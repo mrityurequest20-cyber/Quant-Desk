@@ -18,7 +18,7 @@ import pandas as pd
 
 from ..core.calendar import TradingCalendar
 from ..journal.journal import Journal
-from .account import ensure_account, reset_account
+from .account import ensure_account, reset_account, restate_trade
 from .engine import IntradayEngine, close_out, run_live, run_replay
 from .feeds import ReplayFeed
 from .recorder import SessionRecorder
@@ -128,6 +128,18 @@ def cmd_reset_account(cfg, a):
     ensure_account(cfg, j, paths(cfg, "live")["broker"])
     print(f"archived the old account to {moved}" if moved else "no account yet", "·",
           f"new paper account: ₹{cfg.get('intraday.capital'):,.0f}")
+
+
+def cmd_restate_trade(cfg, a):
+    """Correct a closed paper trade's exit price(s), on the record (see account.restate_trade)."""
+    exits = {}
+    for x in a.exit:
+        sym, _, px = x.partition("=")
+        exits[sym.strip()] = float(px)
+    if not a.yes:
+        sys.exit(f"this rewrites trade {a.id}'s exit {exits} and moves paper cash by the difference; add --yes to do it")
+    r = restate_trade(cfg, paths(cfg, a.account or "live")["journal"].parent, a.id, exits, a.reason)
+    print(f"trade {r['trade']}: P&L ₹{r['old_pnl']:+,.2f} → ₹{r['new_pnl']:+,.2f} (cash {r['delta']:+,.2f})")
 
 
 def cmd_command(cfg, a):
@@ -375,6 +387,13 @@ def register(sub):
     x = ss.add_parser("reset-account", help="archive the live paper account and start fresh at the configured capital")
     x.add_argument("--yes", action="store_true")
     x.set_defaults(fn=cmd_reset_account)
+    x = ss.add_parser("restate-trade", help="correct a closed paper trade's exit price, on the record (audit note + event)")
+    x.add_argument("--id", required=True)
+    x.add_argument("--exit", action="append", required=True, metavar="SYMBOL=PRICE", help="new exit price for a leg (repeatable)")
+    x.add_argument("--reason", required=True)
+    x.add_argument("--account", default="live")
+    x.add_argument("--yes", action="store_true")
+    x.set_defaults(fn=cmd_restate_trade)
     x = ss.add_parser("doctor", help="check this machine can run the live desk (Yahoo, NSE, calendar)")
     x.set_defaults(fn=cmd_doctor)
     x = ss.add_parser("command", help="pause / resume / flatten / close a position on the running engine")

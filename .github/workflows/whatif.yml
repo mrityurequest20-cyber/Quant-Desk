@@ -1,0 +1,73 @@
+# What if the desk had traded a recorded day differently? Replays the day's real 1m bars and the headlines
+# the desk read, with the same prior-session history it had (from Yahoo, which GitHub's runners can reach),
+# under variants of its filters, and puts a comparison table in the run summary. Read-only: the journal is
+# restored, never saved. Run it from the Actions tab (or the API) with the day to replay.
+name: What-if replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Day to replay (YYYY-MM-DD)"
+        required: true
+      until:
+        description: "Replay up to (HH:MM IST)"
+        default: "15:30"
+      variants:
+        description: "Comma-separated variants (see deploy/whatif.py)"
+        default: "as_run,no_news,no_rsi_veto,no_news_no_rsi,conviction_40,ev_gate_off,no_stop_floor"
+      compare_ref:
+        description: "Also replay with the code at this commit (e.g. what actually ran that day); empty to skip"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  whatif:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DAY: ${{ inputs.date }}
+      UNTIL: ${{ inputs.until }}
+      VARIANTS: ${{ inputs.variants }}
+      THEN: ${{ inputs.compare_ref }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the journal (read-only)
+        run: deploy/journal.sh restore
+      - name: Replay with the code as it ran that day
+        if: ${{ inputs.compare_ref != '' }}
+        run: |
+          git worktree add -q --detach _then "$THEN"
+          PYTHONPATH=_then python deploy/whatif.py --date "$DAY" --until "$UNTIL" --variants as_run --label "$THEN" --json whatif.jsonl
+      - name: Replay with today's code, every variant
+        run: PYTHONPATH=. python deploy/whatif.py --date "$DAY" --until "$UNTIL" --variants "$VARIANTS" --label "$(git rev-parse --short HEAD)" --json whatif.jsonl
+      - name: Summary
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          rows = [json.loads(l) for l in open("whatif.jsonl", encoding="utf-8")] if os.path.exists("whatif.jsonl") else []
+          print(f"## What-if replay: {os.environ['DAY']} up to {os.environ['UNTIL']} IST\n")
+          print("| code | variant | trades | net ₹ | the trades | kept out by (journaled reads) |")
+          print("|---|---|---:|---:|---|---|")
+          for r in rows:
+              why = "; ".join(f"{k} ×{n}" for k, n in r["kept_out_by"].items())
+              print(f"| {r['code']} | {r['variant']} | {r['trades']} | {r['net']:+,.0f} | {'<br>'.join(r['list']) or '—'} | {why} |")
+          print("\nOptions priced off the model chain (India VIX + skew); real chain snapshots aren't kept.")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: whatif-${{ inputs.date }}
+          path: whatif.jsonl
+          if-no-files-found: ignore

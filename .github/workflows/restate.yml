@@ -1,0 +1,67 @@
+# Correct a closed paper trade's exit price, on the record: the fills, P&L, R and paper cash follow, the old
+# price stays in the trade's exit note and an event records both versions (quantdesk intraday restate-trade).
+# Waits until no desk is running, since the desk owns the journal while it trades; then saves the journal
+# and re-publishes the site. Run it from the Actions tab.
+name: Restate a trade
+
+on:
+  workflow_dispatch:
+    inputs:
+      trade_id:
+        description: "Trade id (e.g. I260929-0001-f343)"
+        required: true
+      exits:
+        description: "New exit price per leg, space-separated SYMBOL=PRICE"
+        required: true
+      reason:
+        description: "Why (goes on the record)"
+        required: true
+
+permissions:
+  contents: write            # the journal and gh-pages branches
+  actions: read              # see whether the live desk is running
+
+concurrency:
+  group: journal-admin
+  cancel-in-progress: false
+
+jobs:
+  restate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      TRADE: ${{ inputs.trade_id }}
+      EXITS: ${{ inputs.exits }}
+      REASON: ${{ inputs.reason }}
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for a running desk to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 320); do
+            busy=$(gh run list -R "$GITHUB_REPOSITORY" --workflow live.yml --limit 5 --json status \
+                   --jq '[.[] | select(.status != "completed")] | length')
+            [ "$busy" = "0" ] && exit 0
+            [ "$i" = 1 ] && echo "the live desk is running; restating after it finishes"
+            sleep 60
+          done
+          echo "::error::the live desk is still running after 5h20m"; exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the journal
+        run: deploy/journal.sh restore
+      - name: Restate
+        run: |
+          args=()
+          for e in $EXITS; do args+=(--exit "$e"); done
+          python -m quantdesk intraday restate-trade --id "$TRADE" "${args[@]}" --reason "$REASON" --yes
+      - name: Save the journal
+        run: deploy/journal.sh save "restated $TRADE $(date '+%F %H:%M') IST"
+      - name: Re-publish the site
+        run: python -m quantdesk intraday export-site --dir _site --sessions 2 && deploy/push-dir.sh _site gh-pages "site (restated $TRADE)"

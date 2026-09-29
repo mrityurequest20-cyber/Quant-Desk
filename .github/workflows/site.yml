@@ -2,7 +2,7 @@
 #
 # While the live desk runs, its own publisher re-exports the site every few minutes with the code
 # it checked out that morning, so an app update pushed mid-session would be overwritten. This job
-# waits for the desk to finish, then publishes the desk's final state with the new app. On a day
+# waits for the desk (and any trade restatement) to finish, then publishes the final state with the new app. On a day
 # the desk isn't running it publishes at once. It never touches the desk's concurrency group: a
 # queued run there could cancel a pending trading day.
 name: Publish site
@@ -27,18 +27,20 @@ jobs:
     timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
-      - name: Wait for a running desk to finish
+      - name: Wait for a running desk (or a trade restatement) to finish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          busy() {                                   # runs of a workflow not yet completed (0 if it doesn't exist yet)
+            gh run list -R "$GITHUB_REPOSITORY" --workflow "$1" --limit 5 --json status \
+              --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0
+          }
           for i in $(seq 320); do
-            busy=$(gh run list -R "$GITHUB_REPOSITORY" --workflow live.yml --limit 5 --json status \
-                   --jq '[.[] | select(.status != "completed")] | length')
-            [ "$busy" = "0" ] && exit 0
-            [ "$i" = 1 ] && echo "the live desk is running; publishing after it finishes"
+            [ "$(busy live.yml)" = "0" ] && [ "$(busy restate.yml)" = "0" ] && exit 0
+            [ "$i" = 1 ] && echo "the live desk or a restatement is running; publishing after it finishes"
             sleep 60
           done
-          echo "::error::the live desk is still running after 5h20m"; exit 1
+          echo "::error::still busy after 5h20m"; exit 1
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

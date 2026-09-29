@@ -200,7 +200,9 @@ Every 4 minutes, in parallel, the desk reads these feeds (all reachable from Git
 - scores the headline with a finance lexicon that knows the subject. Crude, inflation or yields rising is bad for Indian equities. It also understands "snaps losing streak", "higher for longer", and rate cuts and hikes.
 - rates its impact
 
-A recency-weighted tone (half-life 45 minutes) is one piece of evidence with modest weight. After a high-impact story (RBI, the Fed, the budget, a CPI print, war), not a preview, the desk takes no new entries for 15 minutes. A story is invisible until its publish time on the engine's clock, so replays never see the future. Everything is journaled, and it's all on the site's **News** tab.
+A recency-weighted tone (half-life 45 minutes) is one piece of evidence with modest weight. After a high-impact story (RBI, the Fed, the budget, a CPI print, war), not a preview, the desk takes no new entries for 15 minutes. A **recap of the market's own move** ("Stock market crash: Sensex tumbles 700 points") never counts as high impact and weighs less in the tone: the move is already on the desk's tape. On 29 Sep 2026 five such recaps kept it out of the morning's sell-off for 55 minutes. A story is invisible until its publish time on the engine's clock, so replays never see the future. Everything is journaled, and it's all on the site's **News** tab.
+
+**What-if replays.** `deploy/whatif.py` replays a recorded day (its real 1m bars, the headlines as the desk fetched them, and the prior sessions from Yahoo) under variants: the code as it ran that day, no news filter, no RSI filter, a lower conviction bar, the EV gate off, no stop floor. It prints each variant's trades and what kept it out. Run it from the Actions tab (**What-if replay**, with a date and optionally the commit that ran that day); the table lands in the run summary.
 
 ## Edge research (real data)
 

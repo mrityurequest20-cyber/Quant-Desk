@@ -974,8 +974,10 @@ function renderBrain() {
 		const g = b.gap, against = g.explained * g.gap < 0 && Math.abs(g.explained) > 0.0005;
 		const txt = against
 			? `${S.brainSym} opened ${pct(g.gap)}, against the global cue: what the world did while India was shut pointed to ${pct(g.explained)}. India shrugged it off.`
-			: `${S.brainSym} opened ${pct(g.gap)}. What global markets did while India was shut accounts for ${pct(g.explained)}` +
-				(g.share != null && g.share > 0 && g.share <= 1.5 ? `, about ${Math.round(g.share * 100)}% of the gap.` : ".");
+			: g.share != null && g.share > 1.2
+				? `${S.brainSym} opened ${pct(g.gap)}, while what the world did overnight pointed to ${pct(g.explained)}: India moved less than the global cue.`
+				: `${S.brainSym} opened ${pct(g.gap)}. What global markets did while India was shut accounts for ${pct(g.explained)}` +
+					(g.share != null && g.share > 0 ? `, about ${Math.round(g.share * 100)}% of the gap.` : ".");
 		put(body, h("div", { class: "sec-h" }, h("h2", {}, "Today's open, explained")),
 			h("div", { class: "panel pad" }, h("div", { style: "font-size:14px;line-height:1.5" }, txt),
 				(g.parts || []).length ? h("div", { class: "chips", style: "margin-top:10px;flex-wrap:wrap" }, g.parts.map(([n, x]) => h("span", { class: "tag " + (x > 0 ? "bull" : x < 0 ? "bear" : "flat") }, `${n} ${pct(x)}`))) : null));

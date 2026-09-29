@@ -66,6 +66,16 @@ jobs:
       - name: Save the journal
         if: always()
         run: deploy/journal.sh save "morning $(date '+%F %H:%M') IST"
+      # the morning's option-chain snapshots live only on this runner: keep them, or a morning trade's
+      # fills can never be checked against the real quotes (29 Sep 2026: they were lost)
+      - name: Keep the morning's raw data (bars + option-chain snapshots) for replays
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-data-morning-${{ github.run_id }}
+          path: runtime/intraday/data
+          retention-days: 90
+          if-no-files-found: ignore
 
   afternoon:
     needs: morning
