@@ -46,6 +46,7 @@ function qdAnswer(D, url) {
     case "/api/i/reviews": return reply(Object.keys(D.reviews).sort().reverse());
     case "/api/i/review": return D.reviews[q.date] ? reply({ date: q.date, markdown: D.reviews[q.date] }) : reply({ error: "no such review" }, 404);
     case "/api/i/stats": return reply(D.stats);
+    case "/api/i/news": return reply((D.news || []).slice(0, Number(q.n || 120)));
     case "/api/i/chart": return reply(D.chart[(q.symbol || "NIFTY") + "|" + (q.interval || "1m")] || { bars: null });
     case "/api/config": return reply({ gocharting: { enabled: false } });
     default: return reply({ error: "not available on a read-only site" }, 404);
@@ -121,6 +122,7 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
         "trade": {t["id"]: api.trade(account, t["id"]) for t in trades[:max_trade_details]},
         "reviews": {d: api.review(account, d)["markdown"] for d in api.reviews(account)},
         "stats": api.stats(account),
+        "news": api.news(account, 120),
         "chart": {f"{s}|{iv}": api.chart(account, s, None, iv)
                   for s in cfg.get("intraday.underlyings", ["NIFTY", "BANKNIFTY"]) for iv in ("1m", "5m", "15m")},
     }

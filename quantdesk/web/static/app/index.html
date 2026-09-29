@@ -80,6 +80,13 @@ nav.tabs button[aria-selected="true"]{background:var(--surface);border:1px solid
 .chart svg{width:100%;height:100%;display:block}.chart svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 .chart svg text.lvl{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
 .legend{display:flex;gap:12px;flex-wrap:wrap;color:var(--ink2);font-size:12px;margin-top:6px}
+.nrow{display:grid;grid-template-columns:108px 1fr;gap:4px 12px;align-items:center;padding:6px 0}
+.nrow .dbar{margin:4px 0}.nrow .sub{grid-column:2;font-size:12px;color:var(--ink2)}
+.nrow .brk{grid-column:1 / -1;font-size:13px;color:var(--bad);border-left:3px solid var(--bad);padding-left:8px}
+.news-item a{color:var(--ink);text-decoration:none;font-weight:600;line-height:1.35;display:block;margin:4px 0}
+.news-item a:hover{text-decoration:underline}.news-item .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--muted)}
+.badge{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--ring);color:var(--ink2);white-space:nowrap}
+.badge.high{color:var(--bad);border-color:var(--bad)}.badge.medium{color:var(--warn);border-color:var(--warn)}
 .legend i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:5px}
 .list .item{border-top:1px solid var(--grid);padding:10px 0;cursor:pointer}.list .item:first-child{border-top:0}
 .item .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.item .top .t{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
@@ -139,6 +146,11 @@ border:1px solid var(--ring);border-radius:10px;padding:10px 14px;display:none;z
   </section>
   <section data-view="trades" hidden><div class="card"><div class="list" id="tradelist"></div></div></section>
   <section data-view="stats" hidden><div id="stats"></div></section>
+  <section data-view="news" hidden>
+    <div class="card"><h2>What the desk is reading</h2><div id="newstone"></div><div class="small muted" id="newshealth"></div></div>
+    <div class="row" style="margin-bottom:10px"><div class="seg" id="newsseg" role="group" aria-label="Filter news"></div></div>
+    <div class="card"><div class="list" id="newslist"></div></div>
+  </section>
   <section data-view="reviews" hidden><div class="card"><div class="list" id="reviewlist"></div></div></section>
 </main>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="body" id="sheetbody"></div></div>

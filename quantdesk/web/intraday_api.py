@@ -100,6 +100,15 @@ class IntradayAPI:
             out.append(r)
         return out
 
+    def news(self, account=None, n=120) -> list[dict]:
+        rows = self.j(account).news(n=int(n))
+        out = []
+        for r in rows.to_dict("records"):
+            for k in ("sources", "about"):
+                r[k] = json.loads(r[k]) if r.get(k) else None
+            out.append(r)
+        return out
+
     def trades(self, account=None, n=100) -> list[dict]:
         t = self.j(account).df("SELECT id, strategy, symbol, direction, units, opened_at, closed_at, pnl, fees, r_multiple, "
                                "grade, exit_reason, status, meta FROM trades ORDER BY opened_at DESC LIMIT ?", (int(n),))

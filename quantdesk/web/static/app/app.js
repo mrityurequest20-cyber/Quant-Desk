@@ -10,6 +10,7 @@ const S = { account: "live", tab: "live", sym: "NIFTY", interval: "1m", state: n
 const TABS = [
 	["live", "Live", "M3 12h4l3-8 4 16 3-8h4"],
 	["thinking", "Thinking", "M12 3a6 6 0 0 0-3 11v3h6v-3a6 6 0 0 0-3-11zM9 21h6"],
+	["news", "News", "M4 5h13v14H6a2 2 0 0 1-2-2zM17 9h3v8a2 2 0 0 1-2 2M8 9h5M8 13h5M8 17h3"],
 	["trades", "Trades", "M4 6h16M4 12h16M4 18h10"],
 	["stats", "Stats", "M5 20V10M12 20V4M19 20v-7"],
 	["reviews", "Reviews", "M6 3h9l4 4v14H6zM9 12h7M9 16h7"],
@@ -524,6 +525,53 @@ async function loadThoughts(reset) {
 	$("#more").hidden = rows.length < 30;
 }
 
+// ---- news -------------------------------------------------------------------------------------------
+function toneBar(t) {
+	const w = Math.min(Math.abs(t), 1) * 50;
+	return h("div", { class: "dbar", role: "img", "aria-label": `news tone ${t.toFixed(2)}` },
+		h("i", { style: `${t >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${t >= 0 ? "var(--up)" : "var(--down)"}` }));
+}
+function ago(ts) {
+	const m = Math.max(0, (Date.now() - Date.parse(String(ts).replace(" ", "T"))) / 60000);
+	return m < 1 ? "just now" : m < 60 ? `${Math.round(m)} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : ist(ts, true);
+}
+async function loadNews() {
+	seg($("#newsseg"), [["", "All"], ["NIFTY", "NIFTY"], ["BANKNIFTY", "BANKNIFTY"], ["high", "High impact"]], S.newsF || "",
+		(v) => { S.newsF = v; loadNews(); });
+	let st = S.state, rows = [];
+	try { st = await api("/api/i/state"); S.state = st; } catch (e) { /* no account yet */ }
+	try { rows = await api("/api/i/news?n=150"); } catch (e) { rows = []; }
+	const hb = (st && st.heartbeat) || {}, box = $("#newstone");
+	box.textContent = "";
+	const views = Object.entries(hb.views || {});
+	if (!views.length) box.appendChild(h("div", { class: "empty" }, "The desk's news read appears here while it runs."));
+	for (const [u, v] of views) {
+		const n = v.news;
+		box.appendChild(h("div", { class: "nrow" }, h("b", {}, u),
+			n ? toneBar(n.tone) : h("span", { class: "small muted" }, "no relevant stories in the last 2 hours"),
+			n ? h("div", { class: "sub" }, `tone ${n.tone >= 0 ? "+" : ""}${n.tone.toFixed(2)} from ${n.n} ${n.n === 1 ? "story" : "stories"} · weighs in the bias as \u201cnews\u201d evidence`) : null,
+			n && n.breaking ? h("div", { class: "brk" }, `Breaking (${Math.round(n.breaking.age_min)} min ago): \u201c${n.breaking.title}\u201d. No new entries until it settles.`) : null));
+	}
+	const hl = hb.news_health || {}, names = Object.keys(hl), ok = names.filter((k) => String(hl[k]).startsWith("ok"));
+	$("#newshealth").textContent = names.length ? `${ok.length} of ${names.length} feeds live${ok.length < names.length ? " (down: " + names.filter((k) => !ok.includes(k)).join(", ") + ")" : ""}` : "";
+	const f = S.newsF || "";
+	const shown = rows.filter((r) => !f || (f === "high" ? r.impact === "high" : ((r.about || {})[f] || 0) >= 2));
+	const list = $("#newslist");
+	list.textContent = "";
+	if (!shown.length) list.appendChild(h("div", { class: "empty" }, rows.length ? "Nothing matches this filter." : "No headlines yet. The desk reads the news every few minutes while it runs."));
+	for (const r of shown.slice(0, 120)) {
+		const sgn = r.sentiment > 0.15 ? "bullish" : r.sentiment < -0.15 ? "bearish" : "";
+		const tags = Object.entries(r.about || {}).filter(([k, v]) => k !== "macro" && v >= 2).map(([k]) => k);
+		if ((r.about || {}).macro >= 2) tags.push("macro");
+		list.appendChild(h("div", { class: "item news-item" },
+			h("div", { class: "meta" }, h("span", { class: "chip " + sgn }, h("i"), `${sgn || "neutral"} ${r.sentiment >= 0 ? "+" : ""}${Number(r.sentiment).toFixed(2)}`),
+				r.impact !== "low" ? h("span", { class: "badge " + r.impact }, `${r.impact} impact`) : null,
+				...tags.map((t) => h("span", { class: "badge" }, t))),
+			r.link ? h("a", { href: r.link, target: "_blank", rel: "noopener noreferrer" }, r.title) : h("b", {}, r.title),
+			h("div", { class: "meta" }, `${ago(r.ts)} · ${(r.sources || [r.source]).slice(0, 3).join(", ")}${(r.sources || []).length > 3 ? ` +${r.sources.length - 3}` : ""}`)));
+	}
+}
+
 // ---- trades -----------------------------------------------------------------------------------------
 function tradeItem(t) {
 	return h("div", { class: "item", onclick: () => openTrade(t.id) },
@@ -661,6 +709,7 @@ async function refresh(full) {
 	if (document.hidden) return;
 	if (S.tab === "live") await loadLive(full || tick % 3 === 0);
 	else if (S.tab === "thinking" && full) await loadThoughts(true);
+	else if (S.tab === "news" && (full || tick % 6 === 0)) await loadNews();
 	else if (S.tab === "trades" && full) await loadTrades();
 	else if (S.tab === "stats" && full) await loadStats();
 	else if (S.tab === "reviews" && full) await loadReviews();

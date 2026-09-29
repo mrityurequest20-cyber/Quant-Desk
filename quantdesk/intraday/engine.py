@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 class IntradayEngine:
     def __init__(self, cfg, feed: IntradayFeed, chains: ChainSource | str | None, journal: Journal,
                  broker: IntradayBroker, recorder=None, say=print, underlyings: list[str] | None = None,
-                 review_dir: Path | None = None):
+                 review_dir: Path | None = None, news=None):
         ic = cfg.get("intraday", {}) or {}
         self.cfg, self.feed, self.journal, self.broker, self.recorder = cfg, feed, journal, broker, recorder
         self.say = say or (lambda *_: None)
@@ -57,6 +57,7 @@ class IntradayEngine:
         self.history_days = ic.get("history_days", 6)
         self.expiry_min_days = ic.get("expiry_min_days", 1)
         self.review_dir = review_dir
+        self.news = news                                  # NewsDesk (live headlines) or None
         self.bars: dict[str, pd.DataFrame] = {}
         self.last_ts: dict[str, pd.Timestamp] = {}
         self.chain_df: dict[str, pd.DataFrame] = {}
@@ -155,6 +156,7 @@ class IntradayEngine:
                     self.flow[u].add(t)
         if not got:
             return False
+        self._refresh_news(now)
         for u in self.underlyings:
             if u not in self.bars or self.bars[u].empty or self.bars[u].index[-1].date() != self.day:
                 continue
@@ -163,7 +165,8 @@ class IntradayEngine:
             if s is None:
                 continue
             view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
-                                       ", ".join(self.events_today) or None, self._flow_state(u, now))
+                                       ", ".join(self.events_today) or None, self._flow_state(u, now),
+                                       self.news.state(u, now) if self.news is not None else None)
             self.views[u] = view
             exits = self._manage(u, view, now)
             action = self._maybe_enter(u, view, s, now)
@@ -231,6 +234,20 @@ class IntradayEngine:
         except Exception as exc:
             self.chain_at[u] = now
             self.journal.event(now, "WARN", "chain", f"{u} chain refresh failed: {exc}")
+
+    def _refresh_news(self, now) -> None:
+        if self.news is None:
+            return
+        try:
+            fresh = self.news.refresh(now)
+        except Exception as exc:                          # the desk trades without news rather than not at all
+            self.journal.event(now, "WARN", "news", f"news refresh failed: {exc!s:.160}")
+            return
+        if fresh:
+            self.journal.news_add(fresh, now)
+            hot = [x for x in fresh if x.impact == "high" and max(x.about.values() or [0]) >= self.news.min_relevance]
+            for x in hot:
+                self.say(f"  {now:%H:%M} NEWS ({x.source}) {x.title} [tone {x.sentiment:+.2f}]")
 
     def _vix_state(self) -> dict | None:
         v = self.bars.get(self.vix)
@@ -400,11 +417,12 @@ class IntradayEngine:
         eq = self.equity(now)
         views = {}
         for u, v in self.views.items():
+            ns = self.news.state(u, now) if self.news is not None else None
             views[u] = {"spot": v.spot, "bias": v.bias, "score": v.score, "conviction": v.conviction, "day_type": v.day_type,
                         "vol_view": v.vol_view, "iv": v.iv, "rv": v.rv, "narrative": v.narrative, "vetoes": v.vetoes,
                         "levels": {k: float(x) for k, x in v.levels.items() if x is not None and x == x},
                         "chg": v.state.get("chg"), "vwap": v.state.get("vwap"), "phase": v.state.get("phase"),
-                        "expiry": str(self.expiry.get(u)),
+                        "expiry": str(self.expiry.get(u)), "news": ns,
                         "evidence": [{"factor": e.factor, "category": e.category, "direction": e.direction,
                                       "weight": e.weight, "observation": e.observation} for e in v.evidence]}
         positions = []
@@ -421,7 +439,8 @@ class IntradayEngine:
             "ts": str(now), "day": str(self.day), "equity": eq, "day_start_equity": self.day_start_equity,
             "day_pnl": eq - self.day_start_equity, "paused": self.paused, "halted": self.risk.halted,
             "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(),
-            "views": views, "positions": positions})
+            "views": views, "positions": positions,
+            "news_health": dict(self.news.health) if self.news is not None else None})
 
     # ---- journaling ------------------------------------------------------------------------------------------
     def _think(self, u: str, view: MarketView, now, action: str, force: bool = False) -> None:

@@ -344,6 +344,7 @@ def make_handler(api: DeskAPI, iapi=None, token: str | None = None):
                         "/api/i/accounts": lambda: iapi.accounts(), "/api/i/state": lambda: iapi.state(acct),
                         "/api/i/thoughts": lambda: iapi.thoughts(acct, q.get("symbol"), q.get("n", 40), q.get("before")),
                         "/api/i/trades": lambda: iapi.trades(acct, q.get("n", 100)),
+                        "/api/i/news": lambda: iapi.news(acct, q.get("n", 120)),
                         "/api/i/trade": lambda: iapi.trade(acct, q.get("id")),
                         "/api/i/reviews": lambda: iapi.reviews(acct), "/api/i/review": lambda: iapi.review(acct, q.get("date")),
                         "/api/i/stats": lambda: iapi.stats(acct),

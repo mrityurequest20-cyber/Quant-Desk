@@ -18,7 +18,7 @@ import numpy as np
 DEFAULT_WEIGHTS = {
     "vwap": 1.0, "ema_5m": 0.8, "htf": 0.6, "orb": 1.0, "value": 0.6, "prev_day": 0.5, "cpr": 0.4,
     "supertrend": 0.4, "rsi": 0.4, "flow": 0.6, "divergence": 0.5, "pcr": 0.3, "oi_walls": 0.4,
-    "vix": 0.3, "max_pain": 0.3, "iv_move": 0.3,
+    "vix": 0.3, "max_pain": 0.3, "iv_move": 0.3, "news": 0.5,
 }
 
 
@@ -74,7 +74,8 @@ class Analyst:
         self.cfg = cfg
 
     def assess(self, symbol: str, s: dict, chain: dict | None = None, vix: dict | None = None,
-               is_expiry_day: bool = False, event: str | None = None, flow: dict | None = None) -> MarketView:
+               is_expiry_day: bool = False, event: str | None = None, flow: dict | None = None,
+               news: dict | None = None) -> MarketView:
         ev: list[Evidence] = []
         w = self.w
         last = s["last"]
@@ -154,6 +155,13 @@ class Analyst:
             add("max_pain", "options", np.clip((mp - last) / (last * 0.004), -1, 1), f"expiry day: max pain {mp:,.0f} "
                                                                                      f"({(mp / last - 1):+.2%} from spot)")
 
+        # --- news (headline tone is noisy: modest weight, scaled by how many stories back it) ---------------
+        if news and news.get("n"):
+            tone = news["tone"]
+            add("news", "news", tone * (0.4 + news.get("confidence", 0.5)),
+                f"news tone {tone:+.2f} over the last 2h ({news['n']} {'story' if news['n'] == 1 else 'stories'}); latest "
+                f"\u201c{news['latest'][:90]}\u201d ({news.get('latest_age_min', 0):.0f} min ago)")
+
         # --- volatility --------------------------------------------------------------------------------
         if vix:
             ch = vix.get("chg", 0.0)
@@ -194,6 +202,10 @@ class Analyst:
             vetoes.append("first 5 minutes: price discovery, spreads wide")
         if event:
             vetoes.append(f"scheduled event: {event}")
+        if news and news.get("breaking"):
+            b = news["breaking"]
+            vetoes.append(f"breaking news {b['age_min']:.0f} min ago \u201c{b['title'][:90]}\u201d ({b['source']}): "
+                          f"letting the market digest it")
         if c.get("atm_spread_pct") and c["atm_spread_pct"] > self.cfg.get("intraday.risk.max_spread_pct", 0.06):
             vetoes.append(f"ATM option spread {c['atm_spread_pct']:.1%} too wide")
         if "rsi5" in s and (s["rsi5"] > 80 or s["rsi5"] < 20):

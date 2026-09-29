@@ -64,7 +64,12 @@ def _live_engine(cfg, a) -> IntradayEngine:
     capital = ensure_account(cfg, j, p["broker"], _say(a.quiet))
     broker = IntradayBroker(cfg, starting_cash=capital, state_path=p["broker"],
                             adverse_ticks=cfg.get("intraday.adverse_ticks", 1))
-    return IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"])
+    news = None
+    if cfg.get("intraday.news.enabled", True) and not getattr(a, "no_news", False):
+        from .news import NewsDesk
+        news = NewsDesk(cfg)
+    return IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"],
+                          news=news)
 
 
 def cmd_live(cfg, a):
@@ -304,6 +309,15 @@ def cmd_doctor(cfg, a):
     except Exception as exc:
         nse_ok = False
         print(f"  nse    NIFTY      FAIL {exc!s:.160}")
+    from .news import NewsDesk
+    nd = NewsDesk(cfg)
+    fresh = nd.refresh(now, force=True)
+    for name, h in nd.health.items():
+        print(f"  news   {name:<20} {h}")
+    for x in sorted(fresh, key=lambda x: -max(x.about.values() or [0]))[:6]:
+        print(f"         {x.ts:%d-%b %H:%M} {x.sentiment:+.2f} {x.impact:<6} {x.title[:100]}")
+    news_ok = sum(h.startswith("ok") for h in nd.health.values())
+    print(f"  news   {news_ok}/{len(nd.health)} feeds reachable, {len(fresh)} stories in the last 24h")
     print("verdict:", "ready" if yahoo_ok and nse_ok else
           "ready, pricing options off the model chain (NSE unreachable from here)" if yahoo_ok else
           "NOT ready: no bars from Yahoo, so the desk has nothing to read")
@@ -321,6 +335,7 @@ def register(sub):
     x.add_argument("--until", help="HH:MM to stop early (squares off, unless --handover)")
     x.add_argument("--handover", action="store_true",
                    help="stop at --until WITHOUT squaring off; the next `live` run resumes the session")
+    x.add_argument("--no-news", action="store_true", help="don't read live headlines")
     x.add_argument("--forever", action="store_true", help="always-on hosts: trade every NSE session, sleep in between")
     x.add_argument("--close-out", action="store_true",
                    help="square off today's open positions now and close the session (the kill switch)")

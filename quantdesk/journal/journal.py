@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS thoughts (
   day_type TEXT, vol_view TEXT, spot REAL, action TEXT, narrative TEXT, evidence TEXT, vetoes TEXT, levels TEXT, chain TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_thoughts_ts ON thoughts(ts);
+CREATE TABLE IF NOT EXISTS news (
+  id TEXT PRIMARY KEY, ts TEXT, seen_at TEXT, source TEXT, sources TEXT, title TEXT, link TEXT, summary TEXT,
+  sentiment REAL, impact TEXT, about TEXT);
+CREATE INDEX IF NOT EXISTS ix_news_ts ON news(ts);
 CREATE INDEX IF NOT EXISTS ix_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS ix_decisions_ts ON decisions(ts);
 """
@@ -176,6 +180,22 @@ class Journal:
                     _json([{"factor": e.factor, "category": e.category, "direction": e.direction, "weight": e.weight,
                             "observation": e.observation} for e in view.evidence]),
                     _json(view.vetoes), _json(view.levels), _json(view.chain)))
+
+    def news_add(self, items, seen_at) -> None:
+        """Headlines as the desk saw them (with its own sentiment / impact / relevance scores)."""
+        for it in items:
+            r = it.to_record()
+            self._exec("INSERT OR REPLACE INTO news (id, ts, seen_at, source, sources, title, link, summary, sentiment, impact, about) "
+                       "VALUES (?,?,?,?,?,?,?,?,?,?,?)", (r["id"], r["ts"], str(seen_at), r["source"], _json(r["sources"]),
+                                                          r["title"], r["link"], r["summary"], r["sentiment"], r["impact"],
+                                                          _json(r["about"])))
+
+    def news(self, since: str | None = None, n: int = 200) -> pd.DataFrame:
+        q, p = "SELECT * FROM news", []
+        if since:
+            q += " WHERE ts >= ?"
+            p.append(since)
+        return self.df(q + " ORDER BY ts DESC LIMIT ?", (*p, int(n)))
 
     def thoughts(self, since: str | None = None, symbol: str | None = None) -> pd.DataFrame:
         q, p = "SELECT * FROM thoughts WHERE 1=1", []
