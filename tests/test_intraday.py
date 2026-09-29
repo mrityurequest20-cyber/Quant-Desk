@@ -204,7 +204,9 @@ def test_risk_gates(cfg):
     r.reset(dt.date(2026, 9, 28), 500000)
     assert r.gate(ts("2026-09-28 09:17"), 500000, [], "NIFTY")                         # before 09:20
     assert not r.gate(ts("2026-09-28 10:00"), 500000, [], "NIFTY")
-    assert any("daily loss" in x for x in r.gate(ts("2026-09-28 10:00"), 480000, [], "NIFTY"))
+    below = 500000 * (1 - cfg.get("intraday.risk.daily_loss_limit") - 0.005)
+    assert not any("daily loss" in x for x in r.gate(ts("2026-09-28 10:00"), 500000 * (1 - cfg.get("intraday.risk.daily_loss_limit") + 0.005), [], "NIFTY"))
+    assert any("daily loss" in x for x in r.gate(ts("2026-09-28 10:00"), below, [], "NIFTY"))
     r2 = IntradayRisk(cfg)
     r2.reset(dt.date(2026, 9, 28), 500000)
     r2.on_close(-1000, ts("2026-09-28 10:00"))

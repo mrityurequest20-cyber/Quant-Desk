@@ -59,12 +59,17 @@ class IntradayAPI:
         p = self._dir(account) / "broker.json"
         return json.loads(p.read_text())["cash"] if p.exists() else None
 
+    def capital(self, account) -> float:
+        """The account's own starting capital (not whatever the config says today)."""
+        acct = self.j(account).get_state("intraday_account") or {}
+        return float(acct.get("capital") or self.cfg.get("intraday.capital", 20000))
+
     # ---- screens -----------------------------------------------------------------------------------------
     def state(self, account=None) -> dict:
         j = self.j(account)
         hb = j.get_state("intraday_live") or {}
         cash = self._cash(account)
-        cap = self.cfg.get("intraday.capital", 500000)
+        cap = self.capital(account)
         day = hb.get("day")
         closed = j.df("SELECT id, strategy, symbol, pnl, r_multiple, grade, exit_reason, opened_at, closed_at "
                       "FROM trades WHERE status='closed' AND opened_at >= ? ORDER BY closed_at DESC", (day or "9999",))
@@ -127,7 +132,7 @@ class IntradayAPI:
 
     def stats(self, account=None) -> dict:
         t = self.j(account).trades("closed")
-        cap = self.cfg.get("intraday.capital", 500000)
+        cap = self.capital(account)
         if t.empty:
             return {"trades": 0, "capital": cap}
         t["day"] = t["opened_at"].str[:10]

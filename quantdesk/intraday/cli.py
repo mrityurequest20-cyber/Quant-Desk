@@ -18,6 +18,7 @@ import pandas as pd
 
 from ..core.calendar import TradingCalendar
 from ..journal.journal import Journal
+from .account import ensure_account, reset_account
 from .engine import IntradayEngine, close_out, run_live, run_replay
 from .feeds import ReplayFeed
 from .recorder import SessionRecorder
@@ -59,9 +60,10 @@ def _live_engine(cfg, a) -> IntradayEngine:
         from .feeds import YahooIntradayFeed
         feed, kite = YahooIntradayFeed(cfg), None
     chains = _chain_source(cfg, a.chain or cfg.get("intraday.chain", "nse"), kite)
-    broker = IntradayBroker(cfg, starting_cash=cfg.get("intraday.capital"), state_path=p["broker"],
-                            adverse_ticks=cfg.get("intraday.adverse_ticks", 1))
     j = Journal(p["journal"], autocommit_every=1)
+    capital = ensure_account(cfg, j, p["broker"], _say(a.quiet))
+    broker = IntradayBroker(cfg, starting_cash=capital, state_path=p["broker"],
+                            adverse_ticks=cfg.get("intraday.adverse_ticks", 1))
     return IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"])
 
 
@@ -93,6 +95,18 @@ def cmd_live(cfg, a):
         print(f"next session {nxt:%a %d-%b}; sleeping until {wake:%a %H:%M} IST", flush=True)
         while pd.Timestamp.now(tz=IST) < wake:
             time.sleep(min(600, max(1, (wake - pd.Timestamp.now(tz=IST)).total_seconds())))
+
+
+def cmd_reset_account(cfg, a):
+    base = paths(cfg, "live")["journal"].parent
+    if not a.yes:
+        sys.exit(f"this archives the live paper account under {base / 'archive'} and starts a fresh one at "
+                 f"₹{cfg.get('intraday.capital'):,.0f}; add --yes to do it")
+    moved = reset_account(base)
+    j = Journal(paths(cfg, "live")["journal"])
+    ensure_account(cfg, j, paths(cfg, "live")["broker"])
+    print(f"archived the old account to {moved}" if moved else "no account yet", "·",
+          f"new paper account: ₹{cfg.get('intraday.capital'):,.0f}")
 
 
 def cmd_command(cfg, a):
@@ -230,7 +244,7 @@ def cmd_stats(cfg, a):
         return out.sort_values("net ₹", ascending=False).to_string(float_format=lambda v: f"{v:,.2f}")
 
     daily = t.groupby("day")["pnl"].sum()
-    cap = cfg.get("intraday.capital", 500000)
+    cap = float((j.get_state("intraday_account") or {}).get("capital") or cfg.get("intraday.capital", 20000))
     eq = cap + daily.cumsum()
     dd = (eq / eq.cummax() - 1).min()
     print(f"{len(t)} trades over {len(daily)} sessions · net ₹{t['pnl'].sum():,.0f} ({t['pnl'].sum() / cap:+.2%} of capital) · "
@@ -312,6 +326,9 @@ def register(sub):
                    help="square off today's open positions now and close the session (the kill switch)")
     x.add_argument("--quiet", action="store_true")
     x.set_defaults(fn=cmd_live)
+    x = ss.add_parser("reset-account", help="archive the live paper account and start fresh at the configured capital")
+    x.add_argument("--yes", action="store_true")
+    x.set_defaults(fn=cmd_reset_account)
     x = ss.add_parser("doctor", help="check this machine can run the live desk (Yahoo, NSE, calendar)")
     x.set_defaults(fn=cmd_doctor)
     x = ss.add_parser("command", help="pause / resume / flatten / close a position on the running engine")

@@ -161,7 +161,9 @@ python -m quantdesk intraday review                     # the written session re
 
 With Kite, full-mode snapshots are classified with the quote rule and fed into it. A true tick-by-tick trade feed (e.g. what GoCharting's order-flow subscription is built on) plugs in through the same `Trade` records. When that data is attached, the analyst's `flow` evidence switches from the bar approximation to real delta.
 
-**On synthetic sessions** (built-in simulator: trend, range, reversal and volatile days) the desk made **+4.0% over 8 traded sessions** (10-session run, 40 trades, win rate 42%, profit factor 1.69, max drawdown −2.3%). Flag breakouts and ORB earned; VWAP pullbacks and value-area fades lost. That proves the machinery, not an edge. Judge it only on recorded real sessions (`intraday replay --last N`) and weeks of live paper trading.
+**On synthetic sessions** (built-in simulator: trend, range, reversal and volatile days), with ₹5 lakh of capital, the desk made **+4.0% over 8 traded sessions** (10-session run, 40 trades, win rate 42%, profit factor 1.69, max drawdown −2.3%). Flag breakouts and ORB earned; VWAP pullbacks and value-area fades lost. That proves the machinery, not an edge. Judge it only on recorded real sessions (`intraday replay --last N`) and weeks of live paper trading.
+
+**With the default ₹20,000 account**, the same 10 sessions lost **−19%**: 20 trades, 30% win rate, max drawdown −27.6%, ₹2,581 in costs. A small options account is a different game. The smallest position is one lot of a narrow NIFTY debit spread, which risks ₹1.2–1.6k (6–8% of the account). Each round trip also costs about ₹110–130, because the ₹20 flat brokerage is charged on each of the 4 orders a spread needs. That's why the ₹20k config caps the desk at 2 trades a day and only sizes into high-conviction plans. BANKNIFTY (monthly expiries only) is too expensive to trade at this size.
 
 ## The website (use it from your phone)
 

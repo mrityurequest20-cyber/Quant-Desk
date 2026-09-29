@@ -20,6 +20,10 @@ on:
       handover:
         description: "Morning runner hands over to the afternoon one at (HH:MM IST)"
         default: "12:20"
+      reset_account:
+        description: "Archive the paper account and start fresh at the configured capital"
+        type: boolean
+        default: false
 
 permissions:
   contents: write            # push the journal and gh-pages branches
@@ -49,6 +53,9 @@ jobs:
         run: python -m quantdesk intraday doctor || echo "::warning::doctor says the data feed is down; the engine will retry every minute"
       - name: Restore the journal
         run: deploy/journal.sh restore
+      - name: Start a fresh paper account
+        if: ${{ inputs.reset_account }}
+        run: python -m quantdesk intraday reset-account --yes
       - name: Trade (paper) until the hand-over
         run: deploy/run-session.sh --quiet --until "$HANDOVER" --handover
       - name: Kill switch — square off
@@ -65,6 +72,8 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}   # the branch tip, not the morning's commit: fixes pushed before the hand-over apply
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

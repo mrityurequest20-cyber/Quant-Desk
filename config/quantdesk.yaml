@@ -80,7 +80,7 @@ risk:
   futures_margin_pct: 0.15
 
 intraday:
-  capital: 500000                  # paper account for the intraday options desk
+  capital: 20000                   # paper account for the intraday options desk (start small, grow)
   underlyings: [NIFTY, BANKNIFTY]
   feed: yahoo                      # yahoo | kite   (replay/synthetic come from the CLI)
   chain: nse                       # nse | kite | model
@@ -96,24 +96,29 @@ intraday:
     iv_rv_cheap: 0.90
     weights: {}                    # override evidence weights, e.g. {vwap: 1.2, pcr: 0.5}
   risk:
-    risk_per_trade: 0.01           # premium at risk to the plan's stop (₹5k on ₹5L), fraction of capital
-    max_trades_per_day: 6
-    max_open: 2
-    daily_loss_limit: 0.025
+    # Sized for a ₹20k account. The smallest sensible NIFTY position (one lot of a narrow weekly
+    # debit spread, ~₹4-5k) risks ~₹1.2-1.6k to its stop, so risk per trade can't be 1% here:
+    # it's 8% of equity × a conviction scale (0.6-1.2), which only lets high-conviction plans
+    # through. BANKNIFTY (monthly expiries only) is priced out at this size; it stays analysed.
+    risk_per_trade: 0.08
+    max_trades_per_day: 2           # each round trip costs ~₹110-130 (4 orders × ₹20 + taxes) ≈ 0.6% of ₹20k
+    max_open: 1
+    daily_loss_limit: 0.10         # ₹2k: roughly one full stop-out plus costs, then done for the day
     cooldown_after_losses: 2
     cooldown_min: 30
     no_entry_before: "09:20"
     no_entry_after: "14:45"
     square_off: "15:15"
     max_spread_pct: 0.06
-    max_premium_outlay: 0.25
+    max_premium_outlay: 0.35       # debit paid, fraction of equity (and never more than the cash)
     max_margin: 0.5
+    credit_margin_per_lot: 30000   # SPAN+exposure on a hedged index spread ≈ ₹25-35k/lot: credit trades need a bigger account
     max_lots: 10
   setups:
-    orb:          {enabled: true, until_min: 120, min_rel_volume: 0.8, long_delta: 0.55, short_delta: 0.25, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 45}
-    vwap_trend:   {enabled: true, after_min: 45, long_delta: 0.55, short_delta: 0.25, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 60}
-    trend_break:  {enabled: true, after_min: 60, until_min: 330, long_delta: 0.55, short_delta: 0.25, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 45}
-    va_reversion: {enabled: true, after_min: 75, until_min: 300, max_abs_score: 0.40, rsi_hi: 60, rsi_lo: 40, long_delta: 0.50, short_delta: 0.25, premium_stop: 0.35, premium_target: 0.60, time_stop_min: 60}
+    orb:          {enabled: true, until_min: 120, min_rel_volume: 0.8, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 45}
+    vwap_trend:   {enabled: true, after_min: 45, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 60}
+    trend_break:  {enabled: true, after_min: 60, until_min: 330, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 45}
+    va_reversion: {enabled: true, after_min: 75, until_min: 300, max_abs_score: 0.40, rsi_hi: 60, rsi_lo: 40, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.35, premium_target: 0.60, time_stop_min: 60}
     range_sell:   {enabled: true, after_min: 75, until_min: 255, max_abs_score: 0.30, wing_mult: 1.0, stop_mult: 0.8, take_profit: 0.30, time_stop_min: 120}
 
 web:

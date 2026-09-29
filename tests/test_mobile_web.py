@@ -88,7 +88,7 @@ def test_live_state_thoughts_trades_stats_reviews(site):
         code, t, _ = call(base, f"/api/i/trade?id={trades[0]['id']}")
         assert code == 200 and "Trigger:" in t["rationale"] and t["fills"]
     code, s, _ = call(base, "/api/i/stats")
-    assert code == 200 and s["capital"] == 500000
+    assert code == 200 and s["capital"] == cfg.get("intraday.capital")
     code, revs, _ = call(base, "/api/i/reviews")
     assert revs == [str(days[-1]), str(days[-2])]
     assert "session review" in call(base, f"/api/i/review?date={days[-1]}")[1]["markdown"]

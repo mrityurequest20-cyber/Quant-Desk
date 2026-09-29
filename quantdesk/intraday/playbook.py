@@ -159,7 +159,8 @@ class Playbook:
             return None
         legs = [_leg(long_q, right, +1)]
         structure = "long_call" if direction > 0 else "long_put"
-        if view.vol_view == "rich" and p.get("spread_when_rich", True):
+        # a debit spread when IV is rich (sell some of the expensive vol) or always (small accounts)
+        if p.get("always_spread", False) or (view.vol_view == "rich" and p.get("spread_when_rich", True)):
             short_q = self.picker.by_delta(chain, right, p.get("short_delta", 0.25), now)
             if short_q is not None and short_q["strike"] != long_q["strike"]:
                 legs.append(_leg(short_q, right, -1))

@@ -27,6 +27,7 @@ class IntradayRisk:
         self.square_off = _t(r.get("square_off", "15:15"))
         self.max_outlay = r.get("max_premium_outlay", 0.25)
         self.max_margin = r.get("max_margin", 0.5)
+        self.credit_margin = r.get("credit_margin_per_lot", 0.0)
         self.max_lots = r.get("max_lots", 10)
         self.reset(None, 0.0)
 
@@ -58,7 +59,7 @@ class IntradayRisk:
             why.append(f"cooling off after {self.consec_losses} straight losses until {self.cool_until:%H:%M}")
         return why
 
-    def size(self, plan, equity: float) -> tuple[int, list[str]]:
+    def size(self, plan, equity: float, cash: float | None = None) -> tuple[int, list[str]]:
         scale = 0.6 + 0.6 * min(max(plan.conviction, 0), 1)
         budget = equity * self.risk_per_trade * scale
         per_lot = plan.planned_risk_per_lot()
@@ -69,9 +70,13 @@ class IntradayRisk:
         lots = math.floor(budget / per_lot)
         caps = {"risk": lots, "max_lots": self.max_lots}
         if plan.is_credit:
-            caps["margin"] = math.floor(self.max_margin * equity / max(plan.max_loss_per_lot(), 1))
+            # the broker blocks SPAN + exposure margin, not just the spread's max loss
+            margin = max(plan.max_loss_per_lot(), self.credit_margin)
+            caps["margin"] = math.floor(self.max_margin * equity / max(margin, 1))
         else:
             caps["premium_outlay"] = math.floor(self.max_outlay * equity / max(plan.net_premium, 1))
+            if cash is not None:
+                caps["cash"] = math.floor(max(cash, 0) / max(plan.net_premium * 1.01, 1))   # can't pay what isn't there
         binding = min(caps, key=caps.get)
         lots = max(0, caps[binding])
         notes.append(f"{lots} lot(s), binding: {binding}")

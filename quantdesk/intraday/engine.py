@@ -273,7 +273,7 @@ class IntradayEngine:
         if not plans:
             return "watching: no setup has triggered"
         plan = max(plans, key=lambda p: p.conviction)
-        lots, notes = self.risk.size(plan, eq)
+        lots, notes = self.risk.size(plan, eq, self.broker.cash())
         if lots < 1:
             self.journal.decision(now, plan.setup, u, "rejected", " | ".join(notes), 0, {"plan": plan.describe()})
             return f"setup {plan.setup} found but sized to 0 lots ({notes[-1]})"
