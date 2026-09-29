@@ -68,8 +68,24 @@ def _live_engine(cfg, a) -> IntradayEngine:
     if cfg.get("intraday.news.enabled", True) and not getattr(a, "no_news", False):
         from .news import NewsDesk
         news = NewsDesk(cfg)
+    brain = None
+    if cfg.get("intraday.global.enabled", True) and not getattr(a, "no_global", False):
+        brain = make_brain(cfg)
     return IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"],
-                          news=news)
+                          news=news, brain=brain)
+
+
+def make_brain(cfg, fetch=None):
+    """The brain with the latest research (runtime/research/links.json + edges.json, fetched by the workflow)."""
+    from .brain import Brain, GlobalFeed
+    rdir = Path(cfg.runtime_dir) / "research"
+
+    def read(name):
+        try:
+            return json.loads((rdir / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+    return Brain(cfg, GlobalFeed(cfg, fetch=fetch), read("links.json"), read("edges.json"))
 
 
 def cmd_live(cfg, a):
@@ -316,6 +332,20 @@ def cmd_doctor(cfg, a):
         print(f"  news   {name:<20} {h}")
     for x in sorted(fresh, key=lambda x: -max(x.about.values() or [0]))[:6]:
         print(f"         {x.ts:%d-%b %H:%M} {x.sentiment:+.2f} {x.impact:<6} {x.title[:100]}")
+    try:
+        brain = make_brain(cfg)
+        brain.gfeed.refresh(now, force=True)
+        snap = brain.gfeed.snapshot(now)
+        live = [k for k, m in snap.items() if m.get("live")]
+        print(f"  global {len(snap)}/{len(brain.gfeed.keys)} markets · trading now: {', '.join(live) or 'none'} · "
+              f"research links {len(brain.links)}")
+        for k in ("ES", "N225", "HSI", "USDINR", "BRENT", "USVIX"):
+            m = snap.get(k)
+            if m:
+                print(f"         {m['name']:<20} last {m.get('last', float('nan')):>10,.2f}  prior session {m.get('prior_ret', 0):+.2%}"
+                      + (f"  30m {m['r30']:+.2%}" if m.get('r30') is not None else ""))
+    except Exception as exc:
+        print(f"  global FAIL {exc!s:.160}")
     news_ok = sum(h.startswith("ok") for h in nd.health.values())
     print(f"  news   {news_ok}/{len(nd.health)} feeds reachable, {len(fresh)} stories in the last 24h")
     print("verdict:", "ready" if yahoo_ok and nse_ok else
@@ -336,6 +366,7 @@ def register(sub):
     x.add_argument("--handover", action="store_true",
                    help="stop at --until WITHOUT squaring off; the next `live` run resumes the session")
     x.add_argument("--no-news", action="store_true", help="don't read live headlines")
+    x.add_argument("--no-global", action="store_true", help="don't watch global markets")
     x.add_argument("--forever", action="store_true", help="always-on hosts: trade every NSE session, sleep in between")
     x.add_argument("--close-out", action="store_true",
                    help="square off today's open positions now and close the session (the kill switch)")

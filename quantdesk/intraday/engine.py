@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 import time
 from pathlib import Path
 
@@ -40,7 +41,7 @@ log = logging.getLogger(__name__)
 class IntradayEngine:
     def __init__(self, cfg, feed: IntradayFeed, chains: ChainSource | str | None, journal: Journal,
                  broker: IntradayBroker, recorder=None, say=print, underlyings: list[str] | None = None,
-                 review_dir: Path | None = None, news=None):
+                 review_dir: Path | None = None, news=None, brain=None):
         ic = cfg.get("intraday", {}) or {}
         self.cfg, self.feed, self.journal, self.broker, self.recorder = cfg, feed, journal, broker, recorder
         self.say = say or (lambda *_: None)
@@ -59,6 +60,9 @@ class IntradayEngine:
         self.expiry_min_days = ic.get("expiry_min_days", 1)
         self.review_dir = review_dir
         self.news = news                                  # NewsDesk (live headlines) or None
+        self.brain = brain                                # Brain (global markets ↔ news ↔ India ↔ decision) or None
+        self.brain_state: dict = {}
+        self.last_action: dict[str, str] = {}
         qc = cfg.get("intraday.quant", {}) or {}
         self.qc = qc
         self.quant_on = bool(qc.get("enabled", True))
@@ -172,6 +176,8 @@ class IntradayEngine:
         if not got:
             return False
         self._refresh_news(now)
+        if self.brain is not None and self.brain.gfeed is not None:
+            self._guarded("global", now, "global refresh", self.brain.gfeed.refresh, now)
         for u in self.underlyings:
             if u not in self.bars or self.bars[u].empty or self.bars[u].index[-1].date() != self.day:
                 continue
@@ -180,9 +186,11 @@ class IntradayEngine:
             if s is None:
                 continue
             q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
+            b = self._guarded(u, now, "brain", self._think_globally, u, now) if self.brain is not None else None
             view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
                                        ", ".join(self.events_today) or None, self._flow_state(u, now),
-                                       self.news.state(u, now) if self.news is not None else None, q)
+                                       self.news.state(u, now) if self.news is not None else None, q,
+                                       {"evidence": b.evidence, "narrative": b.narrative} if b is not None else None)
             self.views[u] = view
             exits = self._manage(u, view, now)
             action = self._maybe_enter(u, view, s, now)
@@ -264,6 +272,16 @@ class IntradayEngine:
             hot = [x for x in fresh if x.impact == "high" and max(x.about.values() or [0]) >= self.news.min_relevance]
             for x in hot:
                 self.say(f"  {now:%H:%M} NEWS ({x.source}) {x.title} [tone {x.sentiment:+.2f}]")
+
+    def _think_globally(self, u: str, now):
+        df = self.bars[u]
+        today = df[df.index.date == self.day]
+        prior = df[df.index.date < self.day]
+        gap = float(np.log(today["open"].iloc[0] / prior["close"].iloc[-1])) if len(today) and len(prior) else None
+        items = list(self.news.items.values()) if self.news is not None else None
+        st = self.brain.think(u, now, items, gap)
+        self.brain_state[u] = st
+        return st
 
     def _vix_state(self) -> dict | None:
         v = self.bars.get(self.vix)
@@ -426,6 +444,15 @@ class IntradayEngine:
                                   {"plan": v.describe(), "ev": {k: round(x, 3) if isinstance(x, float) else x for k, x in e.items()}})
             return f"setup {v.setup} found but not worth it after costs: {why}"
         plan, e, lots, notes = max(ok, key=lambda c: c[1]["ev_r"])
+        bst = self.brain_state.get(u)
+        if bst is not None and bst.size_mult < 1:
+            # global stress: volatility targeting. With one-lot sizes this can mean no trade at all, by design.
+            scaled = int(math.floor(lots * bst.size_mult + 0.49))   # 1 lot survives mild stress; ×0.5 (≈4σ) means aside
+            notes = notes + [f"global stress {bst.stress:.1f}σ: size ×{bst.size_mult:.2f} → {scaled} lot(s)"]
+            if scaled < 1:
+                self.journal.decision(now, plan.setup, u, "rejected", notes[-1], 0, {"plan": plan.describe()})
+                return f"setup {plan.setup} passed the EV gate but global stress is {bst.stress:.1f}σ: standing aside"
+            lots = scaled
         others = sorted([c for c in cands if c[0] is not plan], key=lambda c: -c[1]["ev_r"])[:3]
         text = (f"EV ₹{e['ev']:+,.0f}/lot ({e['ev_r']:+.2f}R), P(profit) {e['p_profit']:.0%}, CVaR5 ₹{e['cvar5']:,.0f}, costs "
                 f"₹{e['fees'] + e['exit_cost']:,.0f}/lot, σ over {e['horizon_min']}m {e['sigma_h_pct']:.2f}%, P(up) {p_up:.2f} [{p_src}]; "
@@ -565,6 +592,8 @@ class IntradayEngine:
                         "chg": v.state.get("chg"), "vwap": v.state.get("vwap"), "phase": v.state.get("phase"),
                         "expiry": str(self.expiry.get(u)), "news": ns,
                         "quant": {k: x for k, x in (self.qstate.get(u) or {}).items() if k != "sigma_min"} or None,
+                        "action": self.last_action.get(u),
+                        "brain": _brain_view(self.brain_state.get(u)),
                         "evidence": [{"factor": e.factor, "category": e.category, "direction": e.direction,
                                       "weight": e.weight, "observation": e.observation} for e in v.evidence]}
         positions = []
@@ -582,10 +611,12 @@ class IntradayEngine:
             "day_pnl": eq - self.day_start_equity, "paused": self.paused, "halted": self.risk.halted,
             "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(),
             "views": views, "positions": positions,
-            "news_health": dict(self.news.health) if self.news is not None else None})
+            "news_health": dict(self.news.health) if self.news is not None else None,
+            "global": _global_view(self.brain, now)})
 
     # ---- journaling ------------------------------------------------------------------------------------------
     def _think(self, u: str, view: MarketView, now, action: str, force: bool = False) -> None:
+        self.last_action[u] = action
         last = self.last_thought.get(u)
         changed = self.last_bias.get(u) != view.bias
         trade_event = action.startswith(("ENTER", "EXIT")) or force
@@ -679,6 +710,25 @@ class IntradayEngine:
     def _grade(self, tid: str) -> str:
         r = self.journal.df("SELECT grade FROM trades WHERE id=?", (tid,))
         return r["grade"].iloc[0] if not r.empty else "?"
+
+
+def _brain_view(st) -> dict | None:
+    if st is None:
+        return None
+    return {"regime": st.regime, "regime_score": st.regime_score, "stress": st.stress, "size_mult": st.size_mult,
+            "narrative": st.narrative, "gap": st.gap, "evidence": st.evidence,
+            "drivers": [{k: d.get(k) for k in ("id", "name", "sign", "live", "prior_z", "z30", "pressure", "gap_beta", "gap_corr",
+                                                "co_corr", "lead_t", "validated", "lead_sign", "news_tone", "news_n", "news_latest")}
+                        | {"move": d.get("lead")} for d in st.drivers]}
+
+
+def _global_view(brain, now) -> dict | None:
+    if brain is None or brain.gfeed is None:
+        return None
+    mk = brain.gfeed.snapshot(now)
+    return {"markets": {k: {x: m.get(x) for x in ("name", "region", "india", "last", "prior_ret", "prior_z", "since_open", "r30",
+                                                   "z30", "live", "last_ts", "prior_date")} for k, m in mk.items()},
+            "health": dict(brain.gfeed.health)}
 
 
 # ---- drivers ------------------------------------------------------------------------------------------

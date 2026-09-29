@@ -9,6 +9,7 @@ const NS = "http://www.w3.org/2000/svg";
 const S = { account: "live", tab: "live", sym: "NIFTY", interval: "1m", state: null, thBefore: null, thSym: "" };
 const TABS = [
 	["live", "Live", "M3 12h4l3-8 4 16 3-8h4"],
+	["brain", "Brain", "M5 6a2 2 0 1 0 0 .01M19 6a2 2 0 1 0 0 .01M12 12a2 2 0 1 0 0 .01M5 18a2 2 0 1 0 0 .01M19 18a2 2 0 1 0 0 .01M6.5 7.5l4 3M17.5 7.5l-4 3M6.5 16.5l4-3M17.5 16.5l-4-3"],
 	["thinking", "Thinking", "M12 3a6 6 0 0 0-3 11v3h6v-3a6 6 0 0 0-3-11zM9 21h6"],
 	["news", "News", "M4 5h13v14H6a2 2 0 0 1-2-2zM17 9h3v8a2 2 0 0 1-2 2M8 9h5M8 13h5M8 17h3"],
 	["trades", "Trades", "M4 6h16M4 12h16M4 18h10"],
@@ -525,6 +526,151 @@ async function loadThoughts(reset) {
 	$("#more").hidden = rows.length < 30;
 }
 
+// ---- brain ------------------------------------------------------------------------------------------
+const CAT_NODE = { trend: "Tape", structure: "Tape", momentum: "Tape", flow: "Flow", options: "Options", volatility: "Vol",
+	news: "News", quant: "Quant", global: "Global" };
+async function loadBrain() {
+	let st = S.state;
+	try { st = await api("/api/i/state"); S.state = st; } catch (e) { /* none yet */ }
+	const hb = (st && st.heartbeat) || {}, views = hb.views || {}, syms = Object.keys(views);
+	if (syms.length && !syms.includes(S.brainSym)) S.brainSym = syms[0];
+	seg($("#brainseg"), (syms.length ? syms : ["NIFTY"]).map((x) => [x, x]), S.brainSym || "NIFTY", (v) => { S.brainSym = v; loadBrain(); });
+	const v = views[S.brainSym || "NIFTY"] || {}, b = v.brain, card = $("#braincard");
+	card.textContent = "";
+	if (!b) {
+		card.appendChild(h("div", { class: "empty" }, "The brain's global read appears here while the desk runs."));
+	} else {
+		card.append(h("div", { class: "regime" }, h("span", { class: "big " + b.regime }, b.regime),
+			h("span", { class: "chip" }, `score ${b.regime_score >= 0 ? "+" : ""}${b.regime_score.toFixed(2)}`),
+			h("span", { class: "chip" }, `global stress ${b.stress.toFixed(1)}σ`),
+			b.size_mult < 1 ? h("span", { class: "badge high" }, `size ×${b.size_mult.toFixed(2)}`) : h("span", { class: "chip" }, "full size")),
+			h("div", { class: "narr" }, b.narrative));
+	}
+	drawBrainGraph(v, hb);
+	// what's pushing the bias: every piece of evidence, by weighted contribution
+	const push = $("#brainpush");
+	push.textContent = "";
+	const ev = [...(v.evidence || [])].sort((a, c) => Math.abs(c.direction * c.weight) - Math.abs(a.direction * a.weight));
+	if (!ev.length) push.appendChild(h("div", { class: "empty" }, "No market read yet."));
+	const grid = h("div", { class: "push" });
+	for (const e of ev.slice(0, 14)) {
+		const w = Math.min(50, Math.abs(e.direction) * Math.min(e.weight, 1.2) / 1.2 * 50);
+		grid.append(h("span", { class: "f" }, `${CAT_NODE[e.category] || e.category} · ${e.factor}`),
+			h("div", { class: "dbar" }, h("i", { style: `${e.direction >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${e.direction >= 0 ? "var(--up)" : "var(--down)"}` })),
+			h("span", { class: "o" }, e.observation));
+	}
+	push.appendChild(grid);
+	// the gap, explained
+	const gc = $("#braingap");
+	gc.textContent = "";
+	gc.hidden = !(b && b.gap);
+	if (b && b.gap) {
+		const g = b.gap;
+		const against = g.explained * g.gap < 0 && Math.abs(g.explained) > 0.0005;
+		const txt = against
+			? `${S.brainSym} opened ${pct(g.gap)}, against the global cue: what the world did while India was shut pointed to ${pct(g.explained)}. India shrugged it off.`
+			: `${S.brainSym} opened ${pct(g.gap)}. What global markets did while India was shut accounts for ${pct(g.explained)}` +
+				(g.share != null && g.share > 0 && g.share <= 1.5 ? ` (about ${Math.round(g.share * 100)}% of the gap).` : ".");
+		gc.append(h("h2", {}, "Today's open, explained"), h("div", {}, txt),
+			h("div", { class: "small muted", style: "margin-top:6px" }, g.parts.map(([n, x]) => `${n} ${pct(x)}`).join(" · ") || "no measured links yet"));
+	}
+	// the global board
+	const G = hb.global || {}, mk = G.markets || {}, board = $("#globalboard");
+	board.textContent = "";
+	const regions = ["US", "Asia", "Europe", "FX", "Commodities", "Rates"];
+	const box = h("div", { class: "gb" });
+	for (const r of regions) {
+		const ms = Object.entries(mk).filter(([, m]) => m.region === r);
+		if (!ms.length) continue;
+		box.appendChild(h("h3", {}, r));
+		for (const [k, m] of ms) {
+			const chg = m.live && m.since_open != null ? m.since_open : m.prior_ret;
+			const lean = chg == null || !m.india ? "" : (chg * m.india > 0 ? "pos" : chg * m.india < 0 ? "neg" : "");
+			box.appendChild(h("div", { class: "gt", title: m.live ? `trading · ${m.last_ts || ""}` : `closed · last session ${m.prior_date || ""}` },
+				h("div", { class: "n" }, h("i", { class: "live" + (m.live ? "" : " shut") }), m.name),
+				h("div", { class: "v" }, m.last != null ? num(m.last, m.last > 1000 ? 0 : 2) : "—"),
+				h("div", { class: "c " + lean }, `${pct(chg)} ${m.live && m.since_open != null ? "since 09:15" : "last session"}` +
+					(m.z30 != null ? ` · 30m ${m.z30 >= 0 ? "+" : ""}${m.z30.toFixed(1)}σ` : ""))));
+		}
+	}
+	if (!Object.keys(mk).length) box.appendChild(h("div", { class: "empty" }, "Global markets appear here while the desk runs."));
+	board.appendChild(box);
+	$("#globalhealth").textContent = "Green dot: trading now. Colour: good (green) or bad (red) for Indian equities, by the market's usual lean.";
+	// the measured wiring
+	const lk = $("#brainlinks");
+	lk.textContent = "";
+	const ds = (b && b.drivers) || [];
+	if (!ds.length) { lk.appendChild(h("div", { class: "empty" }, "Appears with the brain's first read.")); return; }
+	lk.appendChild(h("table", { class: "links" },
+		h("tr", {}, h("th", {}, "Driver"), h("th", {}, "Gap ρ"), h("th", {}, "Same-5m ρ"), h("th", {}, "Lead t"), h("th", {}, "Votes?")),
+		ds.map((d) => h("tr", {}, h("td", {}, d.name), h("td", {}, d.gap_corr != null ? d.gap_corr.toFixed(2) : "—"),
+			h("td", {}, d.co_corr != null ? d.co_corr.toFixed(2) : "—"), h("td", {}, d.lead_t != null ? d.lead_t.toFixed(1) : "—"),
+			h("td", { class: d.validated ? "pos" : "muted" }, d.validated ? (d.lead_sign < 0 ? "yes (fades it)" : "yes") : "no")))));
+}
+
+function drawBrainGraph(v, hb) {
+	const el = $("#braingraph");
+	el.textContent = "";
+	const b = v.brain;
+	if (!b && !(v.evidence || []).length) { el.appendChild(h("div", { class: "empty" }, "Appears with the first market read.")); return; }
+	const W = 340, colX = [2, 126, 236], nodeW = [112, 92, 102];
+	const world = (b && b.drivers) || [];
+	// India-side nodes: evidence grouped by what it's about
+	const agg = {};
+	for (const e of v.evidence || []) {
+		const n = CAT_NODE[e.category] || e.category;
+		const a = (agg[n] = agg[n] || { n, c: 0, w: 0 });
+		a.c += e.direction * e.weight; a.w += e.weight;
+	}
+	const india = ["Tape", "Flow", "Options", "Vol", "News", "Quant", "Global"].filter((k) => agg[k]).map((k) => agg[k]);
+	const rowH = 34, H = Math.max(world.length, india.length, 3) * rowH + 30;
+	const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Influence graph from global markets to the decision" }, el);
+	const yOf = (i, n) => 22 + (H - 30) * (i + 0.5) / n;
+	const color = (x) => (x > 0.02 ? "var(--up)" : x < -0.02 ? "var(--down)" : "var(--axis)");
+	const heads = [["World", colX[0]], ["India read", colX[1]], ["Bias → decision", colX[2]]];
+	heads.forEach(([t, x]) => { const tt = svg("text", { x, y: 12, class: "t" }, g); tt.textContent = t; });
+	const biasY = H / 2 - 20, decY = H / 2 + 26;
+	const edge = (x1, y1, x2, y2, w, col, dash) => svg("path", { d: `M${x1} ${y1} C${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`,
+		fill: "none", stroke: col, "stroke-width": w, "stroke-dasharray": dash || "", "stroke-opacity": 0.85 }, g);
+	const node = (x, y, w, t1, t2, col) => {
+		svg("rect", { x, y: y - 14, width: w, height: 28, rx: 7, fill: "var(--surface2)", stroke: col, "stroke-width": 1.5 }, g);
+		const a = svg("text", { x: x + 6, y: y - 2, class: "t" }, g); a.textContent = t1;
+		const c = svg("text", { x: x + 6, y: y + 10 }, g); c.textContent = t2;
+	};
+	const gNode = india.find((x) => x.n === "Global"), newsNode = india.find((x) => x.n === "News");
+	world.forEach((d, i) => {
+		const y = yOf(i, world.length), p = d.pressure || 0;
+		// validated leads feed the "Global" evidence node; everything else explains the bias (dashed)
+		const target = d.validated && gNode ? [colX[1], yOf(india.indexOf(gNode), india.length)] : [colX[2], biasY];
+		const strength = d.validated ? 3 : Math.max(0.6, Math.abs(d.gap_corr || d.co_corr || 0) * 5);
+		edge(colX[0] + nodeW[0], y, target[0], target[1], strength, color(p), d.validated ? "" : "3 3");
+		if (d.news_n && newsNode) edge(colX[0] + nodeW[0], y, colX[1], yOf(india.indexOf(newsNode), india.length), 0.8, "var(--axis)", "1 3");
+		const mv = d.move || {};
+		const txt = mv.r30 != null ? `${pct(mv.r30)} 30m` : mv.prior_ret != null ? `${pct(mv.prior_ret)} prev` : "—";
+		node(colX[0], y, nodeW[0], d.name.length > 16 ? d.name.slice(0, 15) + "…" : d.name, txt, color(p));
+	});
+	const tot = india.reduce((a, x) => a + x.w, 0) || 1;
+	india.forEach((x, i) => {
+		const y = yOf(i, india.length), share = x.c / tot;
+		edge(colX[1] + nodeW[1], y, colX[2], biasY, Math.max(0.8, Math.abs(share) * 9), color(share));
+		node(colX[1], y, nodeW[1], x.n, `${share >= 0 ? "+" : ""}${share.toFixed(2)}`, color(share));
+	});
+	node(colX[2], biasY, nodeW[2], `${S.brainSym || "NIFTY"} ${v.bias || ""}`, `score ${v.score != null ? (v.score >= 0 ? "+" : "") + v.score.toFixed(2) : "—"}`, color(v.score || 0));
+	edge(colX[2] + nodeW[2] / 2, biasY + 14, colX[2] + nodeW[2] / 2, decY - 14, 1.5, "var(--axis)");
+	node(colX[2], decY, nodeW[2], "Decision", decisionLabel(v.action, (hb.positions || []).some((p) => p.symbol === S.brainSym)), "var(--axis)");
+}
+function decisionLabel(action, holding) {
+	const a = String(action || "");
+	if (/^ENTER/.test(a)) return "entered a trade";
+	if (/^EXIT/.test(a)) return "exited";
+	if (holding) return "holding";
+	if (/not worth it/.test(a)) return "passed: EV < costs";
+	if (/global stress/.test(a)) return "aside: stress";
+	if (/^standing aside/.test(a)) return "standing aside";
+	if (/^watching/.test(a)) return "watching";
+	return a ? a.slice(0, 14) : "—";
+}
+
 // ---- news -------------------------------------------------------------------------------------------
 function toneBar(t) {
 	const w = Math.min(Math.abs(t), 1) * 50;
@@ -717,6 +863,7 @@ async function refresh(full) {
 	if (S.tab === "live") await loadLive(full || tick % 3 === 0);
 	else if (S.tab === "thinking" && full) await loadThoughts(true);
 	else if (S.tab === "news" && (full || tick % 6 === 0)) await loadNews();
+	else if (S.tab === "brain" && (full || tick % 6 === 0)) await loadBrain();
 	else if (S.tab === "trades" && full) await loadTrades();
 	else if (S.tab === "stats" && full) await loadStats();
 	else if (S.tab === "reviews" && full) await loadReviews();

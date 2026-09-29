@@ -75,7 +75,7 @@ class Analyst:
 
     def assess(self, symbol: str, s: dict, chain: dict | None = None, vix: dict | None = None,
                is_expiry_day: bool = False, event: str | None = None, flow: dict | None = None,
-               news: dict | None = None, quant: dict | None = None) -> MarketView:
+               news: dict | None = None, quant: dict | None = None, brain: dict | None = None) -> MarketView:
         ev: list[Evidence] = []
         w = self.w
         last = s["last"]
@@ -168,6 +168,10 @@ class Analyst:
             add("model", "quant", (pm - 0.5) * 6, f"direction model: P(up in 30m) {pm:.2f} (walk-forward AUC "
                                                    f"{quant.get('auc', float('nan')):.3f}, {quant.get('samples', 0):,} samples)")
 
+        # --- the brain: global links that survived research (weight from their t-stat) ---------------------
+        for e in (brain or {}).get("evidence", []):
+            add(e["factor"], "global", e["direction"], e["observation"], weight=e["weight"])
+
         # --- research priors (only what survived the weekly edge research on years of real data) --------
         if quant and quant.get("research_drift"):
             rd = quant["research_drift"]
@@ -240,6 +244,8 @@ class Analyst:
             parts.append("Against: " + "; ".join(e.observation for e in con) + ".")
         if ratio:
             parts.append(f"Vol: ATM IV {iv:.1f} vs realised {rv:.1f} (×{ratio:.2f}) → premium {vol_view}.")
+        if brain and brain.get("narrative"):
+            parts.append(brain["narrative"])
         if quant and quant.get("sigma_30m_pct"):
             src = (f"model AUC {quant['auc']:.3f}" if quant.get("valid") else
                    f"model off: {quant.get('model_status', 'untrained')}")

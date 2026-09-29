@@ -40,6 +40,8 @@ nav.tabs button{flex:1;border:0;border-radius:0;background:transparent;min-heigh
 flex-direction:column;align-items:center;justify-content:center;gap:2px}
 nav.tabs button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
 nav.tabs button[aria-selected="true"]{color:var(--ink);font-weight:600}
+nav.tabs button{min-width:0;padding-left:0;padding-right:0}
+@media (max-width:480px){nav.tabs button{font-size:11px;letter-spacing:-.01em}nav.tabs button svg{width:20px;height:20px}}
 @media (min-width:900px){nav.tabs{position:sticky;top:61px;bottom:auto;max-width:1100px;margin:0 auto;border:0;background:transparent;
 padding:8px 16px 0;gap:6px}nav.tabs button{flex:0 0 auto;flex-direction:row;min-height:38px;border-radius:10px;padding:6px 14px;font-size:14px}
 nav.tabs button[aria-selected="true"]{background:var(--surface);border:1px solid var(--ring)}main{padding-bottom:40px}}
@@ -85,6 +87,19 @@ nav.tabs button[aria-selected="true"]{background:var(--surface);border:1px solid
 .nrow .brk{grid-column:1 / -1;font-size:13px;color:var(--bad);border-left:3px solid var(--bad);padding-left:8px}
 .news-item a{color:var(--ink);text-decoration:none;font-weight:600;line-height:1.35;display:block;margin:4px 0}
 .news-item a:hover{text-decoration:underline}.news-item .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--muted)}
+.gb{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:10px}
+.gb h3{grid-column:1 / -1;margin:6px 0 0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.gt{border:1px solid var(--ring);border-radius:10px;padding:8px 10px;min-width:0;font-variant-numeric:tabular-nums}
+.gt .n{font-size:12px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px}
+.gt .v{font-size:15px;font-weight:600;color:var(--ink)}.gt .c{font-size:12px}
+.gt .live{width:7px;height:7px;border-radius:50%;background:var(--good);display:inline-block}.gt .shut{background:var(--axis)}
+.regime{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.regime .big{font-size:20px;font-weight:700}.regime .risk-on{color:var(--good)}.regime .risk-off{color:var(--bad)}.regime .mixed{color:var(--warn)}
+.push{display:grid;grid-template-columns:minmax(90px,130px) 1fr;gap:6px 10px;align-items:center;font-size:13px}
+.push .f{color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.push .o{grid-column:1 / -1;font-size:12px;color:var(--muted);margin:-2px 0 4px}
+#braingraph svg{display:block;width:100%;height:auto}
+#braingraph text{font-size:10.5px;fill:var(--ink2)}#braingraph text.t{fill:var(--ink);font-weight:600}
+table.links td,table.links th{white-space:nowrap}
 .badge{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--ring);color:var(--ink2);white-space:nowrap}
 .badge.high{color:var(--bad);border-color:var(--bad)}.badge.medium{color:var(--warn);border-color:var(--warn)}
 .legend i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:5px}
@@ -139,6 +154,15 @@ border:1px solid var(--ring);border-radius:10px;padding:10px 14px;display:none;z
       <div class="legend" id="chartlegend"></div></div>
     <div class="card"><h2>Open positions</h2><div id="positions"></div></div>
     <div class="card"><h2>Closed today</h2><div id="closedtoday" class="list"></div></div>
+  </section>
+  <section data-view="brain" hidden>
+    <div class="row" style="margin-bottom:10px"><div class="seg" id="brainseg" role="group" aria-label="Underlying"></div></div>
+    <div class="card" id="braincard"></div>
+    <div class="card"><h2>How everything connects</h2><div class="small muted" style="margin-bottom:6px">World → what the desk reads in India → its bias → the decision. Thick solid lines are research-validated leads; dashed lines explain but don't vote.</div><div class="scroll" id="braingraph"></div></div>
+    <div class="card"><h2>What's pushing the bias now</h2><div id="brainpush"></div></div>
+    <div class="card" id="braingap" hidden></div>
+    <div class="card"><h2>Global markets</h2><div id="globalboard"></div><div class="small muted" id="globalhealth"></div></div>
+    <div class="card"><h2>The wiring, measured</h2><div class="small muted" style="margin-bottom:6px">From the weekly edge research on years of real data. Only a validated lead may vote.</div><div class="scroll" id="brainlinks"></div></div>
   </section>
   <section data-view="thinking" hidden>
     <div class="row" style="margin-bottom:10px"><div class="seg" id="thseg"></div></div>

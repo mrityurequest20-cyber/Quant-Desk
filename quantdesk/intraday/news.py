@@ -45,6 +45,9 @@ DEFAULT_SOURCES = [
     {"name": "Google News Macro", "url": "https://news.google.com/rss/search?q=%22Federal%20Reserve%22%20OR%20%22crude%20oil%22"
                                          "%20OR%20%22Treasury%20yields%22%20OR%20%22Wall%20Street%22%20when%3A1d&hl=en-IN&gl=IN&ceid=IN%3Aen"},
     {"name": "RBI", "url": "https://www.rbi.org.in/pressreleases_rss.xml"},
+    {"name": "Google News World", "url": "https://news.google.com/rss/search?q=%22global%20markets%22%20OR%20%22Asian%20markets%22"
+                                         "%20OR%20%22European%20stocks%22%20OR%20%22US%20stocks%22%20OR%20%22oil%20prices%22%20when%3A1d"
+                                         "&hl=en-US&gl=US&ceid=US%3Aen"},
 ]
 
 # ---- vocabulary -----------------------------------------------------------------------------------------------

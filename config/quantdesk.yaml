@@ -98,6 +98,12 @@ intraday:
     min_relevance: 2.0             # keyword relevance to count for an underlying
     breaking_stand_aside_min: 15   # no new entries this long after a high-impact story (not previews)
     # sources: [{name: ..., url: ...}]   # defaults: ET, Moneycontrol, Mint, Business Standard, Google News, RBI
+  global:                          # 18 global markets (US, Asia, Europe, $, ₹, crude, gold, UST, US VIX) via Yahoo
+    enabled: true
+    refresh_min: 5
+  brain:                           # global ↔ news ↔ India ↔ decision; votes only with research-validated links
+    stress_z: 2.0                  # global moves bigger than this (σ) shrink size...
+    min_size_mult: 0.5             # ...down to this multiple (with 1-lot sizes that means standing aside)
   quant:                           # the decision layer: vol forecast, direction model, expected value of every plan
     enabled: true
     train_days: 55                 # 5m history for the direction model (Yahoo keeps ~60 days)

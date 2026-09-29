@@ -231,6 +231,41 @@ First run (29-Sep-2026), 25 tests:
 
   Most of the classic intraday setups the playbook uses have no statistical support here. The EV gate and the research priors are what keep the desk from trading them blindly.
 
+## The brain (global markets ↔ news ↔ India ↔ the decision)
+
+The brain connects everything the desk sees into one picture, and it's honest about which connections are worth betting on.
+
+- **Global markets.** It watches 18 markets via Yahoo, refreshed every 5 minutes:
+  - US: S&P 500, Nasdaq, Dow and their futures; CBOE VIX; the 10-year yield.
+  - Asia: Nikkei, Hang Seng, Kospi, Shanghai.
+  - Europe: Euro Stoxx 50, DAX, FTSE.
+  - Currencies and commodities: the dollar index, USD/INR, Brent, gold.
+
+  For each market it tracks the last session that *finished before India opened*, the move since 09:15, and the last 30 minutes, all in σ units of that market's own history. Daily bars keep each exchange's own date, so Tokyo's same-day session is never mistaken for a prior one.
+- **Drivers.** Markets roll up into drivers: US equities, Asia, Europe, the dollar, the rupee, crude, US rates, fear (US VIX) and gold. Each is signed the way it usually leans on Indian equities.
+- **Measured links.** The weekly edge research measures every driver → NIFTY/BANKNIFTY link on real data:
+  - *explanatory*: β and correlation to the opening gap, and same-5-minute co-movement
+  - *predictive*: a lead that survives the holdout, false-discovery control and the cost hurdle
+
+  The brain **explains with the first and only votes with the second**, in the *measured* direction.
+- **News → drivers.** Crude headlines attach to the crude node, Fed stories to rates, China to Asia, war to fear. The brain can see whether price and story agree.
+- **Risk overlay.** Big global moves or a US VIX spike shrink size (volatility targeting). At a 1-lot account size, ≈4σ of global stress means standing aside.
+- **What you see.** The site's **Brain** tab shows:
+  - the risk regime
+  - the influence graph (world → India read → bias → decision)
+  - what's pushing the bias right now
+  - today's gap, explained
+  - the global markets board
+  - the measured wiring
+
+What the research says about global markets (29-Sep-2026, 87 tests):
+- **The US close sets the Indian open.** S&P 500 → NIFTY gap: β +0.20, correlation +0.42. US VIX runs against it (−0.38).
+- **The US no longer predicts the Indian session.** Trading NIFTY in the direction of the prior US session earned +6 bps a day over 2007–26 (t +3.2). In the newest third of the data it **reversed** (−4.7 bps). The move is now fully priced into the gap. A brain that "connects the US to India" naively would be betting on a dead edge.
+- **No intraday lead-lag survives.** No global market's last 30 minutes predicts NIFTY's next 30.
+- **One marginal survivor.** BANKNIFTY *fades* Europe's previous session (−5.4 bps, t −2.55, holdout p 0.09). That's the only global link that currently votes.
+
+So global context mostly **explains**; it rarely **predicts**. The desk won't pretend otherwise, and the research re-tests all of it every Saturday. Probability of profit is not the target, because high-POP trades like selling far-OTM options can still lose on average. Expected value after costs is.
+
 ## The website (use it from your phone)
 
 `python -m quantdesk serve` serves a mobile-first web app, plus the daily desk at `/daily`:
@@ -238,6 +273,7 @@ First run (29-Sep-2026), 25 tests:
 | Tab | What's there |
 |---|---|
 | **Live** | equity, today's P&L, engine status (running / paused / not running), **Pause / Resume / Flatten**, the analyst's current read per underlying (bias, conviction, day type, IV vs RV, narrative, evidence bars), the intraday chart (TradingView Lightweight Charts: 1m/5m/15m candles with volume, VWAP, OR/IB/value/prior-day/OI-wall levels as toggleable price lines, entry/exit markers, pinch-zoom, a crosshair readout; **Pro chart** switches to GoCharting), open positions with legs, marks, "Why?" and Close |
+| **Brain** | the global risk regime, the influence graph (world → India read → bias → decision), what's pushing the bias, today's gap explained, the global markets board, and the research-measured wiring |
 | **Thinking** | the running feed of market reads; tap one to see its evidence |
 | **News** | the desk's news tone per index, any breaking-news stand-aside, and the headlines with sentiment, impact and topic tags |
 | **Trades** | every trade with grade, P&L and R; tap for the rationale, market read, sizing, exit, review, lessons and fills |
@@ -453,11 +489,12 @@ quantdesk/                    (repo root)
     ops/                      routine checks
     reporting/                HTML tearsheet, market analysis
     intraday/                 real-time desk: feeds, chains (NSE/Kite/model), order flow, features, analyst,
-                              playbook, quant (vol forecast, direction model, EV engine), news, risk, sim broker,
+                              playbook, quant (vol forecast, direction model, EV engine), news, brain (global
+                              markets, drivers, measured links, risk overlay), risk, sim broker,
                               engine, recorder, synthetic sessions, CLI
     research/                 edge research on real data (pre-registered hypotheses, HAC, holdout, FDR)
     web/                      server (token auth), intraday API, mobile app (PWA), daily desk, GoCharting datafeed
-    data/                     Yahoo, CSV, synthetic market, validation
+    data/                     Yahoo, CSV, synthetic market, validation, the global universe
   tests/                      the test suite
 ```
 
