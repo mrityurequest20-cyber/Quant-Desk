@@ -165,6 +165,8 @@ With Kite, full-mode snapshots are classified with the quote rule and fed into i
 
 **With the default ₹20,000 account**, the same 10 sessions lost **−19%**: 20 trades, 30% win rate, max drawdown −27.6%, ₹2,581 in costs. A small options account is a different game. The smallest position is one lot of a narrow NIFTY debit spread, which risks ₹1.2–1.6k (6–8% of the account). Each round trip also costs about ₹110–130, because the ₹20 flat brokerage is charged on each of the 4 orders a spread needs. That's why the ₹20k config caps the desk at 2 trades a day and only sizes into high-conviction plans. BANKNIFTY (monthly expiries only) is too expensive to trade at this size.
 
+**The quant decision layer on the same 10 sessions at ₹20k:** 7 trades instead of 20, costs of ₹559 instead of ₹2,581, net **+₹108 (+0.5%)** instead of −₹3,808, and max drawdown −13.5% instead of −27.6%. That's the EV gate refusing trades that can't pay their costs. It is not a proven edge: 7 trades, one +₹3,062 winner carried it, and the data is synthetic.
+
 ## The quant decision layer
 
 Every trade has to pay for itself on paper before it's placed. For each signal the playbook raises, the desk runs these steps:
