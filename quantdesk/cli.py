@@ -313,14 +313,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_research(cfg, a):
     import pandas as pd
-    from .research.edges import load_yahoo, report, run, to_json
+    from .research.edges import links_json, load_global, load_yahoo, report, run, to_json
     data = load_yahoo()
+    data["global"] = load_global()
     res = run(data)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     md = report(res, data, f"{pd.Timestamp.now(tz='Asia/Kolkata'):%Y-%m-%d %H:%M} IST")
     (out / "edge_report.md").write_text(md, encoding="utf-8")
     (out / "edges.json").write_text(to_json(res), encoding="utf-8")
+    (out / "links.json").write_text(links_json(data), encoding="utf-8")
     print(md)
 
 

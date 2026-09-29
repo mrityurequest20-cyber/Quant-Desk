@@ -136,6 +136,35 @@ def load_yahoo(symbols=("NIFTY", "BANKNIFTY")) -> dict:
     return out
 
 
+def _local_daily(raw: pd.DataFrame) -> pd.DataFrame:
+    """Daily bars keyed by the exchange's *own* calendar date. Converting an Asian or US daily bar to IST
+    would shift its date and let a session that runs during India's day pose as a 'prior' session."""
+    df = raw.rename(columns={c: str(c).lower() for c in raw.columns})
+    idx = pd.DatetimeIndex(df.index)
+    df.index = pd.DatetimeIndex(idx.date if idx.tz is not None else idx.normalize())
+    return df[["open", "high", "low", "close"]].astype(float).dropna(subset=["close"])
+
+
+def load_global(daily: bool = True, intraday: bool = True) -> dict:
+    import yfinance as yf
+    from ..data.global_universe import GLOBAL
+    out = {"daily": {}, "m5": {}}
+    for key, g in GLOBAL.items():
+        t = yf.Ticker(g["yahoo"])
+        try:
+            if daily:
+                out["daily"][key] = _local_daily(t.history(period="max", interval="1d", auto_adjust=False))
+            if intraday and g.get("intraday"):
+                m = t.history(period="60d", interval="5m", auto_adjust=False)
+                if m is not None and len(m):
+                    m = m.rename(columns={c: str(c).lower() for c in m.columns})
+                    m.index = pd.DatetimeIndex(m.index).tz_convert("UTC")
+                    out["m5"][key] = m[["open", "high", "low", "close"]].astype(float).dropna(subset=["close"])
+        except Exception as exc:                                     # one missing market must not stop the study
+            out.setdefault("errors", {})[key] = str(exc)[:120]
+    return out
+
+
 def _session(df: pd.DataFrame) -> pd.DataFrame:
     t = df.index.time
     return df[(t >= dt.time(9, 15)) & (t < dt.time(15, 30))]
@@ -251,6 +280,103 @@ def m5_tests(sym: str, m: pd.DataFrame) -> list[Result]:
     ]
 
 
+def _prior_session_returns(g: pd.DataFrame, india_dates: pd.DatetimeIndex) -> pd.Series:
+    """For each Indian trading date D: the global market's last *completed* session return with a local date
+    strictly before D (so it finished before NIFTY opened)."""
+    r = np.log(g["close"] / g["close"].shift(1)).dropna()
+    left = pd.DataFrame({"d": pd.DatetimeIndex(india_dates.date).as_unit("ns")})
+    right = pd.DataFrame({"d": pd.DatetimeIndex(r.index).as_unit("ns"), "r": r.to_numpy()}).sort_values("d")
+    m = pd.merge_asof(left.sort_values("d"), right, on="d", direction="backward", allow_exact_matches=False)
+    return pd.Series(m["r"].to_numpy(), index=india_dates)
+
+
+def global_daily_tests(sym: str, d: pd.DataFrame, gdaily: dict) -> tuple[list[Result], list[dict]]:
+    """Trades: open→close in the direction the prior global session implies for India. Links: how much of
+    the opening gap each global market explains (informational: the gap happens before the desk can trade)."""
+    from ..data.global_universe import GLOBAL
+    d = d[d["open"] > 0].copy()
+    r_oc = np.log(d["close"] / d["open"])
+    gap = np.log(d["open"] / d["close"].shift(1))
+    px = float(d["close"].iloc[-1])
+    res, links = [], []
+    for key, g in gdaily.items():
+        meta = GLOBAL.get(key, {})
+        if g is None or len(g) < 300:
+            continue
+        x = _prior_session_returns(g, d.index)
+        ok = x.notna() & r_oc.notna() & (x != 0)
+        if ok.sum() < 250:
+            continue
+        sign = meta.get("india", 0) or 1
+        res.append(evaluate(f"G-{key}", sym, f"{meta.get('name', key)} prior session → trade NIFTY-side "
+                            f"{'with' if sign > 0 else 'against'} it, open→close" if sym == "NIFTY" else
+                            f"{meta.get('name', key)} prior session → trade {'with' if sign > 0 else 'against'} it, open→close",
+                            "daily+global", np.sign(sign * x[ok]) * r_oc[ok], px))
+        okg = x.notna() & gap.notna()
+        if okg.sum() > 250:
+            xs, ys = x[okg].to_numpy(), gap[okg].to_numpy()
+            beta = float(np.cov(xs, ys)[0, 1] / np.var(xs))
+            resid = ys - beta * xs
+            se = math.sqrt(np.var(resid) / (np.var(xs) * len(xs)))
+            links.append({"from": key, "name": meta.get("name", key), "to": sym, "what": "opening gap", "n": int(okg.sum()),
+                          "beta": round(beta, 3), "t": round(beta / se, 2), "corr": round(float(np.corrcoef(xs, ys)[0, 1]), 3),
+                          "r2": round(float(np.corrcoef(xs, ys)[0, 1] ** 2), 3)})
+    return res, links
+
+
+def _asof(df5: pd.DataFrame, times: pd.DatetimeIndex, tol: str = "10min") -> np.ndarray:
+    """Price known at each time: a 5m bar's close is known at its start + 5 minutes; stale beyond `tol` → NaN."""
+    s = df5["close"].copy()
+    s.index = pd.DatetimeIndex(s.index).tz_convert("UTC") + pd.Timedelta(minutes=5)
+    right = pd.DataFrame({"t": s.index.as_unit("ns"), "px": s.to_numpy()}).sort_values("t")
+    left = pd.DataFrame({"t": pd.DatetimeIndex(times).tz_convert("UTC").as_unit("ns")})
+    m = pd.merge_asof(left, right, on="t", direction="backward", tolerance=pd.Timedelta(tol))
+    return m["px"].to_numpy()
+
+
+def global_intraday_tests(sym: str, m5: pd.DataFrame, gm5: dict) -> tuple[list[Result], list[dict]]:
+    """Lead-lag: does a global market's last 30 minutes predict NIFTY's next 30 (non-overlapping blocks)?
+    Links: contemporaneous 5m correlation during Indian hours (moves together, not predictive)."""
+    from ..data.global_universe import GLOBAL
+    m = _session(m5)
+    if m.empty:
+        return [], []
+    px = float(m["close"].iloc[-1])
+    grid = []
+    for day in sorted(set(m.index.date)):
+        base = pd.Timestamp(day, tz=IST) + pd.Timedelta(hours=9, minutes=45)
+        grid += [base + pd.Timedelta(minutes=30 * k) for k in range(11)]          # 09:45 … 14:45, outcome to +30m
+    grid = pd.DatetimeIndex(grid)
+    n_now, n_next = _asof(m, grid), _asof(m, grid + pd.Timedelta(minutes=30))
+    outcome = np.log(n_next / n_now)
+    res, links = [], []
+    nm = m.copy()
+    nm.index = pd.DatetimeIndex(nm.index).tz_convert("UTC")
+    n_ret5 = np.log(nm["close"]).diff()
+    for key, g in gm5.items():
+        meta = GLOBAL.get(key, {})
+        g_now, g_prev = _asof(g, grid), _asof(g, grid - pd.Timedelta(minutes=30))
+        sig = np.log(g_now / g_prev)
+        ok = np.isfinite(sig) & np.isfinite(outcome) & (sig != 0)
+        if ok.sum() < 100:
+            continue
+        sign = meta.get("india", 0) or 1
+        res.append(evaluate(f"L-{key}", sym, f"{meta.get('name', key)} last 30 min → {sym} next 30 min "
+                            f"({'with' if sign > 0 else 'against'} it)", "5m+global",
+                            pd.Series(np.sign(sign * sig[ok]) * outcome[ok], index=grid[ok]), px))
+        gg = g.copy()
+        gg.index = pd.DatetimeIndex(gg.index).tz_convert("UTC")
+        g_ret5 = np.log(gg["close"]).diff()
+        j = pd.concat([n_ret5.rename("n"), g_ret5.rename("g")], axis=1, join="inner").dropna()
+        j = j[(j["n"] != 0) & (j["g"] != 0)]
+        if len(j) > 200:
+            c = float(j["n"].corr(j["g"]))
+            links.append({"from": key, "name": meta.get("name", key), "to": sym, "what": "same 5 minutes", "n": int(len(j)),
+                          "beta": round(float(np.cov(j["g"], j["n"])[0, 1] / np.var(j["g"])), 3),
+                          "t": round(c * math.sqrt((len(j) - 2) / max(1 - c * c, 1e-9)), 2), "corr": round(c, 3), "r2": round(c * c, 3)})
+    return res, links
+
+
 def run(data: dict, symbols=("NIFTY", "BANKNIFTY"), q: float = 0.10) -> list[Result]:
     res: list[Result] = []
     vix = data["daily"].get("INDIAVIX")
@@ -261,6 +387,15 @@ def run(data: dict, symbols=("NIFTY", "BANKNIFTY"), q: float = 0.10) -> list[Res
             res += hourly_tests(s, data["hourly"][s], data["daily"][s])
         if s in data.get("m5", {}):
             res += m5_tests(s, data["m5"][s])
+        glob = data.get("global") or {}
+        if glob.get("daily") and s in data["daily"]:
+            r_, l_ = global_daily_tests(s, data["daily"][s], glob["daily"])
+            res += r_
+            data.setdefault("links", []).extend(l_)
+        if glob.get("m5") and s in data.get("m5", {}):
+            r_, l_ = global_intraday_tests(s, data["m5"][s], glob["m5"])
+            res += r_
+            data.setdefault("links", []).extend(l_)
     passed = benjamini_hochberg([r.p for r in res], q)
     for r, ok in zip(res, passed):
         r.bh_pass = bool(ok)
@@ -278,11 +413,15 @@ def run(data: dict, symbols=("NIFTY", "BANKNIFTY"), q: float = 0.10) -> list[Res
 
 def report(res: list[Result], data: dict, generated: str) -> str:
     span = {k: {s: f"{df.index[0]:%d-%b-%Y} → {df.index[-1]:%d-%b-%Y} ({len(df):,} bars)" for s, df in v.items()}
-            for k, v in data.items()}
-    L = [f"# Edge research — NIFTY & BANKNIFTY", "", f"Generated {generated}. Data: Yahoo Finance.", ""]
+            for k, v in data.items() if k in ("daily", "hourly", "m5")}
+    glob = data.get("global") or {}
+    gspan = {f"global {k}": f"{len(v)} markets" for k, v in glob.items() if k in ("daily", "m5") and v}
+    L = [f"# Edge research — NIFTY & BANKNIFTY, with global markets", "", f"Generated {generated}. Data: Yahoo Finance.", ""]
     for k, v in span.items():
         for s, t in v.items():
             L.append(f"- {k} {s}: {t}")
+    for k, t in gspan.items():
+        L.append(f"- {k}: {t}" + (f" (missing: {', '.join(glob.get('errors', {}))})" if glob.get("errors") else ""))
     L += ["", f"{len(res)} pre-registered tests · Benjamini–Hochberg q = 0.10 · holdout = newest third · cost hurdle "
           f"NIFTY {COST_POINTS['NIFTY']:.1f} pts, BANKNIFTY {COST_POINTS['BANKNIFTY']:.1f} pts per round trip", "",
           "Effect/trade is for the side the test states; a negative effect means the edge is the *opposite* side.", "",
@@ -300,6 +439,15 @@ def report(res: list[Result], data: dict, generated: str) -> str:
         L += ["", "Notes:"]
         for r in notes:
             L.append(f"- {r.id} {r.symbol}: {r.note} {json.dumps(r.params) if r.params else ''}".strip())
+    links = data.get("links") or []
+    if links:
+        L += ["", "## Global links (how markets move together; not trades)", "",
+              "The opening gap happens before the desk can trade, and same-5-minute co-movement isn't a forecast; they "
+              "explain *why* NIFTY is where it is, which is what the brain uses them for.", "",
+              "| From | To | What | N | β | corr | R² | t |", "|---|---|---|---:|---:|---:|---:|---:|"]
+        for l in sorted(links, key=lambda l: (-abs(l["t"]) if l["t"] == l["t"] else 0)):
+            L.append(f"| {l['name']} | {l['to']} | {l['what']} | {l['n']:,} | {l['beta']:+.3f} | {l['corr']:+.3f} | "
+                     f"{l['r2']:.3f} | {l['t']:+.1f} |")
     edges = [r for r in res if r.verdict == "EDGE"]
     L += ["", "## Verdict", ""]
     if edges:
@@ -313,6 +461,10 @@ def report(res: list[Result], data: dict, generated: str) -> str:
     else:
         L.append("Nothing survived every test. Trading any of these would be trading noise; the desk won't.")
     return "\n".join(L) + "\n"
+
+
+def links_json(data: dict) -> str:
+    return json.dumps(data.get("links") or [], indent=1)
 
 
 def to_json(res: list[Result]) -> str:

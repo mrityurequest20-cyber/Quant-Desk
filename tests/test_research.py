@@ -60,3 +60,53 @@ def test_hourly_and_5m_shapes_run():
     hr, mr = hourly_tests("NIFTY", h, daily), m5_tests("NIFTY", m)
     assert [r.id for r in hr] == ["H1", "H2", "H3"] and all(r.n > 50 for r in hr)
     assert [r.id for r in mr] == ["M1", "M2", "M3"] and mr[2].n > 500
+
+
+def _india_and_us(n=1500, seed=7, lead=0.0, same_day=0.0):
+    """NIFTY daily bars plus a 'US' market whose session on day t precedes India's day t+1 (US dates keep their
+    own calendar). `lead`: US day t predicts India day t+1 open→close. `same_day`: US day t co-moves with India
+    day t (concurrent, not usable) — the test must not mistake that for a forecast."""
+    rng = np.random.default_rng(seed)
+    days = pd.bdate_range("2019-01-01", periods=n)
+    us = rng.normal(0, 0.01, n)
+    r_oc = rng.normal(0, 0.008, n)
+    r_oc[1:] += lead * us[:-1]
+    r_oc += same_day * us
+    gap = rng.normal(0, 0.004, n)
+    close = 15000 * np.exp(np.cumsum(gap + r_oc))
+    open_ = close / np.exp(r_oc)
+    india = pd.DataFrame({"open": open_, "high": np.maximum(open_, close), "low": np.minimum(open_, close), "close": close},
+                         index=days.tz_localize("Asia/Kolkata"))
+    us_px = 4000 * np.exp(np.cumsum(us))
+    us_df = pd.DataFrame({"open": us_px, "high": us_px, "low": us_px, "close": us_px}, index=days)   # naive local dates
+    return india, us_df
+
+
+def test_global_lead_is_found_and_concurrency_is_not_mistaken_for_it():
+    from quantdesk.research.edges import global_daily_tests
+    india, us = _india_and_us(lead=0.35)
+    res, links = global_daily_tests("NIFTY", india, {"SPX": us})
+    r = res[0]
+    assert r.id == "G-SPX" and r.t > 4 and r.effect_bps > 0                    # the planted lead shows up
+    india2, us2 = _india_and_us(same_day=0.6)                                   # moves together the same day only
+    r2 = global_daily_tests("NIFTY", india2, {"SPX": us2})[0][0]
+    assert abs(r2.t) < 3                                                       # not a forecast: no look-ahead
+    assert links and links[0]["what"] == "opening gap"
+
+
+def test_global_intraday_lead_lag():
+    from quantdesk.research.edges import global_intraday_tests
+    rng = np.random.default_rng(11)
+    rows_n, rows_g = [], []
+    for d in pd.bdate_range("2026-07-01", periods=50):
+        t0 = pd.Timestamp(d.date(), tz="Asia/Kolkata") + pd.Timedelta(hours=9, minutes=15)
+        idx = pd.date_range(t0, periods=75, freq="5min")
+        g = rng.normal(0, 0.001, 75)
+        n = rng.normal(0, 0.0008, 75)
+        for i in range(6, 75):
+            n[i] += 0.5 * g[i - 6:i].sum() / 6                                   # NIFTY follows the global market with a lag
+        gp, npx = 5000 * np.exp(np.cumsum(g)), 22000 * np.exp(np.cumsum(n))
+        rows_g.append(pd.DataFrame({"open": gp, "high": gp, "low": gp, "close": gp}, index=idx.tz_convert("UTC")))
+        rows_n.append(pd.DataFrame({"open": npx, "high": npx, "low": npx, "close": npx}, index=idx))
+    res, links = global_intraday_tests("NIFTY", pd.concat(rows_n), {"ES": pd.concat(rows_g)})
+    assert res and res[0].id == "L-ES" and res[0].t > 3 and res[0].effect_bps > 0
