@@ -106,9 +106,25 @@ INVERSE_SUBJECTS = ("inflation", "crude", "oil", "brent", "yields", "yield", "do
 NEGATORS = {"not", "no", "never", "without", "despite", "fails", "halts", "snaps", "ends"}
 HIGH_IMPACT = ("repo rate", "monetary policy", "rbi policy", "mpc decision", "fomc", "fed decision", "fed raises", "fed cuts",
                "rate decision", "union budget", r"budget 20\d\d", "gdp data", "cpi data", "inflation data", "election result",
-               "war", "attack", "missile", "emergency", "lower circuit", "circuit breaker", "market crash", "sebi bans",
-               "ceasefire", "sanctions")
+               "war", "attack", "missile", "emergency", "circuit breaker", "sebi bans", "ceasefire", "sanctions")
 HIGH_RE = re.compile(r"\b(" + "|".join(k if "\\" in k else re.escape(k) for k in HIGH_IMPACT) + r")\b")
+# A recap of the market's own move ("Stock market crash: Sensex tumbles 700 points") is not news to the desk: the
+# move is already on its tape, and the explainer usually arrives after it. On 29 Sep 2026 five "market crash"
+# recaps in 70 minutes kept the desk out of the morning's sell-off; so a recap never counts as high impact (it
+# can't make the desk stand aside) and weighs less in the tone. The first report of a shock ("RBI cuts repo rate",
+# "missile attack") is not a recap and still does both.
+RECAP_SUBJECT = re.compile(r"\b(sensex|nifty\w*|bank ?nifty|stock ?markets?|share ?markets?|equity markets?|markets|dalal street|"
+                           r"d-street|indices|benchmark|stocks|investors)\b", re.I)
+RECAP_MOVE = re.compile(r"\b(crash\w*|tumbl\w*|plung\w*|slump\w*|sink\w*|sank|slid\w*|slip\w*|tank\w*|fall\w*|fell|drop\w*|"
+                        r"declin\w*|los[et]\w*|bleed\w*|rall\w*|surg\w*|soar\w*|jump\w*|zoom\w*|rebound\w*|recover\w*|"
+                        r"climb\w*|gain\w*|rise|rises|rose|selloff|sell-off|bloodbath|carnage|wiped? (?:out|off)|bear grip|"
+                        r"bull run|in the red|in the green|\d[\d,]* (?:points|pts)|lakh crore)\b", re.I)
+
+
+def is_recap(text: str) -> bool:
+    return bool(RECAP_SUBJECT.search(text) and RECAP_MOVE.search(text))
+
+
 # a preview is not the event: "ahead of RBI policy" shouldn't make the desk stand aside
 PREVIEW = re.compile(r"\b(ahead of|preview|what to expect|expected to|likely to|may |could |live updates|week ahead|"
                      r"things to know|to watch|before the|explained)\b", re.I)
@@ -173,7 +189,7 @@ def sentiment(text: str) -> float:
 def impact(text: str) -> str:
     t = text.lower()
     # whole words only: "war" must not fire on "toward", "forward", "award", "software"
-    if HIGH_RE.search(t):
+    if HIGH_RE.search(t) and not is_recap(t):
         return "high"
     if any(re.search(rf"\b{re.escape(k)}\b", t) for k in MEDIUM_IMPACT):
         return "medium"
@@ -191,6 +207,7 @@ class NewsItem:
     id: str = ""
     sentiment: float = 0.0
     impact: str = "low"
+    recap: bool = False                             # the market's own move, retold (not new information)
     about: dict = field(default_factory=dict)       # {"NIFTY": relevance, "BANKNIFTY": relevance, "macro": x}
 
     def to_record(self) -> dict:
@@ -207,7 +224,8 @@ def classify(item: NewsItem) -> NewsItem:
     item.sentiment = sentiment(item.title) if item.title else 0.0
     if abs(item.sentiment) < 0.05 and item.summary:
         item.sentiment = 0.5 * sentiment(item.summary[:300])
-    item.impact = impact(text)
+    item.recap = is_recap(item.title)
+    item.impact = impact(text) if not item.recap else min(impact(text), "medium", key=["low", "medium", "high"].index)
     return item
 
 
@@ -340,12 +358,12 @@ class NewsDesk:
         for x in rel:
             age = (now - x.ts).total_seconds() / 60
             w = 0.5 ** (age / self.half_life) * min(x.about.get(symbol, 0) / 4, 1.5) * (1 + 0.5 * (len(x.sources) - 1)) \
-                * {"high": 2.0, "medium": 1.3, "low": 1.0}[x.impact]
+                * {"high": 2.0, "medium": 1.3, "low": 1.0}[x.impact] * (0.4 if x.recap else 1.0)
             num += w * x.sentiment
             den += w
         tone = num / den if den else 0.0
         conf = len(rel) / (len(rel) + 3)
-        breaking = next((x for x in rel if x.impact == "high" and not PREVIEW.search(x.title)
+        breaking = next((x for x in rel if x.impact == "high" and not x.recap and not PREVIEW.search(x.title)
                          and (now - x.ts) <= pd.Timedelta(minutes=self.breaking_min)), None)
         return {"tone": float(tone), "confidence": float(conf), "n": len(rel), "latest": rel[0].title,
                 "latest_age_min": float((now - rel[0].ts).total_seconds() / 60),

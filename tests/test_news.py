@@ -7,7 +7,7 @@ import pytest
 
 from quantdesk.intraday.engine import IntradayEngine, run_replay
 from quantdesk.intraday.feeds import ReplayFeed
-from quantdesk.intraday.news import NewsDesk, impact, parse_feed, sentiment
+from quantdesk.intraday.news import NewsDesk, impact, is_recap, parse_feed, sentiment
 from quantdesk.intraday.sim import IntradayBroker
 from quantdesk.intraday.synthetic import simulate_sessions
 from quantdesk.journal.journal import Journal
@@ -46,8 +46,32 @@ def test_impact_levels():
     # whole words: "war" is not in "toward", "forward", "award" or "software"
     assert impact("Rupee slips toward 96 vs US dollar as crude, yields and stocks weigh") == "medium"
     assert impact("Infosys wins software award; forward guidance steady") != "high"
-    assert impact("Markets slump as war fears grip investors") == "high"
+    assert impact("Iran launches missile attack on Israel") == "high"
     assert impact("Union Budget 2027: what changes for markets") == "high"
+
+
+@pytest.mark.parametrize("title", [                  # 29 Sep 2026: these kept the desk out of the morning's sell-off
+    "Stock Market Crash: Nifty Breaches 22,600, Sensex Slumps 700 Points — Three Reasons Why",
+    "Oil rise, bond yields: Top factors behind Tuesday's stock market crash",
+    "Stock Market Crash: Investors Lose Rs 5.9 Lakh Crore In 90 Minutes As Sensex Tumbles Over 700 Points",
+    "Markets slump as war fears grip investors", "Sensex jumps 600 points after RBI rate cut",
+])
+def test_a_recap_of_the_markets_own_move_is_not_breaking_news(title):
+    assert is_recap(title) and impact(title) != "high"
+
+
+def test_recaps_never_make_the_desk_stand_aside(cfg):
+    t = pd.Timestamp("2026-09-29 10:40", tz=IST)
+    feed = rss([("Stock market crash today: BSE Sensex continues to be in bear grip; Nifty50 below 22,600", rfc("2026-09-29 10:36")),
+                ("Stock Market Crash: Investors Lose Rs 5.9 Lakh Crore In 90 Minutes As Sensex Tumbles", rfc("2026-09-29 10:39"))])
+    nd = NewsDesk(cfg, fetch=lambda url: feed, sources=[{"name": "A", "url": "a"}])
+    nd.refresh(t)
+    st = nd.state("NIFTY", t)
+    assert st["n"] == 2 and st["tone"] < 0 and st["breaking"] is None        # bearish tone, but no stand-aside
+    shock = rss([("Iran launches missile attack on Israel; Nifty, Sensex under pressure", rfc("2026-09-29 10:38"))])
+    nd2 = NewsDesk(cfg, fetch=lambda url: shock, sources=[{"name": "A", "url": "a"}])
+    nd2.refresh(t)
+    assert "missile" in nd2.state("NIFTY", t)["breaking"]["title"]              # a real shock still does
 
 
 def test_parse_rss_atom_and_google_news():
