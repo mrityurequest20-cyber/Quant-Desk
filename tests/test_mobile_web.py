@@ -141,9 +141,10 @@ def test_static_site_exports(site, tmp_path):
     out = publish_site(cfg, "live", tmp_path / "site", sessions=2)
     names = {p.name for p in out.iterdir()}
     assert {"index.html", "app.js", "data.json", "manifest.webmanifest", "icon-192.png", "icon-512.png",
-            "apple-touch-icon.png", ".nojekyll"} <= names
+            "apple-touch-icon.png", ".nojekyll", "lightweight-charts.js"} <= names
     page = (out / "index.html").read_text()
-    assert "QD_PUBLISHED" in page and '<script src="app.js"></script>' in page
+    assert "QD_PUBLISHED" in page and '<script src="app.js"></script>' in page and '<script src="lightweight-charts.js">' in page
+    assert "TradingView Lightweight Charts" in html                             # the snapshot inlines the chart library
     assert 'href="/' not in page and "/static/" not in page                     # works under /<repo>/ on Pages
     man = json.loads((out / "manifest.webmanifest").read_text())
     assert man["start_url"] == "./" and not any(i["src"].startswith("/") for i in man["icons"])
@@ -157,3 +158,12 @@ def test_static_site_exports(site, tmp_path):
     assert set(data["chart"]) == {f"{s}|{iv}" for s in ("NIFTY", "BANKNIFTY") for iv in ("1m", "5m", "15m")}
     assert all(tid in data["trade"] for tid in [t["id"] for t in data["trades"]][:150])
     assert not (out / "data.json.tmp").exists()
+
+
+def test_chart_library_is_served(site):
+    """The phone app's chart engine (TradingView Lightweight Charts, vendored) loads from the desk itself."""
+    base = site[0]
+    code, page, _ = call(base, "/")
+    assert code == 200 and b"/static/vendor/lightweight-charts.js" in page
+    code, lib, headers = call(base, "/static/vendor/lightweight-charts.js")
+    assert code == 200 and b"TradingView Lightweight Charts" in lib[:400] and "javascript" in headers.get("Content-Type", "")

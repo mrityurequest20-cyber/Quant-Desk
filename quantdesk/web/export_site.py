@@ -21,6 +21,7 @@ from pathlib import Path
 from .intraday_api import IntradayAPI
 
 STATIC = Path(__file__).resolve().parent / "static" / "app"
+CHART_LIB = Path(__file__).resolve().parent / "static" / "vendor" / "lightweight-charts.js"
 
 # Answers the app's /api/i/* calls from one data object D (same JSON the server would return).
 ROUTES = r"""
@@ -153,6 +154,7 @@ def export_site(cfg, account: str, out: Path, sessions: int = 3, label: str | No
     app_js = (STATIC / "app.js").read_text(encoding="utf-8")
     html = (f"<title>QuantDesk</title>\n<style>{style}</style>\n{body}\n"
             f'<script type="application/json" id="qd-data">{payload}</script>\n'
+            f"<script>{CHART_LIB.read_text(encoding='utf-8')}</script>\n"
             f"<script>{SHIM}</script>\n<script>{app_js}</script>\n")
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -172,6 +174,7 @@ def publish_site(cfg, account: str, out_dir: Path, sessions: int = 3, label: str
     for asset in ("manifest.webmanifest", "icon-192.png", "apple-touch-icon.png"):
         html = html.replace(f'href="/{asset}"', f'href="{asset}"')
     html = re.sub(r'<script src="/static/datafeed.js"></script>\s*', "", html)
+    html = html.replace('<script src="/static/vendor/lightweight-charts.js"></script>', '<script src="lightweight-charts.js"></script>')
     html = html.replace('<script src="/static/app/app.js"></script>', f"<script>{LIVE_SHIM}</script>\n<script src=\"app.js\"></script>")
     html = html.replace("</style>", _note_css() + "\n</style>", 1)
     note = note or ("Paper trades only. The desk runs by itself on NSE trading days, 09:15–15:30 IST, and this page "
@@ -179,6 +182,7 @@ def publish_site(cfg, account: str, out_dir: Path, sessions: int = 3, label: str
     html = _with_note(html, data["label"], note)
     (out / "index.html").write_text(html, encoding="utf-8")
     shutil.copyfile(STATIC / "app.js", out / "app.js")
+    shutil.copyfile(CHART_LIB, out / "lightweight-charts.js")
     for icon in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
         shutil.copyfile(STATIC / icon, out / icon)
     man = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))

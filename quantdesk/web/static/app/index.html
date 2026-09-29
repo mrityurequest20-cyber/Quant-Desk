@@ -14,13 +14,13 @@
 <title>QuantDesk</title>
 <style>
 :root{color-scheme:light;--page:#f9f9f7;--surface:#fcfcfb;--surface2:#f3f2ee;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;
---grid:#e1e0d9;--axis:#c3c2b7;--ring:rgba(11,11,11,.10);--up:#2a78d6;--down:#e34948;--s1:#2a78d6;--s2:#eb6834;
+--grid:#e1e0d9;--axis:#c3c2b7;--ring:rgba(11,11,11,.10);--up:#2a78d6;--down:#e34948;--cup:#089981;--cdown:#e0403f;--s1:#2a78d6;--s2:#eb6834;
 --good:#006300;--bad:#d03b3b;--warn:#8a5a00;--track:#cde2fb;--wash:rgba(11,11,11,.05);--mid:#f0efec}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--page:#0d0d0d;--surface:#1a1a19;--surface2:#232321;
---ink:#fff;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--ring:rgba(255,255,255,.10);--up:#3987e5;--down:#e66767;
+--ink:#fff;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--ring:rgba(255,255,255,.10);--up:#3987e5;--down:#e66767;--cup:#26a69a;--cdown:#ef5350;
 --s1:#3987e5;--s2:#d95926;--good:#0ca30c;--bad:#e66767;--warn:#fab219;--track:#184f95;--wash:rgba(255,255,255,.06);--mid:#383835}}
 :root[data-theme="dark"]{color-scheme:dark;--page:#0d0d0d;--surface:#1a1a19;--surface2:#232321;--ink:#fff;--ink2:#c3c2b7;--muted:#898781;
---grid:#2c2c2a;--axis:#383835;--ring:rgba(255,255,255,.10);--up:#3987e5;--down:#e66767;--s1:#3987e5;--s2:#d95926;--good:#0ca30c;
+--grid:#2c2c2a;--axis:#383835;--ring:rgba(255,255,255,.10);--up:#3987e5;--down:#e66767;--cup:#26a69a;--cdown:#ef5350;--s1:#3987e5;--s2:#d95926;--good:#0ca30c;
 --bad:#e66767;--warn:#fab219;--track:#184f95;--wash:rgba(255,255,255,.06);--mid:#383835}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--page);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -68,7 +68,15 @@ nav.tabs button[aria-selected="true"]{background:var(--surface);border:1px solid
 .dbar{position:relative;height:10px;background:var(--surface2);border-radius:5px}
 .dbar::after{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--axis)}
 .dbar i{position:absolute;top:0;bottom:0;border-radius:5px}
-.chart{position:relative;width:100%;height:300px;touch-action:pan-y}@media (min-width:900px){.chart{height:400px}}
+.chart{position:relative;width:100%;height:380px;touch-action:pan-y}@media (min-width:900px){.chart{height:460px}}
+.chart.tall{height:min(78vh,760px)}
+.lwbar{min-height:34px;margin:-2px 0 6px;font-size:12px;line-height:1.4;color:var(--ink2);font-variant-numeric:tabular-nums}
+.lwbar b{color:var(--ink);font-weight:600}.lwbar .k{color:var(--muted);margin-right:2px}.lwbar .row1{display:flex;flex-wrap:wrap;column-gap:10px}.lwbar .row1>span{white-space:nowrap}
+.lwbar .row2{color:var(--muted)}
+.lvchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.lvchips button{font-size:12px;padding:3px 9px;border-radius:999px;min-height:28px}
+.lvchips button[aria-pressed=false]{opacity:.45}
+.lvchips i{display:inline-block;width:12px;height:0;border-top:2px dashed;vertical-align:middle;margin-right:5px}
 .chart svg{width:100%;height:100%;display:block}.chart svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 .chart svg text.lvl{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
 .legend{display:flex;gap:12px;flex-wrap:wrap;color:var(--ink2);font-size:12px;margin-top:6px}
@@ -118,7 +126,9 @@ border:1px solid var(--ring);border-radius:10px;padding:10px 14px;display:none;z
       <div class="seg" id="ivseg" role="group" aria-label="Interval"></div></div>
     <div class="card" id="viewcard"></div>
     <div class="card"><h2>Chart<span class="sp"></span><span class="small muted" id="chartday"></span>
-      <button class="small" id="btn-pro" title="Load the GoCharting SDK (needs network + license)">Pro chart</button></h2><div class="chart" id="chart"></div>
+      <button class="small" id="btn-tall" aria-label="Taller chart" title="Taller chart">⤢</button>
+      <button class="small" id="btn-pro" title="Load the GoCharting SDK (needs network + license)">Pro chart</button></h2><div class="lwbar" id="lwbar" aria-live="off"></div><div class="chart" id="chart"></div>
+      <div class="lvchips" id="lvchips" role="group" aria-label="Levels on the chart"></div>
       <div class="legend" id="chartlegend"></div></div>
     <div class="card"><h2>Open positions</h2><div id="positions"></div></div>
     <div class="card"><h2>Closed today</h2><div id="closedtoday" class="list"></div></div>
@@ -133,6 +143,7 @@ border:1px solid var(--ring);border-radius:10px;padding:10px 14px;display:none;z
 </main>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="body" id="sheetbody"></div></div>
 <div class="tt" id="tt"></div><div id="toast" role="status"></div>
+<script src="/static/vendor/lightweight-charts.js"></script>
 <script src="/static/datafeed.js"></script>
 <script src="/static/app/app.js"></script>
 </body>

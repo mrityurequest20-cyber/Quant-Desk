@@ -82,6 +82,7 @@ function show(tab) {
 function setTheme(t) {
 	if (t) document.documentElement.setAttribute("data-theme", t);
 	store("qd.theme", t || "");
+	if (typeof restyleChart === "function") restyleChart();
 }
 function seg(el, items, current, onpick) {
 	el.textContent = "";
@@ -225,7 +226,7 @@ function loadScript(url, timeout) {
 }
 async function togglePro() {
 	const btn = $("#btn-pro");
-	if (S.pro) { S.pro = false; btn.textContent = "Pro chart"; $("#chart").style.height = ""; return loadChart(); }
+	if (S.pro) { S.pro = false; btn.textContent = "Pro chart"; $("#chart").style.height = ""; $("#chart").textContent = ""; $("#lvchips").hidden = false; return loadChart(); }
 	btn.textContent = "Loading…";
 	let cfg;
 	try { cfg = await api("/api/config"); } catch (e) { cfg = { gocharting: {} }; }
@@ -233,6 +234,8 @@ async function togglePro() {
 	if (!g.enabled || !(await loadScript(g.sdkUrl, 12000))) { btn.textContent = "Pro chart"; return toast("GoCharting SDK couldn't load (network or license); using the built-in chart", true); }
 	S.pro = true;
 	btn.textContent = "Simple chart";
+	destroyLW();
+	$("#lvchips").hidden = true;
 	const el = $("#chart");
 	el.textContent = "";
 	el.style.height = "460px";
@@ -252,7 +255,163 @@ async function loadChart() {
 	let d;
 	try { d = await api(`/api/i/chart?symbol=${S.sym}&interval=${S.interval}`); } catch (e) { return; }
 	S.chart = d;
-	drawCandles();
+	drawChart();
+}
+
+// ---- chart: TradingView Lightweight Charts (vendored under /static/vendor), SVG fallback -------------------
+// The library shows times as UTC; shifting by +5:30 makes the axis and crosshair read IST.
+const IST_OFF = 19800;
+const LEVELS = {
+	or_high: ["OR high", "or"], or_low: ["OR low", "or"], ib_high: ["IB high", "ib"], ib_low: ["IB low", "ib"],
+	vah: ["VAH", "value"], val: ["VAL", "value"], poc: ["POC", "value"], pdh: ["PDH", "prior"], pdl: ["PDL", "prior"],
+	call_wall: ["Call wall", "oi"], put_wall: ["Put wall", "oi"],
+};
+const LEVEL_GROUPS = [["or", "Opening range", "--s1"], ["prior", "Prior day", "--warn"], ["value", "Value area", "--muted"],
+	["oi", "OI walls", "--bad"], ["ib", "Initial balance", "--ink2"]];
+function cssv(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function levelsOn() {
+	let on = null;
+	try { on = JSON.parse(store("qd.levels") || "null"); } catch (e) { on = null; }
+	return on || { or: true, prior: true, value: true, oi: true, ib: false };
+}
+function levelColor(k) {
+	if (k === "call_wall") return cssv("--bad");
+	if (k === "put_wall") return cssv("--good");
+	const g = LEVELS[k][1];
+	return cssv((LEVEL_GROUPS.find((x) => x[0] === g) || [0, 0, "--ink2"])[2]);
+}
+function lwTheme() {
+	return {
+		layout: { background: { type: "solid", color: cssv("--surface") }, textColor: cssv("--ink2"), fontSize: 11,
+			fontFamily: getComputedStyle(document.body).fontFamily, attributionLogo: true },
+		grid: { vertLines: { color: cssv("--grid") }, horzLines: { color: cssv("--grid") } },
+		rightPriceScale: { borderColor: cssv("--axis"), scaleMargins: { top: 0.08, bottom: 0.18 } },
+		timeScale: { borderColor: cssv("--axis"), timeVisible: true, secondsVisible: false, rightOffset: 4, minBarSpacing: 2 },
+		crosshair: { mode: 0, vertLine: { color: cssv("--muted"), labelBackgroundColor: cssv("--ink2") },
+			horzLine: { color: cssv("--muted"), labelBackgroundColor: cssv("--ink2") } },
+	};
+}
+function lwSeriesColors() {
+	const up = cssv("--cup"), dn = cssv("--cdown");
+	return { candle: { upColor: up, downColor: dn, borderUpColor: up, borderDownColor: dn, wickUpColor: up, wickDownColor: dn },
+		vwap: { color: cssv("--s2") }, up, dn };
+}
+function destroyLW() {
+	if (S.lw) { try { S.lw.chart.remove(); } catch (e) { /* already gone */ } }
+	S.lw = null;
+	const bar = $("#lwbar");
+	if (bar) { bar.textContent = ""; bar.hidden = true; }
+}
+function createLW(el) {
+	const LW = window.LightweightCharts, col = lwSeriesColors();
+	el.textContent = "";
+	const legend = $("#lwbar");
+	legend.hidden = false;
+	const chart = LW.createChart(el, Object.assign(lwTheme(), {
+		autoSize: true,
+		handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+		handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+		localization: { priceFormatter: (p) => num(p, p > 1000 ? 1 : 2) },
+	}));
+	const candle = chart.addSeries(LW.CandlestickSeries, Object.assign({ priceLineVisible: true, lastValueVisible: true }, col.candle));
+	const vol = chart.addSeries(LW.HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+	chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 }, visible: false });
+	const vwap = chart.addSeries(LW.LineSeries, { color: col.vwap.color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+		crosshairMarkerVisible: false, title: "VWAP" });
+	const markers = LW.createSeriesMarkers ? LW.createSeriesMarkers(candle, []) : null;
+	S.lw = { chart, candle, vol, vwap, markers, lines: [], legend, key: null, byTime: new Map() };
+	chart.subscribeCrosshairMove((param) => lwLegend(param && param.time));
+}
+function lwLegend(time) {
+	const d = S.chart, L = S.lw;
+	if (!L || !d || !d.bars) return;
+	const B = d.bars, n = B.t.length;
+	let i = n - 1;
+	if (time != null) { const j = L.byTime.get(time); if (j != null) i = j; }
+	const prev = i > 0 ? B.c[i - 1] : B.o[i], chg = (B.c[i] / prev - 1) * 100;
+	const kv = (k, v, strong) => h("span", {}, h("span", { class: "k" }, k), strong ? h("b", { class: cls(chg) }, v) : v);
+	L.legend.textContent = "";
+	L.legend.append(
+		h("div", { class: "row1" }, h("span", {}, h("b", {}, ist(B.t[i]))), kv("O", num(B.o[i])), kv("H", num(B.h[i])), kv("L", num(B.l[i])),
+			kv("C", `${num(B.c[i])} ${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%`, true)),
+		h("div", { class: "row2" }, `VWAP ${num(d.vwap[i])}`, B.v[i] > 0 ? ` · Vol ${num(B.v[i], 0)}` : "",
+			...(L.marksAt.get(B.t[i]) || []).map((m) => ` · ${m.kind === "entry" ? "▲" : "●"} ${m.text}`)));
+}
+function drawLevelChips() {
+	const box = $("#lvchips"), on = levelsOn(), have = new Set(Object.keys((S.chart && S.chart.levels) || {}).map((k) => LEVELS[k] && LEVELS[k][1]));
+	box.textContent = "";
+	for (const [g, label, color] of LEVEL_GROUPS) {
+		if (!have.has(g)) continue;
+		box.appendChild(h("button", { class: "small", "aria-pressed": String(!!on[g]), onclick: () => {
+			const o = levelsOn(); o[g] = !o[g]; store("qd.levels", JSON.stringify(o)); drawChart(); } },
+			h("i", { style: `border-color:${cssv(color)}` }), label));
+	}
+}
+function drawChart() {
+	const el = $("#chart"), d = S.chart;
+	$("#chartday").textContent = d && d.day ? `${d.symbol} · ${d.day} · ${d.interval}` : "";
+	if (!window.LightweightCharts || !window.LightweightCharts.createChart) return drawCandles();   // library missing: SVG
+	$("#chartlegend").textContent = "";
+	if (!d || !d.bars) {
+		destroyLW();
+		el.textContent = "";
+		el.appendChild(h("div", { class: "empty" }, "No bars recorded yet for this account."));
+		$("#lvchips").textContent = "";
+		return;
+	}
+	if (!S.lw) createLW(el);
+	const L = S.lw, B = d.bars, n = B.t.length, col = lwSeriesColors();
+	const T = (t) => t + IST_OFF;
+	L.byTime = new Map(B.t.map((t, i) => [T(t), i]));
+	L.candle.setData(B.t.map((t, i) => ({ time: T(t), open: B.o[i], high: B.h[i], low: B.l[i], close: B.c[i] })));
+	const hasVol = B.v.some((v) => v > 0);
+	L.vol.setData(hasVol ? B.t.map((t, i) => ({ time: T(t), value: B.v[i], color: (B.c[i] >= B.o[i] ? col.up : col.dn) + "55" })) : []);
+	L.vwap.setData(B.t.map((t, i) => ({ time: T(t), value: d.vwap[i] })));
+	// levels as labelled price lines, by group, toggled with the chips under the chart
+	L.lines.forEach((pl) => L.candle.removePriceLine(pl));
+	L.lines = [];
+	const on = levelsOn();
+	for (const [k, v] of Object.entries(d.levels || {})) {
+		if (!LEVELS[k] || !on[LEVELS[k][1]] || !(v > 0)) continue;
+		L.lines.push(L.candle.createPriceLine({ price: v, color: levelColor(k), lineWidth: k === "poc" || k.includes("wall") ? 2 : 1,
+			lineStyle: k === "poc" ? 0 : 2, axisLabelVisible: true, title: LEVELS[k][0] }));
+	}
+	drawLevelChips();
+	// trades: entries as arrows (below the bar for longs), exits as dots coloured by P&L; snapped to their bar
+	const snap = (t) => { let lo = 0; for (let i = 0; i < n; i++) if (B.t[i] <= t) lo = i; return B.t[lo]; };
+	L.marksAt = new Map();
+	const mk = (d.markers || []).map((m) => {
+		const bt = snap(m.t), long = m.dir >= 0, entry = m.kind === "entry";
+		(L.marksAt.get(bt) || L.marksAt.set(bt, []).get(bt)).push(m);
+		const win = /₹-/.test(m.text) ? false : true;
+		return { time: T(bt), position: entry ? (long ? "belowBar" : "aboveBar") : (long ? "aboveBar" : "belowBar"),
+			shape: entry ? (long ? "arrowUp" : "arrowDown") : "circle",
+			color: entry ? cssv("--ink") : (win ? cssv("--good") : cssv("--bad")),
+			text: entry ? m.text.split(" · ")[0] : m.text.replace(/^\S+\s/, "") };
+	}).sort((a, b) => a.time - b.time);
+	if (L.markers) L.markers.setMarkers(mk);
+	else if (L.candle.setMarkers) L.candle.setMarkers(mk);
+	// first draw of a symbol/interval: frame the session (on a phone, the last ~2 hours of 1m bars)
+	const key = `${d.symbol}|${d.interval}|${d.day}`;
+	if (L.key !== key) {
+		L.key = key;
+		const narrow = el.clientWidth < 640, want = d.interval === "1m" ? (narrow ? 120 : 240) : n;
+		if (n > want) L.chart.timeScale().setVisibleLogicalRange({ from: n - want, to: n + 3 });
+		else L.chart.timeScale().fitContent();
+	}
+	lwLegend(null);
+	const lg = $("#chartlegend");
+	lg.append(h("span", {}, h("i", { style: `background:${col.up};height:8px` }), "up"), h("span", {}, h("i", { style: `background:${col.dn};height:8px` }), "down"),
+		h("span", {}, h("i", { style: "background:var(--s2)" }), "VWAP"), h("span", {}, "▲▼ entry  ● exit"),
+		h("span", { class: "muted" }, "pinch or drag to zoom and pan"));
+}
+function restyleChart() {
+	if (!S.lw) return;
+	S.lw.chart.applyOptions(lwTheme());
+	const col = lwSeriesColors();
+	S.lw.candle.applyOptions(col.candle);
+	S.lw.vwap.applyOptions(col.vwap);
+	drawChart();
 }
 
 function niceTicks(lo, hi, n) {
@@ -518,6 +677,8 @@ async function boot() {
 	$("#btn-pause").addEventListener("click", () => command(S.state && S.state.paused ? "resume" : "pause"));
 	$("#btn-flatten").addEventListener("click", () => command("flatten", null, "Close every open position and pause new entries?"));
 	$("#btn-pro").addEventListener("click", togglePro);
+	$("#btn-tall").addEventListener("click", () => { const c = $("#chart"); c.classList.toggle("tall"); if (!S.lw) drawChart(); });
+	matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => restyleChart());
 	if (window.QD_DEMO) $("#btn-pro").hidden = true;
 	if (window.QD_PUBLISHED) $("#btn-pause").parentElement.hidden = true;    // a static site can't command the engine
 	$("#more").addEventListener("click", () => loadThoughts(false));
@@ -538,6 +699,6 @@ async function boot() {
 	setInterval(() => { tick++; refresh(false); }, 10000);
 	document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(true); });
 	let rt;
-	addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (S.tab === "live" && !S.pro) drawCandles(); }, 200); });
+	addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (S.tab === "live" && !S.pro && !S.lw) drawCandles(); }, 200); });
 }
 boot().catch((e) => toast("failed to start: " + e.message, true));
