@@ -2,9 +2,10 @@
 
 export_site   ONE self-contained HTML file with the account's data embedded (a frozen snapshot):
                   python -m quantdesk intraday export-site --account synthetic --out site.html
-publish_site  a folder (index.html, app.js, data.json, PWA manifest + icons) whose page re-fetches
-              data.json every minute; re-publish it every few minutes while the desk runs and the
-              site stays live. This is what the GitHub Actions workflow pushes to GitHub Pages:
+publish_site  a folder (index.html, app.js, data.json, fonts, PWA manifest + icons + service worker)
+              whose page re-fetches data.json every minute; re-publish it every few minutes while the
+              desk runs and the site stays live. Installable as an app on a phone (Add to Home Screen).
+              This is what the GitHub Actions workflow pushes to GitHub Pages:
                   python -m quantdesk intraday export-site --dir _site
 
 Either way a small shim answers the app's /api/i/* calls from the data, and the controls are
@@ -12,6 +13,8 @@ off (a static site has no engine behind it to command).
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 import shutil
@@ -22,6 +25,8 @@ from .intraday_api import IntradayAPI
 
 STATIC = Path(__file__).resolve().parent / "static" / "app"
 CHART_LIB = Path(__file__).resolve().parent / "static" / "vendor" / "lightweight-charts.js"
+FONTS = STATIC / "fonts"
+ICONS = ("icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png")
 
 # Answers the app's /api/i/* calls from one data object D (same JSON the server would return).
 ROUTES = r"""
@@ -34,7 +39,9 @@ function qdAnswer(D, url) {
     case "/api/i/state": {
       const ts = D.state.heartbeat && D.state.heartbeat.ts;
       // a published desk ages in real time (no heartbeat yet = offline); a frozen snapshot never goes stale
-      const age = !D.live ? 0 : ts ? Math.max(0, (Date.now() - Date.parse(String(ts).replace(" ", "T"))) / 1000) : null;
+      // Safari rejects a space separator and more than 3 fractional digits: normalise before parsing
+      const t = ts ? Date.parse(String(ts).trim().replace(" ", "T").replace(/(\.\d{3})\d+/, "$1")) : NaN;
+      const age = !D.live ? 0 : isFinite(t) ? Math.max(0, (Date.now() - t) / 1000) : null;
       return reply(Object.assign({}, D.state, { age_sec: age }));
     }
     case "/api/i/thoughts": {
@@ -82,6 +89,7 @@ window.QD_PUBLISHED = true;
     return pending;
   }
   window.fetch = async (url) => qdAnswer(await load(), url);
+  window.qdReload = () => { at = 0; return load(); };        // pull-to-refresh: skip the 60 s cache
 })();
 """
 
@@ -133,31 +141,35 @@ def _json(data) -> str:
     return json.dumps(_clean(data), separators=(",", ":"))
 
 
-def _note_css() -> str:
-    return ("\n.note-demo{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:10px 12px;"
-            "margin-bottom:12px;font-size:13px;color:var(--ink2)}.note-demo b{color:var(--ink)}")
+def _meta(label: str, note: str) -> str:
+    """The site's label and footnote, as data the app renders with textContent (never as HTML)."""
+    js = f"window.QD_LABEL={json.dumps(label)};window.QD_NOTE={json.dumps(note)};"
+    return "<script>" + js.replace("</", "<\\/") + "</script>"
 
 
-def _with_note(body: str, label: str, note: str) -> str:
-    return body.replace('<section data-view="live">',
-                        f'<section data-view="live">\n    <div class="note-demo" role="note"><b>{label}.</b> {note}</div>', 1)
+def _font_data_uris(css: str) -> str:
+    """The one-file snapshot carries its fonts inline (no folder next to it to load them from)."""
+    for f in FONTS.glob("*.woff2"):
+        uri = "data:font/woff2;base64," + base64.b64encode(f.read_bytes()).decode()
+        css = css.replace(f"/static/app/fonts/{f.name}", uri)
+    return css
 
 
 def export_site(cfg, account: str, out: Path, sessions: int = 3, label: str | None = None, note: str | None = None) -> Path:
     data = site_data(cfg, account, sessions, label)
     payload = _json(data).replace("</", "<\\/")
     style, body = _body_and_style((STATIC / "index.html").read_text(encoding="utf-8"))
-    # the host pads the page for phone safe areas; the sticky header must not add them twice
-    style = style.replace("header{position:sticky;top:0;", "header{position:sticky;top:env(safe-area-inset-top,0px);")
-    style = style.replace("padding:calc(10px + env(safe-area-inset-top)) 16px 10px;", "padding:10px 16px;")
-    style += _note_css()
+    # the host pads the page for phone safe areas; the sticky app bar must not add them twice
+    style = style.replace(".bar{position:sticky;top:0;", ".bar{position:sticky;top:env(safe-area-inset-top,0px);")
+    style = style.replace("min-height:calc(54px + env(safe-area-inset-top,0px));\npadding:env(safe-area-inset-top,0px) 12px 0 16px;",
+                          "min-height:54px;\npadding:0 12px 0 16px;")
+    style = _font_data_uris(style)
     note = note or ("Read-only snapshot of the intraday desk. Controls are off here; they work on your own desk while it runs.")
-    body = _with_note(body, data["label"], note)
     app_js = (STATIC / "app.js").read_text(encoding="utf-8")
     html = (f"<title>QuantDesk</title>\n<style>{style}</style>\n{body}\n"
             f'<script type="application/json" id="qd-data">{payload}</script>\n'
             f"<script>{CHART_LIB.read_text(encoding='utf-8')}</script>\n"
-            f"<script>{SHIM}</script>\n<script>{app_js}</script>\n")
+            f"<script>{SHIM}</script>\n{_meta(data['label'], note)}\n<script>{app_js}</script>\n")
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
@@ -167,31 +179,44 @@ def export_site(cfg, account: str, out: Path, sessions: int = 3, label: str | No
 def publish_site(cfg, account: str, out_dir: Path, sessions: int = 3, label: str | None = None,
                  note: str | None = None) -> Path:
     """A static, installable (PWA) read-only site that stays current: index.html + app.js load
-    data.json and re-fetch it every minute. Re-run this every few minutes while the desk trades
-    and push the folder to any static host (the GitHub Actions workflow publishes it to Pages)."""
+    data.json and re-fetch it every minute; a service worker keeps the app shell for offline use.
+    Re-run this every few minutes while the desk trades and push the folder to any static host
+    (the GitHub Actions workflow publishes it to Pages)."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     data = site_data(cfg, account, sessions, label, live=True)
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     for asset in ("manifest.webmanifest", "icon-192.png", "apple-touch-icon.png"):
         html = html.replace(f'href="/{asset}"', f'href="{asset}"')
+    html = html.replace("/static/app/fonts/", "fonts/")
     html = re.sub(r'<script src="/static/datafeed.js"></script>\s*', "", html)
     html = html.replace('<script src="/static/vendor/lightweight-charts.js"></script>', '<script src="lightweight-charts.js"></script>')
-    html = html.replace('<script src="/static/app/app.js"></script>', f"<script>{LIVE_SHIM}</script>\n<script src=\"app.js\"></script>")
-    html = html.replace("</style>", _note_css() + "\n</style>", 1)
-    note = note or ("Paper trades only. The desk runs by itself on NSE trading days, 09:15–15:30 IST, and this page "
-                    "refreshes every few minutes while it does. Read-only: nothing here can place an order.")
-    html = _with_note(html, data["label"], note)
+    note = note or ("Paper trades only. The desk runs by itself on NSE trading days, 09:15–15:30 IST, and this app "
+                    "refreshes every minute while it does. Read-only: nothing here can place an order.")
+    html = html.replace('<script src="/static/app/app.js"></script>',
+                        f"<script>{LIVE_SHIM}</script>\n{_meta(data['label'], note)}\n<script src=\"app.js\"></script>")
     (out / "index.html").write_text(html, encoding="utf-8")
-    shutil.copyfile(STATIC / "app.js", out / "app.js")
+    app_js = (STATIC / "app.js").read_text(encoding="utf-8")
+    (out / "app.js").write_text(app_js, encoding="utf-8")
     shutil.copyfile(CHART_LIB, out / "lightweight-charts.js")
-    for icon in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
+    (out / "fonts").mkdir(exist_ok=True)
+    for f in [*FONTS.glob("*.woff2"), FONTS / "LICENSE-IBM-Plex.txt"]:
+        shutil.copyfile(f, out / "fonts" / f.name)
+    for icon in ICONS:
         shutil.copyfile(STATIC / icon, out / icon)
     man = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
-    man.update({"start_url": "./", "scope": "./"})
+    man.update({"id": "./", "start_url": "./", "scope": "./"})
     for ic in man.get("icons", []):
         ic["src"] = ic["src"].lstrip("/")
-    (out / "manifest.webmanifest").write_text(json.dumps(man, indent=2), encoding="utf-8")
+    for sc in man.get("shortcuts", []):
+        sc["url"] = "./" + sc["url"].lstrip("/")
+        for ic in sc.get("icons", []):
+            ic["src"] = ic["src"].lstrip("/")
+    (out / "manifest.webmanifest").write_text(json.dumps(man, indent=2, ensure_ascii=False), encoding="utf-8")
+    # the service worker's cache is named after the app's own files: a new app version replaces the
+    # old cache, while an unchanged app re-publishes byte-identical (no needless Pages builds)
+    ver = hashlib.sha1((html + app_js).encode()).hexdigest()[:12]
+    (out / "sw.js").write_text((STATIC / "sw.js").read_text(encoding="utf-8").replace("__QD_VERSION__", ver), encoding="utf-8")
     (out / ".nojekyll").write_text("", encoding="utf-8")
     tmp = out / "data.json.tmp"
     tmp.write_text(_json(data), encoding="utf-8")

@@ -1,0 +1,50 @@
+# Re-publish the read-only site (the phone app) when the app itself changes, without trading.
+#
+# While the live desk runs, its own publisher re-exports the site every few minutes with the code
+# it checked out that morning, so an app update pushed mid-session would be overwritten. This job
+# waits for the desk to finish, then publishes the desk's final state with the new app. On a day
+# the desk isn't running it publishes at once. It never touches the desk's concurrency group: a
+# queued run there could cancel a pending trading day.
+name: Publish site
+
+on:
+  push:
+    branches: [main]
+    paths: ["quantdesk/web/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write            # push the gh-pages branch
+  actions: read              # see whether the live desk is running
+
+concurrency:
+  group: site-publish        # a newer app version supersedes a waiting one
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for a running desk to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 320); do
+            busy=$(gh run list -R "$GITHUB_REPOSITORY" --workflow live.yml --limit 5 --json status \
+                   --jq '[.[] | select(.status != "completed")] | length')
+            [ "$busy" = "0" ] && exit 0
+            [ "$i" = 1 ] && echo "the live desk is running; publishing after it finishes"
+            sleep 60
+          done
+          echo "::error::the live desk is still running after 5h20m"; exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the journal
+        run: deploy/journal.sh restore
+      - name: Publish the site with the new app
+        run: python -m quantdesk intraday export-site --dir _site --sessions 2 && deploy/push-dir.sh _site gh-pages "site (app update)"

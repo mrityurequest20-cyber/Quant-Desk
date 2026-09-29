@@ -64,6 +64,11 @@ class IntradayAPI:
         acct = self.j(account).get_state("intraday_account") or {}
         return float(acct.get("capital") or self.cfg.get("intraday.capital", 20000))
 
+    def limits(self) -> dict:
+        """The risk limits the desk trades under (the app shows how much of each is used today)."""
+        r = self.cfg.get("intraday.risk", {}) or {}
+        return {k: r.get(k) for k in ("risk_per_trade", "max_trades_per_day", "max_open", "daily_loss_limit")}
+
     # ---- screens -----------------------------------------------------------------------------------------
     def state(self, account=None) -> dict:
         j = self.j(account)
@@ -80,6 +85,7 @@ class IntradayAPI:
         return {"heartbeat": hb, "age_sec": age, "cash": cash, "capital": cap,
                 "equity": hb.get("equity", cash if cash is not None else cap), "total_pnl": float(tot["pnl"]), "total_trades": int(tot["n"]),
                 "paused": bool(j.get_state("intraday_paused", False)), "closed_today": closed.to_dict("records"),
+                "limits": self.limits(),
                 "pending_commands": len([c for c in (j.get_state("intraday_cmds") or [])
                                          if c["id"] not in set(j.get_state("intraday_cmds_done") or [])])}
 

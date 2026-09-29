@@ -1,6 +1,7 @@
 """The mobile web app: token auth, the intraday API over a real engine's journal, and the
 phone → engine remote-control round trip (pause / close / flatten)."""
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -140,14 +141,20 @@ def test_static_site_exports(site, tmp_path):
 
     out = publish_site(cfg, "live", tmp_path / "site", sessions=2)
     names = {p.name for p in out.iterdir()}
-    assert {"index.html", "app.js", "data.json", "manifest.webmanifest", "icon-192.png", "icon-512.png",
-            "apple-touch-icon.png", ".nojekyll", "lightweight-charts.js"} <= names
+    assert {"index.html", "app.js", "data.json", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-maskable-512.png",
+            "apple-touch-icon.png", ".nojekyll", "lightweight-charts.js", "sw.js", "fonts"} <= names
+    # installable app: fonts ship with it, the service worker's cache is named after this app version
+    assert {"plex-sans-latin.woff2", "plex-mono-400.woff2"} <= {p.name for p in (out / "fonts").iterdir()}
+    sw = (out / "sw.js").read_text()
+    assert "__QD_VERSION__" not in sw and re.search(r'const CACHE = "qd-[0-9a-f]{12}"', sw)
+    assert "window.QD_NOTE=" in (out / "index.html").read_text()
     page = (out / "index.html").read_text()
     assert "QD_PUBLISHED" in page and '<script src="app.js"></script>' in page and '<script src="lightweight-charts.js">' in page
     assert "TradingView Lightweight Charts" in html                             # the snapshot inlines the chart library
     assert 'href="/' not in page and "/static/" not in page                     # works under /<repo>/ on Pages
     man = json.loads((out / "manifest.webmanifest").read_text())
     assert man["start_url"] == "./" and not any(i["src"].startswith("/") for i in man["icons"])
+    assert any(i.get("purpose") == "maskable" for i in man["icons"]) and all(sc["url"].startswith("./#") for sc in man["shortcuts"])
     data = json.loads((out / "data.json").read_text())
     assert data["live"] is True and data["short"] == "Live paper"
     # nothing time-stamped at export time: an idle desk re-exports byte-identical data (no needless re-deploys)
@@ -158,6 +165,9 @@ def test_static_site_exports(site, tmp_path):
     assert set(data["chart"]) == {f"{s}|{iv}" for s in ("NIFTY", "BANKNIFTY") for iv in ("1m", "5m", "15m")}
     assert all(tid in data["trade"] for tid in [t["id"] for t in data["trades"]][:150])
     assert not (out / "data.json.tmp").exists()
+    assert data["state"]["limits"]["max_trades_per_day"] == cfg.get("intraday.risk.max_trades_per_day")
+    assert (tmp_path / "site2" / "sw.js").read_bytes() == (out / "sw.js").read_bytes()   # stable across re-publishes
+    assert "data:font/woff2;base64," in html                                     # the snapshot carries its fonts
 
 
 def test_chart_library_is_served(site):
