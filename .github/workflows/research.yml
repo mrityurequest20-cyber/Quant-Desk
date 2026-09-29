@@ -1,0 +1,30 @@
+# Edge research on real NIFTY / BANKNIFTY / India VIX data (Yahoo): pre-registered hypotheses,
+# Newey-West t-stats, a chronological holdout, Benjamini-Hochberg false-discovery control and the
+# options cost hurdle. The report lands on the `research` branch and in the run summary.
+name: Edge research
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 6"     # Saturdays 09:47 IST: re-test every week as new data arrives
+
+permissions:
+  contents: write
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Test the hypotheses
+        run: python -m quantdesk research --out _research
+      - name: Publish the report
+        run: |
+          cat _research/edge_report.md >> "$GITHUB_STEP_SUMMARY"
+          deploy/push-dir.sh _research research "edge research $(TZ=Asia/Kolkata date '+%F %H:%M') IST"
