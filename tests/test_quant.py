@@ -159,3 +159,29 @@ def test_calibration_table():
     cal = IntradayAPI._calibration(pd.DataFrame(rows))
     assert len(cal) == 1 and cal[0]["trades"] == 20 and cal[0]["bucket"] == "53–56%"
     assert cal[0]["realised"] == pytest.approx(0.75) and cal[0]["source"] == "prior tilt from the analyst's score"
+
+
+def test_quant_failure_degrades_to_standing_aside(cfg, tmp_path):
+    """A broken quant layer must not stop the desk thinking; it just won't trade on missing numbers."""
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine, run_replay
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    cal = TradingCalendar(cfg.holidays())
+    days = [d.date() for d in cal.trading_days("2026-08-20", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=5)
+    j = Journal()
+    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", j, IntradayBroker(cfg, starting_cash=20000), say=None)
+    eng.volf = None
+
+    def boom(*a, **k):
+        raise RuntimeError("synthetic failure")
+    eng._select_by_ev = boom
+    eng._quant_state = boom
+    run_replay(eng)
+    th = j.thoughts(str(days[-1]))
+    assert len(th) > 100 and not len(j.trades())                                    # kept thinking, didn't trade blind
+    errs = j.events(level="ERROR")
+    assert errs["message"].str.contains("quant state failed").sum() == 2               # once per underlying, not every minute

@@ -69,6 +69,7 @@ class IntradayEngine:
         self.qstate: dict[str, dict] = {}
         self._pcache: dict[str, tuple] = {}
         self._qc_cache: dict[str, dict] = {}
+        self._qerrors: set = set()
         self.research = load_research(Path(cfg.runtime_dir) / "research" / "edges.json") if self.quant_on else {}
         self.bars: dict[str, pd.DataFrame] = {}
         self.last_ts: dict[str, pd.Timestamp] = {}
@@ -178,7 +179,7 @@ class IntradayEngine:
             s = session_state(self.bars[u], now, cache=self.feature_cache[u])
             if s is None:
                 continue
-            q = self._quant_state(u, now) if self.quant_on else None
+            q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
             view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
                                        ", ".join(self.events_today) or None, self._flow_state(u, now),
                                        self.news.state(u, now) if self.news is not None else None, q)
@@ -305,7 +306,9 @@ class IntradayEngine:
         if not plans:
             return "watching: no setup has triggered"
         if self.quant_on:
-            pick = self._select_by_ev(u, plans, view, eq, now)
+            pick = self._guarded(u, now, "EV selection", self._select_by_ev, u, plans, view, eq, now)
+            if pick is None:
+                return "standing aside: the quant layer failed on this minute (see events)"
             if isinstance(pick, str):
                 return pick
             plan, lots, notes = pick
@@ -318,6 +321,19 @@ class IntradayEngine:
         return self._open(plan, lots, notes, view, s, now)
 
     # ---- quant layer --------------------------------------------------------------------------------------------
+    def _guarded(self, u: str, now, what: str, fn, *args):
+        """Run a quant step; on an error, journal it (once per session per kind) and return None so the desk keeps
+        thinking and simply doesn't trade on numbers it couldn't compute."""
+        try:
+            return fn(*args)
+        except Exception as exc:
+            key = (self.day, u, what)
+            if key not in self._qerrors:
+                self._qerrors.add(key)
+                log.exception("%s failed", what)
+                self.journal.event(now, "ERROR", "quant", f"{u} {what} failed: {exc!r:.200}")
+            return None
+
     def _train_models(self, day) -> None:
         """Fit each underlying's direction model on sessions before `day` only, and say how it tested."""
         for u in self.underlyings:
