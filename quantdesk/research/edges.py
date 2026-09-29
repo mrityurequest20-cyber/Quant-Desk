@@ -29,6 +29,8 @@ from scipy import stats
 IST = "Asia/Kolkata"
 # round trip for one lot of a 0.35Δ weekly/monthly option, in index points (₹96 NIFTY / ₹100 BANKNIFTY, see EVEngine)
 COST_POINTS = {"NIFTY": 96 / (65 * 0.35), "BANKNIFTY": 100 / (30 * 0.35)}
+LOT = {"NIFTY": 65, "BANKNIFTY": 30}
+DELTA = 0.35
 
 
 @dataclass
@@ -46,6 +48,8 @@ class Result:
     p_holdout: float = float("nan")
     hurdle_pts: float = float("nan")
     kind: str = "directional"             # directional | premium (needs a seller)
+    sd_pts: float = float("nan")          # per-trade σ of the index move, points
+    capital_half_kelly: float = float("nan")   # account size at which ONE lot of a 0.35Δ option is a half-Kelly bet
     bh_pass: bool = False
     verdict: str = ""
     note: str = ""
@@ -99,8 +103,15 @@ def evaluate(rid, symbol, hypothesis, data, signed_returns: pd.Series, price: fl
     md, _, _ = hac_mean(disc.to_numpy(), lags)
     mh, th, ph2 = hac_mean(hold.to_numpy(), lags)
     one_sided = ph2 / 2 if (mh == mh and md == md and np.sign(mh) == np.sign(md)) else 1 - (ph2 / 2 if ph2 == ph2 else 0)
-    return Result(rid, symbol, hypothesis, data, int(len(x)), m * 1e4, m * price, t, p, mh * 1e4, one_sided,
-                  COST_POINTS.get(symbol, float("nan")), kind, note=note, params=params or {})
+    r = Result(rid, symbol, hypothesis, data, int(len(x)), m * 1e4, m * price, t, p, mh * 1e4, one_sided,
+               COST_POINTS.get(symbol, float("nan")), kind, note=note, params=params or {})
+    r.sd_pts = float(x.std() * price)
+    net = abs(r.effect_pts) - r.hurdle_pts
+    if kind == "directional" and net > 0 and symbol in LOT:
+        # one lot of a 0.35Δ option moves ≈ Δ × lot rupees per index point; Kelly fraction f* = μ/σ² of the account
+        mu, sd = net * DELTA * LOT[symbol], r.sd_pts * DELTA * LOT[symbol]
+        r.capital_half_kelly = float(2 * sd * sd / mu)
+    return r
 
 
 # ---- data ---------------------------------------------------------------------------------------------------------
@@ -274,6 +285,7 @@ def report(res: list[Result], data: dict, generated: str) -> str:
             L.append(f"- {k} {s}: {t}")
     L += ["", f"{len(res)} pre-registered tests · Benjamini–Hochberg q = 0.10 · holdout = newest third · cost hurdle "
           f"NIFTY {COST_POINTS['NIFTY']:.1f} pts, BANKNIFTY {COST_POINTS['BANKNIFTY']:.1f} pts per round trip", "",
+          "Effect/trade is for the side the test states; a negative effect means the edge is the *opposite* side.", "",
           "| Verdict | ID | Market | Hypothesis | N | Effect/trade | t | p | Holdout | BH |",
           "|---|---|---|---|---:|---:|---:|---:|---:|:-:|"]
     order = {"EDGE": 0, "NEEDS MARGIN": 1, "REAL BUT BELOW COSTS": 2, "NO EDGE": 3}
@@ -293,8 +305,11 @@ def report(res: list[Result], data: dict, generated: str) -> str:
     if edges:
         L.append("Survived discovery, holdout, false-discovery control and the cost hurdle:")
         for r in edges:
-            L.append(f"- **{r.id} {r.symbol}**: {r.hypothesis}: {r.effect_pts:+.1f} pts/trade vs {r.hurdle_pts:.1f} pts of costs "
-                     f"(t {r.t:+.2f}, holdout {r.effect_holdout_bps:+.1f} bps).")
+            side = "as stated" if r.effect_pts > 0 else "**the opposite side** (the effect is negative)"
+            L.append(f"- **{r.id} {r.symbol}**: {r.hypothesis}. Trade {side}: {abs(r.effect_pts):.1f} pts/trade vs "
+                     f"{r.hurdle_pts:.1f} pts of costs (t {r.t:+.2f}, holdout {r.effect_holdout_bps:+.1f} bps). "
+                     f"Per-trade σ {r.sd_pts:,.0f} pts, so one lot of a 0.35Δ option is a half-Kelly bet only on an account of "
+                     f"about ₹{r.capital_half_kelly:,.0f}; smaller accounts are over-betting it.")
     else:
         L.append("Nothing survived every test. Trading any of these would be trading noise; the desk won't.")
     return "\n".join(L) + "\n"
