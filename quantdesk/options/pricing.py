@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.optimize import brentq
-from scipy.stats import norm
+from scipy.special import ndtr as _N          # the standard normal CDF as a plain ufunc: same values as
+                                               # scipy.stats.norm.cdf, without its per-call overhead (~30× faster)
 
 _SQRT2PI = np.sqrt(2 * np.pi)
 
@@ -28,10 +29,10 @@ def bs_price(S, K, T, r, q, sigma, right: str):
     d1, d2, _ = _d1d2(S, K, T, r, q, sigma)
     df_r, df_q = np.exp(-r * T_), np.exp(-q * T_)
     if call:
-        px = S_ * df_q * norm.cdf(d1) - K_ * df_r * norm.cdf(d2)
+        px = S_ * df_q * _N(d1) - K_ * df_r * _N(d2)
         intrinsic = np.maximum(S_ - K_, 0.0)
     else:
-        px = K_ * df_r * norm.cdf(-d2) - S_ * df_q * norm.cdf(-d1)
+        px = K_ * df_r * _N(-d2) - S_ * df_q * _N(-d1)
         intrinsic = np.maximum(K_ - S_, 0.0)
     out = np.where(T_ <= 1e-10, intrinsic, np.maximum(px, 0.0))
     return float(out) if np.ndim(out) == 0 else out
@@ -52,13 +53,13 @@ def greeks(S, K, T, r, q, sigma, right: str) -> dict:
     gamma = df_q * pdf / (S_ * sig * sqT)
     vega = S_ * df_q * pdf * sqT / 100
     if call:
-        delta = df_q * norm.cdf(d1)
-        theta = (-S_ * df_q * pdf * sig / (2 * sqT) - r * K_ * df_r * norm.cdf(d2) + q * S_ * df_q * norm.cdf(d1)) / 365
-        rho = K_ * T_ * df_r * norm.cdf(d2) / 100
+        delta = df_q * _N(d1)
+        theta = (-S_ * df_q * pdf * sig / (2 * sqT) - r * K_ * df_r * _N(d2) + q * S_ * df_q * _N(d1)) / 365
+        rho = K_ * T_ * df_r * _N(d2) / 100
     else:
-        delta = -df_q * norm.cdf(-d1)
-        theta = (-S_ * df_q * pdf * sig / (2 * sqT) + r * K_ * df_r * norm.cdf(-d2) - q * S_ * df_q * norm.cdf(-d1)) / 365
-        rho = -K_ * T_ * df_r * norm.cdf(-d2) / 100
+        delta = -df_q * _N(-d1)
+        theta = (-S_ * df_q * pdf * sig / (2 * sqT) + r * K_ * df_r * _N(-d2) - q * S_ * df_q * _N(-d1)) / 365
+        rho = -K_ * T_ * df_r * _N(-d2) / 100
     expired = T_ <= 1e-10
     if np.any(expired):
         itm = (S_ > K_) if call else (S_ < K_)
@@ -101,6 +102,55 @@ def implied_vol(price: float, S: float, K: float, T: float, r: float, q: float, 
         return float(brentq(f, lo, hi, xtol=1e-10))
     except ValueError:
         return float("nan")
+
+
+def implied_vol_vec(prices, S: float, K, T: float, r: float, q: float, right: str,
+                    lo: float = 1e-4, hi: float = 5.0) -> np.ndarray:
+    """Implied vols for many strikes of one expiry at once: Newton on vega, then bisection for anything
+    that didn't converge (the price is monotonic in vol, so bisection always does). NaN where a price
+    violates the no-arbitrage bounds. Same answers as `implied_vol`, for a whole chain in one pass."""
+    P, K = np.asarray(prices, dtype=float), np.asarray(K, dtype=float)
+    out = np.full(P.shape, np.nan)
+    if T <= 0 or P.size == 0:
+        return out
+    call = right.upper().startswith("C")
+    df_r, df_q = np.exp(-r * T), np.exp(-q * T)
+    intr = np.maximum(S * df_q - K * df_r, 0) if call else np.maximum(K * df_r - S * df_q, 0)
+    upper = np.full(P.shape, S * df_q) if call else K * df_r
+    ok = np.isfinite(P) & (P >= intr - 1e-9) & (P <= upper + 1e-9)
+    floor = ok & (P - intr < 1e-10)
+    out[floor] = lo
+    live = ok & ~floor
+    if not live.any():
+        return out
+    p, k = P[live], K[live]
+    sig = np.clip(np.sqrt(2 * np.pi / T) * p / S, 0.05, 2.0)           # Brenner–Subrahmanyam start
+    done = np.zeros(p.shape, dtype=bool)
+    for _ in range(30):
+        px = np.asarray(bs_price(S, k, T, r, q, sig, right), dtype=float)
+        diff = px - p
+        done |= np.abs(diff) < 1e-8
+        d1, _, sqT = _d1d2(S, k, T, r, q, sig)
+        vega = S * df_q * np.exp(-0.5 * d1 ** 2) / _SQRT2PI * sqT
+        step = np.where(done | (vega < 1e-10), 0.0, diff / np.maximum(vega, 1e-10))
+        nxt = sig - step
+        bad = (nxt <= lo) | (nxt >= hi) | ~np.isfinite(nxt)
+        sig = np.where(bad, sig, nxt)
+        stuck = bad & ~done
+        if done.all() or stuck.all():
+            break
+    px = np.asarray(bs_price(S, k, T, r, q, sig, right), dtype=float)
+    need = np.abs(px - p) >= 1e-6
+    if need.any():                                                     # bisection: slow but certain
+        a, b = np.full(need.sum(), lo), np.full(need.sum(), hi)
+        pk, kk = p[need], k[need]
+        for _ in range(70):
+            m = 0.5 * (a + b)
+            above = np.asarray(bs_price(S, kk, T, r, q, m, right), dtype=float) > pk
+            b, a = np.where(above, m, b), np.where(above, a, m)
+        sig[need] = 0.5 * (a + b)
+    out[np.flatnonzero(live)] = sig
+    return out
 
 
 def strike_for_delta(S: float, T: float, r: float, q: float, target_delta: float, right: str,

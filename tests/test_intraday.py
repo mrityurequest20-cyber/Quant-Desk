@@ -125,6 +125,49 @@ def test_marker_uses_quote_iv_and_spread(cfg, sessions):
     assert mk.mid(inst, 25100.0, now) > mk.mid(inst, 25000.0, now)                      # delta shows up
 
 
+def test_prices_use_the_iv_the_quote_implies_not_the_printed_one(cfg, sessions):
+    """29 Sep 2026: NSE printed 14.7% for a put whose ask implied 14.05%; valuing it at the printed IV made it
+    'worth' ₹92 the moment it was bought for ₹85 (phantom EV at entry, phantom P&L at the mark)."""
+    from quantdesk.core.types import Instrument
+    from quantdesk.intraday.playbook import StrikePicker
+    _, _, days = sessions
+    cal = TradingCalendar(cfg.holidays())
+    now = ts(f"{days[-1]} 11:00")
+    mc = ModelOptionChain(cfg, cal, lambda u, t: (25000.0, 0.13))
+    exp = mc.expiries("NIFTY", now)[1]
+    ch = mc.chain("NIFTY", exp, ts=now)
+    ch["ce_iv"] += 1.5                                          # the exchange's figure disagrees with its own quotes
+    ch["pe_iv"] += 1.5
+    mk = QuoteMarker(IntradayPricer())
+    mk.calibrate(ch, 65)
+    for K in (24800.0, 25000.0, 25200.0):
+        row = ch.loc[K]
+        inst = Instrument.option("NIFTY", exp, K, "PE", 65)
+        assert mk.mid(inst, 25000.0, now) == pytest.approx((row.pe_bid + row.pe_ask) / 2, rel=0.003)
+    rows = StrikePicker(IntradayPricer()).rows(ch, "PE", now).set_index("strike")
+    pr, T = IntradayPricer(), time_to_expiry(now, exp)
+    for K in (24800.0, 25000.0):
+        assert pr.price(K, "PE", 25000.0, T, rows.at[K, "iv"] / 100) == pytest.approx(rows.at[K, "mid"], rel=0.003)
+
+
+def test_a_stop_inside_one_minutes_noise_is_pushed_out(cfg, sessions):
+    from quantdesk.intraday.analyst import MarketView
+    from quantdesk.intraday.playbook import Playbook
+    _, _, days = sessions
+    cal = TradingCalendar(cfg.holidays())
+    now = ts(f"{days[-1]} 11:00")
+    mc = ModelOptionChain(cfg, cal, lambda u, t: (25000.0, 0.13))
+    ch = mc.chain("NIFTY", mc.expiries("NIFTY", now)[0], ts=now)
+    view = MarketView("NIFTY", now, 25000.0, "bearish", -0.8, 0.8, "trend", "fair", 13.0, 12.0, [], [], {}, "",
+                      state={"atr5": 22.0})
+    plan = Playbook(cfg, IntradayPricer())._directional("vwap_trend", view, ch, now, -1, "t", "thesis.", 25003.0, 24980.0)
+    floor = cfg.get("intraday.risk.min_stop_atr5") * 22.0
+    assert plan.invalidation == pytest.approx(25000.0 + floor)            # 3 pts → 16.5 pts
+    assert 25000.0 - plan.target_underlying >= 1.5 * floor - 1e-9 and "floored" in plan.thesis
+    wide = Playbook(cfg, IntradayPricer())._directional("vwap_trend", view, ch, now, -1, "t", "thesis.", 25040.0, 24920.0)
+    assert wide.invalidation == 25040.0 and wide.target_underlying == 24920.0      # a sane stop is left alone
+
+
 def test_intraday_broker_fills_at_quote_plus_ticks(cfg):
     from quantdesk.core.types import Instrument, Order
     br = IntradayBroker(cfg, starting_cash=500000, adverse_ticks=1)

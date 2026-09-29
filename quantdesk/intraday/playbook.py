@@ -95,14 +95,21 @@ class StrikePicker:
     def rows(self, chain: pd.DataFrame, right: str, now) -> pd.DataFrame:
         S, T = float(chain.attrs["spot"]), time_to_expiry(now, chain.attrs["expiry"])
         side = right.lower()
+        near = chain[np.abs(chain.index.to_numpy(dtype=float) / S - 1) <= 0.08]      # nothing traded is further out
+        mids = np.array([mid(row, side) for _, row in near.iterrows()], dtype=float)
+        # the IV each price implies under *our* pricer, never the exchange's printed IV: NSE computes its figure
+        # from the last trade with its own rate/day-count, and on 29 Sep 2026 its 14.7% against the 14.05% the
+        # quote implied made a put bought at ₹85.05 "worth" ₹92.28 the moment it was bought (phantom EV and P&L)
+        implied = self.pricer.implied_many(np.where(mids > 0.05, mids, np.nan), near.index.to_numpy(dtype=float), right, S, T) \
+            if len(near) else np.array([])
         out = []
-        for K, row in chain.iterrows():
+        for (K, row), m, iv in zip(near.iterrows(), mids, implied):
             bid, ask = row.get(f"{side}_bid"), row.get(f"{side}_ask")
-            m = mid(row, side)
-            iv = row.get(f"{side}_iv")
+            quoted = row.get(f"{side}_iv")
             if not (m == m and m > 0.05):
                 continue
-            iv = iv / 100 if iv == iv and iv and iv > 0 else self.pricer.implied(m, float(K), right, S, T)
+            if not (iv == iv and iv > 0):
+                iv = quoted / 100 if quoted == quoted and quoted and quoted > 0 else float("nan")
             if not (iv == iv and iv > 0):
                 continue
             d = self.pricer.greeks(float(K), right, S, T, iv)["delta"]
@@ -152,6 +159,17 @@ class Playbook:
     def _directional(self, setup, view: MarketView, chain, now, direction: int, trigger, thesis, inval, target,
                      conviction: float | None = None) -> TradePlan | None:
         p = self.p.get(setup, {})
+        # A structural level a few points from the entry puts the stop inside one minute's noise (29 Sep 2026: a
+        # stop 9.5 pts away, σ ≈ 7.6 pts a minute, hit in 2 minutes). Floor the distance at a fraction of the 5m ATR,
+        # keep the target at least 1.5× the risk, and say so in the thesis.
+        S0, atr5 = float(view.spot), float((view.state or {}).get("atr5") or 0)
+        floor = max(float(self.cfg.get("intraday.risk.min_stop_atr5", 0.75)) * atr5, 0.0004 * S0)
+        if inval is not None and direction and abs(S0 - inval) < floor:
+            inval = S0 - direction * floor
+            if target is not None:
+                target = S0 + direction * max(abs(target - S0), 1.5 * floor)
+            thesis += (f" Stop floored to {inval:,.2f} ({floor:,.0f} pts, the noise floor): the structural level was "
+                       f"closer than one minute's noise.")
         right = "CE" if direction > 0 else "PE"
         lot = int(self.cfg.instrument_spec(view.symbol).get("lot_size", 1))
         long_q = self.picker.by_delta(chain, right, p.get("long_delta", 0.55), now)

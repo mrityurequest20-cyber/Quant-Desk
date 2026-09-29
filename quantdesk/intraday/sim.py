@@ -34,11 +34,18 @@ class QuoteMarker:
             ok = (bid > 0) & (ask >= bid)
             m = np.where(ok, (bid + ask) / 2, ltp)
             half = np.where(ok, (ask - bid) / 2, np.maximum(0.05, 0.01 * np.nan_to_num(m)))
+            near = (m > 0) & (np.abs(ks / S - 1) <= 0.08)
+            # marks re-price at the IV the quote itself implies (the same one the entry was priced at);
+            # the exchange's printed IV is only a fallback (see StrikePicker.rows)
+            implied = np.full(len(ks), np.nan)
+            implied[near] = self.pricer.implied_many(m[near], ks[near], right, S, T)
             for i, K in enumerate(ks):
-                if not (m[i] > 0):
+                if not near[i]:
                     continue
                 sym = Instrument.option(u, exp, float(K), right, lot_size).symbol
-                v = iv[i] / 100 if iv[i] > 0 else self.pricer.implied(float(m[i]), float(K), right, S, T)
+                v = implied[i]
+                if not (v == v and v > 0) and iv[i] > 0:
+                    v = iv[i] / 100
                 if v == v and v > 0:
                     self.iv[sym] = v
                 self.half[sym] = float(half[i])

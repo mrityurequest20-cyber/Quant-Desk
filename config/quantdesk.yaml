@@ -128,6 +128,7 @@ intraday:
     max_trades_per_day: 2           # each round trip costs ~₹110-130 (4 orders × ₹20 + taxes) ≈ 0.6% of ₹20k
     max_open: 1
     daily_loss_limit: 0.10         # ₹2k: roughly one full stop-out plus costs, then done for the day
+    min_stop_atr5: 0.75            # an invalidation closer than this × the 5m ATR is pushed out to it (noise floor)
     cooldown_after_losses: 2
     cooldown_min: 30
     no_entry_before: "09:20"

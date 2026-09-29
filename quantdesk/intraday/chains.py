@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from ..core.types import Instrument
-from ..options.pricing import bs_price, greeks, implied_vol
+from ..options.pricing import bs_price, greeks, implied_vol, implied_vol_vec
 from ..options.surface import SkewModel
 
 log = logging.getLogger(__name__)
@@ -65,6 +65,11 @@ class IntradayPricer:
 
     def implied(self, price: float, K: float, right: str, S: float, T: float) -> float:
         return implied_vol(price, S, K, T, self.r, self.q, right) if T > 0 and price > 0 else float("nan")
+
+    def implied_many(self, prices, strikes, right: str, S: float, T: float) -> np.ndarray:
+        """`implied` for a whole chain side in one pass (NaN where there's no usable price)."""
+        p = np.asarray(prices, dtype=float)
+        return implied_vol_vec(np.where(p > 0, p, np.nan), S, strikes, T, self.r, self.q, right)
 
 
 def empty_chain(underlying: str, spot: float, expiry: dt.date, ts, source: str) -> pd.DataFrame:
