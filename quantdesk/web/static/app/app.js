@@ -635,6 +635,13 @@ async function loadStats() {
 			h("tr", {}, h("th", {}, ""), h("th", {}, "Trades"), h("th", {}, "Win"), h("th", {}, "Avg R"), h("th", {}, "Net")),
 			s[key].map((r) => h("tr", {}, h("td", {}, r.key), h("td", {}, r.trades), h("td", {}, Math.round(r.win * 100) + "%"),
 				h("td", {}, (r.avg_r >= 0 ? "+" : "") + r.avg_r.toFixed(2)), h("td", { class: cls(r.pnl) }, inr(r.pnl, true))))))));
+	if ((s.calibration || []).length)
+		el.appendChild(h("div", { class: "card" }, h("h2", {}, "Calibration: did the edge the desk assumed show up?"),
+			h("div", { class: "small muted", style: "margin-bottom:8px" }, "P(right direction) the quant layer traded on vs how often the index actually moved that way by the exit. Until the realised column tracks the assumed one over many trades, the edge is unproven."),
+			h("div", { class: "scroll" }, h("table", {},
+				h("tr", {}, h("th", {}, "Source"), h("th", {}, "Assumed"), h("th", {}, "Trades"), h("th", {}, "Realised"), h("th", {}, "Net")),
+				s.calibration.map((r) => h("tr", {}, h("td", {}, r.source), h("td", {}, `${r.bucket} (${Math.round(r.assumed * 100)}%)`),
+					h("td", {}, r.trades), h("td", {}, Math.round(r.realised * 100) + "%"), h("td", { class: cls(r.pnl) }, inr(r.pnl, true))))))));
 }
 function lineChart(el, xs, ys) {
 	const W = Math.max(300, el.clientWidth), H = el.clientHeight || 220, L = 6, R = 64, T = 10, B = 22;

@@ -33,7 +33,7 @@ pip install -r requirements.txt
 python -m quantdesk --source synthetic demo       # the daily desk, offline, ~90 s
 python -m quantdesk intraday replay --synthetic 5 # the intraday options desk, offline, ~1 min
 python -m quantdesk serve --host 0.0.0.0          # the website, on your phone (prints a private link)
-python -m pytest                                  # 126 tests
+python -m pytest                                  # full test suite
 ```
 
 The demo writes everything to `runtime/demo/`:
@@ -165,14 +165,79 @@ With Kite, full-mode snapshots are classified with the quote rule and fed into i
 
 **With the default ₹20,000 account**, the same 10 sessions lost **−19%**: 20 trades, 30% win rate, max drawdown −27.6%, ₹2,581 in costs. A small options account is a different game. The smallest position is one lot of a narrow NIFTY debit spread, which risks ₹1.2–1.6k (6–8% of the account). Each round trip also costs about ₹110–130, because the ₹20 flat brokerage is charged on each of the 4 orders a spread needs. That's why the ₹20k config caps the desk at 2 trades a day and only sizes into high-conviction plans. BANKNIFTY (monthly expiries only) is too expensive to trade at this size.
 
+## The quant decision layer
+
+Every trade has to pay for itself on paper before it's placed. For each signal the playbook raises, the desk runs these steps:
+
+1. **Forecasts the move.** It estimates σ per minute from three sources: today's EWMA realised volatility, the prior sessions, and the ATM implied volatility. The horizon σ scales with √minutes.
+2. **Asks whether there's a real directional edge.** A logistic regression is trained only on earlier sessions (about 55 days of 5m bars). It predicts whether the index is higher in 30 minutes from momentum, VWAP distance, range and opening-range position, EMA spread, RSI, time of day and the gap.
+   - It has to pass a walk-forward test: out-of-sample AUC ≥ 0.53 *and* log-loss better than the base rate. Otherwise it's switched off and the journal says so.
+   - A test checks the features are causal: recomputing on truncated data must give identical rows.
+   - Without a validated model, P(up) comes from an explicit, labelled prior of 0.5 + 0.10 × the analyst's score.
+3. **Prices every way to express the view.** Candidates are single long options at 0.30Δ and 0.40Δ, and 0.45/0.30 and 0.50/0.20 debit spreads. Each is simulated in a Monte Carlo over its holding period:
+   - It's marked every 3 minutes in **business time**. IV is quoted per calendar year but the variance arrives in trading minutes; without this, every intraday option buyer would get a free edge.
+   - It exits the way the engine would: invalidation, premium stop or target, underlying target, or time stop.
+   - It pays the bid/ask again on the way out, and the full cost stack both ways.
+4. **Trades only the best EV per rupee of risk that the account can hold, and only if EV ≥ max(₹40, 0.05R).** Otherwise the journal records why not, with the numbers.
+
+What that arithmetic says for NIFTY (7-DTE options, 45-minute holds, realised vol = implied):
+
+| Structure | Round-trip costs/lot | EV at a coin flip | Break-even P(right) |
+|---|---:|---:|---:|
+| 0.45/0.30 debit spread | ~₹200 | ≈ −₹270 | > 65% |
+| single long call 0.35Δ | ~₹96 | ≈ −₹145 | ≈ 55% |
+
+A small account should buy single options only when there's a real edge. It should almost never pay the double costs of a narrow spread.
+
+## News
+
+Every 4 minutes, in parallel, the desk reads these feeds (all reachable from GitHub's runners): ET Markets, ET Stocks, Moneycontrol, Mint, Business Standard, Google News (India and macro) and RBI press releases. For each story it:
+
+- dedupes it across outlets
+- tags what it's about: the index, banks, or macro
+- scores the headline with a finance lexicon that knows the subject. Crude, inflation or yields rising is bad for Indian equities. It also understands "snaps losing streak", "higher for longer", and rate cuts and hikes.
+- rates its impact
+
+A recency-weighted tone (half-life 45 minutes) is one piece of evidence with modest weight. After a high-impact story (RBI, the Fed, the budget, a CPI print, war), not a preview, the desk takes no new entries for 15 minutes. A story is invisible until its publish time on the engine's clock, so replays never see the future. Everything is journaled, and it's all on the site's **News** tab.
+
+## Edge research (real data)
+
+`python -m quantdesk research`, run weekly on GitHub as the *Edge research* workflow, tests a fixed, pre-registered list of hypotheses on real NIFTY, BANKNIFTY and India VIX data from Yahoo: 19 years of daily bars, 2 years of hourly and 60 days of 5m. Each hypothesis is judged four ways:
+
+- a Newey-West t-statistic
+- a holdout on the newest third of the data
+- Benjamini-Hochberg false-discovery control across all tests
+- the cost of one lot of a 0.35Δ option (≈ 4.2 NIFTY points) as the hurdle
+
+The report goes to the `research` branch, and the live desk uses only what survives.
+
+First run (29-Sep-2026), 25 tests:
+- **NIFTY's intraday drift is negative.** Open→close averages −5.7 bps a day, about −13 points (t −3.44 over 4,669 days). It holds in the newest third (−4.6 bps). Returns accrue overnight, not in the session. The desk adds this as a small bearish drift to every EV and as low-weight evidence.
+  - It's real but thin: the open→close σ is ~266 points. One lot of a 0.35Δ option is a half-Kelly bet on this edge only for an account of about ₹3.7 lakh. At ₹20k it's a lean, not a strategy.
+- **The volatility risk premium.** India VIX exceeded the next 21 days' realised vol by ~3 vol points on average, 80% of the time (t ≈ 7). Option buyers overpay on average. Harvesting it means selling defined-risk premium, which needs roughly ₹1.5–3 lakh of margin.
+- **No edge on this data:**
+  - opening-range breakout
+  - VWAP reversion
+  - first-hour and Gao-style intraday momentum
+  - late-day trend
+  - 30-minute momentum
+  - gap continuation
+  - post-fall rebounds
+  - turn of the month
+  - Tuesday expiry
+  - VIX-spike rebounds (promising out of sample, too few cases to pass)
+
+  Most of the classic intraday setups the playbook uses have no statistical support here. The EV gate and the research priors are what keep the desk from trading them blindly.
+
 ## The website (use it from your phone)
 
 `python -m quantdesk serve` serves a mobile-first web app, plus the daily desk at `/daily`:
 
 | Tab | What's there |
 |---|---|
-| **Live** | equity, today's P&L, engine status (running / paused / not running), **Pause / Resume / Flatten**, the analyst's current read per underlying (bias, conviction, day type, IV vs RV, narrative, evidence bars), the intraday chart (1m/5m/15m candles, VWAP, OR/IB/value/prior-day/OI-wall levels, entry/exit markers, touch crosshair; **Pro chart** switches to GoCharting), open positions with legs, marks, "Why?" and Close |
+| **Live** | equity, today's P&L, engine status (running / paused / not running), **Pause / Resume / Flatten**, the analyst's current read per underlying (bias, conviction, day type, IV vs RV, narrative, evidence bars), the intraday chart (TradingView Lightweight Charts: 1m/5m/15m candles with volume, VWAP, OR/IB/value/prior-day/OI-wall levels as toggleable price lines, entry/exit markers, pinch-zoom, a crosshair readout; **Pro chart** switches to GoCharting), open positions with legs, marks, "Why?" and Close |
 | **Thinking** | the running feed of market reads; tap one to see its evidence |
+| **News** | the desk's news tone per index, any breaking-news stand-aside, and the headlines with sentiment, impact and topic tags |
 | **Trades** | every trade with grade, P&L and R; tap for the rationale, market read, sizing, exit, review, lessons and fills |
 | **Stats** | net P&L, win rate, profit factor, drawdown, equity by session, P&L by setup, tables by day type, structure, exit, hour and underlying |
 | **Reviews** | the written session reviews |
@@ -386,10 +451,12 @@ quantdesk/                    (repo root)
     ops/                      routine checks
     reporting/                HTML tearsheet, market analysis
     intraday/                 real-time desk: feeds, chains (NSE/Kite/model), order flow, features, analyst,
-                              playbook, risk, sim broker, engine, recorder, synthetic sessions, CLI
+                              playbook, quant (vol forecast, direction model, EV engine), news, risk, sim broker,
+                              engine, recorder, synthetic sessions, CLI
+    research/                 edge research on real data (pre-registered hypotheses, HAC, holdout, FDR)
     web/                      server (token auth), intraday API, mobile app (PWA), daily desk, GoCharting datafeed
     data/                     Yahoo, CSV, synthetic market, validation
-  tests/                      126 tests
+  tests/                      the test suite
 ```
 
 ## Sources for the market rules

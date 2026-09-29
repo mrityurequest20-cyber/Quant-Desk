@@ -69,6 +69,11 @@ class IntradayFeed(abc.ABC):
         """Trades since the last call (order-flow feeds only)."""
         return []
 
+    def history_bars(self, symbol: str, days: int = 55) -> pd.DataFrame:
+        """Longer 5m history for model training (default: the 1m history resampled)."""
+        from .quant import to_5m
+        return to_5m(self.history(symbol, days))
+
     def completed(self, df: pd.DataFrame) -> pd.DataFrame:
         """Drop the still-forming bar: a bar is complete once its minute has ended."""
         return df[df.index + BAR <= self.now()]
@@ -96,6 +101,15 @@ class YahooIntradayFeed(IntradayFeed):
     def poll(self, symbol, since):
         df = self._fetch(symbol, "1d")
         return df if since is None else df[df.index > since]
+
+    def history_bars(self, symbol, days=55):
+        import yfinance as yf
+        from .quant import to_5m
+        raw = yf.Ticker(self._ticker(symbol)).history(period=f"{min(max(days, 5), 59)}d", interval="5m", auto_adjust=False,
+                                                      prepost=False)
+        if raw is None or raw.empty:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        return to_5m(self.completed(normalise_bars(raw)))
 
 
 class BarAggregator:

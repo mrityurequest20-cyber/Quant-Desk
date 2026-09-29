@@ -53,6 +53,8 @@ jobs:
         run: python -m quantdesk intraday doctor || echo "::warning::doctor says the data feed is down; the engine will retry every minute"
       - name: Restore the journal
         run: deploy/journal.sh restore
+      - name: Fetch the latest edge research (priors that survived out-of-sample testing)
+        run: deploy/research.sh
       - name: Start a fresh paper account
         if: ${{ inputs.reset_account }}
         run: python -m quantdesk intraday reset-account --yes
@@ -81,6 +83,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Restore the journal
         run: deploy/journal.sh restore
+      - name: Fetch the latest edge research
+        run: deploy/research.sh
       - name: Trade (paper) to the close, square off, write the review
         run: deploy/run-session.sh --quiet
       - name: Kill switch — square off

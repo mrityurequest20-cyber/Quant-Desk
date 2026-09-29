@@ -18,7 +18,7 @@ import numpy as np
 DEFAULT_WEIGHTS = {
     "vwap": 1.0, "ema_5m": 0.8, "htf": 0.6, "orb": 1.0, "value": 0.6, "prev_day": 0.5, "cpr": 0.4,
     "supertrend": 0.4, "rsi": 0.4, "flow": 0.6, "divergence": 0.5, "pcr": 0.3, "oi_walls": 0.4,
-    "vix": 0.3, "max_pain": 0.3, "iv_move": 0.3, "news": 0.5,
+    "vix": 0.3, "max_pain": 0.3, "iv_move": 0.3, "news": 0.5, "model": 0.8, "research": 0.3,
 }
 
 
@@ -75,7 +75,7 @@ class Analyst:
 
     def assess(self, symbol: str, s: dict, chain: dict | None = None, vix: dict | None = None,
                is_expiry_day: bool = False, event: str | None = None, flow: dict | None = None,
-               news: dict | None = None) -> MarketView:
+               news: dict | None = None, quant: dict | None = None) -> MarketView:
         ev: list[Evidence] = []
         w = self.w
         last = s["last"]
@@ -162,6 +162,19 @@ class Analyst:
                 f"news tone {tone:+.2f} over the last 2h ({news['n']} {'story' if news['n'] == 1 else 'stories'}); latest "
                 f"\u201c{news['latest'][:90]}\u201d ({news.get('latest_age_min', 0):.0f} min ago)")
 
+        # --- the direction model (only once it has passed its walk-forward test) ------------------------
+        if quant and quant.get("valid") and quant.get("p_model") is not None:
+            pm = quant["p_model"]
+            add("model", "quant", (pm - 0.5) * 6, f"direction model: P(up in 30m) {pm:.2f} (walk-forward AUC "
+                                                   f"{quant.get('auc', float('nan')):.3f}, {quant.get('samples', 0):,} samples)")
+
+        # --- research priors (only what survived the weekly edge research on years of real data) --------
+        if quant and quant.get("research_drift"):
+            rd = quant["research_drift"]
+            add("research", "quant", float(np.sign(rd["bps_day"])) * 0.5,
+                f"{rd.get('n', 0):,}-day intraday drift {rd['bps_day']:+.1f} bps/day open→close (t {rd.get('t', 0):+.2f}, "
+                f"holds out of sample): a mild {'long' if rd['bps_day'] > 0 else 'short'} lean")
+
         # --- volatility --------------------------------------------------------------------------------
         if vix:
             ch = vix.get("chg", 0.0)
@@ -227,6 +240,10 @@ class Analyst:
             parts.append("Against: " + "; ".join(e.observation for e in con) + ".")
         if ratio:
             parts.append(f"Vol: ATM IV {iv:.1f} vs realised {rv:.1f} (×{ratio:.2f}) → premium {vol_view}.")
+        if quant and quant.get("sigma_30m_pct"):
+            src = (f"model AUC {quant['auc']:.3f}" if quant.get("valid") else
+                   f"model off: {quant.get('model_status', 'untrained')}")
+            parts.append(f"Quant: 30-min σ {quant['sigma_30m_pct']:.2f}% ({quant.get('vol_source')}); {src}.")
         if vetoes:
             parts.append("No-trade flags: " + "; ".join(vetoes) + ".")
         return MarketView(symbol, s["ts"], last, bias, float(score), conviction, day_type, vol_view, iv, rv, ev, vetoes,

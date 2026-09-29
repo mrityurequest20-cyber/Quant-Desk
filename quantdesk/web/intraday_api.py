@@ -165,7 +165,30 @@ class IntradayAPI:
                 "equity": [{"day": d, "equity": float(v)} for d, v in eq.items()],
                 "by_setup": by("strategy"), "by_structure": by("structure"), "by_day_type": by("day_type"),
                 "by_exit": by("exit_reason"), "by_hour": by("hour"), "by_symbol": by("symbol"),
-                "grades": {str(k): int(v) for k, v in t["grade"].value_counts().sort_index().items()}}
+                "grades": {str(k): int(v) for k, v in t["grade"].value_counts().sort_index().items()},
+                "calibration": self._calibration(t)}
+
+    @staticmethod
+    def _calibration(t: pd.DataFrame) -> list[dict]:
+        """Was the probability the desk traded on any good? For trades priced by the quant layer: the P(right
+        direction) it assumed vs how often the underlying actually moved its way by the exit."""
+        rows = []
+        for r in t.itertuples():
+            q = (json.loads(r.meta or "{}").get("quant") or {})
+            if "p_up" not in q or not r.direction or pd.isna(r.exit_underlying) or pd.isna(r.entry_underlying):
+                continue
+            p_right = q["p_up"] if r.direction > 0 else 1 - q["p_up"]
+            right = (r.exit_underlying - r.entry_underlying) * r.direction > 0
+            rows.append((p_right, right, str(q.get("p_source", "?")).split(" (")[0], r.pnl))
+        if not rows:
+            return []
+        df = pd.DataFrame(rows, columns=["p", "right", "source", "pnl"])
+        df["bucket"] = pd.cut(df["p"], [0, 0.5, 0.53, 0.56, 0.6, 1.0], labels=["≤50%", "50–53%", "53–56%", "56–60%", ">60%"])
+        out = []
+        for (src, b), g in df.groupby(["source", "bucket"], observed=True):
+            out.append({"source": src, "bucket": str(b), "trades": int(len(g)), "assumed": float(g["p"].mean()),
+                        "realised": float(g["right"].mean()), "pnl": float(g["pnl"].sum())})
+        return out
 
     # ---- chart data --------------------------------------------------------------------------------------
     def _bars(self, account, symbol: str, days: int = 1, date: str | None = None) -> pd.DataFrame:

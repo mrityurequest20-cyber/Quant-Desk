@@ -30,6 +30,7 @@ from .features import session_state
 from .feeds import IST, IntradayFeed, ReplayFeed, session_bounds
 from .orderflow import FootprintBuilder
 from .playbook import Playbook, TradePlan
+from .quant import DirectionModel, EVEngine, VolForecaster, features_5m, load_research, session_sigma, to_5m
 from .risk import IntradayRisk
 from .sim import IntradayBroker, QuoteMarker
 
@@ -58,6 +59,17 @@ class IntradayEngine:
         self.expiry_min_days = ic.get("expiry_min_days", 1)
         self.review_dir = review_dir
         self.news = news                                  # NewsDesk (live headlines) or None
+        qc = cfg.get("intraday.quant", {}) or {}
+        self.qc = qc
+        self.quant_on = bool(qc.get("enabled", True))
+        self.volf = VolForecaster()
+        self.ev = EVEngine(cfg, self.pricer, broker.costs, n_paths=int(qc.get("n_paths", 2000)))
+        self.models: dict[str, DirectionModel] = {}
+        self.hist5: dict[str, pd.DataFrame] = {}
+        self.qstate: dict[str, dict] = {}
+        self._pcache: dict[str, tuple] = {}
+        self._qc_cache: dict[str, dict] = {}
+        self.research = load_research(Path(cfg.runtime_dir) / "research" / "edges.json") if self.quant_on else {}
         self.bars: dict[str, pd.DataFrame] = {}
         self.last_ts: dict[str, pd.Timestamp] = {}
         self.chain_df: dict[str, pd.DataFrame] = {}
@@ -132,6 +144,8 @@ class IntradayEngine:
             self.day_start_equity = self.broker.cash() + sum(t.entry_cost for t in self.open_trades)
             self.risk.reset(day, self.day_start_equity)
             self.risk.trades_today = len([t for t in self.closed if t.opened_at.date() == day]) + len(self.open_trades)
+        if self.quant_on:
+            self._train_models(day)
         exp = ", ".join(f"{u} {e:%d-%b}" for u, e in self.expiry.items())
         self.say(f"── session {day} · capital ₹{self.day_start_equity:,.0f} · expiries {exp} · chain {self.chains.name} "
                  f"· feed {self.feed.name}{' · events: ' + ', '.join(self.events_today) if self.events_today else ''}")
@@ -164,9 +178,10 @@ class IntradayEngine:
             s = session_state(self.bars[u], now, cache=self.feature_cache[u])
             if s is None:
                 continue
+            q = self._quant_state(u, now) if self.quant_on else None
             view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
                                        ", ".join(self.events_today) or None, self._flow_state(u, now),
-                                       self.news.state(u, now) if self.news is not None else None)
+                                       self.news.state(u, now) if self.news is not None else None, q)
             self.views[u] = view
             exits = self._manage(u, view, now)
             action = self._maybe_enter(u, view, s, now)
@@ -289,12 +304,120 @@ class IntradayEngine:
         plans = self.playbook.scan(view, s, self.chain_df[u], now)
         if not plans:
             return "watching: no setup has triggered"
+        if self.quant_on:
+            pick = self._select_by_ev(u, plans, view, eq, now)
+            if isinstance(pick, str):
+                return pick
+            plan, lots, notes = pick
+            return self._open(plan, lots, notes, view, s, now)
         plan = max(plans, key=lambda p: p.conviction)
         lots, notes = self.risk.size(plan, eq, self.broker.cash())
         if lots < 1:
             self.journal.decision(now, plan.setup, u, "rejected", " | ".join(notes), 0, {"plan": plan.describe()})
             return f"setup {plan.setup} found but sized to 0 lots ({notes[-1]})"
         return self._open(plan, lots, notes, view, s, now)
+
+    # ---- quant layer --------------------------------------------------------------------------------------------
+    def _train_models(self, day) -> None:
+        """Fit each underlying's direction model on sessions before `day` only, and say how it tested."""
+        for u in self.underlyings:
+            try:
+                h = self.feed.history_bars(u, int(self.qc.get("train_days", 55)))
+                h = h[h.index.date < day] if h is not None and len(h) else pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            except Exception as exc:
+                h = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+                self.journal.event(session_bounds(day)[0], "WARN", "quant", f"{u}: no 5m history for the model ({exc!s:.120})")
+            self.hist5[u] = h
+            m = DirectionModel(min_auc=float(self.qc.get("min_auc", 0.53)))
+            diag = m.fit(features_5m(h)) if len(h) else m.diag
+            self.models[u] = m
+            msg = (f"{u} direction model: {diag.get('status')}"
+                   + (f" (walk-forward AUC {diag['auc_oos']:.3f}, log-loss skill {diag['logloss_skill_oos']:+.2%}, "
+                      f"{diag['samples']:,} samples over {diag['days']} days)" if "auc_oos" in diag else
+                      f" ({diag.get('samples', 0)} samples, {diag.get('days', 0)} days)"))
+            self.journal.event(session_bounds(day)[0], "INFO", "quant", msg)
+            self.say("  " + msg)
+
+    def _quant_state(self, u: str, now) -> dict:
+        df = self.bars[u]
+        c = self._qc_cache.get(u)
+        if c is None or c["day"] != self.day:                      # locate today's rows once per session
+            prior = df[df.index.date < self.day]
+            h5 = self.hist5.get(u)
+            last5 = h5[h5.index.date == h5.index.date[-1]] if h5 is not None and len(h5) else None
+            c = self._qc_cache[u] = {"day": self.day, "start": len(prior),
+                                     "prev_close": float(prior["close"].iloc[-1]) if len(prior) else float("nan"),
+                                     "prev_sig": session_sigma(last5["close"].to_numpy(dtype=float)) if last5 is not None else float("nan"),
+                                     "volf": VolForecaster()}
+        today = df.iloc[c["start"]:]
+        m = self.models.get(u)
+        p_model = None
+        n5 = len(today) // 5                                        # completed 5m bars (features change only then)
+        if m is not None and m.w is not None and n5 > 0:
+            cached = self._pcache.get(u)
+            if cached and cached[0] == (self.day, n5):
+                p_model = cached[1]
+            else:
+                five = to_5m(today.iloc[:n5 * 5])
+                f = features_5m(five, c["prev_close"], c["prev_sig"])
+                p_model = m.predict(f.iloc[-1])
+                self._pcache[u] = ((self.day, n5), p_model)
+        an = self.chain_an.get(u) or {}
+        vol = c["volf"].forecast(df, self.day, an.get("atm_iv"), today_close=today["close"].to_numpy(dtype=float))
+        d = (m.diag if m is not None else {}) or {}
+        rd = (self.research.get(u) or {}).get("drift")
+        q = {"sigma_min": vol["sigma_min"], "sigma_30m_pct": vol["sigma_30m"] * 100, "vol_ann": vol["vol_ann"], "research_drift": rd,
+             "rv_ann": vol["rv_ann"], "vol_source": vol["source"], "p_model": p_model, "valid": bool(m is not None and m.valid),
+             "auc": d.get("auc_oos"), "samples": d.get("samples"), "model_status": d.get("status")}
+        self.qstate[u] = q
+        return q
+
+    def _p_up(self, u: str, view) -> tuple[float, str]:
+        q = self.qstate.get(u) or {}
+        if q.get("valid") and q.get("p_model") is not None:
+            return float(np.clip(q["p_model"], 0.35, 0.65)), f"direction model (AUC {q['auc']:.3f})"
+        tilt = float(self.qc.get("prior_tilt", 0.10))
+        return float(0.5 + np.clip(tilt * view.score, -tilt, tilt)), "prior tilt from the analyst's score (unvalidated)"
+
+    def _select_by_ev(self, u: str, plans: list, view, eq: float, now):
+        """Price every plan and its alternative structures by Monte Carlo; trade the best EV per rupee of risk
+        that the account can hold and that clears the EV floor. Otherwise say why not."""
+        q = self.qstate.get(u) or {}
+        if not q.get("sigma_min"):
+            return "standing aside: no volatility forecast yet"
+        p_up, p_src = self._p_up(u, view)
+        close = pd.Timestamp(dt.datetime.combine(self.day, self.risk.square_off), tz=IST)
+        minutes_left = (close - now).total_seconds() / 60
+        floor_inr, floor_r = float(self.qc.get("min_ev_inr", 40)), float(self.qc.get("min_ev_r", 0.05))
+        cands = []
+        for plan in plans:
+            variants = [plan] + self.playbook.alternatives(plan, self.chain_df[u], now, self.qc.get("long_deltas", (0.30, 0.40)),
+                                                            [tuple(x) for x in self.qc.get("spreads", ((0.45, 0.30), (0.50, 0.20)))])
+            for v in variants:
+                drift = ((self.research.get(u) or {}).get("drift") or {}).get("per_min", 0.0)
+                e = self.ev.evaluate(v, view.spot, now, q["sigma_min"], p_up if v.direction != 0 else 0.5, minutes_left, drift)
+                lots, notes = self.risk.size(v, eq, self.broker.cash())
+                cands.append((v, e, lots, notes))
+        fits = [c for c in cands if c[2] >= 1]
+        ok = [c for c in fits if c[1]["ev"] >= max(floor_inr, floor_r * c[0].planned_risk_per_lot())]
+        if not ok:
+            best = max(fits or cands, key=lambda c: c[1]["ev_r"])
+            v, e = best[0], best[1]
+            why = (f"best of {len(cands)} structures is {v.structure} with EV ₹{e['ev']:+,.0f}/lot ({e['ev_r']:+.2f}R, "
+                   f"P(profit) {e['p_profit']:.0%}) at P(up) {p_up:.2f} [{p_src}]"
+                   + ("" if fits else "; none fits the account"))
+            self.journal.decision(now, v.setup, u, "rejected", f"EV below the floor: {why}", 0,
+                                  {"plan": v.describe(), "ev": {k: round(x, 3) if isinstance(x, float) else x for k, x in e.items()}})
+            return f"setup {v.setup} found but not worth it after costs: {why}"
+        plan, e, lots, notes = max(ok, key=lambda c: c[1]["ev_r"])
+        others = sorted([c for c in cands if c[0] is not plan], key=lambda c: -c[1]["ev_r"])[:3]
+        text = (f"EV ₹{e['ev']:+,.0f}/lot ({e['ev_r']:+.2f}R), P(profit) {e['p_profit']:.0%}, CVaR5 ₹{e['cvar5']:,.0f}, costs "
+                f"₹{e['fees'] + e['exit_cost']:,.0f}/lot, σ over {e['horizon_min']}m {e['sigma_h_pct']:.2f}%, P(up) {p_up:.2f} [{p_src}]; "
+                f"picked over " + ", ".join(f"{c[0].structure} {c[1]['ev_r']:+.2f}R" for c in others))
+        plan.notes["quant"] = {k: (round(x, 4) if isinstance(x, float) else x) for k, x in e.items()}
+        plan.notes["quant"]["p_source"] = p_src
+        plan.notes["quant_text"] = text
+        return plan, lots, notes + [f"quant: {text}"]
 
     def _open(self, plan: TradePlan, lots: int, notes: list[str], view: MarketView, s: dict, now) -> str:
         u = plan.symbol
@@ -304,7 +427,9 @@ class IntradayEngine:
                   exit_rules={"premium_stop": plan.premium_stop, "premium_target": plan.premium_target,
                               "time_stop_min": plan.time_stop_min, "credit": plan.is_credit},
                   rationale=(f"[{plan.setup}] Trigger: {plan.trigger}. Thesis: {plan.thesis} "
-                             f"Structure: {plan.describe()} (vol view {view.vol_view}). Market read: {view.narrative}"),
+                             f"Structure: {plan.describe()} (vol view {view.vol_view}). "
+                             + (f"Quant: {plan.notes['quant_text']}. " if plan.notes.get("quant_text") else "")
+                             + f"Market read: {view.narrative}"),
                   context={"regime": view.day_type, "bias": view.bias, "score": round(view.score, 3),
                            "conviction": round(view.conviction, 3), "vol_view": view.vol_view,
                            "evidence": [(e.factor, round(e.direction, 2), e.observation) for e in view.evidence],
@@ -423,6 +548,7 @@ class IntradayEngine:
                         "levels": {k: float(x) for k, x in v.levels.items() if x is not None and x == x},
                         "chg": v.state.get("chg"), "vwap": v.state.get("vwap"), "phase": v.state.get("phase"),
                         "expiry": str(self.expiry.get(u)), "news": ns,
+                        "quant": {k: x for k, x in (self.qstate.get(u) or {}).items() if k != "sigma_min"} or None,
                         "evidence": [{"factor": e.factor, "category": e.category, "direction": e.direction,
                                       "weight": e.weight, "observation": e.observation} for e in v.evidence]}
         positions = []

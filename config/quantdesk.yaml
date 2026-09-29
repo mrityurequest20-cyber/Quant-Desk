@@ -98,6 +98,16 @@ intraday:
     min_relevance: 2.0             # keyword relevance to count for an underlying
     breaking_stand_aside_min: 15   # no new entries this long after a high-impact story (not previews)
     # sources: [{name: ..., url: ...}]   # defaults: ET, Moneycontrol, Mint, Business Standard, Google News, RBI
+  quant:                           # the decision layer: vol forecast, direction model, expected value of every plan
+    enabled: true
+    train_days: 55                 # 5m history for the direction model (Yahoo keeps ~60 days)
+    min_auc: 0.53                  # walk-forward AUC the model must reach before it's used
+    prior_tilt: 0.10               # no validated model: P(up) = 0.5 + 0.10 × analyst score (an explicit, unvalidated prior)
+    n_paths: 2000                  # Monte Carlo paths per candidate structure
+    min_ev_inr: 40                 # EV per lot after every cost, to take a trade...
+    min_ev_r: 0.05                 # ...and at least this fraction of the planned risk
+    long_deltas: [0.30, 0.40]      # single-option alternatives priced for every directional signal
+    spreads: [[0.45, 0.30], [0.50, 0.20]]
   analyst:
     min_conviction: 0.45
     iv_rv_rich: 1.15

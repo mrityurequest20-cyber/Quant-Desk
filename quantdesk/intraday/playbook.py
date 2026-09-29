@@ -298,6 +298,34 @@ class Playbook:
         ks = chain.index.to_numpy(dtype=float)
         return float(ks[np.argmin(np.abs(ks - K))])
 
+    def alternatives(self, plan: TradePlan, chain, now, long_deltas=(0.30, 0.40),
+                     spreads=((0.45, 0.30), (0.50, 0.20))) -> list[TradePlan]:
+        """Other ways to express a directional plan's view: single long options and debit spreads at other
+        deltas. The quant layer prices them all and keeps the best expected value per rupee of risk."""
+        if plan.direction == 0:
+            return []
+        right = "CE" if plan.direction > 0 else "PE"
+        base = "call" if right == "CE" else "put"
+        out, seen = [], {tuple((l.strike, l.ratio) for l in plan.legs)}
+
+        def add(legs, structure):
+            key = tuple((l.strike, l.ratio) for l in legs)
+            if key in seen or not legs:
+                return
+            seen.add(key)
+            out.append(TradePlan(plan.setup, plan.symbol, plan.direction, structure, plan.expiry, legs, plan.lot_size,
+                                 plan.trigger, plan.thesis, plan.invalidation, plan.target_underlying, plan.premium_stop,
+                                 plan.premium_target, plan.time_stop_min, plan.quote_source, plan.conviction, dict(plan.notes)))
+        for d in long_deltas:
+            q = self.picker.by_delta(chain, right, d, now)
+            if q is not None:
+                add([_leg(q, right, +1)], f"long_{base}")
+        for ld, sd in spreads:
+            lq, sq = self.picker.by_delta(chain, right, ld, now), self.picker.by_delta(chain, right, sd, now)
+            if lq is not None and sq is not None and lq["strike"] != sq["strike"]:
+                add([_leg(lq, right, +1), _leg(sq, right, -1)], "bull_call_spread" if right == "CE" else "bear_put_spread")
+        return out
+
     def scan(self, view: MarketView, s: dict, chain, now) -> list[TradePlan]:
         out = []
         for name in ("orb", "vwap_trend", "trend_break", "va_reversion", "range_sell"):
