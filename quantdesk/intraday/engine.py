@@ -713,7 +713,13 @@ def run_live(engine: IntradayEngine, stop_at: dt.time | None = None, handover: b
         return f"past the hand-over time {stop_at:%H:%M}; nothing to do"
     if now < open_ts:
         engine.say(f"waiting for the open ({open_ts:%H:%M})…")
-        time.sleep((open_ts - now).total_seconds() + 5)
+        # read the news while waiting, so the opening read (and the site's News tab) already know the overnight stories
+        while engine.feed.now() < open_ts:
+            n = engine.feed.now()
+            if engine.news is not None:
+                engine._refresh_news(n)
+                engine.journal.commit()
+            time.sleep(max(1.0, min(240.0, (open_ts - n).total_seconds() + 5)))
     engine.start_session(day)
     while engine.feed.now() < end + pd.Timedelta(seconds=30):
         try:

@@ -118,3 +118,24 @@ def test_engine_reads_news_without_look_ahead(cfg, tmp_path):
     assert not veto[ts >= pd.Timestamp(f"{d} 12:30", tz=IST)].any()
     assert len(j.news()) == 2
     assert j.get_state("intraday_live")["views"]["NIFTY"]["news"] is None             # by the close both are > 2h old
+
+
+def test_reads_the_news_before_the_open(cfg, tmp_path, monkeypatch):
+    import quantdesk.intraday.engine as engine_mod
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import run_live
+    cal = TradingCalendar(cfg.holidays())
+    days = [d.date() for d in cal.trading_days("2026-09-01", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=9)
+    d = days[-1]
+    feed = ReplayFeed(bars, d)
+    feed.clock = pd.Timestamp(f"{d} 08:50", tz=IST)
+    monkeypatch.setattr(engine_mod.time, "sleep", lambda s: feed.advance(max(1, int(s // 60))))
+    xml = rss([("Sensex, Nifty set for a weak open as crude surges", rfc(f"{d} 08:40"))])
+    j = Journal(tmp_path / "journal.db")
+    nd = NewsDesk(cfg, fetch=lambda url: xml, sources=[{"name": "T", "url": "t"}])
+    eng = IntradayEngine(cfg, feed, "model", j, IntradayBroker(cfg, starting_cash=20000), say=None, news=nd)
+    run_live(eng, stop_at=__import__("datetime").time(9, 20), handover=True)
+    first = j.thoughts(str(d)).iloc[0]
+    assert len(j.news()) == 1                                                       # read before 09:15
+    assert any(e["factor"] == "news" for e in json.loads(first["evidence"]))        # and in the very first read
