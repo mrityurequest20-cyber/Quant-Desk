@@ -268,17 +268,17 @@ So global context mostly **explains**; it rarely **predicts**. The desk won't pr
 
 ## The website (use it from your phone)
 
-`python -m quantdesk serve` serves a mobile-first web app, plus the daily desk at `/daily`:
+`python -m quantdesk serve` serves the phone app, plus the daily desk at `/daily`. It is designed like a trading platform, not a report: dark-first (it follows the phone's theme, or pick one in Settings), an amber accent for everything the desk itself says and does, green and red kept for P&L and direction, and IBM Plex Sans + Mono (vendored, so it works offline) with tabular figures, so prices line up.
 
 | Tab | What's there |
 |---|---|
-| **Live** | equity, today's P&L, engine status (running / paused / not running), **Pause / Resume / Flatten**, the analyst's current read per underlying (bias, conviction, day type, IV vs RV, narrative, evidence bars), the intraday chart (TradingView Lightweight Charts: 1m/5m/15m candles with volume, VWAP, OR/IB/value/prior-day/OI-wall levels as toggleable price lines, entry/exit markers, pinch-zoom, a crosshair readout; **Pro chart** switches to GoCharting), open positions with legs, marks, "Why?" and Close |
-| **Brain** | the global risk regime, the influence graph (world → India read → bias → decision), what's pushing the bias, today's gap explained, the global markets board, and the research-measured wiring |
-| **Thinking** | the running feed of market reads; tap one to see its evidence |
-| **News** | the desk's news tone per index, any breaking-news stand-aside, and the headlines with sentiment, impact and topic tags |
-| **Trades** | every trade with grade, P&L and R; tap for the rationale, market read, sizing, exit, review, lessons and fills |
-| **Stats** | net P&L, win rate, profit factor, drawdown, equity by session, P&L by setup, tables by day type, structure, exit, hour and underlying |
-| **Reviews** | the written session reviews |
+| **Desk** | the paper account (equity, today's P&L, all-time, trades used of the daily cap, how much of the daily loss limit is used); a watchlist row per index (price, change, a 5-minute sparkline against the prior close, IV and premium, the desk's bias and what it's doing *in plain words*, e.g. "Standing aside: 5m RSI 16, too stretched to chase"); one sentence on what the desk is doing overall; open positions with legs, live P&L and a track showing spot between the stop and the target; the global pulse strip; the latest headlines; today's closed trades. **Pause / Resume / Flatten** on your own desk |
+| **Chart** | the index price, day high/low and VWAP; candles (1m/5m/15m) with volume, VWAP, prior-day / opening-range / value-area / CPR / IB / OI-wall levels as toggleable price lines, entry and exit markers, an OHLC readout on the crosshair, pinch-zoom and a full-screen mode; below it the desk's read (a −1…+1 bias gauge, conviction, day type, premium, no-trade flags, narrative), the evidence strongest first, a key-levels table with distance from spot, and the quant layer (30-min 1σ move in points, the direction model's out-of-sample AUC and whether it votes, the research drift) |
+| **Trades** | **Positions**; **History** grouped by session with a day P&L; **Performance** (net, return, win rate, profit factor, avg R, drawdown, green days, costs, an equity curve against starting capital, P&L by setup, breakdowns by day type / structure / exit / hour / index, calibration of the edge the desk assumed vs what happened); **Reviews**. Tap any trade for its full story: P&L and R, risk, costs, hold time, entry and exit on the stop-to-target track, legs, why it was taken, the market read, sizing, exit, review, lessons, fills |
+| **Brain** | the global risk regime and stress, today's gap explained, the influence graph (world → India read → bias → decision), what's pushing the bias, the global markets board (colour = good or bad for India) and the research-measured wiring |
+| **Feed** | **Headlines**: news tone per index, breaking-news stand-asides, feed health, filters (index, high impact, bearish, bullish); **Desk log**: the desk's reasoning over time, trades highlighted, tap to see the evidence |
+
+Every term of art has a **?** that explains it in plain words (bias, conviction, premium, R, grades, levels, regime, stress, VWAP), and Settings has the whole glossary. Pull down to refresh. Deep links work (`/#chart`, `/#trades/history`, `/#feed/log`), and so do the home-screen shortcuts (long-press the icon). The GoCharting chart lives on the daily desk (`/daily`); the phone app uses TradingView Lightweight Charts.
 
 **On your phone:**
 
@@ -286,7 +286,7 @@ So global context mostly **explains**; it rarely **predicts**. The desk won't pr
 python -m quantdesk serve --host 0.0.0.0     # prints http://<your-LAN-IP>:8765/?token=…
 ```
 
-Open that link once on the phone, on the same Wi-Fi. The token is remembered in an HttpOnly cookie. Then use **Add to Home Screen** (it installs like an app, with its own icon, standalone and dark-mode aware).
+Open that link once on the phone, on the same Wi-Fi. The token is remembered in an HttpOnly cookie. Then use **Add to Home Screen**: it installs like an app, full-screen, with its own icon.
 
 **Away from home:** install [Tailscale](https://tailscale.com) on the computer and the phone, then open `http://<computer's tailscale name>:8765/?token=…`. Don't port-forward it to the open internet.
 
@@ -317,7 +317,8 @@ touch it.
 
 On NSE holidays both jobs exit within a minute.
 
-- **The live website** is at `https://mrityurequest20-cyber.github.io/Quant-Desk/`. It is the same phone app, **read-only**: Live, Thinking, Trades, Stats and Reviews, re-published every ~6 minutes while the desk runs. The status reads **Live** while the heartbeat is fresh and **Offline** outside market hours. Add it to your home screen; it installs like an app.
+- **The live website** is at `https://mrityurequest20-cyber.github.io/Quant-Desk/`. It is the same phone app, **read-only**, re-published every ~6 minutes while the desk runs. The status pill reads **Live** while the heartbeat is fresh, **Closed** outside market hours and **Offline** if the desk stops reporting mid-session. **Install it:** on Android, Chrome offers *Install app* (the app shows a card for it too); on iPhone, Safari → Share → *Add to Home Screen*. It then opens full-screen from its own icon, and a service worker keeps the last state readable offline.
+- **App updates** reach the site on their own: `site.yml` re-publishes the site whenever `quantdesk/web/` changes on `main`, after any running desk has finished (a running desk keeps publishing with the code it started with).
 - **The journal** lives on the `journal` branch: the SQLite journal, the paper broker, the reviews and the recorded 1m bars. To read it locally, run `git fetch origin journal && git archive FETCH_HEAD | tar -x -C runtime`, then `quantdesk intraday stats` or `quantdesk serve`.
 - **Kill switch:** in the Actions tab, open the running *Live paper desk* run and press **Cancel**. Open paper positions are squared off at current prices (`live --close-out`), and the site and journal are saved.
 
