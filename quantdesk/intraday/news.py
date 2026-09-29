@@ -102,9 +102,10 @@ INVERSE_SUBJECTS = ("inflation", "crude", "oil", "brent", "yields", "yield", "do
                     "fii selling", "fpi selling", "outflow", "unemployment", "jobless", "bond yields")
 NEGATORS = {"not", "no", "never", "without", "despite", "fails", "halts", "snaps", "ends"}
 HIGH_IMPACT = ("repo rate", "monetary policy", "rbi policy", "mpc decision", "fomc", "fed decision", "fed raises", "fed cuts",
-               "rate decision", "union budget", "budget 20", "gdp data", "cpi data", "inflation data", "election result",
+               "rate decision", "union budget", r"budget 20\d\d", "gdp data", "cpi data", "inflation data", "election result",
                "war", "attack", "missile", "emergency", "lower circuit", "circuit breaker", "market crash", "sebi bans",
                "ceasefire", "sanctions")
+HIGH_RE = re.compile(r"\b(" + "|".join(k if "\\" in k else re.escape(k) for k in HIGH_IMPACT) + r")\b")
 # a preview is not the event: "ahead of RBI policy" shouldn't make the desk stand aside
 PREVIEW = re.compile(r"\b(ahead of|preview|what to expect|expected to|likely to|may |could |live updates|week ahead|"
                      r"things to know|to watch|before the|explained)\b", re.I)
@@ -168,7 +169,8 @@ def sentiment(text: str) -> float:
 
 def impact(text: str) -> str:
     t = text.lower()
-    if any(k in t for k in HIGH_IMPACT):
+    # whole words only: "war" must not fire on "toward", "forward", "award", "software"
+    if HIGH_RE.search(t):
         return "high"
     if any(re.search(rf"\b{re.escape(k)}\b", t) for k in MEDIUM_IMPACT):
         return "medium"

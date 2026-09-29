@@ -43,6 +43,11 @@ def test_impact_levels():
     assert impact("RBI keeps repo rate unchanged, maintains stance") == "high"
     assert impact("Rupee slips 10 paise") == "medium"
     assert impact("Five stocks to watch today") == "low"
+    # whole words: "war" is not in "toward", "forward", "award" or "software"
+    assert impact("Rupee slips toward 96 vs US dollar as crude, yields and stocks weigh") == "medium"
+    assert impact("Infosys wins software award; forward guidance steady") != "high"
+    assert impact("Markets slump as war fears grip investors") == "high"
+    assert impact("Union Budget 2027: what changes for markets") == "high"
 
 
 def test_parse_rss_atom_and_google_news():
