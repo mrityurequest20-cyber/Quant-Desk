@@ -290,6 +290,24 @@ tick, full costs, cash settlement), and FII/client positioning as next-session s
 2/3 with Benjamini-Hochberg on those p-values; the newest 1/3 must confirm. Verdicts say whether a real effect fits a
 ₹20k account or needs more capital.
 
+## The validation framework (six layers)
+
+Every strategy is judged the same way, from its per-trade P&L (`analytics/scorecard.py`): the weekly research report
+prints a full scorecard for its strongest results, and `quantdesk intraday stats` prints one for the paper account.
+Nothing here adds a step to the daily process.
+
+| layer | what | where |
+|---|---|---|
+| 1 edge | expectancy W·AvgWin − L·AvgLoss, profit factor > 1.5, SQN, N ≥ 300 | scorecard |
+| 2 risk & tail | Sharpe, Sortino, Calmar, Omega; skew, excess kurtosis; VaR/CVaR 95 & 99 (historical and Cornish-Fisher); max DD, time under water, recovery, Ulcer Index; P(ruin) by bootstrap | scorecard, `risk/metrics.py` |
+| 3 execution | slippage break-even (₹ and bps of notional); live fills at the Kotak bid/ask with an entry-slip guard; fill audit vs recorded quotes; VWAP z-score; OFI and VPIN (library) | scorecard, `intraday/kotak.py`, `deploy/audit_fills.py`, `analytics/models.py` |
+| 4 derivatives | Greeks incl. vanna, volga, charm, speed; IV rank/percentile; 25Δ skew; VRP (IV − RV); naive dealer GEX and gamma flip; options-implied carry; futures basis, carry and roll yield | `options/pricing.py`, `options/gex.py`, chain read, research |
+| 5 robustness | discovery/holdout split with FDR on discovery p-values; OOS efficiency; PSR and DSR (trials counted); ±10% parameter stability; walk-forward | research, scorecard, `backtest/walkforward.py` |
+| 6 models | GBM, OU (fit and half-life), Hurst, variance ratio, Kalman hedge ratio, GARCH, HMM, SVI; Heston (pricing and calibration), Hawkes, PCA of the vol surface, vector Kelly Σ⁻¹μ, Almgren-Chriss, Avellaneda-Stoikov | `analytics/stats.py`, `analytics/volatility.py`, `analytics/regime.py`, `options/surface.py`, `analytics/models.py` |
+
+The live read only gains context lines (dealer gamma, implied carry), never votes: they are untested here. The heavy
+models are a research library, outside the live loop.
+
 ## The brain (global markets ↔ news ↔ India ↔ the decision)
 
 The brain connects everything the desk sees into one picture, and it's honest about which connections are worth betting on.

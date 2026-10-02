@@ -90,12 +90,15 @@ class VRPResult:
     params: dict = field(default_factory=dict)
 
 
-def build_trades(opts: pd.DataFrame, spot: pd.Series, symbol: str, fees=None, lot: int | None = None) -> pd.DataFrame:
+def build_trades(opts: pd.DataFrame, spot: pd.Series, symbol: str, fees=None, lot: int | None = None,
+                 strategies: dict | None = None, offsets=None, delta_mult: float = 1.0, wing_mult: float = 1.0) -> pd.DataFrame:
     """Every (expiry, offset, strategy) trade the data allows → one row each: entry/expiry dates, P&L in index points
     per unit (after spreads, slippage, fees and exercise STT), credit, max loss, ATM IV, 10-day realised vol.
 
     `opts`: date, kind (CE/PE), expiry, strike, close, contracts. `spot`: index close by date.
-    `fees(right, qty, price) → ₹` for one lot (the desk's cost model); None = no fees."""
+    `fees(right, qty, price) → ₹` for one lot (the desk's cost model); None = no fees. `strategies` / `offsets`
+    restrict the run; `delta_mult` and `wing_mult` scale every delta target and the fly's wing (the ±10% stability test)."""
+    strategies = strategies or STRATEGIES
     lot = lot or LOT.get(symbol, 1)
     spot = spot.dropna()
     days = sorted(spot.index)                                  # the trading calendar: every day the index closed
@@ -107,7 +110,7 @@ def build_trades(opts: pd.DataFrame, spot: pd.Series, symbol: str, fees=None, lo
         settle = max((d for d in days if d <= e), default=None)
         if settle is None or settle < e - dt.timedelta(days=4) or settle not in pos:
             continue                                                       # data ends before this expiry
-        for k in OFFSETS.get(symbol, (1, 3, 5)):
+        for k in (offsets or OFFSETS.get(symbol, (1, 3, 5))):
             i = pos[settle] - k
             if i >= 10 and not any(days[i] < x < e for x in expiries):    # trade the nearest expiry only
                 plan.append((days[i], e, k, settle))
@@ -136,9 +139,9 @@ def build_trades(opts: pd.DataFrame, spot: pd.Series, symbol: str, fees=None, lo
         ce0 = sides["CE"].set_index("K").loc[K0]
         pe0 = sides["PE"].set_index("K").loc[K0]
         atm_iv = float(np.nanmean([ce0["iv"], pe0["iv"]]))
-        wing = float(ce0["P"] + pe0["P"])
+        wing = float(ce0["P"] + pe0["P"]) * wing_mult
         rv = float(rv10.get(d, np.nan))
-        for name, (legs, filt) in STRATEGIES.items():
+        for name, (legs, filt) in strategies.items():
             if filt == "iv>rv" and not (atm_iv == atm_iv and rv == rv and atm_iv > rv):
                 continue
             picked = []
@@ -150,6 +153,7 @@ def build_trades(opts: pd.DataFrame, spot: pd.Series, symbol: str, fees=None, lo
                     goal = K0 + wing if target.endswith("+wing") else K0 - wing
                     row = s.iloc[[int(np.abs(s["K"] - goal).argmin())]] if len(s) else s
                 else:
+                    target = target * delta_mult
                     ok = s.dropna(subset=["delta"])
                     ok = ok[(ok["K"] > S) if right == "CE" else (ok["K"] < S)]
                     if ok.empty:
@@ -315,6 +319,113 @@ def run_positioning(part: pd.DataFrame, daily: dict, q: float = 0.10) -> list[Re
     return res
 
 
+# ---- the framework's scorecard, stability, term structure, surface ---------------------------------------------------
+def candidates(vrp: list, n: int = 3) -> list:
+    """The strongest results (by t) plus the strongest that fits ₹20k: what gets the full scorecard."""
+    top = sorted([r for r in vrp if r.mean_pts > 0], key=lambda r: -r.t)[:n]
+    fits = sorted([r for r in vrp if r.mean_pts > 0 and r.capital_rs <= ACCOUNT], key=lambda r: -r.t)[:1]
+    return top + [r for r in fits if r not in top]
+
+
+def scorecards(vrp: list, trades: pd.DataFrame, n_trials: int) -> list[tuple]:
+    from ..analytics.scorecard import scorecard
+    out = []
+    for r in candidates(vrp):
+        g = trades[(trades.symbol == r.symbol) & (trades.strategy == r.strategy) & (trades.k == r.k)].sort_values("entry")
+        lot = LOT.get(r.symbol, 1)
+        pnl = pd.Series(g["pnl_pts"].to_numpy() * lot, index=pd.to_datetime(g["entry"]))
+        capital = max(r.capital_rs, 1.0)
+        notional = float(g["S"].median()) * lot
+        out.append((r, scorecard(pnl, capital=capital, notional=notional, n_trials=n_trials, ruin_horizon=len(pnl))))
+    return out
+
+
+def stability(opts: dict, spots: dict, fees_for, cands: list) -> list[dict]:
+    """Layer 5: rerun each candidate with every delta target and the wing ±10%; a real edge shouldn't sit on a cliff."""
+    rows = []
+    for r in cands:
+        name = r.strategy
+        uses_delta = any(isinstance(t, float) for _, _, t in STRATEGIES[name][0])
+        uses_wing = any(isinstance(t, str) and "wing" in t for _, _, t in STRATEGIES[name][0])
+        res = {}
+        for label, dm, wm in (("−10%", 0.9, 0.9), ("+10%", 1.1, 1.1)):
+            if not (uses_delta or uses_wing):
+                continue
+            tr = build_trades(opts[r.symbol], spots[r.symbol], r.symbol, fees_for(r.symbol) if fees_for else None,
+                              strategies={name: STRATEGIES[name]}, offsets=(r.k,), delta_mult=dm if uses_delta else 1.0,
+                              wing_mult=wm if uses_wing else 1.0)
+            res[label] = float(tr["pnl_pts"].mean() * LOT.get(r.symbol, 1)) if len(tr) else float("nan")
+        base = r.mean_pts * LOT.get(r.symbol, 1)
+        if res:
+            vals = list(res.values())
+            stable = all(v == v and np.sign(v) == np.sign(base) and abs(v - base) <= 0.5 * abs(base) for v in vals)
+        else:
+            stable = None
+        rows.append({"symbol": r.symbol, "strategy": name, "k": r.k, "base": base, **res,
+                     "verdict": "no parameters to perturb (ATM strikes)" if stable is None else
+                     "stable" if stable else "brittle: the result moves >50% or flips with a 10% parameter change"})
+    return rows
+
+
+def term_structure(bhav: pd.DataFrame, spot: pd.Series) -> pd.DataFrame:
+    """Daily near- and next-month futures: basis to spot, annualised carry, and the roll yield between them."""
+    f = bhav[bhav["kind"] == "FUT"][["date", "expiry", "close"]].dropna()
+    rows = []
+    for d, g in f.groupby("date"):
+        g = g[g["expiry"] > d].sort_values("expiry")
+        if len(g) < 2 or d not in spot.index:
+            continue
+        S = float(spot[d])
+        (e1, f1), (e2, f2) = g.iloc[0][["expiry", "close"]], g.iloc[1][["expiry", "close"]]
+        t1, t2 = (e1 - d).days / 365, (e2 - d).days / 365
+        if t1 <= 2 / 365 or t2 <= t1:
+            continue
+        rows.append({"date": d, "basis": f1 - S, "carry_ann": math.log(f1 / S) / t1,
+                     "roll_ann": math.log(f2 / f1) / (t2 - t1)})
+    return pd.DataFrame(rows).set_index("date") if rows else pd.DataFrame()
+
+
+BUCKETS = (-0.10, -0.05, -0.025, 0.0, 0.025, 0.05, 0.10)
+
+
+def surface_pca(opts: pd.DataFrame, spot: pd.Series, min_dte: int = 15, max_dte: int = 45) -> dict:
+    """Daily IVs at fixed moneyness on the expiry 15–45 days out (OTM puts below, OTM calls above), then PCA of the
+    daily changes: how many independent ways the surface really moves (level, skew, curvature)."""
+    from ..analytics.models import pca
+    o = opts[opts["kind"].isin(["CE", "PE"]) & (opts["close"] > 0) & (opts["contracts"] > 0)]
+    rows = {}
+    for d, g in o.groupby("date"):
+        if d not in spot.index:
+            continue
+        exps = sorted(e for e in set(g["expiry"]) if min_dte <= (e - d).days <= max_dte)
+        if not exps:
+            continue
+        e = exps[0]
+        S, T = float(spot[d]), (exps[0] - d).days / 365
+        c = g[g["expiry"] == e]
+        vals = []
+        for m in BUCKETS:
+            right = "PE" if m < 0 else "CE"
+            side = c[c["kind"] == right].sort_values("strike")
+            if side.empty:
+                break
+            K = S * (1 + m)
+            j = int(np.abs(side["strike"].to_numpy() - K).argmin())
+            row = side.iloc[j]
+            if abs(row["strike"] / S - 1 - m) > 0.0125:
+                break
+            iv = implied_vol_vec([row["close"]], S, [row["strike"]], T, R, Q, right)[0]
+            vals.append(iv)
+        if len(vals) == len(BUCKETS) and all(v == v and 0.03 < v < 1.5 for v in vals):
+            rows[d] = vals
+    if len(rows) < 60:
+        return {}
+    panel = pd.DataFrame.from_dict(rows, orient="index", columns=[f"{m:+.1%}" for m in BUCKETS]).sort_index()
+    res = pca(panel.diff().dropna(), 3)
+    res["days"], res["latest"] = len(panel), panel.iloc[-1].to_dict()
+    return res
+
+
 # ---- loading and reporting ------------------------------------------------------------------------------------------
 def load_options(folder: Path, symbols=("NIFTY", "BANKNIFTY")) -> pd.DataFrame:
     import pyarrow.parquet as pq
@@ -353,19 +464,30 @@ def run_all(folder: Path, daily: dict, cfg=None) -> dict:
 
         def fees_for(sym):
             return lambda right, qty, price: costs.fees(Instrument.option(sym, exp, 1.0, right, LOT[sym]), int(qty), float(price))[0]
-    trades = []
+    trades, by_sym, spots, out["term"], out["surface"] = [], {}, {}, {}, {}
     for sym in ("NIFTY", "BANKNIFTY"):
         o = opts[(opts["symbol"] == sym) & opts["kind"].isin(["CE", "PE"])] if len(opts) else opts
         if o.empty:
             continue
         sp = spot_series(opts, sym, daily.get(sym))
+        by_sym[sym], spots[sym] = o, sp
         tr = build_trades(o, sp, sym, fees_for(sym) if cfg is not None else None)
         trades.append(tr)
         out["span"][sym] = f"{min(o['date'])} → {max(o['date'])}"
+        out["term"][sym] = term_structure(opts[opts["symbol"] == sym], sp)
+        out["surface"][sym] = surface_pca(o, sp)
     tr = pd.concat(trades, ignore_index=True) if trades else pd.DataFrame()
     out["trades"] = len(tr)
     out["vrp"] = evaluate_vrp(tr)
     out["trade_rows"] = tr
+    out["scorecards"] = scorecards(out["vrp"], tr, n_trials=len(out["vrp"])) if len(tr) else []
+    out["stability"] = stability(by_sym, spots, fees_for if cfg is not None else None,
+                                 [r for r, _ in out["scorecards"]]) if out["scorecards"] else []
+    vix = daily.get("INDIAVIX")
+    if vix is not None and len(vix) > 260:
+        from ..analytics.volatility import iv_percentile, iv_rank
+        out["vix"] = {"last": float(vix["close"].iloc[-1]), "ivr": float(iv_rank(vix["close"]).iloc[-1]),
+                      "ivp": float(iv_percentile(vix["close"]).iloc[-1])}
     part_files = sorted(Path(folder).glob("participant_oi_*.parquet"))
     if part_files:
         part = pd.concat([pd.read_parquet(p) for p in part_files], ignore_index=True)
@@ -389,6 +511,40 @@ def report(res: dict, generated: str) -> str:
         L.append(f"| **{r.verdict}** | {r.strategy} | {r.symbol} | {r.k} | {r.n} | {r.mean_pts * lot:+,.0f} | {r.t:+.2f} | "
                  f"{r.mean_holdout_pts * lot:+,.0f} | {r.win_rate:.0%} | {r.worst_rs:,.0f} | {r.max_dd_rs:,.0f} | "
                  f"{r.sharpe:.2f} | ₹{r.capital_rs:,.0f} |")
+    if res.get("scorecards"):
+        from ..analytics.scorecard import to_markdown
+        L += ["", "### Scorecards: the strongest results through every gate", "",
+              f"DSR counts all {len(res['vrp'])} strategy tests as trials. Capital = the margin or max loss above; "
+              "ruin is a bootstrap of the trade sequence over as many expiries as were tested.", ""]
+        for r, sc in res["scorecards"]:
+            L += [to_markdown(sc, f"{r.strategy} · {r.symbol} · k={r.k}"), ""]
+    if res.get("stability"):
+        L += ["### Parameter stability (every delta target and the wing ±10%)", "",
+              "| strategy | index | k | base ₹/lot | −10% | +10% | verdict |", "|---|---|---:|---:|---:|---:|---|"]
+        for s_ in res["stability"]:
+            L.append(f"| {s_['strategy']} | {s_['symbol']} | {s_['k']} | {s_['base']:+,.0f} | "
+                     f"{s_.get('−10%', float('nan')):+,.0f} | {s_.get('+10%', float('nan')):+,.0f} | {s_['verdict']} |")
+        L.append("")
+    if any(len(v) for v in res.get("term", {}).values()):
+        L += ["### Futures term structure (near and next month, from the bhavcopy)", "",
+              "| index | days | carry now | carry median | roll yield median | backwardation days |", "|---|---:|---:|---:|---:|---:|"]
+        for sym, ts in res["term"].items():
+            if len(ts):
+                L.append(f"| {sym} | {len(ts):,} | {ts['carry_ann'].iloc[-1]:.2%} | {ts['carry_ann'].median():.2%} | "
+                         f"{ts['roll_ann'].median():.2%} | {(ts['basis'] < 0).mean():.1%} |")
+        L += ["", f"Fair carry ≈ r − q = {R - Q:.1%}: carry well above it means longs pay up for leverage; below, "
+              "selling pressure in futures.", ""]
+    if any(res.get("surface", {}).values()):
+        L += ["### The volatility surface's moving parts (PCA of daily IV changes, 15–45 day expiry)", ""]
+        for sym, sp_ in res["surface"].items():
+            if sp_:
+                ex = sp_["explained"]
+                L.append(f"- **{sym}** ({sp_['days']:,} days): PC1 {ex[0]:.0%} · PC2 {ex[1]:.0%} · PC3 {ex[2]:.0%} of the variance "
+                         f"(read the loadings: PC1 ≈ level, PC2 ≈ skew, PC3 ≈ curvature).")
+        L.append("")
+    if res.get("vix"):
+        v = res["vix"]
+        L += [f"India VIX {v['last']:.2f}: IV rank {v['ivr']:.0%}, IV percentile {v['ivp']:.0%} over the last year.", ""]
     L += ["", "## 2. Positioning (participant-wise OI)", "",
           "Signals known after the close, traded from the next open. Effect in basis points of the index per trade; "
           "the cost hurdle is one lot of a 0.35Δ option in and out.", "",

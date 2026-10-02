@@ -244,6 +244,12 @@ class Analyst:
             parts.append("Against: " + "; ".join(e.observation for e in con) + ".")
         if ratio:
             parts.append(f"Vol: ATM IV {iv:.1f} vs realised {rv:.1f} (×{ratio:.2f}) → premium {vol_view}.")
+        if c.get("gex_state"):                          # context from the chain, not evidence: untested here
+            flip = c.get("gamma_flip")
+            carry = c.get("carry_ann")
+            parts.append(f"Options context: dealer gamma {c['gex_state'].split(' (')[0]} (naive sign)"
+                         + (f", flip {flip:,.0f}" if flip == flip and flip else "")
+                         + (f"; implied carry {carry:.1%}/yr" if carry == carry and carry is not None else "") + ".")
         if brain and brain.get("narrative"):
             parts.append(brain["narrative"])
         if quant and quant.get("sigma_30m_pct"):

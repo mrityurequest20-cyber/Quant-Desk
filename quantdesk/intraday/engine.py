@@ -262,7 +262,7 @@ class IntradayEngine:
                 ch.attrs["spot"] = self.spot(u)
             ch = fill_iv(ch, self.pricer)
             self.chain_df[u] = ch
-            self.chain_an[u] = chain_analytics(ch, self.pricer)
+            self.chain_an[u] = chain_analytics(ch, self.pricer, self.lot(u))
             self.chain_at[u] = now
             self.marker.calibrate(ch, self.lot(u))
             if self.recorder and ch.attrs.get("source") != "model":

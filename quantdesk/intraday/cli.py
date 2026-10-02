@@ -318,6 +318,9 @@ def cmd_stats(cfg, a):
           f"green days {(daily > 0).mean():.0%} · worst day ₹{daily.min():,.0f} · max DD {dd:.2%}")
     for by in ("strategy", "structure", "day_type", "exit_reason", "hour", "symbol"):
         print(f"\nBy {by}:\n{table(by)}")
+    from ..analytics.scorecard import scorecard, to_markdown
+    pnl = pd.Series(t["pnl"].to_numpy(dtype=float), index=pd.to_datetime(t["closed_at"].fillna(t["opened_at"])))
+    print("\n" + to_markdown(scorecard(pnl.sort_index(), capital=cap), "The paper account through the framework's gates"))
 
 
 def cmd_export_site(cfg, a):

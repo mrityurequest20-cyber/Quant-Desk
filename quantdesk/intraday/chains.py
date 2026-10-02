@@ -363,7 +363,7 @@ def mid(row, side: str) -> float:
     return float(l) if pd.notna(l) else float("nan")
 
 
-def chain_analytics(df: pd.DataFrame, pricer: IntradayPricer | None = None) -> dict:
+def chain_analytics(df: pd.DataFrame, pricer: IntradayPricer | None = None, lot: int | None = None) -> dict:
     """ATM IV, implied move, PCR, max pain, OI walls, OI build-up, skew, ATM spread."""
     if df is None or df.empty:
         return {}
@@ -406,6 +406,13 @@ def chain_analytics(df: pd.DataFrame, pricer: IntradayPricer | None = None) -> d
         out["skew_25d"] = ivp - ivc
     except Exception:  # sparse chains
         out["skew_25d"] = np.nan
+    try:                                                # dealer gamma (naive sign) and the options-implied forward
+        from ..options.gex import gamma_exposure, implied_forward
+        units = 1.0 if df.attrs.get("source") == "kotak" else float(lot or 1)   # Kotak reports OI in shares
+        out.update(gamma_exposure(df, S, max(T, 1 / 365 / 24), pricer.r, pricer.q, units))
+        out.update(implied_forward(df, S, max(T, 1 / 365 / 24), pricer.r))
+    except Exception:
+        pass
     return out
 
 

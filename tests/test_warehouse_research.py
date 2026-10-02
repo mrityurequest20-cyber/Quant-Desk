@@ -5,6 +5,7 @@ import math
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from quantdesk.options.pricing import bs_price
 from quantdesk.research import warehouse_research as W
@@ -101,3 +102,48 @@ def test_positioning_finds_a_planted_signal_and_not_noise():
     assert res["P1"].verdict == "EDGE" and res["P1"].effect_bps > 20
     part, daily = _participants(planted=False, seed=4)
     assert not any(r.verdict == "EDGE" for r in W.run_positioning(part, daily))
+
+
+def test_scorecards_and_stability_on_a_rich_world():
+    opts, spot = _world(iv=0.20, rv=0.11, n_exp=120, seed=5)
+    tr = W.build_trades(opts, spot, "NIFTY")
+    vrp = W.evaluate_vrp(tr)
+    cards = W.scorecards(vrp, tr, n_trials=len(vrp))
+    assert cards and all(sc["n"] >= 20 and "gates" in sc for _, sc in cards)
+    r, sc = cards[0]
+    assert sc["expectancy"] > 0 and sc["sqn"] > 0 and "ruin" in sc and sc["n_trials"] == len(vrp)
+    st = W.stability({"NIFTY": opts}, {"NIFTY": spot}, None, [r])
+    assert st[0]["verdict"] in ("stable", "no parameters to perturb (ATM strikes)") or st[0]["verdict"].startswith("brittle")
+    if "−10%" in st[0]:
+        assert st[0]["−10%"] > 0 and st[0]["+10%"] > 0                         # a rich premium survives a nudge
+
+
+def test_term_structure_from_futures():
+    days = bdays(30)
+    spot = pd.Series(20000.0, index=days)
+    e1, e2 = days[-1] + pd.Timedelta(days=20), days[-1] + pd.Timedelta(days=48)
+    rows = []
+    for d in days:
+        for e in (e1, e2):
+            T = (e - d).days / 365
+            rows.append({"date": d, "kind": "FUT", "expiry": e, "close": 20000 * math.exp(0.07 * T)})
+    ts = W.term_structure(pd.DataFrame(rows), spot)
+    assert len(ts) == 30 and ts["carry_ann"].iloc[-1] == pytest.approx(0.07, abs=1e-6)
+    assert ts["roll_ann"].median() == pytest.approx(0.07, abs=1e-6) and (ts["basis"] > 0).all()
+
+
+def test_surface_pca_sees_a_level_factor():
+    rng = np.random.default_rng(6)
+    days = bdays(90)
+    spot = pd.Series(20000.0, index=days)
+    rows, level = [], 0.15
+    for d in days:
+        level = max(0.08, level + rng.normal(0, 0.01))
+        e = d + dt.timedelta(days=30)
+        for K in np.arange(17500, 22550, 50):
+            for right in ("CE", "PE"):
+                iv = level + 0.1 * max(0, (20000 - K) / 20000)                    # a put skew riding on the level
+                rows.append({"date": d, "kind": right, "expiry": e, "strike": float(K), "contracts": 10.0,
+                             "close": bs_price(20000.0, K, 30 / 365, W.R, W.Q, iv, right)})
+    res = W.surface_pca(pd.DataFrame(rows), spot)
+    assert res["days"] >= 85 and res["explained"][0] > 0.9                      # it all moves together

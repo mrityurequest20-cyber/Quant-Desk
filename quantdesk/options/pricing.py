@@ -72,6 +72,31 @@ def greeks(S, K, T, r, q, sigma, right: str) -> dict:
     return {k: float(v) if np.ndim(v) == 0 else v for k, v in res.items()}
 
 
+def second_order_greeks(S, K, T, r, q, sigma, right: str) -> dict:
+    """Vanna = ∂Δ/∂σ, volga (vomma) = ∂ν/∂σ, charm = ∂Δ/∂t (the delta drift as a day passes), speed = ∂Γ/∂S.
+
+    Units: vanna is the delta change per 1 vol point (σ +0.01); volga the vega change (per vol point, as `greeks`'
+    vega) per 1 vol point; charm the delta change per calendar day; speed per unit of the underlying. Vanna, volga
+    and speed are the same for a call and a put; charm differs by the dividend term."""
+    call = right.upper().startswith("C")
+    S_, T_ = np.asarray(S, dtype=float), np.asarray(T, dtype=float)
+    d1, d2, sqT = _d1d2(S, K, T, r, q, sigma)
+    sig = np.maximum(np.asarray(sigma, dtype=float), 1e-8)
+    df_q = np.exp(-q * T_)
+    pdf = np.exp(-0.5 * d1 ** 2) / _SQRT2PI
+    vanna = -df_q * pdf * d2 / sig
+    volga = S_ * df_q * pdf * sqT * d1 * d2 / sig
+    gamma = df_q * pdf / (S_ * sig * sqT)
+    speed = -gamma / S_ * (d1 / (sig * sqT) + 1)
+    common = df_q * pdf * (2 * (r - q) * T_ - d2 * sig * sqT) / (2 * np.maximum(T_, 1e-12) * sig * sqT)
+    charm = (q * df_q * _N(d1) - common) if call else (-q * df_q * _N(-d1) - common)
+    res = {"vanna": vanna / 100, "volga": volga / 10000, "charm": charm / 365, "speed": speed}
+    expired = T_ <= 1e-10
+    if np.any(expired):
+        res = {k: np.where(expired, 0.0, v) for k, v in res.items()}
+    return {k: float(v) if np.ndim(v) == 0 else v for k, v in res.items()}
+
+
 def implied_vol(price: float, S: float, K: float, T: float, r: float, q: float, right: str,
                 lo: float = 1e-4, hi: float = 5.0) -> float:
     """Newton on vega, falling back to Brent. NaN if the price violates no-arbitrage bounds."""
