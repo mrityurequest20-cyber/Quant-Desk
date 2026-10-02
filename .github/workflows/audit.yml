@@ -34,16 +34,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p _chains
+          mkdir -p _dl
           for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow live.yml --limit 40 --json databaseId --jq '.[].databaseId'); do
-            gh run download "$id" -R "$GITHUB_REPOSITORY" --dir "_chains/$id" 2>/dev/null || true
+            gh run download "$id" -R "$GITHUB_REPOSITORY" --dir "_dl/$id" 2>/dev/null || true
           done
-          find _chains -path '*chains/*.csv' | sed 's#/chains/.*##' | sort -u
+          echo "option-chain snapshots per day:"
+          find _dl -type f -path '*/chains/*.csv' | sed -E 's#.*/([0-9-]{10})/chains/.*#\1#' | sort | uniq -c
       - name: Audit
         run: |
           args=()
-          for d in $(find _chains -type d -name chains -printf '%h\n' | xargs -r -n1 dirname | sort -u); do args+=(--data "$d"); done
-          python deploy/audit_fills.py --runtime runtime "${args[@]}" ${DAY:+--date "$DAY"} --json audit.jsonl
+          for d in $(find _dl -type d -name chains -printf '%h\n' | xargs -r -n1 dirname | sort -u); do args+=(--data "$d"); done
+          PYTHONPATH=. python deploy/audit_fills.py --runtime runtime "${args[@]}" ${DAY:+--date "$DAY"} --json audit.jsonl
       - name: Summary
         if: always()
         run: |
