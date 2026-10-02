@@ -305,6 +305,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out")
     s.add_argument("--days", type=int, default=15, help="days of paper trading to replay")
     s.set_defaults(fn=cmd_demo)
+    from .data.cli import register as register_data
+    register_data(sub)
     s = sub.add_parser("research", help="test pre-registered edge hypotheses on real NIFTY/BANKNIFTY data")
     s.add_argument("--out", default="research", help="folder for edge_report.md and edges.json")
     s.set_defaults(fn=cmd_research)

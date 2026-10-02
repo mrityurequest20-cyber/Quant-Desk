@@ -1,0 +1,52 @@
+# The market-data warehouse (quantdesk/data): NSE's F&O bhavcopy (every index option and future, daily),
+# participant-wise OI and volume (FII / DII / Pro / Client), FII/DII cash flows, GIFT Nifty, NSE's event calendar
+# and holiday list, as Parquet tables kept on the `warehouse` release. Each run fills every missing day in its range,
+# so a late or skipped run catches up by itself. Backfill: run it from the Actions tab with a start date.
+name: Data warehouse
+
+on:
+  schedule:
+    - cron: "45 14 * * 1-5"    # 20:15 IST: the day's bhavcopy and participant files are out
+    - cron: "40 2 * * 1-6"     # 08:10 IST: late files, and a pre-open GIFT Nifty print
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Start date YYYY-MM-DD (empty: the last 10 days). 2019-01-01 backfills everything."
+        default: ""
+      to:
+        description: "End date YYYY-MM-DD (empty: today)"
+        default: ""
+      only:
+        description: "Tables, comma-separated (empty: all)"
+        default: ""
+
+permissions:
+  contents: write            # the warehouse release
+
+concurrency:
+  group: warehouse
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FROM: ${{ inputs.from }}
+      TO: ${{ inputs.to }}
+      ONLY: ${{ inputs.only }}
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Fetch what's missing
+        run: python -m quantdesk data update --release warehouse ${FROM:+--from "$FROM"} ${TO:+--to "$TO"} ${ONLY:+--only "$ONLY"}
+      - name: Status
+        if: always()
+        run: python -m quantdesk data status --release warehouse --dir _status >> "$GITHUB_STEP_SUMMARY"
