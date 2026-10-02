@@ -8,8 +8,8 @@ calls: the desk stays a paper desk, and prices its paper fills off Kotak's live 
 Endpoints follow Kotak's official SDK (github.com/Kotak-Neo/kotak-neo-python 3.0.x, docs/functions/market_data).
 The live option chain answers in a compact shape the docs don't show (seen 2 Oct 2026): legs under "inst" with
 "strkPrc", quotes as o/h/l/c/pc/vol, and OI as cur/prev/chg where "chg" is the *price* change. `count` is strikes
-on each side of the money (20 → 41 strikes). Both shapes parse. Limits from those docs: quotes take at most 50 instruments a call and the API
-allows 25 requests a second; 1-minute candles go back 30 days.
+on each side of the money (20 → 41 strikes). Both shapes parse. Limits: the docs say 50 instruments a quotes
+call (the live API took 25) and 25 requests a second; 1-minute candles go back 30 days.
 
 Key: KOTAK_CONSUMER_KEY — Neo app or web → More → Trade API → generate an application → copy its token.
 `python -m quantdesk intraday kotak-check` shows what the key can see."""
@@ -28,7 +28,7 @@ from .chains import COLUMNS, ChainSource, IntradayPricer, fill_iv
 from .feeds import IST, YahooIntradayFeed, normalise_bars, session_bounds
 
 BASE = "https://mis.kotaksecurities.com"
-QUOTES_PER_CALL = 50        # the documented cap; the live API refused a 50-symbol batch on 2 Oct 2026, so it halves
+QUOTES_PER_CALL = 25        # docs say 50, but the live API refused 50 on 2 Oct 2026 and took 25; halves on "max value"
 # indices are quoted by name on the cash segment (Kotak's SFeed/quotes docs)
 INDEX = {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank", "FINNIFTY": "Nifty Fin Service",
          "MIDCPNIFTY": "NIFTY MID SELECT", "INDIAVIX": "INDIA VIX", "SENSEX": "SENSEX"}

@@ -157,7 +157,7 @@ python -m quantdesk intraday review                     # the written session re
 - Kite Connect (`KITE_API_KEY`/`KITE_ACCESS_TOKEN`) gives real-time ticks, depth and real option quotes.
 
 **Kotak Neo (the default when a key is set).** `quantdesk/intraday/kotak.py` uses only the Trade API endpoints that
-authenticate with the app's consumer key: quotes (5-level depth, 50 instruments a call), option chain, expiries
+authenticate with the app's consumer key: quotes (5-level depth, 25 instruments a call), option chain, expiries
 and 1-minute candles. That means **no TOTP, no MPIN, no daily login, and no static IP**: SEBI's static-IP rule
 (from 1 Apr 2026) covers the order APIs, which the desk never calls. Every minute it fetches each underlying's
 chain (41 strikes, 20 each side of the money) and the bid/ask of every contract in it plus the index, about 3

@@ -116,12 +116,12 @@ def test_needs_a_consumer_key_and_sends_it_as_is():
     assert f.headers["Authorization"] == "abc"                                   # no "Bearer", trimmed
 
 
-def test_quotes_go_50_a_call_with_literal_delimiters(client, fake):
+def test_quotes_go_25_a_call_with_literal_delimiters(client, fake):
     insts = [("nse_fo", fake.tok[(24850, "CE")])] * 120 + [("nse_cm", "Nifty 50")]
     qs = client.quotes(insts)
     calls = [u for u, _ in fake.log if "/neosymbol/" in u]
-    assert len(calls) == 3 and len(qs) == 121
-    assert "nse_fo|71004,nse_fo|71004" in calls[0] and "nse_cm|Nifty%2050" in calls[2]
+    assert len(calls) == 5 and len(qs) == 121                                   # 25 a call
+    assert "nse_fo|71004,nse_fo|71004" in calls[0] and "nse_cm|Nifty%2050" in calls[4]
 
 
 def test_error_shapes_raise():
@@ -146,13 +146,13 @@ def test_error_shapes_raise():
 def test_quote_batches_shrink_when_kotak_says_max_value(fake):
     class Strict(FakeKotak):
         def get(self, url, params=None, timeout=None):
-            if "/neosymbol/" in url and url.split("/neosymbol/")[1].count("|") > 30:
+            if "/neosymbol/" in url and url.split("/neosymbol/")[1].count("|") > 20:
                 return Resp({"fault": {"code": "400", "message": "Please set the Neo symbol max value to 50."}}, 400)
             return super().get(url, params, timeout)
     s = Strict()
     k = KotakClient("k", session=s, min_gap=0)
     qs = k.quotes([("nse_fo", s.tok[(24850, "CE")])] * 83)
-    assert len(qs) == 83 and k.batch == 25                                      # 50 → 25, and it stays 25
+    assert len(qs) == 83 and k.batch == 12                                      # 25 → 12, and it stays 12
 
 
 def test_a_429_is_retried_once(monkeypatch):
