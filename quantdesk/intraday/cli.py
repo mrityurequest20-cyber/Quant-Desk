@@ -98,8 +98,13 @@ def _live_engine(cfg, a) -> IntradayEngine:
     brain = None
     if cfg.get("intraday.global.enabled", True) and not getattr(a, "no_global", False):
         brain = make_brain(cfg)
-    return IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"],
-                          news=news, brain=brain)
+    eng = IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"],
+                         news=news, brain=brain)
+    if not getattr(a, "no_global", False):
+        from ..data.nse import NSE, parse_gift
+        nse = NSE(gap=0.3)
+        eng.gift_source = lambda: parse_gift(nse.api("/api/marketStatus")[0])
+    return eng
 
 
 def make_brain(cfg, fetch=None):

@@ -88,6 +88,9 @@ intraday:
   kotak:                           # Kotak Neo Trade API, data endpoints only (consumer key; no login, no static IP)
     refresh_min: 1                 # option chain + live bid/ask every minute (~3 calls per underlying)
     strikes: 20                    # strikes each side of the money (a multiple of 10): 41 strikes, ~2 quote calls
+  heavyweights:                    # their results (NSE's event calendar, via the warehouse) are noted as context
+    NIFTY: [HDFCBANK, ICICIBANK, RELIANCE, INFY, BHARTIARTL, LT, ITC, TCS, SBIN, AXISBANK, KOTAKBANK]
+    BANKNIFTY: [HDFCBANK, ICICIBANK, SBIN, KOTAKBANK, AXISBANK]
   max_entry_slip: 0.15             # with a live book: skip an entry if the net premium moved >15% against the plan
   chain_stale_min: 12              # no new entries on an older real chain
   thought_every_min: 5             # journal the market read at least this often
@@ -289,6 +292,7 @@ calendar:
   # NSE equity + F&O trading holidays, 2026 (NSE circular CMTR71775). The first six
   # dates were cross-checked; re-verify the rest against the circular.
   holidays:
+    - 2026-01-15   # Municipal Corporation elections, Maharashtra (NSE holiday master)
     - 2026-01-26   # Republic Day
     - 2026-03-03   # Holi
     - 2026-03-26   # Shri Ram Navami
@@ -304,12 +308,24 @@ calendar:
     - 2026-10-20   # Dussehra
     - 2026-11-10   # Diwali Balipratipada
     - 2026-11-24   # Guru Nanak Jayanti
-  # Scheduled macro events. Short-vol entries are blocked within `event_blackout_days`.
+  # Scheduled macro events, with IST times (quantdesk/intraday/events.py). One inside the session blocks new
+  # intraday entries from `before_min` before to `after_min` after it; one after the close is context (today, and
+  # "since the last close" the next morning). No time = the whole session. Sources: RBI's FY27 MPC calendar, the
+  # Fed's FOMC calendar (decision 2:00 pm ET), BLS's CPI schedule (8:30 am ET); re-check them as the dates near.
   events:
-    - {date: 2026-10-07, name: "RBI MPC decision"}
-    - {date: 2026-10-28, name: "US FOMC decision"}
-    - {date: 2026-12-04, name: "RBI MPC decision"}
-    - {date: 2026-12-09, name: "US FOMC decision"}
+    - {date: 2026-10-07, name: "RBI MPC decision", time: "10:00", before_min: 15, after_min: 45}
+    - {date: 2026-10-12, name: "India CPI (Sep)", time: "16:00"}
+    - {date: 2026-10-14, name: "US CPI (Sep)", time: "18:00"}
+    - {date: 2026-10-28, name: "US FOMC decision", time: "23:30"}
+    - {date: 2026-11-10, name: "US CPI (Oct)", time: "19:00"}
+    - {date: 2026-11-12, name: "India CPI (Oct)", time: "16:00"}
+    - {date: 2026-12-04, name: "RBI MPC decision", time: "10:00", before_min: 15, after_min: 45}
+    - {date: 2026-12-10, name: "US CPI (Nov)", time: "19:00"}
+    - {date: 2026-12-10, name: "US FOMC decision (9 Dec, US time)", time: "00:30"}
+    - {date: 2027-01-28, name: "US FOMC decision (27 Jan, US time)", time: "00:30"}
+    - {date: 2027-02-01, name: "Union Budget", time: "11:00", before_min: 15, after_min: 90}
+    - {date: 2027-02-05, name: "RBI MPC decision", time: "10:00", before_min: 15, after_min: 45}
+    - {date: 2027-03-17, name: "US FOMC decision", time: "23:30"}
   event_blackout_days: 1
 
 checks:

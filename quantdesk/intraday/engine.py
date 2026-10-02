@@ -97,6 +97,13 @@ class IntradayEngine:
         self.day_start_equity = broker.cash()
         self.paused = bool(journal.get_state("intraday_paused", False))
         self.events_today: list[str] = []
+        from .events import EventBook, from_config
+        self.eventbook = EventBook(from_config(cfg))
+        self.warehouse_dir = Path(cfg.runtime_dir) / "warehouse"
+        self.gift_source = None                           # callable → parse_gift frame (live only); None = skip
+        self.gift: dict | None = None
+        self._gift_at = None
+        self._gift_fails = 0
 
     # ---- helpers ----------------------------------------------------------------------------------
     def lot(self, u: str) -> int:
@@ -139,7 +146,8 @@ class IntradayEngine:
                 pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
             self.last_ts[sym] = h.index[-1] if h is not None and len(h) else None
         self.expiry = {u: self.pick_expiry(u, day) for u in self.underlyings}
-        self.events_today = [n for d, n in self.cfg.events() if d == day]
+        self._load_heavyweights()
+        self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
         saved = self._restore(day)
         if saved.get("day_start_equity"):
             self.day_start_equity = float(saved["day_start_equity"])
@@ -190,8 +198,9 @@ class IntradayEngine:
                 continue
             q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
             b = self._guarded(u, now, "brain", self._think_globally, u, now) if self.brain is not None else None
+            blk = self.eventbook.blocking(now)                   # only an announcement inside the session blocks
             view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
-                                       ", ".join(self.events_today) or None, self._flow_state(u, now),
+                                       blk.label() if blk else None, self._flow_state(u, now),
                                        self.news.state(u, now) if self.news is not None else None, q,
                                        {"evidence": b.evidence, "narrative": b.narrative} if b is not None else None)
             self.views[u] = view
@@ -342,6 +351,48 @@ class IntradayEngine:
         return self._open(plan, lots, notes, view, s, now)
 
     # ---- quant layer --------------------------------------------------------------------------------------------
+    def preopen(self, now) -> None:
+        """Before the open, every few minutes: GIFT Nifty (NSE IX's NIFTY future, trading since 06:30 IST), the
+        overnight cue in one number. Recorded with the session; context for the read, not evidence (untested)."""
+        if self.gift_source is None or (self._gift_at is not None and now - self._gift_at < pd.Timedelta(minutes=4)):
+            return
+        self._gift_at = now
+        from ..data.nse import gift_implied_gap
+        try:
+            g = self.gift_source()
+        except Exception as exc:
+            self._gift_fails += 1
+            if self._gift_fails == 1:
+                self.journal.event(now, "WARN", "gift", f"GIFT Nifty unavailable ({exc!s:.160})")
+            return
+        if g is None or g.empty:
+            return
+        r = g.iloc[0]
+        gap = gift_implied_gap(float(r["last"]), float(r["nifty_close"]), r["expiry"], now.date(),
+                               self.cfg.get("backtest.risk_free", 0.065), self.cfg.get("backtest.dividend_yield", 0.012))
+        first = self.gift is None
+        self.gift = {"ts": str(r["ts"]), "last": float(r["last"]), "pct": float(r["pct"]),
+                     "nifty_close": float(r["nifty_close"]), "implied_gap": gap, "taken": str(now)}
+        self.journal.set_state("intraday_gift", self.gift)
+        if self.recorder is not None:
+            path = self.recorder.day_dir(now.date()) / "gift.csv"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame([self.gift]).to_csv(path, mode="a", header=not path.exists(), index=False)
+        if first:
+            self.journal.event(now, "INFO", "gift", f"GIFT Nifty {r['last']:,.1f} ({pd.Timestamp(r['ts']):%H:%M}): "
+                                                   f"implies a {gap:+.2%} open for NIFTY after carry")
+
+    def _load_heavyweights(self) -> None:
+        """Results dates for the index heavyweights from the warehouse's copy of NSE's event calendar (live.yml pulls
+        it); context only. Silently nothing when the file isn't there."""
+        from .events import EventBook, from_config, heavyweight_results, load_corp_events
+        try:
+            corp = load_corp_events(self.warehouse_dir)
+        except Exception:
+            corp = None
+        heavy = sorted({s for u in self.underlyings for s in (self.cfg.get(f"intraday.heavyweights.{u}") or [])})
+        self.eventbook = EventBook(from_config(self.cfg) + heavyweight_results(corp, heavy))
+
     def _live(self, insts, now) -> dict[str, tuple[float, float]]:
         """Bid/ask right now from the broker's book when the chain source has one; {} otherwise (or on an error),
         and the plan's chain prices / the marks stand in."""
@@ -646,7 +697,7 @@ class IntradayEngine:
             "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(),
             "views": views, "positions": positions,
             "news_health": dict(self.news.health) if self.news is not None else None,
-            "global": _global_view(self.brain, now)})
+            "global": _global_view(self.brain, now), "gift": self.gift, "events": self.events_today})
 
     # ---- journaling ------------------------------------------------------------------------------------------
     def _think(self, u: str, view: MarketView, now, action: str, force: bool = False) -> None:
@@ -714,6 +765,15 @@ class IntradayEngine:
              f"Capital ₹{self.day_start_equity:,.0f} → ₹{end_eq:,.0f} (**{end_eq / self.day_start_equity - 1:+.2%}**, "
              f"₹{end_eq - self.day_start_equity:+,.0f}); {len(trades)} trade(s); chain source {self.chain_name()}; "
              f"feed {self.feed.name}.", ""]
+        if self.events_today:
+            L += [f"Events: {'; '.join(self.events_today)}.", ""]
+        if self.gift and "NIFTY" in self.bars:
+            b = self.bars["NIFTY"]
+            today, prior = b[b.index.date == day], b[b.index.date < day]
+            if len(today) and len(prior):
+                gap = today["open"].iloc[0] / prior["close"].iloc[-1] - 1
+                L += [f"GIFT Nifty before the open implied **{self.gift['implied_gap']:+.2%}** for NIFTY (after carry); "
+                      f"it opened **{gap:+.2%}**.", ""]
         for u in self.underlyings:
             tu = th[th["symbol"] == u] if not th.empty else th
             if tu.empty:
@@ -812,7 +872,8 @@ def run_live(engine: IntradayEngine, stop_at: dt.time | None = None, handover: b
             n = engine.feed.now()
             if engine.news is not None:
                 engine._refresh_news(n)
-                engine.journal.commit()
+            engine.preopen(n)
+            engine.journal.commit()
             time.sleep(max(1.0, min(240.0, (open_ts - n).total_seconds() + 5)))
     engine.start_session(day)
     while engine.feed.now() < end + pd.Timedelta(seconds=30):

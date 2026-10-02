@@ -252,6 +252,44 @@ First run (29-Sep-2026), 25 tests:
 
   Most of the classic intraday setups the playbook uses have no statistical support here. The EV gate and the research priors are what keep the desk from trading them blindly.
 
+## The data warehouse (real NSE data, 2019 →)
+
+`quantdesk/data/` keeps NSE's public end-of-day data as Parquet tables on the **`warehouse`** GitHub release
+(release assets, so the git history stays small). `data.yml` updates it at 20:15 and 08:10 IST and fills every
+missing day by itself; run it from the Actions tab with a start date to backfill.
+
+| table | what | from |
+|---|---|---|
+| `fo_bhav` | every NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY/NIFTYNXT50 future and option, daily: OHLC, close, settle, underlying, OI, contracts | Jan 2019 (both bhavcopy formats) |
+| `participant_oi`, `participant_vol` | FII / DII / Pro / Client positions and volume by product | Jan 2019 |
+| `fii_dii` | FII/FPI and DII cash buy/sell/net | from collection start (NSE shows only the latest day) |
+| `gift_nifty` | GIFT Nifty prints with NIFTY's prior close | from collection start |
+| `corp_events`, `nse_holidays` | board meetings/results; the exchange's holiday list | current |
+| `manifest` | every file fetched: URL, SHA-256, size, rows | — |
+
+Parsers were written against the real files (`NSE data probe` workflow prints them). `quantdesk data status` shows
+coverage and checks the config's holidays against NSE's own list. The live desk also keeps its recorded sessions
+(option-chain snapshots, 1-minute bars, GIFT prints) for good on yearly `chains-YYYY` releases: with Kotak's
+minute-by-minute chains this becomes the desk's own intraday options history.
+
+```bash
+python -m quantdesk data update --from 2026-09-01          # fill missing days (add --release warehouse on GitHub)
+python -m quantdesk data status                            # coverage, gaps, holiday check
+python -m quantdesk research --warehouse runtime/warehouse # + the option-price and positioning research
+```
+
+**Events.** `calendar.events` carry IST times. An announcement inside the session (RBI at 10:00, the Budget at 11:00)
+blocks new entries from 15 minutes before to 45 minutes after it; FOMC, US CPI and India CPI land after the close and
+are context ("since the last close: …" the next morning) instead of whole-day vetoes. Heavyweights' results come from
+NSE's event calendar as context. **GIFT Nifty**: before the open the desk reads it every few minutes and states the
+gap it implies after the futures' carry; the review compares it with the actual open (context, untested).
+
+**Research on it** (`research/warehouse_research.py`, weekly in `research.yml`): the volatility premium traded on real
+option prices (8 pre-registered structures, k sessions before each expiry, real closes worsened by a half-spread and a
+tick, full costs, cash settlement), and FII/client positioning as next-session signals. Discovery runs on the older
+2/3 with Benjamini-Hochberg on those p-values; the newest 1/3 must confirm. Verdicts say whether a real effect fits a
+₹20k account or needs more capital.
+
 ## The brain (global markets ↔ news ↔ India ↔ the decision)
 
 The brain connects everything the desk sees into one picture, and it's honest about which connections are worth betting on.
