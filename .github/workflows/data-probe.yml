@@ -1,0 +1,21 @@
+# Fetch one sample of every NSE source the data warehouse reads and print the real formats
+# (deploy/probe_nse.py). For writing and fixing parsers when NSE changes a file. Run it from the Actions tab.
+name: NSE data probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - run: python deploy/probe_nse.py
