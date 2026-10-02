@@ -63,6 +63,21 @@ def _error(body) -> str | None:
     return None
 
 
+def chain_parts(body) -> tuple[dict, list, list]:
+    """(common data, calls, puts) from an option-chain response, wherever they sit (docs: under "data")."""
+    todo = [body]
+    while todo:
+        x = todo.pop(0)
+        if isinstance(x, dict):
+            calls, puts = x.get("call", x.get("calls")), x.get("put", x.get("puts"))
+            if isinstance(calls, list) or isinstance(puts, list):
+                return x.get("common_data") or x.get("commonData") or {}, calls or [], puts or []
+            todo += [v for v in x.values() if isinstance(v, (dict, list))]
+        elif isinstance(x, list):
+            todo += [v for v in x if isinstance(v, (dict, list))]
+    return {}, [], []
+
+
 def best(q: dict, side: str) -> float:
     """Best bid ('buy') or offer ('sell') from a quote's 5-level depth; NaN when the book is empty."""
     lv = ((q.get("depth") or {}).get(side) or [{}])[0] or {}
@@ -85,6 +100,8 @@ class KotakClient:
         self.base, self.timeout, self.min_gap = base.rstrip("/"), timeout, min_gap
         self._last = 0.0
         self.calls = Counter()
+        self.last_body = None                                      # the last raw response, for kotak-check
+        self.pct_query = False                                     # True: spaces as %20 and a literal "|" in queries
 
     @classmethod
     def from_env(cls, env=None, **kw) -> "KotakClient":
@@ -97,7 +114,12 @@ class KotakClient:
             wait = self.min_gap - (time.monotonic() - self._last)
             if wait > 0:
                 time.sleep(wait)
-            r = self.s.get(f"{self.base}/{path}", params=params, timeout=self.timeout)
+            url = f"{self.base}/{path}"
+            if params and self.pct_query:
+                url += "?" + urllib.parse.urlencode(params, safe="|", quote_via=urllib.parse.quote)
+                r = self.s.get(url, timeout=self.timeout)
+            else:
+                r = self.s.get(url, params=params, timeout=self.timeout)
             self._last = time.monotonic()
             self.calls[what] += 1
             if r.status_code == 429 and attempt == 0:
@@ -108,7 +130,9 @@ class KotakClient:
         try:
             body = r.json()
         except ValueError:
+            self.last_body = r.text[:2000]
             raise KotakError(f"{what}: HTTP {r.status_code}, not JSON: {r.text[:200]!r}") from None
+        self.last_body = body
         err = _error(body)
         if r.status_code != 200 or err:
             raise KotakError(f"{what}: HTTP {r.status_code}: {err or str(body)[:200]}")
@@ -135,8 +159,7 @@ class KotakClient:
         p = {"exchange": exchange, "underlying": underlying, "instrument_type": "option", "count": int(count)}
         if expiry is not None:
             p["expiry"] = expiry.isoformat()
-        body = self._get("market-data/1.0/watchlist/option-chain", p)
-        return body.get("data") or {}
+        return self._get("market-data/1.0/watchlist/option-chain", p)
 
     def candles(self, neosymbol: str, interval: str, start: dt.date, end: dt.date) -> pd.DataFrame:
         """[timestamp, open, high, low, close, volume, oi] rows → bars indexed in IST (bar start)."""
@@ -176,15 +199,14 @@ class KotakOptionChain(ChainSource):
         return exps
 
     def chain(self, underlying: str, expiry: dt.date, spot=None, ts=None) -> pd.DataFrame:
-        d = self.k.option_chain(underlying, expiry, self.count)
-        common = d.get("common_data") or {}
+        common, calls, puts = chain_parts(self.k.option_chain(underlying, expiry, self.count))
         lot = _f(common.get("mktLot"))
         if lot > 0:
             self.lot[underlying] = int(lot)
         rows: dict[float, dict] = {}
         toks: dict[str, tuple[float, str]] = {}
-        for side, key in (("ce", "call"), ("pe", "put")):
-            for item in d.get(key) or []:
+        for side, items in (("ce", calls), ("pe", puts)):
+            for item in items:
                 ins = item.get("instrument") or item.get("inst") or {}
                 K = _f(ins.get("strikePrice"))
                 if not K > 0:
@@ -300,20 +322,35 @@ class KotakIntradayFeed(YahooIntradayFeed):
 
 
 # ---- what the key can see -----------------------------------------------------------------------------------------
+def _raw(x, n: int = 700) -> str:
+    import json
+    try:
+        t = json.dumps(x, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        t = str(x)
+    return t[:n] + ("…" if len(t) > n else "")
+
+
 def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
-    """Walk every endpoint the desk uses and say what came back. True when quotes and the chain both work."""
+    """Walk every endpoint the desk uses and say what came back (raw shapes too, when something looks off).
+    True when quotes and the chain both work."""
     ok_quotes = ok_chain = False
     now = pd.Timestamp.now(tz=IST)
     t0 = time.time()
+    index_tokens: dict[str, str] = {}
     try:
         qs = client.quotes([("nse_cm", INDEX[u]) for u in underlyings + ["INDIAVIX"] if u in INDEX], "all")
         for q in qs:
             up = _f(q.get("lstup_time"))
             age = f"{(now.timestamp() - up) / 60:,.0f} min old" if up > 1e9 else "no timestamp"
-            say(f"  quotes  {q.get('display_symbol') or q.get('exchange_token')!s:<22} ltp {_f(q.get('ltp')):>10,.2f}  ({age})")
+            say(f"  quotes  {q.get('display_symbol') or q.get('exchange_token')!s:<22} ltp {_f(q.get('ltp')):>10,.2f}  "
+                f"({age}; token {q.get('exchange_token')!r})")
+            index_tokens[str(q.get("display_symbol", ""))] = str(q.get("exchange_token", ""))
+        if qs:
+            say(f"          fields: {', '.join(sorted(qs[0]))}")
         ok_quotes = bool(qs)
         if not qs:
-            say("  quotes  FAIL: empty response for the indices")
+            say(f"  quotes  FAIL: empty response for the indices · raw {_raw(client.last_body)}")
     except Exception as exc:
         say(f"  quotes  FAIL {exc!s:.300}")
     for u in underlyings:
@@ -321,39 +358,63 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
         try:
             exps = ch.expiries(u)
             say(f"  expiry  {u:<9} {', '.join(f'{e:%a %d-%b}' for e in exps[:4])}")
-            exp = next(e for e in exps if e > now.date()) if any(e > now.date() for e in exps) else exps[0]
-            df = ch.chain(u, exp)
-            S = df.attrs["spot"]
-            atm = df.index[int(np.abs(df.index.to_numpy() - (S if S == S else df.index.to_numpy().mean())).argmin())]
-            r = df.loc[atm]
-            quoted = int((df[["ce_bid", "pe_bid"]] > 0).sum().sum())
-            say(f"  chain   {u:<9} {exp:%d-%b}: {len(df)} strikes, {quoted} quoted contracts, lot {df.attrs.get('lot')}, "
-                f"spot {S:,.2f}")
-            say(f"          ATM {atm:,.0f} CE {r.ce_bid:,.2f} / {r.ce_ask:,.2f} (IV {r.ce_iv:.1f}%) · "
-                f"PE {r.pe_bid:,.2f} / {r.pe_ask:,.2f} (IV {r.pe_iv:.1f}%)")
-            inst_sym = next(iter(ch.tokens.items()), None)
-            if inst_sym:
-                from ..core.types import Instrument
-                (uu, ee, kk, rr), _ = inst_sym
-                live = ch.live_quotes([Instrument.option(uu, ee, kk, rr, ch.lot.get(uu) or 1)])
-                say(f"  live    {u:<9} {', '.join(f'{s} {b:,.2f}/{a:,.2f}' for s, (b, a) in live.items()) or 'FAIL: no live quote'}")
-            ok_chain = True
+            exp = next((e for e in exps if e > now.date()), exps[0])
         except Exception as exc:
-            say(f"  chain   {u:<9} FAIL {exc!s:.300}")
-    day = now.date()
-    for back in range(6):                                          # today, or the last session with candles
-        d = day - dt.timedelta(days=back)
+            say(f"  expiry  {u:<9} FAIL {exc!s:.300}")
+            continue
         try:
-            raw = client.candles(f"nse_cm|{INDEX['NIFTY']}", "1min", d, d)
+            df = ch.chain(u, exp)
         except Exception as exc:
-            say(f"  candles NIFTY     FAIL {exc!s:.300} (live bars will come from Yahoo)")
-            break
-        if len(raw):
-            say(f"  candles NIFTY     {d:%a %d-%b}: {len(raw)} one-minute bars, first {raw.index[0]:%H:%M}, "
-                f"last {raw.index[-1]:%H:%M} close {raw['close'].iloc[-1]:,.2f}")
-            break
-    else:
-        say("  candles NIFTY     no bars in the last 6 days (live bars will come from Yahoo)")
+            say(f"  chain   {u:<9} FAIL {exc!s:.200}")
+            say(f"          raw: {_raw(client.last_body)}")
+            # what does the endpoint give with fewer parameters?
+            for label, kw in (("nearest expiry", {"expiry": None}), ("count 40", {"count": 40})):
+                try:
+                    body = client.option_chain(u, kw.get("expiry", exp), kw.get("count", 20))
+                    c, calls, puts = chain_parts(body)
+                    say(f"          {label}: {len(calls)} calls, {len(puts)} puts · raw {_raw(body, 400)}")
+                except Exception as exc2:
+                    say(f"          {label}: FAIL {exc2!s:.200}")
+            continue
+        S = df.attrs["spot"]
+        atm = df.index[int(np.abs(df.index.to_numpy() - (S if S == S else df.index.to_numpy().mean())).argmin())]
+        r = df.loc[atm]
+        quoted = int((df[["ce_bid", "pe_bid"]] > 0).sum().sum())
+        say(f"  chain   {u:<9} {exp:%d-%b}: {len(df)} strikes, {quoted} quoted contracts, lot {df.attrs.get('lot')}, "
+            f"spot {S:,.2f}")
+        say(f"          ATM {atm:,.0f} CE {r.ce_bid:,.2f} / {r.ce_ask:,.2f} (IV {r.ce_iv:.1f}%) · "
+            f"PE {r.pe_bid:,.2f} / {r.pe_ask:,.2f} (IV {r.pe_iv:.1f}%)")
+        first = next(iter(ch.tokens), None)
+        if first:
+            from ..core.types import Instrument
+            uu, ee, kk, rr = first
+            live = ch.live_quotes([Instrument.option(uu, ee, kk, rr, ch.lot.get(uu) or 1)])
+            say(f"  live    {u:<9} {', '.join(f'{s} {b:,.2f}/{a:,.2f}' for s, (b, a) in live.items()) or 'FAIL: no live quote'}")
+        ok_chain = True
+    # candles: the last week in one call; try the index by name, by its quote token, and two encodings
+    start, end = now.date() - dt.timedelta(days=7), now.date()
+    names = [f"nse_cm|{INDEX['NIFTY']}"]
+    tok = next((t for k, t in index_tokens.items() if "nifty 50" in k.lower()), "")
+    if tok and tok != INDEX["NIFTY"]:
+        names.append(f"nse_cm|{tok}")
+    worked = None
+    for sym in names:
+        for pct in (False, True):
+            client.pct_query = pct
+            try:
+                raw = client.candles(sym, "1min", start, end)
+            except Exception as exc:
+                say(f"  candles {sym:<16} {'%20' if pct else '+  '} FAIL {exc!s:.160}")
+                continue
+            if len(raw):
+                say(f"  candles {sym:<16} {'%20' if pct else '+  '} {len(raw)} one-minute bars, {raw.index[0]:%d-%b %H:%M} → "
+                    f"{raw.index[-1]:%d-%b %H:%M}, last close {raw['close'].iloc[-1]:,.2f}")
+                worked = worked or (sym, pct)
+            else:
+                say(f"  candles {sym:<16} {'%20' if pct else '+  '} no bars · raw {_raw(client.last_body, 300)}")
+    client.pct_query = bool(worked and worked[1])
+    if not worked:
+        say("  candles none worked: live bars will come from Yahoo")
     say(f"  {sum(client.calls.values())} calls in {time.time() - t0:.1f}s: "
         + ", ".join(f"{k} {v}" for k, v in client.calls.items()))
     return ok_quotes and ok_chain
