@@ -158,9 +158,11 @@ class Analyst:
         # --- news (headline tone is noisy: modest weight, scaled by how many stories back it) ---------------
         if news and news.get("n"):
             tone = news["tone"]
+            ts_ = news.get("top_surprise")
             add("news", "news", tone * (0.4 + news.get("confidence", 0.5)),
-                f"news tone {tone:+.2f} over the last 2h ({news['n']} {'story' if news['n'] == 1 else 'stories'}); latest "
-                f"\u201c{news['latest'][:90]}\u201d ({news.get('latest_age_min', 0):.0f} min ago)")
+                f"news tone {tone:+.2f} over the last 2h ({news['n']} {'story' if news['n'] == 1 else 'stories'}); "
+                + (f"biggest surprise {ts_['surprise']:+.2f} ({ts_['event']}): \u201c{ts_['title'][:80]}\u201d" if ts_ else
+                   f"latest \u201c{news['latest'][:90]}\u201d ({news.get('latest_age_min', 0):.0f} min ago)"))
 
         # --- the direction model (only once it has passed its walk-forward test) ------------------------
         if quant and quant.get("valid") and quant.get("p_model") is not None:

@@ -146,6 +146,12 @@ intraday:
     max_margin: 0.5
     credit_margin_per_lot: 30000   # SPAN+exposure on a hedged index spread ≈ ₹25-35k/lot: credit trades need a bigger account
     max_lots: 10
+  # Anticipation: setups the read already favours (orb, trend_break: stop entries through the level; vwap_trend:
+  # a limit entry on the pullback) wait at their trigger level and fire the moment price gets there, from Kotak's
+  # live index price every tick_sec seconds (each new 1-minute bar's range without it), instead of a 5-minute close later.
+  # confirm_fallback: a breakout the read only backs once it happens is still taken on the 5m close (later, not missed).
+  anticipate: {enabled: true, setups: [orb, trend_break, vwap_trend], tick_sec: 5, ttl_min: 2, buffer_atr5: 0.10, reach_atr5: 1.5,
+               confirm_fallback: true}
   setups:
     orb:          {enabled: true, until_min: 120, min_rel_volume: 0.8, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 45}
     vwap_trend:   {enabled: true, after_min: 45, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 60}

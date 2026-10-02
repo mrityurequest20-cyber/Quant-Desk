@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from . import nlp
+
 log = logging.getLogger(__name__)
 IST = "Asia/Kolkata"
 
@@ -209,11 +211,14 @@ class NewsItem:
     impact: str = "low"
     recap: bool = False                             # the market's own move, retold (not new information)
     about: dict = field(default_factory=dict)       # {"NIFTY": relevance, "BANKNIFTY": relevance, "macro": x}
+    nlp: dict = field(default_factory=dict)         # nlp.Reading: event, half-life, certainty, surprise, exposure …
+    novelty: float = 1.0                            # 1 − cosine to the closest earlier story (nlp.Novelty)
+    lex: float = 0.0                                # the words' tone alone, before any surprise
 
     def to_record(self) -> dict:
         return {"id": self.id, "ts": str(self.ts), "source": self.source, "sources": self.sources, "title": self.title,
                 "link": self.link, "summary": self.summary, "sentiment": round(self.sentiment, 3), "impact": self.impact,
-                "about": self.about}
+                "about": self.about, "nlp": {**self.nlp, "novelty": round(self.novelty, 3), "lex": round(self.lex, 3)}}
 
 
 def classify(item: NewsItem) -> NewsItem:
@@ -226,6 +231,16 @@ def classify(item: NewsItem) -> NewsItem:
         item.sentiment = 0.5 * sentiment(item.summary[:300])
     item.recap = is_recap(item.title)
     item.impact = impact(text) if not item.recap else min(impact(text), "medium", key=["low", "medium", "high"].index)
+    # NLP: event type, surprise against expectations, heavyweight exposure, certainty (nlp.py)
+    r = nlp.read(text, recap=item.recap)
+    item.lex = item.sentiment
+    if r.surprise is not None:                      # what was expected matters more than how the words lean
+        item.sentiment = float(max(-1.0, min(1.0, 0.4 * item.lex + 0.6 * r.surprise)))
+        if abs(r.surprise) >= 0.8 and r.certainty >= 1 and r.event in ("policy", "inflation", "growth"):
+            item.impact = "high"
+    for sym in ("NIFTY", "BANKNIFTY"):              # a story about HDFC Bank is ~28% a story about BANKNIFTY
+        item.about[sym] = round(item.about[sym] + 15 * r.exposure.get(sym, 0.0), 2)
+    item.nlp = r.to_record()
     return item
 
 
@@ -300,6 +315,7 @@ class NewsDesk:
         self.breaking_min = nc.get("breaking_stand_aside_min", 15)
         self.fetch = fetch or self._http
         self.items: dict[str, NewsItem] = {}
+        self.novelty = nlp.Novelty()
         self.last_fetch: pd.Timestamp | None = None
         self.health: dict[str, str] = {}
 
@@ -336,13 +352,20 @@ class NewsDesk:
                     if it.source not in dup.sources:
                         dup.sources.append(it.source)
                     continue
-                self.items[it.id] = it
+                self._remember(it)
                 new.append(it)
         return sorted(new, key=lambda x: x.ts)
 
+    def _remember(self, it: NewsItem) -> None:
+        it.novelty, related = self.novelty.score(it.id, f"{it.title}. {it.summary[:200]}")
+        if related:
+            it.nlp["related"] = related
+        self.items[it.id] = it
+
     def add(self, items: list[NewsItem]) -> None:
         for it in items:
-            self.items.setdefault(it.id, it)
+            if it.id not in self.items:
+                self._remember(it)
 
     def relevant(self, symbol: str, now: pd.Timestamp, minutes: int | None = None) -> list[NewsItem]:
         lo = now - pd.Timedelta(minutes=minutes or self.window)
@@ -354,18 +377,35 @@ class NewsDesk:
         rel = self.relevant(symbol, now)
         if not rel:
             return None
-        num = den = 0.0
+        num = den = snum = sden = 0.0
+        top = None
         for x in rel:
             age = (now - x.ts).total_seconds() / 60
-            w = 0.5 ** (age / self.half_life) * min(x.about.get(symbol, 0) / 4, 1.5) * (1 + 0.5 * (len(x.sources) - 1)) \
-                * {"high": 2.0, "medium": 1.3, "low": 1.0}[x.impact] * (0.4 if x.recap else 1.0)
+            n = x.nlp or {}
+            # each event fades at its own pace (a policy decision for hours, a recap in minutes), speculation and
+            # retellings count less, and a story's weight is what the text says about it (nlp.py)
+            w = 0.5 ** (age / (n.get("half_life") or self.half_life)) * min(x.about.get(symbol, 0) / 4, 1.5) \
+                * (1 + 0.5 * (len(x.sources) - 1)) * {"high": 2.0, "medium": 1.3, "low": 1.0}[x.impact] \
+                * (0.4 if x.recap else 1.0) * (n.get("weight") or 1.0) * (n.get("certainty") or 1.0) * (0.5 + 0.5 * x.novelty)
             num += w * x.sentiment
             den += w
+            if n.get("surprise") is not None:
+                snum += w * n["surprise"]
+                sden += w
+                if top is None or abs(n["surprise"]) * w > abs(top[0]) * top[1]:
+                    top = (n["surprise"], w, x)
         tone = num / den if den else 0.0
         conf = len(rel) / (len(rel) + 3)
         breaking = next((x for x in rel if x.impact == "high" and not x.recap and not PREVIEW.search(x.title)
                          and (now - x.ts) <= pd.Timedelta(minutes=self.breaking_min)), None)
+        events: dict[str, int] = {}
+        for x in rel:
+            e = (x.nlp or {}).get("event", "general")
+            events[e] = events.get(e, 0) + 1
         return {"tone": float(tone), "confidence": float(conf), "n": len(rel), "latest": rel[0].title,
+                "surprise": float(snum / sden) if sden else None, "events": events,
+                "top_surprise": ({"title": top[2].title, "surprise": float(top[0]), "event": top[2].nlp.get("event"),
+                                  "text": top[2].nlp.get("surprise_text", "")} if top else None),
                 "latest_age_min": float((now - rel[0].ts).total_seconds() / 60),
                 "breaking": ({"title": breaking.title, "age_min": float((now - breaking.ts).total_seconds() / 60),
                               "source": breaking.source} if breaking else None)}

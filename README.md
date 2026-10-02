@@ -129,6 +129,12 @@ Other commands:
    - **range premium-selling iron fly** (balance day with rich IV)
 
    The structure follows the vol view: buy the option when premium is fair or cheap, a debit spread when it's rich, a defined-risk fly for range days. Strikes come from the real chain by delta. Each plan fixes its **invalidation level, targets, premium stop and time stop before entry**.
+
+   **Waiting at the level (anticipation).** The breakout and pullback setups don't only wait for a 5-minute candle to close beyond a level. Every minute the desk also *arms* the ones its read already favours, at the exact trigger: the OR high/low or the 30-minute range edge (a stop entry through it), or VWAP on a trend-day pullback (a limit entry back at it). It only arms them when the level is within 1.5 ATR5 and there's no no-trade flag. With Kotak, the index price is polled every 5 seconds, so an armed setup fires the moment price trades there; without a live price, each new 1-minute bar's range decides it (in replays too). Legs are repriced to the trigger price before the EV gate decides.
+   - The 5-minute-close confirmation stays as a fallback (`intraday.anticipate.confirm_fallback`). A break the read only backs once it happens is still taken, just later.
+   - In replays, armed entries filled within 0.04 points of their level, but the EV gate turned most down before the break: conviction tends to arrive *with* the breakout. Every armed fire and its verdict is journaled, so live sessions show whether pre-break entries would have paid.
+   - The armed setups are on the app's Desk screen (*Waiting at the level*).
+   - Stops and targets are checked on the same 5-second price, not once a minute.
 4. **sizes and executes (simulated):**
    - **Sizing:** 1% of capital at risk to the plan's stop, scaled by conviction.
    - **Caps:** lots, premium outlay and margin.
@@ -218,8 +224,14 @@ Every 4 minutes, in parallel, the desk reads these feeds (all reachable from Git
 - tags what it's about: the index, banks, or macro
 - scores the headline with a finance lexicon that knows the subject. Crude, inflation or yields rising is bad for Indian equities. It also understands "snaps losing streak", "higher for longer", and rate cuts and hikes.
 - rates its impact
+- **reads it with NLP** (`intraday/nlp.py`, rule-based and deterministic):
+  - **event type:** policy, inflation, growth, earnings, flows, geopolitics, commodities, currency, regulation, global markets, ratings, corporate, or a market recap. Each type has its own half-life (a policy decision lasts hours, a recap minutes) and weight.
+  - **surprise against expectations,** parsed from the numbers: "CPI 5.4% vs 5.0% expected" is bearish whatever the level, and "eases to 5.1% but above the 4.8% expected" is still bearish. It also reads beats and misses of estimates and RBI/Fed cuts, hikes and holds. The surprise is signed for Indian equities (inflation above expectations hurts, growth above helps) and outweighs how the words lean.
+  - **index heavyweights** named in the story, as their approximate share of each index: HDFC Bank news is ~28% a BANKNIFTY story and ~13% a NIFTY one. "Reliance Power" is not Reliance Industries.
+  - **certainty:** "may", "sources say", previews and questions count half.
+  - **novelty:** TF-IDF cosine against the day's earlier stories, so a retelling counts less than the first report.
 
-A recency-weighted tone (half-life 45 minutes) is one piece of evidence with modest weight. After a high-impact story (RBI, the Fed, the budget, a CPI print, war), not a preview, the desk takes no new entries for 15 minutes. A **recap of the market's own move** ("Stock market crash: Sensex tumbles 700 points") never counts as high impact and weighs less in the tone: the move is already on the desk's tape. On 29 Sep 2026 five such recaps kept it out of the morning's sell-off for 55 minutes. A story is invisible until its publish time on the engine's clock, so replays never see the future. Everything is journaled, and it's all on the site's **News** tab.
+A recency-weighted tone (each story fading at its event's half-life, weighted by certainty and novelty) is one piece of evidence with modest weight; the read names the biggest surprise behind it. After a high-impact story (RBI, the Fed, the budget, a CPI print, war), not a preview, the desk takes no new entries for 15 minutes. A **recap of the market's own move** ("Stock market crash: Sensex tumbles 700 points") never counts as high impact and weighs less in the tone: the move is already on the desk's tape. On 29 Sep 2026 five such recaps kept it out of the morning's sell-off for 55 minutes. A story is invisible until its publish time on the engine's clock, so replays never see the future. Everything is journaled, and it's all on the site's **News** tab.
 
 **What-if replays.** `deploy/whatif.py` replays a recorded day (its real 1m bars, the headlines as the desk fetched them, and the prior sessions from Yahoo) under variants: the code as it ran that day, no news filter, no RSI filter, a lower conviction bar, the EV gate off, no stop floor. It prints each variant's trades and what kept it out. Run it from the Actions tab (**What-if replay**, with a date and optionally the commit that ran that day); the table lands in the run summary.
 
@@ -369,7 +381,7 @@ So global context mostly **explains**; it rarely **predicts**. The desk won't pr
 | **Brain** | the global risk regime and stress, today's gap explained, the influence graph (world → India read → bias → decision), what's pushing the bias, the global markets board (colour = good or bad for India) and the research-measured wiring |
 | **Feed** | **Headlines**: news tone per index, breaking-news stand-asides, feed health, filters (index, high impact, bearish, bullish); **Desk log**: the desk's reasoning over time, trades highlighted, tap to see the evidence |
 
-Every term of art has a **?** that explains it in plain words (bias, conviction, premium, R, grades, levels, regime, stress, VWAP), and Settings has the whole glossary. Pull down to refresh. Deep links work (`/#chart`, `/#trades/history`, `/#feed/log`), and so do the home-screen shortcuts (long-press the icon). The GoCharting chart lives on the daily desk (`/daily`); the phone app uses TradingView Lightweight Charts.
+Every term of art has a **?** that explains it in plain words (bias, conviction, premium, R, grades, levels, regime, stress, VWAP), and Settings has the whole glossary. Pull down to refresh. Deep links work (`/#chart`, `/#trades/history`, `/#feed/log`), and so do the home-screen shortcuts (long-press the icon). The GoCharting chart lives on the daily desk (`/daily`); the phone app uses TradingView Lightweight Charts with the **session profile** drawn into the price pane: the POC bar, the value area tinted, and the rest muted. NIFTY and BANKNIFTY are indices and their bars carry no volume, so the profile (and the desk's own POC/VAH/VAL, which the value-area setups read) is by **time at price** (TPO, Market Profile's original form). Before this fix those levels were empty on live data. GoCharting's own volume profile would be empty for the same reason, and its SDK needs a commercial licence for a public site. The UDF endpoint (`/api/i/udf`) is ready if you get a key.
 
 **On your phone:**
 

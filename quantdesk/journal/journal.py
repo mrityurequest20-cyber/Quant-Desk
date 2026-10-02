@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS thoughts (
 CREATE INDEX IF NOT EXISTS ix_thoughts_ts ON thoughts(ts);
 CREATE TABLE IF NOT EXISTS news (
   id TEXT PRIMARY KEY, ts TEXT, seen_at TEXT, source TEXT, sources TEXT, title TEXT, link TEXT, summary TEXT,
-  sentiment REAL, impact TEXT, about TEXT);
+  sentiment REAL, impact TEXT, about TEXT, nlp TEXT);
 CREATE INDEX IF NOT EXISTS ix_news_ts ON news(ts);
 CREATE INDEX IF NOT EXISTS ix_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS ix_decisions_ts ON decisions(ts);
@@ -108,6 +108,9 @@ class Journal:
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.lock = threading.RLock()
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(news)")}
+        if "nlp" not in cols:                                   # journals from before the headline NLP
+            self.db.execute("ALTER TABLE news ADD COLUMN nlp TEXT")
         self._pending = 0
         self._every = autocommit_every
 
@@ -185,10 +188,10 @@ class Journal:
         """Headlines as the desk saw them (with its own sentiment / impact / relevance scores)."""
         for it in items:
             r = it.to_record()
-            self._exec("INSERT OR REPLACE INTO news (id, ts, seen_at, source, sources, title, link, summary, sentiment, impact, about) "
-                       "VALUES (?,?,?,?,?,?,?,?,?,?,?)", (r["id"], r["ts"], str(seen_at), r["source"], _json(r["sources"]),
-                                                          r["title"], r["link"], r["summary"], r["sentiment"], r["impact"],
-                                                          _json(r["about"])))
+            self._exec("INSERT OR REPLACE INTO news (id, ts, seen_at, source, sources, title, link, summary, sentiment, impact, about, nlp) "
+                       "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (r["id"], r["ts"], str(seen_at), r["source"], _json(r["sources"]),
+                                                            r["title"], r["link"], r["summary"], r["sentiment"], r["impact"],
+                                                            _json(r["about"]), _json(r.get("nlp") or {})))
 
     def news(self, since: str | None = None, n: int = 200) -> pd.DataFrame:
         q, p = "SELECT * FROM news", []

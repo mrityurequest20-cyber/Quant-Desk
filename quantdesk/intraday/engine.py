@@ -18,6 +18,7 @@ import logging
 import math
 import time
 import traceback
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -27,7 +28,7 @@ from ..core.calendar import TradingCalendar
 from ..core.types import OPTIONS, Instrument, Order, Trade, TradeLeg, new_trade_id
 from ..journal.journal import Journal, trade_from_dict, trade_to_dict
 from .analyst import Analyst, MarketView
-from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity
+from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
 from .features import session_state
 from .feeds import IST, IntradayFeed, ReplayFeed, session_bounds
 from .ivhist import iv_percentile
@@ -57,6 +58,22 @@ class IntradayEngine:
         self.marker = QuoteMarker(self.pricer)
         self.refresh_min = getattr(self.chains, "refresh_min", None) or ic.get("chain_refresh_min", 3)
         self.max_entry_slip = float(ic.get("max_entry_slip", 0.15))
+        # anticipation: setups the read already favours wait at their trigger level (playbook.Armed) and fire the
+        # moment price gets there, from a live price polled every few seconds (feeds with `realtime`) or, without
+        # one, from each new 1-minute bar's range. Stops and targets are checked on the same fast loop.
+        ac = ic.get("anticipate", {}) or {}
+        self.anticipate = bool(ac.get("enabled", True))
+        self.ant = {"setups": tuple(ac.get("setups", ("orb", "trend_break", "vwap_trend"))), "ttl_min": float(ac.get("ttl_min", 2)),
+                    "buffer_atr5": float(ac.get("buffer_atr5", 0.10)), "reach_atr5": float(ac.get("reach_atr5", 1.5)),
+                    # the 5m-close confirmation stays as a fallback: a breakout the read only backs once it happens
+                    # (conviction often arrives with the break) is still taken, later, rather than missed
+                    "confirm_fallback": bool(ac.get("confirm_fallback", True))}
+        self.tick_sec = float(ac.get("tick_sec", 5))
+        self.armed: dict[str, list] = {}
+        self.last_px: dict[str, tuple] = {}
+        self._last_s: dict[str, dict] = {}
+        self._tick_fails = 0
+        self._tick_retry = None
         self.live_fails = 0
         self.think_every = ic.get("thought_every_min", 5)
         self.stale_min = ic.get("chain_stale_min", 12)
@@ -180,6 +197,9 @@ class IntradayEngine:
                 continue
             self.bars[sym] = pd.concat([self.bars.get(sym), new]) if sym in self.bars and len(self.bars[sym]) else new
             self.last_ts[sym] = new.index[-1]
+            if self.anticipate and not self.live_px and sym in self.underlyings:
+                for ts, b in new.iterrows():                   # no live price: each new bar's range decides the armed orders
+                    self._fire_armed(sym, now, bar=(float(b["open"]), float(b["high"]), float(b["low"])))
             if self.recorder:
                 self.recorder.record_bars(sym, new)
             got = got or sym in self.underlyings
@@ -207,8 +227,11 @@ class IntradayEngine:
                                        self.news.state(u, now) if self.news is not None else None, q,
                                        {"evidence": b.evidence, "narrative": b.narrative} if b is not None else None)
             self.views[u] = view
+            self._last_s[u] = s
             exits = self._manage(u, view, now)
             action = self._maybe_enter(u, view, s, now)
+            if self.anticipate:
+                action = self._arm(u, view, s, now, action)
             self._think(u, view, now, "; ".join(exits + [action]) if exits else action, force=bool(exits))
         if now.time() >= self.risk.square_off:
             for t in list(self.open_trades):
@@ -324,7 +347,130 @@ class IntradayEngine:
                 "stacked_buy": st["buy"], "stacked_sell": st["sell"]}
 
     # ---- trading ------------------------------------------------------------------------------------------
-    def _maybe_enter(self, u: str, view: MarketView, s: dict, now) -> str:
+    # ---- anticipation: arm at the level, fire in real time -----------------------------------------------------
+    @property
+    def live_px(self) -> bool:
+        """A live price between minutes (Kotak's quotes) that is working; otherwise (replays, bar-only feeds, or the
+        quotes failing) each new bar's range decides the armed orders."""
+        return bool(getattr(self.feed, "has_ltp", False)) and self._tick_fails < 3
+
+    def _arm(self, u: str, view: MarketView, s: dict, now, action: str) -> str:
+        """Re-arm this underlying's anticipated setups from the minute's read; say what's waiting in the thought."""
+        self.armed[u] = []
+        if self._blocked(u, view, now) or not action.startswith("watching"):
+            return action
+        q = self.qstate.get(u) or {}
+        why = (f"{view.bias} read (score {view.score:+.2f}, conviction {view.conviction:.2f}"
+               + (f", model P(up) {q['p_model']:.2f}" if q.get("valid") and q.get("p_model") is not None else "") + ")")
+        self.armed[u] = self.playbook.arm(view, s, now, ttl_min=self.ant["ttl_min"], buffer_atr5=self.ant["buffer_atr5"],
+                                          reach_atr5=self.ant["reach_atr5"], setups=self.ant["setups"], why=why)
+        if not self.armed[u]:
+            return action
+        return "armed: " + "; ".join(a.describe() for a in self.armed[u])
+
+    def _fire_armed(self, u: str, now, price: float | None = None, bar: tuple | None = None) -> str | None:
+        """Fire the first armed setup the price (or the new bar's range) reached, through the same gates as any entry."""
+        live = [a for a in self.armed.get(u, []) if now <= a.expires]
+        view, s = self.views.get(u), self._last_s.get(u)
+        if not live or view is None or s is None:
+            return None
+        for a in live:
+            S = (price if a.hit(price) else None) if price is not None else a.bar_fill(*bar)
+            if S is None:
+                continue
+            self.armed[u] = []                                  # one shot per read: re-armed on the next minute
+            why = self._blocked(u, view, now)
+            if why:
+                return None
+            chain = self._chain_at(u, float(S), now)            # priced where the trade fills, not a minute ago
+            plan = self.playbook.fire(a, view, chain, now, S)
+            if plan is None:
+                return None
+            at_s = replace(view, spot=float(S))
+            eq = self.equity(now)
+            if self.quant_on:
+                pick = self._guarded(u, now, "EV selection", self._select_by_ev, u, [plan], at_s, eq, now, chain)
+                if pick is None or isinstance(pick, str):
+                    msg = f"{a.setup} reached its level {a.level:,.2f} but " + (pick or "the quant layer failed")
+                    self.journal.decision(now, a.setup, u, "rejected", msg, 0, {"armed": a.to_record()})
+                    self._think(u, view, now, msg, force=True)
+                    return msg
+                plan, lots, notes = pick
+            else:
+                lots, notes = self.risk.size(plan, eq, self.broker.cash())
+                if lots < 1:
+                    self.journal.decision(now, plan.setup, u, "rejected", " | ".join(notes), 0, {"plan": plan.describe()})
+                    return None
+            msg = self._open(plan, lots, notes, at_s, s, now)
+            self._think(u, at_s, now, msg, force=True)
+            return msg
+        return None
+
+    def _chain_at(self, u: str, S: float, now) -> pd.DataFrame:
+        """The last chain repriced to underlying price S: each strike's bid/ask/LTP moves by its Black-Scholes value
+        change at its own IV (the live book, when there is one, still sets the actual fill)."""
+        from ..options.pricing import bs_price
+        ch = self.chain_df[u]
+        S0 = float(ch.attrs.get("spot") or S)
+        if abs(S - S0) < 1e-9:
+            return ch
+        out = ch.copy()
+        out.attrs = {**ch.attrs, "spot": float(S)}
+        T = max(time_to_expiry(now, ch.attrs["expiry"]), 1 / 365 / 24)
+        K = ch.index.to_numpy(dtype=float)
+        for side, right in (("ce", "CE"), ("pe", "PE")):
+            iv = ch[f"{side}_iv"].to_numpy(dtype=float) / 100
+            ok = iv > 0
+            shift = np.zeros(len(K))
+            shift[ok] = (bs_price(S, K[ok], T, self.pricer.r, self.pricer.q, iv[ok], right)
+                         - bs_price(S0, K[ok], T, self.pricer.r, self.pricer.q, iv[ok], right))
+            for f in ("bid", "ask", "ltp"):
+                col = out[f"{side}_{f}"]
+                out[f"{side}_{f}"] = np.where(col > 0, np.maximum(col + shift, 0.05), col)
+        return out
+
+    def tick(self) -> bool:
+        """Between minute steps: the live index price fires armed entries the moment price gets there and checks open
+        positions' stops and targets in real time. A no-op without a realtime feed or anything to watch."""
+        if not (getattr(self.feed, "has_ltp", False) and self.day):
+            return False
+        want = [u for u in self.underlyings if self.armed.get(u) or any(t.symbol == u for t in self.open_trades)]
+        if not want:
+            return False
+        now = self.feed.now()
+        if self._tick_fails >= 3 and self._tick_retry and now < self._tick_retry:
+            return False                                         # failing: the minute bars decide; retry once a minute
+        try:
+            px = self.feed.ltp(want) or {}
+            if self._tick_fails >= 3:
+                self.journal.event(now, "INFO", "quotes", "live index price is back: armed orders fire in real time again")
+            self._tick_fails = 0
+        except Exception as exc:
+            self._tick_fails += 1
+            self._tick_retry = now + pd.Timedelta(minutes=1)
+            if self._tick_fails == 3:
+                self.journal.event(now, "WARN", "quotes", f"live index price unavailable ({exc!s:.160}); armed orders "
+                                                          f"fire on the minute bars until it's back")
+            return False
+        did = False
+        for u, p in px.items():
+            if not (p and p == p):
+                continue
+            self.last_px[u] = (now, float(p))
+            fired = self._fire_armed(u, now, price=float(p)) if self.anticipate else None
+            view = self.views.get(u)
+            exits = self._manage(u, replace(view, spot=float(p)), now) if view is not None else []
+            if exits:
+                self._think(u, replace(view, spot=float(p)), now, "; ".join(exits), force=True)
+            did = did or bool(fired or exits)
+        if did:
+            self._persist()
+            self._heartbeat(now)
+            self.journal.commit()
+        return did
+
+    def _blocked(self, u: str, view: MarketView, now) -> str | None:
+        """Why no new entry can be taken right now (None: one can)."""
         if self.paused:
             return "standing aside: new entries paused from the app"
         if view.vetoes:
@@ -334,11 +480,16 @@ class IntradayEngine:
         age = now - self.chain_at.get(u, now)
         if self.chain_df[u].attrs.get("source") != "model" and age > pd.Timedelta(minutes=self.stale_min):
             return f"standing aside: option chain {age.seconds // 60} min old"
+        gate = self.risk.gate(now, self.equity(now), self.open_trades, u)
+        return f"standing aside: {gate[0]}" if gate else None
+
+    def _maybe_enter(self, u: str, view: MarketView, s: dict, now) -> str:
+        why = self._blocked(u, view, now)
+        if why:
+            return why
         eq = self.equity(now)
-        gate = self.risk.gate(now, eq, self.open_trades, u)
-        if gate:
-            return f"standing aside: {gate[0]}"
-        plans = self.playbook.scan(view, s, self.chain_df[u], now)
+        skip = self.ant["setups"] if self.anticipate and not self.ant["confirm_fallback"] else ()
+        plans = self.playbook.scan(view, s, self.chain_df[u], now, skip=skip)
         if not plans:
             return "watching: no setup has triggered"
         if self.quant_on:
@@ -515,7 +666,7 @@ class IntradayEngine:
         tilt = float(self.qc.get("prior_tilt", 0.10))
         return float(0.5 + np.clip(tilt * view.score, -tilt, tilt)), "prior tilt from the analyst's score (unvalidated)"
 
-    def _select_by_ev(self, u: str, plans: list, view, eq: float, now):
+    def _select_by_ev(self, u: str, plans: list, view, eq: float, now, chain: pd.DataFrame | None = None):
         """Price every plan and its alternative structures by Monte Carlo; trade the best EV per rupee of risk
         that the account can hold and that clears the EV floor. Otherwise say why not."""
         q = self.qstate.get(u) or {}
@@ -527,7 +678,7 @@ class IntradayEngine:
         floor_inr, floor_r = float(self.qc.get("min_ev_inr", 40)), float(self.qc.get("min_ev_r", 0.05))
         cands = []
         for plan in plans:
-            variants = [plan] + self.playbook.alternatives(plan, self.chain_df[u], now, self.qc.get("long_deltas", (0.30, 0.40)),
+            variants = [plan] + self.playbook.alternatives(plan, self.chain_df[u] if chain is None else chain, now, self.qc.get("long_deltas", (0.30, 0.40)),
                                                             [tuple(x) for x in self.qc.get("spreads", ((0.45, 0.30), (0.50, 0.20)))])
             for v in variants:
                 drift = ((self.research.get(u) or {}).get("drift") or {}).get("per_min", 0.0)
@@ -738,6 +889,7 @@ class IntradayEngine:
             "day_pnl": eq - self.day_start_equity, "paused": self.paused, "halted": self.risk.halted,
             "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(),
             "views": views, "positions": positions,
+            "armed": [a.to_record() for u in self.underlyings for a in self.armed.get(u, []) if now <= a.expires],
             "news_health": dict(self.news.health) if self.news is not None else None,
             "global": _global_view(self.brain, now), "gift": self.gift, "events": self.events_today})
 
@@ -925,7 +1077,16 @@ def run_live(engine: IntradayEngine, stop_at: dt.time | None = None, handover: b
             log.exception("step failed")
             engine.journal.event(engine.feed.now(), "ERROR", "engine", repr(exc), {"where": _where(exc)})
         n = engine.feed.now()
-        time.sleep(max(1.0, 60 - n.second + 4))
+        nxt = n.floor("min") + pd.Timedelta(seconds=64)            # the next minute's step, 4 s after it closes
+        while (left := (nxt - engine.feed.now()).total_seconds()) > 0:
+            ticking = getattr(engine.feed, "has_ltp", False)
+            time.sleep(max(0.5, min(engine.tick_sec, left)) if ticking else left)
+            if ticking and engine.feed.now() < nxt:
+                try:
+                    engine.tick()
+                except Exception as exc:                    # the minute step still runs; journal the failure
+                    log.exception("tick failed")
+                    engine.journal.event(engine.feed.now(), "ERROR", "engine", f"tick: {exc!r}", {"where": _where(exc)})
     if handover and end < close_ts:
         engine._persist()
         engine.journal.event(engine.feed.now(), "INFO", "session", f"handed over at {stop_at:%H:%M} with "

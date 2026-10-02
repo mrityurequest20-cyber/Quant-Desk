@@ -94,6 +94,7 @@ class Profile:
     approximate: bool
     hvn: list[float] = field(default_factory=list)
     lvn: list[float] = field(default_factory=list)
+    kind: str = "volume"        # "volume": volume at price; "tpo": time at price (no volume, e.g. an index)
 
     def position(self, price: float) -> str:
         if price > self.vah:
@@ -103,7 +104,7 @@ class Profile:
         return "inside value"
 
     def to_dict(self) -> dict:
-        return {"poc": self.poc, "vah": self.vah, "val": self.val, "approximate": self.approximate,
+        return {"poc": self.poc, "vah": self.vah, "val": self.val, "approximate": self.approximate, "kind": self.kind,
                 "hvn": self.hvn[:3], "lvn": self.lvn[:3]}
 
 
@@ -139,9 +140,14 @@ def _nodes(prices, vol) -> tuple[list[float], list[float]]:
 
 
 def profile_from_bars(df: pd.DataFrame, tick: float | None = None, bins: int | None = None) -> Profile | None:
-    """Spread each bar's volume uniformly across its high-low range (approximate profile)."""
-    if df is None or df.empty or df["volume"].sum() <= 0:
+    """Spread each bar's volume uniformly across its high-low range (approximate profile). An index has no volume
+    (NIFTY and BANKNIFTY bars carry 0), so without any the profile is by time at price instead (TPO, Market
+    Profile's original form): every minute counts the same, and the value area is where the session spent its time."""
+    if df is None or df.empty:
         return None
+    tpo = not df["volume"].sum() > 0
+    if tpo:
+        df = df.assign(volume=1.0)
     lo, hi = float(df["low"].min()), float(df["high"].max())
     if tick is None:
         tick = max((hi - lo) / (bins or 80), 1e-9)
@@ -160,7 +166,7 @@ def profile_from_bars(df: pd.DataFrame, tick: float | None = None, bins: int | N
     centres = (edges[:-1] + edges[1:]) / 2
     poc, vah, val = _value_area(centres, vol)
     hvn, lvn = _nodes(centres, vol)
-    return Profile(centres, vol, poc, vah, val, True, hvn, lvn)
+    return Profile(centres, vol, poc, vah, val, True, hvn, lvn, "tpo" if tpo else "volume")
 
 
 def profile_from_trades(trades: list[Trade], tick: float) -> Profile | None:

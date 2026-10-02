@@ -65,9 +65,15 @@ class IntradayFeed(abc.ABC):
     def poll(self, symbol: str, since: pd.Timestamp | None) -> pd.DataFrame:
         """Completed 1m bars strictly after `since`."""
 
+    has_ltp = False                                   # ltp() gives a live price between minutes
+
     def trades(self, symbol: str) -> list[Trade]:
         """Trades since the last call (order-flow feeds only)."""
         return []
+
+    def ltp(self, symbols) -> dict[str, float]:
+        """The last traded price right now per symbol, for the engine's fast loop (feeds with has_ltp)."""
+        return {}
 
     def history_bars(self, symbol: str, days: int = 55) -> pd.DataFrame:
         """Longer 5m history for model training (default: the 1m history resampled)."""

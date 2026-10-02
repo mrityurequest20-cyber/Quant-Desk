@@ -101,6 +101,8 @@ def test_chart_and_udf(site):
     code, c, _ = call(base, "/api/i/chart?symbol=NIFTY&interval=5m")
     assert code == 200 and c["day"] == str(days[-1]) and len(c["bars"]["t"]) == 75 and len(c["vwap"]) == 75
     assert "or_high" in c["levels"]
+    pr = c["profile"]                                                       # the session profile the chart draws
+    assert pr["val"] <= pr["poc"] <= pr["vah"] and len(pr["prices"]) == len(pr["size"]) and max(pr["size"]) == 1.0
     code, u, _ = call(base, "/api/i/udf?symbol=NSE:INDEX:NIFTY&interval=15m&countback=10&to=2000000000")
     assert u["s"] == "ok" and len(u["t"]) == 10 and u["t"] == sorted(u["t"])
 

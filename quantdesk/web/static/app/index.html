@@ -357,6 +357,8 @@ border:1px solid var(--line);box-shadow:var(--shadow);display:grid;place-items:c
     <div class="panel rows" id="d-markets"></div>
     <div class="sec-h"><h2>What the desk is doing</h2><button class="link" data-go="feed/log">Log<svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div>
     <div class="panel" id="d-now"></div>
+    <div id="d-armed-wrap" hidden><div class="sec-h"><h2>Waiting at the level</h2><span class="hint">fires the moment price gets there</span></div>
+      <div class="panel rows" id="d-armed"></div></div>
     <div id="d-pos-wrap" hidden><div class="sec-h"><h2>Open positions</h2><span class="hint" id="d-pos-hint"></span></div><div class="stack" id="d-positions"></div></div>
     <div id="d-global-wrap"><div class="sec-h"><h2>Global pulse</h2><button class="link" data-go="brain">Brain<svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div>
       <div class="ticker" id="d-global"></div></div>

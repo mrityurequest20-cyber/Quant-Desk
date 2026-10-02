@@ -133,6 +133,7 @@ function readAction(a) {
 	if (/^EXIT/.test(a)) return { kind: "exit", label: "Closed a trade", reason: a.slice(5) };
 	if ((m = a.match(/^standing aside[^:]*:\s*(.*)$/i))) return { kind: "aside", label: "Standing aside", reason: cap(m[1]) };
 	if ((m = a.match(/^watching[^:]*:\s*(.*)$/i))) return { kind: "watch", label: "Watching", reason: cap(m[1]) };
+	if ((m = a.match(/^armed:\s*(.*)$/i))) return { kind: "armed", label: "Waiting at the level", reason: cap(m[1]) };
 	if (/sized to 0 lots|not worth it|\bEV\b/.test(a)) return { kind: "pass", label: "Passed on a setup", reason: cap(a) };
 	return { kind: a ? "other" : "none", label: a ? cap(a) : "No read yet", reason: "" };
 }
@@ -157,6 +158,7 @@ const GLOSS = {
 	bias: ["Bias score", "The desk's lean for the index, from −1 (strongly bearish) to +1 (strongly bullish): a weighted vote of every piece of evidence — trend, structure, momentum, options positioning, volatility, news, global markets, and the quant model when it has proven an edge."],
 	conviction: ["Conviction", "How much the evidence agrees, 0 (split) to 1 (unanimous). The desk trades only with enough conviction and no no-trade flag up."],
 	premium: ["Premium: rich, fair or cheap", "Implied volatility (IV, what option prices assume) against realised volatility (RV, how much the index is actually moving). Rich premium (IV well above RV) favours spreads that sell some of it back; cheap premium favours buying options outright."],
+	armed: ["Waiting at the level", "A setup the desk's read already favours, decided before price gets there: it knows the level that triggers it (the opening range, a 30-minute range edge, VWAP on a pullback) and fires the moment price trades there, from a live price checked every few seconds, instead of waiting for a 5-minute candle to close beyond it. Re-decided every minute from the latest read."],
 	aside: ["Standing aside", "A no-trade flag is up: the first minutes after the open, a move too stretched to chase, breaking news, a stale option chain, global stress, or an EV that doesn't clear costs. Not trading is a decision too."],
 	r: ["R-multiple", "P&L divided by the risk planned at entry. +1R made what the trade risked; −1R lost exactly the planned amount. It makes trades of different sizes comparable."],
 	grade: ["Trade grade", "A post-trade review of decision quality (entry, sizing, management, exit), A to F. A well-run loser can grade well; a lucky winner can grade badly."],
@@ -345,6 +347,16 @@ async function renderDesk() {
 	}
 	$("#d-mkt-hint").textContent = hb.feed ? `${hb.feed} · chain ${hb.chain || "—"}` : "tap for the chart";
 	renderNow(st);
+	// setups decided before price gets there: they fire the moment it does
+	const armed = hb.armed || [];
+	$("#d-armed-wrap").hidden = !armed.length;
+	const ar = $("#d-armed");
+	ar.textContent = "";
+	armed.forEach((x) => ar.appendChild(h("div", { class: "trow" },
+		h("span", { class: "grade" }, x.direction > 0 ? "▲" : "▼"),
+		h("div", { style: "min-width:0" }, h("div", { class: "t1" }, `${x.symbol} · ${setupName(x.setup)}`),
+			h("div", { class: "t2" }, `${x.kind === "break" ? "on a trade through" : "on a pullback to"} ${num(x.level)} · stop ${num(x.invalidation)} · ${x.why}`)),
+		h("div", { class: "v" }, x.direction > 0 ? "Buy" : "Sell", h("small", {}, "armed " + ist(x.armed_at))))));
 	// open positions
 	const pos = hb.positions || [];
 	$("#d-pos-wrap").hidden = !pos.length;
@@ -682,6 +694,37 @@ function candleColors() {
 	const up = cssv("--cup"), dn = cssv("--cdn");
 	return { upColor: up, downColor: dn, borderUpColor: up, borderDownColor: dn, wickUpColor: up, wickDownColor: dn };
 }
+// The session profile, drawn inside the price pane from its right edge: how much volume (or, for an index with no
+// volume, how much time) traded at each price. The POC bar is strongest, the value area tinted, the rest muted.
+function makeSVP() {
+	let data = null, series = null, requestUpdate = null;
+	const renderer = {
+		draw(target) {
+			if (!data || !series) return;
+			target.useBitmapCoordinateSpace((sc) => {
+				const ctx = sc.context, vr = sc.verticalPixelRatio, W = sc.bitmapSize.width, maxW = W * 0.24, half = data.step / 2;
+				const acc = cssv("--acc"), mute = cssv("--fg3");
+				data.prices.forEach((p, i) => {
+					const y1 = series.priceToCoordinate(p + half), y2 = series.priceToCoordinate(p - half);
+					if (y1 == null || y2 == null) return;
+					const w = data.size[i] * maxW, poc = Math.abs(p - data.poc) <= half, inVA = p >= data.val - half && p <= data.vah + half;
+					ctx.globalAlpha = poc ? 0.75 : inVA ? 0.32 : 0.16;
+					ctx.fillStyle = poc || inVA ? acc : mute;
+					ctx.fillRect(W - w, Math.min(y1, y2) * vr, w, Math.max(1, Math.abs(y2 - y1) * vr - 1));
+				});
+				ctx.globalAlpha = 1;
+			});
+		},
+	};
+	const view = { zOrder: () => "bottom", renderer: () => renderer };
+	return {
+		attached(p) { series = p.series; requestUpdate = p.requestUpdate; },
+		detached() { series = null; requestUpdate = null; },
+		updateAllViews() {},
+		paneViews: () => [view],
+		set(d) { data = d && d.prices && d.prices.length ? d : null; if (requestUpdate) requestUpdate(); },
+	};
+}
 function destroyLW() { if (S.lw) { try { S.lw.chart.remove(); } catch (e) { /* gone */ } } S.lw = null; }
 function createLW(el) {
 	const LW = window.LightweightCharts;
@@ -697,7 +740,9 @@ function createLW(el) {
 	chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.86, bottom: 0 }, visible: false });
 	const vwap = chart.addSeries(LW.LineSeries, { color: cssv("--vwap"), lineWidth: 2, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "VWAP" });
 	const markers = LW.createSeriesMarkers ? LW.createSeriesMarkers(candle, []) : null;
-	S.lw = { chart, candle, vol, vwap, markers, lines: [], key: null, byTime: new Map(), marksAt: new Map() };
+	const svp = typeof candle.attachPrimitive === "function" ? makeSVP() : null;
+	if (svp) candle.attachPrimitive(svp);
+	S.lw = { chart, candle, vol, vwap, markers, svp, lines: [], key: null, byTime: new Map(), marksAt: new Map() };
 	chart.subscribeCrosshairMove((param) => ohlcLegend(param && param.time));
 }
 function ohlcLegend(time) {
@@ -712,6 +757,8 @@ function ohlcLegend(time) {
 	put(el, h("div", {}, h("b", {}, ist(B.t[i])), "  ", ...kv("O", num(B.o[i])), ...kv("H", num(B.h[i])), ...kv("L", num(B.l[i])),
 		h("span", { class: "k" }, "C"), h("b", { class: cls(chg) }, `${num(B.c[i])} ${chg >= 0 ? "+" : "−"}${Math.abs(chg).toFixed(2)}%`)),
 	h("div", { class: "r2" }, h("span", { style: "color:var(--vwap)" }, "VWAP " + num(d.vwap[i])), B.v[i] > 0 ? "  Vol " + num(B.v[i], 0) : "",
+		d.profile ? h("span", { style: "color:var(--acc)", title: d.profile.kind === "tpo" ? "time at price: an index has no volume" : "volume at price" },
+			`  POC ${num(d.profile.poc, 0)} · VA ${num(d.profile.val, 0)}–${num(d.profile.vah, 0)}${d.profile.kind === "tpo" ? " (TPO)" : ""}`) : "",
 		...(L.marksAt.get(B.t[i]) || []).map((m) => `  ${m.kind === "entry" ? "▲" : "●"} ${m.text}`)));
 }
 function drawChart(reframe) {
@@ -733,6 +780,7 @@ function drawChart(reframe) {
 	const hasVol = B.v.some((x) => x > 0);
 	L.vol.setData(hasVol ? B.t.map((t, i) => ({ time: T(t), value: B.v[i], color: (B.c[i] >= B.o[i] ? up : dn) + "44" })) : []);
 	L.vwap.setData(B.t.map((t, i) => ({ time: T(t), value: d.vwap[i] })));
+	if (L.svp) L.svp.set(d.profile);
 	L.lines.forEach((pl) => L.candle.removePriceLine(pl));
 	L.lines = [];
 	const on = levelsOn();
@@ -1124,6 +1172,17 @@ async function renderFeed(full) {
 	put(body, chips, list);
 	paint();
 }
+// what the headline NLP read (nlp.py): the event, a surprise against expectations, speculation, a retelling
+function nlpTags(n) {
+	if (!n) return null;
+	const t = [], tag = (txt, cls, tip) => h("span", { class: "tag line " + (cls || ""), style: "height:18px;font-size:10.5px", title: tip || "" }, txt);
+	if (n.event && n.event !== "general") t.push(tag(words(n.event)));
+	if (fin(n.surprise) && n.surprise !== 0)
+		t.push(tag(`surprise ${signed(n.surprise)}`, n.surprise > 0 ? "bull" : "bear", n.surprise_text || "against expectations"));
+	if (fin(n.certainty) && n.certainty < 1) t.push(tag("unconfirmed", "", "speculation, a preview or sources-say"));
+	if (fin(n.novelty) && n.novelty < 0.5) t.push(tag("retold", "", "mostly a retelling of an earlier story"));
+	return t;
+}
 function newsRow(r, compact) {
 	const k = r.sentiment > 0.15 ? "bull" : r.sentiment < -0.15 ? "bear" : "";
 	const tags = Object.entries(r.about || {}).filter(([t, x]) => t !== "macro" && x >= 2).map(([t]) => t);
@@ -1133,7 +1192,8 @@ function newsRow(r, compact) {
 		h("div", { class: "meta" }, h("span", { class: "sent " + k, title: `sentiment ${signed(r.sentiment)}` }),
 			r.impact && r.impact !== "low" ? h("span", { class: "imp " + r.impact }, r.impact) : null,
 			h("span", {}, `${src.slice(0, compact ? 1 : 3).join(", ")}${src.length > (compact ? 1 : 3) ? " +" + (src.length - (compact ? 1 : 3)) : ""}`), h("span", {}, "·"), h("span", {}, ago(r.ts)),
-			compact ? null : tags.map((t) => h("span", { class: "tag line", style: "height:18px;font-size:10.5px" }, t))),
+			compact ? null : tags.map((t) => h("span", { class: "tag line", style: "height:18px;font-size:10.5px" }, t)),
+			compact ? null : nlpTags(r.nlp)),
 		r.link ? h("a", { class: "ttl", href: r.link, target: "_blank", rel: "noopener noreferrer" }, r.title) : h("div", { class: "ttl" }, r.title));
 }
 async function renderLog(reset) {

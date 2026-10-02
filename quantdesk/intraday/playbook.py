@@ -14,7 +14,7 @@ premium rich → debit vertical (sells some of the rich vol back); balance + ric
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -86,6 +86,48 @@ class TradePlan:
         kind = "credit" if self.is_credit else "debit"
         return (f"{self.structure} {self.symbol} {self.expiry:%d-%b}: {legs}; {kind} ₹{abs(self.net_premium):,.0f}/lot, "
                 f"max loss ₹{self.max_loss_per_lot():,.0f}/lot")
+
+
+@dataclass
+class Armed:
+    """A setup decided before price gets there: the desk's read already favours it, and the level that triggers it is
+    known, so the entry waits at the level instead of for a 5-minute bar to close beyond it.
+
+    kind "break": a stop entry, fires when price trades through `level` in the trade's direction (breakouts).
+    kind "touch": a limit entry, fires when price comes back to `level` against the trade (pullbacks)."""
+    setup: str
+    symbol: str
+    direction: int
+    kind: str
+    level: float
+    invalidation: float
+    reward_risk: float                 # target = fill ± max(reward_risk × risk, min_move)
+    min_move: float
+    armed_at: pd.Timestamp
+    expires: pd.Timestamp
+    why: str
+    thesis: str
+
+    def hit(self, price: float) -> bool:
+        up = (self.direction > 0) == (self.kind == "break")       # does a higher price trigger it?
+        return price >= self.level if up else price <= self.level
+
+    def bar_fill(self, o: float, h: float, l: float) -> float | None:
+        """The underlying price this would have filled at inside a 1-minute bar (replays; feeds without a live price):
+        the level, or the open when the bar gapped through it. None when the bar never reached it."""
+        if (self.direction > 0) == (self.kind == "break"):          # a rising price triggers it
+            return None if h < self.level else max(o, self.level)  # gapped up through it: the open
+        return None if l > self.level else min(o, self.level)
+
+    def describe(self) -> str:
+        side = "buy" if self.direction > 0 else "sell"
+        how = ("on a trade through" if self.kind == "break" else "on a pullback to")
+        return f"{self.setup}: {side} {how} {self.level:,.2f} (stop {self.invalidation:,.2f})"
+
+    def to_record(self) -> dict:
+        return {"setup": self.setup, "symbol": self.symbol, "direction": self.direction, "kind": self.kind,
+                "level": round(self.level, 2), "invalidation": round(self.invalidation, 2),
+                "armed_at": str(self.armed_at), "expires": str(self.expires), "why": self.why, "text": self.describe()}
 
 
 class StrikePicker:
@@ -344,9 +386,85 @@ class Playbook:
                 add([_leg(lq, right, +1), _leg(sq, right, -1)], "bull_call_spread" if right == "CE" else "bear_put_spread")
         return out
 
-    def scan(self, view: MarketView, s: dict, chain, now) -> list[TradePlan]:
+    # --- anticipation: arm the level now, fire the moment price gets there ---------------------------------------
+    def arm(self, view: MarketView, s: dict, now, ttl_min: float = 2.0, buffer_atr5: float = 0.10,
+            reach_atr5: float = 1.5, setups=("orb", "trend_break", "vwap_trend"), why: str = "") -> list[Armed]:
+        """The setups this read already favours whose trigger level is known and within reach. Rebuilt every minute
+        from the latest read; each lives `ttl_min` minutes so a late minute can't leave a stale order behind."""
+        if view.vetoes or not view.score or view.conviction < self.min_conv:
+            return []
+        d = int(np.sign(view.score))
+        last, vw = float(s["last"]), float(s["vwap"])
+        atr5 = float(s.get("atr5") or 0)
+        if not atr5 > 0:
+            return []
+        buf, reach = buffer_atr5 * atr5, reach_atr5 * atr5
+        exp = now + pd.Timedelta(minutes=ttl_min)
+        why = why or f"{view.bias} read, score {view.score:+.2f}, conviction {view.conviction:.2f}"
+        out = []
+
+        def add(setup, kind, level, inval, rr, min_move, thesis):
+            if (d > 0 and inval >= level) or (d < 0 and inval <= level):
+                return                                              # the stop would sit beyond the entry
+            if abs(level - last) > reach:
+                return                                              # too far to be the next thing that happens
+            out.append(Armed(setup, view.symbol, d, kind, float(level), float(inval), rr, float(min_move), now, exp,
+                             why, thesis))
+
+        p = self.on("orb")
+        if p and "orb" in setups and s.get("or_done") and 15 <= s["minutes"] <= p.get("until_min", 120) and not (
+                s.get("rel_volume", 1) == s.get("rel_volume", 1) and s.get("rel_volume", 1) < p.get("min_rel_volume", 0.8)):
+            hi, lo = float(s["or_high"]), float(s["or_low"])
+            mid_or = (hi + lo) / 2
+            if d > 0 and last <= hi:
+                add("orb", "break", hi + buf, max(mid_or, vw), 1.5, hi - lo,
+                    f"Opening-range breakout the read expects: through {hi:,.2f}; wrong back at the OR mid / VWAP.")
+            elif d < 0 and last >= lo:
+                add("orb", "break", lo - buf, min(mid_or, vw), 1.5, hi - lo,
+                    f"Opening-range breakdown the read expects: through {lo:,.2f}; wrong back at the OR mid / VWAP.")
+        p = self.on("trend_break")
+        if (p and "trend_break" in setups and "range30_high" in s and view.day_type in ("trend", "undetermined")
+                and p.get("after_min", 60) <= s["minutes"] <= p.get("until_min", 330) and view.conviction >= max(self.min_conv, 0.55)):
+            hi, lo = float(s["range30_high"]), float(s["range30_low"])
+            width = hi - lo
+            if 0 < width <= 7.5 * atr5 and lo <= last <= hi and ((d > 0 and last > vw) or (d < 0 and last < vw)):
+                add("trend_break", "break", hi + buf if d > 0 else lo - buf, (hi + lo) / 2, 2.0, width,
+                    f"Flag breakout the {view.bias} tape points to: out of the {width:,.0f}-pt 30-min range; "
+                    f"wrong back inside, past its midpoint {(hi + lo) / 2:,.2f}.")
+        p = self.on("vwap_trend")
+        if (p and "vwap_trend" in setups and s["minutes"] >= p.get("after_min", 45) and view.day_type in ("trend", "undetermined")
+                and ((d > 0 and s.get("ema9", 0) >= s.get("ema21", 0)) or (d < 0 and s.get("ema9", 0) <= s.get("ema21", 0)))):
+            away = (last - vw) * d
+            if away > 0.25 * atr5:                                  # on the trend side, not sitting on VWAP
+                add("vwap_trend", "touch", vw + d * buf, vw - d * 0.35 * atr5, 2.0, 0.0,
+                    f"Trend-day pullback: buyers/sellers expected to defend VWAP {vw:,.2f}; wrong past it by 0.35 ATR5.")
+        return out
+
+    def fire(self, a: Armed, view: MarketView, chain, now, S: float) -> TradePlan | None:
+        """Build the trade for an armed setup filled at underlying price S (legs repriced from the chain's spot to S
+        by their delta; the live book, when there is one, sets the actual fill)."""
+        risk = abs(S - a.invalidation)
+        if risk <= 0 or (a.direction > 0) != (S > a.invalidation):
+            return None
+        target = S + a.direction * max(a.reward_risk * risk, a.min_move)
+        v = replace(view, spot=float(S))
+        trig = (f"price {'traded through' if a.kind == 'break' else 'came back to'} {a.level:,.2f} at {now:%H:%M:%S}, "
+                f"armed {a.armed_at:%H:%M} on a {a.why}")
+        plan = self._directional(a.setup, v, chain, now, a.direction, trig, a.thesis, a.invalidation, target)
+        if plan is None:
+            return None
+        dS = float(S) - float(chain.attrs.get("spot") or S)
+        for l in plan.legs:
+            shift = l.delta * dS
+            l.price, l.mid = max(0.05, l.price + shift), max(0.05, l.mid + shift)
+        plan.notes.update({"armed": a.to_record(), "fill_underlying": round(float(S), 2)})
+        return plan
+
+    def scan(self, view: MarketView, s: dict, chain, now, skip=()) -> list[TradePlan]:
         out = []
         for name in ("orb", "vwap_trend", "trend_break", "va_reversion", "range_sell"):
+            if name in skip:
+                continue
             try:
                 pl = getattr(self, name)(view, s, chain, now)
             except (KeyError, ValueError, IndexError):

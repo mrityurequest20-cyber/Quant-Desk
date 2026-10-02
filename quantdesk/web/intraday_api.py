@@ -110,7 +110,7 @@ class IntradayAPI:
         rows = self.j(account).news(n=int(n))
         out = []
         for r in rows.to_dict("records"):
-            for k in ("sources", "about"):
+            for k in ("sources", "about", "nlp"):
                 r[k] = json.loads(r[k]) if r.get(k) else None
             out.append(r)
         return out
@@ -175,6 +175,19 @@ class IntradayAPI:
                 "calibration": self._calibration(t)}
 
     @staticmethod
+    def _profile(day: pd.DataFrame) -> dict | None:
+        """The session's profile for the chart: price bins with their volume (or, for an index, time) at price, and
+        the POC and value area the desk itself reads."""
+        from ..intraday.orderflow import profile_from_bars
+        prof = profile_from_bars(day, bins=48) if len(day) >= 5 else None
+        if prof is None:
+            return None
+        top = float(prof.volume.max()) or 1.0
+        return {"kind": prof.kind, "poc": round(prof.poc, 2), "vah": round(prof.vah, 2), "val": round(prof.val, 2),
+                "step": round(float(prof.prices[1] - prof.prices[0]), 4) if len(prof.prices) > 1 else 1.0,
+                "prices": [round(float(x), 2) for x in prof.prices], "size": [round(float(v) / top, 3) for v in prof.volume]}
+
+    @staticmethod
     def _calibration(t: pd.DataFrame) -> list[dict]:
         """Was the probability the desk traded on any good? For trades priced by the quant layer: the P(right
         direction) it assumed vs how often the underlying actually moved its way by the exit."""
@@ -213,6 +226,7 @@ class IntradayAPI:
         if df.empty:
             return {"symbol": symbol, "bars": None}
         day = str(df.index[-1].date())
+        profile = self._profile(df[df.index.date == df.index[-1].date()])
         if interval in ("3m", "5m", "15m"):
             df = df.resample(interval.replace("m", "min"), label="left", closed="left", origin="start_day",
                              offset="15min").agg({"open": "first", "high": "max", "low": "min", "close": "last",
@@ -236,7 +250,7 @@ class IntradayAPI:
         th = j.df("SELECT levels FROM thoughts WHERE symbol=? AND ts >= ? AND ts < ? ORDER BY id DESC LIMIT 1",
                   (symbol, day, day + " 99"))
         levels = json.loads(th.iloc[0]["levels"]) if not th.empty and th.iloc[0]["levels"] else {}
-        return {"symbol": symbol, "day": day, "interval": interval,
+        return {"symbol": symbol, "day": day, "interval": interval, "profile": profile,
                 "bars": {"t": [int(x.timestamp()) for x in df.index], "o": df["open"].round(2).tolist(),
                          "h": df["high"].round(2).tolist(), "l": df["low"].round(2).tolist(), "c": df["close"].round(2).tolist(),
                          "v": df["volume"].round(0).tolist()},

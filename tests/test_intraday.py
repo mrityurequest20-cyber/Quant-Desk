@@ -53,6 +53,15 @@ def test_profile_from_bars_conserves_volume():
     assert (approx_delta(df) > 0).all()                     # all bars closed near their highs
 
 
+def test_an_index_without_volume_gets_a_time_at_price_profile():
+    idx = pd.date_range(ts("2026-09-28 09:15"), periods=60, freq="min")
+    px = np.r_[np.full(40, 100.0), np.linspace(100, 110, 20)]             # 40 minutes around 100, then a run to 110
+    df = pd.DataFrame({"open": px, "high": px + 0.5, "low": px - 0.5, "close": px, "volume": 0.0}, index=idx)
+    prof = profile_from_bars(df, tick=0.5)
+    assert prof.kind == "tpo" and abs(prof.poc - 100) <= 1 and prof.val <= 100 <= prof.vah < 105   # 0.5-pt bins
+    assert profile_from_bars(df.assign(volume=10.0), tick=0.5).kind == "volume"
+
+
 def test_tick_classifier_quote_then_tick_rule():
     c = TickClassifier()
     assert c.classify(Trade(ts("2026-09-28 10:00"), 100.05, 1, 0, 100.0, 100.05)).side == 1     # at the ask

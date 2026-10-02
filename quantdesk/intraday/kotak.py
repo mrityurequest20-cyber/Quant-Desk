@@ -312,6 +312,20 @@ class KotakIntradayFeed(YahooIntradayFeed):
         self.served: Counter = Counter()
         self.last_error = ""
 
+    has_ltp = True
+
+    def ltp(self, symbols) -> dict[str, float]:
+        """Each index's last traded price right now (one quotes call per index), for the engine's fast loop:
+        armed entries fire and stops are checked on it every few seconds instead of once a minute."""
+        out = {}
+        for s in symbols:
+            name = INDEX.get(s)
+            for q in (self.k.quotes([("nse_cm", name)]) if name else []):
+                p = _f(q.get("ltp"))
+                if p == p and p > 0:
+                    out[s] = p
+        return out
+
     def kotak_bars(self, symbol: str, day: dt.date) -> pd.DataFrame:
         idx = INDEX.get(symbol)
         if idx is None:
