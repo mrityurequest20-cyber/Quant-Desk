@@ -1,0 +1,42 @@
+# Which language-model keys the desk can use from a GitHub runner: lists the repository's secret NAMES (never values),
+# then makes one tiny test read with each provider that has a key (quantdesk intraday ai-check) and lists the models it
+# offers. Run it from the Actions tab after adding a key.
+name: AI check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY || secrets.CLAUDE_KEY || secrets.CLAUDE_API || secrets.CLOUD_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_API_KEY || secrets.GOOGLE_AI_API_KEY || secrets.GEMINI_KEY || secrets.GOOGLE_KEY }}
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.OLLAMA_KEY || secrets.OLAMA_API_KEY || secrets.OLLAMA_API }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Repository secrets (names only)
+        env:
+          ALL_SECRETS: ${{ toJSON(secrets) }}
+        run: |
+          python3 -c "import json, os; print('\n'.join(sorted(json.loads(os.environ['ALL_SECRETS']))))" | tee names.txt
+      - name: Language models
+        run: |
+          set -o pipefail
+          python -m quantdesk intraday ai-check | tee check.txt
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## AI check"; echo "Secret names:"; echo '```'; cat names.txt 2>/dev/null; echo '```';
+            echo '```'; cat check.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

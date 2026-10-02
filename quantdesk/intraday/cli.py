@@ -32,7 +32,7 @@ def paths(cfg, account: str) -> dict:
     acct = base if account == "live" else base / account
     acct.mkdir(parents=True, exist_ok=True)
     return {"journal": acct / "journal.db", "broker": acct / "broker.json", "reviews": acct / "reviews",
-            "data": base / "data"}
+            "memory": acct / "memory.json", "data": base / "data"}
 
 
 def _chain_source(cfg, name: str, kite=None, kotak=None):
@@ -93,13 +93,20 @@ def _live_engine(cfg, a) -> IntradayEngine:
                             adverse_ticks=cfg.get("intraday.adverse_ticks", 1))
     news = None
     if cfg.get("intraday.news.enabled", True) and not getattr(a, "no_news", False):
+        from .llm import LLMDesk
         from .news import NewsDesk
         news = NewsDesk(cfg)
+        desk = LLMDesk(cfg)
+        if desk.active:
+            news.llm = desk
+            print("news: second readers " + ", ".join(r.name for r in desk.readers), flush=True)
     brain = None
     if cfg.get("intraday.global.enabled", True) and not getattr(a, "no_global", False):
         brain = make_brain(cfg)
+    from .learning import Memory
+    memory = Memory(p["memory"]) if cfg.get("intraday.learning.enabled", True) else None
     eng = IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"],
-                         news=news, brain=brain)
+                         news=news, brain=brain, memory=memory)
     if not getattr(a, "no_global", False):
         from ..data.nse import NSE, parse_gift
         nse = NSE(gap=0.3)
@@ -109,7 +116,7 @@ def _live_engine(cfg, a) -> IntradayEngine:
 
 def make_brain(cfg, fetch=None):
     """The brain with the latest research (runtime/research/links.json + edges.json, fetched by the workflow)."""
-    from .brain import Brain, GlobalFeed
+    from .brain import HEAVY_UNIVERSE, Brain, GlobalFeed
     rdir = Path(cfg.runtime_dir) / "research"
 
     def read(name):
@@ -117,7 +124,8 @@ def make_brain(cfg, fetch=None):
             return json.loads((rdir / name).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return []
-    return Brain(cfg, GlobalFeed(cfg, fetch=fetch), read("links.json"), read("edges.json"))
+    heavy = GlobalFeed(cfg, universe=HEAVY_UNIVERSE) if cfg.get("intraday.brain.heavy_pulse", True) and fetch is None else None
+    return Brain(cfg, GlobalFeed(cfg, fetch=fetch), read("links.json"), read("edges.json"), hfeed=heavy)
 
 
 def cmd_live(cfg, a):
@@ -227,7 +235,7 @@ def cmd_replay(cfg, a):
     account = a.account or ("synthetic" if a.synthetic else "replay")
     p = paths(cfg, account)
     if a.fresh:
-        for k in ("journal", "broker"):
+        for k in ("journal", "broker", "memory"):
             if p[k].exists():
                 p[k].unlink()
     broker = IntradayBroker(cfg, starting_cash=cfg.get("intraday.capital"), state_path=p["broker"],
@@ -252,6 +260,8 @@ def cmd_replay(cfg, a):
             return RecordedChains(snaps) if snaps and a.chain != "model" else "model"
         label = lambda d: "recorded"
     results = []
+    from .learning import Memory                   # the replay account learns too, in its own memory
+    memory = Memory(p["memory"]) if cfg.get("intraday.learning.enabled", True) and not getattr(a, "no_learn", False) else None
     rec_out = SessionRecorder(p["data"] if not a.synthetic else paths(cfg, account)["journal"].parent / "data")
     for d in days:
         feed = ReplayFeed(bars, d)
@@ -259,7 +269,7 @@ def cmd_replay(cfg, a):
             syms = cfg.get("intraday.underlyings") + [cfg.get("universe.volatility_index")]
             for sym in syms:
                 rec_out.record_bars(sym, bars[sym][bars[sym].index.date == d])
-        eng = IntradayEngine(cfg, feed, chains_for(d), j, broker, None, _say(a.quiet), None, p["reviews"])
+        eng = IntradayEngine(cfg, feed, chains_for(d), j, broker, None, _say(a.quiet), None, p["reviews"], memory=memory)
         start = broker.cash()
         review = run_replay(eng)
         results.append((d, label(d), len(eng.closed), broker.cash() - start))
@@ -270,6 +280,76 @@ def cmd_replay(cfg, a):
     j.commit()
     tot = sum(r[3] for r in results)
     print(f"\n{len(results)} session(s), net ₹{tot:+,.0f}; journal → {p['journal']}")
+
+
+def cmd_ai_check(cfg, a):
+    """Which language-model keys this machine has (variable names only, never values), one tiny test read each,
+    and the models each provider offers."""
+    from . import llm
+    item = [{"id": "t1", "ts": "2026-10-05 10:00", "source": "test", "title": "RBI cuts repo rate by 25 bps to 5.25%",
+             "summary": ""}]
+    ok_any = False
+    for name in ("claude", "gemini", "ollama"):
+        var, key = llm.key_for(name)
+        if not key:
+            print(f"{name}: no key (looked for {', '.join(llm.KEY_NAMES[name])})")
+            continue
+        pc = cfg.get(f"intraday.llm.{name}", {}) or {}
+        try:
+            r = {"claude": lambda: llm.ClaudeReader(key, pc.get("model", "claude-opus-5-5"), pc.get("effort", "low")),
+                 "gemini": lambda: llm.GeminiReader(key, pc.get("model", "gemini-2.5-flash")),
+                 "ollama": lambda: llm.OllamaReader(key, pc.get("model", "gpt-oss:120b"), pc.get("host", "https://ollama.com"))}[name]()
+            if hasattr(r, "models"):
+                try:
+                    ms = r.models()
+                    print(f"{name}: {len(ms)} models available, e.g. {', '.join(ms[:12])}")
+                except Exception as exc:
+                    print(f"{name}: could not list models ({type(exc).__name__}: {str(exc)[:120]})")
+            got = r.read(item).get("t1")
+            ok_any = ok_any or bool(got)
+            print(f"{name}: key in {var}; model {r.model}; test read "
+                  + (f"NIFTY {got['NIFTY']:+.2f}, BANKNIFTY {got['BANKNIFTY']:+.2f} ({got['event']}; {got['why']})" if got else "empty")
+                  + f"; usage {r.usage}")
+        except Exception as exc:
+            print(f"{name}: key in {var}, but the call failed: {type(exc).__name__}: {str(exc)[:200]}")
+    if not ok_any:
+        sys.exit(1)
+
+
+def cmd_stocks(cfg, a):
+    """The F&O stocks with liquid options, from the warehouse's daily bhavcopy, and what one position costs here."""
+    from ..data.warehouse import Warehouse
+    from . import stocks
+    root = Path(cfg.runtime_dir) / "warehouse"
+    today = dt.date.today()
+    df = Warehouse(root).read("fo_stocks", start=today - dt.timedelta(days=int(a.days * 1.6) + 7), end=today) \
+        if root.exists() else None
+    if df is None or df.empty:
+        sys.exit(f"no fo_stocks table under {root}: run `python -m quantdesk data update --only fo_stocks --from "
+                 f"{today - dt.timedelta(days=40)}` (or the Data workflow), then try again")
+    ranked = stocks.rank(df, days=a.days, top=a.top)
+    capital = float(a.capital or cfg.get("intraday.capital"))
+    budget = float(cfg.get("intraday.risk.risk_per_trade", 0.08))
+    d = pd.to_datetime(df["date"])
+    print(f"F&O stocks by near-month option liquidity, {d.min():%d %b} → {d.max():%d %b} ({d.nunique()} sessions); "
+          f"risk budget {budget:.0%} of ₹{capital:,.0f}")
+    print("\n".join(stocks.table(ranked, capital, budget)))
+
+
+def cmd_learn(cfg, a):
+    """What the desk has learned (or, with --rebuild, grade the account's whole journal again)."""
+    from . import learning
+    p = paths(cfg, a.account or "live")
+    mem = learning.Memory(p["memory"])
+    if a.rebuild:
+        rec = SessionRecorder(p["data"])
+        bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
+        got = learning.rebuild(mem, Journal(p["journal"]), bars)
+        mem.save()
+        print("rebuilt from the journal: " + ", ".join(f"{v} {k}" for k, v in got.items()))
+    lines = learning.summary(mem, top=a.top)
+    print(f"record over {len(mem.d['days'])} session(s) → {p['memory']}")
+    print("\n".join(lines) if lines else "nothing graded yet")
 
 
 def _journal(cfg, a) -> Journal:
@@ -501,7 +581,20 @@ def register(sub):
     x.add_argument("--fresh", action="store_true", help="reset that account first")
     x.add_argument("--show-review", action="store_true")
     x.add_argument("--quiet", action="store_true")
+    x.add_argument("--no-learn", action="store_true", help="don't grade or apply the account's track record")
     x.set_defaults(fn=cmd_replay)
+    x = ss.add_parser("stocks", help="F&O stocks ranked by option liquidity, and whether this account can hold one")
+    x.add_argument("--days", type=int, default=20)
+    x.add_argument("--top", type=int, default=25)
+    x.add_argument("--capital", type=float, help="default: intraday.capital")
+    x.set_defaults(fn=cmd_stocks)
+    x = ss.add_parser("ai-check", help="which language-model keys are set (names only) and a test read from each")
+    x.set_defaults(fn=cmd_ai_check)
+    x = ss.add_parser("learn", help="what the desk has learned from its calls (news, factors, setups)")
+    x.add_argument("--account", help="live (default), replay, synthetic")
+    x.add_argument("--rebuild", action="store_true", help="grade the whole journal again from the recorded bars")
+    x.add_argument("--top", type=int, default=12)
+    x.set_defaults(fn=cmd_learn)
     x = ss.add_parser("export-site", help="the web app + an account's data as a read-only static site")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--out", default="quantdesk-snapshot.html")

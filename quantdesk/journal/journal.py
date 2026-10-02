@@ -193,6 +193,10 @@ class Journal:
                                                             r["title"], r["link"], r["summary"], r["sentiment"], r["impact"],
                                                             _json(r["about"]), _json(r.get("nlp") or {})))
 
+    def news_set_nlp(self, news_id: str, nlp: dict) -> None:
+        """A story's NLP record after a language model's read arrived (news_add wrote the rest)."""
+        self._exec("UPDATE news SET nlp = ? WHERE id = ?", (_json(nlp or {}), news_id))
+
     def news(self, since: str | None = None, n: int = 200) -> pd.DataFrame:
         q, p = "SELECT * FROM news", []
         if since:

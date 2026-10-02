@@ -220,3 +220,47 @@ def test_session_archive_compacts_chains_and_bars(tmp_path):
     assert pushed == [(2026, sorted(names))]
     back = load_archive(tmp_path / "out", "chains")
     assert len(back) == 6 and back["source"].eq("kotak").all()
+
+
+STOCKS = UDIFF.splitlines()[0] + "\n" + "\n".join(
+    [f"2026-10-01,2026-10-01,FO,NSE,STO,1,,RELIANCE,,2026-10-27,2026-10-27,{k}.00,{r},X,0,0,0,{c},0,0,1402.50,0,"
+     f"{oi},0,{n},0,0,F1,500,,,,," for k, r, c, oi, n in
+     [(1390, "CE", 25.0, 500000, 3000), (1400, "CE", 19.5, 900000, 9000), (1410, "CE", 14.0, 700000, 6000),
+      (1390, "PE", 12.0, 400000, 2500), (1400, "PE", 16.5, 800000, 7000), (1410, "PE", 22.0, 300000, 90)]]
+    + ["2026-10-01,2026-10-01,FO,NSE,STO,1,,RELIANCE,,2026-11-24,2026-11-24,1400.00,CE,X,0,0,0,40.0,0,0,1402.50,0,"
+       "100000,0,999,0,0,F1,500,,,,,",
+       "2026-10-01,2026-10-01,FO,NSE,STF,1,,RELIANCE,,2026-10-27,2026-10-27,,,X,0,0,0,1408.0,0,0,1402.50,0,"
+       "50000000,0,40000,0,0,F1,500,,,,,"]) + "\n" + "\n".join(UDIFF.splitlines()[1:]) + "\n"
+
+
+def test_stock_liquidity_from_the_same_bhavcopy():
+    df = N.parse_fo_stocks(zipped(STOCKS, "b.csv"), dt.date(2026, 10, 1))
+    assert list(df.columns) == N.STOCK_COLS and set(df["symbol"]) == {"RELIANCE", "ABCAPITAL"}   # no index rows
+    r = df.set_index("symbol").loc["RELIANCE"]
+    assert r.expiry == dt.date(2026, 10, 27) and r.lot == 500 and r.underlying == 1402.5
+    assert r.opt_contracts == 27590 and r.active_strikes == 3                          # 1410 PE's 90 contracts don't count
+    assert r.opt_premium == pytest.approx(500 * (25 * 3000 + 19.5 * 9000 + 14 * 6000 + 12 * 2500 + 16.5 * 7000 + 22 * 90))
+    assert r.opt_oi == pytest.approx(3_600_000 / 500) and r.fut_oi == 100_000 and r.fut_contracts == 40000
+    assert r.strike_step == 10 and r.atm_straddle == pytest.approx(36 / 1402.5)        # the November row is ignored
+
+
+def test_ranking_and_what_the_account_can_hold():
+    from quantdesk.intraday import stocks
+    rows = []
+    for i, d in enumerate(pd.bdate_range("2026-09-01", periods=25)):
+        rows += [{"date": d.date(), "symbol": "RELIANCE", "lot": 500, "underlying": 1400.0, "expiry": None, "opt_contracts": 2e5,
+                  "opt_premium": 4e8 + i, "opt_oi": 1e5, "active_strikes": 30, "strike_step": 10.0, "atm_straddle": 0.03,
+                  "fut_contracts": 4e4, "fut_oi": 1e5, "fut_close": 1405.0},
+                 {"date": d.date(), "symbol": "IDEA", "lot": 70000, "underlying": 8.0, "expiry": None, "opt_contracts": 5e4,
+                  "opt_premium": 6e7, "opt_oi": 1e5, "active_strikes": 12, "strike_step": 0.05 * 0 + 1.0, "atm_straddle": 0.08,
+                  "fut_contracts": 2e4, "fut_oi": 1e5, "fut_close": 8.0},
+                 {"date": d.date(), "symbol": "THIN", "lot": 1000, "underlying": 300.0, "expiry": None, "opt_contracts": 900,
+                  "opt_premium": 9e8, "opt_oi": 1e3, "active_strikes": 4, "strike_step": 5.0, "atm_straddle": 0.05,
+                  "fut_contracts": 100, "fut_oi": 1e3, "fut_close": 300.0}]
+    r = stocks.rank(pd.DataFrame(rows), days=20)
+    assert list(r.index) == ["RELIANCE", "IDEA", "THIN"] and r.loc["RELIANCE", "sessions"] == 20
+    assert not r.loc["THIN", "liquid"] and r.loc["RELIANCE", "min_spread_risk"] == 2500
+    assert stocks.fits(r.loc["RELIANCE"], 20000, 0.08) == (False, "one lot of a 1-strike spread risks ≈₹2,500 (12.5%), over the ₹1,600 budget")
+    assert stocks.fits(r.loc["RELIANCE"], 100000, 0.08)[0]
+    lines = stocks.table(r, 20000, 0.08)
+    assert lines[1].startswith("RELIANCE") and "below the liquidity bar" in lines[-1]

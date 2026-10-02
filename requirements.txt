@@ -5,6 +5,7 @@ pyyaml>=6.0
 requests>=2.31           # news feeds, NSE option chain
 pyarrow>=15            # the data warehouse (Parquet)
 yfinance>=0.2.54      # Yahoo data source (curl_cffi: survives Yahoo's cloud-IP rate limits) (NSE: *.NS, ^NSEI, ^NSEBANK, ^INDIAVIX)
+anthropic>=1,<2       # Claude as a second news reader + the after-close reflection (only with a key)
 pytest>=8.0
 # optional, live trading only:
 # kiteconnect>=5.0

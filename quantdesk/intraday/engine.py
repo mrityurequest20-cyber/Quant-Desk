@@ -44,7 +44,7 @@ log = logging.getLogger(__name__)
 class IntradayEngine:
     def __init__(self, cfg, feed: IntradayFeed, chains: ChainSource | str | None, journal: Journal,
                  broker: IntradayBroker, recorder=None, say=print, underlyings: list[str] | None = None,
-                 review_dir: Path | None = None, news=None, brain=None):
+                 review_dir: Path | None = None, news=None, brain=None, memory=None):
         ic = cfg.get("intraday", {}) or {}
         self.cfg, self.feed, self.journal, self.broker, self.recorder = cfg, feed, journal, broker, recorder
         self.say = say or (lambda *_: None)
@@ -122,6 +122,12 @@ class IntradayEngine:
         self.fut_hist: dict[str, list] = {}               # today's futures snapshots per underlying: (ts, ltp, oi)
         self._fut_fails = 0
         self.gift_source = None                           # callable → parse_gift frame (live only); None = skip
+        # learning (learning.py): every call is graded against what the market did next; the record moves factor
+        # weights, news trust and setup conviction within bounds. None: the desk doesn't learn (tests, one-offs).
+        self.memory = memory
+        self.learned_today: dict = {}
+        self._record_said: dict = {}
+        self._apply_memory()
         self.gift: dict | None = None
         self._gift_at = None
         self._gift_fails = 0
@@ -167,8 +173,15 @@ class IntradayEngine:
                 pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
             self.last_ts[sym] = h.index[-1] if h is not None and len(h) else None
         self.expiry = {u: self.pick_expiry(u, day) for u in self.underlyings}
+        self._learn(day, catch_up=True)
         self._load_heavyweights()
         self._load_iv_history(day)
+        if self.brain is not None:                        # FII positioning and cash flows: context for the narrative
+            from .brain import load_flows
+            try:
+                self.brain.flows = load_flows(self.warehouse_dir, day)
+            except Exception:
+                self.brain.flows = None
         self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
         saved = self._restore(day)
         if saved.get("day_start_equity"):
@@ -217,6 +230,8 @@ class IntradayEngine:
         self._refresh_news(now)
         if self.brain is not None and self.brain.gfeed is not None:
             self._guarded("global", now, "global refresh", self.brain.gfeed.refresh, now)
+        if self.brain is not None and getattr(self.brain, "hfeed", None) is not None:
+            self._guarded("global", now, "heavyweights refresh", self.brain.hfeed.refresh, now)
         for u in self.underlyings:
             if u not in self.bars or self.bars[u].empty or self.bars[u].index[-1].date() != self.day:
                 continue
@@ -253,7 +268,9 @@ class IntradayEngine:
             self._refresh_chain(u, now)                 # exits priced off a calibrated chain, never a default IV
         for t in list(self.open_trades):
             self._close(t, now, reason, note)
+        self._learn(self.day)
         review = self.session_review()
+        review += self._reflect(review, now)
         self.journal.event(now, "INFO", "session_review", review[:2000])
         self._persist(ended=True)
         self.journal.commit()
@@ -319,6 +336,8 @@ class IntradayEngine:
             hot = [x for x in fresh if x.impact == "high" and max(x.about.values() or [0]) >= self.news.min_relevance]
             for x in hot:
                 self.say(f"  {now:%H:%M} NEWS ({x.source}) {x.title} [tone {x.sentiment:+.2f}]")
+        for x in self.news.collect():                     # language models' reads that arrived since (llm.py)
+            self.journal.news_set_nlp(x.id, x.nlp)
 
     def _think_globally(self, u: str, now):
         df = self.bars[u]
@@ -326,7 +345,11 @@ class IntradayEngine:
         prior = df[df.index.date < self.day]
         gap = float(np.log(today["open"].iloc[0] / prior["close"].iloc[-1])) if len(today) and len(prior) else None
         items = list(self.news.items.values()) if self.news is not None else None
-        st = self.brain.think(u, now, items, gap)
+        tone = (lambda x: self.news.item_tone(x, u, now)) if self.news is not None else None
+        r30 = None
+        if len(today) > 30:
+            r30 = float(np.log(today["close"].iloc[-1] / today["close"].iloc[-31]))
+        st = self.brain.think(u, now, items, gap, tone=tone, index_r30=r30)
         self.brain_state[u] = st
         return st
 
@@ -392,13 +415,18 @@ class IntradayEngine:
             plan = self.playbook.fire(a, view, chain, now, S)
             if plan is None:
                 return None
+            kept, stop = self._by_record(u, [plan], view, now)
+            if not kept:
+                self._think(u, view, now, f"{a.setup} reached its level {a.level:,.2f} but {stop}", force=True)
+                return None
             at_s = replace(view, spot=float(S))
             eq = self.equity(now)
             if self.quant_on:
                 pick = self._guarded(u, now, "EV selection", self._select_by_ev, u, [plan], at_s, eq, now, chain)
                 if pick is None or isinstance(pick, str):
                     msg = f"{a.setup} reached its level {a.level:,.2f} but " + (pick or "the quant layer failed")
-                    self.journal.decision(now, a.setup, u, "rejected", msg, 0, {"armed": a.to_record()})
+                    self.journal.decision(now, a.setup, u, "rejected", msg, 0,
+                                          {"armed": a.to_record(), "target": plan.target_underlying, "regime": view.day_type})
                     self._think(u, view, now, msg, force=True)
                     return msg
                 plan, lots, notes = pick
@@ -475,6 +503,96 @@ class IntradayEngine:
             self.journal.commit()
         return did
 
+    # ---- learning ---------------------------------------------------------------------------------------------
+    def _apply_memory(self) -> None:
+        """Hand what the record says to the parts that use it."""
+        if self.memory is None:
+            return
+        self.analyst.learned = self.memory.factor_weights()
+        if self.brain is not None:                        # probation drivers earn a vote on their live record
+            self.brain.learned = {k: (self.memory.reliability("factor", k), float(r["n"]))
+                                  for k, r in (self.memory.d["tables"].get("factor") or {}).items()
+                                  if k.startswith(("global_", "heavy_"))}
+        if self.news is not None:
+            self.news.trust = self.memory.news_trust
+            self.news.reader_trust = lambda name: self.memory.reliability("news_reader", name)
+
+    def _learn(self, day, catch_up: bool = False) -> None:
+        """Grade the day's calls (news, each read's factors, trades, refused pre-break entries) against the bars that
+        followed, save the memory and re-weight. At the start of a session it catches up on anything a crashed close
+        left ungraded."""
+        if self.memory is None:
+            return
+        from . import learning
+        try:
+            got = learning.grade_session(self.memory, self.journal, {u: self.bars.get(u) for u in self.underlyings}, day)
+            self.memory.save()
+        except Exception as exc:                          # learning must never cost a session
+            self.journal.event(pd.Timestamp.now(tz=IST), "WARN", "learning", f"grading failed: {exc!s:.200}")
+            return
+        self._apply_memory()
+        if not catch_up:
+            self.learned_today = got
+        if any(got.values()):
+            self.journal.event(pd.Timestamp.now(tz=IST), "INFO", "learning",
+                               ("caught up: " if catch_up else "graded: ") + ", ".join(f"{v} {k}" for k, v in got.items()),
+                               got)
+
+    def _reflect(self, review: str, now) -> str:
+        """After the close: Claude reads the review and the record and writes the lessons (for the human and the
+        memory; nothing here touches orders or risk). Also what the language models cost today."""
+        desk = getattr(self.news, "llm", None) if self.news is not None else None
+        if desk is None or not desk.active:
+            return ""
+        out = []
+        claude = next((r for r in desk.readers if r.name == "claude"), None)
+        if claude is not None and self.cfg.get("intraday.llm.claude.reflect", True):
+            from .learning import summary
+            try:
+                got = claude.reflect(review, summary(self.memory) if self.memory is not None else [])
+            except Exception as exc:
+                got = None
+                self.journal.event(now, "WARN", "llm", f"reflection failed: {exc!s:.200}")
+            if got and (got["lessons"] or got["watch_tomorrow"]):
+                out += ["", "## Reflection (Claude, after the close)", ""] + [f"- {x}" for x in got["lessons"]]
+                if got["watch_tomorrow"]:
+                    out += ["", "Watch at tomorrow's open:"] + [f"- {x}" for x in got["watch_tomorrow"]]
+                if self.memory is not None:
+                    self.memory.d["lessons"].append({"day": str(self.day), **got})
+                    self.memory.save()
+        from .llm import cost_line
+        lc = self.cfg.get("intraday.llm", {}) or {}
+        prices = {k: {"in": (lc.get(k) or {}).get("price_in", 0), "out": (lc.get(k) or {}).get("price_out", 0)}
+                  for k in ("claude", "gemini", "ollama") if (lc.get(k) or {}).get("price_in") is not None}
+        cost = cost_line(desk.usage(), prices)
+        if cost or desk.errors:
+            line = "Language models today: " + (cost or "no calls") + (
+                "; problems: " + "; ".join(f"{k}: {v}" for k, v in desk.errors.items()) if desk.errors else "")
+            out += ["", line]
+            self.journal.event(now, "INFO", "llm", line, {"usage": desk.usage(), "errors": desk.errors})
+        return "\n".join(out)
+
+    def _by_record(self, u: str, plans: list, view: MarketView, now) -> tuple[list, str | None]:
+        """Each setup's own record of R (by day type when it has one) scales its conviction, and a clearly losing
+        record stands it aside. A fresh desk changes nothing."""
+        if self.memory is None:
+            return plans, None
+        kept, stop = [], None
+        for p in plans:
+            m, why = self.memory.setup_mult(p.setup, view.day_type)
+            if why:
+                stop = stop or f"its record says no: {why}"
+                said = self._record_said.get((u, p.setup))
+                if said is None or now - said >= pd.Timedelta(minutes=15):    # once per setup per 15 minutes
+                    self._record_said[(u, p.setup)] = now
+                    self.journal.decision(now, p.setup, u, "rejected", f"track record: {why}", 0, {"plan": p.describe()})
+                continue
+            if m != 1.0:
+                p.notes["track_record"] = f"conviction ×{m:.2f} from its past trades"
+                p.conviction = float(min(1.0, max(0.0, p.conviction * m)))
+            kept.append(p)
+        return kept, stop
+
     def _blocked(self, u: str, view: MarketView, now) -> str | None:
         """Why no new entry can be taken right now (None: one can)."""
         if self.paused:
@@ -498,6 +616,9 @@ class IntradayEngine:
         plans = self.playbook.scan(view, s, self.chain_df[u], now, skip=skip)
         if not plans:
             return "watching: no setup has triggered"
+        plans, stop = self._by_record(u, plans, view, now)
+        if not plans:
+            return f"standing aside: {stop}"
         if self.quant_on:
             pick = self._guarded(u, now, "EV selection", self._select_by_ev, u, plans, view, eq, now)
             if pick is None:
@@ -1027,6 +1148,17 @@ class IntradayEngine:
             reasons = th["action"].str.extract(r"^(standing aside|watching)[^:]*: (.*)$")[1].dropna().value_counts().head(4) \
                 if not th.empty else pd.Series(dtype=int)
             L.append("No trades. Most common reasons: " + "; ".join(f"{k} (x{v})" for k, v in reasons.items()))
+        if self.memory is not None:
+            from .learning import summary
+            got = self.learned_today
+            lines = summary(self.memory)
+            L += ["", "## What the desk learned", "",
+                  (f"Graded today: {got.get('news', 0)} news calls, {got.get('factors', 0)} factor reads, "
+                   f"{got.get('trades', 0)} trades, {got.get('armed', 0)} refused pre-break entries. "
+                   if got else "")
+                  + f"Record over {len(self.memory.d['days'])} session(s); every weight is shrunk toward 1× until the "
+                    f"record is long enough to mean something."]
+            L += [f"- {x}" for x in lines] if lines else ["- Nothing graded yet."]
         return "\n".join(L)
 
     def _grade(self, tid: str) -> str:

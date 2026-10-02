@@ -3,6 +3,8 @@
 
 Tables (one file per period, `{table}_{period}.parquet`):
   fo_bhav           month  every index future and option, daily: OHLC, close, settle, underlying, OI, volume
+  fo_stocks         month  each F&O stock's near-month liquidity, daily: option contracts and premium traded, OI,
+                           active strikes, ATM straddle, futures volume/OI (the same bhavcopy file)
   participant_oi    year   FII / DII / Pro / Client open interest by product, daily (contracts)
   participant_vol   year   the same for volume
   fii_dii           year   FII/FPI and DII cash-market buy/sell/net, ₹ crore (NSE gives only the latest day:
@@ -29,6 +31,7 @@ from . import nse as N
 IST = "Asia/Kolkata"
 TABLES = {                                   # table → (period, key columns, date column)
     "fo_bhav": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
+    "fo_stocks": ("month", ["date", "symbol"], "date"),
     "participant_oi": ("year", ["date", "participant"], "date"),
     "participant_vol": ("year", ["date", "participant"], "date"),
     "fii_dii": ("year", ["date", "category"], "date"),
@@ -38,7 +41,7 @@ TABLES = {                                   # table → (period, key columns, d
     "manifest": ("year", ["table", "date"], "date"),
 }
 DATE_COLS = ("date", "expiry")
-DAILY_FILES = ("fo_bhav", "participant_oi", "participant_vol")
+DAILY_FILES = ("fo_bhav", "fo_stocks", "participant_oi", "participant_vol")
 SETTLE_DAYS = 3                              # a file still missing this many days later is taken as never coming
 
 
@@ -153,6 +156,7 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
     counts: dict[str, int] = {}
     stamp = (lambda: pd.Timestamp(today, tz=IST)) if sim else (lambda: pd.Timestamp.now(tz=IST))   # noqa: E731
     fetchers = {"fo_bhav": (nse.fo_bhav, N.parse_fo_bhav),
+                "fo_stocks": (nse.fo_bhav, N.parse_fo_stocks),
                 "participant_oi": (lambda d: nse.participant("oi", d), N.parse_participant),
                 "participant_vol": (lambda d: nse.participant("vol", d), N.parse_participant)}
     for table in [t for t in DAILY_FILES if t in only]:

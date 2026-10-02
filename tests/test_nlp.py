@@ -99,3 +99,12 @@ def test_journal_gains_the_nlp_column_in_place(tmp_path):
     row = j.news().iloc[0]
     assert '"event": "policy"' in row["nlp"]
     j.close()
+
+
+def test_an_outcome_with_the_market_move_is_news_not_a_recap():
+    cut = item("RBI cuts repo rate by 25 bps, Nifty and banks rally")
+    assert not cut.recap and cut.nlp["event"] == "policy" and cut.impact == "high" and cut.sentiment > 0.3
+    miss = item("Sensex, Nifty fall as HDFC Bank Q2 profit misses estimates")
+    assert not miss.recap and miss.nlp["event"] == "earnings" and miss.sentiment < 0
+    for t in ("Stock market crash: Sensex tumbles 700 points", "Sensex tumbles 700 points as Fed rate hike fears grip markets"):
+        assert item(t).recap and item(t).impact != "high"            # the move retold, no outcome: still a recap

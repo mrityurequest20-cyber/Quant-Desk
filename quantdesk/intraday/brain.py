@@ -14,6 +14,13 @@ News            headlines are mapped to the drivers they're about, so price and 
                 checked against each other.
 Risk overlay    when global stress is high (big σ-moves, US VIX up), size shrinks: volatility
                 targeting, not a directional bet.
+Heavyweights    the index leaders (HDFC Bank, ICICI, Reliance …) polled like the global markets: their
+                index-weighted 30-minute move, and whether the index is moving with or against them.
+Flows           FII index-futures positioning and cash flows from the warehouse (yesterday): context.
+Probation       a driver without a validated research link still reports its live move as evidence
+                with zero weight. The learning loop grades it like any factor, and once its record
+                is long and good (30+ graded reads, shrunk hit rate ≥ 57.5%) it votes with a small
+                weight. A validated link always votes; a probation one has to earn it, live.
 """
 from __future__ import annotations
 
@@ -39,6 +46,15 @@ DRIVERS = {
     "fear":   {"name": "US VIX", "members": ["USVIX"], "sign": -1},
     "gold":   {"name": "Gold", "members": ["GOLD"], "sign": 0},
 }
+# the index heavyweights on NSE → (≈ weight in NIFTY, in BANKNIFTY); the same shares as nlp.HEAVY
+HEAVY_NSE = {"HDFCBANK": (0.13, 0.28), "ICICIBANK": (0.09, 0.25), "RELIANCE": (0.085, 0.0), "INFY": (0.05, 0.0),
+             "BHARTIARTL": (0.045, 0.0), "LT": (0.04, 0.0), "ITC": (0.035, 0.0), "TCS": (0.03, 0.0),
+             "AXISBANK": (0.03, 0.08), "SBIN": (0.03, 0.09), "KOTAKBANK": (0.028, 0.08)}
+HEAVY_UNIVERSE = {k: {"yahoo": f"{k}.NS", "name": k, "region": "india", "india": 1} for k in HEAVY_NSE}
+# news event types (nlp.py) → the drivers they're about, on top of the title patterns below
+EVENT_DRIVERS = {"commodities": ["crude"], "currency": ["rupee"], "geopolitics": ["fear"], "flows": ["india"],
+                 "regulation": ["india"]}
+PROMOTE_N, PROMOTE_REL, PROBATION_W = 30.0, 1.15, 0.25
 # prior weights of each driver in the descriptive risk regime (not a trading signal)
 REGIME_W = {"us": 1.0, "asia": 0.6, "europe": 0.5, "fear": 0.8, "dollar": 0.4, "rupee": 0.4, "crude": 0.4, "rates": 0.3}
 
@@ -60,16 +76,27 @@ def news_drivers(title: str) -> list[str]:
     return [k for k, pat in NEWS_DRIVERS.items() if re.search(pat, t)]
 
 
+def item_drivers(x) -> list[str]:
+    """The drivers a story is about: its title's patterns plus what its NLP event type says."""
+    out = news_drivers(x.title)
+    for d in EVENT_DRIVERS.get((getattr(x, "nlp", None) or {}).get("event"), []):
+        if d not in out:
+            out.append(d)
+    return out
+
+
 # ---- global market data ---------------------------------------------------------------------------------------
 class GlobalFeed:
     """Live global prices (Yahoo), fetched in one batch at most every `refresh_min` minutes. `fetch` is
     pluggable (tests / replays pass frames and a clock; nothing after `now` is ever used)."""
 
-    def __init__(self, cfg=None, fetch=None, refresh_min: float = 5.0, keys: list[str] | None = None):
+    def __init__(self, cfg=None, fetch=None, refresh_min: float = 5.0, keys: list[str] | None = None,
+                 universe: dict | None = None):
         gc = (cfg.get("intraday.global", {}) if cfg is not None else {}) or {}
         self.enabled = gc.get("enabled", True)
         self.refresh_min = gc.get("refresh_min", refresh_min)
-        self.keys = keys or list(GLOBAL)
+        self.universe = universe or GLOBAL
+        self.keys = keys or list(self.universe)
         self.fetch = fetch or self._yahoo
         self.intraday: dict[str, pd.DataFrame] = {}       # 5m bars, UTC index (bar start)
         self.daily: dict[str, pd.DataFrame] = {}          # daily bars, exchange-local dates
@@ -80,7 +107,7 @@ class GlobalFeed:
     def _yahoo(self, now: pd.Timestamp) -> tuple[dict, dict]:
         import yfinance as yf
         intraday, daily = {}, {}
-        tick = {GLOBAL[k]["yahoo"]: k for k in self.keys}
+        tick = {self.universe[k]["yahoo"]: k for k in self.keys}
         d5 = yf.download(list(tick), period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False,
                          threads=True)
         # completed daily sessions don't change during India's day: fetch them once per day (half the requests)
@@ -129,7 +156,7 @@ class GlobalFeed:
 
     def market(self, key: str, now: pd.Timestamp) -> dict | None:
         """One market's state at `now`: prior completed session, move since India's open, last 30 minutes."""
-        meta = GLOBAL.get(key, {})
+        meta = self.universe.get(key, {})
         now_ist = pd.Timestamp(now).tz_convert(IST)
         today = now_ist.date()
         out = {"key": key, "name": meta.get("name", key), "region": meta.get("region"), "india": meta.get("india", 0)}
@@ -196,13 +223,19 @@ class BrainState:
     gap: dict | None = None
     evidence: list = field(default_factory=list)
     narrative: str = ""
+    pulse: dict | None = None
+    flows: dict | None = None
 
 
 class Brain:
-    def __init__(self, cfg, gfeed: GlobalFeed | None, research_links: list | None = None, research_edges: list | None = None):
+    def __init__(self, cfg, gfeed: GlobalFeed | None, research_links: list | None = None, research_edges: list | None = None,
+                 hfeed: GlobalFeed | None = None):
         bc = (cfg.get("intraday.brain", {}) or {}) if cfg is not None else {}
         self.cfg = cfg
         self.gfeed = gfeed
+        self.hfeed = hfeed                               # the index heavyweights (HEAVY_UNIVERSE) or None
+        self.learned: dict[str, tuple[float, float]] = {}   # factor → (reliability, graded n), from learning.Memory
+        self.flows: dict | None = None                   # FII positioning / cash flows (load_flows), or None
         self.stress_z = float(bc.get("stress_z", 2.0))
         self.min_size_mult = float(bc.get("min_size_mult", 0.5))
         self.links = self._links(research_links or [], research_edges or [])
@@ -239,8 +272,10 @@ class Brain:
                 lk.lead_edge = lk.lead_edge or is_edge
         return out
 
-    def think(self, target: str, now, news_items: list | None = None, gap: float | None = None) -> BrainState:
-        """Global state → drivers → links → evidence and a narrative for `target` (NIFTY/BANKNIFTY)."""
+    def think(self, target: str, now, news_items: list | None = None, gap: float | None = None, tone=None,
+              index_r30: float | None = None) -> BrainState:
+        """Global state → drivers → links → evidence and a narrative for `target` (NIFTY/BANKNIFTY). `tone(x)`: a story's
+        tone for the target (the news desk's blend of the rules and the language models); default its rule tone."""
         mk = self.gfeed.snapshot(now) if self.gfeed is not None else {}
         drivers = []
         for d, v in DRIVERS.items():
@@ -272,11 +307,13 @@ class Brain:
         if news_items:
             now_ts = pd.Timestamp(now)
             for item in drivers + [{"id": "india"}]:
-                rel = [x for x in news_items if item["id"] in news_drivers(x.title) and x.ts <= now_ts
+                rel = [x for x in news_items if item["id"] in item_drivers(x) and x.ts <= now_ts
                        and now_ts - x.ts <= pd.Timedelta(hours=2)]
                 if rel and "name" in item:
-                    w = [0.5 ** ((now_ts - x.ts).total_seconds() / 60 / 45) for x in rel]
-                    item["news_tone"] = float(np.dot(w, [x.sentiment for x in rel]) / sum(w))
+                    # recency × certainty × novelty (nlp.py): a rumour or a retelling counts less
+                    w = [0.5 ** ((now_ts - x.ts).total_seconds() / 60 / 45) * ((x.nlp or {}).get("certainty") or 1.0)
+                         * (0.5 + 0.5 * getattr(x, "novelty", 1.0)) for x in rel]
+                    item["news_tone"] = float(np.dot(w, [tone(x) if tone else x.sentiment for x in rel]) / sum(w))
                     item["news_n"] = len(rel)
                     item["news_latest"] = max(rel, key=lambda x: x.ts).title
         # descriptive regime and the risk overlay
@@ -292,10 +329,21 @@ class Brain:
         fear = next((it for it in drivers if it["id"] == "fear"), None)
         stress = max(big + [abs(fear["prior_z"]) if fear and fear.get("prior_z") is not None else 0.0] or [0.0])
         size_mult = 1.0 if stress < self.stress_z else max(self.min_size_mult, self.stress_z / stress)
-        # evidence for the analyst: only validated predictive links carry weight
+        # evidence for the analyst: validated predictive links carry weight; the rest are on probation (weight 0
+        # until the live record earns it), and only for a live 30-minute move (a prior session is one bet a day)
         evidence = []
         for it in drivers:
             if not it["validated"]:
+                z = it.get("z30")
+                if not it["sign"] or z is None or not it["live"]:
+                    continue
+                direction = float(np.clip(it["sign"] * z / 2, -1, 1))
+                if abs(direction) < 0.1:
+                    continue
+                f = f"global_{it['id']}"
+                evidence.append({"factor": f, "direction": direction, "weight": self._probation_weight(f),
+                                 "observation": f"{it['name']} {_fmt_move(it)} → {'bullish' if direction > 0 else 'bearish'} "
+                                                f"lean for {target} ({self._probation_note(f)})"})
                 continue
             # the measured edge decides the direction, not the hypothesis: e.g. BANKNIFTY *fades* Europe's last session
             z = it["prior_z"] if it["lead_kind"] == "prior" else it["z30"]
@@ -320,9 +368,52 @@ class Brain:
             explained = float(sum(p for _, p in parts))
             gap_info = {"gap": gap, "explained": explained, "parts": sorted(parts, key=lambda x: -abs(x[1]))[:4],
                         "share": float(explained / gap) if abs(gap) > 1e-4 else None}
-        st = BrainState(str(now), regime, score, float(stress), float(size_mult), drivers, mk, gap_info, evidence)
+        pulse = self.pulse(target, now, index_r30)
+        if pulse and abs(pulse["z"]) >= 0.2:
+            d = float(np.clip(pulse["z"] / 2, -1, 1))
+            evidence.append({"factor": "heavy_pulse", "direction": d, "weight": self._probation_weight("heavy_pulse"),
+                             "observation": f"{target} leaders {pulse['r30']:+.2%} in 30m (index-weighted; "
+                                            + ", ".join(f"{k} {r:+.2%}" for k, r in pulse["leaders"]) + f") → "
+                                            f"{'bullish' if d > 0 else 'bearish'} lean ({self._probation_note('heavy_pulse')})"})
+        st = BrainState(str(now), regime, score, float(stress), float(size_mult), drivers, mk, gap_info, evidence,
+                        pulse=pulse, flows=self.flows)
         st.narrative = self._narrate(target, st)
         return st
+
+    # ---- domestic: the leaders, the flows, and what has to earn a vote --------------------------------------------
+    def pulse(self, target: str, now, index_r30: float | None = None) -> dict | None:
+        """The index heavyweights' index-weighted 30-minute move (live 5m bars), and whether the index moves with them."""
+        if self.hfeed is None:
+            return None
+        col = 1 if target == "BANKNIFTY" else 0
+        w_all = {k: v[col] for k, v in HEAVY_NSE.items() if v[col] > 0}
+        got = []
+        for k, w in w_all.items():
+            m = self.hfeed.market(k, now)
+            if m and m.get("live") and m.get("r30") is not None and m.get("z30") == m.get("z30") and m.get("z30") is not None:
+                got.append((k, w, m["r30"], m["z30"]))
+        cover = sum(w for _, w, _, _ in got) / sum(w_all.values()) if w_all else 0.0
+        if cover < 0.5:
+            return None
+        W = sum(w for _, w, _, _ in got)
+        r30 = sum(w * r for _, w, r, _ in got) / W
+        z = sum(w * zz for _, w, _, zz in got) / W
+        leaders = sorted(((k, r) for k, w, r, _ in got), key=lambda kr: -abs(kr[1] * w_all[kr[0]]))[:3]
+        out = {"r30": float(r30), "z": float(z), "coverage": float(cover), "leaders": [(k, float(r)) for k, r in leaders]}
+        if index_r30 is not None and index_r30 == index_r30:
+            out["index_r30"] = float(index_r30)
+            out["against"] = bool(abs(r30) >= 0.001 and abs(index_r30) >= 0.001 and np.sign(r30) != np.sign(index_r30))
+        return out
+
+    def _probation_weight(self, factor: str) -> float:
+        rel, n = self.learned.get(factor, (1.0, 0.0))
+        return PROBATION_W if n >= PROMOTE_N and rel >= PROMOTE_REL else 0.0
+
+    def _probation_note(self, factor: str) -> str:
+        rel, n = self.learned.get(factor, (1.0, 0.0))
+        if self._probation_weight(factor):
+            return f"earned a vote live: {n:.0f} graded reads, ×{rel:.2f}"
+        return f"probation, no vote yet: {n:.0f} graded reads" + (f", ×{rel:.2f}" if n else "")
 
     def _narrate(self, target: str, st: BrainState) -> str:
         movers = sorted([d for d in st.drivers if d["pressure"]], key=lambda d: -abs(d["pressure"]))[:4]
@@ -339,6 +430,21 @@ class Brain:
         if news:
             n = max(news, key=lambda d: d["news_n"])
             s += f" News is loudest on {n['name'].lower()} ({n['news_n']} stories, tone {n['news_tone']:+.2f})."
+        if st.pulse:
+            p = st.pulse
+            s += (f" Leaders {p['r30']:+.2%} in 30m (" + ", ".join(f"{k} {r:+.2%}" for k, r in p["leaders"]) + ")"
+                  + (f", against the index's {p['index_r30']:+.2%}: a narrow move" if p.get("against") else "") + ".")
+        if st.flows:
+            f = st.flows
+            bits = []
+            if f.get("fii_long_pct") is not None:
+                bits.append(f"FIIs {f['fii_long_pct']:.0%} long index futures"
+                            + (f" ({f['fii_long_pct_5d']:.0%} a week before)" if f.get("fii_long_pct_5d") is not None else ""))
+            if f.get("fii_cash_cr") is not None:
+                bits.append(f"FII cash ₹{f['fii_cash_cr']:+,.0f} cr" + (f", DII ₹{f['dii_cash_cr']:+,.0f} cr"
+                                                                        if f.get("dii_cash_cr") is not None else ""))
+            if bits:
+                s += f" Flows ({f.get('date', 'last session')}): " + "; ".join(bits) + "."
         if st.size_mult < 1:
             s += f" Global stress {st.stress:.1f}σ: size ×{st.size_mult:.2f}."
         val = [d["name"] for d in st.drivers if d["validated"]]
@@ -363,3 +469,42 @@ def _fmt_move(d: dict) -> str:
     if L.get("prior_ret") is not None:
         return f"{L['prior_ret']:+.2%} last session"
     return "flat"
+
+
+def load_flows(root, day) -> dict | None:
+    """FII index-futures positioning and cash flows as of the last session before `day`, from the warehouse's
+    participant_oi and fii_dii tables. Context for the narrative; None without the files."""
+    from pathlib import Path
+    from ..data.warehouse import Warehouse
+    if not Path(root).exists():
+        return None
+    wh = Warehouse(root)
+    out: dict = {}
+    try:
+        po = wh.read("participant_oi", start=pd.Timestamp(day) - pd.Timedelta(days=20), end=pd.Timestamp(day) - pd.Timedelta(days=1))
+    except Exception:
+        po = pd.DataFrame()
+    if po is not None and not po.empty:
+        f = po[po["participant"] == "FII"].copy()
+        f["date"] = pd.to_datetime(f["date"])
+        f = f.sort_values("date")
+        f["pct"] = f["fut_idx_long"] / (f["fut_idx_long"] + f["fut_idx_short"])
+        if len(f):
+            out["fii_long_pct"] = float(f["pct"].iloc[-1])
+            out["date"] = str(f["date"].iloc[-1].date())
+            if len(f) > 5:
+                out["fii_long_pct_5d"] = float(f["pct"].iloc[-6])
+    try:
+        fd = wh.read("fii_dii", start=pd.Timestamp(day) - pd.Timedelta(days=10), end=pd.Timestamp(day) - pd.Timedelta(days=1))
+    except Exception:
+        fd = pd.DataFrame()
+    if fd is not None and not fd.empty:
+        fd = fd.copy()
+        fd["date"] = pd.to_datetime(fd["date"])
+        last = fd[fd["date"] == fd["date"].max()]
+        for cat, key in (("FII/FPI", "fii_cash_cr"), ("DII", "dii_cash_cr")):
+            r = last[last["category"] == cat]
+            if len(r):
+                out[key] = float(r["net"].iloc[0])
+        out.setdefault("date", str(fd["date"].max().date()))
+    return out or None

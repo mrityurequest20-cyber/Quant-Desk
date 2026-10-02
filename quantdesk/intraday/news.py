@@ -188,10 +188,10 @@ def sentiment(text: str) -> float:
     return float(max(-1.0, min(1.0, score / max(mass, 1.0))))
 
 
-def impact(text: str) -> str:
+def impact(text: str, recap: bool | None = None) -> str:
     t = text.lower()
     # whole words only: "war" must not fire on "toward", "forward", "award", "software"
-    if HIGH_RE.search(t) and not is_recap(t):
+    if HIGH_RE.search(t) and not (is_recap(t) if recap is None else recap):
         return "high"
     if any(re.search(rf"\b{re.escape(k)}\b", t) for k in MEDIUM_IMPACT):
         return "medium"
@@ -229,10 +229,15 @@ def classify(item: NewsItem) -> NewsItem:
     item.sentiment = sentiment(item.title) if item.title else 0.0
     if abs(item.sentiment) < 0.05 and item.summary:
         item.sentiment = 0.5 * sentiment(item.summary[:300])
-    item.recap = is_recap(item.title)
-    item.impact = impact(text) if not item.recap else min(impact(text), "medium", key=["low", "medium", "high"].index)
-    # NLP: event type, surprise against expectations, heavyweight exposure, certainty (nlp.py)
-    r = nlp.read(text, recap=item.recap)
+    # NLP: event type, surprise against expectations, heavyweight exposure, certainty (nlp.py). A headline that
+    # reports an outcome ("RBI cuts repo rate by 25 bps, Nifty rallies", "… as HDFC Bank misses estimates") is news
+    # even when it also tells the market's move; only the move with no outcome in it ("Sensex tumbles 700 points
+    # as rate fears grip") is a recap.
+    r = nlp.read(text)
+    item.recap = is_recap(item.title) and r.surprise is None
+    if item.recap:
+        r = nlp.read(text, recap=True)
+    item.impact = impact(text, item.recap) if not item.recap else min(impact(text, True), "medium", key=["low", "medium", "high"].index)
     item.lex = item.sentiment
     if r.surprise is not None:                      # what was expected matters more than how the words lean
         item.sentiment = float(max(-1.0, min(1.0, 0.4 * item.lex + 0.6 * r.surprise)))
@@ -316,6 +321,9 @@ class NewsDesk:
         self.fetch = fetch or self._http
         self.items: dict[str, NewsItem] = {}
         self.novelty = nlp.Novelty()
+        self.trust = None                              # (event, source) → tone multiplier, set from learning.Memory
+        self.reader_trust = None                       # reader name → weight (rules, claude, gemini, ollama)
+        self.llm = None                                # llm.LLMDesk: language models as second readers, or None
         self.last_fetch: pd.Timestamp | None = None
         self.health: dict[str, str] = {}
 
@@ -354,7 +362,39 @@ class NewsDesk:
                     continue
                 self._remember(it)
                 new.append(it)
-        return sorted(new, key=lambda x: x.ts)
+        new = sorted(new, key=lambda x: x.ts)
+        if self.llm is not None:                       # only what can still move the tone gets a second read
+            self.llm.submit([x for x in new if now - x.ts <= pd.Timedelta(minutes=self.window)], now)
+        return new
+
+    def collect(self) -> list[NewsItem]:
+        """Attach the language models' reads that have arrived; returns the stories they updated."""
+        if self.llm is None:
+            return []
+        done = {}
+        for hid, reader, rd in self.llm.drain():
+            x = self.items.get(hid)
+            if x is None:
+                continue
+            x.nlp.setdefault("llm", {}).setdefault("readers", {})[reader] = rd
+            done[hid] = x
+        return list(done.values())
+
+    def item_tone(self, x: NewsItem, symbol: str, now: pd.Timestamp) -> float:
+        """The story's tone for one index: the rules' read and each language model's read that had arrived by `now`,
+        each weighted by its record (and the model's own confidence)."""
+        readers = ((x.nlp or {}).get("llm") or {}).get("readers") or {}
+        if not readers:
+            return x.sentiment
+        rt = self.reader_trust or (lambda name: 1.0)
+        num, den = rt("rules") * x.sentiment, rt("rules")
+        for name, rd in readers.items():
+            v = rd.get(symbol)
+            if v is None or not rd.get("at") or pd.Timestamp(rd["at"]) > now:
+                continue
+            w = rt(name) * max(0.2, float(rd.get("confidence") or 0.0))
+            num, den = num + w * float(v), den + w
+        return max(-1.0, min(1.0, num / den)) if den else x.sentiment
 
     def _remember(self, it: NewsItem) -> None:
         it.novelty, related = self.novelty.score(it.id, f"{it.title}. {it.summary[:200]}")
@@ -387,14 +427,16 @@ class NewsDesk:
             w = 0.5 ** (age / (n.get("half_life") or self.half_life)) * min(x.about.get(symbol, 0) / 4, 1.5) \
                 * (1 + 0.5 * (len(x.sources) - 1)) * {"high": 2.0, "medium": 1.3, "low": 1.0}[x.impact] \
                 * (0.4 if x.recap else 1.0) * (n.get("weight") or 1.0) * (n.get("certainty") or 1.0) * (0.5 + 0.5 * x.novelty)
-            num += w * x.sentiment
+            # trust: how this kind of story and this source have called the next 30 minutes (learning.py);
+            # a type that's been wrong pulls its tone toward neutral, one that's been right counts for more
+            num += w * self.item_tone(x, symbol, now) * (self.trust(n.get("event"), x.source) if self.trust else 1.0)
             den += w
             if n.get("surprise") is not None:
                 snum += w * n["surprise"]
                 sden += w
                 if top is None or abs(n["surprise"]) * w > abs(top[0]) * top[1]:
                     top = (n["surprise"], w, x)
-        tone = num / den if den else 0.0
+        tone = max(-1.0, min(1.0, num / den)) if den else 0.0
         conf = len(rel) / (len(rel) + 3)
         breaking = next((x for x in rel if x.impact == "high" and not x.recap and not PREVIEW.search(x.title)
                          and (now - x.ts) <= pd.Timedelta(minutes=self.breaking_min)), None)

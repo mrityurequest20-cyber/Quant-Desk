@@ -72,6 +72,9 @@ class Analyst:
         self.cheap = a.get("iv_rv_cheap", 0.90)
         self.events_days = cfg.get("calendar.event_blackout_days", 1)
         self.cfg = cfg
+        # what the desk has learned (learning.py): each factor's weight × how often its direction called the next
+        # 30 minutes right, shrunk toward 1× until there's a record, bounded to 0.5×–1.5×. Empty: no learning.
+        self.learned: dict[str, float] = {}
 
     def assess(self, symbol: str, s: dict, chain: dict | None = None, vix: dict | None = None,
                is_expiry_day: bool = False, event: str | None = None, flow: dict | None = None,
@@ -81,7 +84,8 @@ class Analyst:
         last = s["last"]
 
         def add(f, cat, d, obs, weight=None):
-            ev.append(Evidence(f, cat, float(np.clip(d, -1, 1)), w.get(f, 0.5) if weight is None else weight, obs))
+            base = w.get(f, 0.5) if weight is None else weight
+            ev.append(Evidence(f, cat, float(np.clip(d, -1, 1)), base * self.learned.get(f, 1.0), obs))
 
         # --- trend ---------------------------------------------------------------------------------
         vw, slope = s["vwap"], s["vwap_slope"]
@@ -281,6 +285,11 @@ class Analyst:
             src = (f"model AUC {quant['auc']:.3f}" if quant.get("valid") else
                    f"model off: {quant.get('model_status', 'untrained')}")
             parts.append(f"Quant: 30-min σ {quant['sigma_30m_pct']:.2f}% ({quant.get('vol_source')}); {src}.")
+        moved = sorted({e.factor for e in ev if abs(self.learned.get(e.factor, 1.0) - 1) >= 0.1},
+                       key=lambda f: (-abs(self.learned[f] - 1), f))
+        if moved:                                       # what its own record changed in this read (learning.py)
+            parts.append("Track record: " + ", ".join(f"{f} ×{self.learned[f]:.2f}" for f in moved[:5])
+                         + " (weights from how each called the next 30 minutes).")
         if vetoes:
             parts.append("No-trade flags: " + "; ".join(vetoes) + ".")
         return MarketView(symbol, s["ts"], last, bias, float(score), conviction, day_type, vol_view, iv, rv, ev, vetoes,

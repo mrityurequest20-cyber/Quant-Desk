@@ -251,9 +251,85 @@ Every 4 minutes, in parallel, the desk reads these feeds (all reachable from Git
   - **certainty:** "may", "sources say", previews and questions count half.
   - **novelty:** TF-IDF cosine against the day's earlier stories, so a retelling counts less than the first report.
 
-A recency-weighted tone (each story fading at its event's half-life, weighted by certainty and novelty) is one piece of evidence with modest weight; the read names the biggest surprise behind it. After a high-impact story (RBI, the Fed, the budget, a CPI print, war), not a preview, the desk takes no new entries for 15 minutes. A **recap of the market's own move** ("Stock market crash: Sensex tumbles 700 points") never counts as high impact and weighs less in the tone: the move is already on the desk's tape. On 29 Sep 2026 five such recaps kept it out of the morning's sell-off for 55 minutes. A story is invisible until its publish time on the engine's clock, so replays never see the future. Everything is journaled, and it's all on the site's **News** tab.
+A recency-weighted tone (each story fading at its event's half-life, weighted by certainty and novelty) is one piece of evidence with modest weight; the read names the biggest surprise behind it. After a high-impact story (RBI, the Fed, the budget, a CPI print, war), not a preview, the desk takes no new entries for 15 minutes. A **recap of the market's own move** ("Stock market crash: Sensex tumbles 700 points") never counts as high impact and weighs less in the tone: the move is already on the desk's tape. On 29 Sep 2026 five such recaps kept it out of the morning's sell-off for 55 minutes. A headline that reports an outcome along with the move ("RBI cuts repo rate by 25 bps, Nifty rallies", "… as HDFC Bank misses estimates") is news, not a recap. A story is invisible until its publish time on the engine's clock, so replays never see the future. Everything is journaled, and it's all on the site's **News** tab.
 
 **What-if replays.** `deploy/whatif.py` replays a recorded day (its real 1m bars, the headlines as the desk fetched them, and the prior sessions from Yahoo) under variants: the code as it ran that day, no news filter, no RSI filter, a lower conviction bar, the EV gate off, no stop floor. It prints each variant's trades and what kept it out. Run it from the Actions tab (**What-if replay**, with a date and optionally the commit that ran that day); the table lands in the run summary.
+
+## Learning from its own calls
+
+Every call the desk makes is graded against what the market did next (`intraday/learning.py`), and the record
+changes how much it trusts each input. It grades at the close, and catches up at the next open if a run died.
+- **News:** each headline's tone, where the story is about an index, against that index's next 30 minutes. It is
+  tracked by event type, by source and by reader (the rules, and the LLM once one is wired). News that lands
+  overnight is graded from the open, the first moment the desk could act on it. The record becomes a trust
+  multiplier on that kind of story's tone: a type that has been wrong pulls toward neutral, one that has been
+  right counts for more.
+- **Evidence:** every factor in every read (VWAP, ORB, PCR, futures OI, news, global links …) is graded on whether
+  its direction called the next 30 minutes. Reads are 5 minutes apart against a 30-minute horizon, so each counts
+  as a sixth of an observation. The factor's weight is multiplied by twice its shrunk hit rate (60% → 1.2×), within
+  0.5×–1.5×. The read says so: *"Track record: vwap ×1.18, pcr ×0.84"*.
+- **Setups:** each closed trade's R by setup, and by setup × day type. After 8+ trades the setup's conviction is
+  scaled 0.6×–1.3×. A setup that has lost 0.3R a trade or worse (shrunk) stands aside, with the record named in the
+  decision.
+- **Pre-break entries the EV gate refused** are replayed on the bars that followed: target or stop first, within
+  45 minutes. That shows whether waiting for confirmation is costing the desk.
+
+Everything is shrunk toward "no change" by a prior worth 20 observations (8 for trades), so one good or bad day
+can't swing it. The memory is `runtime/intraday/memory.json`; it is saved with the journal and survives an account
+reset (that resets money, not knowledge). Each session review ends with **What the desk learned**.
+`python -m quantdesk intraday learn` shows the record. `--rebuild` grades the whole journal again from the
+recorded bars, and `intraday replay --no-learn` turns it off for a replay.
+
+### Stocks with liquid options
+
+The index desk trades NIFTY and BANKNIFTY. F&O stocks are ranked from the same daily NSE bhavcopy (warehouse table
+`fo_stocks`, filled by the Data workflow). Liquidity is measured on near-month options:
+- premium traded
+- strikes that traded 100+ contracts
+- futures volume and OI
+- the ATM straddle (the market's priced move)
+
+`python -m quantdesk intraday stocks` prints the ranking and whether this account can hold the smallest
+defined-risk position: one lot of a one-strike debit spread, about half the strike step × the lot. At ₹20,000 the
+answer is mostly no. RELIANCE (lot 500, ₹10 strikes) is ≈₹2,500 a lot, 12.5% of the account, over the desk's 8% risk
+budget. So stocks are a watch list at this size, and the ranking says which ones fit as the account grows.
+
+The volume units, checked on the warehouse's Sep-2026 data:
+- `TtlTradgVol` counts **contracts**: only ~1% of values are lot multiples, i.e. chance.
+- Open interest is in **shares**: 96% are lot multiples.
+- So OI is divided by the lot, and volumes are not.
+
+### Language models as second readers
+
+With a key in the environment, each provider reads the headlines about an index next to the rules
+(`intraday/llm.py`):
+- **Claude:** `claude-opus-5-5` through the official `anthropic` SDK, at low effort, with structured JSON output
+  and server-side refusal fallbacks (`fallbacks: "default"`).
+- **Gemini** and **Ollama:** through their REST APIs.
+
+For each headline, each reader gives NIFTY's and BANKNIFTY's likely direction over the next 30–60 minutes and a
+confidence.
+- **Background:** reads run on a background thread, so a slow API never holds the trading loop.
+- **Point in time:** a read counts only from the moment it arrived, so replays never see one early.
+- **Graded like everything else:** each reader is graded on its own (`news_reader` in the record). The tone weighs
+  the rules and each model by how often each has called the move: a model that keeps being wrong fades.
+- **Reflection:** after the close, Claude reads the session review and the learning record. It writes up to five
+  lessons and three things to watch at the open, into the review and the memory. Nothing it writes touches
+  orders, sizing or risk.
+
+Keys (repository secrets, passed by `live.yml`):
+- `ANTHROPIC_API_KEY`, or `CLAUDE_API_KEY`, `CLAUDE_API`, `CLOUD_API_KEY`
+- `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
+- `OLLAMA_API_KEY`
+
+Run **Actions → AI check** to see which secret names exist (names only, never values) and get a test read from
+each provider. Locally, run `python -m quantdesk intraday ai-check`.
+
+**Cost:**
+- Headlines go 12 per call, at most 40 calls per provider per day (`intraday.llm`).
+- One Claude headline call is ~2k tokens in and ~1k out: about $0.03 at $4/$20 per million.
+- A busy news day costs about $0.50–1.50 for Claude; the reflection is a few cents.
+- The review ends with the day's calls, tokens and estimated cost.
 
 ## Edge research (real data)
 
@@ -371,7 +447,20 @@ The brain connects everything the desk sees into one picture, and it's honest ab
   - *predictive*: a lead that survives rolling validation, false-discovery control and the cost hurdle
 
   The brain **explains with the first and only votes with the second**, in the *measured* direction.
-- **News → drivers.** Crude headlines attach to the crude node, Fed stories to rates, China to Asia, war to fear. The brain can see whether price and story agree.
+- **News → drivers.** Crude headlines attach to the crude node, Fed stories to rates, China to Asia, war to fear,
+  by title and by the NLP event type (an OPEC story is a crude story even without the word "crude"). Each driver's
+  news tone uses the news desk's blend of the rules and the language models. Rumours and retellings count less.
+  The brain can see whether price and story agree.
+- **The leaders.** The index heavyweights (HDFC Bank, ICICI Bank, Reliance, Infosys … SBI, Axis, Kotak) are
+  polled like the global markets. Their index-weighted 30-minute move is the *heavyweight pulse*. When the index
+  moves against its leaders, the read calls it a narrow move.
+- **Flows.** Yesterday's FII share of index futures held long (participant OI, with a week-earlier comparison) and
+  FII/DII cash flows go into the narrative, from the warehouse.
+- **Probation.** A driver with no validated research link (and the heavyweight pulse) still reports its live
+  30-minute move as evidence, with **zero weight**. The learning loop grades it like every other factor. After 30+
+  graded reads at a shrunk hit rate of 57.5% or better, it gets a small vote (0.25, then scaled by its record). If
+  the record slips, it drops back to zero. Validated links vote from the start; everything else has to earn a vote
+  live.
 - **Risk overlay.** Big global moves or a US VIX spike shrink size (volatility targeting). At a 1-lot account size, ≈4σ of global stress means standing aside.
 - **What you see.** The site's **Brain** tab shows:
   - the risk regime

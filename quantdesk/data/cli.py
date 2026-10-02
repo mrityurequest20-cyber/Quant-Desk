@@ -106,7 +106,7 @@ def register(sub):
     x = ss.add_parser("update", help="fetch missing days (default: the last 10) and today's snapshots")
     x.add_argument("--from", dest="start", help="YYYY-MM-DD")
     x.add_argument("--to", help="YYYY-MM-DD (default today)")
-    x.add_argument("--only", help="comma-separated tables (fo_bhav, participant_oi, participant_vol, fii_dii, "
+    x.add_argument("--only", help="comma-separated tables (fo_bhav, fo_stocks, participant_oi, participant_vol, fii_dii, "
                                   "gift_nifty, corp_events, nse_holidays)")
     x.add_argument("--dir", help="warehouse folder (default runtime/warehouse)")
     x.add_argument("--release", help="GitHub release holding the files (e.g. warehouse): pull first, push after")

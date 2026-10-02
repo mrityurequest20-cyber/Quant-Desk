@@ -167,6 +167,69 @@ def parse_fo_bhav(b: bytes, day: dt.date, symbols=INDEX_SYMBOLS) -> pd.DataFrame
     return out[BHAV_COLS].reset_index(drop=True)
 
 
+STOCK_COLS = ["date", "symbol", "lot", "underlying", "expiry", "opt_contracts", "opt_premium", "opt_oi", "active_strikes",
+              "strike_step", "atm_straddle", "fut_contracts", "fut_oi", "fut_close"]
+
+
+def parse_fo_stocks(b: bytes, day: dt.date, min_strike_contracts: int = 100) -> pd.DataFrame:
+    """Stock futures and options in the same bhavcopy, one row per stock: how liquid its near-month F&O is.
+    Volumes are contracts (TtlTradgVol / CONTRACTS); open interest is in shares, so it's divided by the lot.
+
+    opt_premium: premium traded in the near-month options, ₹ (close × contracts × lot, a turnover proxy);
+    active_strikes: near-month strikes (call or put) that traded at least `min_strike_contracts` contracts;
+    atm_straddle: near-month ATM call + put close as a fraction of the stock price (the market's priced move)."""
+    raw = _unzip_csv(b)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    if "FinInstrmTp" in raw.columns:
+        d = raw[raw["FinInstrmTp"].isin(["STO", "STF"])]
+        df = pd.DataFrame({"date": pd.to_datetime(d["TradDt"]).dt.date, "symbol": d["TckrSymb"].astype(str).str.strip(),
+                           "fut": d["FinInstrmTp"].eq("STF").values, "right": d["OptnTp"].astype(str).str.strip(),
+                           "expiry": pd.to_datetime(d["XpryDt"]).dt.date, "strike": d["StrkPric"], "close": d["ClsPric"],
+                           "underlying": d["UndrlygPric"], "oi": d["OpnIntrst"], "contracts": d["TtlTradgVol"],
+                           "lot": d["NewBrdLotQty"]})
+    elif "INSTRUMENT" in raw.columns:
+        inst = raw["INSTRUMENT"].astype(str).str.strip()
+        d = raw[inst.isin(["OPTSTK", "FUTSTK"])]
+        df = pd.DataFrame({"date": pd.to_datetime(d["TIMESTAMP"], format="%d-%b-%Y").dt.date,
+                           "symbol": d["SYMBOL"].astype(str).str.strip(), "fut": inst[d.index].eq("FUTSTK").values,
+                           "right": d["OPTION_TYP"].astype(str).str.strip(),
+                           "expiry": pd.to_datetime(d["EXPIRY_DT"], format="%d-%b-%Y").dt.date, "strike": d["STRIKE_PR"],
+                           "close": d["CLOSE"], "underlying": np.nan, "oi": d["OPEN_INT"], "contracts": d["CONTRACTS"],
+                           "lot": np.nan})
+    else:
+        raise ValueError(f"unrecognised F&O bhavcopy columns: {list(raw.columns)[:8]}")
+    for c in ("strike", "close", "underlying", "oi", "contracts", "lot"):
+        df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
+    if len(df) and (df["date"] != day).any():
+        raise ValueError(f"bhavcopy for {day} carries trade dates {sorted(set(df['date']))[:3]}")
+    rows = []
+    for sym, g in df.groupby("symbol"):
+        near = min(g["expiry"])
+        f = g[g["fut"] & (g["expiry"] == near)]
+        o = g[~g["fut"] & (g["expiry"] == near)]
+        lot = float(g["lot"].dropna().iloc[0]) if g["lot"].notna().any() else np.nan
+        S = float(g["underlying"].dropna().iloc[0]) if g["underlying"].notna().any() else \
+            (float(f["close"].iloc[0]) if len(f) else np.nan)
+        lot_div = lot if lot == lot and lot > 0 else 1.0
+        strikes = np.sort(o["strike"].dropna().unique())
+        step = float(np.median(np.diff(strikes))) if len(strikes) > 2 else np.nan
+        straddle = np.nan
+        if S == S and len(strikes):
+            k = strikes[np.argmin(np.abs(strikes - S))]
+            ce, pe = o[(o["strike"] == k) & (o["right"] == "CE")], o[(o["strike"] == k) & (o["right"] == "PE")]
+            if len(ce) and len(pe):
+                straddle = float(ce["close"].iloc[0] + pe["close"].iloc[0]) / S
+        rows.append({"date": day, "symbol": sym, "lot": lot, "underlying": S, "expiry": near,
+                     "opt_contracts": float(o["contracts"].sum()),
+                     "opt_premium": float((o["close"] * o["contracts"]).sum() * (lot if lot == lot else 1.0)),
+                     "opt_oi": float(o["oi"].sum() / lot_div),
+                     "active_strikes": int(o.loc[o["contracts"] >= min_strike_contracts, "strike"].nunique()),
+                     "strike_step": step, "atm_straddle": straddle,
+                     "fut_contracts": float(f["contracts"].sum()), "fut_oi": float(f["oi"].sum() / lot_div),
+                     "fut_close": float(f["close"].iloc[0]) if len(f) else np.nan})
+    return pd.DataFrame(rows, columns=STOCK_COLS)
+
+
 PARTICIPANT_COLS = {
     "future index long": "fut_idx_long", "future index short": "fut_idx_short",
     "future stock long": "fut_stk_long", "future stock short": "fut_stk_short",
