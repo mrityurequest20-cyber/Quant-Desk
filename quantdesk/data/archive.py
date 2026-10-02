@@ -87,4 +87,9 @@ def load_archive(folder: Path, kind: str = "chains", start=None, end=None) -> pd
         if (start and d < pd.Timestamp(start).date()) or (end and d > pd.Timestamp(end).date()):
             continue
         parts.append(pd.read_parquet(p))
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    if not parts:
+        return pd.DataFrame()
+    df = pd.concat(parts, ignore_index=True)
+    # a live run's artifact can carry earlier days too, so the same snapshot may be archived under two parts
+    keys = {"chains": ["ts", "underlying", "expiry", "strike"], "bars": ["symbol", "ts"]}.get(kind)
+    return df.drop_duplicates(keys).reset_index(drop=True) if keys else df.drop_duplicates().reset_index(drop=True)

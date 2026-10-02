@@ -309,6 +309,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_data(sub)
     s = sub.add_parser("research", help="test pre-registered edge hypotheses on real NIFTY/BANKNIFTY data")
     s.add_argument("--out", default="research", help="folder for edge_report.md and edges.json")
+    s.add_argument("--warehouse", help="the data warehouse folder: also test the volatility premium on real option "
+                                       "prices and FII positioning (data_report.md)")
     s.set_defaults(fn=cmd_research)
     return p
 
@@ -326,6 +328,19 @@ def cmd_research(cfg, a):
     (out / "edges.json").write_text(to_json(res), encoding="utf-8")
     (out / "links.json").write_text(links_json(data), encoding="utf-8")
     print(md)
+    wh = Path(a.warehouse) if a.warehouse else None
+    if wh and any(wh.glob("fo_bhav_*.parquet")):
+        from .research import warehouse_research as W
+        res = W.run_all(wh, data["daily"], cfg)
+        md2 = W.report(res, f"{pd.Timestamp.now(tz='Asia/Kolkata'):%Y-%m-%d %H:%M} IST")
+        (out / "data_report.md").write_text(md2, encoding="utf-8")
+        (out / "vrp_positioning.json").write_text(W.to_json(res), encoding="utf-8")
+        if len(res.get("trade_rows", [])):
+            res["trade_rows"].assign(strikes=res["trade_rows"]["strikes"].astype(str)).to_csv(
+                out / "vrp_trades.csv.gz", index=False)
+        print(md2)
+    elif wh:
+        print(f"no warehouse files in {wh}: skipping the option-price and positioning research")
 
 
 def main(argv=None):
