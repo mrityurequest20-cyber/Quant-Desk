@@ -17,6 +17,7 @@ import datetime as dt
 import logging
 import math
 import time
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -349,7 +350,7 @@ class IntradayEngine:
             if key not in self._qerrors:
                 self._qerrors.add(key)
                 log.exception("%s failed", what)
-                self.journal.event(now, "ERROR", "quant", f"{u} {what} failed: {exc!r:.200}")
+                self.journal.event(now, "ERROR", "quant", f"{u} {what} failed: {exc!r:.200}", {"where": _where(exc)})
             return None
 
     def _train_models(self, day) -> None:
@@ -731,6 +732,13 @@ def _global_view(brain, now) -> dict | None:
             "health": dict(brain.gfeed.health)}
 
 
+def _where(exc: BaseException, frames: int = 6) -> list[str]:
+    """The last few frames of a failure, so a journaled error can be traced from the journal alone
+    (29 Sep 2026: a one-off TypeError on the live desk was journaled as a bare repr, untraceable)."""
+    tb = traceback.extract_tb(exc.__traceback__)[-frames:]
+    return [f"{Path(f.filename).name}:{f.lineno} {f.name}: {(f.line or '').strip()[:120]}" for f in tb]
+
+
 # ---- drivers ------------------------------------------------------------------------------------------
 def run_replay(engine: IntradayEngine) -> str:
     feed = engine.feed
@@ -776,7 +784,7 @@ def run_live(engine: IntradayEngine, stop_at: dt.time | None = None, handover: b
             engine.step()
         except Exception as exc:                        # keep the loop alive; journal the failure
             log.exception("step failed")
-            engine.journal.event(engine.feed.now(), "ERROR", "engine", repr(exc))
+            engine.journal.event(engine.feed.now(), "ERROR", "engine", repr(exc), {"where": _where(exc)})
         n = engine.feed.now()
         time.sleep(max(1.0, 60 - n.second + 4))
     if handover and end < close_ts:

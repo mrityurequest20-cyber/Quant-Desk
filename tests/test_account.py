@@ -98,3 +98,45 @@ def test_restating_a_mispriced_exit_moves_pnl_cash_and_leaves_a_trail(cfg, tmp_p
     assert "restated" in j2.df("SELECT message FROM events WHERE category='restatement'")["message"].iloc[0]
     with pytest.raises(KeyError):
         restate_trade(cfg, tmp_path, "T1", {"NOPE": 1.0}, "wrong leg")
+
+
+def test_fill_audit_compares_paper_fills_with_recorded_quotes(cfg, tmp_path):
+    """deploy/audit_fills.py: a fill at the recorded ask + a tick is fair; an exit above the recorded bid is flagged."""
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.core.types import Instrument
+    from quantdesk.intraday.chains import ModelOptionChain
+    from quantdesk.intraday.recorder import SessionRecorder
+    from quantdesk.journal.journal import trade_from_dict
+    spec = importlib.util.spec_from_file_location("audit_fills", Path(__file__).resolve().parent.parent / "deploy" / "audit_fills.py")
+    af = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(af)
+    cal = TradingCalendar(cfg.holidays())
+    t_in, t_out = pd.Timestamp("2026-09-29 11:08", tz="Asia/Kolkata"), pd.Timestamp("2026-09-29 11:10", tz="Asia/Kolkata")
+    mc = ModelOptionChain(cfg, cal, lambda u, t: (22600.0, 0.14))
+    exp = mc.expiries("NIFTY", t_in)[1]
+    rec = SessionRecorder(tmp_path / "data")
+    for ts in (t_in - pd.Timedelta(minutes=1), t_out - pd.Timedelta(minutes=1)):
+        rec.record_chain(mc.chain("NIFTY", exp, ts=ts))
+    snap_in, snap_out = (mc.chain("NIFTY", exp, ts=ts) for ts in (t_in - pd.Timedelta(minutes=1), t_out - pd.Timedelta(minutes=1)))
+    K = 22400.0
+    ask_in, bid_out = float(snap_in.at[K, "pe_ask"]), float(snap_out.at[K, "pe_bid"])
+    inst = Instrument.option("NIFTY", exp, K, "PE", 65)
+    j = Journal(tmp_path / "intraday" / "journal.db")
+    t = trade_from_dict({"id": "T1", "strategy": "vwap_trend", "family": "intraday", "symbol": "NIFTY", "direction": -1,
+                         "kind": "options", "units": 1, "opened_at": str(t_in), "entry_underlying": 22600.0, "initial_risk": 1000.0,
+                         "legs": [{"instrument": inst.to_dict(), "qty": 65, "entry_price": ask_in + 0.05, "exit_price": bid_out + 7}]})
+    j.open_trade(t)
+    j.fill(str(t_in), "T1", inst.symbol, 65, ask_in + 0.05, 25.0, {})
+    t.closed_at, t.exit_underlying, t.exit_reason, t.pnl, t.fees = t_out, 22610.0, "invalidation", 999.0, 50.0
+    j.close_trade(t)
+    j.fill(str(t_out), "T1", inst.symbol, -65, bid_out + 7, 25.0, {})          # marked 7 above the market's bid
+    j.commit()
+    [r] = af.audit(tmp_path, [tmp_path / "data"])
+    entry, exit_ = r["fills"]
+    assert entry["better_than_market"] == pytest.approx(0, abs=0.01)
+    assert exit_["better_than_market"] == pytest.approx((7 + 0.05) * 65, abs=0.5)
+    assert r["pnl_at_quotes"] < 0 < r["pnl_booked"]            # bought at the ask, sold at the bid a minute later: a loss

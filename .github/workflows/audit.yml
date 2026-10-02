@@ -1,0 +1,66 @@
+# Check every paper fill against the real option-chain quotes the desk recorded (deploy/audit_fills.py).
+# The chain snapshots live in each live run's session-data artifacts (90 days), which only a runner can
+# download. Read-only: the journal is restored, never saved. Run it from the Actions tab.
+name: Audit fills
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Only trades opened on this day (YYYY-MM-DD); empty for all"
+        default: ""
+
+permissions:
+  contents: read
+  actions: read              # download the live runs' session-data artifacts
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DAY: ${{ inputs.date }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the journal (read-only)
+        run: deploy/journal.sh restore
+      - name: Download the recorded option chains
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p _chains
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow live.yml --limit 40 --json databaseId --jq '.[].databaseId'); do
+            gh run download "$id" -R "$GITHUB_REPOSITORY" --dir "_chains/$id" 2>/dev/null || true
+          done
+          find _chains -path '*chains/*.csv' | sed 's#/chains/.*##' | sort -u
+      - name: Audit
+        run: |
+          args=()
+          for d in $(find _chains -type d -name chains -printf '%h\n' | xargs -r -n1 dirname | sort -u); do args+=(--data "$d"); done
+          python deploy/audit_fills.py --runtime runtime "${args[@]}" ${DAY:+--date "$DAY"} --json audit.jsonl
+      - name: Summary
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          rows = [json.loads(l) for l in open("audit.jsonl", encoding="utf-8")] if os.path.exists("audit.jsonl") else []
+          print("## Paper fills vs the recorded quotes\n")
+          print("| trade | opened | booked ₹ | at the quotes ₹ | fills (price vs recorded bid / ask) |")
+          print("|---|---|---:|---:|---|")
+          for r in rows:
+              q = "—" if r["pnl_at_quotes"] is None else f"{r['pnl_at_quotes']:+,.0f}"
+              f = "<br>".join(f"{x['fill']} · {x['quote']}" for x in r["fills"])
+              print(f"| {r['symbol']} {r['strategy']}{' (restated)' if r['restated'] else ''} | {r['opened']} | {r['pnl_booked']:+,.0f} | {q} | {f} |")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audit-fills
+          path: audit.jsonl
+          if-no-files-found: ignore

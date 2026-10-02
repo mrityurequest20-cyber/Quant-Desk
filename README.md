@@ -310,7 +310,7 @@ touch it.
 
 | IST | What happens |
 |---|---|
-| 08:52 | The `morning` job starts. It checks Yahoo/NSE reachability (`doctor`), restores the journal from the `journal` branch, and waits for the open |
+| 08:25–08:52 | The `morning` job starts (see *Who starts it* below). It checks Yahoo/NSE reachability (`doctor`), restores the journal from the `journal` branch, and waits for the open |
 | 09:15 | It trades on paper and re-publishes the website every 6 minutes |
 | 12:20 | It hands over without squaring off. A hosted job may run for at most 6 h, and the session is 6h15m |
 | 12:21 | The `afternoon` job restores the journal and resumes the same session: open positions, trades closed so far, the day's P&L, the loss streak, the cooldown |
@@ -318,6 +318,10 @@ touch it.
 | 15:30 | It writes the session review, saves the journal, posts the review in the run summary, and keeps the day's bars and option chains as a 90-day artifact |
 
 On NSE holidays both jobs exit within a minute.
+
+**Who starts it.** GitHub's own scheduled events are best-effort: on 29 Sep – 1 Oct 2026 live.yml's 08:52 cron arrived at 15:19–15:46 IST, and the desk lost two sessions. So `scheduler.yml` checks every 10 minutes, around the clock, and starts the desk by `workflow_dispatch` (which runs at once) whenever it's an NSE trading day between 08:25 and 14:45 IST and no run is queued, running or done for the day (`deploy/scheduler.py`). A failed day is retried up to three times. A run you **cancelled** keeps the desk stopped for the rest of that day, so the kill switch still works. Live.yml's own cron stays as a backup; a late one finds the session over and exits.
+
+**Checking the fills.** `audit.yml` (Actions tab, optional date) downloads the recorded option chains from the live runs' artifacts and checks every paper fill against the bid/ask the market actually showed, with each trade's P&L at those quotes (`deploy/audit_fills.py`).
 
 - **The live website** is at `https://mrityurequest20-cyber.github.io/Quant-Desk/`. It is the same phone app, **read-only**, re-published every ~6 minutes while the desk runs. The status pill reads **Live** while the heartbeat is fresh, **Closed** outside market hours and **Offline** if the desk stops reporting mid-session. **Install it:** on Android, Chrome offers *Install app* (the app shows a card for it too); on iPhone, Safari → Share → *Add to Home Screen*. It then opens full-screen from its own icon, and a service worker keeps the last state readable offline.
 - **App updates** reach the site on their own: `site.yml` re-publishes the site whenever `quantdesk/web/` changes on `main`, after any running desk has finished (a running desk keeps publishing with the code it started with).
