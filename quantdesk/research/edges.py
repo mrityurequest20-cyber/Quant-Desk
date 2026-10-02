@@ -7,7 +7,9 @@ Rules (fixed before looking at the data, so the list can't be tuned to what happ
   * t-statistics are Newey-West (HAC), so autocorrelated or overlapping observations don't inflate them;
   * discovery = the older 2/3 of the sample, holdout = the newest 1/3; an edge must keep its sign
     in the holdout (one-sided p < 0.10);
-  * Benjamini-Hochberg false-discovery control (q = 0.10) across every test run;
+  * Benjamini-Hochberg false-discovery control (q = 0.10) across every test run, on the *discovery*
+    p-values (with the full sample's p the holdout sits inside the evidence it is meant to confirm,
+    and chance results confirm themselves: 3 false "edges" in 20 noise worlds, against 1 in 40 this way);
   * the cost hurdle: what one lot of a 0.35Δ index option costs to get in and out (brokerage, STT,
     exchange, GST, stamp, the bid/ask) expressed in index points. Under fair (business-time) option
     pricing theta is paid for by gamma, so the directional edge must beat the costs.
@@ -100,11 +102,11 @@ def evaluate(rid, symbol, hypothesis, data, signed_returns: pd.Series, price: fl
     x = signed_returns.dropna()
     m, t, p = hac_mean(x.to_numpy(), lags)
     disc, hold = _split(x)
-    md, _, _ = hac_mean(disc.to_numpy(), lags)
+    md, _, pdisc = hac_mean(disc.to_numpy(), lags)
     mh, th, ph2 = hac_mean(hold.to_numpy(), lags)
     one_sided = ph2 / 2 if (mh == mh and md == md and np.sign(mh) == np.sign(md)) else 1 - (ph2 / 2 if ph2 == ph2 else 0)
     r = Result(rid, symbol, hypothesis, data, int(len(x)), m * 1e4, m * price, t, p, mh * 1e4, one_sided,
-               COST_POINTS.get(symbol, float("nan")), kind, note=note, params=params or {})
+               COST_POINTS.get(symbol, float("nan")), kind, note=note, params={**(params or {}), "p_discovery": pdisc})
     r.sd_pts = float(x.std() * price)
     net = abs(r.effect_pts) - r.hurdle_pts
     if kind == "directional" and net > 0 and symbol in LOT:
@@ -396,7 +398,7 @@ def run(data: dict, symbols=("NIFTY", "BANKNIFTY"), q: float = 0.10) -> list[Res
             r_, l_ = global_intraday_tests(s, data["m5"][s], glob["m5"])
             res += r_
             data.setdefault("links", []).extend(l_)
-    passed = benjamini_hochberg([r.p for r in res], q)
+    passed = benjamini_hochberg([r.params.get("p_discovery", r.p) for r in res], q)
     for r, ok in zip(res, passed):
         r.bh_pass = bool(ok)
         holds = r.p_holdout == r.p_holdout and r.p_holdout < 0.10
