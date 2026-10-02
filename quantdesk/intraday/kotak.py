@@ -28,7 +28,7 @@ from .chains import COLUMNS, ChainSource, IntradayPricer, fill_iv
 from .feeds import IST, YahooIntradayFeed, normalise_bars, session_bounds
 
 BASE = "https://mis.kotaksecurities.com"
-QUOTES_PER_CALL = 50
+QUOTES_PER_CALL = 50        # the documented cap; the live API refused a 50-symbol batch on 2 Oct 2026, so it halves
 # indices are quoted by name on the cash segment (Kotak's SFeed/quotes docs)
 INDEX = {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank", "FINNIFTY": "Nifty Fin Service",
          "MIDCPNIFTY": "NIFTY MID SELECT", "INDIAVIX": "INDIA VIX", "SENSEX": "SENSEX"}
@@ -104,6 +104,7 @@ class KotakClient:
         self.calls = Counter()
         self.last_body = None                                      # the last raw response, for kotak-check
         self.pct_query = False                                     # True: spaces as %20 and a literal "|" in queries
+        self.batch = QUOTES_PER_CALL                               # quotes per call; halves when Kotak says "max value"
 
     @classmethod
     def from_env(cls, env=None, **kw) -> "KotakClient":
@@ -124,7 +125,7 @@ class KotakClient:
                 r = self.s.get(url, params=params, timeout=self.timeout)
             self._last = time.monotonic()
             self.calls[what] += 1
-            if r.status_code == 429 and attempt == 0:
+            if r.status_code in (429, 502, 503, 504) and attempt == 0:      # rate limit or a gateway blip: once more
                 ra = _f(r.headers.get("Retry-After"))
                 time.sleep(min(5.0, ra if ra > 0 else 1.0))
                 continue
@@ -142,13 +143,22 @@ class KotakClient:
 
     # ---- endpoints -----------------------------------------------------------------------------------------
     def quotes(self, instruments: list[tuple[str, str]], kind: str = "all") -> list[dict]:
-        """[(segment, token)] → quote dicts (ltp, 5-level depth, volume, OI, …), 50 instruments a call."""
+        """[(segment, token)] → quote dicts (ltp, 5-level depth, volume, OI, …), `self.batch` instruments a call."""
         out: list[dict] = []
-        for i in range(0, len(instruments), QUOTES_PER_CALL):
-            batch = ",".join(f"{seg}|{tok}" for seg, tok in instruments[i:i + QUOTES_PER_CALL])
-            body = self._get(f"script-details/1.0/quotes/neosymbol/{urllib.parse.quote(batch, safe='|,')}/{kind}")
+        i = 0
+        while i < len(instruments):
+            chunk = instruments[i:i + self.batch]
+            batch = ",".join(f"{seg}|{tok}" for seg, tok in chunk)
+            try:
+                body = self._get(f"script-details/1.0/quotes/neosymbol/{urllib.parse.quote(batch, safe='|,')}/{kind}")
+            except KotakError as exc:
+                if "max value" in str(exc).lower() and self.batch > 5:
+                    self.batch = max(5, self.batch // 2)            # "Please set the Neo symbol max value to 50."
+                    continue
+                raise
             rows = body if isinstance(body, list) else (body.get("data") if isinstance(body, dict) else None) or []
             out += [q for q in rows if isinstance(q, dict)]
+            i += len(chunk)
         return out
 
     def expiries(self, underlying: str, exchange: str = "nse_fo") -> list[dt.date]:
@@ -422,6 +432,7 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
     client.pct_query = bool(worked and worked[1])
     if not worked:
         say("  candles none worked: live bars will come from Yahoo")
+    say(f"  quotes per call: {client.batch}")
     say(f"  {sum(client.calls.values())} calls in {time.time() - t0:.1f}s: "
         + ", ".join(f"{k} {v}" for k, v in client.calls.items()))
     return ok_quotes and ok_chain

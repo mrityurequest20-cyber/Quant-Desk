@@ -143,6 +143,18 @@ def test_error_shapes_raise():
         KotakClient("k", session=Html(), min_gap=0).expiries("NIFTY")
 
 
+def test_quote_batches_shrink_when_kotak_says_max_value(fake):
+    class Strict(FakeKotak):
+        def get(self, url, params=None, timeout=None):
+            if "/neosymbol/" in url and url.split("/neosymbol/")[1].count("|") > 30:
+                return Resp({"fault": {"code": "400", "message": "Please set the Neo symbol max value to 50."}}, 400)
+            return super().get(url, params, timeout)
+    s = Strict()
+    k = KotakClient("k", session=s, min_gap=0)
+    qs = k.quotes([("nse_fo", s.tok[(24850, "CE")])] * 83)
+    assert len(qs) == 83 and k.batch == 25                                      # 50 → 25, and it stays 25
+
+
 def test_a_429_is_retried_once(monkeypatch):
     monkeypatch.setattr(kotak_mod.time, "sleep", lambda s: None)
 
