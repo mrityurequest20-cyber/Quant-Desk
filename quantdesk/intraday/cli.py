@@ -1,6 +1,7 @@
 """`quantdesk intraday …` commands.
 
-  live      real-time paper trading on today's session (Yahoo or Kite bars; NSE/Kite/model chain)
+  live      real-time paper trading on today's session (Yahoo/Kotak/Kite bars; Kotak/NSE/Kite/model chain)
+  kotak-check  what the Kotak Neo consumer key can see (quotes, expiries, option chain, candles)
   replay    re-run recorded sessions (--date / --last N) or synthetic ones (--synthetic N)
   thoughts  the analyst's reads, newest last
   trades    intraday trades with setup, structure, P&L, R, grade
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -33,14 +35,32 @@ def paths(cfg, account: str) -> dict:
             "data": base / "data"}
 
 
-def _chain_source(cfg, name: str, kite=None):
+def _chain_source(cfg, name: str, kite=None, kotak=None):
+    if name == "kotak" and kotak is None:
+        print("kotak chain: no KOTAK_CONSUMER_KEY; using NSE's public chain", flush=True)
+        name = "nse"
     if name == "nse":
         from .chains import NSEOptionChain
         return NSEOptionChain()
     if name == "kite":
         from .chains import KiteOptionChain
         return KiteOptionChain(kite)
+    if name == "kotak":
+        from .chains import FallbackChain, NSEOptionChain
+        from .kotak import KotakOptionChain
+        kc = cfg.get("intraday.kotak", {}) or {}
+        return FallbackChain(KotakOptionChain(kotak, strikes=kc.get("strikes", 40), refresh_min=kc.get("refresh_min", 1)),
+                             NSEOptionChain(), secondary_min=cfg.get("intraday.chain_refresh_min", 3))
     return "model"
+
+
+def _kotak_client():
+    """A Kotak Neo client when KOTAK_CONSUMER_KEY is set, else None."""
+    from .kotak import KotakClient, KotakError
+    try:
+        return KotakClient.from_env()
+    except KotakError:
+        return None
 
 
 def _say(quiet: bool):
@@ -51,15 +71,22 @@ def _live_engine(cfg, a) -> IntradayEngine:
     p = paths(cfg, "live")
     syms = a.symbols.split(",") if a.symbols else None
     feed_name = a.feed or cfg.get("intraday.feed", "yahoo")
+    chain_name = a.chain or cfg.get("intraday.chain", "nse")
     underlyings = syms or cfg.get("intraday.underlyings")
+    kotak = _kotak_client() if "kotak" in (feed_name, chain_name) else None
+    if feed_name == "kotak" and kotak is None:
+        print("kotak feed: no KOTAK_CONSUMER_KEY; bars from Yahoo", flush=True)
     if feed_name == "kite":
         from .feeds import KiteIntradayFeed
         feed = KiteIntradayFeed(cfg, underlyings + [cfg.get("universe.volatility_index")])
         kite = feed.kite
+    elif feed_name == "kotak" and kotak is not None:
+        from .kotak import KotakIntradayFeed
+        feed, kite = KotakIntradayFeed(cfg, kotak), None
     else:
         from .feeds import YahooIntradayFeed
         feed, kite = YahooIntradayFeed(cfg), None
-    chains = _chain_source(cfg, a.chain or cfg.get("intraday.chain", "nse"), kite)
+    chains = _chain_source(cfg, chain_name, kite, kotak)
     j = Journal(p["journal"], autocommit_every=1)
     capital = ensure_account(cfg, j, p["broker"], _say(a.quiet))
     broker = IntradayBroker(cfg, starting_cash=capital, state_path=p["broker"],
@@ -299,6 +326,19 @@ def cmd_export_site(cfg, a):
     print(f"wrote {out} ({out.stat().st_size / 1e6:.1f} MB): open it in any browser, or host it anywhere static")
 
 
+def cmd_kotak_check(cfg, a):
+    """Walk the Kotak Neo endpoints the desk uses with KOTAK_CONSUMER_KEY; exit 1 if quotes or the chain fail."""
+    from .kotak import check
+    kotak = _kotak_client()
+    if kotak is None:
+        sys.exit("no KOTAK_CONSUMER_KEY: add it as a repository secret (Settings → Secrets and variables → Actions)")
+    print(f"Kotak Neo · consumer key set ({len(os.environ['KOTAK_CONSUMER_KEY'].strip())} chars) · data endpoints only, "
+          f"no login, no orders", flush=True)
+    if not check(kotak, cfg.get("intraday.underlyings")):
+        sys.exit(1)
+    print("verdict: Kotak data is usable; the desk prices its option fills off Kotak's live book")
+
+
 def cmd_doctor(cfg, a):
     """Can this machine run the live desk? Market-data reachability, the calendar, expiries."""
     import time
@@ -337,6 +377,11 @@ def cmd_doctor(cfg, a):
     except Exception as exc:
         nse_ok = False
         print(f"  nse    NIFTY      FAIL {exc!s:.160}")
+    kotak = _kotak_client()
+    if kotak is not None:
+        from .kotak import check
+        print("  kotak  (KOTAK_CONSUMER_KEY set)")
+        check(kotak, cfg.get("intraday.underlyings"), say=lambda m: print("  " + m))
     from .news import NewsDesk
     nd = NewsDesk(cfg)
     fresh = nd.refresh(now, force=True)
@@ -371,8 +416,8 @@ def register(sub):
     s = sub.add_parser("intraday", help="real-time intraday options desk (paper)")
     ss = s.add_subparsers(dest="icmd", required=True)
     x = ss.add_parser("live", help="trade today's session in real time (paper)")
-    x.add_argument("--feed", choices=["yahoo", "kite"])
-    x.add_argument("--chain", choices=["nse", "kite", "model"])
+    x.add_argument("--feed", choices=["yahoo", "kotak", "kite"])
+    x.add_argument("--chain", choices=["kotak", "nse", "kite", "model"])
     x.add_argument("--symbols", help="e.g. NIFTY,BANKNIFTY")
     x.add_argument("--until", help="HH:MM to stop early (squares off, unless --handover)")
     x.add_argument("--handover", action="store_true",
@@ -394,8 +439,10 @@ def register(sub):
     x.add_argument("--account", default="live")
     x.add_argument("--yes", action="store_true")
     x.set_defaults(fn=cmd_restate_trade)
-    x = ss.add_parser("doctor", help="check this machine can run the live desk (Yahoo, NSE, calendar)")
+    x = ss.add_parser("doctor", help="check this machine can run the live desk (Yahoo, NSE, Kotak, calendar)")
     x.set_defaults(fn=cmd_doctor)
+    x = ss.add_parser("kotak-check", help="what the Kotak Neo consumer key can see (no login, no orders)")
+    x.set_defaults(fn=cmd_kotak_check)
     x = ss.add_parser("command", help="pause / resume / flatten / close a position on the running engine")
     x.add_argument("cmd", choices=["pause", "resume", "flatten", "close"])
     x.add_argument("id", nargs="?", help="trade id (for close)")

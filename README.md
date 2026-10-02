@@ -111,7 +111,7 @@ Other commands:
 
 `python -m quantdesk intraday live` runs from 09:15 to 15:30 IST in paper mode. Every closed minute it:
 
-1. **reads the market:** new 1-minute bars (Yahoo free, or Kite ticks) and a fresh option chain every 3 minutes (NSE's free chain, Kite quotes, or a model). Everything is recorded to `runtime/intraday/data/`, so the desk builds its own intraday history.
+1. **reads the market:** new 1-minute bars (Kotak Neo candles, Yahoo, or Kite ticks) and a fresh option chain (Kotak's live book every minute, NSE's free chain every 3 minutes, Kite quotes, or a model). Everything is recorded to `runtime/intraday/data/`, so the desk builds its own intraday history.
 2. **thinks:** the analyst gathers weighted **evidence** in six groups:
    - **trend:** VWAP side and slope, 5m EMA9/21, Supertrend, 15m slope
    - **structure:** opening range, initial balance, value area and POC, prior-day high/low, CPR
@@ -134,12 +134,14 @@ Other commands:
    - **Caps:** lots, premium outlay and margin.
    - **Daily limits:** 6 trades a day, 2 open, −2.5% daily stop, cooldown after 2 losses.
    - **Entry window:** new trades only between 09:20 and 14:45.
-   - **Fills:** buys at the ask, sells at the bid, plus a tick, plus the full cost stack (STT 0.15% on premium sold).
+   - **Fills:** buys at the ask, sells at the bid, plus a tick, plus the full cost stack (STT 0.15% on premium sold). With Kotak, entries and exits use the bid/ask of that moment, and an entry is skipped if the live net premium has moved more than 15% against the plan (a real limit order wouldn't have filled).
 5. **manages:** open options are marked with the IV implied by their last real quote, repriced with the live spot and minute-level time to expiry, so delta, gamma and theta all show up in P&L. Exits happen on invalidation, premium stop/target, underlying target, breakeven trail or time stop. Everything is squared off by 15:15.
 6. **reviews:** every trade gets a grade and lessons. The session review (how the read evolved, the bias path, each trade's why and how it ended) goes to `runtime/intraday/reviews/<date>.md`.
 
 ```bash
 python -m quantdesk intraday live                       # Yahoo 1m bars + NSE option chain (free; best effort)
+python -m quantdesk intraday live --feed kotak --chain kotak # Kotak Neo bars + live bid/ask (the default with a key)
+python -m quantdesk intraday kotak-check                # what KOTAK_CONSUMER_KEY can see
 python -m quantdesk intraday live --feed kite --chain kite   # real-time ticks + real quotes (Kite Connect)
 python -m quantdesk intraday replay --last 5            # re-run recorded real sessions through the same engine
 python -m quantdesk intraday replay --synthetic 20      # offline practice on synthetic sessions
@@ -153,6 +155,22 @@ python -m quantdesk intraday review                     # the written session re
 - Yahoo's 1-minute bars cover only ~7 days, may lag, and carry little or no volume for indices; the desk falls back to TWAP and flags it. So record every session.
 - NSE's option-chain API is free but throttled and changes without notice (the v3 endpoint is used).
 - Kite Connect (`KITE_API_KEY`/`KITE_ACCESS_TOKEN`) gives real-time ticks, depth and real option quotes.
+
+**Kotak Neo (the default when a key is set).** `quantdesk/intraday/kotak.py` uses only the Trade API endpoints that
+authenticate with the app's consumer key: quotes (5-level depth, 50 instruments a call), option chain, expiries
+and 1-minute candles. That means **no TOTP, no MPIN, no daily login, and no static IP**: SEBI's static-IP rule
+(from 1 Apr 2026) covers the order APIs, which the desk never calls. Every minute it fetches each underlying's
+chain (40 strikes) and the bid/ask of every contract in it plus the index, about 3 calls per underlying. Paper
+fills use the book of that moment. If Kotak fails, the chain falls back to NSE (asked at most every 3 minutes)
+and bars fall back to Yahoo, and the session review says which source served.
+
+Setup:
+1. Kotak Neo app or web → More → Trade API → the "Default Application" → copy the **consumer key**. Leave the IP
+   fields empty; they matter only for real orders.
+2. GitHub → this repo → Settings → Secrets and variables → Actions → New repository secret. Name
+   `KOTAK_CONSUMER_KEY`, value the key.
+3. Actions → **Broker check** → Run workflow. It prints index quotes, expiries, an option chain with bid/ask and
+   IVs, a live quote and the latest candles. The live desk picks the key up on its next run.
 
 **Order flow and the GoCharting plan.** `quantdesk/intraday/orderflow.py` already computes:
 - volume profile (POC, value area, high/low-volume nodes)
@@ -472,7 +490,7 @@ Everything is in `config/quantdesk.yaml`: account, universe, contract specs, cos
 
 - **Options history:** there's no free historical NSE option-chain data, so option P&L in backtests is model-priced (VIX × IV beta + skew). Real chains have wider, stickier spreads around events. Plug a chain source into `OptionPricer` and `SVI.fit` when you have one.
 - **Futures:** futures are priced off spot, and basis and roll cost are ignored. Pair legs ignore lot rounding.
-- **Intraday data:** the free path (Yahoo + NSE) is best effort. For real-time decisions use Kite. The intraday desk models only index options on NIFTY and BANKNIFTY.
+- **Intraday data:** the free path (Yahoo + NSE) is best effort. For real quotes add a Kotak Neo consumer key (or use Kite). The intraday desk models only index options on NIFTY and BANKNIFTY.
 - **Kite:** the Kite path and GoCharting's full SDK are untested from this environment. Both are behind guards and have fallbacks.
 - **GitHub-hosted runs:** the runners sit in US data centres. Yahoo works from there; NSE often refuses those IPs, and then options are priced off the model chain (India VIX + skew) rather than real quotes. The site says which chain is in use. For real chains, run the desk on a machine in India.
 
@@ -495,7 +513,7 @@ quantdesk/                    (repo root)
     journal/                  SQLite journal, trade and period reviews
     ops/                      routine checks
     reporting/                HTML tearsheet, market analysis
-    intraday/                 real-time desk: feeds, chains (NSE/Kite/model), order flow, features, analyst,
+    intraday/                 real-time desk: feeds, chains (Kotak/NSE/Kite/model), order flow, features, analyst,
                               playbook, quant (vol forecast, direction model, EV engine), news, brain (global
                               markets, drivers, measured links, risk overlay), risk, sim broker,
                               engine, recorder, synthetic sessions, CLI

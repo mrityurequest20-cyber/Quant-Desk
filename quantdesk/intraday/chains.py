@@ -5,6 +5,8 @@ Sources
                     expiries from /api/option-chain-contract-info, chain from
                     /api/option-chain-v3). Best effort: NSE throttles and changes endpoints.
   KiteOptionChain   real quotes (bid/ask/OI/volume) through a Kite Connect session.
+  KotakOptionChain  real quotes through Kotak Neo's consumer-key endpoints (kotak.py).
+  FallbackChain     the first source that answers (e.g. Kotak, then NSE).
   ModelOptionChain  priced from the real spot + an ATM IV (India VIX × beta) + skew, with a
                     modelled spread. Always labelled source='model'.
   RecordedChains    replays chain snapshots saved by the session recorder.
@@ -81,6 +83,7 @@ def empty_chain(underlying: str, spot: float, expiry: dt.date, ts, source: str) 
 
 class ChainSource(abc.ABC):
     name = "base"
+    refresh_min: float | None = None           # how often the engine may ask (None: intraday.chain_refresh_min)
 
     @abc.abstractmethod
     def expiries(self, underlying: str) -> list[dt.date]:
@@ -89,6 +92,51 @@ class ChainSource(abc.ABC):
     @abc.abstractmethod
     def chain(self, underlying: str, expiry: dt.date, spot: float | None = None, ts=None) -> pd.DataFrame:
         ...
+
+    def live_quotes(self, instruments) -> dict[str, tuple[float, float]]:
+        """{symbol: (bid, ask)} right now, for sources with a live book; {} otherwise."""
+        return {}
+
+
+class FallbackChain(ChainSource):
+    """The first source that answers: the broker's live book, then NSE's public chain. The second source is asked
+    at most every `secondary_min` minutes (NSE throttles); in between, its last chain is handed back unchanged,
+    timestamp and all, so the engine's staleness rule still sees how old it is."""
+
+    def __init__(self, primary: ChainSource, secondary: ChainSource, secondary_min: float = 3):
+        self.primary, self.secondary, self.secondary_min = primary, secondary, secondary_min
+        self.name = primary.name
+        self.refresh_min = primary.refresh_min
+        self.error: dict[str, str] = {}
+        self._held: dict[str, tuple[pd.Timestamp, pd.DataFrame]] = {}
+
+    def expiries(self, underlying: str) -> list[dt.date]:
+        try:
+            return self.primary.expiries(underlying)
+        except Exception as exc:
+            self.error[underlying] = f"{self.primary.name}: {exc!s:.160}"
+            return self.secondary.expiries(underlying)
+
+    def chain(self, underlying, expiry, spot=None, ts=None) -> pd.DataFrame:
+        try:
+            ch = self.primary.chain(underlying, expiry, spot=spot, ts=ts)
+            self.error.pop(underlying, None)
+            return ch
+        except Exception as exc:
+            self.error[underlying] = f"{self.primary.name}: {exc!s:.160}"
+        now = pd.Timestamp.now(tz=IST)
+        held = self._held.get(underlying)
+        if held and held[1].attrs.get("expiry") == expiry and now - held[0] < pd.Timedelta(minutes=self.secondary_min):
+            return held[1]
+        try:
+            ch = self.secondary.chain(underlying, expiry, spot=spot, ts=ts)
+        except Exception as exc:
+            raise RuntimeError(f"{self.error[underlying]}; {self.secondary.name}: {exc!s:.160}") from exc
+        self._held[underlying] = (now, ch)
+        return ch
+
+    def live_quotes(self, instruments) -> dict[str, tuple[float, float]]:
+        return self.primary.live_quotes(instruments)
 
 
 # ---- NSE (free) ---------------------------------------------------------------------------------

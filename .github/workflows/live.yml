@@ -37,6 +37,9 @@ env:
   TZ: Asia/Kolkata
   HANDOVER: ${{ inputs.handover || '12:20' }}
   PUBLISH_EVERY_MIN: "6"     # Pages allows ~10 builds an hour
+  # Kotak Neo data (live option bid/ask, chain, 1m bars): consumer key only — no login, no orders, no static IP.
+  # Unset: the desk uses Yahoo bars and NSE's public chain, as before.
+  KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
 
 jobs:
   morning:

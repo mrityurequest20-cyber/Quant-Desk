@@ -1,0 +1,34 @@
+# What the Kotak Neo consumer key can see from a GitHub runner: index quotes, expiries, the option chain with live
+# bid/ask, and 1-minute candles (quantdesk intraday kotak-check). Data endpoints only: no login, no orders, so no
+# static IP is involved. Run it from the Actions tab after adding the KOTAK_CONSUMER_KEY repository secret.
+name: Broker check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Kotak Neo data
+        run: |
+          set -o pipefail
+          python -m quantdesk intraday kotak-check | tee check.txt
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## Kotak Neo data check"; echo '```'; cat check.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

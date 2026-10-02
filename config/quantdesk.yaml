@@ -82,9 +82,13 @@ risk:
 intraday:
   capital: 20000                   # paper account for the intraday options desk (start small, grow)
   underlyings: [NIFTY, BANKNIFTY]
-  feed: yahoo                      # yahoo | kite   (replay/synthetic come from the CLI)
-  chain: nse                       # nse | kite | model
-  chain_refresh_min: 3             # NSE throttles; don't hammer it
+  feed: kotak                      # kotak | yahoo | kite (kotak without KOTAK_CONSUMER_KEY = yahoo; replay/synthetic: CLI)
+  chain: kotak                     # kotak (falls back to NSE) | nse | kite | model; kotak without a key = nse
+  chain_refresh_min: 3             # NSE throttles; don't hammer it (Kotak: intraday.kotak.refresh_min)
+  kotak:                           # Kotak Neo Trade API, data endpoints only (consumer key; no login, no static IP)
+    refresh_min: 1                 # option chain + live bid/ask every minute (~3 calls per underlying)
+    strikes: 40                    # strikes around the money per chain (a multiple of 10)
+  max_entry_slip: 0.15             # with a live book: skip an entry if the net premium moved >15% against the plan
   chain_stale_min: 12              # no new entries on an older real chain
   thought_every_min: 5             # journal the market read at least this often
   history_days: 6                  # prior sessions loaded for levels, value areas, relative volume

@@ -54,7 +54,9 @@ class IntradayEngine:
         self.chains = self.model_chain if chains in (None, "model") else chains
         self.analyst, self.playbook, self.risk = Analyst(cfg), Playbook(cfg, self.pricer), IntradayRisk(cfg)
         self.marker = QuoteMarker(self.pricer)
-        self.refresh_min = ic.get("chain_refresh_min", 3)
+        self.refresh_min = getattr(self.chains, "refresh_min", None) or ic.get("chain_refresh_min", 3)
+        self.max_entry_slip = float(ic.get("max_entry_slip", 0.15))
+        self.live_fails = 0
         self.think_every = ic.get("thought_every_min", 5)
         self.stale_min = ic.get("chain_stale_min", 12)
         self.history_days = ic.get("history_days", 6)
@@ -340,6 +342,20 @@ class IntradayEngine:
         return self._open(plan, lots, notes, view, s, now)
 
     # ---- quant layer --------------------------------------------------------------------------------------------
+    def _live(self, insts, now) -> dict[str, tuple[float, float]]:
+        """Bid/ask right now from the broker's book when the chain source has one; {} otherwise (or on an error),
+        and the plan's chain prices / the marks stand in."""
+        try:
+            out = self.chains.live_quotes(insts) if hasattr(self.chains, "live_quotes") else {}
+            self.live_fails = 0
+            return out or {}
+        except Exception as exc:
+            self.live_fails += 1
+            if self.live_fails == 1 or self.live_fails % 10 == 0:
+                self.journal.event(now, "WARN", "quotes", f"live quotes unavailable ({exc!s:.160}); "
+                                                          f"using the last chain{f' — {self.live_fails} in a row' if self.live_fails > 1 else ''}")
+            return {}
+
     def _guarded(self, u: str, now, what: str, fn, *args):
         """Run a quant step; on an error, journal it (once per session per kind) and return None so the desk keeps
         thinking and simply doesn't trade on numbers it couldn't compute."""
@@ -483,10 +499,24 @@ class IntradayEngine:
                         "entry_net_premium_per_lot": plan.net_premium, "max_loss": plan.max_loss_per_lot(),
                         "legs_plan": [(l.strike, l.right, l.ratio, round(l.price, 2), round(l.iv, 2), round(l.delta, 3))
                                       for l in plan.legs], **plan.notes})
-        for leg in plan.legs:
-            inst = Instrument.option(u, plan.expiry, leg.strike, leg.right, plan.lot_size)
+        insts = [Instrument.option(u, plan.expiry, l.strike, l.right, plan.lot_size) for l in plan.legs]
+        live = self._live(insts, now)
+        px = {i.symbol: (live[i.symbol][1] if l.ratio > 0 else live[i.symbol][0]) if i.symbol in live else l.price
+              for i, l in zip(insts, plan.legs)}
+        if live:
+            # a real limit order at the planned prices wouldn't fill if the book has moved away: skip, don't chase
+            planned = sum(l.ratio * l.price for l in plan.legs)
+            now_net = sum(l.ratio * px[i.symbol] for i, l in zip(insts, plan.legs))
+            worse = now_net - planned                       # + = paying more (debit) or collecting less (credit)
+            if abs(planned) > 0 and worse > self.max_entry_slip * abs(planned):
+                msg = (f"skipped {plan.setup}: the live book moved away (planned ₹{planned * plan.lot_size:,.0f}/lot, "
+                       f"now ₹{now_net * plan.lot_size:,.0f}/lot)")
+                self.journal.decision(now, plan.setup, u, "rejected", msg, 0, {"plan": plan.describe()})
+                return msg
+        t.meta["fill_quotes"] = f"live {self.chains.name} book" if len(live) == len(insts) else "option chain"
+        for inst, leg in zip(insts, plan.legs):
             qty = leg.ratio * lots * plan.lot_size
-            fill = self.broker.execute(Order(inst, qty, t.id, "open"), leg.price, now)
+            fill = self.broker.execute(Order(inst, qty, t.id, "open"), px[inst.symbol], now)
             if fill is None:
                 for done in t.legs:
                     self.broker.execute(Order(done.instrument, -done.qty, t.id, "unwind"), done.entry_price, now)
@@ -535,8 +565,11 @@ class IntradayEngine:
 
     def _close(self, t: Trade, now, reason: str, note: str) -> str:
         S = self.spot(t.symbol)
+        live = self._live([l.instrument for l in t.legs], now)
+        t.meta["exit_quotes"] = f"live {self.chains.name} book" if len(live) == len(t.legs) else "marked"
         for l in t.legs:
-            px = self.marker.exit_price(l.instrument, l.qty, S, now)
+            q = live.get(l.instrument.symbol)
+            px = (q[0] if l.qty > 0 else q[1]) if q else self.marker.exit_price(l.instrument, l.qty, S, now)
             fill = self.broker.execute(Order(l.instrument, -l.qty, t.id, "close"), px, now)
             if fill is None:
                 self.journal.event(now, "ERROR", "execution", f"exit {l.instrument.symbol} rejected for {t.id}")
@@ -662,11 +695,14 @@ class IntradayEngine:
         return st
 
     def chain_name(self) -> str:
-        """The chain actually in use: the configured source, or the model standing in for it."""
+        """The chain actually in use: the configured source, or what is standing in for it."""
         srcs = {str(ch.attrs.get("source")) for ch in self.chain_df.values()}
-        if self.chains is self.model_chain or "model" not in srcs:
-            return self.chains.name
-        return f"model (no {self.chains.name})" if srcs == {"model"} else f"{self.chains.name}+model"
+        name = self.chains.name
+        if self.chains is self.model_chain or not srcs or srcs == {name}:
+            return name
+        if name not in srcs:
+            return f"{'+'.join(sorted(srcs))} (no {name})"
+        return "+".join([name] + sorted(srcs - {name}))
 
     # ---- review ------------------------------------------------------------------------------------------------
     def session_review(self) -> str:
