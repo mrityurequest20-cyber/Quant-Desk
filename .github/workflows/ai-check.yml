@@ -1,6 +1,6 @@
-# Which language-model keys the desk can use from a GitHub runner: lists the repository's secret NAMES (never values),
-# then makes one tiny test read with each provider that has a key (quantdesk intraday ai-check) and lists the models it
-# offers. Run it from the Actions tab after adding a key.
+# Which language-model keys the desk can use from a GitHub runner: which of the accepted secret names are set
+# (true/false, never a value), then one tiny test read with each provider that has a key (quantdesk intraday
+# ai-check) and the models it offers. Run it from the Actions tab after adding a key.
 name: AI check
 
 on:
@@ -26,11 +26,28 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Repository secrets (names only)
+      - name: Which key names are set (true/false only, never a value)
         env:
-          ALL_SECRETS: ${{ toJSON(secrets) }}
+          HAS_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_CLAUDE_API: ${{ secrets.CLAUDE_API != '' }}
+          HAS_CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY != '' }}
+          HAS_CLAUDE_API_TOKEN: ${{ secrets.CLAUDE_API_TOKEN != '' }}
+          HAS_CLAUDE_KEY: ${{ secrets.CLAUDE_KEY != '' }}
+          HAS_CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY != '' }}
+          HAS_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY != '' }}
+          HAS_GEMINI_KEY: ${{ secrets.GEMINI_KEY != '' }}
+          HAS_GOOGLE_AI_API_KEY: ${{ secrets.GOOGLE_AI_API_KEY != '' }}
+          HAS_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY != '' }}
+          HAS_GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY != '' }}
+          HAS_GOOGLE_KEY: ${{ secrets.GOOGLE_KEY != '' }}
+          HAS_KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY != '' }}
+          HAS_OLAMA_API_KEY: ${{ secrets.OLAMA_API_KEY != '' }}
+          HAS_OLLAMA_API: ${{ secrets.OLLAMA_API != '' }}
+          HAS_OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY != '' }}
+          HAS_OLLAMA_KEY: ${{ secrets.OLLAMA_KEY != '' }}
+          HAS_OLLAMA_TOKEN: ${{ secrets.OLLAMA_TOKEN != '' }}
         run: |
-          python3 -c "import json, os; print('\n'.join(sorted(json.loads(os.environ['ALL_SECRETS']))))" | tee names.txt
+          env | grep '^HAS_' | sort | sed 's/^HAS_//' | tee names.txt
       - name: Language models
         run: |
           set -o pipefail
@@ -38,5 +55,5 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          { echo "## AI check"; echo "Secret names:"; echo '```'; cat names.txt 2>/dev/null; echo '```';
+          { echo "## AI check"; echo "Key names set:"; echo '```'; cat names.txt 2>/dev/null; echo '```';
             echo '```'; cat check.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
