@@ -1,0 +1,13 @@
+// Cloudflare Workers Builds deploys this repo with `npx wrangler deploy` on every push to main (no build step).
+// The Worker serves the desk's read-only phone app, which GitHub Actions publishes to GitHub Pages, from
+// Cloudflare: see deploy/cloudflare/worker.js. The name must match the Worker's name in the Cloudflare dashboard.
+{
+  "name": "quantdesk",
+  "main": "deploy/cloudflare/worker.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "vars": {
+    "ORIGIN": "https://mrityurequest20-cyber.github.io/Quant-Desk"
+  },
+  "observability": { "enabled": true }
+}
