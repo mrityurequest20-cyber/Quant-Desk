@@ -244,12 +244,19 @@ class Analyst:
             parts.append("Against: " + "; ".join(e.observation for e in con) + ".")
         if ratio:
             parts.append(f"Vol: ATM IV {iv:.1f} vs realised {rv:.1f} (×{ratio:.2f}) → premium {vol_view}.")
+        if c.get("atm_ivp") is not None:                # same-days-to-expiry rank over the past year (ivhist.py)
+            parts.append(f"IV percentile {c['atm_ivp'] * 100:.0f}: ATM IV {c['atm_iv']:.1f} vs a median "
+                         f"{c['atm_iv_median']:.1f} for {c['atm_ivp_dte']}-day options over the past year "
+                         f"({c['atm_ivp_n']} sessions).")
         if c.get("gex_state"):                          # context from the chain, not evidence: untested here
             flip = c.get("gamma_flip")
             carry = c.get("carry_ann")
             parts.append(f"Options context: dealer gamma {c['gex_state'].split(' (')[0]} (naive sign)"
                          + (f", flip {flip:,.0f}" if flip == flip and flip else "")
                          + (f"; implied carry {carry:.1%}/yr" if carry == carry and carry is not None else "") + ".")
+        if c.get("liquid_lo") is not None:              # where a real order fills near the mid (chains.liquid_band)
+            parts.append(f"Liquid strikes {c['liquid_lo']:,.0f}–{c['liquid_hi']:,.0f} "
+                         f"(out-of-the-money side quoting within 3%; {c['liquid_strikes']} of {c['strikes']}).")
         if brain and brain.get("narrative"):
             parts.append(brain["narrative"])
         if quant and quant.get("sigma_30m_pct"):

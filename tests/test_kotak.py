@@ -3,6 +3,7 @@ the fallback to NSE, bars with a Yahoo fallback, and paper fills priced off the 
 ones in Kotak's official SDK docs (kotak-neo-python 3.0.x, docs/functions/market_data)."""
 import datetime as dt
 import json
+import re
 
 import numpy as np
 import pandas as pd
@@ -338,6 +339,9 @@ def test_fills_come_from_the_live_book(traded):
         assert f.price == pytest.approx(a + 0.05 if f.qty > 0 else b - 0.05)    # the book, plus one adverse tick
     assert all(t.meta["fill_quotes"] == "live kotak book" for t in eng.closed)
     assert all(t.meta["exit_quotes"] == "live kotak book" for t in eng.closed)
+    for t in eng.closed:                                     # each leg's book at entry: '25000CE ok 1.8%'
+        assert len(t.meta["leg_liquidity"]) == len(t.legs)
+        assert all(re.fullmatch(r"\d+(\.\d+)?(CE|PE) (ok|wide) \d+\.\d%", x) for x in t.meta["leg_liquidity"])
     assert eng.chain_name() == "kotak"
 
 
@@ -347,6 +351,23 @@ def test_entries_dont_chase_a_book_that_ran_away(traded, sessions):
     dec = eng.journal.df("SELECT * FROM decisions")
     moved = dec[dec.astype(str).apply(lambda r: r.str.contains("moved away")).any(axis=1)]
     assert len(moved) >= 1 and not eng.closed and not eng.open_trades
+
+
+class OneSided(LiveBook):
+    """The book answers, but the first leg of every request has no two-sided quote (no bid, or no offer)."""
+
+    def live_quotes(self, insts):
+        out = super().live_quotes(insts[1:])
+        out["NIFTY-ELSEWHERE"] = (10.0, 10.5)                    # the book is up: it quotes other contracts
+        return out
+
+
+def test_no_entry_when_a_leg_has_no_two_sided_quote(traded, sessions):
+    cfg, day, _, _ = traded
+    eng = _replay(cfg, sessions[0], day, OneSided())
+    dec = eng.journal.df("SELECT * FROM decisions")
+    skipped = dec[dec.astype(str).apply(lambda r: r.str.contains("no two-sided quote")).any(axis=1)]
+    assert len(skipped) >= 1 and not eng.closed and not eng.open_trades
 
 
 def test_chain_name_says_what_stands_in(cfg, sessions):

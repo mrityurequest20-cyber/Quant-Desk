@@ -304,13 +304,23 @@ Nothing here adds a step to the daily process.
 |---|---|---|
 | 1 edge | expectancy W·AvgWin − L·AvgLoss, profit factor > 1.5, SQN, N ≥ 300 | scorecard |
 | 2 risk & tail | Sharpe, Sortino, Calmar, Omega; skew, excess kurtosis; VaR/CVaR 95 & 99 (historical and Cornish-Fisher); max DD, time under water, recovery, Ulcer Index; P(ruin) by bootstrap | scorecard, `risk/metrics.py` |
-| 3 execution | slippage break-even (₹ and bps of notional); live fills at the Kotak bid/ask with an entry-slip guard; fill audit vs recorded quotes; VWAP z-score; OFI and VPIN (library) | scorecard, `intraday/kotak.py`, `deploy/audit_fills.py`, `analytics/models.py` |
-| 4 derivatives | Greeks incl. vanna, volga, charm, speed; IV rank/percentile; 25Δ skew; VRP (IV − RV); naive dealer GEX and gamma flip; options-implied carry; futures basis, carry and roll yield | `options/pricing.py`, `options/gex.py`, chain read, research |
+| 3 execution | slippage break-even (₹ and bps of notional); live fills at the Kotak bid/ask with an entry-slip guard; no entry when a leg has no two-sided quote; each leg's book logged at entry (`ok`/`wide`/`no quote`); the liquid strike band in the read; fill audit vs recorded quotes; VWAP z-score; OFI and VPIN (library) | scorecard, `intraday/kotak.py`, `deploy/audit_fills.py`, `analytics/models.py` |
+| 4 derivatives | Greeks incl. vanna, volga, charm, speed; IV rank/percentile (India VIX, and each underlying's ATM IV against the past year at the same days to expiry); 25Δ skew; VRP (IV − RV); naive dealer GEX and gamma flip; options-implied carry; futures basis, carry and roll yield | `options/pricing.py`, `options/gex.py`, `intraday/ivhist.py`, chain read, research |
 | 5 robustness | discovery/rolling-validation split with FDR on discovery p-values; OOS efficiency; PSR and DSR (trials counted); ±10% parameter stability; walk-forward | research, scorecard, `backtest/walkforward.py` |
 | 6 models | GBM, OU (fit and half-life), Hurst, variance ratio, Kalman hedge ratio, GARCH, HMM, SVI; Heston (pricing and calibration), Hawkes, PCA of the vol surface, vector Kelly Σ⁻¹μ, Almgren-Chriss, Avellaneda-Stoikov | `analytics/stats.py`, `analytics/volatility.py`, `analytics/regime.py`, `options/surface.py`, `analytics/models.py` |
 
-The live read only gains context lines (dealer gamma, implied carry), never votes: they are untested here. The heavy
-models are a research library, outside the live loop.
+The live read only gains context lines (dealer gamma, implied carry, the IV percentile, the liquid strikes), never
+votes: they are untested here. The heavy models are a research library, outside the live loop.
+
+- **IV percentile.** Short-dated IV depends on days to expiry: over the past year NIFTY's ATM IV had a median of 13.9 one
+  day before expiry and 11.0 five days out. So today's ATM IV is ranked only against past sessions with the same days to
+  expiry (±1, or ±3 when that leaves fewer than 15). The history is the nearest expiry's ATM IV at each close, from the
+  warehouse bhavcopy, using strikes that actually traded. `deploy/warehouse-context.sh` pulls the last 13 months (~2 MB a
+  month) before each session.
+- **Liquidity.** A contract's book is `no quote` (not two-sided), `wide` (spread > max(₹0.10, 3% of the mid)) or `ok`.
+  The read gives the run of strikes around the money whose out-of-the-money side is `ok`. At entry each leg's book goes
+  into the trade (`leg_liquidity`). When the live book answers but a leg has no two-sided quote, the desk stands aside,
+  as it does when the book has moved away from the plan.
 
 ## The brain (global markets ↔ news ↔ India ↔ the decision)
 

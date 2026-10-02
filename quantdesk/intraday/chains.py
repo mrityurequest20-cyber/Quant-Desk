@@ -356,6 +356,48 @@ def fill_iv(df: pd.DataFrame, pricer: IntradayPricer) -> pd.DataFrame:
     return df
 
 
+WIDE_PCT, WIDE_ABS = 0.03, 0.10      # a spread wider than 3% of the mid (and two ticks) won't fill near the mid
+
+
+def liquidity(bid, ask, wide_pct: float = WIDE_PCT, wide_abs: float = WIDE_ABS) -> str:
+    """One contract's book: 'no quote' (not two-sided), 'wide' (spread > max(wide_abs, wide_pct × mid)) or 'ok'."""
+    try:
+        b, a = float(bid), float(ask)
+    except (TypeError, ValueError):
+        return "no quote"
+    if not (b > 0 and a >= b):                         # NaN fails these too
+        return "no quote"
+    return "wide" if a - b > max(wide_abs, wide_pct * (a + b) / 2) + 1e-9 else "ok"    # 1e-9: 1.10 − 1.00 is two ticks
+
+
+def liquidity_flags(df: pd.DataFrame) -> pd.DataFrame:
+    """Per strike: ce_liq / pe_liq ('ok', 'wide', 'no quote') from the chain's bid/ask."""
+    return pd.DataFrame({f"{s}_liq": [liquidity(b, a) for b, a in zip(df[f"{s}_bid"], df[f"{s}_ask"])] for s in SIDES},
+                        index=df.index)
+
+
+def liquid_band(df: pd.DataFrame, spot: float) -> dict:
+    """The run of strikes around the money whose out-of-the-money side (puts below spot, calls above, both at the
+    money) quotes two-sided within WIDE_PCT: where a spread or a strangle can actually be filled near the mid.
+    {} when the chain has no book (the model chain, an NSE chain without bid/ask)."""
+    if df.empty or not ((df["ce_bid"] > 0) | (df["pe_bid"] > 0)).any():
+        return {}
+    f = liquidity_flags(df)
+    ks = df.index.to_numpy(dtype=float)
+    i0 = int(np.argmin(np.abs(ks - spot)))
+    otm = np.where(ks < ks[i0], f["pe_liq"], np.where(ks > ks[i0], f["ce_liq"], "both"))
+    ok = [(o == "ok") or (o == "both" and f["ce_liq"].iloc[i] == "ok" and f["pe_liq"].iloc[i] == "ok") for i, o in enumerate(otm)]
+    out = {"liquid_strikes": int(sum(ok)), "strikes": len(ok)}
+    if ok[i0]:
+        lo = hi = i0
+        while lo > 0 and ok[lo - 1]:
+            lo -= 1
+        while hi < len(ok) - 1 and ok[hi + 1]:
+            hi += 1
+        out.update(liquid_lo=float(ks[lo]), liquid_hi=float(ks[hi]))
+    return out
+
+
 def mid(row, side: str) -> float:
     b, a, l = row.get(f"{side}_bid"), row.get(f"{side}_ask"), row.get(f"{side}_ltp")
     if pd.notna(b) and pd.notna(a) and a >= b > 0:
@@ -406,6 +448,7 @@ def chain_analytics(df: pd.DataFrame, pricer: IntradayPricer | None = None, lot:
         out["skew_25d"] = ivp - ivc
     except Exception:  # sparse chains
         out["skew_25d"] = np.nan
+    out.update(liquid_band(df, S))
     try:                                                # dealer gamma (naive sign) and the options-implied forward
         from ..options.gex import gamma_exposure, implied_forward
         units = 1.0 if df.attrs.get("source") == "kotak" else float(lot or 1)   # Kotak reports OI in shares

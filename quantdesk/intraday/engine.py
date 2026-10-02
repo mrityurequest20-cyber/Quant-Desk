@@ -27,9 +27,10 @@ from ..core.calendar import TradingCalendar
 from ..core.types import OPTIONS, Instrument, Order, Trade, TradeLeg, new_trade_id
 from ..journal.journal import Journal, trade_from_dict, trade_to_dict
 from .analyst import Analyst, MarketView
-from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv
+from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity
 from .features import session_state
 from .feeds import IST, IntradayFeed, ReplayFeed, session_bounds
+from .ivhist import iv_percentile
 from .orderflow import FootprintBuilder
 from .playbook import Playbook, TradePlan
 from .quant import DirectionModel, EVEngine, VolForecaster, features_5m, load_research, session_sigma, to_5m
@@ -100,6 +101,7 @@ class IntradayEngine:
         from .events import EventBook, from_config
         self.eventbook = EventBook(from_config(cfg))
         self.warehouse_dir = Path(cfg.runtime_dir) / "warehouse"
+        self.iv_hist: dict[str, pd.DataFrame] = {}        # past year's ATM IV per underlying (ivhist.py)
         self.gift_source = None                           # callable → parse_gift frame (live only); None = skip
         self.gift: dict | None = None
         self._gift_at = None
@@ -147,6 +149,7 @@ class IntradayEngine:
             self.last_ts[sym] = h.index[-1] if h is not None and len(h) else None
         self.expiry = {u: self.pick_expiry(u, day) for u in self.underlyings}
         self._load_heavyweights()
+        self._load_iv_history(day)
         self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
         saved = self._restore(day)
         if saved.get("day_start_equity"):
@@ -262,7 +265,10 @@ class IntradayEngine:
                 ch.attrs["spot"] = self.spot(u)
             ch = fill_iv(ch, self.pricer)
             self.chain_df[u] = ch
-            self.chain_an[u] = chain_analytics(ch, self.pricer, self.lot(u))
+            an = chain_analytics(ch, self.pricer, self.lot(u))
+            if ch.attrs.get("source") != "model":             # the model chain's IV is India VIX's, not this market's
+                an.update(iv_percentile(self.iv_hist.get(u), an.get("atm_iv"), (self.expiry[u] - now.date()).days, now.date()))
+            self.chain_an[u] = an
             self.chain_at[u] = now
             self.marker.calibrate(ch, self.lot(u))
             if self.recorder and ch.attrs.get("source") != "model":
@@ -393,6 +399,19 @@ class IntradayEngine:
         heavy = sorted({s for u in self.underlyings for s in (self.cfg.get(f"intraday.heavyweights.{u}") or [])})
         self.eventbook = EventBook(from_config(self.cfg) + heavyweight_results(corp, heavy))
 
+    def _load_iv_history(self, day: dt.date) -> None:
+        """Each underlying's past year of ATM IV from the warehouse's bhavcopy (live.yml pulls 13 months), for the
+        IV percentile in the read. Context only: without the files the read simply has no percentile."""
+        from .ivhist import load
+        try:
+            self.iv_hist = load(self.warehouse_dir, self.underlyings, self.pricer.r, self.pricer.q, self.expiry_min_days, day)
+        except Exception as exc:
+            self.iv_hist = {}
+            self.journal.event(session_bounds(day)[0], "WARN", "quant", f"ATM IV history unavailable ({exc!s:.160})")
+        if self.iv_hist:
+            self.journal.event(session_bounds(day)[0], "INFO", "quant", "ATM IV history for the IV percentile: " +
+                               ", ".join(f"{u} {len(h)} sessions to {h['date'].iloc[-1]}" for u, h in self.iv_hist.items()))
+
     def _live(self, insts, now) -> dict[str, tuple[float, float]]:
         """Bid/ask right now from the broker's book when the chain source has one; {} otherwise (or on an error),
         and the plan's chain prices / the marks stand in."""
@@ -406,6 +425,21 @@ class IntradayEngine:
                 self.journal.event(now, "WARN", "quotes", f"live quotes unavailable ({exc!s:.160}); "
                                                           f"using the last chain{f' — {self.live_fails} in a row' if self.live_fails > 1 else ''}")
             return {}
+
+    def _leg_liquidity(self, u: str, insts, legs, live: dict) -> list[str]:
+        """Each leg's book at entry, from the live quotes or else the last chain: e.g. '25000CE ok 0.4%'."""
+        ch = self.chain_df.get(u)
+        out = []
+        for inst, leg in zip(insts, legs):
+            if inst.symbol in live:
+                b, a = live[inst.symbol]
+            elif ch is not None and leg.strike in ch.index:
+                b, a = ch.at[leg.strike, f"{leg.right.lower()}_bid"], ch.at[leg.strike, f"{leg.right.lower()}_ask"]
+            else:
+                b = a = float("nan")
+            flag = liquidity(b, a)
+            out.append(f"{leg.strike:g}{leg.right} {flag}" + (f" {(a - b) / ((a + b) / 2):.1%}" if flag != "no quote" else ""))
+        return out
 
     def _guarded(self, u: str, now, what: str, fn, *args):
         """Run a quant step; on an error, journal it (once per session per kind) and return None so the desk keeps
@@ -552,6 +586,14 @@ class IntradayEngine:
                                       for l in plan.legs], **plan.notes})
         insts = [Instrument.option(u, plan.expiry, l.strike, l.right, plan.lot_size) for l in plan.legs]
         live = self._live(insts, now)
+        t.meta["leg_liquidity"] = self._leg_liquidity(u, insts, plan.legs, live)
+        if live and any(i.symbol not in live for i in insts):
+            # the book answered, but not two-sided for every leg: a real order there may not fill at all
+            missing = ", ".join(f"{l.strike:g}{l.right}" for i, l in zip(insts, plan.legs) if i.symbol not in live)
+            msg = f"skipped {plan.setup}: no two-sided quote on {missing} in the live book"
+            self.journal.decision(now, plan.setup, u, "rejected", msg, 0,
+                                  {"plan": plan.describe(), "legs": t.meta["leg_liquidity"]})
+            return msg
         px = {i.symbol: (live[i.symbol][1] if l.ratio > 0 else live[i.symbol][0]) if i.symbol in live else l.price
               for i, l in zip(insts, plan.legs)}
         if live:

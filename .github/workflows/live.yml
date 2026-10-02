@@ -58,10 +58,10 @@ jobs:
         run: deploy/journal.sh restore
       - name: Fetch the latest edge research (priors that survived out-of-sample testing)
         run: deploy/research.sh
-      - name: Fetch the event calendar from the data warehouse (heavyweights' results; context for the read)
+      - name: Fetch context from the data warehouse (heavyweights' results, a year of bhavcopy for the IV percentile)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download warehouse --pattern 'corp_events_*.parquet' --dir runtime/warehouse --clobber || echo "no warehouse yet"
+        run: deploy/warehouse-context.sh
       - name: Start a fresh paper account
         if: ${{ inputs.reset_account }}
         run: python -m quantdesk intraday reset-account --yes
@@ -107,10 +107,10 @@ jobs:
         run: deploy/journal.sh restore
       - name: Fetch the latest edge research
         run: deploy/research.sh
-      - name: Fetch the event calendar from the data warehouse
+      - name: Fetch context from the data warehouse (heavyweights' results, a year of bhavcopy for the IV percentile)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download warehouse --pattern 'corp_events_*.parquet' --dir runtime/warehouse --clobber || echo "no warehouse yet"
+        run: deploy/warehouse-context.sh
       - name: Trade (paper) to the close, square off, write the review
         run: deploy/run-session.sh --quiet
       - name: Kill switch — square off

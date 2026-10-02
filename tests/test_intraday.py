@@ -101,6 +101,39 @@ def test_nse_v3_parser_and_analytics():
     assert a["top_put_adds"][0] == 24950.0 and a["max_pain"] in (24950.0, 25000.0)
 
 
+def test_liquidity_flags_and_the_liquid_band():
+    from quantdesk.intraday.chains import liquid_band, liquidity
+    assert liquidity(100.0, 101.0) == "ok" and liquidity(100.0, 105.0) == "wide"          # 1% vs 4.9% of the mid
+    assert liquidity(1.0, 1.1) == "ok"                                                   # two ticks on a cheap option
+    assert all(liquidity(b, a) == "no quote" for b, a in ((0, 5.0), (np.nan, 5.0), (5.0, 4.0), (None, 1.0)))
+    ks = np.arange(24700.0, 25301.0, 100.0)                                              # spot 25010: ATM 25000
+    df = pd.DataFrame(np.nan, index=ks, columns=COLUMNS)
+    df.index.name = "strike"
+    df[["ce_bid", "ce_ask", "pe_bid", "pe_ask"]] = [50.0, 50.5, 50.0, 50.5]
+    df.loc[24700.0, ["pe_bid", "pe_ask"]] = [3.0, 3.5]           # out-of-the-money put 15% wide: the band stops above
+    df.loc[24800.0, ["ce_bid", "ce_ask"]] = [0.0, 260.0]         # its in-the-money call is one-sided: doesn't matter
+    df.loc[25300.0, ["ce_bid", "ce_ask"]] = [np.nan, 2.0]        # out-of-the-money call with no bid
+    b = liquid_band(df, 25010.0)
+    assert (b["liquid_lo"], b["liquid_hi"], b["liquid_strikes"], b["strikes"]) == (24800.0, 25200.0, 5, 7)
+    df.loc[25000.0, ["pe_bid", "pe_ask"]] = [0.0, 0.0]           # at the money both sides must quote
+    assert "liquid_lo" not in liquid_band(df, 25010.0) and liquid_band(df, 25010.0)["liquid_strikes"] == 4
+    assert liquid_band(df.assign(ce_bid=np.nan, pe_bid=np.nan), 25010.0) == {}         # no book (the model chain)
+
+
+def test_the_read_gives_the_iv_percentile_and_the_liquid_strikes(cfg, sessions):
+    from quantdesk.intraday.analyst import Analyst
+    bars, _, days = sessions
+    now = ts(f"{days[-1]} 11:00")
+    s = session_state(bars["NIFTY"][bars["NIFTY"].index + pd.Timedelta(minutes=1) <= now], now)
+    c = {"spot": s["last"], "atm_iv": 12.4, "atm_ivp": 0.66, "atm_iv_median": 10.8, "atm_ivp_n": 146, "atm_ivp_dte": 5,
+         "liquid_lo": 24800.0, "liquid_hi": 25200.0, "liquid_strikes": 5, "strikes": 7}
+    v = Analyst(cfg).assess("NIFTY", s, c)
+    assert "IV percentile 66: ATM IV 12.4 vs a median 10.8 for 5-day options over the past year (146 sessions)." in v.narrative
+    assert "Liquid strikes 24,800–25,200 (out-of-the-money side quoting within 3%; 5 of 7)." in v.narrative
+    plain = Analyst(cfg).assess("NIFTY", s, {"spot": s["last"], "atm_iv": 12.4}).narrative
+    assert "IV percentile" not in plain and "Liquid strikes" not in plain
+
+
 def test_time_to_expiry_is_minute_precise():
     e = dt.date(2026, 9, 29)
     assert time_to_expiry(ts("2026-09-29 15:30"), e) == 0
