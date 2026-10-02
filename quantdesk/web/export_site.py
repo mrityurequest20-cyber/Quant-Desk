@@ -131,8 +131,8 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
         "reviews": {d: api.review(account, d)["markdown"] for d in api.reviews(account)},
         "stats": api.stats(account),
         "news": api.news(account, 120),
-        "chart": {f"{s}|{iv}": api.chart(account, s, None, iv)
-                  for s in cfg.get("intraday.underlyings", ["NIFTY", "BANKNIFTY"]) for iv in ("1m", "5m", "15m")},
+        "chart": {f"{s}{k}|{iv}": api.chart(account, s + k, None, iv)
+                  for s in cfg.get("intraday.underlyings", ["NIFTY", "BANKNIFTY"]) for k in ("", "-FUT") for iv in ("1m", "5m", "15m")},
     }
 
 

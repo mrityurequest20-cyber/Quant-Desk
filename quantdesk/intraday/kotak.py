@@ -290,6 +290,55 @@ class KotakOptionChain(ChainSource):
         return out
 
 
+# ---- futures ------------------------------------------------------------------------------------------------------
+class KotakFutures:
+    """Index and stock futures on Kotak (verified on a runner, 3 Oct 2026): every expiry from the chain endpoint's
+    `instrument_type=fut` view (token, LTP, OHLC, OI; its `oi.chg` is the price change, as on the option chain),
+    and 1-minute candles with real volume by token (`nse_fo|<token>`; no OI in candles). The contract used is the
+    near month, rolled to the next one `roll_days` before expiry, when the volume moves."""
+
+    def __init__(self, client: KotakClient, roll_days: int = 3):
+        self.k, self.roll_days = client, roll_days
+        self._c: dict[str, tuple] = {}
+
+    def contracts(self, underlying: str) -> list[dict]:
+        body = self.k._get("market-data/1.0/watchlist/option-chain",
+                           {"exchange": "nse_fo", "underlying": underlying, "instrument_type": "fut", "count": 10})
+        rows = body.get("future_contracts") or (body.get("data") or {}).get("future_contracts") or []
+        out = []
+        for r in rows:
+            inst, q, oi = r.get("inst") or {}, r.get("quote") or {}, r.get("oi") or {}
+            try:
+                exp = dt.date.fromisoformat(str(inst.get("exp"))[:10])
+            except ValueError:
+                continue
+            out.append({"token": str(inst.get("neoSymbol") or ""), "symbol": str(inst.get("symbol") or ""), "expiry": exp,
+                        "ltp": _f(q.get("ltp")), "open": _f(q.get("o")), "high": _f(q.get("h")), "low": _f(q.get("l")),
+                        "close": _f(q.get("c")), "prev_close": _f(q.get("pc")), "volume": _f(q.get("vol")),
+                        "oi": _f(oi.get("cur")), "oi_prev": _f(oi.get("prev"))})
+        if not out:
+            raise KotakError(f"no futures for {underlying}")
+        return sorted(out, key=lambda c: c["expiry"])
+
+    def active(self, underlying: str, today: dt.date, fresh: list[dict] | None = None) -> dict:
+        hit = self._c.get(underlying)
+        cs = fresh or (hit[1] if hit and hit[0] == today else None) or self.contracts(underlying)
+        self._c[underlying] = (today, cs)
+        live = [c for c in cs if (c["expiry"] - today).days >= self.roll_days] or cs
+        return live[0]
+
+    def snapshot(self, underlying: str, today: dt.date) -> dict:
+        """The active contract right now (LTP, OI), plus the next one for the term structure."""
+        cs = self.contracts(underlying)
+        a = self.active(underlying, today, cs)
+        nxt = next((c for c in cs if c["expiry"] > a["expiry"]), None)
+        return {**a, "next": nxt}
+
+    def bars(self, underlying: str, start: dt.date, end: dt.date) -> pd.DataFrame:
+        a = self.active(underlying, end)
+        return normalise_bars(self.k.candles(a["token"], "1min", start, end))
+
+
 # ---- 1-minute bars ------------------------------------------------------------------------------------------------
 class KotakIntradayFeed(YahooIntradayFeed):
     """Live 1-minute index bars from Kotak's candles; any minute Kotak can't serve, Yahoo serves. History stays
@@ -311,6 +360,37 @@ class KotakIntradayFeed(YahooIntradayFeed):
         self.rest_until: pd.Timestamp | None = None
         self.served: Counter = Counter()
         self.last_error = ""
+        self.fut = KotakFutures(client, int(cfg.get("intraday.futures.roll_days", 3) or 3))
+        self.fut_bars: dict[str, pd.DataFrame] = {}
+        self.fut_error = ""
+
+    has_futures = True
+
+    def _with_futures(self, symbol: str, df: pd.DataFrame, start: dt.date, end: dt.date) -> pd.DataFrame:
+        """The index bars with each minute's near-month futures volume on them (an index has none of its own), and
+        the futures' own bars kept for the chart. On any failure the bars go back unchanged."""
+        if df is None or df.empty or symbol not in INDEX or symbol == "INDIAVIX":
+            return df
+        try:
+            fb = self.completed(self.fut.bars(symbol, start, end))
+            self.fut_error = ""
+        except Exception as exc:
+            self.fut_error = f"{exc!s:.200}"
+            return df
+        if fb.empty:
+            return df
+        old = self.fut_bars.get(symbol)
+        self.fut_bars[symbol] = fb if old is None or old.empty else \
+            pd.concat([old, fb])[lambda x: ~x.index.duplicated(keep="last")].sort_index()
+        out = df.copy()
+        out["volume"] = fb["volume"].reindex(out.index).fillna(0.0).to_numpy(dtype=float)
+        return out
+
+    def history(self, symbol, days=5):
+        h = super().history(symbol, days)
+        if h is None or h.empty or symbol not in INDEX:
+            return h
+        return self._with_futures(symbol, h, h.index[0].date(), h.index[-1].date())
 
     has_ltp = True
 
@@ -341,6 +421,7 @@ class KotakIntradayFeed(YahooIntradayFeed):
                     raise KotakError("no candles yet for today")
                 self.fails = 0
                 self.served["kotak"] += 1
+                df = self._with_futures(symbol, df, now.date(), now.date())
                 return df if since is None else df[df.index > since]
             except Exception as exc:
                 self.fails += 1
@@ -348,7 +429,8 @@ class KotakIntradayFeed(YahooIntradayFeed):
                 if self.fails >= 5:
                     self.rest_until, self.fails = now + pd.Timedelta(minutes=15), 0
         self.served["yahoo"] += 1
-        return super().poll(symbol, since)
+        df = super().poll(symbol, since)
+        return self._with_futures(symbol, df, now.date(), now.date()) if df is not None and len(df) else df
 
 
 # ---- what the key can see -----------------------------------------------------------------------------------------

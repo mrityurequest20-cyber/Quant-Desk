@@ -119,6 +119,8 @@ class IntradayEngine:
         self.eventbook = EventBook(from_config(cfg))
         self.warehouse_dir = Path(cfg.runtime_dir) / "warehouse"
         self.iv_hist: dict[str, pd.DataFrame] = {}        # past year's ATM IV per underlying (ivhist.py)
+        self.fut_hist: dict[str, list] = {}               # today's futures snapshots per underlying: (ts, ltp, oi)
+        self._fut_fails = 0
         self.gift_source = None                           # callable → parse_gift frame (live only); None = skip
         self.gift: dict | None = None
         self._gift_at = None
@@ -202,6 +204,9 @@ class IntradayEngine:
                     self._fire_armed(sym, now, bar=(float(b["open"]), float(b["high"]), float(b["low"])))
             if self.recorder:
                 self.recorder.record_bars(sym, new)
+                fb = getattr(self.feed, "fut_bars", {}).get(sym)
+                if fb is not None and len(fb):                  # the futures' own bars, for the chart and replays
+                    self.recorder.record_bars(f"{sym}-FUT", fb[fb.index.date == fb.index[-1].date()])
             got = got or sym in self.underlyings
         if self.feed.has_ticks:
             for u in self.underlyings:
@@ -291,6 +296,7 @@ class IntradayEngine:
             an = chain_analytics(ch, self.pricer, self.lot(u))
             if ch.attrs.get("source") != "model":             # the model chain's IV is India VIX's, not this market's
                 an.update(iv_percentile(self.iv_hist.get(u), an.get("atm_iv"), (self.expiry[u] - now.date()).days, now.date()))
+            an.update(self._futures(u, now, an.get("spot")))
             self.chain_an[u] = an
             self.chain_at[u] = now
             self.marker.calibrate(ch, self.lot(u))
@@ -549,6 +555,31 @@ class IntradayEngine:
             corp = None
         heavy = sorted({s for u in self.underlyings for s in (self.cfg.get(f"intraday.heavyweights.{u}") or [])})
         self.eventbook = EventBook(from_config(self.cfg) + heavyweight_results(corp, heavy))
+
+    def _futures(self, u: str, now, spot) -> dict:
+        """The near-month future right now (Kotak): basis, carry and the 30-minute OI build-up (futures.py)."""
+        fut = getattr(self.feed, "fut", None)
+        if fut is None or not getattr(self.feed, "has_futures", False) or u == self.vix:
+            return {}
+        try:
+            snap = fut.snapshot(u, self.day)
+            self._fut_fails = 0
+        except Exception as exc:
+            self._fut_fails += 1
+            if self._fut_fails in (1, 30):
+                self.journal.event(now, "WARN", "futures", f"{u} futures snapshot failed ({exc!s:.160})")
+            return {}
+        h = self.fut_hist.setdefault(u, [])
+        if snap["ltp"] > 0 and snap["oi"] > 0 and spot and spot == spot and (not h or h[-1][0] < now):
+            h.append((now, snap["ltp"], snap["oi"], float(spot)))
+        from .futures import read
+        out = read(h, float(spot) if spot else float("nan"), now, snap["expiry"], snap["symbol"])
+        if snap.get("oi_prev") and snap["oi_prev"] > 0:
+            out["fut_oi_vs_prev"] = float(snap["oi"] / snap["oi_prev"] - 1)
+        nxt = snap.get("next")
+        if nxt and nxt.get("ltp", 0) > 0:
+            out["fut_calendar"] = float(nxt["ltp"] - snap["ltp"])
+        return out
 
     def _load_iv_history(self, day: dt.date) -> None:
         """Each underlying's past year of ATM IV from the warehouse's bhavcopy (live.yml pulls 13 months), for the

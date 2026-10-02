@@ -58,6 +58,16 @@ class FakeKotak:
         if path.startswith("market-data/1.0/watchlist/expiries"):
             return Resp({"exchange": "nse_fo", "underlying": params["underlying"],
                          "expiries": ["2026-10-06", "2026-10-13", "2026-10-27"]})
+        if path.startswith("market-data/1.0/watchlist/option-chain") and params.get("instrument_type") == "fut":
+            def fut(tok, sym, exp, ltp, oi):                         # the shape the API sent on 3 Oct 2026
+                return {"inst": {"neoSymbol": f"nse_fo|{tok}", "symbol": sym, "optType": "XX", "strkPrc": "0", "exp": exp},
+                        "quote": {"ltp": str(ltp), "o": "1", "h": "1", "l": "1", "c": str(ltp), "pc": str(ltp - 50), "vol": "0"},
+                        "oi": {"cur": str(oi), "prev": str(int(oi * 0.98)), "chg": "-177", "chgPct": "-0.78"}}
+            self.fut_oi = getattr(self, "fut_oi", 19_000_000)
+            return Resp({"common_data": {"mktLot": "65", "expiryDt": "2026-10-27", "unlSymbol": params["underlying"]},
+                         "call": [], "put": [],
+                         "future_contracts": [fut(48704, "NIFTY26OCTFUT", "2026-10-27", self.spot + 108, self.fut_oi),
+                                              fut(61471, "NIFTY26NOVFUT", "2026-11-23", self.spot + 216, 2_252_640)]})
         if path.startswith("market-data/1.0/watchlist/option-chain"):
             def leg(k, r):
                 if self.shape == "docs":
@@ -94,6 +104,10 @@ class FakeKotak:
             return Resp(out)
         if path.startswith("market-data/1.0/historical/details"):
             day = params["fromdate"]
+            if params["neosymbol"].startswith("nse_fo|"):             # a future: real volume, no OI column
+                rows = [[f"{day}T09:{15 + i:02d}:00+0530", 24908 + i, 24913 + i, 24903 + i, 24909 + i, 5000 + 100 * i]
+                        for i in range(10)]
+                return Resp({"status": "SUCCESS", "data": {"candles": rows}})
             rows = [[f"{day}T09:{15 + i:02d}:00+0530", 24800 + i, 24805 + i, 24795 + i, 24801 + i, 0, 0] for i in range(10)]
             return Resp({"status": "success", "interval": "1min", "data": {"candles": rows}})
         return Resp({"code": 404, "message": "no such route"}, 404)
@@ -260,7 +274,8 @@ def test_bars_from_kotak_with_yahoo_behind(cfg, client, monkeypatch):
     monkeypatch.setattr(YahooIntradayFeed, "poll", lambda self, s, since: yahoo)
     monkeypatch.setattr(feed, "kotak_bars", lambda s, d: (_ for _ in ()).throw(KotakError("down")))
     for _ in range(5):
-        assert feed.poll("NIFTY", None) is yahoo
+        got = feed.poll("NIFTY", None)
+        assert got["close"].tolist() == [1.0] and got["volume"].tolist() == [5900.0]  # Yahoo's prices, the future's volume
     assert feed.rest_until is not None and feed.served["yahoo"] == 5            # rested after 5 failures
     assert feed.name == "kotak+yahoo (5 of 7 polls from Yahoo)"
 
@@ -380,3 +395,48 @@ def test_chain_name_says_what_stands_in(cfg, sessions):
         eng.chain_df = {f"U{i}": pd.DataFrame().pipe(lambda d, s=s: (d.attrs.update(source=s), d)[1])
                         for i, s in enumerate(sorted(src))}
         assert eng.chain_name() == want
+
+
+# ---- futures (verified shape: the chain endpoint's `fut` view, candles by token) ----------------------------------
+def test_futures_contracts_roll_and_volume_on_the_index_bars(cfg, client, fake, monkeypatch):
+    from quantdesk.intraday.kotak import KotakFutures
+    kf = KotakFutures(client, roll_days=3)
+    cs = kf.contracts("NIFTY")
+    assert [c["symbol"] for c in cs] == ["NIFTY26OCTFUT", "NIFTY26NOVFUT"] and cs[0]["token"] == "nse_fo|48704"
+    assert cs[0]["oi"] == 19_000_000 and cs[0]["oi_prev"] == int(19_000_000 * 0.98)   # chg (a price change) ignored
+    assert kf.active("NIFTY", dt.date(2026, 10, 5))["symbol"] == "NIFTY26OCTFUT"
+    assert kf.active("NIFTY", dt.date(2026, 10, 25))["symbol"] == "NIFTY26NOVFUT"      # 2 days before expiry: rolled
+    feed = KotakIntradayFeed(cfg, client)
+    monkeypatch.setattr(feed, "now", lambda: pd.Timestamp("2026-10-05 09:30", tz=IST))
+    bars = feed.poll("NIFTY", None)
+    assert len(bars) == 10 and bars["volume"].tolist() == [5000.0 + 100 * i for i in range(10)]
+    assert bars["close"].iloc[0] == 24801                                               # prices stay the index's
+    fb = feed.fut_bars["NIFTY"]
+    assert fb["close"].iloc[0] == 24909 and fb["volume"].sum() == bars["volume"].sum()
+
+
+def test_futures_read_buildup_and_carry():
+    from quantdesk.intraday.futures import buildup, read
+    assert buildup(0.003, 0.008)[0] == "long build-up" and buildup(0.003, 0.008)[1] > 0
+    assert buildup(-0.003, 0.008)[0] == "short build-up" and buildup(-0.003, 0.008)[1] < 0
+    assert buildup(0.003, -0.008) == ("short covering", pytest.approx(0.4)) and buildup(-0.003, -0.008)[1] == pytest.approx(-0.4)
+    assert buildup(0.003, 0.0005)[1] == 0                                                # OI barely moved: nothing to say
+    t0 = pd.Timestamp("2026-10-05 10:00", tz=IST)
+    h = [(t0 + pd.Timedelta(minutes=i), 25000 + 2 * i, 19_000_000 * (1 + 0.0004 * i), 24900 + 2 * i) for i in range(40)]
+    r = read(h, 24978.0, h[-1][0], dt.date(2026, 10, 27), "NIFTY26OCTFUT")
+    assert r["fut_buildup"] == "long build-up" and r["fut_dir"] > 0 and r["fut_basis"] == pytest.approx(100)
+    assert 0.05 < r["fut_carry"] < 0.10 and "fut_carry_chg" in r
+
+
+def test_engine_reads_the_future(cfg, client, fake, monkeypatch):
+    """With a futures-capable feed, the chain read gains the future: its build-up, basis and the next contract."""
+    feed = KotakIntradayFeed(cfg, client)
+    eng = IntradayEngine(cfg, feed, "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    eng.day = dt.date(2026, 10, 5)
+    t0 = pd.Timestamp("2026-10-05 10:00", tz=IST)
+    for i in range(35):                                                                 # OI climbs with price for 35 min
+        fake.fut_oi = int(19_000_000 * (1 + 0.0003 * i))
+        fake.spot = 24852.35 + 2 * i
+        out = eng._futures("NIFTY", t0 + pd.Timedelta(minutes=i), fake.spot)
+    assert out["fut_symbol"] == "NIFTY26OCTFUT" and out["fut_buildup"] == "long build-up" and out["fut_basis"] == pytest.approx(108)
+    assert out["fut_calendar"] == pytest.approx(108) and out["fut_oi_vs_prev"] == pytest.approx(1 / 0.98 - 1, rel=1e-3)

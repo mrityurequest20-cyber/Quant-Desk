@@ -10,7 +10,7 @@ const VERSION = "2.0";
 const $ = (s, r) => (r || document).querySelector(s);
 const NS = "http://www.w3.org/2000/svg";
 const S = {
-	account: "live", tab: "desk", sub: { trades: "positions", feed: "news" }, sym: "NIFTY", interval: "5m", brainSym: "NIFTY",
+	account: "live", tab: "desk", sub: { trades: "positions", feed: "news" }, sym: "NIFTY", interval: "5m", brainSym: "NIFTY", ckind: "idx",
 	state: null, charts: {}, chartAt: {}, news: null, newsAt: 0, lw: null, eq: null, thBefore: null, thSym: "", newsF: "", brk: "by_day_type",
 	accounts: [], installEvt: null, networkUnavailable: false,
 };
@@ -540,17 +540,20 @@ async function renderChart() {
 	if (!syms.includes(S.sym)) S.sym = syms[0];
 	seg($("#c-sym"), syms.map((s) => [s, s === "BANKNIFTY" ? "BANK" : s]), S.sym, (v) => { S.sym = v; store("qd.sym", v); renderChart(); });
 	seg($("#c-iv"), [["1m", "1m"], ["5m", "5m"], ["15m", "15m"]], S.interval, (v) => { S.interval = v; store("qd.iv", v); renderChart(); });
+	seg($("#c-kind"), [["idx", "Index"], ["fut", "Futures"]], S.ckind, (v) => { S.ckind = v; store("qd.ckind", v); renderChart(); });
 	const v = views()[S.sym];
 	renderQuoteHead(v);
 	renderRead(v);
-	await loadChart(S.sym, S.interval);
+	await loadChart(chartSym(), S.interval);
 	if (S.tab !== "chart") return;
 	drawChart(false);
 	renderQuoteHead(v);
 	renderLevelsTable(v);
 	renderQuant(v);
 }
-function chartData() { return S.charts[S.sym + "|" + S.interval]; }
+// the index, or its near-month future (real volume and OI; the index bars carry the futures' volume too)
+function chartSym() { return S.sym + (S.ckind === "fut" ? "-FUT" : ""); }
+function chartData() { return S.charts[chartSym() + "|" + S.interval]; }
 function renderQuoteHead(v) {
 	const d = chartData(), B = d && d.bars, n = B ? B.t.length : 0;
 	const last = v && fin(v.spot) ? v.spot : n ? B.c[n - 1] : null;
@@ -768,7 +771,8 @@ function drawChart(reframe) {
 		destroyLW();
 		el.textContent = "";
 		$("#c-ohlc").textContent = "";
-		el.appendChild(empty("chart", "No bars recorded yet for this session."));
+		el.appendChild(empty("chart", S.ckind === "fut" ? "No futures bars recorded yet: they come from Kotak during the session (near month, with real volume)."
+			: "No bars recorded yet for this session."));
 		$("#c-levels").textContent = "";
 		return;
 	}
@@ -1323,6 +1327,7 @@ async function boot() {
 	applyTheme(themeMode());
 	matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(themeMode()));
 	S.sym = store("qd.sym") || S.sym;
+	S.ckind = store("qd.ckind") || S.ckind;
 	S.interval = store("qd.iv") || S.interval;
 	buildTabs();
 	document.addEventListener("click", (e) => { const g = e.target.closest("[data-go]"); if (g) go(g.dataset.go); });

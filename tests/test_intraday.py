@@ -143,6 +143,26 @@ def test_the_read_gives_the_iv_percentile_and_the_liquid_strikes(cfg, sessions):
     assert "IV percentile" not in plain and "Liquid strikes" not in plain
 
 
+def test_the_read_weighs_the_futures_build_up_and_basis(cfg, sessions):
+    from quantdesk.intraday.analyst import Analyst
+    bars, _, days = sessions
+    now = ts(f"{days[-1]} 11:00")
+    s = session_state(bars["NIFTY"][bars["NIFTY"].index + pd.Timedelta(minutes=1) <= now], now)
+    base = {"spot": s["last"], "atm_iv": 12.4}
+    fut = {**base, "fut_symbol": "NIFTY26OCTFUT", "fut_ltp": s["last"] + 60, "fut_basis": 60.0, "fut_carry": 0.07,
+           "fut_buildup": "short build-up", "fut_dir": -0.8, "fut_px_chg30": -0.004, "fut_oi_chg30": 0.008,
+           "fut_carry_chg": -0.02, "fut_oi_vs_prev": 0.031}
+    a = Analyst(cfg)
+    plain, v = a.assess("NIFTY", s, base), a.assess("NIFTY", s, fut)
+    ev = {e.factor: e for e in v.evidence}
+    assert ev["fut_oi"].direction == pytest.approx(-0.8) and "short build-up" in ev["fut_oi"].observation
+    assert ev["basis"].direction == pytest.approx(-2 / 3) and "shrinking" in ev["basis"].observation
+    assert v.score < plain.score                                 # fresh shorts and a fading premium lean it down
+    assert "Futures: NIFTY26OCTFUT" in v.narrative and "OI +3.1% vs yesterday" in v.narrative
+    quiet = a.assess("NIFTY", s, {**fut, "fut_dir": 0.0, "fut_carry_chg": 0.004})
+    assert not {"fut_oi", "basis"} & {e.factor for e in quiet.evidence}
+
+
 def test_time_to_expiry_is_minute_precise():
     e = dt.date(2026, 9, 29)
     assert time_to_expiry(ts("2026-09-29 15:30"), e) == 0

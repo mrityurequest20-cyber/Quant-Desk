@@ -18,7 +18,7 @@ import numpy as np
 DEFAULT_WEIGHTS = {
     "vwap": 1.0, "ema_5m": 0.8, "htf": 0.6, "orb": 1.0, "value": 0.6, "prev_day": 0.5, "cpr": 0.4,
     "supertrend": 0.4, "rsi": 0.4, "flow": 0.6, "divergence": 0.5, "pcr": 0.3, "oi_walls": 0.4,
-    "vix": 0.3, "max_pain": 0.3, "iv_move": 0.3, "news": 0.5, "model": 0.8, "research": 0.3,
+    "vix": 0.3, "max_pain": 0.3, "iv_move": 0.3, "news": 0.5, "model": 0.8, "research": 0.3, "fut_oi": 0.4, "basis": 0.2,
 }
 
 
@@ -155,6 +155,16 @@ class Analyst:
             add("max_pain", "options", np.clip((mp - last) / (last * 0.004), -1, 1), f"expiry day: max pain {mp:,.0f} "
                                                                                      f"({(mp / last - 1):+.2%} from spot)")
 
+        # --- futures: open-interest build-up and the basis (futures.py) -----------------------------------------
+        if c.get("fut_dir"):
+            add("fut_oi", "flow", c["fut_dir"],
+                f"{c.get('fut_symbol') or 'futures'} {c['fut_buildup']}: price {c['fut_px_chg30']:+.2%}, "
+                f"OI {c['fut_oi_chg30']:+.2%} in 30 min")
+        if c.get("fut_carry_chg") is not None and abs(c["fut_carry_chg"]) >= 0.01:
+            dc = c["fut_carry_chg"]
+            add("basis", "flow", max(-1.0, min(1.0, dc / 0.03)),
+                f"futures premium {'widening' if dc > 0 else 'shrinking'}: carry {c['fut_carry']:.1%}/yr "
+                f"({dc:+.1%} since the first read today, basis {c['fut_basis']:+.1f} pts)")
         # --- news (headline tone is noisy: modest weight, scaled by how many stories back it) ---------------
         if news and news.get("n"):
             tone = news["tone"]
@@ -256,6 +266,12 @@ class Analyst:
             parts.append(f"Options context: dealer gamma {c['gex_state'].split(' (')[0]} (naive sign)"
                          + (f", flip {flip:,.0f}" if flip == flip and flip else "")
                          + (f"; implied carry {carry:.1%}/yr" if carry == carry and carry is not None else "") + ".")
+        if c.get("fut_ltp"):                            # the future's own read (futures.py)
+            parts.append(f"Futures: {c.get('fut_symbol') or 'near month'} {c['fut_ltp']:,.1f}"
+                         + (f", basis {c['fut_basis']:+.1f} (carry {c['fut_carry']:.1%}/yr)" if c.get("fut_carry") is not None else "")
+                         + (f"; {c['fut_buildup']} (OI {c['fut_oi_chg30']:+.2%}, price {c['fut_px_chg30']:+.2%} in 30 min)"
+                            if c.get("fut_buildup") else "")
+                         + (f"; OI {c['fut_oi_vs_prev']:+.1%} vs yesterday" if c.get("fut_oi_vs_prev") is not None else "") + ".")
         if c.get("liquid_lo") is not None:              # where a real order fills near the mid (chains.liquid_band)
             parts.append(f"Liquid strikes {c['liquid_lo']:,.0f}–{c['liquid_hi']:,.0f} "
                          f"(out-of-the-money side quoting within 3%; {c['liquid_strikes']} of {c['strikes']}).")

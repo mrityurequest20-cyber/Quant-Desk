@@ -164,7 +164,7 @@ def test_static_site_exports(site, tmp_path):
     assert (tmp_path / "site2" / "data.json").read_bytes() == (out / "data.json").read_bytes()
     assert data["state"]["heartbeat"]["ts"] and set(data["reviews"]) == {str(days[-1]), str(days[-2])}
     assert {t["ts"][:10] for t in data["thoughts"]} == {str(days[-1]), str(days[-2])}
-    assert set(data["chart"]) == {f"{s}|{iv}" for s in ("NIFTY", "BANKNIFTY") for iv in ("1m", "5m", "15m")}
+    assert set(data["chart"]) == {f"{s}{k}|{iv}" for s in ("NIFTY", "BANKNIFTY") for k in ("", "-FUT") for iv in ("1m", "5m", "15m")}
     assert all(tid in data["trade"] for tid in [t["id"] for t in data["trades"]][:150])
     assert not (out / "data.json.tmp").exists()
     assert data["state"]["limits"]["max_trades_per_day"] == cfg.get("intraday.risk.max_trades_per_day")

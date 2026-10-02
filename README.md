@@ -116,7 +116,8 @@ Other commands:
    - **trend:** VWAP side and slope, 5m EMA9/21, Supertrend, 15m slope
    - **structure:** opening range, initial balance, value area and POC, prior-day high/low, CPR
    - **momentum:** 5m RSI
-   - **flow:** CVD slope and price/CVD divergence (tick delta when a tick feed is attached)
+   - **flow:** CVD slope and price/CVD divergence (tick delta when a tick feed is attached), the near-month future's
+     open-interest build-up and its basis
    - **options:** PCR, OI walls, max pain on expiry day
    - **volatility:** India VIX change, ATM IV vs realised vol
 
@@ -158,7 +159,8 @@ python -m quantdesk intraday review                     # the written session re
 ```
 
 **Data reality check.**
-- Yahoo's 1-minute bars cover only ~7 days, may lag, and carry little or no volume for indices; the desk falls back to TWAP and flags it. So record every session.
+- Yahoo's 1-minute bars cover only ~7 days, may lag, and carry no volume for indices. With Kotak, the future's
+  volume fills that in; otherwise the desk falls back to TWAP and a TPO (time) profile and flags it. So record every session.
 - NSE's option-chain API is free but throttled and changes without notice (the v3 endpoint is used).
 - Kite Connect (`KITE_API_KEY`/`KITE_ACCESS_TOKEN`) gives real-time ticks, depth and real option quotes.
 
@@ -178,6 +180,24 @@ Setup:
    `KOTAK_CONSUMER_KEY`, value the key.
 3. Actions → **Broker check** → Run workflow. It prints index quotes, expiries, an option chain with bid/ask and
    IVs, a live quote and the latest candles. The live desk picks the key up on its next run.
+
+**Futures: where the volume is.** An index has no volume and no open interest; its future has both. With
+Kotak, the desk follows each index's near-month future (`quantdesk/intraday/futures.py`, `KotakFutures` in
+`kotak.py`). It rolls to the next month 3 trading days before expiry (`intraday.futures.roll_days`).
+- **Volume:** each minute's futures volume goes onto that minute's index bar (index prices are kept). The session
+  volume profile, VWAP, relative volume and CVD are then built on real traded volume, not on time (TPO) as
+  before. This works on the Yahoo fallback too.
+- **Recording:** the future's own 1-minute bars are recorded as `NIFTY-FUT` / `BANKNIFTY-FUT`. The app's chart
+  has an *Index / Futures* switch.
+- **Open-interest build-up** over the last 30 minutes uses the classic four states: long build-up (price ↑,
+  OI ↑), short build-up (price ↓, OI ↑), short covering and long unwinding. The last two are closing trades, so
+  they count half. The result is the `fut_oi` evidence.
+- **Basis:** futures minus spot, read as an annualised carry. A premium widening or shrinking since the first read
+  of the day is the `basis` evidence.
+- **Context:** OI against yesterday's close and the near/next calendar spread go in the narrative.
+
+Option expiries (weekly NIFTY) and futures expiries (monthly) are tracked separately. The option chain uses its
+own nearest weekly, and the futures read always uses the active monthly.
 
 **Order flow and the GoCharting plan.** `quantdesk/intraday/orderflow.py` already computes:
 - volume profile (POC, value area, high/low-volume nodes)
