@@ -522,8 +522,9 @@ def report(res: dict, generated: str) -> str:
         L += ["### Parameter stability (every delta target and the wing ±10%)", "",
               "| strategy | index | k | base ₹/lot | −10% | +10% | verdict |", "|---|---|---:|---:|---:|---:|---|"]
         for s_ in res["stability"]:
+            fmt = lambda v: f"{v:+,.0f}" if v == v else "—"                                   # noqa: E731
             L.append(f"| {s_['strategy']} | {s_['symbol']} | {s_['k']} | {s_['base']:+,.0f} | "
-                     f"{s_.get('−10%', float('nan')):+,.0f} | {s_.get('+10%', float('nan')):+,.0f} | {s_['verdict']} |")
+                     f"{fmt(s_.get('−10%', float('nan')))} | {fmt(s_.get('+10%', float('nan')))} | {s_['verdict']} |")
         L.append("")
     if any(len(v) for v in res.get("term", {}).values()):
         L += ["### Futures term structure (near and next month, from the bhavcopy)", "",
