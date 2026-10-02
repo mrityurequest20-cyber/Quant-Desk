@@ -5,8 +5,10 @@ header): quotes, option chain, expiries and historical candles. So: no TOTP, no 
 static IP. SEBI's static-IP rule (in force from 1 Apr 2026) covers the order APIs, which this module never
 calls: the desk stays a paper desk, and prices its paper fills off Kotak's live order book.
 
-Endpoints and response shapes follow Kotak's official SDK (github.com/Kotak-Neo/kotak-neo-python 3.0.x,
-docs/functions/market_data). Limits from those docs: quotes take at most 50 instruments a call and the API
+Endpoints follow Kotak's official SDK (github.com/Kotak-Neo/kotak-neo-python 3.0.x, docs/functions/market_data).
+The live option chain answers in a compact shape the docs don't show (seen 2 Oct 2026): legs under "inst" with
+"strkPrc", quotes as o/h/l/c/pc/vol, and OI as cur/prev/chg where "chg" is the *price* change. `count` is strikes
+on each side of the money (20 → 41 strikes). Both shapes parse. Limits from those docs: quotes take at most 50 instruments a call and the API
 allows 25 requests a second; 1-minute candles go back 30 days.
 
 Key: KOTAK_CONSUMER_KEY — Neo app or web → More → Trade API → generate an application → copy its token.
@@ -179,9 +181,9 @@ class KotakOptionChain(ChainSource):
     and the quotes are from the same instant) from the quotes endpoint: ~3 calls per underlying per refresh."""
     name = "kotak"
 
-    def __init__(self, client: KotakClient, strikes: int = 40, refresh_min: int = 1):
+    def __init__(self, client: KotakClient, strikes: int = 20, refresh_min: int = 1):
         self.k = client
-        self.count = max(10, int(round(strikes / 10)) * 10)       # the API wants a multiple of 10
+        self.count = max(10, int(round(strikes / 10)) * 10)       # strikes each side; the API wants a multiple of 10
         self.refresh_min = refresh_min
         self.tokens: dict[tuple, str] = {}                        # (underlying, expiry, strike, right) → "nse_fo|71472"
         self.lot: dict[str, int] = {}
@@ -198,7 +200,9 @@ class KotakOptionChain(ChainSource):
         self._exp[underlying] = (today, exps)
         return exps
 
-    def chain(self, underlying: str, expiry: dt.date, spot=None, ts=None) -> pd.DataFrame:
+    def chain(self, underlying: str, expiry: dt.date, spot=None, ts=None, require_quotes: bool = True) -> pd.DataFrame:
+        """`require_quotes`: no bid/ask anywhere is an error (in the session the desk can't price fills without one;
+        outside it the book is simply empty)."""
         common, calls, puts = chain_parts(self.k.option_chain(underlying, expiry, self.count))
         lot = _f(common.get("mktLot"))
         if lot > 0:
@@ -208,15 +212,17 @@ class KotakOptionChain(ChainSource):
         for side, items in (("ce", calls), ("pe", puts)):
             for item in items:
                 ins = item.get("instrument") or item.get("inst") or {}
-                K = _f(ins.get("strikePrice"))
+                K = _f(ins.get("strikePrice", ins.get("strkPrc")))
                 if not K > 0:
                     continue
                 q, oi = item.get("quote") or {}, item.get("openInterest") or item.get("oi") or {}
                 row = rows.setdefault(K, {c: np.nan for c in COLUMNS})
                 row[f"{side}_ltp"] = _f(q.get("ltp"))
                 row[f"{side}_vol"] = _f(q.get("volume", q.get("vol")))
-                row[f"{side}_oi"] = _f(oi.get("current", oi.get("cur")))
-                row[f"{side}_doi"] = _f(oi.get("change", oi.get("chg")))
+                cur, prev = _f(oi.get("current", oi.get("cur"))), _f(oi.get("previous", oi.get("prev")))
+                row[f"{side}_oi"] = cur
+                # the live API's compact "oi.chg" carries the *price* change (ltp − prev close), so take current − previous
+                row[f"{side}_doi"] = cur - prev if cur == cur and prev == prev else _f(oi.get("change"))
                 tok = str(ins.get("neoSymbol") or "")
                 if "|" in tok:
                     toks[tok] = (K, side)
@@ -246,14 +252,14 @@ class KotakOptionChain(ChainSource):
                            (f"{side}_oi", _f(q.get("open_int")))):
                 if v > 0:
                     row[col] = v
-        if quoted == 0:
+        if quoted == 0 and require_quotes:
             raise KotakError(f"no bid/ask in Kotak's quotes for {underlying} {expiry} ({len(toks)} contracts asked)")
         df = pd.DataFrame.from_dict(rows, orient="index", columns=COLUMNS).astype(float).sort_index()
         df.index.name = "strike"
         if not S > 0:
             S = float(spot) if spot else np.nan
         df.attrs.update({"underlying": underlying, "spot": S, "expiry": expiry, "ts": pd.Timestamp.now(tz=IST),
-                         "source": "kotak", "lot": self.lot.get(underlying)})
+                         "source": "kotak", "lot": self.lot.get(underlying), "quoted": quoted})
         return fill_iv(df, IntradayPricer())
 
     def live_quotes(self, instruments) -> dict[str, tuple[float, float]]:
@@ -353,6 +359,10 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
             say(f"  quotes  FAIL: empty response for the indices · raw {_raw(client.last_body)}")
     except Exception as exc:
         say(f"  quotes  FAIL {exc!s:.300}")
+    o, c = session_bounds(now.date())
+    market_open = now.weekday() < 5 and o <= now <= c
+    if not market_open:
+        say(f"  (market closed at {now:%a %H:%M} IST: option bids/asks may be empty; the desk needs them only in the session)")
     for u in underlyings:
         ch = KotakOptionChain(client, strikes=20)
         try:
@@ -363,7 +373,7 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
             say(f"  expiry  {u:<9} FAIL {exc!s:.300}")
             continue
         try:
-            df = ch.chain(u, exp)
+            df = ch.chain(u, exp, require_quotes=market_open)
         except Exception as exc:
             say(f"  chain   {u:<9} FAIL {exc!s:.200}")
             say(f"          raw: {_raw(client.last_body)}")
@@ -384,12 +394,9 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
             f"spot {S:,.2f}")
         say(f"          ATM {atm:,.0f} CE {r.ce_bid:,.2f} / {r.ce_ask:,.2f} (IV {r.ce_iv:.1f}%) · "
             f"PE {r.pe_bid:,.2f} / {r.pe_ask:,.2f} (IV {r.pe_iv:.1f}%)")
-        first = next(iter(ch.tokens), None)
-        if first:
-            from ..core.types import Instrument
-            uu, ee, kk, rr = first
-            live = ch.live_quotes([Instrument.option(uu, ee, kk, rr, ch.lot.get(uu) or 1)])
-            say(f"  live    {u:<9} {', '.join(f'{s} {b:,.2f}/{a:,.2f}' for s, (b, a) in live.items()) or 'FAIL: no live quote'}")
+        from ..core.types import Instrument
+        live = ch.live_quotes([Instrument.option(u, exp, float(atm), r_, ch.lot.get(u) or 1) for r_ in ("CE", "PE")])
+        say(f"  live    {u:<9} {', '.join(f'{s} {b:,.2f}/{a:,.2f}' for s, (b, a) in live.items()) or 'no bid/ask right now'}")
         ok_chain = True
     # candles: the last week in one call; try the index by name, by its quote token, and two encodings
     start, end = now.date() - dt.timedelta(days=7), now.date()

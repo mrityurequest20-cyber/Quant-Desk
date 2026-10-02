@@ -35,11 +35,13 @@ class Resp:
 
 
 class FakeKotak:
-    """Routes GETs like Kotak's backend: a NIFTY chain of 5 strikes around 24,850 with 5-level depth."""
+    """Routes GETs like Kotak's backend: a NIFTY chain of 5 strikes around 24,850 with 5-level depth. `shape`:
+    "live" is what the API actually sent on 2 Oct 2026 (inst/strkPrc, oi cur/prev/chg with chg = the price
+    change); "docs" is the shape in Kotak's SDK docs."""
 
-    def __init__(self, strikes=(24750, 24800, 24850, 24900, 24950), spot=24852.35, quoted=True):
+    def __init__(self, strikes=(24750, 24800, 24850, 24900, 24950), spot=24852.35, quoted=True, shape="live"):
         self.headers, self.log = {}, []
-        self.strikes, self.spot, self.quoted = strikes, spot, quoted
+        self.strikes, self.spot, self.quoted, self.shape = strikes, spot, quoted, shape
         self.tok = {}
         for i, k in enumerate(strikes):
             self.tok[(k, "CE")] = str(71000 + 2 * i)
@@ -57,14 +59,20 @@ class FakeKotak:
                          "expiries": ["2026-10-06", "2026-10-13", "2026-10-27"]})
         if path.startswith("market-data/1.0/watchlist/option-chain"):
             def leg(k, r):
-                return {"instrument": {"neoSymbol": f"nse_fo|{self.tok[(k, r)]}", "symbol": f"NIFTY26OCT{k}{r}",
-                                       "optionType": r, "strikePrice": str(k), "moneyness": "ATM"},
-                        "quote": {"ltp": f"{self.price(k, r):.4f}", "volume": 1000 + k % 7},
-                        "openInterest": {"current": 500000, "previous": 450000, "change": 50000, "changePct": 11.1}}
-            return Resp({"data": {"common_data": {"mktLot": "65", "unlSymbol": "NIFTY", "exSeg": "nse_fo",
-                                                  "expiryDt": params.get("expiry")},
-                                  "call": [leg(k, "CE") for k in self.strikes],
-                                  "put": [leg(k, "PE") for k in self.strikes]}})
+                if self.shape == "docs":
+                    return {"instrument": {"neoSymbol": f"nse_fo|{self.tok[(k, r)]}", "symbol": f"NIFTY26OCT{k}{r}",
+                                           "optionType": r, "strikePrice": str(k), "moneyness": "ATM"},
+                            "quote": {"ltp": f"{self.price(k, r):.4f}", "volume": 1000 + k % 7},
+                            "openInterest": {"current": 500000, "previous": 450000, "change": 50000, "changePct": 11.1}}
+                return {"inst": {"neoSymbol": f"nse_fo|{self.tok[(k, r)]}", "symbol": f"NIFTY26O06{k}{r}", "optType": r,
+                                 "strkPrc": str(k), "exp": "2026-10-06", "moneyness": "atm"},
+                        "quote": {"ltp": f"{self.price(k, r)}", "o": "1", "h": "1", "l": "1", "c": "1", "pc": "1",
+                                  "vol": str(1000 + k % 7)},
+                        "oi": {"cur": "500000", "prev": "450000", "chg": "-391.85", "chgPct": "-26.77"}}
+            d = {"common_data": {"mktLot": "65", "multiplier": "1", "expiryDt": params.get("expiry"), "unlSymbol": "NIFTY",
+                                 "exSeg": "nse_fo"},
+                 "call": [leg(k, "CE") for k in self.strikes], "put": [leg(k, "PE") for k in self.strikes]}
+            return Resp({"data": d} if self.shape == "docs" else d)
         if path.startswith("script-details/1.0/quotes/neosymbol/"):
             syms = path.split("/neosymbol/")[1].rsplit("/", 1)[0].split(",")
             out = []
@@ -150,9 +158,12 @@ def test_a_429_is_retried_once(monkeypatch):
     assert KotakClient("k", session=b, min_gap=0).expiries("NIFTY")[0] == EXP and b.n == 2
 
 
-def test_chain_from_the_live_book(client, fake):
-    ch = KotakOptionChain(client, strikes=37)
-    assert ch.count == 40                                                       # the API wants a multiple of 10
+@pytest.mark.parametrize("shape", ["live", "docs"])
+def test_chain_from_the_live_book(shape):
+    fake = FakeKotak(shape=shape)
+    client = KotakClient("ck-token", session=fake, min_gap=0)
+    ch = KotakOptionChain(client, strikes=17)
+    assert ch.count == 20                                                       # each side; a multiple of 10
     assert ch.expiries("NIFTY") == [EXP, dt.date(2026, 10, 13), dt.date(2026, 10, 27)]
     df = ch.chain("NIFTY", EXP)
     assert list(df.index) == [24750.0, 24800.0, 24850.0, 24900.0, 24950.0]
@@ -160,7 +171,7 @@ def test_chain_from_the_live_book(client, fake):
     r = df.loc[24850.0]
     p = fake.price(24850, "CE")
     assert (r.ce_bid, r.ce_ask, r.ce_ltp) == (pytest.approx(p - 0.4), pytest.approx(p + 0.4), pytest.approx(p))
-    assert r.ce_oi == 520000 and r.ce_doi == 50000 and r.ce_vol == 123450
+    assert r.ce_oi == 520000 and r.ce_doi == 50000 and r.ce_vol == 123450       # OI change = cur − prev, not "chg"
     assert (df[["ce_iv", "pe_iv"]] > 0).all().all()                             # IVs from the quote mids
     n_quote_calls = sum("/neosymbol/" in u for u, _ in fake.log)
     assert n_quote_calls == 1                                                    # 10 contracts + the index: one call
@@ -172,6 +183,8 @@ def test_an_empty_book_is_an_error_not_a_chain():
     ch = KotakOptionChain(KotakClient("k", session=FakeKotak(quoted=False), min_gap=0))
     with pytest.raises(KotakError, match="no bid/ask"):
         ch.chain("NIFTY", EXP)
+    df = ch.chain("NIFTY", EXP, require_quotes=False)                           # after hours: LTPs, tokens, OI
+    assert df.attrs["quoted"] == 0 and (df["ce_ltp"] > 0).all() and len(ch.tokens) == 10
 
 
 def test_live_quotes_for_held_contracts(client, fake):

@@ -49,7 +49,7 @@ def _chain_source(cfg, name: str, kite=None, kotak=None):
         from .chains import FallbackChain, NSEOptionChain
         from .kotak import KotakOptionChain
         kc = cfg.get("intraday.kotak", {}) or {}
-        return FallbackChain(KotakOptionChain(kotak, strikes=kc.get("strikes", 40), refresh_min=kc.get("refresh_min", 1)),
+        return FallbackChain(KotakOptionChain(kotak, strikes=kc.get("strikes", 20), refresh_min=kc.get("refresh_min", 1)),
                              NSEOptionChain(), secondary_min=cfg.get("intraday.chain_refresh_min", 3))
     return "model"
 

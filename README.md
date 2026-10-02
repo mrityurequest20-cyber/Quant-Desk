@@ -160,7 +160,8 @@ python -m quantdesk intraday review                     # the written session re
 authenticate with the app's consumer key: quotes (5-level depth, 50 instruments a call), option chain, expiries
 and 1-minute candles. That means **no TOTP, no MPIN, no daily login, and no static IP**: SEBI's static-IP rule
 (from 1 Apr 2026) covers the order APIs, which the desk never calls. Every minute it fetches each underlying's
-chain (40 strikes) and the bid/ask of every contract in it plus the index, about 3 calls per underlying. Paper
+chain (41 strikes, 20 each side of the money) and the bid/ask of every contract in it plus the index, about 3
+calls per underlying. Paper
 fills use the book of that moment. If Kotak fails, the chain falls back to NSE (asked at most every 3 minutes)
 and bars fall back to Yahoo, and the session review says which source served.
 
