@@ -84,6 +84,22 @@ def cmd_status(cfg, a):
         print(f"\nHoliday list check ({year}): config/quantdesk.yaml matches NSE's F&O holidays.")
 
 
+def cmd_archive(cfg, a):
+    from .archive import archive
+    from .warehouse import ReleaseStore
+    data = Path(a.data) if a.data else Path(cfg.runtime_dir) / "intraday" / "data"
+    day = dt.date.fromisoformat(a.day) if a.day else None
+    store_for = None
+    if a.release_prefix:
+        store_for = lambda y: ReleaseStore(f"{a.release_prefix}-{y}", title=f"Option-chain archive {y}",   # noqa: E731
+                                           notes="The live desk's recorded option-chain snapshots and 1-minute bars, "
+                                                 "one Parquet file per session part (quantdesk/data/archive.py). "
+                                                 "Not a software release.")
+    names = archive(data, a.part, Path(a.out), day, store_for, say=lambda m: print(m, flush=True))
+    print(f"archived {len(names)} file(s) from {data}" if names else f"nothing recorded under {data}"
+          + (f" for {day}" if day else ""))
+
+
 def register(sub):
     s = sub.add_parser("data", help="the market-data warehouse: NSE bhavcopy, participant OI, FII/DII, GIFT Nifty")
     ss = s.add_subparsers(dest="dcmd", required=True)
@@ -96,6 +112,13 @@ def register(sub):
     x.add_argument("--release", help="GitHub release holding the files (e.g. warehouse): pull first, push after")
     x.add_argument("--gap", type=float, default=0.5, help="seconds between NSE requests")
     x.set_defaults(fn=cmd_update)
+    x = ss.add_parser("archive-session", help="keep the desk's recorded chains and bars as Parquet (chains-YYYY release)")
+    x.add_argument("--part", required=True, help="which job recorded it, e.g. morning-<run id>")
+    x.add_argument("--data", help="recorder folder (default runtime/intraday/data)")
+    x.add_argument("--day", help="only this day (YYYY-MM-DD)")
+    x.add_argument("--out", default="_archive")
+    x.add_argument("--release-prefix", default="chains", help="push to <prefix>-<year>; empty to only write files")
+    x.set_defaults(fn=cmd_archive)
     x = ss.add_parser("status", help="coverage, gaps, and NSE's holidays vs the config")
     x.add_argument("--dir")
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")

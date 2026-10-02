@@ -185,3 +185,38 @@ def test_release_store_pulls_only_whats_there_and_pushes_changes(tmp_path):
     assert up[-1] == "--clobber" and up[3] == "warehouse" and up[4].endswith("fo_bhav_2026-10.parquet")
     names = needed_assets(dt.date(2026, 9, 25), dt.date(2026, 10, 2))
     assert "fo_bhav_2026-09.parquet" in names and "fo_bhav_2026-10.parquet" in names and "participant_oi_2026.parquet" in names
+
+
+# ---- the session archive -----------------------------------------------------------------------------------------
+def test_session_archive_compacts_chains_and_bars(tmp_path):
+    import numpy as np
+    from quantdesk.data.archive import archive, compact_day, load_archive
+    from quantdesk.intraday.chains import COLUMNS
+    from quantdesk.intraday.recorder import SessionRecorder
+    rec = SessionRecorder(tmp_path / "data")
+    day = dt.date(2026, 10, 5)
+    for minute, spot in ((30, 22450.0), (31, 22455.5)):
+        ch = pd.DataFrame(np.arange(len(COLUMNS) * 3, dtype=float).reshape(3, -1), columns=COLUMNS,
+                          index=pd.Index([22400.0, 22450.0, 22500.0], name="strike"))
+        ch.attrs.update({"underlying": "NIFTY", "spot": spot, "expiry": dt.date(2026, 10, 6),
+                         "ts": pd.Timestamp(f"{day} 09:{minute}", tz="Asia/Kolkata"), "source": "kotak"})
+        rec.record_chain(ch)
+    bars = pd.DataFrame({"open": [1.0, 2.0], "high": [1.0, 2.0], "low": [1.0, 2.0], "close": [1.0, 2.0], "volume": [0.0, 0.0]},
+                        index=pd.DatetimeIndex([f"{day} 09:15", f"{day} 09:16"]).tz_localize("Asia/Kolkata"))
+    rec.record_bars("NIFTY", bars)
+    f = compact_day(tmp_path / "data" / str(day))
+    assert len(f["chains"]) == 6 and set(f["chains"]["spot"]) == {22450.0, 22455.5} and len(f["bars"]) == 2
+    assert {"ts", "underlying", "expiry", "spot", "source", "strike", "ce_bid", "pe_ask"} <= set(f["chains"].columns)
+    pushed = []
+
+    class Store:
+        def __init__(self, year):
+            self.year = year
+
+        def push(self, src, names):
+            pushed.append((self.year, sorted(names)))
+    names = archive(tmp_path / "data", "morning-7", tmp_path / "out", store_for=Store, say=lambda m: None)
+    assert sorted(names) == ["2026-10-05_morning-7_bars.parquet", "2026-10-05_morning-7_chains.parquet"]
+    assert pushed == [(2026, sorted(names))]
+    back = load_archive(tmp_path / "out", "chains")
+    assert len(back) == 6 and back["source"].eq("kotak").all()

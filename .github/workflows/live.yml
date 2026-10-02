@@ -79,6 +79,11 @@ jobs:
           path: runtime/intraday/data
           retention-days: 90
           if-no-files-found: ignore
+      - name: Keep them for good too (Parquet on the chains-YYYY release; artifacts expire after 90 days)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk data archive-session --part "morning-${{ github.run_id }}" --day "$(date +%F)" || echo "::warning::session archive failed; the artifact still has the data"
 
   afternoon:
     needs: morning
@@ -119,3 +124,8 @@ jobs:
           path: runtime/intraday/data
           retention-days: 90
           if-no-files-found: ignore
+      - name: Keep them for good too (Parquet on the chains-YYYY release)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk data archive-session --part "afternoon-${{ github.run_id }}" --day "$(date +%F)" || echo "::warning::session archive failed; the artifact still has the data"

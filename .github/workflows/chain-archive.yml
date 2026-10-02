@@ -1,0 +1,38 @@
+# One-off / catch-up: archive the session data still held in live.yml's artifacts (90-day retention) onto the
+# chains-YYYY releases, as live.yml now does after every session (quantdesk data archive-session).
+name: Archive recorded sessions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write            # the chains-YYYY releases
+  actions: read              # download live.yml's artifacts
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Download every live run's session data
+        run: |
+          mkdir -p _dl
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow live.yml --limit 100 --json databaseId --jq '.[].databaseId'); do
+            gh run download "$id" -R "$GITHUB_REPOSITORY" --dir "_dl/$id" 2>/dev/null || true
+          done
+          find _dl -maxdepth 2 -mindepth 2 -type d | sort
+      - name: Archive them
+        run: |
+          for d in $(find _dl -maxdepth 2 -mindepth 2 -type d | sort); do
+            name=$(basename "$d"); part=${name#session-data-}; [ "$part" = "$name" ] && part="run-$(basename "$(dirname "$d")")"
+            python -m quantdesk data archive-session --data "$d" --part "$part" --out "_archive/$part"
+          done

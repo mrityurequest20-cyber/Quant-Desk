@@ -49,4 +49,4 @@ jobs:
         run: python -m quantdesk data update --release warehouse ${FROM:+--from "$FROM"} ${TO:+--to "$TO"} ${ONLY:+--only "$ONLY"}
       - name: Status
         if: always()
-        run: python -m quantdesk data status --release warehouse --dir _status >> "$GITHUB_STEP_SUMMARY"
+        run: python -m quantdesk data status --release warehouse --dir _status | tee -a "$GITHUB_STEP_SUMMARY"

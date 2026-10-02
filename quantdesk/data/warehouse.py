@@ -228,8 +228,11 @@ def holiday_diff(wh: Warehouse, configured: set[dt.date], year: int) -> tuple[li
 class ReleaseStore:
     """Pull/push the warehouse's files as assets of one GitHub release, through the `gh` CLI (GH_TOKEN)."""
 
-    def __init__(self, tag: str = "warehouse", repo: str | None = None, run=subprocess.run):
-        self.tag, self.repo, self._run = tag, repo, run
+    def __init__(self, tag: str = "warehouse", repo: str | None = None, run=subprocess.run,
+                 title: str = "Market-data warehouse",
+                 notes: str = "NSE end-of-day data as Parquet tables, maintained by data.yml "
+                              "(quantdesk/data/warehouse.py). Not a software release."):
+        self.tag, self.repo, self._run, self.title, self.notes = tag, repo, run, title, notes
 
     def _gh(self, *args, check=True) -> subprocess.CompletedProcess:
         cmd = ["gh", *args] + (["-R", self.repo] if self.repo else [])
@@ -243,9 +246,7 @@ class ReleaseStore:
 
     def ensure(self) -> None:
         if self._gh("release", "view", self.tag, check=False).returncode != 0:
-            self._gh("release", "create", self.tag, "--title", "Market-data warehouse", "--latest=false", "--notes",
-                     "NSE end-of-day data as Parquet tables, maintained by data.yml (quantdesk/data/warehouse.py). "
-                     "Not a software release.")
+            self._gh("release", "create", self.tag, "--title", self.title, "--latest=false", "--notes", self.notes)
 
     def pull(self, dest: Path, names: list[str]) -> list[str]:
         have = set(self.assets())
