@@ -294,7 +294,9 @@ def cmd_ai_check(cfg, a):
         if not key:
             print(f"{name}: no key (looked for {', '.join(llm.KEY_NAMES[name])})")
             continue
-        pc = cfg.get(f"intraday.llm.{name}", {}) or {}
+        pc = dict(cfg.get(f"intraday.llm.{name}", {}) or {})
+        if getattr(a, "model", None) and name in (a.only or name):
+            pc["model"] = a.model
         try:
             r = {"claude": lambda: llm.ClaudeReader(key, pc.get("model", "claude-opus-5-5"), pc.get("effort", "low")),
                  "gemini": lambda: llm.GeminiReader(key, pc.get("model", "gemini-2.5-flash")),
@@ -310,6 +312,8 @@ def cmd_ai_check(cfg, a):
             print(f"{name}: key in {var}; model {r.model}; test read "
                   + (f"NIFTY {got['NIFTY']:+.2f}, BANKNIFTY {got['BANKNIFTY']:+.2f} ({got['event']}; {got['why']})" if got else "empty")
                   + f"; usage {r.usage}")
+            if not got:                                     # the model's own reply (never the key), to see why
+                print(f"{name}: raw reply {json.dumps(getattr(r, 'last_raw', {}))[:800]}")
         except Exception as exc:
             print(f"{name}: key in {var}, but the call failed: {type(exc).__name__}: {str(exc)[:200]}")
     if not ok_any:
@@ -589,6 +593,8 @@ def register(sub):
     x.add_argument("--capital", type=float, help="default: intraday.capital")
     x.set_defaults(fn=cmd_stocks)
     x = ss.add_parser("ai-check", help="which language-model keys are set (names only) and a test read from each")
+    x.add_argument("--model", help="try this model instead of the configured one")
+    x.add_argument("--only", help="with --model: the provider it's for (claude, gemini, ollama)")
     x.set_defaults(fn=cmd_ai_check)
     x = ss.add_parser("learn", help="what the desk has learned from its calls (news, factors, setups)")
     x.add_argument("--account", help="live (default), replay, synthetic")

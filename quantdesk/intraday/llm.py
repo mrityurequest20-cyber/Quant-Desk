@@ -150,6 +150,7 @@ class ClaudeReader:
             client = anthropic.Anthropic(api_key=key, timeout=timeout, max_retries=2)
         self.client, self.model, self.effort = client, model, effort
         self.usage = {"calls": 0, "in": 0, "out": 0}
+        self.last_raw: dict = {}
 
     def _call(self, system: str, user: str, schema: dict, effort: str, max_tokens: int) -> str | None:
         r = self.client.beta.messages.create(
@@ -161,9 +162,11 @@ class ClaudeReader:
         u = getattr(r, "usage", None)
         self.usage["in"] += int(getattr(u, "input_tokens", 0) or 0)
         self.usage["out"] += int(getattr(u, "output_tokens", 0) or 0)
+        text = "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
+        self.last_raw = {"content": text[:600], "stop_reason": r.stop_reason}
         if r.stop_reason == "refusal":                      # the whole fallback chain declined: no read
             return None
-        return "".join(b.text for b in r.content if getattr(b, "type", "") == "text") or None
+        return text or None
 
     def read(self, items: list[dict]) -> dict[str, dict]:
         text = self._call(READ_SYSTEM, _payload(items), READ_SCHEMA, self.effort, 4000)
@@ -193,6 +196,7 @@ class GeminiReader:
         self.key, self.model, self.timeout = key, model, timeout
         self.http = session or requests.Session()
         self.usage = {"calls": 0, "in": 0, "out": 0}
+        self.last_raw: dict = {}
 
     def read(self, items: list[dict]) -> dict[str, dict]:
         body = {"systemInstruction": {"parts": [{"text": READ_SYSTEM}]},
@@ -208,7 +212,9 @@ class GeminiReader:
         self.usage["in"] += int(um.get("promptTokenCount") or 0)
         self.usage["out"] += int(um.get("candidatesTokenCount") or 0)
         parts = ((d.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
-        return _parse_reads("".join(p.get("text", "") for p in parts), {it["id"] for it in items})
+        text = "".join(p.get("text", "") for p in parts)
+        self.last_raw = {"content": text[:600], "finish": ((d.get("candidates") or [{}])[0]).get("finishReason")}
+        return _parse_reads(text, {it["id"] for it in items})
 
     def models(self) -> list[str]:
         r = self.http.get(f"{self.base}/models", timeout=self.timeout, headers={"x-goog-api-key": self.key})
@@ -227,12 +233,13 @@ class OllamaReader:
         self.key, self.model, self.host, self.timeout = key, model, host.rstrip("/"), timeout
         self.http = session or requests.Session()
         self.usage = {"calls": 0, "in": 0, "out": 0}
+        self.last_raw: dict = {}
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.key}"} if self.key else {}
 
     def read(self, items: list[dict]) -> dict[str, dict]:
-        body = {"model": self.model, "stream": False, "format": READ_SCHEMA, "options": {"temperature": 0.2},
+        body = {"model": self.model, "stream": False, "format": READ_SCHEMA, "options": {"temperature": 0.2, "num_predict": 4096},
                 "messages": [{"role": "system", "content": READ_SYSTEM}, {"role": "user", "content": _payload(items)}]}
         r = self.http.post(f"{self.host}/api/chat", json=body, timeout=self.timeout, headers=self._headers())
         r.raise_for_status()
@@ -240,7 +247,13 @@ class OllamaReader:
         self.usage["calls"] += 1
         self.usage["in"] += int(d.get("prompt_eval_count") or 0)
         self.usage["out"] += int(d.get("eval_count") or 0)
-        return _parse_reads((d.get("message") or {}).get("content", ""), {it["id"] for it in items})
+        m = d.get("message") or {}
+        text = m.get("content") or ""
+        if not text.strip() and "{" in (m.get("thinking") or ""):   # some reasoning models answer in the thinking field
+            text = m["thinking"]
+        self.last_raw = {"content": (m.get("content") or "")[:600], "thinking_chars": len(m.get("thinking") or ""),
+                         "done_reason": d.get("done_reason")}
+        return _parse_reads(text, {it["id"] for it in items})
 
     def models(self) -> list[str]:
         r = self.http.get(f"{self.host}/api/tags", timeout=self.timeout, headers=self._headers())

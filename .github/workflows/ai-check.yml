@@ -5,6 +5,13 @@ name: AI check
 
 on:
   workflow_dispatch:
+    inputs:
+      provider:
+        description: "Try another model for one provider (claude, gemini, ollama); empty: the configured ones"
+        default: ""
+      model:
+        description: "The model to try, e.g. glm-5.3 or gemini-3-flash"
+        default: ""
 
 permissions:
   contents: read
@@ -49,9 +56,12 @@ jobs:
         run: |
           env | grep '^HAS_' | sort | sed 's/^HAS_//' | tee names.txt
       - name: Language models
+        env:
+          PROVIDER: ${{ inputs.provider }}
+          MODEL: ${{ inputs.model }}
         run: |
           set -o pipefail
-          python -m quantdesk intraday ai-check | tee check.txt
+          python -m quantdesk intraday ai-check ${MODEL:+--model "$MODEL" --only "$PROVIDER"} | tee check.txt
       - name: Summary
         if: always()
         run: |
