@@ -8,9 +8,10 @@
    the close) predict the next session(s)? Tested as trades entered at the next open.
 
 Both lists were fixed before any result was seen. Newey-West t-statistics; each series is split in time, the older
-2/3 for discovery and the newest 1/3 kept untouched; Benjamini-Hochberg FDR (q = 0.10) runs on the *discovery* p-values
-within each family, and a discovery counts only if the holdout then keeps its sign (one-sided p < 0.10). (Taking the
-FDR on the full sample, holdout included, let chance results confirm themselves: on simulated noise it "found" edges
+2/3 for discovery and newest 1/3 for rolling validation, which is inspected weekly and is not an untouched final test;
+Benjamini-Hochberg FDR (q = 0.10) runs on the *discovery* p-values within each family, and a discovery counts only if
+rolling validation keeps its sign (one-sided p < 0.10). (Taking the FDR on the full sample, validation included,
+let chance results confirm themselves: on simulated noise it "found" edges
 in 3 of 20 worlds.)
 """
 from __future__ import annotations
@@ -27,6 +28,7 @@ from scipy.special import ndtr
 
 from ..options.pricing import implied_vol_vec
 from .edges import LOT, Result, _split, benjamini_hochberg, evaluate, hac_mean
+from .protocol import development_sample
 
 R, Q = 0.065, 0.012
 ACCOUNT = 20_000
@@ -200,7 +202,7 @@ def evaluate_vrp(trades: pd.DataFrame, lot_of=LOT, account: float = ACCOUNT, q: 
     if trades.empty:
         return res
     for (sym, name, k), g in trades.sort_values("entry").groupby(["symbol", "strategy", "k"]):
-        x = g.set_index(pd.to_datetime(g["entry"]))["pnl_pts"]
+        x = development_sample(g.set_index(pd.to_datetime(g["entry"]))["pnl_pts"])
         if len(x) < 20:
             continue
         lot = lot_of.get(sym, 1)
@@ -232,7 +234,7 @@ def evaluate_vrp(trades: pd.DataFrame, lot_of=LOT, account: float = ACCOUNT, q: 
         if not (ok and holds):
             r.verdict = "NO EDGE"
         elif r.mean_pts > 0:
-            r.verdict = "EDGE (fits ₹20k)" if r.capital_rs <= account else f"EDGE, needs ~₹{r.capital_rs / 1e3:,.0f}k"
+            r.verdict = "PAPER CANDIDATE (fits ₹20k)" if r.capital_rs <= account else f"PAPER CANDIDATE, needs ~₹{r.capital_rs / 1e3:,.0f}k"
         else:
             r.verdict = "RELIABLY LOSES"
     return res
@@ -315,7 +317,7 @@ def run_positioning(part: pd.DataFrame, daily: dict, q: float = 0.10) -> list[Re
         r.bh_pass = bool(ok)
         holds = r.p_holdout == r.p_holdout and r.p_holdout < 0.10
         r.verdict = ("NO EDGE" if not (ok and holds) else
-                     "REAL BUT BELOW COSTS" if abs(r.effect_pts) < r.hurdle_pts else "EDGE")
+                     "REAL BUT BELOW COSTS" if abs(r.effect_pts) < r.hurdle_pts else "PAPER CANDIDATE")
     return res
 
 
@@ -456,6 +458,15 @@ def spot_series(opts: pd.DataFrame, symbol: str, daily: pd.DataFrame | None) -> 
 def run_all(folder: Path, daily: dict, cfg=None) -> dict:
     out = {"vrp": [], "positioning": [], "trades": 0, "span": {}}
     opts = load_options(folder)
+    # This sample is reserved for the final test. Keeping it out of optimization, scorecards,
+    # stability and positioning makes the lock cover every routine research output.
+    from .protocol import FINAL_TEST_START
+    if len(opts):
+        opts = opts[pd.to_datetime(opts["date"]).dt.date < FINAL_TEST_START.date()]
+    daily = {s: f[pd.DatetimeIndex(f.index).tz_localize(None).date < FINAL_TEST_START.date()]
+             if isinstance(f.index, pd.DatetimeIndex) and f.index.tz is not None else
+             f[pd.DatetimeIndex(f.index).date < FINAL_TEST_START.date()]
+             for s, f in daily.items()}
     if cfg is not None:
         from ..core.types import Instrument
         from ..intraday.sim import IntradayBroker
@@ -503,9 +514,11 @@ def report(res: dict, generated: str) -> str:
          "Opened at the close k sessions before expiry at bhavcopy closing prices worsened by a half-spread and a tick, "
          "plus brokerage, STT, exchange, GST, stamp and exercise STT; held to cash settlement. ₹ figures are per lot "
          "at today's lot sizes (NIFTY 65, BANKNIFTY 30). Benjamini-Hochberg across all rows below.", "",
-         "| verdict | strategy | index | k | trades | mean ₹/lot | t | holdout ₹/lot | win | worst ₹ | max DD ₹ | Sharpe | capital |",
+         "**The rolling validation is re-inspected; it is not an untouched holdout. The locked final test window is sealed "
+         "and excluded from routine research. Candidate labels require a cost-inclusive paper trial and final test before promotion.**", "",
+         "| verdict | strategy | index | k | trades | mean ₹/lot | t | rolling validation ₹/lot | win | worst ₹ | max DD ₹ | Sharpe | capital |",
          "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
-    order = lambda v: (0 if v.startswith("EDGE (fits") else 1 if v.startswith("EDGE") else 2 if v == "RELIABLY LOSES" else 3)  # noqa: E731
+    order = lambda v: (0 if v.startswith("PAPER CANDIDATE (fits") else 1 if v.startswith("PAPER CANDIDATE") else 2 if v == "RELIABLY LOSES" else 3)  # noqa: E731
     for r in sorted(res["vrp"], key=lambda r: (order(r.verdict), -abs(r.t))):
         lot = LOT.get(r.symbol, 1)
         L.append(f"| **{r.verdict}** | {r.strategy} | {r.symbol} | {r.k} | {r.n} | {r.mean_pts * lot:+,.0f} | {r.t:+.2f} | "
@@ -549,8 +562,8 @@ def report(res: dict, generated: str) -> str:
     L += ["", "## 2. Positioning (participant-wise OI)", "",
           "Signals known after the close, traded from the next open. Effect in basis points of the index per trade; "
           "the cost hurdle is one lot of a 0.35Δ option in and out.", "",
-          "| verdict | id | index | hypothesis | n | effect bps | t | p | holdout bps |", "|---|---|---|---|---:|---:|---:|---:|---:|"]
-    for r in sorted(res["positioning"], key=lambda r: (r.verdict != "EDGE", r.p)):
+          "| verdict | id | index | hypothesis | n | effect bps | t | p | rolling validation bps |", "|---|---|---|---|---:|---:|---:|---:|---:|"]
+    for r in sorted(res["positioning"], key=lambda r: (r.verdict != "PAPER CANDIDATE", r.p)):
         L.append(f"| **{r.verdict}** | {r.id} | {r.symbol} | {r.hypothesis} | {r.n:,} | {r.effect_bps:+.1f} | {r.t:+.2f} | "
                  f"{r.p:.3f} | {r.effect_holdout_bps:+.1f} |")
     return "\n".join(L) + "\n"

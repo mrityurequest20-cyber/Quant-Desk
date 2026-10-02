@@ -77,7 +77,7 @@ class IntradayEngine:
         self._pcache: dict[str, tuple] = {}
         self._qc_cache: dict[str, dict] = {}
         self._qerrors: set = set()
-        self.research = load_research(Path(cfg.runtime_dir) / "research" / "edges.json") if self.quant_on else {}
+        self.research = load_research(Path(cfg.runtime_dir) / "research" / "promoted_research.json") if self.quant_on else {}
         self.bars: dict[str, pd.DataFrame] = {}
         self.last_ts: dict[str, pd.Timestamp] = {}
         self.chain_df: dict[str, pd.DataFrame] = {}

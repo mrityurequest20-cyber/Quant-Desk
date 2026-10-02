@@ -67,11 +67,11 @@ def test_rich_implied_vol_shows_a_premium_and_fair_pricing_does_not():
     opts, spot = _world(iv=0.20, rv=0.11)
     res = {(r.strategy, r.k): r for r in W.evaluate_vrp(W.build_trades(opts, spot, "NIFTY"))}
     ss = res[("short_straddle", 1)]
-    assert ss.mean_pts > 0 and ss.t > 3 and ss.verdict.startswith("EDGE")
+    assert ss.mean_pts > 0 and ss.t > 3 and ss.verdict.startswith("PAPER CANDIDATE")
     assert "needs" in ss.verdict                                                # a naked straddle needs ~₹1.5L+, not ₹20k
     opts, spot = _world(iv=0.12, rv=0.12, seed=2)
     fair = {(r.strategy, r.k): r for r in W.evaluate_vrp(W.build_trades(opts, spot, "NIFTY"))}
-    assert not any(r.verdict.startswith("EDGE") for r in fair.values())        # costs eat a fairly priced premium
+    assert not any(r.verdict.startswith("PAPER CANDIDATE") for r in fair.values())  # costs eat a fairly priced premium
 
 
 def _participants(n=900, planted=True, seed=3):
@@ -99,9 +99,9 @@ def _participants(n=900, planted=True, seed=3):
 def test_positioning_finds_a_planted_signal_and_not_noise():
     part, daily = _participants(planted=True)
     res = {r.id: r for r in W.run_positioning(part, daily)}
-    assert res["P1"].verdict == "EDGE" and res["P1"].effect_bps > 20
+    assert res["P1"].verdict == "PAPER CANDIDATE" and res["P1"].effect_bps > 20
     part, daily = _participants(planted=False, seed=4)
-    assert not any(r.verdict == "EDGE" for r in W.run_positioning(part, daily))
+    assert not any(r.verdict == "PAPER CANDIDATE" for r in W.run_positioning(part, daily))
 
 
 def test_scorecards_and_stability_on_a_rich_world():

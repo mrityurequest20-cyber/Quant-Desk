@@ -12,7 +12,7 @@ const NS = "http://www.w3.org/2000/svg";
 const S = {
 	account: "live", tab: "desk", sub: { trades: "positions", feed: "news" }, sym: "NIFTY", interval: "5m", brainSym: "NIFTY",
 	state: null, charts: {}, chartAt: {}, news: null, newsAt: 0, lw: null, eq: null, thBefore: null, thSym: "", newsF: "", brk: "by_day_type",
-	accounts: [], installEvt: null,
+	accounts: [], installEvt: null, ollamaStatus: null, ollamaView: null, networkUnavailable: false,
 };
 
 // ---- icons (24px, stroked) -----------------------------------------------------------------------------------
@@ -242,6 +242,10 @@ function deskStatus(st) {
 	const hb = (st && st.heartbeat) || {}, pub = !!window.QD_PUBLISHED;
 	const stale = !st || st.age_sec == null || !(st.age_sec <= (pub ? 900 : 180));
 	if (window.QD_DEMO && !pub) return { k: "off", t: "Snapshot", s: hb.ts ? ist(hb.ts, true) : "", stale: false };
+	if (!navigator.onLine || window.QD_OFFLINE_CACHE)
+		return { k: "off", t: "Offline", s: hb.ts ? ist(hb.ts, true) : "", stale: true, network: true };
+	if (S.networkUnavailable)
+		return { k: "off", t: "Unavailable", s: hb.ts ? ist(hb.ts, true) : "", stale: true, network: true };
 	if (stale) return { k: "off", t: inSession() ? "Offline" : "Closed", s: hb.ts ? ist(hb.ts, true) : "", stale: true };
 	if (st.paused) return { k: "paused", t: "Paused", s: ist(hb.ts), stale: false };
 	if (hb.halted) return { k: "paused", t: "Done for day", s: ist(hb.ts), stale: false };
@@ -257,7 +261,8 @@ function setStatus(st) {
 
 // ---- data ------------------------------------------------------------------------------------------------------
 async function loadState() {
-	try { S.state = await api("/api/i/state"); } catch (e) { S.state = null; S.stateErr = e.message; }
+	try { S.state = await api("/api/i/state"); S.networkUnavailable = false; S.stateErr = ""; }
+	catch (e) { S.networkUnavailable = true; S.stateErr = e.message; }
 	setStatus(S.state);
 	return S.state;
 }
@@ -281,6 +286,12 @@ const symbols = () => { const v = Object.keys(views()); return v.length ? v : ["
 async function renderDesk() {
 	const st = S.state;
 	if (!st) {
+		const banner = $("#d-banner");
+		banner.textContent = "";
+		if (S.networkUnavailable && (window.QD_PUBLISHED || S.account === "live"))
+			banner.appendChild(h("div", { class: "banner" }, icon("aside"),
+				(!navigator.onLine || window.QD_OFFLINE_CACHE ? "Network unavailable." : "Desk connection failed.") +
+				" No current session snapshot is available; reconnect and refresh before relying on this desk."));
 		$("#d-hero").textContent = "";
 		$("#d-hero").appendChild(empty("info", (S.stateErr || "No desk yet") + ". Start one with `quantdesk intraday live` (or `intraday replay --synthetic 5`)."));
 		return;
@@ -289,7 +300,12 @@ async function renderDesk() {
 	// banner: why nothing is moving
 	const bn = $("#d-banner");
 	bn.textContent = "";
-	if (status.stale && (window.QD_PUBLISHED || S.account === "live")) {
+	if (status.network && (window.QD_PUBLISHED || S.account === "live")) {
+		bn.appendChild(h("div", { class: "banner" }, icon("aside"),
+			(!navigator.onLine || window.QD_OFFLINE_CACHE ? "Network unavailable." : "Desk connection failed.") +
+			" Showing the last saved state" + (hb.ts ? ", " + ist(hb.ts, true) : "") +
+			"; data may be stale. Reconnect and refresh before relying on it."));
+	} else if (status.stale && (window.QD_PUBLISHED || S.account === "live")) {
 		const mins = st.age_sec != null ? Math.round(st.age_sec / 60) : null;
 		bn.appendChild(h("div", { class: "banner" }, icon(inSession() ? "clock" : "moon"), h("div", {}, inSession()
 			? `The desk hasn't reported for ${mins != null ? mins + " min" : "a while"}. It hands over to a fresh runner at 12:20, and a restart takes a few minutes; this page refreshes by itself.`
@@ -950,7 +966,33 @@ function markdown(md) {
 // ==================================================================================================================
 // BRAIN
 // ==================================================================================================================
+function ensureOllamaStatus() {
+	if (window.QD_PUBLISHED || S.ollamaStatus !== null) return;
+	S.ollamaStatus = { loading: true };
+	api("/api/i/ollama").then((x) => { S.ollamaStatus = x; if (S.tab === "brain") renderBrain(); })
+		.catch((e) => { S.ollamaStatus = { enabled: false, error: e.message }; if (S.tab === "brain") renderBrain(); });
+}
+async function explainWithOllama() {
+	const symbol = S.brainSym;
+	S.ollamaView = { symbol, status: "pending" };
+	renderBrain();
+	try {
+		const queued = await post("/api/i/ollama/explain", { symbol });
+		const deadline = Date.now() + 90000;
+		while (Date.now() < deadline) {
+			const state = await api("/api/i/ollama/job?id=" + encodeURIComponent(queued.job_id));
+			if (state.status === "done") { S.ollamaView = { symbol, status: "done", result: state.result }; renderBrain(); return; }
+			if (state.status === "error") throw new Error(state.error || "Ollama could not explain this read.");
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+		}
+		throw new Error("Ollama is taking too long. The desk will keep running; try again later.");
+	} catch (e) {
+		S.ollamaView = { symbol, status: "error", error: e.message };
+		renderBrain();
+	}
+}
 function renderBrain() {
+	ensureOllamaStatus();
 	const syms = symbols();
 	if (!syms.includes(S.brainSym)) S.brainSym = syms[0];
 	seg($("#b-sym"), syms.map((s) => [s, s]), S.brainSym, (v) => { S.brainSym = v; renderBrain(); });
@@ -969,6 +1011,29 @@ function renderBrain() {
 		h("div", { class: "narr" }, b.narrative));
 	}
 	body.appendChild(rp);
+	if (!window.QD_PUBLISHED && S.ollamaStatus && S.ollamaStatus.enabled) {
+		const current = S.ollamaView && S.ollamaView.symbol === S.brainSym ? S.ollamaView : null;
+		const panel = h("div", { class: "panel pad", style: "margin-top:14px" },
+			h("div", { class: "sec-h" }, h("h2", {}, "AI explanation"),
+				h("span", { class: "hint" }, `${S.ollamaStatus.model || "Ollama"} · local`)),
+			h("div", { class: "f3", style: "font-size:12px;margin:6px 0 12px" },
+				"Optional explanation of the latest saved read and related headlines. It cannot change signals, risk or orders."));
+		if (S.ollamaStatus.ready) panel.appendChild(h("button", { class: "btn", disabled: !!(current && current.status === "pending"), onclick: explainWithOllama },
+			current && current.status === "pending" ? "Asking local model…" : "Explain the latest read"));
+		else panel.appendChild(h("div", { class: "hint" }, "Set ai.ollama.model to a model installed in Ollama to enable explanations."));
+		if (current && current.status === "done") {
+			const r = current.result;
+			panel.appendChild(h("div", { class: "narr", style: "margin-top:12px" }, r.summary));
+			if (r.observations.length) put(panel, h("div", { class: "lbl", style: "margin-top:12px" }, "Evidence noted"),
+				h("ul", { class: "f3", style: "padding-left:20px;line-height:1.55" }, r.observations.map((x) => h("li", {}, x))));
+			if (r.uncertainties.length) put(panel, h("div", { class: "lbl", style: "margin-top:10px" }, "Uncertainties"),
+				h("ul", { class: "f3", style: "padding-left:20px;line-height:1.55" }, r.uncertainties.map((x) => h("li", {}, x))));
+			panel.appendChild(h("div", { class: "hint", style: "margin-top:10px" }, `Snapshot ${ist(r.as_of, true)} · AI text is explanatory only.`));
+		} else if (current && current.status === "error") {
+			panel.appendChild(h("div", { class: "note", style: "margin-top:10px" }, current.error));
+		}
+		body.appendChild(panel);
+	}
 	// the open, explained
 	if (b && b.gap) {
 		const g = b.gap, against = g.explained * g.gap < 0 && Math.abs(g.explained) > 0.0005;
@@ -1260,6 +1325,8 @@ async function boot() {
 	addEventListener("hashchange", () => { const [t, s] = location.hash.slice(1).split("/"); show(t || "desk", s); });
 	addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); S.installEvt = e; if (S.tab === "desk") installCard(); });
 	addEventListener("appinstalled", () => { store("qd.installed", "1"); document.querySelectorAll(".install").forEach((x) => x.remove()); });
+	addEventListener("offline", () => { S.networkUnavailable = true; setStatus(S.state); if (S.tab === "desk") renderDesk(); });
+	addEventListener("online", () => { S.networkUnavailable = false; window.QD_OFFLINE_CACHE = false; refresh(true, true); });
 	try { S.accounts = await api("/api/i/accounts"); } catch (e) { S.accounts = []; }
 	if (!S.accounts.length) S.accounts = [{ id: "live", label: "Live paper" }];
 	const saved = store("qd.account");

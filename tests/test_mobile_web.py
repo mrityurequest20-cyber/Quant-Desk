@@ -135,7 +135,7 @@ def test_static_site_exports(site, tmp_path):
     from quantdesk.web.export_site import export_site, publish_site
     _, cfg, _, days = site
     one = export_site(cfg, "live", tmp_path / "snap.html")
-    html = one.read_text()
+    html = one.read_text(encoding="utf-8")
     assert html.startswith("<title>QuantDesk</title>") and 'id="qd-data"' in html and "qdAnswer" in html
     assert "</script>" not in html[html.index('id="qd-data"'):html.index("window.QD_DEMO")].split("</script>", 1)[0]
 
@@ -148,7 +148,7 @@ def test_static_site_exports(site, tmp_path):
     sw = (out / "sw.js").read_text()
     assert "__QD_VERSION__" not in sw and re.search(r'const CACHE = "qd-[0-9a-f]{12}"', sw)
     assert "window.QD_NOTE=" in (out / "index.html").read_text()
-    page = (out / "index.html").read_text()
+    page = (out / "index.html").read_text(encoding="utf-8")
     assert "QD_PUBLISHED" in page and '<script src="app.js"></script>' in page and '<script src="lightweight-charts.js">' in page
     assert "TradingView Lightweight Charts" in html                             # the snapshot inlines the chart library
     assert 'href="/' not in page and "/static/" not in page                     # works under /<repo>/ on Pages

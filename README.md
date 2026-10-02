@@ -225,14 +225,19 @@ A recency-weighted tone (half-life 45 minutes) is one piece of evidence with mod
 
 ## Edge research (real data)
 
-`python -m quantdesk research`, run weekly on GitHub as the *Edge research* workflow, tests a fixed, pre-registered list of hypotheses on real NIFTY, BANKNIFTY and India VIX data from Yahoo: 19 years of daily bars, 2 years of hourly and 60 days of 5m. Each hypothesis is judged four ways:
+`python -m quantdesk research`, run weekly on GitHub as the *Edge research* workflow, tests a fixed, pre-registered list of hypotheses on real NIFTY, BANKNIFTY and India VIX data from Yahoo: 19 years of daily bars, 2 years of hourly and 60 days of 5m. Each hypothesis is judged with Newey-West statistics, discovery-only Benjamini-Hochberg control, a realistic one-lot cost hurdle, and a chronological rolling-validation slice.
 
-- a Newey-West t-statistic
-- a holdout on the newest third of the data
-- Benjamini-Hochberg false-discovery control across all tests
-- the cost of one lot of a 0.35Δ option (≈ 4.2 NIFTY points) as the hurdle
+The newest third is re-inspected by each weekly run. It is **rolling validation**, not a fresh
+holdout. Routine analysis permanently excludes the locked final period **2026-10-05 through
+2027-03-31**. Every run is appended to `experiment_log.jsonl` with its code digest, data fingerprint,
+hypotheses, parameters and results. A statistical result is labelled **PAPER CANDIDATE** and is
+not loaded by the engine. A candidate must also pass at least 60 real paper sessions, 30 closed
+trades, positive net P&L after costs, profit factor ≥1.15, max drawdown ≤10%, no risk-limit
+incidents, and the locked final test before a separate promotion review.
 
-The report goes to the `research` branch, and the live desk uses only what survives.
+The report and append-only ledger go to the `research` branch. No candidate is promoted automatically.
+See [release gates](docs/RELEASE_GATES.md) for measurable operating and promotion criteria, and
+[recovery steps](docs/RECOVERY.md) for journal restore, session replay and safe restart.
 
 First run (29-Sep-2026), 25 tests:
 - **NIFTY's intraday drift is negative.** Open→close averages −5.7 bps a day, about −13 points (t −3.44 over 4,669 days). It holds in the newest third (−4.6 bps). Returns accrue overnight, not in the session. The desk adds this as a small bearish drift to every EV and as low-weight evidence.
@@ -302,7 +307,7 @@ Nothing here adds a step to the daily process.
 | 2 risk & tail | Sharpe, Sortino, Calmar, Omega; skew, excess kurtosis; VaR/CVaR 95 & 99 (historical and Cornish-Fisher); max DD, time under water, recovery, Ulcer Index; P(ruin) by bootstrap | scorecard, `risk/metrics.py` |
 | 3 execution | slippage break-even (₹ and bps of notional); live fills at the Kotak bid/ask with an entry-slip guard; fill audit vs recorded quotes; VWAP z-score; OFI and VPIN (library) | scorecard, `intraday/kotak.py`, `deploy/audit_fills.py`, `analytics/models.py` |
 | 4 derivatives | Greeks incl. vanna, volga, charm, speed; IV rank/percentile; 25Δ skew; VRP (IV − RV); naive dealer GEX and gamma flip; options-implied carry; futures basis, carry and roll yield | `options/pricing.py`, `options/gex.py`, chain read, research |
-| 5 robustness | discovery/holdout split with FDR on discovery p-values; OOS efficiency; PSR and DSR (trials counted); ±10% parameter stability; walk-forward | research, scorecard, `backtest/walkforward.py` |
+| 5 robustness | discovery/rolling-validation split with FDR on discovery p-values; OOS efficiency; PSR and DSR (trials counted); ±10% parameter stability; walk-forward | research, scorecard, `backtest/walkforward.py` |
 | 6 models | GBM, OU (fit and half-life), Hurst, variance ratio, Kalman hedge ratio, GARCH, HMM, SVI; Heston (pricing and calibration), Hawkes, PCA of the vol surface, vector Kelly Σ⁻¹μ, Almgren-Chriss, Avellaneda-Stoikov | `analytics/stats.py`, `analytics/volatility.py`, `analytics/regime.py`, `options/surface.py`, `analytics/models.py` |
 
 The live read only gains context lines (dealer gamma, implied carry), never votes: they are untested here. The heavy
@@ -322,7 +327,7 @@ The brain connects everything the desk sees into one picture, and it's honest ab
 - **Drivers.** Markets roll up into drivers: US equities, Asia, Europe, the dollar, the rupee, crude, US rates, fear (US VIX) and gold. Each is signed the way it usually leans on Indian equities.
 - **Measured links.** The weekly edge research measures every driver → NIFTY/BANKNIFTY link on real data:
   - *explanatory*: β and correlation to the opening gap, and same-5-minute co-movement
-  - *predictive*: a lead that survives the holdout, false-discovery control and the cost hurdle
+  - *predictive*: a lead that survives rolling validation, false-discovery control and the cost hurdle
 
   The brain **explains with the first and only votes with the second**, in the *measured* direction.
 - **News → drivers.** Crude headlines attach to the crude node, Fed stories to rates, China to Asia, war to fear. The brain can see whether price and story agree.
@@ -369,7 +374,22 @@ Open that link once on the phone, on the same Wi-Fi. The token is remembered in 
 
 **Share a read-only snapshot:** `python -m quantdesk intraday export-site --account live --out site.html` writes the whole app plus an account's data as one HTML file. Host it anywhere static; the controls are off in a snapshot. For a site that stays current, use `--dir` (see [Running it every day by itself](#running-it-every-day-by-itself)).
 
+The Pages app is intentionally a full paper-performance disclosure: balance/P&L, positions,
+closed trades, up to 150 trade details, session reviews, recent reads, headlines and charts are
+public. It contains no real broker account or credentials. See [release gates and disclosure](docs/RELEASE_GATES.md)
+before adding any personal, live-account or private data.
+
 **How the pieces fit:** the engine (`intraday live`) and the website are separate processes sharing the journal. Commands from the phone are queued, and the engine applies them on its next minute. Everything is paper-only; the website can pause, close or flatten, but never places real orders.
+
+### Optional local Ollama explanation
+
+The Brain tab can ask a locally running Ollama model to explain the latest saved desk read and a few related headlines. It runs only when you press **Explain the latest read**. Ollama receives a compact snapshot; the result is displayed as commentary and is never read by the signal, sizing, risk, or broker code. The feature is off by default, uses no hosted AI API key, and is available only in the local app (not the static published site).
+
+1. Install and start [Ollama](https://ollama.com), then download a model you want to run locally (for example, `ollama pull qwen3:4b`).
+2. In `config/quantdesk.yaml`, set `ai.ollama.enabled: true` and `ai.ollama.model: qwen3:4b` (or the exact name of your downloaded model). The default URL is `http://127.0.0.1:11434`; keep `allow_remote: false` for a same-machine Ollama service.
+3. Restart `python -m quantdesk serve`, open the Brain tab, and press **Explain the latest read**. This works when the local journal has a saved read for the selected index.
+
+The request is sent to Ollama's local `/api/chat` endpoint using a constrained JSON response and a bounded timeout. If you intentionally host Ollama on another trusted machine, set `allow_remote: true` and configure its reachable URL; that sends the snapshot across your network. Do not expose an unauthenticated Ollama endpoint to the public internet.
 
 ## Running it every day by itself
 
@@ -398,7 +418,7 @@ On NSE holidays both jobs exit within a minute.
 
 **Checking the fills.** `audit.yml` (Actions tab, optional date) downloads the recorded option chains from the live runs' artifacts and checks every paper fill against the bid/ask the market actually showed, with each trade's P&L at those quotes (`deploy/audit_fills.py`).
 
-- **The live website** is at `https://mrityurequest20-cyber.github.io/Quant-Desk/`. It is the same phone app, **read-only**, re-published every ~6 minutes while the desk runs. The status pill reads **Live** while the heartbeat is fresh, **Closed** outside market hours and **Offline** if the desk stops reporting mid-session. **Install it:** on Android, Chrome offers *Install app* (the app shows a card for it too); on iPhone, Safari → Share → *Add to Home Screen*. It then opens full-screen from its own icon, and a service worker keeps the last state readable offline.
+- **The live website** is at `https://mrityurequest20-cyber.github.io/Quant-Desk/`. It is the same phone app, **read-only**, re-published every ~6 minutes while the desk runs. The status pill reads **Live** while the heartbeat is fresh, **Closed** outside market hours and **Offline** when the connection or desk is unavailable; cached data is labelled as potentially stale. **Install it:** on Android, Chrome offers *Install app* (the app shows a card for it too); on iPhone, Safari → Share → *Add to Home Screen*. It then opens full-screen from its own icon, and a service worker keeps the last state readable offline.
 - **On Cloudflare too.** Cloudflare Workers Builds deploys the `quantdesk` Worker from `main` with `npx wrangler deploy` (no build command). The Worker (`deploy/cloudflare/worker.js`, configured in `wrangler.jsonc`) passes every request to the GitHub Pages site above, so it serves exactly what the desk last published, with `data.json` never cached at the edge. It only redeploys when those two files change, not on every data update. The site itself is still published to Pages, so Pages must stay on.
 - **App updates** reach the site on their own: `site.yml` re-publishes the site whenever `quantdesk/web/` changes on `main`, after any running desk has finished (a running desk keeps publishing with the code it started with).
 - **The journal** lives on the `journal` branch: the SQLite journal, the paper broker, the reviews and the recorded 1m bars. To read it locally, run `git fetch origin journal && git archive FETCH_HEAD | tar -x -C runtime`, then `quantdesk intraday stats` or `quantdesk serve`.

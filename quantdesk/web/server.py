@@ -13,6 +13,9 @@ requests handled in order. Binds to localhost by default.
   GET  /api/broker?symbol=              GoCharting setBrokerAccounts() payload
   GET  /api/status                      account, positions, queue, checks, recent reviews
   GET  /api/analysis?symbol=            chart + quant + options read (text)
+  GET  /api/i/ollama                   optional local Ollama status
+  GET  /api/i/ollama/job?id=           status/result of a requested explanation
+  POST /api/i/ollama/explain           queue an explanation of the latest market read
   POST /api/order|close|modify|cancel   trade from the chart (paper account only)
 """
 from __future__ import annotations
@@ -348,6 +351,8 @@ def make_handler(api: DeskAPI, iapi=None, token: str | None = None):
                         "/api/i/trade": lambda: iapi.trade(acct, q.get("id")),
                         "/api/i/reviews": lambda: iapi.reviews(acct), "/api/i/review": lambda: iapi.review(acct, q.get("date")),
                         "/api/i/stats": lambda: iapi.stats(acct),
+                        "/api/i/ollama": lambda: iapi.ollama_status(),
+                        "/api/i/ollama/job": lambda: iapi.ollama_job(q.get("id", "")),
                         "/api/i/chart": lambda: iapi.chart(acct, q.get("symbol", "NIFTY"), q.get("date"), q.get("interval", "1m")),
                         "/api/i/udf": lambda: iapi.udf(acct, q.get("symbol", "NIFTY"), q.get("interval", "1m"), q.get("from"),
                                                        q.get("to"), q.get("countback")),
@@ -373,6 +378,7 @@ def make_handler(api: DeskAPI, iapi=None, token: str | None = None):
                 routes = {"/api/order": api.order, "/api/close": api.close, "/api/modify": api.modify, "/api/cancel": api.cancel}
                 if iapi is not None:
                     routes["/api/i/command"] = lambda b: iapi.command(q.get("account"), b)
+                    routes["/api/i/ollama/explain"] = lambda b: iapi.ollama_explain(q.get("account"), b)
                 fn = routes.get(u.path)
                 if fn is None:
                     return self._send(404, {"error": "not found"})

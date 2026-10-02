@@ -25,8 +25,13 @@ self.addEventListener("fetch", (e) => {
 		e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => keep(req, res))));
 		return;
 	}
-	e.respondWith(fetch(req).then((res) => keep(req, res)).catch(() =>
-		caches.match(req, { ignoreSearch: true }).then((hit) => hit || (req.mode === "navigate" ? caches.match("index.html") : Response.error()))));
+	e.respondWith(fetch(req).then((res) => keep(req, res)).catch(async () => {
+		const hit = await caches.match(req, { ignoreSearch: true });
+		if (!hit) return req.mode === "navigate" ? caches.match("index.html") : Response.error();
+		const headers = new Headers(hit.headers);
+		headers.set("X-QD-Offline-Cache", "1");
+		return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers });
+	}));
 });
 
 function keep(req, res) {

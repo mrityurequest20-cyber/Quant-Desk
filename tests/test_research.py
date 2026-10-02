@@ -38,7 +38,7 @@ def test_finds_a_planted_edge_and_refuses_noise():
     assert abs(d2_noise.t) < 3
     data = {"daily": {"NIFTY": _daily(seed=2, gap_follow=0.8)}, "hourly": {}, "m5": {}}
     res = {r.id: r for r in run(data, symbols=("NIFTY",))}
-    assert res["D2"].verdict == "EDGE" and res["D2"].bh_pass
+    assert res["D2"].verdict == "PAPER CANDIDATE" and res["D2"].bh_pass
     assert res["D4"].verdict == "NO EDGE"                                    # Tuesdays: nothing planted, nothing found
 
 

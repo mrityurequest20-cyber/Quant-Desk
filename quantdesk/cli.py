@@ -309,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_data(sub)
     s = sub.add_parser("research", help="test pre-registered edge hypotheses on real NIFTY/BANKNIFTY data")
     s.add_argument("--out", default="research", help="folder for edge_report.md and edges.json")
+    s.add_argument("--experiment-log", help="append every run to this JSONL ledger (default: runtime/research/experiment_log.jsonl)")
     s.add_argument("--warehouse", help="the data warehouse folder: also test the volatility premium on real option "
                                        "prices and FII positioning (data_report.md)")
     s.set_defaults(fn=cmd_research)
@@ -318,12 +319,24 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_research(cfg, a):
     import pandas as pd
     from .research.edges import links_json, load_global, load_yahoo, report, run, to_json
-    data = load_yahoo()
-    data["global"] = load_global()
-    res = run(data)
+    from .research.protocol import (append_experiment, append_warehouse_experiment, development_data,
+                                    fail_experiment, start_experiment)
+    generated = f"{pd.Timestamp.now(tz='Asia/Kolkata'):%Y-%m-%d %H:%M} IST"
+    log_path = Path(a.experiment_log) if a.experiment_log else Path(cfg.runtime_dir) / "research" / "experiment_log.jsonl"
+    experiment = start_experiment(log_path, generated)
+    try:
+        data = load_yahoo()
+        data["global"] = load_global()
+        data = development_data(data)
+        res = run(data)
+        experiment = append_experiment(log_path, data, res, generated, experiment["run_id"])
+    except Exception as exc:
+        fail_experiment(log_path, experiment["run_id"], generated, type(exc).__name__)
+        raise
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    md = report(res, data, f"{pd.Timestamp.now(tz='Asia/Kolkata'):%Y-%m-%d %H:%M} IST")
+    md = report(res, data, generated)
+    md += f"\n\nExperiment record: {experiment['run_id']} · {experiment['research_code_sha256']}\n"
     (out / "edge_report.md").write_text(md, encoding="utf-8")
     (out / "edges.json").write_text(to_json(res), encoding="utf-8")
     (out / "links.json").write_text(links_json(data), encoding="utf-8")
@@ -331,7 +344,12 @@ def cmd_research(cfg, a):
     wh = Path(a.warehouse) if a.warehouse else None
     if wh and any(wh.glob("fo_bhav_*.parquet")):
         from .research import warehouse_research as W
-        res = W.run_all(wh, data["daily"], cfg)
+        try:
+            res = W.run_all(wh, data["daily"], cfg)
+            append_warehouse_experiment(log_path, data, res, generated, experiment["run_id"], wh)
+        except Exception as exc:
+            fail_experiment(log_path, experiment["run_id"], generated, type(exc).__name__)
+            raise
         md2 = W.report(res, f"{pd.Timestamp.now(tz='Asia/Kolkata'):%Y-%m-%d %H:%M} IST")
         (out / "data_report.md").write_text(md2, encoding="utf-8")
         (out / "vrp_positioning.json").write_text(W.to_json(res), encoding="utf-8")

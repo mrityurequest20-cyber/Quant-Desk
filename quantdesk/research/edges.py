@@ -5,10 +5,10 @@ Rules (fixed before looking at the data, so the list can't be tuned to what happ
   * every hypothesis is stated as "trade in direction D over window W": the effect is the average
     signed index return per trade, in basis points and in index points;
   * t-statistics are Newey-West (HAC), so autocorrelated or overlapping observations don't inflate them;
-  * discovery = the older 2/3 of the sample, holdout = the newest 1/3; an edge must keep its sign
-    in the holdout (one-sided p < 0.10);
+  * discovery = the older 2/3 of the sample, rolling validation = the newest 1/3; an edge must keep its sign
+    in rolling validation (one-sided p < 0.10). It is re-inspected weekly, so it is not a final test;
   * Benjamini-Hochberg false-discovery control (q = 0.10) across every test run, on the *discovery*
-    p-values (with the full sample's p the holdout sits inside the evidence it is meant to confirm,
+    p-values (with the full sample's p the validation slice sits inside the evidence it is meant to confirm,
     and chance results confirm themselves: 3 false "edges" in 20 noise worlds, against 1 in 40 this way);
   * the cost hurdle: what one lot of a 0.35Δ index option costs to get in and out (brokerage, STT,
     exchange, GST, stamp, the bid/ask) expressed in index points. Under fair (business-time) option
@@ -27,6 +27,8 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 import pandas as pd
 from scipy import stats
+
+from .protocol import FINAL_TEST_END, FINAL_TEST_START, development_data, development_sample
 
 IST = "Asia/Kolkata"
 # round trip for one lot of a 0.35Δ weekly/monthly option, in index points (₹96 NIFTY / ₹100 BANKNIFTY, see EVEngine)
@@ -91,7 +93,7 @@ def benjamini_hochberg(pvals: list[float], q: float = 0.10) -> list[bool]:
 
 
 def _split(x: pd.Series):
-    x = x.dropna()
+    x = development_sample(x.dropna())
     cut = int(len(x) * 2 / 3)
     return x.iloc[:cut], x.iloc[cut:]
 
@@ -99,7 +101,7 @@ def _split(x: pd.Series):
 def evaluate(rid, symbol, hypothesis, data, signed_returns: pd.Series, price: float, lags=None, kind="directional",
              note="", params=None) -> Result:
     """`signed_returns`: per-trade log returns already signed by the trade direction (a series indexed by time)."""
-    x = signed_returns.dropna()
+    x = development_sample(signed_returns.dropna())
     m, t, p = hac_mean(x.to_numpy(), lags)
     disc, hold = _split(x)
     md, _, pdisc = hac_mean(disc.to_numpy(), lags)
@@ -380,6 +382,7 @@ def global_intraday_tests(sym: str, m5: pd.DataFrame, gm5: dict) -> tuple[list[R
 
 
 def run(data: dict, symbols=("NIFTY", "BANKNIFTY"), q: float = 0.10) -> list[Result]:
+    data = development_data(data)
     res: list[Result] = []
     vix = data["daily"].get("INDIAVIX")
     for s in symbols:
@@ -409,7 +412,7 @@ def run(data: dict, symbols=("NIFTY", "BANKNIFTY"), q: float = 0.10) -> list[Res
         elif abs(r.effect_pts) < r.hurdle_pts:
             r.verdict = "REAL BUT BELOW COSTS"
         else:
-            r.verdict = "EDGE"
+            r.verdict = "PAPER CANDIDATE"
     return res
 
 
@@ -424,12 +427,15 @@ def report(res: list[Result], data: dict, generated: str) -> str:
             L.append(f"- {k} {s}: {t}")
     for k, t in gspan.items():
         L.append(f"- {k}: {t}" + (f" (missing: {', '.join(glob.get('errors', {}))})" if glob.get("errors") else ""))
-    L += ["", f"{len(res)} pre-registered tests · Benjamini–Hochberg q = 0.10 · holdout = newest third · cost hurdle "
+    L += ["", f"{len(res)} pre-registered tests · Benjamini–Hochberg q = 0.10 · rolling validation = newest third · cost hurdle "
           f"NIFTY {COST_POINTS['NIFTY']:.1f} pts, BANKNIFTY {COST_POINTS['BANKNIFTY']:.1f} pts per round trip", "",
+          f"**Validation is re-inspected on every report and is not an untouched holdout.** The locked final test window "
+          f"is {FINAL_TEST_START:%Y-%m-%d} through {FINAL_TEST_END:%Y-%m-%d}; routine research excludes it. A paper-candidate "
+          "verdict is not promotion approval; it must pass the paper gate and locked test.", "",
           "Effect/trade is for the side the test states; a negative effect means the edge is the *opposite* side.", "",
-          "| Verdict | ID | Market | Hypothesis | N | Effect/trade | t | p | Holdout | BH |",
+          "| Verdict | ID | Market | Hypothesis | N | Effect/trade | t | p | Rolling validation | BH |",
           "|---|---|---|---|---:|---:|---:|---:|---:|:-:|"]
-    order = {"EDGE": 0, "NEEDS MARGIN": 1, "REAL BUT BELOW COSTS": 2, "NO EDGE": 3}
+    order = {"PAPER CANDIDATE": 0, "NEEDS MARGIN": 1, "REAL BUT BELOW COSTS": 2, "NO EDGE": 3}
     for r in sorted(res, key=lambda r: (order.get(r.verdict, 9), r.p)):
         eff = (f"{r.effect_bps:+.1f} bps ({r.effect_pts:+.1f} pts)" if r.kind == "directional"
                else f"{r.effect_bps / 100:+.2f} vol pts")
@@ -450,14 +456,14 @@ def report(res: list[Result], data: dict, generated: str) -> str:
         for l in sorted(links, key=lambda l: (-abs(l["t"]) if l["t"] == l["t"] else 0)):
             L.append(f"| {l['name']} | {l['to']} | {l['what']} | {l['n']:,} | {l['beta']:+.3f} | {l['corr']:+.3f} | "
                      f"{l['r2']:.3f} | {l['t']:+.1f} |")
-    edges = [r for r in res if r.verdict == "EDGE"]
+    edges = [r for r in res if r.verdict == "PAPER CANDIDATE"]
     L += ["", "## Verdict", ""]
     if edges:
-        L.append("Survived discovery, holdout, false-discovery control and the cost hurdle:")
+        L.append("Research candidates survived discovery, repeatedly inspected rolling validation, false-discovery control and the cost hurdle; none is approved for promotion:")
         for r in edges:
             side = "as stated" if r.effect_pts > 0 else "**the opposite side** (the effect is negative)"
             L.append(f"- **{r.id} {r.symbol}**: {r.hypothesis}. Trade {side}: {abs(r.effect_pts):.1f} pts/trade vs "
-                     f"{r.hurdle_pts:.1f} pts of costs (t {r.t:+.2f}, holdout {r.effect_holdout_bps:+.1f} bps). "
+                     f"{r.hurdle_pts:.1f} pts of costs (t {r.t:+.2f}, rolling validation {r.effect_holdout_bps:+.1f} bps). "
                      f"Per-trade σ {r.sd_pts:,.0f} pts, so one lot of a 0.35Δ option is a half-Kelly bet only on an account of "
                      f"about ₹{r.capital_half_kelly:,.0f}; smaller accounts are over-betting it.")
     else:

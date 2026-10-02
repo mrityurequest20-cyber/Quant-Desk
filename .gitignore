@@ -1,6 +1,7 @@
 runtime/
 data/csv/
 *.db
+.venv/
 __pycache__/
 .pytest_cache/
 node_modules/

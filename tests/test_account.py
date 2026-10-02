@@ -53,6 +53,7 @@ def test_account_resets_only_without_history(cfg, tmp_path):
     assert ensure_account(cfg2, j, broker, say=msgs.append) == 20000 and "reset-account" in msgs[0]
     # an explicit reset archives it
     base = tmp_path
+    j.close()  # close SQLite before moving its files (required on Windows)
     moved = reset_account(base)
     assert moved and (moved / "journal.db").exists() and not (base / "journal.db").exists()
 

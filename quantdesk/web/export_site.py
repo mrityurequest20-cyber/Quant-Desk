@@ -82,9 +82,9 @@ window.QD_PUBLISHED = true;
     if (D && Date.now() - at < 60000) return Promise.resolve(D);
     // no-cache = revalidate with the server (ETag), so an unchanged file costs a 304, not a download
     pending = realFetch("data.json", { cache: "no-cache" })
-      .then((r) => { if (!r.ok) throw new Error("data.json: HTTP " + r.status); return r.json(); })
+      .then((r) => { window.QD_OFFLINE_CACHE = r.headers.get("X-QD-Offline-Cache") === "1"; if (!r.ok) throw new Error("data.json: HTTP " + r.status); return r.json(); })
       .then((d) => { D = d; at = Date.now(); return D; })
-      .catch((e) => { if (!D) throw e; return D; })
+      .catch((e) => { window.QD_OFFLINE_CACHE = true; if (!D) throw e; return D; })
       .finally(() => { pending = null; });
     return pending;
   }

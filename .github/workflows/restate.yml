@@ -36,7 +36,7 @@ jobs:
       PYTHONUNBUFFERED: "1"
       TZ: Asia/Kolkata
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Wait for a running desk to finish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -49,7 +49,7 @@ jobs:
             sleep 60
           done
           echo "::error::the live desk is still running after 5h20m"; exit 1
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.11"
           cache: pip

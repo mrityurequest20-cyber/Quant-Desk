@@ -138,12 +138,16 @@ def test_research_priors_only_use_surviving_edges(plan_factory, tmp_path):
     call = make([leg(22950, 1)])
     base = ev.evaluate(call, S, now, sig, 0.5, 240)["ev"]
     assert ev.evaluate(call, S, now, sig, 0.5, 240, base_drift_min=-5.7 / 1e4 / 375)["ev"] < base   # a bearish drift costs a call
-    (tmp_path / "edges.json").write_text(json.dumps([
+    (tmp_path / "promoted_research.json").write_text(json.dumps([
         {"id": "D1", "symbol": "NIFTY", "verdict": "EDGE", "effect_bps": -5.7, "t": -3.44, "n": 4669, "effect_holdout_bps": -4.6},
+        {"id": "D1", "symbol": "NIFTY", "verdict": "PAPER CANDIDATE", "effect_bps": -5.7},
+        {"id": "D1", "symbol": "NIFTY", "verdict": "PROMOTED", "effect_bps": -5.7, "t": -3.44, "n": 4669, "effect_holdout_bps": -4.6,
+         "promotion": {"approved": True, "paper_gate_passed": True, "locked_final_test_passed": True, "review_id": "PR-42"}},
         {"id": "D1", "symbol": "BANKNIFTY", "verdict": "NO EDGE", "effect_bps": -5.0},
         {"id": "V1", "symbol": "NIFTY", "verdict": "NEEDS MARGIN", "effect_bps": 301}]))
-    r = load_research(tmp_path / "edges.json")
+    r = load_research(tmp_path / "promoted_research.json")
     assert set(r) == {"NIFTY"} and r["NIFTY"]["drift"]["per_min"] == pytest.approx(-5.7 / 1e4 / 375)
+    assert r["NIFTY"]["drift"]["rolling_validation_bps"] == -4.6  # legacy and candidate rows were ignored
     assert load_research(tmp_path / "missing.json") == {}
 
 
