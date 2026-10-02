@@ -230,7 +230,7 @@ class Brain:
                 continue
             lk = out.setdefault((d, e["symbol"]), Link(d, e["symbol"]))
             t = e.get("t")
-            is_edge = e.get("verdict") == "EDGE"
+            is_edge = e.get("verdict") in ("PAPER CANDIDATE", "EDGE")      # EDGE: reports before 3-Oct-2026
             # the link's predictive fields come from its validated test if it has one, else from its strongest test
             if t is not None and ((is_edge and not lk.lead_edge) or (is_edge == lk.lead_edge and not (abs(lk.lead_t) >= abs(t)))):
                 lk.lead_t = t

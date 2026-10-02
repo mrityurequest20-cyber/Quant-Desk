@@ -227,15 +227,14 @@ A recency-weighted tone (half-life 45 minutes) is one piece of evidence with mod
 
 `python -m quantdesk research`, run weekly on GitHub as the *Edge research* workflow, tests a fixed, pre-registered list of hypotheses on real NIFTY, BANKNIFTY and India VIX data from Yahoo: 19 years of daily bars, 2 years of hourly and 60 days of 5m. Each hypothesis is judged with Newey-West statistics, discovery-only Benjamini-Hochberg control, a realistic one-lot cost hurdle, and a chronological rolling-validation slice.
 
-The newest third is re-inspected by each weekly run. It is **rolling validation**, not a fresh
-holdout. Routine analysis permanently excludes the locked final period **2026-10-05 through
-2027-03-31**. Every run is appended to `experiment_log.jsonl` with its code digest, data fingerprint,
-hypotheses, parameters and results. A statistical result is labelled **PAPER CANDIDATE** and is
-not loaded by the engine. A candidate must also pass at least 60 real paper sessions, 30 closed
-trades, positive net P&L after costs, profit factor ≥1.15, max drawdown ≤10%, no risk-limit
-incidents, and the locked final test before a separate promotion review.
+The newest third is re-inspected by each weekly run, so it is **rolling validation**, not a fresh holdout. Every
+run is appended to `experiment_log.jsonl` with its code digest, data fingerprints, hypotheses, parameters and
+results. A result that survives everything is a **PAPER CANDIDATE**: the paper desk uses it, and that is its forward
+test. Before any real money, a strategy must clear the paper gate (`quantdesk intraday paper-gate`): at least 60
+paper sessions, 30 closed trades, positive net P&L after costs, profit factor ≥ 1.15, max drawdown ≤ 10% and no
+risk-limit incidents.
 
-The report and append-only ledger go to the `research` branch. No candidate is promoted automatically.
+The report and the append-only ledger go to the `research` branch.
 See [release gates](docs/RELEASE_GATES.md) for measurable operating and promotion criteria, and
 [recovery steps](docs/RECOVERY.md) for journal restore, session replay and safe restart.
 
@@ -380,16 +379,6 @@ public. It contains no real broker account or credentials. See [release gates an
 before adding any personal, live-account or private data.
 
 **How the pieces fit:** the engine (`intraday live`) and the website are separate processes sharing the journal. Commands from the phone are queued, and the engine applies them on its next minute. Everything is paper-only; the website can pause, close or flatten, but never places real orders.
-
-### Optional local Ollama explanation
-
-The Brain tab can ask a locally running Ollama model to explain the latest saved desk read and a few related headlines. It runs only when you press **Explain the latest read**. Ollama receives a compact snapshot; the result is displayed as commentary and is never read by the signal, sizing, risk, or broker code. The feature is off by default, uses no hosted AI API key, and is available only in the local app (not the static published site).
-
-1. Install and start [Ollama](https://ollama.com), then download a model you want to run locally (for example, `ollama pull qwen3:4b`).
-2. In `config/quantdesk.yaml`, set `ai.ollama.enabled: true` and `ai.ollama.model: qwen3:4b` (or the exact name of your downloaded model). The default URL is `http://127.0.0.1:11434`; keep `allow_remote: false` for a same-machine Ollama service.
-3. Restart `python -m quantdesk serve`, open the Brain tab, and press **Explain the latest read**. This works when the local journal has a saved read for the selected index.
-
-The request is sent to Ollama's local `/api/chat` endpoint using a constrained JSON response and a bounded timeout. If you intentionally host Ollama on another trusted machine, set `allow_remote: true` and configure its reachable URL; that sends the snapshot across your network. Do not expose an unauthenticated Ollama endpoint to the public internet.
 
 ## Running it every day by itself
 

@@ -319,15 +319,13 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_research(cfg, a):
     import pandas as pd
     from .research.edges import links_json, load_global, load_yahoo, report, run, to_json
-    from .research.protocol import (append_experiment, append_warehouse_experiment, development_data,
-                                    fail_experiment, start_experiment)
+    from .research.protocol import append_experiment, append_warehouse_experiment, fail_experiment, start_experiment
     generated = f"{pd.Timestamp.now(tz='Asia/Kolkata'):%Y-%m-%d %H:%M} IST"
     log_path = Path(a.experiment_log) if a.experiment_log else Path(cfg.runtime_dir) / "research" / "experiment_log.jsonl"
     experiment = start_experiment(log_path, generated)
     try:
         data = load_yahoo()
         data["global"] = load_global()
-        data = development_data(data)
         res = run(data)
         experiment = append_experiment(log_path, data, res, generated, experiment["run_id"])
     except Exception as exc:

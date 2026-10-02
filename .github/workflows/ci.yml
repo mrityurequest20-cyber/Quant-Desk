@@ -27,6 +27,7 @@ jobs:
       - name: Workflow integrity
         run: python deploy/check_workflows.py
       - name: Dependency vulnerability audit
+        continue-on-error: true   # a newly published CVE in a dependency warns; it doesn't fail unrelated changes
         run: |
           python -m pip install pip-audit
           python -m pip_audit -r requirements.txt

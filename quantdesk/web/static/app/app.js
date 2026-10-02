@@ -12,7 +12,7 @@ const NS = "http://www.w3.org/2000/svg";
 const S = {
 	account: "live", tab: "desk", sub: { trades: "positions", feed: "news" }, sym: "NIFTY", interval: "5m", brainSym: "NIFTY",
 	state: null, charts: {}, chartAt: {}, news: null, newsAt: 0, lw: null, eq: null, thBefore: null, thSym: "", newsF: "", brk: "by_day_type",
-	accounts: [], installEvt: null, ollamaStatus: null, ollamaView: null, networkUnavailable: false,
+	accounts: [], installEvt: null, networkUnavailable: false,
 };
 
 // ---- icons (24px, stroked) -----------------------------------------------------------------------------------
@@ -966,33 +966,7 @@ function markdown(md) {
 // ==================================================================================================================
 // BRAIN
 // ==================================================================================================================
-function ensureOllamaStatus() {
-	if (window.QD_PUBLISHED || S.ollamaStatus !== null) return;
-	S.ollamaStatus = { loading: true };
-	api("/api/i/ollama").then((x) => { S.ollamaStatus = x; if (S.tab === "brain") renderBrain(); })
-		.catch((e) => { S.ollamaStatus = { enabled: false, error: e.message }; if (S.tab === "brain") renderBrain(); });
-}
-async function explainWithOllama() {
-	const symbol = S.brainSym;
-	S.ollamaView = { symbol, status: "pending" };
-	renderBrain();
-	try {
-		const queued = await post("/api/i/ollama/explain", { symbol });
-		const deadline = Date.now() + 90000;
-		while (Date.now() < deadline) {
-			const state = await api("/api/i/ollama/job?id=" + encodeURIComponent(queued.job_id));
-			if (state.status === "done") { S.ollamaView = { symbol, status: "done", result: state.result }; renderBrain(); return; }
-			if (state.status === "error") throw new Error(state.error || "Ollama could not explain this read.");
-			await new Promise((resolve) => setTimeout(resolve, 1000));
-		}
-		throw new Error("Ollama is taking too long. The desk will keep running; try again later.");
-	} catch (e) {
-		S.ollamaView = { symbol, status: "error", error: e.message };
-		renderBrain();
-	}
-}
 function renderBrain() {
-	ensureOllamaStatus();
 	const syms = symbols();
 	if (!syms.includes(S.brainSym)) S.brainSym = syms[0];
 	seg($("#b-sym"), syms.map((s) => [s, s]), S.brainSym, (v) => { S.brainSym = v; renderBrain(); });
@@ -1011,29 +985,6 @@ function renderBrain() {
 		h("div", { class: "narr" }, b.narrative));
 	}
 	body.appendChild(rp);
-	if (!window.QD_PUBLISHED && S.ollamaStatus && S.ollamaStatus.enabled) {
-		const current = S.ollamaView && S.ollamaView.symbol === S.brainSym ? S.ollamaView : null;
-		const panel = h("div", { class: "panel pad", style: "margin-top:14px" },
-			h("div", { class: "sec-h" }, h("h2", {}, "AI explanation"),
-				h("span", { class: "hint" }, `${S.ollamaStatus.model || "Ollama"} · local`)),
-			h("div", { class: "f3", style: "font-size:12px;margin:6px 0 12px" },
-				"Optional explanation of the latest saved read and related headlines. It cannot change signals, risk or orders."));
-		if (S.ollamaStatus.ready) panel.appendChild(h("button", { class: "btn", disabled: !!(current && current.status === "pending"), onclick: explainWithOllama },
-			current && current.status === "pending" ? "Asking local model…" : "Explain the latest read"));
-		else panel.appendChild(h("div", { class: "hint" }, "Set ai.ollama.model to a model installed in Ollama to enable explanations."));
-		if (current && current.status === "done") {
-			const r = current.result;
-			panel.appendChild(h("div", { class: "narr", style: "margin-top:12px" }, r.summary));
-			if (r.observations.length) put(panel, h("div", { class: "lbl", style: "margin-top:12px" }, "Evidence noted"),
-				h("ul", { class: "f3", style: "padding-left:20px;line-height:1.55" }, r.observations.map((x) => h("li", {}, x))));
-			if (r.uncertainties.length) put(panel, h("div", { class: "lbl", style: "margin-top:10px" }, "Uncertainties"),
-				h("ul", { class: "f3", style: "padding-left:20px;line-height:1.55" }, r.uncertainties.map((x) => h("li", {}, x))));
-			panel.appendChild(h("div", { class: "hint", style: "margin-top:10px" }, `Snapshot ${ist(r.as_of, true)} · AI text is explanatory only.`));
-		} else if (current && current.status === "error") {
-			panel.appendChild(h("div", { class: "note", style: "margin-top:10px" }, current.error));
-		}
-		body.appendChild(panel);
-	}
 	// the open, explained
 	if (b && b.gap) {
 		const g = b.gap, against = g.explained * g.gap < 0 && Math.abs(g.explained) > 0.0005;

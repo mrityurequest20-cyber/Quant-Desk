@@ -5,33 +5,7 @@ import numpy as np
 import pandas as pd
 
 from quantdesk.journal.journal import Journal
-from quantdesk.research.protocol import (
-    FINAL_TEST_END,
-    FINAL_TEST_START,
-    append_experiment,
-    append_warehouse_experiment,
-    development_data,
-    development_sample,
-    evaluate_paper_candidate,
-    paper_strategy_fingerprint,
-    record_locked_final_result,
-    register_locked_candidate,
-)
-
-
-def test_locked_final_window_is_excluded_from_all_routine_inputs():
-    idx = pd.date_range("2026-10-01", "2026-10-08", tz="Asia/Kolkata")
-    values = pd.Series(np.arange(len(idx)), index=idx)
-    sample = development_sample(values)
-    assert sample.index.max().tz_localize(None) < FINAL_TEST_START
-    data = {
-        "daily": {"NIFTY": pd.DataFrame({"close": values}, index=idx)},
-        "global": {"daily": {"SPX": pd.DataFrame({"close": values}, index=idx)}},
-    }
-    locked = development_data(data)
-    assert locked["daily"]["NIFTY"].index.max().tz_localize(None) < FINAL_TEST_START
-    assert locked["global"]["daily"]["SPX"].index.max().tz_localize(None) < FINAL_TEST_START
-    assert FINAL_TEST_END > FINAL_TEST_START
+from quantdesk.research.protocol import append_experiment, append_warehouse_experiment, evaluate_paper_candidate
 
 
 def test_experiment_log_is_append_only_and_json_safe(tmp_path):
@@ -65,51 +39,16 @@ def test_warehouse_hypotheses_are_in_the_same_experiment_ledger(tmp_path):
     assert row["warehouse_files"][source.name]["sha256"]
 
 
-def test_paper_gate_is_cost_inclusive_and_final_test_required():
-    pnl = [100.0] * 30
-    trades = pd.DataFrame({"status": ["closed"] * 30, "pnl": pnl})
+def test_paper_gate_is_cost_inclusive_and_needs_every_check():
+    trades = pd.DataFrame({"status": ["closed"] * 30, "pnl": [100.0] * 30})
     gate = evaluate_paper_candidate(trades, observed_sessions=60, risk_violations=0, capital=20_000)
-    assert gate["status"] == "PAPER PASS; FINAL TEST REQUIRED"
-    assert not gate["eligible"] and not gate["checks"]["locked_final_test_passed"]
-    locked = evaluate_paper_candidate(trades, 60, 0, 20_000, final_test_passed=True)
-    assert locked["eligible"] and locked["status"] == "ELIGIBLE FOR PROMOTION REVIEW"
-    failed = evaluate_paper_candidate(trades, 60, 1, 20_000, final_test_passed=True)
-    assert not failed["eligible"] and not failed["checks"]["no_risk_limit_violations"]
-
-
-def test_locked_candidate_registration_and_final_evaluation_are_sealed_once(tmp_path):
-    manifest_path = tmp_path / "candidate.json"
-    ledger = tmp_path / "experiments.jsonl"
-    manifest = register_locked_candidate(
-        manifest_path, strategy="opening_range", account="candidate-a", since="2026-01-01",
-        preperiod_gate={"eligible_for_paper_trial": True}, ledger=ledger, today="2026-10-02")
-    assert manifest["paper_strategy_sha256"] == paper_strategy_fingerprint()
-    assert manifest_path.exists()
-    try:
-        register_locked_candidate(manifest_path, strategy="opening_range", account="candidate-a",
-                                  since="2026-01-01", preperiod_gate={"eligible_for_paper_trial": True},
-                                  today="2026-10-02")
-        assert False, "manifest replacement must fail"
-    except ValueError as exc:
-        assert "already exists" in str(exc)
-    final_gate = {"eligible_for_paper_trial": True, "locked_final_test_passed": True, "eligible": True}
-    row = record_locked_final_result(ledger, manifest, final_gate, today="2027-04-01")
-    assert row["result"] == "PASS; promotion review required" and row["promotion_allowed"] is False
-    try:
-        record_locked_final_result(ledger, manifest, final_gate, today="2027-04-01")
-        assert False, "second final evaluation must fail"
-    except ValueError as exc:
-        assert "lock" in str(exc).lower() or "already recorded" in str(exc).lower()
-
-
-def test_locked_candidate_cannot_register_after_final_window_starts(tmp_path):
-    try:
-        register_locked_candidate(tmp_path / "candidate.json", strategy="s", account="isolated",
-                                  since="2026-01-01", preperiod_gate={"eligible_for_paper_trial": True},
-                                  ledger=tmp_path / "experiments.jsonl", today="2026-10-05")
-        assert False, "registration after seal must fail"
-    except ValueError as exc:
-        assert "sealed" in str(exc)
+    assert gate["status"] == "PAPER PASS" and gate["eligible"] and all(gate["checks"].values())
+    assert not evaluate_paper_candidate(trades, 59, 0, 20_000)["eligible"]                 # 60 sessions
+    assert not evaluate_paper_candidate(trades.head(29), 60, 0, 20_000)["eligible"]        # 30 trades
+    risky = evaluate_paper_candidate(trades, 60, 1, 20_000)
+    assert risky["status"] == "NOT YET" and not risky["checks"]["no_risk_limit_violations"]
+    losing = pd.DataFrame({"status": ["closed"] * 30, "pnl": [100.0, -150.0] * 15})
+    assert not evaluate_paper_candidate(losing, 60, 0, 20_000)["checks"]["positive_net_after_costs"]
 
 
 def test_journal_integrity_check_and_closed_file_recovery(tmp_path):

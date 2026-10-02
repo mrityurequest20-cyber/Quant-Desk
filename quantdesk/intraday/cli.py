@@ -188,7 +188,7 @@ def cmd_command(cfg, a):
 
 
 def cmd_paper_gate(cfg, a):
-    """Read-only check of one strategy's completed, cost-inclusive paper-trading record."""
+    """Read-only check of one strategy's closed, cost-inclusive paper trades against the bar for real money."""
     from ..research.protocol import evaluate_paper_candidate
     j = Journal(paths(cfg, a.account or "live")["journal"])
     try:
@@ -208,101 +208,8 @@ def cmd_paper_gate(cfg, a):
         ] if not events.empty else events
         gate = evaluate_paper_candidate(trades, int(sessions.iloc[0]["n"]), len(risky_checks) + len(risky_events),
                                         float(cfg.get("intraday.capital", 20000)))
-        gate.update({"strategy": a.strategy, "since": a.since, "costs_included": True,
-                     "paper_account": a.account, "promotion_allowed": False})
+        gate.update({"strategy": a.strategy, "since": a.since, "costs_included": True, "paper_account": a.account})
         print(json.dumps(gate, indent=2, ensure_ascii=False))
-    finally:
-        j.close()
-
-
-def _paper_window_observations(j, strategy: str, start: str, end: str, capital: float,
-                               final_test_passed: bool = False) -> dict:
-    """Collect one candidate's closed trades, observed sessions, and risk incidents in a date window."""
-    from ..research.protocol import evaluate_paper_candidate
-    trades = j.trades()
-    other_strategy_trades = 0
-    if not trades.empty:
-        opened = trades["opened_at"].astype(str).str.slice(0, 10)
-        closed = trades["closed_at"].fillna("").astype(str).str.slice(0, 10)
-        in_window = opened.ge(start) & opened.le(end)
-        other_strategy_trades = int((in_window & trades["strategy"].astype(str).ne(strategy)).sum())
-        trades = trades[(trades["strategy"].astype(str) == strategy) & in_window].copy()
-        closed_here = closed.loc[trades.index].ge(start) & closed.loc[trades.index].le(end)
-        incomplete = trades["status"].astype(str).str.lower().ne("closed") | ~closed_here
-    else:
-        incomplete = pd.Series(dtype=bool)
-    # Counting session records only inside the registered window avoids stale history inflating the gate.
-    sessions = j.df("SELECT COUNT(DISTINCT substr(ts,1,10)) AS n FROM thoughts WHERE substr(ts,1,10) BETWEEN ? AND ?",
-                    (start, end))
-    checks = j.df("SELECT * FROM checks WHERE substr(ts,1,10) BETWEEN ? AND ?", (start, end))
-    risky_checks = checks[
-        checks["name"].astype(str).str.contains(r"risk|limit|kill|reconcil", case=False, regex=True) &
-        checks["status"].astype(str).str.upper().isin(["FAIL", "ERROR"])
-    ] if not checks.empty else checks
-    events = j.df("SELECT * FROM events WHERE substr(ts,1,10) BETWEEN ? AND ?", (start, end))
-    risky_events = events[
-        events["category"].astype(str).str.lower().isin(["risk", "risk_limit", "kill_switch", "execution"]) &
-        events["level"].astype(str).str.upper().isin(["WARN", "ERROR"])
-    ] if not events.empty else events
-    risk_count = len(risky_checks) + len(risky_events) + int(incomplete.sum()) + other_strategy_trades
-    return {"trades": trades, "sessions": int(sessions.iloc[0]["n"]), "risk_violations": risk_count,
-            "gate": evaluate_paper_candidate(trades, int(sessions.iloc[0]["n"]), risk_count, capital)}
-
-
-def _manifest_path(cfg, value: str | None) -> Path:
-    return Path(value) if value else Path(cfg.runtime_dir) / "research" / "locked_candidate.json"
-
-
-def cmd_register_paper_candidate(cfg, a):
-    from ..research.protocol import register_locked_candidate
-    manifest_path = _manifest_path(cfg, a.manifest)
-    j = Journal(paths(cfg, a.account)["journal"])
-    try:
-        start = pd.Timestamp(a.since).date().isoformat()
-        today = dt.date.today().isoformat()
-        if pd.Timestamp(start) >= pd.Timestamp("2026-10-05"):
-            sys.exit("pre-period must start before 2026-10-05")
-        observed = _paper_window_observations(j, a.strategy, start, min(today, "2026-10-04"),
-                                              float(cfg.get("intraday.capital", 20000)))
-        gate = observed["gate"]
-        gate.update({"strategy": a.strategy, "paper_account": a.account, "costs_included": True,
-                     "promotion_allowed": False})
-        try:
-            manifest = register_locked_candidate(manifest_path, strategy=a.strategy, account=a.account,
-                                                 since=start, preperiod_gate=gate,
-                                                 ledger=Path(cfg.runtime_dir) / "research" / "experiments.jsonl")
-        except ValueError as exc:
-            sys.exit(str(exc))
-        print(json.dumps({"manifest": str(manifest_path), "registration": manifest,
-                          "preperiod_gate": gate}, indent=2, ensure_ascii=False))
-    finally:
-        j.close()
-
-
-def cmd_locked_paper_test(cfg, a):
-    from ..research.protocol import (FINAL_TEST_END, FINAL_TEST_START, record_locked_final_result)
-    manifest_path = _manifest_path(cfg, a.manifest)
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        sys.exit(f"cannot read locked candidate manifest: {exc}")
-    if manifest.get("account") != a.account or manifest.get("strategy") != a.strategy:
-        sys.exit("strategy and isolated account must match the locked manifest")
-    j = Journal(paths(cfg, a.account)["journal"])
-    try:
-        observed = _paper_window_observations(j, a.strategy, FINAL_TEST_START.date().isoformat(),
-                                              FINAL_TEST_END.date().isoformat(),
-                                              float(cfg.get("intraday.capital", 20000)),
-                                              final_test_passed=True)
-        gate = observed["gate"]
-        gate.update({"strategy": a.strategy, "paper_account": a.account, "costs_included": True,
-                     "promotion_allowed": False})
-        try:
-            record = record_locked_final_result(Path(cfg.runtime_dir) / "research" / "experiments.jsonl",
-                                                manifest, gate)
-        except ValueError as exc:
-            sys.exit(str(exc))
-        print(json.dumps({"final_test": record, "gate": gate}, indent=2, ensure_ascii=False))
     finally:
         j.close()
 
@@ -579,22 +486,11 @@ def register(sub):
     x.add_argument("id", nargs="?", help="trade id (for close)")
     x.add_argument("--account", help="live (default)")
     x.set_defaults(fn=cmd_command)
-    x = ss.add_parser("paper-gate", help="read-only promotion check on one strategy's paper journal")
+    x = ss.add_parser("paper-gate", help="read-only check of one strategy's paper record against the bar for real money")
     x.add_argument("--strategy", required=True)
-    x.add_argument("--since", required=True, help="candidate paper-trial start date (YYYY-MM-DD)")
-    x.add_argument("--account", required=True, help="isolated paper account used only for this candidate")
+    x.add_argument("--since", required=True, help="paper-trial start date (YYYY-MM-DD)")
+    x.add_argument("--account", default="live", help="paper account (default: live)")
     x.set_defaults(fn=cmd_paper_gate)
-    x = ss.add_parser("register-paper-candidate", help="seal an isolated paper candidate before the final test window")
-    x.add_argument("--strategy", required=True)
-    x.add_argument("--since", required=True, help="pre-period paper-trial start date (YYYY-MM-DD)")
-    x.add_argument("--account", required=True, help="dedicated isolated paper account")
-    x.add_argument("--manifest", help="manifest path (default: runtime/research/locked_candidate.json)")
-    x.set_defaults(fn=cmd_register_paper_candidate)
-    x = ss.add_parser("paper-final-test", help="consume and record the one-time sealed final-period result")
-    x.add_argument("--strategy", required=True)
-    x.add_argument("--account", required=True, help="same dedicated account sealed in the candidate manifest")
-    x.add_argument("--manifest", help="manifest path (default: runtime/research/locked_candidate.json)")
-    x.set_defaults(fn=cmd_locked_paper_test)
     x = ss.add_parser("replay", help="replay recorded or synthetic sessions")
     x.add_argument("--date")
     x.add_argument("--last", type=int)

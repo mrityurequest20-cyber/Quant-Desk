@@ -68,7 +68,7 @@ def test_regime_stress_and_size():
 
 
 def test_only_validated_links_vote_in_their_measured_direction():
-    edges = [{"id": "G-STOXX", "symbol": "BANKNIFTY", "verdict": "EDGE", "t": -2.55, "effect_bps": -5.4},
+    edges = [{"id": "G-STOXX", "symbol": "BANKNIFTY", "verdict": "PAPER CANDIDATE", "t": -2.55, "effect_bps": -5.4},
              {"id": "G-SPX", "symbol": "NIFTY", "verdict": "NO EDGE", "t": 2.56, "effect_bps": 4.5}]
     b = brain_with(edges=edges, europe_last=0.02)                                   # Europe rallied yesterday
     bnf = b.think("BANKNIFTY", NOW)

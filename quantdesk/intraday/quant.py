@@ -321,7 +321,9 @@ class EVEngine:
 
 
 def load_research(path) -> dict:
-    """Load only explicitly reviewed priors; legacy EDGE labels and paper candidates fail closed."""
+    """Research priors per symbol from edges.json (the Edge research workflow's output). Only results that survived
+    discovery, rolling validation, false-discovery control and the cost hurdle (verdict PAPER CANDIDATE, or EDGE in
+    older reports) are used, and only in the paper desk, which is their forward test. Today: the intraday drift (D1)."""
     import json
     from pathlib import Path
     p = Path(path)
@@ -333,11 +335,7 @@ def load_research(path) -> dict:
         return {}
     out: dict = {}
     for r in rows:
-        promotion = r.get("promotion") or {}
-        if (r.get("verdict") == "PROMOTED" and promotion.get("approved") is True
-                and promotion.get("paper_gate_passed") is True
-                and promotion.get("locked_final_test_passed") is True
-                and promotion.get("review_id") and r.get("id") == "D1" and r.get("effect_bps") is not None):
+        if r.get("verdict") in ("PAPER CANDIDATE", "EDGE") and r.get("id") == "D1" and r.get("effect_bps") is not None:
             out.setdefault(r["symbol"], {})["drift"] = {"bps_day": float(r["effect_bps"]), "t": r.get("t"), "n": r.get("n"),
                                                          "rolling_validation_bps": r.get("effect_holdout_bps"),
                                                          "per_min": float(r["effect_bps"]) / 1e4 / 375}

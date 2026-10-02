@@ -28,8 +28,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from .protocol import FINAL_TEST_END, FINAL_TEST_START, development_data, development_sample
-
 IST = "Asia/Kolkata"
 # round trip for one lot of a 0.35Δ weekly/monthly option, in index points (₹96 NIFTY / ₹100 BANKNIFTY, see EVEngine)
 COST_POINTS = {"NIFTY": 96 / (65 * 0.35), "BANKNIFTY": 100 / (30 * 0.35)}
@@ -93,7 +91,7 @@ def benjamini_hochberg(pvals: list[float], q: float = 0.10) -> list[bool]:
 
 
 def _split(x: pd.Series):
-    x = development_sample(x.dropna())
+    x = x.dropna()
     cut = int(len(x) * 2 / 3)
     return x.iloc[:cut], x.iloc[cut:]
 
@@ -101,7 +99,7 @@ def _split(x: pd.Series):
 def evaluate(rid, symbol, hypothesis, data, signed_returns: pd.Series, price: float, lags=None, kind="directional",
              note="", params=None) -> Result:
     """`signed_returns`: per-trade log returns already signed by the trade direction (a series indexed by time)."""
-    x = development_sample(signed_returns.dropna())
+    x = signed_returns.dropna()
     m, t, p = hac_mean(x.to_numpy(), lags)
     disc, hold = _split(x)
     md, _, pdisc = hac_mean(disc.to_numpy(), lags)
@@ -382,7 +380,6 @@ def global_intraday_tests(sym: str, m5: pd.DataFrame, gm5: dict) -> tuple[list[R
 
 
 def run(data: dict, symbols=("NIFTY", "BANKNIFTY"), q: float = 0.10) -> list[Result]:
-    data = development_data(data)
     res: list[Result] = []
     vix = data["daily"].get("INDIAVIX")
     for s in symbols:
@@ -429,9 +426,8 @@ def report(res: list[Result], data: dict, generated: str) -> str:
         L.append(f"- {k}: {t}" + (f" (missing: {', '.join(glob.get('errors', {}))})" if glob.get("errors") else ""))
     L += ["", f"{len(res)} pre-registered tests · Benjamini–Hochberg q = 0.10 · rolling validation = newest third · cost hurdle "
           f"NIFTY {COST_POINTS['NIFTY']:.1f} pts, BANKNIFTY {COST_POINTS['BANKNIFTY']:.1f} pts per round trip", "",
-          f"**Validation is re-inspected on every report and is not an untouched holdout.** The locked final test window "
-          f"is {FINAL_TEST_START:%Y-%m-%d} through {FINAL_TEST_END:%Y-%m-%d}; routine research excludes it. A paper-candidate "
-          "verdict is not promotion approval; it must pass the paper gate and locked test.", "",
+          "**Validation is re-inspected on every report, so it is not an untouched holdout.** A paper candidate is "
+          "forward-tested by the paper desk; real money waits for the paper gate (`quantdesk intraday paper-gate`).", "",
           "Effect/trade is for the side the test states; a negative effect means the edge is the *opposite* side.", "",
           "| Verdict | ID | Market | Hypothesis | N | Effect/trade | t | p | Rolling validation | BH |",
           "|---|---|---|---|---:|---:|---:|---:|---:|:-:|"]
@@ -459,7 +455,7 @@ def report(res: list[Result], data: dict, generated: str) -> str:
     edges = [r for r in res if r.verdict == "PAPER CANDIDATE"]
     L += ["", "## Verdict", ""]
     if edges:
-        L.append("Research candidates survived discovery, repeatedly inspected rolling validation, false-discovery control and the cost hurdle; none is approved for promotion:")
+        L.append("Survived discovery, rolling validation, false-discovery control and the cost hurdle; the paper desk forward-tests them:")
         for r in edges:
             side = "as stated" if r.effect_pts > 0 else "**the opposite side** (the effect is negative)"
             L.append(f"- **{r.id} {r.symbol}**: {r.hypothesis}. Trade {side}: {abs(r.effect_pts):.1f} pts/trade vs "

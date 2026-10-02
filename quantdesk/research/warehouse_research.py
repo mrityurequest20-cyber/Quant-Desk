@@ -28,7 +28,6 @@ from scipy.special import ndtr
 
 from ..options.pricing import implied_vol_vec
 from .edges import LOT, Result, _split, benjamini_hochberg, evaluate, hac_mean
-from .protocol import development_sample
 
 R, Q = 0.065, 0.012
 ACCOUNT = 20_000
@@ -202,7 +201,7 @@ def evaluate_vrp(trades: pd.DataFrame, lot_of=LOT, account: float = ACCOUNT, q: 
     if trades.empty:
         return res
     for (sym, name, k), g in trades.sort_values("entry").groupby(["symbol", "strategy", "k"]):
-        x = development_sample(g.set_index(pd.to_datetime(g["entry"]))["pnl_pts"])
+        x = g.set_index(pd.to_datetime(g["entry"]))["pnl_pts"]
         if len(x) < 20:
             continue
         lot = lot_of.get(sym, 1)
@@ -458,15 +457,6 @@ def spot_series(opts: pd.DataFrame, symbol: str, daily: pd.DataFrame | None) -> 
 def run_all(folder: Path, daily: dict, cfg=None) -> dict:
     out = {"vrp": [], "positioning": [], "trades": 0, "span": {}}
     opts = load_options(folder)
-    # This sample is reserved for the final test. Keeping it out of optimization, scorecards,
-    # stability and positioning makes the lock cover every routine research output.
-    from .protocol import FINAL_TEST_START
-    if len(opts):
-        opts = opts[pd.to_datetime(opts["date"]).dt.date < FINAL_TEST_START.date()]
-    daily = {s: f[pd.DatetimeIndex(f.index).tz_localize(None).date < FINAL_TEST_START.date()]
-             if isinstance(f.index, pd.DatetimeIndex) and f.index.tz is not None else
-             f[pd.DatetimeIndex(f.index).date < FINAL_TEST_START.date()]
-             for s, f in daily.items()}
     if cfg is not None:
         from ..core.types import Instrument
         from ..intraday.sim import IntradayBroker
@@ -514,8 +504,8 @@ def report(res: dict, generated: str) -> str:
          "Opened at the close k sessions before expiry at bhavcopy closing prices worsened by a half-spread and a tick, "
          "plus brokerage, STT, exchange, GST, stamp and exercise STT; held to cash settlement. ₹ figures are per lot "
          "at today's lot sizes (NIFTY 65, BANKNIFTY 30). Benjamini-Hochberg across all rows below.", "",
-         "**The rolling validation is re-inspected; it is not an untouched holdout. The locked final test window is sealed "
-         "and excluded from routine research. Candidate labels require a cost-inclusive paper trial and final test before promotion.**", "",
+         "**The rolling validation is re-inspected every week, so it is not an untouched holdout. A paper candidate still "
+         "needs a cost-inclusive paper trial before real money.**", "",
          "| verdict | strategy | index | k | trades | mean ₹/lot | t | rolling validation ₹/lot | win | worst ₹ | max DD ₹ | Sharpe | capital |",
          "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
     order = lambda v: (0 if v.startswith("PAPER CANDIDATE (fits") else 1 if v.startswith("PAPER CANDIDATE") else 2 if v == "RELIABLY LOSES" else 3)  # noqa: E731

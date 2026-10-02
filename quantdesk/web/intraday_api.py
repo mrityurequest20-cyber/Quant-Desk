@@ -6,9 +6,7 @@ appends to a queue the engine executes on its next step (pause / resume / close 
 from __future__ import annotations
 
 import json
-import math
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -25,9 +23,6 @@ class IntradayAPI:
         self.cfg = cfg
         self.base = cfg.runtime_dir / "intraday"
         self._j: dict[str, Journal] = {}
-        self._ai_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="quantdesk-ollama")
-        self._ai_jobs: dict[str, dict] = {}
-        self._ai_by_snapshot: dict[tuple[str, str, str], str] = {}
 
     # ---- accounts / plumbing -------------------------------------------------------------------------
     def _dir(self, account: str) -> Path:
@@ -178,122 +173,6 @@ class IntradayAPI:
                 "by_exit": by("exit_reason"), "by_hour": by("hour"), "by_symbol": by("symbol"),
                 "grades": {str(k): int(v) for k, v in t["grade"].value_counts().sort_index().items()},
                 "calibration": self._calibration(t)}
-
-    # ---- optional local AI explanation ------------------------------------------------------------------
-    def ollama_status(self) -> dict:
-        c = self.cfg.get("ai.ollama", {}) or {}
-        model = str(c.get("model", "")).strip()
-        return {"enabled": bool(c.get("enabled", False)), "ready": bool(c.get("enabled", False) and model), "model": model,
-                "local_only": not bool(c.get("allow_remote", False))}
-
-    def ollama_explain(self, account, body: dict) -> dict:
-        """Queue a user-requested explanation of the latest journaled read; never feeds the engine."""
-        status = self.ollama_status()
-        if not status["enabled"]:
-            raise PermissionError("Local AI is disabled in ai.ollama.enabled.")
-        symbol = str(body.get("symbol", "")).upper()
-        allowed = {str(x).upper() for x in (self.cfg.get("intraday.underlyings", []) or [])}
-        if symbol not in allowed:
-            raise ValueError("Choose a supported index symbol.")
-        snapshot = self._ollama_snapshot(account, symbol)
-        key = (str(account or "live"), symbol, snapshot["as_of"])
-        existing = self._ai_by_snapshot.get(key)
-        if existing and existing in self._ai_jobs:
-            return {"job_id": existing, "status": "pending"}
-        from ..intraday.ollama import explain_market
-        job_id = uuid.uuid4().hex
-        future = self._ai_pool.submit(explain_market, snapshot, self.cfg.get("ai.ollama", {}) or {})
-        self._ai_jobs[job_id] = {"future": future, "as_of": snapshot["as_of"], "key": key}
-        self._ai_by_snapshot[key] = job_id
-        # Keep this small process-local cache bounded.
-        if len(self._ai_jobs) > 30:
-            for old_id, old in list(self._ai_jobs.items()):
-                if old["future"].done() and old_id != job_id:
-                    self._ai_jobs.pop(old_id, None)
-                    self._ai_by_snapshot.pop(old["key"], None)
-                    if len(self._ai_jobs) <= 20:
-                        break
-        return {"job_id": job_id, "status": "pending"}
-
-    def ollama_job(self, job_id: str) -> dict:
-        job = self._ai_jobs.get(str(job_id))
-        if not job:
-            raise KeyError("AI explanation expired; request a new one.")
-        future = job["future"]
-        if not future.done():
-            return {"status": "pending", "as_of": job["as_of"]}
-        try:
-            return {"status": "done", "result": future.result(), "as_of": job["as_of"]}
-        except Exception as exc:
-            return {"status": "error", "error": str(exc)[:300], "as_of": job["as_of"]}
-
-    def _ollama_snapshot(self, account, symbol: str) -> dict:
-        j = self.j(account)
-        rows = j.df("SELECT ts, symbol, bias, score, conviction, day_type, vol_view, spot, action, narrative, "
-                    "evidence, vetoes, levels FROM thoughts WHERE symbol=? ORDER BY id DESC LIMIT 1", (symbol,))
-        if rows.empty:
-            raise KeyError(f"No market read is available yet for {symbol}.")
-        row = rows.iloc[0].to_dict()
-        try:
-            evidence = json.loads(row.get("evidence") or "[]")
-        except (TypeError, ValueError):
-            evidence = []
-        if not isinstance(evidence, list):
-            evidence = []
-        evidence = [e for e in evidence if isinstance(e, dict)]
-        evidence = sorted(evidence, key=lambda x: abs((self._finite_float(x.get("direction")) or 0.0) *
-                                                       (self._finite_float(x.get("weight")) or 0.0)), reverse=True)
-        try:
-            levels = json.loads(row.get("levels") or "{}")
-        except (TypeError, ValueError):
-            levels = {}
-        if not isinstance(levels, dict):
-            levels = {}
-        try:
-            vetoes = json.loads(row.get("vetoes") or "[]")
-        except (TypeError, ValueError):
-            vetoes = []
-        if not isinstance(vetoes, list):
-            vetoes = []
-        news_rows = j.df("SELECT ts, source, title, summary, sentiment, impact, about FROM news "
-                         "ORDER BY ts DESC LIMIT 20")
-        relevant = []
-        for item in news_rows.to_dict("records"):
-            try:
-                about = json.loads(item.get("about") or "[]")
-            except (TypeError, ValueError):
-                about = []
-            about_text = json.dumps(about, ensure_ascii=False).upper()
-            if about and symbol not in about_text:
-                continue
-            relevant.append({"time": str(item.get("ts") or ""), "source": str(item.get("source") or "")[:80],
-                             "title": str(item.get("title") or "")[:220], "summary": str(item.get("summary") or "")[:350],
-                             "impact": str(item.get("impact") or "")[:40],
-                             "desk_sentiment": self._finite_float(item.get("sentiment"))})
-            if len(relevant) >= 5:
-                break
-        return {
-            "as_of": str(row.get("ts") or ""), "symbol": symbol,
-            "desk_read": {"bias": str(row.get("bias") or ""), "score": self._finite_float(row.get("score")),
-                          "conviction": self._finite_float(row.get("conviction")), "day_type": str(row.get("day_type") or ""),
-                          "volatility_view": str(row.get("vol_view") or ""), "spot": self._finite_float(row.get("spot")),
-                          "current_action": str(row.get("action") or "")[:180],
-                          "narrative": str(row.get("narrative") or "")[:500]},
-            "evidence": [{"factor": str(e.get("factor") or "")[:60], "category": str(e.get("category") or "")[:40],
-                          "direction": self._finite_float(e.get("direction")), "weight": self._finite_float(e.get("weight")),
-                          "observation": str(e.get("observation") or "")[:200]} for e in evidence[:8]],
-            "vetoes": [str(x)[:180] for x in vetoes[:6]],
-            "key_levels": {str(k): v for k, v in list(levels.items())[:12]},
-            "recent_headlines": relevant,
-        }
-
-    @staticmethod
-    def _finite_float(value):
-        try:
-            number = float(value)
-            return number if math.isfinite(number) else None
-        except (TypeError, ValueError):
-            return None
 
     @staticmethod
     def _calibration(t: pd.DataFrame) -> list[dict]:

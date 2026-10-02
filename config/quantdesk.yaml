@@ -11,16 +11,6 @@ account:
 runtime:
   dir: runtime                     # journal DB, broker state, reports, cache (git-ignored)
 
-# Optional local Ollama assistant. It only explains a prepared snapshot when
-# requested in the Brain tab; its output never enters signals, risk or orders.
-ai:
-  ollama:
-    enabled: false
-    base_url: http://127.0.0.1:11434
-    model: ""                       # set to a model installed in Ollama
-    timeout_sec: 35
-    allow_remote: false              # keep the endpoint on this machine by default
-
 data:
   source: yahoo                    # yahoo | csv | synthetic
   csv_dir: data/csv                # <SYMBOL>.csv with date,open,high,low,close,volume
