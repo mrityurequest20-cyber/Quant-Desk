@@ -446,7 +446,74 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
     client.pct_query = bool(worked and worked[1])
     if not worked:
         say("  candles none worked: live bars will come from Yahoo")
+    futures_probe(client, underlyings[:1] or ["NIFTY"], now, say)
     say(f"  quotes per call: {client.batch}")
     say(f"  {sum(client.calls.values())} calls in {time.time() - t0:.1f}s: "
         + ", ".join(f"{k} {v}" for k, v in client.calls.items()))
     return ok_quotes and ok_chain
+
+
+def futures_probe(client: KotakClient, underlyings, now, say=print) -> dict:
+    """Which of Kotak's endpoints give index futures (tokens, live quotes with volume/OI, 1-minute candles)? Each
+    route is tried and reported, and what worked is returned, so the desk's futures feed can be pinned to it."""
+    found: dict = {}
+    mon = now.strftime("%y%b").upper()                                   # 26OCT
+    for u in underlyings:
+        say(f"  futures {u}: probing")
+        # 1. the watchlist chain endpoint asked for futures instead of options
+        for it in ("future", "futures", "fut", "FUTIDX"):
+            try:
+                body = client._get("market-data/1.0/watchlist/option-chain",
+                                   {"exchange": "nse_fo", "underlying": u, "instrument_type": it, "count": 10})
+                calls, puts = chain_parts(body)
+                say(f"    chain instrument_type={it}: keys {sorted(body)[:8]} · {len(calls)}+{len(puts)} rows · "
+                    f"raw {_raw(body, 500)}")
+                found.setdefault("chain_type", it)
+            except Exception as exc:
+                say(f"    chain instrument_type={it}: FAIL {exc!s:.160}")
+        # 2. the scrip master's file list (tokens for every contract)
+        for path in ("script-details/1.0/masterscrip/file-paths", "script-details/1.0/masterscrip/v2/file-paths",
+                     "Files/1.0/masterscrip/v2/file-paths"):
+            try:
+                body = client._get(path)
+                say(f"    scrip master {path}: {_raw(body, 600)}")
+                found.setdefault("master", path)
+                break
+            except Exception as exc:
+                say(f"    scrip master {path}: FAIL {exc!s:.160}")
+        # 3. quotes and candles by trading symbol
+        for sym in (f"{u}{mon}FUT", f"{u}-{mon}-FUT", f"{u} {now:%b}".upper() + " FUT"):
+            try:
+                qs = client.quotes([("nse_fo", sym)])
+                q = qs[0] if qs else {}
+                say(f"    quote nse_fo|{sym}: ltp {q.get('ltp')} vol {q.get('last_volume', q.get('volume'))} "
+                    f"oi {q.get('open_int')} · fields {', '.join(sorted(q))[:300] if q else 'none'}")
+                if q:
+                    found.setdefault("quote_symbol", sym)
+            except Exception as exc:
+                say(f"    quote nse_fo|{sym}: FAIL {exc!s:.160}")
+            for name in (sym, f"nse_fo|{sym}"):
+                try:
+                    raw = client.candles(name, "1min", now.date() - dt.timedelta(days=5), now.date())
+                    say(f"    candles {name}: {len(raw)} bars" + (f", volume sum {raw['volume'].sum():,.0f}, last "
+                                                                 f"{raw.index[-1]:%d-%b %H:%M} {raw['close'].iloc[-1]:,.2f}"
+                                                                 if len(raw) else f" · raw {_raw(client.last_body, 200)}"))
+                    if len(raw):
+                        found.setdefault("candles", name)
+                except Exception as exc:
+                    say(f"    candles {name}: FAIL {exc!s:.160}")
+    # 4. NSE's own derivative quote (the fallback: a snapshot with volume and OI per contract)
+    try:
+        from ..data.nse import NSE
+        body, _, _ = NSE().api(f"/api/quote-derivative?symbol={underlyings[0]}")
+        futs = [x for x in (body.get("stocks") or []) if "Futures" in str((x.get("metadata") or {}).get("instrumentType"))]
+        say(f"  futures NSE quote-derivative: {len(futs)} futures · "
+            + "; ".join(f"{(x.get('metadata') or {}).get('expiryDate')} ltp {(x.get('metadata') or {}).get('lastPrice')} "
+                        f"vol {(x.get('metadata') or {}).get('numberOfContractsTraded')} oi "
+                        f"{((x.get('marketDeptOrderBook') or {}).get('tradeInfo') or {}).get('openInterest')}" for x in futs[:3]))
+        if futs:
+            found["nse"] = True
+    except Exception as exc:
+        say(f"  futures NSE quote-derivative: FAIL {exc!s:.160}")
+    say(f"  futures verdict: {found or 'nothing worked'}")
+    return found
