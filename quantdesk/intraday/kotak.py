@@ -454,66 +454,82 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
 
 
 def futures_probe(client: KotakClient, underlyings, now, say=print) -> dict:
-    """Which of Kotak's endpoints give index futures (tokens, live quotes with volume/OI, 1-minute candles)? Each
-    route is tried and reported, and what worked is returned, so the desk's futures feed can be pinned to it."""
+    """Index futures from Kotak: tokens from the scrip master, then live quotes (volume, OI) and 1-minute candles by
+    token; also the raw `fut` chain response and a liquid stock (cash and options), for the stock universe."""
+    import io
     found: dict = {}
-    mon = now.strftime("%y%b").upper()                                   # 26OCT
-    for u in underlyings:
-        say(f"  futures {u}: probing")
-        # 1. the watchlist chain endpoint asked for futures instead of options
-        for it in ("future", "futures", "fut", "FUTIDX"):
-            try:
-                body = client._get("market-data/1.0/watchlist/option-chain",
-                                   {"exchange": "nse_fo", "underlying": u, "instrument_type": it, "count": 10})
-                calls, puts = chain_parts(body)
-                say(f"    chain instrument_type={it}: keys {sorted(body)[:8]} · {len(calls)}+{len(puts)} rows · "
-                    f"raw {_raw(body, 500)}")
-                found.setdefault("chain_type", it)
-            except Exception as exc:
-                say(f"    chain instrument_type={it}: FAIL {exc!s:.160}")
-        # 2. the scrip master's file list (tokens for every contract)
-        for path in ("script-details/1.0/masterscrip/file-paths", "script-details/1.0/masterscrip/v2/file-paths",
-                     "Files/1.0/masterscrip/v2/file-paths"):
-            try:
-                body = client._get(path)
-                say(f"    scrip master {path}: {_raw(body, 600)}")
-                found.setdefault("master", path)
-                break
-            except Exception as exc:
-                say(f"    scrip master {path}: FAIL {exc!s:.160}")
-        # 3. quotes and candles by trading symbol
-        for sym in (f"{u}{mon}FUT", f"{u}-{mon}-FUT", f"{u} {now:%b}".upper() + " FUT"):
-            try:
-                qs = client.quotes([("nse_fo", sym)])
-                q = qs[0] if qs else {}
-                say(f"    quote nse_fo|{sym}: ltp {q.get('ltp')} vol {q.get('last_volume', q.get('volume'))} "
-                    f"oi {q.get('open_int')} · fields {', '.join(sorted(q))[:300] if q else 'none'}")
-                if q:
-                    found.setdefault("quote_symbol", sym)
-            except Exception as exc:
-                say(f"    quote nse_fo|{sym}: FAIL {exc!s:.160}")
-            for name in (sym, f"nse_fo|{sym}"):
-                try:
-                    raw = client.candles(name, "1min", now.date() - dt.timedelta(days=5), now.date())
-                    say(f"    candles {name}: {len(raw)} bars" + (f", volume sum {raw['volume'].sum():,.0f}, last "
-                                                                 f"{raw.index[-1]:%d-%b %H:%M} {raw['close'].iloc[-1]:,.2f}"
-                                                                 if len(raw) else f" · raw {_raw(client.last_body, 200)}"))
-                    if len(raw):
-                        found.setdefault("candles", name)
-                except Exception as exc:
-                    say(f"    candles {name}: FAIL {exc!s:.160}")
-    # 4. NSE's own derivative quote (the fallback: a snapshot with volume and OI per contract)
     try:
-        from ..data.nse import NSE
-        body, _, _ = NSE().api(f"/api/quote-derivative?symbol={underlyings[0]}")
-        futs = [x for x in (body.get("stocks") or []) if "Futures" in str((x.get("metadata") or {}).get("instrumentType"))]
-        say(f"  futures NSE quote-derivative: {len(futs)} futures · "
-            + "; ".join(f"{(x.get('metadata') or {}).get('expiryDate')} ltp {(x.get('metadata') or {}).get('lastPrice')} "
-                        f"vol {(x.get('metadata') or {}).get('numberOfContractsTraded')} oi "
-                        f"{((x.get('marketDeptOrderBook') or {}).get('tradeInfo') or {}).get('openInterest')}" for x in futs[:3]))
-        if futs:
-            found["nse"] = True
+        body = client._get("script-details/1.0/masterscrip/file-paths")
+        files = (body.get("data") or {}).get("filesPaths") or []
+        say(f"  scrip master: {len(files)} files: {', '.join(f.rsplit('/', 1)[-1] for f in files)}")
     except Exception as exc:
-        say(f"  futures NSE quote-derivative: FAIL {exc!s:.160}")
+        say(f"  scrip master: FAIL {exc!s:.200}")
+        files = []
+    master = {}
+    for name in ("nse_fo.csv", "nse_cm.csv"):
+        url = next((f for f in files if f.endswith("/" + name)), None)
+        if not url:
+            continue
+        for auth in (False, True):
+            try:
+                r = client.s.get(url, timeout=60, **({} if auth else {"headers": {"Authorization": ""}}))
+                say(f"  {name}: HTTP {r.status_code}, {len(r.content) / 1e6:.1f} MB (auth {'on' if auth else 'off'})")
+                if r.status_code == 200 and len(r.content) > 1000:
+                    df = pd.read_csv(io.BytesIO(r.content), low_memory=False)
+                    df.columns = [str(c).strip().rstrip(";") for c in df.columns]
+                    master[name] = df
+                    say(f"    columns: {', '.join(df.columns[:40])}")
+                    break
+            except Exception as exc:
+                say(f"  {name}: FAIL {exc!s:.200}")
+    fo = master.get("nse_fo.csv")
+    if fo is not None:
+        cols = {c.lower(): c for c in fo.columns}
+        sym_col = next((cols[c] for c in ("psymbolname", "psymbol_name", "symbolname") if c in cols), None)
+        typ_col = next((cols[c] for c in ("pinsttype", "instrumenttype", "pinst_type") if c in cols), None)
+        for u in list(underlyings) + ["BANKNIFTY", "RELIANCE"]:
+            rows = fo[(fo[sym_col].astype(str).str.upper() == u)] if sym_col else fo.head(0)
+            futs = rows[rows[typ_col].astype(str).str.upper().str.startswith("FUT")] if typ_col is not None else rows.head(0)
+            say(f"  {u} futures rows: {len(futs)}")
+            for _, row in futs.head(3).iterrows():
+                say(f"    {dict((k, row[k]) for k in fo.columns[:25])}")
+            if len(futs):
+                tokc = next((cols[c] for c in ("psymbol", "ptoken", "token") if c in cols), fo.columns[0])
+                tok = str(futs.iloc[0][tokc]).split(".")[0]
+                found.setdefault("tokens", {})[u] = tok
+                try:
+                    q = (client.quotes([("nse_fo", tok)]) or [{}])[0]
+                    say(f"    quote nse_fo|{tok}: ltp {q.get('ltp')} last_volume {q.get('last_volume')} "
+                        f"oi {q.get('open_int')} ohlc {q.get('ohlc')} lstup {q.get('lstup_time')}")
+                except Exception as exc:
+                    say(f"    quote nse_fo|{tok}: FAIL {exc!s:.200}")
+                try:
+                    raw = client.candles(f"nse_fo|{tok}", "1min", now.date() - dt.timedelta(days=5), now.date())
+                    body = client.last_body
+                    first = ((body.get("data") or {}).get("candles") or [[]])[:2] if isinstance(body, dict) else None
+                    say(f"    candles nse_fo|{tok}: {len(raw)} bars, volume sum {raw['volume'].sum() if len(raw) else 0:,.0f}; "
+                        f"raw rows {first}")
+                    if len(raw):
+                        found["candles"] = "nse_fo|<token>"
+                except Exception as exc:
+                    say(f"    candles nse_fo|{tok}: FAIL {exc!s:.200}")
+    cm = master.get("nse_cm.csv")
+    if cm is not None:
+        cols = {c.lower(): c for c in cm.columns}
+        for c in ("ptrdsymbol", "psymbolname"):
+            if c in cols:
+                hit = cm[cm[cols[c]].astype(str).str.upper().isin(["RELIANCE-EQ", "RELIANCE"])]
+                say(f"  nse_cm RELIANCE rows by {c}: {len(hit)} · {hit.head(2).to_dict('records')}")
+    try:
+        body = client._get("market-data/1.0/watchlist/option-chain", {"exchange": "nse_fo", "underlying": "NIFTY",
+                                                                       "instrument_type": "fut", "count": 10})
+        say(f"  chain instrument_type=fut raw: {_raw(body, 900)}")
+    except Exception as exc:
+        say(f"  chain instrument_type=fut: FAIL {exc!s:.200}")
+    try:
+        exps = client.expiries("RELIANCE")
+        say(f"  RELIANCE option expiries: {[str(e) for e in exps[:3]]}")
+    except Exception as exc:
+        say(f"  RELIANCE option expiries: FAIL {exc!s:.200}")
     say(f"  futures verdict: {found or 'nothing worked'}")
     return found
