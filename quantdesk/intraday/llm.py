@@ -114,8 +114,37 @@ def _payload(items: list[dict]) -> str:
     return ("Headlines (id | published IST | source | title — summary). Return one read per id.\n\n" + "\n".join(lines))
 
 
+JSON_SHAPE = ('\n\nAnswer with JSON only, no prose, exactly this shape: {"reads": [{"id": "<id>", "nifty": <-1..1>, '
+              '"banknifty": <-1..1>, "confidence": <0..1>, "event": "<one of: ' + ", ".join(EVENTS) + '>", "why": "<≤20 words>"}]}')
+_NUM = r"[^\d+\-−\n]{0,12}([+\-−]?\d*\.?\d+)"
+
+
+def _parse_text_reads(text: str, ids: set) -> dict[str, dict]:
+    """A model that ignored the JSON format and wrote "**t1** - NIFTY impact: +0.6 - BANKNIFTY …": read it anyway."""
+    import re
+    out = {}
+    marks = sorted((m.start(), i) for i in ids for m in re.finditer(r"(?<!\w)" + re.escape(i) + r"(?!\w)", text or ""))
+    for k, (pos, hid) in enumerate(marks):
+        if hid in out:
+            continue
+        block = text[pos:marks[k + 1][0] if k + 1 < len(marks) else len(text)]
+        def num(label):
+            m = re.search(label + _NUM, block, re.I)
+            return float(m.group(1).replace("−", "-")) if m else None
+        n, b = num(r"\bnifty\b"), num(r"\bbank ?nifty\b")
+        if n is None and b is None:
+            continue
+        ev = re.search(r"\bevent\b[^a-z\n]{0,12}([a-z_]+)", block, re.I)
+        why = re.search(r"\bwhy\b[^a-z\n]{0,12}(.+)", block, re.I)
+        out[hid] = {"NIFTY": _clip(n), "BANKNIFTY": _clip(b), "confidence": _clip(num(r"\bconfidence\b") or 0.5, 0.0, 1.0),
+                    "event": ev.group(1).lower() if ev and ev.group(1).lower() in EVENTS else "general",
+                    "why": (why.group(1).strip() if why else "")[:200]}
+    return out
+
+
 def _parse_reads(text: str, ids: set) -> dict[str, dict]:
-    """Lenient: a JSON object with `reads`, or a bare list; unknown ids and junk dropped, numbers clipped."""
+    """Lenient: a JSON object with `reads`, or a bare list; unknown ids and junk dropped, numbers clipped. Prose
+    with the numbers in it is read too (_parse_text_reads)."""
     try:
         data = json.loads(text)
     except (TypeError, ValueError):
@@ -133,7 +162,7 @@ def _parse_reads(text: str, ids: set) -> dict[str, dict]:
         out[str(r["id"])] = {"NIFTY": _clip(r.get("nifty")), "BANKNIFTY": _clip(r.get("banknifty")),
                              "confidence": _clip(r.get("confidence"), 0.0, 1.0), "event": ev,
                              "why": str(r.get("why") or "")[:200]}
-    return out
+    return out or _parse_text_reads(text or "", ids)
 
 
 # ---- providers ---------------------------------------------------------------------------------------------------
@@ -200,8 +229,7 @@ class GeminiReader:
 
     def read(self, items: list[dict]) -> dict[str, dict]:
         body = {"systemInstruction": {"parts": [{"text": READ_SYSTEM}]},
-                "contents": [{"role": "user", "parts": [{"text": _payload(items) + "\n\nAnswer with JSON only: "
-                              '{"reads": [{"id", "nifty", "banknifty", "confidence", "event", "why"}]}'}]}],
+                "contents": [{"role": "user", "parts": [{"text": _payload(items) + JSON_SHAPE}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}}
         r = self.http.post(f"{self.base}/models/{self.model}:generateContent", json=body, timeout=self.timeout,
                            headers={"x-goog-api-key": self.key})
@@ -240,7 +268,7 @@ class OllamaReader:
 
     def read(self, items: list[dict]) -> dict[str, dict]:
         body = {"model": self.model, "stream": False, "format": READ_SCHEMA, "options": {"temperature": 0.2, "num_predict": 4096},
-                "messages": [{"role": "system", "content": READ_SYSTEM}, {"role": "user", "content": _payload(items)}]}
+                "messages": [{"role": "system", "content": READ_SYSTEM}, {"role": "user", "content": _payload(items) + JSON_SHAPE}]}
         r = self.http.post(f"{self.host}/api/chat", json=body, timeout=self.timeout, headers=self._headers())
         r.raise_for_status()
         d = r.json()

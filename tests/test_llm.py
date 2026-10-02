@@ -50,6 +50,15 @@ def test_reads_are_parsed_leniently_and_clipped():
     got = llm._parse_reads(txt, ids)
     assert got == {"a": {"NIFTY": 1.0, "BANKNIFTY": -0.5, "confidence": 1.0, "event": "general", "why": "x"}}
     assert llm._parse_reads("not json", ids) == {} and llm._parse_reads(None, ids) == {}
+    # what gpt-oss:120b on Ollama actually sent on 2 Oct 2026, ignoring the JSON format
+    md = ("**t1**  \n- **NIFTY impact:**\u202f+0.6  \n- **BANKNIFTY impact:**\u202f+0.5  \n- **confidence:**\u202f0.7  \n"
+          "- **why:**\u202fUnexpected 25\u202fbps rate cut lowers funding costs and boosts risk appetite.")
+    got = llm._parse_reads(md, {"t1"})["t1"]
+    assert (got["NIFTY"], got["BANKNIFTY"], got["confidence"], got["event"]) == (0.6, 0.5, 0.7, "general")
+    assert got["why"].startswith("Unexpected 25")
+    two = "a: NIFTY −0.4, BANKNIFTY −0.6, confidence 0.8, event inflation, why hot CPI\nb: NIFTY 0 BANKNIFTY 0.1"
+    r = llm._parse_reads(two, {"a", "b"})
+    assert r["a"]["NIFTY"] == -0.4 and r["a"]["event"] == "inflation" and r["b"]["BANKNIFTY"] == 0.1
 
 
 class FakeHTTP:
