@@ -168,7 +168,8 @@ def parse_fo_bhav(b: bytes, day: dt.date, symbols=INDEX_SYMBOLS) -> pd.DataFrame
 
 
 STOCK_COLS = ["date", "symbol", "lot", "underlying", "expiry", "opt_contracts", "opt_premium", "opt_oi", "active_strikes",
-              "strike_step", "atm_straddle", "fut_contracts", "fut_oi", "fut_close"]
+              "strike_step", "atm_straddle", "fut_contracts", "fut_oi", "fut_close",
+              "atm_call", "atm_put", "otm2_call", "otm2_put"]       # closes: at the money, and two strikes out
 
 
 def parse_fo_stocks(b: bytes, day: dt.date, min_strike_contracts: int = 100) -> pd.DataFrame:
@@ -213,12 +214,19 @@ def parse_fo_stocks(b: bytes, day: dt.date, min_strike_contracts: int = 100) -> 
         lot_div = lot if lot == lot and lot > 0 else 1.0
         strikes = np.sort(o["strike"].dropna().unique())
         step = float(np.median(np.diff(strikes))) if len(strikes) > 2 else np.nan
-        straddle = np.nan
+        straddle = atm_c = atm_p = otm_c = otm_p = np.nan
+
+        def close(k, right):
+            x = o[(o["strike"] == k) & (o["right"] == right)]
+            return float(x["close"].iloc[0]) if len(x) else np.nan
         if S == S and len(strikes):
-            k = strikes[np.argmin(np.abs(strikes - S))]
-            ce, pe = o[(o["strike"] == k) & (o["right"] == "CE")], o[(o["strike"] == k) & (o["right"] == "PE")]
-            if len(ce) and len(pe):
-                straddle = float(ce["close"].iloc[0] + pe["close"].iloc[0]) / S
+            i = int(np.argmin(np.abs(strikes - S)))
+            k = strikes[i]
+            atm_c, atm_p = close(k, "CE"), close(k, "PE")
+            if atm_c == atm_c and atm_p == atm_p:
+                straddle = (atm_c + atm_p) / S
+            otm_c = close(strikes[i + 2], "CE") if i + 2 < len(strikes) else np.nan     # the call two strikes up
+            otm_p = close(strikes[i - 2], "PE") if i >= 2 else np.nan                    # the put two strikes down
         rows.append({"date": day, "symbol": sym, "lot": lot, "underlying": S, "expiry": near,
                      "opt_contracts": float(o["contracts"].sum()),
                      "opt_premium": float((o["close"] * o["contracts"]).sum() * (lot if lot == lot else 1.0)),
@@ -226,7 +234,8 @@ def parse_fo_stocks(b: bytes, day: dt.date, min_strike_contracts: int = 100) -> 
                      "active_strikes": int(o.loc[o["contracts"] >= min_strike_contracts, "strike"].nunique()),
                      "strike_step": step, "atm_straddle": straddle,
                      "fut_contracts": float(f["contracts"].sum()), "fut_oi": float(f["oi"].sum() / lot_div),
-                     "fut_close": float(f["close"].iloc[0]) if len(f) else np.nan})
+                     "fut_close": float(f["close"].iloc[0]) if len(f) else np.nan,
+                     "atm_call": atm_c, "atm_put": atm_p, "otm2_call": otm_c, "otm2_put": otm_p})
     return pd.DataFrame(rows, columns=STOCK_COLS)
 
 

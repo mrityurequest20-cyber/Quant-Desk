@@ -144,7 +144,7 @@ def _settled(man: pd.DataFrame, table: str, today: dt.date) -> set[dt.date]:
 
 def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[str] | None = None,
            holidays: set[dt.date] | None = None, say=print, today: dt.date | None = None,
-           checkpoint_every: int = 60, on_checkpoint=None) -> dict:
+           checkpoint_every: int = 60, on_checkpoint=None, refetch: bool = False) -> dict:
     """Fetch every missing trading day in [start, end] for the daily files, plus today's API snapshots when the range
     reaches today. Returns counts per table."""
     sim = today is not None
@@ -161,7 +161,7 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
                 "participant_vol": (lambda d: nse.participant("vol", d), N.parse_participant)}
     for table in [t for t in DAILY_FILES if t in only]:
         fetch, parse = fetchers[table]
-        done = _settled(man, table, today)
+        done = set() if refetch else _settled(man, table, today)    # refetch: parse the range again (new columns)
         todo = [d for d in days if d not in done]
         if not todo:
             continue

@@ -41,6 +41,7 @@ def rank(fo_stocks: pd.DataFrame, days: int = 20, top: int = 25) -> pd.DataFrame
         "lot": g["lot"].last(),
         "price": g["underlying"].last(),
         "strike_step": g["strike_step"].last(),
+        **{c: g[c].last() for c in ("atm_call", "atm_put", "otm2_call", "otm2_put") if c in df.columns},
     })
     out["liquid"] = (out["active_strikes"] >= MIN_STRIKES) & (out["premium_cr"] * 1e7 >= MIN_PREMIUM)
     out["min_spread_risk"] = 0.5 * out["strike_step"] * out["lot"]          # one lot, one strike wide, at the money
@@ -61,11 +62,35 @@ def fits(row, capital: float, max_loss_frac: float) -> tuple[bool, str]:
     return False, f"one lot of a 1-strike spread risks ≈₹{r:,.0f} ({pct:.1%}), over the ₹{budget:,.0f} budget"
 
 
+def fits_long(row, capital: float, max_loss_frac: float, outlay_frac: float = 0.35, stop: float = 0.30) -> tuple[bool, str]:
+    """Can the account buy one lot of a call or put: the premium within the outlay cap, and the loss at the premium stop
+    within the risk budget? Tries the at-the-money option, then the one two strikes out (cheaper, lower delta)."""
+    lot = float(row.get("lot") or 0)
+    best = None
+    for col, what in (("atm_call", "ATM call"), ("atm_put", "ATM put"), ("otm2_call", "call 2 strikes out"),
+                      ("otm2_put", "put 2 strikes out")):
+        prem = row.get(col)
+        if prem is None or not prem == prem or prem <= 0 or not lot:
+            continue
+        cost = prem * lot
+        if cost <= capital * outlay_frac and cost * stop <= capital * max_loss_frac:
+            if best is None or (what.startswith("ATM") and not best[1].startswith("ATM")):
+                best = (cost, what, prem)
+    if best is None:
+        cheapest = min((row.get(c) for c in ("otm2_call", "otm2_put") if row.get(c) == row.get(c) and row.get(c)), default=None)
+        return False, (f"cheapest option one lot ≈₹{cheapest * lot:,.0f} (stop at {stop:.0%}: ₹{cheapest * lot * stop:,.0f})"
+                       if cheapest else "no option premiums in the data")
+    cost, what, prem = best
+    return True, f"{what} ₹{prem:,.2f} × {lot:,.0f} = ₹{cost:,.0f} a lot; {stop:.0%} stop risks ₹{cost * stop:,.0f}"
+
+
 def table(ranked: pd.DataFrame, capital: float, max_loss_frac: float) -> list[str]:
     lines = [f"{'stock':<12}{'premium ₹cr':>12}{'strikes':>9}{'fut ctr':>9}{'straddle':>10}{'lot':>7}{'price':>10}  fits ₹{capital:,.0f}?"]
     for sym, r in ranked.iterrows():
         ok, why = fits(r, capital, max_loss_frac)
+        lok, lwhy = fits_long(r, capital, max_loss_frac) if "atm_call" in r.index else (False, "")
         lines.append(f"{sym:<12}{r.premium_cr:>12,.1f}{r.active_strikes:>9.0f}{r.fut_contracts:>9,.0f}"
                      f"{(r.atm_straddle if r.atm_straddle == r.atm_straddle else np.nan):>10.2%}{r.lot:>7,.0f}{r.price:>10,.1f}  "
-                     + ("yes: " if ok else "no: ") + why + ("" if r.liquid else " · below the liquidity bar"))
+                     + (("BUY OK: " + lwhy) if lok else ("spread ok: " + why) if ok else ("no: " + (lwhy or why)))
+                     + ("" if r.liquid else " · below the liquidity bar"))
     return lines

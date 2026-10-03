@@ -242,6 +242,18 @@ def test_stock_liquidity_from_the_same_bhavcopy():
     assert r.opt_premium == pytest.approx(500 * (25 * 3000 + 19.5 * 9000 + 14 * 6000 + 12 * 2500 + 16.5 * 7000 + 22 * 90))
     assert r.opt_oi == pytest.approx(3_600_000 / 500) and r.fut_oi == 100_000 and r.fut_contracts == 40000
     assert r.strike_step == 10 and r.atm_straddle == pytest.approx(36 / 1402.5)        # the November row is ignored
+    assert (r.atm_call, r.atm_put) == (19.5, 16.5) and r.otm2_call != r.otm2_call     # no strike two above 1400 here
+
+
+def test_buying_one_lot_of_a_stock_option():
+    from quantdesk.intraday import stocks
+    rel = pd.Series({"lot": 500, "atm_call": 18.6, "atm_put": 17.0, "otm2_call": 7.4, "otm2_put": 6.9})
+    ok, why = stocks.fits_long(rel, 20000, 0.08)                        # ATM ₹9,300: over the ₹7,000 outlay cap
+    assert ok and why.startswith("call 2 strikes out ₹7.40 × 500 = ₹3,700") and "risks ₹1,110" in why
+    assert stocks.fits_long(rel, 50000, 0.08)[1].startswith("ATM call")  # a bigger account buys at the money
+    pricey = pd.Series({"lot": 50, "atm_call": 420.0, "atm_put": 400.0, "otm2_call": 260.0, "otm2_put": 240.0})
+    no, why = stocks.fits_long(pricey, 20000, 0.08)
+    assert not no and "≈₹12,000" in why
 
 
 def test_ranking_and_what_the_account_can_hold():

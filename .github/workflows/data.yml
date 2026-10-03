@@ -19,6 +19,10 @@ on:
       only:
         description: "Tables, comma-separated (empty: all)"
         default: ""
+      refetch:
+        description: "Fetch and parse the range again even if already fetched (after a parser change)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write            # the warehouse release
@@ -36,6 +40,7 @@ jobs:
       FROM: ${{ inputs.from }}
       TO: ${{ inputs.to }}
       ONLY: ${{ inputs.only }}
+      REFETCH: ${{ inputs.refetch && '--refetch' || '' }}
       PYTHONUNBUFFERED: "1"
       TZ: Asia/Kolkata
     steps:
@@ -46,7 +51,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Fetch what's missing
-        run: python -m quantdesk data update --release warehouse ${FROM:+--from "$FROM"} ${TO:+--to "$TO"} ${ONLY:+--only "$ONLY"}
+        run: python -m quantdesk data update --release warehouse ${FROM:+--from "$FROM"} ${TO:+--to "$TO"} ${ONLY:+--only "$ONLY"} $REFETCH
       - name: Status
         if: always()
         run: python -m quantdesk data status --release warehouse --dir _status | tee -a "$GITHUB_STEP_SUMMARY"

@@ -42,7 +42,7 @@ def cmd_update(cfg, a):
             print(f"    pushed {len(wh.dirty)} file(s)", flush=True)
             wh.dirty.clear()
     counts = update(wh, NSE(gap=a.gap), start, end, only, holidays=set(cfg.holidays()),
-                    say=lambda m: print(m, flush=True), on_checkpoint=checkpoint)
+                    say=lambda m: print(m, flush=True), on_checkpoint=checkpoint, refetch=getattr(a, "refetch", False))
     print("rows added: " + (", ".join(f"{k} {v:,}" for k, v in counts.items()) or "none"), flush=True)
     if store:
         n = len(wh.dirty)
@@ -108,6 +108,7 @@ def register(sub):
     x.add_argument("--to", help="YYYY-MM-DD (default today)")
     x.add_argument("--only", help="comma-separated tables (fo_bhav, fo_stocks, participant_oi, participant_vol, fii_dii, "
                                   "gift_nifty, corp_events, nse_holidays)")
+    x.add_argument("--refetch", action="store_true", help="fetch and parse the range again even if already fetched")
     x.add_argument("--dir", help="warehouse folder (default runtime/warehouse)")
     x.add_argument("--release", help="GitHub release holding the files (e.g. warehouse): pull first, push after")
     x.add_argument("--gap", type=float, default=0.5, help="seconds between NSE requests")
