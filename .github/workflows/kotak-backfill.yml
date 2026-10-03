@@ -1,0 +1,52 @@
+# Historical 1-minute option, index and futures candles from Kotak (quantdesk/data/kotak_backfill.py): run once by hand
+# for the last ~30 days; after that, live.yml's afternoon job collects each session's minutes as it closes.
+name: Kotak minute backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Days back (Kotak serves about 30)"
+        default: "30"
+      expiries:
+        description: "Nearest expiries per index"
+        default: "4"
+      strikes:
+        description: "Strikes each side of the money (rounded to 10s)"
+        default: "20"
+
+permissions:
+  contents: write            # create and upload to the option-minutes-YYYY release
+
+concurrency:
+  group: kotak-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      DAYS: ${{ inputs.days }}
+      EXPIRIES: ${{ inputs.expiries }}
+      STRIKES: ${{ inputs.strikes }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Pull the minutes and keep them on the option-minutes release
+        run: |
+          python -m quantdesk data kotak-backfill --days "$DAYS" --expiries "$EXPIRIES" --strikes "$STRIKES" \
+            --release-prefix option-minutes | tee backfill.txt
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## Kotak minute backfill"; echo '```'; cat backfill.txt 2>/dev/null || echo "no output"; echo '```';
+            echo '```json'; cat runtime/intraday/backfill/*/manifest.json 2>/dev/null | head -c 6000; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

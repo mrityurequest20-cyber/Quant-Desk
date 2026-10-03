@@ -131,6 +131,15 @@ def register(sub):
     x.add_argument("--out", help="output root (default runtime/external)")
     x.add_argument("--n", type=int, default=80, help="sessions sampled per symbol")
     x.set_defaults(fn=cmd_external_verify)
+    x = ss.add_parser("kotak-backfill", help="1-minute option, index and futures candles from Kotak (~30 days back): "
+                                             "the intraday option history no free source has (traded bars, not quotes)")
+    x.add_argument("--days", type=int, default=30)
+    x.add_argument("--expiries", type=int, default=4, help="nearest expiries per index")
+    x.add_argument("--strikes", type=int, default=20, help="strikes each side of the money (rounded to 10s)")
+    x.add_argument("--symbols", default="NIFTY,BANKNIFTY")
+    x.add_argument("--out", help="default runtime/intraday/backfill")
+    x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. option-minutes)")
+    x.set_defaults(fn=cmd_kotak_backfill)
     x = ss.add_parser("truedata-import", help="TrueData Velocity export → audited, immutable Parquet with provenance "
                                               "(raw files untouched; external_unverified until checked)")
     x.add_argument("--source", required=True, help="the export folder (or a clone of the repo holding it)")
@@ -156,6 +165,39 @@ def cmd_external_import(cfg, a):
     ds = X.dataset_dir(out, man["source_commit"])
     print(f"{man['dataset']}: status {man['status']} · {sum(1 for s in man['sessions'] if s['accepted'])} accepted of "
           f"{len(man['sessions'])} sessions · report {ds / 'quality.md'}")
+
+
+def cmd_kotak_backfill(cfg, a):
+    import shutil
+
+    from ..intraday.kotak import KotakClient, KotakError
+    from .kotak_backfill import backfill, release_names
+    try:
+        client = KotakClient.from_env()
+    except KotakError:
+        raise SystemExit("kotak-backfill: no KOTAK_CONSUMER_KEY")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "intraday" / "backfill"
+    man = backfill(client, out, [s.strip().upper() for s in a.symbols.split(",") if s.strip()], days=a.days,
+                   n_expiries=a.expiries, strikes=a.strikes, say=lambda m: print(m, flush=True))
+    run = Path(man["path"])
+    print(f"{run}: " + ", ".join(f"{u} {r.get('bars', 0):,} option bars" for u, r in man["underlyings"].items()))
+    if a.release_prefix:
+        from .warehouse import ReleaseStore
+        stage = out / "_release"
+        if stage.exists():
+            shutil.rmtree(stage)
+        stage.mkdir(parents=True)
+        names = []
+        for n in release_names(run):
+            dst = f"{man['as_of']}_{n}"
+            shutil.copyfile(run / n, stage / dst)
+            names.append(dst)
+        year = man["as_of"][:4]
+        ReleaseStore(f"{a.release_prefix}-{year}", title=f"Option minutes {year}",
+                     notes="Kotak 1-minute candles (traded bars, not quotes) for NIFTY/BANKNIFTY options near the money, "
+                           "the index and its futures; one set per run (quantdesk/data/kotak_backfill.py). Not a software "
+                           "release.").push(stage, names)
+        print(f"pushed {len(names)} file(s) to release {a.release_prefix}-{year}")
 
 
 def cmd_truedata_import(cfg, a):

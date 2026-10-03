@@ -379,6 +379,19 @@ passes. It is for underlying features, direction research, regime research and d
 bid/ask, IV or execution data, and never evidence to qualify anything. `autolearn direction-study` runs the
 direction baseline over the four horizons on it.
 
+### Option minutes from Kotak (intraday option history)
+
+`python -m quantdesk data kotak-backfill` pulls Kotak's 1-minute candles (about 30 days back) for every NIFTY/BANKNIFTY
+option within 20 strikes of the money on the 4 nearest expiries, plus the index and its futures
+(`quantdesk/data/kotak_backfill.py`).
+- **Kotak minute backfill** (`kotak-backfill.yml`) runs it once by hand for the last month.
+- After that, the live desk's afternoon job keeps each session's minutes on the `option-minutes-YYYY` release, so a
+  contract's last days survive its expiry.
+
+These are **traded** bars (OHLC of trades, plus volume), not bid/ask, with evidence class `real_trade_minutes`. They
+serve intraday research and checking the cost model against the chain tape's real quotes. They never qualify a
+strategy.
+
 ### TrueData exports (private data, derived reports only)
 
 `python -m quantdesk data truedata-import --source <export>` audits and imports a TrueData Velocity 2.0 export

@@ -144,3 +144,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m quantdesk data archive-session --part "afternoon-${{ github.run_id }}" --day "$(date +%F)" || echo "::warning::session archive failed; the artifact still has the data"
+      - name: Keep the session's option minutes (Kotak 1-minute candles; Kotak forgets them after ~30 days)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk data kotak-backfill --days 3 --release-prefix option-minutes || echo "::warning::option-minute backfill failed"
