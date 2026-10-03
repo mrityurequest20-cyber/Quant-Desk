@@ -1,0 +1,20 @@
+{
+  "name": "expiry_wings_v1",
+  "registered": "2026-10-04",
+  "question": "the expiry-eve strangle earns most of its money on ordinary days and gives most of it back on a handful of shock days (2% of BANKNIFTY trades lost Rs 2.06L of its Rs 3.52L total). Can far wings, bought as crash insurance, cap that tail while keeping most of the edge?",
+  "data": "NSE F&O bhavcopy 2019-01 to the latest warehouse release (runtime/warehouse fo_bhav_*.parquet), evidence class real_eod_approximation; the same conventions as warehouse_research.build_trades: entry at the close one session before expiry, legs at close -/+ leg_cost, statutory fees, held to the expiry-day close, STT on exercised long legs; only strikes that traded that day",
+  "variants": {
+    "B0": {"strategy": "short_strangle_20d", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20]], "role": "reference (sleeve B)"},
+    "A0": {"strategy": "iron_condor_20_10", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.10], [1, "PE", -0.10]], "role": "reference (sleeve A)"},
+    "W5": {"strategy": "iron_condor_20_05", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.05], [1, "PE", -0.05]], "role": "candidate"},
+    "W3": {"strategy": "iron_condor_20_03", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.03], [1, "PE", -0.03]], "role": "candidate"},
+    "W2": {"strategy": "iron_condor_20_02", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.02], [1, "PE", -0.02]], "role": "candidate"}
+  },
+  "offsets": "k = 1 only (the session before expiry)",
+  "trials": "3 new candidates on top of the 40 configurations of the original study; reported with every result",
+  "account": {"equity": 500000, "per_trade_loss_budget": 0.04, "sizing": "lots = floor(Rs 20,000 / the median max loss per lot); the naked reference is sized by its 1st-percentile loss for comparison only", "trades_per_year_now": {"NIFTY": 52, "BANKNIFTY": 12}},
+  "reported": "per index and variant: n, mean, sd, t, win rate, worst, 1st percentile, CVaR 5% (mean of the worst 5%), median max loss per lot, credit kept vs the strangle, mean in the first two thirds and the last third, P&L by year, lots under the budget and expected rupees a year at Rs 5L",
+  "selection": "per index, a candidate qualifies when its full-sample t >= 2 and its mean is positive in both the first two thirds and the last third. Among qualifiers, the one with the highest expected rupees a year at Rs 5L under the loss budget is selected. With no qualifier, sleeve A stays as registered",
+  "use": "the selection becomes sleeve C in a new forward spec (expiry_seller_v2) on real quotes, exactly like v1; nothing here goes live or changes v1",
+  "changes": "evaluated once; a different wing rule is a new spec"
+}
