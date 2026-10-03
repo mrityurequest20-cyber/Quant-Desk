@@ -76,6 +76,7 @@ jobs:
           set -o pipefail
           python -m quantdesk autolearn research | tee research.txt
           cp "$(python -c "import json;print(json.load(open('runtime/intraday/autolearn/plan/latest.json'))['path'].replace('report.json','report.md'))")" plan_report.md
+          cat plan_report.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always() && steps.research.outcome != 'skipped'
         with:
