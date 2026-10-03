@@ -131,6 +131,17 @@ def register(sub):
     x.add_argument("--out", help="output root (default runtime/external)")
     x.add_argument("--n", type=int, default=80, help="sessions sampled per symbol")
     x.set_defaults(fn=cmd_external_verify)
+    x = ss.add_parser("truedata-import", help="TrueData Velocity export → audited, immutable Parquet with provenance "
+                                              "(raw files untouched; external_unverified until checked)")
+    x.add_argument("--source", required=True, help="the export folder (or a clone of the repo holding it)")
+    x.add_argument("--out", help="output root (default runtime/external)")
+    x.set_defaults(fn=cmd_truedata_import)
+    x = ss.add_parser("truedata-verify", help="every TrueData bar against Yahoo's daily OHLC; sets the batch's status")
+    x.add_argument("--out", help="output root (default runtime/external)")
+    x.set_defaults(fn=cmd_truedata_verify)
+    x = ss.add_parser("truedata-research", help="daily research on the verified TrueData batch: stats, the pre-registered "
+                                                "rules, a causal prediction replay, the backtester (report in the batch folder)")
+    x.set_defaults(fn=cmd_truedata_research)
     x = ss.add_parser("status", help="coverage, gaps, and NSE's holidays vs the config")
     x.add_argument("--dir")
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")
@@ -145,6 +156,34 @@ def cmd_external_import(cfg, a):
     ds = X.dataset_dir(out, man["source_commit"])
     print(f"{man['dataset']}: status {man['status']} · {sum(1 for s in man['sessions'] if s['accepted'])} accepted of "
           f"{len(man['sessions'])} sessions · report {ds / 'quality.md'}")
+
+
+def cmd_truedata_import(cfg, a):
+    from . import external_truedata as T
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
+    man = T.import_export(Path(a.source), out)
+    print(f"{man['dataset']}: status {man['status']} · {len(man['files'])} files · "
+          f"{sum(f.get('rows_accepted', 0) for f in man['files'])} rows accepted, "
+          f"{sum(f.get('rows_rejected', 0) for f in man['files'])} rejected · report {Path(man['path']) / 'quality.md'}")
+
+
+def cmd_truedata_verify(cfg, a):
+    from . import external_truedata as T
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
+    ds = T.latest(out)
+    if ds is None:
+        raise SystemExit("no TrueData import: run `data truedata-import` first")
+    r = T.verify(ds)
+    print(f"{ds.name}: {'external_verified' if r['passed'] else 'external_unverified'}")
+
+
+def cmd_truedata_research(cfg, a):
+    from ..research import truedata_study as S
+    rep = S.run(cfg)
+    from . import external_truedata as T
+    ds = T.latest(Path(cfg.runtime_dir) / "external")
+    (ds / "research.md").write_text(S.render(rep))
+    print(ds / "research.md")
 
 
 def cmd_external_verify(cfg, a):

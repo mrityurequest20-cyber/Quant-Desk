@@ -379,6 +379,20 @@ passes. It is for underlying features, direction research, regime research and d
 bid/ask, IV or execution data, and never evidence to qualify anything. `autolearn direction-study` runs the
 direction baseline over the four horizons on it.
 
+### TrueData exports (private data, derived reports only)
+
+`python -m quantdesk data truedata-import --source <export>` audits and imports a TrueData Velocity 2.0 export
+([TRUEDATA.md](docs/TRUEDATA.md)). It:
+- detects schema, timeframe and time zone from the bytes;
+- gives no meaning to columns that aren't populated;
+- lists every rejected row with its reason;
+- writes immutable, provenance-stamped batches, so re-importing the same files is a no-op.
+
+`data truedata-verify` checks every bar against Yahoo. `data truedata-research` writes the stats, the pre-registered
+daily rules, a causal prediction replay and the backtester's verdict. `--source truedata` feeds the daily backtester.
+The raw and normalised bars stay private; only reports are committed ([QUALITY](docs/truedata/QUALITY.md),
+[RESEARCH](docs/truedata/RESEARCH.md)).
+
 **Headlines that share a window are one observation.** A night's forty stories are all judged on the same opening
 move, so they split one observation between them. Counted one each, the 403 headlines of 29 Sep 2026 had scored "66%
 right" (×1.31 trust); counted properly they're 24 observations at 48% (×0.98).

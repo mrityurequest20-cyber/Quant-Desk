@@ -94,8 +94,11 @@ def cmd_backtest(cfg, a):
                        progress=lambda n, N, ts: print(f"  {ts.date()} ({n}/{N})", file=sys.stderr))
     print(res.summary())
     print()
-    _print_df(res.per_strategy[["trades", "win_rate", "profit_factor", "avg_r", "total_pnl", "total_fees"]],
-              pct_cols=("win_rate",))
+    cols = ["trades", "win_rate", "profit_factor", "avg_r", "total_pnl", "total_fees"]
+    if res.per_strategy.empty or not set(cols) <= set(res.per_strategy.columns):
+        print("no trades: every strategy stayed flat over this period (missing inputs or warm-up; see the log above)")
+        return
+    _print_df(res.per_strategy[cols], pct_cols=("win_rate",))
     mc = trade_bootstrap(res.trades["pnl"].to_numpy(), cfg.get("account.starting_capital")) if a.mc or a.report else None
     if mc:
         print(f"\nMonte Carlo (trade bootstrap): median max DD {mc['maxdd_p50']:.1%}, 95th pct {mc['maxdd_p95']:.1%}, "
@@ -247,7 +250,7 @@ def cmd_demo(cfg, a):
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="quantdesk", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", action="append", help="extra YAML merged over the default config (repeatable)")
-    p.add_argument("--source", choices=["yahoo", "csv", "synthetic"], help="data source (default from config)")
+    p.add_argument("--source", choices=["yahoo", "csv", "synthetic", "truedata"], help="data source (default from config)")
     p.add_argument("--live", action="store_true", help="use the Kite broker (REAL MONEY; also needs account.mode: live)")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)

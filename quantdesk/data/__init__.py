@@ -15,6 +15,11 @@ def make_provider(cfg, source: str | None = None, **kw) -> DataProvider:
         return CSVProvider(path if str(path).startswith("/") else cfg.root / path)
     if source == "synthetic":
         return SyntheticProvider(cfg, **kw)
+    if source == "truedata":
+        from pathlib import Path
+
+        from .external_truedata import TrueDataProvider
+        return TrueDataProvider(Path(cfg.runtime_dir) / "external")
     raise ValueError(f"unknown data source {source!r}")
 
 
