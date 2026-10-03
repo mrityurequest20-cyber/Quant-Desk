@@ -81,6 +81,9 @@ out.url = c.url; out.method = c.init.method; out.body = JSON.parse(c.init.body);
 out.auth = new Headers(c.init.headers).get("authorization");
 const logs = []; console.log = (m) => logs.push(m);
 await worker.scheduled({ cron: "*/10 2-9 * * 1-5" }, { GH_DISPATCH_TOKEN: "t0k" }, {});
+globalThis.fetch = async () => new Response(JSON.stringify({ message: "Resource not accessible by personal access token" }),
+  { status: 403, headers: { "x-accepted-github-permissions": "actions=write" } });
+out.refused = await dispatchScheduler({ GH_DISPATCH_TOKEN: "github_pat_" + "x".repeat(82) + "\n" });
 process.stdout.write(JSON.stringify({ ...out, log: logs[0] }) + "\n");
 """
 
@@ -102,3 +105,6 @@ def test_the_worker_dispatches_the_scheduler(tmp_path):
     assert out["url"] == "https://api.github.com/repos/mrityurequest20-cyber/Quant-Desk/actions/workflows/scheduler.yml/dispatches"
     assert out["method"] == "POST" and out["body"] == {"ref": "main"} and out["auth"] == "Bearer t0k"
     assert out["log"].startswith("desk scheduler dispatched")
+    why = out["refused"]["why"]                                    # a refusal says why, and which token kind, never the token
+    assert out["refused"]["ok"] is False and why.startswith("GitHub answered 403: Resource not accessible")
+    assert "(needs actions=write)" in why and "fine-grained token, 93 characters" in why and "xxxx" not in why

@@ -16,8 +16,16 @@
 const LIVE = /(^|\/)(data\.json|sw\.js)$/;         // live data and the service worker: never from an edge cache
 const PASS = ["accept", "accept-encoding", "if-none-match", "if-modified-since", "range"];
 
+// What kind of token the secret holds, never any of its value: a classic token (ghp_, 40 characters) cannot be
+// limited to Actions on one repository, and a fine-grained one (github_pat_) can.
+export function tokenKind(token) {
+	const t = String(token || "");
+	const kind = t.startsWith("github_pat_") ? "fine-grained" : t.startsWith("ghp_") ? "classic" : "unrecognised";
+	return `${kind} token, ${t.length} characters`;
+}
+
 export async function dispatchScheduler(env) {
-	const token = env.GH_DISPATCH_TOKEN;
+	const token = String(env.GH_DISPATCH_TOKEN || "").trim();       // a pasted newline would break the header
 	if (!token) return { ok: false, why: "GH_DISPATCH_TOKEN is not set on this Worker: the desk relies on GitHub's own cron" };
 	const repo = String(env.GH_REPO || "mrityurequest20-cyber/Quant-Desk");
 	const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/scheduler.yml/dispatches`, {
@@ -26,7 +34,12 @@ export async function dispatchScheduler(env) {
 			"user-agent": "quantdesk-worker", "content-type": "application/json" },
 		body: JSON.stringify({ ref: String(env.GH_REF || "main") }),
 	});
-	return { ok: res.status === 204, why: `GitHub answered ${res.status}` };
+	if (res.status === 204) return { ok: true, why: "GitHub answered 204" };
+	// GitHub says why it refused, and on a 403 which permission the call needed: log both (never the token)
+	let msg = "";
+	try { msg = String((await res.json()).message || ""); } catch (e) { msg = ""; }
+	const needs = res.headers.get("x-accepted-github-permissions");
+	return { ok: false, why: `GitHub answered ${res.status}${msg ? `: ${msg}` : ""}${needs ? ` (needs ${needs})` : ""}; ${tokenKind(token)}` };
 }
 
 export default {
