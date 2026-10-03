@@ -67,7 +67,9 @@ class IntradayAPI:
     def limits(self) -> dict:
         """The risk limits the desk trades under (the app shows how much of each is used today)."""
         r = self.cfg.get("intraday.risk", {}) or {}
-        return {k: r.get(k) for k in ("risk_per_trade", "max_trades_per_day", "max_open", "daily_loss_limit")}
+        sl = self.cfg.get("intraday.short_legs_from_equity", 300000)       # buyer only below this equity (engine)
+        return {**{k: r.get(k) for k in ("risk_per_trade", "max_trades_per_day", "max_open", "daily_loss_limit")},
+                "short_legs_from_equity": None if sl is None else float(sl)}
 
     # ---- screens -----------------------------------------------------------------------------------------
     def state(self, account=None) -> dict:

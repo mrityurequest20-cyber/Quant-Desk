@@ -28,6 +28,7 @@ from ..core.calendar import TradingCalendar
 from ..core.types import OPTIONS, Instrument, Order, Trade, TradeLeg, new_trade_id
 from ..journal.journal import Journal, trade_from_dict, trade_to_dict
 from .analyst import Analyst, MarketView
+from .chainflow import ChainFlow, chain_step
 from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
 from .features import session_state
 from .feeds import IST, IntradayFeed, ReplayFeed, session_bounds
@@ -103,6 +104,7 @@ class IntradayEngine:
         self.last_ts: dict[str, pd.Timestamp] = {}
         self.chain_df: dict[str, pd.DataFrame] = {}
         self.chain_an: dict[str, dict] = {}
+        self.chainflow = ChainFlow()                      # how each chain moved since the first read (chainflow.py)
         self.chain_at: dict[str, pd.Timestamp] = {}
         self.chain_fail: dict[str, int] = {}
         self.chain_tried: dict[str, pd.Timestamp] = {}
@@ -318,6 +320,7 @@ class IntradayEngine:
             if ch.attrs.get("source") != "model":             # the model chain's IV is India VIX's, not this market's
                 an.update(iv_percentile(self.iv_hist.get(u), an.get("atm_iv"), (self.expiry[u] - now.date()).days, now.date()))
             an.update(self._futures(u, now, an.get("spot")))
+            an.update(self.chainflow.update(u, an, now, chain_step(ch)))
             self.chain_an[u] = an
             self.chain_at[u] = now
             self.marker.calibrate(ch, self.lot(u))
@@ -526,6 +529,9 @@ class IntradayEngine:
         if self.memory is None:
             return
         self.analyst.learned = self.memory.factor_weights()
+        from .analyst import PROBATION, PROMOTE_N, PROMOTE_REL
+        self.analyst.graduated = {f for f in PROBATION if (self.memory.stat("factor", f) or {"n": 0})["n"] >= PROMOTE_N
+                                  and self.memory.reliability("factor", f) >= PROMOTE_REL}
         if self.brain is not None:                        # probation drivers earn a vote on their live record
             self.brain.learned = {k: (self.memory.reliability("factor", k), float(r["n"]))
                                   for k, r in (self.memory.d["tables"].get("factor") or {}).items()
@@ -542,6 +548,9 @@ class IntradayEngine:
             return
         from . import learning
         try:
+            if not catch_up:                              # the buyer's edge: realised vs the open's implied vol
+                for u in self.underlyings:
+                    learning.record_move(self.memory, day, u, self.bars.get(u), self.chainflow.opening(u))
             got = learning.grade_session(self.memory, self.journal, {u: self.bars.get(u) for u in self.underlyings}, day)
             self.memory.save()
         except Exception as exc:                          # learning must never cost a session
@@ -1041,8 +1050,10 @@ class IntradayEngine:
                         "quant": {k: x for k, x in (self.qstate.get(u) or {}).items() if k != "sigma_min"} or None,
                         "action": self.last_action.get(u),
                         "brain": _brain_view(self.brain_state.get(u)),
+                        "chain": _chain_view(self.chain_an.get(u)),
                         "evidence": [{"factor": e.factor, "category": e.category, "direction": e.direction,
-                                      "weight": e.weight, "observation": e.observation} for e in v.evidence]}
+                                      "weight": e.weight, "observation": e.observation,
+                                      "learned": (getattr(self.analyst, "learned", None) or {}).get(e.factor)} for e in v.evidence]}
         positions = []
         for t in self.open_trades:
             S = self.spot(t.symbol)
@@ -1050,6 +1061,10 @@ class IntradayEngine:
             positions.append({"id": t.id, "setup": t.strategy, "symbol": t.symbol, "structure": t.meta.get("structure"),
                               "lots": t.units, "opened": str(t.opened_at), "pnl": t.value(marks) - t.entry_cost - t.fees,
                               "stop": t.stop, "target": t.target, "entry_underlying": t.entry_underlying, "spot": S,
+                              "direction": t.direction, "premium": abs(t.entry_cost),
+                              "premium_stop": t.exit_rules.get("premium_stop"), "premium_target": t.exit_rules.get("premium_target"),
+                              "time_stop": (str(t.opened_at + pd.Timedelta(minutes=t.exit_rules["time_stop_min"]))
+                                            if t.exit_rules.get("time_stop_min") else None),
                               "legs": [{"symbol": l.instrument.symbol, "qty": l.qty, "entry": l.entry_price,
                                         "mark": marks[l.instrument.symbol]} for l in t.legs],
                               "rationale": t.rationale[:600]})
@@ -1060,7 +1075,23 @@ class IntradayEngine:
             "views": views, "positions": positions,
             "armed": [a.to_record() for u in self.underlyings for a in self.armed.get(u, []) if now <= a.expires],
             "news_health": dict(self.news.health) if self.news is not None else None,
-            "global": _global_view(self.brain, now), "gift": self.gift, "events": self.events_today})
+            "global": _global_view(self.brain, now), "gift": self.gift, "events": self.events_today,
+            "learning": self._learning_view()})
+
+    def _learning_view(self) -> dict | None:
+        """What the record says, for the app: factor IC by horizon, the buyer's edge, the probation factors."""
+        if self.memory is None:
+            return None
+        from . import learning
+        from .analyst import PROBATION
+        try:
+            return {"ic": learning.ic_table(self.memory)[:12], "edge": learning.buyer_edge(self.memory),
+                    "sessions": len(self.memory.d.get("days") or []),
+                    "probation": {f: {"n": round((self.memory.stat("factor", f) or {"n": 0})["n"], 1),
+                                      "rel": round(self.memory.reliability("factor", f), 3),
+                                      "voting": f in self.analyst.graduated} for f in PROBATION}}
+        except Exception:                                 # the app's extra must never cost a heartbeat
+            return None
 
     # ---- journaling ------------------------------------------------------------------------------------------
     def _think(self, u: str, view: MarketView, now, action: str, force: bool = False) -> None:
@@ -1181,6 +1212,23 @@ class IntradayEngine:
     def _grade(self, tid: str) -> str:
         r = self.journal.df("SELECT grade FROM trades WHERE id=?", (tid,))
         return r["grade"].iloc[0] if not r.empty else "?"
+
+
+CHAIN_VIEW = ("source", "atm_iv", "atm_ivp", "implied_move", "straddle", "dte_days", "pcr_oi", "pcr_doi", "max_pain",
+              "call_wall", "put_wall", "top_call_adds", "top_put_adds", "skew_25d", "gex_state", "gamma_flip",
+              "fut_basis", "fut_carry", "fut_buildup")
+
+
+def _chain_view(an: dict | None) -> dict | None:
+    """The option chain's read for the app (chains.chain_analytics, futures, and chainflow's cf_* changes)."""
+    if not an:
+        return None
+
+    def ok(x):
+        return x is not None and not (isinstance(x, float) and (x != x or x in (float("inf"), float("-inf"))))
+    out = {k: an[k] for k in CHAIN_VIEW if k in an and ok(an[k])}
+    out.update({k: x for k, x in an.items() if k.startswith("cf_") and ok(x)})
+    return out
 
 
 def _brain_view(st) -> dict | None:

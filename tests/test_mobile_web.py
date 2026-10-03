@@ -153,7 +153,7 @@ def test_static_site_exports(site, tmp_path):
     assert {"index.html", "app.js", "data.json", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-maskable-512.png",
             "apple-touch-icon.png", ".nojekyll", "lightweight-charts.js", "sw.js", "fonts"} <= names
     # installable app: fonts ship with it, the service worker's cache is named after this app version
-    assert {"plex-sans-latin.woff2", "plex-mono-400.woff2"} <= {p.name for p in (out / "fonts").iterdir()}
+    assert {"geist-sans.woff2", "geist-mono.woff2", "LICENSE-Geist.txt"} <= {p.name for p in (out / "fonts").iterdir()}
     sw = (out / "sw.js").read_text()
     assert "__QD_VERSION__" not in sw and re.search(r'const CACHE = "qd-[0-9a-f]{12}"', sw)
     assert "window.QD_NOTE=" in (out / "index.html").read_text()
@@ -177,6 +177,8 @@ def test_static_site_exports(site, tmp_path):
     assert data["state"]["limits"]["max_trades_per_day"] == cfg.get("intraday.risk.max_trades_per_day")
     assert (tmp_path / "site2" / "sw.js").read_bytes() == (out / "sw.js").read_bytes()   # stable across re-publishes
     assert "data:font/woff2;base64," in html                                     # the snapshot carries its fonts
+    # the host pads a snapshot for phone safe areas: the app bar's own padding must be patched out (index.html's CSS)
+    assert ".bar{position:sticky;top:env(safe-area-inset-top,0px);" in html and "min-height:52px;\npadding:0 4px 0 16px;" in html
 
 
 def test_chart_library_is_served(site):

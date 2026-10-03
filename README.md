@@ -285,6 +285,12 @@ changes how much it trusts each input. It grades at the close, and catches up at
 - **Pre-break entries the EV gate refused** are replayed on the bars that followed: target or stop first, within
   45 minutes. That shows whether waiting for confirmation is costing the desk.
 
+**Two research tables ride along:**
+- **Factor IC by horizon.** Each factor's direction is correlated with the move 5, 15, 30 and 60 minutes later. The t-stats use overlap-adjusted samples, so you can see which factors predict and over what holding period.
+- **The buyer's edge.** Each session's realised volatility is set against the ATM IV read at the open, as realised ÷ implied over 20 sessions. A desk that only buys options needs realised to beat implied.
+
+Both are on the Brain tab and in the session review. The option chain is now also tracked through the day (`intraday/chainflow.py`): OI wall migration, the 25Δ skew's trend and ATM IV's trend. The first two are new factors **on probation**: graded live, no vote until 30 graded reads at 1.15×. Why these, and what's next (index breadth, relative strength, FII options positioning, the buyer's edge over five years of bhavcopy): [the quant gap review](docs/QUANT_GAP_REVIEW.md).
+
 **Headlines that share a window are one observation.** A night's forty stories are all judged on the same opening
 move, so they split one observation between them. Counted one each, the 403 headlines of 29 Sep 2026 had scored "66%
 right" (×1.31 trust); counted properly they're 24 observations at 48% (×0.98).
@@ -521,7 +527,13 @@ So global context mostly **explains**; it rarely **predicts**. The desk won't pr
 
 ## The website (use it from your phone)
 
-`python -m quantdesk serve` serves the phone app, plus the daily desk at `/daily`. It is designed like a trading platform, not a report: dark-first (it follows the phone's theme, or pick one in Settings), an amber accent for everything the desk itself says and does, green and red kept for P&L and direction, and IBM Plex Sans + Mono (vendored, so it works offline) with tabular figures, so prices line up.
+`python -m quantdesk serve` serves the phone app, plus the daily desk at `/daily`. It is designed like a trading platform, not a report. The design was made with Claude Design (the canvas: phone and desktop screens in dark and light, the icon, tokens, components and states; the brief is in [`design/claude-design-brief.md`](design/claude-design-brief.md)). The direction is "hairline terminal":
+- **Look:** cool near-black and near-white surfaces, sections split by hairlines instead of floating cards, and dense rows.
+- **Colour:** one ink-blue accent for interaction, green and red only for direction and P&L, and amber only for waiting and warnings.
+- **Type:** Geist and Geist Mono (vendored, so it works offline) with tabular figures, so prices line up.
+- **Themes:** dark, light or auto (it follows the phone's theme, or pick one in Settings).
+- **Layout:** a bottom tab bar on the phone, and a labelled sidebar with two-column Desk and Chart screens from 1,024 px.
+- **Icon:** a price path that tests a level, pulls back and breaks through it, the desk's core idea.
 
 | Tab | What's there |
 |---|---|

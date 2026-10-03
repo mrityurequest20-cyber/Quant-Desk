@@ -13,6 +13,14 @@ type's weight (0.5×–1.5×) and a setup's conviction (0.6×–1.3×), each shr
 (a prior worth 20 observations), and a setup × day type with a clearly negative record (8+ trades, shrunk mean
 below −0.3R) is stood aside from. One good or bad day can't swing it; a consistent record does.
 The memory lives next to the journal (runtime/intraday/memory.json), so it carries from day to day.
+
+Two research tables ride along (they change nothing by themselves; they're what the record says):
+* **Factor IC by horizon**: each factor's direction against the index's move 5, 15, 30 and 60 minutes later, as a
+  correlation (forward returns clipped at ±150 bps so one shock can't own it) with a t-stat on overlap-adjusted
+  observations. A factor whose IC peaks at 60 minutes wants holding; one that peaks at 5 doesn't survive costs.
+* **The buyer's edge**: each session's realised volatility (5-minute returns from the first live chain read to the
+  close) against the ATM IV read then, and the session's move against the move that IV implied. A desk that only
+  buys options needs realised to beat implied; over many sessions this says whether it does.
 """
 from __future__ import annotations
 
@@ -27,6 +35,8 @@ IST = "Asia/Kolkata"
 PRIOR = 20.0                 # pseudo-observations at a 50% hit rate / 0R mean
 HORIZON = 30                 # minutes a call is graded over
 READ_EVERY = 5               # minutes between journaled reads
+IC_HORIZONS = (5, 15, 30, 60)
+IC_CLIP_BPS = 150.0          # forward returns clipped for the IC so one shock can't own the correlation
 
 
 class Memory:
@@ -187,6 +197,108 @@ def grade_factors(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
     return n
 
 
+def _settled(b: pd.DataFrame | None, t: pd.Timestamp) -> bool:
+    """Every horizon of a read at `t` is knowable: the bars run an hour past it, or its session has closed."""
+    if b is None or b.empty:
+        return False
+    last = b.index[-1]
+    return last >= t + pd.Timedelta(minutes=max(IC_HORIZONS)) or last.date() > t.date() or \
+        (last.hour, last.minute) >= (15, 25)
+
+
+def grade_ic(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
+    """Accumulate each factor's correlation with the forward move at each horizon (weighted sums, so it's incremental:
+    a read counts min(1, 5/h) of an observation at horizon h, since reads 5 minutes apart overlap)."""
+    up = mem.d["graded"].setdefault("ic_upto", {})
+    ic = mem.d.setdefault("ic", {})
+    n = 0
+    for r in thoughts.itertuples():
+        t = pd.Timestamp(r.ts)
+        t = t.tz_localize(IST) if t.tzinfo is None else t.tz_convert(IST)
+        last = up.get(r.symbol, "")
+        if str(r.ts) <= last or (last and t - pd.Timestamp(last).tz_convert(IST) < pd.Timedelta(minutes=READ_EVERY - 0.5)):
+            continue
+        b = bars.get(r.symbol)
+        if not _settled(b, t):
+            continue
+        frs = {h: forward(b, t, minutes=h) for h in IC_HORIZONS}
+        for e in json.loads(r.evidence or "[]"):
+            d = float(e.get("direction") or 0)
+            if abs(d) < 0.1 or not e.get("factor"):
+                continue
+            for h, fr in frs.items():
+                if fr is None:
+                    continue
+                y, w = float(np.clip(fr * 1e4, -IC_CLIP_BPS, IC_CLIP_BPS)), min(1.0, READ_EVERY / h)
+                s_ = ic.setdefault(str(e["factor"]), {}).setdefault(str(h), [0.0] * 6)
+                for k, v in enumerate((w, w * d, w * y, w * d * d, w * y * y, w * d * y)):
+                    s_[k] += v
+        n += 1
+        up[r.symbol] = str(t)
+    return n
+
+
+def ic_table(mem: Memory, min_n: float = 10.0) -> list[dict]:
+    """[{factor, by horizon: {n, ic, t}}], strongest first (largest |t| at any horizon with ≥ min_n observations)."""
+    out = []
+    for f, hs in (mem.d.get("ic") or {}).items():
+        row = {}
+        for h, (W, Sx, Sy, Sxx, Syy, Sxy) in hs.items():
+            if W < min_n:
+                continue
+            vx, vy = Sxx / W - (Sx / W) ** 2, Syy / W - (Sy / W) ** 2
+            if vx <= 1e-12 or vy <= 1e-12:
+                continue
+            r = float(np.clip((Sxy / W - Sx * Sy / W ** 2) / math.sqrt(vx * vy), -0.999, 0.999))
+            row[str(h)] = {"n": round(W, 1), "ic": round(r, 4), "t": round(r * math.sqrt(max(W - 2, 0) / (1 - r * r)), 2)}
+        if row:
+            out.append({"factor": f, "h": row})
+    out.sort(key=lambda x: -max(abs(v["t"]) for v in x["h"].values()))
+    return out
+
+
+def record_move(mem: Memory, day, symbol: str, bars: pd.DataFrame | None, opening: dict | None) -> dict | None:
+    """The session's realised volatility and move from the first live chain read to the close, against the ATM IV
+    read then (the buyer's edge). `opening`: chainflow.ChainFlow.opening(symbol)."""
+    if bars is None or bars.empty or not opening or not opening.get("atm_iv"):
+        return None
+    t0 = pd.Timestamp(opening["ts"])
+    b = bars[(bars.index >= t0) & (bars.index.date == t0.date())]["close"]
+    if len(b) < 60:
+        return None
+    r5 = np.log(b.resample("5min").last().dropna()).diff().dropna()
+    if len(r5) < 12:
+        return None
+    iv = float(opening["atm_iv"])
+    rv = float(r5.std(ddof=1) * math.sqrt(75 * 252) * 100)               # annualised, in IV's units (%)
+    left = (b.index[-1] - b.index[0]).total_seconds() / 60 / (375 * 252)  # the session left, in years
+    exp_move = iv / 100 * math.sqrt(max(left, 1e-9)) * math.sqrt(2 / math.pi)
+    move = abs(math.log(float(b.iloc[-1]) / float(b.iloc[0])))
+    rec = {"iv": round(iv, 2), "rv": round(rv, 2), "rv_iv": round(rv / iv, 3) if iv > 0 else None,
+           "move": round(move, 5), "exp_move": round(exp_move, 5), "move_ratio": round(move / exp_move, 3) if exp_move else None}
+    mem.d.setdefault("moves", {}).setdefault(str(day)[:10], {})[symbol] = rec
+    return rec
+
+
+def buyer_edge(mem: Memory, n: int = 20) -> dict:
+    """Per index over the last `n` sessions: mean realised/implied vol, share of sessions where realised beat implied,
+    and the mean |move| against the move the open's IV implied."""
+    days = sorted(mem.d.get("moves") or {})[-n:]
+    out = {}
+    for d in days:
+        for sym, r in mem.d["moves"][d].items():
+            if r.get("rv_iv") is not None:
+                out.setdefault(sym, []).append(r)
+    res = {}
+    for sym, rs in out.items():
+        ratio = [r["rv_iv"] for r in rs]
+        mv = [r["move_ratio"] for r in rs if r.get("move_ratio") is not None]
+        res[sym] = {"sessions": len(rs), "rv_iv": round(float(np.mean(ratio)), 3),
+                    "rv_above": round(float(np.mean([x > 1 for x in ratio])), 3),
+                    "move_ratio": round(float(np.mean(mv)), 3) if mv else None}
+    return res
+
+
 def grade_trades(mem: Memory, trades: pd.DataFrame) -> int:
     done, n = set(mem.d["graded"]["trades"]), 0
     for r in trades.itertuples():
@@ -246,6 +358,7 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
     dec = journal.df("SELECT * FROM decisions WHERE ts >= ?", (since,))
     out = {"news": grade_news(mem, news, bars), "factors": grade_factors(mem, th, bars),
            "trades": grade_trades(mem, tr), "armed": grade_armed(mem, dec, bars)}
+    grade_ic(mem, th, bars)
     if str(day) not in mem.d["days"]:
         mem.d["days"].append(str(day))
     return out
@@ -253,15 +366,16 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
 
 def rebuild(mem: Memory, journal, bars: dict) -> dict:
     """Forget everything graded and grade the whole journal again (after a change to the grading rules)."""
-    keep = mem.d.get("lessons", [])
+    keep, moves = mem.d.get("lessons", []), mem.d.get("moves", {})
     mem.d = Memory().d
-    mem.d["lessons"] = keep
+    mem.d["lessons"], mem.d["moves"] = keep, moves             # a session's moves aren't re-derivable from the journal
     news = journal.df("SELECT * FROM news ORDER BY ts")
     th = journal.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
     tr = journal.df("SELECT * FROM trades ORDER BY opened_at")
     dec = journal.df("SELECT * FROM decisions ORDER BY ts")
     out = {"news": grade_news(mem, news, bars), "factors": grade_factors(mem, th, bars),
            "trades": grade_trades(mem, tr), "armed": grade_armed(mem, dec, bars)}
+    grade_ic(mem, th, bars)
     mem.d["days"] = sorted({str(t)[:10] for t in th["ts"]}) if not th.empty else []
     return out
 
@@ -289,6 +403,7 @@ def bootstrap(cfg, mem: Memory, bars: dict, journal=None, min_bars: int = 300, m
         run_replay(eng)
     th = scratch.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
     got = {"sessions": len(days), "factors": grade_factors(mem, th, bars), "news": 0}
+    grade_ic(mem, th, bars)
     if journal is not None:
         got["news"] = grade_news(mem, journal.df("SELECT * FROM news ORDER BY ts"), bars)
     mem.d["bootstrap"] = {**got, "days": [str(d) for d in days]}
@@ -322,4 +437,11 @@ def summary(mem: Memory, top: int = 6) -> list[str]:
     for k, r in (T.get("armed_rejected") or {}).items():
         L.append(f"pre-break {k} entries the EV gate refused: {r['n']:.0f}, would have won {r['hits'] / r['n']:.0%}, "
                  f"{r['sum'] / r['n']:+.2f}R avg")
+    for row in ic_table(mem)[:top]:
+        best = max(row["h"].items(), key=lambda kv: abs(kv[1]["t"]))
+        L.append(f"IC {row['factor']}: " + ", ".join(f"{h}m {v['ic']:+.3f}" for h, v in sorted(row["h"].items(), key=lambda kv: int(kv[0])))
+                 + f" (strongest at {best[0]}m, t {best[1]['t']:+.1f}, n {best[1]['n']:.0f})")
+    for sym, e in buyer_edge(mem).items():
+        L.append(f"buyer's edge {sym}: realised/implied vol {e['rv_iv']:.2f}× over {e['sessions']} sessions, realised above "
+                 f"implied in {e['rv_above']:.0%}" + (f", moves {e['move_ratio']:.2f}× what the open's IV implied" if e["move_ratio"] else ""))
     return L

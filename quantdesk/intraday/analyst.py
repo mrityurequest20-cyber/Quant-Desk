@@ -20,6 +20,10 @@ DEFAULT_WEIGHTS = {
     "supertrend": 0.4, "rsi": 0.4, "flow": 0.6, "divergence": 0.5, "pcr": 0.3, "oi_walls": 0.4,
     "vix": 0.3, "max_pain": 0.3, "iv_move": 0.3, "news": 0.5, "model": 0.8, "research": 0.3, "fut_oi": 0.4, "basis": 0.2,
 }
+# evidence on probation (chainflow.py): graded live from the first session, a vote (this weight) only once the record
+# earns it, as the brain's probation drivers do: 30 graded reads at 1.15× reliability
+PROBATION = {"oi_shift": 0.4, "skew_trend": 0.3}
+PROMOTE_N, PROMOTE_REL = 30.0, 1.15
 
 
 @dataclass
@@ -75,6 +79,7 @@ class Analyst:
         # what the desk has learned (learning.py): each factor's weight × how often its direction called the next
         # 30 minutes right, shrunk toward 1× until there's a record, bounded to 0.5×–1.5×. Empty: no learning.
         self.learned: dict[str, float] = {}
+        self.graduated: set[str] = set()                # PROBATION factors whose live record earned them a vote
 
     def assess(self, symbol: str, s: dict, chain: dict | None = None, vix: dict | None = None,
                is_expiry_day: bool = False, event: str | None = None, flow: dict | None = None,
@@ -84,7 +89,10 @@ class Analyst:
         last = s["last"]
 
         def add(f, cat, d, obs, weight=None):
-            base = w.get(f, 0.5) if weight is None else weight
+            if f in PROBATION and f not in self.graduated:
+                base, obs = 0.0, obs + " (probation: graded live, no vote yet)"
+            else:
+                base = w.get(f, PROBATION.get(f, 0.5)) if weight is None else weight
             ev.append(Evidence(f, cat, float(np.clip(d, -1, 1)), base * self.learned.get(f, 1.0), obs))
 
         # --- trend ---------------------------------------------------------------------------------
@@ -154,6 +162,11 @@ class Analyst:
                 add("oi_walls", "options", 0.7, f"just above the put-OI wall {pw:,.0f} ({dp:.2%} away): support")
             else:
                 add("oi_walls", "options", 0, f"between put wall {pw:,.0f} and call wall {cw:,.0f}")
+        # how the chain moved since the first read (chainflow.py): on probation until graded live
+        from .chainflow import skew_trend_signal, wall_shift_signal
+        for f, sig in (("oi_shift", wall_shift_signal(c)), ("skew_trend", skew_trend_signal(c))):
+            if sig is not None:
+                add(f, "options", sig[0], sig[1])
         if is_expiry_day and c.get("max_pain") and s["minutes"] > 180:
             mp = c["max_pain"]
             add("max_pain", "options", np.clip((mp - last) / (last * 0.004), -1, 1), f"expiry day: max pain {mp:,.0f} "
@@ -248,6 +261,11 @@ class Analyst:
                                     "cpr_tc", "cpr_bc", "day_high", "day_low") if k in s}
         if c.get("call_wall") == c.get("call_wall") and c.get("call_wall"):
             levels["call_wall"], levels["put_wall"] = c["call_wall"], c.get("put_wall")
+        # where today's fresh writing is: the strikes adding the most call / put OI (support and resistance being built)
+        if c.get("top_call_adds"):
+            levels["call_add"] = c["top_call_adds"][0]
+        if c.get("top_put_adds"):
+            levels["put_add"] = c["top_put_adds"][0]
 
         pro = sorted([e for e in ev if np.sign(e.direction) == np.sign(score) and e.direction], key=lambda e: -abs(e.signed()))[:4]
         con = sorted([e for e in ev if np.sign(e.direction) == -np.sign(score) and e.direction], key=lambda e: -abs(e.signed()))[:3]
@@ -260,6 +278,9 @@ class Analyst:
             parts.append("Against: " + "; ".join(e.observation for e in con) + ".")
         if ratio:
             parts.append(f"Vol: ATM IV {iv:.1f} vs realised {rv:.1f} (×{ratio:.2f}) → premium {vol_view}.")
+        from .chainflow import iv_trend_note
+        if iv_trend_note(c):                            # vega for a desk that buys options (chainflow.py)
+            parts.append(iv_trend_note(c) + ".")
         if c.get("atm_ivp") is not None:                # same-days-to-expiry rank over the past year (ivhist.py)
             parts.append(f"IV percentile {c['atm_ivp'] * 100:.0f}: ATM IV {c['atm_iv']:.1f} vs a median "
                          f"{c['atm_iv_median']:.1f} for {c['atm_ivp_dte']}-day options over the past year "

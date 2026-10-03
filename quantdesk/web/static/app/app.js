@@ -17,11 +17,11 @@ const S = {
 
 // ---- icons (24px, stroked) -----------------------------------------------------------------------------------
 const IC = {
-	desk: "M3 12h4l3-7 4 14 3-7h4",
-	chart: "M7 3v3M7 17v4M17 4v3M17 16v4M5 6h4v11H5zM15 7h4v9h-4z",
-	trades: "M4 8h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM9 8V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V8M4 13h16",
-	brain: "M5 6a2 2 0 1 0 0 .01M19 6a2 2 0 1 0 0 .01M12 12a2 2 0 1 0 0 .01M5 18a2 2 0 1 0 0 .01M19 18a2 2 0 1 0 0 .01M6.5 7.5l4 3M17.5 7.5l-4 3M6.5 16.5l4-3M17.5 16.5l-4-3",
-	feed: "M4 5h13v14H6a2 2 0 0 1-2-2zM17 9h3v8a2 2 0 0 1-2 2M8 9h5M8 13h5M8 17h3",
+	desk: "M5 3.5h4A1.5 1.5 0 0 1 10.5 5v4A1.5 1.5 0 0 1 9 10.5H5A1.5 1.5 0 0 1 3.5 9V5A1.5 1.5 0 0 1 5 3.5zM15 3.5h4A1.5 1.5 0 0 1 20.5 5v4a1.5 1.5 0 0 1-1.5 1.5h-4A1.5 1.5 0 0 1 13.5 9V5A1.5 1.5 0 0 1 15 3.5zM5 13.5h4a1.5 1.5 0 0 1 1.5 1.5v4A1.5 1.5 0 0 1 9 20.5H5A1.5 1.5 0 0 1 3.5 19v-4A1.5 1.5 0 0 1 5 13.5zM15 13.5h4a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a1.5 1.5 0 0 1-1.5-1.5v-4a1.5 1.5 0 0 1 1.5-1.5z",
+	chart: "M4 4v16h16M7.5 15l3.5-4 3 2.5 5-6",
+	trades: "M8 20V5M4.5 8.5L8 5l3.5 3.5M16 4v15M12.5 15.5L16 19l3.5-3.5",
+	brain: "M6 4.8a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM18 4.8a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM12 15.3a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM8.2 7h7.6M7.1 8.9l3.8 6.7M16.9 8.9l-3.8 6.7",
+	feed: "M4 6h16M4 11h16M4 16h10",
 	chev: "M9 6l6 6-6 6", x: "M6 6l12 12M18 6L6 18",
 	aside: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 9v6M14 9v6",
 	watch: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
@@ -108,6 +108,10 @@ const post = (p, b) => api(p, { method: "POST", headers: { "Content-Type": "appl
 const empty = (ic, text) => h("div", { class: "empty" }, icon(ic), text);
 const SETUP = { orb: "Opening-range breakout", vwap_trend: "VWAP trend", trend_break: "Trend break", fade: "Fade", reversal: "Reversal", range: "Range" };
 const setupName = (s) => SETUP[s] || cap(words(s));
+const ACRO = new Set(["vwap", "cpr", "orb", "ema", "pcr", "oi", "iv", "rv", "vix", "gex", "ofi", "vpin", "rsi", "atr", "adx", "fii", "dii", "or", "ib", "poc", "va", "vah", "val", "ou", "ivr", "gift", "us", "fx"]);
+const factorName = (f) => cap(words(f).split(" ").map((w) => (ACRO.has(w.toLowerCase()) ? w.toUpperCase() : w)).join(" "));
+const DAYTYPE = { undetermined: "Forming", forming: "Forming" };
+const dayName = (d) => DAYTYPE[d] || cap(words(d || "forming"));
 const structName = (s) => cap(words(s || ""));
 
 // ---- IST clock: is the market open, and when does it next open ------------------------------------------------------
@@ -146,8 +150,7 @@ function stance(v) {
 const biasCls = (b) => (b === "bullish" ? "bull" : b === "bearish" ? "bear" : "flat");
 function biasTag(bias, score) {
 	const k = biasCls(bias);
-	return h("span", { class: "tag " + k }, icon(k === "bull" ? "up" : k === "bear" ? "down" : "flat"),
-		cap(bias || "neutral") + (fin(score) ? " " + signed(score) : ""));
+	return h("span", { class: "tag " + k }, (k === "bull" ? "▲ " : k === "bear" ? "▼ " : "● ") + cap(bias || "neutral") + (fin(score) ? " " + signed(score) : ""));
 }
 function chgPill(v, pts) {
 	return h("span", { class: "chg mono " + (v > 0 ? "up" : v < 0 ? "dn" : "flat") }, pts != null ? signed(pts) : pct(v));
@@ -187,8 +190,17 @@ function glossaryList() {
 const TABS = [["desk", "Desk"], ["chart", "Chart"], ["trades", "Trades"], ["brain", "Brain"], ["feed", "Feed"]];
 const SUBS = { trades: [["positions", "Positions"], ["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]],
 	feed: [["news", "Headlines"], ["log", "Desk log"]] };
+// the app's mark: a price path that tests a level, pulls back and breaks through it
+function mark(size) {
+	const s = svg("svg", { viewBox: "0 0 64 64", width: size, height: size, "aria-hidden": "true" });
+	svg("rect", { width: 64, height: 64, rx: 15, fill: "#0B0E13" }, s);
+	svg("path", { d: "M12 34H31M39.5 34H52", stroke: "#5A6474", "stroke-width": 3.5, "stroke-linecap": "round" }, s);
+	svg("path", { d: "M12 48L21 40L28 45L40 27L52 15", fill: "none", stroke: "#7D95FF", "stroke-width": 5.5, "stroke-linecap": "round", "stroke-linejoin": "round" }, s);
+	return s;
+}
 function buildTabs() {
 	const nav = $("#tabs");
+	nav.appendChild(h("div", { class: "brand", "aria-hidden": "true" }, mark(26), h("div", {}, "Quant ", h("span", {}, "Desk"))));
 	for (const [id, label] of TABS)
 		nav.appendChild(h("button", { role: "tab", "aria-selected": "false", "data-tab": id, onclick: () => go(id) }, icon(id), h("span", {}, label)));
 }
@@ -227,7 +239,7 @@ function applyTheme(mode) {
 	if (mode === "dark" || mode === "light") r.setAttribute("data-theme", mode); else r.removeAttribute("data-theme");
 	store("qd.theme", mode);
 	requestAnimationFrame(() => {
-		$("#meta-theme").setAttribute("content", cssv("--bg") || "#08090b");
+		$("#meta-theme").setAttribute("content", cssv("--bg") || "#0a0c10");
 		restyleCharts();
 	});
 }
@@ -245,10 +257,12 @@ function deskStatus(st) {
 	const stale = !st || st.age_sec == null || !(st.age_sec <= (pub ? 900 : 180));
 	if (window.QD_DEMO && !pub) return { k: "off", t: "Snapshot", s: hb.ts ? ist(hb.ts, true) : "", stale: false };
 	if (!navigator.onLine || window.QD_OFFLINE_CACHE)
-		return { k: "off", t: "Offline", s: hb.ts ? ist(hb.ts, true) : "", stale: true, network: true };
+		return { k: "off net", t: "Offline", s: hb.ts ? ist(hb.ts, true) : "", stale: true, network: true };
 	if (S.networkUnavailable)
-		return { k: "off", t: "Unavailable", s: hb.ts ? ist(hb.ts, true) : "", stale: true, network: true };
-	if (stale) return { k: "off", t: inSession() ? "Offline" : "Closed", s: hb.ts ? ist(hb.ts, true) : "", stale: true };
+		return { k: "off net", t: "Unavailable", s: hb.ts ? ist(hb.ts, true) : "", stale: true, network: true };
+	if (stale && inSession() && st && st.age_sec != null)
+		return { k: "stale", t: "Stale", s: Math.round(st.age_sec / 60) + " min", stale: true };
+	if (stale) return { k: "off", t: inSession() ? "Offline" : "Closed", s: inSession() ? (hb.ts ? ist(hb.ts, true) : "") : "opens " + nextOpen(), stale: true };
 	if (st.paused) return { k: "paused", t: "Paused", s: ist(hb.ts), stale: false };
 	if (hb.halted) return { k: "paused", t: "Done for day", s: ist(hb.ts), stale: false };
 	return { k: "live", t: "Live", s: ist(hb.ts), stale: false };
@@ -291,11 +305,12 @@ async function renderDesk() {
 		const banner = $("#d-banner");
 		banner.textContent = "";
 		if (S.networkUnavailable && (window.QD_PUBLISHED || S.account === "live"))
-			banner.appendChild(h("div", { class: "banner" }, icon("aside"),
+			banner.appendChild(h("div", { class: "banner net" }, icon("aside"),
 				(!navigator.onLine || window.QD_OFFLINE_CACHE ? "Network unavailable." : "Desk connection failed.") +
 				" No current session snapshot is available; reconnect and refresh before relying on this desk."));
 		$("#d-hero").textContent = "";
 		$("#d-hero").appendChild(empty("info", (S.stateErr || "No desk yet") + ". Start one with `quantdesk intraday live` (or `intraday replay --synthetic 5`)."));
+		$("#d-now").textContent = "";
 		return;
 	}
 	const hb = st.heartbeat || {}, vs = hb.views || {}, status = deskStatus(st);
@@ -303,67 +318,59 @@ async function renderDesk() {
 	const bn = $("#d-banner");
 	bn.textContent = "";
 	if (status.network && (window.QD_PUBLISHED || S.account === "live")) {
-		bn.appendChild(h("div", { class: "banner" }, icon("aside"),
-			(!navigator.onLine || window.QD_OFFLINE_CACHE ? "Network unavailable." : "Desk connection failed.") +
-			" Showing the last saved state" + (hb.ts ? ", " + ist(hb.ts, true) : "") +
-			"; data may be stale. Reconnect and refresh before relying on it."));
+		bn.appendChild(h("div", { class: "banner net" }, icon("aside"),
+			(!navigator.onLine || window.QD_OFFLINE_CACHE ? "Offline." : "Desk connection failed.") +
+			" Showing the last saved state" + (hb.ts ? " from " + ist(hb.ts, true) : "") + "; data may be stale. It refreshes by itself when the connection returns."));
 	} else if (status.stale && (window.QD_PUBLISHED || S.account === "live")) {
 		const mins = st.age_sec != null ? Math.round(st.age_sec / 60) : null;
-		bn.appendChild(h("div", { class: "banner" }, icon(inSession() ? "clock" : "moon"), h("div", {}, inSession()
-			? `The desk hasn't reported for ${mins != null ? mins + " min" : "a while"}. It hands over to a fresh runner at 12:20, and a restart takes a few minutes; this page refreshes by itself.`
-			: `Market closed. The desk trades every NSE session by itself, 09:15–15:30 IST; next session ${nextOpen()} (exchange holidays excepted). Showing its last state${hb.ts ? ", " + ist(hb.ts, true) : ""}.`)));
+		bn.appendChild(inSession()
+			? h("div", { class: "banner warn" }, icon("clock"), `The desk hasn't reported for ${mins != null ? mins + " min" : "a while"}${hb.ts ? " · showing " + ist(hb.ts) : ""}. It hands over to a fresh runner at 12:20, and a restart takes a few minutes; this page refreshes by itself.`)
+			: h("div", { class: "banner" }, icon("moon"), `Market closed · next session ${nextOpen()}. The desk trades every NSE session by itself, 09:15–15:30 IST (exchange holidays excepted). Showing its last state${hb.ts ? " from " + ist(hb.ts, true) : ""}.`));
 	}
-	// account hero
+	renderNow(st);
+	// account strip
 	const lim = st.limits || {}, dse = hb.day_start_equity || st.equity || st.capital, dp = hb.day_pnl;
 	const lossCap = lim.daily_loss_limit && dse ? lim.daily_loss_limit * dse : null;
 	const used = lossCap && fin(dp) ? Math.max(0, -dp) / lossCap : 0;
+	const sf = lim.short_legs_from_equity, mode = $("#d-mode");
+	mode.textContent = "";
+	if (sf === null || (fin(sf) && fin(st.equity) && st.equity < sf))
+		mode.appendChild(h("span", { class: "tag acc", title: "Buys calls and puts only: selling options needs margin this account doesn't have yet" },
+			fin(sf) ? `Buyer only · selling from ₹${(sf / 1e5).toLocaleString("en-IN", { maximumFractionDigits: 1 })}L` : "Buyer only"));
 	const hero = $("#d-hero");
 	hero.textContent = "";
-	put(hero, 
-		h("div", { class: "lbl" }, "Paper account", info("paper"), h("span", { class: "tag line", style: "margin-left:auto" }, `Started ${inr(st.capital)}`)),
-		h("div", { class: "eq num" }, inr(st.equity)),
-		h("div", { class: "day" }, h("span", { class: "mono " + cls(dp) }, fin(dp) ? `${inr(dp, true)} (${pct(dp / (dse || 1))})` : "—"), h("span", { class: "f3" }, "today")),
+	put(hero,
+		h("div", { class: "acct" },
+			h("div", { style: "min-width:0" }, h("span", { class: "k" }, "Paper equity", info("paper")), h("div", { class: "eq" }, inr(st.equity))),
+			h("div", {}, h("span", { class: "k", style: "text-align:right" }, "Today"),
+				h("div", { class: "day " + cls(dp) }, fin(dp) ? inr(dp, true) + " " : "—", fin(dp) ? h("small", {}, pct(dp / (dse || 1))) : null))),
 		h("div", { class: "stats" },
-			h("div", {}, h("span", {}, "All-time"), h("b", { class: "mono " + cls(st.total_pnl) }, inr(st.total_pnl, true))),
-			h("div", {}, h("span", {}, "Trades"), h("b", { class: "mono" }, `${hb.trades_today ?? 0}${lim.max_trades_per_day ? " / " + lim.max_trades_per_day : ""}`)),
-			h("div", {}, h("span", {}, "Open"), h("b", { class: "mono" }, String((hb.positions || []).length))),
-			h("div", { title: lossCap ? `daily loss limit ${inr(lossCap)}` : null }, h("span", {}, "Loss cap"), h("b", { class: "mono" }, lossCap ? Math.round(used * 100) + "%" : "—"),
-				h("div", { class: "meter" }, h("i", { style: `width:${Math.min(100, used * 100)}%;background:${used > 0.66 ? "var(--dn)" : "var(--acc)"}` })))));
+			h("div", {}, h("span", {}, "All-time"), h("b", { class: cls(st.total_pnl) }, inr(st.total_pnl, true))),
+			h("div", {}, h("span", {}, "Trades"), h("b", {}, `${hb.trades_today ?? 0}${lim.max_trades_per_day ? " of " + lim.max_trades_per_day : ""}`)),
+			h("div", {}, h("span", {}, "Open"), h("b", {}, String((hb.positions || []).length))),
+			h("div", { title: lossCap ? `daily loss limit ${inr(lossCap)}` : null }, h("span", {}, "Loss cap"), h("b", {}, lossCap ? Math.round(used * 100) + "% used" : "—"),
+				lossCap ? h("div", { class: "meter" }, h("i", { style: `width:${Math.min(100, used * 100)}%;background:${used > 0.66 ? "var(--dn)" : "var(--acc)"}` })) : null)));
 	renderControls(st);
-	// markets: the two indices, with the desk's stance on each
+	// markets: the two indices, with the desk's read of each
 	const syms = Object.keys(vs).length ? Object.keys(vs) : ["NIFTY", "BANKNIFTY"];
 	const mk = $("#d-markets");
 	mk.textContent = "";
-	for (const s of syms) {
-		const v = vs[s], c = S.charts[s + "|5m"], a = stance(v);
-		const last = v ? v.spot : c && c.bars ? c.bars.c[c.bars.c.length - 1] : null;
-		const prev = v && fin(v.chg) && fin(v.spot) ? v.spot / (1 + v.chg) : null;
-		mk.appendChild(h("button", { class: "mrow", onclick: () => { S.sym = s; store("qd.sym", s); go("chart"); } },
-			h("div", { style: "min-width:0" }, h("div", { class: "nm" }, s), h("div", { class: "sub" },
-				v ? `${v.expiry && v.expiry !== "None" ? "Exp " + fmtExpiry(v.expiry) + " · " : ""}IV ${num(v.iv, 1)} · ${v.vol_view || "—"}` : "no read yet")),
-			spark(c, prev, v && v.chg),
-			h("div", { class: "px" }, h("div", { class: "v" }, num(last)), v ? chgPill(v.chg) : h("span", { class: "chg flat" }, "—")),
-			v ? h("div", { class: "desk" }, biasTag(v.bias, v.score), h("span", { class: "t" }, a.kind === "none" ? "" : a.label + (a.reason ? " · " + a.reason : ""))) : null));
-	}
-	$("#d-mkt-hint").textContent = hb.feed ? `${hb.feed} · chain ${hb.chain || "—"}` : "tap for the chart";
-	renderNow(st);
-	// setups decided before price gets there: they fire the moment it does
-	const armed = hb.armed || [];
-	$("#d-armed-wrap").hidden = !armed.length;
-	const ar = $("#d-armed");
-	ar.textContent = "";
-	armed.forEach((x) => ar.appendChild(h("div", { class: "trow" },
-		h("span", { class: "grade" }, x.direction > 0 ? "▲" : "▼"),
-		h("div", { style: "min-width:0" }, h("div", { class: "t1" }, `${x.symbol} · ${setupName(x.setup)}`),
-			h("div", { class: "t2" }, `${x.kind === "break" ? "on a trade through" : "on a pullback to"} ${num(x.level)} · stop ${num(x.invalidation)} · ${x.why}`)),
-		h("div", { class: "v" }, x.direction > 0 ? "Buy" : "Sell", h("small", {}, "armed " + ist(x.armed_at))))));
+	for (const s of syms) mk.appendChild(marketRow(s, vs[s]));
+	$("#d-mkt-hint").textContent = (hb.feed ? `${hb.feed} · ` : "") + "bias −1 to +1";
 	// open positions
 	const pos = hb.positions || [];
 	$("#d-pos-wrap").hidden = !pos.length;
-	$("#d-pos-hint").textContent = pos.length ? `${inr(pos.reduce((a, p) => a + (p.pnl || 0), 0), true)} open P&L` : "";
+	$("#d-pos-hint").textContent = pos.length ? `since ${ist(pos[0].opened)}` + (pos.length > 1 ? ` · ${pos.length} open` : "") : "";
 	const pl = $("#d-positions");
 	pl.textContent = "";
 	pos.forEach((p) => pl.appendChild(positionCard(p)));
+	// setups decided before price gets there: they fire the moment it does
+	const armed = hb.armed || [];
+	$("#d-armed-wrap").hidden = !armed.length;
+	$("#d-armed-hint").textContent = armed.length ? `${armed.length} armed` : "";
+	const ar = $("#d-armed");
+	ar.textContent = "";
+	armed.forEach((x) => ar.appendChild(armedRow(x, vs[x.symbol])));
 	renderGlobalStrip(hb.global);
 	// closed today
 	const ct = st.closed_today || [];
@@ -371,20 +378,21 @@ async function renderDesk() {
 	const cl = $("#d-closed");
 	cl.textContent = "";
 	ct.forEach((t) => cl.appendChild(tradeRow(t)));
-	// sparklines and headlines load after the first paint
+	// sparklines, the log and headlines load after the first paint
 	Promise.all(syms.map((s) => loadChart(s, "5m", 60000))).then(() => {
 		if (S.tab !== "desk") return;
-		document.querySelectorAll("#d-markets .mrow").forEach((row, i) => {
-			const s = syms[i], v = vs[s], old = row.querySelector(".spark");
+		document.querySelectorAll("#d-markets .mrow").forEach((row) => {
+			const s = row.dataset.sym, v = vs[s], old = row.querySelector(".spark");
 			if (old) old.replaceWith(spark(S.charts[s + "|5m"], v && fin(v.chg) ? v.spot / (1 + v.chg) : null, v && v.chg));
 		});
 	});
+	if (matchMedia("(min-width: 1024px)").matches) renderDeskLog();
 	loadNews().then((rows) => {
 		if (S.tab !== "desk") return;
 		const box = $("#d-news");
 		box.textContent = "";
 		if (!rows.length) box.appendChild(empty("news", "Headlines appear here while the desk runs."));
-		rows.slice(0, 4).forEach((r) => box.appendChild(newsRow(r, true)));
+		rows.slice(0, 3).forEach((r) => box.appendChild(newsRow(r, true)));
 	});
 	const note = $("#qd-note");
 	if (!note.dataset.done) {
@@ -394,26 +402,52 @@ async function renderDesk() {
 	}
 	installCard();
 }
+function marketRow(s, v) {
+	const c = S.charts[s + "|5m"], a = stance(v);
+	const last = v && fin(v.spot) ? v.spot : c && c.bars ? c.bars.c[c.bars.c.length - 1] : null;
+	const prev = v && fin(v.chg) && fin(v.spot) ? v.spot / (1 + v.chg) : null;
+	const k = v ? biasCls(v.bias) : "flat";
+	return h("button", { class: "mrow", "data-sym": s, onclick: () => { S.sym = s; store("qd.sym", s); go("chart"); } },
+		h("div", { style: "min-width:0" }, h("div", { class: "nm" }, s),
+			h("div", { class: "sub" }, v ? `${dayName(v.day_type)} day${v.expiry && v.expiry !== "None" ? " · exp " + fmtExpiry(v.expiry) : ""}` : "no read yet")),
+		spark(c, prev, v && v.chg),
+		h("div", { class: "px" }, h("div", { class: "v" }, num(last)),
+			h("div", { class: "chg " + (v && cls(v.chg) ? cls(v.chg) : "flat") }, v && prev != null && fin(last) ? `${signed(last - prev)} · ${pct(v.chg)}` : "—")),
+		v ? h("div", { class: "desk" },
+			h("span", { class: "bias" }, biasMeter(v.score), h("span", { class: k === "bull" ? "up" : k === "bear" ? "dn" : "f2" }, `${signed(v.score)} ${cap(v.bias || "neutral")}`)),
+			h("span", {}, "Conviction ", h("b", {}, num(v.conviction))),
+			h("span", {}, "Premium ", h("b", {}, v.vol_view || "—"), fin(v.iv) ? ` · IV ${num(v.iv, 1)}` : "")) : null,
+		v && a.kind !== "none" ? h("div", { class: "st" }, a.label + (a.reason ? " · " + a.reason : "")) : null);
+}
+// a signed meter from −1 to +1: the fill grows from the centre tick, green right, red left
+function biasMeter(score, big) {
+	const w = fin(score) ? Math.min(1, Math.abs(score)) * 50 : 0, pos = fin(score) && score >= 0;
+	return h("span", { class: "bm" + (big ? " big" : ""), role: "meter", "aria-valuemin": "-1", "aria-valuemax": "1", "aria-valuenow": fin(score) ? Number(score).toFixed(2) : "0", "aria-label": "bias score" },
+		h("i", { style: `${pos ? "left:50%" : "right:50%"};width:${w}%;background:${score > 0 ? "var(--up)" : score < 0 ? "var(--dn)" : "var(--fg3)"};border-radius:${pos ? "0 2px 2px 0" : "2px 0 0 2px"}` }));
+}
 function fmtExpiry(e) {
 	const d = new Date(String(e).slice(0, 10) + "T00:00:00Z");
 	return isFinite(d) ? d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" }) : e;
 }
+// "NIFTY06OCT2625650CE" → "NIFTY 25,650 CE · 06 Oct"
+function contractName(sym) {
+	const m = String(sym || "").match(/^([A-Z&-]+?)(\d{2})([A-Z]{3})(\d{2})(\d+(?:\.\d+)?)(CE|PE)$/);
+	if (!m) return sym || "";
+	return [`${m[1]} ${Number(m[5]).toLocaleString("en-IN")} ${m[6]}`, h("small", {}, ` · ${m[2]} ${m[3].charAt(0)}${m[3].slice(1).toLowerCase()}`)];
+}
 function spark(c, prev, chg) {
-	const W = 76, H = 34, s = svg("svg", { class: "spark", viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
-	const ys = c && c.bars ? c.bars.c : null;
+	const W = 96, H = 28, s = svg("svg", { class: "spark", viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
+	const all = c && c.bars ? c.bars.c : null, i0 = c ? todayFrom(c) : 0;
+	const ys = all ? (all.length - i0 >= 2 ? all.slice(i0) : all) : null;
 	if (!ys || ys.length < 2) return s;
 	let lo = Math.min(...ys), hi = Math.max(...ys);
 	if (fin(prev)) { lo = Math.min(lo, prev); hi = Math.max(hi, prev); }
-	const span = hi - lo || 1, X = (i) => 1 + (i / (ys.length - 1)) * (W - 2), Y = (v) => 3 + (hi - v) / span * (H - 6);
+	const span = hi - lo || 1, X = (i) => (i / (ys.length - 1)) * W, Y = (v) => 3 + (hi - v) / span * (H - 6);
 	const col = (chg != null ? chg : ys[ys.length - 1] - ys[0]) >= 0 ? cssv("--up") : cssv("--dn");
 	if (fin(prev)) svg("line", { x1: 0, x2: W, y1: Y(prev), y2: Y(prev), stroke: cssv("--line2"), "stroke-width": 1, "stroke-dasharray": "2 3" }, s);
 	let d = "";
 	ys.forEach((v, i) => (d += (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1)));
-	const gid = "g" + Math.random().toString(36).slice(2, 8), defs = svg("defs", {}, s), lg = svg("linearGradient", { id: gid, x1: 0, x2: 0, y1: 0, y2: 1 }, defs);
-	svg("stop", { offset: "0", "stop-color": col, "stop-opacity": ".22" }, lg);
-	svg("stop", { offset: "1", "stop-color": col, "stop-opacity": "0" }, lg);
-	svg("path", { d: d + `L${X(ys.length - 1).toFixed(1)} ${H}L${X(0)} ${H}Z`, fill: `url(#${gid})` }, s);
-	svg("path", { d, fill: "none", stroke: col, "stroke-width": 1.5, "stroke-linejoin": "round" }, s);
+	svg("path", { d, fill: "none", stroke: col, "stroke-width": 1.3, "stroke-linejoin": "round" }, s);
 	return s;
 }
 function renderControls(st) {
@@ -426,73 +460,107 @@ function renderControls(st) {
 			icon("stop"), "Flatten all")));
 }
 function renderNow(st) {
-	const hb = st.heartbeat || {}, vs = hb.views || {}, box = $("#d-now"), pos = hb.positions || [];
+	const hb = st.heartbeat || {}, vs = hb.views || {}, box = $("#d-now"), pos = hb.positions || [], armed = hb.armed || [];
 	box.textContent = "";
 	const syms = Object.keys(vs);
-	if (!syms.length) { box.appendChild(empty("watch", "The desk's read appears here from 09:15 IST, updated every minute.")); return; }
+	const line = (dot, text, tm) => h("div", { class: "l1" }, h("span", { class: "lbl" }, "Now"), h("span", { class: "dot " + dot }), h("span", { class: "hd" }, text),
+		tm ? h("span", { class: "tm" }, tm) : null);
+	if (!syms.length) { box.appendChild(line("", "The desk's read appears here from 09:15 IST, updated every minute.")); return; }
 	const reads = syms.map((s) => [s, vs[s], stance(vs[s])]);
-	const biases = new Set(reads.map((r) => r[1].bias));
-	const leanTxt = biases.size === 1
-		? `${cap([...biases][0])} on ${syms.length > 1 ? "both indices" : syms[0]}`
-		: reads.map(([s, v]) => `${cap(v.bias)} ${s}`).join(", ");
-	let ic = "watch", icls = "", head, body;
-	if (st.paused) { ic = "pause"; head = "Paused from the app"; body = "No new entries until it's resumed. Open positions are still managed to their exits."; }
-	else if (hb.halted) { ic = "alert"; head = "Done for the day"; body = "The daily loss limit is hit: no new trades until tomorrow. Open positions are still managed."; }
-	else if (pos.length) { ic = "target"; icls = "in"; head = `In ${pos.length === 1 ? "a trade" : pos.length + " trades"}`; body = pos.map((p) => `${p.symbol} ${setupName(p.setup)}, ${inr(p.pnl, true)} so far`).join("; ") + "."; }
-	else if (reads.some((r) => r[2].kind === "enter")) { ic = "target"; icls = "in"; head = "Just entered a trade"; body = leanTxt + "."; }
-	else if (reads.every((r) => r[2].kind === "aside")) { ic = "aside"; head = `${leanTxt}, but standing aside`; body = "A no-trade flag is up, so no entry yet. The desk re-checks every minute."; }
-	else if (reads.some((r) => r[2].kind === "watch")) { ic = "watch"; head = `${leanTxt}, watching for a setup`; body = "No setup has triggered its entry rules yet."; }
-	else { head = leanTxt; body = "Reading the market every minute."; }
-	put(box, h("div", { class: "now" }, h("div", { class: "ic " + icls }, icon(ic)), h("div", {}, h("div", { class: "hd" }, head), h("p", {}, body))),
-		h("div", { class: "why" }, reads.filter((r) => r[2].kind !== "none").map(([s, v, a]) => h("div", {}, h("b", {}, s), h("span", {}, a.label + (a.reason ? ": " + a.reason : ""))))));
-	if (reads.some((r) => r[2].kind === "aside")) box.lastChild.appendChild(h("div", {}, h("b", {}, ""), h("button", { class: "link", onclick: () => showGloss("aside") }, "Why stand aside?")));
+	let dot = "", head;
+	if (st.paused) { dot = "wait"; head = "Paused from the app · open positions are still managed"; }
+	else if (hb.halted) { dot = "aside"; head = "Done for the day · the daily loss limit is hit"; }
+	else if (pos.length) {
+		dot = "in";
+		head = (pos.length === 1 ? `In a ${pos[0].symbol} trade` : `In ${pos.length} trades`) +
+			(armed.length ? ` · armed on ${[...new Set(armed.map((a) => a.symbol))].join(", ")}` : "");
+	} else if (armed.length) { dot = "wait"; const a = armed[0]; head = `Armed · ${setupName(a.setup)} ${a.direction > 0 ? "call" : "put"} on ${a.symbol} at ${num(a.level)}`; }
+	else if (reads.some((r) => r[2].kind === "enter")) { dot = "in"; head = "Just entered a trade"; }
+	else if (reads.every((r) => r[2].kind === "aside")) { dot = "aside"; head = "Standing aside · a no-trade flag is up"; }
+	else if (reads.some((r) => r[2].kind === "watch")) head = "Watching · no setup has triggered";
+	else head = "Reading the market every minute";
+	put(box, line(dot, head, hb.ts ? ist(hb.ts) : ""),
+		h("div", { class: "why" }, reads.filter((r) => r[2].kind !== "none").map(([s, v, a]) => h("div", {}, h("b", {}, s + " "), a.label + (a.reason ? ": " + a.reason : "")))));
+	if (reads.some((r) => r[2].kind === "aside")) box.lastChild.appendChild(h("div", {}, h("button", { class: "link", style: "min-height:28px", onclick: () => showGloss("aside") }, "Why stand aside?")));
 }
 function positionCard(p) {
-	const dir = fin(p.target) && fin(p.entry_underlying) ? Math.sign(p.target - p.entry_underlying) : 0;
-	const card = h("div", { class: "panel" });
-	const pnlPct = p.pnl != null && S.state && S.state.equity ? p.pnl / S.state.equity : null;
-	card.appendChild(h("div", { class: "pos" },
-		h("div", { class: "top" }, h("div", { style: "min-width:0" }, h("div", { class: "t1" }, `${p.symbol} · ${setupName(p.setup)}`),
-			h("div", { class: "t2" }, `${structName(p.structure)} · ${p.lots} lot${p.lots === 1 ? "" : "s"} · since ${ist(p.opened)}`)),
-			h("div", { class: "pnl " + cls(p.pnl) }, inr(p.pnl, true), h("small", {}, pnlPct != null ? pct(pnlPct) + " of equity" : ""))),
+	const legs = p.legs || [], leg = legs[0] || {}, single = legs.length === 1;
+	const risk = fin(p.premium) && fin(p.premium_stop) ? p.premium * p.premium_stop : null;
+	const r = risk && fin(p.pnl) ? p.pnl / risk : null;
+	const dir = p.direction || (fin(p.target) && fin(p.entry_underlying) ? Math.sign(p.target - p.entry_underlying) : 0);
+	const left = p.time_stop ? Math.round((tms(p.time_stop) - Date.now()) / 60000) : null;
+	return h("div", { class: "pos" },
+		h("div", { class: "r1" }, h("span", { class: "t1" }, single ? contractName(leg.symbol) : `${p.symbol} · ${structName(p.structure)}`),
+			h("span", { class: "pnl " + cls(p.pnl) }, inr(p.pnl, true))),
+		h("div", { class: "r2" }, h("span", {}, `${structName(p.structure)} · ${p.lots} lot${p.lots === 1 ? "" : "s"}${single && leg.qty ? " (" + Math.abs(leg.qty) + ")" : ""} · ${setupName(p.setup)}`),
+			h("span", { class: cls(r) }, r != null ? signed(r) + "R" : "")),
+		single ? h("div", { class: "prem" }, `Premium ₹${num(leg.entry)} → `, h("b", {}, `₹${num(leg.mark)}`), fin(p.premium_stop) ? ` · stop −${Math.round(p.premium_stop * 100)}%` : "")
+			: legsTable(legs.map((l) => ({ symbol: l.symbol, qty: l.qty, entry: l.entry, mark: l.mark }))),
 		fin(p.stop) && fin(p.target) ? track(p.stop, p.target, p.entry_underlying, p.spot, dir) : null,
-		legsTable(p.legs.map((l) => ({ symbol: l.symbol, qty: l.qty, entry: l.entry, mark: l.mark }))),
+		h("div", { class: "meta" }, `Since ${ist(p.opened)}` + (p.time_stop ? ` · time stop ${ist(p.time_stop)} if flat${left != null && left > 0 ? ", " + left + " min left" : ""}` : "")),
 		h("div", { class: "btns" }, h("button", { class: "btn", onclick: () => openTrade(p.id) }, icon("info"), "Why this trade"),
 			window.QD_PUBLISHED || window.QD_DEMO ? h("span") : h("button", { class: "btn danger", onclick: () =>
-				confirmSheet(`Close ${p.symbol} ${setupName(p.setup)}?`, "Square off this position at the next minute's prices.", "Close position", () => command("close", p.id)) }, icon("x"), "Close"))));
-	return card;
+				confirmSheet(`Close ${p.symbol} ${setupName(p.setup)}?`, "Square off this position at the next minute's prices.", "Close position", () => command("close", p.id)) }, icon("x"), "Close")));
 }
 function track(stop, target, entry, spot, dir) {
 	const lo = Math.min(stop, target), hi = Math.max(stop, target), span = hi - lo || 1;
 	const X = (v) => Math.max(0, Math.min(100, (v - lo) / span * 100));
 	const targetRight = target > stop;
-	return h("div", { class: "track", role: "img", "aria-label": `spot ${num(spot)} between stop ${num(stop)} and target ${num(target)}` },
-		h("div", { class: "ln" + (targetRight ? "" : " rev") }),
+	const good = fin(entry) && fin(spot) && (spot - entry) * (targetRight ? 1 : -1) >= 0, col = good ? "var(--up)" : "var(--dn)";
+	return h("div", { class: "track", role: "img", "aria-label": `index ${num(spot)} between stop ${num(stop)} and target ${num(target)}` },
+		h("div", { class: "ln" }),
+		fin(entry) && fin(spot) ? h("div", { class: "fill", style: `left:${Math.min(X(entry), X(spot))}%;width:${Math.abs(X(spot) - X(entry))}%;background:${col}` }) : null,
 		fin(entry) ? h("div", { class: "en", style: `left:${X(entry)}%`, title: "entry" }) : null,
-		fin(spot) ? h("div", { class: "sp", style: `left:${X(spot)}%` }) : null,
+		fin(spot) ? h("div", { class: "sp", style: `left:${X(spot)}%;border-color:${col}` }) : null,
 		h("span", { class: "l" }, `${targetRight ? "Stop" : "Target"} ${num(lo, 0)}`), h("span", { class: "r" }, `${targetRight ? "Target" : "Stop"} ${num(hi, 0)}`));
 }
 function legsTable(legs, withExit) {
 	return h("table", { class: "legs" }, h("tr", {}, h("th", {}, "Leg"), h("th", {}, "Qty"), h("th", {}, "Entry"), h("th", {}, withExit ? "Exit" : "Mark")),
 		legs.map((l) => h("tr", {}, h("td", {}, l.symbol), h("td", { class: l.qty < 0 ? "dn" : "" }, (l.qty > 0 ? "+" : "") + l.qty), h("td", {}, num(l.entry)), h("td", {}, num(withExit ? l.exit : l.mark)))));
 }
+function armedRow(x, v) {
+	const away = v && fin(v.spot) && fin(x.level) ? Math.abs(x.level - v.spot) : null;
+	return h("div", { class: "arow" },
+		h("div", { class: "l1" }, h("span", { class: "tag warn" }, "Armed"), h("b", { style: "font-weight:500" }, x.symbol),
+			h("span", { class: x.direction > 0 ? "up" : "dn" }, `${x.direction > 0 ? "▲ call" : "▼ put"} · ${setupName(x.setup)}`),
+			h("span", { class: "t" }, x.expires ? "until " + ist(x.expires) : "armed " + ist(x.armed_at))),
+		h("div", { class: "l2" }, `${x.kind === "break" ? "On a trade through" : "On a pullback to"} `, h("b", {}, num(x.level)), ` · stop ${num(x.invalidation)}`,
+			away != null ? ` · ${num(away, 1)} pts away (${(away / v.spot * 100).toFixed(2)}%)` : ""),
+		x.why ? h("div", { class: "l3" }, cap(x.why)) : null);
+}
 const GLOBAL_ORDER = ["ES", "NQ", "N225", "HSI", "KOSPI", "SSE", "STOXX", "DAX", "FTSE", "USDINR", "DXY", "BRENT", "GOLD", "UST10", "USVIX", "SPX", "NASDAQ", "DJI"];
-const SHORT = { ES: "S&P fut", NQ: "Nasdaq fut", N225: "Nikkei", HSI: "Hang Seng", KOSPI: "Kospi", SSE: "Shanghai", STOXX: "Stoxx 50", DAX: "DAX", FTSE: "FTSE",
-	USDINR: "USD/INR", DXY: "Dollar", BRENT: "Brent", GOLD: "Gold", UST10: "US 10Y", USVIX: "VIX", SPX: "S&P 500", NASDAQ: "Nasdaq", DJI: "Dow" };
+const SHORT = { ES: "S&P 500 fut", NQ: "Nasdaq fut", N225: "Nikkei 225", HSI: "Hang Seng", KOSPI: "Kospi", SSE: "Shanghai", STOXX: "Stoxx 50", DAX: "DAX", FTSE: "FTSE",
+	USDINR: "USD/INR", DXY: "Dollar index", BRENT: "Brent", GOLD: "Gold", UST10: "US 10Y", USVIX: "US VIX", SPX: "S&P 500", NASDAQ: "Nasdaq", DJI: "Dow" };
+const PULSE = ["ES", "N225", "BRENT", "DXY", "USDINR", "USVIX", "NQ", "HSI", "STOXX", "GOLD", "UST10", "KOSPI"];
+const LEVEL_QUOTED = new Set(["USDINR", "DXY", "USVIX", "UST10"]);         // shown as a level; the rest as a % move
 function mchg(m) { return m.live && m.since_open != null ? m.since_open : m.prior_ret; }
 function renderGlobalStrip(G) {
 	const mk = (G && G.markets) || {}, box = $("#d-global");
-	$("#d-global-wrap").hidden = !Object.keys(mk).length;
+	let keys = PULSE.filter((k) => mk[k] && mk[k].last != null);
+	if (keys.length > 3) keys = keys.slice(0, Math.min(6, keys.length - (keys.length % 3)));
+	$("#d-global-wrap").hidden = !keys.length;
 	box.textContent = "";
-	for (const k of GLOBAL_ORDER) {
-		const m = mk[k];
-		if (!m || m.last == null) continue;
-		const c = mchg(m);
-		box.appendChild(h("button", { class: "tk", onclick: () => go("brain"), title: m.name },
-			h("div", { class: "n" }, h("i", { class: m.live ? "on" : "" }), SHORT[k] || m.name),
-			h("div", { class: "v" }, num(m.last, m.last > 1000 ? 0 : 2)),
-			h("div", { class: "c " + cls(c) }, pct(c))));
+	for (const k of keys) {
+		const m = mk[k], c = mchg(m);
+		box.appendChild(h("button", { onclick: () => go("brain"), title: `${m.name}: ${m.live && m.since_open != null ? "since 09:15 IST" : "last session"}` },
+			h("span", { class: "n" }, SHORT[k] || m.name),
+			LEVEL_QUOTED.has(k) ? h("span", { class: "v" }, num(m.last, 2), " ", h("small", { class: cls(c) }, pct(c))) : h("span", { class: "v " + cls(c) }, pct(c))));
 	}
+}
+async function renderDeskLog() {
+	let rows = [];
+	try { rows = await api("/api/i/thoughts?n=12"); } catch (e) { rows = []; }
+	if (S.tab !== "desk") return;
+	const box = $("#d-log");
+	box.textContent = "";
+	if (!rows.length) { box.appendChild(empty("watch", "The desk's minute-by-minute reasoning appears here while it runs.")); return; }
+	rows.forEach((r) => box.appendChild(logRow(r)));
+}
+function logRow(r) {
+	const a = readAction(r.action), sc = Number(r.score);
+	return h("div", { class: "logrow" + (a.kind === "enter" ? " ent" : a.kind === "exit" ? " exit" : ""), title: r.narrative || "" },
+		h("span", { class: "tm" }, ist(r.ts)), h("span", { class: "s" }, r.symbol), h("span", { class: "b " + cls(sc) }, signed(sc)),
+		h("span", { class: "a" }, a.label + (a.reason ? ": " + a.reason : "")));
 }
 function installCard() {
 	const box = $("#d-banner");
@@ -564,64 +632,64 @@ function todayFrom(d) {
 }
 function renderQuoteHead(v) {
 	const d = chartData(), B = d && d.bars, n = B ? B.t.length : 0, i0 = todayFrom(d);
-	const last = v && fin(v.spot) ? v.spot : n ? B.c[n - 1] : null;
+	const last = v && fin(v.spot) && S.ckind !== "fut" ? v.spot : n ? B.c[n - 1] : null;
 	const pc = i0 > 0 ? B.c[i0 - 1] : null;                 // the prior session's close, when the chart has it
-	const chg = v && fin(v.chg) ? v.chg : (pc && last != null ? last / pc - 1 : null);
+	const chg = v && fin(v.chg) && S.ckind !== "fut" ? v.chg : (pc && last != null ? last / pc - 1 : null);
 	const prev = chg != null && last != null ? last / (1 + chg) : null;
 	const hi = n > i0 ? Math.max(...B.h.slice(i0)) : null, lo = n > i0 ? Math.min(...B.l.slice(i0)) : null;
+	const vw = v && S.ckind !== "fut" ? v.vwap : d && d.vwap ? d.vwap[d.vwap.length - 1] : null;
 	const box = $("#c-head");
 	box.textContent = "";
-	put(box, h("div", {}, h("div", { class: "lbl" }, S.sym + (d && d.day ? " · " + istDay(d.day + "T12:00:00+05:30") : "")),
-		h("div", { class: "px" }, num(last)),
-		h("div", { class: "ch " + cls(chg) }, prev != null ? `${signed(last - prev)} (${pct(chg)})` : "")),
-		h("div", { class: "hl" }, h("div", {}, "H ", h("b", {}, num(hi))), h("div", {}, "L ", h("b", {}, num(lo))),
-			h("div", {}, "VWAP ", h("b", {}, num(v ? v.vwap : d && d.vwap ? d.vwap[d.vwap.length - 1] : null)))));
+	put(box, h("span", { class: "k" }, `${S.sym}${S.ckind === "fut" ? " futures" : ""}${d && d.day ? " · " + istDay(d.day + "T12:00:00+05:30") : ""} · ${S.interval}`),
+		h("div", { class: "r" }, h("span", { class: "px" }, num(last)),
+			h("span", { class: "ch " + cls(chg) }, prev != null ? `${signed(last - prev)} · ${pct(chg)}` : "")),
+		h("span", { class: "hl" }, `H ${num(hi)} · L ${num(lo)} · VWAP ${num(vw)}`));
 	$("#c-fs-title").textContent = `${S.sym} · ${S.interval}`;
 }
 function renderRead(v) {
 	const box = $("#c-read");
 	box.textContent = "";
-	$("#c-read-hint").textContent = v && S.state && S.state.heartbeat ? "as of " + ist(S.state.heartbeat.ts) : "";
+	$("#c-read-hint").textContent = v && S.state && S.state.heartbeat ? ist(S.state.heartbeat.ts) + " · each minute" : "";
 	if (!v) { box.appendChild(empty("watch", `No read yet for ${S.sym}. It appears from 09:15 IST.`)); $("#c-evidence").textContent = ""; return; }
-	const a = stance(v);
-	const pos = Math.max(0, Math.min(100, (v.score + 1) * 50));
-	put(box, h("div", { class: "pad" },
-		h("div", { class: "row" }, biasTag(v.bias, v.score), info("bias"), h("span", { class: "grow" }),
-			h("span", { class: "f3", style: "font-size:12px" }, "Conviction ", h("b", { class: "mono", style: "color:var(--fg)" }, num(v.conviction)), info("conviction"))),
-		h("div", { class: "gauge", role: "meter", "aria-valuemin": "-1", "aria-valuemax": "1", "aria-valuenow": num(v.score), "aria-label": "bias score" },
-			h("i", { style: `left:${pos}%` })),
-		h("div", { class: "gscale" }, h("span", {}, "Bearish"), h("span", {}, "Neutral"), h("span", {}, "Bullish"))),
-	h("div", { class: "facts" },
-		fact("Doing now", a.label), fact("Day type", cap(words(v.day_type))),
-		fact(h("span", {}, "Premium", info("premium")), `${cap(v.vol_view)} · IV ${num(v.iv, 1)} / RV ${num(v.rv, 1)}`), fact("Session", `${cap(v.phase)} · exp ${fmtExpiry(v.expiry)}`)),
-	(v.vetoes || []).length ? h("div", { class: "flags" }, v.vetoes.map((x) => h("div", {}, icon("alert"), cap(x)))) : null,
-	narrative(v.narrative));
+	const a = stance(v), k = biasCls(v.bias);
+	const learned = (v.evidence || []).filter((e) => fin(e.learned) && Math.abs(e.learned - 1) >= 0.02);
+	put(box, h("div", { class: "read" },
+		h("div", { class: "sc" }, h("span", { class: "v " + (k === "bull" ? "up" : k === "bear" ? "dn" : "") }, signed(v.score)),
+			h("div", { class: "g" }, biasMeter(v.score, true), h("div", { class: "gscale" }, h("span", {}, "−1 Bearish"), h("span", {}, "Bullish +1")))),
+		h("div", { class: "tags" }, biasTag(v.bias), h("span", { class: "tag line" }, `Conviction ${num(v.conviction)}`), info("conviction"),
+			h("span", { class: "tag line" }, `${dayName(v.day_type)} day`),
+			h("span", { class: "tag line" }, `Premium ${v.vol_view || "—"}`), info("premium")),
+		h("div", { class: "track-rec" }, a.kind === "none" ? "" : `Doing now: ${a.label}${a.reason ? " · " + a.reason : ""}`),
+		(v.vetoes || []).length ? h("div", { class: "flags" }, v.vetoes.map((x) => h("div", {}, icon("alert"), cap(x)))) : null,
+		v.narrative ? h("p", { class: "narr" }, v.narrative) : null,
+		learned.length ? h("div", { class: "track-rec" }, "Track record · " + learned.sort((x, y) => Math.abs(y.learned - 1) - Math.abs(x.learned - 1)).slice(0, 4)
+			.map((e) => `${factorName(e.factor)} ×${num(e.learned)}`).join(" · ")) : null));
 	const ev = $("#c-evidence");
 	ev.textContent = "";
 	ev.appendChild(evidenceList(v.evidence || [], 6));
 }
 function fact(label, value) { return h("div", {}, h("span", {}, label), h("b", {}, value || "—")); }
-function narrative(text) {
-	if (!text) return null;
-	const p = h("div", { class: "narr" }, text);
-	return p;
-}
-const CAT = { trend: "Tape", structure: "Tape", momentum: "Tape", flow: "Flow", options: "Options", volatility: "Vol", news: "News", quant: "Quant", global: "Global" };
+function narrative(text) { return text ? h("p", { class: "narr pad" }, text) : null; }
+const CAT = { trend: "Trend", structure: "Structure", momentum: "Momentum", flow: "Flow", options: "Options", volatility: "Volatility", news: "News", quant: "Quant", global: "Global" };
+const CAT_G = { trend: "Tape", structure: "Tape", momentum: "Tape", flow: "Flow", options: "Options", volatility: "Vol", news: "News", quant: "Quant", global: "Global" };
 function evidenceList(list, limit) {
 	const box = h("div", { class: "evl" });
 	if (!list.length) { box.appendChild(empty("info", "No evidence yet.")); return box; }
 	const sorted = [...list].sort((a, b) => Math.abs(b.direction * b.weight) - Math.abs(a.direction * a.weight));
 	sorted.forEach((e, i) => {
-		const w = Math.min(50, Math.abs(e.direction) * Math.min(e.weight, 1.2) / 1.2 * 50);
-		box.appendChild(h("div", { class: "ev" },
-			h("div", { class: "f" }, words(e.factor), h("small", {}, `${CAT[e.category] || cap(e.category)} · w ${num(e.weight, 1)}`)),
+		const w = Math.min(50, Math.abs(e.direction) * 50), probation = !(e.weight > 0);
+		const col = probation ? "var(--fg3)" : e.direction >= 0 ? "var(--up)" : "var(--dn)";
+		box.appendChild(h("div", { class: "ev" + (probation ? " probation" : "") },
+			h("div", { class: "f" }, h("b", {}, factorName(e.factor)), h("small", {}, CAT[e.category] || cap(e.category)),
+				probation ? h("span", { class: "ln" }, "probation") : fin(e.learned) && Math.abs(e.learned - 1) >= 0.02 ? h("span", { class: "ln" }, `learned ×${num(e.learned)}`) : null),
 			h("div", { class: "dv", title: `${signed(e.direction)} × ${e.weight}` },
-				h("i", { style: `${e.direction >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${e.direction >= 0 ? "var(--up)" : "var(--dn)"}` })),
-			h("div", { class: "o" }, e.observation)));
+				h("i", { style: `${e.direction >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${col}` })),
+			h("span", { class: "w" }, num(e.weight, e.weight >= 10 ? 0 : 2)),
+			h("div", { class: "o" }, `${signed(e.direction)} · ${e.observation || ""}`)));
 		if (limit && i >= limit) box.lastChild.hidden = true;
 	});
 	if (limit && sorted.length > limit + 1) {
-		const btn = h("button", { class: "link", style: "padding:8px 0 2px", onclick: () => { box.querySelectorAll(".ev[hidden]").forEach((x) => (x.hidden = false)); btn.remove(); } },
+		const btn = h("button", { class: "more", onclick: () => { box.querySelectorAll(".ev[hidden]").forEach((x) => (x.hidden = false)); btn.remove(); } },
 			`Show all ${sorted.length}`, icon("down"));
 		box.appendChild(btn);
 	} else box.querySelectorAll(".ev[hidden]").forEach((x) => (x.hidden = false));
@@ -630,7 +698,8 @@ function evidenceList(list, limit) {
 const LEVELS = {
 	or_high: ["OR high", "or"], or_low: ["OR low", "or"], ib_high: ["IB high", "ib"], ib_low: ["IB low", "ib"], vah: ["VAH", "value"], val: ["VAL", "value"],
 	poc: ["POC", "value"], pdh: ["PDH", "prior"], pdl: ["PDL", "prior"], cpr_tc: ["CPR top", "cpr"], cpr_bc: ["CPR bottom", "cpr"],
-	call_wall: ["Call wall", "oi"], put_wall: ["Put wall", "oi"], day_high: ["Day high", "day"], day_low: ["Day low", "day"],
+	call_wall: ["Call wall", "oi"], put_wall: ["Put wall", "oi"], call_add: ["Fresh call writing", "oi"], put_add: ["Fresh put writing", "oi"],
+	day_high: ["Day high", "day"], day_low: ["Day low", "day"],
 };
 const LEVEL_GROUPS = [["prior", "Prior day", "--fg2"], ["or", "Opening range", "--acc"], ["value", "Value area", "--fg3"], ["oi", "OI walls", "--dn"], ["cpr", "CPR", "--fg3"], ["ib", "Initial balance", "--fg3"]];
 function levelsOn() {
@@ -639,8 +708,8 @@ function levelsOn() {
 	return Object.assign({ prior: true, or: true, value: false, oi: true, cpr: false, ib: false }, on || {});
 }
 function levelColor(k) {
-	if (k === "call_wall") return cssv("--dn");
-	if (k === "put_wall") return cssv("--up");
+	if (k === "call_wall" || k === "call_add") return cssv("--dn");
+	if (k === "put_wall" || k === "put_add") return cssv("--up");
 	const g = LEVELS[k][1];
 	return cssv((LEVEL_GROUPS.find((x) => x[0] === g) || [0, 0, "--fg3"])[2]);
 }
@@ -670,25 +739,71 @@ function renderLevelsTable(v) {
 		rows.map(([n, x, k]) => h("tr", { class: k === "spot" ? "spot" : "" },
 			h("td", {}, k !== "spot" && LEVELS[k] ? h("span", { class: "sw", style: `background:${levelColor(k)}` }) : null, n),
 			h("td", {}, num(x)),
-			h("td", { class: k === "spot" ? "" : cls(x - spot) }, k === "spot" ? "—" : [signed(x - spot), h("small", { class: "sub" }, pct((x - spot) / spot))]))))));
+			h("td", { class: k === "spot" ? "" : cls(x - spot) }, k === "spot" ? "—" : [signed(x - spot, 1), h("small", { class: "sub" }, pct((x - spot) / spot))]))))));
 }
 function renderQuant(v) {
 	const box = $("#c-quant");
 	box.textContent = "";
-	const q = v && v.quant;
-	if (!q) { box.appendChild(empty("info", "The quant layer's read appears while the desk runs.")); return; }
-	const sig = q.sigma_30m_pct, spot = v.spot, band = fin(sig) && fin(spot) ? spot * sig / 100 : null;
-	const drift = q.research_drift;
-	put(box, h("div", { class: "facts", style: "border-top:0" },
-		fact("30-min move, 1σ", fin(sig) ? `±${num(sig, 2)}%${band != null ? " · ±" + num(band, 0) + " pts" : ""}` : "—"),
-		fact("Volatility (ann.)", fin(q.vol_ann) ? `${num(q.vol_ann, 1)}% · ${words(q.vol_source || "")}` : "—"),
-		fact("Direction model", q.valid ? `Voting · AUC ${num(q.auc, 2)}` : `Off · AUC ${num(q.auc, 2)}`),
-		fact("P(up) used", q.valid && fin(q.p_model) ? pct(q.p_model, 0).replace("+", "") : "coin flip + prior"),
-		fact("Research drift", drift ? `${signed(drift.bps_day, 1)} bps/day · t ${num(drift.t, 1)}` : "none validated"),
-		fact("Samples", fin(q.samples) ? num(q.samples, 0) : "—")),
-	h("div", { class: "narr" }, q.valid
-		? "The direction model beat a coin flip out of sample, so its probability feeds the EV of every candidate trade."
-		: `The direction model scored AUC ${num(q.auc, 2)} out of sample: no better than a coin flip, so it doesn't vote. ${q.model_status ? cap(q.model_status) + "." : ""}`));
+	const q = v && v.quant, c = (v && v.chain) || {};
+	if (!q && !Object.keys(c).length) { box.appendChild(empty("info", "The quant layer's read appears while the desk runs.")); return; }
+	const F = [];
+	if (q) {
+		const sig = q.sigma_30m_pct, band = fin(sig) && fin(v.spot) ? v.spot * sig / 100 : null, drift = q.research_drift;
+		F.push(fact("30-min move, 1σ", fin(sig) ? `±${num(sig, 2)}%${band != null ? " · ±" + num(band, 0) + " pts" : ""}` : "—"),
+			fact("Direction model", q.valid ? `Voting · AUC ${num(q.auc, 2)}` : `Off · AUC ${num(q.auc, 2)}`),
+			fact("P(up) used", q.valid && fin(q.p_model) ? pct(q.p_model, 0).replace("+", "") : "coin flip + prior"),
+			fact("Research drift", drift ? `${signed(drift.bps_day, 1)} bps/day · t ${num(drift.t, 1)}` : "none validated"));
+	}
+	// the option chain: where it stands and how it moved since the first read (chainflow.py)
+	if (fin(c.atm_iv)) F.push(fact("ATM IV · 30 min", `${num(c.atm_iv, 1)}%` + (fin(c.cf_iv_chg30) ? ` · ${signed(c.cf_iv_chg30, 1)} pts` : "")
+		+ (fin(c.atm_ivp) ? ` · pctile ${Math.round(c.atm_ivp * 100)}` : "")));
+	if (fin(c.implied_move)) F.push(fact("Implied move to expiry", `±${num(c.implied_move * 100, 2)}%` + (fin(c.dte_days) ? ` · ${num(c.dte_days, 1)} days` : "")));
+	if (fin(c.pcr_oi)) F.push(fact("PCR · today's ΔOI", num(c.pcr_oi) + (fin(c.pcr_doi) ? ` · ${num(c.pcr_doi)}` : "") + (fin(c.cf_pcr_chg30) ? ` (${signed(c.cf_pcr_chg30)} in 30 min)` : "")));
+	if (fin(c.skew_25d)) F.push(fact("Skew, 25Δ put − call IV", `${signed(c.skew_25d, 1)} pts` + (fin(c.cf_skew_chg30) ? ` · ${signed(c.cf_skew_chg30, 1)} in 30 min` : "")));
+	if (fin(c.call_wall) || fin(c.put_wall)) {
+		const sh = (x) => (fin(x) && x ? ` (${signed(x, 0)})` : "");
+		F.push(fact("OI walls · since first read", `call ${num(c.call_wall, 0)}${sh(c.cf_call_wall_shift)} · put ${num(c.put_wall, 0)}${sh(c.cf_put_wall_shift)}`));
+	}
+	if ((c.top_call_adds || []).length || (c.top_put_adds || []).length)
+		F.push(fact("Fresh writing, today's ΔOI", `calls ${(c.top_call_adds || []).map((k) => num(k, 0)).join(", ") || "—"} · puts ${(c.top_put_adds || []).map((k) => num(k, 0)).join(", ") || "—"}`));
+	if (fin(c.max_pain)) F.push(fact("Max pain", num(c.max_pain, 0)));
+	if (fin(c.fut_basis)) F.push(fact("Futures basis · carry", `${signed(c.fut_basis, 1)} pts` + (fin(c.fut_carry) ? ` · ${num(c.fut_carry * 100, 1)}%/yr` : "")));
+	if (c.fut_buildup) F.push(fact("Futures OI build-up", cap(c.fut_buildup)));
+	if (c.gex_state) F.push(fact("Dealer gamma (naive sign)", cap(String(c.gex_state).split(" (")[0]) + (fin(c.gamma_flip) ? ` · flip ${num(c.gamma_flip, 0)}` : "")));
+	if (F.length % 2) F.push(h("div", {}));
+	put(box, h("div", { class: "facts" }, F),
+		c.source === "model" ? h("p", { class: "narr pad", style: "border-top:1px solid var(--line);font-size:12px;color:var(--warn)" },
+			"No live option chain: priced off India VIX, so the chain reads above are the model's, not the market's.") : null,
+		q ? h("p", { class: "narr pad", style: "border-top:1px solid var(--line);font-size:12px;color:var(--fg3)" }, q.valid
+			? "The direction model beat a coin flip out of sample, so its probability feeds the EV of every candidate trade."
+			: `The direction model scored AUC ${num(q.auc, 2)} out of sample: no better than a coin flip, so it doesn't vote.${q.model_status ? " " + cap(q.model_status) + "." : ""}`) : null);
+}
+// what the record says (learning.py): the buyer's edge, factor IC by horizon, the factors on probation
+function learnedGrp(L, sym) {
+	const e = (L.edge || {})[sym], H = ["5", "15", "30", "60"], ic = (L.ic || []).slice(0, 8), pro = Object.entries(L.probation || {});
+	const b = (x, c) => h("b", { class: c || "", style: "font-weight:400" }, x);
+	const edge = h("div", { class: "pad", style: "display:grid;gap:6px" },
+		h("div", { class: "lbl" }, "Buyer's edge: realised vs implied volatility"),
+		e ? h("div", { class: "row", style: "flex-wrap:wrap;gap:6px 16px" },
+			h("span", {}, "Realised ÷ implied ", b(num(e.rv_iv) + "×", e.rv_iv >= 1 ? "up" : "dn")),
+			h("span", {}, "Realised beat implied on ", b(Math.round(e.rv_above * 100) + "%"), " of sessions"),
+			e.move_ratio != null ? h("span", {}, "Move ÷ implied move ", b(num(e.move_ratio) + "×")) : null,
+			h("span", { class: "f3" }, `${e.sessions} session${e.sessions === 1 ? "" : "s"}`))
+			: h("div", { class: "f3", style: "font-size:12.5px" }, "Recorded from the first full session with a live option chain."),
+		h("div", { class: "f3", style: "font-size:12px" }, "A desk that only buys options needs the index to move more than the options priced in. Below 1× it is paying for more movement than it gets."));
+	const icTable = ic.length ? h("div", { class: "scroll" }, h("table", { class: "tbl" },
+		h("tr", {}, h("th", {}, "Factor"), H.map((x) => h("th", {}, x + " min"))),
+		ic.map((r) => h("tr", {}, h("td", {}, factorName(r.factor)), H.map((x) => {
+			const c = r.h[x];
+			return h("td", { class: c && Math.abs(c.t) >= 2 ? (c.ic > 0 ? "up" : "dn") : "f3", title: c ? `t ${num(c.t, 1)} · n ${num(c.n, 0)}` : "" }, c ? signed(c.ic, 3) : "—");
+		})))))
+		: empty("info", "Fills as sessions are graded: each factor's direction against the move 5, 15, 30 and 60 minutes later.");
+	return grp("What the desk has learned", `${L.sessions || 0} session${L.sessions === 1 ? "" : "s"} graded`, h("div", { class: "rows" }, edge,
+		h("div", {}, h("div", { class: "pad", style: "padding-bottom:2px" }, h("div", { class: "lbl" }, "Factor IC by horizon"),
+			h("div", { class: "f3", style: "font-size:12px;margin-top:4px" }, "Correlation of each factor's call with the index's move that followed. In colour: |t| ≥ 2 on overlap-adjusted samples.")), icTable),
+		pro.length ? h("div", { class: "pad", style: "display:grid;gap:6px" }, h("div", { class: "lbl" }, "On probation: graded live, no vote yet"),
+			pro.map(([f, p]) => h("div", { class: "row" }, h("span", { class: "grow" }, factorName(f)),
+				h("span", { class: "tag " + (p.voting ? "bull" : "dash") }, p.voting ? `Voting · ×${num(p.rel)}` : `${num(p.n, 0)} of 30 graded · ×${num(p.rel)}`)))) : null));
 }
 
 // ---- TradingView Lightweight Charts (vendored); IST on the axis by shifting times +5:30 ---------------------------------
@@ -854,47 +969,55 @@ async function renderTrades(full) {
 	if (sub === "positions") return renderPositionsTab(body);
 	if (!full && sub !== "positions") return;
 	body.textContent = "";
-	body.appendChild(h("div", { class: "panel", style: "margin-top:14px" }, h("div", { class: "pad" }, h("span", { class: "skel", style: "width:70%" }), h("span", { class: "skel", style: "width:40%;margin-top:10px" }))));
+	body.appendChild(h("div", { class: "panel" }, h("div", { class: "pad" }, h("span", { class: "skel", style: "width:70%" }), h("span", { class: "skel", style: "width:40%;margin-top:10px" }))));
 	if (sub === "history") return renderHistory(body);
 	if (sub === "performance") return renderPerformance(body);
 	if (sub === "reviews") return renderReviews(body);
 }
+// a section: a header band (title, hint or a control) over its rows
+function grp(title, hint, ...content) {
+	return h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, title),
+		hint == null || hint === "" ? null : typeof hint === "object" ? hint : h("span", { class: "hint" }, hint)), ...content);
+}
 function renderPositionsTab(body) {
 	const st = S.state || {}, hb = st.heartbeat || {}, pos = hb.positions || [], ct = st.closed_today || [];
+	const net = ct.reduce((a, t) => a + t.pnl, 0);
 	body.textContent = "";
-	put(body, h("div", { class: "sec-h" }, h("h2", {}, "Open"), h("span", { class: "hint" }, pos.length ? inr(pos.reduce((a, p) => a + (p.pnl || 0), 0), true) + " open P&L" : "")));
-	body.appendChild(pos.length ? h("div", { class: "stack" }, pos.map(positionCard)) : h("div", { class: "panel" }, empty("target", "Flat: no open positions. The desk takes at most one position at a time.")));
-	put(body, h("div", { class: "sec-h" }, h("h2", {}, "Closed today"), h("span", { class: "hint mono " + cls(ct.reduce((a, t) => a + t.pnl, 0)) },
-		ct.length ? inr(ct.reduce((a, t) => a + t.pnl, 0), true) : "")),
-	h("div", { class: "panel rows" }, ct.length ? ct.map(tradeRow) : empty("trades", "No closed trades this session.")));
+	put(body,
+		grp("Open", pos.length ? inr(pos.reduce((a, p) => a + (p.pnl || 0), 0), true) + " open P&L" : "",
+			h("div", { class: "rows" }, pos.length ? pos.map(positionCard) : empty("target", "Flat: no open positions. The desk takes at most one position at a time."))),
+		grp("Closed today", ct.length ? h("span", { class: "hint " + cls(net) }, inr(net, true)) : "",
+			h("div", { class: "rows" }, ct.length ? ct.map(tradeRow) : empty("trades", "No closed trades this session."))));
 }
 function tradeRow(t) {
 	const open = t.status === "open";
 	return h("button", { class: "trow", onclick: () => openTrade(t.id) },
-		h("span", { class: "grade " + (t.grade || "") }, t.grade || "·"),
-		h("div", { style: "min-width:0" }, h("div", { class: "t1" }, `${t.symbol} · ${setupName(t.strategy)}`),
-			h("div", { class: "t2" }, `${ist(t.opened_at)}${t.closed_at ? "–" + ist(t.closed_at) : ""} · ${t.structure ? structName(t.structure) + " · " : ""}${open ? "open" : words(t.exit_reason || "")}`)),
+		h("span", { class: "tm" }, h("b", {}, ist(t.opened_at)), open ? h("span", { class: "acc" }, "open") : h("span", {}, t.closed_at ? ist(t.closed_at) : "")),
+		h("div", { style: "min-width:0" }, h("div", { class: "t1" }, setupName(t.strategy)),
+			h("div", { class: "t2" }, `${t.symbol}${t.structure ? " · " + structName(t.structure) : ""}${t.units ? ` · ${t.units} lot${t.units === 1 ? "" : "s"}` : ""}`)),
 		h("div", { class: "v " + (open ? "" : cls(t.pnl)) }, open ? "Open" : inr(t.pnl, true),
-			h("small", {}, !open && fin(t.r_multiple) ? signed(t.r_multiple) + "R" : "")));
+			h("small", {}, open ? "" : `${fin(t.r_multiple) ? signed(t.r_multiple) + "R · " : ""}${cap(words(t.exit_reason || ""))}`)),
+		h("span", { class: "grade " + (t.grade || "") }, t.grade || "–"));
 }
 async function renderHistory(body) {
 	let rows;
-	try { rows = await api("/api/i/trades?n=300"); } catch (e) { body.textContent = ""; body.appendChild(empty("alert", e.message)); return; }
+	try { rows = await api("/api/i/trades?n=300"); } catch (e) { body.textContent = ""; body.appendChild(h("div", { class: "panel" }, empty("alert", e.message))); return; }
 	if (S.tab !== "trades" || S.sub.trades !== "history") return;
 	body.textContent = "";
-	if (!rows.length) { body.appendChild(h("div", { class: "panel", style: "margin-top:14px" }, empty("trades", "No trades yet. Every trade the desk takes lands here with its full reasoning."))); return; }
+	if (!rows.length) { body.appendChild(h("div", { class: "panel" }, empty("trades", "No trades yet. Every trade the desk takes lands here with its full reasoning."))); return; }
 	const days = new Map();
 	for (const t of rows) { const d = String(t.opened_at).slice(0, 10); (days.get(d) || days.set(d, []).get(d)).push(t); }
 	const closed = rows.filter((t) => t.status !== "open"), net = closed.reduce((a, t) => a + t.pnl, 0), wins = closed.filter((t) => t.pnl > 0).length;
-	body.appendChild(h("div", { class: "kpis", style: "margin-top:14px" },
-		h("div", { class: "kpi" }, h("span", {}, "Trades"), h("b", {}, String(rows.length))),
-		h("div", { class: "kpi" }, h("span", {}, "Net P&L"), h("b", { class: cls(net) }, inr(net, true))),
-		h("div", { class: "kpi" }, h("span", {}, "Win rate"), h("b", {}, closed.length ? Math.round(wins / closed.length * 100) + "%" : "—")),
-		h("div", { class: "kpi" }, h("span", {}, "Sessions"), h("b", {}, String(days.size)))));
+	const nOpen = rows.length - closed.length;
+	body.appendChild(h("div", { class: "panel" }, h("div", { class: "kpis" },
+		h("div", { class: "kpi" }, h("span", {}, `Net, ${days.size} session${days.size === 1 ? "" : "s"}`), h("b", { class: cls(net) }, inr(net, true))),
+		h("div", { class: "kpi" }, h("span", {}, "Trades"), h("b", {}, `${rows.length}${nOpen ? " · " + nOpen + " open" : ""}`)),
+		h("div", { class: "kpi" }, h("span", {}, "Won"), h("b", {}, closed.length ? `${wins} of ${closed.length}` : "—")),
+		h("div", { class: "kpi" }, h("span", {}, "Win rate"), h("b", {}, closed.length ? Math.round(wins / closed.length * 100) + "%" : "—")))));
 	for (const [d, ts] of days) {
 		const dn = ts.filter((t) => t.status !== "open").reduce((a, t) => a + t.pnl, 0);
-		put(body, h("div", { class: "panel rows", style: "margin-top:12px" },
-			h("div", { class: "dayh" }, h("span", {}, istDay(d + "T12:00:00+05:30")), h("span", { class: "mono " + cls(dn) }, inr(dn, true))), ts.map(tradeRow)));
+		body.appendChild(h("div", { class: "grp" }, h("div", { class: "dayh" }, h("span", {}, istDay(d + "T12:00:00+05:30")), h("span", { class: cls(dn) }, inr(dn, true))),
+			h("div", { class: "rows" }, ts.map(tradeRow))));
 	}
 }
 async function openTrade(id) {
@@ -907,7 +1030,7 @@ async function openTrade(id) {
 	openSheet(`${t.symbol} · ${setupName(t.strategy)}`,
 		h("div", { class: "row", style: "align-items:flex-end;margin-bottom:12px" },
 			h("div", { class: "grow" }, h("div", { class: "lbl" }, open ? "Open P&L" : "Net P&L, after costs"),
-				h("div", { class: "mono " + cls(t.pnl), style: "font-size:30px;font-weight:600;letter-spacing:-.02em" }, open ? "Open" : inr(t.pnl, true))),
+				h("div", { class: cls(t.pnl), style: "font-size:26px;font-weight:300;letter-spacing:-.02em" }, open ? "Open" : inr(t.pnl, true))),
 			h("div", { style: "text-align:right" }, h("span", { class: "grade " + (t.grade || "") }, t.grade || "·"), info("grade"))),
 		h("div", { class: "kpis" },
 			h("div", { class: "kpi" }, h("span", {}, "R multiple"), h("b", { class: cls(t.r_multiple) }, fin(t.r_multiple) ? signed(t.r_multiple) + "R" : "—")),
@@ -932,20 +1055,19 @@ async function renderPerformance(body) {
 	try { s = await api("/api/i/stats"); } catch (e) { body.textContent = ""; body.appendChild(empty("alert", e.message)); return; }
 	if (S.tab !== "trades" || S.sub.trades !== "performance") return;
 	body.textContent = "";
-	if (!s.trades) { body.appendChild(h("div", { class: "panel", style: "margin-top:14px" }, empty("chart", "Performance appears after the first closed trade."))); return; }
+	if (!s.trades) { body.appendChild(h("div", { class: "panel" }, empty("chart", "No closed trades yet. Performance appears after the first trade closes; until then the desk's reads are under Feed › Desk log."))); return; }
 	const kpi = (l, v, c) => h("div", { class: "kpi" }, h("span", {}, l), h("b", { class: c || "" }, v));
-	put(body, h("div", { class: "kpis", style: "margin-top:14px" },
+	put(body, h("div", { class: "panel" }, h("div", { class: "kpis" },
 		kpi("Net P&L", inr(s.net, true), cls(s.net)), kpi("Return", pct(s.net / s.capital, 1), cls(s.net)),
 		kpi("Win rate", Math.round(s.win_rate * 100) + "%"), kpi("Profit factor", s.profit_factor ? num(s.profit_factor) : "—"),
 		kpi("Avg trade", signed(s.avg_r) + "R", cls(s.avg_r)), kpi("Max drawdown", pct(s.max_dd, 1), "dn"),
-		kpi("Green days", Math.round(s.green_days * 100) + "%"), kpi("Costs paid", inr(s.fees))),
-	h("div", { class: "sec-h" }, h("h2", {}, "Equity"), h("span", { class: "hint" }, `${s.trades} trades · ${s.sessions} sessions`)));
-	const eq = h("div", { class: "panel" }, h("div", { class: "eqc" }));
-	body.appendChild(eq);
-	drawEquity(eq.firstChild, s);
-	put(body, h("div", { class: "sec-h" }, h("h2", {}, "P&L by setup")), h("div", { class: "panel" }, hbars(s.by_setup, setupName)));
+		kpi("Green days", Math.round(s.green_days * 100) + "%"), kpi("Costs paid", inr(s.fees)))));
+	const eqc = h("div", { class: "eqc" });
+	body.appendChild(grp("Equity", `${s.trades} trades · ${s.sessions} sessions · dashed: start`, eqc));
+	drawEquity(eqc, s);
+	body.appendChild(grp("P&L by setup", "trades", hbars(s.by_setup, setupName)));
 	const BRK = [["by_day_type", "Day type"], ["by_structure", "Structure"], ["by_exit", "Exit"], ["by_hour", "Hour"], ["by_symbol", "Index"]];
-	const segEl = h("div", { class: "seg" }), tbl = h("div", { class: "panel scroll" });
+	const segEl = h("div", { class: "seg" }), tbl = h("div", { class: "scroll" });
 	const paint = () => {
 		tbl.textContent = "";
 		tbl.appendChild(h("table", { class: "tbl" }, h("tr", {}, h("th", {}, ""), h("th", {}, "Trades"), h("th", {}, "Win"), h("th", {}, "Avg R"), h("th", {}, "Net")),
@@ -954,14 +1076,14 @@ async function renderPerformance(body) {
 	};
 	seg(segEl, BRK, S.brk, (v) => { S.brk = v; paint(); });
 	paint();
-	put(body, h("div", { class: "sec-h" }, h("h2", {}, "Breakdown")), h("div", { style: "margin-bottom:8px" }, segEl), tbl);
+	body.appendChild(grp("Breakdown", "closed trades", h("div", { style: "padding:8px 16px 10px;border-top:1px solid var(--line)" }, segEl), tbl));
 	if ((s.calibration || []).length)
-		put(body, h("div", { class: "sec-h" }, h("h2", {}, "Calibration"), h("span", { class: "hint" }, "assumed vs realised")),
-			h("div", { class: "panel" }, h("div", { class: "narr", style: "border-top:0" },
+		body.appendChild(grp("Calibration", "priced vs realised",
+			h("div", {}, h("p", { class: "narr pad", style: "font-size:12px;color:var(--fg3)" },
 				"P(right direction) the quant layer priced each trade on, against how often the index actually went that way by the exit. Until the realised column tracks the assumed one over many trades, the edge is unproven."),
 			h("div", { class: "scroll" }, h("table", { class: "tbl" }, h("tr", {}, h("th", {}, "Source"), h("th", {}, "Assumed"), h("th", {}, "Trades"), h("th", {}, "Realised"), h("th", {}, "Net")),
 				s.calibration.map((r) => h("tr", {}, h("td", {}, cap(String(r.source).split(/ from | \(/)[0])), h("td", {}, Math.round(r.assumed * 100) + "%"), h("td", {}, r.trades),
-					h("td", {}, Math.round(r.realised * 100) + "%"), h("td", { class: cls(r.pnl) }, inr(r.pnl, true))))))));
+					h("td", {}, Math.round(r.realised * 100) + "%"), h("td", { class: cls(r.pnl) }, inr(r.pnl, true)))))))));
 }
 function drawEquity(el, s) {
 	if (S.eq) { try { S.eq.chart.remove(); } catch (e) { /* gone */ } S.eq = null; }
@@ -986,12 +1108,12 @@ function drawEquity(el, s) {
 	S.eq = { chart, paint };
 }
 function hbars(rows, name) {
-	const box = h("div", { style: "padding:6px 0" });
+	const box = h("div", {});
 	rows = [...rows].sort((a, b) => b.pnl - a.pnl);
 	const max = Math.max(...rows.map((r) => Math.abs(r.pnl)), 1);
 	for (const r of rows) {
 		const w = Math.abs(r.pnl) / max * 50;
-		box.appendChild(h("div", { class: "hb" }, h("span", {}, name ? name(r.key) : r.key, h("div", { class: "f3", style: "font-size:11px" }, `${r.trades} trade${r.trades === 1 ? "" : "s"} · ${Math.round(r.win * 100)}% win`)),
+		box.appendChild(h("div", { class: "hb" }, h("span", {}, name ? name(r.key) : r.key, h("div", { class: "f3", style: "font-size:11px" }, `${r.trades} trade${r.trades === 1 ? "" : "s"} · ${Math.round(r.win * 100)}% won`)),
 			h("div", { class: "bar2" }, h("i", { style: `${r.pnl >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${r.pnl >= 0 ? "var(--up)" : "var(--dn)"}` })),
 			h("b", { class: cls(r.pnl) }, inr(r.pnl, true))));
 	}
@@ -1002,11 +1124,11 @@ async function renderReviews(body) {
 	try { dates = await api("/api/i/reviews"); } catch (e) { body.textContent = ""; body.appendChild(empty("alert", e.message)); return; }
 	if (S.tab !== "trades" || S.sub.trades !== "reviews") return;
 	body.textContent = "";
-	body.appendChild(h("div", { class: "panel rows", style: "margin-top:14px" }, dates.length ? dates.map((d) =>
+	body.appendChild(grp("Session reviews", dates.length ? `${dates.length}` : "", h("div", { class: "rows" }, dates.length ? dates.map((d) =>
 		h("button", { class: "set", onclick: async () => {
 			try { const r = await api("/api/i/review?date=" + encodeURIComponent(d)); openSheet("Session " + istDay(d + "T12:00:00+05:30"), markdown(r.markdown)); } catch (e) { toast(e.message); }
 		} }, icon("book"), h("div", { class: "grow" }, istDay(d + "T12:00:00+05:30"), h("small", {}, "The desk's own post-session review")), icon("chev")))
-		: empty("book", "Session reviews appear after each close.")));
+		: empty("book", "Session reviews appear after each close."))));
 }
 function inline(text) {
 	const out = [];
@@ -1040,18 +1162,16 @@ function renderBrain() {
 	const hb = (S.state && S.state.heartbeat) || {}, v = (hb.views || {})[S.brainSym] || {}, b = v.brain, body = $("#b-body");
 	body.textContent = "";
 	// regime
-	const rp = h("div", { class: "panel", style: "margin-top:14px" });
-	if (!b) rp.appendChild(empty("globe", "The brain's global read appears here while the desk runs: which world markets are moving, how they usually lean on India, and what that means for the bias."));
+	if (!b) body.appendChild(h("div", { class: "panel" }, empty("globe", "The brain's global read appears here while the desk runs: which world markets are moving, how they usually lean on India, and what that means for the bias.")));
 	else {
 		const rc = b.regime === "risk-on" ? "on" : b.regime === "risk-off" ? "offr" : "mixed";
-		put(rp, h("div", { class: "regime" }, h("div", { class: "lbl" }, "Global regime", info("regime")),
-			h("div", { class: "big " + rc }, words(b.regime)),
-			h("div", { class: "tags" }, h("span", { class: "tag line" }, `score ${signed(b.regime_score)}`),
-				h("span", { class: "tag " + (b.stress >= 2 ? "bear" : "line") }, `stress ${num(b.stress, 1)}σ`, info("stress")),
-				h("span", { class: "tag " + (b.size_mult < 1 ? "acc" : "line") }, b.size_mult < 1 ? `size ×${num(b.size_mult)}` : "full size"))),
-		h("div", { class: "narr" }, b.narrative));
+		body.appendChild(grp("Global regime", info("regime"),
+			h("div", { class: "regime" }, h("div", { class: "big " + rc }, (rc === "on" ? "▲ " : rc === "offr" ? "▼ " : "") + words(b.regime)),
+				h("div", { class: "tags" }, h("span", { class: "tag line" }, `Score ${signed(b.regime_score)}`),
+					h("span", { class: "tag " + (b.stress >= 2 ? "bear" : "line") }, `Global stress ${num(b.stress, 1)}σ`), info("stress"),
+					h("span", { class: "tag " + (b.size_mult < 1 ? "warn" : "line") }, b.size_mult < 1 ? `Size ×${num(b.size_mult)}` : "Full size")),
+				b.narrative ? h("p", { class: "narr" }, b.narrative) : null)));
 	}
-	body.appendChild(rp);
 	// the open, explained
 	if (b && b.gap) {
 		const g = b.gap, against = g.explained * g.gap < 0 && Math.abs(g.explained) > 0.0005;
@@ -1061,22 +1181,20 @@ function renderBrain() {
 				? `${S.brainSym} opened ${pct(g.gap)}, while what the world did overnight pointed to ${pct(g.explained)}: India moved less than the global cue.`
 				: `${S.brainSym} opened ${pct(g.gap)}. What global markets did while India was shut accounts for ${pct(g.explained)}` +
 					(g.share != null && g.share > 0 ? `, about ${Math.round(g.share * 100)}% of the gap.` : ".");
-		put(body, h("div", { class: "sec-h" }, h("h2", {}, "Today's open, explained")),
-			h("div", { class: "panel pad" }, h("div", { style: "font-size:14px;line-height:1.5" }, txt),
-				(g.parts || []).length ? h("div", { class: "chips", style: "margin-top:10px;flex-wrap:wrap" }, g.parts.map(([n, x]) => h("span", { class: "tag " + (x > 0 ? "bull" : x < 0 ? "bear" : "flat") }, `${n} ${pct(x)}`))) : null));
+		body.appendChild(grp("The opening gap", "09:15", h("div", { class: "pad" }, h("p", { class: "narr", style: "color:var(--fg)" }, txt),
+			(g.parts || []).length ? h("div", { class: "chips", style: "margin-top:8px" }, g.parts.map(([n, x]) => h("span", { class: "tag " + (x > 0 ? "bull" : x < 0 ? "bear" : "flat") }, `${n} ${pct(x)}`))) : null)));
 	}
 	// influence graph
-	put(body, h("div", { class: "sec-h" }, h("h2", {}, "How everything connects")),
-		h("div", { class: "panel pad" }, h("div", { class: "f3", style: "font-size:12px;margin-bottom:8px" }, "World → what the desk reads in India → the bias → the decision. Solid: research-validated leads that vote. Dashed: explains, doesn't vote."),
-			h("div", { class: "scroll", id: "bgraph" })));
+	body.appendChild(grp("How the read is built", "world → India → bias → decision",
+		h("div", {}, h("p", { class: "narr pad", style: "font-size:12px;color:var(--fg3);padding-bottom:0" }, "Solid: research-validated leads that vote. Dashed: explains, doesn't vote."),
+			h("div", { class: "scroll", id: "bgraph" }))));
 	drawBrainGraph($("#bgraph"), v, hb);
 	// what's pushing the bias
-	put(body, h("div", { class: "sec-h" }, h("h2", {}, "What's pushing the bias"), h("span", { class: "hint" }, v.bias ? cap(v.bias) + " " + signed(v.score) : "")),
-		h("div", { class: "panel" }, evidenceList(v.evidence || [], 8)));
+	body.appendChild(grp("What's pushing the bias", v.bias ? `${cap(v.bias)} ${signed(v.score)}` : "", evidenceList(v.evidence || [], 8)));
+	if (hb.learning) body.appendChild(learnedGrp(hb.learning, S.brainSym));
 	// global markets board
-	const G = hb.global || {}, mk = G.markets || {}, board = h("div", { class: "panel rows" });
-	const regions = ["US", "Asia", "Europe", "FX", "Commodities", "Rates"];
-	for (const r of regions) {
+	const G = hb.global || {}, mk = G.markets || {}, board = h("div", { class: "rows" });
+	for (const r of ["US", "Asia", "Europe", "FX", "Commodities", "Rates"]) {
 		const ms = Object.entries(mk).filter(([, m]) => m.region === r);
 		if (!ms.length) continue;
 		board.appendChild(h("div", { class: "reg-h" }, r));
@@ -1085,21 +1203,22 @@ function renderBrain() {
 			board.appendChild(h("div", { class: "grow-row" },
 				h("div", { class: "n" }, h("i", { class: m.live ? "on" : "" }), h("span", {}, m.name)),
 				h("div", { class: "v" }, m.last != null ? num(m.last, m.last > 1000 ? 0 : 2) : "—"),
-				h("span", { class: "chg mono " + (lean || "flat") }, pct(c)),
+				h("span", { class: "chg " + (lean || "flat") }, pct(c)),
 				h("div", { class: "s" }, `${m.live && m.since_open != null ? "since 09:15 IST" : "last session" + (m.prior_date ? " " + m.prior_date : "")}` +
 					(m.z30 != null ? ` · 30m ${signed(m.z30, 1)}σ` : "") + (m.india ? ` · usually ${m.india > 0 ? "moves with" : "leans against"} India` : ""))));
 		}
 	}
 	if (!Object.keys(mk).length) board.appendChild(empty("globe", "Global markets appear here while the desk runs."));
-	put(body, h("div", { class: "sec-h" }, h("h2", {}, "Global markets"), h("span", { class: "hint" }, "colour: good or bad for India")), board);
+	body.appendChild(grp("Global markets", "colour: good or bad for India", board));
 	// the wiring
 	const ds = (b && b.drivers) || [];
-	put(body, h("div", { class: "sec-h" }, h("h2", {}, "The wiring, measured"), h("span", { class: "hint" }, "weekly research, real data")),
-		h("div", { class: "panel scroll" }, ds.length ? h("table", { class: "tbl" },
-			h("tr", {}, h("th", {}, "Driver"), h("th", {}, "Gap ρ"), h("th", {}, "Same-5m ρ"), h("th", {}, "Lead t"), h("th", {}, "Votes")),
+	body.appendChild(grp("The wiring, measured", "weekly research, real data",
+		h("div", { class: "scroll" }, ds.length ? h("table", { class: "tbl" },
+			h("tr", {}, h("th", {}, "Driver"), h("th", {}, "Gap ρ"), h("th", {}, "Same-5m ρ"), h("th", {}, "Lead t"), h("th", {}, "Status")),
 			ds.map((d) => h("tr", {}, h("td", {}, d.name), h("td", {}, fin(d.gap_corr) ? num(d.gap_corr) : "—"), h("td", {}, fin(d.co_corr) ? num(d.co_corr) : "—"),
-				h("td", {}, fin(d.lead_t) ? num(d.lead_t, 1) : "—"), h("td", { class: d.validated ? "up" : "f3" }, d.validated ? (d.lead_sign < 0 ? "yes, fades" : "yes") : "no"))))
-			: empty("info", "Appears with the brain's first read.")));
+				h("td", {}, fin(d.lead_t) ? num(d.lead_t, 1) : "—"),
+				h("td", {}, h("span", { class: "tag " + (d.validated ? "bull" : "dash") }, d.validated ? (d.lead_sign < 0 ? "Validated · fades" : "Validated") : "Probation")))))
+			: empty("info", "Appears with the brain's first read."))));
 }
 function drawBrainGraph(el, v, hb) {
 	el.textContent = "";
@@ -1109,7 +1228,7 @@ function drawBrainGraph(el, v, hb) {
 	const world = (b && b.drivers) || [];
 	const agg = {};
 	for (const e of v.evidence || []) {
-		const n = CAT[e.category] || cap(e.category);
+		const n = CAT_G[e.category] || cap(e.category);
 		const a = (agg[n] = agg[n] || { n, c: 0, w: 0 });
 		a.c += e.direction * e.weight; a.w += e.weight;
 	}
@@ -1161,25 +1280,26 @@ async function renderFeed(full) {
 	if (S.tab !== "feed" || S.sub.feed !== "news") return;
 	body.textContent = "";
 	const hb = (S.state && S.state.heartbeat) || {}, vs = Object.entries(hb.views || {});
-	const tone = h("div", { class: "panel rows", style: "margin-top:14px" });
+	const tone = h("div", { class: "rows" });
 	if (!vs.length) tone.appendChild(empty("news", "The desk's read of the news appears here while it runs."));
 	for (const [u, v] of vs) {
 		const n = v.news;
 		tone.appendChild(h("div", { class: "pad", style: "display:grid;gap:8px" },
-			h("div", { class: "row" }, h("b", {}, u), h("span", { class: "grow" }),
-				n ? h("span", { class: "tag " + (n.tone > 0.1 ? "bull" : n.tone < -0.1 ? "bear" : "flat") }, `tone ${signed(n.tone)}`) : h("span", { class: "f3", style: "font-size:12px" }, "no relevant stories in 2 h")),
-			n ? h("div", { class: "dv", style: "height:8px" }, h("i", { style: `${n.tone >= 0 ? "left:50%" : "right:50%"};width:${Math.min(Math.abs(n.tone), 1) * 50}%;background:${n.tone >= 0 ? "var(--up)" : "var(--dn)"}` })) : null,
-			n ? h("div", { class: "f3", style: "font-size:12px" }, `${n.n} ${n.n === 1 ? "story" : "stories"} in the last 2 h · weighs in the bias as “news” evidence`) : null,
-			n && n.breaking ? h("div", { class: "banner", style: "margin:0;background:var(--dn-bg)" }, icon("bolt"),
-				h("div", {}, h("b", {}, `Breaking, ${Math.round(n.breaking.age_min)} min ago: `), n.breaking.title, ". No new entries until it settles.")) : null));
+			h("div", { class: "row" }, h("b", { style: "font-weight:500" }, u), h("span", { class: "grow" }),
+				n ? h("span", { class: "tag " + (n.tone > 0.1 ? "bull" : n.tone < -0.1 ? "bear" : "flat") }, `${n.tone > 0.1 ? "▲" : n.tone < -0.1 ? "▼" : "●"} Tone ${signed(n.tone)}`)
+					: h("span", { class: "f3", style: "font-size:12px" }, "no relevant stories in 2 h")),
+			n ? h("div", { class: "dv" }, h("i", { style: `${n.tone >= 0 ? "left:50%" : "right:50%"};width:${Math.min(Math.abs(n.tone), 1) * 50}%;background:${n.tone >= 0 ? "var(--up)" : "var(--dn)"}` })) : null,
+			n ? h("div", { class: "f3", style: "font-size:12px" }, `${n.n} ${n.n === 1 ? "story" : "stories"} in the last 2 h · weighs in the bias as news evidence`) : null,
+			n && n.breaking ? h("div", { class: "banner err", style: "margin:0" }, icon("bolt"),
+				h("div", {}, h("b", { style: "font-weight:500" }, `Breaking, ${Math.round(n.breaking.age_min)} min ago: `), n.breaking.title, ". No new entries until it settles.")) : null));
 	}
 	const hl = hb.news_health || {}, names = Object.keys(hl), ok = names.filter((k) => String(hl[k]).startsWith("ok"));
-	put(body, tone, names.length ? h("div", { class: "note", style: "padding:8px 4px 0" }, `${ok.length} of ${names.length} feeds live` +
-		(ok.length < names.length ? ` · down: ${names.filter((k) => !ok.includes(k)).join(", ")}` : "")) : null);
-	const chips = h("div", { class: "chips", style: "margin:16px 0 10px" });
+	body.appendChild(grp("News tone", names.length ? `${ok.length} of ${names.length} feeds live` : "last 2 h", tone));
+	const chips = h("div", { class: "chips pad" });
+	const list = h("div", { class: "rows" });
 	const paint = () => {
 		chips.textContent = "";
-		for (const [val, label] of [["", "All"], ["NIFTY", "NIFTY"], ["BANKNIFTY", "BANKNIFTY"], ["high", "High impact"], ["bear", "Bearish"], ["bull", "Bullish"]])
+		for (const [val, label] of [["", "All"], ["NIFTY", "NIFTY"], ["BANKNIFTY", "BANKNIFTY"], ["high", "High impact"], ["bull", "Bullish"], ["bear", "Bearish"]])
 			chips.appendChild(h("button", { class: "chip", "aria-pressed": String(S.newsF === val), onclick: () => { S.newsF = val; paint(); } }, label));
 		const f = S.newsF;
 		const shown = rows.filter((r) => !f || (f === "high" ? r.impact === "high" : f === "bear" ? r.sentiment < -0.15 : f === "bull" ? r.sentiment > 0.15 : ((r.about || {})[f] || 0) >= 2));
@@ -1187,43 +1307,43 @@ async function renderFeed(full) {
 		if (!shown.length) list.appendChild(empty("news", rows.length ? "Nothing matches this filter." : "No headlines yet. The desk reads 10 feeds every few minutes while it runs."));
 		shown.slice(0, 120).forEach((r) => list.appendChild(newsRow(r)));
 	};
-	const list = h("div", { class: "panel rows" });
-	put(body, chips, list);
+	body.appendChild(grp("Headlines", rows.length ? `${rows.length}` : "", chips, list));
 	paint();
 }
-// what the headline NLP read (nlp.py): the event, a surprise against expectations, speculation, a retelling
-function nlpTags(n) {
-	if (!n) return null;
-	const t = [], tag = (txt, cls, tip) => h("span", { class: "tag line " + (cls || ""), style: "height:18px;font-size:10.5px", title: tip || "" }, txt);
-	if (n.event && n.event !== "general") t.push(tag(words(n.event)));
-	if (fin(n.surprise) && n.surprise !== 0)
-		t.push(tag(`surprise ${signed(n.surprise)}`, n.surprise > 0 ? "bull" : "bear", n.surprise_text || "against expectations"));
-	if (fin(n.certainty) && n.certainty < 1) t.push(tag("unconfirmed", "", "speculation, a preview or sources-say"));
-	if (fin(n.novelty) && n.novelty < 0.5) t.push(tag("retold", "", "mostly a retelling of an earlier story"));
-	return t;
-}
+// one headline: title first, then what the desk read in it (tone, impact, event, a surprise against expectations,
+// speculation, a retelling) and, when they've arrived, the language models' reads for the index it's about
 function newsRow(r, compact) {
-	const k = r.sentiment > 0.15 ? "bull" : r.sentiment < -0.15 ? "bear" : "";
-	const tags = Object.entries(r.about || {}).filter(([t, x]) => t !== "macro" && x >= 2).map(([t]) => t);
-	if ((r.about || {}).macro >= 2) tags.push("macro");
-	const src = (r.sources || [r.source]).filter(Boolean);
-	return h("div", { class: "li" },
-		h("div", { class: "meta" }, h("span", { class: "sent " + k, title: `sentiment ${signed(r.sentiment)}` }),
-			r.impact && r.impact !== "low" ? h("span", { class: "imp " + r.impact }, r.impact) : null,
-			h("span", {}, `${src.slice(0, compact ? 1 : 3).join(", ")}${src.length > (compact ? 1 : 3) ? " +" + (src.length - (compact ? 1 : 3)) : ""}`), h("span", {}, "·"), h("span", {}, ago(r.ts)),
-			compact ? null : tags.map((t) => h("span", { class: "tag line", style: "height:18px;font-size:10.5px" }, t)),
-			compact ? null : nlpTags(r.nlp)),
-		r.link ? h("a", { class: "ttl", href: r.link, target: "_blank", rel: "noopener noreferrer" }, r.title) : h("div", { class: "ttl" }, r.title));
+	const k = r.sentiment > 0.15 ? "bull" : r.sentiment < -0.15 ? "bear" : "flat";
+	const n = r.nlp || {}, readers = (n.llm && n.llm.readers) || {};
+	const about = Object.entries(r.about || {}).filter(([t, x]) => t !== "macro" && x >= 2).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+	const sym = about[0] || "NIFTY", src = (r.sources || [r.source]).filter(Boolean), keep = compact ? 1 : 2;
+	const retold = fin(n.novelty) && n.novelty < 0.5;
+	const reads = Object.entries(readers).filter(([, rd]) => rd && fin(rd[sym]));
+	return h("div", { class: "li" + (retold && !compact ? " muted" : "") },
+		r.link ? h("a", { class: "ttl", href: r.link, target: "_blank", rel: "noopener noreferrer" }, r.title) : h("div", { class: "ttl" }, r.title),
+		h("div", { class: "meta" },
+			h("span", {}, `${src.slice(0, keep).join(", ")}${src.length > keep ? " +" + (src.length - keep) : ""} · ${ago(r.ts)}`),
+			h("span", { class: "tag " + k }, `${k === "bull" ? "▲ Bullish" : k === "bear" ? "▼ Bearish" : "● Neutral"} ${signed(r.sentiment)}`),
+			r.impact ? h("span", { class: "tag line" }, `Impact ${r.impact === "medium" ? "med" : r.impact}`) : null,
+			n.event && n.event !== "general" ? h("span", { class: "tag line" }, cap(words(n.event))) : null,
+			fin(n.surprise) && n.surprise !== 0 ? h("span", { class: "tag acc", title: "against expectations" }, n.surprise_text || `Surprise ${signed(n.surprise)}`) : null,
+			fin(n.certainty) && n.certainty < 1 ? h("span", { class: "tag warn", title: "speculation, a preview or sources-say: half weight" }, "Unconfirmed") : null,
+			retold ? h("span", { class: "tag dash", title: "mostly a retelling of an earlier story" }, "Retelling") : null,
+			compact ? null : about.map((t) => h("span", { class: "tag line" }, t))),
+		reads.length && !compact ? h("div", { class: "readers" }, h("span", {}, sym),
+			h("span", {}, "Rules ", h("span", { class: cls(r.sentiment) }, signed(r.sentiment))),
+			reads.map(([name, rd]) => h("span", {}, cap(name) + " ", h("span", { class: cls(rd[sym]) }, signed(rd[sym]))))) : null);
 }
 async function renderLog(reset) {
 	const body = $("#f-body");
 	if (reset) {
 		S.thBefore = null;
 		body.textContent = "";
-		const chips = h("div", { class: "chips", style: "margin:14px 0 10px" });
+		const chips = h("div", { class: "chips pad" });
 		for (const [val, label] of [["", "All"], ...symbols().map((s) => [s, s]), ["trades", "Trades only"]])
 			chips.appendChild(h("button", { class: "chip", "aria-pressed": String(S.thSym === val), onclick: () => { S.thSym = val; renderLog(true); } }, label));
-		put(body, chips, h("div", { class: "panel rows", id: "f-log" }), h("button", { class: "btn block", id: "f-more", style: "margin-top:10px", onclick: () => renderLog(false) }, "Load earlier"));
+		put(body, grp("Desk log", "every few minutes and on every trade", chips, h("div", { class: "rows", id: "f-log" })),
+			h("button", { class: "btn block", id: "f-more", style: "margin-top:10px", onclick: () => renderLog(false) }, "Load earlier"));
 	}
 	let rows;
 	const sym = S.thSym && S.thSym !== "trades" ? "&symbol=" + S.thSym : "";
@@ -1236,7 +1356,7 @@ async function renderLog(reset) {
 	let lastDay = list.dataset.day || "";
 	for (const r of shown) {
 		const day = String(r.ts).slice(0, 10);
-		if (day !== lastDay) { list.appendChild(h("div", { class: "dayh" }, h("span", {}, istDay(r.ts)), h("span", {}, ""))); lastDay = day; }
+		if (day !== lastDay) { list.appendChild(h("div", { class: "dayh", style: "background:var(--panel2)" }, h("span", {}, istDay(r.ts)), h("span", {}, ""))); lastDay = day; }
 		list.appendChild(thoughtRow(r));
 	}
 	list.dataset.day = lastDay;
@@ -1245,21 +1365,20 @@ async function renderLog(reset) {
 }
 function thoughtRow(r) {
 	const a = readAction(r.action), trade = a.kind === "enter" || a.kind === "exit";
-	const more = h("div", { hidden: true, style: "margin-top:8px" }, r.evidence ? evidenceList(r.evidence) : null);
-	const row = h("button", { class: "th", "aria-expanded": "false", onclick: () => {
+	const more = h("div", { hidden: true, style: "margin:8px -16px 0" }, r.evidence ? evidenceList(r.evidence) : null);
+	const row = h("button", { class: "th", "aria-expanded": "false", style: trade ? "background:var(--acc-bg)" : null, onclick: () => {
 		more.hidden = !more.hidden;
 		row.classList.toggle("open", !more.hidden);
 		row.setAttribute("aria-expanded", String(!more.hidden));
 	} },
 	h("div", { class: "tm" }, ist(r.ts)),
 	h("div", { style: "min-width:0" },
-		h("div", { class: "row", style: "flex-wrap:wrap;gap:6px" }, h("b", { style: "font-size:13px" }, r.symbol), biasTag(r.bias, Number(r.score)),
-			h("span", { class: "f3", style: "font-size:12px" }, `${words(r.day_type)} · c ${num(r.conviction)}`)),
+		h("div", { class: "row", style: "flex-wrap:wrap;gap:6px" }, h("b", { style: "font-weight:500" }, r.symbol), biasTag(r.bias, Number(r.score)),
+			h("span", { class: "f3", style: "font-size:11.5px" }, `${words(r.day_type)} · conviction ${num(r.conviction)}`)),
 		h("div", { class: "act" + (trade ? " trade" : "") }, a.label + (a.reason ? ": " + a.reason : "")),
 		h("div", { class: "nar" }, r.narrative), more));
 	return row;
 }
-
 // ==================================================================================================================
 // settings
 // ==================================================================================================================

@@ -6,7 +6,7 @@
 "use strict";
 const CACHE = "qd-__QD_VERSION__";
 const SHELL = ["./", "index.html", "app.js", "lightweight-charts.js", "manifest.webmanifest", "icon-192.png",
-	"fonts/plex-sans-latin.woff2", "fonts/plex-sans-latin-ext.woff2", "fonts/plex-mono-400.woff2", "fonts/plex-mono-600.woff2"];
+	"fonts/geist-sans.woff2", "fonts/geist-mono.woff2"];
 
 self.addEventListener("install", (e) => {
 	e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

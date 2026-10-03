@@ -161,8 +161,8 @@ def export_site(cfg, account: str, out: Path, sessions: int = 3, label: str | No
     style, body = _body_and_style((STATIC / "index.html").read_text(encoding="utf-8"))
     # the host pads the page for phone safe areas; the sticky app bar must not add them twice
     style = style.replace(".bar{position:sticky;top:0;", ".bar{position:sticky;top:env(safe-area-inset-top,0px);")
-    style = style.replace("min-height:calc(54px + env(safe-area-inset-top,0px));\npadding:env(safe-area-inset-top,0px) 12px 0 16px;",
-                          "min-height:54px;\npadding:0 12px 0 16px;")
+    style = style.replace("min-height:calc(52px + env(safe-area-inset-top,0px));\npadding:env(safe-area-inset-top,0px) 4px 0 16px;",
+                          "min-height:52px;\npadding:0 4px 0 16px;")
     style = _font_data_uris(style)
     note = note or ("Read-only snapshot of the intraday desk. Controls are off here; they work on your own desk while it runs.")
     app_js = (STATIC / "app.js").read_text(encoding="utf-8")
@@ -200,7 +200,7 @@ def publish_site(cfg, account: str, out_dir: Path, sessions: int = 3, label: str
     (out / "app.js").write_text(app_js, encoding="utf-8")
     shutil.copyfile(CHART_LIB, out / "lightweight-charts.js")
     (out / "fonts").mkdir(exist_ok=True)
-    for f in [*FONTS.glob("*.woff2"), FONTS / "LICENSE-IBM-Plex.txt"]:
+    for f in [*FONTS.glob("*.woff2"), *FONTS.glob("LICENSE-*.txt")]:
         shutil.copyfile(f, out / "fonts" / f.name)
     for icon in ICONS:
         shutil.copyfile(STATIC / icon, out / icon)
