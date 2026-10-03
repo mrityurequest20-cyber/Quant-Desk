@@ -299,7 +299,7 @@ def cmd_ai_check(cfg, a):
             pc["model"] = a.model
         try:
             r = {"claude": lambda: llm.ClaudeReader(key, pc.get("model", "claude-opus-5-5"), pc.get("effort", "low")),
-                 "gemini": lambda: llm.GeminiReader(key, pc.get("model", "gemini-2.5-flash")),
+                 "gemini": lambda: llm.GeminiReader(key, pc.get("model", "gemini-flash-latest")),
                  "ollama": lambda: llm.OllamaReader(key, pc.get("model", "gpt-oss:120b"), pc.get("host", "https://ollama.com"))}[name]()
             if hasattr(r, "models"):
                 try:

@@ -73,6 +73,11 @@ jobs:
           HAS_OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY != '' }}
           HAS_OLLAMA_KEY: ${{ secrets.OLLAMA_KEY != '' }}
           HAS_OLLAMA_TOKEN: ${{ secrets.OLLAMA_TOKEN != '' }}
+          HAS_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_CLOUDFLARE_API: ${{ secrets.CLOUDFLARE_API != '' }}
+          HAS_CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_TOKEN != '' }}
+          HAS_CF_API_TOKEN: ${{ secrets.CF_API_TOKEN != '' }}
+          HAS_CLOUD_FLARE_API: ${{ secrets.CLOUD_FLARE_API != '' }}
         run: |
           env | grep '^HAS_' | sort | sed 's/^HAS_//' | tee names.txt
       - name: Language models

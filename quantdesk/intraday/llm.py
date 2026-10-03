@@ -225,7 +225,9 @@ class GeminiReader:
     name = "gemini"
     base = "https://generativelanguage.googleapis.com/v1beta"
 
-    def __init__(self, key: str, model: str = "gemini-2.5-flash", timeout: float = 45.0, session=None):
+    FALLBACK = ("gemini-flash-latest", "gemini-3-flash-preview", "gemini-2.5-flash")
+
+    def __init__(self, key: str, model: str = "gemini-flash-latest", timeout: float = 45.0, session=None):
         import requests
         self.key, self.model, self.timeout = key, model, timeout
         self.http = session or requests.Session()
@@ -236,8 +238,14 @@ class GeminiReader:
         body = {"systemInstruction": {"parts": [{"text": READ_SYSTEM}]},
                 "contents": [{"role": "user", "parts": [{"text": _payload(items) + JSON_SHAPE}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}}
-        r = self.http.post(f"{self.base}/models/{self.model}:generateContent", json=body, timeout=self.timeout,
-                           headers={"x-goog-api-key": self.key})
+        tried = []
+        for m in (self.model,) + tuple(x for x in self.FALLBACK if x != self.model):
+            r = self.http.post(f"{self.base}/models/{m}:generateContent", json=body, timeout=self.timeout,
+                               headers={"x-goog-api-key": self.key})
+            if getattr(r, "status_code", 200) != 404:       # a retired model 404s while still listed: try the next
+                self.model = m
+                break
+            tried.append(m)
         r.raise_for_status()
         d = r.json()
         self.usage["calls"] += 1
@@ -309,7 +317,7 @@ def make_readers(cfg) -> list:
             if name == "claude":
                 out.append(ClaudeReader(key, pc.get("model", "claude-opus-5-5"), pc.get("effort", "low")))
             elif name == "gemini":
-                out.append(GeminiReader(key, pc.get("model", "gemini-2.5-flash")))
+                out.append(GeminiReader(key, pc.get("model", "gemini-flash-latest")))
             elif name == "ollama":
                 out.append(OllamaReader(key, pc.get("model", "gpt-oss:120b"), pc.get("host", "https://ollama.com")))
         except Exception as exc:                            # e.g. the SDK isn't installed: that reader is absent

@@ -191,3 +191,21 @@ def test_the_workflows_pass_every_accepted_key_name():
         for n in names:
             assert f"secrets.{n} " in live or f"secrets.{n} }}}}" in live, n          # the desk gets the key...
             assert f"HAS_{n}: ${{{{ secrets.{n} != '' }}}}" in check, n             # ...and AI check reports the name
+
+
+def test_gemini_moves_past_a_retired_model():
+    reads = '{"reads": [{"id": "a", "nifty": 0.3, "banknifty": 0.2, "confidence": 0.6, "event": "policy", "why": "cut"}]}'
+
+    class Http:
+        def __init__(self):
+            self.urls = []
+
+        def post(self, url, json=None, timeout=None, headers=None):
+            self.urls.append(url)
+            gone = "gemini-2.5-flash:" in url                       # listed, but 404s on generateContent (Oct 2026)
+            return NS(status_code=404 if gone else 200, json=lambda: {"candidates": [{"content": {"parts": [{"text": reads}]}}]},
+                      raise_for_status=lambda: None)
+    h = Http()
+    r = llm.GeminiReader("k", model="gemini-2.5-flash", session=h)
+    assert r.read([{"id": "a", "ts": "", "source": "ET", "title": "x"}])["a"]["NIFTY"] == 0.3
+    assert r.model == "gemini-flash-latest" and len(h.urls) == 2                # and it stays on the one that works
