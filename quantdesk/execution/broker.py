@@ -111,10 +111,18 @@ class PaperBroker(Broker):
 
     # ---- persistence (paper trading across days) -----------------------------------------
     def save(self) -> None:
-        Path(self.state_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(self.state_path, "w") as fh:
+        """Atomic: write a temp file, fsync it, then rename over the state file, so a crash mid-write can't leave
+        a half-written account (the previous state survives intact)."""
+        import os
+        path = Path(self.state_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w") as fh:
             json.dump({"cash": self._cash, "positions": self._pos, "fees_paid": self.fees_paid,
                        "fee_breakdown": self.fee_breakdown}, fh, indent=1, default=str)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
 
     def load(self) -> None:
         with open(self.state_path) as fh:

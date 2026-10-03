@@ -300,6 +300,46 @@ Both are on the Brain tab and in the session review. The option chain is now als
 
 Why these: [the quant gap review](docs/QUANT_GAP_REVIEW.md).
 
+### The self-learning paper loop
+
+The desk now learns from its own predictions and promotes a better model only on evidence (`quantdesk/autolearn`,
+[architecture](docs/ARCHITECTURE.md)).
+
+- **Recording.** At every 5-minute bar it writes each registered model's prediction to an append-only, hash-chained
+  ledger, with the features, versions, data fingerprint and costs, before the outcome is knowable. The outcome is
+  written later.
+- **The cycle.** After the close, the `Learning cycle` workflow (`learn` is taken by the bootstrap) runs:
+  1. ingest the bars, outcomes and closed paper trades;
+  2. rebuild the versioned dataset;
+  3. retrain candidates through day-grouped walk-forward with purge and embargo (the current DirectionModel is the
+     baseline, alongside L2, L1 and boosted-stump variants);
+  4. calibrate them and fit an abstention threshold;
+  5. simulate costs, with block-bootstrap intervals;
+  6. check the locked final test;
+  7. register challengers;
+  8. score their live shadow record;
+  9. promote only when every gate passes.
+- **Live behaviour.** A promoted champion's signal gates entries, and when it is unsure it abstains, so there is no
+  trade. Each stage is idempotent and resumable, and promotion is fail-closed and audited, with rollback.
+- **Honesty.** On a random walk every candidate fails and nothing is promoted (tested). No accuracy figure is
+  promised: the status report shows what was measured.
+
+```bash
+python -m quantdesk autolearn cycle             # all stages (idempotent; --stages train,validate; --offline; --force)
+python -m quantdesk autolearn status            # champion, freshness, last cycle, drift, risk, paper record, recovery point
+python -m quantdesk autolearn verify            # ledger + registry + journal integrity (exit 1 on any problem)
+python -m quantdesk autolearn recover           # torn writes aside, registry state rebuilt, unfinished stages reset
+python -m quantdesk autolearn rollback --reason "…"
+```
+
+Operating controls:
+- **Kill switch:** `runtime/KILL` flattens and halts.
+- **Halts:** stale feed, failed journal check, unverifiable champion and drift alarm all stop new entries.
+- **Caps:** an exposure cap on total open premium sits on top of the daily-loss and position limits.
+- **Ollama:** advisory only, never weighed into a signal.
+
+Recovery steps: [RECOVERY.md](docs/RECOVERY.md). Gates: [RELEASE_GATES.md](docs/RELEASE_GATES.md).
+
 **Headlines that share a window are one observation.** A night's forty stories are all judged on the same opening
 move, so they split one observation between them. Counted one each, the 403 headlines of 29 Sep 2026 had scored "66%
 right" (×1.31 trust); counted properly they're 24 observations at 48% (×0.98).

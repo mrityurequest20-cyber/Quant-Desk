@@ -1212,6 +1212,7 @@ function renderBrain() {
 	body.appendChild(grp("What's pushing the bias", v.bias ? `${cap(v.bias)} ${signed(v.score)}` : "", evidenceList(v.evidence || [], 8)));
 	if (b && b.flows) body.appendChild(flowsGrp(b.flows, S.brainSym));
 	if (hb.learning) body.appendChild(learnedGrp(hb.learning, S.brainSym));
+	if (hb.autolearn || hb.halts) body.appendChild(lifecycleGrp(hb.autolearn || {}, hb.halts || {}, S.brainSym));
 	// global markets board
 	const G = hb.global || {}, mk = G.markets || {}, board = h("div", { class: "rows" });
 	for (const r of ["US", "Asia", "Europe", "FX", "Commodities", "Rates"]) {
@@ -1239,6 +1240,20 @@ function renderBrain() {
 				h("td", {}, fin(d.lead_t) ? num(d.lead_t, 1) : "—"),
 				h("td", {}, h("span", { class: "tag " + (d.validated ? "bull" : "dash") }, d.validated ? (d.lead_sign < 0 ? "Validated · fades" : "Validated") : "Probation")))))
 			: empty("info", "Appears with the brain's first read."))));
+}
+// the self-learning loop (quantdesk/autolearn): which model steers entries, whether it abstains, drift, halts
+function lifecycleGrp(a, halts, sym) {
+	const d = (a.last || {})[sym], F = [];
+	F.push(fact("Champion", a.champion ? `${a.champion}${a.active ? "" : " · not steering"}` : "none yet · session model"));
+	F.push(fact("Its call now", d ? (d.abstained ? `abstains (p ${num(d.p, 3)})` : `${d.signal > 0 ? "up" : "down"} · p ${num(d.p, 3)}`) : "—"));
+	F.push(fact("Challengers in shadow", (a.challengers || []).length ? String(a.challengers.length) : "none"));
+	F.push(fact("Drift", a.drift ? cap(a.drift) : "not measured"));
+	F.push(fact("Rollback target", a.rollback_target || "—"));
+	const hl = [halts.kill_switch ? "kill switch" : null, halts.journal ? "journal check" : null, halts.daily_loss ? "daily loss" : null, a.fault ? "model fault" : null].filter(Boolean);
+	F.push(fact("Halts", hl.length ? hl.join(" · ") : "none"));
+	return grp("Model lifecycle", a.gate_entries && a.active ? "champion gates entries" : "recording only", hl.length
+		? h("div", {}, h("div", { class: "facts" }, F), h("p", { class: "narr pad", style: "border-top:1px solid var(--line);font-size:12px;color:var(--warn)" }, a.fault || "Entries are halted: " + hl.join(", ") + "."))
+		: h("div", { class: "facts" }, F));
 }
 // FII / client positioning from the warehouse (brain.load_flows): context for the day, not a vote
 function flowsGrp(f, sym) {

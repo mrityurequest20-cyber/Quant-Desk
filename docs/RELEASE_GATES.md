@@ -29,6 +29,22 @@ The report is read-only and never enables anything. It passes (**PAPER PASS**) o
 - Maximum drawdown no greater than 10% of starting capital.
 - No failed risk, limit, kill-switch, or reconciliation checks in the trial.
 
+## The self-learning loop's gates
+
+`quantdesk/autolearn` retrains challengers after every session. A challenger can replace the champion only after all
+of the following, every one measurable and recorded in the registry's event log:
+
+1. **Walk-forward.** Out of sample on day-grouped, purged, embargoed folds, against the thresholds in
+   `docs/ARCHITECTURE.md` (sample, calibration beyond noise, net expectancy after costs with a block-bootstrap
+   P > 0.80, profit factor, drawdown, turnover).
+2. **The locked final test.** It is created once and never used for selection. Each look is logged.
+3. **The live shadow (paper) record.** At least 10 sessions and 60 signals, positive net expectancy, and better than
+   the champion on common sessions.
+4. **Risk.** Zero risk-limit violations, and the artifact must verify.
+
+The champion it replaces stays as the rollback target. None of this enables real money: the paper gate above
+remains the minimum for that, and it is a separate, human decision.
+
 ## Operational acceptance targets
 
 | Area | Release target | Evidence |

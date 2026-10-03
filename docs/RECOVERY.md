@@ -42,3 +42,22 @@ that target by bypassing a failed check.
 Record the incident, detection time, recovery time, missing data, replay result, and any duplicate
 or rejected fills in the session review. Keep a copy of damaged files until the recovered account
 has been reviewed and saved successfully with `deploy/journal.sh save "recovery YYYY-MM-DD"`.
+
+## The learning loop (`runtime/intraday/autolearn`)
+
+Every command here is safe to rerun.
+
+| Situation | Commands | What happens |
+|---|---|---|
+| Corrupted journal | `deploy/journal.sh restore`, then `python -m quantdesk autolearn verify` | The restore checks SQLite integrity. While `PRAGMA quick_check` fails, the live engine halts entries and the cycle refuses to ingest trades. Restore the last good journal (above) before anything else. |
+| A torn or edited learning record | `python -m quantdesk autolearn verify` (exit 1 names the file and line), then `python -m quantdesk autolearn recover` | `recover` moves a torn trailing line to `<file>.corrupt` (never deletes it) and rebuilds the registry state from its event log. An edited line in the middle is not repaired automatically: restore the journal branch and investigate. |
+| Incomplete training or cycle | `python -m quantdesk autolearn recover`, then `python -m quantdesk autolearn cycle` | Stages left `running` or `failed` are reset and rerun. Finished stages with unchanged inputs are skipped. A lock older than 3 hours is taken over, on the record. |
+| Failed promotion | `python -m quantdesk autolearn status`, then `python -m quantdesk autolearn promote` | Promotion is fail-closed: nothing changed. The registry's `events.jsonl` has a `promotion_refused` or `deferred` event naming every failed gate. |
+| Stale feeds | `python -m quantdesk intraday doctor` | The desk takes no new entries while the last bar is more than `stale_feed_min` minutes old, and resumes on its own when bars flow again. The cycle validates and quarantines bad sessions before learning from them. |
+| Champion misbehaving | `python -m quantdesk autolearn rollback --reason "…"` | The previous champion, verified first, is champion again on the next session. If there is no rollback target, it refuses. |
+| Halt everything now | `touch runtime/KILL` (remove it to resume) | The running desk flattens every paper position once and takes no new entries. |
+| "Broker and journal disagree" at start | `python -m quantdesk intraday stats`, then compare `runtime/intraday/broker.json` positions with today's open trades | Entries stay halted for the session until the difference is explained. Typical cause: a crash between a fill and its journal entry. Restore the last saved journal and broker state together (`deploy/journal.sh restore`), or square off with `python -m quantdesk intraday live --close-out`. |
+| Safe mode | the journal's CRITICAL `risk` events and `health.last_error` in the heartbeat | Three failed minutes in a row squared off every position and halted entries for the rest of the session. Fix the cause before the next session; the next session starts clean. |
+
+After any recovery, run `python -m quantdesk autolearn status`. Its "recovery point" line gives the registry event
+number, the ledger record count and an integrity verdict. Then save with `deploy/journal.sh save "recovery …"`.

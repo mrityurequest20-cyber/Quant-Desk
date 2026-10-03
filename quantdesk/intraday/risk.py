@@ -29,6 +29,7 @@ class IntradayRisk:
         self.max_margin = r.get("max_margin", 0.5)
         self.credit_margin = r.get("credit_margin_per_lot", 0.0)
         self.max_lots = r.get("max_lots", 10)
+        self.max_exposure = r.get("max_total_outlay", 0.5)      # all open premium together, as a share of equity
         self.reset(None, 0.0)
 
     def reset(self, day, equity: float):
@@ -51,6 +52,9 @@ class IntradayRisk:
             why.append(f"{self.max_open} positions already open")
         if any(tr.symbol == symbol for tr in open_trades):
             why.append(f"already holding a {symbol} position")
+        out = sum(abs(getattr(tr, "entry_cost", 0.0) or 0.0) for tr in open_trades)
+        if equity > 0 and self.max_exposure is not None and out >= self.max_exposure * equity:
+            why.append(f"exposure cap: ₹{out:,.0f} of premium open ≥ {self.max_exposure:.0%} of equity")
         dd = equity / self.start_equity - 1 if self.start_equity else 0
         if dd <= -self.daily_loss or self.halted:
             self.halted = True

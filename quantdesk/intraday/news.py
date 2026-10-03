@@ -323,6 +323,9 @@ class NewsDesk:
         self.novelty = nlp.Novelty()
         self.trust = None                              # (event, source) → tone multiplier, set from learning.Memory
         self.reader_trust = None                       # reader name → weight (rules, claude, gemini, ollama)
+        # readers whose reads are shown and graded but never move the tone (so never a signal, size or limit)
+        self.advisory_only = {str(x).lower() for x in ((cfg.get("intraday.llm", {}) or {}).get("advisory_only", ["ollama"])
+                                                       if cfg is not None else ["ollama"])}
         self.llm = None                                # llm.LLMDesk: language models as second readers, or None
         self.last_fetch: pd.Timestamp | None = None
         self.health: dict[str, str] = {}
@@ -389,6 +392,8 @@ class NewsDesk:
         rt = self.reader_trust or (lambda name: 1.0)
         num, den = rt("rules") * x.sentiment, rt("rules")
         for name, rd in readers.items():
+            if str(name).lower() in self.advisory_only:   # explanatory only: displayed, graded, never weighed
+                continue
             v = rd.get(symbol)
             if v is None or not rd.get("at") or pd.Timestamp(rd["at"]) > now:
                 continue

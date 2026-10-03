@@ -111,6 +111,9 @@ def _live_engine(cfg, a) -> IntradayEngine:
     nse = NSE(gap=0.3)
     if not getattr(a, "no_global", False):
         eng.gift_source = lambda: parse_gift(nse.api("/api/marketStatus")[0])
+    if cfg.get("autolearn.enabled", True) and not getattr(a, "close_out", False):
+        from ..autolearn.live import LiveLearner
+        eng.learner = LiveLearner(cfg)                    # every model's prediction on the record, the champion's gate
     if kotak is not None and cfg.get("intraday.breadth.enabled", True) and not getattr(a, "close_out", False):
         from .breadth import make_breadth
         try:                                              # the index's own stocks, from Kotak's quotes (breadth.py)

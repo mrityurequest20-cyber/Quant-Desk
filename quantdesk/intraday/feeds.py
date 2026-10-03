@@ -75,6 +75,15 @@ class IntradayFeed(abc.ABC):
         """The last traded price right now per symbol, for the engine's fast loop (feeds with has_ltp)."""
         return {}
 
+    def realtime_age(self, now: pd.Timestamp, last_bar: pd.Timestamp) -> float:
+        """Minutes since the last bar completed, counted only inside the session (0 outside it): what the stale-feed
+        halt compares with its limit. A bar from an earlier session counts from today's open."""
+        if last_bar is None or not (OPEN <= now.time() < CLOSE):
+            return 0.0
+        start = pd.Timestamp(dt.datetime.combine(now.date(), OPEN), tz=IST)
+        ref = max(last_bar + BAR, start) if last_bar.date() == now.date() else start
+        return max(0.0, (now - ref) / pd.Timedelta(minutes=1))
+
     def history_bars(self, symbol: str, days: int = 55) -> pd.DataFrame:
         """Longer 5m history for model training (default: the 1m history resampled)."""
         from .quant import to_5m

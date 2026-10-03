@@ -110,6 +110,20 @@ class IntradayEngine:
         self.breadth_state: dict[str, dict | None] = {}
         self.rel: dict | None = None                      # BANKNIFTY vs NIFTY (relstrength.py)
         self.hist_edge: dict[str, dict] = {}              # the warehouse research's buyer's edge for today, per underlying
+        # the self-learning loop (quantdesk/autolearn): LiveLearner or None (replays, tests). It records every model's
+        # prediction per 5-minute bar before the outcome is known; a promoted champion's signal gates entries.
+        self.learner = None
+        self.learn_sig: dict[str, dict | None] = {}
+        # fail-closed halts: a kill-switch file, a stale feed, an unverifiable model, a journal that fails its check
+        self.kill_file = Path(cfg.runtime_dir) / str(ic.get("kill_switch_file", "KILL"))
+        self.killed = False
+        self.stale_feed_min = float(ic.get("stale_feed_min", 3))
+        self.journal_fault: str | None = None
+        # engine health: failures, slow steps, the reconciliation of broker vs journal, safe mode (all in the heartbeat)
+        self.max_step_failures = int(ic.get("max_step_failures", 3))
+        self.slow_step_sec = float(ic.get("slow_step_sec", 40))
+        self.health: dict = {"step_errors": 0, "consecutive_failures": 0, "last_error": None, "slow_steps": 0,
+                             "last_step_sec": None, "safe_mode": None, "reconcile": None}
         self.chain_at: dict[str, pd.Timestamp] = {}
         self.chain_fail: dict[str, int] = {}
         self.chain_tried: dict[str, pd.Timestamp] = {}
@@ -193,8 +207,21 @@ class IntradayEngine:
             except Exception:
                 self.brain.flows = None
         self._load_hist_edge(day)
+        self._check_journal(day)
+        if self.learner is not None:
+            try:
+                self.learner.start(day)
+            except Exception as exc:                          # unreadable registry: no model steers, no entries
+                self.learner.fault = f"learning registry unreadable: {exc!s:.160}"
+            if self.learner.fault:
+                self.journal.event(session_bounds(day)[0], "ERROR", "autolearn", f"entries halted: {self.learner.fault}")
+            elif self.learner.active:
+                self.journal.event(session_bounds(day)[0], "INFO", "autolearn",
+                                   f"champion {self.learner.champion_id} steers entries"
+                                   + (f" (drift {self.learner.drift.get('state')})" if self.learner.drift else ""))
         self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
         saved = self._restore(day)
+        self._reconcile(day)
         if saved.get("day_start_equity"):
             self.day_start_equity = float(saved["day_start_equity"])
             self.risk.reset(day, self.day_start_equity)
@@ -216,6 +243,7 @@ class IntradayEngine:
     def step(self) -> bool:
         now = self.feed.now()
         self._commands(now)
+        self._kill_switch(now)
         got = False
         for sym in self.underlyings + [self.vix]:
             new = self.feed.poll(sym, self.last_ts.get(sym))
@@ -257,6 +285,8 @@ class IntradayEngine:
             s = session_state(self.bars[u], now, cache=self.feature_cache[u])
             if s is None:
                 continue
+            if self.learner is not None:                         # every model's prediction, before the outcome exists
+                self.learn_sig[u] = self._guarded(u, now, "learning record", self._learn_step, u, now)
             q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
             b = self._guarded(u, now, "brain", self._think_globally, u, now) if self.brain is not None else None
             blk = self.eventbook.blocking(now)                   # only an announcement inside the session blocks
@@ -288,6 +318,8 @@ class IntradayEngine:
             self._refresh_chain(u, now)                 # exits priced off a calibrated chain, never a default IV
         for t in list(self.open_trades):
             self._close(t, now, reason, note)
+        if self.learner is not None:
+            self.learner.resolve({u: self.bars.get(u) for u in self.underlyings}, now)
         self._learn(self.day)
         review = self.session_review()
         review += self._reflect(review, now)
@@ -651,8 +683,21 @@ class IntradayEngine:
 
     def _blocked(self, u: str, view: MarketView, now) -> str | None:
         """Why no new entry can be taken right now (None: one can)."""
+        if self.killed:
+            return f"halted: kill switch ({self.kill_file.name}) is set"
+        if self.health.get("safe_mode"):
+            return f"halted: safe mode ({self.health['safe_mode']})"
+        if (self.health.get("reconcile") or {}).get("ok") is False:
+            return f"halted: broker and journal disagree ({self.health['reconcile']['detail']})"
+        if self.journal_fault:
+            return f"halted: {self.journal_fault}"
+        if self.learner is not None and self.learner.fault:
+            return f"halted: {self.learner.fault}"
         if self.paused:
             return "standing aside: new entries paused from the app"
+        last = self.last_ts.get(u)
+        if last is not None and self.feed.realtime_age(now, last) > self.stale_feed_min:
+            return f"halted: {u} feed stale (last bar {last:%H:%M}, {self.feed.realtime_age(now, last):.0f} min ago)"
         if view.vetoes:
             return f"standing aside: {view.vetoes[0]}"
         if u not in self.chain_df:
@@ -676,6 +721,10 @@ class IntradayEngine:
         if not plans:
             return f"standing aside: {stop}"
         plans = self._by_relative_strength(u, plans)
+        if self.learner is not None:                          # an active champion: only setups its signal agrees with
+            plans, why = self.learner.entry_filter(u, plans)
+            if why:
+                return why
         if self.quant_on:
             pick = self._guarded(u, now, "EV selection", self._select_by_ev, u, plans, view, eq, now)
             if pick is None:
@@ -771,6 +820,82 @@ class IntradayEngine:
         if self.iv_hist:
             self.journal.event(session_bounds(day)[0], "INFO", "quant", "ATM IV history for the IV percentile: " +
                                ", ".join(f"{u} {len(h)} sessions to {h['date'].iloc[-1]}" for u, h in self.iv_hist.items()))
+
+    def _learn_step(self, u: str, now) -> dict | None:
+        """The learning loop's record for `u`'s last completed 5-minute bar (and the champion's decision on it)."""
+        df = self.bars[u]
+        c = self._qc_cache.get(u)
+        if c is None or c["day"] != self.day:
+            prior = df[df.index.date < self.day]
+            h5 = self.hist5.get(u)
+            last5 = h5[h5.index.date == h5.index.date[-1]] if h5 is not None and len(h5) else None
+            prev_close = float(prior["close"].iloc[-1]) if len(prior) else float("nan")
+            prev_sig = session_sigma(last5["close"].to_numpy(dtype=float)) if last5 is not None and len(last5) else float("nan")
+        else:
+            prev_close, prev_sig = c["prev_close"], c["prev_sig"]
+        return self.learner.on_bar(u, now, df, self.day, prev_close, prev_sig)
+
+    def _reconcile(self, day) -> None:
+        """Broker positions must equal the legs of the journal's open trades. Anything else (a crash between a fill and
+        its journal entry, a hand-edited file) halts new entries until it's explained: fail closed, say exactly what."""
+        want: dict[str, int] = {}
+        for t in self.open_trades:
+            for leg in t.legs:
+                want[leg.instrument.symbol] = want.get(leg.instrument.symbol, 0) + int(leg.qty)
+        have = {sym: int(p.get("qty", 0)) for sym, p in (self.broker.positions() or {}).items() if int(p.get("qty", 0))}
+        want = {k: v for k, v in want.items() if v}
+        diff = {k: (want.get(k, 0), have.get(k, 0)) for k in set(want) | set(have) if want.get(k, 0) != have.get(k, 0)}
+        if not diff:
+            self.health["reconcile"] = {"ok": True, "positions": len(have)}
+            return
+        detail = "; ".join(f"{k}: journal {w:+d} vs broker {h:+d}" for k, (w, h) in sorted(diff.items()))[:300]
+        self.health["reconcile"] = {"ok": False, "detail": detail}
+        self.journal.event(session_bounds(day)[0], "CRITICAL", "risk", f"reconciliation failed, entries halted: {detail}",
+                           {"journal": want, "broker": have})
+        self.say(f"  RECONCILIATION FAILED: {detail}")
+
+    def enter_safe_mode(self, now, reason: str) -> None:
+        """The engine keeps failing: stop new entries for the session and square off what's open (each exit on its
+        own, so one bad leg can't block the rest)."""
+        if self.health.get("safe_mode"):
+            return
+        self.health["safe_mode"] = reason[:200]
+        flat = 0
+        for t in list(self.open_trades):
+            try:
+                self._close(t, now, "safe_mode", f"safe mode: {reason[:120]}")
+                flat += 1
+            except Exception as exc:                      # recorded; the next one is still tried
+                self.journal.event(now, "CRITICAL", "risk", f"safe mode could not close {t.id}: {exc!r:.160}")
+        try:
+            self._persist()
+        except Exception:
+            pass
+        self.journal.event(now, "CRITICAL", "risk", f"safe mode: {reason[:200]}; {flat} position(s) squared off, entries halted")
+        self.journal.commit()
+        self.say(f"  {now:%H:%M} SAFE MODE: {reason[:120]}")
+
+    def _kill_switch(self, now) -> None:
+        """The file-based kill switch: present → flatten every paper position once and take no new entries."""
+        on = self.kill_file.exists()
+        if on and not self.killed:
+            for t in list(self.open_trades):
+                self._close(t, now, "kill_switch", f"kill switch {self.kill_file.name} set: flattened")
+            self.journal.event(now, "CRITICAL", "risk", f"kill switch {self.kill_file} set: positions flattened, entries halted")
+            self.say(f"  {now:%H:%M} KILL SWITCH: flattened, no new entries")
+        elif self.killed and not on:
+            self.journal.event(now, "WARN", "risk", "kill switch cleared: entries allowed again")
+        self.killed = on
+
+    def _check_journal(self, day) -> None:
+        """Fail closed on a journal that doesn't pass SQLite's own check."""
+        try:
+            res = self.journal.integrity()
+        except Exception as exc:
+            res = f"unreadable ({exc!s:.80})"
+        self.journal_fault = None if res == "ok" else f"journal integrity check failed: {res}"
+        if self.journal_fault:
+            self.journal.event(session_bounds(day)[0], "CRITICAL", "risk", self.journal_fault)
 
     def _load_hist_edge(self, day: dt.date) -> None:
         """The warehouse research's buyer's edge (research.sh fetches buyer_edge.json) for today's weekday and the days
@@ -877,6 +1002,14 @@ class IntradayEngine:
         an = self.chain_an.get(u) or {}
         vol = c["volf"].forecast(df, self.day, an.get("atm_iv"), today_close=today["close"].to_numpy(dtype=float))
         d = (m.diag if m is not None else {}) or {}
+        ls = self.learn_sig.get(u) if self.learner is not None and self.learner.active else None
+        if ls is not None:                                    # a promoted, verified champion replaces the session fit
+            p_model = ls["p"] if ls["signal"] else 0.5
+            card = self.learner.reg.card(self.learner.champion_id) or {}
+            vm = ((card.get("validation") or {}).get("metrics") or {}).get("classification") or {}
+            d = {"auc_oos": vm.get("auc"), "samples": (card.get("training_window") or {}).get("rows"),
+                 "status": f"champion {self.learner.champion_id}" + (" (abstaining)" if not ls["signal"] else "")}
+            m = _Valid()
         rd = (self.research.get(u) or {}).get("drift")
         q = {"sigma_min": vol["sigma_min"], "sigma_30m_pct": vol["sigma_30m"] * 100, "vol_ann": vol["vol_ann"], "research_drift": rd,
              "rv_ann": vol["rv_ann"], "vol_source": vol["source"], "p_model": p_model, "valid": bool(m is not None and m.valid),
@@ -998,6 +1131,7 @@ class IntradayEngine:
         self.open_trades.append(t)
         self.risk.trades_today += 1
         self.journal.open_trade(t, notes)
+        self._persist()                                   # the position is on record before anything else can fail
         msg = f"ENTER {plan.setup} {lots}×{plan.describe()} | stop {plan.invalidation or '—'} | {plan.trigger}"
         self.say(f"  {now:%H:%M} {u:<9} ▲ {msg}")
         return msg
@@ -1055,6 +1189,7 @@ class IntradayEngine:
         v = self.views.get(t.symbol)
         rv = self.journal.close_trade(t, v.day_type if v else None)
         self.risk.on_close(t.pnl, now)
+        self._persist()                                   # the exit is on record before anything else can fail
         msg = f"EXIT {t.strategy} {reason}: ₹{t.pnl:,.0f} ({t.r_multiple:+.2f}R, grade {rv['grade']}) — {note}"
         self.say(f"  {now:%H:%M} {t.symbol:<9} ▼ {msg}")
         return msg
@@ -1124,7 +1259,12 @@ class IntradayEngine:
             "armed": [a.to_record() for u in self.underlyings for a in self.armed.get(u, []) if now <= a.expires],
             "news_health": dict(self.news.health) if self.news is not None else None,
             "global": _global_view(self.brain, now), "gift": self.gift, "events": self.events_today,
-            "learning": self._learning_view()})
+            "learning": self._learning_view(),
+            "autolearn": self.learner.status() if self.learner is not None else None,
+            "halts": {"kill_switch": self.killed, "journal": self.journal_fault, "daily_loss": self.risk.halted,
+                      "safe_mode": self.health.get("safe_mode"),
+                      "reconcile": (self.health.get("reconcile") or {}).get("ok") is False},
+            "health": dict(self.health)})
 
     def _learning_view(self) -> dict | None:
         """What the record says, for the app: factor IC by horizon, the buyer's edge, the probation factors."""
@@ -1282,6 +1422,11 @@ def _chain_view(an: dict | None) -> dict | None:
     return out
 
 
+class _Valid:
+    """Marks a promoted champion as validated for `_quant_state` (it passed every gate to get there)."""
+    valid = True
+
+
 def _brain_view(st) -> dict | None:
     if st is None:
         return None
@@ -1349,23 +1494,38 @@ def run_live(engine: IntradayEngine, stop_at: dt.time | None = None, handover: b
             engine.journal.commit()
             time.sleep(max(1.0, min(240.0, (open_ts - n).total_seconds() + 5)))
     engine.start_session(day)
-    while engine.feed.now() < end + pd.Timedelta(seconds=30):
-        try:
-            engine.step()
-        except Exception as exc:                        # keep the loop alive; journal the failure
-            log.exception("step failed")
-            engine.journal.event(engine.feed.now(), "ERROR", "engine", repr(exc), {"where": _where(exc)})
-        n = engine.feed.now()
-        nxt = n.floor("min") + pd.Timedelta(seconds=64)            # the next minute's step, 4 s after it closes
-        while (left := (nxt - engine.feed.now()).total_seconds()) > 0:
-            ticking = getattr(engine.feed, "has_ltp", False)
-            time.sleep(max(0.5, min(engine.tick_sec, left)) if ticking else left)
-            if ticking and engine.feed.now() < nxt:
-                try:
-                    engine.tick()
-                except Exception as exc:                    # the minute step still runs; journal the failure
-                    log.exception("tick failed")
-                    engine.journal.event(engine.feed.now(), "ERROR", "engine", f"tick: {exc!r}", {"where": _where(exc)})
+    import signal
+
+    def _stop(signum, frame):                             # a cancelled run: save state first, then stop
+        raise SystemExit(f"signal {signum}")
+    try:
+        prev = signal.signal(signal.SIGTERM, _stop)
+    except ValueError:                                    # not the main thread (tests): no handler
+        prev = None
+    try:
+        while engine.feed.now() < end + pd.Timedelta(seconds=30):
+            run_step(engine)
+            n = engine.feed.now()
+            nxt = n.floor("min") + pd.Timedelta(seconds=64)            # the next minute's step, 4 s after it closes
+            while (left := (nxt - engine.feed.now()).total_seconds()) > 0:
+                ticking = getattr(engine.feed, "has_ltp", False)
+                time.sleep(max(0.5, min(engine.tick_sec, left)) if ticking else left)
+                if ticking and engine.feed.now() < nxt:
+                    try:
+                        engine.tick()
+                    except Exception as exc:                    # the minute step still runs; journal the failure
+                        log.exception("tick failed")
+                        engine.journal.event(engine.feed.now(), "ERROR", "engine", f"tick: {exc!r}", {"where": _where(exc)})
+    except (SystemExit, KeyboardInterrupt):
+        try:                                              # whatever happens next, the account is on disk
+            engine._persist()
+            engine.journal.event(engine.feed.now(), "WARN", "session", "runner stopped: state saved")
+            engine.journal.commit()
+        finally:
+            raise
+    finally:
+        if prev is not None:
+            signal.signal(signal.SIGTERM, prev)
     if handover and end < close_ts:
         engine._persist()
         engine.journal.event(engine.feed.now(), "INFO", "session", f"handed over at {stop_at:%H:%M} with "
@@ -1375,6 +1535,36 @@ def run_live(engine: IntradayEngine, stop_at: dt.time | None = None, handover: b
         return (f"handed over at {stop_at:%H:%M}: {len(engine.open_trades)} open, {len(engine.closed)} closed, "
                 f"day P&L ₹{eq - engine.day_start_equity:+,.0f}")
     return engine.end_session()
+
+
+def run_step(engine: IntradayEngine) -> bool:
+    """One minute of the desk, contained: a failure is journaled and counted, a run of them puts the engine in safe
+    mode (no entries, positions squared off), and a step slower than `slow_step_sec` is reported."""
+    h = engine.health
+    t0 = time.monotonic()
+    try:
+        ok = engine.step()
+        h["consecutive_failures"] = 0
+    except Exception as exc:                              # keep the loop alive; journal the failure
+        ok = False
+        log.exception("step failed")
+        now = engine.feed.now()
+        h["step_errors"] += 1
+        h["consecutive_failures"] += 1
+        h["last_error"] = f"{now:%H:%M} {exc!r:.160}"
+        engine.journal.event(now, "ERROR", "engine", repr(exc), {"where": _where(exc)})
+        if h["consecutive_failures"] >= engine.max_step_failures:
+            engine.enter_safe_mode(now, f"{h['consecutive_failures']} steps failed in a row, last: {exc!r:.120}")
+        try:
+            engine.journal.commit()
+        except Exception:
+            pass
+    dt_ = time.monotonic() - t0
+    h["last_step_sec"] = round(dt_, 2)
+    if dt_ > engine.slow_step_sec:
+        h["slow_steps"] += 1
+        engine.journal.event(engine.feed.now(), "WARN", "engine", f"slow step: {dt_:.0f}s (the loop is falling behind)")
+    return ok
 
 
 def close_out(engine: IntradayEngine, note: str = "stopped by the operator") -> str:

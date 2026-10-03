@@ -126,6 +126,11 @@ class Journal:
             self.db.commit()
             self._pending = 0
 
+    def integrity(self) -> str:
+        """SQLite's own consistency check: "ok" or what's wrong."""
+        with self.lock:
+            return str(self.db.execute("PRAGMA quick_check").fetchone()[0])
+
     def close(self):
         self.commit()
         self.db.close()

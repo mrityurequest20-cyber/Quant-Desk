@@ -151,6 +151,11 @@ intraday:
     max_margin: 0.5
     credit_margin_per_lot: 30000   # SPAN+exposure on a hedged index spread ≈ ₹25-35k/lot: credit trades need a bigger account
     max_lots: 10
+    max_total_outlay: 0.5          # all open premium together, fraction of equity (the exposure cap)
+  kill_switch_file: KILL           # runtime/KILL present → flatten every paper position, no new entries until removed
+  stale_feed_min: 3                # no new entries when the last bar completed more than this many minutes ago
+  max_step_failures: 3             # this many failed minutes in a row → safe mode: square off, no entries for the session
+  slow_step_sec: 40                # a minute's step slower than this is reported (the loop is falling behind)
   # Anticipation: setups the read already favours (orb, trend_break: stop entries through the level; vwap_trend:
   # a limit entry on the pullback) wait at their trigger level and fire the moment price gets there, from Kotak's
   # live index price every tick_sec seconds (each new 1-minute bar's range without it), instead of a 5-minute close later.
@@ -181,12 +186,63 @@ intraday:
     claude: {model: claude-opus-5-5, effort: low, reflect: true, price_in: 4.0, price_out: 20.0}
     gemini: {model: gemini-flash-latest}   # the alias that tracks Google's current Flash (2.5 404s now)
     ollama: {model: "gpt-oss:120b", host: "https://ollama.com"}
+    advisory_only: [ollama]    # read, shown and graded, but never weighed into the tone: no effect on signals or sizing
   setups:
     orb:          {enabled: true, until_min: 120, min_rel_volume: 0.8, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 45}
     vwap_trend:   {enabled: true, after_min: 45, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 60}
     trend_break:  {enabled: true, after_min: 60, until_min: 330, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 45}
     va_reversion: {enabled: true, after_min: 75, until_min: 300, max_abs_score: 0.40, rsi_hi: 60, rsi_lo: 40, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.35, premium_target: 0.60, time_stop_min: 60}
     range_sell:   {enabled: true, after_min: 75, until_min: 255, max_abs_score: 0.30, wing_mult: 1.0, stop_mult: 0.8, take_profit: 0.30, time_stop_min: 120}
+
+# The self-learning paper loop (quantdesk/autolearn, docs/ARCHITECTURE.md). Paper only; promotion is fail-closed.
+autolearn:
+  enabled: true                    # record every model's prediction live; a promoted champion gates entries
+  dir: intraday/autolearn          # under runtime/: saved with the journal branch
+  symbols: [NIFTY, BANKNIFTY]
+  horizon_min: 30                  # the DirectionModel's label horizon
+  history_days: 55                 # Yahoo's 5-minute history pulled per cycle (it keeps ~60 days)
+  final_test_days: 8               # the locked final test: created once from the newest sessions, never moved
+  gate_entries: true               # with an active champion, only take plans its non-abstaining signal agrees with
+  candidates: [baseline, logit_l2_weak, logit_l2_strong, logit_l1, stumps]
+  walk_forward: {folds: 5, min_train_days: 15, embargo_min: 30}
+  bootstrap: {samples: 1000, block_days: 3, seed: 7}
+  abstain: {min_coverage: 0.10}    # τ must leave at least this share of bars with a signal on the calibration slice
+  costs:                           # one unit of the index future per signal, round trip, bps of notional unless ₹
+    brokerage_per_order: 20.0
+    stt_sell_bps: 2.0
+    exchange_bps: 0.173
+    sebi_per_crore: 10.0
+    stamp_buy_bps: 0.2
+    gst: 0.18
+    half_spread_bps: 0.5
+    slippage_bps: 1.0
+    delay_bars: 0                  # 5-minute bars between the decision and the entry
+    max_trades_per_symbol_day: 6   # one position per symbol at a time, and at most this many a session
+  gates:                           # walk-forward (out-of-sample) gates a candidate must pass to be registered
+    min_days: 20
+    min_rows: 600
+    min_trades: 40
+    max_ece: 0.03                  # expected calibration error beyond what sampling noise explains
+    min_brier_skill: 0.0
+    min_expectancy_bps: 0.0
+    min_p_positive: 0.80           # block-bootstrap share of resamples with positive net expectancy
+    min_profit_factor: 1.05
+    max_drawdown_bps: 1500         # worst peak-to-trough of the simulated unit, bps of notional
+    max_drawdown_days: 20          # …and at most this many average days of profit to earn it back
+    max_trades_per_day: 12         # both symbols together (the simulator caps each at 6)
+    min_p_beats_champion: 0.70
+    lockbox_min_trades: 5
+    lockbox_min_expectancy_bps: 0.0
+  promotion:                       # live shadow (paper) gates a challenger must pass to become champion
+    min_shadow_sessions: 10
+    min_shadow_signals: 60
+    min_shadow_expectancy_bps: 0.0
+    min_p_beats_champion: 0.60
+    max_shadow_drawdown_bps: 1500
+    max_challenger_days: 45        # a challenger not promoted by then is rejected
+    max_risk_violations: 0
+  drift: {psi_warn: 0.10, psi_alarm: 0.25, ece_warn: 0.03, ece_alarm: 0.06, min_rows: 150, min_trades: 20, window_days: 5}
+  retention: {datasets: 2, runs: 4, cycles: 30, rejected_models: 20, ledger_days: 400, bar_days: 250}
 
 web:
   host: 127.0.0.1                  # the desk UI; keep it on localhost

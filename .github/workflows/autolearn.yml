@@ -1,0 +1,68 @@
+# The self-learning paper loop (quantdesk/autolearn, docs/ARCHITECTURE.md), after every session: ingest the day's bars,
+# outcomes and closed paper trades; rebuild the dataset; retrain challengers through purged walk-forward; validate with
+# costs, intervals and the locked final test; register what qualifies; score the live shadow record; promote only when
+# every gate passes. Paper only: nothing here can place an order. State lives in runtime/intraday/autolearn on the
+# journal branch, saved with the journal.
+name: Learning cycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      stages:
+        description: "Comma-separated stages (blank = all): ingest,dataset,train,validate,register,paper,promote"
+        type: string
+        default: ""
+      force:
+        description: "Rerun stages even if their inputs are unchanged"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "40 10 * * 1-5"    # 16:10 IST, after the desk has squared off and saved its journal
+
+permissions:
+  contents: write            # push the journal branch
+
+concurrency:
+  group: live-desk           # never while the desk (or another job) is writing the same journal
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      STAGES: ${{ inputs.stages }}
+      FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the journal (fails closed if it can't be fetched)
+        id: restore
+        run: deploy/journal.sh restore
+      - name: Verify the learning records (recover a torn write, then require integrity)
+        run: |
+          python -m quantdesk autolearn verify || { python -m quantdesk autolearn recover && python -m quantdesk autolearn verify; }
+      - name: Run the cycle
+        run: |
+          set -o pipefail
+          args=""
+          [ -n "$STAGES" ] && args="--stages $STAGES"
+          [ "$FORCE" = "true" ] && args="$args --force"
+          python -m quantdesk autolearn cycle $args | tee cycle.txt
+      - name: Status
+        if: always()
+        run: python -m quantdesk autolearn status | tee status.txt
+      - name: Save the journal (only a journal that was restored intact; partial cycle state is resumable)
+        if: always() && steps.restore.outcome == 'success'
+        run: deploy/journal.sh save "learning cycle $(date '+%F %H:%M') IST"
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## Learning cycle"; echo '```'; cat cycle.txt 2>/dev/null || echo "no output"; echo '```';
+            echo "## Status"; echo '```'; cat status.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
