@@ -1,0 +1,21 @@
+{
+  "name": "vol_forecast_v1",
+  "registered": "2026-10-04",
+  "dataset": "aeron7 index minutes, importer aeron7-2 (external_verified); uses: underlying_features, regime_research, development_folds",
+  "not_for": "no option prices: nothing here qualifies an option strategy, a DTE change, a paper gate, a promotion or a profitability claim",
+  "question": "how well does the desk's VolForecaster (intraday/quant.py, realised part; IV is not in this dataset) forecast the realised variance of the next 30m / 60m / 120m / to the close, and does a seasonal or HAR model do better",
+  "symbols": ["NIFTY", "BANKNIFTY"],
+  "decision_points": "every 15 minutes from 09:30 to 15:00 IST on accepted sessions",
+  "target": "realised variance over (t, t+h]: the sum of squared 1-minute log returns; for 'close' to the 15:29 bar",
+  "candidates": {
+    "A_desk": "the desk's VolForecaster without IV: EWMA (half-life 30 min) of today's 1-minute squared returns blended with the prior 5 sessions' mean with weight n/(n+60); horizon variance = per-minute variance x minutes",
+    "B_seasonal": "A computed on returns divided by the minute-of-day volatility profile (estimated on the training years only); horizon variance = deseasonalised per-minute variance x the sum of the profile over the horizon's minutes",
+    "C_har": "per horizon, OLS of log realised variance on log B's forecast, log of the previous session's realised variance, log of the previous 5 sessions' mean, log of today's realised variance so far (deseasonalised) and |overnight gap|; smearing correction"
+  },
+  "loss": "QLIKE = RV/F - log(RV/F) - 1, averaged per day then over days (also reported: log-forecast-error bias, and the buyer's calibration ratio mean|r_h| / mean(sqrt(2/pi) x sqrt(F)) by time-of-day bucket)",
+  "dev": {"start": "2010-01-01", "end": "2018-12-31", "folds": "expanding yearly: test 2013, 2014, ..., 2018 with all earlier dev years as training"},
+  "lock": {"start": "2019-01-01", "end": "2099-12-31", "training": "all dev years"},
+  "dev_rule": "per horizon, the candidate with the lowest mean dev QLIKE over the folds and both symbols is selected (A wins ties)",
+  "lock_rule": "evaluated once. For each horizon whose selection is not A: the selection beats A when its mean QLIKE is lower on the lock period with a one-sided Diebold-Mariano p < 0.05 on daily loss differences (Newey-West, 5 lags), on each symbol separately. Reported either way; the lock is never reopened for this spec",
+  "use_if_passed": "only as the desk's realised-volatility input (underlying feature); its effect on option plans is judged by plan research on real point-in-time quotes, never by this study"
+}
