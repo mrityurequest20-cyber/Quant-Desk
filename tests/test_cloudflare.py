@@ -18,7 +18,7 @@ def _config() -> dict:
 
 def test_wrangler_config_is_deployable():
     c = _config()
-    assert c["name"] == "quantdesk"                                 # must match the Worker in the dashboard
+    assert c["name"] == "quant-desk"                                # must match the Worker in the dashboard
     assert (ROOT / c["main"]).is_file()
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", c["compatibility_date"]) and c["compatibility_date"] >= "2024-11-11"
     assert c["vars"]["ORIGIN"].startswith("https://") and not c["vars"]["ORIGIN"].endswith("/")
