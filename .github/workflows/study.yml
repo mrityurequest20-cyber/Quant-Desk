@@ -1,0 +1,44 @@
+# One pre-registered study on the data warehouse, run on demand (docs/prereg/<name>.json). The report goes to the
+# run summary; the report, its JSON and the trade rows are kept as an artifact.
+name: Study
+
+on:
+  workflow_dispatch:
+    inputs:
+      study:
+        description: "Which study"
+        type: choice
+        options: [wings]
+        default: wings
+
+permissions:
+  contents: read
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Pull the data warehouse (NSE bhavcopy)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download warehouse --pattern 'fo_bhav_*.parquet' --dir runtime/warehouse --clobber
+      - name: Run the study
+        env:
+          STUDY: ${{ inputs.study }}
+        run: |
+          python -m quantdesk "$STUDY" --warehouse runtime/warehouse --out _study
+          cat _study/*.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: study-${{ inputs.study }}-${{ github.run_id }}
+          path: _study

@@ -318,7 +318,28 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--warehouse", help="the data warehouse folder: also test the volatility premium on real option "
                                        "prices and FII positioning (data_report.md)")
     s.set_defaults(fn=cmd_research)
+    s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
+    s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
+    s.add_argument("--out", default="_wings")
+    s.set_defaults(fn=cmd_wings)
     return p
+
+
+def cmd_wings(cfg, a):
+    """expiry_wings_v1: far wings on the expiry-eve sale, on real bhavcopy (research/wings.py)."""
+    from .research import wings as WG
+    from .research.edges import load_yahoo
+    res = WG.run(Path(a.warehouse), load_yahoo()["daily"], cfg)
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    md = WG.render(res)
+    stem = f"{res['spec']}-{res['spec_hash']}"
+    (out / f"{stem}.md").write_text(md)
+    (out / f"{stem}.json").write_text(json.dumps({k: v for k, v in res.items() if k not in ("trades", "shocks")}, indent=1,
+                                                 default=str))
+    if len(res["trades"]):
+        res["trades"].to_csv(out / f"{stem}_trades.csv.gz", index=False)
+    print(md)
 
 
 def cmd_research(cfg, a):
