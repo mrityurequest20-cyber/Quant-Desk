@@ -15,7 +15,7 @@ Rules (fixed before looking at the data, so the list can't be tuned to what happ
     pricing theta is paid for by gamma, so the directional edge must beat the costs.
 
 Verdicts: EDGE (survives all of it), REAL BUT BELOW COSTS, NEEDS MARGIN (real, but only a premium
-seller can harvest it, which a ₹20k account can't), NO EDGE.
+seller can harvest it, which needs a margin account), NO EDGE.
 """
 from __future__ import annotations
 

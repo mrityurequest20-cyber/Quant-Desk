@@ -33,7 +33,7 @@ from ..options.pricing import implied_vol_vec
 from .edges import LOT, Result, _split, benjamini_hochberg, evaluate, hac_mean
 
 R, Q = 0.065, 0.012
-ACCOUNT = 20_000
+ACCOUNT = 100_000                 # the intraday paper account (intraday.capital; ₹20k until 4 Oct 2026)
 STT_EXERCISE = 0.00125            # on the intrinsic value of a long option exercised at expiry
 OFFSETS = {"NIFTY": (1, 3, 5), "BANKNIFTY": (1, 5, 10)}
 
@@ -236,7 +236,8 @@ def evaluate_vrp(trades: pd.DataFrame, lot_of=LOT, account: float = ACCOUNT, q: 
         if not (ok and holds):
             r.verdict = "NO EDGE"
         elif r.mean_pts > 0:
-            r.verdict = "PAPER CANDIDATE (fits ₹20k)" if r.capital_rs <= account else f"PAPER CANDIDATE, needs ~₹{r.capital_rs / 1e3:,.0f}k"
+            r.verdict = (f"PAPER CANDIDATE (fits ₹{account / 1e3:,.0f}k)" if r.capital_rs <= account
+                         else f"PAPER CANDIDATE, needs ~₹{r.capital_rs / 1e3:,.0f}k")
         else:
             r.verdict = "RELIABLY LOSES"
     return res
@@ -325,7 +326,7 @@ def run_positioning(part: pd.DataFrame, daily: dict, q: float = 0.10) -> list[Re
 
 # ---- the framework's scorecard, stability, term structure, surface ---------------------------------------------------
 def candidates(vrp: list, n: int = 3) -> list:
-    """The strongest results (by t) plus the strongest that fits ₹20k: what gets the full scorecard."""
+    """The strongest results (by t) plus the strongest that fits the account: what gets the full scorecard."""
     top = sorted([r for r in vrp if r.mean_pts > 0], key=lambda r: -r.t)[:n]
     fits = sorted([r for r in vrp if r.mean_pts > 0 and r.capital_rs <= ACCOUNT], key=lambda r: -r.t)[:1]
     return top + [r for r in fits if r not in top]

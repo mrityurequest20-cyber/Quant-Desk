@@ -17,7 +17,7 @@ def plan(symbol, lot, legs, conviction=0.8):
 
 
 def test_small_account_sizing(cfg):
-    assert cfg.get("intraday.capital") == 20000
+    assert cfg.get("intraday.capital") == 100000                  # ₹20k until 4 Oct 2026; its sizing is still tested below
     r = IntradayRisk(cfg)
     # NIFTY 22850/23000 call spread for ~61 → ₹3,955 a lot, ~₹1.2k to the stop: one lot at good conviction
     nifty = plan("NIFTY", 65, [PlanLeg(22850, "CE", 1, 120.0, 119, 13, 0.45), PlanLeg(23000, "CE", -1, 59.2, 60, 13, 0.30)])
@@ -28,6 +28,7 @@ def test_small_account_sizing(cfg):
     # BANKNIFTY monthly spread ~₹9.4k a lot and ~₹2.8k to the stop: priced out of a ₹20k account
     bnf = plan("BANKNIFTY", 30, [PlanLeg(51000, "CE", 1, 700.0, 700, 15, 0.45), PlanLeg(51800, "CE", -1, 387.0, 387, 15, 0.30)])
     assert r.size(bnf, 20000, 20000)[0] == 0
+    assert r.size(bnf, 100000, 100000)[0] >= 1                   # …and affordable at ₹1,00,000
     # never pay more than the cash on hand
     lots, notes = r.size(nifty, 20000, 3000)
     assert lots == 0 and "binding: cash" in notes[-1]
@@ -43,14 +44,14 @@ def test_account_resets_only_without_history(cfg, tmp_path):
     j = Journal(tmp_path / "journal.db")
     broker = tmp_path / "broker.json"
     broker.write_text('{"cash": 500000}')
-    assert ensure_account(cfg, j, broker, say=None) == 20000 and not broker.exists()   # no trades: take the config
-    assert j.get_state("intraday_account")["capital"] == 20000
+    assert ensure_account(cfg, j, broker, say=None) == 100000 and not broker.exists()  # no trades: take the config
+    assert j.get_state("intraday_account")["capital"] == 100000
     # after trading, a config change doesn't silently rewrite history
     j.db.execute("INSERT INTO trades (id, status, opened_at) VALUES ('T1', 'closed', '2026-09-29 10:00')")
     j.commit()
-    cfg2 = cfg.__class__(dict(cfg.data, intraday=dict(cfg.data["intraday"], capital=100000)))
+    cfg2 = cfg.__class__(dict(cfg.data, intraday=dict(cfg.data["intraday"], capital=150000)))
     msgs = []
-    assert ensure_account(cfg2, j, broker, say=msgs.append) == 20000 and "reset-account" in msgs[0]
+    assert ensure_account(cfg2, j, broker, say=msgs.append) == 100000 and "reset-account" in msgs[0]
     # an explicit reset archives it
     base = tmp_path
     j.close()  # close SQLite before moving its files (required on Windows)

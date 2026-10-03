@@ -80,7 +80,7 @@ risk:
   futures_margin_pct: 0.15
 
 intraday:
-  capital: 20000                   # paper account for the intraday options desk (start small, grow)
+  capital: 100000                  # paper account for the intraday options desk (₹20k until 4 Oct 2026)
   underlyings: [NIFTY, BANKNIFTY]
   feed: kotak                      # kotak | yahoo | kite (kotak without KOTAK_CONSUMER_KEY = yahoo; replay/synthetic: CLI)
   chain: kotak                     # kotak (falls back to NSE) | nse | kite | model; kotak without a key = nse
@@ -135,14 +135,14 @@ intraday:
     iv_rv_cheap: 0.90
     weights: {}                    # override evidence weights, e.g. {vwap: 1.2, pcr: 0.5}
   risk:
-    # Sized for a ₹20k account. The smallest sensible NIFTY position (one lot of a narrow weekly
-    # debit spread, ~₹4-5k) risks ~₹1.2-1.6k to its stop, so risk per trade can't be 1% here:
-    # it's 8% of equity × a conviction scale (0.6-1.2), which only lets high-conviction plans
-    # through. BANKNIFTY (monthly expiries only) is priced out at this size; it stays analysed.
+    # Set for the ₹20k account: its smallest sensible NIFTY position (one lot of a narrow weekly debit
+    # spread, ~₹4-5k) risks ~₹1.2-1.6k to its stop, so risk per trade couldn't be 1%: it is 8% of
+    # equity × a conviction scale (0.6-1.2). At ₹1,00,000 (from 4 Oct 2026) the same lot is 1.2-1.6%
+    # of equity, so 2-3% would do. The percentages are kept until the owner chooses to tighten them.
     risk_per_trade: 0.08
-    max_trades_per_day: 2           # each round trip costs ~₹110-130 (4 orders × ₹20 + taxes) ≈ 0.6% of ₹20k
+    max_trades_per_day: 2           # each round trip costs ~₹110-130 (4 orders × ₹20 + taxes) ≈ 0.12% of ₹1L
     max_open: 1
-    daily_loss_limit: 0.10         # ₹2k: roughly one full stop-out plus costs, then done for the day
+    daily_loss_limit: 0.10         # ₹10k at ₹1L: roughly one full stop-out plus costs, then done for the day
     min_stop_atr5: 0.75            # an invalidation closer than this × the 5m ATR is pushed out to it (noise floor)
     cooldown_after_losses: 2
     cooldown_min: 30
