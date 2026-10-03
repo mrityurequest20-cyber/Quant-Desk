@@ -1,0 +1,54 @@
+{
+  "name": "expiry_seller_v1",
+  "registered": "2026-10-04",
+  "kind": "forward paper test (no orders): every trade is decided by the rules below before its outcome exists",
+  "question": "does the one effect that survived costs in 7.7 years of real NSE option prices (selling 20-delta premium one session before expiry, held to settlement) survive the real bid/ask at the minute it would be traded, and do its forward results stay consistent with that history",
+  "history": {
+    "source": "research branch vrp_trades.csv.gz (quantdesk/research/warehouse_research.py), NSE F&O bhavcopy closes 2019-01 to 2026-09, evidence class real_eod_approximation",
+    "convention": "opened at the bhavcopy close of the session before expiry, each leg filled at close -/+ (0.05 + max(0.05, 0.2% of the price)), statutory fees, held to the expiry-day index close, STT 0.125% on exercised long legs",
+    "per_lot_rupees": {
+      "A_NIFTY":     {"strategy": "iron_condor_20_10",  "n": 391, "mean": 118,  "sd": 2232, "t": 1.05, "worst": -8457,  "p05": -5066, "win": 0.744, "credit": 1381},
+      "B_NIFTY":     {"strategy": "short_strangle_20d", "n": 398, "mean": 649,  "sd": 4816, "t": 2.69, "worst": -39441, "p05": -6869, "win": 0.774, "credit": 2505},
+      "A_BANKNIFTY": {"strategy": "iron_condor_20_10",  "n": 327, "mean": 355,  "sd": 2951, "t": 2.18, "worst": -18655, "p05": -5143, "win": 0.777, "credit": 1811},
+      "B_BANKNIFTY": {"strategy": "short_strangle_20d", "n": 328, "mean": 1074, "sd": 6417, "t": 3.03, "worst": -50684, "p05": -8150, "win": 0.817, "credit": 3341}
+    },
+    "caveats": "40 configurations were tried in that study (deflated Sharpe of the best: 0.72, below the 0.95 bar); returns are negatively skewed (B BANKNIFTY skew -4.8); BANKNIFTY moved from weekly to monthly expiries in Nov 2024, so its forward sample is about 12 trades a year"
+  },
+  "sleeves": {
+    "A": {"strategy": "iron_condor_20_10", "legs": "sell the 0.20-delta call and put, buy the 0.10-delta call and put", "risk": "defined: max loss = wider wing - credit"},
+    "B": {"strategy": "short_strangle_20d", "legs": "sell the 0.20-delta call and put", "risk": "undefined (naked)"}
+  },
+  "underlyings": {"NIFTY": {"lot": 65, "expiries": "weekly"}, "BANKNIFTY": {"lot": 30, "expiries": "monthly"}},
+  "size": "1 lot per sleeve per underlying; P&L reported in rupees per lot",
+  "entry": {
+    "when": "the session whose next trading day is the underlying's nearest expiry (the expiry is the next trading day by the holiday calendar, or the chain tape recorded a chain for that expiry)",
+    "snapshot": "the chain tape's snapshot (runtime/intraday/data/<day>/chains/<U>_<expiry>_<HHMM>.csv) nearest 15:20 IST within 15:10-15:25; ties go to the earlier one",
+    "quotes": "real exchange quotes only (source kotak or nse); a modelled chain is refused",
+    "strikes": "deltas from the desk's own pricer on each strike's quote mid (intraday/playbook.StrikePicker), out-of-the-money side only, the strike whose |delta| is nearest the target and within 0.08 of it; a wing that lands on a short strike, a missing strike or a leg without a two-sided quote skips the trade (logged, never silently dropped)",
+    "fills": "sells at bid - 0.05, buys at ask + 0.05 (a tick worse than the touch)",
+    "fees": "statutory charges per leg from execution/costs.CostModel"
+  },
+  "exit": {
+    "rule": "held to expiry, cash-settled",
+    "settlement_price": "the mean of the 15:00-15:29 one-minute index closes the desk recorded on expiry day (NSE's index close is built from the last 30 minutes); fallback: Yahoo's daily close; the source is recorded with every settlement",
+    "fees": "STT 0.125% of intrinsic value on exercised long legs"
+  },
+  "measured_per_trade": {
+    "pnl_rupees": "settled P&L per lot after all fees",
+    "cost_gap_rupees": "real entry credit minus the credit the history's convention would have assigned at the same snapshot (each leg's quote mid -/+ (0.05 + max(0.05, 0.2% of the mid))); negative means real quotes cost more than the history assumed",
+    "margin_estimate": "A: its max loss; B: about 12% of one side's notional (rough; the broker's SPAN figure is not available offline)"
+  },
+  "rules": {
+    "cost_check": "per sleeve and underlying, from 6 settled trades: costs carry over when the history's mean plus the 90% lower confidence bound of the mean cost gap stays above zero; otherwise the sleeve is retired (the historical edge does not survive real quotes)",
+    "consistency": "from 8 settled trades: retired when z = (forward mean - history mean) / (history sd / sqrt(n)) < -1.645 (forward results inconsistent with the history at one-sided 5%)",
+    "tail": "B: retired on that underlying after any single loss larger than 1.5 x the history's worst; A: a loss beyond its max loss is a bug, reported as such",
+    "retired_means": "no new trades for that sleeve and underlying under this spec; open trades still settle",
+    "no_profit_claim": "the forward test alone cannot show profitability: with A NIFTY's history (mean 118, sd 2232) 26 trades give an expected t of about 0.27. What it can show quickly is whether real quotes cost what the history assumed (the cost gap varies far less than P&L) and whether forward results break from the history"
+  },
+  "eligibility": {
+    "paper_account": "reported, never applied automatically: sleeve A on an underlying becomes eligible for the Rs 5,00,000 paper account (sized by intraday.risk) with at least 10 settled forward trades, the cost check passed and consistency not rejected",
+    "B": "only after A has been eligible for at least 3 months on that underlying and B passes the same checks and the tail rule",
+    "real_money": "only the account owner decides; A first, never B first"
+  },
+  "changes": "any change to these rules is a new spec (expiry_seller_v2) with its own ledger; this ledger is never edited"
+}
