@@ -80,7 +80,7 @@ const c = calls[0];
 out.url = c.url; out.method = c.init.method; out.body = JSON.parse(c.init.body);
 out.auth = new Headers(c.init.headers).get("authorization");
 const logs = []; console.log = (m) => logs.push(m);
-await worker.scheduled({ cron: "*/10 2-9 * * 1-5" }, { GH_DISPATCH_TOKEN: "t0k" }, {});
+await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { GH_DISPATCH_TOKEN: "t0k" }, {});
 globalThis.fetch = async () => new Response(JSON.stringify({ message: "Resource not accessible by personal access token" }),
   { status: 403, headers: { "x-accepted-github-permissions": "actions=write" } });
 out.refused = await dispatchScheduler({ GH_DISPATCH_TOKEN: "github_pat_" + "x".repeat(82) + "\n" });
@@ -90,7 +90,12 @@ process.stdout.write(JSON.stringify({ ...out, log: logs[0] }) + "\n");
 
 def test_cron_triggers_start_the_desk_scheduler():
     c = _config()
-    assert c["triggers"]["crons"] == ["*/10 2-9 * * 1-5"]          # 07:30-15:20 IST, Mon-Fri (Cloudflare cron is UTC)
+    # 07:30-15:20 IST Mon-Fri, plus a Sunday 17:30 IST token check (Cloudflare cron is UTC, and its weekday 1 is SUNDAY:
+    # numeric days are refused here so "1-5" can't silently mean Sunday-Thursday again)
+    assert c["triggers"]["crons"] == ["*/10 2-9 * * MON-FRI", "0 12 * * SUN"]
+    for cron in c["triggers"]["crons"]:
+        dow = cron.split()[4]
+        assert dow == "*" or dow.replace("-", "").replace(",", "").isalpha(), cron
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

@@ -10,7 +10,10 @@
     "ORIGIN": "https://mrityurequest20-cyber.github.io/Quant-Desk"
   },
   "observability": { "enabled": true },
-  // the desk's alarm clock (worker.js): ask GitHub to run scheduler.yml every 10 minutes, 07:30-15:20 IST, Mon-Fri.
+  // the desk's alarm clock (worker.js): ask GitHub to run scheduler.yml every 10 minutes, 07:30-15:20 IST, Mon-Fri, and
+  // once on Sunday at 17:30 IST as a weekly check that the token still works (scheduler.py does nothing on a Sunday).
+  // Cloudflare numbers weekdays 1 = Sunday … 7 = Saturday (not 0 = Sunday), so the days are written by name: "1-5" here
+  // meant Sunday-Thursday and skipped every Friday until 4 Oct 2026.
   // Needs the Worker secret GH_DISPATCH_TOKEN; without it the trigger logs why and does nothing.
-  "triggers": { "crons": ["*/10 2-9 * * 1-5"] }
+  "triggers": { "crons": ["*/10 2-9 * * MON-FRI", "0 12 * * SUN"] }
 }
