@@ -181,3 +181,13 @@ def test_the_close_writes_claudes_reflection_and_the_cost(cfg, tmp_path):
     assert json.loads((tmp_path / "m.json").read_text())["lessons"][-1]["day"] == str(days[-1])
     sent = claude.client.calls[0]
     assert sent["output_config"]["effort"] == "medium" and "Session review" in sent["messages"][0]["content"]
+
+
+def test_the_workflows_pass_every_accepted_key_name():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    live, check = (root / "live.yml").read_text(), (root / "ai-check.yml").read_text()
+    for names in llm.KEY_NAMES.values():
+        for n in names:
+            assert f"secrets.{n} " in live or f"secrets.{n} }}}}" in live, n          # the desk gets the key...
+            assert f"HAS_{n}: ${{{{ secrets.{n} != '' }}}}" in check, n             # ...and AI check reports the name

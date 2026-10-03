@@ -23,9 +23,9 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"
       TZ: Asia/Kolkata
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY || secrets.CLAUDE_KEY || secrets.CLAUDE_API || secrets.CLOUD_API_KEY }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_API_KEY || secrets.GOOGLE_AI_API_KEY || secrets.GEMINI_KEY || secrets.GOOGLE_KEY }}
-      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.OLLAMA_KEY || secrets.OLAMA_API_KEY || secrets.OLLAMA_API }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY || secrets.CLAUDE_KEY || secrets.CLAUDE_API || secrets.CLOUD_API_KEY || secrets.CLOUD_API || secrets.CLAUDE_API_TOKEN || secrets.ANTHROPIC_API || secrets.ANTHROPIC_KEY || secrets.ANTHROPIC || secrets.CLAUDE || secrets.CLOUDE_API || secrets.CLOUDE_API_KEY || secrets.CLAUDE_AI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_API_KEY || secrets.GOOGLE_API || secrets.GOOGLE_AI_API_KEY || secrets.GOOGLE_GENAI_API_KEY || secrets.GEMINI_KEY || secrets.GEMINI_API || secrets.GEMINI || secrets.GOOGLE_KEY || secrets.GOOGLE || secrets.GOOGLEAPI || secrets.GOOGLE_API_TOKEN || secrets.GOOGLE_GEMINI_API_KEY || secrets.GOOGLE_AI_KEY || secrets.GOOGLE_AI_STUDIO_KEY }}
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.OLLAMA_KEY || secrets.OLAMA_API_KEY || secrets.OLLAMA_API || secrets.OLLAMA_TOKEN || secrets.OLLAMA || secrets.OLAMA_API || secrets.OLAMA }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -35,20 +35,40 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Which key names are set (true/false only, never a value)
         env:
+          HAS_ANTHROPIC: ${{ secrets.ANTHROPIC != '' }}
+          HAS_ANTHROPIC_API: ${{ secrets.ANTHROPIC_API != '' }}
           HAS_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY != '' }}
+          HAS_CLAUDE: ${{ secrets.CLAUDE != '' }}
+          HAS_CLAUDE_AI_API_KEY: ${{ secrets.CLAUDE_AI_API_KEY != '' }}
           HAS_CLAUDE_API: ${{ secrets.CLAUDE_API != '' }}
           HAS_CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY != '' }}
           HAS_CLAUDE_API_TOKEN: ${{ secrets.CLAUDE_API_TOKEN != '' }}
           HAS_CLAUDE_KEY: ${{ secrets.CLAUDE_KEY != '' }}
+          HAS_CLOUDE_API: ${{ secrets.CLOUDE_API != '' }}
+          HAS_CLOUDE_API_KEY: ${{ secrets.CLOUDE_API_KEY != '' }}
+          HAS_CLOUD_API: ${{ secrets.CLOUD_API != '' }}
           HAS_CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY != '' }}
+          HAS_GEMINI: ${{ secrets.GEMINI != '' }}
+          HAS_GEMINI_API: ${{ secrets.GEMINI_API != '' }}
           HAS_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY != '' }}
           HAS_GEMINI_KEY: ${{ secrets.GEMINI_KEY != '' }}
+          HAS_GOOGLE: ${{ secrets.GOOGLE != '' }}
+          HAS_GOOGLEAPI: ${{ secrets.GOOGLEAPI != '' }}
           HAS_GOOGLE_AI_API_KEY: ${{ secrets.GOOGLE_AI_API_KEY != '' }}
+          HAS_GOOGLE_AI_KEY: ${{ secrets.GOOGLE_AI_KEY != '' }}
+          HAS_GOOGLE_AI_STUDIO_KEY: ${{ secrets.GOOGLE_AI_STUDIO_KEY != '' }}
+          HAS_GOOGLE_API: ${{ secrets.GOOGLE_API != '' }}
           HAS_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY != '' }}
+          HAS_GOOGLE_API_TOKEN: ${{ secrets.GOOGLE_API_TOKEN != '' }}
+          HAS_GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY != '' }}
           HAS_GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY != '' }}
           HAS_GOOGLE_KEY: ${{ secrets.GOOGLE_KEY != '' }}
           HAS_KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY != '' }}
+          HAS_OLAMA: ${{ secrets.OLAMA != '' }}
+          HAS_OLAMA_API: ${{ secrets.OLAMA_API != '' }}
           HAS_OLAMA_API_KEY: ${{ secrets.OLAMA_API_KEY != '' }}
+          HAS_OLLAMA: ${{ secrets.OLLAMA != '' }}
           HAS_OLLAMA_API: ${{ secrets.OLLAMA_API != '' }}
           HAS_OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY != '' }}
           HAS_OLLAMA_KEY: ${{ secrets.OLLAMA_KEY != '' }}

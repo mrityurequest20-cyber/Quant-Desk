@@ -42,9 +42,9 @@ env:
   KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
   # Language models as second news readers and the after-close reflection (intraday/llm.py). Each is used only when
   # its key is set; several secret names are accepted for each.
-  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY || secrets.CLAUDE_KEY || secrets.CLAUDE_API || secrets.CLOUD_API_KEY }}
-  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_API_KEY || secrets.GOOGLE_AI_API_KEY || secrets.GEMINI_KEY || secrets.GOOGLE_KEY }}
-  OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.OLLAMA_KEY || secrets.OLAMA_API_KEY || secrets.OLLAMA_API }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY || secrets.CLAUDE_KEY || secrets.CLAUDE_API || secrets.CLOUD_API_KEY || secrets.CLOUD_API || secrets.CLAUDE_API_TOKEN || secrets.ANTHROPIC_API || secrets.ANTHROPIC_KEY || secrets.ANTHROPIC || secrets.CLAUDE || secrets.CLOUDE_API || secrets.CLOUDE_API_KEY || secrets.CLAUDE_AI_API_KEY }}
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_API_KEY || secrets.GOOGLE_API || secrets.GOOGLE_AI_API_KEY || secrets.GOOGLE_GENAI_API_KEY || secrets.GEMINI_KEY || secrets.GEMINI_API || secrets.GEMINI || secrets.GOOGLE_KEY || secrets.GOOGLE || secrets.GOOGLEAPI || secrets.GOOGLE_API_TOKEN || secrets.GOOGLE_GEMINI_API_KEY || secrets.GOOGLE_AI_KEY || secrets.GOOGLE_AI_STUDIO_KEY }}
+  OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.OLLAMA_KEY || secrets.OLAMA_API_KEY || secrets.OLLAMA_API || secrets.OLLAMA_TOKEN || secrets.OLLAMA || secrets.OLAMA_API || secrets.OLAMA }}
 
 jobs:
   morning:

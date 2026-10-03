@@ -33,10 +33,15 @@ import pandas as pd
 log = logging.getLogger(__name__)
 IST = "Asia/Kolkata"
 
-KEY_NAMES = {
-    "claude": ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "CLAUDE_KEY", "CLAUDE_API", "CLOUD_API_KEY", "CLAUDE_API_TOKEN"),
-    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_AI_API_KEY", "GOOGLE_GENAI_API_KEY", "GEMINI_KEY", "GOOGLE_KEY"),
-    "ollama": ("OLLAMA_API_KEY", "OLLAMA_KEY", "OLAMA_API_KEY", "OLLAMA_API", "OLLAMA_TOKEN"),
+KEY_NAMES = {        # the first name set wins; a repository secret works under any of these (spaces become _)
+    "claude": ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "CLAUDE_KEY", "CLAUDE_API", "CLOUD_API_KEY", "CLOUD_API",
+               "CLAUDE_API_TOKEN", "ANTHROPIC_API", "ANTHROPIC_KEY", "ANTHROPIC", "CLAUDE", "CLOUDE_API",
+               "CLOUDE_API_KEY", "CLAUDE_AI_API_KEY"),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_API", "GOOGLE_AI_API_KEY", "GOOGLE_GENAI_API_KEY",
+               "GEMINI_KEY", "GEMINI_API", "GEMINI", "GOOGLE_KEY", "GOOGLE", "GOOGLEAPI", "GOOGLE_API_TOKEN",
+               "GOOGLE_GEMINI_API_KEY", "GOOGLE_AI_KEY", "GOOGLE_AI_STUDIO_KEY"),
+    "ollama": ("OLLAMA_API_KEY", "OLLAMA_KEY", "OLAMA_API_KEY", "OLLAMA_API", "OLLAMA_TOKEN", "OLLAMA", "OLAMA_API",
+               "OLAMA"),
 }
 
 EVENTS = ["policy", "inflation", "growth", "earnings", "flows", "geopolitics", "commodities", "currency", "regulation",
