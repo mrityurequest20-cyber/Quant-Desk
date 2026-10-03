@@ -80,7 +80,7 @@ risk:
   futures_margin_pct: 0.15
 
 intraday:
-  capital: 100000                  # paper account for the intraday options desk (₹20k until 4 Oct 2026)
+  capital: 500000                  # paper account for the intraday options desk (₹20k → ₹1L → ₹5L on 4 Oct 2026)
   underlyings: [NIFTY, BANKNIFTY]
   feed: kotak                      # kotak | yahoo | kite (kotak without KOTAK_CONSUMER_KEY = yahoo; replay/synthetic: CLI)
   chain: kotak                     # kotak (falls back to NSE) | nse | kite | model; kotak without a key = nse
@@ -135,14 +135,14 @@ intraday:
     iv_rv_cheap: 0.90
     weights: {}                    # override evidence weights, e.g. {vwap: 1.2, pcr: 0.5}
   risk:
-    # Set for the ₹20k account: its smallest sensible NIFTY position (one lot of a narrow weekly debit
-    # spread, ~₹4-5k) risks ~₹1.2-1.6k to its stop, so risk per trade couldn't be 1%: it is 8% of
-    # equity × a conviction scale (0.6-1.2). At ₹1,00,000 (from 4 Oct 2026) the same lot is 1.2-1.6%
-    # of equity, so 2-3% would do. The percentages are kept until the owner chooses to tighten them.
-    risk_per_trade: 0.08
-    max_trades_per_day: 2           # each round trip costs ~₹110-130 (4 orders × ₹20 + taxes) ≈ 0.12% of ₹1L
-    max_open: 1
-    daily_loss_limit: 0.10         # ₹10k at ₹1L: roughly one full stop-out plus costs, then done for the day
+    # Re-set for ₹5,00,000 (4 Oct 2026). The ₹20k account needed 8% per trade just to afford one lot. At
+    # ₹5L the same lot is ~0.3% of equity, and 8% would be ₹40k a trade: the 10-12 losses in a row the
+    # backtests have seen would take ~60%. Now 2.5% × a conviction scale (0.6-1.2), i.e. ₹7.5-15k a trade.
+    # "Aggressive" means scaling up a measured edge (half-Kelly), never betting big on an unproven one.
+    risk_per_trade: 0.025
+    max_trades_per_day: 4           # a round trip costs ~₹110-130 (≈0.025% of ₹5L): more trades, faster evidence
+    max_open: 2                     # NIFTY and BANKNIFTY at once
+    daily_loss_limit: 0.05         # ₹25k at ₹5L: about two full stop-outs, then done for the day
     min_stop_atr5: 0.75            # an invalidation closer than this × the 5m ATR is pushed out to it (noise floor)
     cooldown_after_losses: 2
     cooldown_min: 30
@@ -150,7 +150,7 @@ intraday:
     no_entry_after: "14:45"
     square_off: "15:15"
     max_spread_pct: 0.06
-    max_premium_outlay: 0.35       # debit paid, fraction of equity (and never more than the cash)
+    max_premium_outlay: 0.20       # debit paid, fraction of equity (₹1L at ₹5L; never more than the cash)
     max_margin: 0.5
     credit_margin_per_lot: 30000   # SPAN+exposure on a hedged index spread ≈ ₹25-35k/lot: credit trades need a bigger account
     max_lots: 10

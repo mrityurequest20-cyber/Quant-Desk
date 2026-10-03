@@ -17,8 +17,11 @@ def plan(symbol, lot, legs, conviction=0.8):
 
 
 def test_small_account_sizing(cfg):
-    assert cfg.get("intraday.capital") == 100000                  # ₹20k until 4 Oct 2026; its sizing is still tested below
-    r = IntradayRisk(cfg)
+    assert cfg.get("intraday.capital") == 500000                  # ₹20k → ₹1L → ₹5L (4 Oct 2026)
+    # the ₹20k account's own rules (8% a trade, 35% outlay), kept tested: what one lot costs a tiny account
+    ri = cfg.data["intraday"]
+    small = cfg.__class__(dict(cfg.data, intraday=dict(ri, risk=dict(ri["risk"], risk_per_trade=0.08, max_premium_outlay=0.35))))
+    r = IntradayRisk(small)
     # NIFTY 22850/23000 call spread for ~61 → ₹3,955 a lot, ~₹1.2k to the stop: one lot at good conviction
     nifty = plan("NIFTY", 65, [PlanLeg(22850, "CE", 1, 120.0, 119, 13, 0.45), PlanLeg(23000, "CE", -1, 59.2, 60, 13, 0.30)])
     lots, notes = r.size(nifty, 20000, 20000)
@@ -40,18 +43,32 @@ def test_small_account_sizing(cfg):
     assert lots == 0 and "binding: margin" in notes[-1]
 
 
+def test_five_lakh_sizing(cfg):
+    r = IntradayRisk(cfg)
+    nifty = plan("NIFTY", 65, [PlanLeg(22850, "CE", 1, 120.0, 119, 13, 0.45), PlanLeg(23000, "CE", -1, 59.2, 60, 13, 0.30)])
+    lots, notes = r.size(nifty, 500000, 500000)
+    assert 1 <= lots <= cfg.get("intraday.risk.max_lots"), notes
+    assert lots * 1186 <= 500000 * 0.025 * 1.2 + 1                 # never more than 3% of equity to the stop
+    bnf = plan("BANKNIFTY", 30, [PlanLeg(51000, "CE", 1, 700.0, 700, 15, 0.45), PlanLeg(51800, "CE", -1, 387.0, 387, 15, 0.30)])
+    assert r.size(bnf, 500000, 500000)[0] >= 1
+    credit = TradePlan("range_sell", "NIFTY", 0, "iron_condor", dt.date(2026, 10, 6),
+                       [PlanLeg(23100, "CE", -1, 40.0, 40, 13, 0.2), PlanLeg(23200, "CE", 1, 20.0, 20, 13, 0.1)],
+                       65, "t", "th", None, None, 0.8, 0.3, 120, "nse", 0.8)
+    assert r.size(credit, 500000, 500000)[0] >= 1                # hedged selling now fits its margin
+
+
 def test_account_resets_only_without_history(cfg, tmp_path):
     j = Journal(tmp_path / "journal.db")
     broker = tmp_path / "broker.json"
     broker.write_text('{"cash": 500000}')
-    assert ensure_account(cfg, j, broker, say=None) == 100000 and not broker.exists()  # no trades: take the config
-    assert j.get_state("intraday_account")["capital"] == 100000
+    assert ensure_account(cfg, j, broker, say=None) == 500000 and not broker.exists()  # no trades: take the config
+    assert j.get_state("intraday_account")["capital"] == 500000
     # after trading, a config change doesn't silently rewrite history
     j.db.execute("INSERT INTO trades (id, status, opened_at) VALUES ('T1', 'closed', '2026-09-29 10:00')")
     j.commit()
-    cfg2 = cfg.__class__(dict(cfg.data, intraday=dict(cfg.data["intraday"], capital=150000)))
+    cfg2 = cfg.__class__(dict(cfg.data, intraday=dict(cfg.data["intraday"], capital=750000)))
     msgs = []
-    assert ensure_account(cfg2, j, broker, say=msgs.append) == 100000 and "reset-account" in msgs[0]
+    assert ensure_account(cfg2, j, broker, say=msgs.append) == 500000 and "reset-account" in msgs[0]
     # an explicit reset archives it
     base = tmp_path
     j.close()  # close SQLite before moving its files (required on Windows)

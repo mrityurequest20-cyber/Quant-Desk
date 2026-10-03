@@ -131,6 +131,10 @@ Other commands:
 
    The structure follows the vol view: buy the option when premium is fair or cheap, a debit spread when it's rich, a defined-risk fly for range days. Strikes come from the real chain by delta. Each plan fixes its **invalidation level, targets, premium stop and time stop before entry**.
 
+   **The paper account is ₹5,00,000 since 4 Oct 2026** (₹20k → ₹1L → ₹5L): above the threshold below, so debit spreads
+   and the defined-risk iron fly are on. Risk is 2.5% of equity a trade × conviction, 4 trades a day, 2 open, a 5% daily
+   stop (`intraday.risk`).
+
    **Buyer only below ₹3 lakh** (`intraday.short_legs_from_equity`). A sold option leg needs margin, and a ₹20k
    account doesn't have it. So below that equity the desk only buys calls and puts:
    - no debit spreads (their short leg), no iron fly, and no spread alternatives in the EV ranking;

@@ -307,7 +307,7 @@ def test_horizons_are_independent_labels_and_purge_and_embargo_hold(cfg):
 
 # ---- no overlapping trades; the engine's limits -------------------------------------------------------------------------
 def test_replay_never_overlaps_and_keeps_the_engine_limits(tmp_path):
-    cfg = make_cfg(tmp_path, intraday={"capital": 500000})
+    cfg = make_cfg(tmp_path, intraday={"capital": 500000, "risk": {"max_open": 1}})
     rules = P.PlanRules.from_cfg(cfg)
     rows = []
     for d in ("2026-09-29", "2026-09-30"):
