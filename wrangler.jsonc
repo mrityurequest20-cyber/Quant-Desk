@@ -9,5 +9,8 @@
   "vars": {
     "ORIGIN": "https://mrityurequest20-cyber.github.io/Quant-Desk"
   },
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  // the desk's alarm clock (worker.js): ask GitHub to run scheduler.yml every 10 minutes, 07:30-15:20 IST, Mon-Fri.
+  // Needs the Worker secret GH_DISPATCH_TOKEN; without it the trigger logs why and does nothing.
+  "triggers": { "crons": ["*/10 2-9 * * 1-5"] }
 }

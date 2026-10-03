@@ -220,25 +220,47 @@ class IntradayAPI:
         frames = [normalise_bars(pd.read_csv(d / x / f"{symbol}_1m.csv", index_col=0, parse_dates=True)) for x in dates[-days:]]
         return pd.concat(frames) if frames else pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
+    SESSIONS = {"1m": 2, "3m": 3, "5m": 3, "15m": 5}       # sessions on the chart: today plus context
+
     def chart(self, account=None, symbol="NIFTY", date=None, interval="1m") -> dict:
+        """Candles for the last few sessions (the latest one is never shown alone: a late start or a holiday-eve
+        stub of a few bars is unreadable), VWAP that restarts each session, the session profile, and the levels:
+        computed from the bars themselves (prior day, opening range, CPR, value area, day range), plus what only the
+        desk's last read knows (OI walls)."""
         symbol = symbol.upper()
-        df = self._bars(account, symbol, 1, date)
+        df = self._bars(account, symbol, self.SESSIONS.get(interval, 2), date)
         if df.empty:
             return {"symbol": symbol, "bars": None}
-        day = str(df.index[-1].date())
-        profile = self._profile(df[df.index.date == df.index[-1].date()])
+        dates = sorted(set(df.index.date))
+        last = dates[-1]
+        day = str(last)
+        today = df[df.index.date == last]
+        prior = df[df.index.date == dates[-2]] if len(dates) > 1 else df.iloc[:0]
+        prof_src = today if len(today) >= 30 or prior.empty else prior      # a stub day: profile the full one before it
+        profile = self._profile(prof_src)
+        if profile is not None:
+            profile["day"] = str(prof_src.index[-1].date())
+        levels = self._bar_levels(today, prior, profile)
         if interval in ("3m", "5m", "15m"):
             df = df.resample(interval.replace("m", "min"), label="left", closed="left", origin="start_day",
                              offset="15min").agg({"open": "first", "high": "max", "low": "min", "close": "last",
                                                   "volume": "sum"}).dropna(subset=["close"])
-        vol = df["volume"].to_numpy(dtype=float)
-        vol = vol if vol.sum() > 0 else np.ones(len(df))
-        tp = ((df["high"] + df["low"] + df["close"]) / 3).to_numpy()
-        vwap = np.cumsum(tp * vol) / np.cumsum(vol)
+        vwap = np.empty(len(df))
+        d_of = np.array(df.index.date)
+        for d in dates:                                     # VWAP restarts every session (TWAP when there's no volume)
+            m = d_of == d
+            if not m.any():
+                continue
+            part = df[m]
+            vol = part["volume"].to_numpy(dtype=float)
+            vol = vol if vol.sum() > 0 else np.ones(len(part))
+            tp = ((part["high"] + part["low"] + part["close"]) / 3).to_numpy()
+            vwap[m] = np.cumsum(tp * vol) / np.cumsum(vol)
         j = self.j(account)
+        first = str(dates[0])
         tr = j.df("SELECT id, strategy, direction, opened_at, closed_at, entry_underlying, exit_underlying, pnl, "
                   "exit_reason, stop, target, meta FROM trades WHERE symbol=? AND opened_at >= ? AND opened_at < ?",
-                  (symbol, day, day + " 99"))
+                  (symbol.replace("-FUT", ""), first, day + " 99"))
         markers = []
         for r in tr.itertuples():
             m = json.loads(r.meta or "{}")
@@ -248,14 +270,42 @@ class IntradayAPI:
                 markers.append({"t": int(pd.Timestamp(r.closed_at).timestamp()), "kind": "exit", "price": r.exit_underlying,
                                 "dir": r.direction, "text": f"{r.exit_reason} ₹{r.pnl:,.0f}"})
         th = j.df("SELECT levels FROM thoughts WHERE symbol=? AND ts >= ? AND ts < ? ORDER BY id DESC LIMIT 1",
-                  (symbol, day, day + " 99"))
-        levels = json.loads(th.iloc[0]["levels"]) if not th.empty and th.iloc[0]["levels"] else {}
+                  (symbol.replace("-FUT", ""), day, day + " 99"))
+        if not th.empty and th.iloc[0]["levels"]:            # the read adds what bars can't say (OI walls); the bars stay
+            for k, v in json.loads(th.iloc[0]["levels"]).items():   # current for the rest (a read can be minutes old)
+                if v is not None:
+                    levels.setdefault(k, v)
         return {"symbol": symbol, "day": day, "interval": interval, "profile": profile,
+                "sessions": [str(d) for d in dates], "today_bars": int(len(today)),
+                "session_starts": [int(df[d_of == d].index[0].timestamp()) for d in dates if (d_of == d).any()],
                 "bars": {"t": [int(x.timestamp()) for x in df.index], "o": df["open"].round(2).tolist(),
                          "h": df["high"].round(2).tolist(), "l": df["low"].round(2).tolist(), "c": df["close"].round(2).tolist(),
                          "v": df["volume"].round(0).tolist()},
                 "vwap": [round(float(x), 2) for x in vwap], "markers": markers,
-                "levels": {k: v for k, v in levels.items() if v is not None}}
+                "levels": {k: round(float(v), 2) for k, v in levels.items() if v is not None and v == v}}
+
+    @staticmethod
+    def _bar_levels(today: pd.DataFrame, prior: pd.DataFrame, profile: dict | None) -> dict:
+        """The levels a trader marks before the open and during the first hour, from the bars alone."""
+        out: dict = {}
+        if len(prior):
+            H, L, C = float(prior["high"].max()), float(prior["low"].min()), float(prior["close"].iloc[-1])
+            out.update({"pdh": H, "pdl": L})
+            pivot, bc = (H + L + C) / 3, (H + L) / 2
+            tc = 2 * pivot - bc
+            out.update({"cpr_tc": max(tc, bc), "cpr_bc": min(tc, bc)})
+        if len(today):
+            t0 = today.index[0].normalize() + pd.Timedelta(hours=9, minutes=15)
+            orng = today[(today.index >= t0) & (today.index < t0 + pd.Timedelta(minutes=15))]
+            if len(orng) >= 10:                              # only a real opening range, not the first bars of a late start
+                out.update({"or_high": float(orng["high"].max()), "or_low": float(orng["low"].min())})
+            ib = today[(today.index >= t0) & (today.index < t0 + pd.Timedelta(minutes=60))]
+            if len(ib) >= 45:
+                out.update({"ib_high": float(ib["high"].max()), "ib_low": float(ib["low"].min())})
+            out.update({"day_high": float(today["high"].max()), "day_low": float(today["low"].min())})
+        if profile:
+            out.update({"poc": profile["poc"], "vah": profile["vah"], "val": profile["val"]})
+        return out
 
     def udf(self, account=None, symbol="NIFTY", interval="1m", frm=None, to=None, countback=None) -> dict:
         """UDF bars for the GoCharting datafeed (intraday resolutions)."""

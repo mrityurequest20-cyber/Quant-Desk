@@ -247,7 +247,8 @@ animation:shimmer 1.3s linear infinite}
 .qhead .ch{font:600 13px var(--mono);margin-top:4px;font-variant-numeric:tabular-nums}
 .qhead .hl{text-align:right;font-size:12px;color:var(--fg3);line-height:1.6}
 .qhead .hl b{font:500 12px var(--mono);color:var(--fg2);font-variant-numeric:tabular-nums}
-.tools{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.tools{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.tools>.seg{flex:none}                 /* each selector stays whole; the row wraps on a phone instead of clipping */
 .tools .chips{flex:1;min-width:0}
 .chartbox{position:relative;height:clamp(300px,50vh,560px);margin:0 -16px;background:var(--panel);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .chartbox .lw{position:absolute;inset:0}

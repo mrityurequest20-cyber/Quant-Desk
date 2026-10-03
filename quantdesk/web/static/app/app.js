@@ -554,16 +554,26 @@ async function renderChart() {
 // the index, or its near-month future (real volume and OI; the index bars carry the futures' volume too)
 function chartSym() { return S.sym + (S.ckind === "fut" ? "-FUT" : ""); }
 function chartData() { return S.charts[chartSym() + "|" + S.interval]; }
+// the latest session's first bar (the chart carries earlier sessions for context)
+function todayFrom(d) {
+	const B = d && d.bars, n = B ? B.t.length : 0, ss = (d && d.session_starts) || [];
+	const t0 = ss.length ? ss[ss.length - 1] : (n ? B.t[0] : 0);
+	let i = 0;
+	while (i < n && B.t[i] < t0) i++;
+	return i;
+}
 function renderQuoteHead(v) {
-	const d = chartData(), B = d && d.bars, n = B ? B.t.length : 0;
+	const d = chartData(), B = d && d.bars, n = B ? B.t.length : 0, i0 = todayFrom(d);
 	const last = v && fin(v.spot) ? v.spot : n ? B.c[n - 1] : null;
-	const prev = v && fin(v.chg) && fin(v.spot) ? v.spot / (1 + v.chg) : null;
-	const hi = n ? Math.max(...B.h) : null, lo = n ? Math.min(...B.l) : null;
+	const pc = i0 > 0 ? B.c[i0 - 1] : null;                 // the prior session's close, when the chart has it
+	const chg = v && fin(v.chg) ? v.chg : (pc && last != null ? last / pc - 1 : null);
+	const prev = chg != null && last != null ? last / (1 + chg) : null;
+	const hi = n > i0 ? Math.max(...B.h.slice(i0)) : null, lo = n > i0 ? Math.min(...B.l.slice(i0)) : null;
 	const box = $("#c-head");
 	box.textContent = "";
 	put(box, h("div", {}, h("div", { class: "lbl" }, S.sym + (d && d.day ? " · " + istDay(d.day + "T12:00:00+05:30") : "")),
 		h("div", { class: "px" }, num(last)),
-		h("div", { class: "ch " + cls(v && v.chg) }, prev != null ? `${signed(last - prev)} (${pct(v.chg)})` : "")),
+		h("div", { class: "ch " + cls(chg) }, prev != null ? `${signed(last - prev)} (${pct(chg)})` : "")),
 		h("div", { class: "hl" }, h("div", {}, "H ", h("b", {}, num(hi))), h("div", {}, "L ", h("b", {}, num(lo))),
 			h("div", {}, "VWAP ", h("b", {}, num(v ? v.vwap : d && d.vwap ? d.vwap[d.vwap.length - 1] : null)))));
 	$("#c-fs-title").textContent = `${S.sym} · ${S.interval}`;
@@ -761,7 +771,8 @@ function ohlcLegend(time) {
 		h("span", { class: "k" }, "C"), h("b", { class: cls(chg) }, `${num(B.c[i])} ${chg >= 0 ? "+" : "−"}${Math.abs(chg).toFixed(2)}%`)),
 	h("div", { class: "r2" }, h("span", { style: "color:var(--vwap)" }, "VWAP " + num(d.vwap[i])), B.v[i] > 0 ? "  Vol " + num(B.v[i], 0) : "",
 		d.profile ? h("span", { style: "color:var(--acc)", title: d.profile.kind === "tpo" ? "time at price: an index has no volume" : "volume at price" },
-			`  POC ${num(d.profile.poc, 0)} · VA ${num(d.profile.val, 0)}–${num(d.profile.vah, 0)}${d.profile.kind === "tpo" ? " (TPO)" : ""}`) : "",
+			`  POC ${num(d.profile.poc, 0)} · VA ${num(d.profile.val, 0)}–${num(d.profile.vah, 0)}${d.profile.kind === "tpo" ? " (TPO)" : ""}`
+			+ (d.profile.day && d.profile.day !== d.day ? ` · ${d.profile.day.slice(8)}/${d.profile.day.slice(5, 7)}` : "")) : "",
 		...(L.marksAt.get(B.t[i]) || []).map((m) => `  ${m.kind === "entry" ? "▲" : "●"} ${m.text}`)));
 }
 function drawChart(reframe) {
@@ -783,7 +794,11 @@ function drawChart(reframe) {
 	L.candle.setData(B.t.map((t, i) => ({ time: T(t), open: B.o[i], high: B.h[i], low: B.l[i], close: B.c[i] })));
 	const hasVol = B.v.some((x) => x > 0);
 	L.vol.setData(hasVol ? B.t.map((t, i) => ({ time: T(t), value: B.v[i], color: (B.c[i] >= B.o[i] ? up : dn) + "44" })) : []);
-	L.vwap.setData(B.t.map((t, i) => ({ time: T(t), value: d.vwap[i] })));
+	// VWAP restarts each session. A point's colour paints the segment that leaves it (Lightweight Charts 5 draws a
+	// line straight through whitespace), so the last bar before each session start leaves a transparent segment.
+	const starts = new Set(((d.session_starts) || []).slice(1));
+	L.vwap.setData(B.t.map((t, i) => (i + 1 < n && starts.has(B.t[i + 1])
+		? { time: T(t), value: d.vwap[i], color: "transparent" } : { time: T(t), value: d.vwap[i] })));
 	if (L.svp) L.svp.set(d.profile);
 	L.lines.forEach((pl) => L.candle.removePriceLine(pl));
 	L.lines = [];

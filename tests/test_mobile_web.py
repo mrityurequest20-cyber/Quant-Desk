@@ -99,8 +99,15 @@ def test_live_state_thoughts_trades_stats_reviews(site):
 def test_chart_and_udf(site):
     base, _, _, days = site
     code, c, _ = call(base, "/api/i/chart?symbol=NIFTY&interval=5m")
-    assert code == 200 and c["day"] == str(days[-1]) and len(c["bars"]["t"]) == 75 and len(c["vwap"]) == 75
-    assert "or_high" in c["levels"]
+    assert code == 200 and c["day"] == str(days[-1]) and c["sessions"] == [str(d) for d in days[-2:]]
+    assert len(c["bars"]["t"]) == 150 and len(c["vwap"]) == 150 and c["today_bars"] == 375  # both sessions, 5m
+    i = c["bars"]["t"].index(c["session_starts"][1])                        # VWAP restarts at the second open
+    tp = (c["bars"]["h"][i] + c["bars"]["l"][i] + c["bars"]["c"][i]) / 3
+    assert i == 75 and abs(c["vwap"][i] - tp) < 0.02 and abs(c["vwap"][i - 1] - tp) > 0.02
+    lv = c["levels"]
+    assert {"or_high", "or_low", "ib_high", "ib_low", "pdh", "pdl", "cpr_tc", "cpr_bc", "day_high", "day_low", "poc"} <= set(lv)
+    assert lv["pdh"] == max(c["bars"]["h"][:75]) and lv["day_low"] == min(c["bars"]["l"][75:])
+    assert lv["cpr_bc"] <= lv["cpr_tc"] and lv["or_low"] <= lv["or_high"]
     pr = c["profile"]                                                       # the session profile the chart draws
     assert pr["val"] <= pr["poc"] <= pr["vah"] and len(pr["prices"]) == len(pr["size"]) and max(pr["size"]) == 1.0
     code, u, _ = call(base, "/api/i/udf?symbol=NSE:INDEX:NIFTY&interval=15m&countback=10&to=2000000000")
@@ -179,3 +186,23 @@ def test_chart_library_is_served(site):
     assert code == 200 and b"/static/vendor/lightweight-charts.js" in page
     code, lib, headers = call(base, "/static/vendor/lightweight-charts.js")
     assert code == 200 and b"TradingView Lightweight Charts" in lib[:400] and "javascript" in headers.get("Content-Type", "")
+
+
+
+def test_a_stub_session_is_charted_with_the_day_before(tmp_path):
+    """A desk that started late (30 Sep 2026: ten bars from 15:20) must not chart ten bars alone."""
+    import numpy as np
+    from quantdesk.web.intraday_api import IntradayAPI
+    idx1 = pd.date_range("2026-09-29 09:15", "2026-09-29 15:29", freq="1min", tz="Asia/Kolkata")
+    idx2 = pd.date_range("2026-09-30 15:20", "2026-09-30 15:29", freq="1min", tz="Asia/Kolkata")
+    rec = SessionRecorder(tmp_path / "data")
+    for idx, base in ((idx1, 22700.0), (idx2, 22617.0)):
+        c = base + np.sin(np.arange(len(idx)) / 20) * 30
+        rec.record_bars("NIFTY", pd.DataFrame({"open": c, "high": c + 3, "low": c - 3, "close": c, "volume": 0.0}, index=idx))
+    api = IntradayAPI.__new__(IntradayAPI)
+    api._data_dir = lambda account: tmp_path / "data"
+    api.j = lambda account: Journal()
+    ch = api.chart(None, "NIFTY", None, "5m")
+    assert ch["day"] == "2026-09-30" and ch["today_bars"] == 10 and len(ch["bars"]["t"]) == 75 + 2
+    assert ch["profile"]["day"] == "2026-09-29"                              # the stub's ten bars don't make a profile
+    assert "or_high" not in ch["levels"] and {"pdh", "pdl", "day_high"} <= set(ch["levels"])   # no fake opening range

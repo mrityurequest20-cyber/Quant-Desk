@@ -280,6 +280,16 @@ reset (that resets money, not knowledge). Each session review ends with **What t
 `python -m quantdesk intraday learn` shows the record. `--rebuild` grades the whole journal again from the
 recorded bars, and `intraday replay --no-learn` turns it off for a replay.
 
+**The chart** (phone app → Chart) shows the last sessions, not just today: 2 for 1-minute, 3 for 5-minute, 5 for
+15-minute.
+- **Why:** a late start (30 Sep 2026: ten bars from 15:20) never leaves ten candles alone on the screen.
+- **VWAP:** restarts at every open, with no line across the overnight gap.
+- **Session profile:** today's, or the day before when today is only a stub (the legend names its date).
+- **Levels:** computed from the bars themselves, so they're there even before the desk's first read: prior-day
+  high and low, CPR, the opening range once 15 minutes have traded, the initial balance after an hour, the value
+  area and today's range. OI walls come from the desk's read.
+- **Header:** H/L and the change refer to today's bars only.
+
 ### Stocks with liquid options
 
 The index desk trades NIFTY and BANKNIFTY. F&O stocks are ranked from the same daily NSE bhavcopy (warehouse table
@@ -535,6 +545,12 @@ touch it.
 On NSE holidays both jobs exit within a minute.
 
 **Who starts it.** GitHub's own scheduled events are best-effort: on 29 Sep – 1 Oct 2026 live.yml's 08:52 cron arrived at 15:19–15:46 IST, and the desk lost two sessions. So `scheduler.yml` checks every 10 minutes, around the clock, and starts the desk by `workflow_dispatch` (which runs at once) whenever it's an NSE trading day between 08:25 and 14:45 IST and no run is queued, running or done for the day (`deploy/scheduler.py`). A failed day is retried up to three times. A run you **cancelled** keeps the desk stopped for the rest of that day, so the kill switch still works. Live.yml's own cron stays as a backup; a late one finds the session over and exits.
+
+That wasn't enough: GitHub throttles cron on this repository so hard that the 10-minute scheduler fired three times on 2 Oct 2026 (21:27, 01:46 and 05:18 IST). So **Cloudflare is the alarm clock**. The Worker's cron trigger (`wrangler.jsonc`: every 10 minutes, 07:30–15:20 IST, Mon–Fri) fires on the minute and asks GitHub to run `scheduler.yml` now. `scheduler.py` then decides exactly as above. One-time setup:
+1. GitHub → Settings → Developer settings → Fine-grained tokens → *Generate new token*. Repository access: only `Quant-Desk`. Permissions: **Actions: Read and write**. Set an expiry you'll remember.
+2. Cloudflare dashboard → Workers & Pages → the Worker → Settings → Variables and Secrets → **Add** → type *Secret*, name `GH_DISPATCH_TOKEN`, value the token.
+
+Without the token the trigger logs why and does nothing (the Worker's Logs show it).
 
 **Checking the fills.** `audit.yml` (Actions tab, optional date) downloads the recorded option chains from the live runs' artifacts and checks every paper fill against the bid/ask the market actually showed, with each trade's P&L at those quotes (`deploy/audit_fills.py`).
 

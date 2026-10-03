@@ -4,11 +4,37 @@
 // Nothing is built or stored here. Every request is passed through to Pages, so the app and its data.json are
 // always the ones the desk last published, and Cloudflare only redeploys when this file or wrangler.jsonc
 // changes on main, not on every data update. The site is read-only, so only GET and HEAD are served.
+//
+// It is also the desk's alarm clock. GitHub's own cron is best-effort and, on this repository, very late: live.yml's
+// 08:52 IST schedule arrived at 15:19-15:46 IST on 29 Sep - 1 Oct 2026 and the every-10-minutes scheduler.yml fired
+// three times in a day. Cloudflare's cron triggers fire on the minute, so every 10 minutes on weekday mornings and
+// through the session (wrangler.jsonc) this asks GitHub to run scheduler.yml now (workflow_dispatch runs at once).
+// scheduler.py then decides: start the desk if it should be running and isn't, never after a manual cancel.
+// It needs GH_DISPATCH_TOKEN: a fine-grained GitHub token for this repository with "Actions: read and write",
+// saved as a secret of this Worker (Cloudflare dashboard → the Worker → Settings → Variables and Secrets).
 
 const LIVE = /(^|\/)(data\.json|sw\.js)$/;         // live data and the service worker: never from an edge cache
 const PASS = ["accept", "accept-encoding", "if-none-match", "if-modified-since", "range"];
 
+export async function dispatchScheduler(env) {
+	const token = env.GH_DISPATCH_TOKEN;
+	if (!token) return { ok: false, why: "GH_DISPATCH_TOKEN is not set on this Worker: the desk relies on GitHub's own cron" };
+	const repo = String(env.GH_REPO || "mrityurequest20-cyber/Quant-Desk");
+	const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/scheduler.yml/dispatches`, {
+		method: "POST",
+		headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28",
+			"user-agent": "quantdesk-worker", "content-type": "application/json" },
+		body: JSON.stringify({ ref: String(env.GH_REF || "main") }),
+	});
+	return { ok: res.status === 204, why: `GitHub answered ${res.status}` };
+}
+
 export default {
+	async scheduled(event, env, ctx) {
+		const r = await dispatchScheduler(env);
+		console.log(`desk scheduler ${r.ok ? "dispatched" : "not dispatched"} (${event.cron}): ${r.why}`);
+	},
+
 	async fetch(request, env) {
 		if (request.method !== "GET" && request.method !== "HEAD") {
 			return new Response("Read-only site.\n", { status: 405, headers: { allow: "GET, HEAD" } });
