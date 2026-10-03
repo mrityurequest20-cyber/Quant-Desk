@@ -92,6 +92,8 @@ class IntradayEngine:
         qc = cfg.get("intraday.quant", {}) or {}
         self.qc = qc
         self.quant_on = bool(qc.get("enabled", True))
+        # a directional trade needs a plan model approved on real point-in-time evidence (autolearn/research.py)
+        self.require_model = bool(cfg.get("autolearn.require_approved_model", True))
         self.volf = VolForecaster()
         self.ev = EVEngine(cfg, self.pricer, broker.costs, n_paths=int(qc.get("n_paths", 2000)))
         self.models: dict[str, DirectionModel] = {}
@@ -472,8 +474,24 @@ class IntradayEngine:
             if not kept:
                 self._think(u, view, now, f"{a.setup} reached its level {a.level:,.2f} but {stop}", force=True)
                 return None
+            kept, stop = self._model_gates(u, kept, now)        # the same model gates as any other entry
+            if not kept:
+                msg = f"{a.setup} reached its level {a.level:,.2f} but {stop}"
+                # on the decision record only: this minute's read isn't formed yet, so no thought on last minute's
+                self.journal.decision(now, a.setup, u, "rejected", msg, 0, {"armed": a.to_record(), "plan": plan.describe()})
+                return msg
+            plan = kept[0]
             at_s = replace(view, spot=float(S))
             eq = self.equity(now)
+            appr = self._approved(u, kept, eq, now)
+            if appr is not None:
+                if isinstance(appr, str):
+                    self._think(u, view, now, appr, force=True)
+                    return appr
+                plan, lots, notes = appr
+                msg = self._open(plan, lots, notes, at_s, s, now)
+                self._think(u, at_s, now, msg, force=True)
+                return msg
             if self.quant_on:
                 pick = self._guarded(u, now, "EV selection", self._select_by_ev, u, [plan], at_s, eq, now, chain)
                 if pick is None or isinstance(pick, str):
@@ -721,10 +739,15 @@ class IntradayEngine:
         if not plans:
             return f"standing aside: {stop}"
         plans = self._by_relative_strength(u, plans)
-        if self.learner is not None:                          # an active champion: only setups its signal agrees with
-            plans, why = self.learner.entry_filter(u, plans)
-            if why:
-                return why
+        plans, why = self._model_gates(u, plans, now)
+        if not plans:
+            return why
+        approved = self._approved(u, plans, eq, now)
+        if approved is not None:
+            if isinstance(approved, str):
+                return approved
+            plan, lots, notes = approved
+            return self._open(plan, lots, notes, view, s, now)
         if self.quant_on:
             pick = self._guarded(u, now, "EV selection", self._select_by_ev, u, plans, view, eq, now)
             if pick is None:
@@ -739,6 +762,41 @@ class IntradayEngine:
             self.journal.decision(now, plan.setup, u, "rejected", " | ".join(notes), 0, {"plan": plan.describe()})
             return f"setup {plan.setup} found but sized to 0 lots ({notes[-1]})"
         return self._open(plan, lots, notes, view, s, now)
+
+    def _model_gates(self, u: str, plans: list, now) -> tuple[list, str | None]:
+        """Every entry path's model gates. A directional plan needs the approved plan model
+        (autolearn.require_approved_model); an active direction champion may then only narrow what's left."""
+        why = None
+        if self.require_model:                                # no directional trade without an approved plan model
+            if self.learner is None:
+                plans, why = [p for p in plans if p.direction == 0], ("standing aside: no approved plan model (the learning "
+                                                                    "loop is off); directional reads stay advisory")
+            else:
+                plans, why = self.learner.plan_gate(u, plans, now)
+            if not plans:
+                return [], why
+        if self.learner is not None:                          # an active champion: only setups its signal agrees with
+            plans, why2 = self.learner.entry_filter(u, plans)
+            if why2:
+                return [], why2
+        return plans, why
+
+    def _approved(self, u: str, plans: list, eq: float, now):
+        """The approved plan model's best plan, sized by the risk engine: (plan, lots, notes), a reason it can't be sized,
+        or None when no plan carries an approval. Its expected value is the validated one, so there's no Monte Carlo on an
+        unvalidated P(up) and no alternative structure it didn't approve."""
+        approved = [p for p in plans if p.notes.get("plan_model")]
+        if not approved:
+            return None
+        plan = max(approved, key=lambda p: p.notes["plan_model"]["ev_R"])
+        pm = plan.notes["plan_model"]
+        lots, notes = self.risk.size(plan, eq, self.broker.cash())
+        if lots < 1:
+            self.journal.decision(now, plan.setup, u, "rejected", " | ".join(notes), 0, {"plan": plan.describe()})
+            return f"setup {plan.setup} approved by the plan model but sized to 0 lots ({notes[-1]})"
+        plan.notes["quant_text"] = (f"plan model {pm['model_id']} ({pm['horizon']}, DTE {pm['bucket']}): expected "
+                                    f"{pm['ev_R']:+.2f}R, P(net>0) {pm['p_win']:.0%}")
+        return plan, lots, notes + [plan.notes["quant_text"]]
 
     # ---- quant layer --------------------------------------------------------------------------------------------
     def preopen(self, now) -> None:

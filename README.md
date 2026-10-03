@@ -312,7 +312,7 @@ The desk now learns from its own predictions and promotes a better model only on
   1. ingest the bars, outcomes and closed paper trades;
   2. rebuild the versioned dataset;
   3. retrain candidates through day-grouped walk-forward with purge and embargo (the current DirectionModel is the
-     baseline, alongside L2, L1 and boosted-stump variants);
+     baseline; the L2, L1 and boosted-stump variants stay in the code, off until one beats it out of sample);
   4. calibrate them and fit an abstention threshold;
   5. simulate costs, with block-bootstrap intervals;
   6. check the locked final test;
@@ -339,6 +339,45 @@ Operating controls:
 - **Ollama:** advisory only, never weighed into a signal.
 
 Recovery steps: [RECOVERY.md](docs/RECOVERY.md). Gates: [RELEASE_GATES.md](docs/RELEASE_GATES.md).
+
+### Plan-level research: the option trade, not the index
+
+`python -m quantdesk autolearn research` ([PLAN_RESEARCH.md](docs/PLAN_RESEARCH.md)) labels every decision point with
+the outcome of the exact plan the engine would buy, under the engine's own rules:
+- the strike picker and its vetoes;
+- the ask in, the bid out, the adverse ticks and every fee;
+- its stop, target, breakeven, progress-gated time exit and square-off;
+- **stop first** when a bar touches both levels, and a gap through the stop costs the gap.
+
+It does this for horizons 30m / 60m / 120m / close and DTE buckets 0 / 1 / 2 / 3–5 / 6+.
+
+Evidence is kept apart and never combined:
+- **real point-in-time** (the desk's recorded books): the only class that can qualify, lock, promote, or change a
+  setting;
+- **modelled chains**: scenario analysis only;
+- **bhavcopy end of day**: descriptive.
+
+One calibrated-logistic baseline predicts expected net R and abstains below its threshold. Development folds choose
+everything, every configuration is logged with its hash, the replay enforces the engine's position and risk limits,
+and the locked period is opened once.
+
+**No directional trade without an approved plan model** (`autolearn.require_approved_model`). The analyst's read,
+narrative, LLMs and unvalidated models stay advisory.
+
+### External index minutes (underlying research only)
+
+`python -m quantdesk data external-import --source <clone>` imports
+[aeron7/nifty-banknifty-intraday-data](https://github.com/aeron7/nifty-banknifty-intraday-data) ([EXTERNAL_DATA.md](docs/EXTERNAL_DATA.md)):
+NIFTY and BANKNIFTY one-minute index bars from 2010 to 2023. It:
+- re-labels them to IST bar starts;
+- validates every session (minutes, duplicates, gaps, ordering, bad prices, volume, jumps, session hours);
+- writes immutable Parquet with the source commit, file checksums and the importer version;
+- builds 1m / 5m / horizon (30m / 60m / 120m / close) datasets.
+
+`data external-verify` checks random sessions against Yahoo's daily OHLC. The data is `external_unverified` until it
+passes. It is for underlying features, direction research, regime research and development folds only: never option,
+bid/ask, IV or execution data, and never evidence to qualify anything. `autolearn direction-study` runs the
+direction baseline over the four horizons on it.
 
 **Headlines that share a window are one observation.** A night's forty stories are all judged on the same opening
 move, so they split one observation between them. Counted one each, the 403 headlines of 29 Sep 2026 had scored "66%

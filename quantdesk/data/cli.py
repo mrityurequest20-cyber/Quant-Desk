@@ -120,8 +120,38 @@ def register(sub):
     x.add_argument("--out", default="_archive")
     x.add_argument("--release-prefix", default="chains", help="push to <prefix>-<year>; empty to only write files")
     x.set_defaults(fn=cmd_archive)
+    x = ss.add_parser("external-import", help="external NIFTY/BANKNIFTY index minutes (github.com/aeron7/"
+                                              "nifty-banknifty-intraday-data) → validated, immutable Parquet "
+                                              "(external_unverified; underlying research only)")
+    x.add_argument("--source", required=True, help="a local clone of the source repository")
+    x.add_argument("--out", help="output root (default runtime/external)")
+    x.set_defaults(fn=cmd_external_import)
+    x = ss.add_parser("external-verify", help="compare random sessions with an independent daily source (Yahoo) and set "
+                                              "the dataset's status")
+    x.add_argument("--out", help="output root (default runtime/external)")
+    x.add_argument("--n", type=int, default=80, help="sessions sampled per symbol")
+    x.set_defaults(fn=cmd_external_verify)
     x = ss.add_parser("status", help="coverage, gaps, and NSE's holidays vs the config")
     x.add_argument("--dir")
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")
     x.add_argument("--all", action="store_true", help="with --release: pull every table (large)")
     x.set_defaults(fn=cmd_status)
+
+
+def cmd_external_import(cfg, a):
+    from . import external_aeron as X
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
+    man = X.import_dataset(Path(a.source), out)
+    ds = X.dataset_dir(out, man["source_commit"])
+    print(f"{man['dataset']}: status {man['status']} · {sum(1 for s in man['sessions'] if s['accepted'])} accepted of "
+          f"{len(man['sessions'])} sessions · report {ds / 'quality.md'}")
+
+
+def cmd_external_verify(cfg, a):
+    from . import external_aeron as X
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
+    ds = X.latest(out)
+    if ds is None:
+        raise SystemExit("no imported external dataset: run `data external-import` first")
+    r = X.verify(ds, n=a.n)
+    print(f"{ds.name}: {r['status']}")

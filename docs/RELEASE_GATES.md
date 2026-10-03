@@ -17,6 +17,8 @@ ledger from the research branch. Do not remove earlier ledger rows.
 
 Run a strategy in the paper account with the same quote, fill, slippage, brokerage, statutory fee
 and risk code intended for release. Use recorded real market data; model-chain fills do not count.
+The command enforces this: only trades filled at the live book on both entry and exit (real point-in-time
+quotes) are counted. The rest are excluded and the count is reported (`excluded_not_real_point_in_time`).
 
 ~~~bash
 python -m quantdesk intraday paper-gate --strategy orb --since YYYY-MM-DD
@@ -44,6 +46,20 @@ of the following, every one measurable and recorded in the registry's event log:
 
 The champion it replaces stays as the rollback target. None of this enables real money: the paper gate above
 remains the minimum for that, and it is a separate, human decision.
+
+## Plan-level research and the directional-entry gate
+
+[PLAN_RESEARCH.md](PLAN_RESEARCH.md). Only `real_point_in_time` plan outcomes, from the desk's own recorded books, can:
+- qualify a configuration;
+- spend the locked final period;
+- register or promote a plan model;
+- support a DTE or horizon change.
+
+Modelled-chain results are **scenario analysis only**. Bhavcopy end-of-day results are descriptive.
+
+A directional option trade needs a plan champion promoted on real point-in-time evidence and a positive expected net R
+from it (`autolearn.require_approved_model`). Without one the desk takes no directional trade, and its reads stay
+advisory.
 
 ## Operational acceptance targets
 

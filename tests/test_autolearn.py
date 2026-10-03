@@ -531,7 +531,7 @@ def test_cli_cycle_status_verify_recover_rollback(tmp_path, capsys, monkeypatch)
     assert "cycle" in out and ("done" in out or "partial" in out)
     main(["--config", str(over), "autolearn", "status"])
     s = capsys.readouterr().out
-    assert "champion        none yet" in s and "locked test" in s and "integrity OK" in s
+    assert "champion        none" in s and "locked test" in s and "integrity OK" in s and "need an approved plan model" in s
     main(["--config", str(over), "autolearn", "verify"])
     assert "intact" in capsys.readouterr().out
     led = next((rt / "intraday" / "autolearn" / "registry").glob("events.jsonl"), None)

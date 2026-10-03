@@ -115,6 +115,8 @@ def test_engine_prices_every_plan(cfg, tmp_path):
     days = [d.date() for d in cal.trading_days("2026-07-15", "2026-09-28")]
     bars, _ = simulate_sessions(days, seed=5)
     j = Journal(tmp_path / "journal.db")
+    # the EV layer's mechanics: past the approved-model gate on purpose (test_plan_research covers the gate itself)
+    cfg = cfg.with_overrides({"autolearn": {"require_approved_model": False}})
     eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", j, IntradayBroker(cfg, starting_cash=20000), say=None)
     run_replay(eng)
     ev = j.events()

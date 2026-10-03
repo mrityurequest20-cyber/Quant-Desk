@@ -1,0 +1,67 @@
+# External NIFTY / BANKNIFTY index minutes (github.com/aeron7/nifty-banknifty-intraday-data):
+#   import → validate → immutable Parquet (status external_unverified) → independent check against Yahoo's daily OHLC
+#   → direction research over 30m / 60m / 120m / close on development folds.
+# Underlying-price research only: never option-chain, bid/ask, IV or execution data, and never evidence to qualify an
+# option strategy, a DTE change, the paper gate, a promotion or a profitability claim (docs/EXTERNAL_DATA.md).
+name: External index data
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write            # the dataset is kept as a release asset
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Sparse clone of the index files only (the whole repository is ~22 GB)
+        run: |
+          git clone --filter=blob:none --no-checkout --depth 1 https://github.com/aeron7/nifty-banknifty-intraday-data src
+          git -C src sparse-checkout set --no-cone '**/NIFTY.txt' '**/BANKNIFTY.txt'
+          git -C src checkout
+          find src -name '*.txt' | wc -l
+      - name: Import (validated, immutable, external_unverified)
+        run: python -m quantdesk data external-import --source src --out runtime/external | tee import.txt
+      - name: Independent check (random sessions vs Yahoo daily OHLC)
+        run: python -m quantdesk data external-verify --out runtime/external | tee verify.txt
+      - name: Direction research, 30m / 60m / 120m / close (development folds)
+        run: python -m quantdesk autolearn direction-study --out runtime/external | tee study.txt
+      - name: Keep the dataset (release external-aeron7)
+        run: |
+          ds=$(ls -d runtime/external/aeron7/*/ | tail -1)
+          name=$(basename "$ds")
+          tar -C runtime/external/aeron7 -czf "$name.tar.gz" "$name"
+          gh release view external-aeron7 >/dev/null 2>&1 || gh release create external-aeron7 --title "External index minutes (underlying research only)" \
+            --notes "aeron7/nifty-banknifty-intraday-data, imported by quantdesk/data/external_aeron.py. Underlying-price research only; see docs/EXTERNAL_DATA.md."
+          gh release upload external-aeron7 "$name.tar.gz" --clobber
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: external-data-reports-${{ github.run_id }}
+          path: |
+            runtime/external/aeron7/*/quality.md
+            runtime/external/aeron7/*/quality.json
+            runtime/external/aeron7/*/verification.json
+            runtime/external/aeron7/*/direction_study.*
+            runtime/external/aeron7/*/manifest.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## Import"; echo '```'; cat import.txt 2>/dev/null; echo '```';
+            echo "## Independent check"; echo '```'; cat verify.txt 2>/dev/null; echo '```';
+            cat runtime/external/aeron7/*/quality.md 2>/dev/null | head -80;
+            cat runtime/external/aeron7/*/direction_study.md 2>/dev/null; } >> "$GITHUB_STEP_SUMMARY"

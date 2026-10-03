@@ -24,6 +24,15 @@ def register(sub):
         x.add_argument("--force", action="store_true")
         x.add_argument("--offline", action="store_true")
         x.set_defaults(fn=cmd_cycle, stages=stage)
+    x = ss.add_parser("research", help="plan-level research: the real point-in-time track (the only qualifying one), "
+                                       "modelled scenarios (scenario analysis only), the EOD approximation")
+    x.add_argument("--offline", action="store_true", help="no Yahoo for India VIX (the scenario track's IV fallback)")
+    x.set_defaults(fn=cmd_research)
+    x = ss.add_parser("direction-study", help="direction research on the external index minutes over 30m / 60m / 120m "
+                                              "/ close (development folds; no option evidence)")
+    x.add_argument("--out", help="external data root (default runtime/external)")
+    x.add_argument("--min-train-days", type=int, default=250)
+    x.set_defaults(fn=cmd_direction_study)
     x = ss.add_parser("status", help="champion, freshness, last cycle, drift, risk, paper results, recovery point")
     x.add_argument("--json", action="store_true")
     x.set_defaults(fn=cmd_status)
@@ -50,6 +59,39 @@ def cmd_cycle(cfg, a):
     print(f"cycle {st['cycle_id']}: {st.get('status')}")
     if st.get("status") == "failed":
         sys.exit(1)
+
+
+def cmd_research(cfg, a):
+    from .research import PlanStudy, load_inputs
+    root = root_of(cfg)
+    inputs = load_inputs(cfg, root, offline=getattr(a, "offline", False))
+    rep = PlanStudy(cfg, inputs, root=root).run()
+    r, sc, e = rep["real"], rep["scenario"], rep["eod"]
+    print(f"plan study {rep['study']}: index {rep['data']['first_day']} → {rep['data']['last_day']} "
+          f"({rep['data']['index_sessions']} sessions)")
+    print(f"  REAL point-in-time: {len(r['pit_sessions'])} session(s), {r['plan_outcomes']:,} plan outcomes — {r.get('status')}")
+    lb = r.get("lockbox") or {}
+    print(f"  locked final period: {'opened once: ' + ('PASS' if lb.get('passed') else 'FAIL') if lb.get('opened') else 'not opened'}"
+          f"; approved: {'yes' if r.get('approved') else 'no'}")
+    print(f"  SCENARIO ANALYSIS ONLY (modelled): {sc['sessions']} sessions, {sc['plan_outcomes']:,} plan outcomes, "
+          f"{len(sc.get('trials') or [])} configurations")
+    print(f"  EOD approximation (not point in time): {e['sessions']} sessions, {e['plan_outcomes']:,} plan outcomes")
+    print(f"  production change: none. {rep['production_change']['why']}")
+    print(f"  report: {root / 'plan' / 'studies' / rep['study'] / 'report.md'}")
+
+
+def cmd_direction_study(cfg, a):
+    from pathlib import Path
+
+    from ..data import external_aeron as X
+    from .external_study import render, study
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
+    ds = X.latest(out)
+    if ds is None:
+        sys.exit("no imported external dataset: run `data external-import` first")
+    rep = study(cfg, ds, min_train_days=a.min_train_days)
+    (ds / "direction_study.md").write_text(render(rep))
+    print(f"{ds / 'direction_study.md'} [{rep['evidence']}]")
 
 
 def cmd_status(cfg, a):

@@ -1,8 +1,10 @@
 # The self-learning paper loop (quantdesk/autolearn, docs/ARCHITECTURE.md), after every session: ingest the day's bars,
 # outcomes and closed paper trades; rebuild the dataset; retrain challengers through purged walk-forward; validate with
 # costs, intervals and the locked final test; register what qualifies; score the live shadow record; promote only when
-# every gate passes. Paper only: nothing here can place an order. State lives in runtime/intraday/autolearn on the
-# journal branch, saved with the journal.
+# every gate passes. Then the plan-level research (autolearn/research.py): real point-in-time plans from the desk's
+# recorded chains (the only qualifying evidence), modelled-chain scenarios (scenario analysis only) and the bhavcopy
+# end-of-day approximation, reported separately. Paper only: nothing here can place an order. State lives in
+# runtime/intraday/autolearn on the journal branch, saved with the journal.
 name: Learning cycle
 
 on:
@@ -29,7 +31,7 @@ concurrency:
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 75
     env:
       PYTHONUNBUFFERED: "1"
       TZ: Asia/Kolkata
@@ -55,6 +57,35 @@ jobs:
           [ -n "$STAGES" ] && args="--stages $STAGES"
           [ "$FORCE" = "true" ] && args="$args --force"
           python -m quantdesk autolearn cycle $args | tee cycle.txt
+      - name: Research inputs (best effort; the real track needs the recorded chains)
+        if: always() && steps.restore.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          deploy/warehouse-context.sh
+          mkdir -p runtime/chains_archive
+          for y in $(seq 2026 "$(date +%Y)"); do
+            gh release download "chains-$y" --pattern '*_chains.parquet' --pattern '*_bars.parquet' \
+              --dir runtime/chains_archive --clobber || echo "no chains-$y release yet"
+          done
+          ls runtime/chains_archive | head -50
+      - name: Plan-level research (real, scenario and EOD, reported separately)
+        id: research
+        if: always() && steps.restore.outcome == 'success'
+        run: |
+          set -o pipefail
+          python -m quantdesk autolearn research | tee research.txt
+          cp "$(python -c "import json;print(json.load(open('runtime/intraday/autolearn/plan/latest.json'))['path'].replace('report.json','report.md'))")" plan_report.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && steps.research.outcome != 'skipped'
+        with:
+          name: plan-research-${{ github.run_id }}
+          path: |
+            plan_report.md
+            runtime/intraday/autolearn/plan/studies/
+            runtime/intraday/autolearn/plan/trials.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Status
         if: always()
         run: python -m quantdesk autolearn status | tee status.txt
@@ -65,4 +96,6 @@ jobs:
         if: always()
         run: |
           { echo "## Learning cycle"; echo '```'; cat cycle.txt 2>/dev/null || echo "no output"; echo '```';
+            echo "## Plan research"; echo '```'; cat research.txt 2>/dev/null || echo "no output"; echo '```';
+            cat plan_report.md 2>/dev/null || true;
             echo "## Status"; echo '```'; cat status.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

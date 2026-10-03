@@ -100,6 +100,9 @@ class Registry:
         missing = [k for k in CARD_FIELDS if k not in card]
         if missing:
             raise ArtifactError(f"{model_id}: card incomplete ({', '.join(missing)})")
+        if art.get("family") == "plan":                           # a plan policy (research.py), its own registry
+            from .policy import PlanPolicy
+            return PlanPolicy.from_artifact(art, expect_sha=card["artifacts"]["artifact.json"])
         return Pipeline.from_artifact(art, expect_sha=card["artifacts"]["artifact.json"])
 
     def register(self, pipe: Pipeline, card: dict) -> tuple[str, bool]:
@@ -109,6 +112,8 @@ class Registry:
         d = self.models / mid
         if (d / "card.json").exists():
             return mid, False
+        if getattr(pipe, "family", None) == "plan" and card.get("evidence") != "real_point_in_time":
+            raise ValueError("a plan policy is registered only on real point-in-time evidence")
         card = {**card, "model_id": mid, "name": pipe.name, "kind": pipe.spec["kind"], "params": pipe.spec,
                 "artifacts": {"artifact.json": art["sha256"]}, "status": "challenger", "approval": None,
                 "rollback_target": None, "paper": card.get("paper") or {}}
@@ -148,6 +153,10 @@ class Registry:
         st = self.state()
         if model_id not in st.get("challengers", []):
             raise PromotionRefused(f"{model_id} is not a registered challenger")
+        card = self.card(model_id) or {}
+        if card.get("family") == "plan" and card.get("evidence") != "real_point_in_time":
+            self._event("promotion_refused", model_id, reason="no real point-in-time evidence")
+            raise PromotionRefused(f"{model_id}: plan policies are promoted only on real point-in-time evidence")
         try:
             self.load(model_id)
         except ArtifactError as exc:

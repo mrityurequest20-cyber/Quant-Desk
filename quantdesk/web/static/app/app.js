@@ -1251,6 +1251,11 @@ function lifecycleGrp(a, halts, sym) {
 	F.push(fact("Rollback target", a.rollback_target || "—"));
 	const hl = [halts.kill_switch ? "kill switch" : null, halts.journal ? "journal check" : null, halts.daily_loss ? "daily loss" : null, a.fault ? "model fault" : null].filter(Boolean);
 	F.push(fact("Halts", hl.length ? hl.join(" · ") : "none"));
+	const pc = a.plan_champion, pr = a.plan_research || {}, rl = pr.real || {}, sc = pr.scenario || {};
+	F.push(fact("Directional entries", a.require_approved_model === false ? "not gated (testing)" : pc ? `plan model ${pc.model_id} · ${pc.horizon} · DTE ${pc.bucket}` : "none: no approved plan model"));
+	F.push(fact("Real point-in-time evidence", pr.study ? `${rl.pit_sessions || 0} session(s) · ${rl.plan_outcomes || 0} plans · ${rl.approved ? "approved" : "nothing approved"}` : "no study yet"));
+	F.push(fact("Modelled chains", pr.study ? `${sc.sessions || 0} sessions · ${sc.plan_outcomes || 0} plans · scenario analysis only` : "—"));
+	F.push(h("div", {}));
 	return grp("Model lifecycle", a.gate_entries && a.active ? "champion gates entries" : "recording only", hl.length
 		? h("div", {}, h("div", { class: "facts" }, F), h("p", { class: "narr pad", style: "border-top:1px solid var(--line);font-size:12px;color:var(--warn)" }, a.fault || "Entries are halted: " + hl.join(", ") + "."))
 		: h("div", { class: "facts" }, F));

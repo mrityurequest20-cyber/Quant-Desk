@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from .analyst import MarketView
-from .chains import IntradayPricer, mid, time_to_expiry
+from .chains import IntradayPricer, time_to_expiry
 
 
 @dataclass
@@ -139,26 +139,30 @@ class StrikePicker:
         S, T = float(chain.attrs["spot"]), time_to_expiry(now, chain.attrs["expiry"])
         side = right.lower()
         near = chain[np.abs(chain.index.to_numpy(dtype=float) / S - 1) <= 0.08]      # nothing traded is further out
-        mids = np.array([mid(row, side) for _, row in near.iterrows()], dtype=float)
+        cols = ["strike", "bid", "ask", "mid", "iv", "delta", "spread"]
+        if near.empty:
+            return pd.DataFrame(columns=cols)
+
+        def col(f):
+            return near[f"{side}_{f}"].to_numpy(dtype=float) if f"{side}_{f}" in near else np.full(len(near), np.nan)
+        K, bid, ask, ltp, quoted = near.index.to_numpy(dtype=float), col("bid"), col("ask"), col("ltp"), col("iv")
+        two = np.isfinite(bid) & np.isfinite(ask) & (ask >= bid) & (bid > 0)
+        mids = np.where(two, (bid + ask) / 2, ltp)                # chains.mid(): the quote's mid, else the last price
         # the IV each price implies under *our* pricer, never the exchange's printed IV: NSE computes its figure
         # from the last trade with its own rate/day-count, and on 29 Sep 2026 its 14.7% against the 14.05% the
         # quote implied made a put bought at ₹85.05 "worth" ₹92.28 the moment it was bought (phantom EV and P&L)
-        implied = self.pricer.implied_many(np.where(mids > 0.05, mids, np.nan), near.index.to_numpy(dtype=float), right, S, T) \
-            if len(near) else np.array([])
-        out = []
-        for (K, row), m, iv in zip(near.iterrows(), mids, implied):
-            bid, ask = row.get(f"{side}_bid"), row.get(f"{side}_ask")
-            quoted = row.get(f"{side}_iv")
-            if not (m == m and m > 0.05):
-                continue
-            if not (iv == iv and iv > 0):
-                iv = quoted / 100 if quoted == quoted and quoted and quoted > 0 else float("nan")
-            if not (iv == iv and iv > 0):
-                continue
-            d = self.pricer.greeks(float(K), right, S, T, iv)["delta"]
-            spread = (ask - bid) / m if bid == bid and ask == ask and ask >= bid > 0 else np.nan
-            out.append({"strike": float(K), "bid": bid, "ask": ask, "mid": m, "iv": iv * 100, "delta": d, "spread": spread})
-        return pd.DataFrame(out)
+        priced = np.isfinite(mids) & (mids > 0.05)
+        implied = self.pricer.implied_many(np.where(priced, mids, np.nan), K, right, S, T)
+        iv = np.where(np.isfinite(implied) & (implied > 0), implied,
+                      np.where(np.isfinite(quoted) & (quoted > 0), quoted / 100, np.nan))
+        keep = priced & np.isfinite(iv) & (iv > 0)
+        if not keep.any():
+            return pd.DataFrame(columns=cols)
+        d = np.atleast_1d(np.asarray(self.pricer.greeks(K[keep], right, S, T, iv[keep])["delta"], dtype=float))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            spread = np.where(two, (ask - bid) / mids, np.nan)
+        return pd.DataFrame({"strike": K[keep], "bid": bid[keep], "ask": ask[keep], "mid": mids[keep], "iv": iv[keep] * 100,
+                             "delta": d, "spread": spread[keep]})
 
     def by_delta(self, chain, right, target: float, now) -> dict | None:
         r = self.rows(chain, right, now)

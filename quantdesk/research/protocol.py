@@ -179,6 +179,24 @@ def _json_safe(value):
     return str(value)
 
 
+def real_quote_trades(trades: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Only trades whose entry and exit both filled against the live book (real point-in-time quotes) can count toward
+    the paper gate. A fill priced off a modelled or repriced chain, or an exit at a marked price, is not evidence.
+    Returns (the real-quote trades, how many were excluded)."""
+    if trades is None or trades.empty:
+        return trades, 0
+
+    def real(meta) -> bool:
+        try:
+            m = json.loads(meta) if isinstance(meta, str) else (meta or {})
+        except (TypeError, ValueError):
+            return False
+        return (str(m.get("quote_source", "")).lower() not in ("", "model", "?")
+                and str(m.get("fill_quotes", "")).startswith("live") and str(m.get("exit_quotes", "")).startswith("live"))
+    ok = trades["meta"].map(real) if "meta" in trades else pd.Series(False, index=trades.index)
+    return trades[ok], int((~ok).sum())
+
+
 def evaluate_paper_candidate(trades: pd.DataFrame, observed_sessions: int, risk_violations: int,
                              capital: float) -> dict:
     """Read-only, cost-inclusive check of a strategy's closed paper trades: the bar before real money."""

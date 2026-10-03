@@ -203,7 +203,13 @@ autolearn:
   history_days: 55                 # Yahoo's 5-minute history pulled per cycle (it keeps ~60 days)
   final_test_days: 8               # the locked final test: created once from the newest sessions, never moved
   gate_entries: true               # with an active champion, only take plans its non-abstaining signal agrees with
-  candidates: [baseline, logit_l2_weak, logit_l2_strong, logit_l1, stumps]
+  # No directional option trade without a plan model approved on real point-in-time evidence for its horizon and a
+  # positive cost-adjusted expected value from it. The analyst's tilt, the narrative, LLM reads and unvalidated
+  # direction models stay advisory (shown, journalled), never a reason to trade. false = the old behaviour (tests only).
+  require_approved_model: true
+  # One simple baseline first (rule: add a model only when it beats this out of sample after costs). The L1, L2 and
+  # stumps variants stay in the code (models.SPECS) for when that's shown.
+  candidates: [baseline]
   walk_forward: {folds: 5, min_train_days: 15, embargo_min: 30}
   bootstrap: {samples: 1000, block_days: 3, seed: 7}
   abstain: {min_coverage: 0.10}    # τ must leave at least this share of bars with a signal on the calibration slice
@@ -233,6 +239,24 @@ autolearn:
     min_p_beats_champion: 0.70
     lockbox_min_trades: 5
     lockbox_min_expectancy_bps: 0.0
+  plans:                           # the plan the research labels and the gate approves (plans.py): the setups' buyer leg
+    long_delta: 0.45
+    premium_stop: 0.30
+    premium_target: 0.60
+    pit_max_age_min: 2             # a real quote at most this old counts as point in time (entry and exit)
+    conviction: 0.5                # sizing scale input for model-driven plans (IntradayRisk.size)
+  plan_research:                   # research.py: real point-in-time track (qualifying), modelled scenarios, EOD study
+    final_test_days: 8             # the locked final period: the newest real sessions, opened once
+    min_real_sessions: 28          # below this the real track is descriptive only (15 training + 5 folds + 8 locked)
+    folds: 5
+    min_train_days: 15
+    horizons: [30m, 60m, 120m, close]
+    buckets: ["0", "1", "2", "3-5", "6+"]   # trading days to expiry
+    candidates: [plan_logit]       # one calibrated logistic → expected net R → abstain
+    bootstrap: {samples: 1000, block_days: 3, seed: 7}
+    dev_gates: {min_trades: 30, min_trade_days: 10, min_ci_lo_R: 0.0, min_profit_factor: 1.10, min_dsr: 0.95, min_positive_folds: 0.6}
+    lock_gates: {min_trades: 8, min_expectancy_R: 0.0, min_net: 0.0}
+    forward_gates: {min_sessions: 10, min_trades: 15, min_expectancy_R: 0.0, min_profit_factor: 1.10}
   promotion:                       # live shadow (paper) gates a challenger must pass to become champion
     min_shadow_sessions: 10
     min_shadow_signals: 60

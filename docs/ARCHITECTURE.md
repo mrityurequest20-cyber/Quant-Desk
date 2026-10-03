@@ -35,7 +35,10 @@ trading: no code path places an order, and no language model can change a signal
 | `drift.py` | Feature PSI, prediction PSI, calibration (ECE beyond its noise floor), performance against the validation interval |
 | `cycle.py` | Stages a–g, idempotent (input keys) and resumable (per-stage state), single-runner lock, retention |
 | `live.py` | `LiveLearner`: per-bar decisions for every registered model, the champion's entry filter, faults |
-| `status.py`, `cli.py` | `autolearn status / cycle / verify / recover / rollback` |
+| `plans.py` | Plan-level outcomes under the engine's own rules, with the evidence class (`real_point_in_time` / `real_eod_approximation` / `modelled`) on every row |
+| `policy.py` | The one plan baseline: calibrated logistic P(net > 0) → expected net R → abstain |
+| `research.py` | Real point-in-time track (the only qualifying one), modelled scenario track, EOD study, the engine-constrained replay, the once-only lock, the plan registry ([PLAN_RESEARCH.md](PLAN_RESEARCH.md)) |
+| `status.py`, `cli.py` | `autolearn status / cycle / research / verify / recover / rollback` |
 
 ## The data contract
 
@@ -122,6 +125,7 @@ Every check must pass, and a missing number fails its check.
 | Engine failures | each minute's step is contained; 3 failures in a row → safe mode (square off every position, each exit on its own; no entries for the session); slow steps are reported |
 | Model | an unverifiable champion artifact halts entries; a drift alarm makes the champion abstain |
 | Language models | Ollama's reads are `advisory_only`: shown and graded, never weighed into the tone. `quantdesk/autolearn` imports no LLM code (a test checks). |
+| Directional entries | `require_approved_model`: only with a plan champion promoted on real point-in-time evidence, and a positive expected net R from it for that plan's bucket; otherwise none. The analyst's tilt, narrative, LLM reads and direction models are advisory |
 
 ## Storage and cost
 

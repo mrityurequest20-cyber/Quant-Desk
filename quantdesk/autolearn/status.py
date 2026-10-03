@@ -59,6 +59,11 @@ def status(cfg, now: pd.Timestamp | None = None) -> dict:
                  .round(2).to_dict("index")}
     drift = read_json(root / "drift.json") or {}
     lock = LockBox(root)
+    preg = Registry(root / "plan")
+    pst = preg.state() if (root / "plan" / "registry").exists() else {}
+    plan = {"require_approved_model": bool(cfg.get("autolearn.require_approved_model", True)),
+            "champion": pst.get("champion"), "challengers": pst.get("challengers", []),
+            "latest_study": read_json(root / "plan" / "latest.json")}
     return {
         "as_of": str(now), "root": str(root),
         "champion": {"model_id": champ, "since": ((card or {}).get("approval") or {}).get("at"),
@@ -72,7 +77,7 @@ def status(cfg, now: pd.Timestamp | None = None) -> dict:
         "last_successful_cycle": {"id": (last_ok or {}).get("cycle_id"), "finished": (last_ok or {}).get("finished")},
         "drift": {"state": drift.get("state", "no champion" if not champ else "not measured yet"),
                   "reasons": drift.get("reasons"), "as_of": drift.get("as_of")},
-        "risk": risk, "paper": paper,
+        "risk": risk, "paper": paper, "plan": plan,
         "lockbox": {"days": (lock.get() or {}).get("days"), "peeks": lock.peeks() if lock.log.path.exists() else 0},
         "recovery_point": {"registry_event": st.get("last_event"), "ledger_records": len(decisions),
                            "last_cycle_finished": (last_ok or {}).get("finished"),
@@ -105,7 +110,7 @@ def render(s: dict) -> str:
         if p:
             L.append(f"  champion paper  {p.get('sessions')} sessions, {p.get('trades')} signals, {f(p.get('expectancy_bps'))} bps/trade net")
     else:
-        L.append("  champion        none yet: the desk runs on its session-trained DirectionModel and the EV gate")
+        L.append("  champion        none (direction models record and filter only; they never open a trade)")
     L.append(f"  rollback target {s['rollback_target'] or '—'} · challengers {', '.join(s['challengers']) or 'none'} · rejected {s['rejected']}")
     d = s["data_freshness"]
     L.append(f"  data            bars to {', '.join(f'{k} {str(v)[:16]}' for k, v in d['bar_store_last_bar'].items()) or 'none'}; "
@@ -122,6 +127,16 @@ def render(s: dict) -> str:
         L.append(f"  paper trades    {p['closed_trades']} closed, net ₹{p['net_pnl']:,.0f}, {p['win_rate']:.0%} won")
     L.append(f"  locked test     {len(s['lockbox']['days'] or [])} sessions" + (f" {s['lockbox']['days'][0]} → {s['lockbox']['days'][-1]}" if s["lockbox"]["days"] else "")
              + f", looked at {s['lockbox']['peeks']} time(s)")
+    pl = s.get("plan") or {}
+    ls = pl.get("latest_study") or {}
+    L.append(f"  directional     {'need an approved plan model' if pl.get('require_approved_model') else 'NOT gated (require_approved_model off)'}"
+             f"; plan champion {pl.get('champion') or 'none'} · challengers {', '.join(pl.get('challengers') or []) or 'none'}")
+    if ls:
+        r, sc = ls.get("real") or {}, ls.get("scenario") or {}
+        L.append(f"  plan research   {ls.get('study')}: REAL point-in-time {r.get('pit_sessions', 0)} session(s), "
+                 f"{r.get('plan_outcomes', 0)} outcomes, approved {'yes' if r.get('approved') else 'no'} ({r.get('lock')})")
+        L.append(f"                  modelled {sc.get('sessions', 0)} sessions / {sc.get('plan_outcomes', 0)} outcomes: "
+                 f"{sc.get('label', 'scenario analysis only').upper()}")
     rp = s["recovery_point"]
     bad = rp["integrity"]["ledger"] + rp["integrity"]["registry"]
     L.append(f"  recovery point  registry event #{(rp['registry_event'] or {}).get('seq', 0)}, {rp['ledger_records']} ledger records; "
