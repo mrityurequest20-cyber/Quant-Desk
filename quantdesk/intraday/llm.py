@@ -242,8 +242,8 @@ class GeminiReader:
         for m in (self.model,) + tuple(x for x in self.FALLBACK if x != self.model):
             r = self.http.post(f"{self.base}/models/{m}:generateContent", json=body, timeout=self.timeout,
                                headers={"x-goog-api-key": self.key})
-            if getattr(r, "status_code", 200) != 404:       # a retired model 404s while still listed: try the next
-                self.model = m
+            if getattr(r, "status_code", 200) not in (404, 429, 500, 503):   # retired (404s while still listed) or
+                self.model = m                              # busy (503 on 3 Oct 2026): try the next model
                 break
             tried.append(m)
         r.raise_for_status()

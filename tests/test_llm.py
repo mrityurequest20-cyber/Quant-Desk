@@ -202,10 +202,10 @@ def test_gemini_moves_past_a_retired_model():
 
         def post(self, url, json=None, timeout=None, headers=None):
             self.urls.append(url)
-            gone = "gemini-2.5-flash:" in url                       # listed, but 404s on generateContent (Oct 2026)
-            return NS(status_code=404 if gone else 200, json=lambda: {"candidates": [{"content": {"parts": [{"text": reads}]}}]},
+            code = 404 if "gemini-2.5-flash:" in url else 503 if "flash-latest" in url else 200   # retired / busy
+            return NS(status_code=code, json=lambda: {"candidates": [{"content": {"parts": [{"text": reads}]}}]},
                       raise_for_status=lambda: None)
     h = Http()
     r = llm.GeminiReader("k", model="gemini-2.5-flash", session=h)
     assert r.read([{"id": "a", "ts": "", "source": "ET", "title": "x"}])["a"]["NIFTY"] == 0.3
-    assert r.model == "gemini-flash-latest" and len(h.urls) == 2                # and it stays on the one that works
+    assert r.model == "gemini-3-flash-preview" and len(h.urls) == 3             # and it stays on the one that works
