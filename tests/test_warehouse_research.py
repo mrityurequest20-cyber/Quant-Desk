@@ -65,10 +65,13 @@ def _world(iv, rv, n_exp=200, seed=1):
 
 def test_rich_implied_vol_shows_a_premium_and_fair_pricing_does_not():
     opts, spot = _world(iv=0.20, rv=0.11)
-    res = {(r.strategy, r.k): r for r in W.evaluate_vrp(W.build_trades(opts, spot, "NIFTY"))}
+    trades = W.build_trades(opts, spot, "NIFTY")
+    res = {(r.strategy, r.k): r for r in W.evaluate_vrp(trades)}
     ss = res[("short_straddle", 1)]
     assert ss.mean_pts > 0 and ss.t > 3 and ss.verdict.startswith("PAPER CANDIDATE")
-    assert "needs" in ss.verdict                                                # a naked straddle needs ~₹1.5L+, not ₹20k
+    assert "fits ₹500k" in ss.verdict and W.ACCOUNT == 500_000                  # a naked straddle (~₹1.5–2L) fits ₹5L
+    small = {(r.strategy, r.k): r for r in W.evaluate_vrp(trades, account=100_000)}
+    assert "needs" in small[("short_straddle", 1)].verdict                       # ...but not the old ₹1L account
     opts, spot = _world(iv=0.12, rv=0.12, seed=2)
     fair = {(r.strategy, r.k): r for r in W.evaluate_vrp(W.build_trades(opts, spot, "NIFTY"))}
     assert not any(r.verdict.startswith("PAPER CANDIDATE") for r in fair.values())  # costs eat a fairly priced premium

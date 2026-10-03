@@ -33,7 +33,7 @@ from ..options.pricing import implied_vol_vec
 from .edges import LOT, Result, _split, benjamini_hochberg, evaluate, hac_mean
 
 R, Q = 0.065, 0.012
-ACCOUNT = 100_000                 # the intraday paper account (intraday.capital; ₹20k until 4 Oct 2026)
+ACCOUNT = 500_000                 # the intraday paper account (intraday.capital: ₹20k → ₹1L → ₹5L on 4 Oct 2026)
 STT_EXERCISE = 0.00125            # on the intrinsic value of a long option exercised at expiry
 OFFSETS = {"NIFTY": (1, 3, 5), "BANKNIFTY": (1, 5, 10)}
 

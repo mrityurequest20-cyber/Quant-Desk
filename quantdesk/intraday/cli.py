@@ -196,6 +196,32 @@ def cmd_tape(cfg, a):
     tape.run(dt.time.fromisoformat(a.until) if a.until else None)
 
 
+def cmd_sleeves(cfg, a):
+    """The pre-registered expiry sellers (intraday/sleeves.py): settle what expired, open on an expiry's eve, report."""
+    from .feeds import IST
+    from .sleeves import ExpirySeller, render
+    base = paths(cfg, "live")
+
+    def yahoo_close(underlying, day):
+        import yfinance as yf
+        sym = cfg.instrument_spec(underlying)["yahoo"]
+        d = yf.download(sym, start=str(day), end=str(day + dt.timedelta(days=1)), interval="1d", progress=False,
+                        auto_adjust=False)
+        if isinstance(d.columns, pd.MultiIndex):
+            d.columns = d.columns.get_level_values(0)
+        d = d[pd.to_datetime(d.index).date == day]
+        if d.empty:
+            raise RuntimeError(f"no Yahoo bar for {sym} on {day}")
+        return float(d["Close"].iloc[-1])
+    seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close)
+    if not a.report:
+        day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
+        for line in seller.run(day) or [f"{day}: nothing to settle or open"]:
+            print(line, flush=True)
+        print(flush=True)
+    print(render(seller.report()), flush=True)
+
+
 def cmd_reset_account(cfg, a):
     base = paths(cfg, "live")["journal"].parent
     if not a.yes:
@@ -626,6 +652,10 @@ def register(sub):
     x.add_argument("--symbols", help="e.g. NIFTY,BANKNIFTY (default: intraday.tape.expiries)")
     x.add_argument("--report", nargs="?", const="today", help="completeness of a recorded day (YYYY-MM-DD) instead")
     x.set_defaults(fn=cmd_tape)
+    x = ss.add_parser("sleeves", help="expiry sellers: paper sleeves pre-registered in docs/prereg/expiry_seller_v1.json")
+    x.add_argument("--day", help="YYYY-MM-DD (default: today, IST)")
+    x.add_argument("--report", action="store_true", help="only print the sleeves' standing")
+    x.set_defaults(fn=cmd_sleeves)
     x = ss.add_parser("reset-account", help="archive the live paper account and start fresh at the configured capital")
     x.add_argument("--yes", action="store_true")
     x.set_defaults(fn=cmd_reset_account)

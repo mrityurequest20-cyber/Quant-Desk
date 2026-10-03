@@ -123,6 +123,11 @@ jobs:
       - name: Kill switch — square off
         if: cancelled()
         run: python -m quantdesk intraday live --close-out && python -m quantdesk intraday export-site --dir _site --sessions 2 && deploy/push-dir.sh _site gh-pages "site (stopped)"
+      # the pre-registered expiry sellers (docs/prereg/expiry_seller_v1.json): paper only, from the tape's real 15:20
+      # quotes on an expiry's eve, settled at the expiry-day close; before the journal is saved, so the ledger is kept
+      - name: Expiry sellers (paper sleeves)
+        if: always()
+        run: python -m quantdesk intraday sleeves | tee -a "$GITHUB_STEP_SUMMARY" || echo "::warning::expiry sleeves failed"
       - name: Save the journal
         if: always()
         run: deploy/journal.sh save "close $(date '+%F %H:%M') IST"

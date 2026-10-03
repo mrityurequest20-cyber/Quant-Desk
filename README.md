@@ -718,6 +718,23 @@ Without the token the trigger logs why and does nothing (the Worker's Logs show 
 
 **The chain tape.** Next to the engine, `deploy/run-session.sh` runs `quantdesk intraday tape`. It is a separate process that records Kotak's real chain (bid/ask, OI, volume, 41 strikes) every minute for NIFTY's 3 nearest expiries and BANKNIFTY's 2 (`intraday.tape` in the config). Files go under `runtime/intraday/data/<day>/chains/`, the recorder's folder and names, so the session archive keeps them on the `chains-YYYY` release. It also writes one log row per attempt to `<day>/tape.csv`, which is archived as `…_tape.parquet`. `quantdesk intraday tape --report [YYYY-MM-DD]` shows a day's per-series minute coverage. This is the only route to real point-in-time evidence for plan research (docs/PLAN_RESEARCH.md): a full session yields about 375 snapshots per series, against 104 in the desk's whole history before it.
 
+**Expiry sellers (paper sleeves, pre-registered).** In 2019–26 NSE bhavcopies (`research/warehouse_research.py`), the one effect that survived costs in real option prices was selling 20-delta premium at the close of the session before an expiry and holding it to settlement. Per lot:
+- BANKNIFTY strangle: +₹1,074/trade, t 3.0;
+- NIFTY strangle: +₹649, t 2.7;
+- the hedged condors are weaker.
+
+That history priced every leg at the close with a modelled cost. `quantdesk intraday sleeves` (`intraday/sleeves.py`, run by the afternoon job) tests it forward on real quotes, under rules fixed in advance in `docs/prereg/expiry_seller_v1.json`:
+- **Sleeves:** A is the iron condor 20/10 (defined risk) and B is the 20-delta strangle (naked), each on NIFTY and BANKNIFTY at 1 lot.
+- **Entry:** the chain tape's real bid/ask nearest 15:20 on the eve, a tick worse than the touch.
+- **Exit:** settled at the expiry-day close.
+
+Every trade records its **cost gap**: the real entry credit against what the history's cost convention would have assigned at the same snapshot. That gap moves much less than P&L, so it shows within weeks whether the backtest's costs were honest. A sleeve is **retired** if:
+- real costs eat the historical edge;
+- its forward mean breaks from the history (z < −1.645);
+- or, for B, a loss exceeds 1.5× the history's worst.
+
+Eligibility for the ₹5L paper account is reported, never applied: A first, after 10 trades. B only follows after A has been eligible for 3 months. Real money is the owner's call. The ledger (`runtime/intraday/sleeves/ledger.jsonl`) is append-only and saved with the journal. Skipped and missed eves are logged, never dropped. `--report` prints the standings.
+
 **Checking the fills.** `audit.yml` (Actions tab, optional date) downloads the recorded option chains from the live runs' artifacts and checks every paper fill against the bid/ask the market actually showed, with each trade's P&L at those quotes (`deploy/audit_fills.py`).
 
 - **The live website** is at `https://mrityurequest20-cyber.github.io/Quant-Desk/`. It is the same phone app, **read-only**, re-published every ~6 minutes while the desk runs. The status pill reads **Live** while the heartbeat is fresh, **Closed** outside market hours and **Offline** when the connection or desk is unavailable; cached data is labelled as potentially stale. **Install it:** on Android, Chrome offers *Install app* (the app shows a card for it too); on iPhone, Safari → Share → *Add to Home Screen*. It then opens full-screen from its own icon, and a service worker keeps the last state readable offline.
