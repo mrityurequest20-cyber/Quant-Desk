@@ -325,6 +325,16 @@ defined-risk position: one lot of a one-strike debit spread, about half the stri
 answer is mostly no. RELIANCE (lot 500, ₹10 strikes) is ≈₹2,500 a lot, 12.5% of the account, over the desk's 8% risk
 budget. So stocks are a watch list at this size, and the ranking says which ones fit as the account grows.
 
+**Buying one lot of a call or put** (the buyer-only desk's question) is checked too: the premium within the 35% outlay
+cap and the 30% premium stop within the risk budget, at the money first, then two strikes out. On 1 Oct 2026
+(26 days to expiry), none of the 25 most liquid stocks fit ₹20k. The closest were:
+- BHARTIARTL: ₹6,412 a lot, ₹1,924 at the stop
+- HDFCBANK: ₹6,662 a lot, ₹1,999 at the stop
+- SBIN: ₹7,837 a lot, ₹2,351 at the stop
+
+All against a ₹1,600 budget. They come within reach in expiry week, as premiums shrink, or at about ₹25k. The
+ranking prints **BUY OK** when one does.
+
 The volume units, checked on the warehouse's Sep-2026 data:
 - `TtlTradgVol` counts **contracts**: only ~1% of values are lot multiples, i.e. chance.
 - Open interest is in **shares**: 96% are lot multiples.
