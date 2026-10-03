@@ -140,3 +140,23 @@ The spec was committed in d4b53d8 before any of these tests touched the data. De
 
 So no pre-registered intraday direction rule survived its untouched period at the futures cost. The lock for this
 spec is spent. A new idea needs a new spec, committed before it runs.
+
+### The record: vol_forecast_v1 (spec sha256 f2d4d047ee19…)
+
+The spec was committed in 617ed1b before the study ran. The question: how well does the desk's VolForecaster
+(realised part) forecast realised variance over the next 30m / 60m / 120m / to the close?
+- **Dev (2013–2018 yearly folds, both indices).** The desk's forecaster lost to both alternatives in every year, on
+  both indices, at every horizon (mean QLIKE 0.20–0.26). The seasonal version cut that by ~20–25%. HAR was best
+  everywhere, so it was selected for all four horizons.
+- **Calibration (dev).** On 30-minute horizons the desk expects moves 15–30% bigger than realised in the morning and
+  midday (move ratio 0.70–0.87), and smaller in the last 90 minutes (~1.15). Its constant per-minute σ ignores the
+  intraday volatility profile. Part of any ratio below 1 is fat tails, which a perfect variance forecast shows too.
+- **Lock (2019 to Feb 2023, opened once on 4 Oct 2026): all 8 tests pass.** QLIKE gain over the desk's forecaster:
+  - NIFTY: 20% (30m), 27% (60m), 35% (120m), 28% (close);
+  - BANKNIFTY: 13% (30m), 18% (60m), 25% (120m), 21% (close);
+  - Diebold-Mariano t: +4.6 to +12.7.
+
+The first pre-registered result in this project to pass its locked period. Its use is fixed by the spec: only as the
+desk's realised-volatility input. Whether it improves option plans is a question for plan research on real
+point-in-time quotes, not for this study. The live forecaster's 30% IV blend was not tested here (no IV in this
+dataset).
