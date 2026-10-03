@@ -58,6 +58,9 @@ class IntradayEngine:
         self.marker = QuoteMarker(self.pricer)
         self.refresh_min = getattr(self.chains, "refresh_min", None) or ic.get("chain_refresh_min", 3)
         self.max_entry_slip = float(ic.get("max_entry_slip", 0.15))
+        # buyer only below this equity: no short option legs (margin). None: never sell; 0: always allowed
+        sl = ic.get("short_legs_from_equity", 300000)
+        self.short_from = None if sl is None else float(sl)
         # anticipation: setups the read already favours wait at their trigger level (playbook.Armed) and fire the
         # moment price gets there, from a live price polled every few seconds (feeds with `realtime`) or, without
         # one, from each new 1-minute bar's range. Stops and targets are checked on the same fast loop.
@@ -228,6 +231,7 @@ class IntradayEngine:
         if not got:
             return False
         self._refresh_news(now)
+        self._short_legs(now)
         if self.brain is not None and self.brain.gfeed is not None:
             self._guarded("global", now, "global refresh", self.brain.gfeed.refresh, now)
         if self.brain is not None and getattr(self.brain, "hfeed", None) is not None:
@@ -502,6 +506,19 @@ class IntradayEngine:
             self._heartbeat(now)
             self.journal.commit()
         return did
+
+    def _short_legs(self, now) -> None:
+        """Buyer only until the account can carry the margin a sold leg needs; say so when it changes."""
+        ok = self.short_from is not None and self.equity(now) >= self.short_from
+        if ok != self.playbook.allow_short or not hasattr(self, "_short_said"):
+            self._short_said = True
+            if not ok:
+                self.journal.event(now, "INFO", "mode", "buyer only: long calls and puts, no sold legs (spreads, flies) "
+                                   + (f"until equity reaches ₹{self.short_from:,.0f}" if self.short_from is not None else "(selling off)"))
+            elif self.playbook.allow_short is False:
+                self.journal.event(now, "INFO", "mode", f"equity ₹{self.equity(now):,.0f} ≥ ₹{self.short_from:,.0f}: spreads and "
+                                                         f"defined-risk selling are back on")
+        self.playbook.allow_short = ok
 
     # ---- learning ---------------------------------------------------------------------------------------------
     def _apply_memory(self) -> None:

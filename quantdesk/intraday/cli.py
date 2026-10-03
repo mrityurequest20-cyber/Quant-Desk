@@ -315,7 +315,9 @@ def cmd_ai_check(cfg, a):
             if not got:                                     # the model's own reply (never the key), to see why
                 print(f"{name}: raw reply {json.dumps(getattr(r, 'last_raw', {}))[:800]}")
         except Exception as exc:
-            print(f"{name}: key in {var}, but the call failed: {type(exc).__name__}: {str(exc)[:200]}")
+            tried = (getattr(locals().get("r"), "last_raw", {}) or {}).get("tried")
+            print(f"{name}: key in {var}, but the call failed: {type(exc).__name__}: {str(exc)[:200]}"
+                  + (f" (models tried: {', '.join(tried)})" if tried else ""))
     if not ok_any:
         sys.exit(1)
 
@@ -345,6 +347,26 @@ def cmd_learn(cfg, a):
     from . import learning
     p = paths(cfg, a.account or "live")
     mem = learning.Memory(p["memory"])
+    if a.bootstrap:
+        if a.if_empty and (mem.d["tables"].get("factor") or mem.d.get("bootstrap")):
+            print(f"learning: the record already has {mem.graded('factor'):.0f} graded factor reads; nothing to bootstrap")
+            return
+        syms = cfg.get("intraday.underlyings") + [cfg.get("universe.volatility_index")]
+        rec = SessionRecorder(p["data"])
+        bars = rec.load_bars(syms) if rec.days() else {}
+        try:                                                # Yahoo keeps a week of 1-minute bars: the sessions not recorded
+            from .feeds import YahooIntradayFeed
+            y = YahooIntradayFeed(cfg)
+            for sym in syms:
+                h = y.history(sym, 7)
+                if h is not None and len(h):
+                    bars[sym] = h if sym not in bars or bars[sym].empty else \
+                        bars[sym].combine_first(h).sort_index()
+        except Exception as exc:
+            print(f"learning: Yahoo history unavailable ({exc!s:.120}); recorded sessions only")
+        got = learning.bootstrap(cfg, mem, bars, Journal(p["journal"]))
+        mem.save()
+        print(f"bootstrapped from {got['sessions']} session(s): {got['factors']} factor reads, {got['news']} news calls graded")
     if a.rebuild:
         rec = SessionRecorder(p["data"])
         bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
@@ -599,6 +621,8 @@ def register(sub):
     x = ss.add_parser("learn", help="what the desk has learned from its calls (news, factors, setups)")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--rebuild", action="store_true", help="grade the whole journal again from the recorded bars")
+    x.add_argument("--bootstrap", action="store_true", help="seed the record from the last week's real sessions (replayed)")
+    x.add_argument("--if-empty", action="store_true", help="with --bootstrap: only when nothing has been graded yet")
     x.add_argument("--top", type=int, default=12)
     x.set_defaults(fn=cmd_learn)
     x = ss.add_parser("export-site", help="the web app + an account's data as a read-only static site")

@@ -1,0 +1,49 @@
+# Seed (or re-seed) the desk's learning record from history, between sessions: the last week of real 1-minute
+# sessions (recorded, plus Yahoo's) is replayed through the same analyst and every factor's read graded against what
+# the index did next; the saved headlines are graded too (intraday/learning.py bootstrap). The record lives in
+# runtime/intraday/memory.json on the journal branch. live.yml does the same by itself when the record is empty.
+name: Learning bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-seed even if the record already has grades"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write            # push the journal branch
+
+concurrency:
+  group: live-desk           # never while the desk is writing the same journal
+  cancel-in-progress: false
+
+jobs:
+  learn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the journal
+        run: deploy/journal.sh restore
+      - name: Bootstrap the record
+        run: |
+          set -o pipefail
+          if [ "$FORCE" = "true" ]; then flag=""; else flag="--if-empty"; fi
+          python -m quantdesk intraday learn --bootstrap $flag --top 20 | tee learn.txt
+      - name: Save the journal
+        run: deploy/journal.sh save "learning bootstrap $(date '+%F %H:%M') IST"
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## Learning record"; echo '```'; cat learn.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

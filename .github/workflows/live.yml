@@ -67,6 +67,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: deploy/warehouse-context.sh
+      - name: Seed the learning record if it's empty (replays the last week's real sessions; factors and news only)
+        run: python -m quantdesk intraday learn --bootstrap --if-empty || echo "::warning::learning bootstrap skipped"
       - name: Start a fresh paper account
         if: ${{ inputs.reset_account }}
         run: python -m quantdesk intraday reset-account --yes

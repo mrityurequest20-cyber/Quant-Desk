@@ -10,6 +10,7 @@ targets, premium stop, and time stop — decided *before* entry and journaled wi
 
 Structure choice follows the vol view: premium cheap/fair → buy the option outright;
 premium rich → debit vertical (sells some of the rich vol back); balance + rich → iron fly.
+Below `intraday.short_legs_from_equity` the desk is a buyer only: no structure with a sold leg is built.
 """
 from __future__ import annotations
 
@@ -190,6 +191,10 @@ class Playbook:
     def __init__(self, cfg, pricer: IntradayPricer):
         self.cfg = cfg
         self.p = cfg.get("intraday.setups", {}) or {}
+        # Buyer only while the account is small: a short option leg (a debit spread's sold leg, the iron fly) needs
+        # margin the account doesn't have. The engine sets this from equity vs intraday.short_legs_from_equity;
+        # the selling structures stay in the playbook and come back by themselves once the account is big enough.
+        self.allow_short = True
         self.min_conv = cfg.get("intraday.analyst.min_conviction", 0.45)
         self.picker = StrikePicker(pricer)
 
@@ -219,8 +224,8 @@ class Playbook:
             return None
         legs = [_leg(long_q, right, +1)]
         structure = "long_call" if direction > 0 else "long_put"
-        # a debit spread when IV is rich (sell some of the expensive vol) or always (small accounts)
-        if p.get("always_spread", False) or (view.vol_view == "rich" and p.get("spread_when_rich", True)):
+        # a debit spread when IV is rich (sell some of the expensive vol) or always, when short legs are allowed
+        if self.allow_short and (p.get("always_spread", False) or (view.vol_view == "rich" and p.get("spread_when_rich", True))):
             short_q = self.picker.by_delta(chain, right, p.get("short_delta", 0.25), now)
             if short_q is not None and short_q["strike"] != long_q["strike"]:
                 legs.append(_leg(short_q, right, -1))
@@ -328,7 +333,7 @@ class Playbook:
 
     def range_sell(self, view: MarketView, s: dict, chain, now) -> TradePlan | None:
         p = self.on("range_sell")
-        if not p or view.day_type != "balance" or view.vol_view != "rich" or abs(view.score) > p.get("max_abs_score", 0.3):
+        if not p or not self.allow_short or view.day_type != "balance" or view.vol_view != "rich" or abs(view.score) > p.get("max_abs_score", 0.3):
             return None
         if not (p.get("after_min", 75) <= s["minutes"] <= p.get("until_min", 255)):
             return None
@@ -380,7 +385,7 @@ class Playbook:
             q = self.picker.by_delta(chain, right, d, now)
             if q is not None:
                 add([_leg(q, right, +1)], f"long_{base}")
-        for ld, sd in spreads:
+        for ld, sd in (spreads if self.allow_short else ()):
             lq, sq = self.picker.by_delta(chain, right, ld, now), self.picker.by_delta(chain, right, sd, now)
             if lq is not None and sq is not None and lq["strike"] != sq["strike"]:
                 add([_leg(lq, right, +1), _leg(sq, right, -1)], "bull_call_spread" if right == "CE" else "bear_put_spread")

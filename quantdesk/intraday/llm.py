@@ -225,7 +225,8 @@ class GeminiReader:
     name = "gemini"
     base = "https://generativelanguage.googleapis.com/v1beta"
 
-    FALLBACK = ("gemini-flash-latest", "gemini-3-flash-preview", "gemini-2.5-flash")
+    FALLBACK = ("gemini-flash-latest", "gemini-3-flash-preview", "gemini-flash-lite-latest", "gemini-2.5-flash-lite",
+                "gemini-pro-latest", "gemma-4-31b-it", "gemini-2.5-flash")
 
     def __init__(self, key: str, model: str = "gemini-flash-latest", timeout: float = 45.0, session=None):
         import requests
@@ -240,12 +241,18 @@ class GeminiReader:
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}}
         tried = []
         for m in (self.model,) + tuple(x for x in self.FALLBACK if x != self.model):
-            r = self.http.post(f"{self.base}/models/{m}:generateContent", json=body, timeout=self.timeout,
-                               headers={"x-goog-api-key": self.key})
-            if getattr(r, "status_code", 200) not in (404, 429, 500, 503):   # retired (404s while still listed) or
-                self.model = m                              # busy (503 on 3 Oct 2026): try the next model
+            for attempt in (0, 1):                          # a busy model gets one more try after a second
+                r = self.http.post(f"{self.base}/models/{m}:generateContent", json=body, timeout=self.timeout,
+                                   headers={"x-goog-api-key": self.key})
+                code = getattr(r, "status_code", 200)
+                if code not in (429, 500, 503) or attempt:
+                    break
+                time.sleep(1.0)
+            tried.append(f"{m} {code}")
+            if code not in (404, 429, 500, 503):            # retired (404s while still listed) or busy (503, 3 Oct
+                self.model = m                              # 2026): try the next model
                 break
-            tried.append(m)
+        self.last_raw = {"tried": tried}
         r.raise_for_status()
         d = r.json()
         self.usage["calls"] += 1
@@ -254,7 +261,7 @@ class GeminiReader:
         self.usage["out"] += int(um.get("candidatesTokenCount") or 0)
         parts = ((d.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts)
-        self.last_raw = {"content": text[:600], "finish": ((d.get("candidates") or [{}])[0]).get("finishReason")}
+        self.last_raw = {"tried": tried, "content": text[:600], "finish": ((d.get("candidates") or [{}])[0]).get("finishReason")}
         return _parse_reads(text, {it["id"] for it in items})
 
     def models(self) -> list[str]:

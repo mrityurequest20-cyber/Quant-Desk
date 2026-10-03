@@ -131,6 +131,12 @@ Other commands:
 
    The structure follows the vol view: buy the option when premium is fair or cheap, a debit spread when it's rich, a defined-risk fly for range days. Strikes come from the real chain by delta. Each plan fixes its **invalidation level, targets, premium stop and time stop before entry**.
 
+   **Buyer only below ₹3 lakh** (`intraday.short_legs_from_equity`). A sold option leg needs margin, and a ₹20k
+   account doesn't have it. So below that equity the desk only buys calls and puts:
+   - no debit spreads (their short leg), no iron fly, and no spread alternatives in the EV ranking;
+   - the selling structures stay in the playbook, untouched;
+   - once equity reaches the threshold they switch back on by themselves, and the journal says so.
+
    **Waiting at the level (anticipation).** The breakout and pullback setups don't only wait for a 5-minute candle to close beyond a level. Every minute the desk also *arms* the ones its read already favours, at the exact trigger: the OR high/low or the 30-minute range edge (a stop entry through it), or VWAP on a trend-day pullback (a limit entry back at it). It only arms them when the level is within 1.5 ATR5 and there's no no-trade flag. With Kotak, the index price is polled every 5 seconds, so an armed setup fires the moment price trades there; without a live price, each new 1-minute bar's range decides it (in replays too). Legs are repriced to the trigger price before the EV gate decides.
    - The 5-minute-close confirmation stays as a fallback (`intraday.anticipate.confirm_fallback`). A break the read only backs once it happens is still taken, just later.
    - In replays, armed entries filled within 0.04 points of their level, but the EV gate turned most down before the break: conviction tends to arrive *with* the breakout. Every armed fire and its verdict is journaled, so live sessions show whether pre-break entries would have paid.
@@ -210,6 +216,11 @@ With Kite, full-mode snapshots are classified with the quote rule and fed into i
 
 **With the default ₹20,000 account**, the same 10 sessions lost **−19%**: 20 trades, 30% win rate, max drawdown −27.6%, ₹2,581 in costs. A small options account is a different game. The smallest position is one lot of a narrow NIFTY debit spread, which risks ₹1.2–1.6k (6–8% of the account). Each round trip also costs about ₹110–130, because the ₹20 flat brokerage is charged on each of the 4 orders a spread needs. That's why the ₹20k config caps the desk at 2 trades a day and only sizes into high-conviction plans. BANKNIFTY (monthly expiries only) is too expensive to trade at this size.
 
+*Since 3 Oct 2026 the ₹20k desk is a buyer only* (see above): one lot of a 0.45-delta NIFTY weekly option, ≈₹5–6k of
+premium against the 35% outlay cap, stopped at 30% of premium (₹1.5–1.8k). On the same 10 synthetic sessions that
+gave 8 trades and **+₹4,298** (spreads with the quant layer: 7 trades, +₹108). That's synthetic data: it checks the
+mechanics, not an edge.
+
 **The quant decision layer on the same 10 sessions at ₹20k:** 7 trades instead of 20, costs of ₹559 instead of ₹2,581, net **+₹108 (+0.5%)** instead of −₹3,808, and max drawdown −13.5% instead of −27.6%. That's the EV gate refusing trades that can't pay their costs. It is not a proven edge: 7 trades, one +₹3,062 winner carried it, and the data is synthetic.
 
 ## The quant decision layer
@@ -273,6 +284,16 @@ changes how much it trusts each input. It grades at the close, and catches up at
   decision.
 - **Pre-break entries the EV gate refused** are replayed on the bars that followed: target or stop first, within
   45 minutes. That shows whether waiting for confirmation is costing the desk.
+
+**Headlines that share a window are one observation.** A night's forty stories are all judged on the same opening
+move, so they split one observation between them. Counted one each, the 403 headlines of 29 Sep 2026 had scored "66%
+right" (×1.31 trust); counted properly they're 24 observations at 48% (×0.98).
+
+**It doesn't start empty.** When the record has no grades, the morning job (and **Actions → Learning bootstrap**)
+replays the last week of real 1-minute sessions through the same analyst: recorded bars, plus Yahoo's week of 1-minute
+history. It grades every read's factors against what the index actually did, and grades the saved headlines. Setups
+are left out: a replay's fills come from a model chain, so the setup record is built only from the desk's own trades.
+Run it locally with `intraday learn --bootstrap`.
 
 Everything is shrunk toward "no change" by a prior worth 20 observations (8 for trades), so one good or bad day
 can't swing it. The memory is `runtime/intraday/memory.json`; it is saved with the journal and survives an account

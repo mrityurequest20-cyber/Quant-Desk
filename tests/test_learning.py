@@ -155,3 +155,27 @@ def test_the_engine_grades_each_session_and_stands_aside_on_a_losing_record(synt
     dec = e2.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'")
     assert e2.closed == [] and (dec.empty or dec["detail"].str.contains("has lost").all())
     assert not plain.closed or not dec.empty                             # what it would have traded, it refused by record
+
+
+def test_a_night_of_headlines_is_one_observation_not_forty(tmp_path):
+    from quantdesk.intraday.news import NewsItem, classify
+    j = Journal(tmp_path / "j.db")
+    night = [classify(NewsItem(ts("2026-10-04 21:00") + pd.Timedelta(minutes=10 * i), "ET",
+                               f"Nifty, banks set to rally as FII buying returns, story {i}", id=f"n{i}")) for i in range(40)]
+    j.news_add(night, ts("2026-10-05 08:00"))
+    j.commit()
+    m = Memory()
+    graded = learning.grade_news(m, j.news(n=1000), {"NIFTY": day_bars(), "BANKNIFTY": day_bars(start=55000.0)})
+    assert graded == 80                                                  # 40 stories × 2 indices were read...
+    assert m.stat("news_reader", "rules")["n"] == pytest.approx(2.0)     # ...but they are one opening move per index
+    assert m.reliability("news_reader", "rules") < 1.1                   # one good morning is not a record
+
+
+def test_bootstrap_seeds_the_record_from_real_sessions(synthetic, tmp_path):
+    cfg, bars, days = synthetic
+    window = {s: df[df.index.date >= days[-3]] for s, df in bars.items()}
+    m = Memory(tmp_path / "memory.json")
+    got = learning.bootstrap(cfg, m, window, journal=None, say=lambda *_: None)
+    assert got["sessions"] == 3 and got["factors"] > 300 and m.d["bootstrap"]["days"][-1] == str(days[-1])
+    assert m.stat("setup", "orb") is None                                # replay fills don't build a setup record
+    assert all(0.5 <= w <= 1.5 for w in m.factor_weights().values()) and len(m.d["days"]) == 3

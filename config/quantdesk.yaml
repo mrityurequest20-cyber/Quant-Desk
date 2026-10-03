@@ -154,6 +154,10 @@ intraday:
   # confirm_fallback: a breakout the read only backs once it happens is still taken on the 5m close (later, not missed).
   anticipate: {enabled: true, setups: [orb, trend_break, vwap_trend], tick_sec: 5, ttl_min: 2, buffer_atr5: 0.10, reach_atr5: 1.5,
                confirm_fallback: true}
+  # Buyer only while the account is small: a sold option leg (a debit spread's short leg, the iron fly) needs margin
+  # this account doesn't have. Below this equity the desk only buys calls and puts; the selling structures stay in the
+  # playbook and switch back on by themselves once equity reaches it. null: never sell; 0: always allowed.
+  short_legs_from_equity: 300000
   # the near-month index future (Kotak): its volume goes on the index bars; OI build-up and basis join the read.
   # roll_days: switch to the next month this many days before expiry.
   futures: {roll_days: 3}

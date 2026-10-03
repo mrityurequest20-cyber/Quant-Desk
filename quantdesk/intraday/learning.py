@@ -99,7 +99,7 @@ class Memory:
 
 
 # ---- grading ---------------------------------------------------------------------------------------------------------
-def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: bool = False) -> float | None:
+def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: bool = False, with_start: bool = False):
     """Log return of the close from the first bar at/after t to the bar `minutes` later, same session only.
     `from_open`: something seen outside market hours (overnight news) is graded from the next session's first bar,
     the first moment the desk could act on it (up to a weekend later)."""
@@ -119,11 +119,17 @@ def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: boo
     if j >= len(idx) or idx[j].date() != idx[i].date():
         return None
     a, b = float(bars["close"].iloc[i]), float(bars["close"].iloc[j])
-    return math.log(b / a) if a > 0 and b > 0 else None
+    fr = math.log(b / a) if a > 0 and b > 0 else None
+    return (fr, idx[i]) if with_start and fr is not None else (None if with_start else fr)
 
 
 def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0, min_tone: float = 0.15) -> int:
-    done, n = set(mem.d["graded"]["news"]), 0
+    """Each headline's tone (each reader's) against the index's next 30 minutes from when the desk could act on it.
+    Headlines that share that window are one observation between them, not one each: a night's forty stories are
+    all judged on the same opening move, and counting them forty times would make one lucky morning look like a
+    record (3 Oct 2026: 403 stories on 29 Sep scored "66% right" and ×1.31 trust before this)."""
+    done = set(mem.d["graded"]["news"])
+    rows = []
     for r in news.itertuples():
         if r.id in done:
             continue
@@ -133,24 +139,30 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
         for sym in ("NIFTY", "BANKNIFTY"):
             if (about.get(sym) or 0) < min_rel:
                 continue
-            fr = forward(bars.get(sym), r.ts, from_open=True)
-            if fr is None:
+            got = forward(bars.get(sym), r.ts, from_open=True, with_start=True)
+            if got is None:
                 continue
+            fr, t0 = got
             graded = True
             llm_ = ((nlp_.get("llm") or {}).get("readers") or {})
             for reader, tone in [("rules", r.sentiment)] + [(k, (v or {}).get(sym)) for k, v in llm_.items()]:
                 if tone is None or not tone == tone or abs(tone) < min_tone:
                     continue
-                s = float(np.sign(tone))
-                hit, bps = s * fr > 0, s * fr * 1e4
-                mem.bump("news_reader", reader, hit, bps)
-                if reader == "rules":
-                    mem.bump("news_event", nlp_.get("event", "general"), hit, bps)
-                    mem.bump("news_source", r.source, hit, bps)
-                n += 1
+                rows.append((reader, sym, t0.floor(f"{HORIZON}min"), float(tone), fr, nlp_.get("event", "general"), r.source))
         if graded:
             mem.d["graded"]["news"].append(r.id)
-    return n
+    share: dict = {}
+    for reader, sym, win, *_ in rows:
+        share[(reader, sym, win)] = share.get((reader, sym, win), 0) + 1
+    for reader, sym, win, tone, fr, event, source in rows:
+        w = 1.0 / share[(reader, sym, win)]
+        s = float(np.sign(tone))
+        hit, bps = s * fr > 0, s * fr * 1e4
+        mem.bump("news_reader", reader, hit, bps, w)
+        if reader == "rules":
+            mem.bump("news_event", event, hit, bps, w)
+            mem.bump("news_source", source, hit, bps, w)
+    return len(rows)
 
 
 def grade_factors(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
@@ -252,6 +264,38 @@ def rebuild(mem: Memory, journal, bars: dict) -> dict:
            "trades": grade_trades(mem, tr), "armed": grade_armed(mem, dec, bars)}
     mem.d["days"] = sorted({str(t)[:10] for t in th["ts"]}) if not th.empty else []
     return out
+
+
+def bootstrap(cfg, mem: Memory, bars: dict, journal=None, min_bars: int = 300, max_sessions: int = 8, say=print) -> dict:
+    """Seed a memory from history so the desk doesn't start every factor at "no record".
+
+    Each full session in `bars` (real 1-minute bars: recorded, or Yahoo's last week) is replayed through the same
+    engine and analyst on a scratch journal, and every read's factors are graded against what the index did next:
+    the same grading as live, point in time. Headlines in `journal` are graded too. Setups are not: a replay's fills
+    come from a model chain, and the setup record should be built from the desk's own trades."""
+    from ..journal.journal import Journal
+    from .engine import IntradayEngine, run_replay
+    from .feeds import ReplayFeed
+    from .sim import IntradayBroker
+    nifty = bars.get("NIFTY")
+    if nifty is None or nifty.empty:
+        return {"sessions": 0, "factors": 0, "news": 0}
+    counts = pd.Series(nifty.index.date).value_counts()
+    days = sorted(d for d, n in counts.items() if n >= min_bars)[-max_sessions:]
+    scratch = Journal()
+    for d in days:
+        say(f"  replaying {d} for the record …")
+        eng = IntradayEngine(cfg, ReplayFeed(bars, d), "model", scratch, IntradayBroker(cfg, starting_cash=500000), say=None)
+        run_replay(eng)
+    th = scratch.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
+    got = {"sessions": len(days), "factors": grade_factors(mem, th, bars), "news": 0}
+    if journal is not None:
+        got["news"] = grade_news(mem, journal.df("SELECT * FROM news ORDER BY ts"), bars)
+    mem.d["bootstrap"] = {**got, "days": [str(d) for d in days]}
+    for d in days:
+        if str(d) not in mem.d["days"]:
+            mem.d["days"].append(str(d))
+    return got
 
 
 def summary(mem: Memory, top: int = 6) -> list[str]:

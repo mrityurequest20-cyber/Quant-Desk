@@ -208,4 +208,5 @@ def test_gemini_moves_past_a_retired_model():
     h = Http()
     r = llm.GeminiReader("k", model="gemini-2.5-flash", session=h)
     assert r.read([{"id": "a", "ts": "", "source": "ET", "title": "x"}])["a"]["NIFTY"] == 0.3
-    assert r.model == "gemini-3-flash-preview" and len(h.urls) == 3             # and it stays on the one that works
+    assert r.model == "gemini-3-flash-preview" and len(h.urls) == 4             # busy model: tried twice; retired: once
+    assert r.last_raw["tried"] == ["gemini-2.5-flash 404", "gemini-flash-latest 503", "gemini-3-flash-preview 200"]

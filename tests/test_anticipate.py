@@ -161,3 +161,35 @@ def test_replay_without_a_live_price_fills_armed_setups_inside_the_bar(day):
     e2 = IntradayEngine(off, ReplayFeed(bars, d), "model", Journal(), IntradayBroker(off, starting_cash=500000), say=None)
     run_replay(e2)                                                      # without the fallback only armed entries exist
     assert all(t.strategy not in ("orb", "trend_break", "vwap_trend") or t.meta.get("armed") for t in e2.closed)
+
+
+def test_buyer_only_below_the_selling_threshold(day):
+    """A ₹20k account can't post margin for a sold leg: only long calls and puts until equity reaches the threshold.
+    The selling structures stay in the playbook and come back by themselves."""
+    cfg, bars, d = day
+    from quantdesk.intraday.engine import run_replay
+    small = IntradayEngine(cfg, ReplayFeed(bars, d), "model", Journal(), IntradayBroker(cfg, starting_cash=20000), say=None)
+    run_replay(small)
+    assert all(l.qty > 0 for t in small.closed for l in t.legs) and not small.playbook.allow_short
+    ev = small.journal.df("SELECT message FROM events WHERE category='mode'")["message"]
+    assert ev.str.contains("buyer only").any() and ev.str.contains("300,000").any()
+    big = IntradayEngine(cfg, ReplayFeed(bars, d), "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(big)
+    assert big.playbook.allow_short                                   # ₹5 lakh: spreads are allowed again
+
+    pb = Playbook(cfg, IntradayPricer())
+    from quantdesk.intraday.chains import ModelOptionChain
+    eng = IntradayEngine(cfg, ReplayFeed(bars, d), "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    eng.start_session(d)
+    for _ in range(60):
+        eng.feed.advance()
+        eng.step()
+    ch, now = eng.chain_df["NIFTY"], eng.feed.now()
+    v = view(score=0.6, conviction=0.7, spot=float(ch.attrs["spot"]))
+    v = v.__class__(**{**v.__dict__, "vol_view": "rich", "state": {"atr5": 20.0}})
+    for allow, want in ((True, "bull_call_spread"), (False, "long_call")):
+        pb.allow_short = allow
+        plan = pb._directional("orb", v, ch, now, 1, "t", "t", float(ch.attrs["spot"]) - 60, float(ch.attrs["spot"]) + 90)
+        assert plan.structure == want and (allow or all(l.ratio > 0 for l in plan.legs))
+        alts = pb.alternatives(plan, ch, now)
+        assert allow or all(a.structure.startswith("long_") for a in alts)
