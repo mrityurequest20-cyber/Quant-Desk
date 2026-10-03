@@ -167,6 +167,35 @@ def cmd_live(cfg, a):
             time.sleep(min(600, max(1, (wake - pd.Timestamp.now(tz=IST)).total_seconds())))
 
 
+def cmd_tape(cfg, a):
+    """Record real option chains every minute for several expiries, beside the engine (intraday/tape.py)."""
+    from .feeds import IST
+    from .kotak import KotakOptionChain
+    from .tape import ChainTape, completeness, render
+    data = paths(cfg, "live")["data"]
+    if a.report:
+        day = a.report if a.report != "today" else str(pd.Timestamp.now(tz=IST).date())
+        print(render(completeness(data / day)), flush=True)
+        return
+    client = _kotak_client()
+    if client is None:
+        print("chain tape: no KOTAK_CONSUMER_KEY; nothing to record (NSE's public chain is the engine's fallback only)",
+              flush=True)
+        return
+    now = pd.Timestamp.now(tz=IST)
+    if not TradingCalendar(cfg.holidays()).is_trading_day(now.date()):
+        print(f"chain tape: {now.date()} is not an NSE trading day", flush=True)
+        return
+    tc = cfg.get("intraday.tape", {}) or {}
+    want = dict(tc.get("expiries") or {})
+    if a.symbols:
+        want = {s.strip().upper(): want.get(s.strip().upper(), 2) for s in a.symbols.split(",") if s.strip()}
+    kc = cfg.get("intraday.kotak", {}) or {}
+    tape = ChainTape(KotakOptionChain(client, strikes=kc.get("strikes", 20)), data, want or None,
+                     every_min=tc.get("every_min", 1), say=lambda m: print(m, flush=True))
+    tape.run(dt.time.fromisoformat(a.until) if a.until else None)
+
+
 def cmd_reset_account(cfg, a):
     base = paths(cfg, "live")["journal"].parent
     if not a.yes:
@@ -592,6 +621,11 @@ def register(sub):
                    help="square off today's open positions now and close the session (the kill switch)")
     x.add_argument("--quiet", action="store_true")
     x.set_defaults(fn=cmd_live)
+    x = ss.add_parser("tape", help="record real option chains every minute for the nearest expiries (beside `live`)")
+    x.add_argument("--until", help="HH:MM to stop early")
+    x.add_argument("--symbols", help="e.g. NIFTY,BANKNIFTY (default: intraday.tape.expiries)")
+    x.add_argument("--report", nargs="?", const="today", help="completeness of a recorded day (YYYY-MM-DD) instead")
+    x.set_defaults(fn=cmd_tape)
     x = ss.add_parser("reset-account", help="archive the live paper account and start fresh at the configured capital")
     x.add_argument("--yes", action="store_true")
     x.set_defaults(fn=cmd_reset_account)

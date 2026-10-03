@@ -681,7 +681,11 @@ That wasn't enough: GitHub throttles cron on this repository so hard that the 10
 1. GitHub → Settings → Developer settings → Fine-grained tokens → *Generate new token*. Repository access: only `Quant-Desk`. Permissions: **Actions: Read and write**. Set an expiry you'll remember.
 2. Cloudflare dashboard → Workers & Pages → the Worker → Settings → Variables and Secrets → **Add** → type *Secret*, name `GH_DISPATCH_TOKEN`, value the token.
 
-Without the token the trigger logs why and does nothing (the Worker's Logs show it).
+Without the token the trigger logs why and does nothing (the Worker's Logs show it). As of 3 Oct 2026 it had never dispatched a run, so the token is probably not set yet.
+
+**The overnight waiter (no setup).** Even a throttled scheduler fires a few times a night, and one firing in the six hours before the open is enough. When `scheduler.py` runs outside the start window and the next session's 08:30 IST is less than 5h40m away, it dispatches `wake.yml` (unless a waiter is already armed or the desk is running). That job sleeps on its runner until 08:30 IST, then runs the same check, which starts the desk. Hosted minutes are free on this public repository. Cancelling a waiter disarms it; cancelling a `live.yml` run is still the day's kill switch.
+
+**The chain tape.** Next to the engine, `deploy/run-session.sh` runs `quantdesk intraday tape`. It is a separate process that records Kotak's real chain (bid/ask, OI, volume, 41 strikes) every minute for NIFTY's 3 nearest expiries and BANKNIFTY's 2 (`intraday.tape` in the config). Files go under `runtime/intraday/data/<day>/chains/`, the recorder's folder and names, so the session archive keeps them on the `chains-YYYY` release. It also writes one log row per attempt to `<day>/tape.csv`, which is archived as `…_tape.parquet`. `quantdesk intraday tape --report [YYYY-MM-DD]` shows a day's per-series minute coverage. This is the only route to real point-in-time evidence for plan research (docs/PLAN_RESEARCH.md): a full session yields about 375 snapshots per series, against 104 in the desk's whole history before it.
 
 **Checking the fills.** `audit.yml` (Actions tab, optional date) downloads the recorded option chains from the live runs' artifacts and checks every paper fill against the bid/ask the market actually showed, with each trade's P&L at those quotes (`deploy/audit_fills.py`).
 

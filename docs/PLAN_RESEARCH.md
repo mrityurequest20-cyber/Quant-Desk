@@ -129,6 +129,17 @@ selected, locked, registered or promoted, and sessions held for the real lock ar
 - The analyst's tilt, the narrative, LLM reads and the session-trained DirectionModel stay **advisory**: shown in the
   app and the journal, never the reason for a trade.
 
+## Where real point-in-time evidence comes from
+
+Only the desk's own recordings of Kotak's live book qualify. Until 3 Oct 2026 the desk recorded one expiry, at the
+engine's refresh, on the few sessions it was awake for: 104 snapshots in all. Two changes raise that to about 375 per
+series per session:
+- the overnight waiter (`wake.yml`, deploy/scheduler.py) so the desk is up at the open;
+- the chain tape (intraday/tape.py), which records the 3 nearest NIFTY expiries and 2 BANKNIFTY expiries every minute,
+  across every DTE bucket.
+`tape.csv` records each attempt, so missing minutes are measured, not guessed. The bar for qualifying (≥ 28 independent
+real sessions) is unchanged.
+
 ## Reading the report
 
 `plan/studies/<id>/report.md` has separate sections:

@@ -103,3 +103,24 @@ pass. The failures are listed, by year.
 
 The tolerances and the bar were not changed between the two runs. Only the importer defect the first run exposed was
 fixed.
+
+## Pre-registered intraday direction tests
+
+`docs/prereg/intraday_direction_v1.json` fixed seven hypotheses × two indices, the statistic, the dev period
+(→ 2018) and the lock period (2019 →), and both decision rules before any of them touched these data. They have a
+literature or market-structure reason, and were not found by searching:
+- intraday momentum (Gao, Han, Li & Zhou 2018), with and without the overnight gap;
+- first-hour continuation;
+- large-gap behaviour;
+- the 30-minute opening-range breakout;
+- momentum in high volatility.
+
+The rules:
+- one trade a day, so no overlapping samples;
+- Newey-West t;
+- Benjamini-Hochberg across all 14 dev tests, plus the futures round trip as a materiality bar;
+- the selected tests' direction is frozen, and they are evaluated once on the lock period.
+
+`python -m quantdesk autolearn prereg` runs dev (repeatable, deterministic). `--open-lock` evaluates the lock and
+refuses ever after for the same spec hash. Results are kept in `docs/prereg/results/` under the spec's hash. Same
+restrictions as the rest of this dataset: direction research only, no option or profitability claim.

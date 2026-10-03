@@ -39,7 +39,9 @@ class SessionRecorder:
         ts = pd.Timestamp(chain.attrs["ts"])
         path = (self.day_dir(ts.date()) / "chains" /
                 f"{chain.attrs['underlying']}_{chain.attrs['expiry']}_{ts:%H%M}.csv")
-        save_chain(chain, path)
+        tmp = path.with_name(f".{path.name}.tmp")        # the chain tape (tape.py) may write the same minute's file
+        save_chain(chain, tmp)
+        tmp.replace(path)
 
     def days(self) -> list[dt.date]:
         if not self.root.exists():

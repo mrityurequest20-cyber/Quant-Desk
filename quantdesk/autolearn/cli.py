@@ -33,6 +33,13 @@ def register(sub):
     x.add_argument("--out", help="external data root (default runtime/external)")
     x.add_argument("--min-train-days", type=int, default=250)
     x.set_defaults(fn=cmd_direction_study)
+    x = ss.add_parser("prereg", help="pre-registered intraday direction tests on the external index minutes "
+                                     "(docs/prereg; dev always, the lock once)")
+    x.add_argument("--out", help="external data root (default runtime/external)")
+    x.add_argument("--spec", default="docs/prereg/intraday_direction_v1.json")
+    x.add_argument("--results", default="docs/prereg/results")
+    x.add_argument("--open-lock", action="store_true", help="evaluate the selected tests on the lock period: once, ever")
+    x.set_defaults(fn=cmd_prereg)
     x = ss.add_parser("status", help="champion, freshness, last cycle, drift, risk, paper results, recovery point")
     x.add_argument("--json", action="store_true")
     x.set_defaults(fn=cmd_status)
@@ -78,6 +85,20 @@ def cmd_research(cfg, a):
     print(f"  EOD approximation (not point in time): {e['sessions']} sessions, {e['plan_outcomes']:,} plan outcomes")
     print(f"  production change: none. {rep['production_change']['why']}")
     print(f"  report: {root / 'plan' / 'studies' / rep['study'] / 'report.md'}")
+
+
+def cmd_prereg(cfg, a):
+    from pathlib import Path
+
+    from ..data import external_aeron as X
+    from .prereg import render, run
+    ds = X.latest(Path(a.out) if a.out else Path(cfg.runtime_dir) / "external")
+    if ds is None:
+        sys.exit("no imported external dataset: run `data external-import` first")
+    rep = run(cfg, ds, Path(a.spec), Path(a.results), open_lock=a.open_lock)
+    md = Path(rep["path"]).with_suffix(".md")
+    md.write_text(render(rep))
+    print(md)
 
 
 def cmd_direction_study(cfg, a):

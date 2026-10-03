@@ -1,0 +1,32 @@
+{
+  "name": "intraday_direction_v1",
+  "registered": "2026-10-03",
+  "dataset": "aeron7 index minutes, importer aeron7-2 (external_verified); uses: direction_research, regime_research",
+  "not_for": "no option prices: nothing here qualifies an option strategy, a DTE change, a paper gate, a promotion or a profitability claim",
+  "symbols": ["NIFTY", "BANKNIFTY"],
+  "dev": {"start": "2008-01-01", "end": "2018-12-31"},
+  "lock": {"start": "2019-01-01", "end": "2099-12-31"},
+  "price_at": "close of the 5-minute bar that ENDS at the named time (09:45 = the 09:40 bar's close); 'close' = the 15:25 bar's close; 'open' = the 09:15 bar's open",
+  "hypotheses": {
+    "H1_intraday_momentum": {"why": "Gao, Han, Li & Zhou (2018, JFE): the first half hour's return, overnight included, predicts the last half hour's",
+                             "signal": "sign(log(px 09:45 / previous close))", "trade": "15:00 -> close"},
+    "H2_first_half_hour_ex_gap": {"why": "H1 without the overnight gap",
+                                  "signal": "sign(log(px 09:45 / open))", "trade": "15:00 -> close"},
+    "H3_first_hour_continuation": {"why": "intraday trend persistence after the first hour",
+                                   "signal": "sign(log(px 10:15 / open))", "trade": "10:15 -> close"},
+    "H4_large_gap": {"why": "gap fade or continuation after a large gap",
+                     "filter": "|log(open / previous close)| >= 0.005", "signal": "sign(gap)", "trade": "09:20 -> close"},
+    "H5_opening_range_breakout": {"why": "30-minute opening-range breakout",
+                                  "signal": "first 5-minute bar starting 09:45..13:55 closing above the 09:15-09:44 high (+1) or below its low (-1)",
+                                  "trade": "that bar's close -> close"},
+    "H6_momentum_high_vol": {"why": "H1 in high volatility (momentum is stronger in volatile markets in Gao et al.)",
+                             "filter": "prior 20-session close-to-close realised vol in the top tercile of the dev period's distribution (threshold frozen from dev)",
+                             "signal": "as H1", "trade": "as H1"},
+    "H7_first_hour_high_vol": {"why": "H3 in high volatility", "filter": "as H6", "signal": "as H3", "trade": "as H3"}
+  },
+  "statistic": "per test (hypothesis x symbol): r = signal x log return of the trade, one trade a day at most; mean in bps; t with Newey-West (5 lags); two-sided p",
+  "cost_hurdle": "futures round trip in bps from autolearn.costs (CostModel.round_trip_bps at the median entry price), for scale only",
+  "dev_rule": "a test is selected when its Benjamini-Hochberg q < 0.05 across all 14 dev tests AND |mean| > the cost hurdle. Its direction (follow the signal, or fade it) is the sign of its dev mean, frozen",
+  "lock_rule": "only selected tests are evaluated, once, on the lock period, in their frozen direction. A test passes when its one-sided p < 0.05 AND its mean net of the cost hurdle is > 0. A failure or no selection is reported as such; the lock is never reopened for this spec",
+  "reported": "every test's dev statistics; every selected test's lock statistics; sessions per period; the spec's sha256"
+}
