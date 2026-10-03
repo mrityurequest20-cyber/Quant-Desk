@@ -145,6 +145,30 @@ Benjamini-Hochberg FDR within each family. The live desk loads the table (`buyer
 and states, in the read and on the Chart's Quant panel, what history says about buying at today's point in the expiry
 cycle.
 
+**What it found** (first run, 3 Oct 2026; real NSE prices, Jan 2019 → Oct 2026, about 1,900 sessions per index):
+
+| ATM straddle, bought at the open, sold at the close | NIFTY | BANKNIFTY |
+|---|---:|---:|
+| All sessions: mean on the premium | −6.3% | −5.7% |
+| Sessions profitable | 31% | 29% |
+| Expiry day (0 days to expiry) | −14.2% (median −31.7%) | −19.6% (median −34.5%) |
+| 1 day to expiry | −7.5% | −4.1% |
+| 2 days to expiry | −4.8% | −5.7% |
+| 3 days | −2.2% | +0.4% |
+| 4–5 days | −1.3% | −1.7% |
+
+- **No bucket where buyers win**, on either index, intraday or overnight. Verdicts: "buyers lose" (FDR on the discovery
+  data, and the newest third keeping the sign) on expiry day, 1–2 days out on NIFTY, and on Tuesday to Thursday.
+- On expiry day the index out-moved what the straddle priced on **5%** of sessions.
+- The least bad: 3+ days to expiry, and Mondays and Fridays. Both are "no edge", not an edge.
+
+What it means for this desk: a straddle is the zero-skill baseline for a buyer. A directional buy that does no better
+than a coin flip loses about what the straddle loses. So a NIFTY trade bought with 1 day to expiry has to earn back
+roughly 7–8% of its premium from the direction call alone before it makes anything. The desk already never buys on
+expiry day (`expiry_min_days: 1`), but 1-day weeklies are its usual pick on Mondays. The data argue for buying 3+ days
+out (`expiry_min_days: 3`), at the cost of a larger premium per lot. That is a decision for the account's owner,
+not a default this review changes.
+
 ### What not to copy
 
 - **Stock heatmaps and scanners across 200 names.** The F&O stocks ranking showed most stock options don't fit a ₹20k

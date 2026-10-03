@@ -70,11 +70,12 @@ def hist_edge_note(symbol: str, he: dict) -> str:
     if not b and not w:
         return ""
     r = b or w
-    what = (f"with {r['group']} day{'s' if r['group'] != '1' else ''} to expiry" if b else f"on a {r['group']}")
+    what = (f"with {r['group']} day{'' if r['group'] == '1' else 's'} to expiry" if b else f"on {r['group']}")
     s = (f"History ({r['first'][:4]}–{r['last'][:4]}): the {symbol} ATM straddle bought at the open {what} returned "
-         f"{r['mean_pct']:+.0%} by the close on average ({r['n']} sessions, {r['win']:.0%} profitable): {r['verdict'].lower()}")
+         f"{r['mean_pct']:+.1%} by the close on average ({r['n']} sessions, {r['win']:.0%} profitable): {r['verdict'].lower()}")
     if b and w:
-        s += f"; on {w['group']}s {w['mean_pct']:+.0%} ({w['n']}, {w['verdict'].lower()})"
+        day = {"Mon": "Mondays", "Tue": "Tuesdays", "Wed": "Wednesdays", "Thu": "Thursdays", "Fri": "Fridays"}.get(w["group"], w["group"])
+        s += f"; on {day} {w['mean_pct']:+.1%} ({w['n']}, {w['verdict'].lower()})"
     return s + "."
 
 

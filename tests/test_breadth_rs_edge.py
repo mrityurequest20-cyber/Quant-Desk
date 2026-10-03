@@ -247,6 +247,7 @@ def test_buyer_edge_rows_tables_and_the_desk_lookup(cfg, tmp_path):
     assert got["bucket"]["group"] == "0 (expiry day)" and got["weekday"]["group"] == "Tue"
     note = hist_edge_note("NIFTY", got)
     assert note.startswith("History (2026–2026): the NIFTY ATM straddle bought at the open with 0 (expiry day) days")
+    assert "; on Tuesdays " in note
     # the engine picks today's rows from runtime/research/buyer_edge.json at the session start
     from quantdesk.core.calendar import TradingCalendar
     from quantdesk.intraday.engine import IntradayEngine
