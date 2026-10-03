@@ -124,3 +124,19 @@ The rules:
 `python -m quantdesk autolearn prereg` runs dev (repeatable, deterministic). `--open-lock` evaluates the lock and
 refuses ever after for the same spec hash. Results are kept in `docs/prereg/results/` under the spec's hash. Same
 restrictions as the rest of this dataset: direction research only, no option or profitability claim.
+
+### The record: intraday_direction_v1 (spec sha256 5367cc9ae63c…)
+
+The spec was committed in d4b53d8 before any of these tests touched the data. Dev ran 2010–2018 (2,011 NIFTY and
+2,008 BANKNIFTY sessions); the lock ran 2019 to Feb 2023 (1,023 each).
+- **Intraday momentum (Gao et al.) does not appear** in either index: NIFTY +0.9 bps a day (t 1.6), BANKNIFTY −0.5.
+  Nor does it in high volatility.
+- **NIFTY first-hour continuation** was significant on dev (+5.1 bps, t 3.3, q 0.007), but below the 6.6 bps futures
+  round trip, so it was not selected.
+- **BANKNIFTY 30-minute opening-range breakout** was the one selection (+8.4 bps, t 3.6, q 0.005, in the follow
+  direction). Its dev years were uneven (2013 +26, 2015 +19, 2012 −1.8, 2010 −5.0).
+- **Lock (opened once, 3 Oct 2026): fail.** +3.55 bps a day over 952 days, t 0.96, one-sided p 0.17, −2.6 bps net of
+  the hurdle. It decayed after 2018, the way a crowded, well-known rule does.
+
+So no pre-registered intraday direction rule survived its untouched period at the futures cost. The lock for this
+spec is spent. A new idea needs a new spec, committed before it runs.
