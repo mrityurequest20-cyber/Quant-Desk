@@ -6,6 +6,9 @@
    by a half-spread and a tick), and held to cash settlement at the index close on expiry day.
 2. **Positioning.** Does FII / client index-futures and options positioning (participant-wise OI, published after
    the close) predict the next session(s)? Tested as trades entered at the next open.
+3. **When does buying options pay?** The ATM straddle bought at the open and sold at the close (what an intraday
+   buyer lives through), and bought at the close and sold at the next close, by days to expiry and by weekday:
+   the premium paid against the move delivered, after spreads and costs (`buyer_edge`).
 
 Both lists were fixed before any result was seen. Newey-West t-statistics; each series is split in time, the older
 2/3 for discovery and newest 1/3 for rolling validation, which is inspected weekly and is not an untouched final test;
@@ -427,12 +430,164 @@ def surface_pca(opts: pd.DataFrame, spot: pd.Series, min_dte: int = 15, max_dte:
     return res
 
 
+# ---- 3. the buyer's edge, by days to expiry and weekday ---------------------------------------------------------------
+DTE_BUCKETS = ((0, 0, "0 (expiry day)"), (1, 1, "1"), (2, 2, "2"), (3, 3, "3"), (4, 5, "4–5"), (6, 10, "6–10"),
+               (11, 99, "11+"))
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri")
+SESSION_YEARS = 1 / 252                   # one session's variance under the trading-day convention (IV/√252 a day)
+OPEN_TO_CLOSE = 6.25 / 24 / 365           # calendar time from the open to the close, for the IV at the open
+
+
+def dte_bucket(n: int) -> str:
+    return next(lab for lo, hi, lab in DTE_BUCKETS if lo <= n <= hi)
+
+
+def buyer_edge_rows(opts: pd.DataFrame, spot: pd.Series, opens: pd.Series | None, symbol: str, fees=None,
+                    lot: int | None = None) -> pd.DataFrame:
+    """One row per session and horizon: the nearest expiry's ATM straddle bought and sold at bhavcopy prices.
+
+    * intraday: bought at the open (the strike nearest the index's open, both legs' opening prints), sold at the close;
+    * overnight: bought at the close (nearest the index close), sold at the next session's close.
+
+    `pnl_pct`: the straddle's change after a half-spread and a tick each way on each leg (and fees, when given), as a
+    share of the premium paid. `move_ratio`: the index's |move| over the same span against the move the straddle's
+    own implied vol priced (σ·√(1/252)·√(2/π) for a session; the open→close span leaves out the overnight gap, so its
+    ratio reads low by construction: compare it across buckets, not with 1). `opens`: the index's daily open by date."""
+    lot = lot or LOT.get(symbol, 1)
+    o = opts[opts["kind"].isin(["CE", "PE"]) & (opts["close"] > 0) & (opts["contracts"] > 0)]
+    if o.empty:
+        return pd.DataFrame()
+    o = o[o["expiry"] >= o["date"]]
+    near = o.groupby("date")["expiry"].min()
+    o = o[o["expiry"].values == o["date"].map(near).values]
+    cols = ["open", "close"] if "open" in o.columns else ["close"]
+    piv = o.pivot_table(index=["date", "strike"], columns="kind", values=cols, aggfunc="last")
+    spot = spot.dropna()
+    days = sorted(spot.index)
+    pos = {d: i for i, d in enumerate(days)}
+    rows = []
+
+    piv_days = set(piv.index.get_level_values("date"))
+
+    def cost(*prices):
+        """Spread and slippage on all four fills (call and put bought, then sold), plus fees, in index points."""
+        c = sum(float(leg_cost(p_)) for p_ in prices)
+        if fees is not None:
+            c += sum(fees(r_, q_ * lot, p_) / lot for r_, q_, p_ in zip(("CE", "PE", "CE", "PE"), (1, 1, -1, -1), prices))
+        return c
+
+    def iv_of(ce, pe, S, K, T):
+        iv = [implied_vol_vec([ce], S, [K], T, R, Q, "CE")[0], implied_vol_vec([pe], S, [K], T, R, Q, "PE")[0]]
+        iv = [x for x in iv if x == x and 0.02 < x < 3]
+        return float(np.mean(iv)) if iv else float("nan")
+
+    for d, g in piv.groupby(level="date"):
+        if d not in pos:
+            continue
+        e = near[d]
+        dte = sum(1 for x in days[pos[d] + 1:pos[d] + 40] if x <= e)
+        g = g.droplevel("date")
+        base = {"symbol": symbol, "date": d, "expiry": e, "dte": dte, "bucket": dte_bucket(dte),
+                "weekday": WEEKDAYS[d.weekday()] if d.weekday() < 5 else str(d.weekday())}
+        # intraday: open → close
+        S0 = float(opens.get(d, np.nan)) if opens is not None else float("nan")
+        if "open" in cols and S0 == S0 and S0 > 0:
+            ok = g[(g[("open", "CE")] > 0) & (g[("open", "PE")] > 0) & (g[("close", "CE")] > 0) & (g[("close", "PE")] > 0)]
+            if len(ok):
+                K = float(ok.index[int(np.abs(ok.index.to_numpy(float) - S0).argmin())])
+                r = ok.loc[K]
+                p0, p1 = float(r[("open", "CE")] + r[("open", "PE")]), float(r[("close", "CE")] + r[("close", "PE")])
+                if abs(K / S0 - 1) < 0.01 and p0 > 0:
+                    pnl = p1 - p0 - cost(r[("open", "CE")], r[("open", "PE")], r[("close", "CE")], r[("close", "PE")])
+                    iv = iv_of(float(r[("open", "CE")]), float(r[("open", "PE")]), S0, K, max((e - d).days, 0) / 365 + OPEN_TO_CLOSE)
+                    exp = iv * math.sqrt(SESSION_YEARS) * math.sqrt(2 / math.pi) if iv == iv else float("nan")
+                    mv = abs(math.log(float(spot[d]) / S0))
+                    rows.append({**base, "horizon": "intraday", "premium_pct": p0 / S0, "pnl_pct": pnl / p0, "iv": iv,
+                                 "move": mv, "move_ratio": mv / exp if exp == exp and exp > 0 else float("nan")})
+        # overnight: close → next close (the contract has to exist tomorrow)
+        if e > d and pos[d] + 1 < len(days):
+            d1 = days[pos[d] + 1]
+            S, S1 = float(spot[d]), float(spot[d1])
+            ok = g[(g[("close", "CE")] > 0) & (g[("close", "PE")] > 0)]
+            if len(ok) and d1 in piv_days:
+                K = float(ok.index[int(np.abs(ok.index.to_numpy(float) - S).argmin())])
+                nxt = piv.loc[d1]
+                if K in nxt.index and abs(K / S - 1) < 0.01:
+                    r0, r1 = ok.loc[K], nxt.loc[K]
+                    if r1[("close", "CE")] > 0 and r1[("close", "PE")] > 0:
+                        p0 = float(r0[("close", "CE")] + r0[("close", "PE")])
+                        p1 = float(r1[("close", "CE")] + r1[("close", "PE")])
+                        pnl = p1 - p0 - cost(r0[("close", "CE")], r0[("close", "PE")], r1[("close", "CE")], r1[("close", "PE")])
+                        iv = iv_of(float(r0[("close", "CE")]), float(r0[("close", "PE")]), S, K, (e - d).days / 365)
+                        exp = iv * math.sqrt(SESSION_YEARS) * math.sqrt(2 / math.pi) if iv == iv else float("nan")
+                        mv = abs(math.log(S1 / S))
+                        rows.append({**base, "horizon": "overnight", "premium_pct": p0 / S, "pnl_pct": pnl / p0, "iv": iv,
+                                     "move": mv, "move_ratio": mv / exp if exp == exp and exp > 0 else float("nan")})
+    return pd.DataFrame(rows)
+
+
+def buyer_edge(rows: pd.DataFrame, q: float = 0.10, min_n: int = 30) -> list[dict]:
+    """Per index × horizon × (days-to-expiry bucket | weekday): n, mean P&L on the premium, t, win rate, the move ratio,
+    discovery (older 2/3) and rolling validation (newest 1/3) means. FDR (BH, q) on the discovery p-values within each
+    index × horizon × grouping; a verdict needs the validation to keep the sign (one-sided p < 0.10)."""
+    out = []
+    if rows is None or rows.empty:
+        return out
+    for (sym, hz), g0 in rows.sort_values("date").groupby(["symbol", "horizon"]):
+        for by in ("bucket", "weekday"):
+            fam = []
+            order = [lab for _, _, lab in DTE_BUCKETS] if by == "bucket" else list(WEEKDAYS)
+            for key in order:
+                g = g0[g0[by] == key]
+                x = pd.Series(g["pnl_pct"].to_numpy(float), index=pd.to_datetime(g["date"])).dropna()
+                if len(x) < min_n:
+                    continue
+                m, t, p = hac_mean(x.to_numpy())
+                disc, hold = _split(x)
+                md, _, pd_ = hac_mean(disc.to_numpy())
+                mh, _, ph = hac_mean(hold.to_numpy())
+                p1 = ph / 2 if (mh == mh and md == md and np.sign(mh) == np.sign(md)) else 1.0
+                mr = g["move_ratio"].replace([np.inf, -np.inf], np.nan).dropna()
+                fam.append({"symbol": sym, "horizon": hz, "by": "days to expiry" if by == "bucket" else "weekday", "group": key,
+                            "n": int(len(x)), "mean_pct": float(m), "median_pct": float(x.median()), "t": float(t), "p": float(p),
+                            "win": float((x > 0).mean()), "move_ratio": float(mr.median()) if len(mr) else None,
+                            "move_above": float((mr > 1).mean()) if len(mr) else None,
+                            "premium_pct": float(g["premium_pct"].median()), "iv": float(g["iv"].median()),
+                            "mean_disc": float(md), "p_disc": float(pd_), "mean_hold": float(mh), "p_hold": float(p1),
+                            "first": str(x.index[0].date()), "last": str(x.index[-1].date())})
+            for r, ok in zip(fam, benjamini_hochberg([r["p_disc"] for r in fam], q)):
+                holds = r["p_hold"] < 0.10
+                r["bh_pass"] = bool(ok)
+                r["verdict"] = ("BUYERS WIN" if ok and holds and r["mean_pct"] > 0 else
+                                "BUYERS LOSE" if ok and holds and r["mean_pct"] < 0 else "NO EDGE")
+            out += fam
+    return out
+
+
+def edge_for(table: list[dict] | dict, symbol: str, day: dt.date, dte: int, horizon: str = "intraday") -> dict:
+    """The history's rows for one session: its days-to-expiry bucket and its weekday ({"bucket": row, "weekday": row})."""
+    rows = table.get("rows", []) if isinstance(table, dict) else table
+    out = {}
+    for by, key in (("days to expiry", dte_bucket(int(dte))), ("weekday", WEEKDAYS[day.weekday()] if day.weekday() < 5 else "")):
+        r = next((r for r in rows if r.get("symbol") == symbol and r.get("horizon") == horizon and r.get("by") == by
+                  and r.get("group") == key), None)
+        if r:
+            out["bucket" if by == "days to expiry" else "weekday"] = r
+    return out
+
+
+def buyer_edge_json(res: dict) -> str:
+    def clean(d):
+        return {k: (None if isinstance(v, float) and v != v else v) for k, v in d.items()}
+    return json.dumps({"span": res.get("span", {}), "rows": [clean(r) for r in res.get("buyer_edge", [])]}, indent=1, default=str)
+
+
 # ---- loading and reporting ------------------------------------------------------------------------------------------
 def load_options(folder: Path, symbols=("NIFTY", "BANKNIFTY")) -> pd.DataFrame:
     import pyarrow.parquet as pq
     parts = []
     for p in sorted(Path(folder).glob("fo_bhav_*.parquet")):
-        t = pq.read_table(p, columns=["date", "symbol", "kind", "expiry", "strike", "close", "underlying", "contracts"],
+        t = pq.read_table(p, columns=["date", "symbol", "kind", "expiry", "strike", "open", "close", "underlying", "contracts"],
                           filters=[("symbol", "in", list(symbols))])
         parts.append(t.to_pandas())
     if not parts:
@@ -465,7 +620,7 @@ def run_all(folder: Path, daily: dict, cfg=None) -> dict:
 
         def fees_for(sym):
             return lambda right, qty, price: costs.fees(Instrument.option(sym, exp, 1.0, right, LOT[sym]), int(qty), float(price))[0]
-    trades, by_sym, spots, out["term"], out["surface"] = [], {}, {}, {}, {}
+    trades, by_sym, spots, out["term"], out["surface"], be_rows = [], {}, {}, {}, {}, []
     for sym in ("NIFTY", "BANKNIFTY"):
         o = opts[(opts["symbol"] == sym) & opts["kind"].isin(["CE", "PE"])] if len(opts) else opts
         if o.empty:
@@ -476,8 +631,17 @@ def run_all(folder: Path, daily: dict, cfg=None) -> dict:
         trades.append(tr)
         out["span"][sym] = f"{min(o['date'])} → {max(o['date'])}"
         out["term"][sym] = term_structure(opts[opts["symbol"] == sym], sp)
+        dly = daily.get(sym)
+        opens = None
+        if dly is not None and len(dly) and "open" in dly.columns:
+            opens = dly["open"].copy()
+            opens.index = [pd.Timestamp(x).date() for x in opens.index]
+            opens = opens[~pd.Index(opens.index).duplicated(keep="last")]
+        be_rows.append(buyer_edge_rows(o, sp, opens, sym, fees_for(sym) if cfg is not None else None))
         out["surface"][sym] = surface_pca(o, sp)
     tr = pd.concat(trades, ignore_index=True) if trades else pd.DataFrame()
+    be = pd.concat([x for x in be_rows if len(x)], ignore_index=True) if any(len(x) for x in be_rows) else pd.DataFrame()
+    out["buyer_edge"], out["buyer_edge_rows"] = buyer_edge(be), be
     out["trades"] = len(tr)
     out["vrp"] = evaluate_vrp(tr)
     out["trade_rows"] = tr
@@ -556,7 +720,36 @@ def report(res: dict, generated: str) -> str:
     for r in sorted(res["positioning"], key=lambda r: (r.verdict != "PAPER CANDIDATE", r.p)):
         L.append(f"| **{r.verdict}** | {r.id} | {r.symbol} | {r.hypothesis} | {r.n:,} | {r.effect_bps:+.1f} | {r.t:+.2f} | "
                  f"{r.p:.3f} | {r.effect_holdout_bps:+.1f} |")
+    L += buyer_edge_report(res.get("buyer_edge") or [], res.get("buyer_edge_rows"))
     return "\n".join(L) + "\n"
+
+
+def buyer_edge_report(rows: list[dict], raw: pd.DataFrame | None = None) -> list[str]:
+    if not rows:
+        return []
+    L = ["", "## 3. When does buying options pay? (the ATM straddle, real prices)", "",
+         "The nearest expiry's ATM straddle, bought and sold at bhavcopy prices with a half-spread and a tick each way on "
+         "each leg (and fees). **Intraday**: bought at the opening prints at the strike nearest the index's open, sold at the "
+         "close: what a buyer who squares off by the close lives through. **Overnight**: bought at the close, sold at the "
+         "next close. P&L is on the premium paid. Move ratio: the index's |move| over the span against the move the "
+         "straddle's own IV priced for a session (IV/√252·√(2/π)); the intraday span leaves out the overnight gap, so read "
+         "it across rows, not against 1. FDR within each index × horizon × grouping; a verdict needs the newest third to "
+         "keep the sign.", ""]
+    if raw is not None and len(raw):
+        for (sym, hz), g in raw.groupby(["symbol", "horizon"]):
+            L.append(f"- **{sym} {hz}**: {len(g):,} sessions {g['date'].min()} → {g['date'].max()}; mean {g['pnl_pct'].mean():+.1%} "
+                     f"on the premium, {(g['pnl_pct'] > 0).mean():.0%} of sessions profitable, median premium "
+                     f"{g['premium_pct'].median():.2%} of the index.")
+        L.append("")
+    L += ["| verdict | index | horizon | by | group | n | mean | median | t | win | move ratio | realised > implied | "
+          "discovery | validation |", "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for r in rows:
+        mr = f"{r['move_ratio']:.2f}×" if r.get("move_ratio") is not None else "—"
+        ma = f"{r['move_above']:.0%}" if r.get("move_above") is not None else "—"
+        L.append(f"| **{r['verdict']}** | {r['symbol']} | {r['horizon']} | {r['by']} | {r['group']} | {r['n']:,} | "
+                 f"{r['mean_pct']:+.1%} | {r['median_pct']:+.1%} | {r['t']:+.2f} | {r['win']:.0%} | {mr} | {ma} | "
+                 f"{r['mean_disc']:+.1%} | {r['mean_hold']:+.1%} |")
+    return L
 
 
 def to_json(res: dict) -> str:

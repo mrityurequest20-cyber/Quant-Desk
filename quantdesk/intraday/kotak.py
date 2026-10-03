@@ -433,6 +433,26 @@ class KotakIntradayFeed(YahooIntradayFeed):
         return self._with_futures(symbol, df, now.date(), now.date()) if df is not None and len(df) else df
 
 
+# ---- the scrip master ---------------------------------------------------------------------------------------------
+def scrip_master(client: KotakClient, name: str = "nse_fo") -> pd.DataFrame:
+    """One of Kotak's scrip-master CSVs (`nse_fo`, `nse_cm`, …; the file names carry a suffix like nse_cm-v1.csv) as a
+    frame with clean column names. The file URLs come from the API; the files themselves download without the key."""
+    import io
+    body = client._get("script-details/1.0/masterscrip/file-paths")
+    files = (body.get("data") or {}).get("filesPaths") or []
+    url = next((f for f in files if f.rsplit("/", 1)[-1].split(".")[0].split("-")[0] == name), None)
+    if not url:
+        raise KotakError(f"no {name} file in the scrip master ({len(files)} files)")
+    r = client.s.get(url, timeout=60, headers={"Authorization": ""})
+    if r.status_code != 200:
+        r = client.s.get(url, timeout=60)
+    if r.status_code != 200 or len(r.content) < 1000:
+        raise KotakError(f"scrip master {name}: HTTP {r.status_code}, {len(r.content)} bytes")
+    df = pd.read_csv(io.BytesIO(r.content), low_memory=False)
+    df.columns = [str(c).strip().rstrip(";") for c in df.columns]
+    return df
+
+
 # ---- what the key can see -----------------------------------------------------------------------------------------
 def _raw(x, n: int = 700) -> str:
     import json
@@ -529,10 +549,32 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
     if not worked:
         say("  candles none worked: live bars will come from Yahoo")
     futures_probe(client, underlyings[:1] or ["NIFTY"], now, say)
+    breadth_probe(client, say)
     say(f"  quotes per call: {client.batch}")
     say(f"  {sum(client.calls.values())} calls in {time.time() - t0:.1f}s: "
         + ", ".join(f"{k} {v}" for k, v in client.calls.items()))
     return ok_quotes and ok_chain
+
+
+def breadth_probe(client: KotakClient, say=print) -> int:
+    """Index breadth's inputs (breadth.py): cash tokens from the F&O scrip master, then the fields it reads from each
+    stock's quote. Returns how many of the NIFTY 50 (built-in list) have a token."""
+    from .breadth import NIFTY50, cash_tokens, quote_row
+    try:
+        toks = cash_tokens(scrip_master(client, "nse_fo"), NIFTY50)
+    except Exception as exc:
+        say(f"  breadth FAIL scrip master: {exc!s:.200}")
+        return 0
+    miss = sorted(set(NIFTY50) - set(toks))
+    say(f"  breadth tokens for {len(toks)} of {len(NIFTY50)} NIFTY 50 stocks" + (f"; none for {', '.join(miss)}" if miss else ""))
+    pick = [s_ for s_ in ("RELIANCE", "HDFCBANK", "M&M", "BAJAJ-AUTO") if s_ in toks]
+    try:
+        for q in client.quotes([("nse_cm", toks[s_]) for s_ in pick], "all"):
+            say(f"    nse_cm|{q.get('exchange_token')} {q.get('display_symbol')}: ltp {q.get('ltp')} change {q.get('change')} "
+                f"per_change {q.get('per_change')} avg_cost {q.get('avg_cost')} ohlc {q.get('ohlc')} → {quote_row(q)}")
+    except Exception as exc:
+        say(f"  breadth FAIL quotes: {exc!s:.200}")
+    return len(toks)
 
 
 def futures_probe(client: KotakClient, underlyings, now, say=print) -> dict:

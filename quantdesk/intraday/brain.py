@@ -440,6 +440,12 @@ class Brain:
             if f.get("fii_long_pct") is not None:
                 bits.append(f"FIIs {f['fii_long_pct']:.0%} long index futures"
                             + (f" ({f['fii_long_pct_5d']:.0%} a week before)" if f.get("fii_long_pct_5d") is not None else ""))
+            if f.get("fii_opt_net") is not None:
+                more = [f"{f['fii_opt_d1'] / 1e3:+,.0f}k on the day"] if f.get("fii_opt_d1") is not None else []
+                if f.get("fii_opt_pctile") is not None:
+                    more.append(f"percentile {f['fii_opt_pctile']:.0%} of its year")
+                bits.append(f"FII index options net {f['fii_opt_net'] / 1e3:+,.0f}k contracts calls − puts"
+                            + (f" ({', '.join(more)})" if more else ""))
             if f.get("fii_cash_cr") is not None:
                 bits.append(f"FII cash ₹{f['fii_cash_cr']:+,.0f} cr" + (f", DII ₹{f['dii_cash_cr']:+,.0f} cr"
                                                                         if f.get("dii_cash_cr") is not None else ""))
@@ -471,9 +477,14 @@ def _fmt_move(d: dict) -> str:
     return "flat"
 
 
-def load_flows(root, day) -> dict | None:
-    """FII index-futures positioning and cash flows as of the last session before `day`, from the warehouse's
-    participant_oi and fii_dii tables. Context for the narrative; None without the files."""
+def load_flows(root, day, research=None) -> dict | None:
+    """FII positioning and cash flows as of the last session before `day`, from the warehouse's participant_oi and
+    fii_dii tables. Context for the narrative (a regime input, not an intraday vote); None without the files.
+
+    Index futures: the FII long share. Index options: FII net calls minus net puts (long − short of each, contracts),
+    its change on the day and over 5 sessions, and where it sits in its past year; the same for clients, who are
+    usually on the other side. `research`: the folder with the research's vrp_positioning.json, for what the warehouse
+    research found when it tested the options change as a next-session signal (P4)."""
     from pathlib import Path
     from ..data.warehouse import Warehouse
     if not Path(root).exists():
@@ -481,19 +492,24 @@ def load_flows(root, day) -> dict | None:
     wh = Warehouse(root)
     out: dict = {}
     try:
-        po = wh.read("participant_oi", start=pd.Timestamp(day) - pd.Timedelta(days=20), end=pd.Timestamp(day) - pd.Timedelta(days=1))
+        po = wh.read("participant_oi", start=pd.Timestamp(day) - pd.Timedelta(days=400), end=pd.Timestamp(day) - pd.Timedelta(days=1))
     except Exception:
         po = pd.DataFrame()
     if po is not None and not po.empty:
-        f = po[po["participant"] == "FII"].copy()
-        f["date"] = pd.to_datetime(f["date"])
-        f = f.sort_values("date")
+        po = po.copy()
+        po["date"] = pd.to_datetime(po["date"])
+        f = po[po["participant"] == "FII"].sort_values("date").drop_duplicates("date", keep="last").copy()
         f["pct"] = f["fut_idx_long"] / (f["fut_idx_long"] + f["fut_idx_short"])
         if len(f):
             out["fii_long_pct"] = float(f["pct"].iloc[-1])
             out["date"] = str(f["date"].iloc[-1].date())
             if len(f) > 5:
                 out["fii_long_pct_5d"] = float(f["pct"].iloc[-6])
+        opt = option_positioning(po)
+        if opt:
+            out.update(opt)
+    if research is not None:
+        out.update(_p4_verdict(Path(research) / "vrp_positioning.json"))
     try:
         fd = wh.read("fii_dii", start=pd.Timestamp(day) - pd.Timedelta(days=10), end=pd.Timestamp(day) - pd.Timedelta(days=1))
     except Exception:
@@ -508,3 +524,41 @@ def load_flows(root, day) -> dict | None:
                 out[key] = float(r["net"].iloc[0])
         out.setdefault("date", str(fd["date"].max().date()))
     return out or None
+
+
+def option_positioning(po: pd.DataFrame, year: int = 250, min_year: int = 120) -> dict:
+    """FII and client index-options positioning from participant OI rows: net calls − net puts (contracts; > 0 leans
+    long the index), its 1- and 5-session change, and its percentile over the past `year` sessions."""
+    out: dict = {}
+    need = {"opt_idx_call_long", "opt_idx_call_short", "opt_idx_put_long", "opt_idx_put_short"}
+    if not need <= set(po.columns):
+        return out
+    for who, key in (("FII", "fii"), ("Client", "client")):
+        x = po[po["participant"] == who].sort_values("date").drop_duplicates("date", keep="last").dropna(subset=list(need))
+        if x.empty:
+            continue
+        calls = x["opt_idx_call_long"] - x["opt_idx_call_short"]
+        puts = x["opt_idx_put_long"] - x["opt_idx_put_short"]
+        net = (calls - puts).astype(float).reset_index(drop=True)
+        out[f"{key}_opt_net"] = float(net.iloc[-1])
+        out[f"{key}_call_net"], out[f"{key}_put_net"] = float(calls.iloc[-1]), float(puts.iloc[-1])
+        if len(net) > 1:
+            out[f"{key}_opt_d1"] = float(net.iloc[-1] - net.iloc[-2])
+        if len(net) > 5:
+            out[f"{key}_opt_d5"] = float(net.iloc[-1] - net.iloc[-6])
+        hist = net.iloc[-year:]
+        if len(hist) >= min_year:
+            out[f"{key}_opt_pctile"] = float((hist < net.iloc[-1]).mean() + 0.5 * (hist == net.iloc[-1]).mean())
+    return out
+
+
+def _p4_verdict(path) -> dict:
+    """The warehouse research's verdict on "FII index-options net change → next session" (P4), per index."""
+    import json
+    try:
+        rows = json.loads(open(path, encoding="utf-8").read()).get("positioning") or []
+    except (OSError, ValueError, AttributeError):
+        return {}
+    got = {r.get("symbol"): f"{r.get('verdict')} (t {float(r.get('t') or 0):+.1f}, n {r.get('n')})" for r in rows
+           if r.get("id") == "P4" and r.get("symbol")}
+    return {"fii_opt_research": got} if got else {}

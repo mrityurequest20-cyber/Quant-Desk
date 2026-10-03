@@ -14,6 +14,7 @@ At the close: square off, write the session review.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import math
 import time
@@ -105,6 +106,10 @@ class IntradayEngine:
         self.chain_df: dict[str, pd.DataFrame] = {}
         self.chain_an: dict[str, dict] = {}
         self.chainflow = ChainFlow()                      # how each chain moved since the first read (chainflow.py)
+        self.breadth = None                               # breadth.Breadth (the index's own stocks; live with Kotak) or None
+        self.breadth_state: dict[str, dict | None] = {}
+        self.rel: dict | None = None                      # BANKNIFTY vs NIFTY (relstrength.py)
+        self.hist_edge: dict[str, dict] = {}              # the warehouse research's buyer's edge for today, per underlying
         self.chain_at: dict[str, pd.Timestamp] = {}
         self.chain_fail: dict[str, int] = {}
         self.chain_tried: dict[str, pd.Timestamp] = {}
@@ -184,9 +189,10 @@ class IntradayEngine:
         if self.brain is not None:                        # FII positioning and cash flows: context for the narrative
             from .brain import load_flows
             try:
-                self.brain.flows = load_flows(self.warehouse_dir, day)
+                self.brain.flows = load_flows(self.warehouse_dir, day, Path(self.cfg.runtime_dir) / "research")
             except Exception:
                 self.brain.flows = None
+        self._load_hist_edge(day)
         self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
         saved = self._restore(day)
         if saved.get("day_start_equity"):
@@ -238,6 +244,12 @@ class IntradayEngine:
             self._guarded("global", now, "global refresh", self.brain.gfeed.refresh, now)
         if self.brain is not None and getattr(self.brain, "hfeed", None) is not None:
             self._guarded("global", now, "heavyweights refresh", self.brain.hfeed.refresh, now)
+        if self.breadth is not None:
+            self._guarded("breadth", now, "breadth refresh", self.breadth.refresh, now)
+        from .relstrength import PAIR, rel_strength
+        if all(x in self.underlyings for x in PAIR):
+            self.rel = self._guarded("pair", now, "relative strength", rel_strength, self.bars.get(PAIR[0]),
+                                     self.bars.get(PAIR[1]), self.day, now)
         for u in self.underlyings:
             if u not in self.bars or self.bars[u].empty or self.bars[u].index[-1].date() != self.day:
                 continue
@@ -248,10 +260,12 @@ class IntradayEngine:
             q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
             b = self._guarded(u, now, "brain", self._think_globally, u, now) if self.brain is not None else None
             blk = self.eventbook.blocking(now)                   # only an announcement inside the session blocks
+            br = self.breadth_state[u] = self.breadth.state(u, s.get("chg"), now) if self.breadth is not None else None
             view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
                                        blk.label() if blk else None, self._flow_state(u, now),
                                        self.news.state(u, now) if self.news is not None else None, q,
-                                       {"evidence": b.evidence, "narrative": b.narrative} if b is not None else None)
+                                       {"evidence": b.evidence, "narrative": b.narrative} if b is not None else None,
+                                       breadth=br, rel=self.rel, hist_edge=self.hist_edge.get(u))
             self.views[u] = view
             self._last_s[u] = s
             exits = self._manage(u, view, now)
@@ -619,6 +633,22 @@ class IntradayEngine:
             kept.append(p)
         return kept, stop
 
+    def _by_relative_strength(self, u: str, plans: list) -> list:
+        """Which index: once the record shows the leader of the last 30 minutes keeps leading (relstrength.py), a plan
+        long the laggard or short the leader has its conviction cut, and one with the leader gets a small lift. Until
+        then nothing changes."""
+        if self.memory is None or self.rel is None:
+            return plans
+        from .relstrength import preference, record
+        rec = record(self.memory)
+        for p in plans:
+            got = preference(u, p.direction, self.rel, rec)
+            if got:
+                m, note = got
+                p.notes["relative_strength"] = note
+                p.conviction = float(min(1.0, max(0.0, p.conviction * m)))
+        return plans
+
     def _blocked(self, u: str, view: MarketView, now) -> str | None:
         """Why no new entry can be taken right now (None: one can)."""
         if self.paused:
@@ -645,6 +675,7 @@ class IntradayEngine:
         plans, stop = self._by_record(u, plans, view, now)
         if not plans:
             return f"standing aside: {stop}"
+        plans = self._by_relative_strength(u, plans)
         if self.quant_on:
             pick = self._guarded(u, now, "EV selection", self._select_by_ev, u, plans, view, eq, now)
             if pick is None:
@@ -740,6 +771,22 @@ class IntradayEngine:
         if self.iv_hist:
             self.journal.event(session_bounds(day)[0], "INFO", "quant", "ATM IV history for the IV percentile: " +
                                ", ".join(f"{u} {len(h)} sessions to {h['date'].iloc[-1]}" for u, h in self.iv_hist.items()))
+
+    def _load_hist_edge(self, day: dt.date) -> None:
+        """The warehouse research's buyer's edge (research.sh fetches buyer_edge.json) for today's weekday and the days
+        to the expiry each underlying trades: what five years say about buying the ATM straddle at this point."""
+        from ..research.warehouse_research import edge_for
+        self.hist_edge = {}
+        try:
+            table = json.loads((Path(self.cfg.runtime_dir) / "research" / "buyer_edge.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for u in self.underlyings:
+            e = self.expiry.get(u)
+            if e is not None:
+                got = edge_for(table, u, day, self.cal.trading_days_between(day, e))
+                if got:
+                    self.hist_edge[u] = got
 
     def _live(self, insts, now) -> dict[str, tuple[float, float]]:
         """Bid/ask right now from the broker's book when the chain source has one; {} otherwise (or on an error),
@@ -1051,6 +1098,7 @@ class IntradayEngine:
                         "action": self.last_action.get(u),
                         "brain": _brain_view(self.brain_state.get(u)),
                         "chain": _chain_view(self.chain_an.get(u)),
+                        "breadth": self.breadth_state.get(u), "rel": self.rel, "hist_edge": self.hist_edge.get(u),
                         "evidence": [{"factor": e.factor, "category": e.category, "direction": e.direction,
                                       "weight": e.weight, "observation": e.observation,
                                       "learned": (getattr(self.analyst, "learned", None) or {}).get(e.factor)} for e in v.evidence]}
@@ -1085,7 +1133,10 @@ class IntradayEngine:
         from . import learning
         from .analyst import PROBATION
         try:
+            from .relstrength import earned, record
+            rs = record(self.memory)
             return {"ic": learning.ic_table(self.memory)[:12], "edge": learning.buyer_edge(self.memory),
+                    "rs": {**rs, "used": earned(rs)} if rs else None,
                     "sessions": len(self.memory.d.get("days") or []),
                     "probation": {f: {"n": round((self.memory.stat("factor", f) or {"n": 0})["n"], 1),
                                       "rel": round(self.memory.reliability("factor", f), 3),
@@ -1235,7 +1286,7 @@ def _brain_view(st) -> dict | None:
     if st is None:
         return None
     return {"regime": st.regime, "regime_score": st.regime_score, "stress": st.stress, "size_mult": st.size_mult,
-            "narrative": st.narrative, "gap": st.gap, "evidence": st.evidence,
+            "narrative": st.narrative, "gap": st.gap, "evidence": st.evidence, "pulse": st.pulse, "flows": st.flows,
             "drivers": [{k: d.get(k) for k in ("id", "name", "sign", "live", "prior_z", "z30", "pressure", "gap_beta", "gap_corr",
                                                 "co_corr", "lead_t", "validated", "lead_sign", "news_tone", "news_n", "news_latest")}
                         | {"move": d.get("lead")} for d in st.drivers]}

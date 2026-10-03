@@ -113,6 +113,9 @@ intraday:
     stress_z: 2.0                  # global moves bigger than this (σ) shrink size...
     min_size_mult: 0.5             # ...down to this multiple (with 1-lot sizes that means standing aside)
     heavy_pulse: true              # poll the index heavyweights (Yahoo 5m) for the leaders' 30-minute move
+  breadth:                         # the index's own stocks from Kotak's quotes (breadth.py): advancers, above VWAP,
+    enabled: true                  # equal weight vs the index; on probation until graded live. Needs KOTAK_CONSUMER_KEY
+    refresh_min: 1
   quant:                           # the decision layer: vol forecast, direction model, expected value of every plan
     enabled: true
     train_days: 55                 # 5m history for the direction model (Yahoo keeps ~60 days)

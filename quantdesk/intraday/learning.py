@@ -21,6 +21,9 @@ Two research tables ride along (they change nothing by themselves; they're what 
 * **The buyer's edge**: each session's realised volatility (5-minute returns from the first live chain read to the
   close) against the ATM IV read then, and the session's move against the move that IV implied. A desk that only
   buys options needs realised to beat implied; over many sessions this says whether it does.
+* **Relative-strength persistence** (relstrength.py): whether the index that led the other over the last 30 minutes
+  leads over the next 30, from every 5-minute point of every whole session in the bars. Only once it's positive with
+  t ≥ 2 does the desk prefer the leader for longs and the laggard for shorts.
 """
 from __future__ import annotations
 
@@ -359,6 +362,8 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
     out = {"news": grade_news(mem, news, bars), "factors": grade_factors(mem, th, bars),
            "trades": grade_trades(mem, tr), "armed": grade_armed(mem, dec, bars)}
     grade_ic(mem, th, bars)
+    from . import relstrength
+    out["rs"] = relstrength.grade(mem, bars)
     if str(day) not in mem.d["days"]:
         mem.d["days"].append(str(day))
     return out
@@ -376,6 +381,8 @@ def rebuild(mem: Memory, journal, bars: dict) -> dict:
     out = {"news": grade_news(mem, news, bars), "factors": grade_factors(mem, th, bars),
            "trades": grade_trades(mem, tr), "armed": grade_armed(mem, dec, bars)}
     grade_ic(mem, th, bars)
+    from . import relstrength
+    out["rs"] = relstrength.grade(mem, bars)
     mem.d["days"] = sorted({str(t)[:10] for t in th["ts"]}) if not th.empty else []
     return out
 
@@ -404,6 +411,8 @@ def bootstrap(cfg, mem: Memory, bars: dict, journal=None, min_bars: int = 300, m
     th = scratch.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
     got = {"sessions": len(days), "factors": grade_factors(mem, th, bars), "news": 0}
     grade_ic(mem, th, bars)
+    from . import relstrength
+    got["rs"] = relstrength.grade(mem, bars)
     if journal is not None:
         got["news"] = grade_news(mem, journal.df("SELECT * FROM news ORDER BY ts"), bars)
     mem.d["bootstrap"] = {**got, "days": [str(d) for d in days]}
@@ -441,6 +450,12 @@ def summary(mem: Memory, top: int = 6) -> list[str]:
         best = max(row["h"].items(), key=lambda kv: abs(kv[1]["t"]))
         L.append(f"IC {row['factor']}: " + ", ".join(f"{h}m {v['ic']:+.3f}" for h, v in sorted(row["h"].items(), key=lambda kv: int(kv[0])))
                  + f" (strongest at {best[0]}m, t {best[1]['t']:+.1f}, n {best[1]['n']:.0f})")
+    from .relstrength import earned, record
+    rs = record(mem)
+    if rs:
+        L.append(f"relative strength (BANKNIFTY/NIFTY): the last 30 minutes' leader then led the next 30 with IC "
+                 f"{rs['ic']:+.3f} (t {rs['t']:+.1f}, n {rs['n']:.0f} over {rs['days']} sessions): "
+                 + ("used to pick the index" if earned(rs) else "not used yet"))
     for sym, e in buyer_edge(mem).items():
         L.append(f"buyer's edge {sym}: realised/implied vol {e['rv_iv']:.2f}× over {e['sessions']} sessions, realised above "
                  f"implied in {e['rv_above']:.0%}" + (f", moves {e['move_ratio']:.2f}× what the open's IV implied" if e["move_ratio"] else ""))

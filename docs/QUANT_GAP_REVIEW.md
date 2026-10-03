@@ -85,36 +85,65 @@ move ÷ implied move. It is on the Brain tab and in the review. Persistently bel
 movement it doesn't get. The answer then is fewer, more selective buys (only where the IC table and the EV gate agree)
 or waiting for the margin to sell premium, not more trades.
 
-### 4. Index breadth (next)
+### 4. Index breadth (implemented)
 
 A NIFTY move carried by three heavyweights while most constituents fall is a fragile move, and breadth is the
-cleanest intraday check for it. The fields needed:
+cleanest intraday check for it. Now (`intraday/breadth.py`), once a minute for each index's own stocks (NIFTY 50 and
+Nifty Bank, about 57 names: 3 quotes calls):
 
-- the share of the 50 constituents advancing;
-- the share above their VWAP;
-- the gap between equal-weighted and cap-weighted moves.
+- the share of members up on the day (Kotak's `per_change`) and the share above their own session VWAP (Kotak's
+  `avg_cost`, the day's average traded price; both fields seen on a runner on 2 Oct 2026);
+- the equal-weighted average move against the index's own move: negative means the index is being carried by its
+  largest names;
+- the 30-minute change of those shares (thrusts).
 
-The data path exists: the Kotak quotes endpoint already batches up to 50 instruments a call. It needs the 50
-equity tokens from the scrip master and one call a minute. It should go in on probation like the heavyweights pulse,
-with its IC tracked from day one. It is not built yet because it needs a live Kotak session to verify the quote
-fields (open, previous close, average traded price).
+Members come from NSE's published index lists, else a built-in late-2025 list. Each stock's cash-market token comes
+from the F&O scrip master's `pAssetCode`. Two new factors, both **on probation**: `breadth` (participation) and
+`breadth_div` (a narrow move leans against the index). Their IC is tracked from the first session.
 
-### 5. Relative strength: BANKNIFTY vs NIFTY, and sectors (next)
+### 5. Relative strength: BANKNIFTY vs NIFTY (implemented)
 
-Which index to trade is a decision the desk makes implicitly. The BANKNIFTY/NIFTY ratio's intraday trend, and later
-an RRG-style read of the sector indices, would make it explicit. It costs nothing on data the desk already has.
+Which index to trade used to be decided implicitly. Now (`intraday/relstrength.py`) the read carries:
 
-### 6. FII index options positioning (next)
+- the BANKNIFTY/NIFTY ratio's move on the day and over the last 30 minutes;
+- that 30-minute move in σ of its own history;
+- BANKNIFTY's beta and correlation to NIFTY today.
 
-The participant OI the warehouse already downloads has FII long and short positions in index calls and puts, not only
-futures. Net FII option positioning is a daily context read for the brain: a regime input, not an intraday vote.
+Whether the leader keeps leading is measured before it is used. The learning loop grades every 5-minute point of every
+whole session in the bars: the last 30 minutes of the ratio against its next 30, as an overlap-adjusted IC. It is
+seeded from the bars the desk already loads. Only when that IC is positive with t ≥ 2 does the desk act on it:
 
-### 7. The buyer's edge over history (next)
+- a plan long the laggard or short the leader has its conviction cut (×0.8);
+- one going with relative strength gets a small lift (×1.1).
 
-Section 3 starts from today. The warehouse's bhavcopy has five years of index option closes, enough to compute the
-daily ATM straddle's implied move against the next day's realised move per weekday and per days-to-expiry. That
-answers on day one when buying options tends to pay (for example, close to expiry or around events) instead of waiting
-20 sessions.
+Sector rotation (RRG-style) is still to do.
+
+### 6. FII index options positioning (implemented)
+
+The brain's flows now carry FII net index-options positioning:
+
+- net calls − net puts in contracts (> 0 leans long the index);
+- its change on the day and over 5 sessions;
+- its percentile over the past year;
+- the same for clients, who are usually on the other side.
+
+It sits on the Brain tab and in the narrative, next to the warehouse research's verdict on whether the change predicts
+the next session (hypothesis P4). It is a regime input, not an intraday vote, and stays that way unless P4 passes.
+
+### 7. The buyer's edge over history (implemented)
+
+Section 3 starts from today. The warehouse research now answers on day one, from five years of bhavcopy
+(`warehouse_research.buyer_edge`). It takes the nearest expiry's ATM straddle at real prices, with a half-spread and a
+tick each way on every leg plus fees, in two versions:
+
+- **bought at the opening prints and sold at the close**: what an intraday buyer lives through;
+- **bought at the close and sold at the next close.**
+
+Both are grouped by days to expiry and by weekday, with the move delivered against the move the straddle's own IV
+priced. The statistics: Newey-West t, discovery on the older 2/3, rolling validation on the newest 1/3, and
+Benjamini-Hochberg FDR within each family. The live desk loads the table (`buyer_edge.json` from the research branch)
+and states, in the read and on the Chart's Quant panel, what history says about buying at today's point in the expiry
+cycle.
 
 ### What not to copy
 
@@ -126,6 +155,7 @@ answers on day one when buying options tends to pay (for example, close to expir
 ## How to read the new numbers
 
 - A new factor gets weight only through the probation rule and the bounded learning multipliers (0.5×–1.5×).
+- Breadth, the narrow-move read and relative strength follow the same rule: no vote until their live record earns it.
 - Before any factor's base weight is raised by hand, the IC table should show |t| ≥ 2 at the horizon the trades are
   held over, on at least a few hundred overlap-adjusted reads (roughly 20+ sessions).
 - The buyer's edge needs 20+ sessions before it means anything. One volatile week proves nothing.

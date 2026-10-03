@@ -109,7 +109,8 @@ const empty = (ic, text) => h("div", { class: "empty" }, icon(ic), text);
 const SETUP = { orb: "Opening-range breakout", vwap_trend: "VWAP trend", trend_break: "Trend break", fade: "Fade", reversal: "Reversal", range: "Range" };
 const setupName = (s) => SETUP[s] || cap(words(s));
 const ACRO = new Set(["vwap", "cpr", "orb", "ema", "pcr", "oi", "iv", "rv", "vix", "gex", "ofi", "vpin", "rsi", "atr", "adx", "fii", "dii", "or", "ib", "poc", "va", "vah", "val", "ou", "ivr", "gift", "us", "fx"]);
-const factorName = (f) => cap(words(f).split(" ").map((w) => (ACRO.has(w.toLowerCase()) ? w.toUpperCase() : w)).join(" "));
+const FACTOR_NAMES = { breadth_div: "Narrow move", oi_shift: "OI wall shift", skew_trend: "Skew trend", heavy_pulse: "Heavyweights" };
+const factorName = (f) => FACTOR_NAMES[f] || cap(words(f).split(" ").map((w) => (ACRO.has(w.toLowerCase()) ? w.toUpperCase() : w)).join(" "));
 const DAYTYPE = { undetermined: "Forming", forming: "Forming" };
 const dayName = (d) => DAYTYPE[d] || cap(words(d || "forming"));
 const structName = (s) => cap(words(s || ""));
@@ -670,8 +671,8 @@ function renderRead(v) {
 }
 function fact(label, value) { return h("div", {}, h("span", {}, label), h("b", {}, value || "—")); }
 function narrative(text) { return text ? h("p", { class: "narr pad" }, text) : null; }
-const CAT = { trend: "Trend", structure: "Structure", momentum: "Momentum", flow: "Flow", options: "Options", volatility: "Volatility", news: "News", quant: "Quant", global: "Global" };
-const CAT_G = { trend: "Tape", structure: "Tape", momentum: "Tape", flow: "Flow", options: "Options", volatility: "Vol", news: "News", quant: "Quant", global: "Global" };
+const CAT = { trend: "Trend", structure: "Structure", momentum: "Momentum", flow: "Flow", breadth: "Breadth", options: "Options", volatility: "Volatility", news: "News", quant: "Quant", global: "Global" };
+const CAT_G = { trend: "Tape", structure: "Tape", momentum: "Tape", flow: "Flow", breadth: "Breadth", options: "Options", volatility: "Vol", news: "News", quant: "Quant", global: "Global" };
 function evidenceList(list, limit) {
 	const box = h("div", { class: "evl" });
 	if (!list.length) { box.appendChild(empty("info", "No evidence yet.")); return box; }
@@ -744,8 +745,8 @@ function renderLevelsTable(v) {
 function renderQuant(v) {
 	const box = $("#c-quant");
 	box.textContent = "";
-	const q = v && v.quant, c = (v && v.chain) || {};
-	if (!q && !Object.keys(c).length) { box.appendChild(empty("info", "The quant layer's read appears while the desk runs.")); return; }
+	const q = v && v.quant, c = (v && v.chain) || {}, br = v && v.breadth, rs = v && v.rel, he = v && v.hist_edge;
+	if (!q && !Object.keys(c).length && !br && !rs) { box.appendChild(empty("info", "The quant layer's read appears while the desk runs.")); return; }
 	const F = [];
 	if (q) {
 		const sig = q.sigma_30m_pct, band = fin(sig) && fin(v.spot) ? v.spot * sig / 100 : null, drift = q.research_drift;
@@ -770,6 +771,16 @@ function renderQuant(v) {
 	if (fin(c.fut_basis)) F.push(fact("Futures basis · carry", `${signed(c.fut_basis, 1)} pts` + (fin(c.fut_carry) ? ` · ${num(c.fut_carry * 100, 1)}%/yr` : "")));
 	if (c.fut_buildup) F.push(fact("Futures OI build-up", cap(c.fut_buildup)));
 	if (c.gex_state) F.push(fact("Dealer gamma (naive sign)", cap(String(c.gex_state).split(" (")[0]) + (fin(c.gamma_flip) ? ` · flip ${num(c.gamma_flip, 0)}` : "")));
+	// the index's own stocks (breadth.py), which index leads (relstrength.py), five years of the straddle (research)
+	if (br) {
+		F.push(fact(`Breadth · ${br.n} stocks`, `${Math.round(br.adv * br.n)} up` + (fin(br.above_vwap) ? ` · ${Math.round(br.above_vwap * br.n)} above VWAP` : "")
+			+ (fin(br.vwap_chg30) ? ` (${signed(br.vwap_chg30 * 100, 0)}% in 30 min)` : "")));
+		if (fin(br.ew_gap)) F.push(fact("Equal weight vs index", `${pct(br.ew_chg)} vs ${pct(br.index_chg)} · ${br.ew_gap < 0 ? "carried by the largest" : "broad"}`));
+	}
+	if (rs) F.push(fact("BANKNIFTY vs NIFTY", `${rs.leader} leads ${pct(Math.abs(rs.rs_day)).replace("+", "")}` + (fin(rs.rs_30) ? ` · 30 min ${pct(rs.rs_30)}` : "")
+		+ (fin(rs.z30) ? ` (${signed(rs.z30, 1)}σ)` : "") + (fin(rs.beta) ? ` · β ${num(rs.beta)}` : "")));
+	const hr = he && (he.bucket || he.weekday);
+	if (hr) F.push(fact(`History: straddle at the open, ${he.bucket ? hr.group + " DTE" : hr.group}`, `${pct(hr.mean_pct, 0)} by the close · ${Math.round(hr.win * 100)}% won · ${words(hr.verdict.toLowerCase())}`));
 	if (F.length % 2) F.push(h("div", {}));
 	put(box, h("div", { class: "facts" }, F),
 		c.source === "model" ? h("p", { class: "narr pad", style: "border-top:1px solid var(--line);font-size:12px;color:var(--warn)" },
@@ -798,7 +809,15 @@ function learnedGrp(L, sym) {
 			return h("td", { class: c && Math.abs(c.t) >= 2 ? (c.ic > 0 ? "up" : "dn") : "f3", title: c ? `t ${num(c.t, 1)} · n ${num(c.n, 0)}` : "" }, c ? signed(c.ic, 3) : "—");
 		})))))
 		: empty("info", "Fills as sessions are graded: each factor's direction against the move 5, 15, 30 and 60 minutes later.");
-	return grp("What the desk has learned", `${L.sessions || 0} session${L.sessions === 1 ? "" : "s"} graded`, h("div", { class: "rows" }, edge,
+	const rs = L.rs, rsRow = h("div", { class: "pad", style: "display:grid;gap:6px" },
+		h("div", { class: "lbl" }, "Relative strength: does the leader keep leading?"),
+		rs ? h("div", { class: "row", style: "flex-wrap:wrap;gap:6px 16px" },
+			h("span", {}, "IC, last 30 → next 30 min ", b(signed(rs.ic, 3), Math.abs(rs.t) >= 2 ? (rs.ic > 0 ? "up" : "dn") : "")),
+			h("span", {}, "t ", b(signed(rs.t, 1))), h("span", { class: "f3" }, `${num(rs.n, 0)} obs · ${rs.days} sessions`),
+			h("span", { class: "tag " + (rs.used ? "bull" : "dash") }, rs.used ? "Picks the index" : "Not used yet"))
+			: h("div", { class: "f3", style: "font-size:12.5px" }, "Graded from every whole session of BANKNIFTY and NIFTY bars."),
+		h("div", { class: "f3", style: "font-size:12px" }, "Only when the leader of the last 30 minutes has kept leading (IC > 0, t ≥ 2) does the desk prefer it for longs and the laggard for shorts."));
+	return grp("What the desk has learned", `${L.sessions || 0} session${L.sessions === 1 ? "" : "s"} graded`, h("div", { class: "rows" }, edge, rsRow,
 		h("div", {}, h("div", { class: "pad", style: "padding-bottom:2px" }, h("div", { class: "lbl" }, "Factor IC by horizon"),
 			h("div", { class: "f3", style: "font-size:12px;margin-top:4px" }, "Correlation of each factor's call with the index's move that followed. In colour: |t| ≥ 2 on overlap-adjusted samples.")), icTable),
 		pro.length ? h("div", { class: "pad", style: "display:grid;gap:6px" }, h("div", { class: "lbl" }, "On probation: graded live, no vote yet"),
@@ -1191,6 +1210,7 @@ function renderBrain() {
 	drawBrainGraph($("#bgraph"), v, hb);
 	// what's pushing the bias
 	body.appendChild(grp("What's pushing the bias", v.bias ? `${cap(v.bias)} ${signed(v.score)}` : "", evidenceList(v.evidence || [], 8)));
+	if (b && b.flows) body.appendChild(flowsGrp(b.flows, S.brainSym));
 	if (hb.learning) body.appendChild(learnedGrp(hb.learning, S.brainSym));
 	// global markets board
 	const G = hb.global || {}, mk = G.markets || {}, board = h("div", { class: "rows" });
@@ -1220,6 +1240,23 @@ function renderBrain() {
 				h("td", {}, h("span", { class: "tag " + (d.validated ? "bull" : "dash") }, d.validated ? (d.lead_sign < 0 ? "Validated · fades" : "Validated") : "Probation")))))
 			: empty("info", "Appears with the brain's first read."))));
 }
+// FII / client positioning from the warehouse (brain.load_flows): context for the day, not a vote
+function flowsGrp(f, sym) {
+	const k = (x) => `${signed(x / 1000, 0)}k`, F = [];
+	if (fin(f.fii_long_pct)) F.push(fact("FII index futures long", `${Math.round(f.fii_long_pct * 100)}%` + (fin(f.fii_long_pct_5d) ? ` · ${Math.round(f.fii_long_pct_5d * 100)}% a week before` : "")));
+	if (fin(f.fii_opt_net)) F.push(fact("FII index options, calls − puts", k(f.fii_opt_net) + (fin(f.fii_opt_d1) ? ` · ${k(f.fii_opt_d1)} on the day` : "")
+		+ (fin(f.fii_opt_pctile) ? ` · pctile ${Math.round(f.fii_opt_pctile * 100)}` : "")));
+	if (fin(f.fii_opt_d5)) F.push(fact("FII options, 5 sessions", k(f.fii_opt_d5)));
+	if (fin(f.client_opt_net)) F.push(fact("Clients' options, calls − puts", k(f.client_opt_net) + (fin(f.client_opt_pctile) ? ` · pctile ${Math.round(f.client_opt_pctile * 100)}` : "")));
+	if (fin(f.fii_cash_cr)) F.push(fact("FII · DII cash", `₹${signed(f.fii_cash_cr, 0)} cr` + (fin(f.dii_cash_cr) ? ` · ₹${signed(f.dii_cash_cr, 0)} cr` : "")));
+	const r = (f.fii_opt_research || {})[sym];
+	if (r) F.push(fact("Research: options change → next day", r));
+	if (!F.length) return h("div");
+	if (F.length % 2) F.push(h("div", {}));
+	return grp("Flows and positioning", f.date ? `as of ${f.date}` : "last session", h("div", {}, h("div", { class: "facts" }, F),
+		h("p", { class: "narr pad", style: "border-top:1px solid var(--line);font-size:12px;color:var(--fg3)" },
+			"Contracts, from NSE's participant-wise open interest after the close. Context for the day, not a vote: the research tests whether the change predicts the next session.")));
+}
 function drawBrainGraph(el, v, hb) {
 	el.textContent = "";
 	const b = v.brain;
@@ -1232,7 +1269,7 @@ function drawBrainGraph(el, v, hb) {
 		const a = (agg[n] = agg[n] || { n, c: 0, w: 0 });
 		a.c += e.direction * e.weight; a.w += e.weight;
 	}
-	const india = ["Tape", "Flow", "Options", "Vol", "News", "Quant", "Global"].filter((k) => agg[k]).map((k) => agg[k]);
+	const india = ["Tape", "Flow", "Breadth", "Options", "Vol", "News", "Quant", "Global"].filter((k) => agg[k]).map((k) => agg[k]);
 	const rowH = 36, H = Math.max(world.length, india.length, 3) * rowH + 30;
 	const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Influence graph from global markets to the decision" }, el);
 	const yOf = (i, n) => 24 + (H - 30) * (i + 0.5) / n;

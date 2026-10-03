@@ -86,7 +86,7 @@ def test_grading_news_factors_trades_and_refused_entries(tmp_path):
     assert m.stat("setup", "orb")["n"] == 3 and m.stat("setup", "orb|trend")["n"] == 2
     assert m.stat("armed_rejected", "orb")["sum"] == pytest.approx(1.5)                 # target first: +1.5R missed
     again = learning.grade_session(m, j, bars, "2026-10-05")
-    assert again == {"news": 0, "factors": 0, "trades": 0, "armed": 0}                 # nothing graded twice
+    assert again == {"news": 0, "factors": 0, "trades": 0, "armed": 0, "rs": 0}        # nothing graded twice
     assert m.reliability("factor", "vwap") > 1 > m.reliability("factor", "pcr")
     lines = learning.summary(m)
     assert any(x.startswith("factor vwap") for x in lines) and any("pre-break orb" in x for x in lines)

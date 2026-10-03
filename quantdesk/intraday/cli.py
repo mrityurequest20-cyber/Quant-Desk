@@ -107,10 +107,16 @@ def _live_engine(cfg, a) -> IntradayEngine:
     memory = Memory(p["memory"]) if cfg.get("intraday.learning.enabled", True) else None
     eng = IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"],
                          news=news, brain=brain, memory=memory)
+    from ..data.nse import NSE, parse_gift
+    nse = NSE(gap=0.3)
     if not getattr(a, "no_global", False):
-        from ..data.nse import NSE, parse_gift
-        nse = NSE(gap=0.3)
         eng.gift_source = lambda: parse_gift(nse.api("/api/marketStatus")[0])
+    if kotak is not None and cfg.get("intraday.breadth.enabled", True) and not getattr(a, "close_out", False):
+        from .breadth import make_breadth
+        try:                                              # the index's own stocks, from Kotak's quotes (breadth.py)
+            eng.breadth = make_breadth(cfg, kotak, nse, say=lambda m: print(m, flush=True))
+        except Exception as exc:                          # the desk reads without breadth rather than not at all
+            print(f"breadth: off ({exc!s:.160})", flush=True)
     return eng
 
 
@@ -521,6 +527,13 @@ def cmd_doctor(cfg, a):
     except Exception as exc:
         nse_ok = False
         print(f"  nse    NIFTY      FAIL {exc!s:.160}")
+    from ..data.nse import NSE
+    from .breadth import LISTS, index_members, nse_list_fetcher
+    fetch = nse_list_fetcher(NSE(gap=0.3))
+    for u in [x for x in cfg.get("intraday.underlyings") if x in LISTS]:      # breadth's members (breadth.py)
+        got, src = index_members(u, fetch)
+        print(f"  index  {u:<10} {len(got)} members from {src}"
+              + (f" · not in the built-in list: {', '.join(sorted(set(got) - set(LISTS[u][1])))}" if src.startswith("NSE") else ""))
     kotak = _kotak_client()
     if kotak is not None:
         from .kotak import check

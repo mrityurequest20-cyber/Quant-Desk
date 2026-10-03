@@ -351,6 +351,9 @@ def cmd_research(cfg, a):
         md2 = W.report(res, f"{pd.Timestamp.now(tz='Asia/Kolkata'):%Y-%m-%d %H:%M} IST")
         (out / "data_report.md").write_text(md2, encoding="utf-8")
         (out / "vrp_positioning.json").write_text(W.to_json(res), encoding="utf-8")
+        (out / "buyer_edge.json").write_text(W.buyer_edge_json(res), encoding="utf-8")
+        if len(res.get("buyer_edge_rows", [])):
+            res["buyer_edge_rows"].to_csv(out / "buyer_edge_sessions.csv.gz", index=False)
         if len(res.get("trade_rows", [])):
             res["trade_rows"].assign(strikes=res["trade_rows"]["strikes"].astype(str)).to_csv(
                 out / "vrp_trades.csv.gz", index=False)

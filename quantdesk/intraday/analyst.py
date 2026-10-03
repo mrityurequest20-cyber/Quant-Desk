@@ -20,9 +20,9 @@ DEFAULT_WEIGHTS = {
     "supertrend": 0.4, "rsi": 0.4, "flow": 0.6, "divergence": 0.5, "pcr": 0.3, "oi_walls": 0.4,
     "vix": 0.3, "max_pain": 0.3, "iv_move": 0.3, "news": 0.5, "model": 0.8, "research": 0.3, "fut_oi": 0.4, "basis": 0.2,
 }
-# evidence on probation (chainflow.py): graded live from the first session, a vote (this weight) only once the record
-# earns it, as the brain's probation drivers do: 30 graded reads at 1.15× reliability
-PROBATION = {"oi_shift": 0.4, "skew_trend": 0.3}
+# evidence on probation (chainflow.py, breadth.py): graded live from the first session, a vote (this weight) only once
+# the record earns it, as the brain's probation drivers do: 30 graded reads at 1.15× reliability
+PROBATION = {"oi_shift": 0.4, "skew_trend": 0.3, "breadth": 0.4, "breadth_div": 0.3}
 PROMOTE_N, PROMOTE_REL = 30.0, 1.15
 
 
@@ -64,6 +64,20 @@ class MarketView:
         return d
 
 
+def hist_edge_note(symbol: str, he: dict) -> str:
+    """The warehouse research's buyer's edge for today's days-to-expiry bucket (and weekday): one sentence."""
+    b, w = he.get("bucket"), he.get("weekday")
+    if not b and not w:
+        return ""
+    r = b or w
+    what = (f"with {r['group']} day{'s' if r['group'] != '1' else ''} to expiry" if b else f"on a {r['group']}")
+    s = (f"History ({r['first'][:4]}–{r['last'][:4]}): the {symbol} ATM straddle bought at the open {what} returned "
+         f"{r['mean_pct']:+.0%} by the close on average ({r['n']} sessions, {r['win']:.0%} profitable): {r['verdict'].lower()}")
+    if b and w:
+        s += f"; on {w['group']}s {w['mean_pct']:+.0%} ({w['n']}, {w['verdict'].lower()})"
+    return s + "."
+
+
 def _fmt(x, nd=2):
     return f"{x:,.{nd}f}" if x is not None and x == x else "—"
 
@@ -83,7 +97,8 @@ class Analyst:
 
     def assess(self, symbol: str, s: dict, chain: dict | None = None, vix: dict | None = None,
                is_expiry_day: bool = False, event: str | None = None, flow: dict | None = None,
-               news: dict | None = None, quant: dict | None = None, brain: dict | None = None) -> MarketView:
+               news: dict | None = None, quant: dict | None = None, brain: dict | None = None,
+               breadth: dict | None = None, rel: dict | None = None, hist_edge: dict | None = None) -> MarketView:
         ev: list[Evidence] = []
         w = self.w
         last = s["last"]
@@ -182,6 +197,11 @@ class Analyst:
             add("basis", "flow", max(-1.0, min(1.0, dc / 0.03)),
                 f"futures premium {'widening' if dc > 0 else 'shrinking'}: carry {c['fut_carry']:.1%}/yr "
                 f"({dc:+.1%} since the first read today, basis {c['fut_basis']:+.1f} pts)")
+        # --- breadth: how many of the index's own stocks move with it (breadth.py), on probation ---------------
+        from .breadth import breadth_signal, divergence_signal
+        for f, sig in (("breadth", breadth_signal(breadth)), ("breadth_div", divergence_signal(breadth))):
+            if sig is not None:
+                add(f, "breadth", sig[0], sig[1])
         # --- news (headline tone is noisy: modest weight, scaled by how many stories back it) ---------------
         if news and news.get("n"):
             tone = news["tone"]
@@ -300,6 +320,18 @@ class Analyst:
         if c.get("liquid_lo") is not None:              # where a real order fills near the mid (chains.liquid_band)
             parts.append(f"Liquid strikes {c['liquid_lo']:,.0f}–{c['liquid_hi']:,.0f} "
                          f"(out-of-the-money side quoting within 3%; {c['liquid_strikes']} of {c['strikes']}).")
+        if breadth:                                     # the index's own stocks (breadth.py)
+            b = breadth
+            parts.append(f"Breadth: {round(b['adv'] * b['n'])} of {b['n']} {b['index']} stocks up"
+                         + (f", {round(b['above_vwap'] * b['n'])} above their VWAP" if b.get("above_vwap") is not None else "")
+                         + (f" ({b['vwap_chg30']:+.0%} in 30 min)" if b.get("vwap_chg30") is not None else "")
+                         + (f"; equal weight {b['ew_chg']:+.2%} vs the index {b['index_chg']:+.2%}" if b.get("ew_gap") is not None else "")
+                         + ".")
+        from .relstrength import describe
+        if describe(rel):                               # which index is leading (relstrength.py)
+            parts.append(describe(rel) + ".")
+        if hist_edge:                                   # five years of the ATM straddle at this point of the cycle
+            parts.append(hist_edge_note(symbol, hist_edge))
         if brain and brain.get("narrative"):
             parts.append(brain["narrative"])
         if quant and quant.get("sigma_30m_pct"):

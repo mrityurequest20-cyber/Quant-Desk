@@ -289,7 +289,16 @@ changes how much it trusts each input. It grades at the close, and catches up at
 - **Factor IC by horizon.** Each factor's direction is correlated with the move 5, 15, 30 and 60 minutes later. The t-stats use overlap-adjusted samples, so you can see which factors predict and over what holding period.
 - **The buyer's edge.** Each session's realised volatility is set against the ATM IV read at the open, as realised ÷ implied over 20 sessions. A desk that only buys options needs realised to beat implied.
 
-Both are on the Brain tab and in the session review. The option chain is now also tracked through the day (`intraday/chainflow.py`): OI wall migration, the 25Δ skew's trend and ATM IV's trend. The first two are new factors **on probation**: graded live, no vote until 30 graded reads at 1.15×. Why these, and what's next (index breadth, relative strength, FII options positioning, the buyer's edge over five years of bhavcopy): [the quant gap review](docs/QUANT_GAP_REVIEW.md).
+Both are on the Brain tab and in the session review. The option chain is now also tracked through the day (`intraday/chainflow.py`): OI wall migration, the 25Δ skew's trend and ATM IV's trend. The first two are new factors **on probation**: graded live, no vote until 30 graded reads at 1.15×.
+
+**More reads, each tested before it acts:**
+
+- **Index breadth** (`intraday/breadth.py`, live with Kotak). The NIFTY 50 and Nifty Bank stocks, once a minute: the share advancing, the share above their own VWAP, and the equal-weighted move against the index's. Two factors on probation: `breadth`, and `breadth_div` (a narrow move leans against the index).
+- **BANKNIFTY vs NIFTY** (`intraday/relstrength.py`). Which index is leading, by how much, and how unusual that is. The learning loop measures whether the leader of the last 30 minutes keeps leading. Only once that IC has t ≥ 2 does it tilt conviction toward the leader for longs and the laggard for shorts.
+- **FII index options positioning** (Brain tab, flows). FII and client net calls − puts, their change and percentile over the year, with the research's verdict on whether the change predicts the next session.
+- **The buyer's edge over five years of bhavcopy** (warehouse research section 3, `buyer_edge.json`). The ATM straddle bought at the open and sold at the close, and close to next close, at real prices after spreads and fees, by days to expiry and weekday. The desk states what history says for today in its read.
+
+Why these: [the quant gap review](docs/QUANT_GAP_REVIEW.md).
 
 **Headlines that share a window are one observation.** A night's forty stories are all judged on the same opening
 move, so they split one observation between them. Counted one each, the 403 headlines of 29 Sep 2026 had scored "66%
