@@ -1,0 +1,47 @@
+# The desk's own engineer (quantdesk/ops/selfreview.py): after every session it files what needs fixing or building as
+# GitHub issues labelled `desk-request`. They queue up whether or not anyone is in a chat. The scheduled Claude
+# session (docs/AUTONOMY.md) works through them. The cron covers a day the desk never started at all.
+name: Self-review
+
+on:
+  workflow_run:
+    workflows: ["Live paper desk"]
+    types: [completed]
+  schedule:
+    - cron: "40 11 * * 1-5"      # 17:10 IST on weekdays
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "YYYY-MM-DD (default: today, IST)"
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: self-review
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the journal
+        run: deploy/journal.sh restore
+      - name: Review the day and file what needs doing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.day }}
+        run: python -m quantdesk intraday self-review --issues ${DAY:+--day "$DAY"} | tee -a "$GITHUB_STEP_SUMMARY"

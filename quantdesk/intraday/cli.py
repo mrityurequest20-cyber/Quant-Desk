@@ -199,7 +199,7 @@ def cmd_tape(cfg, a):
 def cmd_sleeves(cfg, a):
     """The pre-registered expiry sellers (intraday/sleeves.py): settle what expired, open on an expiry's eve, report."""
     from .feeds import IST
-    from .sleeves import ExpirySeller, render
+    from .sleeves import ExpirySeller, render, specs
     base = paths(cfg, "live")
 
     def yahoo_close(underlying, day):
@@ -213,13 +213,35 @@ def cmd_sleeves(cfg, a):
         if d.empty:
             raise RuntimeError(f"no Yahoo bar for {sym} on {day}")
         return float(d["Close"].iloc[-1])
-    seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close)
-    if not a.report:
-        day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
-        for line in seller.run(day) or [f"{day}: nothing to settle or open"]:
-            print(line, flush=True)
-        print(flush=True)
-    print(render(seller.report()), flush=True)
+    for spec in specs():                                  # every registered spec, each with its own ledger
+        seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec)
+        if not a.report:
+            day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
+            for line in seller.run(day) or [f"{spec['name']} {day}: nothing to settle or open"]:
+                print(line, flush=True)
+            print(flush=True)
+        print(render(seller.report()) + "\n", flush=True)
+
+
+def cmd_self_review(cfg, a):
+    """The desk's own engineer (ops/selfreview.py): what needs fixing or building, filed as GitHub issues with --issues."""
+    from ..ops import selfreview as SR
+    from .feeds import IST
+    now = pd.Timestamp.now(tz=IST)
+    day = dt.date.fromisoformat(a.day) if a.day else now.date()
+    gh = None
+    repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if repo and token:
+        gh = SR.GitHub(repo, token)
+    findings = SR.review(cfg, day, gh=gh, now=now)
+    print(SR.render(findings, day), flush=True)
+    if a.json:
+        Path(a.json).write_text(SR.to_json(findings))
+    if a.issues:
+        if gh is None:
+            print("self-review: --issues needs GITHUB_REPOSITORY and GH_TOKEN; nothing filed", flush=True)
+        else:
+            SR.sync(gh, findings, day)
 
 
 def cmd_reset_account(cfg, a):
@@ -652,7 +674,12 @@ def register(sub):
     x.add_argument("--symbols", help="e.g. NIFTY,BANKNIFTY (default: intraday.tape.expiries)")
     x.add_argument("--report", nargs="?", const="today", help="completeness of a recorded day (YYYY-MM-DD) instead")
     x.set_defaults(fn=cmd_tape)
-    x = ss.add_parser("sleeves", help="expiry sellers: paper sleeves pre-registered in docs/prereg/expiry_seller_v1.json")
+    x = ss.add_parser("self-review", help="the desk's own engineer: findings after a session, filed as GitHub issues")
+    x.add_argument("--day", help="YYYY-MM-DD (default: today, IST)")
+    x.add_argument("--issues", action="store_true", help="open / comment / close desk-request issues (Actions token)")
+    x.add_argument("--json", help="also write the findings here")
+    x.set_defaults(fn=cmd_self_review)
+    x = ss.add_parser("sleeves", help="expiry sellers: paper sleeves pre-registered in docs/prereg/expiry_seller_v*.json")
     x.add_argument("--day", help="YYYY-MM-DD (default: today, IST)")
     x.add_argument("--report", action="store_true", help="only print the sleeves' standing")
     x.set_defaults(fn=cmd_sleeves)

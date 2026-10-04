@@ -127,15 +127,15 @@ def test_rules_retire_and_qualify_as_registered():
 
     def trades(pnls, gaps):
         return [{"id": f"t{i}", "pnl_rs": p, "cost_gap_rs": g, "max_loss_rs": 6000.0} for i, (p, g) in enumerate(zip(pnls, gaps))]
-    ok = assess(trades([300, -200, 500, 100, 250, -100, 400, 50, 150, 200], [-20, 10, -5, 0, 15, -10, 5, 0, -15, 20]), hist["A_NIFTY"], "A")
+    ok = assess(trades([300, -200, 500, 100, 250, -100, 400, 50, 150, 200], [-20, 10, -5, 0, 15, -10, 5, 0, -15, 20]), hist["A_NIFTY"], False)
     assert ok["cost"] == "passed" and ok["consistency"] == "consistent" and ok["eligible"] and not ok["retired"]
-    pricey = assess(trades([100] * 6, [-400, -350, -500, -450, -380, -420]), hist["A_NIFTY"], "A")
+    pricey = assess(trades([100] * 6, [-400, -350, -500, -450, -380, -420]), hist["A_NIFTY"], False)
     assert pricey["cost"] == "failed" and "cost more than the edge" in pricey["retired"]
-    broken = assess(trades([-3000] * 8, [0] * 8), hist["A_NIFTY"], "A")
+    broken = assess(trades([-3000] * 8, [0] * 8), hist["A_NIFTY"], False)
     assert broken["consistency"] == "rejected" and broken["z"] < -1.645 and broken["retired"]
-    tail = assess(trades([2000, -70000], [0, 0]), hist["B_NIFTY"], "B")
+    tail = assess(trades([2000, -70000], [0, 0]), hist["B_NIFTY"], True)
     assert tail["tail"] == "breached" and tail["retired"] and not tail["eligible"]
-    bug = assess([{"id": "x", "pnl_rs": -9000.0, "cost_gap_rs": 0, "max_loss_rs": 6000.0, "stt_rs": 10.0}], hist["A_NIFTY"], "A")
+    bug = assess([{"id": "x", "pnl_rs": -9000.0, "cost_gap_rs": 0, "max_loss_rs": 6000.0, "stt_rs": 10.0}], hist["A_NIFTY"], False)
     assert bug["bugs"]
 
 
@@ -169,3 +169,30 @@ def test_an_eve_without_a_run_is_recorded_not_dropped(cfg, tmp_path):
     n = len(seller.events())
     seller.run(later, now=at(later, "16:00"))
     assert len(seller.events()) == n
+
+
+def test_specs_drive_the_sleeves_and_v2_trades_only_its_far_wing_condor(cfg, tmp_path):
+    from quantdesk.intraday.sleeves import specs
+    names = [s["name"] for s in specs()]
+    assert names[:2] == ["expiry_seller_v1", "expiry_seller_v2"]
+    v2 = next(s for s in specs() if s["name"] == "expiry_seller_v2")
+    cal = TradingCalendar(cfg.holidays())
+    d = next(x.date() for x in pd.date_range("2026-06-01", "2026-12-31") if cal.is_trading_day(x.date())
+             and cal.next_trading_day(x.date()) in cal.expiries(x.date(), 40, 1, False))   # a BANKNIFTY monthly eve
+    e = cal.next_trading_day(d)
+    data = tmp_path / "data"
+    mc = ModelOptionChain(cfg, cal, lambda u, t: (54000.0, 0.16))
+    for u in ("NIFTY", "BANKNIFTY"):
+        ch = mc.chain(u, e, spot=22600.0 if u == "NIFTY" else 54000.0, ts=at(d, "15:20"))
+        ch.attrs["source"] = "kotak"
+        SessionRecorder(data).record_chain(ch)
+    seller = ExpirySeller(cfg, tmp_path / "sleeves", data, spec=v2, say=lambda *a: None)
+    assert seller.ledger.name == "expiry_seller_v2.jsonl"
+    seller.run(d, now=at(d, "15:40"))
+    trades = seller.trades()
+    assert [(t["sleeve"], t["underlying"]) for t in trades] == [("C", "BANKNIFTY")]    # never NIFTY
+    legs = sorted(trades[0]["legs"], key=lambda x: (x["right"], x["strike"]))
+    wings = [x for x in legs if x["qty"] > 0]
+    assert len(legs) == 4 and all(abs(abs(x["delta"]) - 0.05) <= 0.08 for x in wings)
+    assert trades[0]["max_loss_rs"] > 0 and trades[0]["margin_est_rs"] == trades[0]["max_loss_rs"]
+    assert "C = iron_condor_20_05 (defined risk)" in render(seller.report())

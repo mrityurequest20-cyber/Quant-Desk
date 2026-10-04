@@ -18,7 +18,9 @@ its history.
 - Paper only. Nothing here can place an order, and nothing is promoted automatically: eligibility is reported for the
   account owner to act on.
 
-Ledger: runtime/intraday/sleeves/ledger.jsonl, append-only (open / settle / skip events), saved with the journal.
+Each spec (docs/prereg/expiry_seller_v*.json) names its sleeves, legs, underlyings and history. A new pre-registered
+sleeve is a new spec file, not new code. One ledger per spec: runtime/intraday/sleeves/<spec name>.jsonl, append-only
+(open / settle / skip events), saved with the journal.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -34,13 +37,13 @@ import pandas as pd
 from ..core.calendar import TradingCalendar
 from ..core.types import Instrument
 from ..execution.costs import CostModel
-from ..research.warehouse_research import STRATEGIES, STT_EXERCISE, leg_cost
+from ..research.warehouse_research import NAKED, STRATEGIES, STT_EXERCISE, leg_cost
 from .chains import IntradayPricer, load_chain
 from .feeds import IST, normalise_bars
 from .playbook import StrikePicker
 
-SPEC_PATH = Path(__file__).resolve().parents[2] / "docs" / "prereg" / "expiry_seller_v1.json"
-SLEEVES = {"A": "iron_condor_20_10", "B": "short_strangle_20d"}
+PREREG = Path(__file__).resolve().parents[2] / "docs" / "prereg"
+SPEC_PATH = PREREG / "expiry_seller_v1.json"
 REAL_SOURCES = {"kotak", "nse"}                # exchange quotes; a modelled chain is refused
 ENTRY, WINDOW = 1520, (1510, 1525)             # HHMM: the snapshot nearest 15:20 inside 15:10–15:25
 TICK = 0.05
@@ -57,6 +60,23 @@ def load_spec(path: Path = SPEC_PATH) -> dict:
     spec = json.loads(raw)
     spec["_hash"] = hashlib.sha256(raw).hexdigest()[:12]
     return spec
+
+
+def specs(folder: Path = PREREG) -> list[dict]:
+    """Every registered expiry-seller spec, oldest version first."""
+    return [load_spec(p) for p in sorted(Path(folder).glob("expiry_seller_v*.json"),
+                                         key=lambda p: int(re.sub(r"\D", "", p.stem.rsplit("_v", 1)[1]) or 0))]
+
+
+def sleeve_table(spec: dict) -> dict:
+    """{sleeve: strategy, legs [(qty, right, delta)], underlyings, naked} from a spec (legs default to the history's)."""
+    out = {}
+    for k, v in spec["sleeves"].items():
+        legs = ([(int(q), r, float(d)) for q, r, d in v["legs"]] if isinstance(v.get("legs"), list)   # v1 describes them
+                else STRATEGIES[v["strategy"]][0])
+        out[k] = {"strategy": v["strategy"], "legs": legs, "underlyings": list(v.get("underlyings") or spec["underlyings"]),
+                  "naked": bool(v.get("naked", v["strategy"] in NAKED))}
+    return out
 
 
 def _mins(hhmm: int) -> int:
@@ -128,7 +148,7 @@ def _stats(x: list[float]) -> tuple[float, float]:
     return (float(a.mean()) if len(a) else float("nan"), float(a.std(ddof=1)) if len(a) > 1 else float("nan"))
 
 
-def assess(trades: list[dict], hist: dict, sleeve: str) -> dict:
+def assess(trades: list[dict], hist: dict, naked: bool) -> dict:
     """The spec's rules on one sleeve and underlying's settled trades (oldest first)."""
     n = len(trades)
     pnl = [t["pnl_rs"] for t in trades]
@@ -156,13 +176,13 @@ def assess(trades: list[dict], hist: dict, sleeve: str) -> dict:
             out["retired"] = out["retired"] or f"forward mean ₹{mean:,.0f} breaks from the history's ₹{hist['mean']:,.0f} (z {z:.2f})"
         else:
             out["consistency"] = "consistent"
-    if sleeve == "B" and n and min(pnl) < -1.5 * abs(hist["worst"]):
+    if naked and n and min(pnl) < -1.5 * abs(hist["worst"]):
         out["tail"] = "breached"
         out["retired"] = out["retired"] or f"a loss of ₹{min(pnl):,.0f} beyond 1.5× the history's worst"
     for t in trades:
         if t.get("max_loss_rs") is not None and t["pnl_rs"] + t.get("stt_rs", 0.0) < -t["max_loss_rs"] - 1:   # STT on exercise is extra
             out["bugs"].append(f"{t['id']}: lost ₹{-t['pnl_rs']:,.0f}, beyond its max loss ₹{t['max_loss_rs']:,.0f}")
-    out["eligible"] = (sleeve == "A" and n >= MIN_ELIGIBLE and out["cost"] == "passed"
+    out["eligible"] = (not naked and n >= MIN_ELIGIBLE and out["cost"] == "passed"
                        and out["consistency"] == "consistent" and not out["retired"] and not out["bugs"])
     return out
 
@@ -170,8 +190,9 @@ def assess(trades: list[dict], hist: dict, sleeve: str) -> dict:
 class ExpirySeller:
     def __init__(self, cfg, root: Path, data_dir: Path, close_fn=None, spec: dict | None = None, say=print):
         self.cfg, self.root, self.data = cfg, Path(root), Path(data_dir)
-        self.ledger = self.root / "ledger.jsonl"
         self.spec = spec or load_spec()
+        self.ledger = self.root / f"{self.spec['name']}.jsonl"
+        self.sleeves = sleeve_table(self.spec)
         self.hist = self.spec["history"]["per_lot_rupees"]
         self.cal = TradingCalendar(cfg.holidays())
         self.costs = CostModel(cfg)
@@ -202,13 +223,21 @@ class ExpirySeller:
 
     def assessment(self, sleeve: str, underlying: str) -> dict:
         done = [t for t in self.trades() if t["settled"] and t["sleeve"] == sleeve and t["underlying"] == underlying]
-        return assess(done, self.hist[f"{sleeve}_{underlying}"], sleeve)
+        return assess(done, self.hist[f"{sleeve}_{underlying}"], self.sleeves[sleeve]["naked"])
+
+    def trading(self, underlying: str) -> list[str]:
+        return [s for s, v in self.sleeves.items() if underlying in v["underlyings"]]
 
     def eligible_since(self, underlying: str) -> str | None:
-        """The settlement date on which sleeve A first became eligible on this underlying (for B's 3-month wait)."""
-        done = [t for t in self.trades() if t["settled"] and t["sleeve"] == "A" and t["underlying"] == underlying]
+        """The settlement date on which this spec's first defined-risk sleeve became eligible on this underlying (a
+        naked sleeve waits 3 months behind it)."""
+        hedged = [s for s in self.trading(underlying) if not self.sleeves[s]["naked"]]
+        if not hedged:
+            return None
+        s = hedged[0]
+        done = [t for t in self.trades() if t["settled"] and t["sleeve"] == s and t["underlying"] == underlying]
         for k in range(MIN_ELIGIBLE, len(done) + 1):
-            if assess(done[:k], self.hist[f"A_{underlying}"], "A")["eligible"]:
+            if assess(done[:k], self.hist[f"{s}_{underlying}"], False)["eligible"]:
                 return done[k - 1]["expiry"]
         return None
 
@@ -277,10 +306,10 @@ class ExpirySeller:
                 continue
             for u in self.underlyings:
                 exp = self.due(u, past)
-                for s in SLEEVES if exp else ():
+                for s in self.trading(u) if exp else ():
                     if (s, u, str(exp)) not in seen:
                         reason = f"the sleeves did not run on the eve ({past})"
-                        self._append({"event": "skip", "sleeve": s, "strategy": SLEEVES[s], "underlying": u,
+                        self._append({"event": "skip", "sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u,
                                       "expiry": str(exp), "day": str(past), "reason": reason})
                         notes.append(f"skip {s}-{u}-{exp}: {reason}")
         return notes
@@ -294,14 +323,15 @@ class ExpirySeller:
             exp = self.due(u, day)
             if exp is None:
                 continue
-            todo = [s for s in SLEEVES if (s, u, str(exp)) not in seen]
+            todo = [s for s in self.trading(u) if (s, u, str(exp)) not in seen]
             if not todo:
                 continue
             lot = int(self.spec["underlyings"][u]["lot"])
             snap = entry_snapshot(self.data / str(day), u, exp)
             chain = load_chain(snap) if snap else None
             for s in todo:
-                base = {"sleeve": s, "strategy": SLEEVES[s], "underlying": u, "expiry": str(exp), "day": str(day)}
+                base = {"sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u, "expiry": str(exp),
+                        "day": str(day)}
                 a = self.assessment(s, u)
                 if a["retired"]:
                     reason = f"retired under the spec: {a['retired']}"
@@ -316,7 +346,7 @@ class ExpirySeller:
                     notes.append(f"skip {s}-{u}-{exp}: {reason}")
                     continue
                 ts = pd.Timestamp(chain.attrs["ts"])
-                legs, why = pick_legs(chain, STRATEGIES[SLEEVES[s]][0], ts, self.picker)
+                legs, why = pick_legs(chain, self.sleeves[s]["legs"], ts, self.picker)
                 if legs is None:
                     self._append({"event": "skip", **base, "snapshot": snap.name, "reason": why})
                     notes.append(f"skip {s}-{u}-{exp}: {why}")
@@ -334,7 +364,7 @@ class ExpirySeller:
         credit = sum(-x["qty"] * x["fill"] for x in legs)
         model = sum(-x["qty"] * x["model_fill"] for x in legs)
         spot = float(chain.attrs["spot"])
-        if base["sleeve"] == "A":
+        if not self.sleeves[base["sleeve"]]["naked"]:
             width = max(max(x["strike"] for x in legs if x["right"] == r) - min(x["strike"] for x in legs if x["right"] == r)
                         for r in ("CE", "PE"))
             max_loss = round(max(width - credit, 0.0) * lot + fees, 2)
@@ -355,17 +385,18 @@ class ExpirySeller:
         rows = []
         for u in self.underlyings:
             since = self.eligible_since(u)
-            for s in SLEEVES:
+            for s in self.trading(u):
                 a = self.assessment(s, u)
                 h = self.hist[f"{s}_{u}"]
-                if s == "B" and a["eligible"] is False and since and not a["retired"]:
+                if self.sleeves[s]["naked"] and since and not a["retired"]:
                     waited = (pd.Timestamp.now(tz=IST).date() - dt.date.fromisoformat(since)).days
                     ok = (a["n"] >= MIN_ELIGIBLE and a["cost"] == "passed" and a["consistency"] == "consistent"
                           and a["tail"] == "ok" and waited >= B_AFTER_A_DAYS)
                     a["eligible"] = ok
                 status = ("retired: " + a["retired"]) if a["retired"] else (
                     "eligible for the paper account (owner decides)" if a["eligible"] else "collecting")
-                rows.append({"sleeve": s, "strategy": SLEEVES[s], "underlying": u, "history": h, **a, "status": status})
+                rows.append({"sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u, "history": h, **a,
+                             "status": status, "naked": self.sleeves[s]["naked"]})
         trades = self.trades()
         evs = self.events()
         return {"spec": self.spec["name"], "spec_hash": self.spec["_hash"], "rows": rows,
@@ -377,9 +408,12 @@ class ExpirySeller:
 def render(rep: dict) -> str:
     def rs(x, sign=True):
         return "–" if x is None or (isinstance(x, float) and not math.isfinite(x)) else (f"₹{x:+,.0f}" if sign else f"₹{x:,.0f}")
+    kinds = {}
+    for r in rep["rows"]:
+        kinds.setdefault(r["sleeve"], f"{r['sleeve']} = {r['strategy']} ({'naked' if r['naked'] else 'defined risk'})")
     out = [f"## Expiry sellers (paper) · {rep['spec']} · spec {rep['spec_hash']}", "",
-           "Sell 20-delta premium at ~15:20 the session before expiry on real quotes, hold to settlement. A = iron condor "
-           "(defined risk), B = strangle (naked). 1 lot each; ₹ per lot.", "",
+           "Sold at ~15:20 the session before expiry on real quotes, held to settlement. " + ", ".join(kinds.values())
+           + ". 1 lot each; ₹ per lot.", "",
            "| sleeve | trades | P&L | mean (history) | win | worst (history) | cost gap mean / 90% low | cost | consistency | status |",
            "|---|---:|---:|---:|---:|---:|---:|---|---|---|"]
     for r in rep["rows"]:

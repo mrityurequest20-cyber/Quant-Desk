@@ -735,6 +735,28 @@ Every trade records its **cost gap**: the real entry credit against what the his
 
 Eligibility for the ₹5L paper account is reported, never applied: A first, after 10 trades. B only follows after A has been eligible for 3 months. Real money is the owner's call. The ledger (`runtime/intraday/sleeves/ledger.jsonl`) is append-only and saved with the journal. Skipped and missed eves are logged, never dropped. `--report` prints the standings.
 
+**Crash insurance (expiry_wings_v1).** The strangle's profits are eaten by a few shock days. 2% of BANKNIFTY trades
+lost ₹2.06L of its ₹3.52L, on Covid, the Ukraine invasion and HDFC Bank's results. `quantdesk wings` (run on the
+warehouse by the `Study` workflow) tested far wings on 2019–26 real prices.
+
+The BANKNIFTY condor with 0.05-delta wings:
+- keeps 60% of the strangle's mean (+₹648/lot, t 2.66, positive in both halves);
+- cuts the worst trade from −₹50,684 to −₹20,891;
+- becomes **sleeve C** (`docs/prereg/expiry_seller_v2.json`).
+
+NIFTY's best wing reached t 1.99 against a 2.0 bar and did not qualify. Sleeves are spec-driven: a new pre-registered
+sleeve is a new `expiry_seller_v*.json`, each with its own ledger.
+
+**Running without anyone in a chat (docs/AUTONOMY.md).** Trading never waits for a person or a language model. After
+every session the `Self-review` workflow (`ops/selfreview.py`) files what needs fixing or building as GitHub issues
+labelled `desk-request`:
+- missed sessions, errors, tape gaps and failed workflows;
+- sleeve skips and decision points;
+- data milestones.
+
+A scheduled Claude session works those issues, then the ranked [backlog](docs/BACKLOG.md), within hard limits: no
+live orders, no looser risk, no promotions, no edits to registered specs.
+
 **Checking the fills.** `audit.yml` (Actions tab, optional date) downloads the recorded option chains from the live runs' artifacts and checks every paper fill against the bid/ask the market actually showed, with each trade's P&L at those quotes (`deploy/audit_fills.py`).
 
 - **The live website** is at `https://mrityurequest20-cyber.github.io/Quant-Desk/`. It is the same phone app, **read-only**, re-published every ~6 minutes while the desk runs. The status pill reads **Live** while the heartbeat is fresh, **Closed** outside market hours and **Offline** when the connection or desk is unavailable; cached data is labelled as potentially stale. **Install it:** on Android, Chrome offers *Install app* (the app shows a card for it too); on iPhone, Safari → Share → *Add to Home Screen*. It then opens full-screen from its own icon, and a service worker keeps the last state readable offline.
