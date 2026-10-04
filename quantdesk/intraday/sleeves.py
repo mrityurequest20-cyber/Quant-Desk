@@ -15,8 +15,8 @@ its history.
   buys at ask + 0.05, statutory fees per leg.
 - Exit: cash settlement at the expiry-day index close: the mean of the recorded 15:00–15:29 one-minute closes, which is
   how NSE builds it, else Yahoo's daily close. The source is recorded with every settlement.
-- Paper only. Nothing here can place an order, and nothing is promoted automatically: eligibility is reported for the
-  account owner to act on.
+- Paper only. Nothing here can place an order or promote itself: it reports eligibility by the spec's rules, and a
+  registered allocator spec (BACKLOG 9) is what moves an eligible sleeve into the paper account.
 
 Each spec (docs/prereg/expiry_seller_v*.json) names its sleeves, legs, underlyings and history. A new pre-registered
 sleeve is a new spec file, not new code. One ledger per spec: runtime/intraday/sleeves/<spec name>.jsonl, append-only
@@ -407,7 +407,7 @@ class ExpirySeller:
                           and a["tail"] == "ok" and waited >= B_AFTER_A_DAYS)
                     a["eligible"] = ok
                 status = ("retired: " + a["retired"]) if a["retired"] else (
-                    "eligible for the paper account (owner decides)" if a["eligible"] else "collecting")
+                    "eligible for the paper account (the registered allocator applies it)" if a["eligible"] else "collecting")
                 rows.append({"sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u, "history": h, **a,
                              "status": status, "naked": self.sleeves[s]["naked"]})
         trades = self.trades()

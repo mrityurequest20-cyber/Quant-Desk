@@ -172,8 +172,10 @@ def check_sleeves(seller, day: dt.date) -> list[Finding]:
                                f"Expiry sleeve {tag} reached {r['n']} settled trades",
                                f"Cost check: {r['cost']}; consistency: {r['consistency']}; status: {r['status']}. Mean cost "
                                f"gap ₹{r['gap_mean']:+,.0f}/lot (history assumed 0).",
-                               "Report the verdict to the owner with the numbers; if eligible, propose sizing under "
-                               "the ₹5L loss budget (never applied automatically).", transient=False))
+                               "Record the verdict with the numbers in docs/principles.json (a decision record on this "
+                               "issue). If eligible, apply the registered allocator to the paper account under the ₹5L "
+                               "loss budget (BACKLOG 9); register it first if it doesn't exist yet. Real money stays off.",
+                               transient=False))
     for t in rep["open"]:
         if dt.date.fromisoformat(t["expiry"]) < day:
             out.append(Finding(f"sleeve-unsettled:{rep['spec']}:{t['id']}", "data", f"Sleeve trade {t['id']} past expiry and unsettled",

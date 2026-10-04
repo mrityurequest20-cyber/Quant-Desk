@@ -9,7 +9,7 @@ that unblocks one.
 **Rules for every item:**
 - the spec is committed alone, before code or results;
 - real point-in-time quotes are the only evidence that qualifies anything;
-- nothing goes live or changes size without the owner.
+- nothing touches real money; paper sizing changes only through a registered allocator spec.
 
 ## Where the evidence stands (4 Oct 2026, evidence level 2/4)
 
@@ -60,8 +60,10 @@ that unblocks one.
    `desk-request` with a fetch plan, then build the fetcher (docs/AUTONOMY.md, "Going outside").
 9. **Portfolio sizing**, once two sleeves are eligible:
    - a risk-budgeted allocator: per-trade max loss ≤ 4% of equity, correlation-aware, half-Kelly cap;
-   - a proposal to the owner, never applied by itself.
-10. **Live execution through Kotak.** Last. Only after a sleeve passes paper and the owner says go.
+   - registered as a spec first, then applied to the paper account by the engineer when a sleeve's registered
+     eligibility rule says so. Real money stays off.
+10. **Live execution through Kotak.** Last. Only after a sleeve passes paper. Real money is the one switch the
+    account's owner flips by hand; the engineer builds and tests everything up to it, on paper.
 
 ## Data the desk now collects by itself
 - **NSE F&O bhavcopy, daily since 2019:**
