@@ -1,0 +1,29 @@
+{
+  "name": "expiry_seller_v2",
+  "registered": "2026-10-04",
+  "kind": "forward paper test (no orders): every trade is decided by the rules below before its outcome exists",
+  "question": "does the far-wing condor that expiry_wings_v1 selected (BANKNIFTY, short 0.20 / long 0.05 delta) survive the real bid/ask at the minute it would be traded, and stay consistent with its history. It is the crash-insured version of the strangle: on 7.7 years of real prices it kept 60% of the strangle's mean and cut its worst trade from -Rs 50,684 to -Rs 20,891 per lot",
+  "history": {
+    "source": "expiry_wings_v1 (spec 03ed351842ac), Study run 37162998404: docs/prereg/results/expiry_wings_v1-03ed351842ac.md; NSE F&O bhavcopy 2019-01 to 2026-09, evidence class real_eod_approximation",
+    "convention": "the same as expiry_seller_v1: entry at the close one session before expiry, legs at close -/+ (0.05 + max(0.05, 0.2% of the price)), statutory fees, held to the expiry-day close, STT 0.125% on exercised long legs",
+    "per_lot_rupees": {
+      "C_BANKNIFTY": {"strategy": "iron_condor_20_05", "n": 326, "mean": 648, "sd": 4185, "t": 2.66, "worst": -20891, "p05": -8502, "win": 0.794, "credit": 2562, "max_loss_median": 15222}
+    },
+    "caveats": "43 configurations tried across the two studies; selected among 3 wing distances by a rule fixed before the run; BANKNIFTY expiries are monthly since Nov 2024, so about 12 forward trades a year"
+  },
+  "sleeves": {
+    "C": {"strategy": "iron_condor_20_05", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.05], [1, "PE", -0.05]],
+          "underlyings": ["BANKNIFTY"], "naked": false, "risk": "defined: max loss = wider wing - credit"}
+  },
+  "underlyings": {"BANKNIFTY": {"lot": 30, "expiries": "monthly"}},
+  "size": "1 lot; P&L reported in rupees per lot",
+  "entry": "exactly as expiry_seller_v1 (the tape snapshot nearest 15:20 within 15:10-15:25 on the eve, real quotes only, out-of-the-money strikes with |delta| nearest the target within 0.08, a two-sided quote on every leg, sells at bid - 0.05, buys at ask + 0.05, statutory fees)",
+  "exit": "exactly as expiry_seller_v1 (cash settlement at the mean of the recorded 15:00-15:29 index closes, Yahoo's close as the fallback, STT on exercised long legs)",
+  "measured_per_trade": "as expiry_seller_v1: P&L, the cost gap against the history's convention at the same snapshot, max loss, margin (its max loss)",
+  "rules": "as expiry_seller_v1: the cost check from 6 settled trades, the consistency check from 8, a loss beyond the max loss is a bug, a retired sleeve opens nothing more",
+  "eligibility": {
+    "paper_account": "reported, never applied automatically: eligible for the Rs 5,00,000 paper account with at least 10 settled forward trades, the cost check passed and consistency not rejected",
+    "real_money": "only the account owner decides"
+  },
+  "changes": "any change to these rules is a new spec with its own ledger; this ledger is never edited"
+}
