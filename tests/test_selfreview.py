@@ -123,3 +123,13 @@ def test_failed_workflows_are_findings():
             {"name": "CI", "conclusion": "success"}, {"name": "Study", "conclusion": "cancelled"}]
     f = SR.check_workflows(FakeGitHub(runs), pd.Timestamp("2026-10-05 17:00", tz=IST))
     assert [x.key for x in f] == ["workflow-failed:Live paper desk"] and "#7" in f[0].detail
+
+
+def test_a_lot_size_change_at_the_exchange_is_a_finding(cfg, tmp_path):
+    rows = [{"date": dt.date(2026, 10, 1), "symbol": "NIFTY", "lot": 75.0}, {"date": dt.date(2026, 10, 1), "symbol": "NIFTY", "lot": 75.0},
+            {"date": dt.date(2026, 9, 30), "symbol": "BANKNIFTY", "lot": 30.0}]
+    pd.DataFrame(rows).to_parquet(tmp_path / "fo_bhav_2026-10.parquet")
+    pd.DataFrame([{"date": dt.date(2026, 10, 1), "symbol": "SENSEX", "lot": 20.0}]).to_parquet(tmp_path / "bse_fo_bhav_2026-10.parquet")
+    f = SR.check_lots(cfg, tmp_path)
+    assert [x.key for x in f] == ["lot-drift:NIFTY"] and "config 65, exchange 75" in f[0].title
+    assert SR.check_lots(cfg, tmp_path / "missing") == []

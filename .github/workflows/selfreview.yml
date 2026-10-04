@@ -40,6 +40,12 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Restore the journal
         run: deploy/journal.sh restore
+      - name: The newest exchange files (lot sizes change by circular)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          m=$(date +%Y-%m)
+          gh release download warehouse --pattern "fo_bhav_$m.parquet" --pattern "bse_fo_bhav_$m.parquet" --dir runtime/warehouse --clobber || echo "no exchange files for $m yet"
       - name: Review the day and file what needs doing
         env:
           GH_TOKEN: ${{ github.token }}

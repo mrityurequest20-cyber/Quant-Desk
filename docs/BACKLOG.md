@@ -55,10 +55,13 @@ that unblocks one.
    - *Needs:* fo_stock_opts and historical results dates (corp_events history; NSE's board-meeting archive).
    - *Then:* pre-register selling straddles the day before results and buying back the day after, pooled across stocks.
 7. **Plan research on the real tape** at the self-review's milestones (10, 20, 40 sessions).
-8. **Portfolio sizing**, once two sleeves are eligible:
+8. **Data scout (weekly, standing).** One web search a week for a public source that would test a principle on new
+   ground. Examples: index options on another exchange, a longer history, results and policy calendars. File it as a
+   `desk-request` with a fetch plan, then build the fetcher (docs/AUTONOMY.md, "Going outside").
+9. **Portfolio sizing**, once two sleeves are eligible:
    - a risk-budgeted allocator: per-trade max loss ≤ 4% of equity, correlation-aware, half-Kelly cap;
    - a proposal to the owner, never applied by itself.
-9. **Live execution through Kotak.** Last. Only after a sleeve passes paper and the owner says go.
+10. **Live execution through Kotak.** Last. Only after a sleeve passes paper and the owner says go.
 
 ## Data the desk now collects by itself
 - **NSE F&O bhavcopy, daily since 2019:**

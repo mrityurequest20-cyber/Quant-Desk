@@ -16,7 +16,9 @@ What it checks:
   - a sleeve reaching a decision point;
 - **GitHub Actions:** any workflow that failed in the last day;
 - **data milestones:** the tape reaching 10, 20, 40, 60 full sessions, when real-quote plan research becomes worth
-  re-running.
+  re-running;
+- **the outside world:** the config's lot sizes against the newest NSE and BSE bhavcopy (exchanges change them by
+  circular).
 
 One issue per finding key:
 - a recurring problem seen again gets one comment a day;
@@ -224,7 +226,38 @@ def check_milestones(data_dir: Path) -> list[Finding]:
                     "the overnight-theta study (docs/BACKLOG.md), and report what qualifies.", transient=False)]
 
 
-def review(cfg, day: dt.date, gh=None, now: pd.Timestamp | None = None) -> list[Finding]:
+def check_lots(cfg, folder: Path) -> list[Finding]:
+    """The exchanges change lot sizes by circular. The config's lot drives sizing and costs, so check it against the
+    lot in the newest NSE and BSE bhavcopy the warehouse holds (NewBrdLotQty). A mismatch is a data bug until fixed."""
+    out = []
+    files = [sorted(Path(folder).glob(f"{t}_*.parquet"))[-1:] for t in ("fo_bhav", "bse_fo_bhav")]
+    parts = []
+    for f in [x for fs in files for x in fs]:
+        try:
+            parts.append(pd.read_parquet(f, columns=["date", "symbol", "lot"]))
+        except Exception:
+            continue
+    if not parts:
+        return out
+    d = pd.concat(parts, ignore_index=True).dropna(subset=["lot"])
+    for sym, spec in (cfg.get("instruments", {}) or {}).items():
+        want = spec.get("lot_size") if isinstance(spec, dict) else None
+        g = d[d["symbol"] == sym]
+        if not want or g.empty:
+            continue
+        last = g[g["date"] == g["date"].max()]
+        have = int(last["lot"].mode().iloc[0])
+        if have != int(want):
+            out.append(Finding(f"lot-drift:{sym}", "data", f"{sym} lot size changed: config {int(want)}, exchange {have}",
+                               f"The exchange's bhavcopy for {last['date'].iloc[0]} gives {sym} a lot of {have}; "
+                               f"config/quantdesk.yaml says {int(want)}. Sizing and costs use the config.",
+                               "Confirm against the exchange's circular, update instruments in config/quantdesk.yaml, "
+                               "and check every place that assumes the old lot (sleeve specs keep their own reference "
+                               "lots by design)."))
+    return out
+
+
+def review(cfg, day: dt.date, gh=None, now: pd.Timestamp | None = None, warehouse: Path | None = None) -> list[Finding]:
     from ..core.calendar import TradingCalendar
     from ..intraday.cli import paths
     from ..intraday.sleeves import ExpirySeller, specs
@@ -245,6 +278,7 @@ def review(cfg, day: dt.date, gh=None, now: pd.Timestamp | None = None) -> list[
         out += check_sleeves(ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", p["data"], spec=spec), day)
     out += check_workflows(gh, now)
     out += check_milestones(p["data"])
+    out += check_lots(cfg, Path(warehouse or "runtime/warehouse"))
     return out
 
 
@@ -280,6 +314,10 @@ class GitHub:
     def open_issues(self) -> list[dict]:
         return [i for i in self._req("GET", "/issues", params={"labels": LABEL, "state": "open", "per_page": 100})
                 if "pull_request" not in i]
+
+    def issues(self, label: str, state: str = "all", since: str | None = None) -> list[dict]:
+        params = {"labels": label, "state": state, "per_page": 100, **({"since": since} if since else {})}
+        return [i for i in self._req("GET", "/issues", params=params) if "pull_request" not in i]
 
     def issue_titled(self, title: str, label: str) -> dict | None:
         for i in self._req("GET", "/issues", params={"labels": label, "state": "open", "per_page": 100}):
