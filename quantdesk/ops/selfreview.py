@@ -281,6 +281,12 @@ class GitHub:
         return [i for i in self._req("GET", "/issues", params={"labels": LABEL, "state": "open", "per_page": 100})
                 if "pull_request" not in i]
 
+    def issue_titled(self, title: str, label: str) -> dict | None:
+        for i in self._req("GET", "/issues", params={"labels": label, "state": "open", "per_page": 100}):
+            if i.get("title") == title and "pull_request" not in i:
+                return i
+        return None
+
     def ensure_label(self, name: str, color: str) -> None:
         self._req("POST", "/labels", json={"name": name, "color": color})
 

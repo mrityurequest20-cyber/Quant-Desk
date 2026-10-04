@@ -11,6 +11,8 @@
 | Learning cycle (autolearn) | `Learning cycle` | after every session |
 | Self-review → GitHub issues | `Self-review` | after every session; 17:10 IST fallback |
 | Edge research | `Edge research` | Saturdays 09:47 IST |
+| Progress snapshot | `Live paper desk`, afternoon job | after every session |
+| Progress report → "Desk progress" issue | `Progress` | Saturdays 10:40 IST |
 
 The engine, risk limits, sleeves and research are deterministic Python. Language models (Claude, Gemini, Ollama) are
 optional **readers** of the news and an after-close reflection, with no say over orders, sizing or risk. If every key
@@ -65,6 +67,18 @@ up.
 - Edit a registered spec, a ledger, or a result after the fact; delete data; rewrite history.
 - Print, commit or log a secret.
 - Push with a failing test suite.
+
+## Getting smarter, deliberately
+
+- [principles.json](principles.json) is what the desk believes about markets. Each principle is stated without
+  naming an instrument and placed on an evidence ladder: found → replicated → forward → proven, or rejected. It lists
+  every piece of evidence for and against. Negative results stay, because they are knowledge too.
+- A principle climbs only on a registered result. Replication means instruments the effect was never fitted to: an
+  edge found on NIFTY and BANKNIFTY must also hold on FINNIFTY, SENSEX and the rest.
+- The weekly progress report (`ops/progress.py`) compares this week with last week and with the first snapshot.
+  - **Its headline is the evidence level:** the highest rung any principle has reached.
+  - **Below it:** knowledge, research throughput, forward sleeves, the paper account and data.
+  - Every line says improved, same or worse.
 
 ## How the owner steers
 - Comment on any `desk-request` issue; the next engineer session reads the thread.

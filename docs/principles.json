@@ -1,0 +1,67 @@
+{
+  "about": "What the desk believes about markets, stated without naming an instrument, with every piece of evidence for and against. A principle climbs the ladder only on evidence registered in advance (docs/prereg). The progress report (ops/progress.py) counts these; the desk engineer updates this file when a registered result lands, never otherwise.",
+  "ladder": {
+    "hypothesis": "stated, not yet tested",
+    "found": "positive on the discovery instruments, real history",
+    "replicated": "also positive on held-out instruments it was never fitted to",
+    "forward": "survives real point-in-time quotes going forward (the cost check passed)",
+    "proven": "made money in the paper account at registered size for 3 months or more",
+    "rejected": "tested as registered and failed; kept, because knowing what doesn't work is knowledge"
+  },
+  "principles": [
+    {
+      "id": "L1",
+      "statement": "Option sellers are paid more than the move they insure on the last night before expiry.",
+      "status": "found",
+      "evidence": [
+        {"instrument": "NIFTY", "class": "real_eod_history", "result": "20-delta strangle, k=1: +Rs 649/lot (about +2.6 bps of spot), t 2.87, 398 expiries 2019-26", "ref": "research branch vrp_trades.csv.gz; docs/prereg/results/expiry_wings_v1-03ed351842ac.md"},
+        {"instrument": "BANKNIFTY", "class": "real_eod_history", "result": "20-delta strangle, k=1: +Rs 1,074/lot, t 3.29, 328 expiries 2019-26", "ref": "same"}
+      ],
+      "pending": ["expiry_eve_law_v1: held-out FINNIFTY, MIDCPNIFTY, NIFTYNXT50, SENSEX, BANKEX", "expiry_seller_v1/v2: forward on real quotes from 5 Oct 2026"],
+      "applied_in": ["expiry_seller_v1 sleeves A, B", "expiry_seller_v2 sleeve C"]
+    },
+    {
+      "id": "L2",
+      "statement": "The short-premium edge is eaten by a few shock days; far-out-of-the-money wings bought as insurance turn an unlimited loss into a known one for a fraction of the premium.",
+      "status": "found",
+      "evidence": [
+        {"instrument": "BANKNIFTY", "class": "real_eod_history", "result": "0.05-delta wings keep 60% of the strangle's mean (t 2.66) and cut the worst trade from -Rs 50,684 to -Rs 20,891", "ref": "docs/prereg/results/expiry_wings_v1-03ed351842ac.md"},
+        {"instrument": "NIFTY", "class": "real_eod_history", "result": "best wing t 1.99 against a 2.0 bar: the tail falls, the mean falls below significance", "ref": "same"}
+      ],
+      "pending": ["expiry_eve_law_v1 insured structure on held-out instruments", "expiry_seller_v2 forward"],
+      "applied_in": ["expiry_seller_v2 sleeve C"]
+    },
+    {
+      "id": "L3",
+      "statement": "How much the market will move is forecastable even when where it moves is not: intraday seasonality plus a heterogeneous-horizon (HAR) model beats a plain recent-volatility estimate.",
+      "status": "found",
+      "note": "passed a locked out-of-sample test in time (2019-26, fitted on 2010-18) on both indices it was built on; that is not yet replication on instruments it never saw",
+      "evidence": [
+        {"instrument": "NIFTY", "class": "real_minutes_13y", "result": "QLIKE 20-35% better than the desk's forecaster at 30m-to-close horizons; DM t +4.6 to +12.7 on the lock period", "ref": "docs/prereg/results/vol_forecast_v1-f2d4d047ee19.md"},
+        {"instrument": "BANKNIFTY", "class": "real_minutes_13y", "result": "QLIKE 13-25% better, same test", "ref": "same"}
+      ],
+      "pending": ["live shadow forecasts next to the desk's (BACKLOG item 3)", "stocks, pooled, once fo_stock_opts and minute data allow"],
+      "applied_in": []
+    },
+    {
+      "id": "N1",
+      "statement": "Short-horizon index direction is not predictable from the desk's price, volume and time-of-day features.",
+      "status": "rejected",
+      "evidence": [
+        {"instrument": "NIFTY, BANKNIFTY", "class": "real_minutes_13y", "result": "7 pre-registered rules; the lock failed (best: BANKNIFTY opening-range breakout +3.55 bps gross, t 0.96, -2.57 net)", "ref": "docs/prereg/results/intraday_direction_v1-5367cc9ae63c.md"}
+      ],
+      "pending": [],
+      "applied_in": ["directional entries need an approved model (autolearn.require_approved_model)"]
+    },
+    {
+      "id": "L4",
+      "statement": "Buyers of short-dated options overpay: the mirror of L1.",
+      "status": "found",
+      "evidence": [
+        {"instrument": "NIFTY, BANKNIFTY", "class": "real_eod_history", "result": "17 of 20 buying setups negative after costs; 0-DTE calls about -2.7R", "ref": "docs/reports/2026-10-04_capital_1L.md"}
+      ],
+      "pending": ["held-out instruments via the same bhavcopy tables"],
+      "applied_in": ["buyer setups demoted; selling structures preferred"]
+    }
+  ]
+}

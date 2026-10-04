@@ -128,6 +128,9 @@ jobs:
       - name: Expiry sellers (paper sleeves)
         if: always()
         run: python -m quantdesk intraday sleeves | tee -a "$GITHUB_STEP_SUMMARY" || echo "::warning::expiry sleeves failed"
+      - name: Progress snapshot (is the desk getting smarter? ops/progress.py)
+        if: always()
+        run: python -m quantdesk intraday progress > /dev/null || echo "::warning::progress snapshot failed"
       - name: Save the journal
         if: always()
         run: deploy/journal.sh save "close $(date '+%F %H:%M') IST"

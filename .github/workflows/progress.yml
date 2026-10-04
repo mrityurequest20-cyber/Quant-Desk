@@ -1,0 +1,34 @@
+# The desk's weekly progress report (quantdesk/ops/progress.py): what it knows (principles on the evidence ladder),
+# what it has tested, how the forward sleeves and the paper account are doing, and how much real data it holds. It
+# compares this week with last week and with the first snapshot, and posts the table to the "Desk progress" issue.
+name: Progress
+
+on:
+  schedule:
+    - cron: "10 5 * * 6"         # Saturdays 10:40 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the journal
+        run: deploy/journal.sh restore
+      - name: This week against last week and the start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk intraday progress --issue | tee -a "$GITHUB_STEP_SUMMARY"
