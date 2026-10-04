@@ -1,0 +1,25 @@
+{
+  "name": "expiry_eve_law_v1",
+  "registered": "2026-10-04",
+  "law": "L1: option sellers are paid more than the move they insure on the last night before expiry. Selling 20-delta options at the close one session before expiry and holding them to settlement earns a positive premium after costs, on any liquid index option market, not just the two it was found on",
+  "why_it_should_be_general": "the buyers' demand for overnight protection and lottery-like payoffs into expiry, and the sellers' required compensation for gap risk, are features of how option markets work, not of one index. If L1 shows up only on NIFTY and BANKNIFTY, it is more likely an accident of those two histories",
+  "discovery": {"instruments": ["NIFTY", "BANKNIFTY"], "note": "where L1 was found (warehouse_research, expiry_wings_v1); reported for reference, not part of the test"},
+  "held_out": {
+    "instruments": ["FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"],
+    "data": "NSE F&O bhavcopy (fo_bhav, from each contract's listing) and BSE F&O bhavcopy (bse_fo_bhav, from 2024-01-01), real end-of-day prices; never used to find or tune L1"
+  },
+  "structures": {
+    "strangle": {"strategy": "short_strangle_20d", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20]], "role": "the law itself"},
+    "insured": {"strategy": "iron_condor_20_05", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.05], [1, "PE", -0.05]], "role": "the law with crash insurance (expiry_wings_v1)"}
+  },
+  "conventions": "warehouse_research.build_trades, unchanged: entry at the close one session before each expiry (the nearest expiry only), legs at close -/+ (0.05 + max(0.05, 0.2% of the price)), statutory fees at the instrument's lot, held to the expiry-day index close, STT on exercised long legs; only strikes that traded that day",
+  "spot": "the bhavcopy's underlying price where the file carries one; otherwise the settle price of that day's nearest-expiry index future (on an expiry day the expiring future settles at the index close itself)",
+  "unit": "P&L in basis points of the index level at entry (index points / spot x 10,000), so instruments of any size and lot compare; also the share of the premium sold that was kept (P&L / credit)",
+  "tests": {
+    "pooled": "per expiry week, the mean P&L (bps) across the held-out instruments that traded that week, so that one market shock hitting all of them counts once; L1 replicates when that weekly series has a positive mean with a Newey-West one-sided p < 0.05 (t > 1.645) AND at least 60% of held-out instruments with 20 or more trades have a positive mean",
+    "per_instrument": "an instrument is a candidate for the chain tape and a forward sleeve when it has 30 or more trades, t > 1.645 (one-sided: a replication of a known effect, not a new search), and a positive mean in both its first two thirds and last third",
+    "both_structures": "each test is run for the strangle and the insured condor; they are reported separately"
+  },
+  "use": "a replicated law goes into docs/principles.json with every instrument's evidence; candidate instruments go on the chain tape (real quotes) and get a forward sleeve spec. Nothing here trades or changes size",
+  "changes": "evaluated once; a different rule is a new spec"
+}
