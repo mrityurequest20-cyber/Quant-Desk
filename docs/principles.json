@@ -1,168 +1,305 @@
 {
-  "about": "What the desk believes about markets, stated without naming an instrument, with every piece of evidence for and against. A principle climbs the ladder only on evidence registered in advance (docs/prereg). The progress report (ops/progress.py) counts these; the desk engineer updates this file when a registered result lands, never otherwise.",
-  "ladder": {
-    "hypothesis": "stated, not yet tested",
-    "found": "positive on the discovery instruments, real history",
-    "replicated": "also positive on held-out instruments it was never fitted to",
-    "forward": "survives real point-in-time quotes going forward (the cost check passed)",
-    "proven": "made money in the paper account at registered size for 3 months or more",
-    "rejected": "tested as registered and failed; kept, because knowing what doesn't work is knowledge"
-  },
-  "principles": [
+ "about": "What the desk believes about markets, stated without naming an instrument, with every piece of evidence for and against. A principle climbs the ladder only on evidence registered in advance (docs/prereg). The progress report (ops/progress.py) counts these; the desk engineer updates this file when a registered result lands, never otherwise. Each principle's `history` records every move up or down the ladder, and every review that left it in place, with the date, the reason and the result it rests on; `caveats` are the known weaknesses the next tests must address (research/memory.py turns them into proposals).",
+ "ladder": {
+  "hypothesis": "stated, not yet tested",
+  "found": "positive on the discovery instruments, real history",
+  "replicated": "also positive on held-out instruments it was never fitted to",
+  "forward": "survives real point-in-time quotes going forward (the cost check passed)",
+  "proven": "made money in the paper account at registered size for 3 months or more",
+  "rejected": "tested as registered and failed; kept, because knowing what doesn't work is knowledge"
+ },
+ "principles": [
+  {
+   "id": "L1",
+   "statement": "Option sellers are paid more than the move they insure on the last night before expiry.",
+   "status": "replicated",
+   "evidence": [
     {
-      "id": "L1",
-      "statement": "Option sellers are paid more than the move they insure on the last night before expiry.",
-      "status": "replicated",
-      "evidence": [
-        {
-          "instrument": "NIFTY",
-          "class": "real_eod_history",
-          "result": "20-delta strangle, k=1: +Rs 649/lot (about +2.6 bps of spot), t 2.87, 398 expiries 2019-26",
-          "ref": "research branch vrp_trades.csv.gz; docs/prereg/results/expiry_wings_v1-03ed351842ac.md"
-        },
-        {
-          "instrument": "BANKNIFTY",
-          "class": "real_eod_history",
-          "result": "20-delta strangle, k=1: +Rs 1,074/lot, t 3.29, 328 expiries 2019-26",
-          "ref": "same"
-        },
-        {
-          "instrument": "FINNIFTY",
-          "class": "real_eod_history, held out",
-          "result": "+9.08 bps/trade, t 2.81, 212 expiries 2021-26, 36% of premium kept",
-          "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
-        },
-        {
-          "instrument": "MIDCPNIFTY",
-          "class": "real_eod_history, held out",
-          "result": "+9.22 bps, t 3.00, 99 expiries 2023-26, 35% kept",
-          "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
-        },
-        {
-          "instrument": "SENSEX",
-          "class": "real_eod_history, held out",
-          "result": "+4.45 bps, t 1.75, 142 expiries 2024-26, 22% kept",
-          "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
-        },
-        {
-          "instrument": "NIFTYNXT50",
-          "class": "real_eod_history, held out",
-          "result": "+11.34 bps, t 2.40, 26 expiries (too few to be a candidate), 42% kept",
-          "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
-        },
-        {
-          "instrument": "BANKEX",
-          "class": "real_eod_history, held out",
-          "result": "+2.98 bps, t 0.59, 67 expiries: positive but weak",
-          "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
-        },
-        {
-          "instrument": "pooled held-out",
-          "class": "real_eod_history, held out",
-          "result": "weekly mean across the 5 instruments: +8.87 bps, t 4.46 over 286 weeks, positive in both parts; 5 of 5 instruments positive",
-          "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
-        }
-      ],
-      "pending": [
-        "forward on real quotes: expiry_seller_v1 (NIFTY, BANKNIFTY), v3 (FINNIFTY, MIDCPNIFTY, SENSEX)"
-      ],
-      "applied_in": [
-        "expiry_seller_v1 sleeves A, B",
-        "expiry_seller_v2 sleeve C",
-        "expiry_seller_v3 sleeves D, E"
-      ]
+     "instrument": "NIFTY",
+     "class": "real_eod_history",
+     "result": "20-delta strangle, k=1: +Rs 649/lot (about +2.6 bps of spot), t 2.87, 398 expiries 2019-26",
+     "ref": "research branch vrp_trades.csv.gz; docs/prereg/results/expiry_wings_v1-03ed351842ac.md"
     },
     {
-      "id": "L2",
-      "statement": "The short-premium edge is eaten by a few shock days; far-out-of-the-money wings bought as insurance turn an unlimited loss into a known one for a fraction of the premium.",
-      "status": "replicated",
-      "evidence": [
-        {
-          "instrument": "BANKNIFTY",
-          "class": "real_eod_history",
-          "result": "0.05-delta wings keep 60% of the strangle's mean (t 2.66) and cut the worst trade from -Rs 50,684 to -Rs 20,891",
-          "ref": "docs/prereg/results/expiry_wings_v1-03ed351842ac.md"
-        },
-        {
-          "instrument": "NIFTY",
-          "class": "real_eod_history",
-          "result": "best wing t 1.99 against a 2.0 bar: the tail falls, the mean falls below significance",
-          "ref": "same"
-        },
-        {
-          "instrument": "pooled held-out",
-          "class": "real_eod_history, held out",
-          "result": "the insured 0.05-wing condor: +5.07 bps, t 3.28 over 286 weeks, 5 of 5 instruments positive; no single instrument strong enough alone (FINNIFTY t 2.07 but negative in its last third)",
-          "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
-        }
-      ],
-      "pending": [
-        "forward: expiry_seller_v2 (BANKNIFTY), v3 sleeve E"
-      ],
-      "applied_in": [
-        "expiry_seller_v2 sleeve C"
-      ]
+     "instrument": "BANKNIFTY",
+     "class": "real_eod_history",
+     "result": "20-delta strangle, k=1: +Rs 1,074/lot, t 3.29, 328 expiries 2019-26",
+     "ref": "same"
     },
     {
-      "id": "L3",
-      "statement": "How much the market will move is forecastable even when where it moves is not: intraday seasonality plus a heterogeneous-horizon (HAR) model beats a plain recent-volatility estimate.",
-      "status": "found",
-      "note": "passed a locked out-of-sample test in time (2019-26, fitted on 2010-18) on both indices it was built on; that is not yet replication on instruments it never saw",
-      "evidence": [
-        {
-          "instrument": "NIFTY",
-          "class": "real_minutes_13y",
-          "result": "QLIKE 20-35% better than the desk's forecaster at 30m-to-close horizons; DM t +4.6 to +12.7 on the lock period",
-          "ref": "docs/prereg/results/vol_forecast_v1-f2d4d047ee19.md"
-        },
-        {
-          "instrument": "BANKNIFTY",
-          "class": "real_minutes_13y",
-          "result": "QLIKE 13-25% better, same test",
-          "ref": "same"
-        }
-      ],
-      "pending": [
-        "live shadow forecasts next to the desk's (BACKLOG item 3)",
-        "stocks, pooled, once fo_stock_opts and minute data allow"
-      ],
-      "applied_in": []
+     "instrument": "FINNIFTY",
+     "class": "real_eod_history, held out",
+     "result": "+9.08 bps/trade, t 2.81, 212 expiries 2021-26, 36% of premium kept",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
     },
     {
-      "id": "N1",
-      "statement": "Short-horizon index direction is not predictable from the desk's price, volume and time-of-day features.",
-      "status": "rejected",
-      "evidence": [
-        {
-          "instrument": "NIFTY, BANKNIFTY",
-          "class": "real_minutes_13y",
-          "result": "7 pre-registered rules; the lock failed (best: BANKNIFTY opening-range breakout +3.55 bps gross, t 0.96, -2.57 net)",
-          "ref": "docs/prereg/results/intraday_direction_v1-5367cc9ae63c.md"
-        }
-      ],
-      "pending": [],
-      "applied_in": [
-        "directional entries need an approved model (autolearn.require_approved_model)"
-      ]
+     "instrument": "MIDCPNIFTY",
+     "class": "real_eod_history, held out",
+     "result": "+9.22 bps, t 3.00, 99 expiries 2023-26, 35% kept",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
     },
     {
-      "id": "L4",
-      "statement": "Buyers of short-dated options overpay: the mirror of L1.",
-      "status": "found",
-      "evidence": [
-        {
-          "instrument": "NIFTY, BANKNIFTY",
-          "class": "real_eod_history",
-          "result": "17 of 20 buying setups negative after costs; 0-DTE calls about -2.7R",
-          "ref": "docs/reports/2026-10-04_capital_1L.md"
-        }
-      ],
-      "pending": [
-        "held-out instruments via the same bhavcopy tables"
-      ],
-      "applied_in": [
-        "buyer setups demoted; selling structures preferred"
-      ]
+     "instrument": "SENSEX",
+     "class": "real_eod_history, held out",
+     "result": "+4.45 bps, t 1.75, 142 expiries 2024-26, 22% kept",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
+    },
+    {
+     "instrument": "NIFTYNXT50",
+     "class": "real_eod_history, held out",
+     "result": "+11.34 bps, t 2.40, 26 expiries (too few to be a candidate), 42% kept",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
+    },
+    {
+     "instrument": "BANKEX",
+     "class": "real_eod_history, held out",
+     "result": "+2.98 bps, t 0.59, 67 expiries: positive but weak",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
+    },
+    {
+     "instrument": "pooled held-out",
+     "class": "real_eod_history, held out",
+     "result": "weekly mean across the 5 instruments: +8.87 bps, t 4.46 over 286 weeks, positive in both parts; 5 of 5 instruments positive",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
+    },
+    {
+     "instrument": "pooled held-out, robustness",
+     "class": "real_eod_history, registered audit",
+     "result": "10 of 10 registered checks passed; see history and caveats",
+     "ref": "docs/prereg/results/expiry_eve_law_v1_audit-363b1c53b623.md"
+    },
+    {
+     "instrument": "pooled held-out (official closes)",
+     "class": "real_eod_history, held out",
+     "result": "+9.48 bps a week, t 4.98 over 288 weeks, 5 of 5 positive; FINNIFTY +9.42 (t 2.96), MIDCPNIFTY +11.20 (t 3.92), SENSEX +4.45 (t 1.75), NIFTYNXT50 +11.34, BANKEX +2.98",
+     "ref": "docs/prereg/results/expiry_eve_law_v2-a3ff6d83a18e.md"
     }
-  ]
+   ],
+   "pending": [
+    "forward on real quotes: expiry_seller_v1 (NIFTY, BANKNIFTY), v3 (FINNIFTY, MIDCPNIFTY, SENSEX)"
+   ],
+   "applied_in": [
+    "expiry_seller_v1 sleeves A, B",
+    "expiry_seller_v2 sleeve C",
+    "expiry_seller_v3 sleeves D, E"
+   ],
+   "history": [
+    {
+     "date": "2026-10-04",
+     "from": "hypothesis",
+     "to": "found",
+     "kind": "up",
+     "reason": "NIFTY and BANKNIFTY real end-of-day history 2019-26: the 20-delta strangle sold at the close the night before expiry earned +Rs 649/lot (t 2.87) and +Rs 1,074/lot (t 3.29)",
+     "ref": "docs/prereg/results/expiry_wings_v1-03ed351842ac.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "found",
+     "to": "replicated",
+     "kind": "up",
+     "reason": "expiry_eve_law_v1: on five instruments never used to find it, pooled +8.87 bps a week, Newey-West t 4.46 over 286 weeks, positive on 5 of 5",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "replicated",
+     "to": "replicated",
+     "kind": "review",
+     "reason": "expiry_eve_law_v1_audit: passed 10 of 10 registered checks (t 3.80 even at 20 lags; block-bootstrap 5th percentile +5.41 bps; positive with any one instrument left out; +7.83 bps at triple costs, break-even 18x; t 4.18 on strikes with 100+ contracts; positive in 6 of 6 years). Stays replicated, with caveats",
+     "ref": "docs/prereg/results/expiry_eve_law_v1_audit-363b1c53b623.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "replicated",
+     "to": "replicated",
+     "kind": "review",
+     "reason": "expiry_eve_law_v2 replaces v1 as the evidence: with the spot and settlement on NSE's official closes (v1 used the monthly future on 612 weekly expiry days), the pooled held-out mean is +9.48 bps a week, t 4.98 over 288 weeks, 5 of 5 instruments positive. The basis error had understated the premium",
+     "ref": "docs/prereg/results/expiry_eve_law_v2-a3ff6d83a18e.md"
+    }
+   ],
+   "caveats": [
+    "Weaker in the current regime: since SEBI's one-weekly-expiry rule (20 Nov 2024) the pooled mean is +4.92 bps a week with t 1.42 over 98 weeks; positive, not significant on its own (2024: +1.51 bps). Test: the forward sleeves, and stock options (BACKLOG 1)",
+    "The robustness audit ran on v1's settlement; repeat the same ten checks on v2 (a new audit spec pointing at v2)"
+   ]
+  },
+  {
+   "id": "L2",
+   "statement": "The short-premium edge is eaten by a few shock days; far-out-of-the-money wings bought as insurance turn an unlimited loss into a known one for a fraction of the premium.",
+   "status": "replicated",
+   "evidence": [
+    {
+     "instrument": "BANKNIFTY",
+     "class": "real_eod_history",
+     "result": "0.05-delta wings keep 60% of the strangle's mean (t 2.66) and cut the worst trade from -Rs 50,684 to -Rs 20,891",
+     "ref": "docs/prereg/results/expiry_wings_v1-03ed351842ac.md"
+    },
+    {
+     "instrument": "NIFTY",
+     "class": "real_eod_history",
+     "result": "best wing t 1.99 against a 2.0 bar: the tail falls, the mean falls below significance",
+     "ref": "same"
+    },
+    {
+     "instrument": "pooled held-out",
+     "class": "real_eod_history, held out",
+     "result": "the insured 0.05-wing condor: +5.07 bps, t 3.28 over 286 weeks, 5 of 5 instruments positive; no single instrument strong enough alone (FINNIFTY t 2.07 but negative in its last third)",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md (Study run 37170766466)"
+    },
+    {
+     "instrument": "pooled held-out, robustness",
+     "class": "real_eod_history, registered audit",
+     "result": "10 of 10 registered checks passed; see history and caveats",
+     "ref": "docs/prereg/results/expiry_eve_law_v1_audit-363b1c53b623.md"
+    },
+    {
+     "instrument": "pooled held-out (official closes)",
+     "class": "real_eod_history, held out",
+     "result": "+5.48 bps a week, t 3.63 over 288 weeks, 5 of 5 positive; MIDCPNIFTY a candidate (t 2.25)",
+     "ref": "docs/prereg/results/expiry_eve_law_v2-a3ff6d83a18e.md"
+    }
+   ],
+   "pending": [
+    "forward: expiry_seller_v2 (BANKNIFTY), v3 sleeve E"
+   ],
+   "applied_in": [
+    "expiry_seller_v2 sleeve C"
+   ],
+   "history": [
+    {
+     "date": "2026-10-04",
+     "from": "hypothesis",
+     "to": "found",
+     "kind": "up",
+     "reason": "expiry_wings_v1: on BANKNIFTY, 0.05-delta wings kept 60% of the strangle's mean (t 2.66) and cut the worst trade from -Rs 50,684 to -Rs 20,891",
+     "ref": "docs/prereg/results/expiry_wings_v1-03ed351842ac.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "found",
+     "to": "replicated",
+     "kind": "up",
+     "reason": "expiry_eve_law_v1 (insured condor): pooled held-out +5.07 bps a week, t 3.28 over 286 weeks, positive on 5 of 5",
+     "ref": "docs/prereg/results/expiry_eve_law_v1-51e180594091.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "replicated",
+     "to": "replicated",
+     "kind": "review",
+     "reason": "expiry_eve_law_v1_audit: passed 10 of 10 registered checks, but by narrower margins than L1 (break-even at 6.2x costs; t 2.75 at 20 lags). Stays replicated, with caveats",
+     "ref": "docs/prereg/results/expiry_eve_law_v1_audit-363b1c53b623.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "replicated",
+     "to": "replicated",
+     "kind": "review",
+     "reason": "expiry_eve_law_v2 replaces v1: the insured condor pooled +5.48 bps a week, t 3.63 over 288 weeks, 5 of 5 positive, on NSE's official closes",
+     "ref": "docs/prereg/results/expiry_eve_law_v2-a3ff6d83a18e.md"
+    }
+   ],
+   "caveats": [
+    "Leans on FINNIFTY: without it the insured condor's pooled mean is +1.91 bps, t 1.11",
+    "Weak in the current regime: since 20 Nov 2024, +2.30 bps a week, t 0.84 over 98 weeks; 2024 alone was negative (-1.92)",
+    "Thin cost margin: break-even at 6.2x the modelled costs; wings are where real spreads are widest. Test: the cost gap measured by sleeves C and E",
+    "The robustness audit ran on v1's settlement; repeat the same ten checks on v2 (a new audit spec pointing at v2)"
+   ]
+  },
+  {
+   "id": "L3",
+   "statement": "How much the market will move is forecastable even when where it moves is not: intraday seasonality plus a heterogeneous-horizon (HAR) model beats a plain recent-volatility estimate.",
+   "status": "found",
+   "note": "passed a locked out-of-sample test in time (2019-26, fitted on 2010-18) on both indices it was built on; that is not yet replication on instruments it never saw",
+   "evidence": [
+    {
+     "instrument": "NIFTY",
+     "class": "real_minutes_13y",
+     "result": "QLIKE 20-35% better than the desk's forecaster at 30m-to-close horizons; DM t +4.6 to +12.7 on the lock period",
+     "ref": "docs/prereg/results/vol_forecast_v1-f2d4d047ee19.md"
+    },
+    {
+     "instrument": "BANKNIFTY",
+     "class": "real_minutes_13y",
+     "result": "QLIKE 13-25% better, same test",
+     "ref": "same"
+    }
+   ],
+   "pending": [
+    "live shadow forecasts next to the desk's (BACKLOG item 3)",
+    "stocks, pooled, once fo_stock_opts and minute data allow"
+   ],
+   "applied_in": [],
+   "history": [
+    {
+     "date": "2026-10-03",
+     "from": "hypothesis",
+     "to": "found",
+     "kind": "up",
+     "reason": "vol_forecast_v1: seasonality plus HAR beat the desk's forecaster by 13-35% QLIKE at 30m-to-close horizons on a locked 2019-26 period (DM t +4.6 to +12.7), on NIFTY and BANKNIFTY",
+     "ref": "docs/prereg/results/vol_forecast_v1-f2d4d047ee19.md"
+    }
+   ],
+   "caveats": []
+  },
+  {
+   "id": "N1",
+   "statement": "Short-horizon index direction is not predictable from the desk's price, volume and time-of-day features.",
+   "status": "rejected",
+   "evidence": [
+    {
+     "instrument": "NIFTY, BANKNIFTY",
+     "class": "real_minutes_13y",
+     "result": "7 pre-registered rules; the lock failed (best: BANKNIFTY opening-range breakout +3.55 bps gross, t 0.96, -2.57 net)",
+     "ref": "docs/prereg/results/intraday_direction_v1-5367cc9ae63c.md"
+    }
+   ],
+   "pending": [],
+   "applied_in": [
+    "directional entries need an approved model (autolearn.require_approved_model)"
+   ],
+   "history": [
+    {
+     "date": "2026-10-03",
+     "from": "hypothesis",
+     "to": "rejected",
+     "kind": "down",
+     "reason": "intraday_direction_v1: none of 7 pre-registered direction rules survived its locked period (best: BANKNIFTY opening-range breakout +3.55 bps gross, t 0.96, negative after costs)",
+     "ref": "docs/prereg/results/intraday_direction_v1-5367cc9ae63c.md"
+    }
+   ],
+   "caveats": []
+  },
+  {
+   "id": "L4",
+   "statement": "Buyers of short-dated options overpay: the mirror of L1.",
+   "status": "found",
+   "evidence": [
+    {
+     "instrument": "NIFTY, BANKNIFTY",
+     "class": "real_eod_history",
+     "result": "17 of 20 buying setups negative after costs; 0-DTE calls about -2.7R",
+     "ref": "docs/reports/2026-10-04_capital_1L.md"
+    }
+   ],
+   "pending": [
+    "held-out instruments via the same bhavcopy tables"
+   ],
+   "applied_in": [
+    "buyer setups demoted; selling structures preferred"
+   ],
+   "history": [
+    {
+     "date": "2026-10-04",
+     "from": "hypothesis",
+     "to": "found",
+     "kind": "up",
+     "reason": "17 of 20 option-buying setups on NIFTY and BANKNIFTY were negative after costs; 0-DTE calls about -2.7R. An analysis in a report, not a registered result",
+     "ref": "docs/reports/2026-10-04_capital_1L.md"
+    }
+   ],
+   "caveats": [
+    "Found in an unregistered analysis (a report), not a registered study: it needs a pre-registered test before it can count, on NIFTY/BANKNIFTY first, then held out"
+   ]
+  }
+ ]
 }

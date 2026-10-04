@@ -530,6 +530,47 @@ First run (29-Sep-2026), 25 tests:
 
   Most of the classic intraday setups the playbook uses have no statistical support here. The EV gate and the research priors are what keep the desk from trading them blindly.
 
+## Audits and research memory (how the desk checks itself)
+
+- **Is the edge robust?** `python -m quantdesk law-audit` runs the registered robustness battery
+  (docs/prereg/expiry_eve_law_v1_audit.json). Its ten checks:
+  - reproduction of the registered numbers;
+  - Newey-West t at 0 to 20 lags;
+  - a stationary block bootstrap;
+  - leave-one-instrument-out;
+  - costs ×2 and ×3, with the break-even multiple;
+  - a liquidity floor;
+  - year by year;
+  - the post-Nov-2024 regime;
+  - the best weeks removed;
+  - Bonferroni.
+
+  L1 and L2 passed all ten. The current regime is the open caveat.
+- **Can the data be trusted?** `python -m quantdesk warehouse-audit` checks every option table against NSE's official
+  index closes:
+  - missing days, duplicates and rows after expiry;
+  - holiday-shifted and re-dated expiries;
+  - settlement values;
+  - partial files and lot changes;
+  - NSE/BSE schema differences.
+
+  Its first run found that v1 of the law study took the index level from the monthly future on 612 weekly expiry
+  days. expiry_eve_law_v2 fixed exactly that: pooled +9.48 bps, t 4.98.
+- **Does it learn?** `python -m quantdesk experiments` prints the research memory:
+  - every registered experiment's fingerprint (the suite refuses a duplicate);
+  - every principle's moves with reasons;
+  - the next tests the evidence calls for.
+
+  `--check draft.json` says whether a draft repeats a past experiment.
+- **Do paper fills measure reality?** Every sleeve leg records:
+  - its bid, ask and mid;
+  - the spread as a share of mid;
+  - the size resting at the touch;
+  - flags: wide, locked, thin, a late snapshot;
+  - the history's modelled fill next to the real one.
+
+  The report and the self-review compare real costs with the model, per instrument.
+
 ## The data warehouse (real NSE data, 2019 →)
 
 `quantdesk/data/` keeps NSE's public end-of-day data as Parquet tables on the **`warehouse`** GitHub release

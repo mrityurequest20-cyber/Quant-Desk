@@ -13,12 +13,19 @@ that unblocks one.
 
 ## Where the evidence stands (4 Oct 2026, evidence level 2/4)
 
-[principles.json](principles.json) is the ledger. In short:
-- **L1, the expiry-eve premium, has replicated.** It was found on NIFTY and BANKNIFTY. Every one of five instruments
-  it never saw was positive: FINNIFTY, MIDCPNIFTY, NIFTYNXT50, SENSEX, BANKEX. Pooled t is 4.46 over 286 weeks.
-- **L2, far wings as crash insurance, has replicated pooled** (t 3.28). It is strong on BANKNIFTY alone.
+[principles.json](principles.json) is the ledger, with every move's reason; `python -m quantdesk experiments` prints
+it with the next tests. In short:
+- **L1, the expiry-eve premium, has replicated** on five instruments it never saw: FINNIFTY, MIDCPNIFTY, NIFTYNXT50,
+  SENSEX, BANKEX.
+  - expiry_eve_law_v2, settled on NSE's official closes: pooled +9.48 bps a week, t 4.98 over 288 weeks, 5 of 5
+    positive.
+  - The registered audit passed 10 of 10 checks.
+  - **Caveat: the current regime.** Since SEBI's one-weekly rule (Nov 2024): +4.92 bps, t 1.42 — positive, not yet
+    significant on its own.
+- **L2, far wings as crash insurance, has replicated pooled** (v2: t 3.63). Caveats: it leans on FINNIFTY, it is weak
+  since Nov 2024, and it breaks even at 6.2× the modelled costs.
 - **L3, move size is forecastable:** found, and locked out of sample in time on NIFTY and BANKNIFTY.
-- **L4, buyers of short-dated options overpay:** found.
+- **L4, buyers of short-dated options overpay:** found, but in a report; it needs a registered test.
 - **N1, index direction from price patterns:** rejected.
 
 **Forward tests on real quotes:**
@@ -70,6 +77,7 @@ that unblocks one.
   - every index option (fo_bhav);
   - every stock option and future (fo_stock_opts, no longer discarded).
 - **BSE F&O bhavcopy since 2024:** SENSEX and BANKEX (bse_fo_bhav).
+- **NSE's official index closes since 2019** (nse_index_close): the values NSE's index options settle on.
 - **The chain tape:** real Kotak bid/ask every minute, for NIFTY, BANKNIFTY, SENSEX, FINNIFTY and MIDCPNIFTY.
 - **Kotak 1-minute option candles:** the 30 days Kotak keeps, then every session (option-minutes releases).
 

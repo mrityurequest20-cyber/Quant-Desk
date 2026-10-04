@@ -43,7 +43,9 @@ KPIS = {"level": ("evidence level (0-4)", 1), "principles_tested": ("principles 
         "sleeve_pnl_per_trade": ("forward sleeve P&L per trade, ₹/lot", 1),
         "sleeve_win": ("forward sleeve win rate", 1), "paper_pnl_per_trade": ("paper P&L per trade, ₹", 1),
         "forecast_skill": ("live forecast skill vs a coin flip (Brier)", 1),
-        "signal_hit_rate": ("live signals right on direction", 1), "signal_net_bps": ("live signal P&L after costs, bps", 1)}
+        "signal_hit_rate": ("live signals right on direction", 1), "signal_net_bps": ("live signal P&L after costs, bps", 1),
+        "experiments": ("distinct experiments registered", 1), "open_caveats": ("open caveats on principles", -1),
+        "sleeve_real_vs_model_cost": ("real fill cost ÷ the history's cost model", -1)}
 FULL_TAPE = 300
 
 
@@ -97,9 +99,13 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
             "specs": len(list((ROOT / "docs" / "prereg").glob("*.json"))),
             "results": len(list((ROOT / "docs" / "prereg" / "results").glob("*.md")))}
     trades = pnl = eligible = retired = wins = 0
-    gaps = []
+    gaps, real, model = [], 0.0, 0.0
     for spec in specs():
         rep = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", p["data"], spec=spec).report()
+        for f in rep.get("fills", {}).values():
+            if f["legs"] and f["model_cost_pts"]:
+                real += f["real_cost_pts"] * f["legs"]
+                model += f["model_cost_pts"] * f["legs"]
         for r in rep["rows"]:
             trades += r["n"]
             pnl += r["sum"]
@@ -108,6 +114,7 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
             retired += bool(r["retired"])
             if r["n"]:
                 gaps.append(r["gap_mean"])
+    snap["sleeve_real_vs_model_cost"] = round(real / model, 3) if model > 0 else None
     snap.update({"sleeve_pnl_per_trade": round(pnl / trades, 2) if trades else None,
                  "sleeve_win": round(wins / trades, 4) if trades else None})
     snap.update({"sleeve_trades": trades, "sleeve_pnl": round(pnl, 2), "sleeves_eligible": eligible,
@@ -127,6 +134,10 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
                  "paper_trades": int(len(closed)), "paper_pnl": round(float(closed["pnl"].sum()), 2) if len(closed) else 0.0,
                  "paper_pnl_per_trade": round(float(closed["pnl"].mean()), 2) if len(closed) else None})
     snap.update(forecast_skill(cfg))
+    from ..research import memory as M
+    mem = M.summary()
+    snap.update({"experiments": mem["experiments"], "open_caveats": mem["open_caveats"],
+                 "next_tests": [f"{x['principle']} · {x['kind']}: {x['test']}" for x in mem["proposals"][:5]]})
     full = 0
     for log in Path(p["data"]).glob("*/tape.csv"):
         try:
@@ -202,5 +213,8 @@ def render(hist: list[dict]) -> str:
                 "| measure | then | now | verdict |", "|---|---:|---:|---|"]
         out += [f"| {lab} | {v(a)} | {v(b)} | {mark[ver]} |" for lab, a, b, ver in rows]
         out.append("")
-    out.append("The level climbs only on registered evidence (docs/prereg); docs/principles.json says why each rung was reached.")
+    if cur.get("next_tests"):
+        out += ["### What the evidence says to test next", ""] + [f"{i}. {t}" for i, t in enumerate(cur["next_tests"], 1)] + [""]
+    out.append("The level climbs only on registered evidence (docs/prereg); docs/principles.json says why each rung was reached "
+               "(`python -m quantdesk experiments` prints the whole memory).")
     return "\n".join(out)

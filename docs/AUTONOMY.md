@@ -128,6 +128,23 @@ progress report, under "levers only the owner holds". It never opens an issue fo
   every piece of evidence for and against. Negative results stay, because they are knowledge too.
 - A principle climbs only on a registered result. Replication means instruments the effect was never fitted to: an
   edge found on NIFTY and BANKNIFTY must also hold on FINNIFTY, SENSEX and the rest.
+- **The research memory** (`research/memory.py`, `python -m quantdesk experiments`) is how the desk remembers:
+  - every registered spec has a *fingerprint* of its substance. The suite refuses a second spec with the same
+    fingerprint, so an identical experiment is never run twice. `experiments --check draft.json` shows whether a
+    draft repeats one, and which earlier specs it is nearest to;
+  - every principle carries a `history`: each move up or down the ladder, and each review that left it in place,
+    with the date, the reason and the result it rests on. `caveats` are its known weaknesses;
+  - the suite checks that every recorded result still matches its spec byte for byte, so a spec can't be edited
+    after its result;
+  - `proposals()` turns caveats and pending items into the next tests, most urgent first. **The engineer picks its
+    research from this list** when the issue queue is empty.
+- **Audits try to break what the desk believes:**
+  - `law-audit` is the registered robustness battery for a law (HAC lags, block bootstrap, leave-one-out, costs ×2
+    and ×3, liquidity floor, years, current regime, best weeks removed, multiple testing);
+  - `warehouse-audit` checks the data against NSE's official closes (coverage, duplicates, holiday-shifted and
+    re-dated expiries, settlement values, basis).
+  Both run locally or through the `Study` workflow. A finding that weakens a principle becomes a caveat; a flaw in
+  a study becomes a new spec that fixes exactly that flaw. expiry_eve_law_v2 replaced v1 this way.
 - The weekly progress report (`ops/progress.py`) compares this week with last week and with the first snapshot.
   - **Its headline is the evidence level:** the highest rung any principle has reached.
   - **Below it:** knowledge, research throughput, forward sleeves, the paper account and data.
