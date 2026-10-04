@@ -1,0 +1,53 @@
+{
+  "name": "expiry_eve_entry_v1",
+  "registered": "2026-10-04",
+  "question": "Is the history's entry price executable? L1's history (expiry_eve_law_v2) sells each leg at the eve's bhavcopy close minus (0.05 + max(0.05, 0.2% of the close)); the forward sleeves sell at the real 15:20 bid minus 0.05. This measures the difference on the same strikes on the same eve",
+  "why": "the L1 evidence audit (docs/reports/2026-10-04_l1_evidence_audit.md, section 10): a bhavcopy close is a last trade on only 27% of NSE option rows, so the entry price is the largest unverified approximation in L1's history. A paired difference on the same strikes resolves in weeks; a P&L-only forward test would need about 300",
+  "population": {
+    "from": "2026-10-05",
+    "instruments": ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"],
+    "eves": "every session before an expiry of these instruments on which a registered expiry-seller sleeve (docs/prereg/expiry_seller_v*.json) opened; one observation per instrument and expiry, from the earliest open event for it",
+    "source_executable": "sleeve_open_events",
+    "source_history": ["fo_bhav", "bse_fo_bhav", "nse_index_close"],
+    "target_delta": 0.20,
+    "legs": "the two short legs at target delta 0.20 (one CE, one PE) that the sleeve picked from the Kotak snapshot nearest 15:20 by the history's strike rule"
+  },
+  "measures": {
+    "executable_credit_bps": "the sum over the two short legs of the recorded fill (bid - 0.05), in bps of the snapshot's index spot",
+    "history_credit_bps": "the sum over the same two strikes of the eve's bhavcopy close minus leg_cost(close) = 0.05 + max(0.05, 0.002 x close), in bps of the eve's official index close (nse_index_close; for SENSEX the bhavcopy underlying)",
+    "d_bps": "history_credit_bps - executable_credit_bps: positive when the history assumed a better sale than the market offered",
+    "exclusion": "an eve where either strike has no bhavcopy row with contracts > 0 and close > 0 is excluded from the test and counted: the history would not have priced that leg",
+    "secondary": "the two legs' payout at the expiry's official close and at the sleeves' registered 15:00-15:29 mean, in bps of the entry spot; reported, not tested"
+  },
+  "test": {
+    "series": "weekly: per ISO week of the expiry, the mean d_bps across that week's eves",
+    "nw": "Newey-West t, Bartlett kernel, lags floor(4 x (weeks/100)^(2/9)), as research/edges.hac_mean",
+    "margin_bps": 2.0,
+    "t_critical": 1.645,
+    "overstated": "t of (d_bps - 2) > 1.645",
+    "equivalent": "t of (d_bps + 2) > 1.645 and t of (d_bps - 2) < -1.645 (two one-sided tests)",
+    "understated": "t of (d_bps + 2) < -1.645",
+    "inconclusive": "none of the above"
+  },
+  "sample_size": {
+    "planning_sd_bps": 4.0,
+    "power": 0.8,
+    "n_eves": 40,
+    "min_weeks": 12,
+    "reestimate_after_eves": 10,
+    "reestimate_inflation": 1.6,
+    "n_cap": 120,
+    "reestimate_rule": "after the first 10 eves: n = min(120, max(40, ceil(1.6 x ((1.645 + 0.842) x sd10 / 2)^2))), sd10 the sample sd of d_bps over those 10 eves; it can only raise n",
+    "extend_once_to": 80,
+    "extend_rule": "if the result at n eves and 12 weeks is inconclusive, continue once to max(80, n), capped at 120, and decide there; inconclusive then is the result",
+    "interim": "before the decision point the report shows only the eves collected, the excluded count and the current n: no mean, sd or t"
+  },
+  "decision": {
+    "overstated": "L1's historical edge is overstated by an entry-price artifact: recompute L1's pooled result with the mean d_bps subtracted from every trade and register expiry_eve_law_v3; L1 keeps a caveat until then",
+    "equivalent": "the history's entry convention is validated: clear L1's non-executable-entry caveat",
+    "understated": "the history's entry convention was conservative: clear the caveat and record by how much",
+    "inconclusive": "L1 keeps its caveat; any follow-up is a new spec"
+  },
+  "out_of_scope": "live trading; any change to the sleeves' registered rules; promotion of any strategy",
+  "changes": "evaluated once at the decision point; a different rule is a new spec"
+}
