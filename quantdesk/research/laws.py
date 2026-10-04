@@ -35,16 +35,20 @@ def load_spec(path: Path = SPEC_PATH) -> dict:
     return spec
 
 
-def spot(opts: pd.DataFrame, symbol: str) -> pd.Series:
-    """The index close by date: the bhavcopy's underlying where it has one, else that day's nearest-expiry future's
-    settle (on an expiry day the expiring future settles at the index close)."""
+def spot(opts: pd.DataFrame, symbol: str, official: pd.Series | None = None) -> pd.Series:
+    """The index close by date: NSE's official close where given (`official`, from nse_index_close: v2), else the
+    bhavcopy's underlying, else that day's nearest-expiry future's settle. That last is the index itself only when the
+    future expires that day: on a weekly expiry it is the monthly future, basis and all (the flaw v2 fixes)."""
     o = opts[opts["symbol"] == symbol]
     und = o.dropna(subset=["underlying"]).groupby("date")["underlying"].median()
     f = o[(o["kind"] == "FUT") & (o["expiry"] >= o["date"])].copy()
     px = f["settle"] if "settle" in f else f["close"]
     f = f.assign(px=pd.to_numeric(px, errors="coerce").where(lambda x: x > 0, f["close"]))
     fut = f.sort_values("expiry").groupby("date")["px"].first()
-    return und.combine_first(fut).dropna().sort_index()
+    out = und.combine_first(fut)
+    if official is not None and len(official):
+        out = official.combine_first(out)
+    return out.dropna().sort_index()
 
 
 def lot_of(opts: pd.DataFrame, symbol: str, cfg=None) -> int:
@@ -54,11 +58,11 @@ def lot_of(opts: pd.DataFrame, symbol: str, cfg=None) -> int:
     return int((cfg.instrument_spec(symbol).get("lot_size") if cfg is not None else 0) or 50)
 
 
-def trades(opts: pd.DataFrame, symbol: str, spec: dict, fees_for=None, cfg=None) -> pd.DataFrame:
+def trades(opts: pd.DataFrame, symbol: str, spec: dict, fees_for=None, cfg=None, official=None) -> pd.DataFrame:
     strategies = {v["strategy"]: ([(int(q), r, float(d)) for q, r, d in v["legs"]], None)
                   for v in spec["structures"].values()}
     o = opts[(opts["symbol"] == symbol) & opts["kind"].isin(["CE", "PE"])]
-    sp = spot(opts, symbol)
+    sp = spot(opts, symbol, official)
     if o.empty or sp.empty:
         return pd.DataFrame()
     lot = lot_of(opts, symbol, cfg)
@@ -66,7 +70,8 @@ def trades(opts: pd.DataFrame, symbol: str, spec: dict, fees_for=None, cfg=None)
                         offsets=(1,))
     if tr.empty:
         return tr
-    return tr.assign(bps=tr["pnl_pts"] / tr["S"] * 1e4, credit_bps=tr["credit_pts"] / tr["S"] * 1e4, lot=lot)
+    return tr.assign(bps=tr["pnl_pts"] / tr["S"] * 1e4, credit_bps=tr["credit_pts"] / tr["S"] * 1e4,
+                     cost_bps=tr["cost_pts"] / tr["S"] * 1e4, lot=lot)
 
 
 def summarize(g: pd.DataFrame) -> dict:
@@ -95,7 +100,8 @@ def pooled(tr: pd.DataFrame) -> dict:
 
 def evaluate(tr: pd.DataFrame, spec: dict) -> dict:
     held, disc = spec["held_out"]["instruments"], spec["discovery"]["instruments"]
-    out = {"spec": spec["name"], "spec_hash": spec["_hash"], "structures": {}}
+    out = {"spec": spec["name"], "spec_hash": spec["_hash"], "spot_source": spec.get("spot_source", "bhavcopy"),
+           "structures": {}}
     for key, v in spec["structures"].items():
         g = tr[tr["strategy"] == v["strategy"]] if len(tr) else tr
         rows = {s: summarize(x) for s, x in g.groupby("symbol") if len(x) >= 5} if len(g) else {}
@@ -113,20 +119,46 @@ def evaluate(tr: pd.DataFrame, spec: dict) -> dict:
     return out
 
 
+def fees_factory(cfg):
+    """The desk's statutory fee model for one lot of an option on `sym`, or None without a config."""
+    if cfg is None:
+        return None
+    from ..core.types import Instrument
+    from ..execution.costs import CostModel
+    costs, exp = CostModel(cfg), dt.date(2030, 1, 1)
+
+    def fees_for(sym, lot):
+        return lambda right, qty, price: costs.fees(Instrument.option(sym, exp, 1.0, right, lot), int(qty), float(price))[0]
+    return fees_for
+
+
+def all_trades(opts: pd.DataFrame, spec: dict, syms, fees_for=None, cfg=None, official: dict | None = None) -> pd.DataFrame:
+    official = official or {}
+    parts = [trades(opts, s, spec, fees_for, cfg, official.get(s)) for s in syms if len(opts) and (opts["symbol"] == s).any()]
+    return pd.concat([p for p in parts if len(p)], ignore_index=True) if any(len(p) for p in parts) else pd.DataFrame()
+
+
+def load(folder: Path, spec: dict) -> pd.DataFrame:
+    syms = spec["discovery"]["instruments"] + spec["held_out"]["instruments"]
+    return W.load_options(folder, syms, TABLES, extra=("settle", "lot"))
+
+
+def official_closes(folder: Path, spec: dict) -> dict:
+    """{symbol: official close by date} when the spec takes its spot from NSE's official closes (v2), else {}."""
+    if spec.get("spot_source") != "nse_index_close":
+        return {}
+    from ..data.audit import official_closes as oc
+    ic = oc(folder)
+    if ic.empty:
+        raise FileNotFoundError(f"{spec['name']} needs nse_index_close_*.parquet in {folder}")
+    return {s: g.assign(date=pd.to_datetime(g["date"]).dt.date).set_index("date")["close"].sort_index()
+            for s, g in ic.groupby("symbol")}                        # keyed like the options' dates (datetime.date)
+
+
 def run(folder: Path, cfg=None, spec: dict | None = None) -> tuple[dict, pd.DataFrame]:
     spec = spec or load_spec()
     syms = spec["discovery"]["instruments"] + spec["held_out"]["instruments"]
-    opts = W.load_options(folder, syms, TABLES, extra=("settle", "lot"))
-    fees_for = None
-    if cfg is not None:
-        from ..core.types import Instrument
-        from ..execution.costs import CostModel
-        costs, exp = CostModel(cfg), dt.date(2030, 1, 1)
-
-        def fees_for(sym, lot):
-            return lambda right, qty, price: costs.fees(Instrument.option(sym, exp, 1.0, right, lot), int(qty), float(price))[0]
-    parts = [trades(opts, s, spec, fees_for, cfg) for s in syms if len(opts) and (opts["symbol"] == s).any()]
-    tr = pd.concat([p for p in parts if len(p)], ignore_index=True) if any(len(p) for p in parts) else pd.DataFrame()
+    tr = all_trades(load(folder, spec), spec, syms, fees_factory(cfg), cfg, official_closes(folder, spec))
     return evaluate(tr, spec), tr
 
 
@@ -134,7 +166,8 @@ def render(res: dict) -> str:
     def f(x, d=1):
         return "–" if x is None or (isinstance(x, float) and not math.isfinite(x)) else f"{x:+,.{d}f}"
     out = [f"# Law L1 across instruments · {res['spec']} · spec {res['spec_hash']}", "",
-           "Selling 20-delta options at the close the night before expiry, held to settlement; real bhavcopy prices. "
+           ("Index levels from NSE's official closes (nse_index_close). " if res.get("spot_source") == "nse_index_close" else "")
+           + "Selling 20-delta options at the close the night before expiry, held to settlement; real bhavcopy prices. "
            "P&L in basis points of the index (instrument-neutral); 'kept' is the share of the premium sold that was "
            "kept. Discovery instruments are for reference; the test is on the held-out ones.", ""]
     for key, s in res["structures"].items():

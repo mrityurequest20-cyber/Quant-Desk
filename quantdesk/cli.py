@@ -318,10 +318,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--warehouse", help="the data warehouse folder: also test the volatility premium on real option "
                                        "prices and FII positioning (data_report.md)")
     s.set_defaults(fn=cmd_research)
-    s = sub.add_parser("laws", help="expiry_eve_law_v1: the expiry-eve premium on held-out instruments (NSE + BSE)")
+    s = sub.add_parser("laws", help="expiry_eve_law_v*: the expiry-eve premium on held-out instruments (NSE + BSE)")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet and bse_fo_bhav_*.parquet")
+    s.add_argument("--spec", default="docs/prereg/expiry_eve_law_v2.json", help="the registered spec (v1: the original)")
     s.add_argument("--out", default="_laws")
     s.set_defaults(fn=cmd_laws)
+    s = sub.add_parser("warehouse-audit", help="can the warehouse be trusted: coverage, duplicates, expiries, settlement")
+    s.add_argument("--warehouse", default="runtime/warehouse")
+    s.add_argument("--out", default="_warehouse_audit")
+    s.set_defaults(fn=cmd_warehouse_audit)
+    s = sub.add_parser("experiments", help="the research memory: what was tested, how beliefs moved, what to test next")
+    s.add_argument("--check", help="a draft spec (JSON): has this experiment been run already? exits 1 if identical")
+    s.set_defaults(fn=cmd_experiments)
+    s = sub.add_parser("law-audit", help="expiry_eve_law_v1_audit: try to break the replication of L1 and L2")
+    s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet and bse_fo_bhav_*.parquet")
+    s.add_argument("--out", default="_law_audit")
+    s.add_argument("--spec", default="docs/prereg/expiry_eve_law_v1_audit.json", help="the registered audit spec")
+    s.set_defaults(fn=cmd_law_audit)
     s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
@@ -349,7 +362,7 @@ def cmd_wings(cfg, a):
 def cmd_laws(cfg, a):
     """expiry_eve_law_v1: is the expiry-eve premium a law of option markets? Held-out instruments (research/laws.py)."""
     from .research import laws as L
-    res, tr = L.run(Path(a.warehouse), cfg)
+    res, tr = L.run(Path(a.warehouse), cfg, L.load_spec(Path(a.spec)))
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     md = L.render(res)
@@ -358,6 +371,47 @@ def cmd_laws(cfg, a):
     (out / f"{stem}.json").write_text(json.dumps(res, indent=1, default=str))
     if len(tr):
         tr.to_csv(out / f"{stem}_trades.csv.gz", index=False)
+    print(md)
+
+
+def cmd_warehouse_audit(cfg, a):
+    """The warehouse audit (data/audit.py): report to --out and stdout."""
+    from .data import audit as A
+    res = A.run(Path(a.warehouse))
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    md = A.render(res)
+    (out / "warehouse_audit.md").write_text(md)
+    (out / "warehouse_audit.json").write_text(json.dumps(res, indent=1, default=str))
+    print(md)
+
+
+def cmd_experiments(cfg, a):
+    """The research memory (research/memory.py)."""
+    from .research import memory as M
+    reg = M.registry()
+    if a.check:
+        c = M.check(json.loads(Path(a.check).read_text()), reg)
+        print(f"fingerprint {c['fingerprint']}")
+        print("IDENTICAL to: " + ", ".join(c["identical"]) if c["identical"] else "new: no registered spec has this substance")
+        for sim, name in c["nearest"]:
+            print(f"  nearest: {name} ({sim:.0%} of substance shared)")
+        if c["identical"]:
+            raise SystemExit(1)
+        return
+    print(M.render(M.summary(reg=reg), reg))
+
+
+def cmd_law_audit(cfg, a):
+    """expiry_eve_law_v1_audit: the registered robustness audit of the L1/L2 replication (research/law_audit.py)."""
+    from .research import law_audit as A
+    res = A.run(Path(a.warehouse), cfg, Path(a.spec))
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    md = A.render(res)
+    stem = f"{res['spec']}-{res['spec_hash']}"
+    (out / f"{stem}.md").write_text(md)
+    (out / f"{stem}.json").write_text(json.dumps(res, indent=1, default=str))
     print(md)
 
 

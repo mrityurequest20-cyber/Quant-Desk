@@ -8,6 +8,8 @@ Tables (one file per period, `{table}_{period}.parquet`):
   fo_stock_opts     month  every F&O stock's options and futures, daily, in fo_bhav's columns: the nearest two
                            expiries, strikes within ±30% that traded or are open (the same file, kept, not discarded)
   bse_fo_bhav       month  BSE's index futures and options (SENSEX, BANKEX), daily, in fo_bhav's columns (from 2024)
+  nse_index_close   year   NSE's official closing value of every index, daily (ind_close_all): the price NSE's
+                           index options settle on, and the true spot on days the bhavcopy has no underlying column
   participant_oi    year   FII / DII / Pro / Client open interest by product, daily (contracts)
   participant_vol   year   the same for volume
   fii_dii           year   FII/FPI and DII cash-market buy/sell/net, ₹ crore (NSE gives only the latest day:
@@ -38,6 +40,7 @@ TABLES = {                                   # table → (period, key columns, d
     "fo_stocks": ("month", ["date", "symbol"], "date"),
     "fo_stock_opts": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
     "bse_fo_bhav": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
+    "nse_index_close": ("year", ["date", "index"], "date"),
     "participant_oi": ("year", ["date", "participant"], "date"),
     "participant_vol": ("year", ["date", "participant"], "date"),
     "fii_dii": ("year", ["date", "category"], "date"),
@@ -47,7 +50,8 @@ TABLES = {                                   # table → (period, key columns, d
     "manifest": ("year", ["table", "date"], "date"),
 }
 DATE_COLS = ("date", "expiry")
-DAILY_FILES = ("fo_bhav", "fo_stocks", "fo_stock_opts", "bse_fo_bhav", "participant_oi", "participant_vol")
+DAILY_FILES = ("fo_bhav", "fo_stocks", "fo_stock_opts", "bse_fo_bhav", "nse_index_close", "participant_oi",
+               "participant_vol")
 SETTLE_DAYS = 3                              # a file still missing this many days later is taken as never coming
 
 
@@ -167,6 +171,7 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
                 "fo_stocks": (nse.fo_bhav, N.parse_fo_stocks),
                 "fo_stock_opts": (nse.fo_bhav, N.parse_fo_stock_opts),
                 "bse_fo_bhav": (bse.fo_bhav if bse else None, B.parse_fo_bhav),
+                "nse_index_close": (nse.index_close, N.parse_index_close),
                 "participant_oi": (lambda d: nse.participant("oi", d), N.parse_participant),
                 "participant_vol": (lambda d: nse.participant("vol", d), N.parse_participant)}
     for table in [t for t in DAILY_FILES if t in only]:

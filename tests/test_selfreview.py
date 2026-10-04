@@ -133,3 +133,29 @@ def test_a_lot_size_change_at_the_exchange_is_a_finding(cfg, tmp_path):
     f = SR.check_lots(cfg, tmp_path)
     assert [x.key for x in f] == ["lot-drift:NIFTY"] and "config 65, exchange 75" in f[0].title
     assert SR.check_lots(cfg, tmp_path / "missing") == []
+
+
+class FakeSeller:
+    def __init__(self, trades, fills):
+        self._t, self._f = trades, fills
+
+    def report(self):
+        return {"spec": "expiry_seller_v3", "rows": [], "open": [], "skips": [], "fills": self._f}
+
+    def trades(self):
+        return self._t
+
+
+def test_questionable_fills_and_an_optimistic_cost_model_are_findings():
+    leg = {"strike": 81200.0, "right": "CE", "flags": ["wide", "thin"], "spread_pct": 0.31, "touch_qty": 10.0}
+    t = {"id": "E-SENSEX-2026-10-08", "day": "2026-10-07", "quote_flags": ["late", "thin", "wide"], "snapshot_off_min": 9,
+         "legs": [leg, {"strike": 80000.0, "right": "PE", "flags": [], "spread_pct": 0.05, "touch_qty": 400.0}]}
+    fills = {"SENSEX": {"legs": 12, "real_vs_model": 2.6, "real_cost_pts": 0.52, "model_cost_pts": 0.2,
+                        "median_spread_pct": 0.12},
+             "NIFTY": {"legs": 12, "real_vs_model": 1.0, "real_cost_pts": 0.12, "model_cost_pts": 0.12,
+                       "median_spread_pct": 0.01}}
+    f = SR.check_sleeves(FakeSeller([t], fills), dt.date(2026, 10, 7))
+    assert [x.key for x in f] == ["sleeve-quotes:expiry_seller_v3:E-SENSEX-2026-10-08", "cost-model:SENSEX"]
+    assert "81200CE: wide, thin (spread 31%, 10 at the touch)" in f[0].detail and "9 min from 15:20" in f[0].detail
+    assert "2.6x" in f[1].title
+    assert SR.check_sleeves(FakeSeller([t], {}), dt.date(2026, 10, 8)) == []      # another day: nothing new

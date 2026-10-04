@@ -123,6 +123,10 @@ class NSE:
         assert kind in ("oi", "vol")
         return self.archive(f"/content/nsccl/fao_participant_{kind}_{day:%d%m%Y}.csv")
 
+    def index_close(self, day: dt.date) -> tuple[bytes, str]:
+        """NSE's official closing values of every index that day: the price index options settle on."""
+        return self.archive(f"/content/indices/ind_close_all_{day:%d%m%Y}.csv")
+
 
 # ---- parsers --------------------------------------------------------------------------------------------------------
 def _unzip_csv(b: bytes) -> pd.DataFrame:
@@ -316,6 +320,23 @@ def parse_participant(b: bytes, day: dt.date) -> pd.DataFrame:
         df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "").str.strip(), errors="coerce").astype("float64")
     df.insert(0, "date", day)
     return df[["date", "participant", *PARTICIPANT_COLS.values()]].reset_index(drop=True)
+
+
+
+INDEX_NAMES = {"Nifty 50": "NIFTY", "Nifty Bank": "BANKNIFTY", "Nifty Financial Services": "FINNIFTY",
+               "Nifty Midcap Select": "MIDCPNIFTY", "Nifty Next 50": "NIFTYNXT50"}
+
+
+def parse_index_close(b: bytes, day: dt.date) -> pd.DataFrame:
+    """ind_close_all_DDMMYYYY.csv → one row per index: date, index (NSE's name), symbol (the F&O underlying it
+    settles, where there is one), open, high, low, close. Every index is kept; most have no options."""
+    raw = pd.read_csv(io.BytesIO(b))
+    raw.columns = [str(c).strip() for c in raw.columns]
+    name = raw["Index Name"].astype(str).str.strip()
+    num = {k: pd.to_numeric(raw[c], errors="coerce") for k, c in (("open", "Open Index Value"), ("high", "High Index Value"),
+                                                                    ("low", "Low Index Value"), ("close", "Closing Index Value"))}
+    out = pd.DataFrame({"date": pd.Timestamp(day), "index": name, "symbol": name.map(INDEX_NAMES).fillna(""), **num})
+    return out[out["close"] > 0].drop_duplicates("index").reset_index(drop=True)
 
 
 def parse_fii_dii(rows) -> pd.DataFrame:

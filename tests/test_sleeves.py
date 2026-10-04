@@ -9,7 +9,7 @@ import pytest
 from quantdesk.core.calendar import TradingCalendar
 from quantdesk.intraday.chains import ModelOptionChain
 from quantdesk.intraday.recorder import SessionRecorder
-from quantdesk.intraday.sleeves import ExpirySeller, assess, entry_snapshot, load_spec, render
+from quantdesk.intraday.sleeves import ExpirySeller, assess, entry_snapshot, fill_quality, load_spec, render
 
 IST = "Asia/Kolkata"
 SPOT = 22600.0
@@ -91,6 +91,34 @@ def test_opens_on_the_eve_from_real_quotes_and_settles_at_expiry(cfg, setup):
     seller.run(e, now=at(e, "16:00"))
     assert sum(ev["event"] == "settle" for ev in seller.events()) == 2
     assert "A NIFTY | 1 |" in render(seller.report())
+
+
+def test_every_fill_says_how_real_it_was(cfg, setup):
+    """Each leg records its spread and the size resting where it would fill; a thin touch or a snapshot far from 15:20 is
+    flagged, and the report compares real fills with the history's cost model."""
+    seller, cal, data, d, e = setup
+    mc = ModelOptionChain(cfg, cal, lambda u, t: (SPOT, 0.14))
+    ch = mc.chain("NIFTY", e, ts=pd.Timestamp(f"{d} 15:10", tz=IST))
+    ch.attrs["source"] = "kotak"
+    ch["ce_bidq"], ch["ce_askq"], ch["pe_bidq"], ch["pe_askq"] = 10.0, 1e5, 1e5, 1e5   # 10 units bid for the calls
+    SessionRecorder(data).record_chain(ch)
+    seller.run(d, now=at(d, "15:40"))
+    opened = {t["sleeve"]: t for t in seller.trades()}
+    a = opened["A"]
+    assert a["snapshot_off_min"] == 10 and "late" in a["quote_flags"] and "thin" in a["quote_flags"]
+    for leg in a["legs"]:
+        mid = (leg["bid"] + leg["ask"]) / 2
+        assert leg["spread_pct"] == pytest.approx((leg["ask"] - leg["bid"]) / mid, abs=1e-4)
+        sold_call = leg["right"] == "CE" and leg["qty"] < 0
+        assert ("thin" in leg["flags"]) == sold_call                # selling hits the 10-unit bid; 65 a lot
+        assert leg["touch_qty"] == (10.0 if sold_call else 1e5)
+    fq = seller.report()["fills"]["NIFTY"]
+    assert fq["trades"] == 2 and fq["legs"] == 6 and fq["flags"]["thin"] == 2 and fq["flags"]["late"] == 2
+    assert fq["real_vs_model"] > 0 and fq["median_spread_pct"] > 0
+    assert "Fill quality" in render(seller.report())
+    skips = fill_quality([{"event": "skip", "underlying": "SENSEX", "reason": "CE 81200: no two-sided quote"},
+                          {"event": "skip", "underlying": "SENSEX", "reason": "CE 81300: no two-sided quote"}])
+    assert skips["SENSEX"]["skips"] == {"CE #: no two-sided quote": 2} and skips["SENSEX"]["legs"] == 0
 
 
 def test_a_breakout_costs_the_condor_its_width_and_exercise_stt(cfg, setup):

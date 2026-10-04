@@ -1,5 +1,6 @@
-# One pre-registered study on the data warehouse, run on demand (docs/prereg/<name>.json). The report goes to the
-# run summary; the report, its JSON and the trade rows are kept as an artifact.
+# One pre-registered study on the data warehouse, run on demand (docs/prereg/<name>.json), or one of the audits
+# (law-audit: the registered robustness audit of L1/L2; warehouse-audit: can the data be trusted). The report goes to
+# the run summary; the report, its JSON and the trade rows are kept as an artifact.
 name: Study
 
 on:
@@ -8,7 +9,7 @@ on:
       study:
         description: "Which study"
         type: choice
-        options: [wings, laws]
+        options: [wings, laws, law-audit, warehouse-audit]
         default: wings
 
 permissions:
@@ -31,7 +32,9 @@ jobs:
       - name: Pull the data warehouse (NSE and BSE bhavcopy)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download warehouse --pattern 'fo_bhav_*.parquet' --pattern 'bse_fo_bhav_*.parquet' --dir runtime/warehouse --clobber
+        run: |
+          gh release download warehouse --pattern 'fo_bhav_*.parquet' --pattern 'bse_fo_bhav_*.parquet' --dir runtime/warehouse --clobber
+          gh release download warehouse --pattern 'nse_index_close_*.parquet' --dir runtime/warehouse --clobber || echo "no official index closes yet"
       - name: Run the study
         env:
           STUDY: ${{ inputs.study }}

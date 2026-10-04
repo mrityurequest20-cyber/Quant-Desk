@@ -40,3 +40,23 @@ def test_spot_falls_back_to_the_nearest_future():
         {"date": d2, "symbol": "FINNIFTY", "kind": "CE", "expiry": e2, "strike": 18000, "close": 120, "settle": 120, "underlying": 17941.0}])
     s = L.spot(opts, "FINNIFTY")
     assert s[d1] == 18005 and s[d2] == 17941.0                 # the file's underlying wins; else the near future settles
+
+
+def test_official_closes_take_precedence_over_the_monthly_future():
+    """v2: on a weekly expiry with no underlying column, the monthly future carries basis; NSE's official close wins."""
+    import datetime as dt
+
+    import numpy as np
+    import pandas as pd
+
+    from quantdesk.research import laws as L
+    d1, d2 = dt.date(2023, 3, 6), dt.date(2023, 3, 7)
+    opts = pd.DataFrame([
+        {"date": d1, "symbol": "FINNIFTY", "kind": "FUT", "expiry": dt.date(2023, 3, 28), "strike": 0.0, "close": 18100.0,
+         "settle": 18090.0, "underlying": np.nan},
+        {"date": d2, "symbol": "FINNIFTY", "kind": "FUT", "expiry": dt.date(2023, 3, 28), "strike": 0.0, "close": 18200.0,
+         "settle": 18190.0, "underlying": np.nan}])
+    assert list(L.spot(opts, "FINNIFTY")) == [18090.0, 18190.0]                    # v1: the monthly future, basis and all
+    official = pd.Series({d1: 18050.0})                                             # one day has an official close
+    assert list(L.spot(opts, "FINNIFTY", official)) == [18050.0, 18190.0]
+    assert L.official_closes(None, {"name": "x"}) == {}                             # v1 specs never read the table

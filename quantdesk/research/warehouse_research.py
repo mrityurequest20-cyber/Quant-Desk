@@ -97,7 +97,8 @@ class VRPResult:
 def build_trades(opts: pd.DataFrame, spot: pd.Series, symbol: str, fees=None, lot: int | None = None,
                  strategies: dict | None = None, offsets=None, delta_mult: float = 1.0, wing_mult: float = 1.0) -> pd.DataFrame:
     """Every (expiry, offset, strategy) trade the data allows → one row each: entry/expiry dates, P&L in index points
-    per unit (after spreads, slippage, fees and exercise STT), credit, max loss, ATM IV, 10-day realised vol.
+    per unit (after spreads, slippage, fees and exercise STT), credit, the trading cost inside that P&L (slippage and
+    fees, not exercise STT), max loss, ATM IV, 10-day realised vol.
 
     `opts`: date, kind (CE/PE), expiry, strike, close, contracts. `spot`: index close by date.
     `fees(right, qty, price) → ₹` for one lot (the desk's cost model); None = no fees. `strategies` / `offsets`
@@ -172,15 +173,18 @@ def build_trades(opts: pd.DataFrame, spot: pd.Series, symbol: str, fees=None, lo
             else:
                 if len({(r_, k_) for _, r_, k_, _ in picked}) < len(picked):
                     continue                                             # a wing collapsed onto a short strike
-                pnl, credit, fee_pts = 0.0, 0.0, 0.0
+                pnl, credit, fee_pts, cost = 0.0, 0.0, 0.0, 0.0
                 for qty, right, K, P in picked:
                     intr = max(S_T - K, 0.0) if right == "CE" else max(K - S_T, 0.0)
                     c = float(leg_cost(P))
                     fill = P - c if qty < 0 else P + c
                     pnl += -qty * fill + qty * intr                              # sell: +fill − payout; buy: −fill + payout
                     credit += -qty * P
+                    cost += abs(qty) * c
                     if fees is not None:
-                        fee_pts += fees(right, qty * lot, fill) / lot
+                        f = fees(right, qty * lot, fill) / lot
+                        fee_pts += f
+                        cost += f
                     if qty > 0 and intr > 0:
                         fee_pts += STT_EXERCISE * intr
                 pnl -= fee_pts
@@ -194,7 +198,8 @@ def build_trades(opts: pd.DataFrame, spot: pd.Series, symbol: str, fees=None, lo
                 else:
                     max_loss = float("nan")
                 out.append({"symbol": symbol, "strategy": name, "k": k, "entry": d, "expiry": e, "S": S, "S_T": S_T,
-                            "pnl_pts": pnl, "credit_pts": credit, "max_loss_pts": max_loss, "atm_iv": atm_iv, "rv10": rv,
+                            "pnl_pts": pnl, "credit_pts": credit, "cost_pts": cost, "max_loss_pts": max_loss,
+                            "atm_iv": atm_iv, "rv10": rv,
                             "strikes": strikes})
     return pd.DataFrame(out)
 

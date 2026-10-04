@@ -182,6 +182,26 @@ def check_sleeves(seller, day: dt.date) -> list[Finding]:
                                f"Expired {t['expiry']} with no settlement: no recorded closing bars and no Yahoo close.",
                                "Recover the expiry-day close (recorded bars, the backfill's index minutes, or NSE) "
                                "and re-run `quantdesk intraday sleeves`."))
+    for t in seller.trades():
+        if str(t.get("day", "")) == str(day) and t.get("quote_flags"):
+            legs = "; ".join(f"{x['strike']:.0f}{x['right']}: {', '.join(x['flags'])} (spread {x['spread_pct']:.0%}"
+                             + (f", {x['touch_qty']:.0f} at the touch" if x.get("touch_qty") is not None else "") + ")"
+                             for x in t["legs"] if x.get("flags"))
+            out.append(Finding(f"sleeve-quotes:{rep['spec']}:{t['id']}", "data",
+                               f"Sleeve trade {t['id']} filled on questionable quotes: {', '.join(t['quote_flags'])}",
+                               (legs or "") + (f"; snapshot {t.get('snapshot_off_min')} min from 15:20" if "late" in t["quote_flags"] else ""),
+                               "Check the tape at that minute: if the quotes were stale or the book thin, record a decision "
+                               "on whether this trade counts toward the sleeve's assessment, and fix the tape if it missed "
+                               "minutes.", transient=False))
+    for u, f in rep.get("fills", {}).items():
+        if f["legs"] >= 8 and f["real_vs_model"] and f["real_vs_model"] > 2:
+            out.append(Finding(f"cost-model:{u}", "research",
+                               f"Real fills on {u} cost {f['real_vs_model']}x what the history assumed",
+                               f"{f['legs']} legs: real {f['real_cost_pts']} vs model {f['model_cost_pts']} pts a leg; median "
+                               f"spread {f['median_spread_pct']:.0%} of mid.",
+                               "The history's results on this instrument are too kind. Register a re-costing study (a new "
+                               "spec using the measured spreads) and add a caveat to every principle that rests on it.",
+                               transient=False))
     for e in rep["skips"]:
         if e.get("day") == str(day) and not e["reason"].startswith("retired"):
             out.append(Finding(f"sleeve-skip:{rep['spec']}:{e['sleeve']}-{e['underlying']}-{e['expiry']}", "data",

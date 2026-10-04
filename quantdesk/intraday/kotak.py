@@ -24,7 +24,7 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from .chains import COLUMNS, ChainSource, IntradayPricer, fill_iv
+from .chains import COLUMNS, DEPTH, ChainSource, IntradayPricer, fill_iv
 from .feeds import IST, YahooIntradayFeed, normalise_bars, session_bounds
 
 BASE = "https://mis.kotaksecurities.com"
@@ -95,6 +95,13 @@ def best(q: dict, side: str) -> float:
     """Best bid ('buy') or offer ('sell') from a quote's 5-level depth; NaN when the book is empty."""
     lv = ((q.get("depth") or {}).get(side) or [{}])[0] or {}
     v = _f(lv.get("price"))
+    return v if v > 0 else float("nan")
+
+
+def best_qty(q: dict, side: str) -> float:
+    """The quantity (units, not lots) resting at the best bid ('buy') or offer ('sell'); NaN when unknown."""
+    lv = ((q.get("depth") or {}).get(side) or [{}])[0] or {}
+    v = _f(lv.get("quantity", lv.get("qty")))
     return v if v > 0 else float("nan")
 
 
@@ -237,7 +244,7 @@ class KotakOptionChain(ChainSource):
                 if not K > 0:
                     continue
                 q, oi = item.get("quote") or {}, item.get("openInterest") or item.get("oi") or {}
-                row = rows.setdefault(K, {c: np.nan for c in COLUMNS})
+                row = rows.setdefault(K, {c: np.nan for c in COLUMNS + DEPTH})
                 row[f"{side}_ltp"] = _f(q.get("ltp"))
                 row[f"{side}_vol"] = _f(q.get("volume", q.get("vol")))
                 cur, prev = _f(oi.get("current", oi.get("cur"))), _f(oi.get("previous", oi.get("prev")))
@@ -268,6 +275,7 @@ class KotakOptionChain(ChainSource):
             b, a = best(q, "buy"), best(q, "sell")
             if b > 0 and a >= b:
                 row[f"{side}_bid"], row[f"{side}_ask"] = b, a
+                row[f"{side}_bidq"], row[f"{side}_askq"] = best_qty(q, "buy"), best_qty(q, "sell")
                 quoted += 1
             for col, v in ((f"{side}_ltp", _f(q.get("ltp"))), (f"{side}_vol", _f(q.get("last_volume"))),
                            (f"{side}_oi", _f(q.get("open_int")))):
@@ -275,7 +283,7 @@ class KotakOptionChain(ChainSource):
                     row[col] = v
         if quoted == 0 and require_quotes:
             raise KotakError(f"no bid/ask in Kotak's quotes for {underlying} {expiry} ({len(toks)} contracts asked)")
-        df = pd.DataFrame.from_dict(rows, orient="index", columns=COLUMNS).astype(float).sort_index()
+        df = pd.DataFrame.from_dict(rows, orient="index", columns=COLUMNS + DEPTH).astype(float).sort_index()
         df.index.name = "strike"
         if not S > 0:
             S = float(spot) if spot else np.nan

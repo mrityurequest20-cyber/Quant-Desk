@@ -34,6 +34,7 @@ IST = "Asia/Kolkata"
 SIDES = ("ce", "pe")
 FIELDS = ("ltp", "bid", "ask", "iv", "oi", "doi", "vol")
 COLUMNS = [f"{s}_{f}" for s in SIDES for f in FIELDS]
+DEPTH = [f"{s}_{f}" for s in SIDES for f in ("bidq", "askq")]   # size at the best bid / offer, where the source has a book
 
 
 def expiry_close(expiry: dt.date) -> pd.Timestamp:
@@ -473,7 +474,7 @@ def save_chain(df: pd.DataFrame, path: Path) -> None:
 
 def load_chain(path: Path) -> pd.DataFrame:
     raw = pd.read_csv(path, index_col=0)
-    df = raw[COLUMNS].astype(float)
+    df = raw[COLUMNS + [c for c in DEPTH if c in raw.columns]].astype(float)
     df.index.name = "strike"
     a = raw.iloc[0]
     df.attrs.update({"underlying": a["_underlying"], "spot": float(a["_spot"]),

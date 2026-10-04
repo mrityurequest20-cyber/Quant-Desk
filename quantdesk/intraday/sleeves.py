@@ -53,6 +53,8 @@ MIN_COST, MIN_CONSISTENCY, MIN_ELIGIBLE = 6, 8, 10
 Z90, Z95 = 1.2816, 1.645
 NAKED_MARGIN = 0.12                            # rough SPAN + exposure for one side of a naked index strangle
 B_AFTER_A_DAYS = 91
+WIDE_SPREAD = 0.25                             # a leg whose bid-ask is over 25% of its mid is flagged 'wide'
+LATE_SNAPSHOT_MIN = 5                          # a snapshot more than 5 minutes from 15:20 is flagged 'late'
 
 
 def load_spec(path: Path = SPEC_PATH) -> dict:
@@ -117,11 +119,18 @@ def pick_legs(chain: pd.DataFrame, legs, now, picker: StrikePicker) -> tuple[lis
         if not (math.isfinite(bid) and math.isfinite(ask) and bid > 0 and ask >= bid):
             return None, f"{right} {float(row['strike']):.0f}: no two-sided quote"
         sell = qty < 0
-        out.append({"qty": int(qty), "right": right, "strike": float(row["strike"]), "target": float(target),
+        K = float(row["strike"])
+        col = f"{right.lower()}_{'bidq' if sell else 'askq'}"           # the side this order would hit
+        touch = float(chain.at[K, col]) if col in chain.columns and K in chain.index else float("nan")
+        spread = (ask - bid) / mid if mid > 0 else float("nan")
+        flags = (["wide"] if spread > WIDE_SPREAD else []) + (["locked"] if ask == bid else [])
+        out.append({"qty": int(qty), "right": right, "strike": K, "target": float(target),
                     "delta": round(float(row["delta"]), 4), "iv": round(float(row["iv"]), 2),
                     "bid": bid, "ask": ask, "mid": mid,
                     "fill": round(max(bid - TICK, 0.0) if sell else ask + TICK, 2),
-                    "model_fill": round(float(mid - leg_cost(mid) if sell else mid + leg_cost(mid)), 4)})
+                    "model_fill": round(float(mid - leg_cost(mid) if sell else mid + leg_cost(mid)), 4),
+                    "spread_pct": round(spread, 4) if math.isfinite(spread) else None,
+                    "touch_qty": touch if math.isfinite(touch) else None, "flags": flags})
     if len({(x["right"], x["strike"]) for x in out}) < len(out):
         return None, "a wing landed on a short strike"
     return out, ""
@@ -370,6 +379,15 @@ class ExpirySeller:
     def _open(self, base: dict, legs: list[dict], chain, snap: Path, lot: int) -> str:
         u, exp = base["underlying"], dt.date.fromisoformat(base["expiry"])
         fees = 0.0
+        try:
+            off = abs(_mins(int(snap.stem.rsplit("_", 1)[1])) - _mins(ENTRY))
+        except ValueError:
+            off = None
+        for leg in legs:
+            if leg.get("touch_qty") is not None and leg["touch_qty"] < abs(leg["qty"]) * lot:
+                leg.setdefault("flags", []).append("thin")              # less size at the touch than this order
+        quality = sorted({f for x in legs for f in x.get("flags", [])}
+                         | ({"late"} if off is not None and off > LATE_SNAPSHOT_MIN else set()))
         for leg in legs:
             inst = Instrument.option(u, exp, leg["strike"], leg["right"], lot)
             leg["fees_rs"] = round(self.costs.fees(inst, leg["qty"] * lot, leg["fill"])[0], 2)
@@ -388,7 +406,8 @@ class ExpirySeller:
                            "snapshot": snap.name, "source": str(chain.attrs.get("source")), "spot": spot, "lot": lot,
                            "legs": legs, "credit_pts": round(credit, 2), "model_credit_pts": round(model, 2),
                            "cost_gap_rs": round((credit - model) * lot, 2), "entry_fees_rs": round(fees, 2),
-                           "max_loss_rs": max_loss, "margin_est_rs": margin})
+                           "max_loss_rs": max_loss, "margin_est_rs": margin, "snapshot_off_min": off,
+                           "quote_flags": quality})
         k = ", ".join(f"{'S' if x['qty'] < 0 else 'B'} {x['strike']:.0f}{x['right']} @{x['fill']:.2f}" for x in legs)
         return (f"opened {ev['id']} at {pd.Timestamp(ev['ts']):%H:%M} (spot {spot:,.2f}): {k}; credit ₹{credit * lot:,.0f}/lot, "
                 f"cost gap vs history's convention ₹{ev['cost_gap_rs']:+,.0f}")
@@ -413,10 +432,52 @@ class ExpirySeller:
         trades = self.trades()
         evs = self.events()
         return {"spec": self.spec["name"], "spec_hash": self.spec["_hash"], "rows": rows,
+                "fills": fill_quality(evs),
                 "open": [t for t in trades if not t["settled"]],
                 "recent": [t for t in trades if t["settled"]][-8:],
                 "skips": [e for e in evs if e["event"] == "skip"][-8:]}
 
+
+
+def fill_quality(events: list[dict]) -> dict:
+    """Did the paper fills measure reality? Per underlying, over every leg the sleeves opened:
+    - real cost: how far each fill sat from the quote's mid (the spread crossed plus a tick);
+    - model cost: what the history assumed for the same leg (warehouse_research.leg_cost);
+    - real ÷ model: above 1, the history's results were too kind;
+    - the median bid-ask as a share of mid;
+    - the share of legs flagged (wide, locked, thin, late snapshot) and the size at the touch, where the book showed it.
+    Skips are counted by reason: the data the sleeves refused."""
+    out: dict[str, dict] = {}
+    for e in events:
+        if e.get("event") == "open":
+            o = out.setdefault(e["underlying"], {"trades": 0, "legs": 0, "real": 0.0, "model": 0.0, "spreads": [],
+                                                 "flagged": 0, "flags": {}, "skips": {}})
+            o["trades"] += 1
+            for x in e.get("legs", []):
+                o["legs"] += 1
+                o["real"] += abs(float(x["fill"]) - float(x["mid"]))
+                o["model"] += abs(float(x["model_fill"]) - float(x["mid"]))
+                if x.get("spread_pct") is not None:
+                    o["spreads"].append(float(x["spread_pct"]))
+                fl = x.get("flags") or []
+                o["flagged"] += bool(fl)
+                for f in fl:
+                    o["flags"][f] = o["flags"].get(f, 0) + 1
+            for f in e.get("quote_flags") or []:
+                if f == "late":
+                    o["flags"]["late"] = o["flags"].get("late", 0) + 1
+        elif e.get("event") == "skip":
+            o = out.setdefault(e["underlying"], {"trades": 0, "legs": 0, "real": 0.0, "model": 0.0, "spreads": [],
+                                                 "flagged": 0, "flags": {}, "skips": {}})
+            why = re.sub(r"[-+]?\d[\d.,]*", "#", str(e.get("reason", "")))[:60]
+            o["skips"][why] = o["skips"].get(why, 0) + 1
+    return {u: {"trades": o["trades"], "legs": o["legs"],
+                "real_cost_pts": round(o["real"] / o["legs"], 3) if o["legs"] else None,
+                "model_cost_pts": round(o["model"] / o["legs"], 3) if o["legs"] else None,
+                "real_vs_model": round(o["real"] / o["model"], 2) if o["model"] > 0 else None,
+                "median_spread_pct": round(float(np.median(o["spreads"])), 4) if o["spreads"] else None,
+                "flagged_legs": o["flagged"], "flags": o["flags"], "skips": o["skips"]}
+            for u, o in sorted(out.items())}
 
 def render(rep: dict) -> str:
     def rs(x, sign=True):
@@ -448,6 +509,13 @@ def render(rep: dict) -> str:
     if rep["skips"]:
         out += ["", "**Skipped (latest):** " + "; ".join(f"{e['sleeve']}-{e['underlying']}-{e['expiry']}: {e['reason']}"
                                                           for e in rep["skips"])]
+    fills = {u: f for u, f in (rep.get("fills") or {}).items() if f["legs"]}
+    if fills:
+        out += ["", "**Fill quality (real quotes vs the history's cost model):** " + "; ".join(
+            f"{u}: {f['legs']} legs, real {f['real_cost_pts']:.2f} vs model {f['model_cost_pts']:.2f} pts a leg "
+            f"(×{f['real_vs_model']}), median spread {f['median_spread_pct']:.0%} of mid"
+            + (f", flagged {f['flagged_legs']} ({', '.join(f'{k} {v}' for k, v in f['flags'].items())})" if f["flags"] else "")
+            for u, f in fills.items())]
     out += ["", "Forward results alone can't prove profit (A NIFTY: 26 trades give an expected t of ~0.27). What they show "
             "quickly is whether real quotes cost what the 2019–26 history assumed (the cost gap) and whether results break "
             "from that history. Rules: docs/prereg/expiry_seller_v1.json."]
