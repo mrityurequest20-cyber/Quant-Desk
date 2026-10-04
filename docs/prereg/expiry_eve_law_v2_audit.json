@@ -1,0 +1,37 @@
+{
+  "name": "expiry_eve_law_v2_audit",
+  "registered": "2026-10-04",
+  "study_spec": "docs/prereg/expiry_eve_law_v2.json",
+  "audits": "expiry_eve_law_v2 (spec a3ff6d83a18e): the replication of L1 (strangle) and L2 (insured condor) on held-out instruments, with index levels from NSE's official closes",
+  "question": "is the replication robust, or an artefact of one choice: the t-statistic's lag length, the cost assumption, a single instrument, illiquid closing prices, a few lucky weeks, or a regime that has ended?",
+  "not_a_new_search": "the trades are exactly those of expiry_eve_law_v2 (same code, same data, same conventions). The battery, pass bars and verdict rule are expiry_eve_law_v1_audit's, unchanged, applied to v2; nothing is added or loosened after seeing v1's audit or the L1 evidence audit",
+  "series": "the pooled held-out series of expiry_eve_law_v2: per ISO expiry week, the mean P&L (bps of the index) across held-out instruments that traded that week",
+  "checks": {
+    "0_reproduce": "rebuild the registered expiry_eve_law_v2 result from the raw warehouse files; the pooled weeks, mean bps (2 dp) and t (2 dp) must match the registered expiry_eve_law_v2 result. If not, the registered expiry_eve_law_v2 result is void until explained",
+    "1_hac_lags": "Newey-West t at lags 0, the automatic rule (floor(4 (n/100)^(2/9))), 10 and 20 weeks. Pass: t > 1.645 at every lag",
+    "2_block_bootstrap": "stationary bootstrap (Politis-Romano) of the weekly series, mean block 8 weeks, 10,000 resamples, seed 20261004. Pass: the 5th percentile of the resampled mean is > 0 (one-sided 95%)",
+    "3_leave_one_out": "the pooled series rebuilt with each held-out instrument removed in turn. Pass: mean > 0 in every case and t > 1.645 in at least 4 of 5",
+    "4_costs": "costs (slippage on every leg plus statutory fees, not the STT on exercise) multiplied by 2 and 3. Pass: pooled mean > 0 at 2x. Also reported: the break-even cost multiple",
+    "5_liquidity": "the study re-run on chains restricted to strikes that traded at least 100 contracts that day (and, reported only, 1,000). Pass at 100: pooled mean > 0 and t > 1.645",
+    "6_years": "the pooled mean per calendar year of expiry, for years with 20 or more weeks. Pass: positive in at least two thirds of them",
+    "7_current_regime": "the pooled mean for expiries on or after 2024-11-20, when SEBI cut each exchange to one weekly index expiry (the regime the desk trades in now). Pass: mean > 0",
+    "8_trim_best_weeks": "the pooled mean with the best 5% of weeks removed. Pass: mean > 0",
+    "9_multiple_testing": "two structures were tested in expiry_eve_law_v1; Bonferroni at one-sided 5% needs t > 1.96. Pass: pooled t > 1.96"
+  },
+  "informational": [
+    "skip rate: expiries in the data versus trades built, per instrument (a missing 20-delta strike skips a trade)",
+    "settlement source: the share of trades settled on the bhavcopy's underlying versus the nearest future's settle",
+    "cost share: slippage and fees as a share of the premium sold"
+  ],
+  "verdict_rule": {
+    "reproduction_fails": "the principle returns to 'found' until the difference is explained",
+    "two_or_more_checks_1_to_9_fail": "the principle is downgraded from 'replicated' to 'found', with the failed checks as the reason",
+    "one_check_fails": "the principle stays 'replicated' with that check recorded as a caveat",
+    "none_fail": "the principle stays 'replicated', with the audit recorded as evidence"
+  },
+  "applies_to": {
+    "strangle": "L1",
+    "insured": "L2"
+  },
+  "changes": "evaluated once; a different battery is a new spec"
+}
