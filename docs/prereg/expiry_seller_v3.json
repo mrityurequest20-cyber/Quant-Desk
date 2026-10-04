@@ -1,0 +1,30 @@
+{
+  "name": "expiry_seller_v3",
+  "registered": "2026-10-04",
+  "kind": "forward paper test (no orders): every trade is decided by the rules below before its outcome exists",
+  "question": "law L1 (the expiry-eve premium) replicated on instruments it was never fitted to (expiry_eve_law_v1: pooled t 4.46; FINNIFTY, MIDCPNIFTY and SENSEX qualified individually). Does it survive their real bid/ask going forward, naked and insured?",
+  "history": {
+    "source": "expiry_eve_law_v1 (spec 51e180594091), Study run 37170766466: docs/prereg/results/expiry_eve_law_v1-51e180594091.md; NSE and BSE F&O bhavcopy, evidence class real_eod_approximation",
+    "convention": "as expiry_seller_v1; rupees per lot at the reference lot below (the median lot of each instrument's history), so forward and history compare like for like whatever the exchange's current lot",
+    "per_lot_rupees": {
+      "D_FINNIFTY":   {"strategy": "short_strangle_20d", "n": 212, "mean": 971,  "sd": 5645, "worst": -54208, "p05": -9395,  "win": 0.844, "credit": 2904},
+      "D_MIDCPNIFTY": {"strategy": "short_strangle_20d", "n": 99,  "mean": 1309, "sd": 4994, "worst": -23905, "p05": -8344,  "win": 0.778, "credit": 3565},
+      "D_SENSEX":     {"strategy": "short_strangle_20d", "n": 142, "mean": 691,  "sd": 5666, "worst": -30229, "p05": -11846, "win": 0.782, "credit": 3228},
+      "E_FINNIFTY":   {"strategy": "iron_condor_20_05",  "n": 212, "mean": 547,  "sd": 4763, "worst": -48089, "p05": -9482,  "win": 0.825, "credit": 2288, "max_loss_median": 10683},
+      "E_MIDCPNIFTY": {"strategy": "iron_condor_20_05",  "n": 99,  "mean": 590,  "sd": 4531, "worst": -18069, "p05": -8874,  "win": 0.778, "credit": 2816, "max_loss_median": 16875},
+      "E_SENSEX":     {"strategy": "iron_condor_20_05",  "n": 142, "mean": 228,  "sd": 4614, "worst": -17243, "p05": -11331, "win": 0.775, "credit": 2536, "max_loss_median": 13089}
+    },
+    "caveats": "FINNIFTY and MIDCPNIFTY moved from weekly to monthly expiries in Nov 2024 (about 12 forward trades a year each); SENSEX history starts in 2024 (BSE's archive); 43 configurations tried across the earlier studies, but these instruments were held out of all of them"
+  },
+  "sleeves": {
+    "D": {"strategy": "short_strangle_20d", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20]], "underlyings": ["FINNIFTY", "MIDCPNIFTY", "SENSEX"], "naked": true, "risk": "undefined (naked): the law itself"},
+    "E": {"strategy": "iron_condor_20_05", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.05], [1, "PE", -0.05]], "underlyings": ["FINNIFTY", "MIDCPNIFTY", "SENSEX"], "naked": false, "risk": "defined: the law with crash insurance"}
+  },
+  "underlyings": {"FINNIFTY": {"lot": 60, "expiries": "monthly"}, "MIDCPNIFTY": {"lot": 120, "expiries": "monthly"}, "SENSEX": {"lot": 20, "expiries": "weekly, Thursday (BSE)"}},
+  "size": "1 reference lot per sleeve per underlying; P&L in rupees per reference lot",
+  "entry": "exactly as expiry_seller_v1: the chain tape's snapshot nearest 15:20 within 15:10-15:25 on the eve, real quotes only, out-of-the-money strikes nearest each delta within 0.08, a two-sided quote on every leg, sells at bid - 0.05, buys at ask + 0.05, statutory fees",
+  "exit": "as expiry_seller_v1, with one more source: these indices have no recorded minute bars, so the 15:00-15:29 mean of the index spot the chain tape logged every minute (the index's own Kotak quote) stands before Yahoo's close; the source is recorded",
+  "rules": "as expiry_seller_v1: the cost check from 6 settled trades, the consistency check from 8, the naked tail rule (1.5 x the history's worst), a retired sleeve opens nothing more",
+  "eligibility": "as expiry_seller_v1: reported, never applied; E (defined risk) first; D only after E has been eligible for 3 months on that underlying; real money only on the owner's word",
+  "changes": "any change is a new spec with its own ledger; this ledger is never edited"
+}
