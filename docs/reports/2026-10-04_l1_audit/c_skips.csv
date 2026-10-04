@@ -1,0 +1,129 @@
+symbol,expiry,reason,move_pct
+FINNIFTY,2021-07-15,CE: nearest |delta| off by 0.08,0.6137412657039043
+FINNIFTY,2021-07-22,CE: nearest |delta| off by 0.19,1.264952648667239
+FINNIFTY,2021-07-29,CE: nearest |delta| off by 0.19,0.41867465300475804
+FINNIFTY,2021-08-05,CE: nearest |delta| off by 0.16; PE: nearest |delta| off by 0.17,0.34631557898459064
+FINNIFTY,2021-08-12,CE: no OTM strike traded; PE: nearest |delta| off by 0.18,0.500651692797538
+FINNIFTY,2021-08-18,PE: nearest |delta| off by 0.17,0.5650172844054779
+FINNIFTY,2021-08-26,CE: nearest |delta| off by 0.17,0.21690852206290856
+FINNIFTY,2021-09-16,PE: nearest |delta| off by 0.15,1.0931670177467545
+FINNIFTY,2021-09-23,no strike with both CE and PE,2.2812787501170773
+FINNIFTY,2021-09-30,PE: nearest |delta| off by 0.13,0.3674209228524905
+FINNIFTY,2021-10-21,re-dated contract (never reached expiry),1.220094368734359
+FINNIFTY,2021-10-28,re-dated contract (never reached expiry),2.6516617746959126
+FINNIFTY,2021-11-03,re-dated contract (never reached expiry),0.7588526253155314
+FINNIFTY,2021-11-09,no strike with both CE and PE,0.6811960741457845
+FINNIFTY,2021-11-11,re-dated contract (never reached expiry),1.2490630054838858
+FINNIFTY,2021-11-18,re-dated contract (never reached expiry),0.3940053372733954
+FINNIFTY,2021-11-25,re-dated contract (never reached expiry),0.21798097173622022
+FINNIFTY,2021-12-02,re-dated contract (never reached expiry),1.2616244858197678
+FINNIFTY,2021-12-09,re-dated contract (never reached expiry),0.451190733362683
+FINNIFTY,2021-12-30,re-dated contract (never reached expiry),0.07851722124927463
+FINNIFTY,2025-01-28,re-dated contract (never reached expiry),1.8889251265463702
+FINNIFTY,2025-02-25,re-dated contract (never reached expiry),0.17764576955190403
+FINNIFTY,2025-03-25,re-dated contract (never reached expiry),0.1135386340643807
+MIDCPNIFTY,2022-02-01,no strike with both CE and PE,1.1324244662235472
+MIDCPNIFTY,2022-02-08,CE: nearest |delta| off by 0.16; PE: no OTM strike traded,0.6937029500842851
+MIDCPNIFTY,2022-02-15,no traded contracts on the eve,3.733503618561085
+MIDCPNIFTY,2022-02-22,CE: nearest |delta| off by 0.12; PE: no OTM strike traded,0.8305578101822086
+MIDCPNIFTY,2022-02-28,no traded contracts on the eve,0.9170745752951293
+MIDCPNIFTY,2022-03-08,no traded contracts on the eve,1.4758997209401326
+MIDCPNIFTY,2022-03-15,no traded contracts on the eve,0.24178576054574297
+MIDCPNIFTY,2022-03-22,no traded contracts on the eve,0.3772579378436003
+MIDCPNIFTY,2022-03-29,no traded contracts on the eve,0.3965847708659931
+MIDCPNIFTY,2022-04-05,no traded contracts on the eve,1.4423012747780906
+MIDCPNIFTY,2022-04-12,no traded contracts on the eve,1.7669138515060023
+MIDCPNIFTY,2022-04-19,no traded contracts on the eve,1.0073210412147482
+MIDCPNIFTY,2022-04-26,no traded contracts on the eve,1.8014386489210166
+MIDCPNIFTY,2022-05-02,no traded contracts on the eve,0.5754391782203494
+MIDCPNIFTY,2022-05-10,CE: nearest |delta| off by 0.19; PE: no OTM strike traded,1.753301865721646
+MIDCPNIFTY,2022-05-17,no traded contracts on the eve,2.724506025570439
+MIDCPNIFTY,2022-05-24,no traded contracts on the eve,0.44825204228735593
+MIDCPNIFTY,2022-05-31,no traded contracts on the eve,0.3696098562628203
+MIDCPNIFTY,2022-06-07,no traded contracts on the eve,0.8371933946482057
+MIDCPNIFTY,2022-06-14,no traded contracts on the eve,0.13242763219393217
+MIDCPNIFTY,2022-06-21,no traded contracts on the eve,2.879844359248951
+MIDCPNIFTY,2022-06-28,no traded contracts on the eve,0.19794755554174426
+MIDCPNIFTY,2022-07-05,no traded contracts on the eve,0.4600653900046714
+MIDCPNIFTY,2022-07-12,no traded contracts on the eve,0.5868074197866058
+MIDCPNIFTY,2022-07-19,no traded contracts on the eve,0.4273977456429767
+MIDCPNIFTY,2022-07-26,no traded contracts on the eve,1.6423699730357288
+MIDCPNIFTY,2022-08-02,no traded contracts on the eve,0.24745593060111482
+MIDCPNIFTY,2022-08-08,no traded contracts on the eve,0.8043605542699561
+MIDCPNIFTY,2022-08-16,no traded contracts on the eve,0.9906405321701728
+MIDCPNIFTY,2022-08-23,no traded contracts on the eve,1.2800596532653863
+MIDCPNIFTY,2022-08-30,CE: no OTM strike traded; PE: nearest |delta| off by 0.25,1.9132468783323642
+MIDCPNIFTY,2022-09-06,no traded contracts on the eve,0.17609641781051177
+MIDCPNIFTY,2022-09-13,no traded contracts on the eve,0.00717159007189716
+MIDCPNIFTY,2022-09-20,PE: no OTM strike traded,1.4691253594992348
+MIDCPNIFTY,2022-09-27,no traded contracts on the eve,0.1468428781204012
+MIDCPNIFTY,2022-10-04,no traded contracts on the eve,3.208281071634933
+MIDCPNIFTY,2022-10-11,no traded contracts on the eve,1.5576090292222178
+MIDCPNIFTY,2022-10-18,no traded contracts on the eve,1.464361448612661
+MIDCPNIFTY,2022-10-25,no traded contracts on the eve,0.09272041703582978
+MIDCPNIFTY,2022-11-01,no traded contracts on the eve,1.0645757203921136
+MIDCPNIFTY,2022-11-07,no traded contracts on the eve,0.9380938631067925
+MIDCPNIFTY,2022-11-15,no traded contracts on the eve,0.047785157929947086
+MIDCPNIFTY,2022-11-22,no traded contracts on the eve,0.7946299742790819
+MIDCPNIFTY,2022-11-29,no traded contracts on the eve,0.9740986029107779
+MIDCPNIFTY,2022-12-06,CE: nearest |delta| off by 0.20; PE: no OTM strike traded,0.3587701599433335
+MIDCPNIFTY,2022-12-13,no traded contracts on the eve,0.005393888724081197
+MIDCPNIFTY,2022-12-20,no traded contracts on the eve,0.2593830631710148
+MIDCPNIFTY,2022-12-27,no traded contracts on the eve,1.0688240817219752
+MIDCPNIFTY,2023-01-03,no traded contracts on the eve,0.0062390383562149765
+MIDCPNIFTY,2023-01-10,no traded contracts on the eve,0.4904423050090645
+MIDCPNIFTY,2023-01-17,no traded contracts on the eve,0.10284465457767178
+MIDCPNIFTY,2023-01-24,no traded contracts on the eve,0.4260930598586343
+MIDCPNIFTY,2023-01-31,no traded contracts on the eve,1.6621818795046428
+MIDCPNIFTY,2023-02-07,no traded contracts on the eve,0.15371086628584996
+MIDCPNIFTY,2023-02-14,CE: nearest |delta| off by 0.20; PE: no OTM strike traded,0.13608365563673175
+MIDCPNIFTY,2023-02-21,CE: nearest |delta| off by 0.20; PE: no OTM strike traded,0.5057793144833012
+MIDCPNIFTY,2023-02-28,no traded contracts on the eve,0.48690607448627077
+MIDCPNIFTY,2023-03-06,no traded contracts on the eve,0.5646898905325992
+MIDCPNIFTY,2023-03-14,no traded contracts on the eve,0.4417489713454237
+MIDCPNIFTY,2023-03-21,CE: nearest |delta| off by 0.20; PE: no OTM strike traded,0.43893087393875874
+MIDCPNIFTY,2023-03-28,no traded contracts on the eve,0.4442339782618432
+MIDCPNIFTY,2023-04-03,no traded contracts on the eve,0.01467060817006427
+MIDCPNIFTY,2023-04-11,CE: nearest |delta| off by 0.20; PE: no OTM strike traded,0.33440917403120274
+MIDCPNIFTY,2023-04-18,no traded contracts on the eve,0.9665279124137616
+MIDCPNIFTY,2023-04-25,no traded contracts on the eve,0.5115125454072889
+MIDCPNIFTY,2023-05-02,re-dated contract (never reached expiry),1.3155802586916066
+MIDCPNIFTY,2023-05-03,CE: no OTM strike traded; PE: nearest |delta| off by 0.11,0.1617151357178992
+MIDCPNIFTY,2023-05-09,re-dated contract (never reached expiry),0.043711290290038285
+MIDCPNIFTY,2023-05-10,PE: nearest |delta| off by 0.15,0.1505700150570055
+MIDCPNIFTY,2023-05-16,re-dated contract (never reached expiry),0.50203953561343
+MIDCPNIFTY,2023-05-23,re-dated contract (never reached expiry),0.8585142069184926
+MIDCPNIFTY,2023-05-24,CE: nearest |delta| off by 0.08,0.18207273707251392
+MIDCPNIFTY,2023-05-30,re-dated contract (never reached expiry),0.23712562503221957
+MIDCPNIFTY,2023-05-31,PE: nearest |delta| off by 0.09,0.3432759064026625
+MIDCPNIFTY,2023-07-05,CE: nearest |delta| off by 0.09,0.7642606159148801
+MIDCPNIFTY,2023-07-26,PE: nearest |delta| off by 0.09,0.24683007292165549
+MIDCPNIFTY,2023-08-23,re-dated contract (never reached expiry),0.7899673571948984
+MIDCPNIFTY,2023-08-30,re-dated contract (never reached expiry),0.9460243100958499
+MIDCPNIFTY,2023-09-06,re-dated contract (never reached expiry),0.2094084625330117
+MIDCPNIFTY,2023-09-13,re-dated contract (never reached expiry),0.5562367629026843
+MIDCPNIFTY,2023-09-27,re-dated contract (never reached expiry),0.4382944770523922
+MIDCPNIFTY,2023-10-25,re-dated contract (never reached expiry),0.6815638669424473
+MIDCPNIFTY,2025-01-27,re-dated contract (never reached expiry),3.0249382644556233
+MIDCPNIFTY,2025-02-24,re-dated contract (never reached expiry),0.6460455937636778
+MIDCPNIFTY,2025-03-31,re-dated contract (never reached expiry),0.2622483891696614
+NIFTYNXT50,2025-01-31,re-dated contract (never reached expiry),1.5020946840608618
+NIFTYNXT50,2025-02-27,PE: nearest |delta| off by 0.11,0.9193677555321411
+NIFTYNXT50,2025-02-28,re-dated contract (never reached expiry),2.8998318790073307
+NIFTYNXT50,2025-03-28,re-dated contract (never reached expiry),0.6294671320746237
+NIFTYNXT50,2026-01-27,PE: nearest |delta| off by 0.11,0.6580084228096528
+NIFTYNXT50,2026-09-29,PE: nearest |delta| off by 0.11,1.2079448723145592
+SENSEX,2024-01-05,first 10 days of history,0.24855398728167444
+SENSEX,2024-01-12,first 10 days of history,1.1813386227053302
+SENSEX,2024-11-01,re-dated contract (never reached expiry),0.4220480756416567
+SENSEX,2025-01-10,re-dated contract (never reached expiry),0.3108726451526045
+SENSEX,2025-01-17,re-dated contract (never reached expiry),0.5496813330560957
+SENSEX,2025-01-31,re-dated contract (never reached expiry),0.9650362605118534
+SENSEX,2025-02-07,re-dated contract (never reached expiry),0.25361858388668335
+SENSEX,2025-03-28,re-dated contract (never reached expiry),0.2467707894822535
+SENSEX,2026-01-15,no traded contracts on the eve,0.2929412494832695
+BANKEX,2024-01-01,first 10 days of history,
+BANKEX,2024-01-08,first 10 days of history,1.4198102743143592
+BANKEX,2024-01-15,first 10 days of history,0.8411963334211903
+BANKEX,2025-01-27,re-dated contract (never reached expiry),0.03665711254884352
+BANKEX,2025-02-24,re-dated contract (never reached expiry),0.5150563065771441
