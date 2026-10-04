@@ -1,6 +1,7 @@
 # One pre-registered study on the data warehouse, run on demand (docs/prereg/<name>.json), or one of the audits
-# (law-audit: the registered robustness audit of L1/L2; warehouse-audit: can the data be trusted). The report goes to
-# the run summary; the report, its JSON and the trade rows are kept as an artifact.
+# (law-audit: the registered robustness audit of L1/L2; warehouse-audit: can the data be trusted; entry-check: the
+# prospective expiry_eve_entry_v1 test on the sleeves' real-quote fills). The report goes to the run summary; the
+# report, its JSON and the trade rows are kept as an artifact.
 name: Study
 
 on:
@@ -9,8 +10,11 @@ on:
       study:
         description: "Which study"
         type: choice
-        options: [wings, laws, law-audit, warehouse-audit]
+        options: [wings, laws, law-audit, warehouse-audit, entry-check]
         default: wings
+      spec:
+        description: "Registered spec for laws / law-audit (empty: the command's default)"
+        default: ""
 
 permissions:
   contents: read
@@ -35,11 +39,15 @@ jobs:
         run: |
           gh release download warehouse --pattern 'fo_bhav_*.parquet' --pattern 'bse_fo_bhav_*.parquet' --dir runtime/warehouse --clobber
           gh release download warehouse --pattern 'nse_index_close_*.parquet' --dir runtime/warehouse --clobber || echo "no official index closes yet"
+      - name: Restore the paper ledgers (entry-check reads the sleeves' real-quote fills)
+        if: inputs.study == 'entry-check'
+        run: deploy/journal.sh restore
       - name: Run the study
         env:
           STUDY: ${{ inputs.study }}
+          SPEC: ${{ inputs.spec }}
         run: |
-          python -m quantdesk "$STUDY" --warehouse runtime/warehouse --out _study
+          python -m quantdesk "$STUDY" --warehouse runtime/warehouse --out _study ${SPEC:+--spec "$SPEC"}
           cat _study/*.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

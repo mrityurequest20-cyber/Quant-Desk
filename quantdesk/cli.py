@@ -362,7 +362,9 @@ def cmd_wings(cfg, a):
 def cmd_laws(cfg, a):
     """expiry_eve_law_v1: is the expiry-eve premium a law of option markets? Held-out instruments (research/laws.py)."""
     from .research import laws as L
+    from .research.provenance import WAREHOUSE_TABLES, stamp
     res, tr = L.run(Path(a.warehouse), cfg, L.load_spec(Path(a.spec)))
+    res["provenance"] = stamp(Path(a.warehouse), WAREHOUSE_TABLES)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     md = L.render(res)
@@ -377,7 +379,9 @@ def cmd_laws(cfg, a):
 def cmd_warehouse_audit(cfg, a):
     """The warehouse audit (data/audit.py): report to --out and stdout."""
     from .data import audit as A
+    from .research.provenance import WAREHOUSE_TABLES, stamp
     res = A.run(Path(a.warehouse))
+    res["provenance"] = stamp(Path(a.warehouse), WAREHOUSE_TABLES)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     md = A.render(res)
@@ -405,7 +409,9 @@ def cmd_experiments(cfg, a):
 def cmd_law_audit(cfg, a):
     """expiry_eve_law_v1_audit: the registered robustness audit of the L1/L2 replication (research/law_audit.py)."""
     from .research import law_audit as A
+    from .research.provenance import WAREHOUSE_TABLES, stamp
     res = A.run(Path(a.warehouse), cfg, Path(a.spec))
+    res["provenance"] = stamp(Path(a.warehouse), WAREHOUSE_TABLES)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     md = A.render(res)
