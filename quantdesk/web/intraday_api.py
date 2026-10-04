@@ -59,8 +59,23 @@ class IntradayAPI:
         p = self._dir(account) / "broker.json"
         return json.loads(p.read_text())["cash"] if p.exists() else None
 
+    def pending_capital(self, account) -> float | None:
+        """The configured capital, when the account is about to take it.
+
+        The engine's own rule (intraday/account.ensure_account): an account with no trades takes the configured capital
+        at its next session. Until that session, the stored figure is stale (on 4 Oct 2026 the app showed ₹20,000 two
+        days after the account was set to ₹5,00,000), so the app shows what the account is about to be."""
+        j = self.j(account)
+        acct = j.get_state("intraday_account") or {}
+        cfg_cap = float(self.cfg.get("intraday.capital", 20000))
+        n = int(j.df("SELECT COUNT(*) AS n FROM trades")["n"].iloc[0])
+        return cfg_cap if n == 0 and float(acct.get("capital") or 0) != cfg_cap else None
+
     def capital(self, account) -> float:
-        """The account's own starting capital (not whatever the config says today)."""
+        """The account's own starting capital (not whatever the config says today), unless it has yet to trade."""
+        pending = self.pending_capital(account)
+        if pending is not None:
+            return pending
         acct = self.j(account).get_state("intraday_account") or {}
         return float(acct.get("capital") or self.cfg.get("intraday.capital", 20000))
 
@@ -77,6 +92,9 @@ class IntradayAPI:
         hb = j.get_state("intraday_live") or {}
         cash = self._cash(account)
         cap = self.capital(account)
+        pending = self.pending_capital(account) is not None
+        if pending:                                         # nothing traded yet: the account starts at the new capital
+            cash, hb = cap, {**hb, "equity": cap}
         day = hb.get("day")
         closed = j.df("SELECT id, strategy, symbol, pnl, r_multiple, grade, exit_reason, opened_at, closed_at "
                       "FROM trades WHERE status='closed' AND opened_at >= ? ORDER BY closed_at DESC", (day or "9999",))
@@ -87,7 +105,7 @@ class IntradayAPI:
         return {"heartbeat": hb, "age_sec": age, "cash": cash, "capital": cap,
                 "equity": hb.get("equity", cash if cash is not None else cap), "total_pnl": float(tot["pnl"]), "total_trades": int(tot["n"]),
                 "paused": bool(j.get_state("intraday_paused", False)), "closed_today": closed.to_dict("records"),
-                "limits": self.limits(),
+                "limits": self.limits(), "capital_pending": pending,
                 "pending_commands": len([c for c in (j.get_state("intraday_cmds") or [])
                                          if c["id"] not in set(j.get_state("intraday_cmds_done") or [])])}
 

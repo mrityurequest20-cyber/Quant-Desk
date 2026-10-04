@@ -208,3 +208,27 @@ def test_a_stub_session_is_charted_with_the_day_before(tmp_path):
     assert ch["day"] == "2026-09-30" and ch["today_bars"] == 10 and len(ch["bars"]["t"]) == 75 + 2
     assert ch["profile"]["day"] == "2026-09-29"                              # the stub's ten bars don't make a profile
     assert "or_high" not in ch["levels"] and {"pdh", "pdl", "day_high"} <= set(ch["levels"])   # no fake opening range
+
+
+def test_an_account_that_has_not_traded_shows_the_new_capital(cfg):
+    """4 Oct 2026: the account was set to ₹5,00,000 but the app kept showing ₹20,000 until the next session, because
+    the journal's stored figure only changes when the engine starts. The app applies the engine's rule itself."""
+    import json as _json
+    from quantdesk.journal.journal import Journal
+    from quantdesk.web.intraday_api import IntradayAPI
+    base = cfg.runtime_dir / "intraday"
+    base.mkdir(parents=True, exist_ok=True)
+    j = Journal(base / "journal.db")
+    j.set_state("intraday_account", {"capital": 20000.0, "since": "2026-10-03"})
+    j.set_state("intraday_live", {"day": "2026-10-03", "equity": 20000.0})
+    j.commit()
+    (base / "broker.json").write_text(_json.dumps({"cash": 20000.0}))
+    api = IntradayAPI(cfg)
+    s = api.state()
+    want = float(cfg.get("intraday.capital"))
+    assert want != 20000 and s["capital"] == want and s["cash"] == want and s["equity"] == want and s["capital_pending"]
+    j._exec("INSERT INTO trades (id, status, pnl, opened_at, closed_at) VALUES ('t1', 'closed', 150.0, "
+            "'2026-10-03 10:00', '2026-10-03 11:00')")
+    j.commit()
+    s = IntradayAPI(cfg).state()                     # once it has traded, its own history stands
+    assert s["capital"] == 20000 and s["cash"] == 20000 and not s["capital_pending"]
