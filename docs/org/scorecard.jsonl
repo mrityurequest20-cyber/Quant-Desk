@@ -14,3 +14,7 @@
 {"date": "2026-10-04", "dept": "research", "kind": "fixed", "what": "expiry_eve_entry_v1 registered and built (entry price vs executable quotes, paired)", "ref": "53a40b1"}
 {"date": "2026-10-04", "dept": "orders", "kind": "fixed", "what": "skip-bias bound in the entry check", "ref": "487fbf9"}
 {"date": "2026-10-04", "dept": "chief_of_staff", "kind": "fixed", "what": "AUTONOMY.md: the engineer decides and records decisions instead of asking", "ref": "docs/AUTONOMY.md"}
+{"date": "2026-10-04", "dept": "engineering", "kind": "self_found", "what": "org rota's duplicate check searched open issues only: re-running the rota after the shift closed the day's audit would file it again", "ref": "this commit (self-review of 9690e42..c316124)"}
+{"date": "2026-10-04", "dept": "orders", "kind": "self_found", "what": "the settlement check runs after the close, before NSE publishes its official close file, so it would always have fallen back to the 15:29 bar and never used the official file", "ref": "this commit (self-review of 9690e42..c316124)"}
+{"date": "2026-10-04", "dept": "engineering", "kind": "fixed", "what": "rota checks titles among open and closed audits of the last 2 days", "ref": "this commit (self-review of 9690e42..c316124)"}
+{"date": "2026-10-04", "dept": "orders", "kind": "fixed", "what": "on expiry day the settlement check accepts only NSE's file; the fallbacks wait for the next run", "ref": "this commit (self-review of 9690e42..c316124)"}

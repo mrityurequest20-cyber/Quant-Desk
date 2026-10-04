@@ -43,16 +43,13 @@ def test_the_audit_issue_is_filed_once_and_flagged_when_overdue():
         def ensure_label(self, *a):
             pass
 
-        def issue_titled(self, title, label):
-            return self.made.get(title)
-
         def create(self, title, body, labels):
             self.made[title] = {"number": len(self.made) + 1, "title": title, "body": body, "labels": labels,
                                 "created_at": f"{self.today}T11:50:00Z"}
             return self.made[title]
 
-        def issues(self, label, state="open"):
-            return list(self.made.values())
+        def issues(self, label, state="open", since=None):
+            return [i for i in self.made.values() if state == "all" or i.get("state", "open") == state]
 
         def comment(self, n, b):
             self.comments.append(n)
@@ -65,6 +62,9 @@ def test_the_audit_issue_is_filed_once_and_flagged_when_overdue():
     first = O.sync(gh, MON, [], say=lambda *a: None)
     again = O.sync(gh, MON, [], say=lambda *a: None)
     assert first["created"] == [1] and again["created"] == []
+    gh.made[O.title("data", MON)]["state"] = "closed"                  # the shift closed it; a re-run doesn't refile
+    assert O.sync(gh, MON, [], say=lambda *a: None)["created"] == []
+    gh.made[O.title("data", MON)]["state"] = "open"
     body = gh.made[O.title("data", MON)]["body"]
     assert "data-steward" in body and "warehouse-audit" in body and "no finding" in body
     gh.today = MON + dt.timedelta(days=2)

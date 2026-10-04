@@ -134,7 +134,10 @@ def test_each_settlement_is_checked_against_the_official_close(cfg, setup):
                                                               "volume": 0.0}, index=idx))
     seller.run(e, now=at(e, "15:35"))                            # settles; too early for the check
     assert not any(ev["event"] == "official" for ev in seller.events())
-    notes = seller.run(e, now=at(e, "15:50"))
+    seller.run(e, now=at(e, "15:50"))                            # expiry day: NSE's file or nothing; not out yet
+    assert not any(ev["event"] == "official" for ev in seller.events())
+    nxt = cal.next_trading_day(e)
+    notes = seller.check_settlement(nxt, at(nxt, "16:00"))       # the next run falls back to the 15:29 bar
     assert sum("settlement check" in n for n in notes) == 2
     for t in seller.trades():
         assert t["settle"] == pytest.approx(SPOT + 600 / 30, abs=0.01)          # registered: unchanged
@@ -142,7 +145,7 @@ def test_each_settlement_is_checked_against_the_official_close(cfg, setup):
         assert t["settle_gap_bps"] == pytest.approx(((SPOT + 20) / (SPOT + 600) - 1) * 1e4, abs=0.01)
         assert t["pnl_rs_official"] == pytest.approx(payoff(t, SPOT + 600)["pnl_rs"], abs=0.01)
         assert t["pnl_gap_rs"] == pytest.approx(t["pnl_rs"] - t["pnl_rs_official"], abs=0.02)
-    seller.run(e, now=at(e, "16:30"))
+    seller.check_settlement(nxt, at(nxt, "17:00"))
     assert sum(ev["event"] == "official" for ev in seller.events()) == 2       # once per trade
     rep = seller.report()
     st = rep["settlement"]["NIFTY"]
@@ -153,8 +156,10 @@ def test_each_settlement_is_checked_against_the_official_close(cfg, setup):
 
     seller.official_fn = lambda u, day: SPOT + 300
     assert seller.official("NIFTY", e) == (SPOT + 300, "NSE's official close")
+    assert seller.official("NIFTY", e, nse_only=True) == (SPOT + 300, "NSE's official close")
     seller.official_fn = lambda u, day: None
     assert seller.official("NIFTY", e) == (SPOT + 600, "the 15:29 one-minute close")
+    assert seller.official("NIFTY", e, nse_only=True)[0] is None
     seller.close_fn = lambda u, day: SPOT + 1
     assert seller.official("NIFTY", d) == (SPOT + 1, "Yahoo daily close")       # no 15:29 bar on the eve
 

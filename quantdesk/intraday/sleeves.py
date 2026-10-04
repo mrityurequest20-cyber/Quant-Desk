@@ -336,9 +336,9 @@ class ExpirySeller:
             notes.append(f"settled {t['id']} at {s_t:,.2f} ({src}): ₹{r['pnl_rs']:+,.0f}/lot")
         return notes
 
-    def official(self, underlying: str, day: dt.date) -> tuple[float | None, str]:
+    def official(self, underlying: str, day: dt.date, nse_only: bool = False) -> tuple[float | None, str]:
         """The official close for the settlement check: NSE's published file, else the 15:29 one-minute close, else
-        Yahoo's daily close."""
+        Yahoo's daily close. `nse_only`: NSE's file or nothing (on expiry day, before it is published)."""
         why = []
 
         def call(name: str, fn) -> float | None:
@@ -356,6 +356,8 @@ class ExpirySeller:
 
         if (v := call("NSE's official close", self.official_fn)) is not None:
             return v, "NSE's official close"
+        if nse_only:
+            return None, "; ".join(why) or "NSE's file not published yet"
         v, src = official_close(self.data, underlying, day)
         if v is not None:
             return v, src
@@ -365,8 +367,9 @@ class ExpirySeller:
         return None, "; ".join(why)
 
     def check_settlement(self, day: dt.date, now: pd.Timestamp) -> list[str]:
-        """Diagnostic: each settled trade's P&L at the official close too, appended once as an `official` event. Runs
-        from 15:45 on expiry day (the published sources lag the close); the registered settlement is never changed."""
+        """Diagnostic: each settled trade's P&L at the official close too, appended once as an `official` event. On
+        expiry day (from 15:45) only NSE's published file is accepted; it usually appears in the evening, so the
+        fallbacks are used only from the next run on. The registered settlement is never changed."""
         notes = []
         for t in self.trades():
             if not t["settled"] or "official" in t:
@@ -374,7 +377,7 @@ class ExpirySeller:
             exp = dt.date.fromisoformat(t["expiry"])
             if exp > day or (exp == now.date() and now.time() < dt.time(15, 45)):
                 continue
-            v, src = self.official(t["underlying"], exp)
+            v, src = self.official(t["underlying"], exp, nse_only=exp == now.date())
             if v is None:
                 continue
             r = payoff(t, v)

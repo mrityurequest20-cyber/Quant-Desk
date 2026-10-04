@@ -206,9 +206,11 @@ def sync(gh, day: dt.date, events: list[dict], say=print) -> dict:
     gh.ensure_label("overdue", "b60205")
     sc = scores(events, day)
     done = {"created": [], "overdue": []}
+    since = f"{day - dt.timedelta(days=2)}T00:00:00Z"
+    seen = {i.get("title") for i in gh.issues(LABEL[0], state="all", since=since)}   # closed ones too: once a day
     for dept in due(day, events):
         t = title(dept, day)
-        if gh.issue_titled(t, LABEL[0]) is None:
+        if t not in seen:
             i = gh.create(t, body(dept, day, sc.get(dept, {}).get("trust", "standard")), [LABEL[0]])
             done["created"].append(i.get("number"))
     for i in gh.issues(LABEL[0], state="open"):
