@@ -23,6 +23,19 @@ def test_the_fingerprint_is_the_substance_not_the_wording():
     assert M.similarity(SPEC, changed) > M.similarity(SPEC, {"tests": {"t": 3.0}})
 
 
+def test_a_rewording_does_not_make_a_new_experiment():
+    """The exact fingerprint moves with any new word in a rule; the method fingerprint, which the guard uses, does not."""
+    reworded = copy.deepcopy(SPEC)
+    reworded["rules"]["entry"] = "enter at 15:20 on the last session before the expiry"
+    assert M.fingerprint(reworded) != M.fingerprint(SPEC)
+    assert M.method_fingerprint(reworded) == M.method_fingerprint(SPEC)
+    moved = copy.deepcopy(SPEC)
+    moved["rules"]["entry"] = "15:25 the session before expiry"                # a number in the prose changed
+    assert M.method_fingerprint(moved) != M.method_fingerprint(SPEC)
+    renamed = dict(SPEC, rules=dict(SPEC["rules"], source="settle on nse_index_close"))
+    assert M.method_fingerprint(renamed) != M.method_fingerprint(dict(SPEC, rules=dict(SPEC["rules"], source="settle on fo_bhav")))
+
+
 def test_check_names_the_identical_and_the_nearest(tmp_path):
     (tmp_path / "results").mkdir()
     (tmp_path / "x_v1.json").write_text(json.dumps(SPEC))
@@ -34,6 +47,8 @@ def test_check_names_the_identical_and_the_nearest(tmp_path):
     assert c["identical"] == ["x_v1"] and c["nearest"][0][1] == "x_v2"
     (tmp_path / "x_v3.json").write_text(json.dumps(again))
     assert M.duplicates(M.registry(tmp_path)) == [["x_v1", "x_v3"]]
+    (tmp_path / "x_v4.json").write_text(json.dumps(dict(SPEC, name="x_v4", rules=dict(SPEC["rules"], entry="at 15:20, eve of expiry"))))
+    assert M.duplicates(M.registry(tmp_path)) == [["x_v1", "x_v3", "x_v4"]]   # reworded, still refused
 
 
 def test_no_two_registered_specs_are_the_same_experiment():

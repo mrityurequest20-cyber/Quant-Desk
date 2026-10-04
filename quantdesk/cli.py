@@ -396,8 +396,8 @@ def cmd_experiments(cfg, a):
     reg = M.registry()
     if a.check:
         c = M.check(json.loads(Path(a.check).read_text()), reg)
-        print(f"fingerprint {c['fingerprint']}")
-        print("IDENTICAL to: " + ", ".join(c["identical"]) if c["identical"] else "new: no registered spec has this substance")
+        print(f"fingerprint {c['fingerprint']} · method {c['method']}")
+        print("IDENTICAL to: " + ", ".join(c["identical"]) if c["identical"] else "new: no registered spec has this method")
         for sim, name in c["nearest"]:
             print(f"  nearest: {name} ({sim:.0%} of substance shared)")
         if c["identical"]:

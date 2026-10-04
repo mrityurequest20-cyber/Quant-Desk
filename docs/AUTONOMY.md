@@ -129,9 +129,12 @@ progress report, under "levers only the owner holds". It never opens an issue fo
 - A principle climbs only on a registered result. Replication means instruments the effect was never fitted to: an
   edge found on NIFTY and BANKNIFTY must also hold on FINNIFTY, SENSEX and the rest.
 - **The research memory** (`research/memory.py`, `python -m quantdesk experiments`) is how the desk remembers:
-  - every registered spec has a *fingerprint* of its substance. The suite refuses a second spec with the same
-    fingerprint, so an identical experiment is never run twice. `experiments --check draft.json` shows whether a
-    draft repeats one, and which earlier specs it is nearest to;
+  - every registered spec has a *fingerprint* of its substance, and a *method fingerprint* that rewording can't
+    move: each prose value is reduced to the numbers, times, dates and snake_case identifiers in it. The suite
+    refuses a second spec with the same method fingerprint, so an identical experiment is never run twice, however
+    it is worded. A real variant differs in a number, an identifier or a structured field, so put the difference
+    there, not in prose. `experiments --check draft.json` shows whether a draft repeats one, and which earlier specs
+    it is nearest to;
   - every principle carries a `history`: each move up or down the ladder, and each review that left it in place,
     with the date, the reason and the result it rests on. `caveats` are its known weaknesses;
   - the suite checks that every recorded result still matches its spec byte for byte, so a spec can't be edited

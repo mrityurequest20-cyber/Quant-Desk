@@ -4,9 +4,12 @@ All of it lives in files in the repository, so a fresh session (or a person) rea
 
 1. **Has this experiment been run?** Every pre-registered spec (docs/prereg/*.json) gets a *fingerprint*: a hash of its
    substance (instruments, structures, rules, tests, thresholds) with the free text (name, dates, rationale) left out
-   and the wording normalised. Two specs with the same fingerprint are the same experiment. The test suite refuses a
-   second one, so an identical experiment can't be registered twice, by the engineer or anyone else. A variant must
-   differ in substance, and `check()` shows the nearest earlier specs so it can say how.
+   and the wording normalised. It also gets a *method fingerprint*, which a rewording can't move: every prose value is
+   reduced to the numbers, times, dates and snake_case identifiers in it, so "t above 1.645" and "a t-stat over 1.645"
+   are the same rule. Two specs with the same method fingerprint are the same experiment. The test suite refuses a
+   second one, so an identical experiment can't be registered twice, by the engineer or anyone else, however it is
+   worded. A variant must differ in a number, a date, an identifier or a structured field, and `check()` shows the
+   nearest earlier specs so it can say how.
 2. **Why does the desk believe it?** Each principle in docs/principles.json carries a `history`: every move up or down
    the evidence ladder, and every review that left it where it was, with the date, the reason and the registered result
    it rests on. `caveats` are the known weaknesses a later test must address. The suite checks the history agrees with
@@ -22,6 +25,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +53,26 @@ def fingerprint(spec: dict) -> str:
     return hashlib.sha256(json.dumps(substance(spec), sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
 
 
+_TOKENS = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}|\d+(?:\.\d+)?%?|[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+
+
+def method(obj):
+    """The substance with every prose value (a string with a space in it) reduced to the sorted set of numbers, times,
+    dates and snake_case identifiers it contains: what an experiment does, not how it is described."""
+    obj = substance(obj)
+    if isinstance(obj, dict):
+        return {k: method(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [method(x) for x in obj]
+    if isinstance(obj, str) and " " in obj:
+        return "§ " + " ".join(sorted(set(_TOKENS.findall(obj))))
+    return obj
+
+
+def method_fingerprint(spec: dict) -> str:
+    return hashlib.sha256(json.dumps(method(spec), sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
+
+
 def _pairs(obj, path="") -> set[str]:
     if isinstance(obj, dict):
         return set().union(*[_pairs(v, f"{path}/{k}") for k, v in obj.items()]) if obj else {path}
@@ -73,24 +97,28 @@ def registry(folder: Path = PREREG) -> list[dict]:
         results = sorted(x.name for k in {h, canon}
                          for x in (Path(folder) / "results").glob(f"{spec.get('name', p.stem)}-{k}*.md"))
         out.append({"name": spec.get("name", p.stem), "file": p.name, "hash": h, "fingerprint": fingerprint(spec),
-                    "registered": spec.get("registered"), "results": results, "spec": spec})
+                    "method": method_fingerprint(spec), "registered": spec.get("registered"), "results": results,
+                    "spec": spec})
     return out
 
 
 def duplicates(reg: list[dict]) -> list[list[str]]:
+    """Groups of registered specs that are one experiment: the same method fingerprint, however they are worded."""
     by: dict[str, list[str]] = {}
     for r in reg:
-        by.setdefault(r["fingerprint"], []).append(r["name"])
+        by.setdefault(r.get("method") or method_fingerprint(r["spec"]), []).append(r["name"])
     return [v for v in by.values() if len(v) > 1]
 
 
 def check(spec: dict, reg: list[dict] | None = None, top: int = 3) -> dict:
-    """Is `spec` an experiment the desk has already run? Identical ones by fingerprint, then the nearest by substance."""
+    """Is `spec` an experiment the desk has already run? Identical ones by method fingerprint (a rewording doesn't make
+    a new experiment), then the nearest by substance."""
     reg = registry() if reg is None else reg
-    fp = fingerprint(spec)
-    same = [r["name"] for r in reg if r["fingerprint"] == fp and r["spec"] is not spec]
-    near = sorted(((round(similarity(spec, r["spec"]), 3), r["name"]) for r in reg if r["fingerprint"] != fp), reverse=True)
-    return {"fingerprint": fp, "identical": same, "nearest": near[:top]}
+    fp, mfp = fingerprint(spec), method_fingerprint(spec)
+    same = [r["name"] for r in reg if (r.get("method") or method_fingerprint(r["spec"])) == mfp and r["spec"] is not spec]
+    near = sorted(((round(similarity(spec, r["spec"]), 3), r["name"]) for r in reg if r["name"] not in same),
+                  reverse=True)
+    return {"fingerprint": fp, "method": mfp, "identical": same, "nearest": near[:top]}
 
 
 # ---- principles ---------------------------------------------------------------------------------------------------
@@ -173,7 +201,7 @@ def proposals(doc: dict, reg: list[dict] | None = None) -> list[dict]:
                             "why": "running; evidence accumulates with each session"})
         elif s == "rejected":
             out.append({"rank": 9, "principle": pid, "kind": "closed",
-                        "test": "none: an identical retest is refused by fingerprint",
+                        "test": "none: an identical retest is refused by its method fingerprint",
                         "why": "rejected on a registered test; a variant must say what differs and why it could matter"})
     return sorted(out, key=lambda x: (x["rank"], x["principle"]))
 
@@ -182,7 +210,7 @@ def summary(doc: dict | None = None, reg: list[dict] | None = None) -> dict:
     doc = load_principles() if doc is None else doc
     reg = registry() if reg is None else reg
     moves = [dict(e, principle=p["id"]) for p in doc["principles"] for e in p.get("history", [])]
-    return {"experiments": len({r["fingerprint"] for r in reg}), "specs": len(reg),
+    return {"experiments": len({r["method"] for r in reg}), "specs": len(reg),
             "with_results": sum(bool(r["results"]) for r in reg), "duplicates": duplicates(reg),
             "history_problems": history_problems(doc), "moves": moves,
             "open_caveats": sum(len(p.get("caveats", [])) for p in doc["principles"]),
@@ -191,11 +219,12 @@ def summary(doc: dict | None = None, reg: list[dict] | None = None) -> dict:
 
 def render(s: dict, reg: list[dict]) -> str:
     out = ["# Research memory", "",
-           f"{s['specs']} registered specs, {s['experiments']} distinct experiments (by fingerprint), "
+           f"{s['specs']} registered specs, {s['experiments']} distinct experiments (by method fingerprint), "
            f"{s['with_results']} with a recorded result. Duplicates: {s['duplicates'] or 'none'}. "
            f"History problems: {s['history_problems'] or 'none'}.", "",
-           "| spec | registered | fingerprint | results |", "|---|---|---|---|"]
-    out += [f"| {r['name']} | {r['registered']} | `{r['fingerprint']}` | {', '.join(r['results']) or '–'} |" for r in reg]
+           "| spec | registered | fingerprint | method | results |", "|---|---|---|---|---|"]
+    out += [f"| {r['name']} | {r['registered']} | `{r['fingerprint']}` | `{r['method']}` | {', '.join(r['results']) or '–'} |"
+            for r in reg]
     out += ["", "## How the beliefs moved", "", "| date | principle | move | reason | evidence |", "|---|---|---|---|---|"]
     out += [f"| {m['date']} | {m['principle']} | {m['from']} → {m['to']} ({m['kind']}) | {m['reason']} | {m['ref']} |"
             for m in s["moves"]]
