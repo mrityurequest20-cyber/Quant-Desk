@@ -38,6 +38,17 @@ import pandas as pd
 from . import warehouse as W
 
 OPTION_TABLES = ("fo_bhav", "bse_fo_bhav")
+
+# Days the exchange never published, checked by hand: kept out of "missing" so the audit's alarm means something, and
+# listed with the evidence so nobody spends a run refetching them.
+UNPUBLISHED = {
+    "fo_bhav": {
+        "2021-03-30": "NSE's archive returns 404 for this day's bhavcopy in both formats on both hosts (checked 4 Oct 2026, "
+                      "Data run 37189408232 fetched 0 files); its market-activity zip /archives/fo/mkt/fo30032021.zip exists "
+                      "but has no settle prices or change in OI, so it is not substituted. No L1 leg enters or settles on it: "
+                      "the next index expiries were 31 Mar / 1 Apr, and nse_index_close has the day",
+    },
+}
 COLS = ["date", "symbol", "kind", "expiry", "strike", "high", "low", "close", "settle", "underlying", "contracts", "lot", "src"]
 
 
@@ -72,15 +83,17 @@ def official_closes(folder: Path) -> pd.DataFrame:
     return ic[ic["symbol"].astype(str) != ""] if len(ic) else ic
 
 
-def _coverage(df: pd.DataFrame, days: list, start=None) -> dict:
+def _coverage(df: pd.DataFrame, days: list, start=None, unpublished=None) -> dict:
     present = set(pd.to_datetime(df["date"].unique()))
     first, last = min(present), max(present)
     first = max(first, pd.Timestamp(start)) if start else first
     expected = {d for d in days if first <= d <= last}
-    missing = sorted(expected - present)
+    absent = [str(d.date()) for d in sorted(expected - present)]
+    known = unpublished or {}
     extra = sorted(d for d in present - expected if days and first <= d <= max(days))
     return {"first": str(first.date()), "last": str(last.date()), "expected": len(expected),
-            "present": len(present & expected), "missing": [str(d.date()) for d in missing],
+            "present": len(present & expected), "missing": [d for d in absent if d not in known],
+            "unpublished": {d: known[d] for d in absent if d in known},
             "on_non_trading_days": [str(d.date()) for d in extra]}
 
 
@@ -245,7 +258,7 @@ def run(folder: Path) -> dict:
         frames[t] = df
         key = W.TABLES[t][1]
         r = {"rows": int(len(df)), "symbols": sorted(df["symbol"].unique().tolist()),
-             "coverage": _coverage(df, days), "duplicates": int(df.duplicated(key).sum()),
+             "coverage": _coverage(df, days, unpublished=UNPUBLISHED.get(t)), "duplicates": int(df.duplicated(key).sum()),
              "partial_days": _partial_days(df), "contracts": _contracts(df, days)}
         if t == "fo_bhav":
             monthly = {s: set(pd.to_datetime(g.loc[g["kind"] == "FUT", "expiry"].unique())) for s, g in df.groupby("symbol")}
@@ -307,7 +320,8 @@ def render(res: dict) -> str:
         out += [f"## {t}", "",
                 f"- {r['rows']:,} rows; symbols: {', '.join(r['symbols'])}",
                 f"- coverage {c['first']} → {c['last']}: {c['present']:,} of {c['expected']:,} trading days present; "
-                f"missing {len(c['missing'])}; files on non-trading days {len(c['on_non_trading_days'])}",
+                f"missing {len(c['missing'])}; never published by the exchange {len(c.get('unpublished', {}))}; "
+                f"files on non-trading days {len(c['on_non_trading_days'])}",
                 f"- duplicates on the key: {r['duplicates']:,}; partial symbol-days: {len(r['partial_days'])}",
                 f"- expiries (past): {k['expiries']:,}; rows after expiry: {k['rows_after_expiry']:,}; without "
                 f"expiry-day rows: {len(k['expiries_without_expiry_day_rows'])}, of which holiday-shifted "
@@ -317,6 +331,8 @@ def render(res: dict) -> str:
                 f"range {k['close_outside_range']:,}; closes with no trade (theoretical): {k['theoretical_close_share']:.0%}",
                 "- lot changes: " + (", ".join(f"{x['symbol']} {x['was']:.0f}→{x['lot']:.0f} on {x['date']}"
                                                for x in k["lot_changes"]) or "none"), ""]
+        for d, why in c.get("unpublished", {}).items():
+            out.insert(len(out) - 1, f"- {d} never published: {why}")
         s = r.get("settlement", {})
         if t == "fo_bhav" and s:
             out.append("**Settlement against NSE's official closes**")

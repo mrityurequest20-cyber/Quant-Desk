@@ -65,3 +65,11 @@ def test_the_basis_of_a_future_that_does_not_expire_is_measured(tmp_path):
     pd.DataFrame(rows).to_parquet(tmp_path / "fo_bhav_2024-01.parquet")
     b = A.run(tmp_path)["tables"]["fo_bhav"]["settlement"]["futures_fallback_basis"]["expiry_days_future_does_not_expire"]
     assert b["days"] == 1 and abs(b["mean_pct"] - 0.2) < 1e-9
+
+
+def test_a_day_the_exchange_never_published_is_not_an_alarm():
+    days = list(pd.to_datetime(["2021-03-26", "2021-03-30", "2021-03-31"]))
+    df = pd.DataFrame({"date": pd.to_datetime(["2021-03-26", "2021-03-31"])})
+    c = A._coverage(df, days, unpublished={"2021-03-30": "404 at NSE"})
+    assert c["missing"] == [] and c["unpublished"] == {"2021-03-30": "404 at NSE"}
+    assert A._coverage(df, days)["missing"] == ["2021-03-30"]
