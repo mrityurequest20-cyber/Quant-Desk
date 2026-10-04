@@ -1,0 +1,16 @@
+{"date": "2026-10-04", "dept": "research", "kind": "owner_found", "what": "L1, the desk's only replicated law, was never attacked by a robustness audit until the owner asked (the five checks)", "ref": "docs/prereg/results/expiry_eve_law_v1_audit-363b1c53b623.md"}
+{"date": "2026-10-04", "dept": "data", "kind": "owner_found", "what": "v1 took spot and settlement from the monthly future on 612 weekly expiry days (+0.19% basis); found by a warehouse audit the owner asked for", "ref": "docs/prereg/expiry_eve_law_v2.json"}
+{"date": "2026-10-04", "dept": "orders", "kind": "owner_found", "what": "sleeves settle on the 15:00-15:29 mean, about 10-11 bps from the official close the history uses", "ref": "docs/reports/2026-10-04_l1_evidence_audit.md"}
+{"date": "2026-10-04", "dept": "research", "kind": "owner_found", "what": "history fills are bhavcopy closes, a last trade on only 27% of option rows; never checked against executable quotes", "ref": "docs/reports/2026-10-04_l1_evidence_audit.md"}
+{"date": "2026-10-04", "dept": "research", "kind": "owner_found", "what": "'five held-out instruments' were effectively two (FINNIFTY 51%, SENSEX 30% of the pooled weight)", "ref": "docs/reports/2026-10-04_l1_evidence_audit.md"}
+{"date": "2026-10-04", "dept": "research", "kind": "owner_found", "what": "the duplicate-experiment guard could be evaded by rewording a spec's prose", "ref": "docs/reports/2026-10-04_l1_evidence_audit.md"}
+{"date": "2026-10-04", "dept": "research", "kind": "owner_found", "what": "recorded results carried no code commit or data digest", "ref": "docs/reports/2026-10-04_l1_evidence_audit.md"}
+{"date": "2026-10-04", "dept": "orders", "kind": "owner_found", "what": "the sleeve report showed no skip rate and nothing bounded skip bias", "ref": "docs/reports/2026-10-04_l1_evidence_audit.md"}
+{"date": "2026-10-04", "dept": "chief_of_staff", "kind": "asked_owner", "what": "the engineer routine escalated decisions to the owner that it should have made itself", "ref": "docs/AUTONOMY.md"}
+{"date": "2026-10-04", "dept": "research", "kind": "fixed", "what": "expiry_eve_law_v2 on official closes; v2 robustness audit 10/10; reproduced on a runner", "ref": "91b0ab3"}
+{"date": "2026-10-04", "dept": "orders", "kind": "fixed", "what": "official-close settlement check and skip rate on every sleeve", "ref": "54cb72f"}
+{"date": "2026-10-04", "dept": "research", "kind": "fixed", "what": "method fingerprint: the guard ignores rewording", "ref": "0b0db2c"}
+{"date": "2026-10-04", "dept": "research", "kind": "fixed", "what": "provenance stamp on every new result", "ref": "562e205"}
+{"date": "2026-10-04", "dept": "research", "kind": "fixed", "what": "expiry_eve_entry_v1 registered and built (entry price vs executable quotes, paired)", "ref": "53a40b1"}
+{"date": "2026-10-04", "dept": "orders", "kind": "fixed", "what": "skip-bias bound in the entry check", "ref": "487fbf9"}
+{"date": "2026-10-04", "dept": "chief_of_staff", "kind": "fixed", "what": "AUTONOMY.md: the engineer decides and records decisions instead of asking", "ref": "docs/AUTONOMY.md"}

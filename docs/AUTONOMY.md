@@ -46,9 +46,25 @@ persistent cloud session that has this repository checked out. That session runs
 `.claude/settings.json` sets the model and effort for every Claude session opened in this repository. It works the
 queue:
 
+0. **Before anything else:**
+   - read [org/lessons.md](org/lessons.md) and `python -m quantdesk org scorecard` (trust levels by department);
+   - on Saturdays, the latest [org/plan.md](org/plan.md) too.
 1. **Urgent first:** open `desk-request` issues labelled `desk:bug` or `desk:ops`, newest first.
-2. **Then the rest of the queue:** the other open `desk-request` issues.
-3. **When nothing is open:** the top unblocked item of [BACKLOG.md](BACKLOG.md).
+2. **Today's audit:** the open `desk:audit` issue(s) the rota filed ([ORG.md](ORG.md)), before the routine queue.
+   - Delegate it to that department's agent (`.claude/agents/`): an auditor never reviews work it built.
+   - File every finding as its own `desk-request` issue.
+   - Close the audit with a comment listing the findings, or "no finding" plus what was checked.
+   - Record each finding on the scorecard as `self_found`.
+3. **Then the rest of the queue:** the other open `desk-request` issues.
+4. **When nothing is open:** the top unblocked item of [BACKLOG.md](BACKLOG.md).
+5. **Saturday:** the chief-of-staff agent drafts next week's [org/plan.md](org/plan.md). Commit it and open the issues
+   it calls for.
+6. **End of shift:** append the shift's events to [org/scorecard.jsonl](org/scorecard.jsonl):
+   - `fixed` for each fix shipped with a test;
+   - `self_found` for findings;
+   - `regression`, `reverted` or `asked_owner` honestly, each with a lesson in [org/lessons.md](org/lessons.md).
+   - Anything the owner points out that the desk should have found is `owner_found`: −5, a lesson, and a new
+     standing check in `ops/selfreview.py` or the rota, so that class of defect is caught next time.
 
 If Claude is unavailable (a usage limit, an outage), nothing breaks. The issues wait and the next shift picks them up.
 
@@ -90,9 +106,13 @@ but nothing waits for one.
    - tests before and after (counts);
    - the commit;
    - any decision records.
-5. **Ship:** merge the branch into main (fast-forward or a merge commit, never a force-push) and push. CI runs on the
+5. **Review gates before shipping:**
+   - a change touching orders, brokers, credentials, risk limits, sizing, sleeve rules, registered specs/results or
+     workflow permissions needs a **CLEAR** from the `risk-compliance` agent (a VETO is final);
+   - a change from a department on probation (`org scorecard`) needs an `internal-auditor` pass first.
+6. **Ship:** merge the branch into main (fast-forward or a merge commit, never a force-push) and push. CI runs on the
    branch and again on main; a red main becomes tomorrow's self-review finding and the next shift's first job.
-6. **Close** each resolved issue with its commit.
+7. **Close** each resolved issue with its commit.
 
 ### What it does on its own
 - Fix bugs and failed workflows, with a regression test, after the full suite passes.
