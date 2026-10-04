@@ -115,11 +115,28 @@
      "kind": "review",
      "reason": "expiry_eve_law_v2 replaces v1 as the evidence: with the spot and settlement on NSE's official closes (v1 used the monthly future on 612 weekly expiry days), the pooled held-out mean is +9.48 bps a week, t 4.98 over 288 weeks, 5 of 5 instruments positive. The basis error had understated the premium",
      "ref": "docs/prereg/results/expiry_eve_law_v2-a3ff6d83a18e.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "replicated",
+     "to": "replicated",
+     "kind": "review",
+     "reason": "expiry_eve_law_v2_audit: the same ten registered checks on v2 pass 10 of 10 (t 4.18 at 20 lags; block-bootstrap 5th percentile +6.11 bps; without FINNIFTY +6.87 bps, t 3.47; break-even at 19.1x costs; t 4.01 on strikes with 1,000+ contracts; positive in 6 of 6 years). Stays replicated",
+     "ref": "docs/prereg/results/expiry_eve_law_v2_audit-7eee17d7220f.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "replicated",
+     "to": "replicated",
+     "kind": "review",
+     "reason": "L1 evidence audit (2026-10-04): no defect invalidates the result; the 'weaker current regime' caveat is replaced because the decline is a change in which instruments trade, not a within-instrument decay; two new caveats record the narrow instrument base and the non-executable entry price. Status unchanged",
+     "ref": "docs/reports/2026-10-04_l1_evidence_audit.md"
     }
    ],
    "caveats": [
-    "Weaker in the current regime: since SEBI's one-weekly-expiry rule (20 Nov 2024) the pooled mean is +4.92 bps a week with t 1.42 over 98 weeks; positive, not significant on its own (2024: +1.51 bps). Test: the forward sleeves, and stock options (BACKLOG 1)",
-    "The robustness audit ran on v1's settlement; repeat the same ten checks on v2 (a new audit spec pointing at v2)"
+    "The held-out evidence is narrower than five instruments: FINNIFTY carries 51% of the pooled weight and SENSEX 30%, and 184 of 288 weeks hold one instrument. Test: stock options (BACKLOG 1) and the forward sleeves",
+    "Entries are bhavcopy closing prices, not executable quotes: the close is a last trade on only 27% of NSE option rows (UDiFF era). Test: expiry_eve_entry_v1 (history-convention credit vs the 15:20 executable credit)",
+    "Current regime unresolved: since 20 Nov 2024 +4.92 bps a week, t 1.42 over 98 weeks (68 of them SENSEX alone); within instruments the shift is +3.43 bps (t 0.89), so the drop is mostly composition, not decay; the 95% interval (-1.9 to +11.7) does not exclude zero, and about 303 weeks would be needed to detect +4.92 at 80% power. Test: the forward sleeves, read as a check of the entry and settlement links rather than of the mean"
    ]
   },
   {
@@ -196,13 +213,27 @@
      "kind": "review",
      "reason": "expiry_eve_law_v2 replaces v1: the insured condor pooled +5.48 bps a week, t 3.63 over 288 weeks, 5 of 5 positive, on NSE's official closes",
      "ref": "docs/prereg/results/expiry_eve_law_v2-a3ff6d83a18e.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "replicated",
+     "to": "replicated",
+     "kind": "review",
+     "reason": "expiry_eve_law_v2_audit: 10 of 10 registered checks pass on v2, by narrow margins (without FINNIFTY +3.17 bps, t 1.84; break-even at 6.6x costs; since 20 Nov 2024 +2.30 bps, t 0.84; 2024 negative). Stays replicated",
+     "ref": "docs/prereg/results/expiry_eve_law_v2_audit-7eee17d7220f.md"
+    },
+    {
+     "date": "2026-10-04",
+     "from": "replicated",
+     "to": "replicated",
+     "kind": "review",
+     "reason": "L1 evidence audit (2026-10-04): the v1-number caveats are replaced with the v2 sensitivity facts. Status unchanged (the registered replication rule passed)",
+     "ref": "docs/reports/2026-10-04_l1_evidence_audit.md"
     }
    ],
    "caveats": [
-    "Leans on FINNIFTY: without it the insured condor's pooled mean is +1.91 bps, t 1.11",
-    "Weak in the current regime: since 20 Nov 2024, +2.30 bps a week, t 0.84 over 98 weeks; 2024 alone was negative (-1.92)",
-    "Thin cost margin: break-even at 6.2x the modelled costs; wings are where real spreads are widest. Test: the cost gap measured by sleeves C and E",
-    "The robustness audit ran on v1's settlement; repeat the same ten checks on v2 (a new audit spec pointing at v2)"
+    "Not robust under sensitivity (v2): t 1.58 on weeks with two or more instruments; without FINNIFTY +3.17 bps, t 1.84; since 20 Nov 2024 +2.30 bps, t 0.84; 2024 negative. It passed its registered test, so it stays replicated, but the desk should not lean on it. Test: stock options (BACKLOG 1)",
+    "Thin cost margin: break-even at 6.6x the modelled costs on v2 (4.1x since Nov 2024); the 5-delta wings are where real spreads are widest. Test: the cost gap measured by sleeves C and E"
    ]
   },
   {

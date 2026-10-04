@@ -154,9 +154,12 @@ def audit_structure(h: pd.DataFrame, held: list[str], registered: dict | None, l
     return {"base": base, "checks": checks, "info": info, "fails": fails, "verdict": verdict}
 
 
-def coverage(opts: pd.DataFrame, tr: pd.DataFrame, held: list[str]) -> dict:
-    """Informational: expiries in the data versus trades built, and where each trade's settlement price came from."""
+def coverage(opts: pd.DataFrame, tr: pd.DataFrame, held: list[str], official: dict | None = None) -> dict:
+    """Informational: expiries in the data versus trades built, and where each trade's settlement level came from.
+    An expiry whose contracts stop trading more than 3 days before its nominal date was re-dated by the exchange (the
+    contracts moved to a new expiry weekday): it never reached expiry, so it is counted apart, not as a skip."""
     out = {}
+    official = official or {}
     o = opts[opts["kind"].isin(["CE", "PE"])]
     und = opts.dropna(subset=["underlying"])[["symbol", "date"]].drop_duplicates()
     und_keys = set(zip(und["symbol"], pd.to_datetime(und["date"]).dt.date))
@@ -164,13 +167,28 @@ def coverage(opts: pd.DataFrame, tr: pd.DataFrame, held: list[str]) -> dict:
         os_ = o[o["symbol"] == s]
         if os_.empty:
             continue
-        last = os_["date"].max()
-        expiries = {e for e in os_["expiry"].unique() if pd.Timestamp(e) <= pd.Timestamp(last)}
+        last = pd.Timestamp(os_["date"].max())
+        seen = os_.groupby("expiry")["date"].max()
+        past = [e for e in seen.index if pd.Timestamp(e) <= last]
+        redated = [e for e in past if (pd.Timestamp(e) - pd.Timestamp(seen[e])).days > 3]
+        real = len(past) - len(redated)
         t = tr[(tr["symbol"] == s)]
-        built = t["expiry"].nunique() if len(t) else 0
-        on_und = sum((s, pd.Timestamp(e).date()) in und_keys for e in t["expiry"].unique()) if len(t) else 0
-        out[s] = {"expiries": len(expiries), "traded": int(built), "skip_rate": 1 - built / len(expiries) if expiries else None,
-                  "settled_on_underlying": on_und / built if built else None}
+        built = int(t["expiry"].nunique()) if len(t) else 0
+        src = {"official": 0, "underlying": 0, "future": 0}
+        off = official.get(s)
+        cal = sorted(set(off.index) if off is not None else set()) or sorted(d for (x, d) in und_keys if x == s)
+        for e in (t["expiry"].unique() if len(t) else []):
+            e = pd.Timestamp(e).date()
+            d = max((x for x in cal if x <= e), default=e)          # the settlement day (holiday-shifted expiries)
+            if off is not None and d in off.index:
+                src["official"] += 1
+            elif (s, d) in und_keys:
+                src["underlying"] += 1
+            else:
+                src["future"] += 1
+        out[s] = {"expiries": real, "redated": len(redated), "traded": built,
+                  "skip_rate": 1 - built / real if real else None,
+                  "settled_on": {k: v / built for k, v in src.items()} if built else None}
     return out
 
 
@@ -191,7 +209,8 @@ def run(folder: Path, cfg=None, audit_spec: Path = SPEC_PATH) -> dict:
         thin = opts["kind"].isin(["CE", "PE"]) & (opts["contracts"] < f)
         liquid[f] = L.all_trades(opts[~thin], spec, held, fees_for, cfg, official)
     res = {"spec": aspec["name"], "spec_hash": aspec["_hash"], "audits": f"{spec['name']} ({spec['_hash']})",
-           "structures": {}, "coverage": coverage(opts, tr[tr["strategy"] == "short_strangle_20d"] if len(tr) else tr, held)}
+           "structures": {}, "coverage": coverage(opts, tr[tr["strategy"] == "short_strangle_20d"] if len(tr) else tr, held,
+                                                   official)}
     for key, v in spec["structures"].items():
         h = tr[tr["strategy"] == v["strategy"]] if len(tr) else tr
         liq = {f: (x[x["strategy"] == v["strategy"]] if len(x) else x) for f, x in liquid.items()}
@@ -214,12 +233,14 @@ def render(res: dict) -> str:
         for name, c in s["checks"].items():
             out.append(f"| {name} | {'✅ pass' if c['pass'] else '❌ fail'} | {c['detail']} |")
         out += ["", f"Failed: {', '.join(s['fails']) or 'none'}.", ""]
-    out += ["## Coverage (informational)", "", "| instrument | expiries in data | traded | skipped | settled on the index itself |",
-            "|---|---:|---:|---:|---:|"]
+    out += ["## Coverage (informational)", "",
+            "| instrument | expiries that reached expiry | re-dated by the exchange | traded | skipped | settled on: official close / file's underlying / nearest future |",
+            "|---|---:|---:|---:|---:|---|"]
     for sym, c in res["coverage"].items():
         sk = "–" if c["skip_rate"] is None else f"{c['skip_rate']:.0%}"
-        su = "–" if c["settled_on_underlying"] is None else f"{c['settled_on_underlying']:.0%}"
-        out.append(f"| {sym} | {c['expiries']} | {c['traded']} | {sk} | {su} |")
-    out += ["", "The rest settled on the nearest index future's settle price, which on expiry day is the index's own "
-            "final settlement value.", ""]
+        so = c.get("settled_on")
+        su = "–" if not so else " / ".join(f"{so[k]:.0%}" for k in ("official", "underlying", "future"))
+        out.append(f"| {sym} | {c['expiries']} | {c.get('redated', 0)} | {c['traded']} | {sk} | {su} |")
+    out += ["", "A nearest future is the index itself only when it expires that day; on a weekly expiry it is the monthly "
+            "future, basis and all (the flaw expiry_eve_law_v2 corrects).", ""]
     return "\n".join(out)
