@@ -196,3 +196,23 @@ def test_specs_drive_the_sleeves_and_v2_trades_only_its_far_wing_condor(cfg, tmp
     assert len(legs) == 4 and all(abs(abs(x["delta"]) - 0.05) <= 0.08 for x in wings)
     assert trades[0]["max_loss_rs"] > 0 and trades[0]["margin_est_rs"] == trades[0]["max_loss_rs"]
     assert "C = iron_condor_20_05 (defined risk)" in render(seller.report())
+
+
+def test_settlement_from_the_tape_when_no_bars_are_recorded(tmp_path):
+    from quantdesk.intraday.sleeves import settlement_price
+    day = dt.date(2026, 10, 27)
+    d = tmp_path / str(day)
+    d.mkdir(parents=True)
+    rows = []
+    for m in range(0, 31):                                        # 15:00–15:30, two series of the same index
+        ts = pd.Timestamp(f"{day} 15:00") + pd.Timedelta(minutes=m)
+        for e in ("2026-10-27", "2026-11-24"):
+            rows.append({"ts": f"{ts:%Y-%m-%d %H:%M:%S}+05:30", "underlying": "FINNIFTY", "expiry": e, "ok": True,
+                         "strikes": 41, "quoted": 80, "spot": 24000.0 + m, "secs": 1.0, "error": ""})
+    rows.append({"ts": f"{day} 15:10:00+05:30", "underlying": "SENSEX", "expiry": "2026-10-29", "ok": True, "strikes": 41,
+                 "quoted": 80, "spot": 72000.0, "secs": 1.0, "error": ""})
+    pd.DataFrame(rows).to_csv(d / "tape.csv", index=False)
+    s, src = settlement_price(tmp_path, "FINNIFTY", day)
+    assert s == pytest.approx(24014.5) and "30 tape index spots" in src       # 15:30 itself is outside the window
+    s2, src2 = settlement_price(tmp_path, "SENSEX", day)
+    assert s2 is None and "tape has 1" in src2

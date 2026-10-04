@@ -128,15 +128,28 @@ def pick_legs(chain: pd.DataFrame, legs, now, picker: StrikePicker) -> tuple[lis
 
 
 def settlement_price(data_dir: Path, underlying: str, day: dt.date) -> tuple[float | None, str]:
-    """NSE's index close is built from the last 30 minutes: the mean of the recorded 15:00–15:29 one-minute closes."""
+    """The exchange's index close is built from the last 30 minutes: the mean of the recorded 15:00–15:29 one-minute
+    closes, or, for an index the engine doesn't record bars for, of the index spot the chain tape logged each minute."""
     p = Path(data_dir) / str(day) / f"{underlying}_1m.csv"
-    if not p.exists():
-        return None, "no recorded bars"
-    b = normalise_bars(pd.read_csv(p, index_col=0, parse_dates=True))
-    last = b[b.index.time >= SETTLE_FROM]
-    if len(last) < MIN_SETTLE_BARS:
-        return None, f"only {len(last)} of 30 closing-half-hour bars recorded"
-    return float(last["close"].mean()), f"mean of {len(last)} recorded 15:00–15:29 closes"
+    why = "no recorded bars"
+    if p.exists():
+        b = normalise_bars(pd.read_csv(p, index_col=0, parse_dates=True))
+        last = b[b.index.time >= SETTLE_FROM]
+        if len(last) >= MIN_SETTLE_BARS:
+            return float(last["close"].mean()), f"mean of {len(last)} recorded 15:00–15:29 closes"
+        why = f"only {len(last)} of 30 closing-half-hour bars recorded"
+    t = Path(data_dir) / str(day) / "tape.csv"
+    if t.exists():
+        lg = pd.read_csv(t)
+        lg = lg[(lg["underlying"] == underlying) & (lg["ok"].astype(str).str.lower() == "true")]
+        ts = pd.to_datetime(lg["ts"].astype(str).str[:16], errors="coerce")
+        lg = lg.assign(minute=ts)[(ts.dt.time >= SETTLE_FROM) & (ts.dt.time < dt.time(15, 30))]
+        spot = pd.to_numeric(lg["spot"], errors="coerce").groupby(lg["minute"]).median().dropna()
+        spot = spot[spot > 0]
+        if len(spot) >= MIN_SETTLE_BARS:
+            return float(spot.mean()), f"mean of {len(spot)} tape index spots 15:00–15:29"
+        why += f"; tape has {len(spot)} closing-half-hour spots"
+    return None, why
 
 
 def intrinsic(right: str, strike: float, s_t: float) -> float:

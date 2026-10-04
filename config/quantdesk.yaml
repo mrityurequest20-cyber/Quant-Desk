@@ -33,6 +33,9 @@ universe:
 instruments:
   NIFTY:     {yahoo: "^NSEI",     kind: index, lot_size: 65, strike_step: 50,  weekly_expiry: true,  expiry_weekday: 1, iv_beta: 1.00}
   BANKNIFTY: {yahoo: "^NSEBANK",  kind: index, lot_size: 30, strike_step: 100, weekly_expiry: false, expiry_weekday: 1, iv_beta: 1.22}
+  # NSE monthlies (last Tuesday) on the chain tape for the expiry sleeves (expiry_seller_v3); not traded by the engine
+  FINNIFTY:   {yahoo: "NIFTY_FIN_SERVICE.NS", kind: index, lot_size: 60, strike_step: 50, weekly_expiry: false, expiry_weekday: 1, iv_beta: 1.10}
+  MIDCPNIFTY: {yahoo: "NIFTY_MID_SELECT.NS",  kind: index, lot_size: 120, strike_step: 25, weekly_expiry: false, expiry_weekday: 1, iv_beta: 1.15}
   # BSE (Kotak segments bse_fo / bse_cm): SENSEX weekly on Thursday, BANKEX monthly (last Thursday); lots from BSE's
   # bhavcopy (NewBrdLotQty, Oct 2026). Recorded on the chain tape and studied; not traded by the intraday engine.
   SENSEX:    {yahoo: "^BSESN",    kind: index, lot_size: 20, strike_step: 100, weekly_expiry: true,  expiry_weekday: 3, iv_beta: 1.00}
@@ -98,7 +101,7 @@ intraday:
   max_entry_slip: 0.15             # with a live book: skip an entry if the net premium moved >15% against the plan
   tape:                            # the chain tape (intraday/tape.py): real chains every minute, beside the engine
     every_min: 1
-    expiries: {NIFTY: 3, BANKNIFTY: 2, SENSEX: 2}   # nearest N expiries each (NIFTY, SENSEX weekly; BANKNIFTY monthly)
+    expiries: {NIFTY: 3, BANKNIFTY: 2, SENSEX: 2, FINNIFTY: 1, MIDCPNIFTY: 1}   # nearest N each (NIFTY, SENSEX weekly; the rest monthly)
   chain_stale_min: 12              # no new entries on an older real chain
   thought_every_min: 5             # journal the market read at least this often
   history_days: 6                  # prior sessions loaded for levels, value areas, relative volume
