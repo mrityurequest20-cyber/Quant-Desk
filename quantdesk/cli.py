@@ -318,6 +318,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--warehouse", help="the data warehouse folder: also test the volatility premium on real option "
                                        "prices and FII positioning (data_report.md)")
     s.set_defaults(fn=cmd_research)
+    s = sub.add_parser("laws", help="expiry_eve_law_v1: the expiry-eve premium on held-out instruments (NSE + BSE)")
+    s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet and bse_fo_bhav_*.parquet")
+    s.add_argument("--out", default="_laws")
+    s.set_defaults(fn=cmd_laws)
     s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
@@ -339,6 +343,21 @@ def cmd_wings(cfg, a):
                                                  default=str))
     if len(res["trades"]):
         res["trades"].to_csv(out / f"{stem}_trades.csv.gz", index=False)
+    print(md)
+
+
+def cmd_laws(cfg, a):
+    """expiry_eve_law_v1: is the expiry-eve premium a law of option markets? Held-out instruments (research/laws.py)."""
+    from .research import laws as L
+    res, tr = L.run(Path(a.warehouse), cfg)
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    md = L.render(res)
+    stem = f"{res['spec']}-{res['spec_hash']}"
+    (out / f"{stem}.md").write_text(md)
+    (out / f"{stem}.json").write_text(json.dumps(res, indent=1, default=str))
+    if len(tr):
+        tr.to_csv(out / f"{stem}_trades.csv.gz", index=False)
     print(md)
 
 

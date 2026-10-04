@@ -584,12 +584,13 @@ def buyer_edge_json(res: dict) -> str:
 
 
 # ---- loading and reporting ------------------------------------------------------------------------------------------
-def load_options(folder: Path, symbols=("NIFTY", "BANKNIFTY")) -> pd.DataFrame:
+def load_options(folder: Path, symbols=("NIFTY", "BANKNIFTY"), tables=("fo_bhav",), extra=()) -> pd.DataFrame:
+    """Contracts of `symbols` from the warehouse's bhavcopy tables (fo_bhav: NSE indices; bse_fo_bhav: BSE's)."""
     import pyarrow.parquet as pq
     parts = []
-    for p in sorted(Path(folder).glob("fo_bhav_*.parquet")):
-        t = pq.read_table(p, columns=["date", "symbol", "kind", "expiry", "strike", "open", "close", "underlying", "contracts"],
-                          filters=[("symbol", "in", list(symbols))])
+    cols = ["date", "symbol", "kind", "expiry", "strike", "open", "close", "underlying", "contracts", *extra]
+    for p in sorted(x for t in tables for x in Path(folder).glob(f"{t}_*.parquet")):
+        t = pq.read_table(p, columns=cols, filters=[("symbol", "in", list(symbols))])
         parts.append(t.to_pandas())
     if not parts:
         return pd.DataFrame()

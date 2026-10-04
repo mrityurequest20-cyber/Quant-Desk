@@ -8,7 +8,7 @@ on:
       study:
         description: "Which study"
         type: choice
-        options: [wings]
+        options: [wings, laws]
         default: wings
 
 permissions:
@@ -28,10 +28,10 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Pull the data warehouse (NSE bhavcopy)
+      - name: Pull the data warehouse (NSE and BSE bhavcopy)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download warehouse --pattern 'fo_bhav_*.parquet' --dir runtime/warehouse --clobber
+        run: gh release download warehouse --pattern 'fo_bhav_*.parquet' --pattern 'bse_fo_bhav_*.parquet' --dir runtime/warehouse --clobber
       - name: Run the study
         env:
           STUDY: ${{ inputs.study }}
