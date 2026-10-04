@@ -545,7 +545,8 @@ First run (29-Sep-2026), 25 tests:
   - the best weeks removed;
   - Bonferroni.
 
-  L1 and L2 passed all ten. The current regime is the open caveat.
+  L1 and L2 passed all ten, on v1 and again on v2 (`--spec docs/prereg/expiry_eve_law_v2_audit.json`). The L1
+  evidence audit (docs/reports/2026-10-04_l1_evidence_audit.md) lists what the record does and doesn't support.
 - **Can the data be trusted?** `python -m quantdesk warehouse-audit` checks every option table against NSE's official
   index closes:
   - missing days, duplicates and rows after expiry;
@@ -557,11 +558,16 @@ First run (29-Sep-2026), 25 tests:
   Its first run found that v1 of the law study took the index level from the monthly future on 612 weekly expiry
   days. expiry_eve_law_v2 fixed exactly that: pooled +9.48 bps, t 4.98.
 - **Does it learn?** `python -m quantdesk experiments` prints the research memory:
-  - every registered experiment's fingerprint (the suite refuses a duplicate);
+  - every registered experiment's fingerprint and method fingerprint (the suite refuses a duplicate, however it is
+    worded);
   - every principle's moves with reasons;
   - the next tests the evidence calls for.
 
   `--check draft.json` says whether a draft repeats a past experiment.
+- **Is the history's entry price executable?** `python -m quantdesk entry-check` (expiry_eve_entry_v1) pairs each
+  eve's real 15:20 sleeve fill with the history's bhavcopy convention on the same strikes. It shows counts only until
+  its registered decision point, and it also bounds the sleeves' skip bias.
+- **Results say what produced them:** each new result carries the code commit and a digest of every data table read.
 - **Do paper fills measure reality?** Every sleeve leg records:
   - its bid, ask and mid;
   - the spread as a share of mid;

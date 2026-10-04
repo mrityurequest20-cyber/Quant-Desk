@@ -19,11 +19,17 @@ it with the next tests. In short:
   SENSEX, BANKEX.
   - expiry_eve_law_v2, settled on NSE's official closes: pooled +9.48 bps a week, t 4.98 over 288 weeks, 5 of 5
     positive.
-  - The registered audit passed 10 of 10 checks.
-  - **Caveat: the current regime.** Since SEBI's one-weekly rule (Nov 2024): +4.92 bps, t 1.42 — positive, not yet
-    significant on its own.
-- **L2, far wings as crash insurance, has replicated pooled** (v2: t 3.63). Caveats: it leans on FINNIFTY, it is weak
-  since Nov 2024, and it breaks even at 6.2× the modelled costs.
+  - The registered ten-check audit passed 10 of 10, on v1 and again on v2 (expiry_eve_law_v2_audit). v2 reproduced
+    exactly on a GitHub runner, with the same data digests.
+  - **Caveats** (the L1 evidence audit, docs/reports/2026-10-04_l1_evidence_audit.md):
+    - the evidence is narrower than five instruments: FINNIFTY carries 51% of the pooled weight, SENSEX 30%;
+    - entries are bhavcopy closes, not executable quotes: expiry_eve_entry_v1 tests that, paired, on the sleeves'
+      real fills (decision at 40 eves and 12 weeks);
+    - since Nov 2024 the pooled mean is +4.92 bps, t 1.42. That is mostly a change in which instruments trade, not
+      decay (within instruments +3.43 bps, t 0.89), and it is unresolved.
+- **L2, far wings as crash insurance, passed its registered test** (v2: t 3.63; audit 10/10) but is not robust
+  under sensitivity: t 1.84 without FINNIFTY, t 0.84 since Nov 2024, break-even at 6.6× the modelled costs. Don't
+  lean on it.
 - **L3, move size is forecastable:** found, and locked out of sample in time on NIFTY and BANKNIFTY.
 - **L4, buyers of short-dated options overpay:** found, but in a report; it needs a registered test.
 - **N1, index direction from price patterns:** rejected.
@@ -31,7 +37,10 @@ it with the next tests. In short:
 **Forward tests on real quotes:**
 - expiry_seller_v1, sleeves A and B: NIFTY, BANKNIFTY;
 - expiry_seller_v2, sleeve C: BANKNIFTY far-wing condor;
-- expiry_seller_v3, sleeves D and E: FINNIFTY, MIDCPNIFTY, SENSEX, naked and insured.
+- expiry_seller_v3, sleeves D and E: FINNIFTY, MIDCPNIFTY, SENSEX, naked and insured;
+- expiry_eve_entry_v1: the history's entry price against the sleeves' real 15:20 fills, paired on the same strikes
+  (Study → entry-check; counts only until its decision point);
+- every sleeve settlement is also checked against the official close, and every sleeve reports its skip rate.
 
 ## The queue
 

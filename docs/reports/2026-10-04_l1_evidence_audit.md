@@ -420,3 +420,41 @@ Implementation: `quantdesk/intraday/sleeves.py`. The specs are `expiry_seller_v1
   - D within ±2 bps: the history's entry convention is validated; L1 continues to the sleeves' registered consistency tests.
   - Secondary: the settlement gap (c), reported, not tested.
 - **Out of scope.** Live trading, any change to the sleeves' registered rules, and promotion of any strategy.
+
+## Addendum, later on 4 Oct 2026: what was done about §9
+
+This section is added after the report. The text above is left as written. Each line names the commit.
+
+| § 9 | action | status | commit |
+|---|---|---|---|
+| 1 | Every settled sleeve trade gets an `official` event: the official close, the P&L at it, and the gap in bps and ₹. The registered settlement stays the result. | done | 54cb72f |
+| 2 | v2 re-run on a GitHub runner: Study run 37192077531, commit 562e20534d76, clean tree. The data digests are identical to the local run (fo_bhav d3854e12bc920f10, bse_fo_bhav c47fabf348401a54, nse_index_close b6fb9e505fa6a77c). The results are identical: strangle 288 weeks, +9.475 bps, t 4.977; insured +5.481 bps, t 3.634; all 2,544 trades, 0 differences. Item 6 of the summary ("v2 was computed locally") is resolved. | done | 562e205 |
+| 3 | L1/L2 caveats corrected with `review` entries citing this report; status unchanged. | done | 91b0ab3 |
+| 4 | Skip rate per sleeve in every report and a progress KPI; a modelled (labelled) settlement of skipped eves, against traded ones, in the entry-check output. | done | 54cb72f, 487fbf9 |
+| 5 | New results carry `provenance`: code commit, dirty flag, a digest of every warehouse table read. | done | 562e205 |
+| 6 | The duplicate guard uses a *method fingerprint* that rewording can't move. The code commit is recorded by provenance (5), not put in the fingerprint: the same experiment run by newer code is still the same experiment. | done | 0b0db2c |
+| 7 | Dated statutory rates for new studies. | filed for the engineer: issue #3 | – |
+| 8 | expiry_eve_law_v2_audit registered alone (spec 7eee17d7220f), then run once: L1 and L2 both **replicated, robust, 10 of 10**. The informational coverage table was corrected before recording; the ten checks were identical across runs (disclosed in the commit). | done | c511e5a, 91b0ab3 |
+| 9 | The 30 Mar 2021 refetch fetched 0 files: NSE's archive returns 404 for that day in both formats on both hosts (31 Mar returns 200). The market-activity zip exists but lacks settle prices. The day is now listed as never published, with the evidence, instead of missing. | done | 7e257d7 |
+| 10 | Exclude BSE 1–2 Jan 2024 in new specs. | issue #3 | – |
+| 11 | Re-dated expiries reported apart from skips in the audit's coverage table. | done | 91b0ab3 |
+| 12 | Dated lots for fees. | issue #3 | – |
+| §10 | expiry_eve_entry_v1 registered alone (spec 2613fe32a047), before any eve in its population (from 5 Oct 2026). Built to the spec with blinding: before the decision point, every output holds counts only. | done | 58ba1c3, 53a40b1 |
+
+**v2 audit numbers (L1 strangle):**
+- t 4.18 at 20 lags;
+- block-bootstrap 5th percentile +6.11 bps;
+- without FINNIFTY +6.87 bps, t 3.47;
+- break-even at 19.1× costs;
+- t 4.01 on strikes with 1,000+ contracts;
+- positive in 6 of 6 years;
+- since 20 Nov 2024: +4.92 bps, t 1.42.
+
+**v2 audit numbers (L2 insured):**
+- without FINNIFTY +3.17 bps, t 1.84;
+- break-even 6.6×;
+- since 20 Nov 2024: t 0.84;
+- 2024 negative.
+
+Passing the registered checks does not change §2's conclusion that L2 is not robust under sensitivity.
+
