@@ -434,7 +434,7 @@ def cmd_entry_check(cfg, a):
     from .research import entry_check as E
     from .research.provenance import WAREHOUSE_TABLES, stamp
     sleeves = Path(a.sleeves) if a.sleeves else Path(cfg.runtime_dir) / "intraday" / "sleeves"
-    res, paired = E.run(Path(a.warehouse), sleeves, Path(a.spec))
+    res, paired = E.run(Path(a.warehouse), sleeves, Path(a.spec), cfg)
     res["provenance"] = stamp(Path(a.warehouse), WAREHOUSE_TABLES)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)

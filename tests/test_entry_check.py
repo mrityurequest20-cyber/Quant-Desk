@@ -112,3 +112,37 @@ def test_an_inconclusive_first_look_extends_once():
     done = E.decide(_paired(d), SPEC)
     assert done["status"] == "decided" and done["decided_at"] == 80 and done["first_look"]["verdict"] == "inconclusive"
     assert done["result"]["verdict"] == "inconclusive"
+
+
+def test_skip_bias_models_the_skipped_eves_beside_the_traded(tmp_path):
+    """The history's convention on every eve the sleeves were due on: traded and skipped modelled side by side."""
+    from quantdesk.options.pricing import bs_price
+    from quantdesk.research import warehouse_research as W
+    days = [d.date() for d in pd.bdate_range("2026-09-01", "2026-10-09")]
+    spot = {d: 25000.0 + 10 * i for i, d in enumerate(days)}
+    exps = [dt.date(2026, 10, 6), dt.date(2026, 10, 8)]
+    rows = []
+    for e in exps:
+        eve = max(d for d in days if d < e)
+        S, T = spot[eve], W._year_frac(eve, e)
+        for K in range(24000, 26050, 50):
+            for right in ("CE", "PE"):
+                rows.append({"date": pd.Timestamp(eve), "symbol": "NIFTY", "kind": right, "expiry": pd.Timestamp(e),
+                             "strike": float(K), "close": round(float(bs_price(S, K, T, W.R, W.Q, 0.15, right)), 2),
+                             "underlying": None, "contracts": 100.0})
+    wh = tmp_path / "wh"
+    wh.mkdir()
+    pd.DataFrame(rows).to_parquet(wh / "fo_bhav_2026-10.parquet")
+    pd.DataFrame({"date": pd.to_datetime(days), "index": "Nifty 50", "symbol": "NIFTY",
+                  "close": [spot[d] for d in days]}).to_parquet(wh / "nse_index_close_2026.parquet")
+    events = [_open("NIFTY", "2026-10-05", "2026-10-06", 25000.0, (25300, 40.0), (24700, 35.0)),
+              {"event": "skip", "sleeve": "B", "underlying": "NIFTY", "expiry": "2026-10-08", "day": "2026-10-07",
+               "reason": "no real-quote snapshot"},
+              {"event": "skip", "sleeve": "A", "underlying": "NIFTY", "expiry": "2026-10-06", "day": "2026-10-05",
+               "reason": "PE 24700: no two-sided quote"}]          # A skipped an eve B traded: the eve counts as traded
+    sb = E.skip_bias(wh, events)["NIFTY"]
+    assert sb["traded"]["eves"] == 1 and sb["skipped"]["eves"] == 1 and sb["not_modelled"] == 0
+    assert sb["traded"]["modelled_mean_bps"] is not None and sb["skipped"]["modelled_mean_bps"] is not None
+    md = E.render({"spec": "x", "spec_hash": "y", "status": "collecting", "eves": 0, "excluded": 0, "weeks": 0, "n": 40,
+                   "min_weeks": 12, "skip_bias": {"NIFTY": sb}})
+    assert "Skip bias" in md and "| NIFTY | 1 |" in md

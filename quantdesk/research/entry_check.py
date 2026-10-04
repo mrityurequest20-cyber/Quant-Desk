@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from . import laws as L
+from . import warehouse_research as W
 from .edges import hac_mean
 from .warehouse_research import leg_cost
 
@@ -70,34 +72,44 @@ def eves(events: list[dict], spec: dict) -> pd.DataFrame:
 
 
 # ---- the history's side: the warehouse --------------------------------------------------------------------------
-def load_history(folder: Path, ev: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """The bhavcopy rows of the eves' instruments on the eve and expiry days, and NSE's official closes by symbol."""
+OPT_COLS = ["date", "symbol", "kind", "expiry", "strike", "close", "underlying", "contracts", "settle", "lot"]
+
+
+def _load_window(folder: Path, symbols, days, lookback: int = 0) -> tuple[pd.DataFrame, dict]:
+    """Bhavcopy rows of `symbols` in the months holding `days` (and `lookback` calendar days before each), and NSE's
+    official closes by symbol for the same years."""
     import pyarrow.parquet as pq
     folder = Path(folder)
-    days = sorted(set(ev["day"]) | set(ev["expiry"])) if len(ev) else []
-    months = sorted({f"{d:%Y-%m}" for d in days})
+    back = [d - dt.timedelta(days=b) for d in days for b in {0, lookback}]
     parts = []
     for t in ("fo_bhav", "bse_fo_bhav"):
-        for m in months:
+        for m in sorted({f"{d:%Y-%m}" for d in back}):
             f = folder / f"{t}_{m}.parquet"
             if f.exists():
-                parts.append(pq.read_table(f, columns=["date", "symbol", "kind", "expiry", "strike", "close", "underlying",
-                                                       "contracts"],
-                                           filters=[("symbol", "in", sorted(set(ev["underlying"])))]).to_pandas())
-    opts = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(
-        columns=["date", "symbol", "kind", "expiry", "strike", "close", "underlying", "contracts"])
+                cols = [c for c in OPT_COLS if c in pq.read_schema(f).names]
+                parts.append(pq.read_table(f, columns=cols, filters=[("symbol", "in", sorted(symbols))]).to_pandas())
+    opts = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=OPT_COLS)
     for c in ("date", "expiry"):
         opts[c] = pd.to_datetime(opts[c]).dt.date
-    opts = opts[opts["date"].isin(days)]
+    for c in ("strike", "close", "underlying", "contracts", "settle", "lot"):
+        if c in opts:
+            opts[c] = pd.to_numeric(opts[c], errors="coerce")
     official: dict[str, dict] = {}
-    for y in sorted({d.year for d in days}):
+    for y in sorted({d.year for d in back}):
         f = folder / f"nse_index_close_{y}.parquet"
         if f.exists():
             ic = pd.read_parquet(f, columns=["date", "symbol", "close"])
             ic = ic[ic["symbol"].astype(str) != ""]
-            for s, g in ic.groupby("symbol"):
-                official.setdefault(s, {}).update(dict(zip(pd.to_datetime(g["date"]).dt.date, g["close"].astype(float))))
+            for sym, g in ic.groupby("symbol"):
+                official.setdefault(sym, {}).update(dict(zip(pd.to_datetime(g["date"]).dt.date, g["close"].astype(float))))
     return opts, official
+
+
+def load_history(folder: Path, ev: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """The bhavcopy rows of the eves' instruments on the eve and expiry days, and NSE's official closes by symbol."""
+    days = sorted(set(ev["day"]) | set(ev["expiry"])) if len(ev) else []
+    opts, official = _load_window(folder, set(ev["underlying"]) if len(ev) else set(), days)
+    return opts[opts["date"].isin(days)], official
 
 
 def _level(opts: pd.DataFrame, official: dict, symbol: str, day: dt.date) -> tuple[float | None, str]:
@@ -210,12 +222,52 @@ def decide(paired: pd.DataFrame, spec: dict) -> dict:
     return {**res, "status": "decided", "n": n2, "first_look_at": m, "first_look": first, "decided_at": m2, "result": final}
 
 
-def run(warehouse: Path, sleeves: Path, spec_path: Path = SPEC_PATH) -> tuple[dict, pd.DataFrame]:
+# ---- skip bias (not part of the registered test) ----------------------------------------------------------------
+def skip_bias(folder: Path, events: list[dict], cfg=None) -> dict:
+    """Bound the sleeves' skip bias with the history's convention (modelled at bhavcopy closes, not a fill): L1's
+    strangle on the eves the sleeves skipped entirely versus the eves they traded, per instrument. If the skipped eves
+    model much worse, the forward P&L is optimistic: a skip is usually a missing or thin quote, which is not random."""
+    opened = {(e["underlying"], e["expiry"]) for e in events if e.get("event") == "open"}
+    kind = {(e["underlying"], e["expiry"]): ("traded" if (e["underlying"], e["expiry"]) in opened else "skipped")
+            for e in events if e.get("event") in ("open", "skip")}
+    if not kind:
+        return {}
+    exps = {dt.date.fromisoformat(x) for _, x in kind}
+    opts, official = _load_window(folder, {u for u, _ in kind}, exps, lookback=45)
+    fees_for = L.fees_factory(cfg)
+    out = {}
+    for u in sorted({u for u, _ in kind}):
+        o = opts[opts["symbol"] == u]
+        tr = pd.DataFrame()
+        if len(o):
+            sp = L.spot(o, u, pd.Series(official[u], dtype=float) if u in official else None).astype(float)
+            lot = L.lot_of(o, u, cfg)
+            tr = W.build_trades(o[o["kind"].isin(["CE", "PE"])], sp, u, fees_for(u, lot) if fees_for else None, lot=lot,
+                                strategies={"short_strangle_20d": W.STRATEGIES["short_strangle_20d"]}, offsets=(1,))
+        bps = ({e: float(r["pnl_pts"] / r["S"] * 1e4) for e, r in tr.set_index("expiry").iterrows()} if len(tr) else {})
+        res = {k: [] for k in ("traded", "skipped")}
+        missing = 0
+        for (uu, x), k in kind.items():
+            if uu != u:
+                continue
+            v = bps.get(dt.date.fromisoformat(x))
+            if v is None:
+                missing += 1
+            else:
+                res[k].append(v)
+        out[u] = {**{k: {"eves": len(v), "modelled_mean_bps": round(float(np.mean(v)), 2) if v else None}
+                     for k, v in res.items()}, "not_modelled": missing}
+    return out
+
+
+def run(warehouse: Path, sleeves: Path, spec_path: Path = SPEC_PATH, cfg=None) -> tuple[dict, pd.DataFrame]:
     spec = load_spec(spec_path)
-    ev = eves(ledger_events(sleeves), spec)
+    events = ledger_events(sleeves)
+    ev = eves(events, spec)
     opts, official = load_history(warehouse, ev) if len(ev) else (pd.DataFrame(), {})
     paired = pair(ev, opts, official) if len(ev) else pd.DataFrame()
-    res = {"spec": spec["name"], "spec_hash": spec["_hash"], **decide(paired, spec)}
+    res = {"spec": spec["name"], "spec_hash": spec["_hash"], **decide(paired, spec),
+           "skip_bias": skip_bias(warehouse, events, cfg)}
     res["exclusions"] = (paired.loc[paired["excluded"] != "", "excluded"].str.replace(r"\d+", "#", regex=True)
                          .value_counts().to_dict() if len(paired) else {})
     res["by_instrument"] = (paired.groupby("underlying").size().to_dict() if len(paired) else {})
@@ -260,4 +312,15 @@ def render(res: dict) -> str:
         out += [f"Secondary (not tested): on {s['trades']} settled eves, the short legs owed {s['mean_payout_gap_bps']:+.2f} "
                 "bps more on average at the sleeves' registered 15:00–15:29 settlement than at the official close "
                 "(positive: the registered rule cost the seller).", ""]
+    sb = res.get("skip_bias") or {}
+    if sb:
+        def m(x):
+            return "–" if x["modelled_mean_bps"] is None else f"{x['modelled_mean_bps']:+.2f}"
+        out += ["## Skip bias (modelled at bhavcopy closes, not fills; not part of the test)", "",
+                "L1's strangle under the history's convention, on every eve the sleeves were due on since they began.", "",
+                "| instrument | traded eves | modelled bps | skipped eves | modelled bps | not modelled |",
+                "|---|---:|---:|---:|---:|---:|"]
+        out += [f"| {u} | {v['traded']['eves']} | {m(v['traded'])} | {v['skipped']['eves']} | {m(v['skipped'])} | "
+                f"{v['not_modelled']} |" for u, v in sb.items()]
+        out.append("")
     return "\n".join(out)
