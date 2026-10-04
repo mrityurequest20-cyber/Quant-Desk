@@ -177,27 +177,32 @@ def cmd_kotak_backfill(cfg, a):
     except KotakError:
         raise SystemExit("kotak-backfill: no KOTAK_CONSUMER_KEY")
     out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "intraday" / "backfill"
-    man = backfill(client, out, [s.strip().upper() for s in a.symbols.split(",") if s.strip()], days=a.days,
-                   n_expiries=a.expiries, strikes=a.strikes, say=lambda m: print(m, flush=True))
-    run = Path(man["path"])
-    print(f"{run}: " + ", ".join(f"{u} {r.get('bars', 0):,} option bars" for u, r in man["underlyings"].items()))
-    if a.release_prefix:
+
+    def push(run: Path) -> None:
         from .warehouse import ReleaseStore
         stage = out / "_release"
         if stage.exists():
             shutil.rmtree(stage)
         stage.mkdir(parents=True)
-        names = []
+        as_of, names = run.name, []
         for n in release_names(run):
-            dst = f"{man['as_of']}_{n}"
+            dst = f"{as_of}_{n}"
             shutil.copyfile(run / n, stage / dst)
             names.append(dst)
-        year = man["as_of"][:4]
-        ReleaseStore(f"{a.release_prefix}-{year}", title=f"Option minutes {year}",
+        ReleaseStore(f"{a.release_prefix}-{as_of[:4]}", title=f"Option minutes {as_of[:4]}",
                      notes="Kotak 1-minute candles (traded bars, not quotes) for NIFTY/BANKNIFTY options near the money, "
                            "the index and its futures; one set per run (quantdesk/data/kotak_backfill.py). Not a software "
                            "release.").push(stage, names)
-        print(f"pushed {len(names)} file(s) to release {a.release_prefix}-{year}")
+        print(f"pushed {len(names)} file(s) to release {a.release_prefix}-{as_of[:4]}", flush=True)
+
+    # each underlying goes to the release as soon as it is done: a timeout on the next one loses nothing
+    man = backfill(client, out, [s.strip().upper() for s in a.symbols.split(",") if s.strip()], days=a.days,
+                   n_expiries=a.expiries, strikes=a.strikes, say=lambda m: print(m, flush=True),
+                   on_underlying=(lambda u, run: push(run)) if a.release_prefix else None)
+    run = Path(man["path"])
+    print(f"{run}: " + ", ".join(f"{u} {r.get('bars', 0):,} option bars" for u, r in man["underlyings"].items()))
+    if a.release_prefix:
+        push(run)                                   # the final manifest (calls, index/futures of the last underlying)
 
 
 def cmd_truedata_import(cfg, a):

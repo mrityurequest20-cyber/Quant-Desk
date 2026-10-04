@@ -88,8 +88,19 @@ def _frame(df: pd.DataFrame, meta: dict) -> pd.DataFrame:
     return out[[c for c in COLS if c in out.columns]]
 
 
+def _write(run: Path, man: dict, idx_parts: list, fut_parts: list) -> None:
+    """Index, futures and manifest as they stand: rewritten after every underlying, so a later timeout loses nothing."""
+    if idx_parts:
+        pd.concat(idx_parts, ignore_index=True).to_parquet(run / "index.parquet", index=False, compression="zstd")
+    if fut_parts:
+        pd.concat(fut_parts, ignore_index=True).to_parquet(run / "futures.parquet", index=False, compression="zstd")
+    (run / "manifest.json").write_text(json.dumps(man, indent=1, default=str))
+
+
 def backfill(client, out_root: Path, underlyings=("NIFTY", "BANKNIFTY"), days: int = 30, n_expiries: int = 4,
-             strikes: int = 20, today: dt.date | None = None, say=print) -> dict:
+             strikes: int = 20, today: dt.date | None = None, say=print, on_underlying=None) -> dict:
+    """`on_underlying(u, run)` is called once an underlying's files and the manifest so far are on disk (the CLI
+    uploads them to the release there, so a timeout on a later underlying never loses a finished one)."""
     today = today or pd.Timestamp.now(tz=IST).date()
     start = today - dt.timedelta(days=days)
     run = Path(out_root) / str(today)
@@ -100,7 +111,8 @@ def backfill(client, out_root: Path, underlyings=("NIFTY", "BANKNIFTY"), days: i
     idx_parts, fut_parts = [], []
     fut = KotakFutures(client)
     for u in underlyings:
-        rep = {"asked": 0, "served": 0, "empty": 0, "failed": 0, "bars": 0, "errors": {}}
+        rep = {"asked": 0, "served": 0, "empty": 0, "failed": 0, "bars": 0, "errors": {}, "asked_by_expiry": {},
+               "failed_by_expiry": {}, "failed_contracts": []}
         try:
             cs = contracts(client, u, n_expiries, strikes, today)
         except Exception as exc:
@@ -110,12 +122,17 @@ def backfill(client, out_root: Path, underlyings=("NIFTY", "BANKNIFTY"), days: i
             continue
         rep["asked"] = len(cs)
         rep["expiries"] = sorted({str(c["expiry"]) for c in cs})
+        for c in cs:
+            rep["asked_by_expiry"][str(c["expiry"])] = rep["asked_by_expiry"].get(str(c["expiry"]), 0) + 1
         parts = []
         for c in cs:
             df, err = candles(client, c["token"], start, today)
             if err and df.empty:
                 rep["failed"] += 1
                 rep["errors"][err] = rep["errors"].get(err, 0) + 1
+                e = str(c["expiry"])                         # where they fail is the diagnosis: one error string hides it
+                rep["failed_by_expiry"][e] = rep["failed_by_expiry"].get(e, 0) + 1
+                rep["failed_contracts"].append({"expiry": e, "strike": c["strike"], "right": c["right"], "error": err})
             elif df.empty:
                 rep["empty"] += 1
             else:
@@ -143,12 +160,12 @@ def backfill(client, out_root: Path, underlyings=("NIFTY", "BANKNIFTY"), days: i
         say(f"  {u}: {rep['served']}/{rep['asked']} contracts with bars ({rep['empty']} empty, {rep['failed']} failed), "
             f"{rep['bars']:,} option bars over {rep.get('sessions', 0)} sessions; index {rep.get('index_bars', 0):,}, "
             f"futures {rep.get('futures_bars', 0):,} bars")
-    if idx_parts:
-        pd.concat(idx_parts, ignore_index=True).to_parquet(run / "index.parquet", index=False, compression="zstd")
-    if fut_parts:
-        pd.concat(fut_parts, ignore_index=True).to_parquet(run / "futures.parquet", index=False, compression="zstd")
+        man["calls"] = dict(getattr(client, "calls", {}) or {})
+        _write(run, man, idx_parts, fut_parts)
+        if on_underlying:
+            on_underlying(u, run)
     man["calls"] = dict(getattr(client, "calls", {}) or {})
-    (run / "manifest.json").write_text(json.dumps(man, indent=1, default=str))
+    _write(run, man, idx_parts, fut_parts)
     man["path"] = str(run)
     return man
 

@@ -74,3 +74,30 @@ def test_overlapping_runs_deduplicate_on_load(tmp_path):
     one = pd.read_parquet(tmp_path / str(TODAY) / "options_NIFTY.parquet")
     both = B.load(tmp_path, "options", "NIFTY")
     assert len(both) >= len(one) and not both.duplicated(["token", "ts"]).any()
+
+
+def test_manifest_says_which_expiries_and_contracts_failed(tmp_path):
+    """Issue #1: 84 BANKNIFTY failures sat in one error string; the manifest must say where they were (far expiries)."""
+    far = f"{EXPS[3]:%m%d}"
+    k = FakeKotak(dead={f"nse_fo|NIFTY{far}{r}{i}" for r in "CP" for i in range(-2, 3)})
+    man = B.backfill(k, tmp_path, ["NIFTY"], days=10, n_expiries=4, strikes=20, today=TODAY, say=lambda *a: None)
+    rep = man["underlyings"]["NIFTY"]
+    assert rep["failed"] == 10 and rep["asked_by_expiry"]["2026-10-27"] == 10
+    assert rep["failed_by_expiry"] == {"2026-10-27": 10} and "2026-10-06" not in rep["failed_by_expiry"]
+    assert len(rep["failed_contracts"]) == 10
+    assert set(rep["failed_contracts"][0]) == {"expiry", "strike", "right", "error"}
+
+
+def test_each_underlying_is_complete_on_disk_and_announced_before_the_next_starts(tmp_path):
+    """A timeout during the second underlying must not lose the first: files + manifest exist when `on_underlying` runs."""
+    seen = []
+
+    def hook(u, run):
+        seen.append((u, sorted(p.name for p in run.iterdir()),
+                     sorted(json.loads((run / "manifest.json").read_text())["underlyings"])))
+
+    B.backfill(FakeKotak(), tmp_path, ["NIFTY", "BANKNIFTY"], days=10, n_expiries=1, strikes=20, today=TODAY,
+               say=lambda *a: None, on_underlying=hook)
+    assert [s[0] for s in seen] == ["NIFTY", "BANKNIFTY"]
+    assert seen[0][1] == ["futures.parquet", "index.parquet", "manifest.json", "options_NIFTY.parquet"]
+    assert seen[0][2] == ["NIFTY"] and seen[1][2] == ["BANKNIFTY", "NIFTY"]
