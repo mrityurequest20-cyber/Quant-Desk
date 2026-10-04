@@ -440,3 +440,38 @@ def test_engine_reads_the_future(cfg, client, fake, monkeypatch):
         out = eng._futures("NIFTY", t0 + pd.Timedelta(minutes=i), fake.spot)
     assert out["fut_symbol"] == "NIFTY26OCTFUT" and out["fut_buildup"] == "long build-up" and out["fut_basis"] == pytest.approx(108)
     assert out["fut_calendar"] == pytest.approx(108) and out["fut_oi_vs_prev"] == pytest.approx(1 / 0.98 - 1, rel=1e-3)
+
+
+class BseFake(FakeKotak):
+    """The same book served as BSE's: SENSEX contracts on bse_fo and the index on bse_cm. Records the exchange each
+    watchlist call asked for."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.exchanges, self.asked = [], []
+
+    def get(self, url, params=None, timeout=None):
+        self.asked.append(url)
+        if "watchlist" in url:
+            self.exchanges.append((params or {}).get("exchange"))
+        url = url.replace("bse_cm|", "nse_cm|").replace("bse_fo|", "nse_fo|")
+        r = super().get(url, params, timeout)
+        if isinstance(r.body, str):
+            return r
+        text = json.dumps(r.body).replace("nse_fo|", "bse_fo|").replace('"nse_fo"', '"bse_fo"').replace('"nse_cm"', '"bse_cm"')
+        return Resp(json.loads(text), r.status_code)
+
+
+def test_bse_underlyings_use_bse_segments():
+    assert kotak_mod.segments("SENSEX") == ("bse_fo", "bse_cm") and kotak_mod.segments("NIFTY") == ("nse_fo", "nse_cm")
+    fake = BseFake()
+    ch = KotakOptionChain(KotakClient("k", session=fake, min_gap=0))
+    ch.expiries("SENSEX")
+    df = ch.chain("SENSEX", EXP)
+    assert fake.exchanges == ["bse_fo", "bse_fo"]                               # expiries and the chain, both on BSE
+    assert df.attrs["spot"] == pytest.approx(fake.spot)                        # the index came from bse_cm
+    assert all(t.startswith("bse_fo|") for t in ch.tokens.values())
+    assert any("bse_cm|SENSEX" in u for u in fake.asked)
+    nse = BseFake()
+    KotakOptionChain(KotakClient("k", session=nse, min_gap=0)).expiries("NIFTY")
+    assert nse.exchanges == ["nse_fo"]                                           # NSE stays on nse_fo

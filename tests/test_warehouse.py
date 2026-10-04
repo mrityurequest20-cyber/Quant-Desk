@@ -276,3 +276,64 @@ def test_ranking_and_what_the_account_can_hold():
     assert stocks.fits(r.loc["RELIANCE"], 100000, 0.08)[0]
     lines = stocks.table(r, 20000, 0.08)
     assert lines[1].startswith("RELIANCE") and "below the liquidity bar" in lines[-1]
+
+
+STOCK_OPTS = UDIFF + """2026-10-01,2026-10-01,FO,NSE,STO,67132,,ABCAPITAL,,2026-10-27,2026-10-27,600.00,CE,X,0,0,0,0.05,0.05,0.05,375.05,0.05,0,0,0,0,0,F1,3100,,,,,
+2026-10-01,2026-10-01,FO,NSE,STO,67133,,ABCAPITAL,,2026-12-29,2026-12-29,380.00,CE,X,20,21,19,20.5,20.5,20,375.05,20.5,1000,0,10,0,0,F1,3100,,,,,
+2026-10-01,2026-10-01,FO,NSE,STO,67134,,ABCAPITAL,,2026-11-24,2026-11-24,380.00,CE,X,15,16,14,15.5,15.5,15,375.05,15.5,1000,0,10,0,0,F1,3100,,,,,
+2026-10-01,2026-10-01,FO,NSE,STF,67135,,ABCAPITAL,,2026-10-27,2026-10-27,,,X,376,377,375,376.5,376.5,376,375.05,376.5,90000,0,300,0,0,F1,3100,,,,,
+"""
+
+
+def test_stock_options_are_kept_not_discarded():
+    df = N.parse_fo_stock_opts(zipped(STOCK_OPTS, "BhavCopy.csv"), dt.date(2026, 10, 1))
+    assert set(df["symbol"]) == {"ABCAPITAL"}                                     # index contracts live in fo_bhav
+    assert set(df["expiry"]) == {dt.date(2026, 10, 27), dt.date(2026, 11, 24)}    # the nearest two expiries only
+    opts = df[df["kind"] != "FUT"]
+    assert sorted(opts["strike"]) == [380.0, 435.0]       # 600 is >30% away; 435 kept for its open interest
+    assert (df["underlying"] == 375.05).all() and len(df[df["kind"] == "FUT"]) == 1
+    assert list(df.columns) == N.BHAV_COLS
+    old = N.parse_fo_stock_opts(zipped(OLD + "FUTSTK,RELIANCE,25-Jul-2024,0,XX,3150,3160,3140,3155,3155,500,10,9000,10,05-JUL-2024,\n",
+                                       "fo05JUL2024bhav.csv"), dt.date(2024, 7, 5))
+    r = old[old["kind"] == "CE"].iloc[0]
+    assert r["symbol"] == "RELIANCE" and r["underlying"] == 3155 and r["src"] == "old-fut"   # the future stands in
+    assert set(old["symbol"]) == {"RELIANCE"}
+
+
+BSE_CSV = """TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,XpryDt,FininstrmActlXpryDt,StrkPric,OptnTp,FinInstrmNm,OpnPric,HghPric,LwPric,ClsPric,LastPric,PrvsClsgPric,UndrlygPric,SttlmPric,OpnIntrst,ChngInOpnIntrst,TtlTradgVol,TtlTrfVal,TtlNbOfTxsExctd,SsnId,NewBrdLotQty,Rmks,Rsvd1,Rsvd2,Rsvd3,Rsvd4
+{d},{d},FO,BSE,IDO,886815,,SENSEX,,{d},{d},81300.00,CE,X,0.45,0.60,0.05,71909.70,0.40,0.65,71909.70,71909.70,520,-40,600,1,30,F1,20,,,,,
+{d},{d},FO,BSE,IDO,889159,,SENSEX,,{n},{n},72600.00,CE,X,300,340,290,332.65,332.65,310,71909.70,332.65,72620,10,498520,1,40,F1,20,,,,,
+{d},{d},FO,BSE,IDF,889160,,SENSEX,,{n},{n},,,X,71950,72000,71900,71980,71980,71900,71909.70,71980,1000,10,500,1,40,F1,20,,,,,
+{d},{d},FO,BSE,STO,889161,,CIPLA,,{n},{n},1500,CE,X,10,11,9,10,10,9,1480,10,100,0,10,1,1,F1,375,,,,,
+"""
+
+
+def test_bse_bhavcopy_and_its_expiry_day_quirk():
+    from quantdesk.data import bse as B
+    b = BSE_CSV.format(d="2026-10-01", n="2026-10-08").encode()
+    df = B.parse_fo_bhav(b, dt.date(2026, 10, 1))
+    assert set(df["symbol"]) == {"SENSEX"} and list(df.columns) == N.BHAV_COLS and (df["src"] == "bse").all()
+    expiring = df[df["expiry"] == dt.date(2026, 10, 1)].iloc[0]
+    assert pd.isna(expiring["close"]) and pd.isna(expiring["settle"])      # BSE writes the index there: dropped
+    assert expiring["underlying"] == 71909.70 and expiring["oi"] == 520
+    nxt = df[(df["expiry"] == dt.date(2026, 10, 8)) & (df["kind"] == "CE")].iloc[0]
+    assert nxt["close"] == 332.65 and nxt["lot"] == 20
+
+
+def test_update_fetches_bse_only_where_bse_has_files(tmp_path):
+    from quantdesk.data import bse as B
+
+    class FakeBSE:
+        def __init__(self):
+            self.asked = []
+
+        def fo_bhav(self, d):
+            self.asked.append(d)
+            return BSE_CSV.format(d=d, n=d + dt.timedelta(days=7)).encode(), f"bse/{d}"
+    class NoNet:
+        headers = {}
+    wh, fb = Warehouse(tmp_path / "wh"), FakeBSE()
+    c = update(wh, N.NSE(session=NoNet(), gap=0), dt.date(2023, 12, 27), dt.date(2024, 1, 3), only={"bse_fo_bhav"},
+               say=lambda *a: None, today=dt.date(2024, 1, 10), bse=fb)
+    assert fb.asked and min(fb.asked) == B.BSE_FROM                          # nothing asked before BSE's archive
+    assert c["bse_fo_bhav"] > 0 and set(wh.read("bse_fo_bhav")["symbol"]) == {"SENSEX"}

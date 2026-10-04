@@ -131,20 +131,41 @@ def _unzip_csv(b: bytes) -> pd.DataFrame:
         return pd.read_csv(z.open(name), low_memory=False)
 
 
+def udiff_rows(raw: pd.DataFrame, types=("IDO", "IDF"), symbols=None, src: str = "udiff") -> pd.DataFrame:
+    """UDiFF contract rows (NSE's and BSE's common F&O format) → BHAV_COLS, before typing. `types`: the options and
+    futures FinInstrmTp codes to keep (IDO/IDF index, STO/STF stock); `symbols`: None keeps every symbol."""
+    raw.columns = [str(c).strip() for c in raw.columns]
+    d = raw[raw["FinInstrmTp"].isin(types)]
+    if symbols is not None:
+        d = d[d["TckrSymb"].isin(symbols)]
+    fut = d["FinInstrmTp"].isin([t for t in types if t.endswith("F")])
+    kind = np.where(fut, "FUT", d["OptnTp"].astype(str).str.strip())
+    return pd.DataFrame({
+        "date": pd.to_datetime(d["TradDt"]).dt.date, "symbol": d["TckrSymb"].astype(str).str.strip().values, "kind": kind,
+        "expiry": pd.to_datetime(d["XpryDt"]).dt.date, "strike": pd.to_numeric(d["StrkPric"], errors="coerce"),
+        "open": d["OpnPric"], "high": d["HghPric"], "low": d["LwPric"], "close": d["ClsPric"], "last": d["LastPric"],
+        "prev_close": d["PrvsClsgPric"], "settle": d["SttlmPric"], "underlying": d["UndrlygPric"],
+        "oi": d["OpnIntrst"], "chg_oi": d["ChngInOpnIntrst"], "contracts": d["TtlTradgVol"],
+        "lot": d["NewBrdLotQty"], "src": src})
+
+
+def typed(out: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    """Numeric columns as float64, no strike on a future, and every row dated `day` (else the file is wrong)."""
+    out.loc[out["kind"] == "FUT", "strike"] = np.nan
+    for c in ("open", "high", "low", "close", "last", "prev_close", "settle", "underlying", "oi", "chg_oi", "contracts",
+              "lot", "strike"):
+        out[c] = pd.to_numeric(out[c], errors="coerce").astype("float64")
+    if len(out) and (out["date"] != day).any():
+        raise ValueError(f"bhavcopy for {day} carries trade dates {sorted(set(out['date']))[:3]}")
+    return out[BHAV_COLS].reset_index(drop=True)
+
+
 def parse_fo_bhav(b: bytes, day: dt.date, symbols=INDEX_SYMBOLS) -> pd.DataFrame:
     """Index futures and options from either bhavcopy format → BHAV_COLS (one row per contract)."""
     raw = _unzip_csv(b)
     raw.columns = [str(c).strip() for c in raw.columns]
     if "FinInstrmTp" in raw.columns:                                         # UDiFF
-        d = raw[raw["FinInstrmTp"].isin(["IDO", "IDF"]) & raw["TckrSymb"].isin(symbols)]
-        kind = np.where(d["FinInstrmTp"] == "IDF", "FUT", d["OptnTp"].astype(str).str.strip())
-        out = pd.DataFrame({
-            "date": pd.to_datetime(d["TradDt"]).dt.date, "symbol": d["TckrSymb"].values, "kind": kind,
-            "expiry": pd.to_datetime(d["XpryDt"]).dt.date, "strike": pd.to_numeric(d["StrkPric"], errors="coerce"),
-            "open": d["OpnPric"], "high": d["HghPric"], "low": d["LwPric"], "close": d["ClsPric"], "last": d["LastPric"],
-            "prev_close": d["PrvsClsgPric"], "settle": d["SttlmPric"], "underlying": d["UndrlygPric"],
-            "oi": d["OpnIntrst"], "chg_oi": d["ChngInOpnIntrst"], "contracts": d["TtlTradgVol"],
-            "lot": d["NewBrdLotQty"], "src": "udiff"})
+        out = udiff_rows(raw, ("IDO", "IDF"), symbols)
     elif "INSTRUMENT" in raw.columns:                                        # the old format
         d = raw[raw["INSTRUMENT"].astype(str).str.strip().isin(["OPTIDX", "FUTIDX"])
                 & raw["SYMBOL"].astype(str).str.strip().isin(symbols)]
@@ -158,13 +179,7 @@ def parse_fo_bhav(b: bytes, day: dt.date, symbols=INDEX_SYMBOLS) -> pd.DataFrame
             "chg_oi": d["CHG_IN_OI"], "contracts": d["CONTRACTS"], "lot": np.nan, "src": "old"})
     else:
         raise ValueError(f"unrecognised F&O bhavcopy columns: {list(raw.columns)[:8]}")
-    out.loc[out["kind"] == "FUT", "strike"] = np.nan
-    for c in ("open", "high", "low", "close", "last", "prev_close", "settle", "underlying", "oi", "chg_oi", "contracts",
-              "lot", "strike"):
-        out[c] = pd.to_numeric(out[c], errors="coerce").astype("float64")
-    if len(out) and (out["date"] != day).any():
-        raise ValueError(f"bhavcopy for {day} carries trade dates {sorted(set(out['date']))[:3]}")
-    return out[BHAV_COLS].reset_index(drop=True)
+    return typed(out, day)
 
 
 STOCK_COLS = ["date", "symbol", "lot", "underlying", "expiry", "opt_contracts", "opt_premium", "opt_oi", "active_strikes",
@@ -237,6 +252,42 @@ def parse_fo_stocks(b: bytes, day: dt.date, min_strike_contracts: int = 100) -> 
                      "fut_close": float(f["close"].iloc[0]) if len(f) else np.nan,
                      "atm_call": atm_c, "atm_put": atm_p, "otm2_call": otm_c, "otm2_put": otm_p})
     return pd.DataFrame(rows, columns=STOCK_COLS)
+
+
+def parse_fo_stock_opts(b: bytes, day: dt.date, n_expiries: int = 2, band: float = 0.30) -> pd.DataFrame:
+    """Stock options and futures from the same bhavcopy → BHAV_COLS: the contracts the fo_bhav table leaves out.
+    Kept per stock:
+    - the futures and options of its nearest `n_expiries` expiries;
+    - options only within ±`band` of the stock and traded or open that day.
+    That's what studies of stock options need, at a fraction of the file. Before UDiFF (8 Jul 2024) the file has no
+    underlying price: the near-month future's close stands in for it (src "old-fut")."""
+    raw = _unzip_csv(b)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    if "FinInstrmTp" in raw.columns:
+        out = udiff_rows(raw, ("STO", "STF"))
+    elif "INSTRUMENT" in raw.columns:
+        inst = raw["INSTRUMENT"].astype(str).str.strip()
+        d = raw[inst.isin(["OPTSTK", "FUTSTK"])]
+        out = pd.DataFrame({
+            "date": pd.to_datetime(d["TIMESTAMP"], format="%d-%b-%Y").dt.date, "symbol": d["SYMBOL"].astype(str).str.strip().values,
+            "kind": np.where(inst[d.index] == "FUTSTK", "FUT", d["OPTION_TYP"].astype(str).str.strip()),
+            "expiry": pd.to_datetime(d["EXPIRY_DT"], format="%d-%b-%Y").dt.date,
+            "strike": pd.to_numeric(d["STRIKE_PR"], errors="coerce"), "open": d["OPEN"], "high": d["HIGH"], "low": d["LOW"],
+            "close": d["CLOSE"], "last": np.nan, "prev_close": np.nan, "settle": d["SETTLE_PR"], "underlying": np.nan,
+            "oi": d["OPEN_INT"], "chg_oi": d["CHG_IN_OI"], "contracts": d["CONTRACTS"], "lot": np.nan, "src": "old-fut"})
+    else:
+        raise ValueError(f"unrecognised F&O bhavcopy columns: {list(raw.columns)[:8]}")
+    out = typed(out, day)
+    if out.empty:
+        return out
+    near = out.groupby("symbol")["expiry"].transform(lambda e: e.isin(sorted(set(e))[:n_expiries]))
+    out = out[near]
+    fut = out[out["kind"] == "FUT"].sort_values("expiry").groupby("symbol")["close"].first()
+    S = out["underlying"].where(out["underlying"] > 0, out["symbol"].map(fut))
+    out = out.assign(underlying=S)
+    opt = out["kind"] != "FUT"
+    keep = ~opt | ((np.abs(out["strike"] / out["underlying"] - 1) <= band) & ((out["contracts"] > 0) | (out["oi"] > 0)))
+    return out[keep].reset_index(drop=True)
 
 
 PARTICIPANT_COLS = {

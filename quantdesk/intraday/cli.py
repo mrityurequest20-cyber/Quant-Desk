@@ -567,7 +567,8 @@ def cmd_kotak_check(cfg, a):
         sys.exit("no KOTAK_CONSUMER_KEY: add it as a repository secret (Settings → Secrets and variables → Actions)")
     print(f"Kotak Neo · consumer key set ({len(os.environ['KOTAK_CONSUMER_KEY'].strip())} chars) · data endpoints only, "
           f"no login, no orders", flush=True)
-    if not check(kotak, cfg.get("intraday.underlyings")):
+    taped = list((cfg.get("intraday.tape", {}) or {}).get("expiries") or {})
+    if not check(kotak, list(dict.fromkeys(cfg.get("intraday.underlyings") + taped))):
         sys.exit(1)
     print("verdict: Kotak data is usable; the desk prices its option fills off Kotak's live book")
 

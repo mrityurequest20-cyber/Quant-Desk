@@ -31,7 +31,18 @@ BASE = "https://mis.kotaksecurities.com"
 QUOTES_PER_CALL = 25        # docs say 50, but the live API refused 50 on 2 Oct 2026 and took 25; halves on "max value"
 # indices are quoted by name on the cash segment (Kotak's SFeed/quotes docs)
 INDEX = {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank", "FINNIFTY": "Nifty Fin Service",
-         "MIDCPNIFTY": "NIFTY MID SELECT", "INDIAVIX": "INDIA VIX", "SENSEX": "SENSEX"}
+         "MIDCPNIFTY": "NIFTY MID SELECT", "INDIAVIX": "INDIA VIX", "SENSEX": "SENSEX", "BANKEX": "BANKEX"}
+BSE = {"SENSEX", "BANKEX"}                    # BSE's index options: bse_fo contracts, the index on bse_cm
+
+
+def segments(underlying: str) -> tuple[str, str]:
+    """(derivatives segment, cash segment) an underlying trades on at Kotak."""
+    return ("bse_fo", "bse_cm") if underlying in BSE else ("nse_fo", "nse_cm")
+
+
+def _fo(underlying: str) -> dict:
+    """The exchange argument for a BSE underlying; NSE's is the endpoints' default."""
+    return {"exchange": "bse_fo"} if underlying in BSE else {}
 
 
 class KotakError(RuntimeError):
@@ -204,7 +215,7 @@ class KotakOptionChain(ChainSource):
         hit = self._exp.get(underlying)
         if hit and hit[0] == today:
             return hit[1]
-        exps = self.k.expiries(underlying)
+        exps = self.k.expiries(underlying, **_fo(underlying))
         if not exps:
             raise KotakError(f"no expiries for {underlying}")
         self._exp[underlying] = (today, exps)
@@ -213,7 +224,7 @@ class KotakOptionChain(ChainSource):
     def chain(self, underlying: str, expiry: dt.date, spot=None, ts=None, require_quotes: bool = True) -> pd.DataFrame:
         """`require_quotes`: no bid/ask anywhere is an error (in the session the desk can't price fills without one;
         outside it the book is simply empty)."""
-        common, calls, puts = chain_parts(self.k.option_chain(underlying, expiry, self.count))
+        common, calls, puts = chain_parts(self.k.option_chain(underlying, expiry, self.count, **_fo(underlying)))
         lot = _f(common.get("mktLot"))
         if lot > 0:
             self.lot[underlying] = int(lot)
@@ -240,13 +251,13 @@ class KotakOptionChain(ChainSource):
         if not rows:
             raise KotakError(f"empty option chain for {underlying} {expiry}")
         want = [tuple(t.split("|", 1)) for t in toks]
-        idx = INDEX.get(underlying)
+        idx, cash = INDEX.get(underlying), segments(underlying)[1]
         if idx:
-            want.insert(0, ("nse_cm", idx))
+            want.insert(0, (cash, idx))
         S, quoted = float("nan"), 0
         for q in self.k.quotes(want):
             seg, tok = str(q.get("exchange", "")), str(q.get("exchange_token", ""))
-            if seg == "nse_cm":                                    # the only cash-segment name asked for: the index
+            if seg == cash:                                        # the only cash-segment name asked for: the index
                 S = _f(q.get("ltp"))
                 continue
             hit = toks.get(f"{seg}|{tok}")
@@ -471,7 +482,7 @@ def check(client: KotakClient, underlyings: list[str], say=print) -> bool:
     t0 = time.time()
     index_tokens: dict[str, str] = {}
     try:
-        qs = client.quotes([("nse_cm", INDEX[u]) for u in underlyings + ["INDIAVIX"] if u in INDEX], "all")
+        qs = client.quotes([(segments(u)[1], INDEX[u]) for u in underlyings + ["INDIAVIX"] if u in INDEX], "all")
         for q in qs:
             up = _f(q.get("lstup_time"))
             age = f"{(now.timestamp() - up) / 60:,.0f} min old" if up > 1e9 else "no timestamp"
