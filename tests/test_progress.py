@@ -11,8 +11,8 @@ def test_level_is_the_highest_rung_any_principle_reached(tmp_path):
     f.write_text(json.dumps({"principles": [{"status": "found"}, {"status": "rejected"}, {"status": "replicated"}]}))
     p = P.principles(f)
     assert p["level"] == 2 and p["tested"] == 3 and p["replicated_plus"] == 1 and p["counts"]["rejected"] == 1
-    real = P.principles()                                   # the repo's own ledger: nothing beyond "found" yet
-    assert real["level"] == 1 and real["counts"]["rejected"] >= 1
+    real = P.principles()                                   # the repo's own ledger parses, negative results included
+    assert 1 <= real["level"] <= 4 and real["counts"]["rejected"] >= 1
 
 
 def test_snapshots_are_kept_one_per_day(tmp_path):
@@ -36,6 +36,6 @@ def test_report_compares_with_last_week_and_the_start(cfg):
     days = [dt.date(2026, 10, 5) + dt.timedelta(days=7 * k) for k in range(3)]
     hist = [dict(P.snapshot(cfg, d), equity=500000.0 + 1000 * k) for k, d in enumerate(days)]
     md = P.render(hist)
-    assert "Evidence level 1/4" in md and "Since last week (2026-10-12 → 2026-10-19)" in md
+    assert f"Evidence level {P.principles()['level']}/4" in md and "Since last week (2026-10-12 → 2026-10-19)" in md
     assert "Since the first snapshot (2026-10-05 → 2026-10-19)" in md and "⬆ improved" in md
     assert "first snapshot" in P.render(hist[:1])
