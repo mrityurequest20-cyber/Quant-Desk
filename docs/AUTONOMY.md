@@ -13,7 +13,9 @@
 | Edge research | `Edge research` | Saturdays 09:47 IST |
 | Progress snapshot | `Live paper desk`, afternoon job | after every session |
 | Progress report → "Desk progress" issue | `Progress` | Saturdays 10:40 IST |
-| Desk engineer: fixes, data, research | claude.ai routine → persistent Claude session (Opus 5.5, high effort) | 17:40 IST, Monday to Saturday |
+| Audit rota → `desk:audit` issue for the day's department | `Org` | 17:20 IST, Monday to Saturday |
+| Heavy audits (warehouse-audit, entry-check; law audit monthly) | `Org` → `Study` | Sundays 09:00 IST |
+| Desk engineer: audits, fixes, data, research | claude.ai routine → persistent Claude session (Opus 5.5, high effort) | 17:40 IST, Monday to Saturday |
 
 The engine, risk limits, sleeves and research are deterministic Python. Language models (Claude, Gemini, Ollama) are
 optional **readers** of the news and an after-close reflection, with no say over orders, sizing or risk. If every key

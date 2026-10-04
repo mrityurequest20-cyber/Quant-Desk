@@ -48,7 +48,9 @@ KPIS = {"level": ("evidence level (0-4)", 1), "principles_tested": ("principles 
         "sleeve_real_vs_model_cost": ("real fill cost ÷ the history's cost model", -1),
         "sleeve_skip_rate": ("expiry eves the sleeves were due on and skipped", -1),
         "sleeve_settle_gap_bps": ("sleeve settlement vs the official close, mean |gap| in bps", -1),
-        "entry_check_eves": ("eves collected for expiry_eve_entry_v1 (decision at 40+)", 1)}
+        "entry_check_eves": ("eves collected for expiry_eve_entry_v1 (decision at 40+)", 1),
+        "self_found_share": ("defects the desk found itself, share of all found (the north star)", 1),
+        "escapes_30d": ("defects an outside reviewer found first, last 30 days", -1)}
 FULL_TAPE = 300
 
 
@@ -125,6 +127,11 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
                 gaps.append(r["gap_mean"])
     snap["sleeve_real_vs_model_cost"] = round(real / model, 3) if model > 0 else None
     snap["sleeve_skip_rate"] = round(skipped / due, 4) if due else None
+    from . import org as O
+    ev = O.load()
+    snap["self_found_share"] = O.self_found_share(ev)
+    snap["escapes_30d"] = sum(e["kind"] == "owner_found" and dt.date.fromisoformat(e["date"]) > day - dt.timedelta(days=30)
+                              for e in ev)
     from ..research import entry_check as EC
     snap["entry_check_eves"] = int(len(EC.eves(EC.ledger_events(cfg.runtime_dir / "intraday" / "sleeves"), EC.load_spec())))
     snap["sleeve_settle_gap_bps"] = round(float(np.mean(settle_gaps)), 2) if settle_gaps else None

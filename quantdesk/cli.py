@@ -342,6 +342,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--spec", default="docs/prereg/expiry_eve_entry_v1.json")
     s.add_argument("--out", default="_entry_check")
     s.set_defaults(fn=cmd_entry_check)
+    s = sub.add_parser("org", help="the organization (docs/ORG.md): today's audit rota, or the departments' scorecard")
+    s.add_argument("action", choices=["rota", "scorecard"])
+    s.add_argument("--day", help="YYYY-MM-DD (default: today, IST)")
+    s.add_argument("--issues", action="store_true", help="rota: file today's audits as desk:audit issues")
+    s.add_argument("--studies", help="rota: write Sunday's Study runs to this file, one 'study spec' per line")
+    s.set_defaults(fn=cmd_org)
     s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
@@ -426,6 +432,34 @@ def cmd_law_audit(cfg, a):
     (out / f"{stem}.md").write_text(md)
     (out / f"{stem}.json").write_text(json.dumps(res, indent=1, default=str))
     print(md)
+
+
+def cmd_org(cfg, a):
+    """The audit rota and the scorecard (ops/org.py)."""
+    import datetime as dt
+    import os
+
+    import pandas as pd
+
+    from .ops import org as O
+    day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz="Asia/Kolkata").date()
+    events = O.load()
+    if a.action == "scorecard":
+        print(O.render_scorecard(events, day))
+        bad = O.problems(events, O.LESSONS.read_text() if O.LESSONS.exists() else "")
+        if bad:
+            print("\nLedger problems:\n" + "\n".join(f"- {x}" for x in bad))
+        return
+    print(O.render_rota(day, events), flush=True)
+    if a.studies:
+        Path(a.studies).write_text("".join(f"{s} {p}\n" for s, p in O.deterministic(day)))
+    if a.issues:
+        from .ops.selfreview import GitHub
+        repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        if not (repo and token):
+            print("org rota: --issues needs GITHUB_REPOSITORY and GH_TOKEN; nothing filed", flush=True)
+            return
+        O.sync(GitHub(repo, token), day, events)
 
 
 def cmd_entry_check(cfg, a):

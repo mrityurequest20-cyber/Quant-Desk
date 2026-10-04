@@ -356,6 +356,9 @@ class GitHub:
     def comment(self, number: int, body: str) -> None:
         self._req("POST", f"/issues/{number}/comments", json={"body": body})
 
+    def add_label(self, number: int, name: str) -> None:
+        self._req("POST", f"/issues/{number}/labels", json={"labels": [name]})
+
     def close(self, number: int) -> None:
         self._req("PATCH", f"/issues/{number}", json={"state": "closed", "state_reason": "completed"})
 

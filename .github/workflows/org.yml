@@ -1,0 +1,54 @@
+# The organization's audit rota (docs/ORG.md, quantdesk/ops/org.py). Every day it files that day's department audit
+# as a `desk:audit` issue, so the engineer's shift attacks the desk's own work without anyone asking. On Sundays it
+# starts the heavy deterministic audits on the Study workflow.
+name: Org
+
+on:
+  schedule:
+    - cron: "50 11 * * 1-6"      # 17:20 IST Mon-Sat: after self-review (17:10), before the engineer's shift (17:40)
+    - cron: "30 3 * * 0"         # 09:00 IST Sunday: warehouse-audit, entry-check; the law audit on the first Sunday
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "YYYY-MM-DD (default: today, IST)"
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: org-rota
+  cancel-in-progress: false
+
+jobs:
+  rota:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: File today's audits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.day }}
+        run: |
+          python -m quantdesk org rota --issues --studies _studies.txt ${DAY:+--day "$DAY"} | tee -a "$GITHUB_STEP_SUMMARY"
+          python -m quantdesk org scorecard ${DAY:+--day "$DAY"} >> "$GITHUB_STEP_SUMMARY"
+      - name: Start Sunday's deterministic audits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while read -r study spec; do
+            [ -n "$study" ] || continue
+            echo "Study: $study ${spec}"
+            gh workflow run study.yml --ref "${{ github.ref_name }}" -f study="$study" ${spec:+-f spec="$spec"}
+          done < _studies.txt
