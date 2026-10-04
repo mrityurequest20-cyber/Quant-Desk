@@ -148,6 +148,14 @@ progress report, under "levers only the owner holds". It never opens an issue fo
     re-dated expiries, settlement values, basis).
   Both run locally or through the `Study` workflow. A finding that weakens a principle becomes a caveat; a flaw in
   a study becomes a new spec that fixes exactly that flaw. expiry_eve_law_v2 replaced v1 this way.
+- **Forward checks of a law's links** run on the sleeves' real-quote fills, not on their P&L (which would need years):
+  - `entry-check` (expiry_eve_entry_v1) pairs each eve's real 15:20 fill with the history's bhavcopy convention on the
+    same strikes. Run it through the `Study` workflow weekly. Before its decision point it shows counts only; don't
+    try to get more out of it, and don't change its n. When the status reads `decided`, copy the `.md` and `.json`
+    into docs/prereg/results/, apply the spec's `decision` to principles.json with a `review` or move, and say so in
+    the weekly report;
+  - every sleeve settlement is also checked against the official close (an `official` event in the ledger). The
+    gap is a diagnostic: it never changes a sleeve's registered result.
 - The weekly progress report (`ops/progress.py`) compares this week with last week and with the first snapshot.
   - **Its headline is the evidence level:** the highest rung any principle has reached.
   - **Below it:** knowledge, research throughput, forward sleeves, the paper account and data.

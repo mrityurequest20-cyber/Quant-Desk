@@ -47,7 +47,8 @@ KPIS = {"level": ("evidence level (0-4)", 1), "principles_tested": ("principles 
         "experiments": ("distinct experiments registered", 1), "open_caveats": ("open caveats on principles", -1),
         "sleeve_real_vs_model_cost": ("real fill cost ÷ the history's cost model", -1),
         "sleeve_skip_rate": ("expiry eves the sleeves were due on and skipped", -1),
-        "sleeve_settle_gap_bps": ("sleeve settlement vs the official close, mean |gap| in bps", -1)}
+        "sleeve_settle_gap_bps": ("sleeve settlement vs the official close, mean |gap| in bps", -1),
+        "entry_check_eves": ("eves collected for expiry_eve_entry_v1 (decision at 40+)", 1)}
 FULL_TAPE = 300
 
 
@@ -124,6 +125,8 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
                 gaps.append(r["gap_mean"])
     snap["sleeve_real_vs_model_cost"] = round(real / model, 3) if model > 0 else None
     snap["sleeve_skip_rate"] = round(skipped / due, 4) if due else None
+    from ..research import entry_check as EC
+    snap["entry_check_eves"] = int(len(EC.eves(EC.ledger_events(cfg.runtime_dir / "intraday" / "sleeves"), EC.load_spec())))
     snap["sleeve_settle_gap_bps"] = round(float(np.mean(settle_gaps)), 2) if settle_gaps else None
     snap.update({"sleeve_pnl_per_trade": round(pnl / trades, 2) if trades else None,
                  "sleeve_win": round(wins / trades, 4) if trades else None})

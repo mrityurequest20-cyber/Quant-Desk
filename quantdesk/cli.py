@@ -335,6 +335,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", default="_law_audit")
     s.add_argument("--spec", default="docs/prereg/expiry_eve_law_v1_audit.json", help="the registered audit spec")
     s.set_defaults(fn=cmd_law_audit)
+    s = sub.add_parser("entry-check", help="expiry_eve_entry_v1: is the history's entry price executable (sleeve fills "
+                                            "vs bhavcopy on the same strikes)")
+    s.add_argument("--warehouse", default="runtime/warehouse", help="folder with the bhavcopy and nse_index_close tables")
+    s.add_argument("--sleeves", help="folder with the sleeves' ledgers (default: runtime/intraday/sleeves)")
+    s.add_argument("--spec", default="docs/prereg/expiry_eve_entry_v1.json")
+    s.add_argument("--out", default="_entry_check")
+    s.set_defaults(fn=cmd_entry_check)
     s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
@@ -418,6 +425,25 @@ def cmd_law_audit(cfg, a):
     stem = f"{res['spec']}-{res['spec_hash']}"
     (out / f"{stem}.md").write_text(md)
     (out / f"{stem}.json").write_text(json.dumps(res, indent=1, default=str))
+    print(md)
+
+
+def cmd_entry_check(cfg, a):
+    """expiry_eve_entry_v1 (research/entry_check.py). Before the decision point only counts are written anywhere, the
+    artifact included: the paired rows are kept back until the test is decided."""
+    from .research import entry_check as E
+    from .research.provenance import WAREHOUSE_TABLES, stamp
+    sleeves = Path(a.sleeves) if a.sleeves else Path(cfg.runtime_dir) / "intraday" / "sleeves"
+    res, paired = E.run(Path(a.warehouse), sleeves, Path(a.spec))
+    res["provenance"] = stamp(Path(a.warehouse), WAREHOUSE_TABLES)
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    md = E.render(res)
+    stem = f"{res['spec']}-{res['spec_hash']}"
+    (out / f"{stem}.md").write_text(md)
+    (out / f"{stem}.json").write_text(json.dumps(res, indent=1, default=str))
+    if res["status"] == "decided" and len(paired):
+        paired.to_csv(out / f"{stem}_eves.csv", index=False)
     print(md)
 
 
