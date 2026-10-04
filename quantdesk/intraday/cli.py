@@ -213,8 +213,21 @@ def cmd_sleeves(cfg, a):
         if d.empty:
             raise RuntimeError(f"no Yahoo bar for {sym} on {day}")
         return float(d["Close"].iloc[-1])
+    closes: dict = {}
+
+    def nse_close(underlying, day):
+        """NSE's official close (ind_close_all): the warehouse's copy if it has the day, else NSE's archive."""
+        if day not in closes:
+            from ..data.nse import NSE, parse_index_close
+            f = Path(cfg.runtime_dir) / "warehouse" / f"nse_index_close_{day.year}.parquet"
+            df = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["date", "symbol", "close"])
+            df = df[pd.to_datetime(df["date"]).dt.date == day]
+            closes[day] = df if len(df) else parse_index_close(NSE().index_close(day)[0], day)
+        hit = closes[day][closes[day]["symbol"] == underlying]
+        return float(hit["close"].iloc[0]) if len(hit) else None
     for spec in specs():                                  # every registered spec, each with its own ledger
-        seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec)
+        seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec,
+                              official_fn=nse_close)
         if not a.report:
             day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
             for line in seller.run(day) or [f"{spec['name']} {day}: nothing to settle or open"]:

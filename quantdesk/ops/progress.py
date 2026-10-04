@@ -45,7 +45,9 @@ KPIS = {"level": ("evidence level (0-4)", 1), "principles_tested": ("principles 
         "forecast_skill": ("live forecast skill vs a coin flip (Brier)", 1),
         "signal_hit_rate": ("live signals right on direction", 1), "signal_net_bps": ("live signal P&L after costs, bps", 1),
         "experiments": ("distinct experiments registered", 1), "open_caveats": ("open caveats on principles", -1),
-        "sleeve_real_vs_model_cost": ("real fill cost ÷ the history's cost model", -1)}
+        "sleeve_real_vs_model_cost": ("real fill cost ÷ the history's cost model", -1),
+        "sleeve_skip_rate": ("expiry eves the sleeves were due on and skipped", -1),
+        "sleeve_settle_gap_bps": ("sleeve settlement vs the official close, mean |gap| in bps", -1)}
 FULL_TAPE = 300
 
 
@@ -100,13 +102,19 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
             "results": len(list((ROOT / "docs" / "prereg" / "results").glob("*.md")))}
     trades = pnl = eligible = retired = wins = 0
     gaps, real, model = [], 0.0, 0.0
+    due = skipped = 0
+    settle_gaps: list[float] = []
     for spec in specs():
         rep = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", p["data"], spec=spec).report()
+        for c in (rep.get("settlement") or {}).values():
+            settle_gaps += [c["mean_abs_gap_bps"]] * c["days"]
         for f in rep.get("fills", {}).values():
             if f["legs"] and f["model_cost_pts"]:
                 real += f["real_cost_pts"] * f["legs"]
                 model += f["model_cost_pts"] * f["legs"]
         for r in rep["rows"]:
+            due += r.get("eves_due", 0)
+            skipped += r.get("skipped", 0)
             trades += r["n"]
             pnl += r["sum"]
             wins += round(r["win"] * r["n"]) if r["n"] else 0
@@ -115,6 +123,8 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
             if r["n"]:
                 gaps.append(r["gap_mean"])
     snap["sleeve_real_vs_model_cost"] = round(real / model, 3) if model > 0 else None
+    snap["sleeve_skip_rate"] = round(skipped / due, 4) if due else None
+    snap["sleeve_settle_gap_bps"] = round(float(np.mean(settle_gaps)), 2) if settle_gaps else None
     snap.update({"sleeve_pnl_per_trade": round(pnl / trades, 2) if trades else None,
                  "sleeve_win": round(wins / trades, 4) if trades else None})
     snap.update({"sleeve_trades": trades, "sleeve_pnl": round(pnl, 2), "sleeves_eligible": eligible,

@@ -9,7 +9,7 @@ import pytest
 from quantdesk.core.calendar import TradingCalendar
 from quantdesk.intraday.chains import ModelOptionChain
 from quantdesk.intraday.recorder import SessionRecorder
-from quantdesk.intraday.sleeves import ExpirySeller, assess, entry_snapshot, fill_quality, load_spec, render
+from quantdesk.intraday.sleeves import ExpirySeller, assess, entry_snapshot, fill_quality, load_spec, payoff, render
 
 IST = "Asia/Kolkata"
 SPOT = 22600.0
@@ -119,6 +119,44 @@ def test_every_fill_says_how_real_it_was(cfg, setup):
     skips = fill_quality([{"event": "skip", "underlying": "SENSEX", "reason": "CE 81200: no two-sided quote"},
                           {"event": "skip", "underlying": "SENSEX", "reason": "CE 81300: no two-sided quote"}])
     assert skips["SENSEX"]["skips"] == {"CE #: no two-sided quote": 2} and skips["SENSEX"]["legs"] == 0
+
+
+def test_each_settlement_is_checked_against_the_official_close(cfg, setup):
+    """The registered settlement (the 15:00–15:29 mean) stays the result; an `official` event adds the P&L at the
+    official close and the gap, once, from 15:45. NSE's published close wins over the 15:29 bar, which wins over Yahoo."""
+    seller, cal, data, d, e = setup
+    snapshot(cfg, cal, data, d, e, "1520")
+    seller.run(d, now=at(d, "15:40"))
+    idx = pd.date_range(f"{e} 09:15", f"{e} 15:29", freq="1min", tz=IST)
+    close = pd.Series(SPOT, index=idx)
+    close.iloc[-1] = SPOT + 600                                  # a late surge: the last bar is the official close
+    SessionRecorder(data).record_bars("NIFTY", pd.DataFrame({"open": close, "high": close, "low": close, "close": close,
+                                                              "volume": 0.0}, index=idx))
+    seller.run(e, now=at(e, "15:35"))                            # settles; too early for the check
+    assert not any(ev["event"] == "official" for ev in seller.events())
+    notes = seller.run(e, now=at(e, "15:50"))
+    assert sum("settlement check" in n for n in notes) == 2
+    for t in seller.trades():
+        assert t["settle"] == pytest.approx(SPOT + 600 / 30, abs=0.01)          # registered: unchanged
+        assert t["official"] == SPOT + 600 and t["official_source"] == "the 15:29 one-minute close"
+        assert t["settle_gap_bps"] == pytest.approx(((SPOT + 20) / (SPOT + 600) - 1) * 1e4, abs=0.01)
+        assert t["pnl_rs_official"] == pytest.approx(payoff(t, SPOT + 600)["pnl_rs"], abs=0.01)
+        assert t["pnl_gap_rs"] == pytest.approx(t["pnl_rs"] - t["pnl_rs_official"], abs=0.02)
+    seller.run(e, now=at(e, "16:30"))
+    assert sum(ev["event"] == "official" for ev in seller.events()) == 2       # once per trade
+    rep = seller.report()
+    st = rep["settlement"]["NIFTY"]
+    assert st["days"] == 1 and st["trades"] == 2 and st["max_abs_gap_bps"] == pytest.approx(250, abs=0.01)
+    assert all(r["eves_due"] == 1 and r["skip_rate"] == 0 for r in rep["rows"] if r["underlying"] == "NIFTY")
+    md = render(rep)
+    assert "Settlement check" in md and "Skip rate" in md
+
+    seller.official_fn = lambda u, day: SPOT + 300
+    assert seller.official("NIFTY", e) == (SPOT + 300, "NSE's official close")
+    seller.official_fn = lambda u, day: None
+    assert seller.official("NIFTY", e) == (SPOT + 600, "the 15:29 one-minute close")
+    seller.close_fn = lambda u, day: SPOT + 1
+    assert seller.official("NIFTY", d) == (SPOT + 1, "Yahoo daily close")       # no 15:29 bar on the eve
 
 
 def test_a_breakout_costs_the_condor_its_width_and_exercise_stt(cfg, setup):

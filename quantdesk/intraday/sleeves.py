@@ -13,8 +13,12 @@ its history.
   - on NIFTY (weekly) and BANKNIFTY (monthly), 1 lot each.
 - Entry: the tape snapshot nearest 15:20 IST on the session before expiry, real quotes only. Sells fill at bid − 0.05,
   buys at ask + 0.05, statutory fees per leg.
-- Exit: cash settlement at the expiry-day index close: the mean of the recorded 15:00–15:29 one-minute closes, which is
-  how NSE builds it, else Yahoo's daily close. The source is recorded with every settlement.
+- Exit: cash settlement at the expiry-day index close: the mean of the recorded 15:00–15:29 one-minute closes, else
+  Yahoo's daily close. The source is recorded with every settlement.
+- Settlement check (diagnostic, not a rule): the registered mean misses NSE's official close by about 10 bps (the L1
+  evidence audit), while the history settles on the official close. So each settled trade also gets an `official`
+  event: the official close (NSE's published file, else the 15:29 one-minute close, which matched it on every day the
+  audit checked, else Yahoo's close), the P&L at it, and the gap. The registered settlement stays the result.
 - Paper only. Nothing here can place an order or promote itself: it reports eligibility by the spec's rules, and a
   registered allocator spec (BACKLOG 9) is what moves an eligible sleeve into the paper account.
 
@@ -161,6 +165,32 @@ def settlement_price(data_dir: Path, underlying: str, day: dt.date) -> tuple[flo
     return None, why
 
 
+def official_close(data_dir: Path, underlying: str, day: dt.date) -> tuple[float | None, str]:
+    """The 15:29 one-minute close: the last bar of the session, which equalled NSE's official close on every recorded
+    day the L1 evidence audit checked."""
+    p = Path(data_dir) / str(day) / f"{underlying}_1m.csv"
+    if p.exists():
+        b = normalise_bars(pd.read_csv(p, index_col=0, parse_dates=True))
+        last = b[b.index.time == dt.time(15, 29)]
+        if len(last):
+            return float(last["close"].iloc[-1]), "the 15:29 one-minute close"
+    return None, "no 15:29 bar recorded"
+
+
+def payoff(t: dict, s_t: float) -> dict:
+    """A trade held to cash settlement at index level `s_t`: points, STT on exercised long legs, P&L after the entry
+    fees, and each leg's intrinsic value."""
+    lot = int(t["lot"])
+    pts, stt, intr_ = 0.0, 0.0, []
+    for leg in t["legs"]:
+        intr = intrinsic(leg["right"], leg["strike"], s_t)
+        pts += -leg["qty"] * leg["fill"] + leg["qty"] * intr
+        if leg["qty"] > 0 and intr > 0:
+            stt += STT_EXERCISE * intr * leg["qty"] * lot
+        intr_.append(round(intr, 2))
+    return {"pnl_pts": pts, "stt_rs": stt, "pnl_rs": pts * lot - t["entry_fees_rs"] - stt, "intrinsic": intr_}
+
+
 def intrinsic(right: str, strike: float, s_t: float) -> float:
     return max(s_t - strike, 0.0) if right == "CE" else max(strike - s_t, 0.0)
 
@@ -210,7 +240,8 @@ def assess(trades: list[dict], hist: dict, naked: bool) -> dict:
 
 
 class ExpirySeller:
-    def __init__(self, cfg, root: Path, data_dir: Path, close_fn=None, spec: dict | None = None, say=print):
+    def __init__(self, cfg, root: Path, data_dir: Path, close_fn=None, spec: dict | None = None, say=print,
+                 official_fn=None):
         self.cfg, self.root, self.data = cfg, Path(root), Path(data_dir)
         self.spec = spec or load_spec()
         self.ledger = self.root / f"{self.spec['name']}.jsonl"
@@ -221,6 +252,7 @@ class ExpirySeller:
         self.picker = StrikePicker(IntradayPricer(cfg.get("backtest.risk_free", 0.065), cfg.get("backtest.dividend_yield", 0.012)))
         self.underlyings = list(self.spec["underlyings"])
         self.close_fn, self.say = close_fn, say
+        self.official_fn = official_fn            # (underlying, day) -> NSE's published close, or None
 
     # ---- the ledger ----------------------------------------------------------------------------------------------
     def events(self) -> list[dict]:
@@ -239,8 +271,11 @@ class ExpirySeller:
         """Every opened trade, merged with its settlement if it has one (oldest first)."""
         evs = self.events()
         settled = {e["id"]: e for e in evs if e["event"] == "settle"}
-        return [{**e, **({k: v for k, v in settled[e["id"]].items() if k not in ("event", "recorded_at")}
-                         if e["id"] in settled else {}), "settled": e["id"] in settled}
+        official = {e["id"]: e for e in evs if e["event"] == "official"}
+
+        def extra(src: dict, i: str) -> dict:
+            return {k: v for k, v in src[i].items() if k not in ("event", "recorded_at", "spec")} if i in src else {}
+        return [{**e, **extra(settled, e["id"]), **extra(official, e["id"]), "settled": e["id"] in settled}
                 for e in evs if e["event"] == "open"]
 
     def assessment(self, sleeve: str, underlying: str) -> dict:
@@ -270,6 +305,7 @@ class ExpirySeller:
         now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz=IST)
         now = now.tz_localize(IST) if now.tzinfo is None else now.tz_convert(IST)
         notes = self.settle(day, now)
+        notes += self.check_settlement(day, now)
         if self.cal.is_trading_day(day):
             notes += self.open(day, now)
         return notes
@@ -293,19 +329,61 @@ class ExpirySeller:
             if s_t is None or not math.isfinite(s_t):
                 notes.append(f"UNSETTLED {t['id']}: {src}")
                 continue
-            lot = int(t["lot"])
-            pts, stt = 0.0, 0.0
-            payoff = []
-            for leg in t["legs"]:
-                intr = intrinsic(leg["right"], leg["strike"], s_t)
-                pts += -leg["qty"] * leg["fill"] + leg["qty"] * intr
-                if leg["qty"] > 0 and intr > 0:
-                    stt += STT_EXERCISE * intr * leg["qty"] * lot
-                payoff.append(round(intr, 2))
-            pnl = pts * lot - t["entry_fees_rs"] - stt
+            r = payoff(t, s_t)
             self._append({"event": "settle", "id": t["id"], "settle": round(s_t, 2), "settle_source": src,
-                          "intrinsic": payoff, "stt_rs": round(stt, 2), "pnl_pts": round(pts, 2), "pnl_rs": round(pnl, 2)})
-            notes.append(f"settled {t['id']} at {s_t:,.2f} ({src}): ₹{pnl:+,.0f}/lot")
+                          "intrinsic": r["intrinsic"], "stt_rs": round(r["stt_rs"], 2), "pnl_pts": round(r["pnl_pts"], 2),
+                          "pnl_rs": round(r["pnl_rs"], 2)})
+            notes.append(f"settled {t['id']} at {s_t:,.2f} ({src}): ₹{r['pnl_rs']:+,.0f}/lot")
+        return notes
+
+    def official(self, underlying: str, day: dt.date) -> tuple[float | None, str]:
+        """The official close for the settlement check: NSE's published file, else the 15:29 one-minute close, else
+        Yahoo's daily close."""
+        why = []
+
+        def call(name: str, fn) -> float | None:
+            if fn is None:
+                return None
+            try:
+                v = fn(underlying, day)
+            except Exception as exc:
+                why.append(f"{name}: {exc!s:.60}")
+                return None
+            if v is None or not math.isfinite(v) or v <= 0:
+                why.append(f"{name}: none")
+                return None
+            return float(v)
+
+        if (v := call("NSE's official close", self.official_fn)) is not None:
+            return v, "NSE's official close"
+        v, src = official_close(self.data, underlying, day)
+        if v is not None:
+            return v, src
+        why.append(src)
+        if (v := call("Yahoo daily close", self.close_fn)) is not None:
+            return v, "Yahoo daily close"
+        return None, "; ".join(why)
+
+    def check_settlement(self, day: dt.date, now: pd.Timestamp) -> list[str]:
+        """Diagnostic: each settled trade's P&L at the official close too, appended once as an `official` event. Runs
+        from 15:45 on expiry day (the published sources lag the close); the registered settlement is never changed."""
+        notes = []
+        for t in self.trades():
+            if not t["settled"] or "official" in t:
+                continue
+            exp = dt.date.fromisoformat(t["expiry"])
+            if exp > day or (exp == now.date() and now.time() < dt.time(15, 45)):
+                continue
+            v, src = self.official(t["underlying"], exp)
+            if v is None:
+                continue
+            r = payoff(t, v)
+            ev = self._append({"event": "official", "id": t["id"], "official": round(v, 2), "official_source": src,
+                               "pnl_rs_official": round(r["pnl_rs"], 2),
+                               "settle_gap_bps": round((float(t["settle"]) / v - 1) * 1e4, 2),
+                               "pnl_gap_rs": round(float(t["pnl_rs"]) - r["pnl_rs"], 2)})
+            notes.append(f"settlement check {t['id']}: official {v:,.2f} ({src}), registered {float(t['settle']):,.2f} "
+                         f"({ev['settle_gap_bps']:+.1f} bps); P&L at official ₹{r['pnl_rs']:+,.0f} vs ₹{float(t['pnl_rs']):+,.0f}")
         return notes
 
     def due(self, underlying: str, day: dt.date) -> dt.date | None:
@@ -414,7 +492,7 @@ class ExpirySeller:
 
     # ---- the report ----------------------------------------------------------------------------------------------
     def report(self) -> dict:
-        rows = []
+        rows, evs = [], self.events()
         for u in self.underlyings:
             since = self.eligible_since(u)
             for s in self.trading(u):
@@ -428,15 +506,47 @@ class ExpirySeller:
                 status = ("retired: " + a["retired"]) if a["retired"] else (
                     "eligible for the paper account (the registered allocator applies it)" if a["eligible"] else "collecting")
                 rows.append({"sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u, "history": h, **a,
-                             "status": status, "naked": self.sleeves[s]["naked"]})
+                             "status": status, "naked": self.sleeves[s]["naked"], **skip_rate(evs, s, u)})
         trades = self.trades()
-        evs = self.events()
         return {"spec": self.spec["name"], "spec_hash": self.spec["_hash"], "rows": rows,
-                "fills": fill_quality(evs),
+                "fills": fill_quality(evs), "settlement": settlement_check(trades),
                 "open": [t for t in trades if not t["settled"]],
                 "recent": [t for t in trades if t["settled"]][-8:],
                 "skips": [e for e in evs if e["event"] == "skip"][-8:]}
 
+
+
+def skip_rate(events: list[dict], sleeve: str, underlying: str) -> dict:
+    """Eves this sleeve was due on and didn't trade: a high rate means the forward record covers fewer eves than the
+    history, and not at random (a skip is usually a missing or thin quote)."""
+    n = {"open": 0, "skip": 0}
+    for e in events:
+        if e.get("event") in n and e.get("sleeve") == sleeve and e.get("underlying") == underlying:
+            n[e["event"]] += 1
+    due = n["open"] + n["skip"]
+    return {"eves_due": due, "skipped": n["skip"], "skip_rate": round(n["skip"] / due, 4) if due else None}
+
+
+def settlement_check(trades: list[dict]) -> dict:
+    """Per underlying: how far the registered settlement (15:00–15:29 mean) sat from the official close, and what it did
+    to P&L. The history settles on the official close, so this gap is a forward-vs-history difference that is not
+    the market's."""
+    out: dict[str, dict] = {}
+    for t in trades:
+        if "official" not in t:
+            continue
+        o = out.setdefault(t["underlying"], {"days": {}, "pnl_gap": 0.0, "trades": 0, "sources": {}})
+        o["days"][t["expiry"]] = float(t["settle_gap_bps"])
+        o["pnl_gap"] += float(t["pnl_gap_rs"])
+        o["trades"] += 1
+        o["sources"][t["official_source"]] = o["sources"].get(t["official_source"], 0) + 1
+    res = {}
+    for u, o in sorted(out.items()):
+        g = np.array(list(o["days"].values()))
+        res[u] = {"days": len(g), "trades": o["trades"], "mean_gap_bps": round(float(g.mean()), 2),
+                  "mean_abs_gap_bps": round(float(np.abs(g).mean()), 2), "max_abs_gap_bps": round(float(np.abs(g).max()), 2),
+                  "pnl_gap_rs": round(o["pnl_gap"], 2), "sources": o["sources"]}
+    return res
 
 
 def fill_quality(events: list[dict]) -> dict:
@@ -509,6 +619,16 @@ def render(rep: dict) -> str:
     if rep["skips"]:
         out += ["", "**Skipped (latest):** " + "; ".join(f"{e['sleeve']}-{e['underlying']}-{e['expiry']}: {e['reason']}"
                                                           for e in rep["skips"])]
+    due = [r for r in rep["rows"] if r.get("eves_due")]
+    if due:
+        out += ["", "**Skip rate (eves due, not traded):** " + "; ".join(
+            f"{r['sleeve']} {r['underlying']} {r['skipped']}/{r['eves_due']} ({r['skip_rate']:.0%})" for r in due)]
+    st = rep.get("settlement") or {}
+    if st:
+        out += ["", "**Settlement check (registered 15:00–15:29 mean vs the official close; diagnostic):** " + "; ".join(
+            f"{u}: {c['days']} expiries, mean |gap| {c['mean_abs_gap_bps']:.1f} bps (max {c['max_abs_gap_bps']:.1f}), "
+            f"P&L at the registered rule minus at the official close {rs(c['pnl_gap_rs'])} over {c['trades']} trades"
+            for u, c in st.items())]
     fills = {u: f for u, f in (rep.get("fills") or {}).items() if f["legs"]}
     if fills:
         out += ["", "**Fill quality (real quotes vs the history's cost model):** " + "; ".join(
