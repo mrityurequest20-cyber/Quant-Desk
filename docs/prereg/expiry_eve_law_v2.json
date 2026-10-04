@@ -1,0 +1,27 @@
+{
+  "name": "expiry_eve_law_v2",
+  "registered": "2026-10-04",
+  "supersedes": "expiry_eve_law_v1 (spec 51e180594091)",
+  "why": "the warehouse audit (data/audit.py) found that NSE's bhavcopy has no underlying column before 8 Jul 2024, and that on weekly expiry days no future expires, so v1 took the spot and the settlement price from the monthly future: on 612 weekly expiry days it sat +0.19% from NSE's official close on average (max 1.40%; FINNIFTY +0.26%). v2 repeats v1 exactly, changing only where the index level comes from",
+  "law": "L1: option sellers are paid more than the move they insure on the last night before expiry. Selling 20-delta options at the close one session before expiry and holding them to settlement earns a positive premium after costs, on any liquid index option market, not just the two it was found on",
+  "discovery": {"instruments": ["NIFTY", "BANKNIFTY"], "note": "reported for reference, not part of the test"},
+  "held_out": {
+    "instruments": ["FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"],
+    "data": "NSE F&O bhavcopy (fo_bhav), BSE F&O bhavcopy (bse_fo_bhav, from 2024-01-01), and NSE's official index closes (nse_index_close)"
+  },
+  "structures": {
+    "strangle": {"strategy": "short_strangle_20d", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20]], "role": "the law itself"},
+    "insured": {"strategy": "iron_condor_20_05", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.05], [1, "PE", -0.05]], "role": "the law with crash insurance"}
+  },
+  "conventions": "as expiry_eve_law_v1: warehouse_research.build_trades unchanged; entry at the close one session before each expiry (nearest expiry only), legs at close -/+ (0.05 + max(0.05, 0.2% of the price)), statutory fees at the instrument's lot, held to the expiry-day index close, STT on exercised long legs; only strikes that traded that day",
+  "spot_source": "nse_index_close",
+  "spot": "NSE instruments: NSE's official closing value of the index (nse_index_close), the value its index options settle on, for both the entry spot and the settlement. BSE's SENSEX and BANKEX: the bhavcopy's underlying (BSE's file always carries it). The nearest future's settle only where neither exists",
+  "unit": "P&L in basis points of the index level at entry; also the share of the premium sold that was kept",
+  "tests": {
+    "pooled": "per ISO expiry week, the mean P&L (bps) across the held-out instruments that traded that week; replicates when that weekly series has a positive mean with a Newey-West one-sided p < 0.05 (t > 1.645) AND at least 60% of held-out instruments with 20 or more trades have a positive mean",
+    "per_instrument": "a candidate for the tape and a forward sleeve: 30 or more trades, t > 1.645, and a positive mean in both its first two thirds and last third",
+    "both_structures": "the strangle and the insured condor, reported separately"
+  },
+  "decision": "v2 replaces v1 as the evidence for L1 (strangle) and L2 (insured). A structure that replicates under v2 keeps its principle at 'replicated'; one that does not moves its principle back to 'found'. The robustness audit's caveats carry over until the audit is repeated on v2",
+  "changes": "evaluated once; a different rule is a new spec"
+}
