@@ -451,7 +451,7 @@ Severity: **P4** · Status: **VERIFIED**
 | ID | Question | Phase |
 |---|---|---|
 | Q-01 | Kotak candle timestamps: bar start (as the docstring says) or bar end? This decides whether `completed()` admits a forming bar. Needs a Kotak key, or the archived chains and option minutes compared with NSE. | A2 → H |
-| Q-02 | ~~Does the test suite pass on CI's versions?~~ Answered: 423 tests passed; 2 fail by date (A-19); 2 slow files re-run (§ A.7) | A1 |
+| Q-02 | ~~Does the test suite pass on CI's versions?~~ Answered: CI ran 445 passed, 2 failed (A-19, date-dependent), 6 skipped (§ A.7) | A1 |
 | Q-03 | `plan_gate` drops every directional plan while the plan registry is empty (5 of 28 real sessions needed). Is this the dominant cause of 0 trades? | B4 / K |
 | Q-04 | `deploy/whatif.py` runs with `memory=None`, so its `as_run` variant can't reproduce live factor weights. What-if parity? | B / K |
 | Q-05 | Account reset 2026-10-05 (₹20k → ₹5L): where is the pre-reset journal archived, and did that account trade? | K |

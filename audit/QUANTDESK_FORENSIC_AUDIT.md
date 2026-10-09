@@ -148,7 +148,7 @@ python -c "import yfinance as yf; print(yf.Ticker('^NSEI').history(period='2d', 
 |---|---|---|
 | Green | 49 of 52 files | 423 tests in all files that finished |
 | Failing: `tests/test_kotak.py` | 1 | `test_chain_from_the_live_book[live]` and `[docs]` (2 failures) |
-| Over 300 s: `tests/test_handover.py`, `tests/test_plan_research.py` | 2 | re-running with a 25-minute cap; result below |
+| Over 300 s: `tests/test_handover.py`, `tests/test_plan_research.py` | 2 | slow, not failing: they pass in CI's full run (below) |
 
 **Why `test_kotak` fails**
 - This is a time bomb in the test, not a library-version problem: A-19.
@@ -156,6 +156,11 @@ python -c "import yfinance as yf; print(yf.Ticker('^NSEI').history(period='2d', 
 - `KotakOptionChain.chain` stamps the snapshot with the wall clock (`kotak.py:288`).
 - `time_to_expiry` (`chains.py:44-48`) is therefore 0 on any day after 2026-10-06 15:30, and every IV is `NaN`.
 - So the test fails on `main` too, from that date on.
+
+**CI confirmation**
+- GitHub Actions `tests` on this PR (`ci.yml`, CI-resolved versions): **445 passed, 2 failed, 6 skipped** in
+  15 min 27 s.
+- The 2 failures are exactly the A-19 pair. The proposed patch is in the PR comment, not applied (read-only audit).
 
 **Effect on the audit**
 - The probes already cover A-02's real failure, and no existing test catches it.
