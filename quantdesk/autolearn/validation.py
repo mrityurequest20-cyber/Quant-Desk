@@ -133,8 +133,10 @@ class LockBox:
             return []                                              # aged out of the dataset: nothing to compare
         fp = hashlib.sha256(pd.util.hash_pandas_object(part[["symbol", "ts", "y"]].astype(str), index=False)
                             .to_numpy().tobytes()).hexdigest()[:16]
-        return [] if fp == lock["fingerprint"] or len(part) != lock["rows"] else \
-            [f"locked final test changed: fingerprint {fp} != {lock['fingerprint']}"]
+        if fp == lock["fingerprint"] and len(part) == lock["rows"]:
+            return []
+        return [f"locked final test changed: {len(part)} rows (locked {lock['rows']}), fingerprint {fp} != "
+                f"{lock['fingerprint']}"]                         # A-07: a changed row count is a change too
 
     def record_access(self, model_id: str, purpose: str, result: dict | None = None) -> int:
         self.log.append({"event": "access", "model": model_id, "purpose": purpose, "at": str(dt.datetime.now()),
