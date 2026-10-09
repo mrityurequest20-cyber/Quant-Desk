@@ -31,7 +31,7 @@ One label never silently becomes another.
 |---|---|---|---|---|---|
 | 1 | 2026-10-09 | S0 readiness assessment (read-only) | S0 | **done**: this file | requested by owner |
 | 2 | 2026-10-09 | O-1: pause the engineer routine | S0 | **done**: `enabled: false` at 22:36:11 UTC (S0-05) | owner approved in session |
-| 3 | 2026-10-09 | O-4a: ask the audit session to commit and push the H–L artifacts | S0 | **requested**: message delivered; awaiting its push (S0-02) | owner approved in session |
+| 3 | 2026-10-09 | O-4a: ask the audit session to commit and push the H–L artifacts | S0 | **declined by that session (correctly)**: it needs the owner's approval typed in that session, not a relayed request. **Owner action** (S0-02) | owner approved in session |
 | 4 | — | Owner actions O-2, O-3, O-4b, O-5 (§6.1) | S0 | **awaiting owner** | owner only |
 | 5 | — | First remediation PR: A-19 test clock seam (§6.2) | S0 | **proposed, not started** | needs owner approval |
 
@@ -59,6 +59,7 @@ One label never silently becomes another.
 | **Conclusion** | The A–G evidence is preserved on a remote branch, and its git blob hashes are pinned in Appendix A. The handoff reports **115 findings across A–L**. That leaves **≈47 findings (H–L) that exist in no repository location this session can see**. Among them: India VIX zero readings, the Pages 404, kill-switch reachability, journal mutation, replay failures, crash/orphan exposure, and the lost/unrecoverable evidence. They are PREVIOUSLY REPORTED only. |
 | **Located (VERIFIED NOW, 2026-10-09 ~22:30 UTC)** | The audit session `session_01W3ozoc7W4HkbhbWrrxBk83` ("QuantDesk forensic audit") is idle. Its status reads "Phase L audit artifacts written under audit/, left uncommitted". Its final turn (2026-10-09 18:49:50 UTC) says the H–L artifacts are **untracked files under `audit/`**, kept local on the owner's instruction, and that it will commit and push them to `claude/exciting-galileo-criwur` when the owner says so. Its container was reachable at 22:26–22:28 UTC: file reads were served from it. |
 | **Uncertainty** | The H–L files exist **only** in that session's container, which can be reclaimed when idle. They are not hashed anywhere. Also, PR #9 is unmerged, so its branch could be deleted. |
+| **Relay attempt** | 2026-10-09 ~22:36 UTC: this session asked the audit session (on owner approval) to push. It **declined**, citing the owner's standing instruction in that session to keep artifacts local, and said only the owner, typing in that session, can lift it. That is the correct control. It reported (**not verified here**): tracked changes 0; register hash `e49341c0…` unchanged; Phase K probes (10) and Phase L probes (21) pass. It also correctly flagged a timestamp error in this session's message ("about 22:40 UTC" vs a 22:36:11 send); the owner's answer came before 22:36:11. |
 | **Required action** | **Owner, urgent:** tell the audit session to commit and push the H–L artifacts to `claude/exciting-galileo-criwur` (as it offered). Then this log records their hashes. Do not delete that branch. Decide whether to merge PR #9 (audit-only) or tag it (e.g. `audit-a-l-2026-10-09`) so the evidence is pinned. |
 | **Pass condition** | All 115 findings are committed with hashes, or the owner records which are lost and they are re-derived. The A–G branch is tagged or merged. |
 
@@ -230,7 +231,7 @@ One label never silently becomes another.
 | O-1 | Pause routine "Quant-Desk engineer shift" before 2026-10-10 12:10 UTC | **done** 2026-10-09 22:36 UTC |
 | O-2 | Answer S0-07 (a)–(e) from the broker consoles | owner only |
 | O-3 | Re-enable Pages from `gh-pages`, after checking the security log | owner only |
-| O-4a | Get the H–L artifacts committed by the audit session | **requested** 2026-10-09 ~22:37 UTC |
+| O-4a | Get the H–L artifacts committed by the audit session | **owner only**: type the approval in `session_01W3ozoc7W4HkbhbWrrxBk83`; a relayed request was declined |
 | O-4b | Tag evidence: `claude/exciting-galileo-criwur` (after H–L lands), the `journal` head and the `gh-pages` head | owner, or this session on approval |
 | O-5 | Protect `main` (PR + 1 non-author review + no force-push), adding required check `tests` **after** §6.2 merges | owner only |
 
