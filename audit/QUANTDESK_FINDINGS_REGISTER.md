@@ -54,6 +54,14 @@ P3 moderate · P4 minor.
 | B-09 | Trigger engine gaps: LTP sampling misses, fire-time vetoes from the previous minute, repeated re-fires | P3 | PARTIAL | B5 |
 | B-10 | Opening range, initial balance and session minutes count from the first bar present, not 09:15 | P3 | VERIFIED | B2 |
 | B-11 | What-if `as_run` does not reproduce what ran (model chain, no memory, no learner, no brain, no breadth) | P3 | MISLEADING | B4 |
+| C-01 | Even an approved plan model can't let a live directional plan through: the desk builds spreads, the gate takes single legs only | P1 | BROKEN (latent) | C2 |
+| C-02 | The session DirectionModel's validation gate passes on random walks 10% of the time | P2 | VERIFIED | C1 |
+| C-03 | No automatic demotion or rollback of a degraded champion | P2 | VERIFIED (missing) | C1 |
+| C-04 | Two cost models: autolearn's futures STT is 2 bps vs the desk's 5 bps | P3 | CONTRADICTED (internal) | C3 |
+| C-05 | The iron fly (the only non-directional setup) cannot pay its costs on an intraday hold | P2 | VERIFIED | C3 |
+| C-06 | EV model limits: fixed IV, no calibration from outcomes, an unvalidated P(up) prior | P3 | PARTIAL | C3 |
+| C-07 | Lockbox peeks are unbounded: one per cycle in which a candidate passes walk-forward | P3 | PARTIAL | C1 |
+| C-08 | `FEATURE_VERSION` hashes source text: any edit (even a comment) invalidates every artifact and halts entries | P3 | VERIFIED | C1 |
 
 Verified-working controls (V-xx) and open questions (Q-xx) are at the end.
 
@@ -618,6 +626,124 @@ Severity: **P3** · Status: **MISLEADING**
 
 So `as_run` differs from the live run in pricing, weights and gating messages. This resolves Q-04.
 
+### [C-01] Even an approved plan model can't let a live directional plan through
+Severity: **P1** · Status: **BROKEN (latent)**
+
+**Claim**
+`autolearn/live.py` docstring: "Directional entries (`plan_gate`) … needs the plan registry's champion … Without such a
+champion no directional trade is taken" (implying one *is* taken with it).
+
+**Actual behavior**
+- `plan_gate` rejects every plan with `len(p.legs) != 1 or p.legs[0].ratio != 1` ("the plan model covers single long
+  options only", `live.py:198-200`).
+- At ₹5L the desk builds a **debit spread** for every directional setup:
+  - `Playbook._directional` adds a short leg when `allow_short and (always_spread or rich)` (`playbook.py:232-236`);
+  - `always_spread: true` for orb, vwap_trend, trend_break and va_reversion (`config/quantdesk.yaml` → `intraday.setups`);
+  - `allow_short` is on because equity ₹5,00,000 ≥ `short_legs_from_equity` ₹3,00,000.
+- The single-option alternatives exist only inside `_select_by_ev`, which runs *after* the gate.
+
+**Impact**
+The ≈ 33-session path to the first directional trade (28 real sessions + a lock + 10 forward) ends in the same
+rejection, unless config or code changes. Combined with C-05, the engine has no reachable trade path.
+
+**Reproduction**
+`test_phase_c_probes.py::test_approved_plan_model_still_rejects_every_live_directional_plan`: with a stub champion
+that approves everything, the 2-leg plan is rejected and the 1-leg plan is approved.
+
+**Fix**
+Align the plan the model was trained on with the plan the engine builds: either gate the single-leg variant, or train
+and approve spreads.
+
+**Confidence:** High.
+
+### [C-02] The session DirectionModel's validation gate passes on noise
+Severity: **P2** · Status: **VERIFIED**
+
+**Claim**
+README: "It has to pass a walk-forward test: out-of-sample AUC ≥ 0.53 *and* log-loss better than the base rate.
+Otherwise it's switched off".
+
+**Actual behavior**
+- The gate is one 70/30 day split (`quant.py:226-238`), re-run every session (and at hand-over), with 6×-overlapping
+  30-minute labels.
+- **On 200 pure random-walk histories of the live window size it validated 20 (10.0%)**; AUC ≥ 0.53 in 15%,
+  sd(AUC) 0.031 (`audit` null simulation).
+- Refit 2× per session per index, a spurious "validated" model is close to certain within weeks.
+- When valid, it sets P(up) for EV (±0.15) and adds a `model` evidence factor at weight 0.8.
+- Live fits so far: AUC 0.47–0.51, consistent with the null.
+
+**Impact**
+Latent: it acts only on directional plans, which are gated (B-01, C-01).
+
+**Reproduction**
+`::test_session_direction_model_validates_on_random_walks`.
+
+**Confidence:** High.
+
+### [C-03] No automatic demotion or rollback of a degraded champion
+Severity: **P2** · Status: **VERIFIED (missing)**
+
+- `Cycle._promote` judges challengers only (`cycle.py:499`). The champion's shadow record is computed in `_paper` but
+  never acted on.
+- A drift alarm makes the champion abstain (`live.py:132-133`) while it stays champion.
+- `Registry.rollback` has a single caller: the operator CLI (`autolearn/cli.py:170`).
+- **Impact:** a promoted champion that degrades keeps its role until a human acts. The "degradation → … → rollback"
+  chain (D8) has no automatic link.
+- **Reproduction:** `::test_no_automatic_champion_demotion`.
+
+### [C-04] Two cost models disagree on futures STT
+Severity: **P3** · Status: **CONTRADICTED** (internal)
+
+- `autolearn.costs.stt_sell_bps: 2.0` (0.02%) vs `costs.segments.futures.stt_sell: 0.0005` (0.05%, the post-Budget
+  2026-27 rate the README cites).
+- The autolearn simulation's round trip (≈ 5.8 bps) is ≈ 3 bps cheaper than the desk's own schedule. That biases
+  registration toward passing.
+- `docs/ARCHITECTURE.md` repeats the 0.02% figure.
+- **Reproduction:** `::test_autolearn_and_desk_cost_models_disagree_on_futures_stt`.
+
+### [C-05] The iron fly cannot pay its costs on an intraday hold
+Severity: **P2** · Status: **VERIFIED** (answers Q-06)
+
+- The 51 recorded EV rejections show an internally consistent Monte Carlo:
+  - 2-hour holds;
+  - fees ₹228–332 and exit spread ₹23–100 per lot;
+  - theta over ≤ 120 trading minutes too small to cover them.
+- Results:
+  - BANKNIFTY (13–14 DTE): **P(profit) 0%**, EV −₹400…−₹530;
+  - NIFTY 6-DTE: −₹190…−₹255;
+  - NIFTY 1-DTE: +₹18…+₹93, against a 0.05 R floor ≈ ₹221.
+- BANKNIFTY also sizes to 0 lots: a max loss of ₹13.8–15.5k per lot exceeds the 2.5% × conviction budget.
+- **Impact:** the only non-directional setup in the playbook is economically closed by the desk's own model.
+  Together with B-02 and C-01, the intraday engine has no reachable path to a trade.
+
+### [C-06] EV model limits
+Severity: **P3** · Status: **PARTIAL**
+
+- **Fixed IV per leg:** no vega or IV dynamics. The iron fly's own "vol crush" thesis is not modelled.
+- **Normal increments.**
+- **Exit fees on the entry mid.**
+- **An explicit unvalidated prior** P(up) = 0.5 + 0.10 × score for directional plans.
+- **No feedback from realised outcomes.** The app's "calibration" table (`web/intraday_api.py:211-231`) is
+  display-only, and there are 0 trades to compare. EV accuracy is UNVERIFIED.
+
+### [C-07] Lockbox peeks are unbounded
+Severity: **P3** · Status: **PARTIAL**
+
+- `_lockbox_check` runs (and logs a peek) for every candidate that passes walk-forward, in every cycle
+  (`cycle.py:395-414`).
+- Peeks are counted, not capped. Repeated looks erode "final".
+- The plan track's `PlanLock` opens once per generation, which is better.
+- See also A-07.
+
+### [C-08] `FEATURE_VERSION` hashes source text
+Severity: **P3** · Status: **VERIFIED**
+
+- `FEATURE_VERSION` = sha256 of `inspect.getsource` of `_day_features`, `features_5m` and `to_5m` (`features.py:33-42`),
+  including comments and docstrings.
+- Any edit to those functions makes every registered artifact fail `from_artifact` → `LiveLearner.fault` → `_blocked`
+  halts **all** entries ("halted: …").
+- Fail-closed by design, but an availability hazard on a cosmetic change.
+
 ---
 
 ## Verified-working controls (all phases)
@@ -638,6 +764,12 @@ So `as_run` differs from the live run in pricing, weights and gating messages. T
 | V-11 | The fail-closed directional gate works as designed: no directional plan reached EV, risk or execution without an approved plan model, on either entry path | live journal; replay |
 | V-12 | Session features (5 m/15 m indicators) use clock-completed bars only | `features.py:_completed` |
 
+| V-13 | The autolearn registration gate is strict: **0/20 random-walk datasets registered** | null simulation (`QUANTDESK_LEARNING_AUDIT.md` § C.1.3) |
+| V-14 | The full autolearn chain (train → validate → register → shadow ledger → promote → steer → fail closed on tamper → rollback) works, **in tests only** (synthetic planted signal, relaxed promotion gates) | `tests/test_autolearn.py::test_full_cycle_registers_shadows_promotes_and_rolls_back` |
+| V-15 | Model artifacts are content-hashed JSON (no pickle), verified on load with a feature-version check | `models.Pipeline.from_artifact`, `policy.PlanPolicy.from_artifact` |
+| V-16 | The plan-research protocol: real-PIT-only qualification, every configuration logged and hashed, a pre-declared selection rule, a DSR counting configurations, the lock opened once per generation, forward gates before promotion | `autolearn/research.py:513-796` |
+| V-17 | The EV Monte Carlo is internally consistent on the recorded decisions (cost and theta arithmetic reproduces P(profit) and EV) | journal decision contexts |
+
 ---
 
 ## Open questions (carried forward)
@@ -649,7 +781,7 @@ So `as_run` differs from the live run in pricing, weights and gating messages. T
 | Q-03 | ~~Is the empty plan registry the dominant cause of 0 trades?~~ Answered in B-02: it explains 100% of directional rejections; the iron fly fails EV | B4 |
 | Q-04 | ~~What-if parity?~~ Answered: B-11 | B |
 | Q-05 | Account reset 2026-10-05 (₹20k → ₹5L): where is the pre-reset journal archived, and did that account trade? | K |
-| Q-06 | Is the iron fly's Monte Carlo EV right? It reports P(profit) 0% and −₹400–530/lot on BANKNIFTY. Is it the cost model, the margin sizing ("none fits"), or a mark/exit modelling issue? | C3 |
+| Q-06 | ~~Is the iron-fly EV right?~~ Answered: internally consistent; the setup can't pay intraday (C-05) | C3 |
 | Q-07 | Does the global-stress size multiplier ever bind live? (No brain in the replay) | F / K |
 
 ---
@@ -661,3 +793,4 @@ So `as_run` differs from the live run in pricing, weights and gating messages. T
 | 2026-10-09 | A | Register created: A-01 … A-18, V-01 … V-08, Q-01 … Q-05 |
 | 2026-10-09 | A | A-19 added after the test-suite baseline; Q-02 answered |
 | 2026-10-09 | B | B-01 … B-11, V-09 … V-12 added; Q-03, Q-04 answered; Q-06, Q-07 opened |
+| 2026-10-09 | C | C-01 … C-08, V-13 … V-17 added; Q-06 answered |

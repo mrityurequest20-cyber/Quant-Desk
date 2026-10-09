@@ -10,7 +10,7 @@ workflow was changed. The only files written are under `audit/`.
 | `QUANTDESK_ARCHITECTURE_MAP.md` | Phase A1: done |
 | `QUANTDESK_DATA_LINEAGE.md` | Phases A2 + A3: done |
 | `QUANTDESK_TRADING_STATE_MACHINE.md` | Phase B: done |
-| `QUANTDESK_LEARNING_AUDIT.md` | Phases C/D: pending |
+| `QUANTDESK_LEARNING_AUDIT.md` | Part C (models): done; Part D (learning): pending |
 | `QUANTDESK_AI_AUDIT.md` | Phase G: pending |
 | `QUANTDESK_RESEARCH_VALIDITY.md` | Phase E: pending |
 | `QUANTDESK_REMEDIATION_PLAN.md` | at the end |
@@ -21,8 +21,8 @@ workflow was changed. The only files written are under `audit/`.
 | Phase | Scope | Status |
 |---|---|---|
 | A | System foundation: architecture, lineage, point-in-time | done |
-| B | Trading decision pipeline: interpretation, setups, state machine, funnel, triggers | **done, awaiting review** |
-| C | Models: direction, plan, EV/cost | not started |
+| B | Trading decision pipeline: interpretation, setups, state machine, funnel, triggers | done |
+| C | Models: direction, plan, EV/cost | **done, awaiting review** |
 | D | Learning system: ledger, factors, lifecycle, recency, regime, no-trade, baseline, self-correction | not started |
 | E | Research validity | not started |
 | F | Options / futures / execution | not started |
@@ -239,13 +239,69 @@ disappeared.
 
 ---
 
+## Phase C: Models
+
+Full report: `QUANTDESK_LEARNING_AUDIT.md`, Part C.
+
+### C.1 Objective
+
+For every model family (the session DirectionModel, the autolearn candidates, the plan policy, the EV/cost engine),
+prove or break the chain: training → validation → promotion → persistence → future use → evaluation → update. Also
+test the validation gates against pure noise.
+
+### C.2 Files and runtime paths traced
+
+| Area | Code |
+|---|---|
+| Direction and EV | `intraday/quant.py` (DirectionModel, EVEngine, `load_research`) |
+| Autolearn models | `autolearn/models.py`, `autolearn/cycle.py` (dataset … promote, retention), `autolearn/registry.py` (call sites), `autolearn/policy.py`, `autolearn/research.py` (develop, run, lockbox, register, forward) |
+| Costs | `execution/costs.py`, `autolearn/evaluate.py:CostModel` |
+| Display | `web/intraday_api.py:_calibration` |
+| Config | `config/quantdesk.yaml` (`intraday.quant`, `intraday.setups`, `autolearn.*`) |
+| Tests | `tests/test_autolearn.py` |
+
+### C.3 Evidence
+
+- **Null simulations on synthetic random walks:**
+  - the session DirectionModel validated in **20/200**;
+  - the autolearn cycle registered **0/20**.
+- **Recorded EV contexts** of the 51 iron-fly rejections.
+- **4 deterministic probes**, all passing (`audit/probes/test_phase_c_probes.py`), including a stub "approve-everything"
+  plan champion that still rejects the live desk's spread plans.
+
+### C.4 Findings (detail in the register)
+
+| Severity | Findings |
+|---|---|
+| P1 | **C-01**: even an approved plan model rejects every live directional plan (spread vs single-leg mismatch) |
+| P2 | **C-02**: the session model's gate passes noise 10% of the time. **C-03**: no automatic demotion. **C-05**: the iron fly can't pay intraday |
+| P3 | C-04, C-06, C-07, C-08 |
+| Verified working | V-13 … V-17: the autolearn gate is strict on noise; the full chain works in tests; hashed artifacts; a rigorous plan protocol; the EV arithmetic is consistent |
+
+**Bottom line.** Under the current code and config the intraday engine has **no reachable path to a paper trade**:
+- directional plans are gated now (B-02) and would still be rejected after approval (C-01);
+- the iron fly fails EV (C-05).
+
+The only paper trades the desk makes are the pre-registered expiry-seller sleeves.
+
+### C.5 Unresolved (carried forward)
+
+| ID | Question | Phase |
+|---|---|---|
+| Q-07 | Does global-stress sizing ever bind? | F / K |
+| Q-05 | The pre-reset account | K |
+| — | The STT and statutory rates themselves, against an external source | F |
+
+---
+
 ## Answers so far to the final questions
 
-Answers are partial: only what Phases A–B support. Every other question is still open.
+Answers are partial: only what Phases A–C support. Every other question is still open.
 
 | # | Question | Answer so far |
 |---|---|---|
 | 1 | Is QuantDesk genuinely learning? | **Partly, and not via autolearn.** The autolearn loop retrains offline but has no live predictions (A-01). The memory grading runs at the close (A.4), but under the current gate it cannot change an executed decision except through the iron fly's \|score\| test (B-01). Phase D. |
+| 3 | What learning changes future decisions? | **Today: almost none that reaches execution.** The autolearn models never registered (A-01); the plan model can't be fitted yet; even when approved it can't pass the live plans (C-01). The memory weights touch only the iron fly's \|score\| test (B-01). Phase D |
 | 4 | Is learning point-in-time safe? | **Mostly; news learning is not** (A-09). Replay memory crosses time (A-15). |
 | 10 | Are technical indicators actually used? | **Computed, weighted, stored and learned. For execution they matter only through** the iron fly's eligibility (day type: ADX, IB, OR; \|score\| ≤ 0.3) and the RSI veto. Every directional use is gated (B-01). |
 | 11 | Is Volume Profile / Market Profile actually used? | **Yes, the session value area:** it decides the "balance" day type, which the only executable setup (iron fly) requires, and it bounds that trade. The prior-day value area is computed but never read (B-05). Market Profile (TPO) is used only as the volume fallback. |
@@ -255,13 +311,15 @@ Answers are partial: only what Phases A–B support. Every other question is sti
 | 15 | Can valid setups be hidden by later gates? | **Yes.** The plan-model gate removes 100% of directional setups. On the confirm path this writes no decision row (B-03). |
 | 16 | Does the trigger engine work? | **Mechanically yes** (fires at the armed levels), with gaps: LTP sampling, the previous minute's veto view at fire time, re-fires (B-09). |
 | 17 | Where do opportunities disappear? | No setup 70% · vetoes and window 20% · **plan-model gate 7% (every directional setup)** · **EV floor 2.5% (every iron fly)** · executed 0 (B-02). |
-| 18 | Why did recent zero-trade sessions produce zero trades? | **The directional gate needs 28 real point-in-time sessions (5 so far) and an approved model; the iron fly never cleared the EV floor; the rest was no setup or vetoed** (B-02). The gated opportunities averaged −0.07 R on the underlying: no sign the gate cost money. |
+| 18 | Why did recent zero-trade sessions produce zero trades? | See B-02. Phase C adds: **directional trades stay impossible even after a plan model is approved** (C-01), and the iron fly cannot pay costs intraday (C-05). The engine has no reachable trade path. |
+| 18 (cont.) | Phase B: **The directional gate needs 28 real point-in-time sessions (5 so far) and an approved model; the iron fly never cleared the EV floor; the rest was no setup or vetoed** (B-02). The gated opportunities averaged −0.07 R on the underlying: no sign the gate cost money. |
 | 19 | Can every trade be reconstructed? | Untestable (0 trades). Gaps: A-04, A-10, A-13, B-03. |
 | 20 | Can important rejected opportunities be reconstructed? | **Armed-path, EV, sizing and liquidity rejections: yes** (decision rows). **Confirm-path gate rejections: no**, sampled thoughts only (B-03). No opportunity ID; the gate is only in free text. |
-| 24 | Can the system detect and correct degradation? | Partly: the grading failure is only a WARN (A-02). Phase D8. |
-| 26 | What is NOT trustworthy so far? | Cross-day state integrity (A-10); live-vs-training parity (A-05/06); news trust (A-09); catch-up grading (A-02); the "why not" record on the confirm path (B-03); armed-rejection learning (B-07); breaking-news vetoes (B-08); what-if `as_run` (B-11). |
+| 24 | Can the system detect and correct degradation? | **Detect: partly** (drift report, PSI/ECE). **Correct: no automatic demotion or rollback** (C-03); the grading failure is only a WARN (A-02). Phase D8. |
+| 25 | What is production-ready? (so far) | The fail-closed gating (V-11), the autolearn registration and lockbox discipline (V-13), hashed artifacts (V-15), the plan-research protocol (V-16), the ledger guards in code (V-01). None of them has produced a promoted model. |
+| 26 | What is NOT trustworthy so far? | Cross-day state integrity (A-10); live-vs-training parity (A-05/06); news trust (A-09); catch-up grading (A-02); the "why not" record on the confirm path (B-03); armed-rejection learning (B-07); breaking-news vetoes (B-08); what-if `as_run` (B-11); the session DirectionModel's "validated" status (C-02); the path to any directional trade (C-01). |
 
-## Scorecard (rows filled only where Phases A–B have evidence)
+## Scorecard (rows filled only where Phases A–C have evidence)
 
 | Area | Status | Severity | Evidence |
 |---|---|---|---|
@@ -270,7 +328,9 @@ Answers are partial: only what Phases A–B support. Every other question is sti
 | Technical analysis | PARTIAL | P2 | computed correctly on clock-completed bars (V-12); no causal path to execution except iron-fly eligibility and the RSI veto (B-01); OR/IB from the first bar present (B-10) |
 | Setup detection | VERIFIED (mechanics) | P3 | V-09, V-10; dead or display-only inputs (B-05) |
 | Trigger / arming | PARTIAL | P3 | fires at the levels; arms before authorization (B-06); not persisted (B-04); sampling and race gaps (B-09) |
+| Models | PARTIAL | P1 | the autolearn gate is strict on noise (V-13) and the chain works in tests (V-14), but never in production (A-01); session-model gate weak (C-02); plan model unfitted, and incompatible with the live plans (C-01); no automatic demotion (C-03); EV consistent (V-17), uncalibrated (C-06) |
+| Execution (reachability) | BROKEN | P1 | no reachable path to an engine trade: B-02 + C-01 + C-05 |
 | No-trade learning | BROKEN (armed path) | P2 | B-07 (Phase D will complete) |
 | Reliability (foundation) | PARTIAL | P2 | A-02, A-03, A-10 |
 | Auditability | PARTIAL | P2 | A-10, A-13, B-03, B-11 |
-| Models, factor/regime learning, baseline, research validity, options/futures, execution, AI, UI truthfulness, self-correction | not yet audited | — | Phases C–L |
+| Factor/regime learning, baseline, research validity, options/futures, fills, AI, UI truthfulness, self-correction | not yet audited | — | Phases D–L |
