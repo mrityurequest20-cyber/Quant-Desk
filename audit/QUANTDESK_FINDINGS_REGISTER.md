@@ -43,6 +43,17 @@ P3 moderate · P4 minor.
 | A-17 | Kite ticks without an exchange timestamp get the wall clock | P4 | VERIFIED (code path; Kite untested) | A2 |
 | A-18 | Yahoo 5m `completed()` uses a 1-minute bar length | P4 | VERIFIED (code path) | A2 |
 | A-19 | The test suite has a wall-clock time bomb: `test_kotak` fails on every day after 2026-10-06 | P4 | VERIFIED | A1 |
+| B-01 | The analyst's weighted evidence has no causal path to an executed trade under the current config | P2 | MISLEADING (README) | B1 |
+| B-02 | Zero trades is structural: every directional plan is gated, and the only other path (iron fly) never clears EV | P2 | VERIFIED | B4 |
+| B-03 | Gated opportunities on the confirm path are never journaled, and decision rows don't identify the gate or link to the setup | P2 | VERIFIED | B3 |
+| B-04 | The armed lifecycle (armed / expired / not reached) is not persisted | P3 | VERIFIED | B3/B5 |
+| B-05 | Dead or display-only features: max pain unreachable, `iv_move` orphan, prior-day value area unused, GEX/IVP/GIFT/flows narrative only | P3 | VERIFIED | B1 |
+| B-06 | Setups are armed and shown as "Waiting at the level" though authorization can never pass | P3 | MISLEADING | B5 |
+| B-07 | No-trade learning never grades plan-gate rejections of armed setups | P2 | BROKEN | B5 (→ D6) |
+| B-08 | The breaking-news veto fires on retellings days after an event and on irrelevant stories; question-style previews are missed | P3 | VERIFIED | B1 |
+| B-09 | Trigger engine gaps: LTP sampling misses, fire-time vetoes from the previous minute, repeated re-fires | P3 | PARTIAL | B5 |
+| B-10 | Opening range, initial balance and session minutes count from the first bar present, not 09:15 | P3 | VERIFIED | B2 |
+| B-11 | What-if `as_run` does not reproduce what ran (model chain, no memory, no learner, no brain, no breadth) | P3 | MISLEADING | B4 |
 
 Verified-working controls (V-xx) and open questions (Q-xx) are at the end.
 
@@ -429,9 +440,187 @@ Severity: **P4** · Status: **VERIFIED**
   - it is also a small instance of A-11: the chain's time comes from the machine clock, not the data.
 - **Fix:** freeze the clock in the test, or pass `ts` explicitly.
 
+### [B-01] The analyst's weighted evidence has no causal path to an executed trade
+Severity: **P2** · Status: **MISLEADING** (README § Intraday options desk, steps 2–4: "thinks … picks a setup … sizes and executes")
+
+**Actual behavior**
+- `require_approved_model: true` with an empty plan registry → `plan_gate` (`autolearn/live.py:176-189`) keeps only
+  `direction == 0` plans.
+- The one such setup is `range_sell` (iron fly). It is priced with `p_up = 0.5` (`engine.py:1101`).
+- The 25+ weighted evidence factors (VWAP, EMA, Supertrend, CPR, OR, PCR, OI walls, CVD, futures OI/basis, VIX, news
+  tone, research drift, global drivers) can affect an executable plan only through the iron fly's `|score| ≤ 0.30`
+  eligibility test.
+- Decision-relevant inputs today:
+  - day type (ADX, IB extension, OR break, close location, **volume-profile value area**);
+  - IV/RV (`vol_view`);
+  - the vetoes (RSI extremes, ATM spread, events, breaking news, first 5 min, time window);
+  - EV, sizing, global stress, the live book.
+- `ARCHITECTURE.md` and `config` do say the analyst is advisory for directional trades. The README's intraday section
+  still narrates the pre-gate pipeline.
+
+**Evidence**
+B1 table in `QUANTDESK_TRADING_STATE_MACHINE.md`; replay funnel.
+
+**Impact**
+- Most of what the app shows as "the desk's read" cannot currently produce a trade.
+- Weighting and learning those factors (Phase D) changes no executed decision.
+
+**Confidence:** High.
+
+### [B-02] Zero trades is structural
+Severity: **P2** · Status: **VERIFIED**
+
+**Evidence**
+- **Live journal, 10-05 … 10-09 AM:**
+  - 21 armed directional setups reached their level → all rejected "no approved plan model";
+  - 51 iron-fly plans → all "EV below the floor";
+  - 0 trades.
+- **Replay (2,984 index-minutes, real chains):**
+
+  | Outcome | Index-minutes | Share |
+  |---|---|---|
+  | no setup | 2,093 | 70% |
+  | vetoes / window | 602 | 20% |
+  | plan-model gate | 215 | 7% |
+  | EV floor | 74 | 2.5% |
+  | executed | 0 | 0% |
+
+  On the armed path, 40 levels were reached and 40 gated.
+- **The plan registry needs 28 complete real point-in-time sessions; it had 5** (`plan/latest.json`).
+- **The iron fly's EV after costs was:**
+  - +₹18…+₹93/lot on 10-05 (below `max(₹40, 0.05 R)`);
+  - −₹190…−₹531/lot on 10-07 and 10-08;
+  - BANKNIFTY often 0 lots ("none fits").
+
+**Counterfactual**
+The 133 unique gated directional opportunities averaged **−0.07 R on the underlying** before option costs (median
+−0.11 R). There is no evidence that the gate blocked profitable trades in this small, autocorrelated sample.
+
+**Impact**
+- No directional paper trade is possible for at least ~23 more complete recorded sessions.
+- The paper account therefore generates no trade evidence. The setup/trade learning tables stay empty.
+
+**Confidence:** High.
+
+### [B-03] Gated opportunities on the confirm path are never journaled
+Severity: **P2** · Status: **VERIFIED**
+
+**Actual behavior**
+- `_maybe_enter` (`engine.py:729-764`) returns "standing aside: no approved plan model…" when `plan_gate` removes a
+  5-minute-confirmed directional setup. It writes **no decision row**.
+- Only a sampled thought records it (every 5 min / on a bias flip): 35 in 5 live sessions, vs 215 index-minutes in the
+  replay of 4 sessions.
+- Where decision rows are written, every gate (model, EV, sizing, stress, liquidity, track record) uses
+  `action = "rejected"`, and the gate is only in free text.
+- No ID links SETUP → ARMED → TRIGGER → DECISION → TRADE. Re-fires of one breakout are separate rows.
+
+**Impact**
+- "Why didn't we trade at 10:42?" can't be answered from the journal for the confirm path.
+- Rejected-opportunity counts can't be de-duplicated.
+
+**Fix**
+Write a decision row for every gate outcome, with a structured `gate` field and an `opportunity_id`.
+
+**Confidence:** High.
+
+### [B-04] The armed lifecycle is not persisted
+Severity: **P3** · Status: **VERIFIED**
+
+- `engine.armed` is in memory only. It is rebuilt each minute with a 2-minute TTL.
+- Expiry, not-reached and cancellation leave no record.
+- Arms appear only in the heartbeat to the site (`engine.py:1317`) and in sampled thoughts.
+
+### [B-05] Dead or display-only features
+Severity: **P3** · Status: **VERIFIED**
+
+- **`max_pain` is unreachable.**
+  - The analyst gets `is_expiry_day = self.expiry[u] == self.day` (`engine.py:296`).
+  - `pick_expiry` drops expiries < 1 day away (`engine.py:180`, `intraday.expiry_min_days: 1`).
+  - So it is never True: 0 of 675 live reads carry `max_pain`.
+- **`iv_move`** has a weight (`analyst.py:21`) and is never computed.
+- **`open_vs_pva` / the prior-day value area** is computed (`features.py:104`) and never read.
+- **Narrative or site only:** gamma/GEX and the gamma flip (labelled "untested here"), IV percentile, GIFT Nifty, FII
+  flows, the buyer's edge.
+- **Zero weight (probation, displayed and graded):** breadth, breadth_div, oi_shift, skew_trend, the heavyweight
+  pulse, and every global driver except crude.
+- **Reproduction:** `test_phase_b_probes.py::test_expiry_day_is_never_today_so_max_pain_never_fires`.
+
+### [B-06] Setups are armed and shown as waiting though authorization can never pass
+Severity: **P3** · Status: **MISLEADING** (display)
+
+- `_arm` / `Playbook.arm` don't consult `_model_gates`. Authorization happens only after the trigger
+  (`_fire_armed`).
+- Under the current config every armed setup is directional, so every one is rejected on reaching its level.
+- Replay: 594 armed minute-reads → 40 fires → 0 authorizable.
+- The site shows them as "Waiting at the level", and the thought text says "armed: …".
+- **Reproduction:** `::test_arm_does_not_consult_the_plan_gate`.
+
+### [B-07] No-trade learning never grades plan-gate rejections of armed setups
+Severity: **P2** · Status: **BROKEN**
+
+- `grade_armed` (`learning.py:320-351`) skips any decision without `context["target"]`.
+- The plan-gate rejection path writes `{"armed", "plan"}` only (`engine.py:481`). Only the EV-rejection path writes
+  `target` (`engine.py:500`).
+- All 21 live armed rejections are ungraded. `memory.json` has no `armed_rejected` table, and every session logs
+  "0 armed".
+- The README's claim "Pre-break entries the EV gate refused are replayed …" is literally limited to the EV gate, which
+  is never reached by armed setups.
+- **Reproduction:** `::test_armed_rejections_by_plan_gate_are_never_graded` (21 real rows → 0 graded).
+- **Confidence:** High.
+
+### [B-08] Breaking-news veto false positives
+Severity: **P3** · Status: **VERIFIED**
+
+- `NewsDesk.state` sets `breaking` for any high-impact, non-recap, non-preview story published ≤ 15 min ago
+  (`news.py:446-447`). Novelty is not considered.
+- The RBI decision (2026-10-07 10:00) re-triggered 15-minute stand-asides on both indices via retellings:
+  - all afternoon on 10-07;
+  - through 10-08: a market recap ("Sensex, Nifty open in red following RBI repo rate hike"), an Adani stock pick,
+    a bank lending-rate story;
+  - on 10-09 ("RBI hikes repo rate to 5.50%; shifts policy stance").
+- Also "Why Warren Buffett considers interest rates key to stock valuations" (10-07 15:03).
+- A question-form preview, "Will RBI hike repo rate? MPC begins 3-day meet…", is not matched by `PREVIEW`
+  (`news.py:131`).
+- 18 distinct stories caused 67 live veto thoughts; the replay counts 124 index-minutes.
+- **Reproduction:** `::test_retold_rbi_decision_two_days_later_still_vetoes`,
+  `::test_question_style_preview_is_not_recognised_as_a_preview`.
+
+### [B-09] Trigger engine gaps
+Severity: **P3** · Status: **PARTIAL**
+
+1. **LTP sampling misses.** With a working LTP, bar-range firing is switched off (`engine.py:256`). A level crossed
+   and left between two 5 s polls never fires, and the minute bar's range doesn't catch it either.
+2. **Stale authorization view.** `_fire_armed` authorizes against the **previous minute's** view and vetoes
+   (`engine.py:458`). News is refreshed only in `step()`. A tick-fired entry can therefore ignore a breaking story or
+   event that arrived inside the minute. The chain is repriced from a snapshot up to 12 minutes old (`_chain_at`).
+3. **Re-fires.** Each recross of a level fires again after re-arming: ORB at 22,473 fired 09:43, 09:52 and 10:08 on
+   2026-10-08. That produces duplicate decisions and duplicate "rejected opportunities".
+
+**Reproduction:** `::test_bar_range_firing_disabled_when_live_price_works` (1); code (2); journal (3).
+
+### [B-10] Opening range, initial balance and session minutes come from the first bar present
+Severity: **P3** · Status: **VERIFIED**
+
+- `session_state` uses `day.iloc[:15]` / `iloc[:60]` for the OR and IB, and `minutes = now − day.index[0]`
+  (`features.py:97, 124-126`). These are rows from the first bar present, not clock windows from 09:15.
+- **A late start** (2026-09-30: recorded bars begin 15:20) or a replay of a gapped recording computes the "opening
+  range" from whatever bars come first, and thinks it is the open.
+- **Live** is unaffected when the in-memory history already holds the morning (the afternoon restore from Yahoo).
+
+### [B-11] What-if `as_run` does not reproduce what ran
+Severity: **P3** · Status: **MISLEADING**
+
+`deploy/whatif.py` runs the engine with:
+- the model chain (its docstring says the real snapshots "aren't kept"; they are now, on `chains-2026`);
+- `memory=None`: no learned weights or news trust;
+- no learner: the plan gate takes its "learning loop off" branch;
+- no brain and no breadth.
+
+So `as_run` differs from the live run in pricing, weights and gating messages. This resolves Q-04.
+
 ---
 
-## Verified-working controls (Phase A)
+## Verified-working controls (all phases)
 
 | ID | Control | Evidence |
 |---|---|---|
@@ -444,6 +633,11 @@ Severity: **P4** · Status: **VERIFIED**
 | V-07 | What-if replays make stories visible at `seen_at` | `deploy/whatif.py:89` |
 | V-08 | Live news is effectively seen-time (an item exists only after its fetch); LLM reads count only from arrival (`rd["at"] > now` → skipped) | `news.py:398-401`, `engine.py:390` |
 
+| V-09 | Setups are generated from live state, not merely described: replay `scan` raised 298 plans, `arm` 594 armed reads; live decisions show fires at the exact armed levels | replay funnel; journal decisions |
+| V-10 | Pre-entry plan specification: invalidation, target, premium stop/target and time stop are fixed at plan time; the stop is floored at 0.75 ATR5 | `playbook.py:213-226` |
+| V-11 | The fail-closed directional gate works as designed: no directional plan reached EV, risk or execution without an approved plan model, on either entry path | live journal; replay |
+| V-12 | Session features (5 m/15 m indicators) use clock-completed bars only | `features.py:_completed` |
+
 ---
 
 ## Open questions (carried forward)
@@ -452,9 +646,11 @@ Severity: **P4** · Status: **VERIFIED**
 |---|---|---|
 | Q-01 | Kotak candle timestamps: bar start (as the docstring says) or bar end? This decides whether `completed()` admits a forming bar. Needs a Kotak key, or the archived chains and option minutes compared with NSE. | A2 → H |
 | Q-02 | ~~Does the test suite pass on CI's versions?~~ Answered: CI ran 445 passed, 2 failed (A-19, date-dependent), 6 skipped (§ A.7) | A1 |
-| Q-03 | `plan_gate` drops every directional plan while the plan registry is empty (5 of 28 real sessions needed). Is this the dominant cause of 0 trades? | B4 / K |
-| Q-04 | `deploy/whatif.py` runs with `memory=None`, so its `as_run` variant can't reproduce live factor weights. What-if parity? | B / K |
+| Q-03 | ~~Is the empty plan registry the dominant cause of 0 trades?~~ Answered in B-02: it explains 100% of directional rejections; the iron fly fails EV | B4 |
+| Q-04 | ~~What-if parity?~~ Answered: B-11 | B |
 | Q-05 | Account reset 2026-10-05 (₹20k → ₹5L): where is the pre-reset journal archived, and did that account trade? | K |
+| Q-06 | Is the iron fly's Monte Carlo EV right? It reports P(profit) 0% and −₹400–530/lot on BANKNIFTY. Is it the cost model, the margin sizing ("none fits"), or a mark/exit modelling issue? | C3 |
+| Q-07 | Does the global-stress size multiplier ever bind live? (No brain in the replay) | F / K |
 
 ---
 
@@ -464,3 +660,4 @@ Severity: **P4** · Status: **VERIFIED**
 |---|---|---|
 | 2026-10-09 | A | Register created: A-01 … A-18, V-01 … V-08, Q-01 … Q-05 |
 | 2026-10-09 | A | A-19 added after the test-suite baseline; Q-02 answered |
+| 2026-10-09 | B | B-01 … B-11, V-09 … V-12 added; Q-03, Q-04 answered; Q-06, Q-07 opened |
