@@ -1,0 +1,55 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.6.0 -- /tmp/claude-0/-home-user-Quant-Desk/90d04327-a1b0-5265-9bca-acec9246f423/scratchpad/venv/bin/python
+rootdir: /home/user/Quant-Desk
+configfile: pytest.ini
+plugins: platformdirs-4.12.4, anyio-4.15.1
+collecting ... collected 19 items
+
+audit/probes/test_phase_i_probes.py::test_recorded_india_vix_is_zero_on_every_kotak_session PASSED [  5%]
+audit/probes/test_phase_i_probes.py::test_every_production_read_carries_a_fabricated_vix_vote PASSED [ 10%]
+audit/probes/test_phase_i_probes.py::test_thought_scores_recompute_exactly_and_the_vix_vote_flips_bias_labels PASSED [ 15%]
+audit/probes/test_phase_i_probes.py::test_news_first_seen_and_llm_reads_are_overwritten_between_snapshots PASSED [ 21%]
+audit/probes/test_phase_i_probes.py::test_news_dedup_lives_in_memory_and_news_add_replaces_rows PASSED [ 26%]
+audit/probes/test_phase_i_probes.py::test_journal_records_no_code_config_or_model_provenance PASSED [ 31%]
+audit/probes/test_phase_i_probes.py::test_silent_edits_pass_every_integrity_check PASSED [ 36%]
+audit/probes/test_phase_i_probes.py::test_restating_a_trade_rewrites_fills_in_place PASSED [ 42%]
+audit/probes/test_phase_i_probes.py::test_production_opens_the_journal_with_autocommit_every_write PASSED [ 47%]
+audit/probes/test_phase_i_probes.py::test_interrupted_entry_leaves_an_orphan_fill_that_reconcile_never_reads PASSED [ 52%]
+audit/probes/test_phase_i_probes.py::test_interrupted_exit_shows_a_double_exit_in_fills PASSED [ 57%]
+audit/probes/test_phase_i_probes.py::test_reconcile_event_is_stamped_at_the_session_open_before_the_crash_it_reports PASSED [ 63%]
+audit/probes/test_phase_i_probes.py::test_an_executed_entry_writes_no_decision_row PASSED [ 68%]
+audit/probes/test_phase_i_probes.py::test_decision_text_reports_a_p_up_the_ev_did_not_use PASSED [ 73%]
+audit/probes/test_phase_i_probes.py::test_only_a_minority_of_decisions_match_an_archived_snapshot PASSED [ 78%]
+audit/probes/test_phase_i_probes.py::test_rejected_plans_can_be_valued_afterwards_from_persisted_evidence PASSED [ 84%]
+audit/probes/test_phase_i_probes.py::test_zero_vix_prices_the_model_chain_at_zero_volatility PASSED [ 89%]
+audit/probes/test_phase_i_probes.py::test_zero_prior_day_vix_makes_every_step_raise PASSED [ 94%]
+audit/probes/test_phase_i_probes.py::test_no_recorded_market_data_for_2026_10_01 PASSED [100%]
+
+=============================== warnings summary ===============================
+audit/probes/test_phase_i_probes.py::test_zero_prior_day_vix_makes_every_step_raise
+  /home/user/Quant-Desk/quantdesk/options/surface.py:28: RuntimeWarning: divide by zero encountered in divide
+    x = np.clip(np.log(np.asarray(K, dtype=float) / F) / (atm_t * np.sqrt(T)), -self.x_clip, self.x_clip)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED audit/probes/test_phase_i_probes.py::test_recorded_india_vix_is_zero_on_every_kotak_session
+PASSED audit/probes/test_phase_i_probes.py::test_every_production_read_carries_a_fabricated_vix_vote
+PASSED audit/probes/test_phase_i_probes.py::test_thought_scores_recompute_exactly_and_the_vix_vote_flips_bias_labels
+PASSED audit/probes/test_phase_i_probes.py::test_news_first_seen_and_llm_reads_are_overwritten_between_snapshots
+PASSED audit/probes/test_phase_i_probes.py::test_news_dedup_lives_in_memory_and_news_add_replaces_rows
+PASSED audit/probes/test_phase_i_probes.py::test_journal_records_no_code_config_or_model_provenance
+PASSED audit/probes/test_phase_i_probes.py::test_silent_edits_pass_every_integrity_check
+PASSED audit/probes/test_phase_i_probes.py::test_restating_a_trade_rewrites_fills_in_place
+PASSED audit/probes/test_phase_i_probes.py::test_production_opens_the_journal_with_autocommit_every_write
+PASSED audit/probes/test_phase_i_probes.py::test_interrupted_entry_leaves_an_orphan_fill_that_reconcile_never_reads
+PASSED audit/probes/test_phase_i_probes.py::test_interrupted_exit_shows_a_double_exit_in_fills
+PASSED audit/probes/test_phase_i_probes.py::test_reconcile_event_is_stamped_at_the_session_open_before_the_crash_it_reports
+PASSED audit/probes/test_phase_i_probes.py::test_an_executed_entry_writes_no_decision_row
+PASSED audit/probes/test_phase_i_probes.py::test_decision_text_reports_a_p_up_the_ev_did_not_use
+PASSED audit/probes/test_phase_i_probes.py::test_only_a_minority_of_decisions_match_an_archived_snapshot
+PASSED audit/probes/test_phase_i_probes.py::test_rejected_plans_can_be_valued_afterwards_from_persisted_evidence
+PASSED audit/probes/test_phase_i_probes.py::test_zero_vix_prices_the_model_chain_at_zero_volatility
+PASSED audit/probes/test_phase_i_probes.py::test_zero_prior_day_vix_makes_every_step_raise
+PASSED audit/probes/test_phase_i_probes.py::test_no_recorded_market_data_for_2026_10_01
+=================== 19 passed, 1 warning in 90.86s (0:01:30) ===================

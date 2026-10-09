@@ -1,0 +1,96 @@
+{
+ "compared": 10,
+ "all_match": true,
+ "rows": [
+  {
+   "render": "k1005_01_first_heartbeat_091630_text.json",
+   "port_head": "Standing aside · a no-trade flag is up",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1005_02_first_armed_093030_text.json",
+   "port_head": "Armed · Opening-range breakout call on BANKNIFTY at 55,204.64",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1005_03_armed_trigger_rejected_105630_text.json",
+   "port_head": "Armed · Trend break put on NIFTY at 22,465.46",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1005_05_handover_morning_last_122030_text.json",
+   "port_head": "Watching · no setup has triggered",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1005_06_handover_afternoon_restored_122120_text.json",
+   "port_head": "Watching · no setup has triggered",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1005_07_handover_afternoon_first_step_122140_text.json",
+   "port_head": "Watching · no setup has triggered",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1005_09_after_end_session_153130_text.json",
+   "port_head": "Standing aside · a no-trade flag is up",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1005_09_after_end_session_200000_text.json",
+   "port_head": "Standing aside · a no-trade flag is up",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1008_03_armed_trigger_rejected_094430_text.json",
+   "port_head": "Watching · no setup has triggered",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  },
+  {
+   "render": "k1008_04_ev_rejection_110330_text.json",
+   "port_head": "Armed · Trend break put on NIFTY at 22,417.00",
+   "head_in_render": true,
+   "lines_in_render": {
+    "NIFTY": true,
+    "BANKNIFTY": true
+   }
+  }
+ ]
+}

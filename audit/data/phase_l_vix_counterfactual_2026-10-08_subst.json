@@ -1,0 +1,135 @@
+{
+ "day": "2026-10-08",
+ "evidence_class": "replay-subst counterfactual",
+ "minutes_compared": 375,
+ "diff": {
+  "symbol_minutes": 750,
+  "vix_vote_present_as_recorded": 750,
+  "vix_vote_+1_as_recorded": 748,
+  "bias_differs": 6,
+  "armed_differs": 44,
+  "action_kind_differs": 39,
+  "score_abs_diff_sum": 49.282
+ },
+ "mean_abs_score_shift": 0.0657,
+ "decisions_as_recorded": 36,
+ "decisions_without_vote": 37,
+ "decisions_only_as_recorded": [],
+ "decisions_only_without_vote": [
+  "13:19|NIFTY|trend_break|trend_break reached its level 22,251.68 but standing aside: "
+ ],
+ "decision_kinds_as_recorded": {
+  "orb reached its level 22,473.1": 2,
+  "orb reached its level 22,473.0": 2,
+  "trend_break reached its level ": 22,
+  "EV floor": 10
+ },
+ "decision_kinds_without_vote": {
+  "orb reached its level 22,473.1": 2,
+  "orb reached its level 22,473.0": 2,
+  "trend_break reached its level ": 23,
+  "EV floor": 10
+ },
+ "bias_flip_examples": [
+  {
+   "minute": "09:57",
+   "symbol": "BANKNIFTY",
+   "as_recorded": {
+    "bias": "neutral",
+    "score": -0.1485,
+    "conv": 0.0899,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   },
+   "without_vote": {
+    "bias": "bearish",
+    "score": -0.1936,
+    "conv": 0.1235,
+    "vix_vote": null,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   }
+  },
+  {
+   "minute": "10:10",
+   "symbol": "BANKNIFTY",
+   "as_recorded": {
+    "bias": "neutral",
+    "score": -0.1106,
+    "conv": 0.0712,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   },
+   "without_vote": {
+    "bias": "bearish",
+    "score": -0.1572,
+    "conv": 0.1081,
+    "vix_vote": null,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   }
+  },
+  {
+   "minute": "10:11",
+   "symbol": "BANKNIFTY",
+   "as_recorded": {
+    "bias": "neutral",
+    "score": -0.1133,
+    "conv": 0.073,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   },
+   "without_vote": {
+    "bias": "bearish",
+    "score": -0.1601,
+    "conv": 0.1101,
+    "vix_vote": null,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   }
+  },
+  {
+   "minute": "11:06",
+   "symbol": "BANKNIFTY",
+   "as_recorded": {
+    "bias": "neutral",
+    "score": -0.1103,
+    "conv": 0.0593,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "setup range_sell found but not worth it after costs: best of"
+   },
+   "without_vote": {
+    "bias": "bearish",
+    "score": -0.1539,
+    "conv": 0.0877,
+    "vix_vote": null,
+    "armed": [],
+    "action": "setup range_sell found but not worth it after costs: best of"
+   }
+  },
+  {
+   "minute": "11:58",
+   "symbol": "BANKNIFTY",
+   "as_recorded": {
+    "bias": "neutral",
+    "score": -0.1234,
+    "conv": 0.0841,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   },
+   "without_vote": {
+    "bias": "bearish",
+    "score": -0.1675,
+    "conv": 0.121,
+    "vix_vote": null,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   }
+  }
+ ]
+}

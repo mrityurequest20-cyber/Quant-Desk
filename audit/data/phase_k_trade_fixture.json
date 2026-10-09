@@ -1,0 +1,164 @@
+{
+ "journal": "/tmp/k-trade-emg04_w6/rt/intraday/journal.db",
+ "trades_taken": [
+  [
+   "2026-09-11",
+   "I261009-0001-e34e",
+   "orb",
+   "premium_target",
+   20343.0
+  ],
+  [
+   "2026-09-11",
+   "I261009-0002-15ea",
+   "trend_break",
+   "time_exit",
+   3910.0
+  ],
+  [
+   "2026-09-11",
+   "I261009-0003-4928",
+   "trend_break",
+   "time_exit",
+   3720.0
+  ]
+ ],
+ "trades": [
+  {
+   "id": "I261009-0001-e34e",
+   "strategy": "orb",
+   "symbol": "NIFTY",
+   "opened_at": "2026-09-11 09:33:00+05:30",
+   "closed_at": "2026-09-11 11:07:00+05:30",
+   "pnl": 20342.697960755908,
+   "r_multiple": 1.9733290684489688,
+   "grade": "A",
+   "exit_reason": "premium_target",
+   "rationale": "[orb] Trigger: price traded through 25,644.12 at 09:33:00, armed 09:32 on a bearish read (score -0.61, conviction 0.61). Thesis: Opening-range breakdown the read expects: through 25,648.08; wrong back at the OR mid / VWAP. Structure: long_put NIFTY 15-Sep: +25550PE@132.16 (\u0394-0.40, IV 16.5); debit \u20b98,591/lot, max loss \u20b98,591/lot (vol view cheap). Quant: EV \u20b9+135/lot (+0.05R), P(profit) 47%, CVaR5 \u20b9-2,815, costs \u20b9106/lot, \u03c3 over 45m 0.34%, P(up) 0.44 [prior tilt from the analyst's score (unvalidated)]; picked over long_put +0.04R, bear_put_spread -0.01R, bear_put_spread -0.11R. Market read: NIFTY 25,651.76 (-0.34% on the day, opening): forming day; bias bearish (score -0.61, conviction 0.61). For: price 25,651.76 below VWAP 25,723.66 (-1.6\u03c3), VWAP falling -0.25%/15m; 5m EMA9 25,709.71 < EMA21 25,710.23; below value (session POC 25,754.73, VA 25,701.77\u201325,814.31); 5m Supertrend short. Vol: ATM IV 16.1 vs realised 19.2 (\u00d70.84) \u2192 premium cheap. Options context: dealer gamma positive (naive sign), flip 25,632; implied carry 5.3%/yr. Liquid strikes 24,650\u201326,300 (out-of-the-money side quoting within 3%; 34 of 41). BANKNIFTY vs NIFTY: NIFTY leading by 0.52% on the day. Quant: 30-min \u03c3 0.28% (realised+implied); model off: no edge out of sample.",
+   "meta": "{\"structure\": \"long_put\", \"expiry\": \"2026-09-15\", \"quote_source\": \"model\", \"entry_net_premium_per_lot\": 8590.684935257323, \"max_loss\": 8590.684935257323, \"legs_plan\": [[25550.0, \"PE\", 1, 132.16, 16.46, -0.401]], \"armed\": {\"setup\": \"orb\", \"symbol\": \"NIFTY\", \"direction\": -1, \"kind\": \"break\", \"level\": 25644.12, \"invalidation\": 25723.66, \"armed_at\": \"2026-09-11 09:32:00+05:30\", \"expires\": \"2026-09-11 09:34:00+05:30\", \"why\": \"bearish read (score -0.61, conviction 0.61)\", \"text\": \"orb: sell on a trade through 25,644.12 (stop 25,723.66)\"}, \"fill_underlying\": 25644.12, \"quant\": {\"ev\": 135.0777, \"ev_r\": 0.0524, \"p_profit\": 0.4715, \"cvar5\": -2814.697, \"median\": -172.3589, \"fees\": 67.3913, \"exit_cost\": 39.0, \"horizon_min\": 45, \"p_up\": 0.4394, \"sigma_h_pct\": 0.3442, \"avg_hold_min\": 39.675, \"p_source\": \"prior tilt from the analyst's score (unvalidated)\"}, \"quant_text\": \"EV \\u20b9+135/lot (+0.05R), P(profit) 47%, CVaR5 \\u20b9-2,815, costs \\u20b9106/lot, \\u03c3 over 45m 0.34%, P(up) 0.44 [prior tilt from the analyst's score (unvalidated)]; picked over long_put +0.04R, bear_put_spread -0.01R, bear_put_spread -0.11R\", \"leg_liquidity\": [\"25550PE ok 0.9%\"], \"fill_quotes\": \"option chain\", \"exit_quotes\": \"marked\"}",
+   "context": "{\"regime\": \"forming\", \"bias\": \"bearish\", \"score\": -0.606, \"conviction\": 0.606, \"vol_view\": \"cheap\", \"evidence\": [[\"vwap\", -1.0, \"price 25,651.76 below VWAP 25,723.66 (-1.6\\u03c3), VWAP falling -0.25%/15m\"], [\"ema_5m\", -1.0, \"5m EMA9 25,709.71 < EMA21 25,710.23\"], [\"supertrend\", -1.0, \"5m Supertrend short\"], [\"htf\", -0.11, \"15m EMA20 slope -0.02% (down)\"], [\"orb\", 0.0, \"inside the opening range 25,648.08\\u201325,825.26\"], [\"value\", -1.0, \"below value (session POC 25,754.73, VA 25,701.77\\u201325,814.31)\"], [\"prev_day\", 0.0, \"prior day H/L 25,846.54/25,643.21: inside\"], [\"cpr\", -1.0, \"CPR 25,740.62\\u201325,744.88 (width 0.02%); price below\"], [\"rsi\", -0.74, \"5m RSI 35\"], [\"flow\", -0.67, \"approx. CVD (close-location) 30m slope -0.27\"], [\"oi_walls\", 0.0, \"between put wall 25,500 and call wall 26,000\"], [\"vix\", -1.0, \"India VIX 16.03 (+6.1% today)\"]], \"levels\": {\"vwap\": 25723.66, \"or_high\": 25825.26, \"or_low\": 25648.08, \"ib_high\": 25825.26, \"ib_low\": 25626.67, \"pdh\": 25846.54, \"pdl\": 25643.21, \"poc\": 25754.73, \"vah\": 25814.31, \"val\": 25701.77, \"cpr_tc\": 25744.88, \"cpr_bc\": 25740.62, \"day_high\": 25825.26, \"day_low\": 25626.67, \"call_wall\": 26000.0, \"put_wall\": 25500.0}, \"chain\": {\"spot\": 25640.183312198827, \"expiry\": \"2026-09-15\", \"dte_days\": 4.249305555555556, \"atm_strike\": 25650.0, \"atm_iv\": 16.06197174386901, \"straddle\": 354.475, \"implied_move\": 0.013824979161960651, \"source\": \"model\", \"atm_spread_pct\": 0.008600360660285657, \"pcr_oi\": 0.989555806065676, \"pcr_doi\": NaN, \"call_wall\": 26000.0, \"put_wall\": 25500.0, \"max_pain\": 25650.0, \"skew_25d\": 2.153318183023474, \"liquid_strikes\": 34, \"strikes\": 41, \"liquid_lo\": 24650.0, \"liquid_hi\": 26300.0, \"gex_cr_per_1pct\": 37686.095741951525, \"gex_state\": \"positive (dealers damp moves)\", \"gamma_flip\": 25632.01178057064, \"forward\": 25655.979523146914, \"basis\": 15.79621094808681, \"carry_ann\": 0.05290210562101715}}"
+  },
+  {
+   "id": "I261009-0002-15ea",
+   "strategy": "trend_break",
+   "symbol": "NIFTY",
+   "opened_at": "2026-09-11 11:11:00+05:30",
+   "closed_at": "2026-09-11 11:56:00+05:30",
+   "pnl": 3910.4481009640363,
+   "r_multiple": 0.29382534805778426,
+   "grade": "B",
+   "exit_reason": "time_exit",
+   "rationale": "[trend_break] Trigger: 5m close 25,492.55 broke the 30-min low 25,495.49 after a 117-pt consolidation, on the bear side of VWAP. Thesis: Flag breakout in a bearish tape (conviction 0.89): continuation toward 25,366. Wrong back inside the flag below/above its midpoint 25,554.23. Structure: long_put NIFTY 15-Sep: +25400PE@136.50 (\u0394-0.40, IV 17.0); debit \u20b98,872/lot, max loss \u20b98,872/lot (vol view rich). Quant: EV \u20b9+161/lot (+0.06R), P(profit) 48%, CVaR5 \u20b9-2,379, costs \u20b9107/lot, \u03c3 over 45m 0.30%, P(up) 0.41 [prior tilt from the analyst's score (unvalidated)]; picked over long_put +0.04R, bear_put_spread +0.00R, bear_put_spread -0.10R. Market read: NIFTY 25,491.64 (-0.96% on the day, morning): trend day; bias bearish (score -0.89, conviction 0.89). For: price 25,491.64 below VWAP 25,623.24 (-1.7\u03c3), VWAP falling -0.05%/15m; below the opening range low 25,648.08; 5m EMA9 25,532.21 < EMA21 25,576.40; below value (session POC 25,598.93, VA 25,514.91\u201325,670.94). Vol: ATM IV 16.6 vs realised 14.0 (\u00d71.19) \u2192 premium rich. Options context: dealer gamma positive (naive sign), flip 25,485; implied carry 5.3%/yr. Liquid strikes 24,500\u201326,150 (out-of-the-money side quoting within 3%; 34 of 41). BANKNIFTY vs NIFTY: NIFTY leading by 0.58% on the day, -0.05% in 30 min (-0.4\u03c3); \u03b2 1.10, \u03c1 0.90 on 1-minute moves today. Quant: 30-min \u03c3 0.24% (realised+implied); model off: no edge out of sample.",
+   "meta": "{\"structure\": \"long_put\", \"expiry\": \"2026-09-15\", \"quote_source\": \"model\", \"entry_net_premium_per_lot\": 8872.5, \"max_loss\": 8872.5, \"legs_plan\": [[25400.0, \"PE\", 1, 136.5, 17.03, -0.404]], \"quant\": {\"ev\": 161.196, \"ev_r\": 0.0606, \"p_profit\": 0.484, \"cvar5\": -2379.0931, \"median\": -90.0738, \"fees\": 68.0562, \"exit_cost\": 39.0, \"horizon_min\": 45, \"p_up\": 0.4114, \"sigma_h_pct\": 0.2958, \"avg_hold_min\": 38.2545, \"p_source\": \"prior tilt from the analyst's score (unvalidated)\"}, \"quant_text\": \"EV \\u20b9+161/lot (+0.06R), P(profit) 48%, CVaR5 \\u20b9-2,379, costs \\u20b9107/lot, \\u03c3 over 45m 0.30%, P(up) 0.41 [prior tilt from the analyst's score (unvalidated)]; picked over long_put +0.04R, bear_put_spread +0.00R, bear_put_spread -0.10R\", \"leg_liquidity\": [\"25400PE ok 0.9%\"], \"fill_quotes\": \"option chain\", \"exit_quotes\": \"marked\"}",
+   "context": "{\"regime\": \"trend\", \"bias\": \"bearish\", \"score\": -0.886, \"conviction\": 0.886, \"vol_view\": \"rich\", \"evidence\": [[\"vwap\", -1.0, \"price 25,491.64 below VWAP 25,623.24 (-1.7\\u03c3), VWAP falling -0.05%/15m\"], [\"ema_5m\", -1.0, \"5m EMA9 25,532.21 < EMA21 25,576.40\"], [\"supertrend\", -1.0, \"5m Supertrend short\"], [\"htf\", -0.72, \"15m EMA20 slope -0.14% (down)\"], [\"orb\", -1.0, \"below the opening range low 25,648.08\"], [\"value\", -1.0, \"below value (session POC 25,598.93, VA 25,514.91\\u201325,670.94)\"], [\"prev_day\", -1.0, \"prior day H/L 25,846.54/25,643.21: broke below\"], [\"cpr\", -1.0, \"CPR 25,740.62\\u201325,744.88 (width 0.02%); price below\"], [\"rsi\", -1.0, \"5m RSI 25 \\u2014 stretched\"], [\"flow\", -0.36, \"approx. CVD (close-location) 30m slope -0.13\"], [\"oi_walls\", 0.0, \"between put wall 25,000 and call wall 26,000\"], [\"vix\", -1.0, \"India VIX 16.58 (+9.8% today)\"]], \"levels\": {\"vwap\": 25623.24, \"or_high\": 25825.26, \"or_low\": 25648.08, \"ib_high\": 25825.26, \"ib_low\": 25572.86, \"pdh\": 25846.54, \"pdl\": 25643.21, \"poc\": 25598.93, \"vah\": 25670.94, \"val\": 25514.91, \"cpr_tc\": 25744.88, \"cpr_bc\": 25740.62, \"day_high\": 25825.26, \"day_low\": 25465.17, \"call_wall\": 26000.0, \"put_wall\": 25000.0}, \"chain\": {\"spot\": 25492.552922411596, \"expiry\": \"2026-09-15\", \"dte_days\": 4.180555555555556, \"atm_strike\": 25500.0, \"atm_iv\": 16.623641076538718, \"straddle\": 361.82500000000005, \"implied_move\": 0.014193360747401025, \"source\": \"model\", \"atm_spread_pct\": 0.008381776395836212, \"pcr_oi\": 0.9955350483864559, \"pcr_doi\": NaN, \"call_wall\": 26000.0, \"put_wall\": 25000.0, \"max_pain\": 25500.0, \"skew_25d\": 2.2274558045017834, \"liquid_strikes\": 34, \"strikes\": 41, \"liquid_lo\": 24500.0, \"liquid_hi\": 26150.0, \"gex_cr_per_1pct\": 33142.206307889166, \"gex_state\": \"positive (dealers damp moves)\", \"gamma_flip\": 25485.111309653807, \"forward\": 25508.03097669653, \"basis\": 15.478054284933023, \"carry_ann\": 0.05299441366894808}}"
+  },
+  {
+   "id": "I261009-0003-4928",
+   "strategy": "trend_break",
+   "symbol": "BANKNIFTY",
+   "opened_at": "2026-09-11 11:14:00+05:30",
+   "closed_at": "2026-09-11 11:59:00+05:30",
+   "pnl": 3720.003404185,
+   "r_multiple": 0.25250234373445196,
+   "grade": "B",
+   "exit_reason": "time_exit",
+   "rationale": "[trend_break] Trigger: 5m close 56,595.66 broke the 30-min low 56,648.53 after a 262-pt consolidation, on the bear side of VWAP. Thesis: Flag breakout in a bearish tape (conviction 0.91): continuation toward 56,301. Wrong back inside the flag below/above its midpoint 56,779.67. Structure: long_put BANKNIFTY 29-Sep: +55500PE@545.65 (\u0394-0.31, IV 21.4); debit \u20b916,370/lot, max loss \u20b916,370/lot (vol view fair). Quant: EV \u20b9+372/lot (+0.08R), P(profit) 52%, CVaR5 \u20b9-2,119, costs \u20b9154/lot, \u03c3 over 45m 0.39%, P(up) 0.41 [prior tilt from the analyst's score (unvalidated)]; picked over long_put +0.07R, bear_put_spread +0.01R, bear_put_spread -0.08R. Market read: BANKNIFTY 56,620.24 (-1.47% on the day, morning): trend day; bias bearish (score -0.91, conviction 0.91). For: price 56,620.24 below VWAP 56,904.31 (-1.2\u03c3), VWAP falling -0.05%/15m; below the opening range low 56,943.60; 5m EMA9 56,697.39 < EMA21 56,820.69; 15m EMA20 slope -0.23% (down). Vol: ATM IV 20.4 vs realised 19.2 (\u00d71.06) \u2192 premium fair. Options context: dealer gamma positive (naive sign), flip 56,461; implied carry 5.3%/yr. Liquid strikes 54,600\u201358,600 (out-of-the-money side quoting within 3%; 41 of 41). BANKNIFTY vs NIFTY: NIFTY leading by 0.56% on the day, -0.06% in 30 min (-0.5\u03c3); \u03b2 1.10, \u03c1 0.90 on 1-minute moves today. Quant: 30-min \u03c3 0.32% (realised+implied); model off: no edge out of sample.",
+   "meta": "{\"structure\": \"long_put\", \"expiry\": \"2026-09-29\", \"quote_source\": \"model\", \"entry_net_premium_per_lot\": 16369.5, \"max_loss\": 16369.5, \"legs_plan\": [[55500.0, \"PE\", 1, 545.65, 21.45, -0.306]], \"quant\": {\"ev\": 372.3862, \"ev_r\": 0.0758, \"p_profit\": 0.5205, \"cvar5\": -2119.1309, \"median\": 129.3424, \"fees\": 85.6861, \"exit_cost\": 68.25, \"horizon_min\": 45, \"p_up\": 0.4088, \"sigma_h_pct\": 0.3945, \"avg_hold_min\": 35.6325, \"p_source\": \"prior tilt from the analyst's score (unvalidated)\"}, \"quant_text\": \"EV \\u20b9+372/lot (+0.08R), P(profit) 52%, CVaR5 \\u20b9-2,119, costs \\u20b9154/lot, \\u03c3 over 45m 0.39%, P(up) 0.41 [prior tilt from the analyst's score (unvalidated)]; picked over long_put +0.07R, bear_put_spread +0.01R, bear_put_spread -0.08R\", \"leg_liquidity\": [\"55500PE ok 0.8%\"], \"fill_quotes\": \"option chain\", \"exit_quotes\": \"marked\"}",
+   "context": "{\"regime\": \"trend\", \"bias\": \"bearish\", \"score\": -0.912, \"conviction\": 0.912, \"vol_view\": \"fair\", \"evidence\": [[\"vwap\", -1.0, \"price 56,620.24 below VWAP 56,904.31 (-1.2\\u03c3), VWAP falling -0.05%/15m\"], [\"ema_5m\", -1.0, \"5m EMA9 56,697.39 < EMA21 56,820.69\"], [\"supertrend\", -1.0, \"5m Supertrend short\"], [\"htf\", -1.0, \"15m EMA20 slope -0.23% (down)\"], [\"orb\", -1.0, \"below the opening range low 56,943.60\"], [\"value\", -1.0, \"below value (session POC 56,727.42, VA 56,654.59\\u201357,018.75)\"], [\"prev_day\", -1.0, \"prior day H/L 57,786.43/57,190.10: broke below\"], [\"cpr\", -1.0, \"CPR 57,473.63\\u201357,488.26 (width 0.03%); price below\"], [\"rsi\", -1.0, \"5m RSI 29\"], [\"flow\", -0.36, \"approx. CVD (close-location) 30m slope -0.13\"], [\"oi_walls\", 0.0, \"between put wall 55,000 and call wall 58,000\"], [\"vix\", -1.0, \"India VIX 16.65 (+10.2% today)\"]], \"levels\": {\"vwap\": 56904.31, \"or_high\": 57622.87, \"or_low\": 56943.6, \"ib_high\": 57622.87, \"ib_low\": 56712.04, \"pdh\": 57786.43, \"pdl\": 57190.1, \"poc\": 56727.42, \"vah\": 57018.75, \"val\": 56654.59, \"cpr_tc\": 57488.26, \"cpr_bc\": 57473.63, \"day_high\": 57622.87, \"day_low\": 56530.38, \"call_wall\": 58000.0, \"put_wall\": 55000.0}, \"chain\": {\"spot\": 56649.87705666841, \"expiry\": \"2026-09-29\", \"dte_days\": 18.178472222222222, \"atm_strike\": 56600.0, \"atm_iv\": 20.38440570119353, \"straddle\": 2057.3250000000003, \"implied_move\": 0.036316495408136584, \"source\": \"model\", \"atm_spread_pct\": 0.00806630323981732, \"pcr_oi\": 1.029431813916662, \"pcr_doi\": NaN, \"call_wall\": 58000.0, \"put_wall\": 55000.0, \"max_pain\": 56600.0, \"skew_25d\": 2.6928149546854385, \"liquid_strikes\": 41, \"strikes\": 41, \"liquid_lo\": 54600.0, \"liquid_hi\": 58600.0, \"gex_cr_per_1pct\": 41494.96673399658, \"gex_state\": \"positive (dealers damp moves)\", \"gamma_flip\": 56461.01696015283, \"forward\": 56799.62017798328, \"basis\": 149.74312131486658, \"carry_ann\": 0.05300416989365407}}"
+  }
+ ],
+ "decision_rows": [
+  {
+   "ts": "2026-09-11 11:57:00+05:30",
+   "strategy": "trend_break",
+   "symbol": "NIFTY",
+   "action": "rejected",
+   "detail": "EV below the floor: best of 4 structures is long_put with EV \u20b9-434/lot (-0.17R, P(profit) 39%) at P(up) 0.42 [prior tilt from the analyst's score (unvalidated)]"
+  },
+  {
+   "ts": "2026-09-11 11:58:00+05:30",
+   "strategy": "trend_break",
+   "symbol": "NIFTY",
+   "action": "rejected",
+   "detail": "EV below the floor: best of 4 structures is long_put with EV \u20b9+10/lot (+0.00R, P(profit) 41%) at P(up) 0.42 [prior tilt from the analyst's score (unvalidated)]"
+  },
+  {
+   "ts": "2026-09-11 11:59:00+05:30",
+   "strategy": "trend_break",
+   "symbol": "NIFTY",
+   "action": "rejected",
+   "detail": "EV below the floor: best of 4 structures is long_put with EV \u20b9+75/lot (+0.03R, P(profit) 42%) at P(up) 0.42 [prior tilt from the analyst's score (unvalidated)]"
+  },
+  {
+   "ts": "2026-09-11 11:59:00+05:30",
+   "strategy": "trend_break",
+   "symbol": "BANKNIFTY",
+   "action": "rejected",
+   "detail": "EV below the floor: best of 4 structures is long_put with EV \u20b9-52/lot (-0.01R, P(profit) 42%) at P(up) 0.41 [prior tilt from the analyst's score (unvalidated)]"
+  },
+  {
+   "ts": "2026-09-11 12:38:00+05:30",
+   "strategy": "vwap_trend",
+   "symbol": "BANKNIFTY",
+   "action": "rejected",
+   "detail": "EV below the floor: best of 4 structures is long_put with EV \u20b9-54/lot (-0.01R, P(profit) 50%) at P(up) 0.43 [prior tilt from the analyst's score (unvalidated)]"
+  },
+  {
+   "ts": "2026-09-11 12:38:00+05:30",
+   "strategy": "vwap_trend",
+   "symbol": "BANKNIFTY",
+   "action": "rejected",
+   "detail": "vwap_trend reached its level 56,779.60 but setup vwap_trend found but not worth it after costs: best of 4 structures is long_put with EV \u20b9-54/lot (-0.01R, P(profit) 50%) at P(up) 0.43 [prior tilt from the analyst's score (unvalidated)]"
+  }
+ ],
+ "fills": [
+  {
+   "ts": "2026-09-11 09:33:00+05:30",
+   "trade_id": "I261009-0001-e34e",
+   "symbol": "NIFTY15SEP2625550PE",
+   "qty": 260,
+   "price": 132.21438361934344,
+   "fees": 38.88118509003871
+  },
+  {
+   "ts": "2026-09-11 11:07:00+05:30",
+   "trade_id": "I261009-0001-e34e",
+   "symbol": "NIFTY15SEP2625550PE",
+   "qty": -260,
+   "price": 211.09999999999707,
+   "fees": 128.68111312399853
+  },
+  {
+   "ts": "2026-09-11 11:11:00+05:30",
+   "trade_id": "I261009-0002-15ea",
+   "symbol": "NIFTY15SEP2625400PE",
+   "qty": 325,
+   "price": 136.55,
+   "fees": 43.3278632525
+  },
+  {
+   "ts": "2026-09-11 11:14:00+05:30",
+   "trade_id": "I261009-0003-4928",
+   "symbol": "BANKNIFTY29SEP2655500PE",
+   "qty": 90,
+   "price": 545.6999999999999,
+   "fees": 45.43239834199999
+  },
+  {
+   "ts": "2026-09-11 11:56:00+05:30",
+   "trade_id": "I261009-0002-15ea",
+   "symbol": "NIFTY15SEP2625400PE",
+   "qty": -325,
+   "price": 149.0734861476252,
+   "fees": 116.35703376165117
+  },
+  {
+   "ts": "2026-09-11 11:59:00+05:30",
+   "trade_id": "I261009-0003-4928",
+   "symbol": "BANKNIFTY29SEP2655500PE",
+   "qty": -90,
+   "price": 588.9279203328821,
+   "fees": 125.07702743239346
+  }
+ ]
+}

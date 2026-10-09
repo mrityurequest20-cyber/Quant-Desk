@@ -1,0 +1,77 @@
+{
+ "events": {
+  "old_rows": 68,
+  "new_rows": 78,
+  "missing_in_new": 0,
+  "changed_in_new": 0,
+  "example": null
+ },
+ "decisions": {
+  "old_rows": 72,
+  "new_rows": 73,
+  "missing_in_new": 0,
+  "changed_in_new": 0,
+  "example": null
+ },
+ "thoughts": {
+  "old_rows": 675,
+  "new_rows": 743,
+  "missing_in_new": 0,
+  "changed_in_new": 0,
+  "example": null
+ },
+ "fills": {
+  "old_rows": 0,
+  "new_rows": 0,
+  "missing_in_new": 0,
+  "changed_in_new": 0,
+  "example": null
+ },
+ "equity": {
+  "old_rows": 337,
+  "new_rows": 375,
+  "missing_in_new": 0,
+  "changed_in_new": 0,
+  "example": null
+ },
+ "news": {
+  "old_rows": 3907,
+  "new_rows": 4071,
+  "missing_in_new": 0,
+  "changed_in_new": 274,
+  "example": {
+   "key": "00c73342a97cc909",
+   "columns_changed": [
+    "ts",
+    "seen_at",
+    "nlp"
+   ]
+  }
+ },
+ "trades": {
+  "old_rows": 0,
+  "new_rows": 0,
+  "missing_in_new": 0,
+  "changed_in_new": 0,
+  "example": null
+ },
+ "state": {
+  "old_rows": 4,
+  "new_rows": 4,
+  "missing_in_new": 0,
+  "changed_in_new": 2,
+  "example": {
+   "key": "intraday_live",
+   "columns_changed": [
+    "value"
+   ]
+  }
+ },
+ "checks": {
+  "old_rows": 0,
+  "new_rows": 0,
+  "missing_in_new": 0,
+  "changed_in_new": 0,
+  "example": null
+ }
+}

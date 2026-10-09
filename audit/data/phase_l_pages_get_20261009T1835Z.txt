@@ -1,0 +1,33 @@
+GET https://mrityurequest20-cyber.github.io/Quant-Desk/data.json (read-only, 2026-10-09T18:35:51Z)
+HTTP/1.1 200 Connection Established
+
+HTTP/2 404 
+server: GitHub.com
+content-type: text/html; charset=utf-8
+etag: "6abcf5c5-239b"
+content-security-policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'
+x-github-request-id: CA74:39D853:718B4B:77D8C3:6AC93407
+x-github-edge-region: iad
+accept-ranges: bytes
+age: 0
+date: Fri, 09 Oct 2026 18:35:51 GMT
+via: 1.1 varnish
+x-served-by: cache-iad-kiad7000147-IAD
+x-cache: MISS
+x-cache-hits: 0
+x-timer: S1791570951.302952,VS0,VE14
+vary: Accept-Encoding
+x-fastly-request-id: fc1c614605b3ff7feb0ca65741dd81a6fc720b70
+content-length: 9115
+
+
+Also 404: /Quant-Desk/, /Quant-Desk/index.html, / (same time)
+
+Body (first 300 chars):
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="Content-type" content="text/html; charset=utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'">
+    <title>Site not found &middot; GitHub Pages</title>
+ 

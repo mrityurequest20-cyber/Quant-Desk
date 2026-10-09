@@ -1,0 +1,53 @@
+{
+ "rows_old": 3907,
+ "rows_new": 4071,
+ "missing_in_new": 0,
+ "changed_rows": 274,
+ "counts": {
+  "seen_at later": 274,
+  "seen_at earlier": 0,
+  "seen_at same": 0,
+  "ts later": 19,
+  "ts earlier": 11,
+  "ts same": 244,
+  "llm readers lost": 34,
+  "llm readers gained": 2,
+  "nlp identical": 0
+ },
+ "seen_at_shift_hours": {
+  "min": 0.1,
+  "median": 3.26,
+  "max": 52.48
+ },
+ "ts_shift_hours": {
+  "min": -1.66,
+  "median": 0.0,
+  "max": 56.42
+ },
+ "examples": [
+  {
+   "id": "00c73342a97cc909",
+   "title": "S&P 500 Reaches New Record High",
+   "old_ts": "2026-10-07 00:15:00+05:30",
+   "new_ts": "2026-10-09 08:40:28+05:30",
+   "old_seen": "2026-10-07 08:51:26.571497+05:30",
+   "new_seen": "2026-10-09 13:20:04.000391+05:30"
+  },
+  {
+   "id": "6bcd848345434d05",
+   "title": "The Silent Electronic Battleground Shaping the Future of Warfare",
+   "old_ts": "2026-10-08 13:40:03+05:30",
+   "new_ts": "2026-10-09 13:31:01+05:30",
+   "old_seen": "2026-10-08 13:51:04.000393+05:30",
+   "new_seen": "2026-10-09 13:49:04.251468+05:30"
+  },
+  {
+   "id": "34f27e912316bf44",
+   "title": "Adani group stocks under pressure; Enterprises, Green Energy tank up t",
+   "old_ts": "2026-10-08 12:36:20+05:30",
+   "new_ts": "2026-10-08 12:36:20+05:30",
+   "old_seen": "2026-10-09 08:31:30.778179+05:30",
+   "new_seen": "2026-10-09 12:23:04.429368+05:30"
+  }
+ ]
+}

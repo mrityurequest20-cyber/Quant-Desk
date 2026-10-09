@@ -1,0 +1,56 @@
+[
+ {
+  "step": "outage_1_loaded",
+  "note": "data.json = A (fresh)",
+  "data_json_mode": "A",
+  "status_pill": "Live 12:20",
+  "banner": "",
+  "now": "NOW / Watching · no setup has triggered / 12:20 / NIFTY Watching: No setup has triggered / BANKNIFTY Watching: No setup has triggered",
+  "fake_clock": "2026-10-05T06:50:33.071Z"
+ },
+ {
+  "step": "outage_2_failing_70s",
+  "note": "data.json → HTTP 503 for 70 s",
+  "data_json_mode": "fail",
+  "status_pill": "Offline 05 Oct, 12:20",
+  "banner": "Offline. Showing the last saved state from 05 Oct, 12:20; data may be stale. It refreshes by itself when the connection returns.",
+  "now": "NOW / Watching · no setup has triggered / 12:20 / NIFTY Watching: No setup has triggered / BANKNIFTY Watching: No setup has triggered",
+  "fake_clock": "2026-10-05T06:51:43.527Z"
+ },
+ {
+  "step": "outage_3_failing_130s",
+  "note": "still 503",
+  "data_json_mode": "fail",
+  "status_pill": "Offline 05 Oct, 12:20",
+  "banner": "Offline. Showing the last saved state from 05 Oct, 12:20; data may be stale. It refreshes by itself when the connection returns.",
+  "now": "NOW / Watching · no setup has triggered / 12:20 / NIFTY Watching: No setup has triggered / BANKNIFTY Watching: No setup has triggered",
+  "fake_clock": "2026-10-05T06:52:43.979Z"
+ },
+ {
+  "step": "outage_4_recovered",
+  "note": "data.json = B (the next real snapshot)",
+  "data_json_mode": "B",
+  "status_pill": "Live 12:21",
+  "banner": "",
+  "now": "NOW / Watching · no setup has triggered / 12:21 / NIFTY Watching: No setup has triggered / BANKNIFTY Watching: No setup has triggered",
+  "fake_clock": "2026-10-05T06:53:54.442Z"
+ },
+ {
+  "step": "stuck_1_loaded",
+  "note": "data.json = A (fresh)",
+  "data_json_mode": "A",
+  "status_pill": "Live 12:20",
+  "banner": "",
+  "now": "NOW / Watching · no setup has triggered / 12:20 / NIFTY Watching: No setup has triggered / BANKNIFTY Watching: No setup has triggered",
+  "fake_clock": "2026-10-05T06:50:33.073Z"
+ },
+ {
+  "step": "stuck_2_16min",
+  "note": "data.json reachable but never updated (still A) for 16 min",
+  "data_json_mode": "A",
+  "status_pill": "Stale 17 min",
+  "banner": "The desk hasn't reported for 17 min · showing 12:20. It hands over to a fresh runner at 12:20, and a restart takes a few minutes; this page refreshes by itself.",
+  "now": "NOW / Watching · no setup has triggered / 12:20 / NIFTY Watching: No setup has triggered / BANKNIFTY Watching: No setup has triggered",
+  "fake_clock": "2026-10-05T07:06:33.535Z"
+ }
+]

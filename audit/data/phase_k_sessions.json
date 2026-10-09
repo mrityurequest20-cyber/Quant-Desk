@@ -1,0 +1,654 @@
+{
+ "2026-10-05": {
+  "market": {
+   "NIFTY": {
+    "bars": 373,
+    "open_to_close_pct": 0.1,
+    "range_pct": 1.0,
+    "close_location": 0.71,
+    "am_pct": -0.45,
+    "pm_pct": 0.56
+   },
+   "BANKNIFTY": {
+    "bars": 373,
+    "open_to_close_pct": -0.23,
+    "range_pct": 1.5,
+    "close_location": 0.42,
+    "am_pct": -0.58,
+    "pm_pct": 0.35
+   }
+  },
+  "information": {
+   "feed": "kotak",
+   "chain": "kotak",
+   "vix_zero_bars": "373/373",
+   "news_seen_that_day_per_current_record": 498,
+   "llm_line": "Language models today: gemini 8 calls, 5k in / 1k out; ollama 9 calls, 6k in / 4k out; problems: gemini: ReadTimeout: HTTPSConnectionPool(host='genera",
+   "warn_or_worse": {
+    "WARN account: no trades yet: account reset from \u20b920,00": 1,
+    "WARN learning: grading failed: Cannot losslessly conver": 1
+   },
+   "scheduled_events": [
+    "# Intraday session review \u2014 2026-10-05\n\nCapital \u20b9500,000 \u2192 \u20b9500,000 (**+0.00%**,"
+   ]
+  },
+  "reads": {
+   "thoughts": 149,
+   "bias": {
+    "bearish": 67,
+    "bullish": 55,
+    "neutral": 27
+   },
+   "bias_flips": 27,
+   "stance": {
+    "watching": 113,
+    "standing aside": 29,
+    "setup range_sell found b": 4,
+    "armed": 3
+   },
+   "setups_named": [
+    "has",
+    "range_sell"
+   ]
+  },
+  "decisions": {
+   "rows": 7,
+   "by_gate": {
+    "EV floor": 7
+   },
+   "armed_triggers": [],
+   "execution": 0
+  },
+  "counterfactual": {
+   "valued": 7,
+   "basis": "1 lot, held to 15:15; costs: EV fees where recorded; no slippage beyond touch",
+   "by_gate": {
+    "EV floor": {
+     "rows": 7,
+     "distinct_plans": 4,
+     "mid_sum": -517.0,
+     "touch_sum": -1008.0,
+     "touch_winners": 3,
+     "net_after_fees_sum": -2606.0,
+     "distinct_plan_touch_median": -123.5
+    }
+   }
+  },
+  "learning": [
+   "caught up: 0 news, 0 factors, 0 trades, 0 armed, 252 rs",
+   "grading failed: Cannot losslessly convert units",
+   "graded: 51 news, 2028 factors, 0 trades, 0 armed, 63 rs"
+  ],
+  "subsequent_use_learned_multipliers_median": {
+   "news": 1.0,
+   "orb": 1.071,
+   "pcr": 1.0,
+   "rsi": 1.017,
+   "vix": 1.02,
+   "vwap": 1.004
+  }
+ },
+ "2026-10-06": {
+  "market": {
+   "NIFTY": {
+    "bars": 373,
+    "open_to_close_pct": 0.76,
+    "range_pct": 0.95,
+    "close_location": 1.0,
+    "am_pct": 0.36,
+    "pm_pct": 0.4
+   },
+   "BANKNIFTY": {
+    "bars": 373,
+    "open_to_close_pct": 0.41,
+    "range_pct": 0.67,
+    "close_location": 0.8,
+    "am_pct": 0.25,
+    "pm_pct": 0.16
+   }
+  },
+  "information": {
+   "feed": "kotak",
+   "chain": "kotak",
+   "vix_zero_bars": "372/373",
+   "news_seen_that_day_per_current_record": 625,
+   "llm_line": "Language models today: gemini 22 calls, 14k in / 4k out; ollama 22 calls, 15k in / 9k out",
+   "warn_or_worse": {
+    "WARN learning: grading failed: Cannot losslessly conver": 2
+   },
+   "scheduled_events": []
+  },
+  "reads": {
+   "thoughts": 151,
+   "bias": {
+    "bullish": 131,
+    "neutral": 14,
+    "bearish": 6
+   },
+   "bias_flips": 26,
+   "stance": {
+    "watching": 86,
+    "standing aside": 36,
+    "armed": 29
+   },
+   "setups_named": [
+    "has"
+   ]
+  },
+  "decisions": {
+   "rows": 4,
+   "by_gate": {
+    "no approved plan model": 3,
+    "EV floor": 1
+   },
+   "armed_triggers": [
+    {
+     "ts": "10:09:24",
+     "symbol": "NIFTY",
+     "setup": "vwap_trend",
+     "level": 22627.07,
+     "armed_at": "10:09:04",
+     "why": "bullish read (score +0.63, conviction 0.53)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "11:45:19",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22691.75,
+     "armed_at": "11:45:04",
+     "why": "bullish read (score +0.74, conviction 0.68)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "12:38:48",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22701.22,
+     "armed_at": "12:38:04",
+     "why": "bullish read (score +0.67, conviction 0.57)",
+     "gate": "no approved plan model"
+    }
+   ],
+   "execution": 0
+  },
+  "counterfactual": {
+   "valued": 4,
+   "basis": "1 lot, held to 15:15; costs: EV fees where recorded; no slippage beyond touch",
+   "by_gate": {
+    "EV floor": {
+     "rows": 1,
+     "distinct_plans": 1,
+     "mid_sum": 548.0,
+     "touch_sum": 460.0,
+     "touch_winners": 1,
+     "net_after_fees_sum": 120.0,
+     "distinct_plan_touch_median": 460.0
+    },
+    "no approved plan model": {
+     "rows": 3,
+     "distinct_plans": 3,
+     "mid_sum": 312.0,
+     "touch_sum": 217.0,
+     "touch_winners": 1,
+     "net_after_fees_sum": null,
+     "distinct_plan_touch_median": -153.0
+    }
+   }
+  },
+  "learning": [
+   "grading failed: Cannot losslessly convert units",
+   "grading failed: Cannot losslessly convert units",
+   "graded: 135 news, 2034 factors, 0 trades, 0 armed, 63 rs"
+  ],
+  "subsequent_use_learned_multipliers_median": {
+   "news": 0.982,
+   "orb": 1.054,
+   "pcr": 1.124,
+   "rsi": 0.982,
+   "vix": 0.98,
+   "vwap": 1.013
+  }
+ },
+ "2026-10-07": {
+  "market": {
+   "NIFTY": {
+    "bars": 373,
+    "open_to_close_pct": -0.39,
+    "range_pct": 0.76,
+    "close_location": 0.33,
+    "am_pct": -0.09,
+    "pm_pct": -0.3
+   },
+   "BANKNIFTY": {
+    "bars": 373,
+    "open_to_close_pct": 0.16,
+    "range_pct": 1.28,
+    "close_location": 0.6,
+    "am_pct": 0.28,
+    "pm_pct": -0.12
+   }
+  },
+  "information": {
+   "feed": "kotak",
+   "chain": "kotak",
+   "vix_zero_bars": "373/373",
+   "news_seen_that_day_per_current_record": 729,
+   "llm_line": "Language models today: gemini 32 calls, 23k in / 8k out; ollama 28 calls, 21k in / 17k out; problems: ollama: ReadTimeout: HTTPSConnectionPool(host='o",
+   "warn_or_worse": {
+    "WARN learning: grading failed: Cannot losslessly conver": 2
+   },
+   "scheduled_events": [
+    "# Intraday session review \u2014 2026-10-07\n\nCapital \u20b9500,000 \u2192 \u20b9500,000 (**+0.00%**,"
+   ]
+  },
+  "reads": {
+   "thoughts": 153,
+   "bias": {
+    "bullish": 62,
+    "bearish": 59,
+    "neutral": 32
+   },
+   "bias_flips": 37,
+   "stance": {
+    "standing aside": 79,
+    "watching": 57,
+    "setup range_sell found b": 12,
+    "armed": 5
+   },
+   "setups_named": [
+    "has",
+    "range_sell"
+   ]
+  },
+  "decisions": {
+   "rows": 38,
+   "by_gate": {
+    "EV floor": 38
+   },
+   "armed_triggers": [],
+   "execution": 0
+  },
+  "counterfactual": {
+   "valued": 38,
+   "basis": "1 lot, held to 15:15; costs: EV fees where recorded; no slippage beyond touch",
+   "by_gate": {
+    "EV floor": {
+     "rows": 38,
+     "distinct_plans": 24,
+     "mid_sum": 14545.0,
+     "touch_sum": 11268.0,
+     "touch_winners": 35,
+     "net_after_fees_sum": 1026.0,
+     "distinct_plan_touch_median": 338.0
+    }
+   }
+  },
+  "learning": [
+   "grading failed: Cannot losslessly convert units",
+   "grading failed: Cannot losslessly convert units",
+   "graded: 300 news, 2049 factors, 0 trades, 0 armed, 63 rs"
+  ],
+  "subsequent_use_learned_multipliers_median": {
+   "news": 0.931,
+   "orb": 1.043,
+   "pcr": 1.08,
+   "rsi": 0.995,
+   "vix": 0.993,
+   "vwap": 1.006
+  }
+ },
+ "2026-10-08": {
+  "market": {
+   "NIFTY": {
+    "bars": 373,
+    "open_to_close_pct": -1.63,
+    "range_pct": 1.85,
+    "close_location": 0.12,
+    "am_pct": -1.21,
+    "pm_pct": -0.42
+   },
+   "BANKNIFTY": {
+    "bars": 373,
+    "open_to_close_pct": -0.96,
+    "range_pct": 1.2,
+    "close_location": 0.2,
+    "am_pct": -0.48,
+    "pm_pct": -0.48
+   }
+  },
+  "information": {
+   "feed": "kotak+yahoo (1 of 567 polls from Yahoo)",
+   "chain": "kotak",
+   "vix_zero_bars": "372/373",
+   "news_seen_that_day_per_current_record": 638,
+   "llm_line": "Language models today: gemini 23 calls, 14k in / 4k out; ollama 20 calls, 14k in / 9k out; problems: gemini: ReadTimeout: HTTPSConnectionPool(host='ge",
+   "warn_or_worse": {
+    "WARN learning: grading failed: Cannot losslessly conver": 2
+   },
+   "scheduled_events": []
+  },
+  "reads": {
+   "thoughts": 149,
+   "bias": {
+    "bearish": 129,
+    "neutral": 19,
+    "bullish": 1
+   },
+   "bias_flips": 24,
+   "stance": {
+    "watching": 61,
+    "standing aside": 55,
+    "armed": 33
+   },
+   "setups_named": [
+    "has"
+   ]
+  },
+  "decisions": {
+   "rows": 22,
+   "by_gate": {
+    "no approved plan model": 17,
+    "EV floor": 5
+   },
+   "armed_triggers": [
+    {
+     "ts": "09:43:57",
+     "symbol": "NIFTY",
+     "setup": "orb",
+     "level": 22473.15,
+     "armed_at": "09:43:04",
+     "why": "bearish read (score -0.52, conviction 0.50)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "09:52:55",
+     "symbol": "NIFTY",
+     "setup": "orb",
+     "level": 22473.03,
+     "armed_at": "09:52:04",
+     "why": "bearish read (score -0.62, conviction 0.59)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "10:08:45",
+     "symbol": "NIFTY",
+     "setup": "orb",
+     "level": 22473.18,
+     "armed_at": "10:08:04",
+     "why": "bearish read (score -0.59, conviction 0.54)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "10:33:24",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22436.95,
+     "armed_at": "10:33:04",
+     "why": "bearish read (score -0.74, conviction 0.70)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "11:21:29",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22418.82,
+     "armed_at": "11:21:04",
+     "why": "bearish read (score -0.74, conviction 0.71)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "12:25:19",
+     "symbol": "BANKNIFTY",
+     "setup": "trend_break",
+     "level": 54746.67,
+     "armed_at": "12:25:04",
+     "why": "bearish read (score -0.62, conviction 0.56)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "12:30:19",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22309.24,
+     "armed_at": "12:30:04",
+     "why": "bearish read (score -0.78, conviction 0.75)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "12:56:27",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22270.32,
+     "armed_at": "12:56:04",
+     "why": "bearish read (score -0.78, conviction 0.75)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "12:56:38",
+     "symbol": "BANKNIFTY",
+     "setup": "trend_break",
+     "level": 54685.69,
+     "armed_at": "12:56:04",
+     "why": "bearish read (score -0.64, conviction 0.58)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "13:27:57",
+     "symbol": "BANKNIFTY",
+     "setup": "trend_break",
+     "level": 54613.61,
+     "armed_at": "13:27:04",
+     "why": "bearish read (score -0.64, conviction 0.59)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "13:30:47",
+     "symbol": "BANKNIFTY",
+     "setup": "trend_break",
+     "level": 54580.67,
+     "armed_at": "13:30:04",
+     "why": "bearish read (score -0.67, conviction 0.59)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "13:30:53",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22229.09,
+     "armed_at": "13:30:04",
+     "why": "bearish read (score -0.65, conviction 0.61)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "13:45:25",
+     "symbol": "BANKNIFTY",
+     "setup": "trend_break",
+     "level": 54560.65,
+     "armed_at": "13:45:04",
+     "why": "bearish read (score -0.65, conviction 0.56)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "14:00:25",
+     "symbol": "BANKNIFTY",
+     "setup": "trend_break",
+     "level": 54526.16,
+     "armed_at": "14:00:04",
+     "why": "bearish read (score -0.66, conviction 0.59)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "14:18:37",
+     "symbol": "BANKNIFTY",
+     "setup": "trend_break",
+     "level": 54418.14,
+     "armed_at": "14:18:04",
+     "why": "bearish read (score -0.68, conviction 0.61)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "14:21:21",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22201.76,
+     "armed_at": "14:21:04",
+     "why": "bearish read (score -0.62, conviction 0.58)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "14:27:00",
+     "symbol": "NIFTY",
+     "setup": "trend_break",
+     "level": 22201.74,
+     "armed_at": "14:26:04",
+     "why": "bearish read (score -0.61, conviction 0.57)",
+     "gate": "no approved plan model"
+    }
+   ],
+   "execution": 0
+  },
+  "counterfactual": {
+   "valued": 21,
+   "basis": "1 lot, held to 15:15; costs: EV fees where recorded; no slippage beyond touch",
+   "by_gate": {
+    "EV floor": {
+     "rows": 4,
+     "distinct_plans": 4,
+     "mid_sum": 785.0,
+     "touch_sum": -176.0,
+     "touch_winners": 1,
+     "net_after_fees_sum": -1511.0,
+     "distinct_plan_touch_median": -38.5
+    },
+    "no approved plan model": {
+     "rows": 17,
+     "distinct_plans": 17,
+     "mid_sum": 15160.0,
+     "touch_sum": 12242.0,
+     "touch_winners": 12,
+     "net_after_fees_sum": null,
+     "distinct_plan_touch_median": 376.0
+    }
+   }
+  },
+  "learning": [
+   "grading failed: Cannot losslessly convert units",
+   "grading failed: Cannot losslessly convert units",
+   "graded: 176 news, 2274 factors, 0 trades, 0 armed, 63 rs"
+  ],
+  "subsequent_use_learned_multipliers_median": {
+   "news": 0.942,
+   "orb": 1.012,
+   "pcr": 1.048,
+   "rsi": 0.969,
+   "vix": 0.997,
+   "vwap": 0.98
+  }
+ },
+ "2026-10-09": {
+  "market": {
+   "NIFTY": {
+    "bars": 373,
+    "open_to_close_pct": 0.92,
+    "range_pct": 1.28,
+    "close_location": 0.79,
+    "am_pct": 0.68,
+    "pm_pct": 0.24
+   },
+   "BANKNIFTY": {
+    "bars": 373,
+    "open_to_close_pct": 0.93,
+    "range_pct": 1.47,
+    "close_location": 0.8,
+    "am_pct": 0.7,
+    "pm_pct": 0.23
+   }
+  },
+  "information": {
+   "feed": "kotak+yahoo (5 of 564 polls from Yahoo)",
+   "chain": "kotak",
+   "vix_zero_bars": "372/373",
+   "news_seen_that_day_per_current_record": 674,
+   "llm_line": "Language models today: gemini 24 calls, 14k in / 4k out; ollama 20 calls, 13k in / 7k out; problems: ollama: ReadTimeout: HTTPSConnectionPool(host='ol",
+   "warn_or_worse": {
+    "WARN learning: grading failed: Cannot losslessly conver": 2,
+    "WARN engine: slow step: 51s (the loop is falling behi": 1,
+    "WARN engine: slow step: 65s (the loop is falling behi": 1
+   },
+   "scheduled_events": []
+  },
+  "reads": {
+   "thoughts": 141,
+   "bias": {
+    "bullish": 132,
+    "neutral": 6,
+    "bearish": 3
+   },
+   "bias_flips": 8,
+   "stance": {
+    "watching": 93,
+    "standing aside": 32,
+    "armed": 16
+   },
+   "setups_named": [
+    "has"
+   ]
+  },
+  "decisions": {
+   "rows": 2,
+   "by_gate": {
+    "no approved plan model": 2
+   },
+   "armed_triggers": [
+    {
+     "ts": "11:59:20",
+     "symbol": "BANKNIFTY",
+     "setup": "vwap_trend",
+     "level": 55043.08,
+     "armed_at": "11:59:04",
+     "why": "bullish read (score +0.62, conviction 0.47)",
+     "gate": "no approved plan model"
+    },
+    {
+     "ts": "13:59:22",
+     "symbol": "BANKNIFTY",
+     "setup": "trend_break",
+     "level": 55316.65,
+     "armed_at": "13:59:04",
+     "why": "bullish read (score +0.68, conviction 0.59)",
+     "gate": "no approved plan model"
+    }
+   ],
+   "execution": 0
+  },
+  "counterfactual": {
+   "valued": 2,
+   "basis": "1 lot, held to 15:15; costs: EV fees where recorded; no slippage beyond touch",
+   "by_gate": {
+    "no approved plan model": {
+     "rows": 2,
+     "distinct_plans": 2,
+     "mid_sum": 204.0,
+     "touch_sum": -863.0,
+     "touch_winners": 1,
+     "net_after_fees_sum": null,
+     "distinct_plan_touch_median": -431.5
+    }
+   }
+  },
+  "learning": [
+   "grading failed: Cannot losslessly convert units",
+   "grading failed: Cannot losslessly convert units",
+   "graded: 150 news, 2378 factors, 0 trades, 0 armed, 63 rs"
+  ],
+  "subsequent_use_learned_multipliers_median": {
+   "news": 1.074,
+   "orb": 1.066,
+   "pcr": 1.148,
+   "rsi": 1.016,
+   "vix": 0.954,
+   "vwap": 1.019
+  }
+ }
+}

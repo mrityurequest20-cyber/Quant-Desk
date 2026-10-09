@@ -1,0 +1,1209 @@
+{
+ "per_session": [
+  {
+   "day": "2026-10-05",
+   "mode": "bar",
+   "evidence_class": "replay-exact",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 0,
+    "armed_trigger_hits": 9,
+    "ev_calls": 0
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 9
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 9
+   },
+   "screen_after_fire": {
+    "rearmed_same_setup_same_level": 2,
+    "rearmed_other": 1,
+    "watching_no_setup_has_triggered": 6
+   },
+   "examples": {
+    "rearmed_same_setup_same_level": [
+     {
+      "fire_ts": "2026-10-05 10:56:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22465.464525014217,
+      "returned": "trend_break reached its level 22,465.46 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 10:56:00+05:30",
+      "hb_action": "armed: trend_break: sell on a trade through 22,465.46 (stop 22,511.70)",
+      "ui_head": "Armed \u00b7 Trend break put on NIFTY at 22,465.46",
+      "ui_line": "Waiting at the level: Trend_break: sell on a trade through 22,465.46 (stop 22,511.70)"
+     },
+     {
+      "fire_ts": "2026-10-05 12:11:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22411.89189606793,
+      "returned": "trend_break reached its level 22,411.89 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 12:11:00+05:30",
+      "hb_action": "armed: trend_break: sell on a trade through 22,411.89 (stop 22,461.42)",
+      "ui_head": "Armed \u00b7 Trend break put on NIFTY at 22,411.89",
+      "ui_line": "Waiting at the level: Trend_break: sell on a trade through 22,411.89 (stop 22,461.42)"
+     }
+    ],
+    "rearmed_other": [
+     {
+      "fire_ts": "2026-10-05 11:02:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22503.02705894177,
+      "returned": "orb reached its level 22,503.03 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 11:02:00+05:30",
+      "hb_action": "armed: trend_break: sell on a trade through 22,465.33 (stop 22,501.50); vwap_trend: sell on a pullback to 22,543.34 (stop 22,558.29)",
+      "ui_head": "Armed \u00b7 Trend break put on NIFTY at 22,465.33",
+      "ui_line": "Waiting at the level: Trend_break: sell on a trade through 22,465.33 (stop 22,501.50); vwap_trend: sell on a pullback to 22,543.34 (stop 22,558.29)"
+     }
+    ],
+    "watching_no_setup_has_triggered": [
+     {
+      "fire_ts": "2026-10-05 11:24:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22457.901865770407,
+      "returned": "trend_break reached its level 22,457.90 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 11:24:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     },
+     {
+      "fire_ts": "2026-10-05 11:51:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22448.78448143782,
+      "returned": "trend_break reached its level 22,448.78 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 11:51:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     },
+     {
+      "fire_ts": "2026-10-05 11:59:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22448.788804192263,
+      "returned": "trend_break reached its level 22,448.79 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 11:59:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:multiple_armed": 31,
+    "minute:rejected_this_minute_shown_waiting_at_level": 3,
+    "minute:rejected_this_minute_shown_no_setup_triggered": 6,
+    "minute:headline_no_setup_triggered_in_a_rejection_minute": 5,
+    "minute:multiple_armed_symbols_headline_names_one": 14
+   },
+   "ev_pup": {},
+   "ev_examples": [],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-06",
+   "mode": "bar",
+   "evidence_class": "replay-subst",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 0,
+    "armed_trigger_hits": 10,
+    "ev_calls": 1
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 10
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 10
+   },
+   "screen_after_fire": {
+    "watching_no_setup_has_triggered": 9,
+    "rearmed_same_setup_same_level": 1
+   },
+   "examples": {
+    "watching_no_setup_has_triggered": [
+     {
+      "fire_ts": "2026-10-06 10:02:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "vwap_trend",
+      "level": 54996.467517738376,
+      "returned": "vwap_trend reached its level 54,996.47 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-06 10:02:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Armed \u00b7 VWAP trend call on NIFTY at 22,624.64",
+      "ui_line": "Watching: No setup has triggered"
+     },
+     {
+      "fire_ts": "2026-10-06 10:10:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "vwap_trend",
+      "level": 22627.067899804686,
+      "returned": "vwap_trend reached its level 22,627.07 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-06 10:10:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     },
+     {
+      "fire_ts": "2026-10-06 10:38:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22667.7021850302,
+      "returned": "trend_break reached its level 22,667.70 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-06 10:38:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     }
+    ],
+    "rearmed_same_setup_same_level": [
+     {
+      "fire_ts": "2026-10-06 13:42:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22718.427767103676,
+      "returned": "trend_break reached its level 22,718.43 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-06 13:42:00+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 22,718.43 (stop 22,704.08)",
+      "ui_head": "Armed \u00b7 Trend break call on NIFTY at 22,718.43",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 22,718.43 (stop 22,704.08)"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:rejected_this_minute_shown_no_setup_triggered": 9,
+    "minute:headline_no_setup_triggered_in_a_rejection_minute": 7,
+    "minute:multiple_armed": 98,
+    "minute:multiple_armed_symbols_headline_names_one": 59,
+    "minute:rejected_this_minute_shown_waiting_at_level": 1
+   },
+   "ev_pup": {
+    "ev_rejections": 1,
+    "src:prior tilt from the analyst's score": 1,
+    "message_p_differs_from_p_used": 1,
+    "\u2026of_which_nondirectional_structure_used_0.5": 1,
+    "ui_p_used_shows_number": 0,
+    "ui_p_used_shows_coin_flip_while_message_has_number": 1
+   },
+   "ev_examples": [
+    {
+     "ts": "2026-10-06 12:15:00+05:30",
+     "symbol": "BANKNIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.53,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": 0.25842263465009774
+    }
+   ],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-07",
+   "mode": "bar",
+   "evidence_class": "replay-subst",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 0,
+    "armed_trigger_hits": 3,
+    "ev_calls": 30
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 3
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 3
+   },
+   "screen_after_fire": {
+    "standing_aside_other_reason": 1,
+    "watching_no_setup_has_triggered": 1,
+    "rearmed_same_setup_same_level": 1
+   },
+   "examples": {
+    "standing_aside_other_reason": [
+     {
+      "fire_ts": "2026-10-07 09:40:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "orb",
+      "level": 54685.605891651765,
+      "returned": "orb reached its level 54,685.61 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-07 09:40:00+05:30",
+      "hb_action": "standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Standing aside: No approved plan model (the learning loop is off); directional reads stay advisory"
+     }
+    ],
+    "watching_no_setup_has_triggered": [
+     {
+      "fire_ts": "2026-10-07 11:07:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 55312.60126081756,
+      "returned": "trend_break reached its level 55,312.60 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-07 11:07:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Armed \u00b7 Trend break call on NIFTY at 22,708.89",
+      "ui_line": "Watching: No setup has triggered"
+     }
+    ],
+    "rearmed_same_setup_same_level": [
+     {
+      "fire_ts": "2026-10-07 11:08:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22708.88840753617,
+      "returned": "trend_break reached its level 22,708.89 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-07 11:08:00+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 22,708.89 (stop 22,664.67)",
+      "ui_head": "Armed \u00b7 Trend break call on NIFTY at 22,708.89",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 22,708.89 (stop 22,664.67)"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:headline_no_setup_triggered_in_a_rejection_minute": 1,
+    "minute:rejected_this_minute_shown_no_setup_triggered": 1,
+    "minute:rejected_this_minute_shown_waiting_at_level": 1,
+    "minute:multiple_armed": 2,
+    "minute:multiple_armed_symbols_headline_names_one": 2
+   },
+   "ev_pup": {
+    "ev_rejections": 30,
+    "src:prior tilt from the analyst's score": 30,
+    "message_p_differs_from_p_used": 8,
+    "\u2026of_which_nondirectional_structure_used_0.5": 8,
+    "ui_p_used_shows_number": 0,
+    "ui_p_used_shows_coin_flip_while_message_has_number": 30
+   },
+   "ev_examples": [
+    {
+     "ts": "2026-10-07 12:27:00+05:30",
+     "symbol": "NIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.53,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": 0.29907623582626314
+    },
+    {
+     "ts": "2026-10-07 12:30:00+05:30",
+     "symbol": "NIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.51,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": 0.07786477285384244
+    },
+    {
+     "ts": "2026-10-07 12:31:00+05:30",
+     "symbol": "NIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.51,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": 0.07808210089221511
+    }
+   ],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-08",
+   "mode": "bar",
+   "evidence_class": "replay-subst",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 0,
+    "armed_trigger_hits": 26,
+    "ev_calls": 10
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 26
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 26
+   },
+   "screen_after_fire": {
+    "watching_no_setup_has_triggered": 20,
+    "rearmed_other": 3,
+    "rearmed_same_setup_same_level": 2,
+    "standing_aside_other_reason": 1
+   },
+   "examples": {
+    "watching_no_setup_has_triggered": [
+     {
+      "fire_ts": "2026-10-08 09:44:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22473.14552809217,
+      "returned": "orb reached its level 22,473.15 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 09:44:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     },
+     {
+      "fire_ts": "2026-10-08 09:53:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22473.031786584634,
+      "returned": "orb reached its level 22,473.03 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 09:53:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     },
+     {
+      "fire_ts": "2026-10-08 10:39:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22436.892501311544,
+      "returned": "trend_break reached its level 22,436.89 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 10:39:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     }
+    ],
+    "rearmed_other": [
+     {
+      "fire_ts": "2026-10-08 10:00:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22473.09094468573,
+      "returned": "orb reached its level 22,473.09 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 10:00:00+05:30",
+      "hb_action": "armed: vwap_trend: sell on a pullback to 22,503.87 (stop 22,515.76)",
+      "ui_head": "Armed \u00b7 VWAP trend put on NIFTY at 22,503.87",
+      "ui_line": "Waiting at the level: Vwap_trend: sell on a pullback to 22,503.87 (stop 22,515.76)"
+     },
+     {
+      "fire_ts": "2026-10-08 10:09:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22473.17659012338,
+      "returned": "orb reached its level 22,473.18 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 10:09:00+05:30",
+      "hb_action": "armed: vwap_trend: sell on a pullback to 22,502.96 (stop 22,514.54)",
+      "ui_head": "Armed \u00b7 VWAP trend put on NIFTY at 22,502.96",
+      "ui_line": "Waiting at the level: Vwap_trend: sell on a pullback to 22,502.96 (stop 22,514.54)"
+     },
+     {
+      "fire_ts": "2026-10-08 12:26:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 54746.643858011594,
+      "returned": "trend_break reached its level 54,746.64 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 12:26:00+05:30",
+      "hb_action": "armed: vwap_trend: sell on a pullback to 54,840.31 (stop 54,873.86)",
+      "ui_head": "Armed \u00b7 VWAP trend put on BANKNIFTY at 54,840.31",
+      "ui_line": "Waiting at the level: Vwap_trend: sell on a pullback to 54,840.31 (stop 54,873.86)"
+     }
+    ],
+    "rearmed_same_setup_same_level": [
+     {
+      "fire_ts": "2026-10-08 10:34:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22436.95331946989,
+      "returned": "trend_break reached its level 22,436.95 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 10:34:00+05:30",
+      "hb_action": "armed: trend_break: sell on a trade through 22,436.95 (stop 22,468.80)",
+      "ui_head": "Armed \u00b7 Trend break put on NIFTY at 22,436.95",
+      "ui_line": "Waiting at the level: Trend_break: sell on a trade through 22,436.95 (stop 22,468.80)"
+     },
+     {
+      "fire_ts": "2026-10-08 12:17:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22337.652630574674,
+      "returned": "trend_break reached its level 22,337.65 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 12:17:00+05:30",
+      "hb_action": "armed: trend_break: sell on a trade through 22,337.65 (stop 22,361.47)",
+      "ui_head": "Armed \u00b7 Trend break put on NIFTY at 22,337.65",
+      "ui_line": "Waiting at the level: Trend_break: sell on a trade through 22,337.65 (stop 22,361.47)"
+     }
+    ],
+    "standing_aside_other_reason": [
+     {
+      "fire_ts": "2026-10-08 14:05:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22225.31351768229,
+      "returned": "trend_break reached its level 22,225.31 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 14:05:00+05:30",
+      "hb_action": "standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "ui_head": "Standing aside \u00b7 a no-trade flag is up",
+      "ui_line": "Standing aside: No approved plan model (the learning loop is off); directional reads stay advisory"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:rejected_this_minute_shown_no_setup_triggered": 20,
+    "minute:headline_no_setup_triggered_in_a_rejection_minute": 13,
+    "minute:rejected_this_minute_shown_waiting_at_level": 5,
+    "minute:multiple_armed": 59,
+    "minute:multiple_armed_symbols_headline_names_one": 43
+   },
+   "ev_pup": {
+    "ev_rejections": 10,
+    "src:prior tilt from the analyst's score": 10,
+    "message_p_differs_from_p_used": 5,
+    "\u2026of_which_nondirectional_structure_used_0.5": 5,
+    "ui_p_used_shows_number": 0,
+    "ui_p_used_shows_coin_flip_while_message_has_number": 10
+   },
+   "ev_examples": [
+    {
+     "ts": "2026-10-08 11:03:00+05:30",
+     "symbol": "BANKNIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.49,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": -0.06137840795071159
+    },
+    {
+     "ts": "2026-10-08 11:04:00+05:30",
+     "symbol": "BANKNIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.49,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": -0.06209762145131624
+    },
+    {
+     "ts": "2026-10-08 11:06:00+05:30",
+     "symbol": "BANKNIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.49,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": -0.11031494905079325
+    }
+   ],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-09",
+   "mode": "bar",
+   "evidence_class": "replay-subst",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 0,
+    "armed_trigger_hits": 12,
+    "ev_calls": 0
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 12
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 12
+   },
+   "screen_after_fire": {
+    "standing_aside_other_reason": 3,
+    "rearmed_other": 2,
+    "watching_no_setup_has_triggered": 5,
+    "rearmed_same_setup_same_level": 2
+   },
+   "examples": {
+    "standing_aside_other_reason": [
+     {
+      "fire_ts": "2026-10-09 10:30:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22505.85029866104,
+      "returned": "trend_break reached its level 22,505.85 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 10:30:00+05:30",
+      "hb_action": "standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "ui_head": "Armed \u00b7 Trend break call on BANKNIFTY at 55,255.49",
+      "ui_line": "Standing aside: No approved plan model (the learning loop is off); directional reads stay advisory"
+     },
+     {
+      "fire_ts": "2026-10-09 11:20:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22516.82334414547,
+      "returned": "trend_break reached its level 22,516.82 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 11:20:00+05:30",
+      "hb_action": "standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "ui_head": "Standing aside \u00b7 a no-trade flag is up",
+      "ui_line": "Standing aside: No approved plan model (the learning loop is off); directional reads stay advisory"
+     },
+     {
+      "fire_ts": "2026-10-09 11:20:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 55201.989310011995,
+      "returned": "trend_break reached its level 55,201.99 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 11:20:00+05:30",
+      "hb_action": "standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "ui_head": "Standing aside \u00b7 a no-trade flag is up",
+      "ui_line": "Standing aside: No approved plan model (the learning loop is off); directional reads stay advisory"
+     }
+    ],
+    "rearmed_other": [
+     {
+      "fire_ts": "2026-10-09 11:55:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "vwap_trend",
+      "level": 55042.6030637834,
+      "returned": "vwap_trend reached its level 55,042.60 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 11:55:00+05:30",
+      "hb_action": "armed: vwap_trend: buy on a pullback to 55,042.61 (stop 55,013.92)",
+      "ui_head": "Armed \u00b7 VWAP trend call on BANKNIFTY at 55,042.61",
+      "ui_line": "Waiting at the level: Vwap_trend: buy on a pullback to 55,042.61 (stop 55,013.92)"
+     },
+     {
+      "fire_ts": "2026-10-09 14:00:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 55316.64977256362,
+      "returned": "trend_break reached its level 55,316.65 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 14:00:00+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 55,316.87 (stop 55,250.48)",
+      "ui_head": "Armed \u00b7 Trend break call on BANKNIFTY at 55,316.87",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 55,316.87 (stop 55,250.48)"
+     }
+    ],
+    "watching_no_setup_has_triggered": [
+     {
+      "fire_ts": "2026-10-09 12:00:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "vwap_trend",
+      "level": 55043.08120002569,
+      "returned": "vwap_trend reached its level 55,043.08 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 12:00:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     },
+     {
+      "fire_ts": "2026-10-09 13:43:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 55254.6224796214,
+      "returned": "trend_break reached its level 55,254.62 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 13:43:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Watching: No setup has triggered"
+     },
+     {
+      "fire_ts": "2026-10-09 13:59:00+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22540.207560869014,
+      "returned": "trend_break reached its level 22,540.21 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 13:59:00+05:30",
+      "hb_action": "watching: no setup has triggered",
+      "ui_head": "Armed \u00b7 Trend break call on BANKNIFTY at 55,316.65",
+      "ui_line": "Watching: No setup has triggered"
+     }
+    ],
+    "rearmed_same_setup_same_level": [
+     {
+      "fire_ts": "2026-10-09 14:08:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 55326.80084967565,
+      "returned": "trend_break reached its level 55,326.80 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 14:08:00+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 55,326.80 (stop 55,255.45)",
+      "ui_head": "Armed \u00b7 Trend break call on BANKNIFTY at 55,326.80",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 55,326.80 (stop 55,255.45)"
+     },
+     {
+      "fire_ts": "2026-10-09 14:09:00+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 55326.80084967565,
+      "returned": "trend_break reached its level 55,326.80 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 14:09:00+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 55,326.80 (stop 55,255.45)",
+      "ui_head": "Armed \u00b7 Trend break call on BANKNIFTY at 55,326.80",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 55,326.80 (stop 55,255.45)"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:multiple_armed": 83,
+    "minute:multiple_armed_symbols_headline_names_one": 60,
+    "minute:rejected_this_minute_shown_waiting_at_level": 4,
+    "minute:rejected_this_minute_shown_no_setup_triggered": 5,
+    "minute:headline_no_setup_triggered_in_a_rejection_minute": 3
+   },
+   "ev_pup": {},
+   "ev_examples": [],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-05",
+   "mode": "tick",
+   "evidence_class": "replay-exact+synth-tick",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 8,
+    "armed_trigger_hits": 9,
+    "ev_calls": 0
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 9
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 9
+   },
+   "screen_after_fire": {
+    "stale_armed_action_empty_armed_list": 9,
+    "next_minute:rearmed_same_level": 2,
+    "next_minute:armed": 1,
+    "next_minute:watch:no_setup": 6
+   },
+   "examples": {
+    "stale_armed_action_empty_armed_list": [
+     {
+      "fire_ts": "2026-10-05 10:55:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22465.464525014217,
+      "returned": "trend_break reached its level 22,465.46 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 10:55:40+05:30",
+      "hb_action": "armed: trend_break: sell on a trade through 22,465.46 (stop 22,511.70)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Trend_break: sell on a trade through 22,465.46 (stop 22,511.70)"
+     },
+     {
+      "fire_ts": "2026-10-05 11:01:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22503.02705894177,
+      "returned": "orb reached its level 22,503.03 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 11:01:40+05:30",
+      "hb_action": "armed: orb: sell on a trade through 22,503.03 (stop 22,538.82); vwap_trend: sell on a pullback to 22,543.39 (stop 22,558.34)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Orb: sell on a trade through 22,503.03 (stop 22,538.82); vwap_trend: sell on a pullback to 22,543.39 (stop 22,558.34)"
+     },
+     {
+      "fire_ts": "2026-10-05 11:23:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22457.901865770407,
+      "returned": "trend_break reached its level 22,457.90 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-05 11:23:40+05:30",
+      "hb_action": "armed: trend_break: sell on a trade through 22,457.90 (stop 22,486.35)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Trend_break: sell on a trade through 22,457.90 (stop 22,486.35)"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:multiple_armed": 31,
+    "minute:multiple_armed_symbols_headline_names_one": 14,
+    "tick_hb:total": 8,
+    "tick_hb:symbol_line_waiting_at_level_but_nothing_armed": 9,
+    "tick_hb:rejected_this_minute_shown_waiting_at_level": 9,
+    "tick_hb:headline_no_setup_triggered_in_a_rejection_minute": 5
+   },
+   "ev_pup": {},
+   "ev_examples": [],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-06",
+   "mode": "tick",
+   "evidence_class": "replay-subst+synth-tick",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 10,
+    "armed_trigger_hits": 10,
+    "ev_calls": 1
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 10
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 10
+   },
+   "screen_after_fire": {
+    "stale_armed_action_empty_armed_list": 10,
+    "next_minute:watch:no_setup": 9,
+    "next_minute:rearmed_same_level": 1
+   },
+   "examples": {
+    "stale_armed_action_empty_armed_list": [
+     {
+      "fire_ts": "2026-10-06 10:01:40+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "vwap_trend",
+      "level": 54996.467517738376,
+      "returned": "vwap_trend reached its level 54,996.47 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-06 10:01:40+05:30",
+      "hb_action": "armed: vwap_trend: buy on a pullback to 54,996.47 (stop 54,963.21)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Vwap_trend: buy on a pullback to 54,996.47 (stop 54,963.21)"
+     },
+     {
+      "fire_ts": "2026-10-06 10:09:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "vwap_trend",
+      "level": 22627.067899804686,
+      "returned": "vwap_trend reached its level 22,627.07 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-06 10:09:40+05:30",
+      "hb_action": "armed: vwap_trend: buy on a pullback to 22,627.07 (stop 22,616.33)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Vwap_trend: buy on a pullback to 22,627.07 (stop 22,616.33)"
+     },
+     {
+      "fire_ts": "2026-10-06 10:37:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22667.7021850302,
+      "returned": "trend_break reached its level 22,667.70 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-06 10:37:40+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 22,667.70 (stop 22,640.80); vwap_trend: buy on a pullback to 22,630.74 (stop 22,620.38)",
+      "ui_head": "Armed \u00b7 VWAP trend call on BANKNIFTY at 54,993.47",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 22,667.70 (stop 22,640.80); vwap_trend: buy on a pullback to 22,630.74 (stop 22,620.38)"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:multiple_armed": 98,
+    "minute:multiple_armed_symbols_headline_names_one": 59,
+    "tick_hb:total": 10,
+    "tick_hb:symbol_line_waiting_at_level_but_nothing_armed": 10,
+    "tick_hb:rejected_this_minute_shown_waiting_at_level": 10,
+    "tick_hb:headline_no_setup_triggered_in_a_rejection_minute": 4
+   },
+   "ev_pup": {
+    "ev_rejections": 1,
+    "src:prior tilt from the analyst's score": 1,
+    "message_p_differs_from_p_used": 1,
+    "\u2026of_which_nondirectional_structure_used_0.5": 1,
+    "ui_p_used_shows_number": 0,
+    "ui_p_used_shows_coin_flip_while_message_has_number": 1
+   },
+   "ev_examples": [
+    {
+     "ts": "2026-10-06 12:15:00+05:30",
+     "symbol": "BANKNIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.53,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": 0.25842263465009774
+    }
+   ],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-07",
+   "mode": "tick",
+   "evidence_class": "replay-subst+synth-tick",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 3,
+    "armed_trigger_hits": 3,
+    "ev_calls": 30
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 3
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 3
+   },
+   "screen_after_fire": {
+    "stale_armed_action_empty_armed_list": 3,
+    "next_minute:aside": 1,
+    "next_minute:watch:no_setup": 1,
+    "next_minute:rearmed_same_level": 1
+   },
+   "examples": {
+    "stale_armed_action_empty_armed_list": [
+     {
+      "fire_ts": "2026-10-07 09:39:40+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "orb",
+      "level": 54685.605891651765,
+      "returned": "orb reached its level 54,685.61 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-07 09:39:40+05:30",
+      "hb_action": "armed: orb: sell on a trade through 54,685.61 (stop 54,772.58)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Orb: sell on a trade through 54,685.61 (stop 54,772.58)"
+     },
+     {
+      "fire_ts": "2026-10-07 11:06:40+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 55312.60126081756,
+      "returned": "trend_break reached its level 55,312.60 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-07 11:06:40+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 55,312.60 (stop 55,166.97)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 55,312.60 (stop 55,166.97)"
+     },
+     {
+      "fire_ts": "2026-10-07 11:07:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22708.88840753617,
+      "returned": "trend_break reached its level 22,708.89 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-07 11:07:40+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 22,708.89 (stop 22,664.67)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 22,708.89 (stop 22,664.67)"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:multiple_armed": 2,
+    "minute:multiple_armed_symbols_headline_names_one": 2,
+    "tick_hb:total": 3,
+    "tick_hb:symbol_line_waiting_at_level_but_nothing_armed": 3,
+    "tick_hb:rejected_this_minute_shown_waiting_at_level": 3,
+    "tick_hb:headline_no_setup_triggered_in_a_rejection_minute": 3
+   },
+   "ev_pup": {
+    "ev_rejections": 30,
+    "src:prior tilt from the analyst's score": 30,
+    "message_p_differs_from_p_used": 8,
+    "\u2026of_which_nondirectional_structure_used_0.5": 8,
+    "ui_p_used_shows_number": 0,
+    "ui_p_used_shows_coin_flip_while_message_has_number": 30
+   },
+   "ev_examples": [
+    {
+     "ts": "2026-10-07 12:27:00+05:30",
+     "symbol": "NIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.53,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": 0.29907623582626314
+    },
+    {
+     "ts": "2026-10-07 12:30:00+05:30",
+     "symbol": "NIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.51,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": 0.07786477285384244
+    },
+    {
+     "ts": "2026-10-07 12:31:00+05:30",
+     "symbol": "NIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.51,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": 0.07808210089221511
+    }
+   ],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-08",
+   "mode": "tick",
+   "evidence_class": "replay-subst+synth-tick",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 22,
+    "armed_trigger_hits": 26,
+    "ev_calls": 10
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 26
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 26
+   },
+   "screen_after_fire": {
+    "stale_armed_action_empty_armed_list": 26,
+    "next_minute:watch:no_setup": 20,
+    "next_minute:armed": 3,
+    "next_minute:rearmed_same_level": 2,
+    "next_minute:aside": 1
+   },
+   "examples": {
+    "stale_armed_action_empty_armed_list": [
+     {
+      "fire_ts": "2026-10-08 09:43:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22473.14552809217,
+      "returned": "orb reached its level 22,473.15 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 09:43:40+05:30",
+      "hb_action": "armed: orb: sell on a trade through 22,473.15 (stop 22,520.05)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Orb: sell on a trade through 22,473.15 (stop 22,520.05)"
+     },
+     {
+      "fire_ts": "2026-10-08 09:52:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22473.031786584634,
+      "returned": "orb reached its level 22,473.03 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 09:52:40+05:30",
+      "hb_action": "armed: orb: sell on a trade through 22,473.03 (stop 22,508.41)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Orb: sell on a trade through 22,473.03 (stop 22,508.41)"
+     },
+     {
+      "fire_ts": "2026-10-08 09:59:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "orb",
+      "level": 22473.09094468573,
+      "returned": "orb reached its level 22,473.09 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-08 09:59:40+05:30",
+      "hb_action": "armed: orb: sell on a trade through 22,473.09 (stop 22,506.75)",
+      "ui_head": "Watching \u00b7 no setup has triggered",
+      "ui_line": "Waiting at the level: Orb: sell on a trade through 22,473.09 (stop 22,506.75)"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:multiple_armed": 59,
+    "minute:multiple_armed_symbols_headline_names_one": 43,
+    "tick_hb:total": 22,
+    "tick_hb:symbol_line_waiting_at_level_but_nothing_armed": 26,
+    "tick_hb:rejected_this_minute_shown_waiting_at_level": 26,
+    "tick_hb:headline_no_setup_triggered_in_a_rejection_minute": 13
+   },
+   "ev_pup": {
+    "ev_rejections": 10,
+    "src:prior tilt from the analyst's score": 10,
+    "message_p_differs_from_p_used": 5,
+    "\u2026of_which_nondirectional_structure_used_0.5": 5,
+    "ui_p_used_shows_number": 0,
+    "ui_p_used_shows_coin_flip_while_message_has_number": 10
+   },
+   "ev_examples": [
+    {
+     "ts": "2026-10-08 11:03:00+05:30",
+     "symbol": "BANKNIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.49,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": -0.06137840795071159
+    },
+    {
+     "ts": "2026-10-08 11:04:00+05:30",
+     "symbol": "BANKNIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.49,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": -0.06209762145131624
+    },
+    {
+     "ts": "2026-10-08 11:06:00+05:30",
+     "symbol": "BANKNIFTY",
+     "structure": "iron_fly",
+     "p_msg": 0.49,
+     "p_used": 0.5,
+     "src": "prior tilt from the analyst's score (unvalidated)",
+     "ui_p_used": "coin flip + prior",
+     "hb_score": -0.11031494905079325
+    }
+   ],
+   "expired_at_fire": 0
+  },
+  {
+   "day": "2026-10-09",
+   "mode": "tick",
+   "evidence_class": "replay-subst+synth-tick",
+   "denominators": {
+    "stepped_minutes": 374,
+    "tick_heartbeats": 11,
+    "armed_trigger_hits": 12,
+    "ev_calls": 0
+   },
+   "fire_outcomes": {
+    "rejected_model_gate": 12
+   },
+   "outcome_visibility": {
+    "outcome_in_heartbeat_action": 0,
+    "outcome_in_thought": 0,
+    "decision_row_written": 12
+   },
+   "screen_after_fire": {
+    "stale_armed_action_empty_armed_list": 12,
+    "next_minute:aside": 3,
+    "next_minute:armed": 2,
+    "next_minute:watch:no_setup": 5,
+    "next_minute:rearmed_same_level": 2
+   },
+   "examples": {
+    "stale_armed_action_empty_armed_list": [
+     {
+      "fire_ts": "2026-10-09 10:29:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22505.85029866104,
+      "returned": "trend_break reached its level 22,505.85 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 10:29:40+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 22,505.85 (stop 22,468.80)",
+      "ui_head": "Armed \u00b7 Trend break call on BANKNIFTY at 55,255.72",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 22,505.85 (stop 22,468.80)"
+     },
+     {
+      "fire_ts": "2026-10-09 11:19:40+05:30",
+      "symbol": "NIFTY",
+      "setup": "trend_break",
+      "level": 22516.82334414547,
+      "returned": "trend_break reached its level 22,516.82 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 11:19:40+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 22,516.82 (stop 22,493.45)",
+      "ui_head": "Reading the market every minute",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 22,516.82 (stop 22,493.45)"
+     },
+     {
+      "fire_ts": "2026-10-09 11:19:40+05:30",
+      "symbol": "BANKNIFTY",
+      "setup": "trend_break",
+      "level": 55201.989310011995,
+      "returned": "trend_break reached its level 55,201.99 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+      "hb_ts": "2026-10-09 11:19:40+05:30",
+      "hb_action": "armed: trend_break: buy on a trade through 55,201.99 (stop 55,145.00)",
+      "ui_head": "Reading the market every minute",
+      "ui_line": "Waiting at the level: Trend_break: buy on a trade through 55,201.99 (stop 55,145.00)"
+     }
+    ]
+   },
+   "minute_scan": {
+    "minute:total": 374,
+    "minute:multiple_armed": 83,
+    "minute:multiple_armed_symbols_headline_names_one": 60,
+    "tick_hb:total": 11,
+    "tick_hb:symbol_line_waiting_at_level_but_nothing_armed": 12,
+    "tick_hb:rejected_this_minute_shown_waiting_at_level": 12,
+    "tick_hb:headline_no_setup_triggered_in_a_rejection_minute": 6
+   },
+   "ev_pup": {},
+   "ev_examples": [],
+   "expired_at_fire": 0
+  }
+ ],
+ "totals_by_mode": {
+  "bar:denominators": {
+   "stepped_minutes": 1870,
+   "tick_heartbeats": 0,
+   "armed_trigger_hits": 60,
+   "ev_calls": 41
+  },
+  "bar:fire_outcomes": {
+   "rejected_model_gate": 60
+  },
+  "bar:outcome_visibility": {
+   "outcome_in_heartbeat_action": 0,
+   "outcome_in_thought": 0,
+   "decision_row_written": 60
+  },
+  "bar:screen_after_fire": {
+   "rearmed_same_setup_same_level": 8,
+   "rearmed_other": 6,
+   "watching_no_setup_has_triggered": 41,
+   "standing_aside_other_reason": 5
+  },
+  "bar:minute_scan": {
+   "minute:total": 1870,
+   "minute:multiple_armed": 273,
+   "minute:rejected_this_minute_shown_waiting_at_level": 14,
+   "minute:rejected_this_minute_shown_no_setup_triggered": 41,
+   "minute:headline_no_setup_triggered_in_a_rejection_minute": 29,
+   "minute:multiple_armed_symbols_headline_names_one": 178
+  },
+  "bar:ev_pup": {
+   "ev_rejections": 41,
+   "src:prior tilt from the analyst's score": 41,
+   "message_p_differs_from_p_used": 14,
+   "\u2026of_which_nondirectional_structure_used_0.5": 14,
+   "ui_p_used_shows_number": 0,
+   "ui_p_used_shows_coin_flip_while_message_has_number": 41
+  },
+  "tick:denominators": {
+   "stepped_minutes": 1870,
+   "tick_heartbeats": 54,
+   "armed_trigger_hits": 60,
+   "ev_calls": 41
+  },
+  "tick:fire_outcomes": {
+   "rejected_model_gate": 60
+  },
+  "tick:outcome_visibility": {
+   "outcome_in_heartbeat_action": 0,
+   "outcome_in_thought": 0,
+   "decision_row_written": 60
+  },
+  "tick:screen_after_fire": {
+   "stale_armed_action_empty_armed_list": 60,
+   "next_minute:rearmed_same_level": 8,
+   "next_minute:armed": 6,
+   "next_minute:watch:no_setup": 41,
+   "next_minute:aside": 5
+  },
+  "tick:minute_scan": {
+   "minute:total": 1870,
+   "minute:multiple_armed": 273,
+   "minute:multiple_armed_symbols_headline_names_one": 178,
+   "tick_hb:total": 54,
+   "tick_hb:symbol_line_waiting_at_level_but_nothing_armed": 60,
+   "tick_hb:rejected_this_minute_shown_waiting_at_level": 60,
+   "tick_hb:headline_no_setup_triggered_in_a_rejection_minute": 31
+  },
+  "tick:ev_pup": {
+   "ev_rejections": 41,
+   "src:prior tilt from the analyst's score": 41,
+   "message_p_differs_from_p_used": 14,
+   "\u2026of_which_nondirectional_structure_used_0.5": 14,
+   "ui_p_used_shows_number": 0,
+   "ui_p_used_shows_coin_flip_while_message_has_number": 41
+  }
+ }
+}

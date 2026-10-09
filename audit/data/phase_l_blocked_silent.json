@@ -1,0 +1,69 @@
+{
+ "evidence_class": "synthetic fixture on the exact 10-05 replay (halt injected at 10:56)",
+ "control_no_halt": {
+  "halt": false,
+  "armed_before_1056": [
+   {
+    "setup": "trend_break",
+    "symbol": "NIFTY",
+    "direction": -1,
+    "kind": "break",
+    "level": 22465.46,
+    "invalidation": 22511.7,
+    "armed_at": "2026-10-05 10:55:00+05:30",
+    "expires": "2026-10-05 10:57:00+05:30",
+    "why": "bearish read (score -0.77, conviction 0.74)",
+    "text": "trend_break: sell on a trade through 22,465.46 (stop 22,511.70)"
+   }
+  ],
+  "decisions_1056": [
+   {
+    "id": 1,
+    "ts": "2026-10-05 10:56:00+05:30",
+    "strategy": "trend_break",
+    "symbol": "NIFTY",
+    "action": "rejected",
+    "units": 0,
+    "detail": "trend_break reached its level 22,465.46 but standing aside: no approved plan model (the learning loop is off); directional reads stay advisory",
+    "context": "{\"armed\": {\"setup\": \"trend_break\", \"symbol\": \"NIFTY\", \"direction\": -1, \"kind\": \"break\", \"level\": 22465.46, \"invalidation\": 22511.7, \"armed_at\": \"2026-10-05 10:55:00+05:30\", \"expires\": \"2026-10-05 10:57:00+05:30\", \"why\": \"bearish read (score -0.77, conviction 0.74)\", \"text\": \"trend_break: sell on a trade through 22,465.46 (stop 22,511.70)\"}, \"plan\": \"bear_put_spread NIFTY 06-Oct: +22450PE@85.64 (\\u0394-0.47, IV 18.6), \\u221222350PE@52.15 (\\u0394-0.32, IV 19.8); debit \\u20b92,177/lot, max loss \\u20b92,177/lot\"}"
+   }
+  ],
+  "thoughts_1056": [],
+  "heartbeat_action_NIFTY": "armed: trend_break: sell on a trade through 22,465.46 (stop 22,511.70)",
+  "heartbeat_armed": [
+   {
+    "setup": "trend_break",
+    "symbol": "NIFTY",
+    "direction": -1,
+    "kind": "break",
+    "level": 22465.46,
+    "invalidation": 22511.7,
+    "armed_at": "2026-10-05 10:56:00+05:30",
+    "expires": "2026-10-05 10:58:00+05:30",
+    "why": "bearish read (score -0.77, conviction 0.74)",
+    "text": "trend_break: sell on a trade through 22,465.46 (stop 22,511.70)"
+   }
+  ]
+ },
+ "halted": {
+  "halt": true,
+  "armed_before_1056": [
+   {
+    "setup": "trend_break",
+    "symbol": "NIFTY",
+    "direction": -1,
+    "kind": "break",
+    "level": 22465.46,
+    "invalidation": 22511.7,
+    "armed_at": "2026-10-05 10:55:00+05:30",
+    "expires": "2026-10-05 10:57:00+05:30",
+    "why": "bearish read (score -0.77, conviction 0.74)",
+    "text": "trend_break: sell on a trade through 22,465.46 (stop 22,511.70)"
+   }
+  ],
+  "decisions_1056": [],
+  "thoughts_1056": [],
+  "heartbeat_action_NIFTY": "halted: safe mode (synthetic halt raised by the Phase L probe)",
+  "heartbeat_armed": []
+ }
+}

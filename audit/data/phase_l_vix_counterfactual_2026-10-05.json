@@ -1,0 +1,133 @@
+{
+ "day": "2026-10-05",
+ "evidence_class": "replay-exact counterfactual",
+ "minutes_compared": 375,
+ "diff": {
+  "symbol_minutes": 750,
+  "vix_vote_present_as_recorded": 750,
+  "vix_vote_+1_as_recorded": 750,
+  "bias_differs": 29,
+  "armed_differs": 46,
+  "action_kind_differs": 43,
+  "score_abs_diff_sum": 38.504
+ },
+ "mean_abs_score_shift": 0.0513,
+ "decisions_as_recorded": 9,
+ "decisions_without_vote": 11,
+ "decisions_only_as_recorded": [],
+ "decisions_only_without_vote": [
+  "10:36|NIFTY|orb|orb reached its level 22,503.10 but standing aside: no appro",
+  "12:00|BANKNIFTY|trend_break|trend_break reached its level 54,501.84 but standing aside: "
+ ],
+ "decision_kinds_as_recorded": {
+  "trend_break reached its level ": 8,
+  "orb reached its level 22,503.0": 1
+ },
+ "decision_kinds_without_vote": {
+  "orb reached its level 22,503.1": 1,
+  "trend_break reached its level ": 9,
+  "orb reached its level 22,503.0": 1
+ },
+ "bias_flip_examples": [
+  {
+   "minute": "09:18",
+   "symbol": "NIFTY",
+   "as_recorded": {
+    "bias": "neutral",
+    "score": -0.1404,
+    "conv": 0.0713,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "standing aside: first 5 minutes: price discovery, spreads wi"
+   },
+   "without_vote": {
+    "bias": "bearish",
+    "score": -0.1971,
+    "conv": 0.1055,
+    "vix_vote": null,
+    "armed": [],
+    "action": "standing aside: first 5 minutes: price discovery, spreads wi"
+   }
+  },
+  {
+   "minute": "09:38",
+   "symbol": "NIFTY",
+   "as_recorded": {
+    "bias": "neutral",
+    "score": -0.1238,
+    "conv": 0.0789,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   },
+   "without_vote": {
+    "bias": "bearish",
+    "score": -0.1711,
+    "conv": 0.115,
+    "vix_vote": null,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   }
+  },
+  {
+   "minute": "10:25",
+   "symbol": "BANKNIFTY",
+   "as_recorded": {
+    "bias": "bullish",
+    "score": 0.1779,
+    "conv": 0.108,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   },
+   "without_vote": {
+    "bias": "neutral",
+    "score": 0.1433,
+    "conv": 0.084,
+    "vix_vote": null,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   }
+  },
+  {
+   "minute": "10:26",
+   "symbol": "BANKNIFTY",
+   "as_recorded": {
+    "bias": "bullish",
+    "score": 0.1728,
+    "conv": 0.105,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   },
+   "without_vote": {
+    "bias": "neutral",
+    "score": 0.1381,
+    "conv": 0.081,
+    "vix_vote": null,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   }
+  },
+  {
+   "minute": "10:27",
+   "symbol": "BANKNIFTY",
+   "as_recorded": {
+    "bias": "bullish",
+    "score": 0.18,
+    "conv": 0.1093,
+    "vix_vote": 1.0,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   },
+   "without_vote": {
+    "bias": "neutral",
+    "score": 0.1455,
+    "conv": 0.0853,
+    "vix_vote": null,
+    "armed": [],
+    "action": "watching: no setup has triggered"
+   }
+  }
+ ]
+}

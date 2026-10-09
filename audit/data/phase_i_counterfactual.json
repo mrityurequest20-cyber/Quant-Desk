@@ -1,0 +1,61 @@
+{
+ "decisions": 73,
+ "parsed_plan": 73,
+ "chain_at_decision": 73,
+ "chain_at_1515": 73,
+ "valued": 72,
+ "examples": [
+  {
+   "id": 1,
+   "ts": "2026-10-05 13:20",
+   "plan": "iron_fly NIFTY 06-Oct: +22300PE@35.65 (\u0394-0.23, IV 21.0), \u221222",
+   "chain_ts_used": "2026-10-05 13:19:12",
+   "plan_px_minus_archived_touch": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "mid_to_mid_pnl_per_unit_to_1515": 2.68
+  },
+  {
+   "id": 2,
+   "ts": "2026-10-05 13:21",
+   "plan": "iron_fly NIFTY 06-Oct: +22250PE@28.55 (\u0394-0.20, IV 21.3), \u221222",
+   "chain_ts_used": "2026-10-05 13:20:06",
+   "plan_px_minus_archived_touch": [
+    1.2,
+    3.35,
+    -3.5,
+    -0.95
+   ],
+   "mid_to_mid_pnl_per_unit_to_1515": -3.5
+  },
+  {
+   "id": 3,
+   "ts": "2026-10-05 13:22",
+   "plan": "iron_fly NIFTY 06-Oct: +22250PE@28.55 (\u0394-0.20, IV 21.3), \u221222",
+   "chain_ts_used": "2026-10-05 13:21:13",
+   "plan_px_minus_archived_touch": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "mid_to_mid_pnl_per_unit_to_1515": -3.85
+  },
+  {
+   "id": 4,
+   "ts": "2026-10-05 13:23",
+   "plan": "iron_fly NIFTY 06-Oct: +22300PE@35.25 (\u0394-0.23, IV 20.8), \u221222",
+   "chain_ts_used": "2026-10-05 13:22:06",
+   "plan_px_minus_archived_touch": [
+    2.35,
+    4.9,
+    -5.95,
+    -2.1
+   ],
+   "mid_to_mid_pnl_per_unit_to_1515": 2.72
+  }
+ ]
+}
