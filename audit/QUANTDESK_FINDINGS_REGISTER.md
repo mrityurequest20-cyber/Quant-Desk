@@ -86,6 +86,12 @@ P3 moderate · P4 minor.
 | F-05 | Exercise STT 0.125% in code vs 0.15% since 1 Apr 2026; paper expiry settlement charges none | P4 | PARTIAL | F4/F5 |
 | F-06 | The Kite live adapter drops partial fills, stamps naive local time, ignores the futures roll and legs sequentially | P3 | BROKEN (latent) | F6 |
 | F-07 | Calendar and contract edges: no holidays after 2026; 5-day futures history across a roll; the model chain can price unlisted weeklies | P4 | VERIFIED | F1 |
+| G-01 | The autonomous Claude engineer has unreviewed write authority over `main` (engine, risk config, specs, principles, sleeves, its own schedule); hard limits except real money are prose; the reviewers are the same model; `main` unprotected | P1 | VERIFIED | G3 |
+| G-02 | Documented autonomy vs reality: nothing shipped since 10-04, audit issues unanswered (#6 overdue), engineer blocked on owner input; the owner finds most defects (8 vs 2) | P2 | CONTRADICTED | G3 |
+| G-03 | Malformed LLM output becomes a confident read: the prose fallback reads "NIFTY 50" as +1.0; out-of-range JSON clipped and accepted | P3 | VERIFIED (latent) | G1 |
+| G-04 | No model or prompt provenance on LLM reads; fallback chains and aliases accrue to one reader's trust; not reproducible | P3 | VERIFIED | G1 |
+| G-05 | LLM failures reported only at INFO (invisible to self-review); Gemini up-weighted ×1.16 on a statistically untested record | P3 | VERIFIED | G1 |
+| G-06 | Claude reader and reflection never ran in production; Gemini/Ollama costs unpriced; the engineer's spend untracked | P4 | VERIFIED | G1/G3 |
 
 Verified-working controls (V-xx) and open questions (Q-xx) are at the end.
 
@@ -1282,6 +1288,148 @@ Severity: **P4** · Status: **VERIFIED**
 
 **Confidence:** High.
 
+### [G-01] The autonomous Claude engineer holds unreviewed write authority over the desk
+Severity: **P1** · Status: **VERIFIED**
+
+**Claim**
+`docs/AUTONOMY.md`: "The owner is not in the loop … It decides; it does not ask." Hard limits: no real money, no
+looser risk, no rewriting the record, no red pushes. Review gates: a CLEAR from the `risk-compliance` agent.
+
+**Actual behavior**
+- **The routine.** "Quant-Desk engineer shift" (Mon–Sat 17:40 IST) drives a persistent Opus 5.5 session in
+  `permission_mode: auto`. Its tools include Bash, Write, Edit, Agent, and `create_trigger` / `update_trigger` /
+  `delete_trigger`.
+- **What it may do.** Merge its own branches into `main`; write specs, run studies, move principles on the ladder, add
+  sleeves, apply paper sizing.
+- **No human review exists.** `main` is **unprotected**. There is **no PR** in the repo's history except this audit's,
+  **112 of 114 `main` commits are Claude's**, pushed directly, and there is no CODEOWNERS.
+- **The reviewers are the same model.** The CLEAR/VETO gates are agents of the same model invoked by the engineer;
+  **no CLEAR or VETO record exists** anywhere.
+- **How each limit is enforced:**
+  - **No real money:** enforced technically (no trading credentials anywhere; V-38).
+  - **No looser risk:** not enforced. The risk tests read the limits from config.
+  - **No rewriting the record:** partly enforced. The spec↔result test covers only specs that have results.
+  - **No red pushes:** not enforced (no protection, no required checks).
+
+**Evidence**
+`docs/AUTONOMY.md`; `.claude/settings.json`; GitHub branches and PR search; `git log origin/main` (unshallowed); the
+routine and session metadata (read-only); `tests/test_intraday.py:312`; `tests/test_memory.py:59`.
+
+**Reproduction**
+`test_phase_g_probes.py::test_autonomy_doc_grants_unreviewed_merge_authority`,
+`::test_risk_limit_tests_read_the_config_so_loosening_it_passes`,
+`::test_spec_immutability_test_covers_only_specs_with_results`.
+
+**Impact**
+- AI is an uncontrolled authority over the paper desk's code, risk configuration and research record.
+- It is not silent (every change is a visible commit), but nothing independent stands between a change and `main`.
+- Real money is out of reach.
+
+**Recommended fix**
+- Branch protection with required CI and a **human** approval: at least CODEOWNERS on the engine, risk, config,
+  prereg, principles and workflows.
+- Pin risk ceilings in tests.
+- Hash-guard every registered spec.
+
+**Confidence:** High.
+
+### [G-02] The documented autonomy is not what runs
+Severity: **P2** · Status: **CONTRADICTED**
+
+**Evidence** [prod]
+- **Nothing shipped.** No commit to `main` since 2026-10-04; no `engineer/*` branch on the remote. The scorecard's 20
+  events are all from 10-04.
+- **The audits are not worked.** Department audit issues #6 (Orders, labelled overdue), #7 (Research) and #8 (Risk)
+  are open with no answer.
+- **The engineer is waiting on the owner.** On 10-09 the owner rejected one of its tool calls at 12:21 UTC; it
+  stopped and asked "resume or discard?". Its status is blocked, "need_input".
+- **The owner finds most defects.** Scorecard: 8 `owner_found` vs 2 `self_found`.
+
+**Impact**
+The self-correcting loop the docs describe is, in practice, dormant and owner-gated. Defects wait for the owner.
+
+**Recommended fix**
+- Decide the intended mode (Q-13).
+- Have each shift post its outcome on an issue so a stalled shift is visible.
+
+**Confidence:** High for the state; the owner's intent is unknown.
+
+### [G-03] Malformed LLM output becomes a confident read
+Severity: **P3** · Status: **VERIFIED** (latent)
+
+**Evidence** [synth]
+- **Prose fallback.** `_parse_text_reads` takes the first number after "nifty" / "bank nifty":
+  - "The NIFTY 50 may slip" → NIFTY **+1.0**;
+  - "NIFTY at 22,500 … mildly bearish" → **+1.0 / +1.0**;
+  - a missing confidence becomes 0.5.
+- **Out-of-range JSON** (7, −3, confidence 2, an unknown event) is clipped and accepted.
+- **In production:** 0 such reads among 759 (Gemini and Ollama run in JSON modes).
+
+**Reproduction**
+`test_phase_g_probes.py::test_prose_fallback_turns_an_index_name_into_a_max_bullish_read`,
+`::test_out_of_range_llm_json_is_clipped_and_accepted_not_rejected`.
+
+**Recommended fix**
+Drop the prose fallback, or require explicit labelled values within range; reject out-of-range values.
+
+**Confidence:** High.
+
+### [G-04] No model or prompt provenance on LLM reads
+Severity: **P3** · Status: **VERIFIED**
+
+**Evidence** [code + prod]
+- **What a read stores.** Persisted reads hold `{NIFTY, BANKNIFTY, confidence, event, why, at}`: no model id, no
+  prompt hash, no raw text (`last_raw` lives in memory only).
+- **Model drift is invisible.**
+  - Gemini runs on the alias `gemini-flash-latest` plus a 7-model fallback chain.
+  - Claude uses server-side fallback.
+  - All of it is graded into one `news_reader` entry per provider.
+- **Prompts are unversioned.** A prompt edit changes the reader without resetting its record.
+
+**Reproduction**
+`test_phase_g_probes.py::test_reads_carry_no_model_id_or_prompt_version`.
+
+**Recommended fix**
+- Store the model, a prompt hash and the raw response.
+- Key trust by (reader, model).
+
+**Confidence:** High.
+
+### [G-05] LLM failures stay at INFO; reader trust on an untested record
+Severity: **P3** · Status: **VERIFIED**
+
+**Evidence** [prod]
+- **Failures are logged at INFO.** Gemini 45 s and Ollama 90 s read timeouts on 10-05, 10-07 and 10-08 appear only
+  inside the daily INFO cost line. Self-review files only ERROR events (D-07), so they are never seen.
+- **Gemini's trust has not been tested.** 53.6 / 90 hits gives shrunk 0.578, so trust is **×1.16** (rules ×1.09). The
+  nominal z ≈ 1.8 sits on an overlap-inflated n, with no placebo or CI (the D-01 method has not been applied to
+  readers).
+
+**Reproduction**
+`test_phase_g_probes.py::test_llm_failures_are_logged_at_info_inside_the_cost_line`,
+`::test_gemini_is_up_weighted_on_an_untested_record`.
+
+**Recommended fix**
+- Log at WARN, and have self-review count them.
+- Run a placebo or CI on reader trust.
+
+**Confidence:** High.
+
+### [G-06] Claude never ran; LLM cost partly untracked
+Severity: **P4** · Status: **VERIFIED**
+
+**Evidence** [prod]
+- **Claude never ran.** 0 Claude calls and `lessons: []`, so the after-close reflection the docs describe has never
+  run.
+- **Costs are not fully priced.** Prices are configured only for Claude, so Gemini and Ollama costs are not priced.
+- **The engineer's spend is outside the repo.** ≈ $7.80 for the current session's turns is not recorded in the
+  repository.
+
+**Reproduction**
+`test_phase_g_probes.py::test_claude_never_ran_in_production_so_no_reflection`.
+
+**Confidence:** High.
+
 ## Verified-working controls (all phases)
 
 | ID | Control | Evidence |
@@ -1323,6 +1471,11 @@ Severity: **P4** · Status: **VERIFIED**
 | V-31 | Live-order guards: `KiteBroker` needs `account.mode: live` + `--live` + credentials; kill-switch file; marketable LIMIT with a 1% band; notional cap. Config is `paper`. | `execution/kite.py:1-91` |
 | V-32 | GEX and participant OI are honestly labelled context and never vote | `analyst.py:309-320`, `brain.py:481` |
 | V-33 | With a live book, an entry is skipped if any leg is not two-sided or the net premium moved > 15% against the plan | `engine.py:1158-1175` |
+| V-34 | LLM reads count only from their arrival (`at ≤ now`), so replays never see a read before the desk had it | `news.py:396-397`; probe `test_advisory_reader_and_unarrived_reads_never_move_the_tone` |
+| V-35 | Advisory-only readers (Ollama) are shown and graded but never weighed into the tone | same probe |
+| V-36 | No LLM output reaches orders, sizing, risk or execution; the reflection's lessons are written and never read | probe `test_llm_outputs_have_no_path_to_orders_sizing_or_risk` |
+| V-37 | LLM keys come from the environment and are never printed (`key_for` returns the variable's name) | `llm.py:99-104` |
+| V-38 | Real money is technically out of reach: no workflow carries trading credentials (Kotak is a consumer key only, no login or static IP; no Kite secrets anywhere) | `.github/workflows/*.yml`, `intraday/kotak.py:1-6` |
 
 ---
 
@@ -1342,6 +1495,7 @@ Severity: **P4** · Status: **VERIFIED**
 | Q-10 | Real expiry-eve spreads for FINNIFTY, MIDCPNIFTY, BANKEX and NIFTYNXT50 (no quotes recorded) | E → H |
 | Q-11 | Do the frozen minutes bias autolearn's "close" labels and any grading window that ends after 15:15? | E → H |
 | Q-12 | How often would the model-chain fallback (F-01) trigger on GitHub-hosted runners, where NSE blocks many cloud IPs and a Kotak outage leaves no real chain? | F → H |
+| Q-13 | Does the owner intend the engineer to merge to `main` without human review (AUTONOMY.md says yes; the owner's 10-09 interruption suggests otherwise)? | G |
 
 ---
 
@@ -1356,3 +1510,4 @@ Severity: **P4** · Status: **VERIFIED**
 | 2026-10-09 | D | D-01 … D-08, V-18 … V-20 added; Q-05 answered |
 | 2026-10-09 | E | E-01 … E-09, V-21 … V-26, Q-08 … Q-11 added. No earlier finding's severity or status changed; A-12, A-14, B-02, C-02, C-04 and D-01 reassessed (`QUANTDESK_RESEARCH_VALIDITY.md` § Reassessment) |
 | 2026-10-09 | F | F-01 … F-07, V-27 … V-33, Q-12 added; Q-01 and Q-08 answered, Q-07 closed. E-01's root cause located (F-02). No earlier severity changed. |
+| 2026-10-09 | G | G-01 … G-06, V-34 … V-38, Q-13 added. No earlier severity changed. |

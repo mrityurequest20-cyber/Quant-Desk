@@ -11,7 +11,7 @@ workflow was changed. The only files written are under `audit/`.
 | `QUANTDESK_DATA_LINEAGE.md` | Phases A2 + A3: done |
 | `QUANTDESK_TRADING_STATE_MACHINE.md` | Phase B: done |
 | `QUANTDESK_LEARNING_AUDIT.md` | Parts C (models) and D (learning): done |
-| `QUANTDESK_AI_AUDIT.md` | Phase G: pending |
+| `QUANTDESK_AI_AUDIT.md` | Phase G: done |
 | `QUANTDESK_RESEARCH_VALIDITY.md` | Phase E: done |
 | `QUANTDESK_OPTIONS_EXECUTION.md` | Phase F: done (extra artifact; the protocol lists none for F) |
 | `QUANTDESK_REMEDIATION_PLAN.md` | at the end |
@@ -26,8 +26,8 @@ workflow was changed. The only files written are under `audit/`.
 | C | Models: direction, plan, EV/cost | done |
 | D | Learning system: ledger, factors, lifecycle, recency, regime, no-trade, baseline, self-correction | done |
 | E | Research validity: provenance, prereg, edges, laws, sleeves, studies, statistics, parity | done |
-| F | Options / futures / execution: contracts, futures and OI, chain/IV/Greeks, fills and costs, settlement, live parity | **done, awaiting review** |
-| G | AI / LLM | not started |
+| F | Options / futures / execution: contracts, futures and OI, chain/IV/Greeks, fills and costs, settlement, live parity | done |
+| G | AI / LLM: news readers, reflection, the autonomous engineer and its agents | **done, awaiting review** |
 | H | Data / reliability / operations | not started |
 | I | Journal / auditability | not started |
 | J | UI truthfulness | not started |
@@ -427,6 +427,32 @@ Findings F-01 … F-07 and controls V-27 … V-33 are in the register. Q-01 and 
 
 ---
 
+## Phase G: AI and LLMs
+
+Full report: `QUANTDESK_AI_AUDIT.md` (component traces, authority tables, failure modes, coverage, remediation).
+Findings G-01 … G-06, controls V-34 … V-38 and Q-13 are in the register.
+
+### Two kinds of AI
+
+1. **In the engine** (LLM news readers, reflection): tightly bounded.
+   - A reader votes into the news tone and learns a trust weight. Nothing else.
+   - No path to orders, sizing, risk or execution (V-36). Reads count only from arrival (V-34). Advisory-only is
+     enforced (V-35).
+   - Weaknesses:
+     - a prose-parsing fallback that turns "NIFTY 50" into +1.0 (G-03, latent);
+     - no model or prompt provenance (G-04);
+     - failures at INFO, and Gemini trusted ×1.16 on an untested record (G-05);
+     - Claude and the reflection never ran (G-06).
+2. **Around the engine** (the autonomous Claude engineer): the real authority (G-01, P1).
+   - It may change the engine, risk config, specs, principles, sleeves and its own schedule, and merge to an
+     unprotected `main` with no human review.
+   - 112 of 114 commits are Claude's; there are 0 PRs.
+   - Its hard limits are prose, except real money, which is technically unreachable (V-38). Its reviewers are the
+     same model.
+   - In practice it has shipped nothing since 10-04, and it sits blocked on the owner (G-02).
+
+---
+
 ## Answers so far to the final questions
 
 Answers are partial: only what Phases A–D support. Every other question is still open.
@@ -454,11 +480,14 @@ Answers are partial: only what Phases A–D support. Every other question is sti
 | 18 (cont.) | Phase B: **The directional gate needs 28 real point-in-time sessions (5 so far) and an approved model; the iron fly never cleared the EV floor; the rest was no setup or vetoed** (B-02). The gated opportunities averaged −0.07 R on the underlying: no sign the gate cost money. |
 | 19 | Can every trade be reconstructed? | Untestable (0 trades). Gaps: A-04, A-10, A-13, B-03. |
 | 20 | Can important rejected opportunities be reconstructed? | **Armed-path, EV, sizing and liquidity rejections: yes** (decision rows). **Confirm-path gate rejections: no**, sampled thoughts only (B-03). No opportunity ID; the gate is only in free text. |
+| 21 | Does AI materially improve the system? | **Not demonstrably.** The engine's LLM readers vote into a news tone whose path to a trade is closed today (B-01, B-02). Gemini's record (59.6% raw, ×1.16 trust) is not tested against chance (G-05). Claude's reflection never ran (G-06). The autonomous engineer wrote 112 of 114 commits, so it built the system; but the owner found 8 defects to its 2, and it has shipped nothing since 10-04 (G-02). |
+| 22 | Is AI safely bounded? | **In the engine: yes** (V-34 … V-37), apart from a latent parsing hazard (G-03). **Real money: yes**, technically (V-38). **The autonomous engineer: no.** It holds unreviewed write authority over code, risk config and the research record; its limits are prose and its reviewers are the same model (G-01). |
+| 23 | Are research results statistically trustworthy? | **L1: yes, on its own data and convention.** Reproduces bit-exactly, robust, honestly pre-registered (V-21 … V-24). **Its economics are not established:** entry price unverified, illiquid instruments untested (E-07), and the forward ledger settles on a frozen index (E-01, F-02). **Program-wide:** no multiplicity accounting (E-04); the paper gate has no power (E-02). |
 | 24 | Can the system detect and correct degradation? | **Detect: partly.** Drift exists for an (absent) champion. Self-review files only ERROR events, so the 8 WARN grading failures went unseen (D-07). It does flag zero-trade streaks (V-20). **Correct: no**: there is no automatic demotion or rollback (C-03). |
 | 25 | What is production-ready? (so far) | The fail-closed gating (V-11), the autolearn registration and lockbox discipline (V-13), hashed artifacts (V-15), the plan-research protocol (V-16), the ledger guards in code (V-01). None of them has produced a promoted model. |
 | 26 | What is NOT trustworthy so far? | Cross-day state integrity (A-10); live-vs-training parity (A-05/06); news trust (A-09); catch-up grading (A-02); the "why not" record on the confirm path (B-03); armed-rejection learning (B-07); breaking-news vetoes (B-08); what-if `as_run` (B-11); the session DirectionModel's "validated" status (C-02); the path to any directional trade (C-01); the learned factor weights and graduations (D-01); the learning record's provenance (D-03). |
 
-## Scorecard (rows filled only where Phases A–F have evidence)
+## Scorecard (rows filled only where Phases A–G have evidence)
 
 | Area | Status | Severity | Evidence |
 |---|---|---|---|
@@ -479,4 +508,5 @@ Answers are partial: only what Phases A–D support. Every other question is sti
 | Research validity | PARTIAL | P1 | L1 reproduces exactly and is statistically robust (V-21, V-24); prereg discipline real (V-22); forward ledger settles on a frozen index (E-01); paper gate has no power (E-02); no program-wide multiplicity (E-04) |
 | Options / futures | PARTIAL | P2 | contracts, lots, pricing, OI handling correct (V-27, V-28, V-30); model-chain fallback trades on fabricated data (F-01); vendor index freeze contaminates basis and grading (F-02); skew-level bias (F-03) |
 | Execution (fills and parity) | PARTIAL | P3 | live-book skip rules (V-33), live guards (V-31); depth ignored (F-04); Kite adapter latent defects (F-06); no live path for the intraday desk |
-| AI, UI truthfulness | not yet audited | — | Phases G–L |
+| AI | PARTIAL | P1 | engine readers bounded (V-34 … V-37) with latent parsing and provenance gaps (G-03 … G-05); real money unreachable (V-38); the autonomous engineer is unreviewed authority (G-01) and dormant (G-02) |
+| UI truthfulness | not yet audited | — | Phase J |
