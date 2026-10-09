@@ -79,6 +79,13 @@ P3 moderate · P4 minor.
 | E-07 | L1's economics untested where most held-out weight sits (no quotes for FINNIFTY/MIDCPNIFTY/BANKEX/NIFTYNXT50; entry at the close) | P3 | UNVERIFIED | E4 |
 | E-08 | L3 parity: the vol study's "desk" baseline omits the live IV blend; the better model is not deployed | P3 | PARTIAL | E6/E8 |
 | E-09 | External minutes "verified" against Yahoo daily H/L/C on 80 sessions only | P4 | PARTIAL | E6 |
+| F-01 | The model-chain fallback trades on fabricated data: exempt from the stale-chain gate; fabricated OI drives the OI-wall vote; fills labelled "option chain" | P2 | VERIFIED (latent) | F3 |
+| F-02 | The 15:15–15:28 index freeze is in Kotak's index series (the future keeps trading) and also contaminates basis, 10.5% of graded factor reads and the sleeves' 15:20 deltas | P2 | VERIFIED | F2 |
+| F-03 | Fixed r/q instead of the chain's forward: put−call ATM IV gaps of ±3 vol pts near expiry bias the 25-delta skew level | P4 | PARTIAL | F3 |
+| F-04 | Paper fills ignore depth (10 lots at the price of 1) and fall back to stale chain prices with no move-away check | P3 | PARTIAL (latent) | F4 |
+| F-05 | Exercise STT 0.125% in code vs 0.15% since 1 Apr 2026; paper expiry settlement charges none | P4 | PARTIAL | F4/F5 |
+| F-06 | The Kite live adapter drops partial fills, stamps naive local time, ignores the futures roll and legs sequentially | P3 | BROKEN (latent) | F6 |
+| F-07 | Calendar and contract edges: no holidays after 2026; 5-day futures history across a roll; the model chain can price unlisted weeklies | P4 | VERIFIED | F1 |
 
 Verified-working controls (V-xx) and open questions (Q-xx) are at the end.
 
@@ -925,7 +932,7 @@ Severity: **P1** · Status: **MISLEADING**
 - Flag flat-bar runs at record time.
 - Keep the v1/v3 ledgers frozen and report both conventions.
 
-**Confidence:** High for the freeze and its P&L effect. The root cause (vendor vs aggregation) is open (Q-08).
+**Confidence:** High for the freeze and its P&L effect. Root cause located in Phase F: Kotak's index series (F-02, Q-08).
 
 ### [E-02] Paper-account eligibility means "not rejected"
 Severity: **P2** · Status: **VERIFIED**
@@ -1107,6 +1114,174 @@ Minute-level spot checks against NSE OHLC (warehouse 2019–2023).
 
 **Confidence:** High for the code; unknown for the data's actual quality.
 
+### [F-01] The model-chain fallback trades on fabricated data
+Severity: **P2** · Status: **VERIFIED** (latent)
+
+**Claim**
+`engine._refresh_chain`: "NSE blocks many cloud IPs … the desk must not stop because of it. Price off the model chain
+(India VIX + skew) and say so in the journal."
+
+**Actual behavior**
+- **The fallback.** When Kotak and NSE both fail, `ModelOptionChain` supplies the chain:
+  - prices from VIX × beta plus a skew model;
+  - modelled spreads;
+  - **OI fabricated** as a Gaussian bump ~0.8σ from spot, ×1.8 on round strikes.
+- **It bypasses the stale gate.** `_blocked` exempts `source == "model"` from the stale-chain check.
+- **It is traded on.** Plans are built on it, EV prices them, and `IntradayBroker` fills them at the modelled bid/ask.
+- **The fill is mislabelled.** The fill label is "option chain"; `meta.quote_source` does say "model".
+- **Fabricated OI votes.** `chain_analytics` computes call and put walls (and max pain) from the fabricated OI. The
+  analyst guards **only PCR** against `source == "model"`, so the OI walls (vote 0.4) vote on a synthetic signal.
+  Max pain would too, but it is unreachable anyway (B-05).
+- **The only signal is a WARN.** The journal gets a WARN on the 1st and every 10th failure.
+
+**Evidence**
+`engine.py:336-376, 724`; `chains.py:280-319, 409-461`; `analyst.py:168-190`.
+Production: 0 fallback events in the journal since 10-05.
+
+**Reproduction**
+`test_phase_f_probes.py::test_model_chain_fallback_yields_oi_walls_and_max_pain_from_fabricated_oi`,
+`::test_model_chain_is_exempt_from_the_stale_chain_gate_and_used_on_failure`.
+
+**Impact**
+- On a Kotak outage the paper desk can trade on invented quotes, and the analyst votes on invented OI.
+- The protocol's rule: "a failure must never silently become valid-looking data".
+
+**Recommended fix**
+- No entries on a model chain (or an explicit opt-in).
+- No OI-derived votes from it.
+- Label fills "model".
+
+**Confidence:** High (code and synthetic run). The production trigger rate is unknown (Q-12).
+
+### [F-02] The 15:15 index freeze is vendor-side and reaches basis, learning and the sleeves' entries
+Severity: **P2** · Status: **VERIFIED**
+
+**Evidence** [prod]
+- **The future keeps trading.** On 10-06 Kotak's NIFTY index candles sit at 22,717.70 from 15:15 to 15:28, while the
+  near-month future, fetched by the same client through the same `candles()` → `normalise_bars` path, trades
+  22,782 → 22,806 → 22,799. Same on 10-08.
+- **So the freeze is in Kotak's index series** (answers Q-08), not the desk's aggregation.
+- **Its consumers beyond E-01's sleeve settlement:**
+  - "basis" (future − index) swings ~24 pts in 14 minutes from staleness alone;
+  - **71 of 675 graded factor reads (10.5%)** have 30-minute windows that end in frozen minutes;
+  - the sleeves' 15:20 eve entries compute deltas from a 5-minute-stale spot.
+- **Not affected:** entries (cut-off 14:45) and the engine's 15:15 square-off.
+
+**Reproduction**
+`test_phase_f_probes.py::test_index_freezes_while_the_future_keeps_trading`,
+`::test_a_tenth_of_graded_factor_reads_end_in_the_frozen_minutes`.
+
+**Recommended fix**
+- Flag flat index runs while the future moves.
+- Exclude them from settlement, basis and grading.
+- Raise it with Kotak.
+
+**Confidence:** High.
+
+### [F-03] Fixed r/q instead of the chain's forward biases the skew level
+Severity: **P4** · Status: **PARTIAL**
+
+**Evidence** [replay]
+- **The forward is off.** On the recorded chains, the chain-implied forward differs from the desk's `S·e^{(r−q)T}`
+  (r 6.5%, q 1.2%) by 3–28 bps.
+- **The put−call ATM IV gap** is −3.2 (NIFTY) / +3.4 (SENSEX) vol pts at ≤ 2 DTE and ±1–2 elsewhere.
+- **What it touches.** The ATM IV mean largely cancels. The 25-delta skew level does not (narrative, app). The
+  probation `skew_trend` uses the 30-minute change, which cancels a constant bias.
+- Asynchronous spot and quote snapshots may contribute.
+
+**Reproduction**
+`phase_f3_pricing.py` → `audit/data/phase_f3_pricing.txt`.
+
+**Recommended fix**
+Solve IV on the chain's implied forward (already computed by `gex.implied_forward`).
+
+**Confidence:** Medium.
+
+### [F-04] Paper fills ignore depth and fall back to stale chain prices
+Severity: **P3** · Status: **PARTIAL** (latent: 0 trades)
+
+**Evidence**
+- **The fill rule** [code]: every leg fills in full at top-of-book + 1 tick. The engine never reads `bidq`/`askq`.
+  - Probe: 650 units fill at the same price as 65.
+- **Real depth** [replay]: the median best-level size within ±4 strikes is 3 lots (NIFTY) / 2 lots (BANKNIFTY);
+  81% / 99% of best levels are below the 10-lot cap.
+- **Fallback prices.** Without a live book:
+  - entries fill at the plan's chain price (the chain may be up to 12 minutes old) with **no move-away check**;
+  - exits fill at Black-Scholes marks ∓ half the last spread.
+
+**Reproduction**
+`phase_f4_depth.py`; `test_phase_f_probes.py::test_paper_fill_takes_any_size_at_top_of_book_plus_one_tick`.
+
+**Recommended fix**
+- Cap fills at the best-level size, or walk the book.
+- Apply the move-away check to chain-price entries.
+
+**Confidence:** High.
+
+### [F-05] Exercise STT out of date; paper settlement charges none
+Severity: **P4** · Status: **PARTIAL**
+
+**Evidence**
+- **The code's rate.** `warehouse_research.STT_EXERCISE = 0.00125` is used by the research and the sleeves, and the
+  sleeve specs freeze 0.125%.
+- **The current rate.** Secondary sources (brokers' and finance publications citing NSE/FATAX/73524 of 31 Mar 2026)
+  report the exercise rate rose to 0.15% on 1 Apr 2026, with the sale rate going 0.10 → 0.15%. The desk already uses
+  0.15% for sales. The primary circular was not opened.
+- **Paper settlement.** `PaperBroker.settle_expiry` charges no exercise STT at all (daily desk, not scheduled).
+- **Magnitude:** 0.025% of the intrinsic value of exercised long legs.
+
+**Reproduction**
+`test_phase_f_probes.py::test_exercise_stt_is_the_pre_april_2026_rate_and_paper_settlement_ignores_it`.
+
+**Recommended fix**
+- A date-effective rate.
+- A new sleeve spec, since the old ones are frozen.
+
+**Confidence:** Medium on the statutory rate; high on the code.
+
+### [F-06] The Kite live adapter: latent execution defects
+Severity: **P3** · Status: **BROKEN** (latent)
+
+**Reachability**
+Only the daily desk's `paper --live` with `account.mode: live` (config: `paper`) plus credentials. The intraday desk
+has no live broker.
+
+**Evidence** [synth, with a fake Kite API; nothing left the process]
+- **Partial fills are lost.** 130 of 650 filled, then the timeout: the order is cancelled and `execute` returns
+  `None`. `filled_quantity` is never read, so the 130 held at the broker are unknown to the desk.
+- **Fills are stamped `pd.Timestamp.now()`:** naive local time, not the exchange's.
+- **Futures symbology** = always the nearest expiry; the data side rolls 3 days early.
+- **Multi-leg orders go leg by leg** with 20-second waits.
+- **The docstring says** "Untested against the real API".
+
+**Reproduction**
+`test_phase_f_probes.py::test_kite_adapter_drops_a_partially_filled_order`, `::test_kite_futures_symbology_ignores_the_roll`.
+
+**Recommended fix**
+Before any live use: partial-fill accounting, exchange timestamps, roll-consistent symbology, an atomic multi-leg
+policy, and a sandbox test.
+
+**Confidence:** High.
+
+### [F-07] Calendar and contract edges
+Severity: **P4** · Status: **VERIFIED**
+
+- **Holidays.** Configured for 2026 only. 2027-01-26 (Republic Day, Tuesday) counts as a trading day and a NIFTY
+  expiry.
+- **Futures history across a roll.** The 5-day history is fetched on the currently active contract, so across a roll
+  earlier days carry the next month's volume.
+- **Unlisted weeklies.** The model chain draws expiries from the calendar, so it can price weeklies the exchange has
+  not listed.
+
+**Reproduction**
+`test_phase_f_probes.py::test_holidays_end_in_2026_so_republic_day_2027_is_an_expiry`; `phase_f1_expiries.py`.
+
+**Recommended fix**
+- Per-year holidays from the warehouse, failing closed when a year is missing.
+- Per-contract history across rolls.
+
+**Confidence:** High.
+
 ## Verified-working controls (all phases)
 
 | ID | Control | Evidence |
@@ -1141,6 +1316,13 @@ Minute-level spot checks against NSE OHLC (warehouse 2019–2023).
 | V-24 | L1's held-out result is robust on its own data and convention: ACF ≈ 0, block-bootstrap p < 5e-5, best 5 weeks = 11% of the total, NW lag 0–10 gives t 4.54–4.98 | `phase_e_l1_robust.py`, `phase_e_v2_post.py` |
 | V-25 | The sleeve and entry-check specs are honest about power, use real quotes, log the cost gap, are append-only and fix their retirement rules in advance; `expiry_eve_entry_v1` has a power analysis and a decision table | `docs/prereg/expiry_seller_v*.json`, `expiry_eve_entry_v1.json` |
 | V-26 | D1's sign and size replicate on NSE's official OHLC (NIFTY −6.30 bps/day, t −3.85, 2019–2026): not a Yahoo artifact | `phase_e_d1_official.py` |
+| V-27 | Contract identity: every exchange-listed expiry (10-09 → 12-31) for the 6 configured underlyings is on the desk calendar, holiday shifts included; all lot sizes match the bhavcopies; holidays = NSE's weekday list | `phase_f1_expiries.py` |
+| V-28 | Pricing: `bs_price` exact vs an independent BS; delta/gamma match finite differences; the IV solver recovers vol (floored only where unidentifiable) | `phase_f3_pricing.py` |
+| V-29 | Kotak 1-minute candles are labelled by bar start (answers Q-01): snapshot spot inside bar t0 87% vs t0+1 43% (n = 7,936), so `completed()` admits only finished minutes | `phase_f6_bar_label.py` |
+| V-30 | Option OI change is computed as current − previous (Kotak's `oi.chg` is a price change and is not used); OI units (shares vs contracts) handled for GEX; PCR, walls and max pain are unit-invariant | `tests/test_kotak.py`, `chains.py:455` |
+| V-31 | Live-order guards: `KiteBroker` needs `account.mode: live` + `--live` + credentials; kill-switch file; marketable LIMIT with a 1% band; notional cap. Config is `paper`. | `execution/kite.py:1-91` |
+| V-32 | GEX and participant OI are honestly labelled context and never vote | `analyst.py:309-320`, `brain.py:481` |
+| V-33 | With a live book, an entry is skipped if any leg is not two-sided or the net premium moved > 15% against the plan | `engine.py:1158-1175` |
 
 ---
 
@@ -1148,17 +1330,18 @@ Minute-level spot checks against NSE OHLC (warehouse 2019–2023).
 
 | ID | Question | Phase |
 |---|---|---|
-| Q-01 | Kotak candle timestamps: bar start (as the docstring says) or bar end? This decides whether `completed()` admits a forming bar. Needs a Kotak key, or the archived chains and option minutes compared with NSE. | A2 → H |
+| Q-01 | ~~Kotak candle timestamps: bar start or bar end?~~ **Answered in Phase F: bar start (V-29).** Original question: bar start (as the docstring says) or bar end? This decides whether `completed()` admits a forming bar. Needs a Kotak key, or the archived chains and option minutes compared with NSE. | A2 → H |
 | Q-02 | ~~Does the test suite pass on CI's versions?~~ Answered: CI ran 445 passed, 2 failed (A-19, date-dependent), 6 skipped (§ A.7) | A1 |
 | Q-03 | ~~Is the empty plan registry the dominant cause of 0 trades?~~ Answered in B-02: it explains 100% of directional rejections; the iron fly fails EV | B4 |
 | Q-04 | ~~What-if parity?~~ Answered: B-11 | B |
 | Q-05 | ~~Where is the pre-reset journal?~~ Answered: on 10-05 the journal had 0 trades, so `ensure_account` only changed the capital (no archive). Earlier trades of the ₹20k account (the README cites 29 Sep) are not recoverable from the force-pushed journal branch (A-10); their sessions still feed `memory.json` (D-03) | D |
 | Q-06 | ~~Is the iron-fly EV right?~~ Answered: internally consistent; the setup can't pay intraday (C-05) | C3 |
-| Q-07 | Does the global-stress size multiplier ever bind live? (No brain in the replay) | F / K |
-| Q-08 | Root cause of the 15:15–15:28 index freeze (E-01): the Kotak index LTP, or the desk's polling and aggregation? Needs raw Kotak responses around 15:15 | E → H |
+| Q-07 | ~~Does the global-stress size multiplier ever bind live?~~ **Closed in Phase F: unreachable (applied after EV, which no plan passes) and unrecorded (only the latest brain state is persisted)** | F |
+| Q-08 | ~~Root cause of the 15:15–15:28 index freeze?~~ **Answered in Phase F: Kotak's index series (the future, same code path, keeps trading; F-02).** Why Kotak freezes it is still open (ask the vendor) | E → F |
 | Q-09 | How many hypotheses has the research program tested since inception? (The ledger starts 2026-10-03; earlier reports are not reconstructed) | E |
 | Q-10 | Real expiry-eve spreads for FINNIFTY, MIDCPNIFTY, BANKEX and NIFTYNXT50 (no quotes recorded) | E → H |
 | Q-11 | Do the frozen minutes bias autolearn's "close" labels and any grading window that ends after 15:15? | E → H |
+| Q-12 | How often would the model-chain fallback (F-01) trigger on GitHub-hosted runners, where NSE blocks many cloud IPs and a Kotak outage leaves no real chain? | F → H |
 
 ---
 
@@ -1172,3 +1355,4 @@ Minute-level spot checks against NSE OHLC (warehouse 2019–2023).
 | 2026-10-09 | C | C-01 … C-08, V-13 … V-17 added; Q-06 answered |
 | 2026-10-09 | D | D-01 … D-08, V-18 … V-20 added; Q-05 answered |
 | 2026-10-09 | E | E-01 … E-09, V-21 … V-26, Q-08 … Q-11 added. No earlier finding's severity or status changed; A-12, A-14, B-02, C-02, C-04 and D-01 reassessed (`QUANTDESK_RESEARCH_VALIDITY.md` § Reassessment) |
+| 2026-10-09 | F | F-01 … F-07, V-27 … V-33, Q-12 added; Q-01 and Q-08 answered, Q-07 closed. E-01's root cause located (F-02). No earlier severity changed. |

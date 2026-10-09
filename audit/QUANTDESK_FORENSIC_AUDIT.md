@@ -13,6 +13,7 @@ workflow was changed. The only files written are under `audit/`.
 | `QUANTDESK_LEARNING_AUDIT.md` | Parts C (models) and D (learning): done |
 | `QUANTDESK_AI_AUDIT.md` | Phase G: pending |
 | `QUANTDESK_RESEARCH_VALIDITY.md` | Phase E: done |
+| `QUANTDESK_OPTIONS_EXECUTION.md` | Phase F: done (extra artifact; the protocol lists none for F) |
 | `QUANTDESK_REMEDIATION_PLAN.md` | at the end |
 | `QUANTDESK_TEST_PLAN.md` | at the end; the Phase A probes are in `audit/probes/` |
 
@@ -24,8 +25,8 @@ workflow was changed. The only files written are under `audit/`.
 | B | Trading decision pipeline: interpretation, setups, state machine, funnel, triggers | done |
 | C | Models: direction, plan, EV/cost | done |
 | D | Learning system: ledger, factors, lifecycle, recency, regime, no-trade, baseline, self-correction | done |
-| E | Research validity: provenance, prereg, edges, laws, sleeves, studies, statistics, parity | **done, awaiting review** |
-| F | Options / futures / execution | not started |
+| E | Research validity: provenance, prereg, edges, laws, sleeves, studies, statistics, parity | done |
+| F | Options / futures / execution: contracts, futures and OI, chain/IV/Greeks, fills and costs, settlement, live parity | **done, awaiting review** |
 | G | AI / LLM | not started |
 | H | Data / reliability / operations | not started |
 | I | Journal / auditability | not started |
@@ -183,7 +184,7 @@ No P0 in Phase A:
 
 | ID | Question | Where it will be settled |
 |---|---|---|
-| Q-01 | Kotak candle timestamp convention | Phase H |
+| Q-01 | ~~Kotak candle timestamp convention~~ answered in F: bar start (V-29) | F |
 | Q-02 | Does the suite pass on CI's versions? (Answered in § A.7: mostly. One date-dependent failure, A-19, and 2 slow files) | § A.7 |
 | Q-03 | Is the empty plan registry (with `require_approved_model`) the dominant cause of zero trades? | Phases B4, K |
 | Q-04 | What-if replays run without the learning memory, so `as_run` ≠ live | Phases B, K |
@@ -234,7 +235,7 @@ disappeared.
 | ID | Question | Phase |
 |---|---|---|
 | Q-06 | Is the iron-fly EV right? | C3 |
-| Q-07 | Does global-stress sizing ever bind? | F / K |
+| Q-07 | ~~Does global-stress sizing ever bind?~~ closed in F: unreachable and unrecorded | F |
 | Q-05 | The pre-reset account | K |
 
 ---
@@ -288,7 +289,7 @@ The only paper trades the desk makes are the pre-registered expiry-seller sleeve
 
 | ID | Question | Phase |
 |---|---|---|
-| Q-07 | Does global-stress sizing ever bind? | F / K |
+| Q-07 | ~~Does global-stress sizing ever bind?~~ closed in F: unreachable and unrecorded | F |
 | Q-05 | The pre-reset account | K |
 | — | The STT and statutory rates themselves, against an external source | F |
 
@@ -389,6 +390,43 @@ proven / suggestive / untested). Findings E-01 … E-09, controls V-21 … V-26,
 
 ---
 
+## Phase F: Options, futures and execution
+
+Full report: `QUANTDESK_OPTIONS_EXECUTION.md` (F0–F7, the displayed-vs-decision table, coverage matrix, remediation).
+Findings F-01 … F-07 and controls V-27 … V-33 are in the register. Q-01 and Q-08 are answered, Q-07 closed, Q-12 new.
+
+**Baseline:** start commit `13a7c78`; 9 relevant test files: 100 passed, 3 skipped, 2 failed (pre-existing A-19).
+
+### What holds up
+
+- Contract identity: every listed expiry and every lot matches the exchanges' files (V-27).
+- The pricing maths is exact vs references (V-28).
+- Kotak candles are start-labelled, so no forming bar leaks (V-29).
+- The OI-change and OI-unit handling is right (V-30).
+- The live-order guards are real (V-31).
+- GEX and participant OI are honestly "context, never a vote" (V-32).
+- Live-book entries skip one-sided or moved books (V-33).
+
+### What doesn't
+
+- **F-01 (P2).** If Kotak and NSE both fail, the engine trades on the model chain: VIX-priced quotes, modelled spreads
+  and fabricated OI. That chain is exempt from the stale gate, its fabricated OI votes through the OI walls,
+  and its fills are labelled "option chain". Latent: 0 fallbacks since 10-05.
+- **F-02 (P2).** The 15:15 freeze is in Kotak's index series: the future keeps trading on the same code path. Besides
+  the sleeve settlement (E-01), it skews late basis and touches 10.5% of graded factor reads.
+- **F-04 (P3).** Paper fills ignore depth: 10 lots at the price of 1, where the median best level is 2–3 lots.
+- **F-06 (P3).** The Kite live adapter drops partial fills (and more). Latent: no scheduled path reaches it.
+- **F-03, F-05, F-07 (P4).** Forward bias on the skew level; exercise STT 0.125% vs 0.15%; no holidays after 2026.
+
+### Question 12: are futures / OI / options / IV / gamma used?
+
+- **Options data:** yes, for structure, pricing, EV and vetoes.
+- **OI, futures and PCR:** as score votes, whose path to a trade is narrow (B-01).
+- **Gamma and participant OI:** display-only, and labelled so.
+- **None of it ends in a trade today:** B-02, C-01 and C-05 close every path.
+
+---
+
 ## Answers so far to the final questions
 
 Answers are partial: only what Phases A–D support. Every other question is still open.
@@ -406,7 +444,7 @@ Answers are partial: only what Phases A–D support. Every other question is sti
 | 9 | Does no-trade learning work? | No: no rejection class is counterfactually graded in production (D-05, B-07). |
 | 10 | Are technical indicators actually used? | **Computed, weighted, stored and learned. For execution they matter only through** the iron fly's eligibility (day type: ADX, IB, OR; \|score\| ≤ 0.3) and the RSI veto. Every directional use is gated (B-01). |
 | 11 | Is Volume Profile / Market Profile actually used? | **Yes, the session value area:** it decides the "balance" day type, which the only executable setup (iron fly) requires, and it bounds that trade. The prior-day value area is computed but never read (B-05). Market Profile (TPO) is used only as the volume fallback. |
-| 12 | Are futures / OI / options / IV / gamma used? | **IV/RV: yes** (iron-fly eligibility, spread choice). **ATM spread / leg liquidity: yes** (vetoes, entry checks). **PCR, OI walls, futures OI, basis:** score only. **OI shift, skew trend:** zero weight. **Gamma/GEX, IV percentile:** display only. **Max pain:** unreachable (B-05). |
+| 12 | Are futures / OI / options / IV / gamma used? | **IV/RV: yes** (iron-fly eligibility, spread choice). **ATM spread / leg liquidity: yes** (vetoes, entry checks). **PCR, OI walls, futures OI, basis:** score only. **OI shift, skew trend:** zero weight. **Gamma/GEX, IV percentile:** display only. **Max pain:** unreachable (B-05). **Phase F adds:** option chain prices drive strikes, EV and fills; futures volume drives VWAP and volume profile; participant OI is display-only (V-32); on a model-chain fallback the OI walls vote on fabricated OI (F-01); late-session basis is contaminated by the vendor freeze (F-02). |
 | 13 | Are setups actually detected? | **Yes** (V-09): 298 confirmed plans and 594 armed reads in 4 replayed sessions. |
 | 14 | Are setups armed before authorization? | **Yes, and every one under the current config is then rejected** (B-06). |
 | 15 | Can valid setups be hidden by later gates? | **Yes.** The plan-model gate removes 100% of directional setups. On the confirm path this writes no decision row (B-03). |
@@ -420,7 +458,7 @@ Answers are partial: only what Phases A–D support. Every other question is sti
 | 25 | What is production-ready? (so far) | The fail-closed gating (V-11), the autolearn registration and lockbox discipline (V-13), hashed artifacts (V-15), the plan-research protocol (V-16), the ledger guards in code (V-01). None of them has produced a promoted model. |
 | 26 | What is NOT trustworthy so far? | Cross-day state integrity (A-10); live-vs-training parity (A-05/06); news trust (A-09); catch-up grading (A-02); the "why not" record on the confirm path (B-03); armed-rejection learning (B-07); breaking-news vetoes (B-08); what-if `as_run` (B-11); the session DirectionModel's "validated" status (C-02); the path to any directional trade (C-01); the learned factor weights and graduations (D-01); the learning record's provenance (D-03). |
 
-## Scorecard (rows filled only where Phases A–D have evidence)
+## Scorecard (rows filled only where Phases A–F have evidence)
 
 | Area | Status | Severity | Evidence |
 |---|---|---|---|
@@ -438,4 +476,7 @@ Answers are partial: only what Phases A–D support. Every other question is sti
 | Self-correction | PARTIAL | P2 | zero-trade detection (V-20); WARN failures missed (D-07); no automatic demotion (C-03) |
 | Reliability (foundation) | PARTIAL | P2 | A-02, A-03, A-10 |
 | Auditability | PARTIAL | P2 | A-10, A-13, B-03, B-11 |
-| Research validity, options/futures, fills, AI, UI truthfulness | not yet audited | — | Phases E–L |
+| Research validity | PARTIAL | P1 | L1 reproduces exactly and is statistically robust (V-21, V-24); prereg discipline real (V-22); forward ledger settles on a frozen index (E-01); paper gate has no power (E-02); no program-wide multiplicity (E-04) |
+| Options / futures | PARTIAL | P2 | contracts, lots, pricing, OI handling correct (V-27, V-28, V-30); model-chain fallback trades on fabricated data (F-01); vendor index freeze contaminates basis and grading (F-02); skew-level bias (F-03) |
+| Execution (fills and parity) | PARTIAL | P3 | live-book skip rules (V-33), live guards (V-31); depth ignored (F-04); Kite adapter latent defects (F-06); no live path for the intraday desk |
+| AI, UI truthfulness | not yet audited | — | Phases G–L |

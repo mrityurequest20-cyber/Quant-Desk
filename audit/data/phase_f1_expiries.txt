@@ -1,0 +1,9 @@
+holiday table: ['date', 'description'] 20
+desk holidays: 16 | NSE weekday holidays missing from the desk: [] | desk holidays NSE doesn't list: []
+NIFTY      lot cfg   65 exch [65] | listed 7, all on the desk calendar: True  | desk dates inside the listed range but not listed: [datetime.date(2026, 11, 17), datetime.date(2026, 12, 1), datetime.date(2026, 12, 8), datetime.date(2026, 12, 15), datetime.date(2026, 12, 22)] | desk weeklies beyond the listing: 0
+BANKNIFTY  lot cfg   30 exch [30] | listed 3, all on the desk calendar: True  | desk dates inside the listed range but not listed: [] | desk weeklies beyond the listing: 0
+FINNIFTY   lot cfg   60 exch [60] | listed 3, all on the desk calendar: True  | desk dates inside the listed range but not listed: [] | desk weeklies beyond the listing: 0
+MIDCPNIFTY lot cfg  120 exch [120] | listed 3, all on the desk calendar: True  | desk dates inside the listed range but not listed: [] | desk weeklies beyond the listing: 0
+NIFTYNXT50 not configured; exch lot [np.float64(25.0)] expiries [datetime.date(2026, 10, 27), datetime.date(2026, 11, 23), datetime.date(2026, 12, 29)]
+SENSEX     lot cfg   20 exch [20] | listed 8, all on the desk calendar: True  | desk dates inside the listed range but not listed: [datetime.date(2026, 12, 3), datetime.date(2026, 12, 10), datetime.date(2026, 12, 17), datetime.date(2026, 12, 24)] | desk weeklies beyond the listing: 0
+BANKEX     lot cfg   30 exch [30] | listed 2, all on the desk calendar: True  | desk dates inside the listed range but not listed: [] | desk weeklies beyond the listing: 1

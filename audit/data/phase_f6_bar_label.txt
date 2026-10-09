@@ -1,0 +1,3 @@
+snapshots compared: 7936
+median |spot - close| bps: {'t0_close': 1.764, 't0+1_close': 2.736, 't0-1_close': 0.755}
+share with spot inside the bar's [low, high]: {'t0_inrange': 0.869, 't0+1_inrange': 0.433, 't0-1_inrange': 0.709}

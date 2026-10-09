@@ -1,0 +1,16 @@
+max |price - ref| (pts): 0.0 | max |delta - FD|: 3.5e-05 | max rel gamma err: 0.00167 | max |IV - true| (p > 0.05): 0.532066
+greeks keys / units: {'delta': 0.5246, 'gamma': 0.0009, 'vega': 12.1282, 'theta': -13.7719, 'rho': 2.1788}
+                       n  put_minus_call_iv  fwd_vs_desk_bps  q_implied
+u          dte_b                                                       
+BANKNIFTY  (15, 40]   50             -1.049            9.904     -0.006
+           (40, 400]  49             -1.966           27.558     -0.010
+FINNIFTY   (15, 40]   50             -0.728            6.980     -0.000
+MIDCPNIFTY (15, 40]   50             -0.282            2.567      0.007
+NIFTY      (0, 2]     11             -3.242            6.975     -0.228
+           (2, 7]     28              1.053           -5.418      0.044
+           (7, 15]    72             -1.067            7.085     -0.013
+           (15, 40]   28              0.411           -3.831      0.019
+SENSEX     (0, 2]     11              3.380           -7.735      0.246
+           (2, 7]     27             -1.289            5.779     -0.027
+           (7, 15]    50             -0.690            4.288     -0.004
+recorded IV vs desk-recomputed IV (CE, median abs diff, vol pts): 0.0

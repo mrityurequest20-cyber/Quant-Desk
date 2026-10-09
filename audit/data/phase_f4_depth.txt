@@ -1,0 +1,2 @@
+BANKNIFTY: 6882 best-level quotes within ±4 strikes; median size 60 (=2.0 lots); share < 1 lot 0.0%; share < 10 lots 99.2%
+NIFTY: 10456 best-level quotes within ±4 strikes; median size 195 (=3.0 lots); share < 1 lot 0.0%; share < 10 lots 81.2%
