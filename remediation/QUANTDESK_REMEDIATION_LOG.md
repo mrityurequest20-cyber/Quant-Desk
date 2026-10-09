@@ -8,7 +8,7 @@ It sits alongside the forensic audit (PR #9, `audit/`); it does not modify the a
 | Field | Value |
 |---|---|
 | Programme stage | **S0: readiness and containment** |
-| S0 status | **NO-GO**: critical blockers open (see §3) |
+| S0 status | **NO-GO**: critical blockers open (see §3); engineer routine paused (interim) |
 | Last updated | 2026-10-09 (S0 readiness assessment, session 1) |
 | Repo revision assessed | `main@c96909f1f0f4e77ad30817ca53f2df7b28bb9098` (2026-10-04 13:09 UTC) |
 | Audit revision assessed | `claude/exciting-galileo-criwur@813849453aa4` (PR #9, draft, open) |
@@ -66,13 +66,14 @@ One label never silently becomes another.
 
 | | |
 |---|---|
-| **Status** | _see result block below; filled in from the run_ |
+| **Status** | **VERIFIED NOW**: baseline reproduced; CI red only by A-19 |
 | **Evidence** | `git archive c96909f` exported to a scratch dir. Fresh venv: CPython 3.11.17 (the CI version), `pip install -r requirements.txt` → pandas 3.0.6, numpy 2.4.6, scipy 1.17.1, pyarrow 26.0.0, yfinance 1.7.0, anthropic 1.13.0. Command: `python -m pytest -o addopts="" -q -rfEs`, with `GH_TOKEN`/`GITHUB_TOKEN`/`GITHUB_REPOSITORY` unset and a fail-closed `gh` shim first on `PATH`, so no test could dispatch a workflow or push. |
-| **Result** | _PENDING_ |
+| **Result** | Run 2026-10-09 22:14:51 → 22:43:42 UTC (28m49s): **441 passed, 3 failed, 9 skipped (453)**. Failures: `test_kotak.py::test_chain_from_the_live_book[live]` and `[docs]`. Every IV is NaN at `test_kotak.py:202` (A-19 reproduced). Also `test_provenance.py::test_the_stamp_names_a_commit`, an **artifact of this run**: the `git archive` export has no `.git`. Re-run in the real checkout: `tests/test_provenance.py` → 2 passed. 3 of the 9 skips are "node not installed" (`test_cloudflare.py:54,101`, `test_web.py:128`); CI has node. The other 6 are sample-dependent (`test_handover.py:45` ×3, `test_kotak.py:348,363,380`). **Reconciled: 441 + 1 + 3 = 445 passed, 2 failed (A-19), 6 skipped, the same as previously reported.** The 3 node tests were not run in this session. |
+| **Coverage gap** | The suite passes on pandas 3.0.6, yet production logs A-02 (`grading failed: Cannot losslessly convert units`) at every session (S0-11). **No test exercises catch-up grading on real-shaped data.** A green suite does not mean that path is healthy. |
 | **Previously reported** | 445 passed / 2 failed / 6 skipped. The 2 failures are `test_kotak.py::test_chain_from_the_live_book[live,docs]` (A-19, wall-clock date bomb since 2026-10-06 15:30 IST). |
 | **Uncertainty** | Dependencies are unpinned (A-03). This session's resolution already differs from the audit's recorded environment (numpy 2.5.3 → 2.4.6, scipy 1.18.1 → 1.17.1, pyarrow 25.0.1 → 26.0.0). So "the baseline" is not reproducible across days. |
 | **Required action** | Fix A-19 (§6.2). Pin dependencies with a lockfile (separate later item, A-03). |
-| **Pass condition** | The suite is green on a pinned environment, twice, on different days. |
+| **Pass condition** | The suite is green on a pinned environment, twice, on different days, including the 3 node tests. |
 
 ### S0-04: Branch protection, rulesets, required CI
 
