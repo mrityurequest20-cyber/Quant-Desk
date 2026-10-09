@@ -1,0 +1,5867 @@
+{
+ "at": "2026-10-07 23:02:24.783173+05:30",
+ "costs": {
+  "fills": {
+   "fills": 0,
+   "note": "no paper option fills yet: the cost model is unverified against fills"
+  },
+  "rules": {
+   "adverse_ticks": 1,
+   "breakeven_frac": 0.5,
+   "chain_stale_min": 12.0,
+   "conviction": 0.5,
+   "entry_from": "09:20",
+   "entry_until": "14:45",
+   "half_spread_pct": 0.012,
+   "long_delta": 0.45,
+   "max_spread_pct": 0.06,
+   "min_half_spread": 0.1,
+   "pit_max_age_min": 2,
+   "premium_stop": 0.3,
+   "premium_target": 0.6,
+   "progress_frac": 0.1,
+   "square_off": "15:15",
+   "tick": 0.05
+  },
+  "spread_cells": {
+   "BANKNIFTY|6+|0": {
+    "n": 25102,
+    "pct": 0.0020268330202579295,
+    "sessions": 5
+   },
+   "BANKNIFTY|6+|1": {
+    "n": 50705,
+    "pct": 0.002860472507680947,
+    "sessions": 5
+   },
+   "BANKNIFTY|6+|2": {
+    "n": 75571,
+    "pct": 0.004534815681685229,
+    "sessions": 5
+   },
+   "BANKNIFTY|6+|3": {
+    "n": 42043,
+    "pct": 0.006585811894851379,
+    "sessions": 5
+   },
+   "BANKNIFTY|6+|4": {
+    "n": 7726,
+    "pct": 0.10465037373614453,
+    "sessions": 2
+   },
+   "FINNIFTY|6+|0": {
+    "n": 11084,
+    "pct": 0.005424017076940403,
+    "sessions": 3
+   },
+   "FINNIFTY|6+|1": {
+    "n": 22024,
+    "pct": 0.007109224861699187,
+    "sessions": 3
+   },
+   "FINNIFTY|6+|2": {
+    "n": 33049,
+    "pct": 0.016454428387466018,
+    "sessions": 3
+   },
+   "FINNIFTY|6+|3": {
+    "n": 24517,
+    "pct": 0.09741114523913999,
+    "sessions": 3
+   },
+   "MIDCPNIFTY|6+|0": {
+    "n": 12350,
+    "pct": 0.0028917056310841845,
+    "sessions": 3
+   },
+   "MIDCPNIFTY|6+|1": {
+    "n": 24372,
+    "pct": 0.0036983923314966994,
+    "sessions": 3
+   },
+   "MIDCPNIFTY|6+|2": {
+    "n": 36897,
+    "pct": 0.0067150147730325,
+    "sessions": 3
+   },
+   "MIDCPNIFTY|6+|3": {
+    "n": 17972,
+    "pct": 0.015924023728991314,
+    "sessions": 3
+   },
+   "NIFTY|0|0": {
+    "n": 3367,
+    "pct": 0.0013605442176869975,
+    "sessions": 1
+   },
+   "NIFTY|0|1": {
+    "n": 6024,
+    "pct": 0.001524200020854345,
+    "sessions": 1
+   },
+   "NIFTY|0|2": {
+    "n": 6739,
+    "pct": 0.0018486644992668946,
+    "sessions": 1
+   },
+   "NIFTY|0|3": {
+    "n": 5480,
+    "pct": 0.0023179895312788737,
+    "sessions": 1
+   },
+   "NIFTY|1|0": {
+    "n": 3420,
+    "pct": 0.0012041457038569003,
+    "sessions": 1
+   },
+   "NIFTY|1|1": {
+    "n": 6664,
+    "pct": 0.0013835804101515244,
+    "sessions": 1
+   },
+   "NIFTY|1|2": {
+    "n": 10169,
+    "pct": 0.0026525198938991473,
+    "sessions": 1
+   },
+   "NIFTY|1|3": {
+    "n": 10056,
+    "pct": 0.009174311926605472,
+    "sessions": 1
+   },
+   "NIFTY|3-5|0": {
+    "n": 7249,
+    "pct": 0.0012547051442910915,
+    "sessions": 4
+   },
+   "NIFTY|3-5|1": {
+    "n": 14681,
+    "pct": 0.001422699968384409,
+    "sessions": 4
+   },
+   "NIFTY|3-5|2": {
+    "n": 21741,
+    "pct": 0.0021021992238033816,
+    "sessions": 4
+   },
+   "NIFTY|3-5|3": {
+    "n": 25730,
+    "pct": 0.004878048780487874,
+    "sessions": 4
+   },
+   "NIFTY|3-5|4": {
+    "n": 2474,
+    "pct": 0.011077177487438326,
+    "sessions": 2
+   },
+   "NIFTY|6+|0": {
+    "n": 16860,
+    "pct": 0.0017790782809644547,
+    "sessions": 3
+   },
+   "NIFTY|6+|1": {
+    "n": 33684,
+    "pct": 0.002145922746781138,
+    "sessions": 3
+   },
+   "NIFTY|6+|2": {
+    "n": 50384,
+    "pct": 0.003523401268830017,
+    "sessions": 3
+   },
+   "NIFTY|6+|3": {
+    "n": 51823,
+    "pct": 0.005994485073732166,
+    "sessions": 3
+   },
+   "SENSEX|1|0": {
+    "n": 5484,
+    "pct": 0.0012293469738617114,
+    "sessions": 1
+   },
+   "SENSEX|1|1": {
+    "n": 10814,
+    "pct": 0.0015815428096759734,
+    "sessions": 1
+   },
+   "SENSEX|1|2": {
+    "n": 14288,
+    "pct": 0.003926707487808538,
+    "sessions": 1
+   },
+   "SENSEX|2|0": {
+    "n": 5377,
+    "pct": 0.0012401352874859331,
+    "sessions": 1
+   },
+   "SENSEX|2|1": {
+    "n": 10757,
+    "pct": 0.001591230551626551,
+    "sessions": 1
+   },
+   "SENSEX|2|2": {
+    "n": 14219,
+    "pct": 0.003344481605351159,
+    "sessions": 1
+   },
+   "SENSEX|3-5|0": {
+    "n": 5418,
+    "pct": 0.0012516469092525538,
+    "sessions": 1
+   },
+   "SENSEX|3-5|1": {
+    "n": 10720,
+    "pct": 0.001542073503544778,
+    "sessions": 1
+   },
+   "SENSEX|3-5|2": {
+    "n": 14424,
+    "pct": 0.002763957987838585,
+    "sessions": 1
+   },
+   "SENSEX|6+|0": {
+    "n": 16293,
+    "pct": 0.0031495222334916866,
+    "sessions": 3
+   },
+   "SENSEX|6+|1": {
+    "n": 32304,
+    "pct": 0.0047041985221191445,
+    "sessions": 3
+   },
+   "SENSEX|6+|2": {
+    "n": 42898,
+    "pct": 0.00968539065228165,
+    "sessions": 3
+   }
+  },
+  "version": "c3-e769896170"
+ },
+ "data": {
+  "bar_quality": {
+   "BANKNIFTY 5m": {
+    "conflicting_duplicates": 0,
+    "gaps": 0,
+    "jump_days": [],
+    "rows_in": 4198,
+    "rows_out": 4198
+   },
+   "BANKNIFTY recorded 1m": {
+    "conflicting_duplicates": 0,
+    "gaps": 7,
+    "jump_days": [],
+    "rows_in": 1503,
+    "rows_out": 1503
+   },
+   "NIFTY 5m": {
+    "conflicting_duplicates": 0,
+    "gaps": 0,
+    "jump_days": [],
+    "rows_in": 4198,
+    "rows_out": 4198
+   },
+   "NIFTY recorded 1m": {
+    "conflicting_duplicates": 0,
+    "gaps": 7,
+    "jump_days": [],
+    "rows_in": 1503,
+    "rows_out": 1503
+   },
+   "decision_points_non_finite_features": 0
+  },
+  "bhavcopy_rows": 680036,
+  "first_day": "2026-07-20",
+  "index_sessions": 56,
+  "last_day": "2026-10-07",
+  "recorded_snapshots": 10177,
+  "symbols": [
+   "BANKNIFTY",
+   "NIFTY"
+  ]
+ },
+ "eod": {
+  "describe": [
+   {
+    "bucket": "0",
+    "ci_R": {
+     "hi": 0.0686048653350278,
+     "lo": -2.2952899303910064,
+     "p_positive": 0.067,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03109160291919338,
+    "first_day": "2025-10-28",
+    "last_day": "2026-09-29",
+    "mean_fees": 64.79631548875,
+    "mean_net_R": -1.201188534798021,
+    "mean_premium": 7381.0,
+    "mean_spread": 181.88054999999997,
+    "p_win": 0.16666666666666666,
+    "plans": 12,
+    "sessions": 12,
+    "side": "put",
+    "stops": 10,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "0",
+    "ci_R": {
+     "hi": -2.2923508486887627,
+     "lo": -3.23012546278579,
+     "p_positive": 0.0,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.029733024088167106,
+    "first_day": "2025-10-28",
+    "last_day": "2026-09-29",
+    "mean_fees": 50.891686105,
+    "mean_net_R": -2.781738310336173,
+    "mean_premium": 4857.0,
+    "mean_spread": 71.86165000000001,
+    "p_win": 0.0,
+    "plans": 12,
+    "sessions": 12,
+    "side": "call",
+    "stops": 12,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "1",
+    "ci_R": {
+     "hi": 1.956627855079745,
+     "lo": -0.4793675560111774,
+     "p_positive": 0.843,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03795379882220678,
+    "first_day": "2025-10-27",
+    "last_day": "2026-09-28",
+    "mean_fees": 70.80898671549998,
+    "mean_net_R": 0.6996067937280959,
+    "mean_premium": 7673.5,
+    "mean_spread": 222.12404999999998,
+    "p_win": 0.3333333333333333,
+    "plans": 12,
+    "sessions": 12,
+    "side": "put",
+    "stops": 8,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "1",
+    "ci_R": {
+     "hi": -0.18753982642785785,
+     "lo": -1.8397364154051854,
+     "p_positive": 0.024,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.028428442627980166,
+    "first_day": "2025-10-27",
+    "last_day": "2026-09-28",
+    "mean_fees": 66.655446196,
+    "mean_net_R": -0.9642295848084537,
+    "mean_premium": 9679.5,
+    "mean_spread": 213.90479999999994,
+    "p_win": 0.16666666666666666,
+    "plans": 12,
+    "sessions": 12,
+    "side": "call",
+    "stops": 10,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "2",
+    "ci_R": {
+     "hi": 0.20881522593098778,
+     "lo": -1.5612130046454247,
+     "p_positive": 0.096,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.02898501726174976,
+    "first_day": "2025-10-24",
+    "last_day": "2026-09-25",
+    "mean_fees": 65.51029811874999,
+    "mean_net_R": -0.738582898499501,
+    "mean_premium": 9916.875,
+    "mean_spread": 208.78335000000004,
+    "p_win": 0.25,
+    "plans": 12,
+    "sessions": 12,
+    "side": "put",
+    "stops": 9,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "2",
+    "ci_R": {
+     "hi": 1.1683595848945323,
+     "lo": -0.8335540072643745,
+     "p_positive": 0.646,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.033012316987583716,
+    "first_day": "2025-10-24",
+    "last_day": "2026-09-25",
+    "mean_fees": 74.72757378700001,
+    "mean_net_R": 0.16100245982669234,
+    "mean_premium": 10780.375,
+    "mean_spread": 275.06249999999994,
+    "p_win": 0.4166666666666667,
+    "plans": 12,
+    "sessions": 12,
+    "side": "call",
+    "stops": 5,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "3-5",
+    "ci_R": {
+     "hi": 0.46908708966171137,
+     "lo": -0.35819152141292226,
+     "p_positive": 0.53,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03104723586786675,
+    "first_day": "2025-10-21",
+    "last_day": "2026-09-24",
+    "mean_fees": 79.30528040623528,
+    "mean_net_R": 0.02841900729412869,
+    "mean_premium": 13336.764705882353,
+    "mean_spread": 327.20710588235295,
+    "p_win": 0.3235294117647059,
+    "plans": 34,
+    "sessions": 34,
+    "side": "put",
+    "stops": 15,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "3-5",
+    "ci_R": {
+     "hi": -0.30028164293504594,
+     "lo": -1.0008940882281134,
+     "p_positive": 0.0,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.0288385285801645,
+    "first_day": "2025-10-21",
+    "last_day": "2026-09-24",
+    "mean_fees": 72.87392359300001,
+    "mean_net_R": -0.6688634934140055,
+    "mean_premium": 12733.014705882353,
+    "mean_spread": 280.94890588235296,
+    "p_win": 0.20588235294117646,
+    "plans": 34,
+    "sessions": 34,
+    "side": "call",
+    "stops": 20,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "6+",
+    "ci_R": {
+     "hi": -0.11791705782081827,
+     "lo": -0.28506114012170714,
+     "p_positive": 0.001,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.02825387548628909,
+    "first_day": "2025-10-03",
+    "last_day": "2026-10-06",
+    "mean_fees": 97.78970136544535,
+    "mean_net_R": -0.20041814737403912,
+    "mean_premium": 22059.995951417004,
+    "mean_spread": 523.3098218623481,
+    "p_win": 0.38461538461538464,
+    "plans": 247,
+    "sessions": 247,
+    "side": "put",
+    "stops": 63,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "6+",
+    "ci_R": {
+     "hi": -0.04649427683894648,
+     "lo": -0.20792622479064962,
+     "p_positive": 0.007,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.028481402335653626,
+    "first_day": "2025-10-03",
+    "last_day": "2026-10-06",
+    "mean_fees": 97.7018490692863,
+    "mean_net_R": -0.1271138202865545,
+    "mean_premium": 21967.016129032258,
+    "mean_spread": 521.9119403225807,
+    "p_win": 0.39919354838709675,
+    "plans": 248,
+    "sessions": 248,
+    "side": "call",
+    "stops": 45,
+    "symbol": "BANKNIFTY"
+   },
+   {
+    "bucket": "0",
+    "ci_R": {
+     "hi": 0.15155132386284098,
+     "lo": -1.351272144700761,
+     "p_positive": 0.106,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.041404450400116186,
+    "first_day": "2025-10-07",
+    "last_day": "2026-10-06",
+    "mean_fees": 57.781235676037745,
+    "mean_net_R": -0.6147474584107511,
+    "mean_premium": 4818.278301886792,
+    "mean_spread": 119.37075849056603,
+    "p_win": 0.22641509433962265,
+    "plans": 53,
+    "sessions": 53,
+    "side": "put",
+    "stops": 41,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "0",
+    "ci_R": {
+     "hi": -2.195081101269703,
+     "lo": -2.829513178800397,
+     "p_positive": 0.0,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.036924691568099265,
+    "first_day": "2025-10-07",
+    "last_day": "2026-10-06",
+    "mean_fees": 54.173782743886804,
+    "mean_net_R": -2.530261010992795,
+    "mean_premium": 5495.504716981132,
+    "mean_spread": 104.4251490566038,
+    "p_win": 0.018867924528301886,
+    "plans": 53,
+    "sessions": 53,
+    "side": "call",
+    "stops": 51,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "1",
+    "ci_R": {
+     "hi": -0.1270482065891699,
+     "lo": -1.1584009044609835,
+     "p_positive": 0.025,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03481655259168511,
+    "first_day": "2025-10-06",
+    "last_day": "2026-10-05",
+    "mean_fees": 63.330089782226416,
+    "mean_net_R": -0.6754322432667623,
+    "mean_premium": 7699.127358490566,
+    "mean_spread": 178.43162264150945,
+    "p_win": 0.22641509433962265,
+    "plans": 53,
+    "sessions": 53,
+    "side": "put",
+    "stops": 39,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "1",
+    "ci_R": {
+     "hi": 0.028040732416976324,
+     "lo": -1.0198355199445739,
+     "p_positive": 0.06,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03502294100448581,
+    "first_day": "2025-10-06",
+    "last_day": "2026-10-05",
+    "mean_fees": 61.99377345623586,
+    "mean_net_R": -0.48872496587431646,
+    "mean_premium": 7473.712264150943,
+    "mean_spread": 167.89904716981133,
+    "p_win": 0.2641509433962264,
+    "plans": 53,
+    "sessions": 53,
+    "side": "call",
+    "stops": 38,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "2",
+    "ci_R": {
+     "hi": -0.5010635349895607,
+     "lo": -1.040422988450271,
+     "p_positive": 0.0,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03181403269871444,
+    "first_day": "2025-10-03",
+    "last_day": "2026-10-01",
+    "mean_fees": 64.00712349513208,
+    "mean_net_R": -0.7762592318010741,
+    "mean_premium": 8181.5990566037735,
+    "mean_spread": 187.06779245283016,
+    "p_win": 0.22641509433962265,
+    "plans": 53,
+    "sessions": 53,
+    "side": "put",
+    "stops": 39,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "2",
+    "ci_R": {
+     "hi": -0.1151046630434861,
+     "lo": -0.7834857808524499,
+     "p_positive": 0.02,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03254220890958718,
+    "first_day": "2025-10-03",
+    "last_day": "2026-10-01",
+    "mean_fees": 64.49282716580188,
+    "mean_net_R": -0.4557040005142959,
+    "mean_premium": 7948.702830188679,
+    "mean_spread": 188.04132075471696,
+    "p_win": 0.20754716981132076,
+    "plans": 53,
+    "sessions": 53,
+    "side": "call",
+    "stops": 34,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "3-5",
+    "ci_R": {
+     "hi": 0.006599215385167182,
+     "lo": -0.4196435802540017,
+     "p_positive": 0.055,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03214178563227695,
+    "first_day": "2025-10-07",
+    "last_day": "2026-10-06",
+    "mean_fees": 71.15404670285713,
+    "mean_net_R": -0.2077985289728787,
+    "mean_premium": 10527.573051948051,
+    "mean_spread": 253.6074948051948,
+    "p_win": 0.35714285714285715,
+    "plans": 154,
+    "sessions": 154,
+    "side": "put",
+    "stops": 87,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "3-5",
+    "ci_R": {
+     "hi": -0.4283943759842182,
+     "lo": -0.7167292454372016,
+     "p_positive": 0.0,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.030251809284057872,
+    "first_day": "2025-10-07",
+    "last_day": "2026-10-06",
+    "mean_fees": 69.8881313944156,
+    "mean_net_R": -0.5726219518688157,
+    "mean_premium": 10976.452922077922,
+    "mean_spread": 249.63344545454547,
+    "p_win": 0.2727272727272727,
+    "plans": 154,
+    "sessions": 154,
+    "side": "call",
+    "stops": 87,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "6+",
+    "ci_R": {
+     "hi": -0.001096818046774387,
+     "lo": -0.23213222677409923,
+     "p_positive": 0.047,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.030667653217320207,
+    "first_day": "2025-10-03",
+    "last_day": "2026-10-06",
+    "mean_fees": 78.37562082287805,
+    "mean_net_R": -0.12571160551058552,
+    "mean_premium": 13565.447154471545,
+    "mean_spread": 326.877437804878,
+    "p_win": 0.3983739837398374,
+    "plans": 246,
+    "sessions": 246,
+    "side": "put",
+    "stops": 91,
+    "symbol": "NIFTY"
+   },
+   {
+    "bucket": "6+",
+    "ci_R": {
+     "hi": -0.09429551339645961,
+     "lo": -0.3239561561918159,
+     "p_positive": 0.002,
+     "samples": 1000
+    },
+    "cost_share_of_premium": 0.03020537370020438,
+    "first_day": "2025-10-03",
+    "last_day": "2026-10-06",
+    "mean_fees": 77.68884647685081,
+    "mean_net_R": -0.2064452761751254,
+    "mean_premium": 13723.570564516129,
+    "mean_spread": 323.94704193548387,
+    "p_win": 0.38306451612903225,
+    "plans": 248,
+    "sessions": 248,
+    "side": "call",
+    "stops": 78,
+    "symbol": "NIFTY"
+   }
+  ],
+  "evidence": "real_eod_approximation",
+  "exclusions": {
+   "eod_untraded_strike": 3
+  },
+  "label": "real prices, end of day: not point in time, cannot qualify",
+  "period": [
+   "2025-10-03",
+   "2026-10-06"
+  ],
+  "plan_outcomes": 1755,
+  "sessions": 248
+ },
+ "production_change": {
+  "change": null,
+  "expiry_min_days": 1,
+  "why": "no configuration has passed on real point-in-time evidence (development gates and the locked test): no basis for a DTE or horizon change. Modelled and EOD results cannot supply one."
+ },
+ "protocol": {
+  "code": "ef0b94a070819cdb",
+  "lock_opens_total": 0,
+  "policy_version": "p2",
+  "selection": "highest 5% lower bound of expectancy R among configurations with ≥ 30 replayed trades (pre-declared; real track only)",
+  "settings": {
+   "bootstrap": {
+    "block_days": 3,
+    "samples": 1000,
+    "seed": 7
+   },
+   "buckets": [
+    "0",
+    "1",
+    "2",
+    "3-5",
+    "6+"
+   ],
+   "candidates": [
+    "plan_logit"
+   ],
+   "dev_gates": {
+    "min_ci_lo_R": 0.0,
+    "min_dsr": 0.95,
+    "min_positive_folds": 0.6,
+    "min_profit_factor": 1.1,
+    "min_trade_days": 10,
+    "min_trades": 30
+   },
+   "final_test_days": 8,
+   "folds": 5,
+   "forward_gates": {
+    "min_expectancy_R": 0.0,
+    "min_profit_factor": 1.1,
+    "min_sessions": 10,
+    "min_trades": 15
+   },
+   "horizons": [
+    "30m",
+    "60m",
+    "120m",
+    "close"
+   ],
+   "lock_gates": {
+    "min_expectancy_R": 0.0,
+    "min_net": 0.0,
+    "min_trades": 8
+   },
+   "min_real_sessions": 28,
+   "min_train_days": 15
+  }
+ },
+ "real": {
+  "approved": false,
+  "describe": [
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.04819399815223299,
+    "cvar5": -1573.6371629471246,
+    "exit_reasons": {
+     "breakeven_stop": 6,
+     "premium_stop": 57,
+     "premium_target": 3
+    },
+    "horizon": "120m",
+    "intrabar_stops": 28,
+    "mae_mean": -812.1997915851061,
+    "mean_fees": 52.07149643293182,
+    "mean_gross": -749.617424242424,
+    "mean_net": -801.6889206753559,
+    "mean_net_R": -0.9259579030862214,
+    "mean_premium": 2673.371212121212,
+    "mean_spread": 69.89405923450713,
+    "mfe_mean": 339.66839603792465,
+    "p_win": 0.045454545454545456,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -1.1464281319807519,
+     "net_total": -34894.014552712986,
+     "trades": 3,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "put"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.04714062217099385,
+    "cvar5": -1002.0234060933747,
+    "exit_reasons": {
+     "breakeven_stop": 20,
+     "premium_stop": 26,
+     "premium_target": 9,
+     "square_off": 1,
+     "time_exit": 9
+    },
+    "horizon": "120m",
+    "intrabar_stops": 17,
+    "mae_mean": -545.7230203486907,
+    "mean_fees": 53.1823269682,
+    "mean_gross": 15.200000000000196,
+    "mean_net": -37.98232696819979,
+    "mean_net_R": -0.17088007205660527,
+    "mean_premium": 2523.55,
+    "mean_spread": 61.75550949661809,
+    "mfe_mean": 890.9296521526323,
+    "p_win": 0.27692307692307694,
+    "plans": 65,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": 0.8992782561462328,
+     "net_total": 28403.7511589575,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "call"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.042012611087617,
+    "cvar5": -1231.7427005749996,
+    "exit_reasons": {
+     "breakeven_stop": 3,
+     "premium_stop": 28,
+     "premium_target": 3,
+     "time_exit": 32
+    },
+    "horizon": "30m",
+    "intrabar_stops": 15,
+    "mae_mean": -663.0263365169002,
+    "mean_fees": 52.627538023522725,
+    "mean_gross": -459.18560606060583,
+    "mean_net": -511.81314408412857,
+    "mean_net_R": -0.5753013920615968,
+    "mean_premium": 2673.371212121212,
+    "mean_spread": 52.472631949196106,
+    "mfe_mean": 336.32802721493005,
+    "p_win": 0.13636363636363635,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -0.9157372556844555,
+     "net_total": -27624.708582468487,
+     "trades": 3,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "put"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.049644978898352426,
+    "cvar5": -959.3712759818749,
+    "exit_reasons": {
+     "breakeven_stop": 5,
+     "premium_stop": 19,
+     "premium_target": 6,
+     "square_off": 1,
+     "time_exit": 35
+    },
+    "horizon": "30m",
+    "intrabar_stops": 12,
+    "mae_mean": -471.88646695527274,
+    "mean_fees": 53.203104998681816,
+    "mean_gross": 27.47727272727296,
+    "mean_net": -25.725832271408855,
+    "mean_net_R": -0.14209463175809844,
+    "mean_premium": 2522.3939393939395,
+    "mean_spread": 67.98829900072411,
+    "mfe_mean": 696.179443285283,
+    "p_win": 0.3787878787878788,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": 0.42986598208788923,
+     "net_total": 19932.744161907514,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "call"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.04851266461827761,
+    "cvar5": -1486.6610162724996,
+    "exit_reasons": {
+     "breakeven_stop": 6,
+     "premium_stop": 49,
+     "premium_target": 3,
+     "time_exit": 7
+    },
+    "horizon": "60m",
+    "intrabar_stops": 25,
+    "mae_mean": -786.6310408451274,
+    "mean_fees": 52.1513928532,
+    "mean_gross": -709.3999999999997,
+    "mean_net": -761.5513928531997,
+    "mean_net_R": -0.8742944391513638,
+    "mean_premium": 2674.6,
+    "mean_spread": 70.64228837832843,
+    "mfe_mean": 340.0228279696666,
+    "p_win": 0.046153846153846156,
+    "plans": 65,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -1.1464281319807519,
+     "net_total": -34894.014552712986,
+     "trades": 3,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "put"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.049678079780138135,
+    "cvar5": -963.4604995569998,
+    "exit_reasons": {
+     "breakeven_stop": 12,
+     "premium_stop": 23,
+     "premium_target": 8,
+     "square_off": 1,
+     "time_exit": 22
+    },
+    "horizon": "60m",
+    "intrabar_stops": 15,
+    "mae_mean": -525.4112192137547,
+    "mean_fees": 53.18161000331818,
+    "mean_gross": 16.250000000000227,
+    "mean_net": -36.93161000331793,
+    "mean_net_R": -0.1622524664608132,
+    "mean_premium": 2522.3939393939395,
+    "mean_spread": 69.0857702643168,
+    "mfe_mean": 786.1208826685613,
+    "p_win": 0.3333333333333333,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": 0.8992782561462328,
+     "net_total": 28403.7511589575,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "call"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.04819399815223299,
+    "cvar5": -1573.6371629471246,
+    "exit_reasons": {
+     "breakeven_stop": 6,
+     "premium_stop": 57,
+     "premium_target": 3
+    },
+    "horizon": "close",
+    "intrabar_stops": 28,
+    "mae_mean": -812.1997915851061,
+    "mean_fees": 52.07149643293182,
+    "mean_gross": -749.617424242424,
+    "mean_net": -801.6889206753559,
+    "mean_net_R": -0.9259579030862214,
+    "mean_premium": 2673.371212121212,
+    "mean_spread": 69.89405923450713,
+    "mfe_mean": 339.66839603792465,
+    "p_win": 0.045454545454545456,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -1.1464281319807519,
+     "net_total": -34894.014552712986,
+     "trades": 3,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "put"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.0459272142407542,
+    "cvar5": -1002.0234060933747,
+    "exit_reasons": {
+     "breakeven_stop": 27,
+     "premium_stop": 26,
+     "premium_target": 12,
+     "square_off": 1
+    },
+    "horizon": "close",
+    "intrabar_stops": 17,
+    "mae_mean": -546.650991723074,
+    "mean_fees": 53.35338141363636,
+    "mean_gross": 105.96969696969718,
+    "mean_net": 52.6163155560608,
+    "mean_net_R": -0.08202027342264973,
+    "mean_premium": 2522.3939393939395,
+    "mean_spread": 58.56885241987794,
+    "mfe_mean": 928.3480598657991,
+    "p_win": 0.22727272727272727,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": 0.5364309735192601,
+     "net_total": 28471.846842067513,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "call"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.03789984730138876,
+    "cvar5": -2664.9797286224994,
+    "exit_reasons": {
+     "breakeven_stop": 12,
+     "premium_stop": 21,
+     "premium_target": 19,
+     "square_off": 9,
+     "time_exit": 5
+    },
+    "horizon": "120m",
+    "intrabar_stops": 4,
+    "mae_mean": -1032.9847579938503,
+    "mean_fees": 59.677432261568185,
+    "mean_gross": 291.07196969697014,
+    "mean_net": 231.394537435402,
+    "mean_net_R": 0.16955979409773508,
+    "mean_premium": 5052.912878787879,
+    "mean_spread": 134.1452956709307,
+    "mfe_mean": 1735.6098961039065,
+    "p_win": 0.4393939393939394,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": 0.012521106225444362,
+     "net_total": 1520.6693784285035,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "put"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.06996338841109527,
+    "cvar5": -2168.5432384023748,
+    "exit_reasons": {
+     "breakeven_stop": 2,
+     "premium_stop": 38,
+     "premium_target": 19,
+     "square_off": 4,
+     "time_exit": 3
+    },
+    "horizon": "120m",
+    "intrabar_stops": 18,
+    "mae_mean": -1331.4279139686273,
+    "mean_fees": 60.517686558681824,
+    "mean_gross": -18.909090909090384,
+    "mean_net": -79.42677746777221,
+    "mean_net_R": -0.07791899905251211,
+    "mean_premium": 5660.662878787879,
+    "mean_spread": 339.8760365067821,
+    "mfe_mean": 1752.723575201363,
+    "p_win": 0.3333333333333333,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -0.6306855146210795,
+     "net_total": -25732.63525656949,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "call"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.02616789465071612,
+    "cvar5": -2419.4956510922493,
+    "exit_reasons": {
+     "breakeven_stop": 6,
+     "premium_stop": 8,
+     "premium_target": 10,
+     "time_exit": 42
+    },
+    "horizon": "30m",
+    "intrabar_stops": 1,
+    "mae_mean": -784.2204867233453,
+    "mean_fees": 59.61096747327273,
+    "mean_gross": 256.35606060606096,
+    "mean_net": 196.74509313278827,
+    "mean_net_R": 0.12969666164096438,
+    "mean_premium": 5052.912878787879,
+    "mean_spread": 74.12189638598984,
+    "mfe_mean": 1308.8584451801494,
+    "p_win": 0.5,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": 1.092970405553475,
+     "net_total": 47742.686748489505,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "put"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.04076954124335096,
+    "cvar5": -1997.6334648288744,
+    "exit_reasons": {
+     "breakeven_stop": 1,
+     "premium_stop": 15,
+     "premium_target": 6,
+     "time_exit": 44
+    },
+    "horizon": "30m",
+    "intrabar_stops": 12,
+    "mae_mean": -1060.0426576241302,
+    "mean_fees": 60.03650034668181,
+    "mean_gross": -270.2424242424238,
+    "mean_net": -330.2789245891056,
+    "mean_net_R": -0.21228672782547822,
+    "mean_premium": 5660.662878787879,
+    "mean_spread": 170.29497973493804,
+    "mfe_mean": 917.3496605359513,
+    "p_win": 0.3333333333333333,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -0.4385067692243679,
+     "net_total": -18138.64990187998,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "call"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.03413658827518748,
+    "cvar5": -2664.9797286224994,
+    "exit_reasons": {
+     "breakeven_stop": 8,
+     "premium_stop": 17,
+     "premium_target": 17,
+     "square_off": 6,
+     "time_exit": 18
+    },
+    "horizon": "60m",
+    "intrabar_stops": 2,
+    "mae_mean": -989.2870029786662,
+    "mean_fees": 59.73918323509092,
+    "mean_gross": 323.325757575758,
+    "mean_net": 263.5865743406672,
+    "mean_net_R": 0.18642514800437873,
+    "mean_premium": 5052.912878787879,
+    "mean_spread": 114.25586222819021,
+    "mfe_mean": 1584.7014817118475,
+    "p_win": 0.4696969696969697,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": 0.2722724920254151,
+     "net_total": 10013.001588394027,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "put"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.05203258742866744,
+    "cvar5": -2093.4130790481245,
+    "exit_reasons": {
+     "breakeven_stop": 2,
+     "premium_stop": 30,
+     "premium_target": 12,
+     "square_off": 1,
+     "time_exit": 21
+    },
+    "horizon": "60m",
+    "intrabar_stops": 16,
+    "mae_mean": -1270.6333947562352,
+    "mean_fees": 60.00322081438637,
+    "mean_gross": -287.6249999999995,
+    "mean_net": -347.62822081438594,
+    "mean_net_R": -0.22887462727917088,
+    "mean_premium": 5660.662878787879,
+    "mean_spread": 233.78671890497952,
+    "mfe_mean": 1323.0386775655186,
+    "p_win": 0.25757575757575757,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -0.8118540664183357,
+     "net_total": -25571.218970112495,
+     "trades": 3,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "call"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.03765697072594499,
+    "cvar5": -2664.9797286224994,
+    "exit_reasons": {
+     "breakeven_stop": 17,
+     "premium_stop": 21,
+     "premium_target": 19,
+     "square_off": 9
+    },
+    "horizon": "close",
+    "intrabar_stops": 4,
+    "mae_mean": -1032.9847579938503,
+    "mean_fees": 59.58438155795454,
+    "mean_gross": 242.46969696969745,
+    "mean_net": 182.88531541174282,
+    "mean_net_R": 0.13603584368171773,
+    "mean_premium": 5052.912878787879,
+    "mean_spread": 132.97349018494734,
+    "mfe_mean": 1735.6098961039065,
+    "p_win": 0.3939393939393939,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": 0.12783437691837723,
+     "net_total": 4338.441475965014,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "put"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.07216130989935175,
+    "cvar5": -2168.5432384023748,
+    "exit_reasons": {
+     "breakeven_stop": 2,
+     "premium_stop": 38,
+     "premium_target": 20,
+     "square_off": 6
+    },
+    "horizon": "close",
+    "intrabar_stops": 18,
+    "mae_mean": -1331.4279139686273,
+    "mean_fees": 60.66306060627273,
+    "mean_gross": 57.02272727272777,
+    "mean_net": -3.640333333544969,
+    "mean_net_R": -0.03638469874081919,
+    "mean_premium": 5660.662878787879,
+    "mean_spread": 352.73774236963686,
+    "mfe_mean": 1783.8466916950333,
+    "p_win": 0.36363636363636365,
+    "plans": 66,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -0.4899737644603115,
+     "net_total": -15230.80239823099,
+     "trades": 3,
+     "unaffordable": 0
+    },
+    "sessions": 1,
+    "side": "call"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.020898044461482156,
+    "cvar5": -3180.556443905072,
+    "exit_reasons": {
+     "breakeven_stop": 6,
+     "premium_stop": 25,
+     "premium_target": 14,
+     "square_off": 29,
+     "time_exit": 60
+    },
+    "horizon": "120m",
+    "intrabar_stops": 11,
+    "mae_mean": -1608.3187177862314,
+    "mean_fees": 67.62133079626493,
+    "mean_gross": -511.3899253731344,
+    "mean_net": -579.0112561693994,
+    "mean_net_R": -0.18408830959653702,
+    "mean_premium": 9071.550373134329,
+    "mean_spread": 116.5043310915251,
+    "mfe_mean": 1377.2041572428063,
+    "p_win": 0.2462686567164179,
+    "plans": 134,
+    "replay": {
+     "ci_R": {
+      "hi": -0.15881243703764014,
+      "lo": -0.15881243703764014,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.15881243703764014,
+     "net_total": -10767.302704991998,
+     "trades": 8,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "put"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.024191866296603824,
+    "cvar5": -2605.7886846882143,
+    "exit_reasons": {
+     "premium_stop": 23,
+     "square_off": 42,
+     "time_exit": 68
+    },
+    "horizon": "120m",
+    "intrabar_stops": 5,
+    "mae_mean": -1194.0061005291798,
+    "mean_fees": 66.58277615524813,
+    "mean_gross": -396.2556390977443,
+    "mean_net": -462.83841525299243,
+    "mean_net_R": -0.20666218969899608,
+    "mean_premium": 8537.872180451128,
+    "mean_spread": 129.37662106957043,
+    "mfe_mean": 1409.7336339037363,
+    "p_win": 0.41353383458646614,
+    "plans": 133,
+    "replay": {
+     "ci_R": {
+      "hi": -0.032753082551408186,
+      "lo": -0.0327530825514082,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.032753082551408186,
+     "net_total": -2214.4898451499957,
+     "trades": 5,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "call"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.016747352696076946,
+    "cvar5": -2760.6722629527503,
+    "exit_reasons": {
+     "premium_stop": 6,
+     "premium_target": 2,
+     "square_off": 1,
+     "time_exit": 132
+    },
+    "horizon": "30m",
+    "intrabar_stops": 3,
+    "mae_mean": -935.7684479314008,
+    "mean_fees": 67.91222305390427,
+    "mean_gross": -325.94503546099315,
+    "mean_net": -393.85725851489747,
+    "mean_net_R": -0.13745699697608935,
+    "mean_premium": 9044.35815602837,
+    "mean_spread": 82.58127896579465,
+    "mfe_mean": 727.1957272700047,
+    "p_win": 0.3546099290780142,
+    "plans": 141,
+    "replay": {
+     "ci_R": {
+      "hi": -0.22488535390658757,
+      "lo": -0.2248853539065876,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.2248853539065876,
+     "net_total": -22694.324853238497,
+     "trades": 11,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "put"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.016593828605900217,
+    "cvar5": -1919.9986254816429,
+    "exit_reasons": {
+     "premium_stop": 2,
+     "square_off": 3,
+     "time_exit": 135
+    },
+    "horizon": "30m",
+    "intrabar_stops": 0,
+    "mae_mean": -757.9854388942482,
+    "mean_fees": 67.58604218170001,
+    "mean_gross": -39.185714285714106,
+    "mean_net": -106.77175646741411,
+    "mean_net_R": -0.053003838719911836,
+    "mean_premium": 8673.367857142857,
+    "mean_spread": 76.94682588233006,
+    "mfe_mean": 823.9415085322311,
+    "p_win": 0.4857142857142857,
+    "plans": 140,
+    "replay": {
+     "ci_R": {
+      "hi": 0.2260982987649078,
+      "lo": 0.22609829876490778,
+      "p_positive": 1.0,
+      "samples": 1000
+     },
+     "expectancy_R": 0.22609829876490778,
+     "net_total": 17304.34317245851,
+     "trades": 8,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "call"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.016775955616371626,
+    "cvar5": -3044.7945034360005,
+    "exit_reasons": {
+     "premium_stop": 11,
+     "premium_target": 4,
+     "square_off": 12,
+     "time_exit": 112
+    },
+    "horizon": "60m",
+    "intrabar_stops": 7,
+    "mae_mean": -1285.1907256842296,
+    "mean_fees": 67.57283108960793,
+    "mean_gross": -522.8291366906477,
+    "mean_net": -590.4019677802556,
+    "mean_net_R": -0.20361230484996168,
+    "mean_premium": 9060.275179856115,
+    "mean_spread": 82.96641576096043,
+    "mfe_mean": 970.5053827603465,
+    "p_win": 0.2949640287769784,
+    "plans": 139,
+    "replay": {
+     "ci_R": {
+      "hi": -0.22170568558372886,
+      "lo": -0.22170568558372886,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.22170568558372886,
+     "net_total": -20648.994380881002,
+     "trades": 10,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "put"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.018236259658899395,
+    "cvar5": -2418.590792092214,
+    "exit_reasons": {
+     "premium_stop": 8,
+     "square_off": 17,
+     "time_exit": 113
+    },
+    "horizon": "60m",
+    "intrabar_stops": 0,
+    "mae_mean": -980.405806853766,
+    "mean_fees": 67.3691700698913,
+    "mean_gross": -110.68840579710127,
+    "mean_net": -178.05757586699258,
+    "mean_net_R": -0.08501048999250971,
+    "mean_premium": 8639.465579710144,
+    "mean_spread": 85.95179183643049,
+    "mfe_mean": 1137.0689972869166,
+    "p_win": 0.5217391304347826,
+    "plans": 138,
+    "replay": {
+     "ci_R": {
+      "hi": 0.028207791463752883,
+      "lo": 0.028207791463752872,
+      "p_positive": 1.0,
+      "samples": 1000
+     },
+     "expectancy_R": 0.028207791463752883,
+     "net_total": 169.97917527001118,
+     "trades": 7,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "call"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.019551392986958356,
+    "cvar5": -3221.899527101143,
+    "exit_reasons": {
+     "breakeven_stop": 15,
+     "premium_stop": 34,
+     "premium_target": 14,
+     "square_off": 70
+    },
+    "horizon": "close",
+    "intrabar_stops": 19,
+    "mae_mean": -1734.0044763035844,
+    "mean_fees": 67.2461785091579,
+    "mean_gross": -722.6729323308273,
+    "mean_net": -789.9191108399851,
+    "mean_net_R": -0.25705126127857775,
+    "mean_premium": 9083.994360902256,
+    "mean_spread": 104.90414677870275,
+    "mfe_mean": 1580.0519154729611,
+    "p_win": 0.18796992481203006,
+    "plans": 133,
+    "replay": {
+     "ci_R": {
+      "hi": -0.35176447268252636,
+      "lo": -0.35176447268252636,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.35176447268252636,
+     "net_total": -22376.805211779003,
+     "trades": 7,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "put"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.024535810292801847,
+    "cvar5": -2632.4303076321426,
+    "exit_reasons": {
+     "breakeven_stop": 12,
+     "premium_stop": 32,
+     "square_off": 88
+    },
+    "horizon": "close",
+    "intrabar_stops": 6,
+    "mae_mean": -1320.757164385972,
+    "mean_fees": 65.98152690035226,
+    "mean_gross": -670.558712121212,
+    "mean_net": -736.5402390215644,
+    "mean_net_R": -0.31874776203846505,
+    "mean_premium": 8505.619318181818,
+    "mean_spread": 129.34907785510757,
+    "mfe_mean": 1484.0244406779727,
+    "p_win": 0.25757575757575757,
+    "plans": 132,
+    "replay": {
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null,
+      "samples": 0
+     },
+     "expectancy_R": -0.15562485939220366,
+     "net_total": -7590.740188727498,
+     "trades": 4,
+     "unaffordable": 0
+    },
+    "sessions": 2,
+    "side": "call"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.014292784960832342,
+    "cvar5": -5218.964293300074,
+    "exit_reasons": {
+     "breakeven_stop": 3,
+     "premium_stop": 20,
+     "premium_target": 7,
+     "square_off": 115,
+     "time_exit": 251
+    },
+    "horizon": "120m",
+    "intrabar_stops": 13,
+    "mae_mean": -1927.1240657110102,
+    "mean_fees": 84.80982420840151,
+    "mean_gross": -386.2159090909079,
+    "mean_net": -471.02573329930937,
+    "mean_net_R": -0.09764085953255146,
+    "mean_premium": 16256.10101010101,
+    "mean_spread": 136.85889501852193,
+    "mfe_mean": 2225.9071152546408,
+    "p_win": 0.4116161616161616,
+    "plans": 396,
+    "replay": {
+     "ci_R": {
+      "hi": 0.19935477462298357,
+      "lo": -0.3760109082885993,
+      "p_positive": 0.188,
+      "samples": 1000
+     },
+     "expectancy_R": -0.08418688974438938,
+     "net_total": -6408.288144177994,
+     "trades": 13,
+     "unaffordable": 0
+    },
+    "sessions": 4,
+    "side": "put"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.01394251038552457,
+    "cvar5": -4512.498618828872,
+    "exit_reasons": {
+     "premium_stop": 16,
+     "square_off": 115,
+     "time_exit": 263
+    },
+    "horizon": "120m",
+    "intrabar_stops": 6,
+    "mae_mean": -1809.755232168646,
+    "mean_fees": 84.57015442309519,
+    "mean_gross": -575.8914974619278,
+    "mean_net": -660.4616518850231,
+    "mean_net_R": -0.14736942585175636,
+    "mean_premium": 16308.439720812183,
+    "mean_spread": 128.42165177893384,
+    "mfe_mean": 1727.6235912122854,
+    "p_win": 0.38071065989847713,
+    "plans": 394,
+    "replay": {
+     "ci_R": {
+      "hi": 0.10097740716810497,
+      "lo": -0.08361718629102347,
+      "p_positive": 0.674,
+      "samples": 1000
+     },
+     "expectancy_R": 0.012271785044950488,
+     "net_total": -1071.8875114719758,
+     "trades": 13,
+     "unaffordable": 0
+    },
+    "sessions": 4,
+    "side": "call"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.012468606547822622,
+    "cvar5": -3881.7861942536983,
+    "exit_reasons": {
+     "premium_stop": 1,
+     "premium_target": 4,
+     "square_off": 1,
+     "time_exit": 394
+    },
+    "horizon": "30m",
+    "intrabar_stops": 1,
+    "mae_mean": -1113.0875671574468,
+    "mean_fees": 85.45552320446501,
+    "mean_gross": -124.90124999999873,
+    "mean_net": -210.35677320446376,
+    "mean_net_R": -0.03857439614489805,
+    "mean_premium": 16317.736875,
+    "mean_spread": 109.84595222631084,
+    "mfe_mean": 1145.9971517867364,
+    "p_win": 0.4625,
+    "plans": 400,
+    "replay": {
+     "ci_R": {
+      "hi": -0.10086688962123848,
+      "lo": -0.29707746091867193,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.18254199632659635,
+     "net_total": -17769.16641491349,
+     "trades": 14,
+     "unaffordable": 0
+    },
+    "sessions": 4,
+    "side": "put"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.012573258518412662,
+    "cvar5": -2416.4580925750497,
+    "exit_reasons": {
+     "square_off": 1,
+     "time_exit": 399
+    },
+    "horizon": "30m",
+    "intrabar_stops": 0,
+    "mae_mean": -1074.6899999473421,
+    "mean_fees": 85.6190133387625,
+    "mean_gross": -190.44249999999877,
+    "mean_net": -276.0615133387613,
+    "mean_net_R": -0.06253851802770476,
+    "mean_premium": 16440.230625,
+    "mean_spread": 113.72307578148936,
+    "mfe_mean": 955.6365804865732,
+    "p_win": 0.38,
+    "plans": 400,
+    "replay": {
+     "ci_R": {
+      "hi": 0.0640032079573659,
+      "lo": -0.13093490646290595,
+      "p_positive": 0.235,
+      "samples": 1000
+     },
+     "expectancy_R": -0.033465849252770026,
+     "net_total": -3673.1777401824816,
+     "trades": 15,
+     "unaffordable": 0
+    },
+    "sessions": 4,
+    "side": "call"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.013261922338309126,
+    "cvar5": -4790.267743854373,
+    "exit_reasons": {
+     "premium_stop": 8,
+     "premium_target": 6,
+     "square_off": 46,
+     "time_exit": 340
+    },
+    "horizon": "60m",
+    "intrabar_stops": 5,
+    "mae_mean": -1535.3496656285124,
+    "mean_fees": 85.28517326053374,
+    "mean_gross": -218.82187499999873,
+    "mean_net": -304.10704826053245,
+    "mean_net_R": -0.05626413007791116,
+    "mean_premium": 16321.74875,
+    "mean_spread": 124.50340625804459,
+    "mfe_mean": 1805.366965012623,
+    "p_win": 0.435,
+    "plans": 400,
+    "replay": {
+     "ci_R": {
+      "hi": 0.01376726641318994,
+      "lo": -0.3547353205194547,
+      "p_positive": 0.122,
+      "samples": 1000
+     },
+     "expectancy_R": -0.14904490718356475,
+     "net_total": -13579.93491781698,
+     "trades": 14,
+     "unaffordable": 0
+    },
+    "sessions": 4,
+    "side": "put"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.012840023878958974,
+    "cvar5": -3329.5404615049993,
+    "exit_reasons": {
+     "premium_stop": 2,
+     "square_off": 39,
+     "time_exit": 358
+    },
+    "horizon": "60m",
+    "intrabar_stops": 1,
+    "mae_mean": -1417.004313876059,
+    "mean_fees": 85.32653810069174,
+    "mean_gross": -320.8859649122795,
+    "mean_net": -406.2125030129713,
+    "mean_net_R": -0.09060489195924062,
+    "mean_premium": 16422.114661654134,
+    "mean_spread": 115.24651686647479,
+    "mfe_mean": 1344.8777551245894,
+    "p_win": 0.44611528822055135,
+    "plans": 399,
+    "replay": {
+     "ci_R": {
+      "hi": 0.13799857584145997,
+      "lo": -0.11195396043333039,
+      "p_positive": 0.674,
+      "samples": 1000
+     },
+     "expectancy_R": 0.023029189733465388,
+     "net_total": 1611.1985273760179,
+     "trades": 14,
+     "unaffordable": 0
+    },
+    "sessions": 4,
+    "side": "call"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.012544777763481712,
+    "cvar5": -5142.239095015325,
+    "exit_reasons": {
+     "breakeven_stop": 41,
+     "premium_stop": 26,
+     "premium_target": 7,
+     "square_off": 322
+    },
+    "horizon": "close",
+    "intrabar_stops": 15,
+    "mae_mean": -2159.3292166972037,
+    "mean_fees": 84.97055413397351,
+    "mean_gross": -240.44002525252418,
+    "mean_net": -325.4105793864976,
+    "mean_net_R": -0.08018152762578015,
+    "mean_premium": 16205.9273989899,
+    "mean_spread": 104.28754689956696,
+    "mfe_mean": 2431.7965132906807,
+    "p_win": 0.3282828282828283,
+    "plans": 396,
+    "replay": {
+     "ci_R": {
+      "hi": -0.0566827718491298,
+      "lo": -0.05668277184912982,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.0566827718491298,
+     "net_total": -3731.9466993949986,
+     "trades": 10,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "put"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.016871625943215937,
+    "cvar5": -4461.673741188524,
+    "exit_reasons": {
+     "breakeven_stop": 3,
+     "premium_stop": 31,
+     "square_off": 362
+    },
+    "horizon": "close",
+    "intrabar_stops": 13,
+    "mae_mean": -2102.791242381732,
+    "mean_fees": 83.56022474152273,
+    "mean_gross": -1011.3080808080799,
+    "mean_net": -1094.8683055496026,
+    "mean_net_R": -0.24169425929139882,
+    "mean_premium": 16233.702651515152,
+    "mean_spread": 167.7070194924113,
+    "mfe_mean": 1943.7584372196998,
+    "p_win": 0.21464646464646464,
+    "plans": 396,
+    "replay": {
+     "ci_R": {
+      "hi": -0.10262804606399889,
+      "lo": -0.1026280460639989,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.10262804606399889,
+     "net_total": -9993.670131030996,
+     "trades": 8,
+     "unaffordable": 0
+    },
+    "sessions": 3,
+    "side": "call"
+   }
+  ],
+  "evidence": "real_point_in_time",
+  "exclusions": {
+   "no_bar_at_decision": 132,
+   "no_fresh_real_snapshot": 99,
+   "real_entry_but_modelled_marks_or_exit": 219
+  },
+  "forward": {},
+  "lock": {
+   "dev": [
+    "2026-09-29",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07"
+   ],
+   "generation": null,
+   "lock": null,
+   "note": "no lock yet: 4 real sessions, 28 needed",
+   "reserved": []
+  },
+  "lockbox": {
+   "opened": false,
+   "why": "insufficient real point-in-time data: 4 session(s) with complete real plans; the protocol needs 28 (15 training + 5 folds + 8 locked). Descriptive only; nothing fitted."
+  },
+  "pit_sessions": [
+   "2026-09-29",
+   "2026-10-05",
+   "2026-10-06",
+   "2026-10-07"
+  ],
+  "plan_outcomes": 5325,
+  "selected": null,
+  "sessions_with_recorded_chains": [
+   "2026-09-29",
+   "2026-09-30",
+   "2026-10-05",
+   "2026-10-06",
+   "2026-10-07"
+  ],
+  "status": "insufficient real point-in-time data: 4 session(s) with complete real plans; the protocol needs 28 (15 training + 5 folds + 8 locked). Descriptive only; nothing fitted.",
+  "trials": []
+ },
+ "replay_hash": "ec008a6024a13063",
+ "scenario": {
+  "best_by_the_selection_rule": "close|3-5|plan_logit",
+  "describe": [
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.11005684797343854,
+    "cvar5": -1333.62032355937,
+    "exit_reasons": {
+     "breakeven_stop": 87,
+     "premium_stop": 598,
+     "premium_target": 292,
+     "time_exit": 13
+    },
+    "horizon": "120m",
+    "intrabar_stops": 313,
+    "mae_mean": -488.59181605792355,
+    "mean_fees": 51.238175283883336,
+    "mean_gross": 28.987626262626293,
+    "mean_net": -22.250549021257054,
+    "mean_net_R": -0.0910826161147709,
+    "mean_premium": 1688.2419191919191,
+    "mean_spread": 101.17959416929025,
+    "mfe_mean": 553.3185024160794,
+    "p_win": 0.30303030303030304,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 1.0301878513034752,
+      "lo": 0.06595505363384417,
+      "p_positive": 0.976,
+      "samples": 1000
+     },
+     "expectancy_R": 0.5140461651669179,
+     "net_total": 135473.00812764405,
+     "trades": 48,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "put"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.11385830013696227,
+    "cvar5": -1647.66849374508,
+    "exit_reasons": {
+     "breakeven_stop": 73,
+     "premium_stop": 754,
+     "premium_target": 162,
+     "time_exit": 1
+    },
+    "horizon": "120m",
+    "intrabar_stops": 403,
+    "mae_mean": -565.5397270346768,
+    "mean_fees": 50.7806742217197,
+    "mean_gross": -228.46944444444443,
+    "mean_net": -279.2501186661641,
+    "mean_net_R": -0.5536416882725091,
+    "mean_premium": 1703.2517676767677,
+    "mean_spread": 108.29704058307746,
+    "mfe_mean": 378.964139815024,
+    "p_win": 0.16464646464646465,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": -0.3358822185064904,
+      "lo": -0.9102627806516806,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.6326822734466573,
+     "net_total": -155913.02437853848,
+     "trades": 44,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "call"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.10393013648854613,
+    "cvar5": -1211.34531141509,
+    "exit_reasons": {
+     "breakeven_stop": 53,
+     "premium_stop": 502,
+     "premium_target": 229,
+     "time_exit": 206
+    },
+    "horizon": "30m",
+    "intrabar_stops": 266,
+    "mae_mean": -446.94770128284665,
+    "mean_fees": 51.149705441292426,
+    "mean_gross": -17.22196969696967,
+    "mean_net": -68.37167513826212,
+    "mean_net_R": -0.13799657269733867,
+    "mean_premium": 1688.2419191919191,
+    "mean_spread": 89.97512122564243,
+    "mfe_mean": 443.4074752159237,
+    "p_win": 0.29292929292929293,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 0.7838491214339165,
+      "lo": 0.13135789569435458,
+      "p_positive": 1.0,
+      "samples": 1000
+     },
+     "expectancy_R": 0.4456555278724042,
+     "net_total": 113717.95949784205,
+     "trades": 48,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "put"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.11126982903269615,
+    "cvar5": -1310.40832788943,
+    "exit_reasons": {
+     "breakeven_stop": 43,
+     "premium_stop": 625,
+     "premium_target": 145,
+     "time_exit": 177
+    },
+    "horizon": "30m",
+    "intrabar_stops": 351,
+    "mae_mean": -511.04433544257415,
+    "mean_fees": 50.88443906371061,
+    "mean_gross": -174.27095959595957,
+    "mean_net": -225.1553986596702,
+    "mean_net_R": -0.48866590824929523,
+    "mean_premium": 1703.2517676767677,
+    "mean_spread": 103.23689586814818,
+    "mfe_mean": 351.31307438819084,
+    "p_win": 0.19090909090909092,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": -0.24524024109205417,
+      "lo": -0.6611973402367269,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.46343052731694656,
+     "net_total": -124740.29683486545,
+     "trades": 46,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "call"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.10903789442182327,
+    "cvar5": -1277.4990526763702,
+    "exit_reasons": {
+     "breakeven_stop": 80,
+     "premium_stop": 570,
+     "premium_target": 273,
+     "time_exit": 67
+    },
+    "horizon": "60m",
+    "intrabar_stops": 304,
+    "mae_mean": -475.0700422101557,
+    "mean_fees": 51.190383487174245,
+    "mean_gross": 4.025000000000026,
+    "mean_net": -47.16538348717421,
+    "mean_net_R": -0.10041413423411194,
+    "mean_premium": 1688.2419191919191,
+    "mean_spread": 97.6710155586402,
+    "mfe_mean": 506.1994105464618,
+    "p_win": 0.301010101010101,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 1.0342684340625854,
+      "lo": 0.04146884744553118,
+      "p_positive": 0.966,
+      "samples": 1000
+     },
+     "expectancy_R": 0.5021014301387956,
+     "net_total": 134066.48583825756,
+     "trades": 48,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "put"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.11355387325548931,
+    "cvar5": -1524.7624402133897,
+    "exit_reasons": {
+     "breakeven_stop": 65,
+     "premium_stop": 722,
+     "premium_target": 160,
+     "time_exit": 43
+    },
+    "horizon": "60m",
+    "intrabar_stops": 396,
+    "mae_mean": -550.8097630244471,
+    "mean_fees": 50.81211609145606,
+    "mean_gross": -212.04671717171718,
+    "mean_net": -262.8588332631732,
+    "mean_net_R": -0.5352068579393855,
+    "mean_premium": 1703.2517676767677,
+    "mean_spread": 107.49221834800626,
+    "mfe_mean": 374.71548252529385,
+    "p_win": 0.17272727272727273,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": -0.3172695717706761,
+      "lo": -0.8684189042226004,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.597233276646838,
+     "net_total": -156928.29454668149,
+     "trades": 45,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "call"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.1106749889093247,
+    "cvar5": -1361.32511197564,
+    "exit_reasons": {
+     "breakeven_stop": 92,
+     "premium_stop": 602,
+     "premium_target": 295,
+     "square_off": 1
+    },
+    "horizon": "close",
+    "intrabar_stops": 317,
+    "mae_mean": -493.4217868377282,
+    "mean_fees": 51.24127383146061,
+    "mean_gross": 30.606060606060634,
+    "mean_net": -20.63521322539998,
+    "mean_net_R": -0.0913984896803349,
+    "mean_premium": 1688.2419191919191,
+    "mean_spread": 103.8069533829428,
+    "mfe_mean": 561.1499807563318,
+    "p_win": 0.298989898989899,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 1.0251232357551145,
+      "lo": 0.04781850617386318,
+      "p_positive": 0.969,
+      "samples": 1000
+     },
+     "expectancy_R": 0.4959096177069369,
+     "net_total": 126783.06862577703,
+     "trades": 48,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "put"
+   },
+   {
+    "bucket": "0",
+    "cost_share_of_premium": 0.11386686986362976,
+    "cvar5": -1647.66849374508,
+    "exit_reasons": {
+     "breakeven_stop": 73,
+     "premium_stop": 754,
+     "premium_target": 163
+    },
+    "horizon": "close",
+    "intrabar_stops": 403,
+    "mae_mean": -565.5397270346768,
+    "mean_fees": 50.784068168356065,
+    "mean_gross": -226.69671717171718,
+    "mean_net": -277.48078534007317,
+    "mean_net_R": -0.5513704731945708,
+    "mean_premium": 1703.2517676767677,
+    "mean_spread": 108.3159000741649,
+    "mfe_mean": 379.354952678521,
+    "p_win": 0.16464646464646465,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": -0.3358822185064904,
+      "lo": -0.9102627806516806,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.6326822734466573,
+     "net_total": -155913.02437853848,
+     "trades": 44,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "call"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.05166528960818436,
+    "cvar5": -2107.67973665291,
+    "exit_reasons": {
+     "breakeven_stop": 65,
+     "premium_stop": 382,
+     "premium_target": 173,
+     "square_off": 175,
+     "time_exit": 195
+    },
+    "horizon": "120m",
+    "intrabar_stops": 196,
+    "mae_mean": -771.5213037816252,
+    "mean_fees": 55.103206673416665,
+    "mean_gross": -40.92702020202013,
+    "mean_net": -96.03022687543678,
+    "mean_net_R": -0.07265472424695482,
+    "mean_premium": 3383.354292929293,
+    "mean_spread": 113.52443806028097,
+    "mfe_mean": 879.4345956594144,
+    "p_win": 0.3898989898989899,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 0.7591037148853302,
+      "lo": -0.08314989351910894,
+      "p_positive": 0.896,
+      "samples": 1000
+     },
+     "expectancy_R": 0.3101210571261611,
+     "net_total": 150738.01154915054,
+     "trades": 46,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "put"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.055835823836210406,
+    "cvar5": -1670.2293912225505,
+    "exit_reasons": {
+     "breakeven_stop": 36,
+     "premium_stop": 487,
+     "premium_target": 171,
+     "square_off": 151,
+     "time_exit": 145
+    },
+    "horizon": "120m",
+    "intrabar_stops": 244,
+    "mae_mean": -807.9148853558603,
+    "mean_fees": 54.83493865332727,
+    "mean_gross": -66.09898989898988,
+    "mean_net": -120.93392855231711,
+    "mean_net_R": -0.15344609003906762,
+    "mean_premium": 3290.0651515151517,
+    "mean_spread": 123.84874695331459,
+    "mfe_mean": 792.4217808336617,
+    "p_win": 0.3101010101010101,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 0.07069120880463883,
+      "lo": -0.356982795501511,
+      "p_positive": 0.132,
+      "samples": 1000
+     },
+     "expectancy_R": -0.14019449619436497,
+     "net_total": -57660.34288268497,
+     "trades": 41,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "call"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.04688358055358274,
+    "cvar5": -1596.18754878316,
+    "exit_reasons": {
+     "breakeven_stop": 8,
+     "premium_stop": 147,
+     "premium_target": 114,
+     "square_off": 28,
+     "time_exit": 693
+    },
+    "horizon": "30m",
+    "intrabar_stops": 81,
+    "mae_mean": -550.2849010339169,
+    "mean_fees": 55.21677963441212,
+    "mean_gross": 18.394444444444527,
+    "mean_net": -36.82233518996757,
+    "mean_net_R": -0.0416625616193431,
+    "mean_premium": 3383.354292929293,
+    "mean_spread": 98.9448251593749,
+    "mfe_mean": 584.436443824794,
+    "p_win": 0.39090909090909093,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 0.8380821879145505,
+      "lo": 0.07465705906165153,
+      "p_positive": 0.978,
+      "samples": 1000
+     },
+     "expectancy_R": 0.42913424005280687,
+     "net_total": 209274.46761135658,
+     "trades": 48,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "put"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.04851530029696677,
+    "cvar5": -1454.6050852398903,
+    "exit_reasons": {
+     "breakeven_stop": 7,
+     "premium_stop": 173,
+     "premium_target": 94,
+     "square_off": 27,
+     "time_exit": 689
+    },
+    "horizon": "30m",
+    "intrabar_stops": 93,
+    "mae_mean": -580.1740025467905,
+    "mean_fees": 54.80542582163636,
+    "mean_gross": -81.51414141414132,
+    "mean_net": -136.31956723577767,
+    "mean_net_R": -0.14591121892418554,
+    "mean_premium": 3290.0651515151517,
+    "mean_spread": 100.52257864347767,
+    "mfe_mean": 499.3828332769336,
+    "p_win": 0.3242424242424242,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": -0.016495544239681397,
+      "lo": -0.45182585657118984,
+      "p_positive": 0.043,
+      "samples": 1000
+     },
+     "expectancy_R": -0.22147214152168251,
+     "net_total": -91397.06316252143,
+     "trades": 47,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "call"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.04924546424586173,
+    "cvar5": -1767.65022251871,
+    "exit_reasons": {
+     "breakeven_stop": 24,
+     "premium_stop": 259,
+     "premium_target": 143,
+     "square_off": 101,
+     "time_exit": 463
+    },
+    "horizon": "60m",
+    "intrabar_stops": 137,
+    "mae_mean": -666.6990456728465,
+    "mean_fees": 55.17806446934848,
+    "mean_gross": -1.8272727272726539,
+    "mean_net": -57.00533719662112,
+    "mean_net_R": -0.04976126533652809,
+    "mean_premium": 3383.354292929293,
+    "mean_spread": 105.8218882054106,
+    "mfe_mean": 752.6973613389077,
+    "p_win": 0.39090909090909093,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 0.768684752002908,
+      "lo": -0.05332564672259819,
+      "p_positive": 0.939,
+      "samples": 1000
+     },
+     "expectancy_R": 0.3367881404157504,
+     "net_total": 169281.33018479455,
+     "trades": 48,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "put"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.05271670877218169,
+    "cvar5": -1599.8584612675404,
+    "exit_reasons": {
+     "breakeven_stop": 14,
+     "premium_stop": 353,
+     "premium_target": 139,
+     "square_off": 90,
+     "time_exit": 394
+    },
+    "horizon": "60m",
+    "intrabar_stops": 181,
+    "mae_mean": -715.3873229524015,
+    "mean_fees": 54.825075902418185,
+    "mean_gross": -71.25050505050501,
+    "mean_net": -126.07558095292318,
+    "mean_net_R": -0.1426837367801109,
+    "mean_premium": 3290.0651515151517,
+    "mean_spread": 114.25689699473851,
+    "mfe_mean": 668.5811830691009,
+    "p_win": 0.33434343434343433,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 0.1262284131750441,
+      "lo": -0.20829317064830696,
+      "p_positive": 0.371,
+      "samples": 1000
+     },
+     "expectancy_R": -0.034899711662526395,
+     "net_total": -29288.28404611296,
+     "trades": 44,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "call"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.05247292686860244,
+    "cvar5": -2293.45868348512,
+    "exit_reasons": {
+     "breakeven_stop": 102,
+     "premium_stop": 433,
+     "premium_target": 190,
+     "square_off": 265
+    },
+    "horizon": "close",
+    "intrabar_stops": 214,
+    "mae_mean": -812.1693516431369,
+    "mean_fees": 55.14982074163485,
+    "mean_gross": -16.579545454545382,
+    "mean_net": -71.72936619618022,
+    "mean_net_R": -0.033937914132906206,
+    "mean_premium": 3383.354292929293,
+    "mean_spread": 115.76067223046151,
+    "mfe_mean": 943.335878150163,
+    "p_win": 0.3888888888888889,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": 0.9621186349337179,
+      "lo": 0.02867385096792962,
+      "p_positive": 0.961,
+      "samples": 1000
+     },
+     "expectancy_R": 0.48651752909302864,
+     "net_total": 203123.11890480405,
+     "trades": 41,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "put"
+   },
+   {
+    "bucket": "1",
+    "cost_share_of_premium": 0.057686993584075766,
+    "cvar5": -1696.6332994333802,
+    "exit_reasons": {
+     "breakeven_stop": 47,
+     "premium_stop": 579,
+     "premium_target": 187,
+     "square_off": 177
+    },
+    "horizon": "close",
+    "intrabar_stops": 287,
+    "mae_mean": -857.7477155352112,
+    "mean_fees": 54.77912998722727,
+    "mean_gross": -95.24898989898993,
+    "mean_net": -150.0281198862171,
+    "mean_net_R": -0.1922993264400438,
+    "mean_premium": 3290.0651515151517,
+    "mean_spread": 129.93796977905393,
+    "mfe_mean": 841.6723179362115,
+    "p_win": 0.301010101010101,
+    "plans": 990,
+    "replay": {
+     "ci_R": {
+      "hi": -0.004453778800484637,
+      "lo": -0.46142905487237884,
+      "p_positive": 0.046,
+      "samples": 1000
+     },
+     "expectancy_R": -0.24664392483197234,
+     "net_total": -96296.24547929346,
+     "trades": 40,
+     "unaffordable": 0
+    },
+    "sessions": 12,
+    "side": "call"
+   },
+   {
+    "bucket": "2",
+    "cost_share_of_premium": 0.03593595617088198,
+    "cvar5": -3309.51108851999,
+    "exit_reasons": {
+     "breakeven_stop": 8,
+     "premium_stop": 168,
+     "premium_target": 40,
+     "square_off": 229,
+     "time_exit": 479
+    },
+    "horizon": "120m",
+    "intrabar_stops": 80,
+    "mae_mean": -1173.215445430254,
+    "mean_fees": 62.28895147529221,
+    "mean_gross": -309.4480519480519,
+    "mean_net": -371.7370034233441,
+    "mean_net_R": -0.18609324919389272,
+    "mean_premium": 6647.286255411255,
+    "mean_spread": 174.68416953432595,
+    "mfe_mean": 886.6445339430355,
+    "p_win": 0.3712121212121212,
+    "plans": 924,
+    "replay": {
+     "ci_R": {
+      "hi": 0.09943533994951842,
+      "lo": -0.21513840734278794,
+      "p_positive": 0.286,
+      "samples": 1000
+     },
+     "expectancy_R": -0.055229745843969266,
+     "net_total": -21274.79933248597,
+     "trades": 36,
+     "unaffordable": 0
+    },
+    "sessions": 11,
+    "side": "put"
+   },
+   {
+    "bucket": "2",
+    "cost_share_of_premium": 0.036491877807290504,
+    "cvar5": -2475.2532726274467,
+    "exit_reasons": {
+     "breakeven_stop": 8,
+     "premium_stop": 91,
+     "premium_target": 74,
+     "square_off": 246,
+     "time_exit": 505
+    },
+    "horizon": "120m",
+    "intrabar_stops": 52,
+    "mae_mean": -992.1350956171336,
+    "mean_fees": 62.405042988048706,
+    "mean_gross": 110.27002164502174,
+    "mean_net": 47.86497865697298,
+    "mean_net_R": -0.012285537120713605,
+    "mean_premium": 6355.869047619048,
+    "mean_spread": 168.5312571774021,
+    "mfe_mean": 1218.6749083371228,
+    "p_win": 0.38095238095238093,
+    "plans": 924,
+    "replay": {
+     "ci_R": {
+      "hi": -0.04564573177456629,
+      "lo": -0.18359402728592736,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.11435411570503276,
+     "net_total": -48315.93840810149,
+     "trades": 37,
+     "unaffordable": 0
+    },
+    "sessions": 11,
+    "side": "call"
+   },
+   {
+    "bucket": "2",
+    "cost_share_of_premium": 0.03449135229560268,
+    "cvar5": -2650.1395730638833,
+    "exit_reasons": {
+     "breakeven_stop": 3,
+     "premium_stop": 37,
+     "premium_target": 18,
+     "square_off": 14,
+     "time_exit": 852
+    },
+    "horizon": "30m",
+    "intrabar_stops": 15,
+    "mae_mean": -739.0851705076527,
+    "mean_fees": 62.46252190524837,
+    "mean_gross": -218.78869047619045,
+    "mean_net": -281.2512123814388,
+    "mean_net_R": -0.14121593533654728,
+    "mean_premium": 6647.286255411255,
+    "mean_spread": 165.08429445298097,
+    "mfe_mean": 490.5385532293203,
+    "p_win": 0.33116883116883117,
+    "plans": 924,
+    "replay": {
+     "ci_R": {
+      "hi": 0.15189541774223192,
+      "lo": -0.14892778813205182,
+      "p_positive": 0.48,
+      "samples": 1000
+     },
+     "expectancy_R": -0.00034989612239502954,
+     "net_total": -761.6634497369741,
+     "trades": 44,
+     "unaffordable": 0
+    },
+    "sessions": 11,
+    "side": "put"
+   },
+   {
+    "bucket": "2",
+    "cost_share_of_premium": 0.035262327252435,
+    "cvar5": -2086.646457635192,
+    "exit_reasons": {
+     "premium_stop": 26,
+     "premium_target": 34,
+     "square_off": 20,
+     "time_exit": 844
+    },
+    "horizon": "30m",
+    "intrabar_stops": 11,
+    "mae_mean": -664.4158350006178,
+    "mean_fees": 62.11494602090747,
+    "mean_gross": -41.25351731601723,
+    "mean_net": -103.36846333692473,
+    "mean_net_R": -0.06785720644982322,
+    "mean_premium": 6355.869047619048,
+    "mean_spread": 160.28354979904785,
+    "mfe_mean": 624.081717812585,
+    "p_win": 0.3538961038961039,
+    "plans": 924,
+    "replay": {
+     "ci_R": {
+      "hi": -0.06402172372669118,
+      "lo": -0.33827203745492673,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.1962179315431883,
+     "net_total": -78228.24269870146,
+     "trades": 43,
+     "unaffordable": 0
+    },
+    "sessions": 11,
+    "side": "call"
+   },
+   {
+    "bucket": "2",
+    "cost_share_of_premium": 0.034934311103519126,
+    "cvar5": -3119.4339173777666,
+    "exit_reasons": {
+     "breakeven_stop": 4,
+     "premium_stop": 85,
+     "premium_target": 25,
+     "square_off": 104,
+     "time_exit": 706
+    },
+    "horizon": "60m",
+    "intrabar_stops": 35,
+    "mae_mean": -943.2095335545281,
+    "mean_fees": 62.36023523268994,
+    "mean_gross": -272.21509740259734,
+    "mean_net": -334.5753326352873,
+    "mean_net_R": -0.16743303645125213,
+    "mean_premium": 6647.286255411255,
+    "mean_spread": 168.42715588817612,
+    "mfe_mean": 678.7251216925282,
+    "p_win": 0.3463203463203463,
+    "plans": 924,
+    "replay": {
+     "ci_R": {
+      "hi": 0.1660772187117692,
+      "lo": -0.22100635439289845,
+      "p_positive": 0.372,
+      "samples": 1000
+     },
+     "expectancy_R": -0.035217948414057225,
+     "net_total": -20434.582667274986,
+     "trades": 42,
+     "unaffordable": 0
+    },
+    "sessions": 11,
+    "side": "put"
+   },
+   {
+    "bucket": "2",
+    "cost_share_of_premium": 0.03568062213945768,
+    "cvar5": -2376.037894057511,
+    "exit_reasons": {
+     "premium_stop": 53,
+     "premium_target": 55,
+     "square_off": 98,
+     "time_exit": 718
+    },
+    "horizon": "60m",
+    "intrabar_stops": 25,
+    "mae_mean": -833.831542015209,
+    "mean_fees": 62.25870131342533,
+    "mean_gross": 33.83279220779235,
+    "mean_net": -28.425909105633025,
+    "mean_net_R": -0.03656801501638253,
+    "mean_premium": 6355.869047619048,
+    "mean_spread": 163.08794955601837,
+    "mfe_mean": 896.0333434891717,
+    "p_win": 0.38095238095238093,
+    "plans": 924,
+    "replay": {
+     "ci_R": {
+      "hi": -0.06913929716845449,
+      "lo": -0.29035384812788567,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.17337448585895268,
+     "net_total": -73027.13986930046,
+     "trades": 44,
+     "unaffordable": 0
+    },
+    "sessions": 11,
+    "side": "call"
+   },
+   {
+    "bucket": "2",
+    "cost_share_of_premium": 0.03691622614975017,
+    "cvar5": -3450.258551467225,
+    "exit_reasons": {
+     "breakeven_stop": 20,
+     "premium_stop": 314,
+     "premium_target": 48,
+     "square_off": 542
+    },
+    "horizon": "close",
+    "intrabar_stops": 143,
+    "mae_mean": -1420.8336648102827,
+    "mean_fees": 62.098160599368505,
+    "mean_gross": -409.10200216450215,
+    "mean_net": -471.2001627638707,
+    "mean_net_R": -0.24234366588530928,
+    "mean_premium": 6647.286255411255,
+    "mean_spread": 181.56986553068555,
+    "mfe_mean": 1001.1209835148653,
+    "p_win": 0.38203463203463206,
+    "plans": 924,
+    "replay": {
+     "ci_R": {
+      "hi": 0.016502594523292134,
+      "lo": -0.27408888110861007,
+      "p_positive": 0.091,
+      "samples": 1000
+     },
+     "expectancy_R": -0.11367073415977355,
+     "net_total": -31056.32640819297,
+     "trades": 25,
+     "unaffordable": 0
+    },
+    "sessions": 11,
+    "side": "put"
+   },
+   {
+    "bucket": "2",
+    "cost_share_of_premium": 0.03712453912091916,
+    "cvar5": -2510.008045488351,
+    "exit_reasons": {
+     "breakeven_stop": 44,
+     "premium_stop": 134,
+     "premium_target": 79,
+     "square_off": 667
+    },
+    "horizon": "close",
+    "intrabar_stops": 78,
+    "mae_mean": -1108.3738348228487,
+    "mean_fees": 62.38394944394319,
+    "mean_gross": 99.25243506493513,
+    "mean_net": 36.8684856209919,
+    "mean_net_R": -0.012693985646866414,
+    "mean_premium": 6355.869047619048,
+    "mean_spread": 172.49218674948943,
+    "mfe_mean": 1479.5311909409256,
+    "p_win": 0.35173160173160173,
+    "plans": 924,
+    "replay": {
+     "ci_R": {
+      "hi": 0.08878533820285439,
+      "lo": -0.23640866627961038,
+      "p_positive": 0.271,
+      "samples": 1000
+     },
+     "expectancy_R": -0.05368231145788534,
+     "net_total": -15235.625557546988,
+     "trades": 20,
+     "unaffordable": 0
+    },
+    "sessions": 11,
+    "side": "call"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.03308865655595433,
+    "cvar5": -2678.5959047009555,
+    "exit_reasons": {
+     "breakeven_stop": 28,
+     "premium_stop": 180,
+     "premium_target": 184,
+     "square_off": 967,
+     "time_exit": 1545
+    },
+    "horizon": "120m",
+    "intrabar_stops": 114,
+    "mae_mean": -1016.6355341259443,
+    "mean_fees": 67.18415499054649,
+    "mean_gross": 199.6912878787878,
+    "mean_net": 132.5071328882413,
+    "mean_net_R": 0.059600755070882826,
+    "mean_premium": 8309.145488980716,
+    "mean_spread": 204.52727550387374,
+    "mfe_mean": 1308.5244330616554,
+    "p_win": 0.44421487603305787,
+    "plans": 2904,
+    "replay": {
+     "ci_R": {
+      "hi": 0.24895560532155156,
+      "lo": 0.03374828142326229,
+      "p_positive": 0.987,
+      "samples": 1000
+     },
+     "expectancy_R": 0.14623540331044343,
+     "net_total": 167065.95751554356,
+     "trades": 103,
+     "unaffordable": 0
+    },
+    "sessions": 35,
+    "side": "put"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.033066262350895735,
+    "cvar5": -3146.3749959652164,
+    "exit_reasons": {
+     "breakeven_stop": 13,
+     "premium_stop": 424,
+     "premium_target": 4,
+     "square_off": 821,
+     "time_exit": 1642
+    },
+    "horizon": "120m",
+    "intrabar_stops": 212,
+    "mae_mean": -1273.7907280353802,
+    "mean_fees": 64.91731352078615,
+    "mean_gross": -581.1403236914601,
+    "mean_net": -646.0576372122464,
+    "mean_net_R": -0.27365987874118003,
+    "mean_premium": 7981.934573002754,
+    "mean_spread": 195.77228940929848,
+    "mfe_mean": 749.9657045788625,
+    "p_win": 0.2926997245179063,
+    "plans": 2904,
+    "replay": {
+     "ci_R": {
+      "hi": -0.21982099103020258,
+      "lo": -0.37635601161938687,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.3033243408510229,
+     "net_total": -240494.35257188353,
+     "trades": 109,
+     "unaffordable": 0
+    },
+    "sessions": 35,
+    "side": "call"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.03168069066039585,
+    "cvar5": -1854.7688298197368,
+    "exit_reasons": {
+     "breakeven_stop": 6,
+     "premium_stop": 24,
+     "premium_target": 54,
+     "square_off": 101,
+     "time_exit": 2719
+    },
+    "horizon": "30m",
+    "intrabar_stops": 21,
+    "mae_mean": -658.2961647105897,
+    "mean_fees": 66.71371050757388,
+    "mean_gross": -46.03142217630868,
+    "mean_net": -112.74513268388252,
+    "mean_net_R": -0.04481429029150698,
+    "mean_premium": 8309.145488980716,
+    "mean_spread": 193.406405196917,
+    "mfe_mean": 602.4163088186002,
+    "p_win": 0.3884297520661157,
+    "plans": 2904,
+    "replay": {
+     "ci_R": {
+      "hi": 0.08921705623000296,
+      "lo": -0.026715659673520162,
+      "p_positive": 0.835,
+      "samples": 1000
+     },
+     "expectancy_R": 0.033340416596113885,
+     "net_total": 35531.15023866296,
+     "trades": 131,
+     "unaffordable": 0
+    },
+    "sessions": 35,
+    "side": "put"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.031577784359309045,
+    "cvar5": -2174.198838711702,
+    "exit_reasons": {
+     "breakeven_stop": 2,
+     "premium_stop": 43,
+     "premium_target": 1,
+     "square_off": 54,
+     "time_exit": 2804
+    },
+    "horizon": "30m",
+    "intrabar_stops": 23,
+    "mae_mean": -760.9882352646395,
+    "mean_fees": 65.39759405403875,
+    "mean_gross": -330.2800447658403,
+    "mean_net": -395.67763881987906,
+    "mean_net_R": -0.16763005201075679,
+    "mean_premium": 7981.934573002754,
+    "mean_spread": 183.72830165340739,
+    "mfe_mean": 401.48975300541923,
+    "p_win": 0.28960055096418735,
+    "plans": 2904,
+    "replay": {
+     "ci_R": {
+      "hi": -0.1616207371089681,
+      "lo": -0.24977781572652452,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.20890605711892338,
+     "net_total": -209631.66306630452,
+     "trades": 135,
+     "unaffordable": 0
+    },
+    "sessions": 35,
+    "side": "call"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.03213385466929291,
+    "cvar5": -2328.2203438220654,
+    "exit_reasons": {
+     "breakeven_stop": 13,
+     "premium_stop": 77,
+     "premium_target": 122,
+     "square_off": 435,
+     "time_exit": 2257
+    },
+    "horizon": "60m",
+    "intrabar_stops": 48,
+    "mae_mean": -838.3526060474145,
+    "mean_fees": 66.97384979264824,
+    "mean_gross": 89.8446108815426,
+    "mean_net": 22.870761088894326,
+    "mean_net_R": 0.011314072059488253,
+    "mean_premium": 8309.145488980716,
+    "mean_spread": 196.73463540095096,
+    "mfe_mean": 974.2997091667237,
+    "p_win": 0.44077134986225897,
+    "plans": 2904,
+    "replay": {
+     "ci_R": {
+      "hi": 0.14595094713562834,
+      "lo": -0.016559453002903676,
+      "p_positive": 0.895,
+      "samples": 1000
+     },
+     "expectancy_R": 0.06432138885735564,
+     "net_total": 77253.40313271043,
+     "trades": 124,
+     "unaffordable": 0
+    },
+    "sessions": 35,
+    "side": "put"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.03203038109159682,
+    "cvar5": -2750.998578426726,
+    "exit_reasons": {
+     "breakeven_stop": 3,
+     "premium_stop": 169,
+     "premium_target": 3,
+     "square_off": 343,
+     "time_exit": 2386
+    },
+    "horizon": "60m",
+    "intrabar_stops": 87,
+    "mae_mean": -1019.6829276270176,
+    "mean_fees": 65.17458281786622,
+    "mean_gross": -446.76334366391194,
+    "mean_net": -511.93792648177816,
+    "mean_net_R": -0.21691508803115658,
+    "mean_premium": 7981.934573002754,
+    "mean_spread": 187.76072037513367,
+    "mfe_mean": 589.70415990731,
+    "p_win": 0.299931129476584,
+    "plans": 2904,
+    "replay": {
+     "ci_R": {
+      "hi": -0.18492078440297172,
+      "lo": -0.27337943771707424,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.23130639207977385,
+     "net_total": -224839.616899209,
+     "trades": 130,
+     "unaffordable": 0
+    },
+    "sessions": 35,
+    "side": "call"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.03440050157712456,
+    "cvar5": -2873.6997262767472,
+    "exit_reasons": {
+     "breakeven_stop": 70,
+     "premium_stop": 331,
+     "premium_target": 206,
+     "square_off": 2297
+    },
+    "horizon": "close",
+    "intrabar_stops": 203,
+    "mae_mean": -1149.2375041089147,
+    "mean_fees": 67.4414292321875,
+    "mean_gross": 334.0708505509641,
+    "mean_net": 266.6294213187766,
+    "mean_net_R": 0.11566140483911945,
+    "mean_premium": 8309.145488980716,
+    "mean_spread": 215.52631787051413,
+    "mfe_mean": 1553.4412187712894,
+    "p_win": 0.48863636363636365,
+    "plans": 2904,
+    "replay": {
+     "ci_R": {
+      "hi": 0.49067763090113675,
+      "lo": 0.1933348747707036,
+      "p_positive": 1.0,
+      "samples": 1000
+     },
+     "expectancy_R": 0.3491245007438646,
+     "net_total": 304077.91970755253,
+     "trades": 67,
+     "unaffordable": 0
+    },
+    "sessions": 35,
+    "side": "put"
+   },
+   {
+    "bucket": "3-5",
+    "cost_share_of_premium": 0.034576703177462996,
+    "cvar5": -3328.5770180228124,
+    "exit_reasons": {
+     "breakeven_stop": 83,
+     "premium_stop": 746,
+     "premium_target": 6,
+     "square_off": 2069
+    },
+    "horizon": "close",
+    "intrabar_stops": 379,
+    "mae_mean": -1473.1068260018938,
+    "mean_fees": 64.6784027192402,
+    "mean_gross": -705.9282885674933,
+    "mean_net": -770.6066912867334,
+    "mean_net_R": -0.3277540705287635,
+    "mean_premium": 7981.934573002754,
+    "mean_spread": 207.42338378756557,
+    "mfe_mean": 868.3514710874575,
+    "p_win": 0.2599862258953168,
+    "plans": 2904,
+    "replay": {
+     "ci_R": {
+      "hi": -0.3761236655518113,
+      "lo": -0.59147198507572,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.497525514366808,
+     "net_total": -243091.80187371353,
+     "trades": 71,
+     "unaffordable": 0
+    },
+    "sessions": 35,
+    "side": "call"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.029189131450262713,
+    "cvar5": -4195.725267538714,
+    "exit_reasons": {
+     "breakeven_stop": 11,
+     "premium_stop": 193,
+     "premium_target": 90,
+     "square_off": 2402,
+     "time_exit": 4696
+    },
+    "horizon": "120m",
+    "intrabar_stops": 116,
+    "mae_mean": -1391.714858705379,
+    "mean_fees": 83.03898175163819,
+    "mean_gross": -214.19294507575736,
+    "mean_net": -297.23192682739557,
+    "mean_net_R": -0.06588806997254748,
+    "mean_premium": 15365.839995941558,
+    "mean_spread": 350.9230289333353,
+    "mfe_mean": 1184.5705344754408,
+    "p_win": 0.3777056277056277,
+    "plans": 7392,
+    "replay": {
+     "ci_R": {
+      "hi": 0.058625653184083984,
+      "lo": -0.05675300914483603,
+      "p_positive": 0.496,
+      "samples": 1000
+     },
+     "expectancy_R": 0.0015994103622608373,
+     "net_total": -941.4864838160283,
+     "trades": 216,
+     "unaffordable": 0
+    },
+    "sessions": 56,
+    "side": "put"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.029262372555581284,
+    "cvar5": -4436.102179750904,
+    "exit_reasons": {
+     "premium_stop": 264,
+     "premium_target": 54,
+     "square_off": 2308,
+     "time_exit": 4766
+    },
+    "horizon": "120m",
+    "intrabar_stops": 123,
+    "mae_mean": -1473.672574720352,
+    "mean_fees": 80.51797987533848,
+    "mean_gross": -431.76237824675314,
+    "mean_net": -512.2803581220916,
+    "mean_net_R": -0.1177643691770744,
+    "mean_premium": 14473.768296807359,
+    "mean_spread": 330.2953031968673,
+    "mfe_mean": 1024.5307870091767,
+    "p_win": 0.33292748917748916,
+    "plans": 7392,
+    "replay": {
+     "ci_R": {
+      "hi": -0.08582038471024411,
+      "lo": -0.20339049135460835,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.14795520056779218,
+     "net_total": -220056.92671280657,
+     "trades": 218,
+     "unaffordable": 207
+    },
+    "sessions": 56,
+    "side": "call"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.028796288315989155,
+    "cvar5": -2644.187029297159,
+    "exit_reasons": {
+     "breakeven_stop": 3,
+     "premium_stop": 18,
+     "premium_target": 30,
+     "square_off": 98,
+     "time_exit": 7243
+    },
+    "horizon": "30m",
+    "intrabar_stops": 11,
+    "mae_mean": -862.2263474705487,
+    "mean_fees": 82.89760602907772,
+    "mean_gross": -288.03635687229416,
+    "mean_net": -370.93396290137196,
+    "mean_net_R": -0.0830995384017408,
+    "mean_premium": 15365.839995941558,
+    "mean_spread": 346.3273918483377,
+    "mfe_mean": 499.82722976948475,
+    "p_win": 0.3026244588744589,
+    "plans": 7392,
+    "replay": {
+     "ci_R": {
+      "hi": 0.01174562820713428,
+      "lo": -0.0726603711525023,
+      "p_positive": 0.098,
+      "samples": 1000
+     },
+     "expectancy_R": -0.033969753485137394,
+     "net_total": -75903.51103988955,
+     "trades": 222,
+     "unaffordable": 0
+    },
+    "sessions": 56,
+    "side": "put"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.02895314013978532,
+    "cvar5": -2569.213465706208,
+    "exit_reasons": {
+     "premium_stop": 12,
+     "premium_target": 11,
+     "square_off": 123,
+     "time_exit": 7246
+    },
+    "horizon": "30m",
+    "intrabar_stops": 6,
+    "mae_mean": -887.1172516347071,
+    "mean_fees": 80.64358769323357,
+    "mean_gross": -366.15486336580074,
+    "mean_net": -446.7984510590342,
+    "mean_net_R": -0.10490347091541768,
+    "mean_premium": 14473.768296807359,
+    "mean_spread": 326.57923359569725,
+    "mfe_mean": 448.3560009289182,
+    "p_win": 0.2708333333333333,
+    "plans": 7392,
+    "replay": {
+     "ci_R": {
+      "hi": -0.10837514844735961,
+      "lo": -0.1755782570540773,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.1425292758444889,
+     "net_total": -213507.3086659866,
+     "trades": 224,
+     "unaffordable": 76
+    },
+    "sessions": 56,
+    "side": "call"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.028964717167533904,
+    "cvar5": -3393.0653981281635,
+    "exit_reasons": {
+     "breakeven_stop": 5,
+     "premium_stop": 67,
+     "premium_target": 39,
+     "square_off": 929,
+     "time_exit": 6352
+    },
+    "horizon": "60m",
+    "intrabar_stops": 43,
+    "mae_mean": -1110.425091581871,
+    "mean_fees": 82.94793027528998,
+    "mean_gross": -261.7509807900431,
+    "mean_net": -344.6989110653331,
+    "mean_net_R": -0.07723968213990956,
+    "mean_premium": 15365.839995941558,
+    "mean_spread": 348.27856295680203,
+    "mfe_mean": 825.2243161079974,
+    "p_win": 0.3621482683982684,
+    "plans": 7392,
+    "replay": {
+     "ci_R": {
+      "hi": 0.004413554832482601,
+      "lo": -0.09385032005551631,
+      "p_positive": 0.066,
+      "samples": 1000
+     },
+     "expectancy_R": -0.0464487066424577,
+     "net_total": -86570.71081492802,
+     "trades": 222,
+     "unaffordable": 0
+    },
+    "sessions": 56,
+    "side": "put"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.028992324613306666,
+    "cvar5": -3351.6263662564184,
+    "exit_reasons": {
+     "premium_stop": 61,
+     "premium_target": 20,
+     "square_off": 893,
+     "time_exit": 6418
+    },
+    "horizon": "60m",
+    "intrabar_stops": 28,
+    "mae_mean": -1167.5558201532597,
+    "mean_fees": 80.5620745045276,
+    "mean_gross": -408.73085768398255,
+    "mean_net": -489.2929321885102,
+    "mean_net_R": -0.11477255285030113,
+    "mean_premium": 14473.768296807359,
+    "mean_spread": 326.96278052293366,
+    "mfe_mean": 710.847154716713,
+    "p_win": 0.3058712121212121,
+    "plans": 7392,
+    "replay": {
+     "ci_R": {
+      "hi": -0.1042981643378784,
+      "lo": -0.19166943389457197,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.1512423934139601,
+     "net_total": -226312.2079790206,
+     "trades": 221,
+     "unaffordable": 264
+    },
+    "sessions": 56,
+    "side": "call"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.02965542915305852,
+    "cvar5": -4855.684714880666,
+    "exit_reasons": {
+     "breakeven_stop": 21,
+     "premium_stop": 427,
+     "premium_target": 112,
+     "square_off": 6832
+    },
+    "horizon": "close",
+    "intrabar_stops": 240,
+    "mae_mean": -1663.8908879379305,
+    "mean_fees": 83.27052064251299,
+    "mean_gross": -93.25547889610368,
+    "mean_net": -176.5259995386167,
+    "mean_net_R": -0.04374478500072529,
+    "mean_premium": 15365.839995941558,
+    "mean_spread": 356.0566508734593,
+    "mfe_mean": 1459.1420640938736,
+    "p_win": 0.4211309523809524,
+    "plans": 7392,
+    "replay": {
+     "ci_R": {
+      "hi": 0.15880026416138918,
+      "lo": -0.03164606723116779,
+      "p_positive": 0.875,
+      "samples": 1000
+     },
+     "expectancy_R": 0.06691536355662321,
+     "net_total": 59148.69986314598,
+     "trades": 124,
+     "unaffordable": 0
+    },
+    "sessions": 56,
+    "side": "put"
+   },
+   {
+    "bucket": "6+",
+    "cost_share_of_premium": 0.029582217250522177,
+    "cvar5": -4967.0183014527975,
+    "exit_reasons": {
+     "breakeven_stop": 5,
+     "premium_stop": 573,
+     "premium_target": 67,
+     "square_off": 6747
+    },
+    "horizon": "close",
+    "intrabar_stops": 275,
+    "mae_mean": -1761.7940081973913,
+    "mean_fees": 80.35102018209984,
+    "mean_gross": -518.9688176406925,
+    "mean_net": -599.3198378227922,
+    "mean_net_R": -0.13211811031745757,
+    "mean_premium": 14473.768296807359,
+    "mean_spread": 334.16452464813443,
+    "mfe_mean": 1272.8606209238412,
+    "p_win": 0.32399891774891776,
+    "plans": 7392,
+    "replay": {
+     "ci_R": {
+      "hi": -0.1247817326771196,
+      "lo": -0.29838123528858834,
+      "p_positive": 0.0,
+      "samples": 1000
+     },
+     "expectancy_R": -0.2137072272959727,
+     "net_total": -201429.66986761452,
+     "trades": 137,
+     "unaffordable": 0
+    },
+    "sessions": 56,
+    "side": "call"
+   }
+  ],
+  "evidence": "modelled",
+  "excluded_sessions_held_for_real_lock": [],
+  "exclusions": {},
+  "iv_sources": {
+   "bhavcopy": 26400
+  },
+  "label": "scenario analysis only",
+  "layout": "1be9c193c19c03f0",
+  "period": [
+   "2026-07-20",
+   "2026-10-07"
+  ],
+  "plan_outcomes": 105600,
+  "sessions": 56,
+  "trials": [
+   {
+    "bucket": "0",
+    "candidate": "plan_logit",
+    "config": "30m|0|plan_logit",
+    "config_hash": "ac0e09975b03b30b",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 264,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.02,
+      "test_rows": 396,
+      "train_rows": 792
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.02,
+      "test_rows": 132,
+      "train_rows": 1188
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.02,
+      "test_rows": 264,
+      "train_rows": 1320
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1584
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "30m",
+    "metrics": {
+     "abstention": 0.9722,
+     "blocked": {
+      "2 positions already open": 1,
+      "4 trades already today": 168,
+      "already holding a NIFTY position": 14,
+      "cooling off after 0 straight losses unti": 6,
+      "cooling off after 2 straight losses unti": 9
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -1.7327791306221436,
+       "trades": 2
+      },
+      "put": {
+       "expectancy_R": 0.18734397300918376,
+       "trades": 9
+      }
+     },
+     "ci_R": {
+      "hi": 0.9603125559620701,
+      "lo": -1.0240382561064811,
+      "p_positive": 0.32896064581231077,
+      "samples": 991
+     },
+     "cvar5": -8932.69546021,
+     "decision_points": 594,
+     "dsr": 0.07850846109908115,
+     "ece_p_win": 0.26575196348218766,
+     "ev_rank_ic": 0.1568547285606,
+     "exit_reasons": {
+      "premium_stop": 7,
+      "premium_target": 3,
+      "time_exit": 1
+     },
+     "expectancy": -561.6369114245452,
+     "expectancy_R": -0.16176931856014853,
+     "fees_total": 963.00602567,
+     "folds_fitted": 4,
+     "free_points": 396,
+     "gross_total": -5214.9999999999945,
+     "hold_min_mean": 16.363636363636363,
+     "max_drawdown": -19652.15225367,
+     "median_R": -1.0466554365644218,
+     "net_total": -6178.006025669998,
+     "p_win": 0.36363636363636365,
+     "positive_folds": 0.25,
+     "premium_mean": 17487.272727272728,
+     "profit_factor": 0.8409444006803954,
+     "sessions": 41,
+     "sharpe_per_trade": -0.1022970091875701,
+     "trade_days": 4,
+     "trades": 11,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "1",
+    "candidate": "plan_logit",
+    "config": "30m|1|plan_logit",
+    "config_hash": "50f8e60fed3a6573",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 264,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 792
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.02,
+      "test_rows": 264,
+      "train_rows": 1188
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1452
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1584
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": true,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "30m",
+    "metrics": {
+     "abstention": 0.9836,
+     "blocked": {
+      "4 trades already today": 51,
+      "already holding a NIFTY position": 44,
+      "cooling off after 2 straight losses unti": 12
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.42145923887556286,
+       "trades": 3
+      },
+      "put": {
+       "expectancy_R": 0.24707721098691562,
+       "trades": 5
+      }
+     },
+     "ci_R": {
+      "hi": 0.23284033855575065,
+      "lo": -0.2400882539787782,
+      "p_positive": 0.37557603686635943,
+      "samples": 868
+     },
+     "cvar5": -8909.321983272997,
+     "decision_points": 594,
+     "dsr": null,
+     "ece_p_win": 0.18124350416152535,
+     "ev_rank_ic": -0.07466239511883312,
+     "exit_reasons": {
+      "premium_stop": 1,
+      "premium_target": 1,
+      "time_exit": 6
+     },
+     "expectancy": 515.2092838568753,
+     "expectancy_R": -0.0036239577115137755,
+     "fees_total": 967.825729145,
+     "folds_fitted": 4,
+     "free_points": 487,
+     "gross_total": 5089.500000000002,
+     "hold_min_mean": 44.375,
+     "max_drawdown": -19620.303367474997,
+     "median_R": -0.12145567233865825,
+     "net_total": 4121.674270855003,
+     "p_win": 0.375,
+     "positive_folds": 0.25,
+     "premium_mean": 30758.0,
+     "profit_factor": 1.1884949353140155,
+     "sessions": 41,
+     "sharpe_per_trade": -0.003913572618099122,
+     "trade_days": 2,
+     "trades": 8,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "2",
+    "candidate": "plan_logit",
+    "config": "30m|2|plan_logit",
+    "config_hash": "0cbec49769a84352",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 132,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 396,
+      "train_rows": 660,
+      "why": "too little data (660 plan rows over 4 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 264,
+      "train_rows": 1056
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1320
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1452
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "30m",
+    "metrics": {
+     "abstention": 1.0,
+     "blocked": {},
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null
+     },
+     "decision_points": 396,
+     "dsr": null,
+     "ece_p_win": 0.17330900152305323,
+     "ev_rank_ic": -0.020729889205481467,
+     "expectancy": null,
+     "expectancy_R": null,
+     "folds_fitted": 3,
+     "free_points": 396,
+     "net_total": 0.0,
+     "p_win": null,
+     "positive_folds": 0.0,
+     "profit_factor": null,
+     "sessions": 41,
+     "trade_days": 0,
+     "trades": 0,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "3-5",
+    "candidate": "plan_logit",
+    "config": "30m|3-5|plan_logit",
+    "config_hash": "3237f2f1cce5fa13",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.02,
+      "test_rows": 1188,
+      "train_rows": 1584
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 528,
+      "train_rows": 2772
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 660,
+      "train_rows": 3300
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.1,
+      "test_rows": 1188,
+      "train_rows": 3960
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.05,
+      "test_rows": 660,
+      "train_rows": 5148
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "30m",
+    "metrics": {
+     "abstention": 0.9917,
+     "blocked": {
+      "2 positions already open": 34,
+      "4 trades already today": 231,
+      "already holding a BANKNIFTY position": 21,
+      "already holding a NIFTY position": 18,
+      "cooling off after 0 straight losses unti": 6,
+      "cooling off after 2 straight losses unti": 3
+     },
+     "by_side": {
+      "put": {
+       "expectancy_R": 0.010005150724054982,
+       "trades": 15
+      }
+     },
+     "ci_R": {
+      "hi": 0.13298004032646385,
+      "lo": -0.10486981604116882,
+      "p_positive": 0.5405128205128205,
+      "samples": 975
+     },
+     "cvar5": -9732.045487980004,
+     "decision_points": 2112,
+     "dsr": 0.11194222028444906,
+     "ece_p_win": 0.13815720976164383,
+     "ev_rank_ic": 0.056212831092435016,
+     "exit_reasons": {
+      "time_exit": 15
+     },
+     "expectancy": 64.2124417080336,
+     "expectancy_R": 0.010005150724054982,
+     "fees_total": 1942.0633743795006,
+     "folds_fitted": 5,
+     "free_points": 1799,
+     "gross_total": 2905.2500000000023,
+     "hold_min_mean": 38.0,
+     "max_drawdown": -9732.045487980004,
+     "median_R": 0.08005010034637147,
+     "net_total": 963.186625620504,
+     "p_win": 0.7333333333333333,
+     "positive_folds": 0.2,
+     "premium_mean": 34717.13333333333,
+     "profit_factor": 1.0590130320693623,
+     "sessions": 41,
+     "sharpe_per_trade": 0.03295436569329964,
+     "trade_days": 4,
+     "trades": 15,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "6+",
+    "candidate": "plan_logit",
+    "config": "30m|6+|plan_logit",
+    "config_hash": "b4b07ecd7677f7ef",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2376,
+      "train_rows": 3960
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 6336
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 8448
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 10560
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 2112,
+      "train_rows": 12672
+     }
+    ],
+    "gates": {
+     "ci_lo_R": true,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": true,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "30m",
+    "metrics": {
+     "abstention": 0.9977,
+     "blocked": {
+      "2 positions already open": 20,
+      "4 trades already today": 98,
+      "already holding a BANKNIFTY position": 34,
+      "already holding a NIFTY position": 12,
+      "cooling off after 2 straight losses unti": 12,
+      "cooling off after 3 straight losses unti": 12
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": 0.11521128870983371,
+       "trades": 12
+      }
+     },
+     "ci_R": {
+      "hi": 0.5197592012148572,
+      "lo": 0.005366797936327927,
+      "p_positive": 0.9932356257046223,
+      "samples": 887
+     },
+     "cvar5": -2405.156711922999,
+     "decision_points": 5412,
+     "dsr": 0.37001452577382865,
+     "ece_p_win": 0.052284667541126977,
+     "ev_rank_ic": 0.0490644897424267,
+     "exit_reasons": {
+      "square_off": 1,
+      "time_exit": 11
+     },
+     "expectancy": 950.093539787334,
+     "expectancy_R": 0.11521128870983371,
+     "fees_total": 1324.3775225519998,
+     "folds_fitted": 5,
+     "free_points": 5224,
+     "gross_total": 12725.500000000007,
+     "hold_min_mean": 37.5,
+     "max_drawdown": -6275.2447188749975,
+     "median_R": 0.16473863802450484,
+     "net_total": 11401.122477448007,
+     "p_win": 0.5833333333333334,
+     "positive_folds": 0.2,
+     "premium_mean": 25914.6875,
+     "profit_factor": 2.423299261113026,
+     "sessions": 41,
+     "sharpe_per_trade": 0.29262994908226403,
+     "trade_days": 4,
+     "trades": 12,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "0",
+    "candidate": "plan_logit",
+    "config": "60m|0|plan_logit",
+    "config_hash": "32e8674da0a961b5",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 264,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.15,
+      "test_rows": 396,
+      "train_rows": 792
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1188
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 264,
+      "train_rows": 1320
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 396,
+      "train_rows": 1584
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": true,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "60m",
+    "metrics": {
+     "abstention": 0.9259,
+     "blocked": {
+      "2 positions already open": 2,
+      "4 trades already today": 339,
+      "already holding a NIFTY position": 16,
+      "cooling off after 0 straight losses unti": 6,
+      "cooling off after 2 straight losses unti": 9,
+      "cooling off after 3 straight losses unti": 6
+     },
+     "by_side": {
+      "put": {
+       "expectancy_R": 0.12368764669935339,
+       "trades": 16
+      }
+     },
+     "ci_R": {
+      "hi": 1.4143311186430905,
+      "lo": -0.8156068818140045,
+      "p_positive": 0.5564516129032258,
+      "samples": 992
+     },
+     "cvar5": -9482.440149725,
+     "decision_points": 594,
+     "dsr": 0.1154781561874974,
+     "ece_p_win": 0.5103531720819882,
+     "ev_rank_ic": -0.11026701429158678,
+     "exit_reasons": {
+      "breakeven_stop": 2,
+      "premium_stop": 9,
+      "premium_target": 5
+     },
+     "expectancy": 801.5339540465638,
+     "expectancy_R": 0.12368764669935339,
+     "fees_total": 1637.9567352550002,
+     "folds_fitted": 4,
+     "free_points": 216,
+     "gross_total": 14462.500000000022,
+     "hold_min_mean": 17.1875,
+     "max_drawdown": -29289.825248754998,
+     "median_R": -1.0440759219731568,
+     "net_total": 12824.543264745022,
+     "p_win": 0.3125,
+     "positive_folds": 0.25,
+     "premium_mean": 22653.75,
+     "profit_factor": 1.1774520246235356,
+     "sessions": 41,
+     "sharpe_per_trade": 0.07184135376557664,
+     "trade_days": 4,
+     "trades": 16,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "1",
+    "candidate": "plan_logit",
+    "config": "60m|1|plan_logit",
+    "config_hash": "d4f4f15a849bf97c",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 264,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.1,
+      "test_rows": 396,
+      "train_rows": 792
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.05,
+      "test_rows": 264,
+      "train_rows": 1188
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1452
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1584
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "60m",
+    "metrics": {
+     "abstention": 0.9565,
+     "blocked": {
+      "2 positions already open": 16,
+      "4 trades already today": 43,
+      "already holding a BANKNIFTY position": 5,
+      "already holding a NIFTY position": 99,
+      "cooling off after 2 straight losses unti": 11,
+      "cooling off after 3 straight losses unti": 6,
+      "daily loss limit hit (-5.07% ≤ -5.0%)": 92
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": 0.04676077516795529,
+       "trades": 8
+      },
+      "put": {
+       "expectancy_R": -0.04897754854972467,
+       "trades": 6
+      }
+     },
+     "ci_R": {
+      "hi": 0.8094009568255558,
+      "lo": -0.7448780957966806,
+      "p_positive": 0.5,
+      "samples": 990
+     },
+     "cvar5": -15043.55869606,
+     "decision_points": 594,
+     "dsr": 0.09412777381520321,
+     "ece_p_win": 0.3205641540712015,
+     "ev_rank_ic": -0.002311207271136181,
+     "exit_reasons": {
+      "premium_stop": 5,
+      "premium_target": 3,
+      "time_exit": 6
+     },
+     "expectancy": -1233.7761591243914,
+     "expectancy_R": 0.005730065003235331,
+     "fees_total": 1608.6162277414999,
+     "folds_fitted": 4,
+     "free_points": 322,
+     "gross_total": -15664.249999999978,
+     "hold_min_mean": 54.285714285714285,
+     "max_drawdown": -40436.615033946495,
+     "median_R": -0.5344279007522232,
+     "net_total": -17272.86622774148,
+     "p_win": 0.2857142857142857,
+     "positive_folds": 0.25,
+     "premium_mean": 29606.303571428572,
+     "profit_factor": 0.7657275780032956,
+     "sessions": 41,
+     "sharpe_per_trade": 0.004087071089014596,
+     "trade_days": 4,
+     "trades": 14,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "2",
+    "candidate": "plan_logit",
+    "config": "60m|2|plan_logit",
+    "config_hash": "0d2e289a9cc209f5",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 132,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 396,
+      "train_rows": 660,
+      "why": "too little data (660 plan rows over 4 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 264,
+      "train_rows": 1056
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.05,
+      "test_rows": 132,
+      "train_rows": 1320
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1452
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "60m",
+    "metrics": {
+     "abstention": 0.9522,
+     "blocked": {
+      "4 trades already today": 47,
+      "already holding a NIFTY position": 113,
+      "cooling off after 2 straight losses unti": 6
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.07986018194778215,
+       "trades": 9
+      },
+      "put": {
+       "expectancy_R": -0.15420911376529448,
+       "trades": 2
+      }
+     },
+     "ci_R": {
+      "hi": -0.02621942174424008,
+      "lo": -0.16667505043112218,
+      "p_positive": 0.0,
+      "samples": 958
+     },
+     "cvar5": -5838.132115799998,
+     "decision_points": 396,
+     "dsr": 0.016013831776838457,
+     "ece_p_win": 0.20680028294844635,
+     "ev_rank_ic": 0.10294374117192195,
+     "exit_reasons": {
+      "time_exit": 11
+     },
+     "expectancy": -925.181142425635,
+     "expectancy_R": -0.09337816955096621,
+     "fees_total": 1382.492566682,
+     "folds_fitted": 3,
+     "free_points": 230,
+     "gross_total": -8794.499999999982,
+     "hold_min_mean": 66.36363636363636,
+     "max_drawdown": -16121.510079338992,
+     "median_R": 0.041091710752099,
+     "net_total": -10176.992566681985,
+     "p_win": 0.5454545454545454,
+     "positive_folds": 0.0,
+     "premium_mean": 33916.704545454544,
+     "profit_factor": 0.5242946680563059,
+     "sessions": 41,
+     "sharpe_per_trade": -0.29009465274066903,
+     "trade_days": 3,
+     "trades": 11,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "3-5",
+    "candidate": "plan_logit",
+    "config": "60m|3-5|plan_logit",
+    "config_hash": "37ba1cb65b312278",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 1188,
+      "train_rows": 1584
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.02,
+      "test_rows": 528,
+      "train_rows": 2772
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.02,
+      "test_rows": 660,
+      "train_rows": 3300
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 1188,
+      "train_rows": 3960
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.05,
+      "test_rows": 660,
+      "train_rows": 5148
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "60m",
+    "metrics": {
+     "abstention": 0.9847,
+     "blocked": {
+      "4 trades already today": 56,
+      "already holding a NIFTY position": 333,
+      "cooling off after 2 straight losses unti": 18,
+      "cooling off after 3 straight losses unti": 6
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.07968415822073083,
+       "trades": 4
+      },
+      "put": {
+       "expectancy_R": -0.16665709475597237,
+       "trades": 22
+      }
+     },
+     "ci_R": {
+      "hi": -0.04720924574530253,
+      "lo": -0.24389474692849017,
+      "p_positive": 0.017,
+      "samples": 1000
+     },
+     "cvar5": -7792.508218911247,
+     "decision_points": 2112,
+     "dsr": 0.0004197153061999972,
+     "ece_p_win": 0.14140264512163003,
+     "ev_rank_ic": 0.07316826585730025,
+     "exit_reasons": {
+      "square_off": 2,
+      "time_exit": 24
+     },
+     "expectancy": -1508.6743241969998,
+     "expectancy_R": -0.15327664298131982,
+     "fees_total": 3118.0324291220004,
+     "folds_fitted": 5,
+     "free_points": 1699,
+     "gross_total": -36107.49999999999,
+     "hold_min_mean": 77.6923076923077,
+     "max_drawdown": -41260.040167521016,
+     "median_R": -0.11969699170442324,
+     "net_total": -39225.532429121995,
+     "p_win": 0.3076923076923077,
+     "positive_folds": 0.0,
+     "premium_mean": 31954.625,
+     "profit_factor": 0.3313298202886695,
+     "sessions": 41,
+     "sharpe_per_trade": -0.4151731394024426,
+     "trade_days": 9,
+     "trades": 26,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "6+",
+    "candidate": "plan_logit",
+    "config": "60m|6+|plan_logit",
+    "config_hash": "9a22a5dc9d8fb1e5",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2376,
+      "train_rows": 3960
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 6336
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 8448
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 10560
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 12672
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "60m",
+    "metrics": {
+     "abstention": 1.0,
+     "blocked": {},
+     "ci_R": {
+      "hi": null,
+      "lo": null,
+      "p_positive": null
+     },
+     "decision_points": 5412,
+     "dsr": null,
+     "ece_p_win": 0.07940927435204213,
+     "ev_rank_ic": -0.0028236879458981654,
+     "expectancy": null,
+     "expectancy_R": null,
+     "folds_fitted": 5,
+     "free_points": 5412,
+     "net_total": 0.0,
+     "p_win": null,
+     "positive_folds": 0.0,
+     "profit_factor": null,
+     "sessions": 41,
+     "trade_days": 0,
+     "trades": 0,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "0",
+    "candidate": "plan_logit",
+    "config": "120m|0|plan_logit",
+    "config_hash": "31ebb459118e79ca",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 264,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.1,
+      "test_rows": 396,
+      "train_rows": 792
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1188
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 264,
+      "train_rows": 1320
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 396,
+      "train_rows": 1584
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": true,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "120m",
+    "metrics": {
+     "abstention": 0.9252,
+     "blocked": {
+      "2 positions already open": 2,
+      "4 trades already today": 338,
+      "already holding a NIFTY position": 19,
+      "cooling off after 0 straight losses unti": 6,
+      "cooling off after 2 straight losses unti": 9,
+      "cooling off after 3 straight losses unti": 6
+     },
+     "by_side": {
+      "put": {
+       "expectancy_R": 0.11516195812112462,
+       "trades": 16
+      }
+     },
+     "ci_R": {
+      "hi": 1.4143311186430905,
+      "lo": -0.8224274326765876,
+      "p_positive": 0.5564516129032258,
+      "samples": 992
+     },
+     "cvar5": -8932.69546021,
+     "decision_points": 594,
+     "dsr": 0.11224024929899962,
+     "ece_p_win": 0.5107835598681909,
+     "ev_rank_ic": 0.12382939974229316,
+     "exit_reasons": {
+      "breakeven_stop": 2,
+      "premium_stop": 9,
+      "premium_target": 5
+     },
+     "expectancy": 922.0395444912515,
+     "expectancy_R": 0.11516195812112462,
+     "fees_total": 1627.3672881400003,
+     "folds_fitted": 4,
+     "free_points": 214,
+     "gross_total": 16380.000000000022,
+     "hold_min_mean": 18.4375,
+     "max_drawdown": -29289.825248754998,
+     "median_R": -1.0440759219731568,
+     "net_total": 14752.632711860024,
+     "p_win": 0.3125,
+     "positive_folds": 0.25,
+     "premium_mean": 22275.9375,
+     "profit_factor": 1.209726059619115,
+     "sessions": 41,
+     "sharpe_per_trade": 0.06661594107693554,
+     "trade_days": 4,
+     "trades": 16,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "1",
+    "candidate": "plan_logit",
+    "config": "120m|1|plan_logit",
+    "config_hash": "50526e58f3bd5be4",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 264,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 396,
+      "train_rows": 792
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.3,
+      "test_rows": 264,
+      "train_rows": 1188
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1452
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1584
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "120m",
+    "metrics": {
+     "abstention": 0.9498,
+     "blocked": {
+      "2 positions already open": 6,
+      "4 trades already today": 143,
+      "already holding a BANKNIFTY position": 1,
+      "already holding a NIFTY position": 138,
+      "cooling off after 2 straight losses unti": 18,
+      "daily loss limit hit (-6.45% ≤ -5.0%)": 9
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.5286132384746859,
+       "trades": 9
+      },
+      "put": {
+       "expectancy_R": -0.1217818261269985,
+       "trades": 5
+      }
+     },
+     "ci_R": {
+      "hi": 0.4336204454487966,
+      "lo": -1.079692096561732,
+      "p_positive": 0.16767676767676767,
+      "samples": 990
+     },
+     "cvar5": -16180.032307273501,
+     "decision_points": 594,
+     "dsr": 0.031169091387762502,
+     "ece_p_win": 0.32494019699300747,
+     "ev_rank_ic": -0.068321984182378,
+     "exit_reasons": {
+      "premium_stop": 8,
+      "premium_target": 2,
+      "square_off": 1,
+      "time_exit": 3
+     },
+     "expectancy": -3889.6034130337493,
+     "expectancy_R": -0.38331630549336904,
+     "fees_total": 1499.6977824725002,
+     "folds_fitted": 4,
+     "free_points": 279,
+     "gross_total": -52954.74999999999,
+     "hold_min_mean": 72.5,
+     "max_drawdown": -57686.963231653,
+     "median_R": -1.043076289152198,
+     "net_total": -54454.44778247249,
+     "p_win": 0.21428571428571427,
+     "positive_folds": 0.0,
+     "premium_mean": 28470.125,
+     "profit_factor": 0.4307620360447458,
+     "sessions": 41,
+     "sharpe_per_trade": -0.29417856989635505,
+     "trade_days": 4,
+     "trades": 14,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "2",
+    "candidate": "plan_logit",
+    "config": "120m|2|plan_logit",
+    "config_hash": "296251910b310425",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 132,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 396,
+      "train_rows": 660,
+      "why": "too little data (660 plan rows over 4 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 264,
+      "train_rows": 1056
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1320
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 396,
+      "train_rows": 1452
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "120m",
+    "metrics": {
+     "abstention": 0.825,
+     "blocked": {
+      "2 positions already open": 46,
+      "4 trades already today": 103,
+      "already holding a NIFTY position": 161,
+      "cooling off after 2 straight losses unti": 6
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.47853739862917277,
+       "trades": 8
+      },
+      "put": {
+       "expectancy_R": 0.2047368892528675,
+       "trades": 6
+      }
+     },
+     "ci_R": {
+      "hi": 0.09041434821756403,
+      "lo": -0.46182547014844655,
+      "p_positive": 0.12096774193548387,
+      "samples": 992
+     },
+     "cvar5": -10584.2096337025,
+     "decision_points": 396,
+     "dsr": 0.05307372889725357,
+     "ece_p_win": 0.4247402743102599,
+     "ev_rank_ic": -0.1264341175488325,
+     "exit_reasons": {
+      "premium_stop": 2,
+      "premium_target": 1,
+      "square_off": 2,
+      "time_exit": 9
+     },
+     "expectancy": -1966.998613270749,
+     "expectancy_R": -0.18570556096544122,
+     "fees_total": 1695.2305857905,
+     "folds_fitted": 3,
+     "free_points": 80,
+     "gross_total": -25842.749999999985,
+     "hold_min_mean": 106.07142857142857,
+     "max_drawdown": -34628.823902262,
+     "median_R": -0.2855995644516714,
+     "net_total": -27537.980585790487,
+     "p_win": 0.2857142857142857,
+     "positive_folds": 0.0,
+     "premium_mean": 32818.875,
+     "profit_factor": 0.507321644483219,
+     "sessions": 41,
+     "sharpe_per_trade": -0.2040610829288955,
+     "trade_days": 4,
+     "trades": 14,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "3-5",
+    "candidate": "plan_logit",
+    "config": "120m|3-5|plan_logit",
+    "config_hash": "13d9cd2e8c46db28",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 1188,
+      "train_rows": 1584
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 528,
+      "train_rows": 2772
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.1,
+      "test_rows": 660,
+      "train_rows": 3300
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.3,
+      "test_rows": 1188,
+      "train_rows": 3960
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 660,
+      "train_rows": 5148
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": true,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "120m",
+    "metrics": {
+     "abstention": 0.9869,
+     "blocked": {
+      "2 positions already open": 67,
+      "4 trades already today": 70,
+      "already holding a BANKNIFTY position": 19,
+      "already holding a NIFTY position": 321,
+      "cooling off after 2 straight losses unti": 30
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.13399680512273957,
+       "trades": 2
+      },
+      "put": {
+       "expectancy_R": 0.13974878771989271,
+       "trades": 19
+      }
+     },
+     "ci_R": {
+      "hi": 0.3231160360049032,
+      "lo": -0.14359113218750252,
+      "p_positive": 0.765,
+      "samples": 1000
+     },
+     "cvar5": -5565.4592758215,
+     "decision_points": 2112,
+     "dsr": 0.1359114683600895,
+     "ece_p_win": 0.23817673884194118,
+     "ev_rank_ic": 0.055157909861970354,
+     "exit_reasons": {
+      "breakeven_stop": 1,
+      "premium_target": 2,
+      "square_off": 5,
+      "time_exit": 13
+     },
+     "expectancy": 1161.7658723556665,
+     "expectancy_R": 0.11367777887773724,
+     "fees_total": 2754.916680531,
+     "folds_fitted": 5,
+     "free_points": 1605,
+     "gross_total": 27152.000000000007,
+     "hold_min_mean": 120.95238095238095,
+     "max_drawdown": -23234.51928927549,
+     "median_R": -0.095211976408324,
+     "net_total": 24397.083319469,
+     "p_win": 0.38095238095238093,
+     "positive_folds": 0.4,
+     "premium_mean": 34552.25,
+     "profit_factor": 1.6567902943635684,
+     "sessions": 41,
+     "sharpe_per_trade": 0.16073750900473652,
+     "trade_days": 9,
+     "trades": 21,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "6+",
+    "candidate": "plan_logit",
+    "config": "120m|6+|plan_logit",
+    "config_hash": "dc2048040aa09ae0",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 2376,
+      "train_rows": 3960
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.02,
+      "test_rows": 2112,
+      "train_rows": 6336
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 8448
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 10560
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 12672
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": true,
+     "trades": false
+    },
+    "horizon": "120m",
+    "metrics": {
+     "abstention": 0.995,
+     "blocked": {
+      "2 positions already open": 175,
+      "4 trades already today": 112,
+      "already holding a BANKNIFTY position": 74,
+      "already holding a NIFTY position": 188,
+      "cooling off after 2 straight losses unti": 21,
+      "cooling off after 3 straight losses unti": 12
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.008282029649515778,
+       "trades": 8
+      },
+      "put": {
+       "expectancy_R": 0.00024645712633517697,
+       "trades": 16
+      }
+     },
+     "ci_R": {
+      "hi": 0.08591077906587373,
+      "lo": -0.09123631125854709,
+      "p_positive": 0.4427710843373494,
+      "samples": 996
+     },
+     "cvar5": -5608.452586142501,
+     "decision_points": 5412,
+     "dsr": 0.03522597057931517,
+     "ece_p_win": 0.0811227917516805,
+     "ev_rank_ic": 0.0003312665377672589,
+     "exit_reasons": {
+      "square_off": 5,
+      "time_exit": 19
+     },
+     "expectancy": -24.02562767935484,
+     "expectancy_R": -0.0025963717989484756,
+     "fees_total": 2820.3650643045003,
+     "folds_fitted": 5,
+     "free_points": 4830,
+     "gross_total": 2243.7499999999854,
+     "hold_min_mean": 116.25,
+     "max_drawdown": -11101.736259165998,
+     "median_R": -0.017258996439693308,
+     "net_total": -576.6150643045162,
+     "p_win": 0.4583333333333333,
+     "positive_folds": 0.2,
+     "premium_mean": 29730.479166666668,
+     "profit_factor": 0.9752905357704281,
+     "sessions": 41,
+     "sharpe_per_trade": -0.009493669965283998,
+     "trade_days": 10,
+     "trades": 24,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "0",
+    "candidate": "plan_logit",
+    "config": "close|0|plan_logit",
+    "config_hash": "d548d072137f9078",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 264,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 396,
+      "train_rows": 792
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1188
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 264,
+      "train_rows": 1320
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1584
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "close",
+    "metrics": {
+     "abstention": 0.9802,
+     "blocked": {
+      "2 positions already open": 1,
+      "4 trades already today": 168,
+      "already holding a NIFTY position": 12,
+      "cooling off after 0 straight losses unti": 6,
+      "cooling off after 2 straight losses unti": 3
+     },
+     "by_side": {
+      "put": {
+       "expectancy_R": -0.2876542018127678,
+       "trades": 8
+      }
+     },
+     "ci_R": {
+      "hi": -0.1868049561290662,
+      "lo": -0.3885034474964694,
+      "p_positive": 0.0,
+      "samples": 885
+     },
+     "cvar5": -8932.69546021,
+     "decision_points": 594,
+     "dsr": null,
+     "ece_p_win": 0.28225393571101043,
+     "ev_rank_ic": 0.08519572675494586,
+     "exit_reasons": {
+      "breakeven_stop": 1,
+      "premium_stop": 5,
+      "premium_target": 2
+     },
+     "expectancy": -3007.06731498875,
+     "expectancy_R": -0.2876542018127678,
+     "fees_total": 726.5385199100001,
+     "folds_fitted": 4,
+     "free_points": 404,
+     "gross_total": -23329.999999999996,
+     "hold_min_mean": 20.0,
+     "max_drawdown": -24056.53851991,
+     "median_R": -1.0443364940308255,
+     "net_total": -24056.53851991,
+     "p_win": 0.25,
+     "positive_folds": 0.0,
+     "premium_mean": 20855.9375,
+     "profit_factor": 0.4140064705841284,
+     "sessions": 41,
+     "sharpe_per_trade": -0.2214881179844121,
+     "trade_days": 2,
+     "trades": 8,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "1",
+    "candidate": "plan_logit",
+    "config": "close|1|plan_logit",
+    "config_hash": "c9ee3db1d2688355",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 264,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 396,
+      "train_rows": 792
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 264,
+      "train_rows": 1188
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 132,
+      "train_rows": 1452
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1584
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "close",
+    "metrics": {
+     "abstention": 0.9697,
+     "blocked": {
+      "2 positions already open": 23,
+      "4 trades already today": 127,
+      "already holding a NIFTY position": 69,
+      "cooling off after 2 straight losses unti": 12
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.4131942853667104,
+       "trades": 9
+      },
+      "put": {
+       "expectancy_R": 2.2557514181845697,
+       "trades": 2
+      }
+     },
+     "ci_R": {
+      "hi": 0.5307696309942552,
+      "lo": -0.4636834656954381,
+      "p_positive": 0.5808080808080808,
+      "samples": 990
+     },
+     "cvar5": -10697.10980626,
+     "decision_points": 594,
+     "dsr": 0.1476131605958373,
+     "ece_p_win": 0.29183693085474405,
+     "ev_rank_ic": -0.0364016316382465,
+     "exit_reasons": {
+      "breakeven_stop": 1,
+      "premium_stop": 6,
+      "premium_target": 3,
+      "square_off": 1
+     },
+     "expectancy": -507.07026328063625,
+     "expectancy_R": 0.0720685698244316,
+     "fees_total": 1255.2728960870002,
+     "folds_fitted": 4,
+     "free_points": 363,
+     "gross_total": -4322.499999999996,
+     "hold_min_mean": 64.54545454545455,
+     "max_drawdown": -38306.532813731,
+     "median_R": -1.0420382654096862,
+     "net_total": -5577.772896086999,
+     "p_win": 0.2727272727272727,
+     "positive_folds": 0.25,
+     "premium_mean": 28684.227272727272,
+     "profit_factor": 0.9049648386089268,
+     "sessions": 41,
+     "sharpe_per_trade": 0.04707966363577743,
+     "trade_days": 4,
+     "trades": 11,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "2",
+    "candidate": "plan_logit",
+    "config": "close|2|plan_logit",
+    "config_hash": "2cf3741891bf1be3",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 132,
+      "train_rows": 528,
+      "why": "too little data (528 plan rows over 3 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "not fitted",
+      "test_rows": 396,
+      "train_rows": 660,
+      "why": "too little data (660 plan rows over 4 sessions)"
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.5,
+      "test_rows": 264,
+      "train_rows": 1056
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 132,
+      "train_rows": 1320
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 396,
+      "train_rows": 1452
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": false,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "close",
+    "metrics": {
+     "abstention": 0.9929,
+     "blocked": {
+      "already holding a NIFTY position": 115
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.5757832746533061,
+       "trades": 2
+      }
+     },
+     "ci_R": {
+      "hi": -0.08002831348792398,
+      "lo": -1.0715382358186882,
+      "p_positive": 0.0,
+      "samples": 871
+     },
+     "cvar5": -11157.92764958,
+     "decision_points": 396,
+     "dsr": null,
+     "ece_p_win": 0.5066436480895402,
+     "ev_rank_ic": -0.3056830522685111,
+     "exit_reasons": {
+      "breakeven_stop": 1,
+      "premium_stop": 1
+     },
+     "expectancy": -5995.43616995075,
+     "expectancy_R": -0.5757832746533061,
+     "fees_total": 235.6223399015,
+     "folds_fitted": 3,
+     "free_points": 281,
+     "gross_total": -11755.249999999998,
+     "hold_min_mean": 300.0,
+     "max_drawdown": -11990.8723399015,
+     "median_R": -0.5757832746533061,
+     "net_total": -11990.8723399015,
+     "p_win": 0.0,
+     "positive_folds": 0.0,
+     "premium_mean": 34701.875,
+     "profit_factor": 0.0,
+     "sessions": 41,
+     "sharpe_per_trade": -1.161427156068796,
+     "trade_days": 2,
+     "trades": 2,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "3-5",
+    "candidate": "plan_logit",
+    "config": "close|3-5|plan_logit",
+    "config_hash": "0710e6296ce45d44",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 1188,
+      "train_rows": 1584
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 528,
+      "train_rows": 2772
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 660,
+      "train_rows": 3300
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 1188,
+      "train_rows": 3960
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 660,
+      "train_rows": 5148
+     }
+    ],
+    "gates": {
+     "ci_lo_R": true,
+     "deflated_sharpe": false,
+     "positive_folds": true,
+     "profit_factor": true,
+     "trade_days": true,
+     "trades": true
+    },
+    "horizon": "close",
+    "metrics": {
+     "abstention": 0.9619,
+     "blocked": {
+      "2 positions already open": 386,
+      "already holding a BANKNIFTY position": 1,
+      "already holding a NIFTY position": 833
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": -0.5067627346083489,
+       "trades": 3
+      },
+      "put": {
+       "expectancy_R": 0.3639192273948192,
+       "trades": 31
+      }
+     },
+     "ci_R": {
+      "hi": 0.5232402329460188,
+      "lo": 0.017610445176693728,
+      "p_positive": 0.966,
+      "samples": 1000
+     },
+     "cvar5": -13137.535490440001,
+     "decision_points": 2112,
+     "dsr": 0.2688348745281628,
+     "ece_p_win": 0.43161104222354396,
+     "ev_rank_ic": -0.04539848151397072,
+     "exit_reasons": {
+      "breakeven_stop": 2,
+      "premium_stop": 7,
+      "premium_target": 6,
+      "square_off": 19
+     },
+     "expectancy": 2976.667584879029,
+     "expectancy_R": 0.2870943483945398,
+     "fees_total": 4746.302114112999,
+     "folds_fitted": 5,
+     "free_points": 892,
+     "gross_total": 105952.99999999999,
+     "hold_min_mean": 198.38235294117646,
+     "max_drawdown": -31391.612004946,
+     "median_R": 0.1335391337209128,
+     "net_total": 101206.69788588698,
+     "p_win": 0.5588235294117647,
+     "positive_folds": 0.6,
+     "premium_mean": 36637.742647058825,
+     "profit_factor": 1.924356878308141,
+     "sessions": 41,
+     "sharpe_per_trade": 0.26980483721336135,
+     "trade_days": 16,
+     "trades": 34,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   },
+   {
+    "bucket": "6+",
+    "candidate": "plan_logit",
+    "config": "close|6+|plan_logit",
+    "config_hash": "6f6a8275078650fe",
+    "evidence": "modelled",
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "status": "ok",
+      "tau": 0.0,
+      "test_rows": 2376,
+      "train_rows": 3960
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 6336
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 8448
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 10560
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "status": "ok",
+      "tau": null,
+      "test_rows": 2112,
+      "train_rows": 12672
+     }
+    ],
+    "gates": {
+     "ci_lo_R": false,
+     "deflated_sharpe": false,
+     "positive_folds": false,
+     "profit_factor": true,
+     "trade_days": false,
+     "trades": false
+    },
+    "horizon": "close",
+    "metrics": {
+     "abstention": 0.9961,
+     "blocked": {
+      "2 positions already open": 941,
+      "already holding a BANKNIFTY position": 5,
+      "already holding a NIFTY position": 107
+     },
+     "by_side": {
+      "call": {
+       "expectancy_R": 0.19824877451553713,
+       "trades": 6
+      },
+      "put": {
+       "expectancy_R": 0.029208569351480206,
+       "trades": 11
+      }
+     },
+     "ci_R": {
+      "hi": 0.2646428340390706,
+      "lo": -0.14270848100195715,
+      "p_positive": 0.7444444444444445,
+      "samples": 990
+     },
+     "cvar5": -6173.399587196002,
+     "decision_points": 5412,
+     "dsr": 0.13607419988827957,
+     "ece_p_win": 0.19902246886116298,
+     "ev_rank_ic": 0.07943936588091227,
+     "exit_reasons": {
+      "premium_target": 1,
+      "square_off": 16
+     },
+     "expectancy": 825.6225582768224,
+     "expectancy_R": 0.08886981823291207,
+     "fees_total": 2021.9165092940002,
+     "folds_fitted": 5,
+     "free_points": 4359,
+     "gross_total": 16057.499999999976,
+     "hold_min_mean": 338.2352941176471,
+     "max_drawdown": -17364.03905965452,
+     "median_R": -0.0754182522243262,
+     "net_total": 14035.58349070598,
+     "p_win": 0.47058823529411764,
+     "positive_folds": 0.2,
+     "premium_mean": 29642.161764705885,
+     "profit_factor": 1.5492379349122098,
+     "sessions": 41,
+     "sharpe_per_trade": 0.13788583805738927,
+     "trade_days": 9,
+     "trades": 17,
+     "unaffordable": 0
+    },
+    "passed": false,
+    "status": "ok",
+    "track": "scenario"
+   }
+  ]
+ },
+ "study": "2026-10-07-47340d"
+}
