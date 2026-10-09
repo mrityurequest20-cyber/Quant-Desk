@@ -1,0 +1,15 @@
+{
+ "price_basis_matched": {
+  "ev_floor:touch": 22
+ },
+ "decisions": 73,
+ "outcome": {
+  "matches only the latest snapshot": 22,
+  "no archived snapshot matches the plan prices": 50,
+  "no snapshot within 15 min": 1
+ },
+ "seconds_from_matching_snapshot_to_decision": {
+  "median": 49.897540000000006,
+  "max": 52.695143
+ }
+}

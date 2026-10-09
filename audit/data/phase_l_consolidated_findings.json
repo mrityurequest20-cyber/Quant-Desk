@@ -1,0 +1,4520 @@
+{
+ "status": "PROPOSED. Not applied to the canonical register.",
+ "canonical_register_sha256": "e49341c0817354b12a4fefa6a9dbd737308e4de9525b345dd2460335b94145d6",
+ "stages": {
+  "S0": {
+   "name": "Owner decisions and guardrails",
+   "gate": "G1"
+  },
+  "S1": {
+   "name": "Evidence integrity and provenance",
+   "gate": "G1"
+  },
+  "S2": {
+   "name": "Data-validity layer and contaminated-record rebuild",
+   "gate": "G1"
+  },
+  "S3": {
+   "name": "Crash, restart and order-state correctness",
+   "gate": "G1"
+  },
+  "S4": {
+   "name": "Decision-state propagation and UI truthfulness",
+   "gate": "G1"
+  },
+  "S5": {
+   "name": "Observability, alerting and scheduling",
+   "gate": "G1"
+  },
+  "S6": {
+   "name": "Deterministic end-to-end trade test, then the gate-architecture decision",
+   "gate": "G1"
+  },
+  "S7": {
+   "name": "Statistical hygiene and learning claims",
+   "gate": "G2"
+  },
+  "S8": {
+   "name": "Execution realism and economics",
+   "gate": "G3"
+  },
+  "S9": {
+   "name": "Live-readiness controls (never authorised by this audit)",
+   "gate": "G4"
+  }
+ },
+ "gates": {
+  "G1": "Paper-system correctness and recovery",
+  "G2": "Statistical strategy evidence",
+  "G3": "Executable trade economics and fill realism",
+  "G4": "Authorization for any live trading"
+ },
+ "root_cause_families": {
+  "RC1": "Authorization chain closed by design mismatch (gate needs a model that cannot exist for the plans built)",
+  "RC2": "No data-validity layer: failures become valid-looking data",
+  "RC3": "Adoption without nulls: signals and gates adopted on point estimates",
+  "RC4": "Unenforced governance and record integrity",
+  "RC5a": "Decision outcomes are not propagated to the state the UI reads (fire result discarded; rejections decision-only; decisions never served)",
+  "RC5b": "The operator surface's own health is not monitored (publish, deploy, freshness, schedule)",
+  "RC6": "Cron-delivered scheduling: GitHub delivers schedule events hours late; backup crons still run the full pipeline",
+  "RC7": "Crash/restart state machine incomplete (orders, legs, halts not idempotent or not persisted)"
+ },
+ "duplicate_groups": [
+  {
+   "group": "Trigger outcome not shown",
+   "parent": "L-01",
+   "members": [
+    "K-01",
+    "K-02",
+    "J-07",
+    "J-08",
+    "L-02",
+    "B-03"
+   ],
+   "relation": "shared root cause RC5a; keep members as UI acceptance tests"
+  },
+  {
+   "group": "India VIX zero",
+   "parent": "I-01",
+   "members": [
+    "J-01",
+    "H-08",
+    "I-09",
+    "L-06"
+   ],
+   "relation": "same input defect: data (I-01), display (J-01), model chain (H-08/I-09), learning statistic (L-06)"
+  },
+  {
+   "group": "EV P(up) text",
+   "parent": "I-07",
+   "members": [
+    "K report 'I-07 in the UI'"
+   ],
+   "relation": "same defect, two surfaces"
+  },
+  {
+   "group": "Operator surface health",
+   "parent": "H-04",
+   "members": [
+    "L-04",
+    "K-03",
+    "K-04",
+    "K-06",
+    "J-11",
+    "L-03"
+   ],
+   "relation": "RC5b; one post-publish verification + status model closes most"
+  },
+  {
+   "group": "Cron lateness",
+   "parent": "H-05",
+   "members": [
+    "I-10",
+    "L-05"
+   ],
+   "relation": "RC6"
+  },
+  {
+   "group": "Restart state",
+   "parent": "H-01",
+   "members": [
+    "H-02",
+    "H-03",
+    "H-07",
+    "I-06",
+    "J-02",
+    "B-04"
+   ],
+   "relation": "RC7"
+  }
+ ],
+ "updates_not_applied": {
+  "I-01": "Root cause still UNVERIFIED (no payload). Indicated: zero OHLC only on Kotak-served minutes; the 1 nonzero bar/day carries Yahoo-style float32 artefacts; 10-08: 1 Yahoo poll <-> 1 nonzero bar. The candle path has no >0 guard (ltp() has one). validation.py:40's INDIAVIX exemption is not on the intraday path (ops/checks only): not causal. Learning effect reconciled exactly (L2). Escalation to P1 not triggered: autolearn/research VIX is Yahoo with a >0 guard (plans.py:324).",
+  "I-07": "Full coverage: replay 14/41 and production 33/51 EV rows print a P(up) the evaluator did not use; all 51 production EV rows priced an iron fly (direction 0, P(up) 0.5). The app's 'P(up) used' says 'coin flip + prior' in 41/41 replay minutes.",
+  "I-10": "Owner correction accepted. Scheduler attribution VERIFIED against run metadata: live.yml cron '22 3 * * 1-5' (08:52 IST); 09-30 run event=schedule created 09:49:30Z (15:19 IST), 10-01 created 10:16:38Z (15:46 IST, 80 s); no dispatch either day; scheduler.yml added 3e2b99a 2026-10-02 09:37Z. Why GitHub delivered late: external, unknowable. Retitle: 'No live session on 10-01 and 10 minutes on 09-30 (late cron); the record has holes'.",
+  "J-05": "Clarified per owner: 6 of the 11 'graded sessions' are bootstrap Yahoo replays (09-24 .. 10-01, incl. 10-01). Phase L adds L-06 (IC on a near-constant regressor).",
+  "K-01": "Extended: bar replay over 5 sessions: 8 of 60 rejections re-armed at the same level in the same minute; 60/60 outcomes shown nowhere. Shares root cause L-01.",
+  "K-02": "Extended: 41 of 60 bar-replay rejections are followed by 'no setup has triggered'; production lower bound 6 of 22 within 5 min (sampled thoughts). Shares root cause L-01.",
+  "K-03": "Pages deploy timing measured (382 runs): build+deploy median 27 s, p90 56 s, max 147 s; first in-session deployment 09:19:34-09:19:40 IST on 10-05..10-08. CDN caching and 10-09 (no deployments) unresolved.",
+  "Q-05": "Correction proposed: the 10-05 08:31 auto-reset found 0 trades, so the Rs 20k account's trades/thoughts/events were already gone; news rows from 09-29 survive, no DELETE exists in code, the 10-05 run skipped its reset step, and the journal branch is one force-pushed commit. How they disappeared is UNRESOLVED; attributing it to force-push (A-10) is inference.",
+  "A-02": "Wording: 9 of 10 catch-up gradings since the reset failed (10-05 09:15 succeeded); still recurring on 10-09.",
+  "D-03": "Nuance: post-reset factor increments reconstruct exactly from persisted thoughts + recorded bars (vix: 5/5 session multipliers to 4 dp; PREV memory within 3e-4); only the bootstrap/pre-reset portion is not replayable.",
+  "H-05": "Related mechanism confirmed for live.yml (L-05, I-10): cron delivery 6-7 h late is routine on this repo."
+ },
+ "owner_decisions_carried": {
+  "J-01": {
+   "severity_proposed": "P1",
+   "basis": "owner decision on the Phase J review"
+  },
+  "J-02": {
+   "severity_proposed": "P2 (P0 if any live-trading mode is enabled)",
+   "basis": "owner decision on the Phase J review"
+  },
+  "J-03": {
+   "severity_proposed": "P2",
+   "basis": "owner decision on the Phase J review"
+  },
+  "K-01": {
+   "severity_proposed": "P3",
+   "basis": "owner: reproduced in exact replay"
+  },
+  "K-02": {
+   "severity_proposed": "P3",
+   "basis": "owner: substituted replay plus consistent production evidence"
+  },
+  "K-03": {
+   "severity_proposed": "P3",
+   "basis": "owner: partially reproduced; Pages latency unmeasured (Phase L: deploy time now measured, CDN still not)"
+  },
+  "K-04": {
+   "severity_proposed": "P4",
+   "basis": "owner"
+  },
+  "K-05": {
+   "severity_proposed": "P3",
+   "basis": "owner: synthetic only"
+  },
+  "K-06": {
+   "severity_proposed": "P4",
+   "basis": "owner"
+  }
+ },
+ "counts": {
+  "findings": 115,
+  "by_phase": {
+   "A": 19,
+   "B": 11,
+   "C": 8,
+   "D": 8,
+   "E": 9,
+   "F": 7,
+   "G": 6,
+   "H": 14,
+   "I": 10,
+   "J": 11,
+   "K": 6,
+   "L": 6
+  },
+  "by_effective_severity": {
+   "P1": 7,
+   "P2": 36,
+   "P3": 55,
+   "P4": 17
+  },
+  "with_acceptance_split_hand_written": 6,
+  "with_acceptance_split_template": 109
+ },
+ "acceptance_naming_two_or_more_evidence_classes_before_phase_l": 8,
+ "findings": [
+  {
+   "id": "A-01",
+   "phase": "A",
+   "title": "autolearn/live.py: the ledger never records a live prediction",
+   "severity": "P1",
+   "status": "CONTRADICTED",
+   "evidence_class": [
+    "production persisted data",
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "B-02",
+    "C-01"
+   ],
+   "blocks": "R L",
+   "risk_if_unresolved": "untrustworthy research; blocks live",
+   "acceptance": "≥ 1 live prediction per session for a registered model, outcome joined; probe flips",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "B-02",
+    "C-01"
+   ],
+   "roadmap_item": "R4",
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-02",
+   "phase": "A",
+   "title": "Catch-up grading crash (time units)",
+   "severity": "P2",
+   "status": "BROKEN",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [
+    "A-03",
+    "D-07"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "5 sessions with 0 \"grading failed\"; unit test across s/ms/us/ns",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-03",
+    "D-07"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "phase_l_update": "Wording: 9 of 10 catch-up gradings since the reset failed (10-05 09:15 succeeded); still recurring on 10-09.",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-03",
+   "phase": "A",
+   "title": "Unpinned dependencies",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-02"
+   ],
+   "blocks": "R A L",
+   "risk_if_unresolved": "untrustworthy research; unreviewed autonomous change; blocks live",
+   "acceptance": "Lockfile; CI installs from it",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-02"
+   ],
+   "roadmap_item": "R0",
+   "earliest_stage": "S0",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-04",
+   "phase": "A",
+   "title": "Feed fallback has no per-bar source",
+   "severity": "P2",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "F-01",
+    "F-02"
+   ],
+   "blocks": "P R",
+   "risk_if_unresolved": "wrong or unsafe paper trading; untrustworthy research",
+   "acceptance": "Every bar carries its source; mixed sessions flagged",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "F-01",
+    "F-02"
+   ],
+   "roadmap_item": "R2a",
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-05",
+   "phase": "A",
+   "title": "Live 5-minute bucketing ≠ training",
+   "severity": "P2",
+   "status": "BROKEN (latent)",
+   "evidence_class": [
+    "synthetic fixture",
+    "replay (archived)"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "C-01"
+   ],
+   "blocks": "P L",
+   "risk_if_unresolved": "wrong or unsafe paper trading; blocks live",
+   "acceptance": "Live/training feature-parity test on a recorded session",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "C-01"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-06",
+   "phase": "A",
+   "title": "12:20 hand-over hole",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "B-10"
+   ],
+   "blocks": "P R",
+   "risk_if_unresolved": "wrong or unsafe paper trading; untrustworthy research",
+   "acceptance": "No unmarked gap minutes",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "B-10"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-07",
+   "phase": "A",
+   "title": "LockBox.verify ignores row-count change",
+   "severity": "P3",
+   "status": "CONTRADICTED",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Verify fails on any change",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-08",
+   "phase": "A",
+   "title": "σ back-filled from later bars",
+   "severity": "P4",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Probe flips",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-09",
+   "phase": "A",
+   "title": "News graded from publish time",
+   "severity": "P2",
+   "status": "MISLEADING",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [
+    "G-04",
+    "G-05"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Grading keyed on seen_at",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "G-04",
+    "G-05"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-10",
+   "phase": "A",
+   "title": "Force-pushed journal; unanchored hashes",
+   "severity": "P2",
+   "status": "MISLEADING",
+   "evidence_class": [
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R A L",
+   "risk_if_unresolved": "untrustworthy research; unreviewed autonomous change; blocks live",
+   "acceptance": "Append-only or anchored history; tamper test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R1",
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-11",
+   "phase": "A",
+   "title": "Chain fetch time ≠ quote time; IV from stale LTP",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "unverified hypothesis",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "F-01",
+    "F-04"
+   ],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Quote timestamps stored; LTP-IV flagged",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "F-01",
+    "F-04"
+   ],
+   "roadmap_item": "R2a",
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-12",
+   "phase": "A",
+   "title": "Yahoo history unstable intraday",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "E-06"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Archived inputs; refit reproduces",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "E-06"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-13",
+   "phase": "A",
+   "title": "Afternoon events back-dated",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Event time = actual time",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-14",
+   "phase": "A",
+   "title": "Warehouse overwrites rows",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "E-06"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Versioned rows or per-day digests",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "E-06"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-15",
+   "phase": "A",
+   "title": "Replay memory leaks across replays",
+   "severity": "P3",
+   "status": "VERIFIED (code path)",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Replay-isolation test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-16",
+   "phase": "A",
+   "title": "Futures volume gaps → 0",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Gaps as NaN, flagged",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R2b",
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-17",
+   "phase": "A",
+   "title": "Kite ticks stamped with the wall clock",
+   "severity": "P4",
+   "status": "VERIFIED (code path)",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [
+    "F-06"
+   ],
+   "blocks": "L",
+   "risk_if_unresolved": "blocks live",
+   "acceptance": "Exchange time required",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "F-06"
+   ],
+   "roadmap_item": "R8",
+   "earliest_stage": "S9",
+   "gate": "G4",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-18",
+   "phase": "A",
+   "title": "Yahoo 5m completed() length",
+   "severity": "P4",
+   "status": "VERIFIED (code path)",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Probe",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "A-19",
+   "phase": "A",
+   "title": "Date-bomb test; CI red on main",
+   "severity": "P4",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "G-01"
+   ],
+   "blocks": "A",
+   "risk_if_unresolved": "unreviewed autonomous change",
+   "acceptance": "Suite green on any date (frozen clock)",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "G-01"
+   ],
+   "roadmap_item": "R0",
+   "earliest_stage": "S0",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-01",
+   "phase": "B",
+   "title": "Evidence score ↛ trade",
+   "severity": "P2",
+   "status": "MISLEADING",
+   "evidence_class": [
+    "code-only",
+    "replay (archived)"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "B-02"
+   ],
+   "blocks": "P R",
+   "risk_if_unresolved": "wrong or unsafe paper trading; untrustworthy research",
+   "acceptance": "Path documented, or README corrected",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "B-02"
+   ],
+   "roadmap_item": "R7",
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-02",
+   "phase": "B",
+   "title": "Zero trades is structural",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data",
+    "replay (archived)"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-01",
+    "C-01",
+    "C-05"
+   ],
+   "blocks": "P R L",
+   "risk_if_unresolved": "wrong or unsafe paper trading; untrustworthy research; blocks live",
+   "acceptance": "Deterministic e2e simulated trade passes the gates (R4)",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-01",
+    "C-01",
+    "C-05"
+   ],
+   "roadmap_item": "R4",
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-03",
+   "phase": "B",
+   "title": "Confirm-path rejections unjournaled",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Every rejection row: gate id + setup id",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R4",
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": "Trigger outcome not shown"
+  },
+  {
+   "id": "B-04",
+   "phase": "B",
+   "title": "Armed lifecycle not persisted",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "code-only",
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "P R",
+   "risk_if_unresolved": "wrong or unsafe paper trading; untrustworthy research",
+   "acceptance": "Survives restart in a test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R4",
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": "Restart state"
+  },
+  {
+   "id": "B-05",
+   "phase": "B",
+   "title": "Dead / display-only features",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Wired or labelled",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-06",
+   "phase": "B",
+   "title": "\"Waiting at the level\" though unauthorisable",
+   "severity": "P3",
+   "status": "MISLEADING",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "B-02"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "UI shows the blocking gate",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "B-02"
+   ],
+   "roadmap_item": "R5",
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-07",
+   "phase": "B",
+   "title": "Plan-gate rejections never graded",
+   "severity": "P2",
+   "status": "BROKEN",
+   "evidence_class": [
+    "code-only",
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "D-05"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Probe flips",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "D-05"
+   ],
+   "roadmap_item": "R5",
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-08",
+   "phase": "B",
+   "title": "Breaking-news veto false positives",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Probes flip",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-09",
+   "phase": "B",
+   "title": "Trigger engine gaps",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only",
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Tick-level replay test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-10",
+   "phase": "B",
+   "title": "OR/IB from the first bar present",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "code-only",
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-06"
+   ],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Anchored to 09:15",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-06"
+   ],
+   "roadmap_item": "R2b",
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "B-11",
+   "phase": "B",
+   "title": "What-if as_run ≠ what ran",
+   "severity": "P3",
+   "status": "MISLEADING",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "as_run replay = journal",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "C-01",
+   "phase": "C",
+   "title": "Approved plan model still rejects spreads",
+   "severity": "P1",
+   "status": "BROKEN (latent)",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "P R",
+   "risk_if_unresolved": "wrong or unsafe paper trading; untrustworthy research",
+   "acceptance": "Approved model + spread plan passes, in a test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R4",
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "C-02",
+   "phase": "C",
+   "title": "Session model passes noise 10%",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Null pass rate ≤ stated α",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R7",
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "C-03",
+   "phase": "C",
+   "title": "No auto demotion",
+   "severity": "P2",
+   "status": "VERIFIED (missing)",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R L",
+   "risk_if_unresolved": "untrustworthy research; blocks live",
+   "acceptance": "Degraded champion demoted in a test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "C-04",
+   "phase": "C",
+   "title": "Two cost models",
+   "severity": "P3",
+   "status": "CONTRADICTED",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [
+    "E-03",
+    "F-05"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "One cost source",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "E-03",
+    "F-05"
+   ],
+   "roadmap_item": "R6",
+   "earliest_stage": "S8",
+   "gate": "G3",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "C-05",
+   "phase": "C",
+   "title": "Iron fly can't pay its costs",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Design decision recorded",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R4",
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "C-06",
+   "phase": "C",
+   "title": "EV uncalibrated",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "evidence/coverage gap",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "B-02"
+   ],
+   "blocks": "P L",
+   "risk_if_unresolved": "wrong or unsafe paper trading; blocks live",
+   "acceptance": "Calibration on realised outcomes",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "B-02"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "C-07",
+   "phase": "C",
+   "title": "Lockbox peeks unbounded",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Peek budget enforced",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "C-08",
+   "phase": "C",
+   "title": "Feature-version hash on source text",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Semantic version test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "D-01",
+   "phase": "D",
+   "title": "Factor learning ≈ noise",
+   "severity": "P1",
+   "status": "MISLEADING",
+   "evidence_class": [
+    "replay (archived)"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "C-02",
+    "G-05"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Placebo p < α on a new sample, or claims withdrawn",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "C-02",
+    "G-05"
+   ],
+   "roadmap_item": "R7",
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "D-02",
+   "phase": "D",
+   "title": "Learning changes 0.07% of decisions",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "replay (archived)"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "B-01"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Measured effect with a CI",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "B-01"
+   ],
+   "roadmap_item": "R7",
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "D-03",
+   "phase": "D",
+   "title": "Memory aggregate-only, unreplayable",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Event-level ledger replays",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "phase_l_update": "Nuance: post-reset factor increments reconstruct exactly from persisted thoughts + recorded bars (vix: 5/5 session multipliers to 4 dp; PREV memory within 3e-4); only the bootstrap/pre-reset portion is not replayable.",
+   "duplicate_group": null
+  },
+  {
+   "id": "D-04",
+   "phase": "D",
+   "title": "No recency, regime or demotion",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Probes flip",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R7",
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "D-05",
+   "phase": "D",
+   "title": "No-trade learning absent",
+   "severity": "P2",
+   "status": "BROKEN",
+   "evidence_class": [
+    "code-only",
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "B-07"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Counterfactual grading runs",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "B-07"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S6",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "D-06",
+   "phase": "D",
+   "title": "No baseline or control",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "ON/OFF control with power",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R7",
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "D-07",
+   "phase": "D",
+   "title": "Self-review blind to WARN",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-02",
+    "G-05"
+   ],
+   "blocks": "A",
+   "risk_if_unresolved": "unreviewed autonomous change",
+   "acceptance": "WARN failures raise issues",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-02",
+    "G-05"
+   ],
+   "roadmap_item": null,
+   "earliest_stage": "S5",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "D-08",
+   "phase": "D",
+   "title": "Truncated ids regraded",
+   "severity": "P4",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Probe flips",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-01",
+   "phase": "E",
+   "title": "Sleeves settle on a frozen index",
+   "severity": "P1",
+   "status": "MISLEADING",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "F-02"
+   ],
+   "blocks": "P R L",
+   "risk_if_unresolved": "wrong or unsafe paper trading; untrustworthy research; blocks live",
+   "acceptance": "Official-close settlement; flat-run quarantine; ledger re-derived under a new spec",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "F-02"
+   ],
+   "roadmap_item": "R3",
+   "earliest_stage": "S8",
+   "gate": "G3",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-02",
+   "phase": "E",
+   "title": "Paper gate passes zero edge ≈ 93%",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture",
+    "inference"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R L",
+   "risk_if_unresolved": "untrustworthy research; blocks live",
+   "acceptance": "False eligibility ≤ 5% under the null",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R7",
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-03",
+   "phase": "E",
+   "title": "D1 drift in live EV, unregistered",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only",
+    "replay (archived)",
+    "inference"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "D/H",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "C-04",
+    "C-06"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Registered, or removed",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "C-04",
+    "C-06"
+   ],
+   "roadmap_item": "R6",
+   "earliest_stage": "S8",
+   "gate": "G3",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-04",
+   "phase": "E",
+   "title": "No program-wide multiplicity",
+   "severity": "P2",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only",
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Ledger complete; family count reported",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R7",
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-05",
+   "phase": "E",
+   "title": "v2 reuses the holdout; no frozen sample",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Specs fix the sample end",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R1",
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-06",
+   "phase": "E",
+   "title": "Result provenance gaps",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-12",
+    "A-14"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Every result stamped, clean tree",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-12",
+    "A-14"
+   ],
+   "roadmap_item": "R1",
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-07",
+   "phase": "E",
+   "title": "L1 economics on illiquid held-out names",
+   "severity": "P3",
+   "status": "UNVERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "evidence/coverage gap",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [
+    "F-04"
+   ],
+   "blocks": "R L",
+   "risk_if_unresolved": "untrustworthy research; blocks live",
+   "acceptance": "Recorded quotes; entry_v1 decided",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "F-04"
+   ],
+   "roadmap_item": "R9",
+   "earliest_stage": "S8",
+   "gate": "G3",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-08",
+   "phase": "E",
+   "title": "L3 baseline ≠ live forecaster",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Re-run vs the live forecaster",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "E-09",
+   "phase": "E",
+   "title": "External data verified shallowly",
+   "severity": "P4",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "evidence/coverage gap",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Minute-level checks",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "F-01",
+   "phase": "F",
+   "title": "Model-chain fallback tradeable; fabricated OI votes",
+   "severity": "P2",
+   "status": "VERIFIED (latent)",
+   "evidence_class": [
+    "synthetic fixture",
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-04"
+   ],
+   "blocks": "P L",
+   "risk_if_unresolved": "wrong or unsafe paper trading; blocks live",
+   "acceptance": "Fault-injection: no entry on a model chain",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-04"
+   ],
+   "roadmap_item": "R2a",
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "F-02",
+   "phase": "F",
+   "title": "Vendor index freeze 15:15–15:28",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "E-01"
+   ],
+   "blocks": "P R",
+   "risk_if_unresolved": "wrong or unsafe paper trading; untrustworthy research",
+   "acceptance": "Detection and quarantine test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "E-01"
+   ],
+   "roadmap_item": "R2a",
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "F-03",
+   "phase": "F",
+   "title": "Skew-level bias",
+   "severity": "P4",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "replay (archived)"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "IV on the implied forward",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S8",
+   "gate": "G3",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "F-04",
+   "phase": "F",
+   "title": "Fills ignore depth",
+   "severity": "P3",
+   "status": "PARTIAL (latent)",
+   "evidence_class": [
+    "synthetic fixture",
+    "replay (archived)"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-11",
+    "E-07"
+   ],
+   "blocks": "P L",
+   "risk_if_unresolved": "wrong or unsafe paper trading; blocks live",
+   "acceptance": "Depth-capped fill test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-11",
+    "E-07"
+   ],
+   "roadmap_item": "R6",
+   "earliest_stage": "S8",
+   "gate": "G3",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "F-05",
+   "phase": "F",
+   "title": "Exercise STT 0.125% vs 0.15%",
+   "severity": "P4",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "code-only",
+    "external source"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [
+    "C-04"
+   ],
+   "blocks": "R L",
+   "risk_if_unresolved": "untrustworthy research; blocks live",
+   "acceptance": "Dated rate",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "C-04"
+   ],
+   "roadmap_item": "R3",
+   "earliest_stage": "S8",
+   "gate": "G3",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "F-06",
+   "phase": "F",
+   "title": "Kite partial fills dropped",
+   "severity": "P3",
+   "status": "BROKEN (latent)",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": "RC1",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-17"
+   ],
+   "blocks": "L",
+   "risk_if_unresolved": "blocks live",
+   "acceptance": "Partial-fill accounting test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-17"
+   ],
+   "roadmap_item": "R8",
+   "earliest_stage": "S9",
+   "gate": "G4",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "F-07",
+   "phase": "F",
+   "title": "Calendar ends 2026",
+   "severity": "P4",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Fail closed on a missing year",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R10",
+   "earliest_stage": "S5",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "G-01",
+   "phase": "G",
+   "title": "Engineer: unreviewed merge authority",
+   "severity": "P1",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-19"
+   ],
+   "blocks": "A (indirectly all)",
+   "risk_if_unresolved": "unreviewed autonomous change",
+   "acceptance": "Test PR blocked without human approval (§6)",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-19"
+   ],
+   "roadmap_item": "R0",
+   "earliest_stage": "S0",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "G-02",
+   "phase": "G",
+   "title": "Documented autonomy ≠ observed",
+   "severity": "P2",
+   "status": "CONTRADICTED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [],
+   "blocks": "A",
+   "risk_if_unresolved": "unreviewed autonomous change",
+   "acceptance": "Owner decision (Q-13) recorded; shift reports",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R0",
+   "earliest_stage": "S0",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "G-03",
+   "phase": "G",
+   "title": "Malformed LLM output → confident read",
+   "severity": "P3",
+   "status": "VERIFIED (latent)",
+   "evidence_class": [
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "latent: reachable, not yet triggered",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "P",
+   "risk_if_unresolved": "wrong or unsafe paper trading",
+   "acceptance": "Probe flips",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R10",
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "G-04",
+   "phase": "G",
+   "title": "No model/prompt provenance",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "code-only",
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "medium-high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "A-09"
+   ],
+   "blocks": "R",
+   "risk_if_unresolved": "untrustworthy research",
+   "acceptance": "Model, prompt hash and raw text stored",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "A-09"
+   ],
+   "roadmap_item": "R10",
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "G-05",
+   "phase": "G",
+   "title": "LLM failures at INFO; trust untested",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family per post-G §4"
+   },
+   "related": [
+    "D-01",
+    "D-07"
+   ],
+   "blocks": "A R",
+   "risk_if_unresolved": "unreviewed autonomous change; untrustworthy research",
+   "acceptance": "WARN plus CI on trust",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [
+    "D-01",
+    "D-07"
+   ],
+   "roadmap_item": "R7",
+   "earliest_stage": "S5",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "G-06",
+   "phase": "G",
+   "title": "Claude never ran; cost untracked",
+   "severity": "P4",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "post-G matrix codes (PO/AR/ST/CI/INF/EXT); AR does not distinguish exact from substituted replay",
+   "confidence": "high",
+   "uncertainty": "confirmed defect",
+   "root_cause": {
+    "family": null,
+    "demonstrated": false,
+    "note": "not demonstrated"
+   },
+   "related": [],
+   "blocks": "—",
+   "risk_if_unresolved": "low",
+   "acceptance": "Cost per provider recorded",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (register / phase reports)",
+   "dependencies": [],
+   "roadmap_item": "R10",
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_POST_G_CONSOLIDATION.md §3",
+   "duplicate_group": null
+  },
+  {
+   "id": "H-01",
+   "phase": "H",
+   "title": "An exit interrupted after one leg fills is re-exited in full on restart: a naked short leg and inflated cash while the journal says \"closed\"",
+   "severity": "P1",
+   "status": "BROKEN (latent)",
+   "evidence_class": [
+    "synthetic fixture",
+    "inference",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "latent",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A test crashes after each leg of a k-leg exit (k = 2, 4) and restarts. The broker ends flat (or holds exactly the unclosed legs, flagged), cash equals a single round trip, and journal fills equal broker fills. Exits are idempotent against broker positions. A rejected exit leg leaves the trade open",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": "Restart state"
+  },
+  {
+   "id": "H-02",
+   "phase": "H",
+   "title": "An entry interrupted after the first leg leaves an orphan position: detected, but never resolved, priced or escalated",
+   "severity": "P2",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "synthetic fixture",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A crash after leg i of an entry leaves, after restart, either the leg flattened at the next step or adopted into a journaled \"orphan\" trade with a stop. A GitHub issue is filed the same day. A test covers both legs and both crash points",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": "Restart state"
+  },
+  {
+   "id": "H-03",
+   "phase": "H",
+   "title": "A position left open across days is dropped from the books and halts entries the next day; settlement of its expired legs is unverified ‡",
+   "severity": "P2",
+   "status": "BROKEN (latent) ‡",
+   "evidence_class": [
+    "synthetic fixture",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "latent",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "With a prior-day open trade in intraday_open, start_session squares it off at the next open (or settles it at the expiry close), records the fills, reconciles to ok, and files an issue. Expired broker legs are settled by a test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": "Restart state"
+  },
+  {
+   "id": "H-04",
+   "phase": "H",
+   "title": "CRITICAL states (reconciliation failure, safe mode, kill switch) and soft-failed workflow steps never reach an alert; no heartbeat watchdog",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5b",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A synthetic journal with one CRITICAL event yields a self-review finding; live.yml with a forced soft-fail produces a finding (or the step fails the job); a Worker dispatch failure creates an issue or notification; a stale-heartbeat check runs every N minutes in market hours, and a probe proves it fires",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S5",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": "Operator surface health"
+  },
+  {
+   "id": "H-05",
+   "phase": "H",
+   "title": "Self-review judges the wrong day when its cron is delivered after midnight IST; a real miss can be misdated and auto-closed",
+   "severity": "P3",
+   "status": "VERIFIED ‡",
+   "evidence_class": [
+    "synthetic fixture",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC6",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A scheduled review delivered at any time before the next session's open checks the last completed trading day. A test with now = 01:14 IST D+1 and no D session files \"did not run on D\"",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S5",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "phase_l_update": "Related mechanism confirmed for live.yml (L-05, I-10): cron delivery 6-7 h late is routine on this repo.",
+   "duplicate_group": "Cron lateness"
+  },
+  {
+   "id": "H-06",
+   "phase": "H",
+   "title": "The file kill switch can't be used on the runners; the real kill switch (cancel) also stops the desk for the day and can strike mid-order",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "synthetic fixture",
+    "inference",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A persisted kill flag (in the saved journal state) is settable remotely, honoured by the next minute step in both jobs and the next day, with \"halt entries\" and \"flatten\" modes. SIGTERM is deferred until the current order sequence completes (test: signal during _open/_close leaves broker = journal)",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "H-07",
+   "phase": "H",
+   "title": "Safe mode (\"no entries for the session\") is forgotten at the 12:20 handover",
+   "severity": "P3",
+   "status": "BROKEN",
+   "evidence_class": [
+    "synthetic fixture",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Safe mode is saved in intraday_open, restored by _restore for the same day, and cleared only by an explicit operator action or the next day. The probe above flips to asserting that safe mode persists",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": "Restart state"
+  },
+  {
+   "id": "H-08",
+   "phase": "H",
+   "title": "A missing or stale India VIX silently becomes 14.0 (or the last stale value) in the model's implied vol",
+   "severity": "P3",
+   "status": "VERIFIED (latent)",
+   "evidence_class": [
+    "synthetic fixture",
+    "code-only",
+    "production persisted data"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "latent",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "model_state returns a staleness flag. With VIX missing or older than N minutes, the model chain is marked degraded and entries priced on it are refused; a test asserts the refusal and the event",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": "India VIX zero"
+  },
+  {
+   "id": "H-09",
+   "phase": "H",
+   "title": "The afternoon job runs the branch tip: code can change mid-session on state written by different code",
+   "severity": "P3",
+   "status": "VERIFIED (config); impact UNVERIFIED",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "The afternoon checks out needs.morning.outputs.sha (or the morning's github.sha); the session start event records the commit for each job; a test reads both and asserts they are equal, or that a hot-fix flag is present",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "H-10",
+   "phase": "H",
+   "title": "The journal is persisted only at job end, to a single force-pushed copy; a runner loss drops the job's state",
+   "severity": "P3",
+   "status": "VERIFIED (design); runner-loss outcome [infer]",
+   "evidence_class": [
+    "inference",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "An incremental save after each fill (or every N minutes) plus a retained history (e.g. daily tags or artifacts). A test kills the job after a fill and shows the next job restores that fill",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "H-11",
+   "phase": "H",
+   "title": "Plan studies are outside retention and grow ~7–8 MB per autolearn day inside the journal snapshot",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data",
+    "inference",
+    "code-only",
+    "synthetic fixture"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A retention rule for plan/studies with a test (N+1 studies → N kept, referenced studies protected); snapshot size flat across 10 synthetic cycles",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "H-12",
+   "phase": "H",
+   "title": "The repo's handover and kill-switch recovery tests skip on every run (no CI coverage of restart recovery)",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "The three tests run (0 skipped) with an injected trade; a CI check fails on a skip in test_handover.py",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "H-13",
+   "phase": "H",
+   "title": "Pre-open GIFT Nifty prints are used without an age check (display only)",
+   "severity": "P4",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "preopen ignores prints older than the previous close, with a test",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "H-14",
+   "phase": "H",
+   "title": "Retry policy is uneven and loop overruns are only WARN; a Kotak timeout is not retried",
+   "severity": "P4",
+   "status": "PARTIAL (overruns [prod]; timeout propagation UNVERIFIED)",
+   "evidence_class": [
+    "synthetic fixture",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Step timing broken down by provider is journaled; a fake-provider test with a timeout shows one retry and a bounded step time; overruns above a threshold count toward the H-04 alert",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md + H_RELIABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "I-01",
+   "phase": "I",
+   "title": "The India VIX recorded since the Kotak switch is 0; every analyst read since 10-05 carries a fabricated \"−100 % VIX\" bullish vote",
+   "severity": "P2",
+   "status": "BROKEN (production)",
+   "evidence_class": [
+    "replay (archived)",
+    "synthetic fixture",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": false,
+    "note": "UNVERIFIED: whether Kotak's candle endpoint returns zero OHLC for INDIA VIX, or parsing zero-fills it. The Kotak payload has never been inspected (A-11)"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Data: VIX bars ≤ 0, or a ≥ 50 % one-minute move, are quarantined, never recorded as valid, and raise WARN or above. Vote: the vix factor is absent (not +1) when VIX is invalid. Probes: a probe over 5 recorded sessions shows 0 zero-VIX bars and 0 \"−100 %\" observations. Learning: the vix memory entry is rebuilt or flagged",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "phase_l_update": "Root cause still UNVERIFIED (no payload). Indicated: zero OHLC only on Kotak-served minutes; the 1 nonzero bar/day carries Yahoo-style float32 artefacts; 10-08: 1 Yahoo poll <-> 1 nonzero bar. The candle path has no >0 guard (ltp() has one). validation.py:40's INDIAVIX exemption is not on the intraday path (ops/checks only): not causal. Learning effect reconciled exactly (L2). Escalation to P1 not triggered: autolearn/research VIX is Yahoo with a >0 guard (plans.py:324).",
+   "duplicate_group": "India VIX zero"
+  },
+  {
+   "id": "I-02",
+   "phase": "I",
+   "title": "The news record of \"when the desk saw it\" is overwritten by every new job; LLM reads are erased",
+   "severity": "P2",
+   "status": "BROKEN (production)",
+   "evidence_class": [
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A story's first seen_at, ts and every read are write-once; a restart re-reads known IDs from the journal. A test runs two jobs over the same feed and asserts unchanged rows. A snapshot diff across a handover shows 0 changed seen_at",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "I-03",
+   "phase": "I",
+   "title": "No decision or trade record identifies the code, configuration, dependencies or model that produced it",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "The session-start event carries {commit, config_sha256, pip_freeze_sha256, model_ids} for each job; decision rows reference the session. A probe asserts these keys are present and match the running checkout",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "I-04",
+   "phase": "I",
+   "title": "A recorded session cannot be replayed from persisted evidence alone; decisions do not reproduce",
+   "severity": "P2",
+   "status": "VERIFIED (§8 test 17 executed)",
+   "evidence_class": [
+    "replay (archived)",
+    "production persisted data",
+    "substituted replay",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Every input to a decision is persisted (or deterministically re-fetchable with a content hash): global, breadth, research priors, futures OI, LLM reads (immutable), memory as of the session start, and code and config IDs. replay --date D on 5 recorded sessions reproduces ≥ 99 % of thought biases and 100 % of decision rows (minute, setup, gate)",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "I-05",
+   "phase": "I",
+   "title": "Journal records are mutable and nothing can detect an edit or deletion",
+   "severity": "P2",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Each table is append-only (corrections as new rows), with a hash chain whose head is anchored outside the snapshot (e.g. in the commit message, or a separate append-only branch or release). A verifier detects the three edits above; a test asserts that detection",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "I-06",
+   "phase": "I",
+   "title": "Interrupted entries and exits leave detectable evidence that nothing checks; an entry's rationale is lost; partial fills are unrepresentable",
+   "severity": "P2",
+   "status": "VERIFIED [synth, production journal setting]",
+   "evidence_class": [
+    "synthetic fixture",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "An intent row is committed before the first broker call; fills carry the order ID, requested quantity and intent; a persisted-record reconciler flags orphan fills, fill/trade mismatches and stale open trades. Tests for both crash points pass with the reconciler flagging each case",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S3",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "duplicate_group": "Restart state"
+  },
+  {
+   "id": "I-07",
+   "phase": "I",
+   "title": "Decisions don't identify the inputs they used; their text can misstate the value used",
+   "severity": "P3",
+   "status": "VERIFIED (production)",
+   "evidence_class": [
+    "replay (archived)",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Decision context has chain_ts / snapshot_id, quote basis and every numeric input; text is generated from context; a probe matches 100 % of decisions to an archived snapshot",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "phase_l_update": "Full coverage: replay 14/41 and production 33/51 EV rows print a P(up) the evaluator did not use; all 51 production EV rows priced an iron fly (direction 0, P(up) 0.5). The app's 'P(up) used' says 'coin flip + prior' in 41/41 replay minutes.",
+   "duplicate_group": "EV P(up) text"
+  },
+  {
+   "id": "I-08",
+   "phase": "I",
+   "title": "Ambiguous timestamps: events back-dated to the session open, and two clocks mixed in one table",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "synthetic fixture",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A written_at column on all tables; reconcile and restart events use the detection time; a probe asserts event order equals causal order in the crash scenarios",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "I-09",
+   "phase": "I",
+   "title": "model_state's inputs are not recorded; with production's zero VIX it prices at zero volatility, or crashes the step",
+   "severity": "P3",
+   "status": "VERIFIED (latent): the model chain was used 0 of 743 times in production",
+   "evidence_class": [
+    "synthetic fixture",
+    "production persisted data",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "latent",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "VIX ≤ 0 or stale → model chain degraded and entries refused, with an event recording S, VIX, IV and ages. _vix_state never divides by a non-positive base; a probe with zero VIX passes without an exception",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S2",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "duplicate_group": "India VIX zero"
+  },
+  {
+   "id": "I-10",
+   "phase": "I",
+   "title": "Market data for some sessions is not persisted anywhere",
+   "severity": "P3",
+   "status": "VERIFIED",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC6",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A daily completeness check (bars ≥ 370 per index, chains present) files an issue on a gap; a backfill path exists",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S1",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_I_AUDITABILITY.md",
+   "phase_l_update": "Owner correction accepted. Scheduler attribution VERIFIED against run metadata: live.yml cron '22 3 * * 1-5' (08:52 IST); 09-30 run event=schedule created 09:49:30Z (15:19 IST), 10-01 created 10:16:38Z (15:46 IST, 80 s); no dispatch either day; scheduler.yml added 3e2b99a 2026-10-02 09:37Z. Why GitHub delivered late: external, unknowable. Retitle: 'No live session on 10-01 and 10 minutes on 09-30 (late cron); the record has holes'.",
+   "duplicate_group": "Cron lateness"
+  },
+  {
+   "id": "J-01",
+   "phase": "J",
+   "title": "The zero India VIX is displayed as a valid, \"learned\", maximally bullish factor, on the deployed site too",
+   "severity": "P2",
+   "status": "MISLEADING (production, rendered)",
+   "evidence_class": [
+    "production persisted data",
+    "synthetic fixture",
+    "rendered (Chromium)",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "The data defect is I-01 (proposed); this finding is about presenting it as valid"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "An invalid series (≤ 0, or a ≥ 50 % one-minute move) is shown as \"data invalid\", never as a vote, a learned multiplier or a bar. A render test on a zero-VIX fixture finds no \"India VIX 0.00\" evidence row and finds a data-quality warning",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "owner_decision": {
+    "severity_proposed": "P1",
+    "basis": "owner decision on the Phase J review"
+   },
+   "duplicate_group": "India VIX zero"
+  },
+  {
+   "id": "J-02",
+   "phase": "J",
+   "title": "Account equity, P&L and positions show the journal's view; broker-held orphan or naked legs are invisible and phantom P&L is displayed",
+   "severity": "P2 (P0 if any live mode is enabled; same rule as H-01)",
+   "status": "MISLEADING (latent): rendered on engine-written synthetic crash journals; production has had 0 trades",
+   "evidence_class": [
+    "production persisted data",
+    "synthetic fixture",
+    "rendered (Chromium)",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "latent",
+   "root_cause": {
+    "family": "RC7",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Positions are rendered from broker positions with journal attribution. Any leg not in a journal trade is shown as \"unattributed position\" with its mark. Equity includes all broker positions. A disagreement state disables the P&L headline and shows a red reconciliation banner. Render tests on the 8a and 8b fixtures assert the orphan and short are visible and \"Today\" P&L is withheld",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "n/a: latent path; must not be provoked in production"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "owner_decision": {
+    "severity_proposed": "P2 (P0 if any live-trading mode is enabled)",
+    "basis": "owner decision on the Phase J review"
+   },
+   "duplicate_group": "Restart state"
+  },
+  {
+   "id": "J-03",
+   "phase": "J",
+   "title": "Safe mode and broker/journal disagreement are not shown as halts; the headline reads \"Reading the market every minute\" and the pill \"Live\"",
+   "severity": "P2",
+   "status": "MISLEADING (rendered, engine-written fixtures)",
+   "evidence_class": [
+    "synthetic fixture",
+    "rendered (Chromium)"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Every heartbeat halt (safe_mode, reconcile, kill_switch, journal, daily_loss) produces a red headline, a pill state other than \"Live\", and an entry in \"Halts\". Render tests on the safe, 8a and kill fixtures assert all three",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "owner_decision": {
+    "severity_proposed": "P2",
+    "basis": "owner decision on the Phase J review"
+   },
+   "duplicate_group": null
+  },
+  {
+   "id": "J-04",
+   "phase": "J",
+   "title": "News ages are computed from rewritten publish times; first-seen time and lost LLM reads are not represented",
+   "severity": "P3",
+   "status": "MISLEADING (production, rendered)",
+   "evidence_class": [
+    "production persisted data",
+    "synthetic fixture",
+    "rendered (Chromium)"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC4",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "The Feed shows the immutable first-seen time (and publish time) once I-02 is fixed. A fixture with a re-fetched story renders the original age and its original reads",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "J-05",
+   "phase": "J",
+   "title": "\"What the desk has learned\", \"learned ×\", Track record and IC present noise-level, mixed-provenance statistics as learning",
+   "severity": "P2",
+   "status": "MISLEADING (protocol claims 1 and 2; 4 and 7 partial)",
+   "evidence_class": [
+    "replay (archived)"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Learned figures carry a statistical label (CI or placebo result) or are relabelled \"unvalidated tilt\" (consolidation R7). \"Sessions graded\" counts live sessions separately from bootstrap and replay. IC cells show a multiplicity-adjusted significance. A UI test asserts the labels",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S7",
+   "gate": "G2",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "phase_l_update": "Clarified per owner: 6 of the 11 'graded sessions' are bootstrap Yahoo replays (09-24 .. 10-01, incl. 10-01). Phase L adds L-06 (IC on a near-constant regressor).",
+   "duplicate_group": null
+  },
+  {
+   "id": "J-06",
+   "phase": "J",
+   "title": "Global intelligence: the UI says only validated links vote, but unvalidated drivers vote; the stress size-cut text describes a control that can't bind",
+   "severity": "P3",
+   "status": "MISLEADING (contradicted)",
+   "evidence_class": [
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Glossary and table distinguish \"validated\", \"voting on live record (unvalidated)\" and \"context only\". The stress text says when the cut can apply, or the cut is moved before EV. A test compares the voting factors with the displayed statuses",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "J-07",
+   "phase": "J",
+   "title": "\"Waiting at the level\" shown while no entry can be authorised",
+   "severity": "P3",
+   "status": "MISLEADING (settled B-06, now quantified on production data)",
+   "evidence_class": [
+    "production persisted data",
+    "synthetic fixture",
+    "rendered (Chromium)"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "When the gate can't authorise (no approved model for the setup), the UI shows \"Watching (entry gated: no approved model)\" instead of \"Waiting at the level\". A render test on an armed fixture with an empty registry asserts it",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "duplicate_group": "Trigger outcome not shown"
+  },
+  {
+   "id": "J-08",
+   "phase": "J",
+   "title": "No-trade reasons are partial: rejection decisions are never shown, and the \"Why stand aside?\" text omits the main production reasons",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "see source"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A \"Decisions\" view lists every rejection with its gate, EV and plan. The glossary lists every gate the engine can return (generated from the engine's gate list). A test compares the gate list with the glossary",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "duplicate_group": "Trigger outcome not shown"
+  },
+  {
+   "id": "J-09",
+   "phase": "J",
+   "title": "Chart levels are recomputed from recorded bars and can contradict the engine's levels",
+   "severity": "P3",
+   "status": "MISLEADING (when a prior day is missing or gappy)",
+   "evidence_class": [
+    "see source"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "medium",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "The chart shows the engine's levels (from the thought or heartbeat) for the levels the engine used, or flags a disagreement. A test on 10-05 data shows the engine's PDL",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "J-10",
+   "phase": "J",
+   "title": "\"Paper trading\" glossary claims real option chains and real costs unconditionally",
+   "severity": "P3",
+   "status": "PARTIAL",
+   "evidence_class": [
+    "see source"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "medium",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "The glossary states when quotes are modelled, and the cost and fill simplifications. A trade made on the model chain is badged \"modelled quotes\" in Trades",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "duplicate_group": null
+  },
+  {
+   "id": "J-11",
+   "phase": "J",
+   "title": "The stale banner explains any staleness as a hand-over, and \"Now\" shows an old stance as current",
+   "severity": "P4",
+   "status": "PARTIAL (staleness itself is flagged, V-J1)",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5b",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "The banner text depends on age and time of day (a missed session is not called a hand-over). \"Now\" is greyed or labelled with the heartbeat's age when stale",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md",
+   "duplicate_group": "Operator surface health"
+  },
+  {
+   "id": "K-01",
+   "phase": "K",
+   "title": "A trigger rejected by the gate is re-armed at the same level within the same minute, so the UI keeps showing \"Waiting at the level\" for a level that was just reached and refused",
+   "severity": "P3",
+   "status": "MISLEADING (reproduced)",
+   "evidence_class": [
+    "production persisted data",
+    "replay (archived)",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "After a gate rejection, the same setup/level is not re-armed for the rest of that read (or is shown as \"rejected: *gate*\"); the Desk shows the last rejection and its gate for ≥ 5 min. A replay test on 10-05 asserts that at 10:56 the heartbeat shows the rejection, not \"armed\"",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_K_SESSION_FORENSICS.md",
+   "owner_decision": {
+    "severity_proposed": "P3",
+    "basis": "owner: reproduced in exact replay"
+   },
+   "phase_l_update": "Extended: bar replay over 5 sessions: 8 of 60 rejections re-armed at the same level in the same minute; 60/60 outcomes shown nowhere. Shares root cause L-01.",
+   "duplicate_group": "Trigger outcome not shown"
+  },
+  {
+   "id": "K-02",
+   "phase": "K",
+   "title": "A trigger that fired and was rejected is reported as \"no setup has triggered\"",
+   "severity": "P3",
+   "status": "MISLEADING (reproduced on a substituted replay; production read consistent)",
+   "evidence_class": [
+    "production persisted data",
+    "substituted replay",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "The minute's action reports the trigger and its rejection; \"no setup has triggered\" never appears in a minute with a decision row for that symbol. Replay test on 10-08 09:44",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_K_SESSION_FORENSICS.md",
+   "owner_decision": {
+    "severity_proposed": "P3",
+    "basis": "owner: substituted replay plus consistent production evidence"
+   },
+   "phase_l_update": "Extended: 41 of 60 bar-replay rejections are followed by 'no setup has triggered'; production lower bound 6 of 22 within 5 min (sampled thoughts). Shares root cause L-01.",
+   "duplicate_group": "Trigger outcome not shown"
+  },
+  {
+   "id": "K-03",
+   "phase": "K",
+   "title": "The published site shows \"Stale … min\" (and blames a hand-over) at the start of every session, until the first fresh publish",
+   "severity": "P3",
+   "status": "PARTIALLY REPRODUCED",
+   "evidence_class": [
+    "production persisted data (rendered)",
+    "production persisted data"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5b",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "Between 09:15 and the first heartbeat of the day, the UI shows \"Starting · first read at ~09:16\" (not \"Stale\"). A clock-advanced render test at 09:15–09:20 with the previous day's data.json asserts it",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_K_SESSION_FORENSICS.md",
+   "owner_decision": {
+    "severity_proposed": "P3",
+    "basis": "owner: partially reproduced; Pages latency unmeasured (Phase L: deploy time now measured, CDN still not)"
+   },
+   "phase_l_update": "Pages deploy timing measured (382 runs): build+deploy median 27 s, p90 56 s, max 147 s; first in-session deployment 09:19:34-09:19:40 IST on 10-05..10-08. CDN caching and 10-09 (no deployments) unresolved.",
+   "duplicate_group": "Operator surface health"
+  },
+  {
+   "id": "K-04",
+   "phase": "K",
+   "title": "The status pill reads \"Live\" for up to 15 minutes after the session has ended",
+   "severity": "P4",
+   "status": "MISLEADING (reproduced on production data)",
+   "evidence_class": [
+    "production persisted data (rendered)",
+    "production persisted data",
+    "replay (archived)"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5b",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "After 15:30 IST (or once the heartbeat carries ended: true), the pill reads \"Closed\". A render test at 15:31 and 15:44",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "re-running the recorded-session replays shows 0 occurrences",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_K_SESSION_FORENSICS.md",
+   "owner_decision": {
+    "severity_proposed": "P4",
+    "basis": "owner"
+   },
+   "duplicate_group": "Operator surface health"
+  },
+  {
+   "id": "K-05",
+   "phase": "K",
+   "title": "A trade made on modelled quotes is presented as a market result; its own record labels the fills \"option chain\"",
+   "severity": "P3",
+   "status": "MISLEADING (reproduced on a synthetic trade with a documented gate substitution; production has no trades)",
+   "evidence_class": [
+    "production persisted data",
+    "synthetic fixture",
+    "code-only"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "high",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC2",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "fill_quotes names the actual source (model / recorded / live book); the sheet and history row badge model-priced trades (\"modelled quotes\"). Test on the synthetic fixture",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S8",
+   "gate": "G3",
+   "source": "QUANTDESK_PHASE_K_SESSION_FORENSICS.md",
+   "owner_decision": {
+    "severity_proposed": "P3",
+    "basis": "owner: synthetic only"
+   },
+   "duplicate_group": null
+  },
+  {
+   "id": "K-06",
+   "phase": "K",
+   "title": "A server-side outage is labelled \"Offline\"",
+   "severity": "P4",
+   "status": "PARTIAL (the outage itself is flagged correctly)",
+   "evidence_class": [
+    "see source"
+   ],
+   "evidence_class_method": "keyword-derived from the finding's section text: review before adoption",
+   "confidence": "medium",
+   "uncertainty": "observed",
+   "root_cause": {
+    "family": "RC5b",
+    "demonstrated": true,
+    "note": "family assigned in Phase L"
+   },
+   "related": [],
+   "risk_if_unresolved": null,
+   "acceptance": "A non-2xx response from the host yields \"Site not updating (HTTP 503)\"; \"Offline\" is reserved for navigator.onLine === false. Render test with an intercepted 503",
+   "acceptance_by_evidence_class": {
+    "template": true,
+    "synthetic": "a deterministic fixture/probe asserting the acceptance above flips from fail to pass",
+    "replay": "n/a unless the defect is observable in recorded sessions",
+    "production": "monitored over >= 5 consecutive production sessions with 0 occurrences, from persisted records"
+   },
+   "regression_test": "flip the finding's existing probe (phase report)",
+   "dependencies": [],
+   "roadmap_item": null,
+   "earliest_stage": "S4",
+   "gate": "G1",
+   "source": "QUANTDESK_PHASE_K_SESSION_FORENSICS.md",
+   "owner_decision": {
+    "severity_proposed": "P4",
+    "basis": "owner"
+   },
+   "duplicate_group": "Operator surface health"
+  },
+  {
+   "id": "L-01",
+   "title": "An armed trigger's outcome never reaches the screen: `step()` discards `_fire_armed`'s result, model-gate rejections are written to `decisions` only, and the live-tick path rewrites the heartbeat with the stale 'armed:' action and an emptied armed list",
+   "severity": "P3",
+   "status": "VERIFIED (exact + substituted replay, every minute; production by path and code)",
+   "evidence_class": [
+    "exact replay",
+    "substituted replay",
+    "synthetic fixture (tick emulation)",
+    "production persisted data",
+    "code-only"
+   ],
+   "confidence": "high (replay, full coverage); production screens not recountable (heartbeat overwritten)",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "engine.py:257-258 ignores the return value; :477-482 decision-only by design; tick() :565-574 heartbeat without updating last_action; :1347 per-minute _think overwrites. Demonstrated by instrumented replay"
+   },
+   "related": [
+    "K-01",
+    "K-02",
+    "J-07",
+    "J-08",
+    "B-03",
+    "B-06"
+   ],
+   "dependencies": [],
+   "risk_if_unresolved": "The operator cannot see what the desk did at a trigger; a future approved-but-blocked or sized-to-zero hit is equally invisible",
+   "acceptance": "Every armed-trigger hit produces exactly one record of its outcome that the UI shows for >= 1 minute; no heartbeat after a rejection says 'armed' for the rejected level or 'no setup has triggered'",
+   "acceptance_by_evidence_class": {
+    "synthetic": "tick-emulated fixture: 0 heartbeats with an 'armed:' action and no armed entry for that symbol",
+    "replay": "phase_l_consistency over 5 sessions x 2 modes: 0 of N hits unshown (today 60/60 unshown in each mode)",
+    "production": "5 consecutive sessions: every decision row with context.armed has a matching thought/heartbeat outcome within 60 s"
+   },
+   "regression_test": "test_phase_l_probes::test_every_replayed_trigger_rejection_is_hidden_from_the_screen (flips after the fix)",
+   "earliest_stage": "S4",
+   "source": "Phase L L1",
+   "phase": "L",
+   "evidence_class_method": "hand-assigned in Phase L",
+   "gate": "G1",
+   "uncertainty": "observed",
+   "roadmap_item": null,
+   "duplicate_group": "Trigger outcome not shown"
+  },
+  {
+   "id": "L-02",
+   "title": "A trigger hit while a halt is up leaves no record that the level was reached (`_fire_armed` clears the armed list and returns None at `_blocked`)",
+   "severity": "P4",
+   "status": "VERIFIED (synthetic fixture on the exact 10-05 replay); 0 production occurrences observable",
+   "evidence_class": [
+    "synthetic fixture",
+    "code-only"
+   ],
+   "confidence": "high (deterministic)",
+   "root_cause": {
+    "family": "RC5a",
+    "demonstrated": true,
+    "note": "engine.py:465-468"
+   },
+   "related": [
+    "L-01",
+    "H-07",
+    "J-03"
+   ],
+   "dependencies": [
+    "L-01"
+   ],
+   "risk_if_unresolved": "Post-incident review can't tell whether a halt cost an entry",
+   "acceptance": "A blocked hit writes a decision row with the halt reason",
+   "acceptance_by_evidence_class": {
+    "synthetic": "phase_l_blocked_silent: 1 decision row at 10:56 with the halt reason",
+    "replay": "n/a (no halts in replays)",
+    "production": "n/a until a halt coincides with a hit"
+   },
+   "regression_test": "test_phase_l_probes::test_halted_trigger_hit_leaves_no_record",
+   "earliest_stage": "S4",
+   "source": "Phase L L1",
+   "phase": "L",
+   "evidence_class_method": "hand-assigned in Phase L",
+   "gate": "G1",
+   "uncertainty": "observed",
+   "roadmap_item": null,
+   "duplicate_group": "Trigger outcome not shown"
+  },
+  {
+   "id": "L-03",
+   "title": "The published site shows armed setups after they expire: TTL 2 min, publish cadence 6 min, and the app never checks `expires`",
+   "severity": "P3",
+   "status": "VERIFIED (code + config + substituted replay counts; 1 production published snapshot)",
+   "evidence_class": [
+    "code-only",
+    "substituted replay",
+    "production persisted data"
+   ],
+   "confidence": "high for the mechanism; viewer exposure inferred",
+   "root_cause": {
+    "family": "RC5b",
+    "demonstrated": true,
+    "note": "config anticipate.ttl_min 2; run-session.sh PUBLISH_EVERY_MIN 6; app.js renderNow/armedRow ignore expires"
+   },
+   "related": [
+    "K-03",
+    "K-04",
+    "J-07",
+    "L-04"
+   ],
+   "dependencies": [],
+   "risk_if_unresolved": "For about 4 of every 6 minutes after a publish that carries one, a viewer sees an 'Armed · … until HH:MM' already in the past",
+   "acceptance": "The app hides or greys armed entries whose expires < now; the publish cadence is >= TTL or the card says 'as of'",
+   "acceptance_by_evidence_class": {
+    "synthetic": "render at expires+1 min: no 'Armed ·' headline",
+    "replay": "0 published snapshots with an expired card shown as live",
+    "production": "gh-pages snapshots over 5 sessions: 0 expired cards rendered as live"
+   },
+   "regression_test": "test_phase_l_probes::test_published_armed_card_outlives_its_expiry",
+   "earliest_stage": "S4",
+   "source": "Phase L L1",
+   "phase": "L",
+   "evidence_class_method": "hand-assigned in Phase L",
+   "gate": "G1",
+   "uncertainty": "observed",
+   "roadmap_item": null,
+   "duplicate_group": "Operator surface health"
+  },
+  {
+   "id": "L-04",
+   "title": "The published site returned HTTP 404 at 2026-10-09 18:35Z; GitHub Pages has no deployment after 2026-10-08 10:46Z although gh-pages was pushed on 10-09 and the live run concluded success; nothing alerted",
+   "severity": "P2",
+   "status": "OBSERVED (production, GitHub API + HTTP); cause and start time UNRESOLVED",
+   "evidence_class": [
+    "production persisted data",
+    "external source"
+   ],
+   "confidence": "high for the observation; cause unknown",
+   "root_cause": {
+    "family": "RC5b",
+    "demonstrated": false,
+    "note": "Pages settings/deploy state not readable read-only; the Worker proxies the Pages origin and passes the 404 through"
+   },
+   "related": [
+    "H-04",
+    "K-03",
+    "K-04",
+    "K-06",
+    "J-11"
+   ],
+   "dependencies": [],
+   "risk_if_unresolved": "The operator's only window is down with no signal; Phase J/K 'production render' findings describe gh-pages branch content, not necessarily what was served on 10-09",
+   "acceptance": "A post-publish check fetches the served data.json, compares its heartbeat ts with the pushed one and alerts on mismatch or non-200",
+   "acceptance_by_evidence_class": {
+    "synthetic": "the check fed a 404 / stale body raises an alert",
+    "replay": "n/a",
+    "production": "5 sessions: every in-session publish verified served within 5 min; 0 unalerted mismatches"
+   },
+   "regression_test": "phase_l_pages_latency (deployments per session-day) + an HTTP check (owner-side)",
+   "earliest_stage": "S0",
+   "source": "Phase L L4",
+   "phase": "L",
+   "evidence_class_method": "hand-assigned in Phase L",
+   "gate": "G1",
+   "uncertainty": "observed",
+   "roadmap_item": null,
+   "duplicate_group": "Operator surface health"
+  },
+  {
+   "id": "L-05",
+   "title": "The backup cron for live.yml is still delivered after the close every day and runs the full pipeline: duplicate, mislabelled archive assets ('morning' = full-day bars) and an extra post-close journal save",
+   "severity": "P4",
+   "status": "VERIFIED (production, Actions run/job metadata and release assets)",
+   "evidence_class": [
+    "production persisted data"
+   ],
+   "confidence": "high",
+   "root_cause": {
+    "family": "RC6",
+    "demonstrated": true,
+    "note": "live.yml cron '22 3 * * 1-5' kept as backup (3e2b99a); runs created 10:23-10:43Z on 10-05..10-09; journal content unchanged on 10-09 (last event 15:31:04)"
+   },
+   "related": [
+    "H-05",
+    "I-10",
+    "H-10",
+    "A-10"
+   ],
+   "dependencies": [],
+   "risk_if_unresolved": "Archive consumers can double-count bars; a post-close force-push races any later journal writer",
+   "acceptance": "A live.yml run that starts after 15:30 IST exits before restoring or saving the journal and uploads nothing",
+   "acceptance_by_evidence_class": {
+    "synthetic": "dry-run of live.yml logic at 16:00 IST: no save/upload steps",
+    "replay": "n/a",
+    "production": "5 sessions: 0 release assets from runs created after 10:00Z"
+   },
+   "regression_test": "release asset listing per day (phase_l report §4)",
+   "earliest_stage": "S5",
+   "source": "Phase L L3",
+   "phase": "L",
+   "evidence_class_method": "hand-assigned in Phase L",
+   "gate": "G1",
+   "uncertainty": "observed",
+   "roadmap_item": null,
+   "duplicate_group": "Cron lateness"
+  },
+  {
+   "id": "L-06",
+   "title": "The learning IC table ranks a near-constant regressor: 'vix' is #2 of the app's top 12 (|t| 1.85 at 5 min) on direction variance 0.0002 (mean 0.999), i.e. on the fabricated +1 vote",
+   "severity": "P3",
+   "status": "VERIFIED (production memory; repo's ic_table)",
+   "evidence_class": [
+    "production persisted data",
+    "code-only"
+   ],
+   "confidence": "high",
+   "root_cause": {
+    "family": "RC3",
+    "demonstrated": true,
+    "note": "learning.ic_table guards only vx <= 1e-12; no minimum direction variance or effective-n rule"
+   },
+   "related": [
+    "J-05",
+    "I-01",
+    "D-01",
+    "J-01"
+   ],
+   "dependencies": [
+    "I-01"
+   ],
+   "risk_if_unresolved": "The UI presents an artefact of invalid data as one of the strongest learned signals",
+   "acceptance": "ic_table excludes factors whose direction variance or distinct-value count is below a stated floor, and says so",
+   "acceptance_by_evidence_class": {
+    "synthetic": "a constant-direction factor is excluded",
+    "replay": "n/a",
+    "production": "the CLOSE memory's table no longer lists 'vix' until rebuilt"
+   },
+   "regression_test": "test_phase_l_probes::test_vix_ic_is_ranked_on_a_near_constant_regressor",
+   "earliest_stage": "S7",
+   "source": "Phase L L2",
+   "phase": "L",
+   "evidence_class_method": "hand-assigned in Phase L",
+   "gate": "G2",
+   "uncertainty": "observed",
+   "roadmap_item": null,
+   "duplicate_group": "India VIX zero"
+  }
+ ]
+}

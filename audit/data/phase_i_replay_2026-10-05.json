@@ -1,0 +1,72 @@
+{
+ "day": "2026-10-05",
+ "substitution": {
+  "dropped_all_zero_prior_vix_days": []
+ },
+ "inputs": {
+  "bar_days": [
+   "2026-09-29",
+   "2026-09-30",
+   "2026-10-05"
+  ],
+  "chain_snapshots": {
+   "NIFTY": 1121,
+   "BANKNIFTY": 748
+  }
+ },
+ "thoughts": {
+  "production": 149,
+  "replay": 164,
+  "same_minute_and_symbol": 35,
+  "bias_equal": 28,
+  "median_abs_score_diff": 0.154,
+  "max_abs_score_diff": 0.6103
+ },
+ "factors_only_in_production": {
+  "news": 35,
+  "heavy_pulse": 28,
+  "breadth": 24,
+  "global_crude": 24,
+  "global_dollar": 24,
+  "global_us": 23,
+  "basis": 19,
+  "global_rupee": 14,
+  "research": 13,
+  "fut_oi": 10,
+  "oi_shift": 7,
+  "global_asia": 5,
+  "skew_trend": 4,
+  "global_fear": 4,
+  "global_europe": 3,
+  "breadth_div": 2
+ },
+ "factors_only_in_replay": {
+  "oi_shift": 6,
+  "skew_trend": 3
+ },
+ "factor_sign_agreement": {
+  "cpr": "18/35",
+  "divergence": "13/13",
+  "ema_5m": "28/35",
+  "flow": "35/35",
+  "htf": "25/35",
+  "oi_shift": "5/9",
+  "oi_walls": "33/35",
+  "orb": "33/33",
+  "pcr": "35/35",
+  "prev_day": "3/35",
+  "rsi": "28/35",
+  "skew_trend": "8/9",
+  "supertrend": "33/35",
+  "value": "32/35",
+  "vix": "35/35",
+  "vwap": "35/35"
+ },
+ "decisions": {
+  "production": 7,
+  "replay": 9,
+  "same_minute_strategy_symbol": 0,
+  "production_only": 7,
+  "replay_only": 9
+ }
+}

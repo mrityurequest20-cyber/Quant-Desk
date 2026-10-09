@@ -1,0 +1,34 @@
+{
+ "vix_normal": {
+  "model_state_iv": 0.155071935080391,
+  "atm_strike": 25700.0,
+  "atm_ce_ltp": 243.60000000000002,
+  "atm_ce_bid_ask": [
+   242.60000000000002,
+   244.65
+  ],
+  "atm_ce_iv_col": 15.611077520556515,
+  "engine_chain_an_atm_iv": 15.634539969719508,
+  "engine_chain_source": "model",
+  "vix_state": {
+   "last": 15.5071935080391,
+   "chg": 0.04614355764761635
+  }
+ },
+ "vix_zero": {
+  "model_state_iv": 0.0,
+  "atm_strike": 25700.0,
+  "atm_ce_ltp": 36.65,
+  "atm_ce_bid_ask": [
+   36.45,
+   36.85
+  ],
+  "atm_ce_iv_col": 0.0,
+  "engine_chain_an_atm_iv": NaN,
+  "engine_chain_source": "model",
+  "vix_state": {
+   "last": 0.0,
+   "chg": -1.0
+  }
+ }
+}

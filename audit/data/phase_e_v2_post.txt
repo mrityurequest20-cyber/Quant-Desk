@@ -1,0 +1,15 @@
+      symbol            strategy       entry      expiry        bps  credit_bps  cost_bps
+796    NIFTY  short_strangle_20d  2026-10-05  2026-10-06 -12.445773   21.746118  0.453265
+797    NIFTY   iron_condor_20_05  2026-10-05  2026-10-06 -16.870483   17.733837  0.865695
+2412  SENSEX  short_strangle_20d  2026-10-07  2026-10-08 -49.917670   20.264680  0.417885
+2413  SENSEX   iron_condor_20_05  2026-10-07  2026-10-08 -53.968131   16.568303  0.771970
+short_strangle_20d T 288 lag 0 mean 9.4754 t 4.8234
+short_strangle_20d T 288 lag 5 mean 9.4754 t 4.9772
+short_strangle_20d T 288 lag 10 mean 9.4754 t 4.5424
+  instruments/week distribution {1: 184, 2: 39, 3: 2, 4: 43, 5: 20}
+  symbol-weeks with >1 trade: 9
+iron_condor_20_05 T 288 lag 0 mean 5.4807 t 3.408
+iron_condor_20_05 T 288 lag 5 mean 5.4807 t 3.6338
+iron_condor_20_05 T 288 lag 10 mean 5.4807 t 3.2976
+  instruments/week distribution {1: 184, 2: 39, 3: 2, 4: 43, 5: 20}
+  symbol-weeks with >1 trade: 9

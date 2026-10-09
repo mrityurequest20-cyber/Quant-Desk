@@ -1,0 +1,65 @@
+{
+ "source": "CLOSE memory.json (10-09 16:15 IST) + repo learning.ic_table",
+ "rank_of_vix": 1,
+ "top12": [
+  "global_crude",
+  "vix",
+  "global_fear",
+  "global_us",
+  "global_rupee",
+  "pcr",
+  "heavy_pulse",
+  "global_europe",
+  "global_asia",
+  "skew_trend",
+  "breadth_div",
+  "basis"
+ ],
+ "vix_row": {
+  "factor": "vix",
+  "h": {
+   "5": {
+    "n": 645.0,
+    "ic": -0.0727,
+    "t": -1.85
+   },
+   "15": {
+    "n": 209.3,
+    "ic": -0.0254,
+    "t": -0.37
+   },
+   "30": {
+    "n": 100.8,
+    "ic": -0.0134,
+    "t": -0.13
+   },
+   "60": {
+    "n": 45.8,
+    "ic": -0.0262,
+    "t": -0.17
+   }
+  }
+ },
+ "vix_direction_stats": {
+  "5": {
+   "W": 645.0,
+   "mean_d": 0.9994,
+   "var_d": 0.000217
+  },
+  "15": {
+   "W": 209.3,
+   "mean_d": 0.9994,
+   "var_d": 0.000222
+  },
+  "30": {
+   "W": 100.8,
+   "mean_d": 0.9994,
+   "var_d": 0.000231
+  },
+  "60": {
+   "W": 45.8,
+   "mean_d": 0.9993,
+   "var_d": 0.000254
+  }
+ }
+}

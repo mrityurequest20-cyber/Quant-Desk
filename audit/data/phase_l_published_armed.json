@@ -1,0 +1,31 @@
+{
+ "source": "gh-pages branch copy (scratch, read-only), heartbeat 10-09",
+ "heartbeat_ts": "2026-10-09 12:46:04.000404+05:30",
+ "armed": [
+  {
+   "setup": "vwap_trend",
+   "symbol": "BANKNIFTY",
+   "direction": 1,
+   "kind": "touch",
+   "level": 55048.7,
+   "invalidation": 55024.2,
+   "armed_at": "2026-10-09 12:46:04.000404+05:30",
+   "expires": "2026-10-09 12:48:04.000404+05:30",
+   "why": "bullish read (score +0.61, conviction 0.50)",
+   "text": "vwap_trend: buy on a pullback to 55,048.70 (stop 55,024.20)"
+  }
+ ],
+ "actions": {
+  "NIFTY": "watching: no setup has triggered",
+  "BANKNIFTY": "armed: vwap_trend: buy on a pullback to 55,048.70 (stop 55,024.20)"
+ },
+ "replay_publish_points": {
+  "note": "every 6th stepped minute from 09:16, 5 sessions, bar replay (10-05 exact, 10-06..10-09 substituted)",
+  "publish_points": 315,
+  "with_armed_card": 138
+ },
+ "config": {
+  "anticipate.ttl_min": 2,
+  "PUBLISH_EVERY_MIN": 6
+ }
+}

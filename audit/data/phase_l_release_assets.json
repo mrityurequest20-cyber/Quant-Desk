@@ -1,0 +1,435 @@
+{
+ "source": "GitHub API get_release_by_tag chains-2026 (read-only, fetched during Phase I/L)",
+ "assets": [
+  {
+   "name": "2026-09-29_36515400008_bars.parquet",
+   "created_at": "2026-10-02T10:53:11Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-29_36515400008_chains.parquet",
+   "created_at": "2026-10-02T10:53:11Z",
+   "size": 520538
+  },
+  {
+   "name": "2026-09-29_36552511075_bars.parquet",
+   "created_at": "2026-10-02T10:53:13Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-29_36698563592_bars.parquet",
+   "created_at": "2026-10-02T10:53:18Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-29_36848113951_bars.parquet",
+   "created_at": "2026-10-02T10:53:24Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-29_36992409941_bars.parquet",
+   "created_at": "2026-10-02T10:53:29Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-29_morning-36552511075_bars.parquet",
+   "created_at": "2026-10-02T10:53:16Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-29_morning-36698563592_bars.parquet",
+   "created_at": "2026-10-02T10:53:21Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-29_morning-36848113951_bars.parquet",
+   "created_at": "2026-10-02T10:53:26Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-29_morning-36992409941_bars.parquet",
+   "created_at": "2026-10-02T10:53:31Z",
+   "size": 23349
+  },
+  {
+   "name": "2026-09-30_36698563592_bars.parquet",
+   "created_at": "2026-10-02T10:53:18Z",
+   "size": 5003
+  },
+  {
+   "name": "2026-09-30_36698563592_chains.parquet",
+   "created_at": "2026-10-02T10:53:18Z",
+   "size": 47337
+  },
+  {
+   "name": "2026-09-30_36848113951_bars.parquet",
+   "created_at": "2026-10-02T10:53:24Z",
+   "size": 5003
+  },
+  {
+   "name": "2026-09-30_36992409941_bars.parquet",
+   "created_at": "2026-10-02T10:53:29Z",
+   "size": 5003
+  },
+  {
+   "name": "2026-09-30_morning-36848113951_bars.parquet",
+   "created_at": "2026-10-02T10:53:26Z",
+   "size": 5003
+  },
+  {
+   "name": "2026-09-30_morning-36992409941_bars.parquet",
+   "created_at": "2026-10-02T10:53:31Z",
+   "size": 5003
+  },
+  {
+   "name": "2026-10-05_afternoon-37257601698_bars.parquet",
+   "created_at": "2026-10-05T10:01:24Z",
+   "size": 32507
+  },
+  {
+   "name": "2026-10-05_afternoon-37257601698_chains.parquet",
+   "created_at": "2026-10-05T10:01:25Z",
+   "size": 3507071
+  },
+  {
+   "name": "2026-10-05_afternoon-37257601698_gift.parquet",
+   "created_at": "2026-10-05T10:01:24Z",
+   "size": 4465
+  },
+  {
+   "name": "2026-10-05_afternoon-37257601698_tape.parquet",
+   "created_at": "2026-10-05T10:01:24Z",
+   "size": 50009
+  },
+  {
+   "name": "2026-10-05_afternoon-37297771333_bars.parquet",
+   "created_at": "2026-10-05T10:40:02Z",
+   "size": 32507
+  },
+  {
+   "name": "2026-10-05_afternoon-37297771333_gift.parquet",
+   "created_at": "2026-10-05T10:40:02Z",
+   "size": 4465
+  },
+  {
+   "name": "2026-10-05_afternoon-37297771333_tape.parquet",
+   "created_at": "2026-10-05T10:40:02Z",
+   "size": 50009
+  },
+  {
+   "name": "2026-10-05_morning-37257601698_bars.parquet",
+   "created_at": "2026-10-05T06:51:26Z",
+   "size": 18171
+  },
+  {
+   "name": "2026-10-05_morning-37257601698_chains.parquet",
+   "created_at": "2026-10-05T06:51:26Z",
+   "size": 3474483
+  },
+  {
+   "name": "2026-10-05_morning-37257601698_gift.parquet",
+   "created_at": "2026-10-05T06:51:26Z",
+   "size": 4465
+  },
+  {
+   "name": "2026-10-05_morning-37257601698_tape.parquet",
+   "created_at": "2026-10-05T06:51:26Z",
+   "size": 27674
+  },
+  {
+   "name": "2026-10-05_morning-37297771333_bars.parquet",
+   "created_at": "2026-10-05T10:39:00Z",
+   "size": 32507
+  },
+  {
+   "name": "2026-10-05_morning-37297771333_gift.parquet",
+   "created_at": "2026-10-05T10:39:00Z",
+   "size": 4465
+  },
+  {
+   "name": "2026-10-05_morning-37297771333_tape.parquet",
+   "created_at": "2026-10-05T10:39:00Z",
+   "size": 50009
+  },
+  {
+   "name": "2026-10-06_afternoon-37406867397_bars.parquet",
+   "created_at": "2026-10-06T10:01:32Z",
+   "size": 31147
+  },
+  {
+   "name": "2026-10-06_afternoon-37406867397_chains.parquet",
+   "created_at": "2026-10-06T10:01:32Z",
+   "size": 3535779
+  },
+  {
+   "name": "2026-10-06_afternoon-37406867397_gift.parquet",
+   "created_at": "2026-10-06T10:01:32Z",
+   "size": 4476
+  },
+  {
+   "name": "2026-10-06_afternoon-37406867397_tape.parquet",
+   "created_at": "2026-10-06T10:01:32Z",
+   "size": 48897
+  },
+  {
+   "name": "2026-10-06_afternoon-37450212263_bars.parquet",
+   "created_at": "2026-10-06T10:32:46Z",
+   "size": 31147
+  },
+  {
+   "name": "2026-10-06_afternoon-37450212263_gift.parquet",
+   "created_at": "2026-10-06T10:32:46Z",
+   "size": 4476
+  },
+  {
+   "name": "2026-10-06_afternoon-37450212263_tape.parquet",
+   "created_at": "2026-10-06T10:32:46Z",
+   "size": 48897
+  },
+  {
+   "name": "2026-10-06_morning-37406867397_bars.parquet",
+   "created_at": "2026-10-06T06:51:29Z",
+   "size": 17083
+  },
+  {
+   "name": "2026-10-06_morning-37406867397_chains.parquet",
+   "created_at": "2026-10-06T06:51:29Z",
+   "size": 3463139
+  },
+  {
+   "name": "2026-10-06_morning-37406867397_gift.parquet",
+   "created_at": "2026-10-06T06:51:29Z",
+   "size": 4476
+  },
+  {
+   "name": "2026-10-06_morning-37406867397_tape.parquet",
+   "created_at": "2026-10-06T06:51:29Z",
+   "size": 27922
+  },
+  {
+   "name": "2026-10-06_morning-37450212263_bars.parquet",
+   "created_at": "2026-10-06T10:31:46Z",
+   "size": 31147
+  },
+  {
+   "name": "2026-10-06_morning-37450212263_gift.parquet",
+   "created_at": "2026-10-06T10:31:46Z",
+   "size": 4476
+  },
+  {
+   "name": "2026-10-06_morning-37450212263_tape.parquet",
+   "created_at": "2026-10-06T10:31:46Z",
+   "size": 48897
+  },
+  {
+   "name": "2026-10-07_afternoon-37564661591_bars.parquet",
+   "created_at": "2026-10-07T10:01:31Z",
+   "size": 32326
+  },
+  {
+   "name": "2026-10-07_afternoon-37564661591_chains.parquet",
+   "created_at": "2026-10-07T10:01:31Z",
+   "size": 3558800
+  },
+  {
+   "name": "2026-10-07_afternoon-37564661591_gift.parquet",
+   "created_at": "2026-10-07T10:01:31Z",
+   "size": 4458
+  },
+  {
+   "name": "2026-10-07_afternoon-37564661591_tape.parquet",
+   "created_at": "2026-10-07T10:01:31Z",
+   "size": 49839
+  },
+  {
+   "name": "2026-10-07_afternoon-37607115705_bars.parquet",
+   "created_at": "2026-10-07T10:26:14Z",
+   "size": 32326
+  },
+  {
+   "name": "2026-10-07_afternoon-37607115705_gift.parquet",
+   "created_at": "2026-10-07T10:26:14Z",
+   "size": 4458
+  },
+  {
+   "name": "2026-10-07_afternoon-37607115705_tape.parquet",
+   "created_at": "2026-10-07T10:26:14Z",
+   "size": 49839
+  },
+  {
+   "name": "2026-10-07_morning-37564661591_bars.parquet",
+   "created_at": "2026-10-07T06:51:20Z",
+   "size": 17772
+  },
+  {
+   "name": "2026-10-07_morning-37564661591_chains.parquet",
+   "created_at": "2026-10-07T06:51:20Z",
+   "size": 3511757
+  },
+  {
+   "name": "2026-10-07_morning-37564661591_gift.parquet",
+   "created_at": "2026-10-07T06:51:20Z",
+   "size": 4458
+  },
+  {
+   "name": "2026-10-07_morning-37564661591_tape.parquet",
+   "created_at": "2026-10-07T06:51:20Z",
+   "size": 28117
+  },
+  {
+   "name": "2026-10-07_morning-37607115705_bars.parquet",
+   "created_at": "2026-10-07T10:25:15Z",
+   "size": 32326
+  },
+  {
+   "name": "2026-10-07_morning-37607115705_gift.parquet",
+   "created_at": "2026-10-07T10:25:15Z",
+   "size": 4458
+  },
+  {
+   "name": "2026-10-07_morning-37607115705_tape.parquet",
+   "created_at": "2026-10-07T10:25:15Z",
+   "size": 49839
+  },
+  {
+   "name": "2026-10-08_afternoon-37720596041_bars.parquet",
+   "created_at": "2026-10-08T10:01:33Z",
+   "size": 32452
+  },
+  {
+   "name": "2026-10-08_afternoon-37720596041_chains.parquet",
+   "created_at": "2026-10-08T10:01:33Z",
+   "size": 3693827
+  },
+  {
+   "name": "2026-10-08_afternoon-37720596041_gift.parquet",
+   "created_at": "2026-10-08T10:01:33Z",
+   "size": 4493
+  },
+  {
+   "name": "2026-10-08_afternoon-37720596041_tape.parquet",
+   "created_at": "2026-10-08T10:01:33Z",
+   "size": 50023
+  },
+  {
+   "name": "2026-10-08_afternoon-37765388558_bars.parquet",
+   "created_at": "2026-10-08T10:46:43Z",
+   "size": 32452
+  },
+  {
+   "name": "2026-10-08_afternoon-37765388558_gift.parquet",
+   "created_at": "2026-10-08T10:46:43Z",
+   "size": 4493
+  },
+  {
+   "name": "2026-10-08_afternoon-37765388558_tape.parquet",
+   "created_at": "2026-10-08T10:46:43Z",
+   "size": 50023
+  },
+  {
+   "name": "2026-10-08_morning-37720596041_bars.parquet",
+   "created_at": "2026-10-08T06:51:26Z",
+   "size": 17405
+  },
+  {
+   "name": "2026-10-08_morning-37720596041_chains.parquet",
+   "created_at": "2026-10-08T06:51:26Z",
+   "size": 3511847
+  },
+  {
+   "name": "2026-10-08_morning-37720596041_gift.parquet",
+   "created_at": "2026-10-08T06:51:26Z",
+   "size": 4493
+  },
+  {
+   "name": "2026-10-08_morning-37720596041_tape.parquet",
+   "created_at": "2026-10-08T06:51:26Z",
+   "size": 28061
+  },
+  {
+   "name": "2026-10-08_morning-37765388558_bars.parquet",
+   "created_at": "2026-10-08T10:45:34Z",
+   "size": 32452
+  },
+  {
+   "name": "2026-10-08_morning-37765388558_gift.parquet",
+   "created_at": "2026-10-08T10:45:34Z",
+   "size": 4493
+  },
+  {
+   "name": "2026-10-08_morning-37765388558_tape.parquet",
+   "created_at": "2026-10-08T10:45:34Z",
+   "size": 50023
+  },
+  {
+   "name": "2026-10-09_afternoon-37877221210_bars.parquet",
+   "created_at": "2026-10-09T10:01:35Z",
+   "size": 31930
+  },
+  {
+   "name": "2026-10-09_afternoon-37877221210_chains.parquet",
+   "created_at": "2026-10-09T10:01:35Z",
+   "size": 3511444
+  },
+  {
+   "name": "2026-10-09_afternoon-37877221210_gift.parquet",
+   "created_at": "2026-10-09T10:01:35Z",
+   "size": 4413
+  },
+  {
+   "name": "2026-10-09_afternoon-37877221210_tape.parquet",
+   "created_at": "2026-10-09T10:01:35Z",
+   "size": 49707
+  },
+  {
+   "name": "2026-10-09_afternoon-37919282668_bars.parquet",
+   "created_at": "2026-10-09T10:45:18Z",
+   "size": 31930
+  },
+  {
+   "name": "2026-10-09_afternoon-37919282668_gift.parquet",
+   "created_at": "2026-10-09T10:45:18Z",
+   "size": 4413
+  },
+  {
+   "name": "2026-10-09_afternoon-37919282668_tape.parquet",
+   "created_at": "2026-10-09T10:45:18Z",
+   "size": 49707
+  },
+  {
+   "name": "2026-10-09_morning-37877221210_bars.parquet",
+   "created_at": "2026-10-09T06:51:30Z",
+   "size": 17627
+  },
+  {
+   "name": "2026-10-09_morning-37877221210_chains.parquet",
+   "created_at": "2026-10-09T06:51:30Z",
+   "size": 3513260
+  },
+  {
+   "name": "2026-10-09_morning-37877221210_gift.parquet",
+   "created_at": "2026-10-09T06:51:30Z",
+   "size": 4413
+  },
+  {
+   "name": "2026-10-09_morning-37877221210_tape.parquet",
+   "created_at": "2026-10-09T06:51:30Z",
+   "size": 27831
+  },
+  {
+   "name": "2026-10-09_morning-37919282668_bars.parquet",
+   "created_at": "2026-10-09T10:44:17Z",
+   "size": 31930
+  },
+  {
+   "name": "2026-10-09_morning-37919282668_gift.parquet",
+   "created_at": "2026-10-09T10:44:17Z",
+   "size": 4413
+  },
+  {
+   "name": "2026-10-09_morning-37919282668_tape.parquet",
+   "created_at": "2026-10-09T10:44:17Z",
+   "size": 49707
+  }
+ ]
+}

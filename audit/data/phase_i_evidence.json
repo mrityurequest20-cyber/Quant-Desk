@@ -1,0 +1,292 @@
+{
+ "clean_round_trip": {
+  "end": {
+   "fills": [
+    [
+     "baec",
+     "NIFTY06OCT2625700CE",
+     65
+    ],
+    [
+     "baec",
+     "NIFTY06OCT2625800CE",
+     -65
+    ],
+    [
+     "baec",
+     "NIFTY06OCT2625700CE",
+     -65
+    ],
+    [
+     "baec",
+     "NIFTY06OCT2625800CE",
+     65
+    ]
+   ],
+   "derived_positions": {},
+   "broker_positions": {},
+   "positions_match": true,
+   "derived_cash": 499402.31,
+   "broker_cash": 499402.31,
+   "cash_match": true,
+   "trade_checks": {
+    "I261009-0001-baec": {
+     "status": "closed",
+     "fills_net": {
+      "NIFTY06OCT2625700CE": 0,
+      "NIFTY06OCT2625800CE": 0
+     },
+     "expected_net": {
+      "NIFTY06OCT2625700CE": 0,
+      "NIFTY06OCT2625800CE": 0
+     },
+     "consistent": true
+    }
+   },
+   "orphan_fill_count": 0,
+   "state_open_trades": [],
+   "critical_events": [],
+   "critical_event_data": []
+  }
+ },
+ "entry_crash_8a_prod_journal": {
+  "after_crash": {
+   "fills": [
+    [
+     "8736",
+     "NIFTY06OCT2625700CE",
+     65
+    ]
+   ],
+   "derived_positions": {
+    "NIFTY06OCT2625700CE": 65
+   },
+   "broker_positions": {
+    "NIFTY06OCT2625700CE": 65
+   },
+   "positions_match": true,
+   "derived_cash": 483904.51,
+   "broker_cash": 483904.51,
+   "cash_match": true,
+   "trade_checks": {},
+   "orphan_fill_count": 1,
+   "state_open_trades": [],
+   "critical_events": [],
+   "critical_event_data": []
+  },
+  "end": {
+   "fills": [
+    [
+     "8736",
+     "NIFTY06OCT2625700CE",
+     65
+    ]
+   ],
+   "derived_positions": {
+    "NIFTY06OCT2625700CE": 65
+   },
+   "broker_positions": {
+    "NIFTY06OCT2625700CE": 65
+   },
+   "positions_match": true,
+   "derived_cash": 483904.51,
+   "broker_cash": 483904.51,
+   "cash_match": true,
+   "trade_checks": {},
+   "orphan_fill_count": 1,
+   "state_open_trades": [],
+   "critical_events": [
+    "reconciliation failed, entries halted: NIFTY06OCT2625700CE: journal +0 vs broker +65"
+   ],
+   "critical_event_data": [
+    {
+     "journal": {},
+     "broker": {
+      "NIFTY06OCT2625700CE": 65
+     }
+    }
+   ]
+  }
+ },
+ "exit_crash_8b_prod_journal": {
+  "after_crash": {
+   "fills": [
+    [
+     "853c",
+     "NIFTY06OCT2625700CE",
+     65
+    ],
+    [
+     "853c",
+     "NIFTY06OCT2625800CE",
+     -65
+    ],
+    [
+     "853c",
+     "NIFTY06OCT2625700CE",
+     -65
+    ]
+   ],
+   "derived_positions": {
+    "NIFTY06OCT2625800CE": -65
+   },
+   "broker_positions": {
+    "NIFTY06OCT2625800CE": -65
+   },
+   "positions_match": true,
+   "derived_cash": 510399.65,
+   "broker_cash": 510399.65,
+   "cash_match": true,
+   "trade_checks": {
+    "I261009-0003-853c": {
+     "status": "open",
+     "fills_net": {
+      "NIFTY06OCT2625700CE": 0,
+      "NIFTY06OCT2625800CE": -65
+     },
+     "expected_net": {
+      "NIFTY06OCT2625700CE": 65,
+      "NIFTY06OCT2625800CE": -65
+     },
+     "consistent": false
+    }
+   },
+   "orphan_fill_count": 0,
+   "state_open_trades": [
+    "853c"
+   ],
+   "critical_events": [],
+   "critical_event_data": []
+  },
+  "restart_open_trades": [
+   "853c"
+  ],
+  "end": {
+   "fills": [
+    [
+     "853c",
+     "NIFTY06OCT2625700CE",
+     65
+    ],
+    [
+     "853c",
+     "NIFTY06OCT2625800CE",
+     -65
+    ],
+    [
+     "853c",
+     "NIFTY06OCT2625700CE",
+     -65
+    ],
+    [
+     "853c",
+     "NIFTY06OCT2625700CE",
+     -65
+    ],
+    [
+     "853c",
+     "NIFTY06OCT2625800CE",
+     65
+    ]
+   ],
+   "derived_positions": {
+    "NIFTY06OCT2625700CE": -65
+   },
+   "broker_positions": {
+    "NIFTY06OCT2625700CE": -65
+   },
+   "positions_match": true,
+   "derived_cash": 513440.14,
+   "broker_cash": 513440.14,
+   "cash_match": true,
+   "trade_checks": {
+    "I261009-0003-853c": {
+     "status": "closed",
+     "fills_net": {
+      "NIFTY06OCT2625700CE": -65,
+      "NIFTY06OCT2625800CE": 0
+     },
+     "expected_net": {
+      "NIFTY06OCT2625700CE": 0,
+      "NIFTY06OCT2625800CE": 0
+     },
+     "consistent": false
+    }
+   },
+   "orphan_fill_count": 0,
+   "state_open_trades": [],
+   "critical_events": [
+    "reconciliation failed, entries halted: NIFTY06OCT2625700CE: journal +65 vs broker +0"
+   ],
+   "critical_event_data": [
+    {
+     "journal": {
+      "NIFTY06OCT2625700CE": 65,
+      "NIFTY06OCT2625800CE": -65
+     },
+     "broker": {
+      "NIFTY06OCT2625800CE": -65
+     }
+    }
+   ]
+  }
+ },
+ "overnight_16c_prod_journal": {
+  "next_day_start": {
+   "fills": [
+    [
+     "b9da",
+     "NIFTY29SEP2625850CE",
+     65
+    ],
+    [
+     "b9da",
+     "NIFTY29SEP2625950CE",
+     -65
+    ]
+   ],
+   "derived_positions": {
+    "NIFTY29SEP2625850CE": 65,
+    "NIFTY29SEP2625950CE": -65
+   },
+   "broker_positions": {
+    "NIFTY29SEP2625850CE": 65,
+    "NIFTY29SEP2625950CE": -65
+   },
+   "positions_match": true,
+   "derived_cash": 497134.65,
+   "broker_cash": 497134.65,
+   "cash_match": true,
+   "trade_checks": {
+    "I261009-0004-b9da": {
+     "status": "open",
+     "fills_net": {
+      "NIFTY29SEP2625850CE": 65,
+      "NIFTY29SEP2625950CE": -65
+     },
+     "expected_net": {
+      "NIFTY29SEP2625850CE": 65,
+      "NIFTY29SEP2625950CE": -65
+     },
+     "consistent": true
+    }
+   },
+   "orphan_fill_count": 0,
+   "state_open_trades": [
+    "b9da"
+   ],
+   "critical_events": [
+    "reconciliation failed, entries halted: NIFTY29SEP2625850CE: journal +0 vs broker +65; NIFT"
+   ],
+   "critical_event_data": [
+    {
+     "journal": {},
+     "broker": {
+      "NIFTY29SEP2625850CE": 65,
+      "NIFTY29SEP2625950CE": -65
+     }
+    }
+   ]
+  }
+ }
+}

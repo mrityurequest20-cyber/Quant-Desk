@@ -1,0 +1,31 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.6.0 -- /tmp/claude-0/-home-user-Quant-Desk/90d04327-a1b0-5265-9bca-acec9246f423/scratchpad/venv/bin/python
+rootdir: /home/user/Quant-Desk
+configfile: pytest.ini
+plugins: platformdirs-4.12.4, anyio-4.15.1
+collecting ... collected 10 items
+
+audit/probes/test_phase_k_probes.py::test_rejected_trigger_is_rearmed_in_the_same_minute_exact_replay PASSED [ 10%]
+audit/probes/test_phase_k_probes.py::test_rearm_rendered_as_waiting_at_the_level PASSED [ 20%]
+audit/probes/test_phase_k_probes.py::test_fired_and_rejected_trigger_shown_as_no_setup_triggered PASSED [ 30%]
+audit/probes/test_phase_k_probes.py::test_open_shows_stale_until_the_first_fresh_publish PASSED [ 40%]
+audit/probes/test_phase_k_probes.py::test_status_reads_live_after_the_close_on_production_data PASSED [ 50%]
+audit/probes/test_phase_k_probes.py::test_trade_on_model_quotes_is_not_labelled_in_the_trade_sheet PASSED [ 60%]
+audit/probes/test_phase_k_probes.py::test_handover_keeps_account_figures_continuous_and_status_live PASSED [ 70%]
+audit/probes/test_phase_k_probes.py::test_outage_is_flagged_and_recovers PASSED [ 80%]
+audit/probes/test_phase_k_probes.py::test_every_session_grades_zero_armed_setups PASSED [ 90%]
+audit/probes/test_phase_k_probes.py::test_vix_learned_multiplier_drifts_on_fabricated_input PASSED [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED audit/probes/test_phase_k_probes.py::test_rejected_trigger_is_rearmed_in_the_same_minute_exact_replay
+PASSED audit/probes/test_phase_k_probes.py::test_rearm_rendered_as_waiting_at_the_level
+PASSED audit/probes/test_phase_k_probes.py::test_fired_and_rejected_trigger_shown_as_no_setup_triggered
+PASSED audit/probes/test_phase_k_probes.py::test_open_shows_stale_until_the_first_fresh_publish
+PASSED audit/probes/test_phase_k_probes.py::test_status_reads_live_after_the_close_on_production_data
+PASSED audit/probes/test_phase_k_probes.py::test_trade_on_model_quotes_is_not_labelled_in_the_trade_sheet
+PASSED audit/probes/test_phase_k_probes.py::test_handover_keeps_account_figures_continuous_and_status_live
+PASSED audit/probes/test_phase_k_probes.py::test_outage_is_flagged_and_recovers
+PASSED audit/probes/test_phase_k_probes.py::test_every_session_grades_zero_armed_setups
+PASSED audit/probes/test_phase_k_probes.py::test_vix_learned_multiplier_drifts_on_fabricated_input
+============================== 10 passed in 9.12s ==============================

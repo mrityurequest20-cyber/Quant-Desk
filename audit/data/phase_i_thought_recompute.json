@@ -1,0 +1,63 @@
+{
+ "thoughts": 743,
+ "score_recomputed_exactly": 743,
+ "conviction_recomputed_exactly": 743,
+ "bias_recomputed_exactly": 743,
+ "rows_with_vix_factor": 743,
+ "vix_is_zero_minus100pct_plus1": 742,
+ "mean_score_shift_from_vix": 0.0354,
+ "max_score_shift_from_vix": 0.0749,
+ "bias_label_flips_without_vix": 23,
+ "examples": [
+  [
+   "2026-10-05 10:41",
+   "NIFTY",
+   "neutral",
+   -0.123,
+   "->",
+   "bearish",
+   -0.164,
+   "watching: no setup has triggered"
+  ],
+  [
+   "2026-10-05 13:22",
+   "NIFTY",
+   "neutral",
+   -0.145,
+   "->",
+   "bearish",
+   -0.19,
+   "setup range_sell found but not worth it "
+  ],
+  [
+   "2026-10-05 13:25",
+   "NIFTY",
+   "neutral",
+   -0.122,
+   "->",
+   "bearish",
+   -0.167,
+   "setup range_sell found but not worth it "
+  ],
+  [
+   "2026-10-05 13:40",
+   "BANKNIFTY",
+   "neutral",
+   -0.123,
+   "->",
+   "bearish",
+   -0.169,
+   "watching: no setup has triggered"
+  ],
+  [
+   "2026-10-05 14:35",
+   "BANKNIFTY",
+   "bullish",
+   0.162,
+   "->",
+   "neutral",
+   0.13,
+   "watching: no setup has triggered"
+  ]
+ ]
+}

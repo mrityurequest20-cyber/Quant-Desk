@@ -1,0 +1,6 @@
+short_strangle_20d weeks 288 mean 9.475 ACF1-4 [-0.054 -0.021 -0.022  0.047] block-bootstrap one-sided p 0.0
+   top-5 weeks contribute 0.109 of the total; median week 17.56
+   by year: {'2021': {'size': 40.0, 'mean': 22.67}, '2022': {'size': 53.0, 'mean': 11.9}, '2023': {'size': 81.0, 'mean': 9.87}, '2024': {'size': 202.0, 'mean': 1.43}, '2025': {'size': 99.0, 'mean': 10.01}, '2026': {'size': 74.0, 'mean': 8.72}}
+iron_condor_20_05 weeks 288 mean 5.481 ACF1-4 [-0.059 -0.026 -0.037  0.029] block-bootstrap one-sided p 0.0002
+   top-5 weeks contribute 0.151 of the total; median week 12.94
+   by year: {'2021': {'size': 40.0, 'mean': 15.3}, '2022': {'size': 53.0, 'mean': 8.51}, '2023': {'size': 81.0, 'mean': 6.06}, '2024': {'size': 202.0, 'mean': -1.64}, '2025': {'size': 99.0, 'mean': 5.22}, '2026': {'size': 74.0, 'mean': 5.81}}

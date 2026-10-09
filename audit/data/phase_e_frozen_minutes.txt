@@ -1,0 +1,14 @@
+2026-09-29 NIFTY     bars 374 frozen-repeat  13 longest-run  13 in-15:00-29 13  mean15 22,684.01 last 22,716.20 gap -14.2 bps
+2026-09-29 BANKNIFTY bars 374 frozen-repeat  13 longest-run  13 in-15:00-29 13  mean15 54,344.46 last 54,259.95 gap +15.6 bps
+2026-09-30 NIFTY     bars  10 frozen-repeat   8 longest-run   7 in-15:00-29  8  mean15 22,617.37 last 22,620.45 gap -1.4 bps
+2026-09-30 BANKNIFTY bars  10 frozen-repeat   8 longest-run   7 in-15:00-29  8  mean15 54,692.01 last 54,633.05 gap +10.8 bps
+2026-10-05 NIFTY     bars 373 frozen-repeat  14 longest-run  14 in-15:00-29 14  mean15 22,531.99 last 22,555.75 gap -10.5 bps
+2026-10-05 BANKNIFTY bars 373 frozen-repeat  14 longest-run  14 in-15:00-29 14  mean15 54,681.55 last 54,714.10 gap -6.0 bps
+2026-10-06 NIFTY     bars 373 frozen-repeat  13 longest-run  13 in-15:00-29 13  mean15 22,714.88 last 22,776.10 gap -26.9 bps
+2026-10-06 BANKNIFTY bars 373 frozen-repeat  13 longest-run  13 in-15:00-29 13  mean15 54,999.85 last 55,128.40 gap -23.3 bps
+2026-10-07 NIFTY     bars 373 frozen-repeat  14 longest-run  14 in-15:00-29 14  mean15 22,602.26 last 22,603.05 gap -0.3 bps
+2026-10-07 BANKNIFTY bars 373 frozen-repeat  13 longest-run  13 in-15:00-29 13  mean15 55,061.36 last 55,055.55 gap +1.1 bps
+2026-10-08 NIFTY     bars 373 frozen-repeat  13 longest-run  12 in-15:00-29 13  mean15 22,208.67 last 22,231.80 gap -10.4 bps
+2026-10-08 BANKNIFTY bars 373 frozen-repeat  13 longest-run  12 in-15:00-29 13  mean15 54,471.72 last 54,515.05 gap -7.9 bps
+2026-10-09 NIFTY     bars 185 frozen-repeat   0 longest-run   0 in-15:00-29  0  mean15 nan last nan gap +nan bps
+2026-10-09 BANKNIFTY bars 185 frozen-repeat   0 longest-run   0 in-15:00-29  0  mean15 nan last nan gap +nan bps

@@ -1,0 +1,43 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.6.0 -- /tmp/claude-0/-home-user-Quant-Desk/90d04327-a1b0-5265-9bca-acec9246f423/scratchpad/venv/bin/python
+rootdir: /home/user/Quant-Desk
+configfile: pytest.ini
+plugins: platformdirs-4.12.4, anyio-4.15.1
+collecting ... collected 16 items
+
+audit/probes/test_phase_j_probes.py::test_zero_vix_is_served_to_the_ui_as_a_normal_factor PASSED [  6%]
+audit/probes/test_phase_j_probes.py::test_halts_fact_omits_safe_mode_and_reconcile PASSED [ 12%]
+audit/probes/test_phase_j_probes.py::test_a_halted_action_has_no_status_class_and_falls_to_the_generic_headline PASSED [ 18%]
+audit/probes/test_phase_j_probes.py::test_entry_crash_shows_a_loss_with_no_position PASSED [ 25%]
+audit/probes/test_phase_j_probes.py::test_exit_crash_shows_a_phantom_gain_and_no_naked_short PASSED [ 31%]
+audit/probes/test_phase_j_probes.py::test_positions_and_equity_come_from_the_engine_not_the_broker PASSED [ 37%]
+audit/probes/test_phase_j_probes.py::test_feed_shows_publish_time_not_first_seen PASSED [ 43%]
+audit/probes/test_phase_j_probes.py::test_rejection_decisions_are_not_served_to_the_ui PASSED [ 50%]
+audit/probes/test_phase_j_probes.py::test_stand_aside_glossary_omits_the_dominant_production_reasons PASSED [ 56%]
+audit/probes/test_phase_j_probes.py::test_unvalidated_global_drivers_vote_while_the_ui_says_only_validated_links_do PASSED [ 62%]
+audit/probes/test_phase_j_probes.py::test_sessions_graded_counts_bootstrap_and_pre_reset_days PASSED [ 68%]
+audit/probes/test_phase_j_probes.py::test_chart_prior_day_levels_disagree_with_the_engine_after_an_unrecorded_day PASSED [ 75%]
+audit/probes/test_phase_j_probes.py::test_stale_banner_blames_a_handover_whatever_the_age PASSED [ 81%]
+audit/probes/test_phase_j_probes.py::test_paper_glossary_claims_real_chains_and_costs_unconditionally PASSED [ 87%]
+audit/probes/test_phase_j_probes.py::test_model_chain_fallback_is_disclosed_in_the_quant_panel PASSED [ 93%]
+audit/probes/test_phase_j_probes.py::test_stress_size_cut_is_described_as_active PASSED [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED audit/probes/test_phase_j_probes.py::test_zero_vix_is_served_to_the_ui_as_a_normal_factor
+PASSED audit/probes/test_phase_j_probes.py::test_halts_fact_omits_safe_mode_and_reconcile
+PASSED audit/probes/test_phase_j_probes.py::test_a_halted_action_has_no_status_class_and_falls_to_the_generic_headline
+PASSED audit/probes/test_phase_j_probes.py::test_entry_crash_shows_a_loss_with_no_position
+PASSED audit/probes/test_phase_j_probes.py::test_exit_crash_shows_a_phantom_gain_and_no_naked_short
+PASSED audit/probes/test_phase_j_probes.py::test_positions_and_equity_come_from_the_engine_not_the_broker
+PASSED audit/probes/test_phase_j_probes.py::test_feed_shows_publish_time_not_first_seen
+PASSED audit/probes/test_phase_j_probes.py::test_rejection_decisions_are_not_served_to_the_ui
+PASSED audit/probes/test_phase_j_probes.py::test_stand_aside_glossary_omits_the_dominant_production_reasons
+PASSED audit/probes/test_phase_j_probes.py::test_unvalidated_global_drivers_vote_while_the_ui_says_only_validated_links_do
+PASSED audit/probes/test_phase_j_probes.py::test_sessions_graded_counts_bootstrap_and_pre_reset_days
+PASSED audit/probes/test_phase_j_probes.py::test_chart_prior_day_levels_disagree_with_the_engine_after_an_unrecorded_day
+PASSED audit/probes/test_phase_j_probes.py::test_stale_banner_blames_a_handover_whatever_the_age
+PASSED audit/probes/test_phase_j_probes.py::test_paper_glossary_claims_real_chains_and_costs_unconditionally
+PASSED audit/probes/test_phase_j_probes.py::test_model_chain_fallback_is_disclosed_in_the_quant_panel
+PASSED audit/probes/test_phase_j_probes.py::test_stress_size_cut_is_described_as_active
+============================= 16 passed in 41.54s ==============================

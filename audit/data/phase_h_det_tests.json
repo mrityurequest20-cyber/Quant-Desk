@@ -1,0 +1,275 @@
+{
+ "test8a_entry_crash": {
+  "after_crash": {
+   "journal_fills": [],
+   "journal_trades": [],
+   "state_open_trades": [],
+   "broker_positions": {
+    "NIFTY06OCT2625700CE": 65
+   },
+   "broker_cash": 483904.51
+  },
+  "restart_open_trades": [],
+  "reconcile": {
+   "ok": false,
+   "detail": "NIFTY06OCT2625700CE: journal +0 vs broker +65"
+  },
+  "blocked": "halted: broker and journal disagree (NIFTY06OCT2625700CE: journal +0 vs broker +65)",
+  "end_of_day": {
+   "journal_fills": [],
+   "journal_trades": [],
+   "state_open_trades": [],
+   "broker_positions": {
+    "NIFTY06OCT2625700CE": 65
+   },
+   "broker_cash": 483904.51
+  },
+  "selfreview_findings": [],
+  "critical_events": [
+   "reconciliation failed, entries halted: NIFTY06OCT2625700CE: journal +0 vs broker +65"
+  ]
+ },
+ "test8b_exit_crash": {
+  "opened": {
+   "journal_fills": [
+    [
+     "NIFTY06OCT2625700CE",
+     65
+    ],
+    [
+     "NIFTY06OCT2625800CE",
+     -65
+    ]
+   ],
+   "journal_trades": [
+    [
+     "I261009-0002-001f",
+     "open"
+    ]
+   ],
+   "state_open_trades": [
+    "I261009-0002-001f"
+   ],
+   "broker_positions": {
+    "NIFTY06OCT2625700CE": 65,
+    "NIFTY06OCT2625800CE": -65
+   },
+   "broker_cash": 496362.97
+  },
+  "after_crash": {
+   "journal_fills": [
+    [
+     "NIFTY06OCT2625700CE",
+     65
+    ],
+    [
+     "NIFTY06OCT2625800CE",
+     -65
+    ]
+   ],
+   "journal_trades": [
+    [
+     "I261009-0002-001f",
+     "open"
+    ]
+   ],
+   "state_open_trades": [
+    "I261009-0002-001f"
+   ],
+   "broker_positions": {
+    "NIFTY06OCT2625800CE": -65
+   },
+   "broker_cash": 510399.65
+  },
+  "restart_open_trades": [
+   "I261009-0002-001f"
+  ],
+  "reconcile": {
+   "ok": false,
+   "detail": "NIFTY06OCT2625700CE: journal +65 vs broker +0"
+  },
+  "end_of_day": {
+   "journal_fills": [
+    [
+     "NIFTY06OCT2625700CE",
+     65
+    ],
+    [
+     "NIFTY06OCT2625800CE",
+     -65
+    ],
+    [
+     "NIFTY06OCT2625700CE",
+     -65
+    ],
+    [
+     "NIFTY06OCT2625800CE",
+     65
+    ]
+   ],
+   "journal_trades": [
+    [
+     "I261009-0002-001f",
+     "closed"
+    ]
+   ],
+   "state_open_trades": [],
+   "broker_positions": {
+    "NIFTY06OCT2625700CE": -65
+   },
+   "broker_cash": 513440.14
+  }
+ },
+ "test16a_graceful_restart": {
+  "before": {
+   "open": [
+    "I261009-0003-65d7"
+   ],
+   "closed": [],
+   "armed": {
+    "NIFTY": 0,
+    "BANKNIFTY": 0
+   },
+   "chain_cached": [
+    "BANKNIFTY",
+    "NIFTY"
+   ],
+   "trades_today": 1,
+   "day_start_equity": 500000.0,
+   "thoughts_rows": 65,
+   "decision_rows": 11
+  },
+  "after_restart": {
+   "open": [
+    "I261009-0003-65d7"
+   ],
+   "closed": [],
+   "armed": {},
+   "chain_cached": [],
+   "trades_today": 1,
+   "day_start_equity": 500000.0,
+   "reconcile": {
+    "ok": true,
+    "positions": 2
+   },
+   "thoughts_rows": 65,
+   "decision_rows": 11,
+   "chain_after_one_step": [
+    "BANKNIFTY",
+    "NIFTY"
+   ]
+  },
+  "end_of_day": {
+   "journal_fills": [
+    [
+     "NIFTY06OCT2625700CE",
+     65
+    ],
+    [
+     "NIFTY06OCT2625800CE",
+     -65
+    ],
+    [
+     "NIFTY06OCT2625700CE",
+     -65
+    ],
+    [
+     "NIFTY06OCT2625800CE",
+     65
+    ]
+   ],
+   "journal_trades": [
+    [
+     "I261009-0003-65d7",
+     "closed"
+    ]
+   ],
+   "state_open_trades": [],
+   "broker_positions": {},
+   "broker_cash": 499401.33
+  }
+ },
+ "test16b_hard_kill_restart": {
+  "before": {
+   "open": [
+    "I261009-0004-02e3"
+   ],
+   "closed": [],
+   "armed": {
+    "NIFTY": 0,
+    "BANKNIFTY": 0
+   },
+   "chain_cached": [
+    "BANKNIFTY",
+    "NIFTY"
+   ],
+   "trades_today": 1,
+   "day_start_equity": 500000.0,
+   "thoughts_rows": 65,
+   "decision_rows": 11
+  },
+  "after_restart": {
+   "open": [
+    "I261009-0004-02e3"
+   ],
+   "closed": [],
+   "armed": {},
+   "chain_cached": [],
+   "trades_today": 1,
+   "day_start_equity": 500000.0,
+   "reconcile": {
+    "ok": true,
+    "positions": 2
+   },
+   "thoughts_rows": 65,
+   "decision_rows": 11,
+   "chain_after_one_step": [
+    "BANKNIFTY",
+    "NIFTY"
+   ]
+  },
+  "end_of_day": {
+   "journal_fills": [
+    [
+     "NIFTY06OCT2625700CE",
+     65
+    ],
+    [
+     "NIFTY06OCT2625800CE",
+     -65
+    ],
+    [
+     "NIFTY06OCT2625700CE",
+     -65
+    ],
+    [
+     "NIFTY06OCT2625800CE",
+     65
+    ]
+   ],
+   "journal_trades": [
+    [
+     "I261009-0004-02e3",
+     "closed"
+    ]
+   ],
+   "state_open_trades": [],
+   "broker_positions": {},
+   "broker_cash": 499401.33
+  }
+ },
+ "test16c_overnight_orphan": {
+  "next_day_open_trades": [],
+  "reconcile": {
+   "ok": false,
+   "detail": "NIFTY29SEP2625850CE: journal +0 vs broker +65; NIFTY29SEP2625950CE: journal +0 vs broker -65"
+  },
+  "warn": [
+   "1 position(s) from 2026-09-28 were never squared off; ignored"
+  ],
+  "broker": {
+   "NIFTY29SEP2625850CE": 65,
+   "NIFTY29SEP2625950CE": -65
+  }
+ }
+}
