@@ -186,10 +186,11 @@ def test_a_429_is_retried_once(monkeypatch):
 
 
 @pytest.mark.parametrize("shape", ["live", "docs"])
-def test_chain_from_the_live_book(shape):
+def test_chain_from_the_live_book(shape, monkeypatch):
     fake = FakeKotak(shape=shape)
     client = KotakClient("ck-token", session=fake, min_gap=0)
     ch = KotakOptionChain(client, strikes=17)
+    monkeypatch.setattr(ch, "now", lambda: pd.Timestamp("2026-10-05 10:00", tz=IST))   # a day before EXP: T > 0
     assert ch.count == 20                                                       # each side; a multiple of 10
     assert ch.expiries("NIFTY") == [EXP, dt.date(2026, 10, 13), dt.date(2026, 10, 27)]
     df = ch.chain("NIFTY", EXP)
@@ -204,6 +205,13 @@ def test_chain_from_the_live_book(shape):
     assert n_quote_calls == 1                                                    # 10 contracts + the index: one call
     ch.expiries("NIFTY")
     assert sum("expiries" in u for u, _ in fake.log) == 1                       # cached for the day
+
+
+def test_a_chain_is_stamped_with_the_wall_clock():
+    ch = KotakOptionChain(KotakClient("k", session=FakeKotak(), min_gap=0))
+    before = pd.Timestamp.now(tz=IST)
+    ts = ch.chain("NIFTY", EXP).attrs["ts"]
+    assert before <= ts <= pd.Timestamp.now(tz=IST) and str(ts.tz) == str(IST)
 
 
 def test_an_empty_book_is_an_error_not_a_chain():
