@@ -113,6 +113,17 @@ def _clip(x, lo=-1.0, hi=1.0) -> float:
     return max(lo, min(hi, x)) if x == x else 0.0
 
 
+def _out_of_range(x, lo=-1.0, hi=1.0) -> bool:
+    """A value a model gave that isn't a number in [lo, hi]: the read is malformed, not strong (G-03). Missing is fine."""
+    if x is None:
+        return False
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return True
+    return not lo <= x <= hi                              # NaN fails both comparisons
+
+
 def _payload(items: list[dict]) -> str:
     lines = [f'{it["id"]} | {it["ts"]} | {it["source"]} | {it["title"]}' + (f' — {it["summary"]}' if it.get("summary") else "")
              for it in items]
@@ -136,19 +147,19 @@ def _parse_text_reads(text: str, ids: set) -> dict[str, dict]:
         def num(label):
             m = re.search(label + _NUM, block, re.I)
             return float(m.group(1).replace("−", "-")) if m else None
-        n, b = num(r"\bnifty\b"), num(r"\bbank ?nifty\b")
-        if n is None and b is None:
+        n, b, c = num(r"\bnifty\b(?:\s*50\b)?"), num(r"\bbank ?nifty\b"), num(r"\bconfidence\b")
+        if n is None and b is None or _out_of_range(n) or _out_of_range(b) or _out_of_range(c, 0.0, 1.0):
             continue
         ev = re.search(r"\bevent\b[^a-z\n]{0,12}([a-z_]+)", block, re.I)
         why = re.search(r"\bwhy\b[^a-z\n]{0,12}(.+)", block, re.I)
-        out[hid] = {"NIFTY": _clip(n), "BANKNIFTY": _clip(b), "confidence": _clip(num(r"\bconfidence\b") or 0.5, 0.0, 1.0),
+        out[hid] = {"NIFTY": _clip(n), "BANKNIFTY": _clip(b), "confidence": _clip(c if c is not None else 0.5, 0.0, 1.0),
                     "event": ev.group(1).lower() if ev and ev.group(1).lower() in EVENTS else "general",
                     "why": (why.group(1).strip() if why else "")[:200]}
     return out
 
 
 def _parse_reads(text: str, ids: set) -> dict[str, dict]:
-    """Lenient: a JSON object with `reads`, or a bare list; unknown ids and junk dropped, numbers clipped. Prose
+    """Lenient: a JSON object with `reads`, or a bare list; unknown ids, junk and out-of-range numbers dropped. Prose
     with the numbers in it is read too (_parse_text_reads)."""
     try:
         data = json.loads(text)
@@ -162,6 +173,8 @@ def _parse_reads(text: str, ids: set) -> dict[str, dict]:
     out = {}
     for r in rows:
         if not isinstance(r, dict) or str(r.get("id")) not in ids:
+            continue
+        if _out_of_range(r.get("nifty")) or _out_of_range(r.get("banknifty")) or _out_of_range(r.get("confidence"), 0, 1):
             continue
         ev = r.get("event") if r.get("event") in EVENTS else "general"
         out[str(r["id"])] = {"NIFTY": _clip(r.get("nifty")), "BANKNIFTY": _clip(r.get("banknifty")),
