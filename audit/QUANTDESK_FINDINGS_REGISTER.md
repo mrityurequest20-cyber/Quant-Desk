@@ -42,6 +42,7 @@ P3 moderate · P4 minor.
 | A-16 | Futures volume gaps become 0, and pre-Kotak sessions have no volume at all | P3 | VERIFIED | A2 |
 | A-17 | Kite ticks without an exchange timestamp get the wall clock | P4 | VERIFIED (code path; Kite untested) | A2 |
 | A-18 | Yahoo 5m `completed()` uses a 1-minute bar length | P4 | VERIFIED (code path) | A2 |
+| A-19 | The test suite has a wall-clock time bomb: `test_kotak` fails on every day after 2026-10-06 | P4 | VERIFIED | A1 |
 
 Verified-working controls (V-xx) and open questions (Q-xx) are at the end.
 
@@ -415,6 +416,19 @@ Severity: **P4** · Status: **VERIFIED** (code path)
   - the cycle runs after the close;
   - `research.py:313` (VIX) and the cycle could be affected only if run mid-session.
 
+### [A-19] The test suite has a wall-clock time bomb
+Severity: **P4** · Status: **VERIFIED**
+
+- `tests/test_kotak.py::test_chain_from_the_live_book[live|docs]` asserts that every IV is > 0. The fixture's
+  expiry is fixed at 2026-10-06 (`tests/test_kotak.py:24`).
+- The production code stamps the snapshot with `pd.Timestamp.now()` (`intraday/kotak.py:288`), and
+  `time_to_expiry` clamps at 0 (`intraday/chains.py:44-48`).
+- From 2026-10-06 15:30 IST onwards, T = 0 → IV `NaN` → 2 failures, on `main` as on any branch.
+- **Impact:**
+  - CI `tests` is red for reasons unrelated to any change, which hides real regressions;
+  - it is also a small instance of A-11: the chain's time comes from the machine clock, not the data.
+- **Fix:** freeze the clock in the test, or pass `ts` explicitly.
+
 ---
 
 ## Verified-working controls (Phase A)
@@ -437,7 +451,7 @@ Severity: **P4** · Status: **VERIFIED** (code path)
 | ID | Question | Phase |
 |---|---|---|
 | Q-01 | Kotak candle timestamps: bar start (as the docstring says) or bar end? This decides whether `completed()` admits a forming bar. Needs a Kotak key, or the archived chains and option minutes compared with NSE. | A2 → H |
-| Q-02 | Does the test suite pass on the versions CI actually installs (pandas 3.x)? See § A.7 of the audit for this phase's result. | A1 |
+| Q-02 | ~~Does the test suite pass on CI's versions?~~ Answered: 423 tests passed; 2 fail by date (A-19); 2 slow files re-run (§ A.7) | A1 |
 | Q-03 | `plan_gate` drops every directional plan while the plan registry is empty (5 of 28 real sessions needed). Is this the dominant cause of 0 trades? | B4 / K |
 | Q-04 | `deploy/whatif.py` runs with `memory=None`, so its `as_run` variant can't reproduce live factor weights. What-if parity? | B / K |
 | Q-05 | Account reset 2026-10-05 (₹20k → ₹5L): where is the pre-reset journal archived, and did that account trade? | K |
@@ -449,3 +463,4 @@ Severity: **P4** · Status: **VERIFIED** (code path)
 | Date | Phase | Change |
 |---|---|---|
 | 2026-10-09 | A | Register created: A-01 … A-18, V-01 … V-08, Q-01 … Q-05 |
+| 2026-10-09 | A | A-19 added after the test-suite baseline; Q-02 answered |

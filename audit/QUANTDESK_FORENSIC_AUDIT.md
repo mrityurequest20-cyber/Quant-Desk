@@ -136,7 +136,30 @@ python -c "import yfinance as yf; print(yf.Ticker('^NSEI').history(period='2d', 
 
 ### A.7 Baseline: the repository's own test suite
 
-See the "Test-suite baseline" note at the end of this phase (added once the run finished).
+**Setup**
+- Run in the same venv as the probes (pandas 3.0.6 / numpy 2.5.3 / yfinance 1.7.0), from the repo root, on
+  2026-10-09.
+- One pytest process per file, 4 in parallel, each capped at 300 s.
+- The suite as one process did not finish within 20 min.
+
+**Results**
+
+| Outcome | Files | Tests |
+|---|---|---|
+| Green | 49 of 52 files | 423 tests in all files that finished |
+| Failing: `tests/test_kotak.py` | 1 | `test_chain_from_the_live_book[live]` and `[docs]` (2 failures) |
+| Over 300 s: `tests/test_handover.py`, `tests/test_plan_research.py` | 2 | re-running with a 25-minute cap; result below |
+
+**Why `test_kotak` fails**
+- This is a time bomb in the test, not a library-version problem: A-19.
+- The fake chain's expiry is fixed at `EXP = dt.date(2026, 10, 6)` (`tests/test_kotak.py:24`).
+- `KotakOptionChain.chain` stamps the snapshot with the wall clock (`kotak.py:288`).
+- `time_to_expiry` (`chains.py:44-48`) is therefore 0 on any day after 2026-10-06 15:30, and every IV is `NaN`.
+- So the test fails on `main` too, from that date on.
+
+**Effect on the audit**
+- The probes already cover A-02's real failure, and no existing test catches it.
+- No test in the suite exercises a `datetime64[s]` bar index.
 
 ### A.8 Findings (detail in the register)
 
@@ -145,7 +168,7 @@ See the "Test-suite baseline" note at the end of this phase (added once the run 
 | P1 | **A-01**: the autolearn ledger has never recorded a live prediction. "Learns from its own predictions" is contradicted by the state. |
 | P2 | **A-02**: catch-up grading broken. **A-03**: unpinned dependencies (its root cause). **A-04**: no per-bar provenance. **A-05**: live/training feature skew. **A-09**: news graded on the wrong clock. **A-10**: force-pushed, unanchored "append-only" state. |
 | P3 | A-06, A-07, A-11, A-12, A-13, A-14, A-15, A-16 |
-| P4 | A-08, A-17, A-18 |
+| P4 | A-08, A-17, A-18, A-19 |
 
 No P0 in Phase A:
 - nothing found can place a real order;
@@ -156,7 +179,7 @@ No P0 in Phase A:
 | ID | Question | Where it will be settled |
 |---|---|---|
 | Q-01 | Kotak candle timestamp convention | Phase H |
-| Q-02 | Does the suite pass on CI's versions | § A.7 |
+| Q-02 | Does the suite pass on CI's versions? (Answered in § A.7: mostly. One date-dependent failure, A-19, and 2 slow files) | § A.7 |
 | Q-03 | Is the empty plan registry (with `require_approved_model`) the dominant cause of zero trades? | Phases B4, K |
 | Q-04 | What-if replays run without the learning memory, so `as_run` ≠ live | Phases B, K |
 | Q-05 | Where is the pre-reset ₹20k account's journal? | Phase K |
