@@ -89,9 +89,9 @@ class IntradayFeed(abc.ABC):
         from .quant import to_5m
         return to_5m(self.history(symbol, days))
 
-    def completed(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Drop the still-forming bar: a bar is complete once its minute has ended."""
-        return df[df.index + BAR <= self.now()]
+    def completed(self, df: pd.DataFrame, bar: pd.Timedelta = BAR) -> pd.DataFrame:
+        """Drop the still-forming bar: a bar is complete once its interval (`bar`, a minute by default) has ended."""
+        return df[df.index + bar <= self.now()]
 
 
 class YahooIntradayFeed(IntradayFeed):
@@ -124,7 +124,7 @@ class YahooIntradayFeed(IntradayFeed):
                                                       prepost=False)
         if raw is None or raw.empty:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        return to_5m(self.completed(normalise_bars(raw)))
+        return to_5m(self.completed(normalise_bars(raw), bar=pd.Timedelta(minutes=5)))
 
 
 class BarAggregator:

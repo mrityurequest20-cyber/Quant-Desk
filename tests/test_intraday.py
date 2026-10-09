@@ -318,3 +318,16 @@ def test_risk_gates(cfg):
     r2.on_close(-1000, ts("2026-09-28 10:10"))
     assert any("cooling off" in x for x in r2.gate(ts("2026-09-28 10:20"), 498000, [], "NIFTY"))
     assert not r2.gate(ts("2026-09-28 10:45"), 498000, [], "NIFTY")
+
+
+def test_a_forming_5_minute_bar_is_not_complete_after_one_minute(cfg, monkeypatch):
+    """A-18: completed() used a 1-minute bar length on Yahoo's 5-minute history."""
+    import yfinance as yf
+    from quantdesk.intraday.feeds import YahooIntradayFeed
+    idx = pd.date_range("2026-10-05 09:15", "2026-10-05 10:00", freq="5min", tz=IST)
+    raw = pd.DataFrame({"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1.0}, index=idx)
+    monkeypatch.setattr(yf, "Ticker", lambda t: type("T", (), {"history": lambda self, **k: raw})())
+    feed = YahooIntradayFeed(cfg)
+    monkeypatch.setattr(feed, "now", lambda: pd.Timestamp("2026-10-05 10:02", tz=IST))
+    got = feed.history_bars("NIFTY")
+    assert got.index[-1] == pd.Timestamp("2026-10-05 09:55", tz=IST)          # 10:00-10:05 is still forming
