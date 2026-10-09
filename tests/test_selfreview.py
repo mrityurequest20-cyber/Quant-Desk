@@ -81,6 +81,20 @@ def test_session_checks(tmp_path):
     assert SR.check_session(j2, day, False) == []                                 # not a trading day
 
 
+def test_failure_warnings_are_findings_but_slow_steps_are_not(tmp_path):
+    """D-07: catch-up grading failed at WARN for five sessions and self-review, filing only ERRORs, never saw it."""
+    day = dt.date(2026, 10, 5)
+    j = _journal(tmp_path / "w.db", day, start=True)
+    t0 = pd.Timestamp(f"{day} 09:15", tz=IST)
+    for k in range(2):
+        j.event(t0 + pd.Timedelta(hours=3 * k), "WARN", "learning", "grading failed: Cannot losslessly convert units")
+    j.event(t0 + pd.Timedelta(hours=4), "WARN", "engine", "slow step: 65s (the loop is falling behind)")
+    j.commit()
+    f = SR.check_session(j, day, True)
+    assert [x.key for x in f] == ["engine-failures"] and "2× `grading failed: Cannot losslessly convert units`" in f[0].detail
+    assert "slow step" not in f[0].detail
+
+
 def test_no_trades_streak(cfg, tmp_path):
     cal = TradingCalendar(cfg.holidays())
     j = Journal(tmp_path / "j.db")
