@@ -660,6 +660,10 @@ class IntradayEngine:
                 "; problems: " + "; ".join(f"{k}: {v}" for k, v in desk.errors.items()) if desk.errors else "")
             out += ["", line]
             self.journal.event(now, "INFO", "llm", line, {"usage": desk.usage(), "errors": desk.errors})
+            failed = {k: v for k, v in desk.errors.items() if not str(v).startswith("daily cap")}
+            if failed:                                    # G-05: at WARN too, so self-review files it (D-07)
+                self.journal.event(now, "WARN", "llm", "language model reads failed: " + "; ".join(
+                    f"{k}: {v}" for k, v in failed.items())[:200], {"errors": failed})
         return "\n".join(out)
 
     def _by_record(self, u: str, plans: list, view: MarketView, now) -> tuple[list, str | None]:

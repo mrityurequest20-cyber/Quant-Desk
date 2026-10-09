@@ -186,6 +186,27 @@ def test_the_close_writes_claudes_reflection_and_the_cost(cfg, tmp_path):
     assert sent["output_config"]["effort"] == "medium" and "Session review" in sent["messages"][0]["content"]
 
 
+
+def test_a_failed_reader_is_a_warning_and_a_daily_cap_is_not(cfg):
+    """G-05: read timeouts sat inside the INFO cost line, where self-review never looks."""
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine, run_replay
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-14", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=5)
+    news = NewsDesk(cfg, fetch=lambda url: "", sources=[])
+    news.llm = llm.LLMDesk(cfg, readers=[llm.ClaudeReader("k", client=FakeAnthropic(reply="{}"))], sync=True)
+    news.llm.errors = {"ollama": "ReadTimeout: read timed out (90s)", "gemini": "daily cap of 40 calls reached"}
+    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
+                         say=None, news=news)
+    run_replay(eng)
+    ev = eng.journal.events()
+    warn = ev[(ev["level"] == "WARN") & (ev["category"] == "llm")]["message"].tolist()
+    assert warn == ["language model reads failed: ollama: ReadTimeout: read timed out (90s)"]
+
 def test_the_workflows_pass_every_accepted_key_name():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
