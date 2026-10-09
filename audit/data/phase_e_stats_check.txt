@@ -1,0 +1,6 @@
+BH mismatches vs reference over 2000 random families: 0
+BH with NaN p treated as 1: [True, False]
+PSR desk 0.986577 reference 0.986577
+DSR desk 0.370123 reference 0.370123
+NW one-sided size at nominal 5%, AR(1) .5, T=288: 0.08075
+NW one-sided size at nominal 5%, iid t3, T=288: 0.05375

@@ -12,7 +12,7 @@ workflow was changed. The only files written are under `audit/`.
 | `QUANTDESK_TRADING_STATE_MACHINE.md` | Phase B: done |
 | `QUANTDESK_LEARNING_AUDIT.md` | Parts C (models) and D (learning): done |
 | `QUANTDESK_AI_AUDIT.md` | Phase G: pending |
-| `QUANTDESK_RESEARCH_VALIDITY.md` | Phase E: pending |
+| `QUANTDESK_RESEARCH_VALIDITY.md` | Phase E: done |
 | `QUANTDESK_REMEDIATION_PLAN.md` | at the end |
 | `QUANTDESK_TEST_PLAN.md` | at the end; the Phase A probes are in `audit/probes/` |
 
@@ -23,8 +23,8 @@ workflow was changed. The only files written are under `audit/`.
 | A | System foundation: architecture, lineage, point-in-time | done |
 | B | Trading decision pipeline: interpretation, setups, state machine, funnel, triggers | done |
 | C | Models: direction, plan, EV/cost | done |
-| D | Learning system: ledger, factors, lifecycle, recency, regime, no-trade, baseline, self-correction | **done, awaiting review** |
-| E | Research validity | not started |
+| D | Learning system: ledger, factors, lifecycle, recency, regime, no-trade, baseline, self-correction | done |
+| E | Research validity: provenance, prereg, edges, laws, sleeves, studies, statistics, parity | **done, awaiting review** |
 | F | Options / futures / execution | not started |
 | G | AI / LLM | not started |
 | H | Data / reliability / operations | not started |
@@ -339,6 +339,53 @@ changes behaviour. Audit lifecycle, recency, regime, no-trade learning, control 
 |---|---|
 | Does the verdict change with a longer live record? The placebo uses 5 sessions | re-run `phase_d_factor_placebo.py` later |
 | News-reader (LLM) trust | G |
+
+---
+
+## Phase E: Research validity
+
+Full report: `QUANTDESK_RESEARCH_VALIDITY.md` (subphases E0–E8, coverage matrix, strategy ladder, remediation,
+proven / suggestive / untested). Findings E-01 … E-09, controls V-21 … V-26, questions Q-08 … Q-11 are in the register.
+
+**Baseline:** start commit `97368c1`, clean tree; research tests 81 passed. Pre-existing failures: A-19 only
+(CI: 2 failed / 445 passed).
+
+### What holds up
+
+- **L1 is the real thing, statistically.**
+  - The registered v2 result reproduces bit-exactly from today's warehouse (V-21).
+  - It is robust on its own data: no autocorrelation, block-bootstrap p < 5·10⁻⁵, not carried by a few weeks (V-24).
+  - The preregistration discipline is genuine: specs before results, locks opened once (V-22).
+  - The stats code (BH, PSR, DSR, NW) matches the references (V-23).
+- **D1 is not a Yahoo artifact** (V-26).
+
+### What doesn't
+
+- **E-01 (P1). The forward ledger is computed on a frozen index.**
+  - The Kotak feed freezes 15:15–15:28 every session.
+  - The sleeves' registered settlement (the 15:00–15:29 mean) missed the official close by −27 bps on the 10-06 NIFTY
+    expiry.
+  - That flipped both NIFTY trades from profit to loss, and the sleeve rules run on that P&L.
+- **E-02 (P2). The paper gate passes a zero-edge sleeve ≈ 93% of the time.**
+- **E-04 (P2).** No program-wide multiplicity accounting.
+- **E-05 (P3).** v2 reuses the held-out set.
+- **E-06 (P3).** Provenance gaps.
+- **E-03 (P3).** An unregistered drift prior in the live EV.
+- **E-07 (P3).** Economics untested on the illiquid held-out instruments.
+- **E-08 (P3).** The L3 study's baseline is not the live forecaster.
+- **E-09 (P4).** Shallow external-data verification.
+
+### Ladder
+
+| Strategy | Highest rung reached |
+|---|---|
+| L1 | REPLICATED / OOS (one held-out exposure), then PAPER started (4 trades, on a mis-settled ledger) |
+| L2 | Passed, not robust |
+| D1 | Validated statistically, unregistered, yet live in the EV |
+| L3 | OOS, not deployed |
+| Engine directional setups | Nothing: N1 rejects their premise |
+
+**Backtest success ≠ validation:** nothing on the desk is past PAPER.
 
 ---
 

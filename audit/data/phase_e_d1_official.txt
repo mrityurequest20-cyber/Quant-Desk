@@ -1,0 +1,10 @@
+NIFTY 2019-2026 n 1918 mean bps -6.3 t -3.85 p 0.0001
+NIFTY 2019-2022 n 990 mean bps -8.25 t -3.05 p 0.0023
+NIFTY 2023-2026 n 928 mean bps -4.23 t -2.27 p 0.0232
+NIFTY share of days open == prior close: 0.0
+BANKNIFTY 2019-2026 n 1918 mean bps -4.87 t -1.95 p 0.0514
+BANKNIFTY 2019-2022 n 990 mean bps -8.15 t -1.86 p 0.063
+BANKNIFTY 2023-2026 n 928 mean bps -1.37 t -0.6 p 0.548
+BANKNIFTY share of days open == prior close: 0.0
+edges.json D1 NIFTY -5.7 t -3.45 holdout bps -4.61 PAPER CANDIDATE
+edges.json D1 BANKNIFTY -4.99 t -2.42 holdout bps -1.35 NO EDGE

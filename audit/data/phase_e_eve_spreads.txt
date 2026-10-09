@@ -1,0 +1,4 @@
+                     n     mid   half  model  half_bps_idx  half/model
+u      day                                                            
+NIFTY  2026-10-05  214  18.725  0.050  0.100         0.022       0.500
+SENSEX 2026-10-07  299  57.600  0.075  0.165         0.010       0.454

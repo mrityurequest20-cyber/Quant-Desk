@@ -70,6 +70,15 @@ P3 moderate · P4 minor.
 | D-06 | No baseline or control for learning; the "getting smarter" learning KPIs are null | P3 | VERIFIED | D7 |
 | D-07 | Self-correction blind spot: self-review files only ERROR events, so the 8 WARN grading failures went unseen | P2 | VERIFIED | D8 |
 | D-08 | Truncated graded-id lists let old headlines be graded again (latent duplicates) | P4 | VERIFIED | D1 |
+| E-01 | The sleeves' forward ledger settles on a frozen index: Kotak bars freeze 15:15–15:28 every session; the gap reached −27 bps and flipped both NIFTY trades' sign; the rules use that P&L | P1 | MISLEADING | E5 |
+| E-02 | Paper-account eligibility = "not rejected": a zero-edge sleeve qualifies ≈ 93% of the time after 10 trades | P2 | VERIFIED | E5 |
+| E-03 | D1 drift enters every live EV without a registered study; its cost hurdle assumes fair option prices, which the desk's own results contradict | P3 | PARTIAL | E3 |
+| E-04 | No program-wide multiplicity accounting: the experiment ledger covers 2 runs; the duplicate guard admits one-number variants | P2 | PARTIAL | E2 |
+| E-05 | v2 re-tests the same held-out instruments (not a second holdout); the spec has no frozen sample end | P3 | PARTIAL | E2/E4 |
+| E-06 | Result provenance gaps: 1 of 7 results stamped (dirty); the digest can't tell appends from revisions; edge inputs not archived | P3 | PARTIAL | E1/E7 |
+| E-07 | L1's economics untested where most held-out weight sits (no quotes for FINNIFTY/MIDCPNIFTY/BANKEX/NIFTYNXT50; entry at the close) | P3 | UNVERIFIED | E4 |
+| E-08 | L3 parity: the vol study's "desk" baseline omits the live IV blend; the better model is not deployed | P3 | PARTIAL | E6/E8 |
+| E-09 | External minutes "verified" against Yahoo daily H/L/C on 80 sessions only | P4 | PARTIAL | E6 |
 
 Verified-working controls (V-xx) and open questions (Q-xx) are at the end.
 
@@ -870,6 +879,234 @@ Severity: **P4** · Status: **VERIFIED** (latent)
 
 ---
 
+### [E-01] The sleeves' forward ledger settles on a frozen index
+Severity: **P1** · Status: **MISLEADING**
+
+**Claim**
+- `expiry_seller_v1/v3`: settlement = "the mean of the 15:00–15:29 one-minute index closes the desk recorded on expiry
+  day (NSE's index close is built from the last 30 minutes)".
+- The forward ledger is the desk's only forward evidence for L1/L2.
+
+**Actual behavior** [prod]
+- **The feed freezes.** On every recorded session the Kotak index bars freeze from 15:15: O = H = L = C and unchanged
+  for 12–14 minutes, while volume keeps changing.
+  - NIFTY then jumps to the official close in the 15:29 bar.
+  - The chain tape's spot freezes the same way (SENSEX never jumps).
+  - Option bid/ask keep updating every minute.
+- **About half of the settlement window is stale.** The mean vs the 15:29 bar was −27 … +16 bps across sessions.
+- **2026-10-06 NIFTY expiry:**
+  - registered settle 22,714.88 vs NSE official 22,776.10 (−26.9 bps);
+  - A-NIFTY goes from **+₹560 to −₹3,419**;
+  - B-NIFTY goes from **+₹2,142 to −₹1,838**.
+- **2026-10-08 SENSEX expiry:**
+  - settle 71,438.50 vs the BSE bhavcopy underlying 71,593.24 (−21.6 bps);
+  - D/E losses are overstated by ≈ ₹3,095/lot [infer].
+- **The rules use the stale P&L.** `sleeves.assess` (`sleeves.py:206`) uses `pnl_rs`, the registered settlement, for
+  the cost check, consistency z, tail rule and eligibility. The official P&L is a diagnostic `official` event only.
+- **Mixed conventions.** The history the consistency z compares against settles on the official close.
+- **Secondary.** The 15:20 entry picks strikes by delta from a 5-minute-stale spot.
+
+**Evidence**
+- `audit/probes/phase_e_frozen_minutes.py` → `audit/data/phase_e_frozen_minutes.txt`.
+- Journal `sleeves/expiry_seller_v1.jsonl` (`settle` and `official` events).
+- `chains-2026` tapes for 10-05/07/08.
+
+**Reproduction**
+`test_phase_e_probes.py::test_official_close_flips_the_sign_of_both_nifty_sleeve_trades`,
+`::test_recorded_index_freezes_from_1515_every_full_session`, `::test_sleeve_rules_use_registered_settlement_pnl`.
+
+**Impact**
+- The forward record of the desk's one validated edge is computed on stale data.
+- Its retirement and eligibility rules run on that record.
+- Paper only, so not P0.
+
+**Recommended fix**
+- A new spec (`expiry_seller_v4`) settling on the exchange's official close.
+- Flag flat-bar runs at record time.
+- Keep the v1/v3 ledgers frozen and report both conventions.
+
+**Confidence:** High for the freeze and its P&L effect. The root cause (vendor vs aggregation) is open (Q-08).
+
+### [E-02] Paper-account eligibility means "not rejected"
+Severity: **P2** · Status: **VERIFIED**
+
+**Claim**
+`expiry_seller_v1` `eligibility`: sleeve A becomes eligible for the ₹5L paper account with ≥ 10 settled trades, the cost
+check passed and consistency not rejected.
+
+**Actual behavior**
+- **Simulation** [synth]: with the production `assess()` and A_NIFTY's history (mean ₹118, sd ₹2,232), a sleeve with a
+  **true edge of zero** is eligible after 10 trades in ≈ 93% of 2,000 simulations.
+- **Analytical** [infer]: 93% for A_NIFTY and 90% for A_BANKNIFTY.
+- **A_NIFTY's own history** is t 1.05 over 391 expiries: not significant.
+
+**Mitigations**
+- The spec's `no_profit_claim` says the forward test cannot show profitability.
+- Eligibility is "reported, never applied automatically".
+
+**Reproduction**
+`test_phase_e_probes.py::test_paper_gate_admits_a_zero_edge_sleeve`.
+
+**Recommended fix**
+- Require positive forward evidence: a one-sided lower bound > 0, or a sequential test on pooled forward trades.
+- Or relabel the status "not rejected". A new spec either way.
+
+**Confidence:** High.
+
+### [E-03] The D1 drift steers every live EV without a registered study, on a hurdle that assumes fair option prices
+Severity: **P3** · Status: **PARTIAL**
+
+**Evidence**
+- **The effect is real** [replay]: on NSE's official OHLC, NIFTY open → close −6.30 bps/day, t −3.85, 2019–2026 (V-26).
+- **It enters every live EV** [code]:
+  - `quant.load_research` turns the edges.json D1 row (`PAPER CANDIDATE`) into `drift.per_min`;
+  - `engine.py:1100` passes it to `ev.evaluate` as the base drift of every plan;
+  - no `docs/prereg` spec covers it.
+- **The hurdle assumes fair option prices** [code]: one 0.35Δ option round trip, justified by "theta is paid for by
+  gamma".
+  - The desk's V1 (VIX above realised), L1 and L4 all say short-dated buyers pay a premium.
+  - Back-of-envelope [infer]: the VRP drag on a 0.35Δ weekly near expiry is several index points per intraday hold,
+    the same order as the ≈ 5 pts of D1 that the option captures.
+
+**Impact**
+Nil today (no trade path: B-02, C-01). A latent mis-pricing once anything can trade.
+
+**Reproduction**
+`phase_e_d1_official.py`; `test_phase_e_probes.py::test_d1_drift_becomes_the_live_ev_base_drift`.
+
+**Recommended fix**
+- Register D1 before it steers EV.
+- Add an IV-premium term to the hurdle, or switch the prior off.
+
+**Confidence:** High for the facts; medium for the cost-of-the-same-order inference.
+
+### [E-04] No program-wide multiplicity accounting
+Severity: **P2** · Status: **PARTIAL**
+
+**Evidence** [prod + code]
+- **The ledger is thin.** `research/experiment_log.jsonl` has 7 lines: an init line plus 2 runs of the
+  edges/warehouse research on 2026-10-03 (87 tests each). "Earlier research reports predate the append-only experiment
+  ledger and are not reconstructed."
+- **Registered studies never write to it**: `laws`, `wings`, `law_audit`, `autolearn/prereg`, `volstudy`, the sleeves'
+  decisions.
+- **BH is per run family.** It is applied within each run, not across the program, and the weekly re-run re-inspects
+  the same rolling-validation slice.
+- **The duplicate guard is a registry, not a multiplicity control.** `memory.method_fingerprint` refuses exact
+  (reworded) repeats only. A one-number variant (v2 with t > 1.5) is "new": no identical match, nearest v2 at
+  similarity > 0.9.
+- **Discovery cells.** The desk's own L1 audit counts ≥ 48 discovery cells before L1.
+
+**Impact**
+- L1's held-out test is a single pre-registered rule, so its p is not inflated.
+- "Found"/"candidate" items (D1, the edges list, L4) carry an unknown family size.
+
+**Reproduction**
+`test_phase_e_probes.py::test_fingerprint_guard_admits_a_one_number_variant`, `::test_experiment_ledger_does_not_cover_the_program`.
+
+**Recommended fix**
+- Every registered run appends to the ledger.
+- Report a running family count.
+- Reconstruct the pre-ledger reports.
+
+**Confidence:** High.
+
+### [E-05] v2 re-tests the same held-out instruments, and its spec has no frozen sample
+Severity: **P3** · Status: **PARTIAL**
+
+**Evidence** [prod]
+- **Timing.** The v1 result was committed at 02:40Z (pooled t 4.46, replicated). The v2 spec was committed at
+  08:07Z: same five held-out instruments, same rule, only the spot source changed. So v2 is a corrected re-test after
+  v1's held-out result had been seen, not a second holdout.
+- **Principles.** `docs/principles.json` rests L1/L2 "replicated" on v2. Legitimate as a correction, but it is one
+  exposure of the held-out data.
+- **No frozen sample.** `expiry_eve_law_v2.json` has no end date. Re-running today gives 289 weeks, +9.27 bps, t 4.82
+  (the registered result: 288 weeks, +9.48, t 4.98). The registered sample exists only as the stored file; the cutoff
+  2026-10-01 is not recorded anywhere but the result's span.
+
+**Reproduction**
+`phase_e_repro_v2.py`, `phase_e_v2_post.py`; `test_phase_e_probes.py::test_v2_spec_has_no_frozen_sample`.
+
+**Recommended fix**
+- Specs fix their sample end.
+- The ladder records how many exposures each held-out set has had.
+
+**Confidence:** High.
+
+### [E-06] Result provenance gaps
+Severity: **P3** · Status: **PARTIAL**
+
+**Evidence** [prod + code]
+- **Stamping.** Only `expiry_eve_law_v2_audit` carries a provenance stamp, and its code state is `dirty: true` (commit
+  `c511e5ace1ab`). v1, v2, wings_v1, N1 and vol_forecast_v1 have none.
+- **The digest design** (`provenance.data_digest`: a hash over whole yearly files) changes with every daily append. It
+  cannot separate appended rows from revised ones; today's digests all differ from the recorded ones.
+  - The v2 rows were verified unrevised by exact reproduction instead (V-21).
+- **Edge research inputs are not archived.** Yahoo `period=max` is re-downloaded each run; only a sha256 is logged,
+  so drift is detectable but `edges.json` cannot be re-derived.
+- **Two spec-hash schemes coexist** (raw bytes vs canonical JSON). `memory.registry` handles both.
+
+**Reproduction**
+`test_phase_e_probes.py::test_registered_results_mostly_lack_provenance`.
+
+**Recommended fix**
+- Stamp every result and refuse a dirty tree.
+- Use per-day digests.
+- Archive the research inputs.
+
+**Confidence:** High.
+
+### [E-07] L1's economics are untested where most of its held-out weight sits
+Severity: **P3** · Status: **UNVERIFIED**
+
+**Evidence** [prod]
+- **Measured spreads are conservative.** Real expiry-eve half-spreads (~0.12–0.30Δ, 15:00–15:30) are 0.050 on NIFTY
+  and 0.075 on SENSEX, vs the model's 0.100 and 0.165: about 0.5×.
+- **The rest is unmeasured.** No quotes were ever recorded for FINNIFTY (51% of the pooled weight), MIDCPNIFTY,
+  BANKEX or NIFTYNXT50.
+- **Entry is not executable as tested.** The entry is the bhavcopy close (a last trade on only 26.8% of rows). The
+  pre-registered `expiry_eve_entry_v1` measures this and is collecting (0 decided).
+- **Decay.** The held-out mean in 2024 is +1.4 bps on 202 trades (L2 −1.6).
+
+**Reproduction**
+`phase_e_eve_spreads.py` → `audit/data/phase_e_eve_spreads.txt`; `phase_e_l1_robust.py`.
+
+**Recommended fix**
+Tape the eves of every held-out instrument; let `expiry_eve_entry_v1` decide.
+
+**Confidence:** Medium (2 eves measured).
+
+### [E-08] L3 parity: the study's "desk" baseline is not the production forecaster, and the winner is not deployed
+Severity: **P3** · Status: **PARTIAL**
+
+**Evidence** [code]
+- **The baseline differs from production.** `volstudy.py` defines A_desk as "the desk's forecaster without IV".
+  Production's `VolForecaster` blends 30% ATM IV (`iv_weight = 0.3`).
+- **The winner is not deployed.** The study found the desk's forecaster mis-scaled by time of day (move ratio
+  0.73–1.23) and beaten by HAR by 13–35% QLIKE. The live EV Monte Carlo still runs `VolForecaster`; no HAR or seasonal
+  model exists in `intraday/quant.py`.
+
+**Reproduction**
+`test_phase_e_probes.py::test_vol_study_baseline_excludes_the_live_iv_blend`.
+
+**Recommended fix**
+Re-run the comparison against the live forecaster (with IV), then decide on deployment.
+
+**Confidence:** High.
+
+### [E-09] External minutes are verified shallowly
+Severity: **P4** · Status: **PARTIAL**
+
+**Evidence** [code]
+- `data/external_aeron.verify` compares 80 seeded random sessions per symbol with Yahoo's daily H/L/C, within
+  tolerances.
+- It does not check minute-level values or timestamps. Minute-level errors that preserve the daily extremes pass.
+- The studies on these data (N1, L3) are labelled "external_verified (underlying only)".
+
+**Recommended fix**
+Minute-level spot checks against NSE OHLC (warehouse 2019–2023).
+
+**Confidence:** High for the code; unknown for the data's actual quality.
+
 ## Verified-working controls (all phases)
 
 | ID | Control | Evidence |
@@ -898,6 +1135,13 @@ Severity: **P4** · Status: **VERIFIED** (latent)
 | V-19 | Probation graduation is reversible and recomputed every close (no stuck promotions) | `engine._apply_memory`, `brain._probation_weight` |
 | V-20 | Self-review detects multi-session zero-trade streaks and missed sessions | `ops/selfreview.py:check_trading`, `check_session` |
 
+| V-21 | `expiry_eve_law_v2` reproduces bit-exactly from today's warehouse with HEAD code (cutoff 2026-10-01): all instruments' n/means, pooled 288 weeks / +9.4754 / t 4.9772 and 288 / +5.4807 / t 3.6338 | `phase_e_repro_v2.py` → `audit/data/phase_e_repro_v2.json` |
+| V-22 | All 7 registered results match their spec hashes; every spec was committed before its result and never edited after; the N1 and vol locks were opened once, after their specs | git history; `memory.registry` |
+| V-23 | BH (0/2,000 mismatches), PSR and DSR (equal to 1e-6) and NW match reference implementations; NW size 5.4% (iid t3), 8.1% (AR(1) .5) | `phase_e_stats_check.py` |
+| V-24 | L1's held-out result is robust on its own data and convention: ACF ≈ 0, block-bootstrap p < 5e-5, best 5 weeks = 11% of the total, NW lag 0–10 gives t 4.54–4.98 | `phase_e_l1_robust.py`, `phase_e_v2_post.py` |
+| V-25 | The sleeve and entry-check specs are honest about power, use real quotes, log the cost gap, are append-only and fix their retirement rules in advance; `expiry_eve_entry_v1` has a power analysis and a decision table | `docs/prereg/expiry_seller_v*.json`, `expiry_eve_entry_v1.json` |
+| V-26 | D1's sign and size replicate on NSE's official OHLC (NIFTY −6.30 bps/day, t −3.85, 2019–2026): not a Yahoo artifact | `phase_e_d1_official.py` |
+
 ---
 
 ## Open questions (carried forward)
@@ -911,6 +1155,10 @@ Severity: **P4** · Status: **VERIFIED** (latent)
 | Q-05 | ~~Where is the pre-reset journal?~~ Answered: on 10-05 the journal had 0 trades, so `ensure_account` only changed the capital (no archive). Earlier trades of the ₹20k account (the README cites 29 Sep) are not recoverable from the force-pushed journal branch (A-10); their sessions still feed `memory.json` (D-03) | D |
 | Q-06 | ~~Is the iron-fly EV right?~~ Answered: internally consistent; the setup can't pay intraday (C-05) | C3 |
 | Q-07 | Does the global-stress size multiplier ever bind live? (No brain in the replay) | F / K |
+| Q-08 | Root cause of the 15:15–15:28 index freeze (E-01): the Kotak index LTP, or the desk's polling and aggregation? Needs raw Kotak responses around 15:15 | E → H |
+| Q-09 | How many hypotheses has the research program tested since inception? (The ledger starts 2026-10-03; earlier reports are not reconstructed) | E |
+| Q-10 | Real expiry-eve spreads for FINNIFTY, MIDCPNIFTY, BANKEX and NIFTYNXT50 (no quotes recorded) | E → H |
+| Q-11 | Do the frozen minutes bias autolearn's "close" labels and any grading window that ends after 15:15? | E → H |
 
 ---
 
@@ -923,3 +1171,4 @@ Severity: **P4** · Status: **VERIFIED** (latent)
 | 2026-10-09 | B | B-01 … B-11, V-09 … V-12 added; Q-03, Q-04 answered; Q-06, Q-07 opened |
 | 2026-10-09 | C | C-01 … C-08, V-13 … V-17 added; Q-06 answered |
 | 2026-10-09 | D | D-01 … D-08, V-18 … V-20 added; Q-05 answered |
+| 2026-10-09 | E | E-01 … E-09, V-21 … V-26, Q-08 … Q-11 added. No earlier finding's severity or status changed; A-12, A-14, B-02, C-02, C-04 and D-01 reassessed (`QUANTDESK_RESEARCH_VALIDITY.md` § Reassessment) |
