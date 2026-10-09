@@ -31,7 +31,7 @@ One label never silently becomes another.
 |---|---|---|---|---|---|
 | 1 | 2026-10-09 | S0 readiness assessment (read-only) | S0 | **done**: this file | requested by owner |
 | 2 | 2026-10-09 | O-1: pause the engineer routine | S0 | **done**: `enabled: false` at 22:36:11 UTC (S0-05) | owner approved in session |
-| 3 | 2026-10-09 | O-4a: ask the audit session to commit and push the H–L artifacts | S0 | **declined by that session (correctly)**: it needs the owner's approval typed in that session, not a relayed request. **Owner action** (S0-02) | owner approved in session |
+| 3 | 2026-10-09 | O-4a: H–L artifacts committed | S0 | **done**: the owner approved in the audit session; commit `de344bd` (22:47 UTC), independently verified here (S0-02) | owner, in the audit session |
 | 4 | — | Owner actions O-2, O-3, O-4b, O-5 (§6.1) | S0 | **awaiting owner** | owner only |
 | 5 | — | First remediation PR: A-19 test clock seam (§6.2) | S0 | **proposed, not started** | needs owner approval |
 
@@ -54,13 +54,15 @@ One label never silently becomes another.
 
 | | |
 |---|---|
-| **Status** | **BLOCKED: H–L evidence missing** (A–G VERIFIED) |
+| **Status** | **VERIFIED: all A–L evidence now committed** (preservation done; pinning by tag still open, O-4b) |
 | **Evidence** | GitHub: PR #9 is open and draft and has not been merged. Its branch `claude/exciting-galileo-criwur@8138494` holds 45 files under `audit/` (10,194 lines). `audit/QUANTDESK_FORENSIC_AUDIT.md` phase tracker: A–G "done", **H, I, J, K, L "not started"**. The register lists **68 findings** (A:19 B:11 C:8 D:8 E:9 F:7 G:6) plus controls V-01…V-38 and questions Q-01…Q-13. A search of `main`, `journal`, `research`, `gh-pages` and the audit branch found no Phase H–L findings. |
 | **Conclusion** | The A–G evidence is preserved on a remote branch, and its git blob hashes are pinned in Appendix A. The handoff reports **115 findings across A–L**. That leaves **≈47 findings (H–L) that exist in no repository location this session can see**. Among them: India VIX zero readings, the Pages 404, kill-switch reachability, journal mutation, replay failures, crash/orphan exposure, and the lost/unrecoverable evidence. They are PREVIOUSLY REPORTED only. |
 | **Located (VERIFIED NOW, 2026-10-09 ~22:30 UTC)** | The audit session `session_01W3ozoc7W4HkbhbWrrxBk83` ("QuantDesk forensic audit") is idle. Its status reads "Phase L audit artifacts written under audit/, left uncommitted". Its final turn (2026-10-09 18:49:50 UTC) says the H–L artifacts are **untracked files under `audit/`**, kept local on the owner's instruction, and that it will commit and push them to `claude/exciting-galileo-criwur` when the owner says so. Its container was reachable at 22:26–22:28 UTC: file reads were served from it. |
 | **Uncertainty** | The H–L files exist **only** in that session's container, which can be reclaimed when idle. They are not hashed anywhere. Also, PR #9 is unmerged, so its branch could be deleted. |
 | **Relay attempt** | 2026-10-09 ~22:36 UTC: this session asked the audit session (on owner approval) to push. It **declined**, citing the owner's standing instruction in that session to keep artifacts local, and said only the owner, typing in that session, can lift it. That is the correct control. It reported (**not verified here**): tracked changes 0; register hash `e49341c0…` unchanged; Phase K probes (10) and Phase L probes (21) pass. It also correctly flagged a timestamp error in this session's message ("about 22:40 UTC" vs a 22:36:11 send); the owner's answer came before 22:36:11. |
-| **Required action** | **Owner, urgent:** tell the audit session to commit and push the H–L artifacts to `claude/exciting-galileo-criwur` (as it offered). Then this log records their hashes. Do not delete that branch. Decide whether to merge PR #9 (audit-only) or tag it (e.g. `audit-a-l-2026-10-09`) so the evidence is pinned. |
+| **Preserved (VERIFIED NOW, 2026-10-09 ~22:50 UTC)** | Commit `de344bd255f3766b02fb8ce301d9d89740e6fe45` on `claude/exciting-galileo-criwur` (parent `8138494`), "Audit Phases H-L: reports, probes and raw evidence". Checked here independently: **176 files, all added, all under `audit/`, 0 outside**. Per-file manifest sha256 = `feb36b9803a8bd1daa41ed4b615e8320c109c5f5d2ae79b781ac4912c6978f42`, regenerated here and matching the audit session's figure. The canonical register sha256 prefix is still `e49341c0817354b1` (unchanged). `audit/data/phase_l_consolidated_findings.json`: status *"PROPOSED. Not applied to the canonical register."*; **115 findings** = A19 B11 C8 D8 E9 F7 G6 **H14 I10 J11 K6 L6**; by effective severity P1 7, P2 36, P3 55, P4 17. One P2 is marked **"P0 if any live mode is enabled"** (rule shared with H-01), so S0-07 decides its severity. The handoff's "115 findings" is now VERIFIED as a count. The individual H–L findings remain PREVIOUSLY REPORTED until each is re-verified when it is worked. |
+| **Key pins (sha256)** | `f76c57c99d4a8d5f1b42c3e6fe0d1c56eaee8a2e8d3bf2e6858d7dd5a64d52e3` audit/QUANTDESK_PHASE_H_RELIABILITY.md · `5202619aa66dcdca83039a46af4cc632ca537c67d7eac7e91b84c69b6a437894` audit/QUANTDESK_PHASE_I_AUDITABILITY.md · `4b50ba726942f711087054e19d9b3998bf4bf32f6dace3c7369dd572a95aa56c` audit/QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md · `c8465ddb080c4668ece170e34e1dbf41122adce7866a4056259c3e56c6bcd379` audit/QUANTDESK_PHASE_K_SESSION_FORENSICS.md · `c94c5b3421962b9d2c1383ea07d35343c1e0fa178fce630f438a7fc27c4cbca2` audit/QUANTDESK_PHASE_L_FINAL_AUDIT.md · `3409c8ace916c162ab4d74f02a09ff8cfb18c94dddcf6b160d6519cff19741b9` audit/QUANTDESK_POST_G_CONSOLIDATION.md · `81b3812dcaf4b8786d6bfbcd8b1f6a80da085dccd93ab40be18cd04de6b4fb23` audit/data/phase_l_consolidated_findings.json · `2fa26b17d047b7e15c3c2f3304f751537f1964fff6047888e6f866cdfc513c60` audit/probes/test_phase_l_probes.py (generated from the manifest; full list in Appendix A2) |
+| **Superseded** | ~~Owner, urgent:~~ tell the audit session to commit and push the H–L artifacts to `claude/exciting-galileo-criwur` (as it offered). Then this log records their hashes. Do not delete that branch. Decide whether to merge PR #9 (audit-only) or tag it (e.g. `audit-a-l-2026-10-09`) so the evidence is pinned. |
 | **Pass condition** | All 115 findings are committed with hashes, or the owner records which are lost and they are re-derived. The A–G branch is tagged or merged. |
 
 ### S0-03: Test baseline (independent re-run)
@@ -186,7 +188,7 @@ One label never silently becomes another.
 1. **S0-07: live-trading state unverified.** BLOCKED: OWNER ACTION REQUIRED: LIVE-TRADING STATE UNVERIFIED.
 2. **S0-05: the autonomous engineer** has self-merge authority over an unprotected `main`. *Interim containment: paused 2026-10-09 22:36 UTC.* The durable fix is S0-04.
 3. **S0-04: `main` is unprotected**: no review, no required CI, no rulesets.
-4. **S0-02: H–L audit evidence (≈47 findings) is not preserved** anywhere visible.
+4. ~~S0-02: H–L audit evidence not preserved~~. **Resolved 2026-10-09 22:47 UTC** (`de344bd`, 115 findings, verified). Only tagging remains (O-4b); PR #9 is still an unmerged draft.
 5. **S0-10: the runtime evidence base is overwritten** on every save. The audit's snapshot is already gone from the branch.
 
 **Serious, but not blocking containment**
@@ -203,7 +205,7 @@ One label never silently becomes another.
 - GitHub repository secret names, environments, collaborators, deploy keys, Actions settings, security/audit log (proxy-denied or settings-only).
 - Cloudflare Worker logs, its secrets, the `GH_DISPATCH_TOKEN` scope; the Workers Builds failure on PR #9.
 - Any self-hosted QuantDesk deployment.
-- Contents of Phase H–L reports (not found).
+- The individual Phase H–L findings: committed and hashed, but not re-verified (PREVIOUSLY REPORTED).
 - Kill-switch behaviour in the hosted runtime (not tested: out of scope for a read-only pass).
 - Whether the post-close `live.yml` re-run mutates sleeves or journal state.
 - Exact reproduction of the audit's 54 probes (not re-run here).
@@ -231,7 +233,7 @@ One label never silently becomes another.
 | O-1 | Pause routine "Quant-Desk engineer shift" before 2026-10-10 12:10 UTC | **done** 2026-10-09 22:36 UTC |
 | O-2 | Answer S0-07 (a)–(e) from the broker consoles | owner only |
 | O-3 | Re-enable Pages from `gh-pages`, after checking the security log | owner only |
-| O-4a | Get the H–L artifacts committed by the audit session | **owner only**: type the approval in `session_01W3ozoc7W4HkbhbWrrxBk83`; a relayed request was declined |
+| O-4a | Get the H–L artifacts committed by the audit session | **done** 2026-10-09 22:47 UTC (`de344bd`) |
 | O-4b | Tag evidence: `claude/exciting-galileo-criwur` (after H–L lands), the `journal` head and the `gh-pages` head | owner, or this session on approval |
 | O-5 | Protect `main` (PR + 1 non-author review + no force-push), adding required check `tests` **after** §6.2 merges | owner only |
 
@@ -299,6 +301,189 @@ e9c7f068a78786fe  91e43a7c21d8  audit/probes/test_phase_c_probes.py
 360190ca32851556  c432685ad34c  audit/probes/test_phase_e_probes.py
 16910aa3ce887312  2682a703d08c  audit/probes/test_phase_f_probes.py
 d4c2254c5670bcf1  41933f4e0496  audit/probes/test_phase_g_probes.py
+```
+
+## Appendix A2: Phase H–L artifact manifest (commit `de344bd`)
+
+Generated here by `git diff-tree --no-commit-id --name-only -r de344bd | sort | xargs sha256sum` over a `git archive` of that commit. The sha256 of this list is `feb36b9803a8bd1daa41ed4b615e8320c109c5f5d2ae79b781ac4912c6978f42`.
+
+```
+85c55e7755499c98a375a609e37a25d8ce1e5704f5fac64a11180462c25c71f7  audit/QUANTDESK_PHASE_H_CLOSEOUT.md
+7d036cb441d836ad025233375348857c429a05c8886ebe299b01bd9933ea4104  audit/QUANTDESK_PHASE_H_REGISTER_PROPOSAL.md
+f76c57c99d4a8d5f1b42c3e6fe0d1c56eaee8a2e8d3bf2e6858d7dd5a64d52e3  audit/QUANTDESK_PHASE_H_RELIABILITY.md
+5202619aa66dcdca83039a46af4cc632ca537c67d7eac7e91b84c69b6a437894  audit/QUANTDESK_PHASE_I_AUDITABILITY.md
+4b50ba726942f711087054e19d9b3998bf4bf32f6dace3c7369dd572a95aa56c  audit/QUANTDESK_PHASE_J_UI_TRUTHFULNESS.md
+c8465ddb080c4668ece170e34e1dbf41122adce7866a4056259c3e56c6bcd379  audit/QUANTDESK_PHASE_K_SESSION_FORENSICS.md
+c94c5b3421962b9d2c1383ea07d35343c1e0fa178fce630f438a7fc27c4cbca2  audit/QUANTDESK_PHASE_L_FINAL_AUDIT.md
+3409c8ace916c162ab4d74f02a09ff8cfb18c94dddcf6b160d6519cff19741b9  audit/QUANTDESK_POST_G_CONSOLIDATION.md
+21533cc0f2e4b3fb967c884076539c37a3cdc07b0c48a3387bbbe3c89627f87e  audit/data/phase_h_det_tests.json
+269d33c5e116e2c890c7d85b3797093428cf588bd86a2b66a14c6e379223e0de  audit/data/phase_i_counterfactual.json
+e6c9efe0027a6812f7f77371b3b04ced14773a32310c116760a2895908e7929b  audit/data/phase_i_evidence.json
+d3ba73d398731d2695122e9e33749a896cd8427b9f45f536cdca341df099daa3  audit/data/phase_i_news_mutation.json
+76bfcc48b07ea037aee9d6450106b60c3d8d693be4ace7b80cf601051a425975  audit/data/phase_i_probe_run.txt
+9f46a35b2f260d46f8495fdcd35c5a4d4be2f52bbd85e0bafd9a653816b1fb80  audit/data/phase_i_replay_2026-10-05.json
+2df2f3e8c192b1b6316b92d4b3357e37314659e881f38e92d2ca7eef5dee0903  audit/data/phase_i_replay_2026-10-08_vix_substituted.json
+2421cb86e48669ff060058a49274ba7a717013fa4e34f37c7a6fe0c39b407977  audit/data/phase_i_snapshot_diff.json
+2a55008632573e19415567b8ce79208a7d2dcce61076355ff448f8604d578b49  audit/data/phase_i_snapshot_ident.json
+514b340969c0bdf22d57de1d064d73fbb561b62f4badcc67b98f1e61947432b7  audit/data/phase_i_thought_recompute.json
+4d15853a2f9d871fc9c94feb0f1f9655ad2577fe3b82b566c80dbb06032239c5  audit/data/phase_i_vix_zero_model_chain.json
+0258b604ae079ab10dd0458087b154e4944d4839a1cae1af7e2785a0acb1783d  audit/data/phase_j_probe_run.txt
+3c70a6ddfd9d266c8bf43a11c8e4f45d0b5bbc9dc0518dd8c5fd842e79989b36  audit/data/phase_j_screens/deployed_1246_brain.png
+765f7c3a42f4706a174992b6bda047233f6480a9c3ab697e68d2c4587d7f965e  audit/data/phase_j_screens/deployed_1246_desk.png
+069cef966da8292e02a826b29fca08775b087ae2996c0aeca4a743b8b068f281  audit/data/phase_j_screens/deployed_1246_text.json
+86e7c2c8ec3caa2b2556d0cc3a99114ca10354792f3df9a5fb676eff6e2ef805  audit/data/phase_j_screens/focus_deployed_vix_evidence.png
+12c3ebeac06c35ce1c238c675bc314f5d369ba79ced9288b2538107d2461e9a1  audit/data/phase_j_screens/focus_fx_8a_account.png
+6d910d9125136b04428a2e658bef65c70aaa4140fce71192200da40e38b053ff  audit/data/phase_j_screens/focus_fx_8a_lifecycle.png
+30b40423f13adf24f7383fdd0ab12d8c4160bda7b02124d7ab490875b99fceb1  audit/data/phase_j_screens/focus_fx_8a_now.png
+2200d10ef5b15d2dd669226d55126231a181272e8c98c5306dab2191d6a6a8e8  audit/data/phase_j_screens/focus_fx_8b_account.png
+6d910d9125136b04428a2e658bef65c70aaa4140fce71192200da40e38b053ff  audit/data/phase_j_screens/focus_fx_8b_lifecycle.png
+6265d93272d06b3df830e6d0b194fddd905561a555771cfffdef8630d15c644d  audit/data/phase_j_screens/focus_fx_8b_now.png
+e09529f60bc3a960fbb92f7e6dc7b6276f9ccbe0882c327e43ad0c8c01a4ae73  audit/data/phase_j_screens/focus_fx_kill_account.png
+a85972dd37570ff33419672effcb45d48d8dbd5ce43b88161d0bd39883afe487  audit/data/phase_j_screens/focus_fx_kill_lifecycle.png
+6aaec1a2788869503e613319104b9d1d3a4fe94cf6fdd6670760776bb14a79a4  audit/data/phase_j_screens/focus_fx_kill_now.png
+d1c7c05842367c17a7975def706ed9bd25d4253f3c43d93e459ddc4ab421d9e8  audit/data/phase_j_screens/focus_fx_safe_account.png
+6d910d9125136b04428a2e658bef65c70aaa4140fce71192200da40e38b053ff  audit/data/phase_j_screens/focus_fx_safe_lifecycle.png
+381fbdced44008fafa740e4b1c8178056ea9b207ee0466fdd420af7898a08d21  audit/data/phase_j_screens/focus_fx_safe_now.png
+3138501db89f365bfa2445831f9a668a164af5e75b35563dfb27fbfd3d707370  audit/data/phase_j_screens/focus_prod_learned.png
+a513234e2a053a866a7b4e64584404dbb72774e7c17a575b0c4c46b7d657b2b2  audit/data/phase_j_screens/focus_prod_lifecycle.png
+5d0abf93ec4f0911c221e20171bdb428adc9798071b68488aaf769c9e8e1f5c8  audit/data/phase_j_screens/focus_prod_quant.png
+95c28f676e518566d05bde89e0a122658e5b9c905ff82040200787331f74c412  audit/data/phase_j_screens/focus_prod_stale_banner.png
+6c651963f90d05670ff4bf645c30039a58dba73185b86eb274570acfcd510410  audit/data/phase_j_screens/focus_prod_vix_evidence.png
+6daefd234365e833faeb4aae6f94e79ef090f351ac827adc3af2e6d83f788652  audit/data/phase_j_screens/fx_8a_brain.png
+17d66242b2f43753941c5a567e5a61f82b3d3463db680b48b052e672d725b360  audit/data/phase_j_screens/fx_8a_chart_chart.png
+859d0529c57aa0c832f7f96d24a257598f8d316ecc3c144c98a8c0dc513de794  audit/data/phase_j_screens/fx_8a_chart_text.json
+1727cb978adec81a97109ef6fc484d6ae3c65f7f7fdf9bd67f2a316062d68f0d  audit/data/phase_j_screens/fx_8a_desk.png
+34c77620ccd60a1e46f6055e1bfe2ad938571026bf9066c65b05b61e92a93b05  audit/data/phase_j_screens/fx_8a_text.json
+c0efe966dd5d67460673c42ccc1c16167e852c1629b73360b73fb71154013cbb  audit/data/phase_j_screens/fx_8a_trades.png
+6daefd234365e833faeb4aae6f94e79ef090f351ac827adc3af2e6d83f788652  audit/data/phase_j_screens/fx_8b_brain.png
+c7e387b5e821f5ca57236b05d702418d847e292496fa17d4762c1863960479db  audit/data/phase_j_screens/fx_8b_desk.png
+bdc7a99b8a4d0aa03cad4874f7ed9a7d7caea657f17235e530e4372e845d8bfa  audit/data/phase_j_screens/fx_8b_text.json
+db5d63e1bd465db8a332b8d42a1fe17d5b781e8c3428ad2eee85cbd54f145c6c  audit/data/phase_j_screens/fx_8b_trades.png
+8c98ef64d919a0287b79e0467494911c7fa2688739ceeb49a639ec296c6adef2  audit/data/phase_j_screens/fx_kill_brain.png
+a98230edf789027ee3eb17810c1c26104aafc291b05ce7a3abf8bfc985867eef  audit/data/phase_j_screens/fx_kill_desk.png
+5087ef739db4756e420120faacc05dfb8ac2a40d99978e1afab391fe99780b26  audit/data/phase_j_screens/fx_kill_text.json
+887575ad6c0e4d116c2507421339eff348f713e5ae39bea52f663c9c826ad6d3  audit/data/phase_j_screens/fx_kill_trades.png
+b941c5e2636dabf63725def9a41050a5f5b0bd2883989e398858e607775e0031  audit/data/phase_j_screens/fx_safe_brain.png
+26acd7a7ed2cd39c9eecd2eeadd4c4d37af3c4f56e506d6eeaa22c9008c5c434  audit/data/phase_j_screens/fx_safe_desk.png
+358055b653689ab27322e8f34f0482229bc648f26c535cc6618af647e81581df  audit/data/phase_j_screens/fx_safe_text.json
+4288df0b8b2d5116db4138c4ccf54996fd8581c0919955bda9928db7827490e9  audit/data/phase_j_screens/fx_safe_trades.png
+2ddb8d25e37e17be48adf36ef7a9b649f2c58083fae6201cbcdf630e84ce68ac  audit/data/phase_j_screens/prod_1529_brain.png
+18a74497be49310b04baf0c0945fff6880d05b5c78330cecaa5c43331ccefdd7  audit/data/phase_j_screens/prod_1529_chart.png
+f21ea23f2e8eda2b35ba07456e83a9ebfa65a3c59464498c8dd90005cef3e122  audit/data/phase_j_screens/prod_1529_desk.png
+21060e158372fae82adc3188e330cd671f585ff1540a3e44433f103e8692bcd3  audit/data/phase_j_screens/prod_1529_feed-log.png
+de18066fc78db1b98003c34b4e52ec4cd1919e6fc0f5a41fb1fc240eea9bb7ef  audit/data/phase_j_screens/prod_1529_feed.png
+93e66741ffca22d6a1f6d98c5d6a6cfb1614ed9ea5501b625e89fc6baa54004d  audit/data/phase_j_screens/prod_1529_text.json
+bb5331cbb10edac52580687d4bd3e1a193bf4792d83da3e8c999081453c69888  audit/data/phase_j_screens/prod_1529_trades.png
+7ecf36fc6fcd80f4bed77dc9ac7e1d9c36b9c9e18fd34615099f5a5886d788fc  audit/data/phase_j_screens/prod_stale_mon1000_desk.png
+a87f86bebd29d98f8b9dfc04c5291ce790c1845843d9ef8220bfc8489cead7dd  audit/data/phase_j_screens/prod_stale_mon1000_text.json
+0df7f216d5b9d41e74fa6f84fd04a9d554a734d352c46ea60f9007cbb8c80bc9  audit/data/phase_k_probe_run.txt
+47bbedf037024c4206a8b1a452154cce9d8d8a265f5f3abe76396d48e1be0ef5  audit/data/phase_k_prod_points.json
+3eb217aa536f8028e309990ba54195a78529d3b635d8b7e25bcdf371f15c7a6d  audit/data/phase_k_screens/focus_k1005_03_armed_rejected_now.png
+949e35f9e51f1612d26d97994c6ed55fad1608d6420ef5e564252cb64134183c  audit/data/phase_k_screens/focus_k1008_03_armed_trigger_rejected_094430_now.png
+8a4fa541898a0be212cf37369eef3646a53e1a5a7dea662afa5502d893fcc570  audit/data/phase_k_screens/focus_k1008_04_ev_rejection_110330_now.png
+060c459944bd9e58d5956ac943fe9930a74db094445488444775e02a04a713c1  audit/data/phase_k_screens/focus_prod_close_1544_status.png
+95c28f676e518566d05bde89e0a122658e5b9c905ff82040200787331f74c412  audit/data/phase_k_screens/focus_prod_open_1012_0917.png
+6cc56ff55f6edcf265430c54eb565bb0490e88efddf036dad68b828b22c92da1  audit/data/phase_k_screens/k1005_01_first_heartbeat_091630_desk.png
+263bc6e3f07c02f751b6a566ced95d49eda6485902bc867c23ed03c9d49f92a1  audit/data/phase_k_screens/k1005_01_first_heartbeat_091630_text.json
+54e185a6d8699586336ca9c88fc085e883ea49fbf06bd631cf9064ef232faf3e  audit/data/phase_k_screens/k1005_02_first_armed_093030_desk.png
+0a238acf0e2cd7f7c2d0f298dd3e4d71fda098a2a6b1f8c4cab6669a1a0d72b4  audit/data/phase_k_screens/k1005_02_first_armed_093030_text.json
+c0e8de75aea81bbc6bc88844cbea64385f6df043ac87e6ba002bfdcae48c5b77  audit/data/phase_k_screens/k1005_03_armed_trigger_rejected_105630_desk.png
+34e34184faab27bdc37e70fa691188a44932d1f66a9725e0ad44d6e61d5fadff  audit/data/phase_k_screens/k1005_03_armed_trigger_rejected_105630_text.json
+e1aa4975506b2ac3e4d75aa4121e4de11207aa3153567cb8d846d4b3022461df  audit/data/phase_k_screens/k1005_05_handover_morning_last_122030_desk.png
+b1f59393a76ba3d529e411eb2274cf451a80362c11d3fa4ee2c604c41372f157  audit/data/phase_k_screens/k1005_05_handover_morning_last_122030_text.json
+e1aa4975506b2ac3e4d75aa4121e4de11207aa3153567cb8d846d4b3022461df  audit/data/phase_k_screens/k1005_06_handover_afternoon_restored_122120_desk.png
+b1f59393a76ba3d529e411eb2274cf451a80362c11d3fa4ee2c604c41372f157  audit/data/phase_k_screens/k1005_06_handover_afternoon_restored_122120_text.json
+327bca94c574ab052018ac50259bcfe1bdc19f812ed816efc54826c59f5eec98  audit/data/phase_k_screens/k1005_07_handover_afternoon_first_step_122140_desk.png
+1798528570798eff56773c0c52ba9d5955b6a38b35f976eca1b975b39a3bf030  audit/data/phase_k_screens/k1005_07_handover_afternoon_first_step_122140_text.json
+de0ca8916415cf78abd9a918f919ad8f8a3422dca8c5dbb3320b62eb151037d7  audit/data/phase_k_screens/k1005_09_after_end_session_153130_desk.png
+d93a7a0a33b488dfb86959df9a9f4a3ff0d06e604d763f8eccc20a5d60e703df  audit/data/phase_k_screens/k1005_09_after_end_session_153130_text.json
+01309f82fb2d328f7269e034ebce351aca87b7e245081e3b8aa48b998dcf8576  audit/data/phase_k_screens/k1005_09_after_end_session_200000_desk.png
+90940462d5ffd5d604ab5408bd09756cc75d01408415d9d52235f23423f7507d  audit/data/phase_k_screens/k1005_09_after_end_session_200000_text.json
+e3ce3a5c8bf3d6364479ec993869399dd23eaaa7b1de740f70403bbd264832b8  audit/data/phase_k_screens/k1008_03_armed_trigger_rejected_094430_desk.png
+3a1c844efdda485d791359337b20b61c0521218efc8d91814b937f86e3bd4ee5  audit/data/phase_k_screens/k1008_03_armed_trigger_rejected_094430_text.json
+ebdceae9c4f24f2d4d19d0ae3b14dba2687772195a0dc6d7a4e116b24fe6d62c  audit/data/phase_k_screens/k1008_04_ev_rejection_110330_desk.png
+160d6ef75e4c1d1f68727c348b8e77f631ea6efcebfedabb47592f5c7f3ae2df  audit/data/phase_k_screens/k1008_04_ev_rejection_110330_text.json
+94eb47a0ac8cfeb31de575eba94741970bf62ceea1f1543fd6d11a61ff3783c3  audit/data/phase_k_screens/outage_k1005_log.json
+9eb7eff5e468c90240d1deee6c02ed838f4383bcfa896ecbdef112daf02f5c8d  audit/data/phase_k_screens/outage_k1005_outage_1_loaded.png
+a326d20edd1642f52744729e689b7d05778b159dc3edc7d712d53bde70eb85af  audit/data/phase_k_screens/outage_k1005_outage_2_failing_70s.png
+a326d20edd1642f52744729e689b7d05778b159dc3edc7d712d53bde70eb85af  audit/data/phase_k_screens/outage_k1005_outage_3_failing_130s.png
+02036d33c1cca9903edc49d13cd6d5364f481d8d977016e6467371c178d48f4b  audit/data/phase_k_screens/outage_k1005_outage_4_recovered.png
+9eb7eff5e468c90240d1deee6c02ed838f4383bcfa896ecbdef112daf02f5c8d  audit/data/phase_k_screens/outage_k1005_stuck_1_loaded.png
+979130f7de0f1a70dd10a6f2a9f6900c8775bf3d77b59da40ff3486266c953bd  audit/data/phase_k_screens/outage_k1005_stuck_2_16min.png
+b171dc5a9ed1c99b605362585aeb3dec6f350afbd6313cac1c10c6a909a2fc9d  audit/data/phase_k_screens/prod_close_1544_desk.png
+c604f2bff995897a21c00ed13e30217ffa54bb31c3d0b9f7d4fbb129a364a42d  audit/data/phase_k_screens/prod_close_1544_text.json
+c8ee825201c6cf087a1136087677063a4160a1e94dbd9a819aa690b20839c6ef  audit/data/phase_k_screens/prod_open_1012_090500_desk.png
+59bce0d7e1594b61a09b0c68bf7553f0b2ca8a7ff91410af9ba37408ee26d223  audit/data/phase_k_screens/prod_open_1012_090500_text.json
+0ded9a1de383b2c6a28c0499a633b96a2d7814e5f1ffcb57bad7e815608261ca  audit/data/phase_k_screens/prod_open_1012_091700_desk.png
+f9b88c9081dea0c178fc427fb8e288c76d5856c469c9a6fe749385f19a2459e4  audit/data/phase_k_screens/prod_open_1012_091700_text.json
+9687b241655e5ca6c6b52310dfd50c813726a254676ef178eedf8c3bad2e068b  audit/data/phase_k_screens/trade_orb_history.png
+eb50d5541a592fe11d70c0f412cff6403fa3d50f5a6d7475691bbc5c91205072  audit/data/phase_k_screens/trade_orb_sheet.png
+2d6032570cc5dae525a553e698dff451e29a739a85a13c0a072776279759633e  audit/data/phase_k_screens/trade_orb_text.json
+c570232d02084dec0dc2ab9d38fafe85e66a6becfe249f3470c150d49a0c11b4  audit/data/phase_k_sessions.json
+597ecd16ce807d833410927c94ae9c322bc7f0ef866c667eff502c9a31f45492  audit/data/phase_k_timeline_2026-10-05.json
+b1fc7669486e520a9275b70cee7ef94a84939a289cdf4932e703456577ac92c5  audit/data/phase_k_timeline_2026-10-08_vix_substituted.json
+01a857503cc562a8f4cd231d6ef298e59e68422f28ebf61c893ad71f8a718ab4  audit/data/phase_k_trade_fixture.json
+719a34b660c817cf1a009bd109b998183f09337f3c2fe45d3629b0819d0c5d79  audit/data/phase_l_blocked_silent.json
+abbc7f082c81cfedca98952f70e8a2ae64cdf7a9782f4dca83e099ce49ea10e4  audit/data/phase_l_consistency_raw/cons_1005_bar.json.gz
+0805470e3f5339611b4d4a658f34e570d3830cb77f7e06eef41229088702c43c  audit/data/phase_l_consistency_raw/cons_1005_tick.json.gz
+9280eedbe472ac0d4f91b2e45b8422eab924a090326f7b0f264d654e3bdbbef4  audit/data/phase_l_consistency_raw/cons_1006_bar.json.gz
+e9c4707fb91e33fc220900d93d55f00d7053a5ce9025d92f28641128fce741a7  audit/data/phase_l_consistency_raw/cons_1006_tick.json.gz
+4e426da9a1b83deb9427baad2dea4b2e78efed7f3b1584f3085872f7a782cb47  audit/data/phase_l_consistency_raw/cons_1007_bar.json.gz
+b3ae3026dcfdf9cfbd530d2df11afd8d74cf82a416cc29f95eff12974a279d9f  audit/data/phase_l_consistency_raw/cons_1007_tick.json.gz
+1bff3e53176d3b9a320ee5170956c862169f38f7446cd45d00b056bc9f537553  audit/data/phase_l_consistency_raw/cons_1008_bar.json.gz
+2f07c99c6225efb81ae4aadf6684b8a89b1341b259083e72afcf313a2c90c980  audit/data/phase_l_consistency_raw/cons_1008_tick.json.gz
+da411f24dde92b28889512087905b1d7d33bdc30ca5350b2d0f8f063753beed6  audit/data/phase_l_consistency_raw/cons_1009_bar.json.gz
+c76c386d2bcc5b046842b7fd49817b65221f8984fd2e0678e2c709b6fb8c2925  audit/data/phase_l_consistency_raw/cons_1009_tick.json.gz
+578a270cd761c1fd0550108a661ab17a0badd734e41d44f5ca9a4b8096ba6d2e  audit/data/phase_l_consistency_summary.json
+81b3812dcaf4b8786d6bfbcd8b1f6a80da085dccd93ab40be18cd04de6b4fb23  audit/data/phase_l_consolidated_findings.json
+6667e0eb24f44f1b2308f7db5ec7ba4e2ff8e2b0bbff203bafbc9a6f991c69da  audit/data/phase_l_pages_get_20261009T1835Z.txt
+dc481e009ca9b945422a2fa0e04f18f2c561d8f1ef44d19f4d4b85fee12a3e15  audit/data/phase_l_pages_latency.json
+c84d6b8a283abe33f7fe9d40e7f6552b87cb6db85dddd195a3107b91d8eb36e3  audit/data/phase_l_probe_run.txt
+6577e1ce4e65071cdfc99808a14e0f6a25300aea02f60955cdd964626de473aa  audit/data/phase_l_prod_consistency.json
+8a5692e70ce7a1b4b0740bb9ec25a6b29d665219006fab28a94947f05f97626c  audit/data/phase_l_published_armed.json
+afb25cb9d6fd8560b56212c8546db29ca0336a9149c896c2a099b1521ea0243d  audit/data/phase_l_release_assets.json
+6f6dab4c6fd84fdfd658f06ea65d9813092e7cccfc8ddf5f45124a70de37c35f  audit/data/phase_l_scheduler_runs.json
+663c8099a057a6de176727f396f6e088db2d49c9de8a57349b7a30cdc652f955  audit/data/phase_l_screens/l1005_tick_rejected_105540_desk.png
+684442406eddbdd98b206f3cc653d3a3a0c08069103ddaf6a9b413bbbced99ae  audit/data/phase_l_screens/l1005_tick_rejected_105540_text.json
+8be48703c3fbbf89d3c47bfb08d5624a4c0b0d905f1cfc8475de9792000f3346  audit/data/phase_l_series_scan.json
+01d16c4cb1a22aeac379c3d511d02f53659c65d1f4d0c15e7b9fbc09149c1856  audit/data/phase_l_ui_port_check.json
+6c58884d483d7b7f8a2b6869e63727a27b98c62c642b08866531077088a24cce  audit/data/phase_l_vix_counterfactual_2026-10-05.json
+1445ce132c3b3b1fb9bf4fae5c057ef5b8cd4f844b8b93c1c4d3a3e2555620c8  audit/data/phase_l_vix_counterfactual_2026-10-08_subst.json
+f04f3591a23a156181762e9d983717c9f73e3cf3a1b83913626421fc41370a56  audit/data/phase_l_vix_ic.json
+bd3e00f5f41ac202369a63e3456ef3be87883e98408cd4b9a22bcf6df7766ca4  audit/data/phase_l_vix_learning.json
+c9b900456b9e95240e0f63124e1ddd3a7b33cee16b03935e9c973e3f9135abc3  audit/probes/phase_h_det_tests.py
+63c091df9f2eaa056714b48c780fbc1bdd55a0f3eb31bd8efb0604c18f545eb1  audit/probes/phase_i_counterfactual.py
+1003c32b4f09d3cce46b4a427966bf74bb0401bb4d970d84411b54e2b09e600c  audit/probes/phase_i_evidence.py
+c60a1a63849bd21db95bdeedc054e9433413a5771f7b38a7c5639c5e7511ccef  audit/probes/phase_i_news_mutation.py
+fd6b295ee63ee7f212809b6200801b1048912db1393e2843a621ae040cbc34c6  audit/probes/phase_i_replay.py
+31f533b9caa062ce0abd6a352ddf9f8a65ec4bf22907fa9cfe526f5135229a23  audit/probes/phase_i_snapshot_diff.py
+3991c157cba69c0afdfbe5b50fc665b583dd308e9cb44137551e7b2ff47677ab  audit/probes/phase_i_snapshot_ident.py
+f6a9bdebce841d4be1bd1cd8a7392e4fec90b6362eae60ed366baf7827f2c6cb  audit/probes/phase_i_thought_recompute.py
+e6be8642eab3027fa7b165ed1523c1bc10d8fde9dfbb48ac0d67f93e18081fe1  audit/probes/phase_i_vix_zero_model_chain.py
+fae3dcbba3e4d9177357edb636f3ef35de6a4d49c12d80c01902468933f419df  audit/probes/phase_j_focus.py
+10203ecc8fc00288039c021ec38ae380050b9d4e136e321ace8f59646682cbf7  audit/probes/phase_j_shoot.py
+b5688ad83d6ae61c15c58024478e2f201ec00296c9be028ebdd5b8966c790d26  audit/probes/phase_j_site.py
+4f95efe861491414b80925b320a28bad4ca72d811df27edfb1643b895dfc18f6  audit/probes/phase_k_outage.py
+f3861ae6fed4bfd08bf767b9bb3aeb967de03947023d511eaf8aae8a9bf539d8  audit/probes/phase_k_prod_points.py
+f3b9ee0d8754f1e6025f3c27c293a62277918b891645fe6bddcb7a4baa9f2260  audit/probes/phase_k_sessions.py
+3e3889ef25d1a72e6b94b8a2de391257545856f66f193d96c0b8fed94203d152  audit/probes/phase_k_timeline.py
+247668e3d62d19eebcdc4a6abba0b05519b85389444f1949810c00b61503310f  audit/probes/phase_k_trade_fixture.py
+75e2b849101a0f078d1a242c09c7845d75d690da1d0d94a0f71d78219c0e2774  audit/probes/phase_k_trade_sheet.py
+a39b46b1cf32c21ccb97909e5000a999dd1ccd12749b2c401d369879e30432dd  audit/probes/phase_l_blocked_silent.py
+741d2a3a25d87e38ac7430d1af8c9b0e525fee678b3d5ab98022b8bb0d8b695f  audit/probes/phase_l_consistency.py
+ebd4d21821c146f8a12782a989e65925a70e7e409e50901c654837b6f52e0d27  audit/probes/phase_l_consistency_analyze.py
+78899d6b1d3fcdd280fa5432066669e5d328db234c11d28602a58436a6fb10ca  audit/probes/phase_l_consolidate.py
+830cbbf2e51c302635559054fd0ab507e6f5214c63639c5ee17cf0306b58af1a  audit/probes/phase_l_pages_latency.py
+ac7f83ff6be1951538e88af7180244dccd9d6ac3751a2d1adb9e278a15399a62  audit/probes/phase_l_prod_consistency.py
+10ea6f69f3e2afde941cae16b7ab7815a562af6ba98de3ba25dff8c8be6874e9  audit/probes/phase_l_series_scan.py
+7844718f7bfd8efe3536e9068fd9b8f9b6c2477c46229984e8dc4d09d69db992  audit/probes/phase_l_ui_port_check.py
+b1d91e595714731e4e19c1e3ec2516502f51ab1050c5787b08d5c32ce258618c  audit/probes/phase_l_vix_counterfactual.py
+ad623917ac4fc527701899ea77dacb02a3bcd4fe15ed53d96d6f2fc5079381d9  audit/probes/phase_l_vix_learning.py
+c87e89fd5fd2ab6d947511fb0eef4713a81ca4e7fd30e73e14c21203f58525cb  audit/probes/test_phase_h_probes.py
+e998e9d756400f2c7def45f63c10a05e3b5be793604c5e156ce9fb8b15c7b77c  audit/probes/test_phase_i_probes.py
+4218123a80c682a7de6cdbe6a6a1a9397a80e2d52a5a72ed7af1fcbcdc6994eb  audit/probes/test_phase_j_probes.py
+fda193a2a89aec0d2493cedebef5c8611565aaa9373afdc9746c128811fcb65d  audit/probes/test_phase_k_probes.py
+2fa26b17d047b7e15c3c2f3304f751537f1964fff6047888e6f866cdfc513c60  audit/probes/test_phase_l_probes.py
 ```
 
 ## Appendix B: Change report template (per approved remediation)
