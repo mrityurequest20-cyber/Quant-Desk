@@ -62,6 +62,14 @@ P3 moderate · P4 minor.
 | C-06 | EV model limits: fixed IV, no calibration from outcomes, an unvalidated P(up) prior | P3 | PARTIAL | C3 |
 | C-07 | Lockbox peeks are unbounded: one per cycle in which a candidate passes walk-forward | P3 | PARTIAL | C1 |
 | C-08 | `FEATURE_VERSION` hashes source text: any edit (even a comment) invalidates every artifact and halts entries | P3 | VERIFIED | C1 |
+| D-01 | Factor learning is indistinguishable from noise: placebo p = 0.70; noise "graduates" a factor in 78% of draws | P1 | MISLEADING | D2 |
+| D-02 | Learning has a negligible effect on decisions: memory ON vs OFF changed 2 of 2,984 minute-decisions, 0 trades | P2 | VERIFIED | D2/D7 |
+| D-03 | The learning record (`memory.json`) is aggregate-only, mixes provenance and cannot be replayed | P2 | VERIFIED | D1 |
+| D-04 | No recency, no regime split, no demotion state; anti-predictive factors keep voting at 0.5× | P2 | VERIFIED | D3/D4/D5 |
+| D-05 | No-trade learning is absent in production: no rejection class is counterfactually graded | P2 | BROKEN | D6 |
+| D-06 | No baseline or control for learning; the "getting smarter" learning KPIs are null | P3 | VERIFIED | D7 |
+| D-07 | Self-correction blind spot: self-review files only ERROR events, so the 8 WARN grading failures went unseen | P2 | VERIFIED | D8 |
+| D-08 | Truncated graded-id lists let old headlines be graded again (latent duplicates) | P4 | VERIFIED | D1 |
 
 Verified-working controls (V-xx) and open questions (Q-xx) are at the end.
 
@@ -744,6 +752,122 @@ Severity: **P3** · Status: **VERIFIED**
   halts **all** entries ("halted: …").
 - Fail-closed by design, but an availability hazard on a cosmetic change.
 
+### [D-01] Factor learning is indistinguishable from noise
+Severity: **P1** · Status: **MISLEADING**
+
+**Claims**
+- README: "the record changes how much it trusts each input".
+- `learning.py`: "One good or bad day can't swing it; a consistent record does".
+- Brain: probation drivers "have to earn a vote live".
+
+**Actual behavior**
+- **Grading the 675 live reads** (2026-10-05 … 10-09) with the production grader: best shrunk hit rate 0.581
+  (`global_crude`).
+- **300 sign-flip placebos** (each factor × index × session multiplied by a random ±1; persistence and window overlap
+  kept, any link to returns destroyed):
+  - placebo median best 0.592, 95th percentile 0.630;
+  - **real vs placebo p = 0.70**;
+  - noise "graduates" ≥ 1 factor (n ≥ 30, reliability ≥ 1.15) in **78%** of draws; the live record graduates 1.
+- **Factor signs persist:** P(next read same sign) = 0.89. Weighted n overstates independent evidence many times over.
+- **No confidence interval or multiple-testing control** enters any rule (30 factors screened daily).
+- **Production memory** (which also contains bootstrap replays): multipliers 0.78–1.07. `global_crude` graduated on a
+  shrunk hit of 0.592 and votes at 0.30. That is consistent with chance.
+
+**Reproduction**
+`audit/probes/phase_d_factor_placebo.py <journal>/intraday 300`.
+
+**Impact**
+- Every learned weight and every graduation so far is statistically unsupported.
+- Because of D-02 the trading impact is small. As a learning claim it does not hold.
+
+**Confidence:** High for the evidence in the snapshot (5 live sessions). A longer record could change the verdict.
+
+### [D-02] Learning has a negligible effect on decisions
+Severity: **P2** · Status: **VERIFIED**
+
+**Evidence**
+The Phase B replay was re-run with the learning memory off (`NO_MEMORY=1`) vs on (the snapshot copy), 4 sessions × 2
+indices:
+- **2 of 2,984** minute-decisions changed outcome class;
+- mean \|Δscore\| 0.005 (max 0.016);
+- 0 trades either way.
+
+**The two changes** (`audit/data/phase_d_learning_ab.json`):
+
+| When | Score with memory → without | Outcome with memory → without |
+|---|---|---|
+| 10-07 12:20 NIFTY | 0.2993 → 0.3069 | iron fly eligible, then EV-rejected → no setup |
+| 10-08 11:34 BANKNIFTY | −0.3995 → −0.4043 | a directional setup raised, then gated → no setup |
+
+This is exactly the B-01 path.
+
+**Impact**
+The learning loop runs every session, and its output barely touches what the desk does.
+
+### [D-03] The learning record is aggregate-only, mixes provenance and cannot be replayed
+Severity: **P2** · Status: **VERIFIED**
+
+- `memory.json` stores only `{n, hits, sum, sum2}` per key. There are no per-observation records, evidence IDs or
+  hash chain.
+- **One record, several sources, no tags:**
+  - the bootstrap replays: 6 sessions, 6,025 factor grades, the model chain, no news/brain/breadth, Yahoo bars with
+    no index volume, so `vwap` was TWAP;
+  - the pre-reset ₹20k account's sessions (09-29 … 10-01);
+  - the live sessions.
+- **Three days** (09-24, 09-25, 09-28) have no recorded bars.
+- **The bootstrap's reads** lived in an in-memory scratch journal and are gone.
+- **`learn --rebuild`** regrades the current journal only. The record can't be reproduced from persisted evidence.
+- **Reproduction:** `test_phase_d_probes.py::test_memory_mixes_bootstrap_and_live_sessions_without_tags`.
+
+### [D-04] No recency, no regime split, no demotion state
+Severity: **P2** · Status: **VERIFIED**
+
+- **No recency.** Sums accumulate forever with no decay. A factor right 70% for 300 reads then 30% for 100 stays
+  up-weighted.
+- **No regime split.** Factor statistics are global. Only setups have a day-type split, and that is empty (0 trades).
+- **Floor, not demotion.** The multiplier floor is 0.5×: a factor right 20% of 1,000 times still votes in its original
+  direction at half weight.
+- **Lifecycle.** States are probation → graduated only, recomputed every close. No transition is persisted.
+- **Reproduction:** `::test_factor_reliability_has_no_recency`, `::test_anti_predictive_factor_is_floored_not_removed`.
+
+### [D-05] No-trade learning is absent in production
+Severity: **P2** · Status: **BROKEN**
+
+- Only armed setups rejected by the EV gate are designed to be counterfactually graded (`grade_armed`, report-only).
+  That path never fires: armed setups are rejected by the plan-model gate, without `target` (B-07).
+- None of these is graded:
+  - confirm-path gate rejections;
+  - iron-fly EV rejections;
+  - sizing, stress and liquidity rejections;
+  - any veto (first 5 min, window, event, breaking news, RSI, spread, stale data);
+  - "no setup".
+- No rejection outcome changes future behaviour.
+
+### [D-06] No baseline or control for learning
+Severity: **P3** · Status: **VERIFIED**
+
+- No ON/OFF comparison or control path exists.
+- `ops/progress.py` ("Is the desk getting smarter?") tracks research and process KPIs. Its learning KPIs
+  (`forecast_skill`, `signal_hit_rate`) come from the empty autolearn ledger and are `null` every day.
+- No claim that learning improved performance can be supported.
+
+### [D-07] Self-correction blind spot
+Severity: **P2** · Status: **VERIFIED**
+
+- `selfreview.check_session` raises an issue only for `level == "ERROR"` events (`ops/selfreview.py:78`).
+- The catch-up grading failure is logged as `WARN` (`engine.py:621`). It recurred 8 times over 5 sessions (A-02) and
+  was never filed.
+- **Reproduction:** `::test_self_review_ignores_warn_level_learning_failures`.
+
+### [D-08] Truncated graded-id lists let headlines be graded again
+Severity: **P4** · Status: **VERIFIED** (latent)
+
+- `Memory.save` keeps only the last 5,000 news ids (2,000 trades or armed).
+- `grade_session` re-reads 7 days of news.
+- Once more than 5,000 headlines have been graded inside that window, the oldest ids are graded again.
+- Today about 1,567 have been graded in total, so it hasn't happened yet.
+- **Reproduction:** `::test_truncated_graded_news_ids_are_regraded`.
+
 ---
 
 ## Verified-working controls (all phases)
@@ -770,6 +894,10 @@ Severity: **P3** · Status: **VERIFIED**
 | V-16 | The plan-research protocol: real-PIT-only qualification, every configuration logged and hashed, a pre-declared selection rule, a DSR counting configurations, the lock opened once per generation, forward gates before promotion | `autolearn/research.py:513-796` |
 | V-17 | The EV Monte Carlo is internally consistent on the recorded decisions (cost and theta arithmetic reproduces P(profit) and EV) | journal decision contexts |
 
+| V-18 | The factor and news grading arithmetic is implemented as documented: shrinkage prior 20, 1/6 overlap weight, bounded 0.5×–1.5× multipliers, headlines sharing a window split one observation | `intraday/learning.py`; probes |
+| V-19 | Probation graduation is reversible and recomputed every close (no stuck promotions) | `engine._apply_memory`, `brain._probation_weight` |
+| V-20 | Self-review detects multi-session zero-trade streaks and missed sessions | `ops/selfreview.py:check_trading`, `check_session` |
+
 ---
 
 ## Open questions (carried forward)
@@ -780,7 +908,7 @@ Severity: **P3** · Status: **VERIFIED**
 | Q-02 | ~~Does the test suite pass on CI's versions?~~ Answered: CI ran 445 passed, 2 failed (A-19, date-dependent), 6 skipped (§ A.7) | A1 |
 | Q-03 | ~~Is the empty plan registry the dominant cause of 0 trades?~~ Answered in B-02: it explains 100% of directional rejections; the iron fly fails EV | B4 |
 | Q-04 | ~~What-if parity?~~ Answered: B-11 | B |
-| Q-05 | Account reset 2026-10-05 (₹20k → ₹5L): where is the pre-reset journal archived, and did that account trade? | K |
+| Q-05 | ~~Where is the pre-reset journal?~~ Answered: on 10-05 the journal had 0 trades, so `ensure_account` only changed the capital (no archive). Earlier trades of the ₹20k account (the README cites 29 Sep) are not recoverable from the force-pushed journal branch (A-10); their sessions still feed `memory.json` (D-03) | D |
 | Q-06 | ~~Is the iron-fly EV right?~~ Answered: internally consistent; the setup can't pay intraday (C-05) | C3 |
 | Q-07 | Does the global-stress size multiplier ever bind live? (No brain in the replay) | F / K |
 
@@ -794,3 +922,4 @@ Severity: **P3** · Status: **VERIFIED**
 | 2026-10-09 | A | A-19 added after the test-suite baseline; Q-02 answered |
 | 2026-10-09 | B | B-01 … B-11, V-09 … V-12 added; Q-03, Q-04 answered; Q-06, Q-07 opened |
 | 2026-10-09 | C | C-01 … C-08, V-13 … V-17 added; Q-06 answered |
+| 2026-10-09 | D | D-01 … D-08, V-18 … V-20 added; Q-05 answered |

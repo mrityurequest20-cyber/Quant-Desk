@@ -10,7 +10,7 @@ workflow was changed. The only files written are under `audit/`.
 | `QUANTDESK_ARCHITECTURE_MAP.md` | Phase A1: done |
 | `QUANTDESK_DATA_LINEAGE.md` | Phases A2 + A3: done |
 | `QUANTDESK_TRADING_STATE_MACHINE.md` | Phase B: done |
-| `QUANTDESK_LEARNING_AUDIT.md` | Part C (models): done; Part D (learning): pending |
+| `QUANTDESK_LEARNING_AUDIT.md` | Parts C (models) and D (learning): done |
 | `QUANTDESK_AI_AUDIT.md` | Phase G: pending |
 | `QUANTDESK_RESEARCH_VALIDITY.md` | Phase E: pending |
 | `QUANTDESK_REMEDIATION_PLAN.md` | at the end |
@@ -22,8 +22,8 @@ workflow was changed. The only files written are under `audit/`.
 |---|---|---|
 | A | System foundation: architecture, lineage, point-in-time | done |
 | B | Trading decision pipeline: interpretation, setups, state machine, funnel, triggers | done |
-| C | Models: direction, plan, EV/cost | **done, awaiting review** |
-| D | Learning system: ledger, factors, lifecycle, recency, regime, no-trade, baseline, self-correction | not started |
+| C | Models: direction, plan, EV/cost | done |
+| D | Learning system: ledger, factors, lifecycle, recency, regime, no-trade, baseline, self-correction | **done, awaiting review** |
 | E | Research validity | not started |
 | F | Options / futures / execution | not started |
 | G | AI / LLM | not started |
@@ -294,15 +294,69 @@ The only paper trades the desk makes are the pre-registered expiry-seller sleeve
 
 ---
 
+## Phase D: The learning system
+
+Full report: `QUANTDESK_LEARNING_AUDIT.md`, Part D.
+
+### D.1 Objective
+
+Prove or break every learning chain (prediction → observation → outcome → grade → statistics → update → future
+decision) for the learners that actually run. Test whether what they learn is distinguishable from noise and whether it
+changes behaviour. Audit lifecycle, recency, regime, no-trade learning, control and self-correction.
+
+### D.2 Files and runtime paths traced
+
+| Area | Code |
+|---|---|
+| Learning | `intraday/learning.py` (Memory, `forward`, `grade_news`, `grade_factors`, `grade_ic`, `grade_trades`, `grade_armed`, `grade_session`, `rebuild`, `bootstrap`) |
+| Engine hooks | `engine._learn`, `_apply_memory` |
+| Learned weights in use | `analyst.add` (learned multipliers, PROBATION), `brain._probation_weight` |
+| Account | `intraday/account.py` (`ensure_account`, `reset_account`) |
+| Ops | `ops/selfreview.py` (`check_session`, `check_trading`), `ops/progress.py` |
+| State | `memory.json` in the snapshot |
+
+### D.3 Evidence
+
+- **A factor placebo** (300 sign-flip draws on the 675 live reads): real best hit 0.581 vs placebo median best 0.592,
+  p = 0.70; noise graduates ≥ 1 factor in 78% of draws.
+- **A learning ON/OFF replay** (4 sessions, real chains): 2 of 2,984 minute-decisions differ; 0 trades both ways.
+- **5 deterministic probes**, all passing.
+
+### D.4 Findings (detail in the register)
+
+| Severity | Findings |
+|---|---|
+| P1 | **D-01**: factor learning is indistinguishable from noise |
+| P2 | **D-02**: negligible decision effect. **D-03**: the record can't be replayed and mixes provenance. **D-04**: no recency, regime split or demotion. **D-05**: no-trade learning is absent. **D-07**: self-review misses WARN failures |
+| P3 | D-06 |
+| P4 | D-08 |
+| Verified working | V-18 … V-20 |
+| Answered | Q-05 |
+
+### D.5 Unresolved (carried forward)
+
+| Question | Phase |
+|---|---|
+| Does the verdict change with a longer live record? The placebo uses 5 sessions | re-run `phase_d_factor_placebo.py` later |
+| News-reader (LLM) trust | G |
+
+---
+
 ## Answers so far to the final questions
 
-Answers are partial: only what Phases A–C support. Every other question is still open.
+Answers are partial: only what Phases A–D support. Every other question is still open.
 
 | # | Question | Answer so far |
 |---|---|---|
-| 1 | Is QuantDesk genuinely learning? | **Partly, and not via autolearn.** The autolearn loop retrains offline but has no live predictions (A-01). The memory grading runs at the close (A.4), but under the current gate it cannot change an executed decision except through the iron fly's \|score\| test (B-01). Phase D. |
-| 3 | What learning changes future decisions? | **Today: almost none that reaches execution.** The autolearn models never registered (A-01); the plan model can't be fitted yet; even when approved it can't pass the live plans (C-01). The memory weights touch only the iron fly's \|score\| test (B-01). Phase D |
-| 4 | Is learning point-in-time safe? | **Mostly; news learning is not** (A-09). Replay memory crosses time (A-15). |
+| 1 | Is QuantDesk genuinely learning? | **Mechanically yes, statistically no.** The memory learners grade and re-weight every close. The measured factor skill is indistinguishable from placebo (p = 0.70, D-01), and it changes 0.07% of decisions and no trades (D-02). The autolearn and plan-model learners have produced nothing (A-01, C-01). |
+| 2 | What exactly is learning? | Factor reliability multipliers; news trust by event, source and reader; relative-strength persistence; plus report-only IC and the buyer's edge. Setup and armed records are empty (0 trades; B-07). |
+| 3 | What learning changes future decisions? | Factor and news weights → the analyst score → only the iron fly's \|score\| ≤ 0.30 eligibility and which directional setup is raised (then gated). Observed: 2 minute-decisions in 4 sessions (D-02). |
+| 4 | Is learning point-in-time safe? | Order: yes (graded at the close, used the next day). Clock: no for news (A-09). Provenance: mixed and untagged (D-03). Replay memory crosses time (A-15). |
+| 5 | Are factor weights actually used in decision formation? | Yes (`_apply_memory` → `Analyst.learned`), with a negligible measured effect (D-02). |
+| 6 | Are unreliable factors demoted? | Down-weighted to a 0.5× floor, never removed or flipped; an anti-predictive factor keeps voting in its original direction (D-04). |
+| 7 | Does regime learning affect behaviour? | No: factor statistics are global; the setup × day-type record is empty (D-04). |
+| 8 | Does recency work statistically? | There is no recency: cumulative sums forever, and overlapping reads treated as independent (D-04; sign persistence 0.89). |
+| 9 | Does no-trade learning work? | No: no rejection class is counterfactually graded in production (D-05, B-07). |
 | 10 | Are technical indicators actually used? | **Computed, weighted, stored and learned. For execution they matter only through** the iron fly's eligibility (day type: ADX, IB, OR; \|score\| ≤ 0.3) and the RSI veto. Every directional use is gated (B-01). |
 | 11 | Is Volume Profile / Market Profile actually used? | **Yes, the session value area:** it decides the "balance" day type, which the only executable setup (iron fly) requires, and it bounds that trade. The prior-day value area is computed but never read (B-05). Market Profile (TPO) is used only as the volume fallback. |
 | 12 | Are futures / OI / options / IV / gamma used? | **IV/RV: yes** (iron-fly eligibility, spread choice). **ATM spread / leg liquidity: yes** (vetoes, entry checks). **PCR, OI walls, futures OI, basis:** score only. **OI shift, skew trend:** zero weight. **Gamma/GEX, IV percentile:** display only. **Max pain:** unreachable (B-05). |
@@ -315,11 +369,11 @@ Answers are partial: only what Phases A–C support. Every other question is sti
 | 18 (cont.) | Phase B: **The directional gate needs 28 real point-in-time sessions (5 so far) and an approved model; the iron fly never cleared the EV floor; the rest was no setup or vetoed** (B-02). The gated opportunities averaged −0.07 R on the underlying: no sign the gate cost money. |
 | 19 | Can every trade be reconstructed? | Untestable (0 trades). Gaps: A-04, A-10, A-13, B-03. |
 | 20 | Can important rejected opportunities be reconstructed? | **Armed-path, EV, sizing and liquidity rejections: yes** (decision rows). **Confirm-path gate rejections: no**, sampled thoughts only (B-03). No opportunity ID; the gate is only in free text. |
-| 24 | Can the system detect and correct degradation? | **Detect: partly** (drift report, PSI/ECE). **Correct: no automatic demotion or rollback** (C-03); the grading failure is only a WARN (A-02). Phase D8. |
+| 24 | Can the system detect and correct degradation? | **Detect: partly.** Drift exists for an (absent) champion. Self-review files only ERROR events, so the 8 WARN grading failures went unseen (D-07). It does flag zero-trade streaks (V-20). **Correct: no**: there is no automatic demotion or rollback (C-03). |
 | 25 | What is production-ready? (so far) | The fail-closed gating (V-11), the autolearn registration and lockbox discipline (V-13), hashed artifacts (V-15), the plan-research protocol (V-16), the ledger guards in code (V-01). None of them has produced a promoted model. |
-| 26 | What is NOT trustworthy so far? | Cross-day state integrity (A-10); live-vs-training parity (A-05/06); news trust (A-09); catch-up grading (A-02); the "why not" record on the confirm path (B-03); armed-rejection learning (B-07); breaking-news vetoes (B-08); what-if `as_run` (B-11); the session DirectionModel's "validated" status (C-02); the path to any directional trade (C-01). |
+| 26 | What is NOT trustworthy so far? | Cross-day state integrity (A-10); live-vs-training parity (A-05/06); news trust (A-09); catch-up grading (A-02); the "why not" record on the confirm path (B-03); armed-rejection learning (B-07); breaking-news vetoes (B-08); what-if `as_run` (B-11); the session DirectionModel's "validated" status (C-02); the path to any directional trade (C-01); the learned factor weights and graduations (D-01); the learning record's provenance (D-03). |
 
-## Scorecard (rows filled only where Phases A–C have evidence)
+## Scorecard (rows filled only where Phases A–D have evidence)
 
 | Area | Status | Severity | Evidence |
 |---|---|---|---|
@@ -330,7 +384,11 @@ Answers are partial: only what Phases A–C support. Every other question is sti
 | Trigger / arming | PARTIAL | P3 | fires at the levels; arms before authorization (B-06); not persisted (B-04); sampling and race gaps (B-09) |
 | Models | PARTIAL | P1 | the autolearn gate is strict on noise (V-13) and the chain works in tests (V-14), but never in production (A-01); session-model gate weak (C-02); plan model unfitted, and incompatible with the live plans (C-01); no automatic demotion (C-03); EV consistent (V-17), uncalibrated (C-06) |
 | Execution (reachability) | BROKEN | P1 | no reachable path to an engine trade: B-02 + C-01 + C-05 |
-| No-trade learning | BROKEN (armed path) | P2 | B-07 (Phase D will complete) |
+| Factor learning | MISLEADING | P1 | runs as coded (V-18), but placebo p = 0.70 (D-01); negligible effect (D-02); no CIs, recency or multiple-testing control (D-04) |
+| Regime learning | ABSENT | P2 | factor statistics global; setup × day-type record empty (D-04) |
+| No-trade learning | BROKEN | P2 | B-07, D-05 |
+| Baseline / control | ABSENT | P3 | D-06; the audit's own ON/OFF replay: 0.07% of decisions differ (D-02) |
+| Self-correction | PARTIAL | P2 | zero-trade detection (V-20); WARN failures missed (D-07); no automatic demotion (C-03) |
 | Reliability (foundation) | PARTIAL | P2 | A-02, A-03, A-10 |
 | Auditability | PARTIAL | P2 | A-10, A-13, B-03, B-11 |
-| Factor/regime learning, baseline, research validity, options/futures, fills, AI, UI truthfulness, self-correction | not yet audited | — | Phases D–L |
+| Research validity, options/futures, fills, AI, UI truthfulness | not yet audited | — | Phases E–L |

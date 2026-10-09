@@ -142,3 +142,152 @@ The protocol (`autolearn/research.py`, `docs/PLAN_RESEARCH.md`) is the most rigo
 
 **Under the current code and config, the intraday engine has no reachable path to an executed paper trade.** The only
 paper trades the desk makes are the pre-registered expiry-seller sleeves.
+
+---
+
+## Part D: The learning system (Phase D)
+
+**Evidence**
+- the journal snapshot's `memory.json`, journal thoughts, decisions and events;
+- 5 probes (`audit/probes/test_phase_d_probes.py`, all pass);
+- a **factor placebo** (`audit/probes/phase_d_factor_placebo.py`);
+- a **learning ON/OFF replay** (`audit/probes/phase_d_replay_learning_ab.py` → `audit/data/phase_d_learning_ab.json`).
+
+### D.0 What actually learns in production
+
+| Learner | Store | Graded in production? | Changes future decisions? |
+|---|---|---|---|
+| Autolearn direction models | `autolearn/ledger/*` | no: the ledger is empty (A-01) | no |
+| Plan policy | `autolearn/plan/*` | no: 5 of 28 sessions (C-01) | no |
+| **Factor reliability** | `memory.json` → `tables.factor` | **yes**: close-time `grade_factors` | weight multipliers 0.5×–1.5× on analyst evidence; probation factors' votes |
+| **News trust** (event, source, reader) | `tables.news_*` | **yes**: `grade_news` (publish-time clock, A-09) | multiplier on story tone; reader weights in the tone blend |
+| Setup record | `tables.setup` | no: 0 trades | would scale conviction 0.6×–1.3×, or stand a setup aside |
+| Armed-rejection record | `tables.armed_rejected` | no: broken (B-07) | none (report only) |
+| Relative-strength persistence | `rs` | yes | conviction tilt for directional plans once t ≥ 2 (gated, B-01) |
+| Factor IC, buyer's edge | `ic`, `moves` | yes | none (research tables) |
+
+So in production the learning that can act is **factor reliability and news trust**. Both act only by re-weighting the
+analyst's score, which reaches an executable trade only through the iron fly's \|score\| ≤ 0.30 test (B-01).
+
+### D1. The learning ledger
+
+| Property | Autolearn ledger | `memory.json` (the store that learns) |
+|---|---|---|
+| Prediction records | designed: one per bar per model | **none**: only aggregate sums `{n, hits, sum, sum2}` per key |
+| Outcome records | designed, separate | none |
+| Evidence IDs / links | `decision_id` (unused) | none: graded-id lists (news, trades, armed) and a timestamp watermark (`thoughts_upto`) per symbol |
+| Hash chain | yes | no |
+| Deduplication | `decision_id` | news / trades / armed by id. **The lists are truncated to the last 5,000 / 2,000 on every save** while `grade_session` re-reads 7 days, so a truncated id is graded again (D-08). Thoughts dedup by watermark |
+| Crash consistency | fsync'd appends | temp file + rename (no fsync); grading and save are not atomic with the journal |
+| Replayability | yes, by design | **no**: the bootstrap's replayed reads lived in an in-memory scratch journal and are gone; 3 of the 10 days in `memory.days` have no recorded bars; the pre-reset account's journal isn't on the branch (A-10). `learn --rebuild` regrades the current journal only and cannot reproduce the record (D-03) |
+| Provenance | `source` field | **none**: bootstrap grades (model chain, no news, no brain, Yahoo bars with no index volume, so `vwap` is TWAP) and live grades share the same keys (D-03) |
+| State in the snapshot | empty | `days` 2026-09-24 … 10-08; bootstrap 6 sessions / 6,025 factor grades; news graded 1,567 |
+
+### D2. Factor learning: the chain
+
+```
+prediction   each journaled read's evidence direction d ∈ [−1, 1] per factor (thoughts.evidence, sampled ≤ 5 min)
+observation  forward(bars, ts, 30): log return from the first bar at/after ts to 30 minutes later, same session
+grade        hit = d·r > 0 (only |d| ≥ 0.1), weight 1/6 per read (READ_EVERY / HORIZON)
+statistics   tables.factor[f] += {n: w, hits: w·hit, sum: w·d·r bps, sum2}
+update       hit_rate = (hits + 10) / (n + 20) (PRIOR 20); reliability = clip(2·hit_rate, 0.5, 1.5)
+future use   Analyst.learned[f] = reliability → evidence weight × reliability (engine._apply_memory, each close)
+             probation factors (oi_shift, skew_trend, breadth, breadth_div; brain drivers) vote only when n ≥ 30 and
+             reliability ≥ 1.15 (0.25 weight × reliability for brain drivers)
+```
+
+| Requirement | As built | Verdict |
+|---|---|---|
+| Hit rate | weighted, shrunk to 50% with a prior of 20 | VERIFIED (arithmetic) |
+| IC | `grade_ic`: overlap-weighted correlation at 5/15/30/60 min with t-stats, **report only** | DISPLAY |
+| Confidence intervals | **none** in any decision rule; shrinkage only | MISSING |
+| Sample size | weighted n treats 1/6-weighted reads as independent. **Measured sign persistence: P(next read same sign) = 0.89** (median 0.92). The effective sample is many times smaller than `n` | OVERSTATED |
+| Multiple testing | **none.** 30 factors are screened by the same rule each day | MISSING |
+| Placebo | graded the 675 live reads (10-05 … 10-09), then 300 sign-flip placebos (each factor × session × index flipped ±1, persistence kept). **Real best shrunk hit rate 0.581 (`global_crude`) vs a placebo median best of 0.592 → p = 0.70.** Noise produces ≥ 1 "graduation" (n ≥ 30, reliability ≥ 1.15) in **78%** of draws; the live record has exactly 1 | **NOT DISTINGUISHABLE FROM NOISE** (D-01) |
+| Production memory | multipliers 0.78–1.07; the only graduated driver is `global_crude` (hit 0.592, n 53 → voting at 0.30) | consistent with chance (D-01) |
+| Weight → future decision | yes: `_apply_memory` → analyst weights. **Measured effect:** with the memory OFF vs ON over 4 replayed sessions, 2 of 2,984 minute-decisions changed (0.07%), mean \|Δscore\| 0.005, 0 trades either way (D-02) | REAL BUT NEGLIGIBLE |
+| Demotion / recovery | multiplier floor 0.5×: an anti-predictive factor (e.g. 20% hit over 1,000 reads) keeps voting **in its original direction** at half weight. Recovery is automatic as the cumulative stats move | PARTIAL (D-04) |
+| Voting eligibility | probation → graduated, recomputed each close (reversible); every other factor always votes | VERIFIED |
+
+### D3. Factor lifecycle
+
+| Requested state | Exists? | How |
+|---|---|---|
+| NEW | implicit | no record → multiplier 1.0 (non-probation: votes at full default weight from the first read) |
+| PROBATION | ✓ | `analyst.PROBATION` + brain drivers: weight 0, graded |
+| ELIGIBLE / VOTING | ✓ (one step) | n ≥ 30 and reliability ≥ 1.15 → weight (`analyst.add`, `brain._probation_weight`) |
+| TRUSTED | ✗ | (a reliability up to 1.5× is a weight, not a state) |
+| WATCH | ✗ | — |
+| DEMOTED | ✗ for regular factors (floor 0.5×); a graduated probation factor falls back to 0 weight when it no longer meets the rule | PARTIAL |
+| Persisted? | ✗ | derived from the sums on every `_apply_memory`; no transition is recorded (no audit trail of when a factor gained or lost its vote) |
+
+### D4. Recency
+
+- **None.** `Memory.bump` accumulates forever. There is no half-life, no window and no decay for factors, news trust
+  or setups. (News *tone* has half-lives; news *trust* does not.)
+- Probe: 300 old reads at 70% hit then 100 recent at 30% → still up-weighted (D-04).
+- Weighted observations are treated as independent (D2).
+
+### D5. Regime learning
+
+| Item | State |
+|---|---|
+| Regime definition | the analyst's `day_type` (trend / balance / volatile / undetermined / forming, point-in-time from the session's own bars); the brain's risk-on/off label (display) |
+| Regime-specific statistics | only setup × day_type (0 trades → empty) |
+| Factor statistics | **global**: no regime split |
+| Use in future decisions | none today |
+| Global / regime double counting | `grade_trades` bumps both `setup` and setup × regime with the same trade; `setup_mult` prefers the regime key when it has ≥ 8 trades, else the global one: no double counting in use |
+| Verdict | **ABSENT in practice** (D-04) |
+
+### D6. No-trade learning, by rejection class
+
+| Rejection class | Counterfactual graded? | Update | Future behaviour changed? |
+|---|---|---|---|
+| Armed setup → plan-model gate | **no**: the context lacks `target` (B-07) | — | no |
+| Armed setup → EV floor | designed (`grade_armed`); never reached in production | `armed_rejected` (report) | no: report only |
+| 5-minute-confirmed setup → plan-model gate | no (not even journaled, B-03) | — | no |
+| Iron fly → EV floor | no | — | no |
+| Sizing to 0 lots / global stress / liquidity / slippage | no | — | no |
+| Vetoes: first 5 min, outside window, event, breaking news, RSI, spread, stale chain or feed | no | — | no |
+| No setup | no | — | no |
+
+**No-trade learning is absent in production** (D-05). The audit's own replay counterfactual (B4: −0.07 R mean on 133
+gated opportunities) is the only such evidence, and the system does not compute it.
+
+### D7. Baseline / control
+
+| Requirement | State |
+|---|---|
+| Baseline definition | none for the memory learning (the autolearn `baseline` model is a model baseline, not a learning control) |
+| ON/OFF comparison | **none in the system.** The audit ran one: memory OFF vs ON, 0.07% of decisions differ, 0 trades both ways |
+| Independent paths / contamination | n/a (no control) |
+| Sample size / statistical test / CI / MDE / significance | none |
+| "Is the desk getting smarter?" (`ops/progress.py`) | tracks research rungs, sleeves, equity, bugs. Its learning KPIs `forecast_skill` / `signal_hit_rate` read the empty autolearn ledger → `null` every day (D-06) |
+| Verdict | **no valid control evidence exists; no claim that learning improved performance can be supported** |
+
+### D8. Self-correction
+
+| Link | State |
+|---|---|
+| Degradation | drift (PSI / ECE / performance) for the autolearn champion only, inactive with no champion; no degradation measure for the memory learners or the EV model |
+| Detection | `selfreview.check_session` files GitHub issues only for **ERROR** events (`selfreview.py:78`). The daily `WARN learning grading failed` (8×, A-02) was never filed. A "no trades in N sessions" finding exists (good) |
+| Diagnosis | manual (issues) |
+| Trust reduction / adaptation | memory multipliers (noise-level, D-01); a drift alarm → champion abstains |
+| Rollback | manual CLI only (C-03) |
+| Recovery verification | none |
+| Healthy without evidence? | `progress` reports forecast skill `null` (honest); the site's learning view is Phase J |
+| Verdict | **PARTIAL**: detection exists for some failures, there is no automatic correction, and a recurring learning failure went undetected for 5 sessions (D-07) |
+
+### D.9 Answers (learning)
+
+| Question | Answer |
+|---|---|
+| Is QuantDesk genuinely learning? | **Mechanically yes, statistically no.** The memory learners grade and re-weight every session. On the evidence available the measured factor skill is indistinguishable from placebo (p = 0.70). Its effect on decisions is 0.07% of minutes and no trades. The autolearn and plan-model learners have produced nothing. |
+| What exactly is learning? | Factor reliability multipliers, news trust (by event, source and reader), relative-strength persistence, plus report-only IC and the buyer's edge. |
+| What learning changes future decisions? | Factor and news weights → the analyst score → (today) only the iron fly's \|score\| ≤ 0.30 eligibility and which directional setup is raised (then gated). Observed: 2 minute-decisions in 4 sessions. |
+| Is learning point-in-time safe? | Order: yes (graded at the close, used the next session). Clock: no for news (A-09). Provenance: mixed (D-03). |
+| Are factor weights used? | Yes (`_apply_memory` → `Analyst.learned`), with a negligible effect (D-02). |
+| Are unreliable factors demoted? | Down-weighted to a 0.5× floor; never removed or flipped (D-04). |
+| Does regime learning affect behaviour? | No (D-04, D5). |
+| Does recency work statistically? | There is no recency (D-04). |
+| Does no-trade learning work? | No (D-05, B-07). |
