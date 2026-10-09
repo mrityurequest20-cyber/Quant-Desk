@@ -50,6 +50,17 @@ def test_memory_shrinks_bounds_and_survives_a_restart(tmp_path):
     assert again.reliability("factor", "vwap") == m.reliability("factor", "vwap") and again.setup_mult("orb")[0] == 0.0
 
 
+def test_forward_grades_second_resolution_bars_from_a_microsecond_timestamp():
+    """A-02: under pandas 3 Yahoo's 1-minute history has a datetime64[s] index and a thought's ts has microseconds;
+    searchsorted refused to mix the two, so every catch-up grading pass failed."""
+    from quantdesk.intraday.feeds import normalise_bars
+    raw = day_bars()
+    raw.index = raw.index.as_unit("s")
+    b = normalise_bars(raw)
+    assert b.index.unit == "ns"
+    assert forward(b, ts("2026-10-05 10:00:04.408148")) == pytest.approx(np.log((25046 + 30) / 25046.0))
+
+
 def test_forward_stays_in_the_session_and_overnight_news_counts_from_the_open():
     b = pd.concat([day_bars("2026-10-05"), day_bars("2026-10-06", 26000.0)])
     assert forward(b, ts("2026-10-05 10:00")) == pytest.approx(np.log((25045 + 30) / 25045.0))
