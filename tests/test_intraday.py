@@ -318,3 +318,32 @@ def test_risk_gates(cfg):
     r2.on_close(-1000, ts("2026-09-28 10:10"))
     assert any("cooling off" in x for x in r2.gate(ts("2026-09-28 10:20"), 498000, [], "NIFTY"))
     assert not r2.gate(ts("2026-09-28 10:45"), 498000, [], "NIFTY")
+
+
+def test_no_new_entry_when_the_model_chain_stands_in_for_a_failed_real_one(cfg, sessions):
+    """F-01: when the real chain fails the desk prices off the model chain (fine for marks) but must not open trades
+    on invented quotes; a replay that chose the model chain on purpose is unaffected."""
+    from types import SimpleNamespace
+    from quantdesk.intraday.chains import ChainSource
+
+    class Down(ChainSource):
+        name = "kotak"
+
+        def expiries(self, underlying):
+            raise ConnectionError("kotak down")
+
+        def chain(self, underlying, expiry, spot=None, ts=None):
+            raise ConnectionError("kotak down")
+
+    bars, _, days = sessions
+    calm = SimpleNamespace(vetoes=[])
+    down = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), Down(), Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(down)
+    now = down.last_ts["NIFTY"]
+    assert down.chain_df["NIFTY"].attrs["source"] == "model"
+    assert "kotak option chain unavailable" in (down._blocked("NIFTY", calm, now) or "")
+    assert not down.closed and not down.open_trades                          # nothing opened on invented quotes
+    model = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(model)
+    assert "unavailable" not in (model._blocked("NIFTY", calm, model.last_ts["NIFTY"]) or "")
+
