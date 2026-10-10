@@ -43,12 +43,14 @@ def test_claude_reader_asks_for_structured_reads_with_fallbacks():
     assert llm.ClaudeReader("k", client=FakeAnthropic(stop="refusal")).read([{"id": "a1", "ts": "", "source": "", "title": "x"}]) == {}
 
 
-def test_reads_are_parsed_leniently_and_clipped():
+def test_reads_are_parsed_leniently_and_out_of_range_reads_are_dropped():
     ids = {"a", "b"}
     txt = 'Sure: {"reads": [{"id": "a", "nifty": 3, "banknifty": "-0.5", "confidence": 2, "event": "weird", "why": "x"},' \
+          ' {"id": "b", "nifty": 0.4, "banknifty": "-0.5", "confidence": 0.7, "event": "weird", "why": "y"},' \
           ' {"id": "zzz", "nifty": 1}]} trailing'
     got = llm._parse_reads(txt, ids)
-    assert got == {"a": {"NIFTY": 1.0, "BANKNIFTY": -0.5, "confidence": 1.0, "event": "general", "why": "x"}}
+    # G-03: nifty 3 / confidence 2 is a malformed read, not the strongest one: dropped, never clipped to ±1
+    assert got == {"b": {"NIFTY": 0.4, "BANKNIFTY": -0.5, "confidence": 0.7, "event": "general", "why": "y"}}
     assert llm._parse_reads("not json", ids) == {} and llm._parse_reads(None, ids) == {}
     # what gpt-oss:120b on Ollama actually sent on 2 Oct 2026, ignoring the JSON format
     md = ("**t1**  \n- **NIFTY impact:**\u202f+0.6  \n- **BANKNIFTY impact:**\u202f+0.5  \n- **confidence:**\u202f0.7  \n"
@@ -59,6 +61,40 @@ def test_reads_are_parsed_leniently_and_clipped():
     two = "a: NIFTY −0.4, BANKNIFTY −0.6, confidence 0.8, event inflation, why hot CPI\nb: NIFTY 0 BANKNIFTY 0.1"
     r = llm._parse_reads(two, {"a", "b"})
     assert r["a"]["NIFTY"] == -0.4 and r["a"]["event"] == "inflation" and r["b"]["BANKNIFTY"] == 0.1
+
+
+def test_prose_reads_never_take_the_index_name_or_a_level_for_a_view():
+    """G-03: the prose fallback read "NIFTY 50" as +1.0 and "NIFTY at 22,500" as +1.0."""
+    ids = {"t1", "t2", "t3", "t4"}
+    txt = ("t1: The NIFTY 50 may slip on weak global cues.\n"
+           "t2: NIFTY at 22,500, mildly bearish; BANKNIFTY 48,100\n"
+           "t3: NIFTY 50 impact: -0.3, BANKNIFTY impact: -0.2, confidence 0\n"
+           "t4: NIFTY impact +0.5, confidence 3")
+    got = llm._parse_reads(txt, ids)
+    assert set(got) == {"t3"}                                   # t1: no view, t2: levels, t4: confidence out of range
+    assert (got["t3"]["NIFTY"], got["t3"]["BANKNIFTY"], got["t3"]["confidence"]) == (-0.3, -0.2, 0.0)
+    # a dropped JSON read must not come back through the prose fallback reading its own `why`
+    bad = '{"reads":[{"id":"t1","why":"Nifty 50 seen up 0.7% on FII buying","nifty":50,"banknifty":0.2,"confidence":0.8}]}'
+    assert llm._parse_reads(bad, {"t1"}) == {}
+    assert llm._parse_reads('{"reads":[{"id":"t1","nifty":"strong","banknifty":-0.9,"why":"Nifty 50 to gain 0.9%"}]}',
+                            {"t1"}) == {}
+    assert llm._parse_reads('{"reads":[{"id":"t1","nifty":true,"banknifty":0.1}]}', {"t1"}) == {}
+    more = ("t1: The NIFTY 50 may slip. BANKNIFTY impact: -0.3\n"
+            "t2: Nifty 50 index fell 0.8%\n"
+            "t3: Bank Nifty impact -0.6\n"
+            "t4: Nifty50 impact: 0.4")
+    got = llm._parse_reads(more, {"t1", "t2", "t3", "t4"})
+    assert set(got) == {"t1", "t3", "t4"}                       # t2: a % move is not a view
+    assert (got["t1"]["NIFTY"], got["t1"]["BANKNIFTY"]) == (0.0, -0.3)
+    assert (got["t3"]["NIFTY"], got["t3"]["BANKNIFTY"]) == (0.0, -0.6)    # Bank Nifty's view isn't NIFTY's
+    assert got["t4"]["NIFTY"] == 0.4
+    words = ("t1: NIFTY fell 0.8 %\nt2: Nifty fell 0.8 per cent\nt3: Bank-Nifty impact -0.6\n"
+             "t4: Nifty Bank: -0.5, NIFTY impact: 0.2\nt5: Bank  Nifty impact -0.4")
+    got = llm._parse_reads(words, {"t1", "t2", "t3", "t4", "t5"})
+    assert set(got) == {"t3", "t4", "t5"}                       # t1, t2: moves, however % is written
+    assert [(got[t]["NIFTY"], got[t]["BANKNIFTY"]) for t in ("t3", "t4", "t5")] == [(0.0, -0.6), (0.2, -0.5), (0.0, -0.4)]
+    # JSON rows with no known id (a wrong key) are no read, so the text is still read as prose, as on main
+    assert llm._parse_reads('{"reads":[{"headline":"t1","nifty":0.4,"banknifty":0.1}]}', {"t1"})["t1"]["NIFTY"] == 0.4
 
 
 class FakeHTTP:
