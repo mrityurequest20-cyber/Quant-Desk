@@ -106,28 +106,116 @@ def test_grading_news_factors_trades_and_refused_entries(tmp_path):
     assert fresh.d["tables"] == m.d["tables"]
 
 
+def switched_on(cfg):
+    """The old behaviour (before D-01): learned factor weights scale the evidence."""
+    return cfg.with_overrides({"intraday": {"learning": {"apply_factor_weights": True}}})
+
+
+def a_record(good="vwap", bad=None):
+    """A memory whose factor record gives `good` 1.5× (right every time) and `bad` 0.5× (never right)."""
+    m = Memory()
+    for _ in range(200):
+        m.bump("factor", good, True, 5.0)
+        if bad:
+            m.bump("factor", bad, False, -5.0)
+    return m
+
+
+def breadth_read():
+    """A session state and a weak-breadth read (a probation factor's evidence)."""
+    from quantdesk.intraday.features import session_state
+    idx = pd.date_range("2026-10-05 09:15", "2026-10-05 11:00", freq="1min", tz=IST)
+    c = 25600 + np.arange(len(idx)) * 0.5
+    s = session_state(pd.DataFrame({"open": c, "high": c + 2, "low": c - 2, "close": c, "volume": 0.0}, index=idx),
+                      idx[-1] + pd.Timedelta(minutes=1))
+    b = {"n": 50, "members": 50, "adv": 0.3, "dec": 0.7, "above_vwap": 0.28, "ew_chg": -0.002, "median_chg": -0.002,
+         "index": "NIFTY 50", "index_chg": 0.004, "ew_gap": -0.006, "up": [("HDFCBANK", 0.02)], "down": []}
+    return s, b
+
+
 def test_the_analyst_and_the_news_desk_use_the_record(cfg):
+    """With intraday.learning.apply_factor_weights on (the old behaviour), the record scales the evidence."""
     from quantdesk.intraday.analyst import Analyst
     from quantdesk.intraday.features import session_state
     from quantdesk.intraday.news import NewsDesk, NewsItem, classify
     b = day_bars()
     now = ts("2026-10-05 11:00")
     s = session_state(b[b.index + pd.Timedelta(minutes=1) <= now], now)
-    a = Analyst(cfg)
+    a = Analyst(switched_on(cfg))
+    assert a.apply_learned
     plain = a.assess("NIFTY", s, {"spot": s["last"]})
     other = next(e.factor for e in plain.evidence if e.factor != "vwap")
-    a.learned = {"vwap": 1.5, other: 0.5}
+    a.learned = a_record("vwap", other).factor_weights()
+    assert a.learned == {"vwap": 1.5, other: 0.5}
     v = a.assess("NIFTY", s, {"spot": s["last"]})
     w0, w1 = ({e.factor: e.weight for e in x.evidence} for x in (plain, v))
     assert w1["vwap"] == pytest.approx(1.5 * w0["vwap"]) and w1[other] == pytest.approx(0.5 * w0[other])
     track = v.narrative.split("Track record: ")[1]
     assert "vwap ×1.50" in track and f"{other} ×0.50" in track and "Track record" not in plain.narrative
+    assert "not applied" not in track
 
     desk = NewsDesk(cfg, fetch=lambda url: "", sources=[])
     desk.add([classify(NewsItem(now - pd.Timedelta(minutes=10), "ET", "RBI cuts repo rate by 25 bps, Nifty in focus", id="x"))])
     tone = desk.state("NIFTY", now)["tone"]
     desk.trust = lambda event, source: 0.5 if event == "policy" else 1.0
     assert desk.state("NIFTY", now)["tone"] == pytest.approx(tone * 0.5)
+
+
+def test_factor_weights_are_recorded_not_applied_by_default(cfg):
+    """D-01 (owner decision: record, don't apply): the factor record couldn't be told from noise (placebo p = 0.70),
+    so by default the analyst weighs every factor at its unlearned weight, and the narrative shows the record."""
+    from quantdesk.intraday.analyst import Analyst
+    from quantdesk.intraday.features import session_state
+    b = day_bars()
+    now = ts("2026-10-05 11:00")
+    s = session_state(b[b.index + pd.Timedelta(minutes=1) <= now], now)
+    a = Analyst(cfg)
+    assert cfg.get("intraday.learning.apply_factor_weights") is False and not a.apply_learned
+    plain = a.assess("NIFTY", s, {"spot": s["last"]})
+    other = next(e.factor for e in plain.evidence if e.factor != "vwap")
+    a.learned = a_record("vwap", other).factor_weights()
+    assert a.learned == {"vwap": 1.5, other: 0.5}                        # the record says 1.5× and 0.5×...
+    v = a.assess("NIFTY", s, {"spot": s["last"]})
+    assert {e.factor: e.weight for e in v.evidence} == {e.factor: e.weight for e in plain.evidence}   # ...not applied
+    assert v.score == plain.score and v.bias == plain.bias
+    track = v.narrative.split("Track record: ")[1]
+    assert "vwap ×1.50" in track and f"{other} ×0.50" in track and "recorded, not applied" in track
+
+
+def test_a_probation_factor_record_does_not_earn_a_vote_by_default(cfg):
+    """Graduation is the record applied too: a probation factor (analyst) or driver (brain) keeps no vote by default,
+    and says what its record would have earned; with the switch on it votes as before."""
+    from quantdesk.intraday.analyst import PROBATION, Analyst
+    from quantdesk.intraday.brain import PROBATION_W, Brain
+    s, b = breadth_read()
+    for c, applied in ((cfg, False), (switched_on(cfg), True)):
+        a = Analyst(c)
+        a.graduated, a.learned = {"breadth"}, {"breadth": 1.2}
+        e = {e.factor: e for e in a.assess("NIFTY", s, None, breadth=b).evidence}["breadth"]
+        if applied:
+            assert e.weight == pytest.approx(PROBATION["breadth"] * 1.2) and "not applied" not in e.observation
+        else:
+            assert e.weight == 0 and "its record would earn a vote; recorded, not applied" in e.observation
+        br = Brain(c, None)
+        br.learned = {"global_us": (1.2, 40.0)}
+        if applied:
+            assert br._probation_weight("global_us") == PROBATION_W
+            assert br._probation_note("global_us") == "earned a vote live: 40 graded reads, ×1.20"
+        else:
+            assert br._probation_weight("global_us") == 0
+            assert br._probation_note("global_us") == "its record would earn a vote: 40 graded reads, ×1.20; recorded, not applied"
+
+
+def test_the_learning_summary_marks_factor_weights_recorded_not_applied():
+    m = a_record("vwap", "pcr")
+    for _ in range(50):
+        m.bump("news_event", "policy", True, 9.0)
+    lines = learning.summary(m)
+    f = [x for x in lines if x.startswith("factor ")]
+    assert f and all(x.endswith("(recorded, not applied)") for x in f)
+    assert any(x.startswith("factor vwap") and "weight ×1.50" in x for x in f)
+    assert not any("not applied" in x for x in lines if x.startswith("news "))   # news trust is still applied
+    assert not any("not applied" in x for x in learning.summary(m, factor_weights_applied=True))
 
 
 @pytest.fixture(scope="module")
@@ -153,8 +241,18 @@ def test_the_engine_grades_each_session_and_stands_aside_on_a_losing_record(synt
         review = run_replay(eng)
     assert "## What the desk learned" in review and "factor " in review
     saved = json.loads((tmp_path / "memory.json").read_text())
-    assert saved["tables"]["factor"] and len(saved["days"]) == 3
-    assert eng.analyst.learned and all(0.5 <= x <= 1.5 for x in eng.analyst.learned.values())
+    assert saved["tables"]["factor"] and len(saved["days"]) == 3              # grading still updates the record
+    assert eng.analyst.learned and all(0.5 <= x <= 1.5 for x in eng.analyst.learned.values())   # handed over...
+    assert not eng.analyst.apply_learned and "(recorded, not applied)" in review                  # ...not applied (D-01)
+    from quantdesk.intraday.analyst import Analyst
+    u, v = next(iter(eng.views.items()))
+    weights = lambda an: {e.factor: e.weight for e in an.assess(u, v.state, v.chain).evidence}
+    moved = {f for f, x in eng.analyst.learned.items() if abs(x - 1) > 1e-6}
+    assert moved & set(weights(eng.analyst))                              # the record does move a factor in this read
+    assert weights(eng.analyst) == weights(Analyst(cfg))                  # but the read weighs it as if nothing learned
+    on = Analyst(switched_on(cfg))
+    on.learned = eng.analyst.learned
+    assert weights(on) != weights(Analyst(cfg))                           # the switch brings the old behaviour back
 
     bad = Memory()                                                       # every setup has lost 1R a trade, 10 times
     for setup in cfg.get("intraday.setups"):
