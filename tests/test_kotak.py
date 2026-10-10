@@ -192,7 +192,7 @@ def test_chain_from_the_live_book(shape):
     ch = KotakOptionChain(client, strikes=17)
     assert ch.count == 20                                                       # each side; a multiple of 10
     assert ch.expiries("NIFTY") == [EXP, dt.date(2026, 10, 13), dt.date(2026, 10, 27)]
-    df = ch.chain("NIFTY", EXP)
+    df = ch.chain("NIFTY", EXP, ts=pd.Timestamp("2026-10-05 10:00", tz=IST))     # fixed clock: EXP is in the past
     assert list(df.index) == [24750.0, 24800.0, 24850.0, 24900.0, 24950.0]
     assert df.attrs["source"] == "kotak" and df.attrs["spot"] == pytest.approx(24852.35) and df.attrs["lot"] == 65
     r = df.loc[24850.0]

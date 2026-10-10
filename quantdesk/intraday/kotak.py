@@ -287,7 +287,8 @@ class KotakOptionChain(ChainSource):
         df.index.name = "strike"
         if not S > 0:
             S = float(spot) if spot else np.nan
-        df.attrs.update({"underlying": underlying, "spot": S, "expiry": expiry, "ts": pd.Timestamp.now(tz=IST),
+        df.attrs.update({"underlying": underlying, "spot": S, "expiry": expiry,
+                         "ts": pd.Timestamp(ts) if ts is not None else pd.Timestamp.now(tz=IST),
                          "source": "kotak", "lot": self.lot.get(underlying), "quoted": quoted})
         return fill_iv(df, IntradayPricer())
 
