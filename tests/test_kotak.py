@@ -296,6 +296,62 @@ def test_check_reports_what_works(client):
     assert "ck-token" not in text                                               # never prints the key
 
 
+class ZeroVix(FakeKotak):
+    """India VIX candles with 0 prices, as Kotak sometimes serves them: `zeros` of the 10 minutes, or all."""
+
+    def __init__(self, zeros=(2, 5), **kw):
+        super().__init__(**kw)
+        self.zeros = zeros
+
+    def get(self, url, params=None, timeout=None):
+        if "historical" in url and "INDIA VIX" in params["neosymbol"]:
+            day = params["fromdate"]
+            rows = [[f"{day}T09:{15 + i:02d}:00+0530", *([0] * 4 if self.zeros is None or i in self.zeros else
+                                                          [14 + i / 10, 14.1 + i / 10, 13.9 + i / 10, 14 + i / 10]), 0, 0]
+                    for i in range(10)]
+            return Resp({"status": "success", "interval": "1min", "data": {"candles": rows}})
+        return super().get(url, params, timeout)
+
+
+def test_zero_price_vix_candles_are_dropped(cfg, monkeypatch):
+    """I-01: a 0 India VIX is a bad print: it never becomes a bar, and a day of nothing but zeros falls back to Yahoo."""
+    day = dt.date(2026, 10, 5)
+    feed = KotakIntradayFeed(cfg, KotakClient("ck-token", session=ZeroVix(), min_gap=0))
+    monkeypatch.setattr(feed, "now", lambda: pd.Timestamp(f"{day} 09:25:30", tz=IST))
+    bars = feed.kotak_bars("INDIAVIX", day)
+    assert len(bars) == 8 and (bars[["open", "high", "low", "close"]] > 0).all().all()
+    feed = KotakIntradayFeed(cfg, KotakClient("ck-token", session=ZeroVix(zeros=None), min_gap=0))
+    monkeypatch.setattr(feed, "now", lambda: pd.Timestamp(f"{day} 09:25:30", tz=IST))
+    assert feed.kotak_bars("INDIAVIX", day).empty
+    yahoo = pd.DataFrame({"open": [14.0], "high": [14.0], "low": [14.0], "close": [14.0], "volume": [0.0]},
+                         index=[pd.Timestamp(f"{day} 09:24", tz=IST)])
+    monkeypatch.setattr(YahooIntradayFeed, "poll", lambda self, s, since: yahoo)
+    assert feed.poll("INDIAVIX", None)["close"].tolist() == [14.0] and feed.served["yahoo"] == 1
+    assert "no candles yet" in feed.last_error
+
+
+def test_zero_vix_is_no_vix_move(cfg, client):
+    """I-01: zero VIX closes aren't a -100% move (a bullish vote); a zero prior day is no base, not a ZeroDivisionError."""
+    eng = IntradayEngine(cfg, KotakIntradayFeed(cfg, client), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
+                         say=None)
+    eng.day = dt.date(2026, 10, 5)
+    idx = pd.DatetimeIndex([pd.Timestamp("2026-10-03 15:29", tz=IST)]
+                           + list(pd.date_range("2026-10-05 09:15", periods=3, freq="min", tz=IST)))
+
+    def vix(prior, today):
+        px = [prior] + list(today)
+        return pd.DataFrame({"open": px, "high": px, "low": px, "close": px, "volume": 0.0}, index=idx)
+    eng.bars[eng.vix] = vix(14.0, [0.0, 0.0, 0.0])                              # today all zero: no reading
+    assert eng._vix_state() is None
+    eng.bars[eng.vix] = vix(0.0, [14.0, 14.2, 14.7])                            # zero prior day: no base
+    assert eng._vix_state() is None
+    eng.bars[eng.vix] = v = vix(14.0, [14.0, 14.2, 14.7]).iloc[1:].copy()      # no prior day, zero open: no base
+    v.iloc[0, 0] = 0.0
+    assert eng._vix_state() is None
+    eng.bars[eng.vix] = vix(14.0, [14.2, 0.0, 14.7])                            # one zero minute: skipped
+    assert eng._vix_state() == pytest.approx({"last": 14.7, "chg": 14.7 / 14.0 - 1})
+
+
 # ---- the desk on a live book --------------------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def sessions():

@@ -200,7 +200,10 @@ class KotakClient:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         df = pd.DataFrame([r[:6] for r in rows], columns=["ts", "open", "high", "low", "close", "volume"])
         df.index = pd.to_datetime(df.pop("ts"), utc=True).dt.tz_convert(IST)
-        return df.apply(pd.to_numeric, errors="coerce")
+        df = df.apply(pd.to_numeric, errors="coerce")
+        # I-01: Kotak sometimes serves India VIX (or any index) at 0: a price must be > 0 (NaN fails too), so an all-zero
+        # day comes back empty and the feed falls back, as for "no candles yet"
+        return df[(df[["open", "high", "low", "close"]] > 0).all(axis=1)]
 
 
 # ---- the option chain, from Kotak's live book ---------------------------------------------------------------

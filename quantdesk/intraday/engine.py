@@ -414,9 +414,14 @@ class IntradayEngine:
             return None
         today = v[v.index.date == self.day]
         prev = v[v.index.date < self.day]
-        if today.empty:
+        # I-01: a 0 VIX is a bad print, not a -100% move: no valid reading today, or a prior day of only bad prints, is
+        # no state (and no ZeroDivisionError)
+        today, pc = today[today["close"] > 0], prev["close"][prev["close"] > 0]
+        if today.empty or (len(prev) and pc.empty):
             return None
-        base = float(prev["close"].iloc[-1]) if len(prev) else float(today["open"].iloc[0])
+        base = float(pc.iloc[-1]) if len(pc) else float(today["open"].iloc[0])
+        if not base > 0:
+            return None
         return {"last": float(today["close"].iloc[-1]), "chg": float(today["close"].iloc[-1]) / base - 1}
 
     def _flow_state(self, u: str, now) -> dict | None:
