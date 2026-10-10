@@ -166,6 +166,14 @@ intraday:
   stale_feed_min: 3                # no new entries when the last bar completed more than this many minutes ago
   max_step_failures: 3             # this many failed minutes in a row → safe mode: square off, no entries for the session
   slow_step_sec: 40                # a minute's step slower than this is reported (the loop is falling behind)
+  # Paper-only exploration, SHIPS OFF; the owner turns it on. While no plan model is approved (autolearn.require_approved_model
+  # stays true: no champion takeover, nothing counts toward the paper gate), a directional plan that passes EVERY other gate
+  # (halts, vetoes, risk, setup record, EV floor, live-book liquidity/slippage) and the direction champion's filter may open at
+  # exactly `lots`, labelled "EXPLORATION (unvalidated prior)" (meta.mode), to gather fills, setup records and EV calibration.
+  # Caps: max_per_day per session, max_total ever (counted from the journal), none after `until` (YYYY-MM-DD or null), and it
+  # stops by itself once a plan model is approved. Refused unless account.mode is paper (live + on: one CRITICAL, no entry).
+  # Excluded from `intraday paper-gate` and from champion paper evidence.
+  exploration: {enabled: false, max_per_day: 2, lots: 1, max_total: 40, until: null}
   # Anticipation: setups the read already favours (orb, trend_break: stop entries through the level; vwap_trend:
   # a limit entry on the pullback) wait at their trigger level and fire the moment price gets there, from Kotak's
   # live index price every tick_sec seconds (each new 1-minute bar's range without it), instead of a 5-minute close later.
