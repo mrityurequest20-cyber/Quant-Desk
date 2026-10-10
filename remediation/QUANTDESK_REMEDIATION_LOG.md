@@ -9,11 +9,11 @@ It sits alongside the forensic audit (PR #9, `audit/`); it does not modify the a
 |---|---|
 | Programme stage | **S0: readiness and containment** |
 | S0 status | **NO-GO**: critical blockers open (see §3); engineer routine paused (interim) |
-| Last updated | 2026-10-09 (S0 readiness assessment, session 1) |
+| Last updated | 2026-10-10 00:00 UTC (S0 assessment + remediation PRs #14–#22, session 1) |
 | Repo revision assessed | `main@c96909f1f0f4e77ad30817ca53f2df7b28bb9098` (2026-10-04 13:09 UTC) |
 | Audit revision assessed | `claude/exciting-galileo-criwur@813849453aa4` (PR #9, draft, open) |
 | Runtime state assessed | `journal@9cdfbeb` (2026-10-09 22:48 IST), `gh-pages@e80b0ed` (2026-10-09 16:14 IST) |
-| Next item awaiting approval | §6: owner actions O-2, O-3, O-5, then the first remediation PR (A-19) |
+| Next item awaiting approval | **Owner review of PRs #14–#22 (§7)**, and owner actions O-2, O-3, O-4b, O-5 |
 
 ## Evidence labels
 
@@ -32,8 +32,9 @@ One label never silently becomes another.
 | 1 | 2026-10-09 | S0 readiness assessment (read-only) | S0 | **done**: this file | requested by owner |
 | 2 | 2026-10-09 | O-1: pause the engineer routine | S0 | **done**: `enabled: false` at 22:36:11 UTC (S0-05) | owner approved in session |
 | 3 | 2026-10-09 | O-4a: H–L artifacts committed | S0 | **done**: the owner approved in the audit session; commit `de344bd` (22:47 UTC), independently verified here (S0-02) | owner, in the audit session |
-| 4 | — | Owner actions O-2, O-3, O-4b, O-5 (§6.1) | S0 | **awaiting owner** | owner only |
-| 5 | — | First remediation PR: A-19 test clock seam (§6.2) | S0 | **proposed, not started** | needs owner approval |
+| 4 | — | Owner actions O-2, O-3, O-4b, O-5 (§6.1) | S0 | **awaiting owner** (O-4b: this session's tag push was refused, 403) | owner only |
+| 5 | 2026-10-09 | A-19 fix | S0 | **PR #14** (draft, not merged) | owner approved the scope |
+| 6 | 2026-10-09 | Further fixes under the owner's "fix everything" instruction | S0/S2/S5 | **PRs #15–#22** (drafts, none merged); see §7 | owner: "do whatever you want"; merging stays with the owner |
 
 ---
 
@@ -69,7 +70,7 @@ One label never silently becomes another.
 
 | | |
 |---|---|
-| **Status** | **VERIFIED NOW**: baseline reproduced; CI red only by A-19 |
+| **Status** | **VERIFIED NOW**: baseline reproduced; CI red only by A-19, **fixed in PR #14** (CI on #13 confirmed: 445 passed / 2 failed / 6 skipped) |
 | **Evidence** | `git archive c96909f` exported to a scratch dir. Fresh venv: CPython 3.11.17 (the CI version), `pip install -r requirements.txt` → pandas 3.0.6, numpy 2.4.6, scipy 1.17.1, pyarrow 26.0.0, yfinance 1.7.0, anthropic 1.13.0. Command: `python -m pytest -o addopts="" -q -rfEs`, with `GH_TOKEN`/`GITHUB_TOKEN`/`GITHUB_REPOSITORY` unset and a fail-closed `gh` shim first on `PATH`, so no test could dispatch a workflow or push. |
 | **Result** | Run 2026-10-09 22:14:51 → 22:43:42 UTC (28m49s): **441 passed, 3 failed, 9 skipped (453)**. Failures: `test_kotak.py::test_chain_from_the_live_book[live]` and `[docs]`. Every IV is NaN at `test_kotak.py:202` (A-19 reproduced). Also `test_provenance.py::test_the_stamp_names_a_commit`, an **artifact of this run**: the `git archive` export has no `.git`. Re-run in the real checkout: `tests/test_provenance.py` → 2 passed. 3 of the 9 skips are "node not installed" (`test_cloudflare.py:54,101`, `test_web.py:128`); CI has node. The other 6 are sample-dependent (`test_handover.py:45` ×3, `test_kotak.py:348,363,380`). **Reconciled: 441 + 1 + 3 = 445 passed, 2 failed (A-19), 6 skipped, the same as previously reported.** The 3 node tests were not run in this session. |
 | **Coverage gap** | The suite passes on pandas 3.0.6, yet production logs A-02 (`grading failed: Cannot losslessly convert units`) at every session (S0-11). **No test exercises catch-up grading on real-shaped data.** A green suite does not mean that path is healthy. |
@@ -250,6 +251,55 @@ One label never silently becomes another.
 - **Independent reviewer:** the owner (human). Not the engineer routine and not this session.
 
 ---
+
+## 7. Remediation PRs (2026-10-09/10; all drafts, none merged)
+
+Every PR changes the fewest lines that fix the finding. Each adds a regression test that **fails on `main` and passes
+with the fix** (reproduced here before the change), and each carries the identical A-19 commit from #14 so its CI can
+go green by itself. Merging is the owner's decision. Engine and risk-gate changes (#22) need an independent
+risk-compliance review first.
+
+| PR | Finding | Sev. | What it fixes | Evidence it works | Production behaviour change |
+|---|---|---|---|---|---|
+| #14 | A-19 | P4 | Test date bomb: `test_chain_from_the_live_book` red on every branch since 10-06 | 2 failures reproduced → pass; negative control (clock after expiry) fails again; `test_kotak.py` 18 passed / 3 skipped | **None**: `KotakOptionChain.now()` returns the same wall clock; a guard test pins that |
+| #15 | A-03 | P2 | Unpinned dependencies (root cause of A-02) | All 44 packages pinned to CI's 2026-10-09 install; a fresh install's freeze is **identical** to CI's; `uv pip check` OK | **None** today (same versions); stops silent drift |
+| #16 | A-02 | P2 | Catch-up grading crash (`Cannot losslessly convert units`), twice every session since 10-06 | Production error reproduced exactly; `normalise_bars` → `ns` index (lossless, pandas-2 behaviour); regression test | Catch-up grading **runs again**; bar index unit `s` → `ns` (values unchanged) |
+| #17 | D-07 | P2 | Self-review filed only ERROR events, so A-02 was never seen | New test fails → passes; `test_selfreview.py` 8 passed; calibrated on the real journal (only the A-02 WARNs qualify) | Self-review files a transient issue for WARN events that say "failed" |
+| #18 | G-03 | P3 | LLM prose fallback read "NIFTY 50" as +1.0; out-of-range JSON clipped to max | 2 tests fail → pass; LLM/news/NLP 54 passed | Out-of-range LLM reads are **dropped**, not clipped. **Reverses a deliberate design and changes an existing test: review** |
+| #19 | A-07 | P3 | `LockBox.verify` passed when the locked row count changed | Reproduced (`assert []`); `test_autolearn.py` 21 passed; **production lock verified intact** (1,200 rows, `96591d96…`), so the cycle is not halted | Integrity check fails on a real change to the final-test data |
+| #20 | G-05 | P3 | LLM read timeouts hidden inside the INFO cost line | Test fails → passes; LLM + self-review 18 passed | Adds a WARN `llm` event on reader failure (daily cap excluded); the cost line is unchanged |
+| #21 | A-18 | P4 | A forming 5-minute bar counted as complete after 1 minute | Test fails → passes; intraday + Kotak 37 passed / 3 skipped; merges cleanly with #16 | `history_bars` drops the forming 5-minute bar |
+| #22 | F-01 | P2 | When the real chain fails, the desk could open trades on the **model** chain (invented quotes and OI) | Gate allowed entry before the fix (only the time window stopped it) → blocked after; explicit model-chain replays unaffected | **Tightens** entry gating: no *new* entries while a configured real chain is down (exits still managed). **Needs risk-compliance review** |
+
+**Verification across the set (VERIFIED NOW).** A local integration branch merging #14 + #15 + #16 (`28d5dcf`, never
+pushed) ran the full suite in the real git checkout, CPython 3.11.17, Node available, GitHub tokens stripped:
+**449 passed, 0 failed, 6 skipped** (2026-10-09 23:41 → 2026-10-10 00:08 UTC). This is the first fully green run since
+2026-10-06. It reconciles with the old baseline: 445 previously passing + the 2 A-19 tests now passing + 1 new A-19
+guard + 1 new A-02 test = 449. All 3 Node tests ran and passed. The 6 skips are the sample-dependent ones also skipped
+on `main` (`test_handover.py:45` ×3, `test_kotak.py:356/371/388`). Each PR also runs the full suite in CI.
+
+**Checks done without a PR (VERIFIED NOW).**
+- **Data integrity:** `autolearn verify` on a scratch copy of `journal@9cdfbeb` reports "learning ledger, registry and
+  journal: intact" (hash chains + SQLite `integrity_check`). The sleeves ledgers (`expiry_seller_v1`, `_v3`): 6 rows
+  each, no duplicate (event, id), no open position without a settlement, so the daily post-close re-run (S0-09)
+  has not double-written them.
+- **Archive duplication (S0-09):** the post-close re-run re-archives the day's bars under a new part name, but
+  `data/archive.load_archive` de-duplicates on read by design. That costs storage and runner minutes; the data is
+  not corrupted. Removing the re-run (`live.yml` schedule) stays an owner-approved workflow change.
+- **Secrets:** a regex scan of the working tree and all fetched history for GitHub, Anthropic, Google, AWS and Slack
+  tokens and private keys found **none**; no `.env` or key files are tracked. Caveat: the clone is shallow (50 commits
+  plus the fetched branches).
+- **Evidence tags (O-4b):** created locally, but the push was **refused by this session's git policy (HTTP 403)**;
+  only branch pushes are allowed. The owner must run:
+  `git tag -a evidence/audit-a-l-2026-10-09 de344bd -m "audit A-L" && git tag -a evidence/journal-2026-10-09 9cdfbeb -m "journal" && git tag -a evidence/gh-pages-2026-10-09 e80b0ed -m "site" && git push origin --tags`
+
+**Not fixed, and why.**
+- D-08 (graded-id truncation, P4 latent): the right fix changes `memory.json`'s schema; the handoff forbids touching
+  learning memory without owner sign-off. ~2,100 graded per week against a 5,000 cap: not urgent.
+- E-01 (sleeves settle on a frozen index, P1), C-01/B-02 (zero trades is structural), D-01 (factor learning ≈ noise):
+  strategy and research decisions, not bugs to patch; they need owner-reviewed studies (S6/S7).
+- A-13 (back-dated events), A-10 (force-pushed journal), F-04/F-06 (fills and the live adapter): S1/S3 design work,
+  not one-line fixes.
 
 ## Appendix A: Audit artifact hashes (PR #9 head `8138494`)
 
