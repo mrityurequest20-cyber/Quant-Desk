@@ -167,7 +167,9 @@ class IntradayEngine:
         df = self.bars[u]
         S = float(df.loc[:ts]["close"].iloc[-1])
         v = self.bars.get(self.vix)
-        vix = float(v.loc[:ts]["close"].iloc[-1]) if v is not None and len(v.loc[:ts]) else 14.0
+        c = v.loc[:ts]["close"] if v is not None else pd.Series(dtype=float)
+        c = c[c > 0]                                            # I-01: a 0 / NaN VIX print would price at zero vol
+        vix = float(c.iloc[-1]) if len(c) else 14.0
         return S, vix / 100 * float(self.cfg.instrument_spec(u).get("iv_beta", 1.0))
 
     def pick_expiry(self, u: str, today: dt.date) -> dt.date:

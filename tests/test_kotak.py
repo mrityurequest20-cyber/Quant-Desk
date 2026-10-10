@@ -320,6 +320,8 @@ def test_zero_price_vix_candles_are_dropped(cfg, monkeypatch):
     monkeypatch.setattr(feed, "now", lambda: pd.Timestamp(f"{day} 09:25:30", tz=IST))
     bars = feed.kotak_bars("INDIAVIX", day)
     assert len(bars) == 8 and (bars[["open", "high", "low", "close"]] > 0).all().all()
+    raw = KotakClient("ck-token", session=ZeroVix(), min_gap=0).candles("nse_cm|India VIX", "1min", day, day, raw=True)
+    assert len(raw) == 10                                    # the backfill archive keeps the rows as served
     feed = KotakIntradayFeed(cfg, KotakClient("ck-token", session=ZeroVix(zeros=None), min_gap=0))
     monkeypatch.setattr(feed, "now", lambda: pd.Timestamp(f"{day} 09:25:30", tz=IST))
     assert feed.kotak_bars("INDIAVIX", day).empty
@@ -350,6 +352,14 @@ def test_zero_vix_is_no_vix_move(cfg, client):
     assert eng._vix_state() is None
     eng.bars[eng.vix] = vix(14.0, [14.2, 0.0, 14.7])                            # one zero minute: skipped
     assert eng._vix_state() == pytest.approx({"last": 14.7, "chg": 14.7 / 14.0 - 1})
+    # the model chain's IV: the last positive VIX (from any source, Yahoo history included), never 0 or NaN
+    eng.bars["NIFTY"] = pd.DataFrame({"close": [25000.0] * 4}, index=idx)
+    beta = float(cfg.instrument_spec("NIFTY").get("iv_beta", 1.0))
+    t = idx[-1]
+    eng.bars[eng.vix] = vix(14.0, [14.2, 14.5, 0.0])
+    assert eng.model_state("NIFTY", t)[1] == pytest.approx(0.145 * beta)
+    eng.bars[eng.vix] = vix(float("nan"), [0.0, float("nan"), 0.0])
+    assert eng.model_state("NIFTY", t)[1] == pytest.approx(0.14 * beta)            # no valid print: the default
 
 
 # ---- the desk on a live book --------------------------------------------------------------------------------------

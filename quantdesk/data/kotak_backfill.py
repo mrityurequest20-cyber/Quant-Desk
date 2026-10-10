@@ -55,7 +55,7 @@ def contracts(client, underlying: str, n_expiries: int, strikes: int, today: dt.
 def candles(client, token: str, start: dt.date, end: dt.date) -> tuple[pd.DataFrame, str | None]:
     """The whole window in one call; if Kotak refuses or returns nothing, in CHUNK_DAYS pieces."""
     try:
-        df = client.candles(token, "1min", start, end)
+        df = client.candles(token, "1min", start, end, raw=True)
         if len(df):
             return df, None
     except Exception as exc:                                  # a long window may be refused: try it in pieces
@@ -67,7 +67,7 @@ def candles(client, token: str, start: dt.date, end: dt.date) -> tuple[pd.DataFr
     while d <= end:
         e = min(end, d + dt.timedelta(days=CHUNK_DAYS - 1))
         try:
-            p = client.candles(token, "1min", d, e)
+            p = client.candles(token, "1min", d, e, raw=True)
             if len(p):
                 parts.append(p)
         except Exception as exc:
