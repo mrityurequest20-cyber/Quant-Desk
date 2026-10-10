@@ -201,8 +201,7 @@ def frozen(b, day="2026-10-05", a="15:15", z="15:28"):
 
 def test_a_read_whose_window_ends_in_the_index_freeze_is_not_graded(tmp_path):
     """F-02: Kotak's index series sits on the 15:14 close from 15:15 to 15:28 while the future keeps trading. A read
-    whose 30 minutes end in the freeze was graded on that stale print (10.5% of graded factor reads); now it isn't,
-    and a read whose window closes before it grades as it did."""
+    whose 30 minutes end in the freeze was graded on that stale print; now it isn't, and a read whose window closes before it grades as it did."""
     b = frozen(day_bars())
     j = Journal(tmp_path / "j.db")
     for t in ("2026-10-05 14:00", "2026-10-05 14:50"):                  # 14:50's window ends at 15:20, in the freeze
@@ -233,6 +232,29 @@ def test_the_freeze_detector_finds_15_15_to_15_28_within_a_session_only(syntheti
     _, bars, _ = synthetic
     assert all(frozen_minutes(s).empty for s in bars.values())               # the synthetic generator never freezes
     assert learning.unfrozen({"NIFTY": bars["NIFTY"]})["NIFTY"] is bars["NIFTY"]
+
+
+def test_armed_and_ic_grading_cope_with_a_masked_bar_and_overshoot_is_counted(tmp_path):
+    """grade_armed / grade_ic read the masked series without crashing or scoring a NaN; grade_session says how many
+    windows a gap in the bars dropped (and stays silent when none)."""
+    b = learning.unfrozen({"NIFTY": frozen(day_bars())})["NIFTY"]
+    j = Journal(tmp_path / "j.db")
+    j.decision(ts("2026-10-05 14:55"), "orb", "NIFTY", "rejected", "orb reached its level 25,340.00 but EV below the floor",
+               0, {"armed": {"level": 25340.0, "invalidation": 25320.0, "direction": 1}, "target": 25500.0})
+    j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+            (str(ts("2026-10-05 14:50")), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+            (str(ts("2026-10-05 11:50")), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j.commit()
+    m = Memory()
+    assert learning.grade_armed(m, j.df("SELECT * FROM decisions"), {"NIFTY": b}) == 1
+    assert np.isfinite(m.stat("armed_rejected", "orb")["sum"])                # the last live bar (15:29), never a NaN
+    learning.grade_ic(m, j.df("SELECT ts, symbol, evidence FROM thoughts"), {"NIFTY": b})
+    assert all(np.isfinite(v).all() for h in m.d["ic"].values() for v in h.values())
+    hole = day_bars().drop(pd.date_range("2026-10-05 12:20", periods=6, freq="1min", tz=IST))
+    assert "dropped_overshoot" not in learning.grade_session(Memory(), j, {"NIFTY": day_bars()}, "2026-10-05")
+    got = learning.grade_session(Memory(), j, {"NIFTY": hole}, "2026-10-05")
+    assert got["dropped_overshoot"] >= 1                                      # 11:50 → 12:20 lands 6 minutes past the hole
 
 
 def test_a_day_without_a_freeze_grades_as_before(synthetic, tmp_path):

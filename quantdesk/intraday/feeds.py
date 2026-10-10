@@ -52,7 +52,8 @@ def normalise_bars(df: pd.DataFrame) -> pd.DataFrame:
 def frozen_minutes(bars: pd.DataFrame | None, min_run: int = 3) -> pd.DatetimeIndex:
     """F-02: the minutes of every run of `min_run`+ bars printing open = high = low = close = the previous bar's close,
     within a session. Kotak's index series does this from 15:15 to 15:28 every session while the future keeps trading;
-    NIFTY or BANKNIFTY never sits on one price for three minutes, so these are stale prints, not prices."""
+    NIFTY or BANKNIFTY never sits on one price for three minutes, so these are stale prints, not prices. A generic
+    detector: an illiquid index or a rounded feed could trip it, and the error is conservative (fewer grades)."""
     if bars is None or len(bars) < min_run:
         return pd.DatetimeIndex([], tz=IST)
     c, d = bars["close"], bars.index.normalize().to_numpy()

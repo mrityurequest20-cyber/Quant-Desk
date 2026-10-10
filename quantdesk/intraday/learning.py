@@ -114,6 +114,9 @@ class Memory:
 
 
 # ---- grading ---------------------------------------------------------------------------------------------------------
+OVERSHOT = [0]                                                  # windows `forward` has dropped for max_overshoot (grade_session reports the change)
+
+
 def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: bool = False, with_start: bool = False,
             max_overshoot: float | None = 5):
     """Log return of the close from the first bar at/after t to the bar `minutes` later, same session only.
@@ -135,8 +138,10 @@ def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: boo
         return None
     end = idx[i] + pd.Timedelta(minutes=minutes)
     j = idx.searchsorted(end)
-    if j >= len(idx) or idx[j].date() != idx[i].date() or \
-            (max_overshoot is not None and idx[j] - end > pd.Timedelta(minutes=max_overshoot)):
+    if j >= len(idx) or idx[j].date() != idx[i].date():
+        return None
+    if max_overshoot is not None and idx[j] - end > pd.Timedelta(minutes=max_overshoot):
+        OVERSHOT[0] += 1
         return None
     a, b = float(bars["close"].iloc[i]), float(bars["close"].iloc[j])
     fr = math.log(b / a) if a > 0 and b > 0 else None                  # NaN (masked) at either end: not graded
@@ -145,7 +150,8 @@ def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: boo
 
 def unfrozen(bars: dict) -> dict:
     """F-02: the bars with each frozen index minute (feeds.frozen_minutes) masked to NaN, kept in place so `forward`
-    sees a window that ends in the freeze rather than stretching it to the first live bar after."""
+    sees a window that ends in the freeze rather than stretching it to the first live bar after. Only `rebuild`
+    corrects what `memory.json` already holds (observations graded before this existed stay as they were)."""
     out = {}
     for k, b in bars.items():
         f = frozen_minutes(b)
@@ -375,7 +381,7 @@ def grade_armed(mem: Memory, decisions: pd.DataFrame, bars: dict, horizon: int =
 def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
     """Grade everything from `day` (and anything older not yet graded); returns what was graded."""
     since = str(pd.Timestamp(day) - pd.Timedelta(days=7))[:10]
-    bars = unfrozen(bars)                                       # F-02: no call graded on a frozen index print
+    bars, over = unfrozen(bars), OVERSHOT[0]                    # F-02: no call graded on a frozen index print
     news = journal.df("SELECT * FROM news WHERE ts >= ?", (since,))
     th = journal.df("SELECT ts, symbol, evidence FROM thoughts WHERE ts >= ? ORDER BY ts", (since,))
     tr = journal.df("SELECT * FROM trades WHERE opened_at >= ?", (since,))
@@ -385,6 +391,8 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
     grade_ic(mem, th, bars)
     from . import relstrength
     out["rs"] = relstrength.grade(mem, bars)
+    if OVERSHOT[0] > over:
+        out["dropped_overshoot"] = OVERSHOT[0] - over           # windows a gap in the bars stretched too far to grade
     if str(day) not in mem.d["days"]:
         mem.d["days"].append(str(day))
     return out
