@@ -47,7 +47,27 @@ env:
   OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.OLLAMA_KEY || secrets.OLAMA_API_KEY || secrets.OLLAMA_API || secrets.OLLAMA_TOKEN || secrets.OLLAMA || secrets.OLAMA_API || secrets.OLAMA }}
 
 jobs:
+  # S0-09: GitHub's own cron is late on this repo (08:52 IST arrived 15:19-16:13 IST) and, queued behind the day's
+  # session in the live-desk group, re-ran the whole pipeline after the close every day (sleeves and journal save
+  # twice). The Cloudflare alarm dispatches the real session; a scheduled run that starts after 15:00 IST is a no-op.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.when.outputs.go }}
+    steps:
+      - id: when
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date +%H%M)" -ge 1500 ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::scheduled run started at $(date '+%H:%M') IST, after the session: nothing to do"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
   morning:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
@@ -98,7 +118,7 @@ jobs:
 
   afternoon:
     needs: morning
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.morning.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
