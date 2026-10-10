@@ -138,6 +138,8 @@ def test_walk_forward_purges_overlapping_labels_and_embargoes():
         tampered = s.copy()
         tampered.loc[tampered["day"] == lock["days"][0], "y"] = 1.0
         assert lb.verify(tampered)                               # its labels changed: reported
+        assert lb.verify(tampered.drop(tampered.index[tampered["day"] == lock["days"][0]][:1]))   # …and a row dropped (A-07)
+        assert lb.verify(s.drop(s.index[s["day"] == lock["days"][-1]][:1]))                     # a row dropped alone
         assert lb.record_access("m", "test") == 1 and lb.peeks() == 1
     finally:
         import shutil

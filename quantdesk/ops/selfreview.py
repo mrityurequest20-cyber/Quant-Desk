@@ -82,6 +82,14 @@ def check_session(journal, day: dt.date, trading_day: bool) -> list[Finding]:
         out.append(Finding("engine-errors", "bug", f"{len(err)} engine error(s) on {day}",
                            f"Errors journaled during the {day} session (most frequent first):\n\n{lines}",
                            "Reproduce from the journal (the event's data has `where`), fix the cause, add a test."))
+    warn = ev[(ev["level"] == "WARN") & ev["message"].astype(str).str.contains("failed")] if len(ev) else ev
+    if len(warn):                                     # D-07: a part that fails and carries on is still broken
+        top = warn["message"].astype(str).str[:90].value_counts().head(6)
+        lines = "\n".join(f"- {n}× `{m}`" for m, n in top.items())
+        out.append(Finding("engine-failures", "bug", f"{len(warn)} failure warning(s) on {day}",
+                           f"Parts of the desk failed and the session carried on without them on {day} (most frequent "
+                           f"first):\n\n{lines}\n\nWhatever failed did not run: a failed grading pass is a day's learning lost.",
+                           "Reproduce from the journal, fix the cause, add a test."))
     return out
 
 
