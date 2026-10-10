@@ -101,8 +101,14 @@ def test_critical_events_are_findings(tmp_path):
     j = _journal(tmp_path / "c.db", day, start=True)
     j.event(pd.Timestamp(f"{day} 09:15", tz=IST), "CRITICAL", "risk", "reconciliation failed, entries halted: 1 orphan")
     j.commit()
-    f = SR.check_session(j, day, True)
-    assert [x.key for x in f] == ["engine-errors"] and "1× `reconciliation failed, entries halted: 1 orphan`" in f[0].detail
+    for i in range(7):                                # 7 different errors, twice each: more than the error list shows
+        for _ in range(2):
+            j.event(pd.Timestamp(f"{day} 10:0{i}", tz=IST), "ERROR", "engine", f"error number {i}")
+    j.commit()
+    f = {x.key: x for x in SR.check_session(j, day, True)}
+    assert set(f) == {"engine-critical", "engine-errors"}         # a halt is its own finding, never lost in a long list
+    assert "reconciliation failed, entries halted: 1 orphan" in f["engine-critical"].detail
+    assert "reconciliation" not in f["engine-errors"].detail and f["engine-errors"].title.startswith("14 engine error")
 
 
 def test_no_trades_streak(cfg, tmp_path):

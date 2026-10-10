@@ -75,7 +75,14 @@ def check_session(journal, day: dt.date, trading_day: bool) -> list[Finding]:
                            f"No `session start` event in the journal for {day}, a trading day.",
                            "Check the Desk scheduler / Desk waiter / Live paper desk runs for the day and the Cloudflare "
                            "cron (deploy/cloudflare). Fix whatever stopped the start."))
-    err = ev[ev["level"].isin(["ERROR", "CRITICAL"])] if len(ev) else ev   # H-04: a CRITICAL (kill switch, …) is an error too
+    crit = ev[ev["level"] == "CRITICAL"] if len(ev) else ev
+    if len(crit):                                     # H-04: a halt (reconciliation, safe mode, kill switch, journal) is
+        lines = "\n".join(f"- {t} `{m}`" for t, m in zip(crit["ts"].astype(str).str[11:16], crit["message"].astype(str)))
+        out.append(Finding("engine-critical", "ops", f"{len(crit)} CRITICAL event(s) on {day}: entries halted",
+                           f"Every CRITICAL event journaled during the {day} session (each halts new entries):\n\n{lines}",
+                           "Check the broker against the journal, then clear the cause (an orphan leg, a journal fault, "
+                           "the kill file) before the next session. Halts are listed in full, never truncated."))
+    err = ev[ev["level"] == "ERROR"] if len(ev) else ev
     if len(err):
         top = err["message"].astype(str).str[:90].value_counts().head(6)
         lines = "\n".join(f"- {n}× `{m}`" for m, n in top.items())
