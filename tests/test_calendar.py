@@ -78,6 +78,17 @@ def test_a_year_without_its_holiday_list_halts_new_entries_and_sleeves(cfg, tmp_
                            tmp_path / "data", say=lambda *a: None)
     resumed.run(dt.date(2027, 1, 25), pd.Timestamp("2027-01-25 15:27", tz="Asia/Kolkata"))
     assert not any("did not run" in e.get("reason", "") for e in resumed.events())   # never mis-recorded as not run
+    # a holiday in the list once it's added moves an expiry onto an eve the halted calendar didn't name (Tue 26 Jan is
+    # Republic Day: the expiry moves to Mon 25, its eve is Fri 22): that eve was halted too, not "not run"
+    late = ExpirySeller(cfg, tmp_path / "late", tmp_path / "data", say=lambda *a: None)
+    for d in pd.bdate_range("2027-01-18", "2027-01-29"):
+        late.run(d.date(), pd.Timestamp(f"{d.date()} 15:27", tz="Asia/Kolkata"))
+    added = cfg.with_overrides({"calendar": {"holiday_years": [2026, 2027],
+                                             "holidays": cfg.get("calendar.holidays") + ["2027-01-26"]}})
+    ExpirySeller(added, tmp_path / "late", tmp_path / "data", say=lambda *a: None).run(
+        dt.date(2027, 2, 1), pd.Timestamp("2027-02-01 15:27", tz="Asia/Kolkata"))
+    reasons = [e["reason"] for e in late.events() if e["event"] == "skip"]
+    assert reasons and not any("did not run" in r for r in reasons) and any("halted on the eve (2027-01-22)" in r for r in reasons)
     assert [f.key for f in check_holidays(cfg, dt.date(2026, 11, 30))] == []
     assert [f.key for f in check_holidays(cfg, dt.date(2026, 12, 1))] == ["holiday-list:2027"]
     assert [f.key for f in check_holidays(cfg, dt.date(2027, 1, 4))] == ["holiday-list:2027"]

@@ -404,7 +404,12 @@ class ExpirySeller:
     def missed(self, day: dt.date) -> list[str]:
         """Eves in the last 10 days (on or after registration) the sleeves never ran on: on the record, not dropped."""
         floor = dt.date.fromisoformat(self.spec["registered"])
-        seen = {(e["sleeve"], e["underlying"], e["expiry"]) for e in self.events() if e["event"] in ("open", "skip")}
+        evs = self.events()
+        seen = {(e["sleeve"], e["underlying"], e["expiry"]) for e in evs if e["event"] in ("open", "skip")}
+        # F-07: days the sleeves were halted for want of a holiday list (once it is added, an expiry a holiday moved can
+        # land on an eve the halted calendar didn't name: that eve was halted too, not "not run")
+        halts = sorted({dt.date.fromisoformat(e["day"]) for e in evs
+                        if e["event"] == "skip" and str(e.get("reason", "")).startswith("halted:")})
         notes = []
         for k in range(10, 0, -1):
             past = day - dt.timedelta(days=k)
@@ -414,7 +419,9 @@ class ExpirySeller:
                 exp = self.due(u, past)
                 for s in self.trading(u) if exp else ():
                     if (s, u, str(exp)) not in seen:
-                        reason = f"the sleeves did not run on the eve ({past})"
+                        near = [h for h in halts if abs((h - past).days) <= 7]
+                        reason = (f"halted on the eve ({past}): no NSE holiday list at the time" if near else
+                                  f"the sleeves did not run on the eve ({past})")
                         self._append({"event": "skip", "sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u,
                                       "expiry": str(exp), "day": str(past), "reason": reason})
                         notes.append(f"skip {s}-{u}-{exp}: {reason}")
