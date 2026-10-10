@@ -135,8 +135,10 @@ def _payload(items: list[dict]) -> str:
 JSON_SHAPE = ('\n\nAnswer with JSON only, no prose, exactly this shape: {"reads": [{"id": "<id>", "nifty": <-1..1>, '
               '"banknifty": <-1..1>, "confidence": <0..1>, "event": "<one of: ' + ", ".join(EVENTS) + '>", "why": "<≤20 words>"}]}')
 _NUM = r"[^\d+\-−\n]{0,12}([+\-−]?\d*\.?\d+)"
-_VIEW = _NUM + r"(?![\d.]*%)"                           # "fell 0.8%" is a move, not a view
-_NIFTY = r"(?<!bank )(?:\bnifty\s*50\b|\bnifty\b(?!\s*50\b))"   # "NIFTY 50"/"Nifty50" is the name; "Bank Nifty" isn't it
+_VIEW = _NUM + r"(?![\d.]*\s*(?:%|per\s*cent\b|percent\b|pct\b))"   # "fell 0.8%" / "0.8 per cent" is a move, not a view
+_BANK = r"\b(?:bank[\s-]*nifty|nifty\s*bank)\b"                          # Bank Nifty, Bank-Nifty, Nifty Bank (NSE's name)
+# "NIFTY 50"/"Nifty50" is the name; any spelling of Bank Nifty isn't NIFTY
+_NIFTY = r"(?<!bank\s)(?<!bank\s\s)(?<!bank-)(?:\bnifty\s*50\b|\bnifty\b(?!\s*50\b))(?!\s*bank\b)"
 
 
 def _parse_text_reads(text: str, ids: set) -> dict[str, dict]:
@@ -151,7 +153,7 @@ def _parse_text_reads(text: str, ids: set) -> dict[str, dict]:
         def num(label, value=_NUM):
             m = re.search(label + value, block, re.I)
             return float(m.group(1).replace("−", "-")) if m else None
-        n, b, c = num(_NIFTY, _VIEW), num(r"\bbank ?nifty\b", _VIEW), num(r"\bconfidence\b")
+        n, b, c = num(_NIFTY, _VIEW), num(_BANK, _VIEW), num(r"\bconfidence\b")
         if n is None and b is None or _out_of_range(n) or _out_of_range(b) or _out_of_range(c, 0.0, 1.0):
             continue
         ev = re.search(r"\bevent\b[^a-z\n]{0,12}([a-z_]+)", block, re.I)
@@ -184,7 +186,10 @@ def _parse_reads(text: str, ids: set) -> dict[str, dict]:
         out[str(r["id"])] = {"NIFTY": _clip(r.get("nifty")), "BANKNIFTY": _clip(r.get("banknifty")),
                              "confidence": _clip(r.get("confidence"), 0.0, 1.0), "event": ev,
                              "why": str(r.get("why") or "")[:200]}
-    return out if rows else _parse_text_reads(text or "", ids)     # dropped JSON reads don't come back as prose
+    # a read for a known id that was dropped doesn't come back as prose; JSON without one (an example, a wrong key) is
+    # no read, so the prose is still read
+    known = any(isinstance(r, dict) and str(r.get("id")) in ids for r in rows)
+    return out if known else _parse_text_reads(text or "", ids)
 
 
 # ---- providers ---------------------------------------------------------------------------------------------------
