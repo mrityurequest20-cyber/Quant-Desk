@@ -90,14 +90,21 @@ class PaperBroker(Broker):
         return fill
 
     def settle_expiry(self, inst: Instrument, settle_price: float, ts) -> Fill | None:
-        """Cash-settle an expiring option at intrinsic value (no brokerage; STT on ITM exercise is ignored)."""
+        """Cash-settle an expiring option at intrinsic value (no brokerage). A long in-the-money leg pays exercise STT
+        at the dated `costs.exercise_stt` rate on its intrinsic value (F-05); short and out-of-the-money legs pay none."""
         p = self._pos.get(inst.symbol)
         if not p:
             return None
         qty = -p["qty"]
-        self._cash -= qty * settle_price
+        long_itm = inst.is_option and p["qty"] > 0 and settle_price > 0
+        stt = self.costs.exercise_stt(pd.Timestamp(ts)) * p["qty"] * settle_price if long_itm else 0.0
+        self._cash -= qty * settle_price + stt
+        self.fees_paid += stt
+        br = {"stt": stt} if stt else {}
+        for k, v in br.items():
+            self.fee_breakdown[k] = self.fee_breakdown.get(k, 0.0) + v
         del self._pos[inst.symbol]
-        fill = Fill("expiry", inst, qty, settle_price, 0.0, pd.Timestamp(ts), {})
+        fill = Fill("expiry", inst, qty, settle_price, stt, pd.Timestamp(ts), br)
         self.fills.append(fill)
         if self.state_path:
             self.save()

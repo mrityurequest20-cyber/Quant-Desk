@@ -3,6 +3,8 @@ slippage. Costs are the silent killer of short-horizon F&O strategies, so every 
 the backtest and paper broker goes through here."""
 from __future__ import annotations
 
+import datetime as dt
+
 from ..core.types import Instrument
 
 
@@ -15,6 +17,8 @@ class CostModel:
         self.gst = float(c.get("gst", 0.18))
         self.sebi = float(c.get("sebi_per_crore", 10.0)) / 1e7
         self.segments = c.get("segments", {})
+        self.exercise_schedule = sorted((d if isinstance(d, dt.date) else dt.date.fromisoformat(str(d)), float(r))
+                                        for d, r in (c.get("exercise_stt") or {}).items())
         s = cfg.get("slippage", {})
         self.eq_bps = float(s.get("equity_bps", 4)) / 1e4
         self.idx_bps = float(s.get("index_bps", 1.5)) / 1e4
@@ -40,6 +44,12 @@ class CostModel:
         gst = self.gst * (brokerage + exchange + sebi)
         br = {"brokerage": brokerage, "stt": stt, "exchange": exchange, "sebi": sebi, "stamp": stamp, "gst": gst}
         return float(sum(br.values())), br
+
+    def exercise_stt(self, day) -> float:
+        """STT rate on the intrinsic value of a long option cash-settled at expiry (F-05): the latest `costs.exercise_stt`
+        entry dated on or before `day`; 0 before the first (an unconfigured rate is never guessed)."""
+        day = day.date() if hasattr(day, "date") else day
+        return next((r for d, r in reversed(self.exercise_schedule) if d <= day), 0.0)
 
     def slippage(self, inst: Instrument, price: float, atr: float | None = None) -> float:
         """Adverse price move per unit, always >= 0."""
