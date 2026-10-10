@@ -294,6 +294,19 @@ def check_lots(cfg, folder: Path) -> list[Finding]:
     return out
 
 
+def check_holidays(cfg, day: dt.date) -> list[Finding]:
+    """F-07: a year without its NSE holiday list halts new entries, so ask for next year's list from 1 December."""
+    out = []
+    for year in sorted({day.year} | ({day.year + 1} if day.month == 12 else set())):
+        if gap := cfg.holiday_gap(dt.date(year, 1, 1)):
+            out.append(Finding(f"holiday-list:{year}", "data", f"NSE holiday list for {year} missing",
+                               f"There is {gap}. On a date in {year} the desk takes no new entries and the expiry "
+                               f"sleeves open nothing, because a holiday would look like a trading day.",
+                               f"Add NSE's {year} F&O trading holidays (its circular, or `quantdesk data status`) to "
+                               f"calendar.holidays and {year} to calendar.holiday_years in config/quantdesk.yaml."))
+    return out
+
+
 def review(cfg, day: dt.date, gh=None, now: pd.Timestamp | None = None, warehouse: Path | None = None) -> list[Finding]:
     from ..core.calendar import TradingCalendar
     from ..intraday.cli import paths
@@ -316,6 +329,7 @@ def review(cfg, day: dt.date, gh=None, now: pd.Timestamp | None = None, warehous
     out += check_workflows(gh, now)
     out += check_milestones(p["data"])
     out += check_lots(cfg, Path(warehouse or "runtime/warehouse"))
+    out += check_holidays(cfg, day)
     return out
 
 

@@ -416,6 +416,11 @@ calendar:
   market_close: "15:30"
   # NSE equity + F&O trading holidays, 2026 (NSE circular CMTR71775). The first six
   # dates were cross-checked; re-verify the rest against the circular.
+  # holiday_years: the years whose list below is entered in full (from the circular above; re-verify dates against it).
+  # On a date in a later year the desk takes no new entries
+  # and the sleeves open nothing (F-07); self-review asks for next year's list from 1 December. When NSE publishes
+  # the 2027 circular (usually December), add its dates below and 2027 here.
+  holiday_years: [2026]
   holidays:
     - 2026-01-15   # Municipal Corporation elections, Maharashtra (NSE holiday master)
     - 2026-01-26   # Republic Day
