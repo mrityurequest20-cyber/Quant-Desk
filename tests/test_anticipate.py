@@ -199,3 +199,14 @@ def test_buyer_only_below_the_selling_threshold(day):
     assert pb._directional("orb", v, ch, now, 1, "t", "t", S - 60, S - 30) is None
     assert pb._directional("orb", v, ch, now, -1, "t", "t", S + 60, S + 30) is None
     assert pb._directional("orb", v, ch, now, 1, "t", "t", S - 60, S + 90) is not None
+    assert pb._directional("orb", v, ch, now, 1, "t", "t", S - 60, S) is None              # a target at the entry too
+    assert pb._directional("orb", v, ch, now, 1, "t", "t", S - 60, float("nan")) is None
+    # va_reversion: the POC it aims at must lie ahead of the price by a quarter of the value area (here 20 pts)
+    st = dict(minutes=150, last=S, vah=S + 40, val=S - 40, day_high=S + 60, day_low=S - 50, rsi5=70, atr5=20.0)
+    bal = v.__class__(**{**v.__dict__, "day_type": "balance", "score": 0.0})
+    for poc, ok in ((S + 10, False), (S - 10, False), (S - 19, False), (S - 20, True), (float("nan"), False)):
+        plan = pb.va_reversion(bal, {**st, "poc": poc}, ch, now)       # fading the high: short, target below
+        assert (plan is not None) == ok and (plan is None or (plan.direction < 0 and plan.target_underlying == poc))
+    for poc, ok in ((S - 10, False), (S + 19, False), (S + 20, True)):
+        plan = pb.va_reversion(bal, {**st, "poc": poc, "rsi5": 30, "day_high": S + 30}, ch, now)   # fading the low
+        assert (plan is not None) == ok and (plan is None or (plan.direction > 0 and plan.target_underlying == poc))
