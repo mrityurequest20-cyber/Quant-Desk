@@ -720,6 +720,9 @@ class IntradayEngine:
             return f"standing aside: {view.vetoes[0]}"
         if u not in self.chain_df:
             return "standing aside: no option chain"
+        if self.chains is not self.model_chain and self.chain_df[u].attrs.get("source") == "model":
+            # F-01: the real chain failed and the model stands in; its quotes and OI are invented, not tradable
+            return f"standing aside: {u} {self.chains.name} option chain unavailable (model prices are not tradable)"
         age = now - self.chain_at.get(u, now)
         if self.chain_df[u].attrs.get("source") != "model" and age > pd.Timedelta(minutes=self.stale_min):
             return f"standing aside: option chain {age.seconds // 60} min old"
