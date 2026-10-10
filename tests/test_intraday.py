@@ -364,3 +364,37 @@ def test_a_forming_5_minute_bar_is_not_complete_after_one_minute(cfg, monkeypatc
     monkeypatch.setattr(feed, "history", lambda symbol, days=55: one)
     got = IntradayFeed.history_bars(feed, "NIFTY")                                  # the default: 1m resampled to 5m
     assert got.index[-1] == pd.Timestamp("2026-10-05 09:55", tz=IST)
+
+
+def test_opening_range_is_a_clock_window_and_unknown_after_a_late_start(cfg, sessions):
+    """B-10: the OR / IB were the first 15 / 60 rows present, so a late start or a gap made any bars 'the open'."""
+    bars, _, days = sessions
+    b = bars["NIFTY"]
+    d = days[-1]
+    full = b[b.index.date <= d]
+    t = pd.Timestamp(f"{d} 11:00", tz=IST)
+    s = session_state(full[full.index <= t], t)
+    day = full[full.index.date == d]
+    first15 = day[day.index < pd.Timestamp(f"{d} 09:30", tz=IST)]
+    assert s["or_done"] and s["or_high"] == float(first15["high"].max()) and s["minutes"] == 105
+    late = full[(full.index.date < d) | (full.index >= pd.Timestamp(f"{d} 10:00", tz=IST))]    # started at 10:00
+    s2 = session_state(late[late.index <= t], t)
+    assert s2["minutes"] == 105                                   # time since 09:15, not since the first bar
+    assert not s2["or_done"] and not s2["ib_done"]                # the opening range is unknown, not 10:00-10:14
+    assert np.isfinite([s2["or_high"], s2["or_low"], s2["ib_high"], s2["ib_low"]]).all()
+    # a late start must not open other setups instead: counting minutes from 09:15 on a partial day would lift the
+    # "forming"/"first 5 minutes" gates over a VWAP built from a few bars, so the analyst stands aside all day
+    from quantdesk.intraday.analyst import Analyst
+    assert s["from_open"] and not s2["from_open"]
+    assert not any("starts after the open" in v for v in Analyst(cfg).assess("NIFTY", s, {"spot": s["last"]}).vetoes)
+    assert any("starts after the open" in v for v in Analyst(cfg).assess("NIFTY", s2, {"spot": s2["last"]}).vetoes)
+    gap = full[(full.index.date < d) | (full.index < pd.Timestamp(f"{d} 09:21", tz=IST)) | (full.index >= pd.Timestamp(f"{d} 10:00", tz=IST))]
+    s3 = session_state(gap[gap.index <= t], t)                   # 09:15-09:20, then nothing until 10:00
+    assert s3["from_open"] and not s3["or_done"] and not s3["ib_done"]   # 6 of 15 bars is not an opening range
+    # the engine says so once, at WARN with "failed", so self-review files it instead of a silent day of standing aside
+    lb = {sym: df[(df.index.date < d) | (df.index >= pd.Timestamp(f"{d} 10:00", tz=IST))] for sym, df in bars.items()}
+    eng = IntradayEngine(cfg, ReplayFeed(lb, d), "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(eng)
+    ev = eng.journal.df("SELECT * FROM events WHERE level = 'WARN' AND category = 'data'")
+    assert len(ev) == len(eng.underlyings) and ev["message"].str.contains("opening bars failed to arrive").all()
+
