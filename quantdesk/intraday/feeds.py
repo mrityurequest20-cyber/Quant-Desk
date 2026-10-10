@@ -40,7 +40,7 @@ def normalise_bars(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns={c: str(c).lower() for c in df.columns})
     idx = pd.DatetimeIndex(df.index)
     idx = idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)
-    df.index = idx.floor("min")
+    df.index = idx.floor("min").as_unit("ns")             # one unit for every source (pandas 3 keeps yfinance's "s")
     if "volume" not in df:
         df["volume"] = 0.0
     df = df[["open", "high", "low", "close", "volume"]].astype(float)
