@@ -94,9 +94,11 @@ def session_state(bars: pd.DataFrame, now: pd.Timestamp, tick: float = 0.05, cac
             cache.update({"key": key, "prior": pc})
 
     o, last = float(day["open"].iloc[0]), float(day["close"].iloc[-1])
-    minutes = (now - day.index[0]).total_seconds() / 60
+    open_ts = day.index[0].normalize() + pd.Timedelta(hours=9, minutes=15)
+    minutes = (now - open_ts).total_seconds() / 60             # B-10: since the open, not since the first bar present
+    from_open = day.index[0] <= open_ts + pd.Timedelta(minutes=1)   # a late start doesn't know the opening range
     s: dict = {"ts": now, "last": last, "open": o, "day_high": float(day["high"].max()), "day_low": float(day["low"].min()),
-               "minutes": minutes, "phase": phase(minutes), "bars_today": len(day)}
+               "minutes": minutes, "phase": phase(minutes), "bars_today": len(day), "from_open": bool(from_open)}
     s.update({k: v for k, v in pc.items() if not k.startswith(("b5", "b15", "vol_curve"))})
     if "pdc" in pc:
         s["gap"], s["chg"] = o / pc["pdc"] - 1, last / pc["pdc"] - 1
@@ -121,9 +123,11 @@ def session_state(bars: pd.DataFrame, now: pd.Timestamp, tick: float = 0.05, cac
     s["touched_vwap_5"] = bool(((lo5 <= vwap[-5:]) & (hi5 >= vwap[-5:])).any())
 
     # opening range and initial balance
-    s.update({"or_high": float(day["high"].iloc[:OR_MIN].max()), "or_low": float(day["low"].iloc[:OR_MIN].min()),
-              "or_done": minutes >= OR_MIN, "ib_high": float(day["high"].iloc[:IB_MIN].max()),
-              "ib_low": float(day["low"].iloc[:IB_MIN].min()), "ib_done": minutes >= IB_MIN})
+    orng = day[day.index < open_ts + pd.Timedelta(minutes=OR_MIN)] if from_open else day.iloc[:1]
+    ib = day[day.index < open_ts + pd.Timedelta(minutes=IB_MIN)] if from_open else day.iloc[:1]
+    s.update({"or_high": float(orng["high"].max()), "or_low": float(orng["low"].min()),
+              "or_done": from_open and minutes >= OR_MIN and len(orng) >= 0.8 * OR_MIN, "ib_high": float(ib["high"].max()),
+              "ib_low": float(ib["low"].min()), "ib_done": from_open and minutes >= IB_MIN and len(ib) >= 0.8 * IB_MIN})
     ibr = s["ib_high"] - s["ib_low"]
     s["ib_ext"] = ((max(s["day_high"] - s["ib_high"], 0) + max(s["ib_low"] - s["day_low"], 0)) / ibr) if ibr > 0 and s["ib_done"] else 0.0
 

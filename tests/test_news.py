@@ -163,3 +163,26 @@ def test_reads_the_news_before_the_open(cfg, tmp_path, monkeypatch):
     first = j.thoughts(str(d)).iloc[0]
     assert len(j.news()) == 1                                                       # read before 09:15
     assert any(e["factor"] == "news" for e in json.loads(first["evidence"]))        # and in the very first read
+
+
+def test_a_re_added_story_keeps_when_it_was_first_seen_and_every_readers_read(tmp_path):
+    # the afternoon hand-over starts a new job whose memory is empty, so it re-adds the morning's stories
+    from quantdesk.intraday.news import NewsItem, classify
+    j = Journal(tmp_path / "journal.db")
+    x = classify(NewsItem(pd.Timestamp("2026-10-05 09:58", tz=IST), "ET", "RBI cuts repo rate by 25 bps", id="n1", sources=["ET"]))
+    x.nlp["llm"] = {"readers": {"claude": {"NIFTY": 0.7, "at": "2026-10-05 10:01:00+05:30"}}}
+    j.news_add([x], pd.Timestamp("2026-10-05 10:00", tz=IST))
+    again = classify(NewsItem(pd.Timestamp("2026-10-05 10:03", tz=IST), "Mint", "RBI cuts repo rate by 25 bps", id="n1",
+                              sources=["Mint"]))
+    again.nlp = {}
+    j.news_add([again], pd.Timestamp("2026-10-05 13:20", tz=IST))
+    j.news_set_nlp("n1", {"llm": {"readers": {"gemini": {"NIFTY": 0.5, "at": "2026-10-05 13:21:00+05:30"}}}})
+    news = j.news()
+    row = news.iloc[0]
+    assert len(news) == 1
+    assert row["seen_at"] == str(pd.Timestamp("2026-10-05 10:00", tz=IST))           # first seen at 10:00, not 13:20
+    assert row["ts"] == str(pd.Timestamp("2026-10-05 09:58", tz=IST))
+    assert json.loads(row["sources"]) == ["ET", "Mint"]                               # only the outlets are merged
+    nlp = json.loads(row["nlp"])
+    assert set(nlp["llm"]["readers"]) == {"claude", "gemini"}                          # the morning's read survives
+    assert nlp["llm"]["readers"]["claude"]["NIFTY"] == 0.7 and nlp["event"] == x.nlp["event"]
