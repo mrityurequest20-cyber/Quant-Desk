@@ -320,7 +320,7 @@ def test_risk_gates(cfg):
     assert not r2.gate(ts("2026-09-28 10:45"), 498000, [], "NIFTY")
 
 
-def test_opening_range_is_a_clock_window_and_unknown_after_a_late_start(sessions):
+def test_opening_range_is_a_clock_window_and_unknown_after_a_late_start(cfg, sessions):
     """B-10: the OR / IB were the first 15 / 60 rows present, so a late start or a gap made any bars 'the open'."""
     bars, _, days = sessions
     b = bars["NIFTY"]
@@ -336,4 +336,13 @@ def test_opening_range_is_a_clock_window_and_unknown_after_a_late_start(sessions
     assert s2["minutes"] == 105                                   # time since 09:15, not since the first bar
     assert not s2["or_done"] and not s2["ib_done"]                # the opening range is unknown, not 10:00-10:14
     assert np.isfinite([s2["or_high"], s2["or_low"], s2["ib_high"], s2["ib_low"]]).all()
+    # a late start must not open other setups instead: counting minutes from 09:15 on a partial day would lift the
+    # "forming"/"first 5 minutes" gates over a VWAP built from a few bars, so the analyst stands aside all day
+    from quantdesk.intraday.analyst import Analyst
+    assert s["from_open"] and not s2["from_open"]
+    assert not any("starts after the open" in v for v in Analyst(cfg).assess("NIFTY", s, {"spot": s["last"]}).vetoes)
+    assert any("starts after the open" in v for v in Analyst(cfg).assess("NIFTY", s2, {"spot": s2["last"]}).vetoes)
+    gap = full[(full.index.date < d) | (full.index < pd.Timestamp(f"{d} 09:21", tz=IST)) | (full.index >= pd.Timestamp(f"{d} 10:00", tz=IST))]
+    s3 = session_state(gap[gap.index <= t], t)                   # 09:15-09:20, then nothing until 10:00
+    assert s3["from_open"] and not s3["or_done"] and not s3["ib_done"]   # 6 of 15 bars is not an opening range
 
