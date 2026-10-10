@@ -168,7 +168,9 @@ class IntradayEngine:
         df = self.bars[u]
         S = float(df.loc[:ts]["close"].iloc[-1])
         v = self.bars.get(self.vix)
-        vix = float(v.loc[:ts]["close"].iloc[-1]) if v is not None and len(v.loc[:ts]) else 14.0
+        c = v.loc[:ts]["close"] if v is not None else pd.Series(dtype=float)
+        c = c[c > 0]                                            # I-01: a 0 / NaN VIX print would price at zero vol
+        vix = float(c.iloc[-1]) if len(c) else 14.0
         return S, vix / 100 * float(self.cfg.instrument_spec(u).get("iv_beta", 1.0))
 
     def pick_expiry(self, u: str, today: dt.date) -> dt.date:
@@ -420,9 +422,14 @@ class IntradayEngine:
             return None
         today = v[v.index.date == self.day]
         prev = v[v.index.date < self.day]
-        if today.empty:
+        # I-01: a 0 VIX is a bad print, not a -100% move: no valid reading today, or a prior day of only bad prints, is
+        # no state (and no ZeroDivisionError)
+        today, pc = today[today["close"] > 0], prev["close"][prev["close"] > 0]
+        if today.empty or (len(prev) and pc.empty):
             return None
-        base = float(prev["close"].iloc[-1]) if len(prev) else float(today["open"].iloc[0])
+        base = float(pc.iloc[-1]) if len(pc) else float(today["open"].iloc[0])
+        if not base > 0:
+            return None
         return {"last": float(today["close"].iloc[-1]), "chg": float(today["close"].iloc[-1]) / base - 1}
 
     def _flow_state(self, u: str, now) -> dict | None:

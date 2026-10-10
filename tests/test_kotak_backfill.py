@@ -27,7 +27,7 @@ class FakeKotak:
     def _get(self, path, params):                      # KotakFutures.contracts
         return {"future_contracts": [{"inst": {"neoSymbol": "nse_fo|FUT1", "exp": "2026-10-27"}, "quote": {}, "oi": {}}]}
 
-    def candles(self, token, interval, start, end):
+    def candles(self, token, interval, start, end, raw=False):
         self.calls["candles"] += 1
         if token in self.dead:
             raise RuntimeError("no data for this instrument")
