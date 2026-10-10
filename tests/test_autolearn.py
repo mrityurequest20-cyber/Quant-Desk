@@ -207,8 +207,10 @@ def test_the_learner_charges_the_desks_futures_stt_unless_overridden():
     assert c.stt_sell_bps == 5.0 == pytest.approx(fut["stt_sell"] * 1e4)            # 0.05% on the sell, as the desk charges
     assert c.exchange_bps == pytest.approx(fut["exchange"] * 1e4) and c.stamp_buy_bps == pytest.approx(fut["stamp_buy"] * 1e4)
     assert CostModel().stt_sell_bps == 5.0
-    over = CostModel.from_cfg(cfg.with_overrides({"autolearn": {"costs": {"stt_sell_bps": 3.0}}}))
-    assert over.stt_sell_bps == 3.0 and over.exchange_bps == c.exchange_bps         # an explicit override still wins
+    over = CostModel.from_cfg(cfg.with_overrides({"autolearn": {"costs": {"stt_sell_bps": 6.0}}}))
+    assert over.stt_sell_bps == 6.0 and over.exchange_bps == c.exchange_bps         # an override may charge more...
+    low = CostModel.from_cfg(cfg.with_overrides({"autolearn": {"costs": {"stt_sell_bps": 2.0}}}))
+    assert low.stt_sell_bps == 5.0                                                   # ...never less than the statute
 
 
 # ---- the immutable ledger -----------------------------------------------------------------------------------------------

@@ -38,12 +38,14 @@ class CostModel:
     @classmethod
     def from_cfg(cls, cfg) -> "CostModel":
         """STT, exchange fees and stamp duty come from the desk's own table (costs.segments.futures, fractions of
-        turnover), so the learner and the desk charge the same statute; autolearn.costs overrides only when it says so."""
+        turnover), so the learner and the desk charge the same statute; autolearn.costs may raise them, never lower them
+        below the statute (a config edit can't quietly make registration easier)."""
         c = (cfg.get("autolearn.costs", {}) or {}) if cfg is not None else {}
         fut = (cfg.get("costs.segments.futures", {}) or {}) if cfg is not None else {}
         desk = {k: round(float(fut[s]) * 1e4, 6) for k, s in (("stt_sell_bps", "stt_sell"), ("exchange_bps", "exchange"),
                                                               ("stamp_buy_bps", "stamp_buy")) if s in fut}
         c = {**desk, **c}
+        c.update({k: max(float(c[k]), v) for k, v in desk.items()})          # the statute is a floor
         lots = {}
         if cfg is not None:
             for s in (cfg.get("autolearn.symbols") or ["NIFTY", "BANKNIFTY"]):
