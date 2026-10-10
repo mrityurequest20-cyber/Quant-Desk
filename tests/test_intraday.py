@@ -373,4 +373,10 @@ def test_opening_range_is_a_clock_window_and_unknown_after_a_late_start(cfg, ses
     gap = full[(full.index.date < d) | (full.index < pd.Timestamp(f"{d} 09:21", tz=IST)) | (full.index >= pd.Timestamp(f"{d} 10:00", tz=IST))]
     s3 = session_state(gap[gap.index <= t], t)                   # 09:15-09:20, then nothing until 10:00
     assert s3["from_open"] and not s3["or_done"] and not s3["ib_done"]   # 6 of 15 bars is not an opening range
+    # the engine says so once, at WARN with "failed", so self-review files it instead of a silent day of standing aside
+    lb = {sym: df[(df.index.date < d) | (df.index >= pd.Timestamp(f"{d} 10:00", tz=IST))] for sym, df in bars.items()}
+    eng = IntradayEngine(cfg, ReplayFeed(lb, d), "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(eng)
+    ev = eng.journal.df("SELECT * FROM events WHERE level = 'WARN' AND category = 'data'")
+    assert len(ev) == len(eng.underlyings) and ev["message"].str.contains("opening bars failed to arrive").all()
 

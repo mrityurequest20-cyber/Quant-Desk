@@ -133,6 +133,7 @@ class IntradayEngine:
         self.open_trades: list[Trade] = []
         self.closed: list[Trade] = []
         self.views: dict[str, MarketView] = {}
+        self.late_start: set[str] = set()                         # indices whose data began after the open (B-10)
         self.last_thought: dict[str, pd.Timestamp] = {}
         self.last_bias: dict[str, str] = {}
         self.flow = {u: FootprintBuilder(float(cfg.instrument_spec(u).get("tick", 0.05))) for u in self.underlyings}
@@ -287,6 +288,11 @@ class IntradayEngine:
             s = session_state(self.bars[u], now, cache=self.feature_cache[u])
             if s is None:
                 continue
+            if not s.get("from_open", True) and u not in self.late_start:
+                self.late_start.add(u)                           # once a session: self-review files it (D-07)
+                first = self.bars[u][self.bars[u].index.date == self.day].index[0]
+                self.journal.event(now, "WARN", "data", f"{u}: the opening bars failed to arrive (today's data starts "
+                                   f"{first:%H:%M}), so the analyst stands aside while they are missing")
             if self.learner is not None:                         # every model's prediction, before the outcome exists
                 self.learn_sig[u] = self._guarded(u, now, "learning record", self._learn_step, u, now)
             q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
