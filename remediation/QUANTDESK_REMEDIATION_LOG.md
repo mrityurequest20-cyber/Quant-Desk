@@ -9,7 +9,7 @@ It sits alongside the forensic audit (PR #9, `audit/`); it does not modify the a
 |---|---|
 | Programme stage | **S0: readiness and containment** |
 | S0 status | **NO-GO**: critical blockers open (see §3); engineer routine paused (interim) |
-| Last updated | 2026-10-10 00:45 UTC (S0 assessment + remediation PRs #14–#23, session 1) |
+| Last updated | 2026-10-10 04:37 UTC (S0 assessment + remediation PRs #14–#23, session 1; CI green on all PR heads) |
 | Repo revision assessed | `main@c96909f1f0f4e77ad30817ca53f2df7b28bb9098` (2026-10-04 13:09 UTC) |
 | Audit revision assessed | `claude/exciting-galileo-criwur@813849453aa4` (PR #9, draft, open) |
 | Runtime state assessed | `journal@9cdfbeb` (2026-10-09 22:48 IST), `gh-pages@e80b0ed` (2026-10-09 16:14 IST) |
@@ -283,6 +283,13 @@ pushed) ran the full suite in the real git checkout, CPython 3.11.17, Node avail
 2026-10-06. It reconciles with the old baseline: 445 previously passing + the 2 A-19 tests now passing + 1 new A-19
 guard + 1 new A-02 test = 449. All 3 Node tests ran and passed. The 6 skips are the sample-dependent ones also skipped
 on `main` (`test_handover.py:45` ×3, `test_kotak.py:356/371/388`). Each PR also runs the full suite in CI.
+
+**CI on every PR head (VERIFIED NOW, 2026-10-10 04:37 UTC).** `tests` and `doctor` are **green** on all eleven heads:
+#13 `08342da`, #14 `a0f46b4`, #15 `4ad2396`, #16 `2fd7dbe`, #17 `a71fac1`, #18 `dacef65`, #19 `df7ba0e`,
+#20 `7dc8efb`, #21 `b91f241`, #22 `b8e6d5e`, #23 `dc2a41e`. The only red check is the Cloudflare `Workers Builds`
+preview, which fails at setup on every non-`main` branch (a Cloudflare project setting, not the code; explained on
+each PR). The earlier red `tests` on #13 (`7a2dab1`, `150af60`) was the A-19 date bomb; #13 now carries the same
+A-19 commit as #14 and is green. None of these PRs is merged.
 
 **Checks done without a PR (VERIFIED NOW).**
 - **Data integrity:** `autolearn verify` on a scratch copy of `journal@9cdfbeb` reports "learning ledger, registry and
