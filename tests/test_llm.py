@@ -270,3 +270,11 @@ def test_gemini_moves_past_a_retired_model():
     assert r.read([{"id": "a", "ts": "", "source": "ET", "title": "x"}])["a"]["NIFTY"] == 0.3
     assert r.model == "gemini-3-flash-preview" and len(h.urls) == 4             # busy model: tried twice; retired: once
     assert r.last_raw["tried"] == ["gemini-2.5-flash 404", "gemini-flash-latest 503", "gemini-3-flash-preview 200"]
+
+
+def test_claude_and_ollama_are_advisory_in_the_shipped_config(tmp_path):
+    """The Claude API credit is for learning only: its reads are shown and graded, never weighed into the tone."""
+    from quantdesk.config import DEFAULT_CONFIG, Config
+    cfg = Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path)}})
+    adv = {str(x).lower() for x in cfg.get("intraday.llm.advisory_only", [])}
+    assert {"claude", "ollama"} <= adv
