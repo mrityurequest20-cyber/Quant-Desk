@@ -9,11 +9,11 @@ It sits alongside the forensic audit (PR #9, `audit/`); it does not modify the a
 |---|---|
 | Programme stage | **S0: readiness and containment** |
 | S0 status | **NO-GO**: critical blockers open (see §3); engineer routine paused (interim) |
-| Last updated | 2026-10-10 00:00 UTC (S0 assessment + remediation PRs #14–#22, session 1) |
+| Last updated | 2026-10-10 00:45 UTC (S0 assessment + remediation PRs #14–#23, session 1) |
 | Repo revision assessed | `main@c96909f1f0f4e77ad30817ca53f2df7b28bb9098` (2026-10-04 13:09 UTC) |
 | Audit revision assessed | `claude/exciting-galileo-criwur@813849453aa4` (PR #9, draft, open) |
 | Runtime state assessed | `journal@9cdfbeb` (2026-10-09 22:48 IST), `gh-pages@e80b0ed` (2026-10-09 16:14 IST) |
-| Next item awaiting approval | **Owner review of PRs #14–#22 (§7)**, and owner actions O-2, O-3, O-4b, O-5 |
+| Next item awaiting approval | **Owner review of PRs #14–#23 (§7)**, and owner actions O-2, O-3, O-4b, O-5 |
 
 ## Evidence labels
 
@@ -34,7 +34,7 @@ One label never silently becomes another.
 | 3 | 2026-10-09 | O-4a: H–L artifacts committed | S0 | **done**: the owner approved in the audit session; commit `de344bd` (22:47 UTC), independently verified here (S0-02) | owner, in the audit session |
 | 4 | — | Owner actions O-2, O-3, O-4b, O-5 (§6.1) | S0 | **awaiting owner** (O-4b: this session's tag push was refused, 403) | owner only |
 | 5 | 2026-10-09 | A-19 fix | S0 | **PR #14** (draft, not merged) | owner approved the scope |
-| 6 | 2026-10-09 | Further fixes under the owner's "fix everything" instruction | S0/S2/S5 | **PRs #15–#22** (drafts, none merged); see §7 | owner: "do whatever you want"; merging stays with the owner |
+| 6 | 2026-10-09 | Further fixes under the owner's "fix everything" instruction | S0/S2/S5 | **PRs #15–#23** (drafts, none merged); see §7 | owner: "do whatever you want"; merging stays with the owner |
 
 ---
 
@@ -270,6 +270,12 @@ risk-compliance review first.
 | #20 | G-05 | P3 | LLM read timeouts hidden inside the INFO cost line | Test fails → passes; LLM + self-review 18 passed | Adds a WARN `llm` event on reader failure (daily cap excluded); the cost line is unchanged |
 | #21 | A-18 | P4 | A forming 5-minute bar counted as complete after 1 minute | Test fails → passes; intraday + Kotak 37 passed / 3 skipped; merges cleanly with #16 | `history_bars` drops the forming 5-minute bar |
 | #22 | F-01 | P2 | When the real chain fails, the desk could open trades on the **model** chain (invented quotes and OI) | Gate allowed entry before the fix (only the time window stopped it) → blocked after; explicit model-chain replays unaffected | **Tightens** entry gating: no *new* entries while a configured real chain is down (exits still managed). **Needs risk-compliance review** |
+| #23 | B-10 | P3 | Opening range / IB / session minutes came from the first bar present, not 09:15 | Reproduced (a 10:00 start gave `minutes == 60`); broad run 121 passed / 7 skipped (1 Node skip locally; CI runs it) | Unchanged on a complete day; after a late start, OR/IB are marked unknown, so ORB stands aside. **Strategy-feature change: review** |
+
+**Merge order note.** #21, #22 and #23 each append a test at the end of `tests/test_intraday.py`, so they conflict
+pairwise in that one test file (production code merges cleanly). Resolution: keep both tests. Whichever merges first, the
+others get `main` merged in. #20 and #22 both touch `engine.py` but merge cleanly; #16 and #21 both touch `feeds.py`
+but merge cleanly.
 
 **Verification across the set (VERIFIED NOW).** A local integration branch merging #14 + #15 + #16 (`28d5dcf`, never
 pushed) ran the full suite in the real git checkout, CPython 3.11.17, Node available, GitHub tokens stripped:
