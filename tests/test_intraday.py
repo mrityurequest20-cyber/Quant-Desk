@@ -320,10 +320,38 @@ def test_risk_gates(cfg):
     assert not r2.gate(ts("2026-09-28 10:45"), 498000, [], "NIFTY")
 
 
+def test_no_new_entry_when_the_model_chain_stands_in_for_a_failed_real_one(cfg, sessions):
+    """F-01: when the real chain fails the desk prices off the model chain (fine for marks) but must not open trades
+    on invented quotes; a replay that chose the model chain on purpose is unaffected."""
+    from types import SimpleNamespace
+    from quantdesk.intraday.chains import ChainSource
+
+    class Down(ChainSource):
+        name = "kotak"
+
+        def expiries(self, underlying):
+            raise ConnectionError("kotak down")
+
+        def chain(self, underlying, expiry, spot=None, ts=None):
+            raise ConnectionError("kotak down")
+
+    bars, _, days = sessions
+    calm = SimpleNamespace(vetoes=[])
+    down = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), Down(), Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(down)
+    now = down.last_ts["NIFTY"]
+    assert down.chain_df["NIFTY"].attrs["source"] == "model"
+    assert "kotak option chain unavailable" in (down._blocked("NIFTY", calm, now) or "")
+    assert not down.closed and not down.open_trades                          # nothing opened on invented quotes
+    model = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(model)
+    assert "unavailable" not in (model._blocked("NIFTY", calm, model.last_ts["NIFTY"]) or "")
+
+
 def test_a_forming_5_minute_bar_is_not_complete_after_one_minute(cfg, monkeypatch):
     """A-18: completed() used a 1-minute bar length on Yahoo's 5-minute history."""
     import yfinance as yf
-    from quantdesk.intraday.feeds import YahooIntradayFeed
+    from quantdesk.intraday.feeds import IntradayFeed, YahooIntradayFeed
     idx = pd.date_range("2026-10-05 09:15", "2026-10-05 10:00", freq="5min", tz=IST)
     raw = pd.DataFrame({"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1.0}, index=idx)
     monkeypatch.setattr(yf, "Ticker", lambda t: type("T", (), {"history": lambda self, **k: raw})())
@@ -331,3 +359,8 @@ def test_a_forming_5_minute_bar_is_not_complete_after_one_minute(cfg, monkeypatc
     monkeypatch.setattr(feed, "now", lambda: pd.Timestamp("2026-10-05 10:02", tz=IST))
     got = feed.history_bars("NIFTY")
     assert got.index[-1] == pd.Timestamp("2026-10-05 09:55", tz=IST)          # 10:00-10:05 is still forming
+    ones = pd.date_range("2026-10-05 09:15", "2026-10-05 10:01", freq="1min", tz=IST)
+    one = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0}, index=ones)
+    monkeypatch.setattr(feed, "history", lambda symbol, days=55: one)
+    got = IntradayFeed.history_bars(feed, "NIFTY")                                  # the default: 1m resampled to 5m
+    assert got.index[-1] == pd.Timestamp("2026-10-05 09:55", tz=IST)

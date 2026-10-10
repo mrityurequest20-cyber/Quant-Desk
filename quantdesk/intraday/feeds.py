@@ -40,7 +40,7 @@ def normalise_bars(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns={c: str(c).lower() for c in df.columns})
     idx = pd.DatetimeIndex(df.index)
     idx = idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)
-    df.index = idx.floor("min")
+    df.index = idx.floor("min").as_unit("ns")             # one unit for every source (pandas 3 keeps yfinance's "s")
     if "volume" not in df:
         df["volume"] = 0.0
     df = df[["open", "high", "low", "close", "volume"]].astype(float)
@@ -85,9 +85,9 @@ class IntradayFeed(abc.ABC):
         return max(0.0, (now - ref) / pd.Timedelta(minutes=1))
 
     def history_bars(self, symbol: str, days: int = 55) -> pd.DataFrame:
-        """Longer 5m history for model training (default: the 1m history resampled)."""
+        """Longer 5m history for model training (default: the 1m history resampled, without a forming 5m bar)."""
         from .quant import to_5m
-        return to_5m(self.history(symbol, days))
+        return self.completed(to_5m(self.history(symbol, days)), bar=pd.Timedelta(minutes=5))
 
     def completed(self, df: pd.DataFrame, bar: pd.Timedelta = BAR) -> pd.DataFrame:
         """Drop the still-forming bar: a bar is complete once its interval (`bar`, a minute by default) has ended."""

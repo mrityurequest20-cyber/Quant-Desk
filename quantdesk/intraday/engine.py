@@ -660,6 +660,10 @@ class IntradayEngine:
                 "; problems: " + "; ".join(f"{k}: {v}" for k, v in desk.errors.items()) if desk.errors else "")
             out += ["", line]
             self.journal.event(now, "INFO", "llm", line, {"usage": desk.usage(), "errors": desk.errors})
+            failed = {k: v for k, v in desk.errors.items() if not str(v).startswith("daily cap")}
+            if failed:                                    # G-05: at WARN too, so self-review files it (D-07)
+                self.journal.event(now, "WARN", "llm", "language model reads failed: " + "; ".join(
+                    f"{k}: {v}" for k, v in failed.items())[:200], {"errors": failed})
         return "\n".join(out)
 
     def _by_record(self, u: str, plans: list, view: MarketView, now) -> tuple[list, str | None]:
@@ -720,6 +724,9 @@ class IntradayEngine:
             return f"standing aside: {view.vetoes[0]}"
         if u not in self.chain_df:
             return "standing aside: no option chain"
+        if self.chains is not self.model_chain and self.chain_df[u].attrs.get("source") == "model":
+            # F-01: the real chain failed and the model stands in; its quotes and OI are invented, not tradable
+            return f"standing aside: {u} {self.chains.name} option chain unavailable (model prices are not tradable)"
         age = now - self.chain_at.get(u, now)
         if self.chain_df[u].attrs.get("source") != "model" and age > pd.Timedelta(minutes=self.stale_min):
             return f"standing aside: option chain {age.seconds // 60} min old"
