@@ -75,7 +75,7 @@ def check_session(journal, day: dt.date, trading_day: bool) -> list[Finding]:
                            f"No `session start` event in the journal for {day}, a trading day.",
                            "Check the Desk scheduler / Desk waiter / Live paper desk runs for the day and the Cloudflare "
                            "cron (deploy/cloudflare). Fix whatever stopped the start."))
-    err = ev[ev["level"] == "ERROR"] if len(ev) else ev
+    err = ev[ev["level"].isin(["ERROR", "CRITICAL"])] if len(ev) else ev   # H-04: a CRITICAL (kill switch, …) is an error too
     if len(err):
         top = err["message"].astype(str).str[:90].value_counts().head(6)
         lines = "\n".join(f"- {n}× `{m}`" for m, n in top.items())
