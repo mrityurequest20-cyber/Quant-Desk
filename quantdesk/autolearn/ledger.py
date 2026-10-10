@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ..intraday.feeds import frozen_minutes
 from .features import BAR, FEATURE_VERSION, FEATURES, HORIZON_BARS, LABEL_VERSION, session_bucket
 from .store import ChainLog, sha
 
@@ -153,8 +154,10 @@ class Ledger:
 
     # ---- resolving ------------------------------------------------------------------------------------------------
     def resolve(self, bars5: dict[str, pd.DataFrame], now: pd.Timestamp, cost_bps=None, delay_bars: int = 0) -> int:
-        """Write outcomes for every pending decision whose exit bar exists, from bars strictly after the decision."""
-        n = 0
+        """Write outcomes for every pending decision whose exit bar exists, from bars strictly after the decision.
+        F-02: one whose entry, label or exit bar is a frozen index print (flat 5-minute bars: Kotak's 15:15-15:28 freeze)
+        stays unresolved rather than being labelled on a stale price."""
+        n, fz = 0, {}
         for r in self.pending(now):
             b = bars5.get(r["symbol"])
             if b is None or b.empty:
@@ -168,6 +171,11 @@ class Ledger:
             c0 = float(before["close"].iloc[-1])
             entry_px = c0 if delay_bars == 0 else float(after["close"].iloc[delay_bars - 1])
             exit_px = float(after["close"].iloc[HORIZON_BARS + delay_bars - 1])
+            used = [before.index[-1], *after.index[sorted({HORIZON_BARS - 1, HORIZON_BARS + delay_bars - 1, max(delay_bars - 1, 0)})]]
+            if r["symbol"] not in fz:
+                fz[r["symbol"]] = frozen_minutes(b, min_run=2)     # once per symbol per call, not per decision
+            if fz[r["symbol"]].isin(used).any():
+                continue                                           # F-02: a stale print is no entry, label or exit
             label_px = float(after["close"].iloc[HORIZON_BARS - 1])  # the existing label: close 30 minutes after ts
             fwd = float(np.log(exit_px / entry_px))
             lr = np.log(before["close"].astype(float)).diff().dropna()
