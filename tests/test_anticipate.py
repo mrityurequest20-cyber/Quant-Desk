@@ -193,3 +193,9 @@ def test_buyer_only_below_the_selling_threshold(day):
         assert plan.structure == want and (allow or all(l.ratio > 0 for l in plan.legs))
         alts = pb.alternatives(plan, ch, now)
         assert allow or all(a.structure.startswith("long_") for a in alts)
+    # a target on the wrong side of the entry was "reached" the next minute: three fake 1-minute va_reversion wins
+    # in the 29 Sep replay. Such a plan isn't a trade.
+    S = float(ch.attrs["spot"])
+    assert pb._directional("orb", v, ch, now, 1, "t", "t", S - 60, S - 30) is None
+    assert pb._directional("orb", v, ch, now, -1, "t", "t", S + 60, S + 30) is None
+    assert pb._directional("orb", v, ch, now, 1, "t", "t", S - 60, S + 90) is not None

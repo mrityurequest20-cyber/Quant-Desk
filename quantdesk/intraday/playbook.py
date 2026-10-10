@@ -214,6 +214,8 @@ class Playbook:
         # stop 9.5 pts away, σ ≈ 7.6 pts a minute, hit in 2 minutes). Floor the distance at a fraction of the 5m ATR,
         # keep the target at least 1.5× the risk, and say so in the thesis.
         S0, atr5 = float(view.spot), float((view.state or {}).get("atr5") or 0)
+        if target is not None and direction * (float(target) - S0) <= 0:
+            return None                  # a target behind the entry is "reached" at once: a fake win, not a trade
         floor = max(float(self.cfg.get("intraday.risk.min_stop_atr5", 0.75)) * atr5, 0.0004 * S0)
         if inval is not None and direction and abs(S0 - inval) < floor:
             inval = S0 - direction * floor
@@ -324,8 +326,8 @@ class Playbook:
             d, edge = 1, s["day_low"]
         else:
             return None
-        if abs(last - s["poc"]) < 0.25 * (s["vah"] - s["val"]):
-            return None
+        if d * (s["poc"] - last) < 0.25 * (s["vah"] - s["val"]):   # POC must lie ahead, with room: a fade of the high
+            return None                                            # below POC has nothing left to rotate back to
         atr5 = s.get("atr5", 0) or 0
         inval = edge + (0.2 * atr5 if d < 0 else -0.2 * atr5)
         trig = (f"probe {'above VAH' if d < 0 else 'below VAL'} {s['vah'] if d < 0 else s['val']:,.2f} failed; price back "
