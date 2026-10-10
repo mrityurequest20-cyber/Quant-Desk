@@ -96,7 +96,7 @@ def _live_engine(cfg, a) -> IntradayEngine:
         from .llm import LLMDesk
         from .news import NewsDesk
         news = NewsDesk(cfg)
-        desk = LLMDesk(cfg)
+        desk = LLMDesk(cfg, journal=j)                  # Claude's credit is kept in the journal
         if desk.active:
             news.llm = desk
             print("news: second readers " + ", ".join(r.name for r in desk.readers), flush=True)

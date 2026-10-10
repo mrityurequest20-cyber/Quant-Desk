@@ -510,6 +510,8 @@ def test_ollama_reads_never_move_the_tone(cfg):
     x.nlp = {"llm": {"readers": {"ollama": {"NIFTY": -1.0, "confidence": 1.0, "at": str(now)}}}}
     assert nd.item_tone(x, "NIFTY", now) == pytest.approx(0.2)                 # explanatory only
     x.nlp["llm"]["readers"]["claude"] = {"NIFTY": -1.0, "confidence": 1.0, "at": str(now)}
+    assert nd.item_tone(x, "NIFTY", now) == pytest.approx(0.2)                 # Claude only learns, too (its own credit)
+    x.nlp["llm"]["readers"]["gemini"] = {"NIFTY": -1.0, "confidence": 1.0, "at": str(now)}
     assert nd.item_tone(x, "NIFTY", now) < 0.2                                 # a weighed reader still counts
     import ast
     import pathlib
