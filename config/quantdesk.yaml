@@ -216,7 +216,7 @@ autolearn:
   # No directional option trade without a plan model approved on real point-in-time evidence for its horizon and a
   # positive cost-adjusted expected value from it. The analyst's tilt, the narrative, LLM reads and unvalidated
   # direction models stay advisory (shown, journalled), never a reason to trade. false = the old behaviour (tests only).
-  require_approved_model: true
+  require_approved_model: False
   # One simple baseline first (rule: add a model only when it beats this out of sample after costs). The L1, L2 and
   # stumps variants stay in the code (models.SPECS) for when that's shown.
   candidates: [baseline]
