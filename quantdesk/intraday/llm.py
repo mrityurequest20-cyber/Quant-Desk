@@ -117,6 +117,8 @@ def _out_of_range(x, lo=-1.0, hi=1.0) -> bool:
     """A value a model gave that isn't a number in [lo, hi]: the read is malformed, not strong (G-03). Missing is fine."""
     if x is None:
         return False
+    if isinstance(x, bool):                               # JSON true is not +1.0
+        return True
     try:
         x = float(x)
     except (TypeError, ValueError):
@@ -133,6 +135,8 @@ def _payload(items: list[dict]) -> str:
 JSON_SHAPE = ('\n\nAnswer with JSON only, no prose, exactly this shape: {"reads": [{"id": "<id>", "nifty": <-1..1>, '
               '"banknifty": <-1..1>, "confidence": <0..1>, "event": "<one of: ' + ", ".join(EVENTS) + '>", "why": "<≤20 words>"}]}')
 _NUM = r"[^\d+\-−\n]{0,12}([+\-−]?\d*\.?\d+)"
+_VIEW = _NUM + r"(?![\d.]*%)"                           # "fell 0.8%" is a move, not a view
+_NIFTY = r"(?<!bank )(?:\bnifty\s*50\b|\bnifty\b(?!\s*50\b))"   # "NIFTY 50"/"Nifty50" is the name; "Bank Nifty" isn't it
 
 
 def _parse_text_reads(text: str, ids: set) -> dict[str, dict]:
@@ -144,10 +148,10 @@ def _parse_text_reads(text: str, ids: set) -> dict[str, dict]:
         if hid in out:
             continue
         block = text[pos:marks[k + 1][0] if k + 1 < len(marks) else len(text)]
-        def num(label):
-            m = re.search(label + _NUM, block, re.I)
+        def num(label, value=_NUM):
+            m = re.search(label + value, block, re.I)
             return float(m.group(1).replace("−", "-")) if m else None
-        n, b, c = num(r"\bnifty\b(?:\s*50\b)?"), num(r"\bbank ?nifty\b"), num(r"\bconfidence\b")
+        n, b, c = num(_NIFTY, _VIEW), num(r"\bbank ?nifty\b", _VIEW), num(r"\bconfidence\b")
         if n is None and b is None or _out_of_range(n) or _out_of_range(b) or _out_of_range(c, 0.0, 1.0):
             continue
         ev = re.search(r"\bevent\b[^a-z\n]{0,12}([a-z_]+)", block, re.I)
@@ -180,7 +184,7 @@ def _parse_reads(text: str, ids: set) -> dict[str, dict]:
         out[str(r["id"])] = {"NIFTY": _clip(r.get("nifty")), "BANKNIFTY": _clip(r.get("banknifty")),
                              "confidence": _clip(r.get("confidence"), 0.0, 1.0), "event": ev,
                              "why": str(r.get("why") or "")[:200]}
-    return out or _parse_text_reads(text or "", ids)
+    return out if rows else _parse_text_reads(text or "", ids)     # dropped JSON reads don't come back as prose
 
 
 # ---- providers ---------------------------------------------------------------------------------------------------

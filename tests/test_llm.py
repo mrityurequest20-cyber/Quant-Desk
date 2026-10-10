@@ -73,6 +73,20 @@ def test_prose_reads_never_take_the_index_name_or_a_level_for_a_view():
     got = llm._parse_reads(txt, ids)
     assert set(got) == {"t3"}                                   # t1: no view, t2: levels, t4: confidence out of range
     assert (got["t3"]["NIFTY"], got["t3"]["BANKNIFTY"], got["t3"]["confidence"]) == (-0.3, -0.2, 0.0)
+    # a dropped JSON read must not come back through the prose fallback reading its own `why`
+    bad = '{"reads":[{"id":"t1","why":"Nifty 50 seen up 0.7% on FII buying","nifty":50,"banknifty":0.2,"confidence":0.8}]}'
+    assert llm._parse_reads(bad, {"t1"}) == {}
+    assert llm._parse_reads('{"nifty":"strong","banknifty":-0.9,"why":"Nifty 50 to gain 0.9%"}', {"t1"}) == {}
+    assert llm._parse_reads('{"reads":[{"id":"t1","nifty":true,"banknifty":0.1}]}', {"t1"}) == {}
+    more = ("t1: The NIFTY 50 may slip. BANKNIFTY impact: -0.3\n"
+            "t2: Nifty 50 index fell 0.8%\n"
+            "t3: Bank Nifty impact -0.6\n"
+            "t4: Nifty50 impact: 0.4")
+    got = llm._parse_reads(more, {"t1", "t2", "t3", "t4"})
+    assert set(got) == {"t1", "t3", "t4"}                       # t2: a % move is not a view
+    assert (got["t1"]["NIFTY"], got["t1"]["BANKNIFTY"]) == (0.0, -0.3)
+    assert (got["t3"]["NIFTY"], got["t3"]["BANKNIFTY"]) == (0.0, -0.6)    # Bank Nifty's view isn't NIFTY's
+    assert got["t4"]["NIFTY"] == 0.4
 
 
 class FakeHTTP:
