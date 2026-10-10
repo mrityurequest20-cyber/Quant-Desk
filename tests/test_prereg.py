@@ -87,3 +87,12 @@ def test_the_spec_is_fixed_and_the_lock_opens_once(tmp_path, monkeypatch):
         P.run(cfg, tmp_path, SPEC, tmp_path / "res", open_lock=True, say=lambda *a: None)
     again = P.run(cfg, tmp_path, SPEC, tmp_path / "res", say=lambda *a: None)          # dev re-runs keep the lock record
     assert again["lock"]["opened"] == rep["lock"]["opened"]
+    frozen = (tmp_path / "res").glob("*.json").__next__().read_text()
+    dearer = cfg.with_overrides({"autolearn": {"costs": {"stt_sell_bps": 50.0}}})        # other costs: other dev results
+    with pytest.raises(RuntimeError, match="frozen"):
+        P.run(dearer, tmp_path, SPEC, tmp_path / "res", say=lambda *a: None)
+    assert (tmp_path / "res").glob("*.json").__next__().read_text() == frozen          # and the file is untouched
+    b.attrs.update({"dataset": "refreshed"})                                       # same dev rows, another dataset
+    with pytest.raises(RuntimeError, match="frozen"):
+        P.run(cfg, tmp_path, SPEC, tmp_path / "res", say=lambda *a: None)
+    assert (tmp_path / "res").glob("*.json").__next__().read_text() == frozen

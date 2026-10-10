@@ -24,7 +24,7 @@ from .features import session_bucket
 @dataclass
 class CostModel:
     brokerage_per_order: float = 20.0      # ₹, flat
-    stt_sell_bps: float = 2.0              # futures: 0.02% on the sell side
+    stt_sell_bps: float = 5.0              # futures: 0.05% on the sell side (costs.segments.futures.stt_sell)
     exchange_bps: float = 0.173            # NSE futures transaction charge, each side
     sebi_per_crore: float = 10.0           # each side
     stamp_buy_bps: float = 0.2             # 0.002% on the buy
@@ -37,7 +37,15 @@ class CostModel:
 
     @classmethod
     def from_cfg(cls, cfg) -> "CostModel":
+        """STT, exchange fees and stamp duty come from the desk's own table (costs.segments.futures, fractions of
+        turnover), so the learner and the desk charge the same statute; autolearn.costs may raise them, never lower them
+        below the statute (a config edit can't quietly make registration easier)."""
         c = (cfg.get("autolearn.costs", {}) or {}) if cfg is not None else {}
+        fut = (cfg.get("costs.segments.futures", {}) or {}) if cfg is not None else {}
+        desk = {k: round(float(fut[s]) * 1e4, 6) for k, s in (("stt_sell_bps", "stt_sell"), ("exchange_bps", "exchange"),
+                                                              ("stamp_buy_bps", "stamp_buy")) if s in fut}
+        c = {**desk, **c}
+        c.update({k: max(float(c[k]), v) for k, v in desk.items()})          # the statute is a floor
         lots = {}
         if cfg is not None:
             for s in (cfg.get("autolearn.symbols") or ["NIFTY", "BANKNIFTY"]):

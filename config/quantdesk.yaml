@@ -224,11 +224,8 @@ autolearn:
   bootstrap: {samples: 1000, block_days: 3, seed: 7}
   abstain: {min_coverage: 0.10}    # τ must leave at least this share of bars with a signal on the calibration slice
   costs:                           # one unit of the index future per signal, round trip, bps of notional unless ₹
-    brokerage_per_order: 20.0
-    stt_sell_bps: 2.0
-    exchange_bps: 0.173
+    brokerage_per_order: 20.0      # STT, exchange fees and stamp duty: costs.segments.futures (set *_bps here to raise them, never lower)
     sebi_per_crore: 10.0
-    stamp_buy_bps: 0.2
     gst: 0.18
     half_spread_bps: 0.5
     slippage_bps: 1.0

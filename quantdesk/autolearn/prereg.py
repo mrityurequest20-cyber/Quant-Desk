@@ -178,6 +178,13 @@ def run(cfg, ds: Path, spec_path: Path, results_dir: Path, open_lock: bool = Fal
         say(f"  dev {k:40s} days {s['days']:5d} mean {s['mean_bps']:+7.2f} bps t {s['t_nw']:+5.2f} q {s['bh_q']:.3f} "
             f"hurdle {s['cost_hurdle_bps']:.1f}{'  SELECTED ' + s['direction'] if s['selected'] else ''}")
     rep["lock"] = prior.get("lock")
+    same = lambda x: json.dumps(json.loads(json.dumps({k: v for k, v in x.items() if k not in ("lock", "path")},
+                                                      default=str)), sort_keys=True)
+    if prior.get("lock") and same(prior) != same(rep):
+        # the result is frozen once its lock is opened: a re-run on other data, code or costs must not rewrite any of it
+        # (dev results, selection, dataset, evidence, session counts) under a lock test that was run on the old one
+        raise RuntimeError(f"{out_path.name}: the lock was opened on {prior['lock'].get('opened')} and this re-run's "
+                           f"results differ (data, code or costs changed): the result is frozen; register a new spec")
     if open_lock:
         from scipy.stats import norm
         res = {"opened": pd.Timestamp.now(tz=X.IST).isoformat(), "tests": {}}
