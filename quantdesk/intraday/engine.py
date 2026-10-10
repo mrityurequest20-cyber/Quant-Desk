@@ -602,7 +602,8 @@ class IntradayEngine:
 
     # ---- learning ---------------------------------------------------------------------------------------------
     def _apply_memory(self) -> None:
-        """Hand what the record says to the parts that use it."""
+        """Hand what the record says to the parts that use it. The factor record (weights, graduation) goes to the
+        analyst and the brain to show; they apply it only under intraday.learning.apply_factor_weights (D-01)."""
         if self.memory is None:
             return
         self.analyst.learned = self.memory.factor_weights()
@@ -652,7 +653,8 @@ class IntradayEngine:
         if claude is not None and self.cfg.get("intraday.llm.claude.reflect", True):
             from .learning import summary
             try:
-                got = claude.reflect(review, summary(self.memory) if self.memory is not None else [])
+                got = claude.reflect(review, summary(self.memory, factor_weights_applied=self.analyst.apply_learned)
+                                     if self.memory is not None else [])
             except Exception as exc:
                 got = None
                 self.journal.event(now, "WARN", "llm", f"reflection failed: {exc!s:.200}")
@@ -1345,6 +1347,7 @@ class IntradayEngine:
                         "brain": _brain_view(self.brain_state.get(u)),
                         "chain": _chain_view(self.chain_an.get(u)),
                         "breadth": self.breadth_state.get(u), "rel": self.rel, "hist_edge": self.hist_edge.get(u),
+                        "learned_applied": self.analyst.apply_learned,    # D-01: "learned" is the record, not the weight
                         "evidence": [{"factor": e.factor, "category": e.category, "direction": e.direction,
                                       "weight": e.weight, "observation": e.observation,
                                       "learned": (getattr(self.analyst, "learned", None) or {}).get(e.factor)} for e in v.evidence]}
@@ -1391,7 +1394,10 @@ class IntradayEngine:
                     "sessions": len(self.memory.d.get("days") or []),
                     "probation": {f: {"n": round((self.memory.stat("factor", f) or {"n": 0})["n"], 1),
                                       "rel": round(self.memory.reliability("factor", f), 3),
-                                      "voting": f in self.analyst.graduated} for f in PROBATION}}
+                                      "earned": f in self.analyst.graduated,
+                                      "voting": self.analyst.apply_learned and f in self.analyst.graduated}
+                                  for f in PROBATION},
+                    "factor_weights_applied": self.analyst.apply_learned}
         except Exception:                                 # the app's extra must never cost a heartbeat
             return None
 
@@ -1501,13 +1507,16 @@ class IntradayEngine:
         if self.memory is not None:
             from .learning import summary
             got = self.learned_today
-            lines = summary(self.memory)
+            lines = summary(self.memory, factor_weights_applied=self.analyst.apply_learned)
             L += ["", "## What the desk learned", "",
                   (f"Graded today: {got.get('news', 0)} news calls, {got.get('factors', 0)} factor reads, "
                    f"{got.get('trades', 0)} trades, {got.get('armed', 0)} refused pre-break entries. "
                    if got else "")
                   + f"Record over {len(self.memory.d['days'])} session(s); every weight is shrunk toward 1× until the "
-                    f"record is long enough to mean something."]
+                    f"record is long enough to mean something."
+                  + ("" if self.analyst.apply_learned else
+                     " Factor weights are recorded, not applied: every factor reads at its unlearned weight until a "
+                     "significance test says its record isn't noise.")]
             L += [f"- {x}" for x in lines] if lines else ["- Nothing graded yet."]
         return "\n".join(L)
 

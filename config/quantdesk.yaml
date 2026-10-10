@@ -180,9 +180,12 @@ intraday:
   # roll_days: switch to the next month this many days before expiry.
   futures: {roll_days: 3}
   # learning: every news call, factor read, trade and refused pre-break entry is graded against the next 30 minutes;
-  # the record moves factor weights (0.5x-1.5x), news trust and setup conviction, shrunk until it's long enough.
+  # the record moves news trust and setup conviction, shrunk until it's long enough.
   # Kept in runtime/intraday/memory.json (saved with the journal).
-  learning: {enabled: true}
+  # apply_factor_weights: false (D-01, owner decision "record, don't apply"): factor reliability (0.5x-1.5x) and
+  # probation graduation are still graded, saved and shown ("recorded, not applied") but every factor votes at its
+  # unlearned weight; the audit couldn't tell the factor record from noise (placebo p = 0.70). true = the old behaviour.
+  learning: {enabled: true, apply_factor_weights: false}
   # language models as second readers of the news (llm.py): each provider whose key is in the environment reads the
   # headlines about an index, in the background, and the learning loop grades each one against the next 30 minutes.
   # Claude also writes the after-close reflection. Keys: ANTHROPIC_API_KEY (or CLAUDE_API_KEY …), GEMINI_API_KEY (or

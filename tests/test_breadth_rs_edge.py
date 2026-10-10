@@ -106,6 +106,7 @@ def test_breadth_goes_to_the_analyst_on_probation(cfg):
     assert ev["breadth_div"].direction < 0 and ev["breadth_div"].weight == 0
     assert "Breadth: 15 of 50 NIFTY 50 stocks up, 14 above their VWAP" in v.narrative
     a.graduated = {"breadth"}
+    a.apply_learned = True              # intraday.learning.apply_factor_weights (off by default, D-01: test_learning)
     ev = {e.factor: e for e in a.assess("NIFTY", s, None, breadth=b).evidence}
     assert ev["breadth"].weight == pytest.approx(PROBATION["breadth"]) and ev["breadth_div"].weight == 0
 

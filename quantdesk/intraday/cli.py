@@ -498,7 +498,7 @@ def cmd_learn(cfg, a):
         got = learning.rebuild(mem, Journal(p["journal"]), bars)
         mem.save()
         print("rebuilt from the journal: " + ", ".join(f"{v} {k}" for k, v in got.items()))
-    lines = learning.summary(mem, top=a.top)
+    lines = learning.summary(mem, top=a.top, factor_weights_applied=learning.apply_factor_weights(cfg))
     print(f"record over {len(mem.d['days'])} session(s) → {p['memory']}")
     print("\n".join(lines) if lines else "nothing graded yet")
 
