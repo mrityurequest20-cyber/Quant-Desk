@@ -217,6 +217,10 @@ class KotakOptionChain(ChainSource):
         self.lot: dict[str, int] = {}
         self._exp: dict[str, tuple[dt.date, list[dt.date]]] = {}
 
+    def now(self) -> pd.Timestamp:
+        """The snapshot's timestamp: the wall clock (a test pins it, as the feeds' `now` is pinned)."""
+        return pd.Timestamp.now(tz=IST)
+
     def expiries(self, underlying: str) -> list[dt.date]:
         today = pd.Timestamp.now(tz=IST).date()
         hit = self._exp.get(underlying)
@@ -287,7 +291,7 @@ class KotakOptionChain(ChainSource):
         df.index.name = "strike"
         if not S > 0:
             S = float(spot) if spot else np.nan
-        df.attrs.update({"underlying": underlying, "spot": S, "expiry": expiry, "ts": pd.Timestamp.now(tz=IST),
+        df.attrs.update({"underlying": underlying, "spot": S, "expiry": expiry, "ts": self.now(),
                          "source": "kotak", "lot": self.lot.get(underlying), "quoted": quoted})
         return fill_iv(df, IntradayPricer())
 
