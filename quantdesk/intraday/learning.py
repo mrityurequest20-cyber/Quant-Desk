@@ -34,6 +34,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .feeds import frozen_minutes
+
 IST = "Asia/Kolkata"
 PRIOR = 20.0                 # pseudo-observations at a 50% hit rate / 0R mean
 HORIZON = 30                 # minutes a call is graded over
@@ -112,10 +114,13 @@ class Memory:
 
 
 # ---- grading ---------------------------------------------------------------------------------------------------------
-def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: bool = False, with_start: bool = False):
+def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: bool = False, with_start: bool = False,
+            max_overshoot: float | None = 5):
     """Log return of the close from the first bar at/after t to the bar `minutes` later, same session only.
     `from_open`: something seen outside market hours (overnight news) is graded from the next session's first bar,
-    the first moment the desk could act on it (up to a weekend later)."""
+    the first moment the desk could act on it (up to a weekend later).
+    Not graded: a window whose end bar is masked (a frozen index minute, `unfrozen`), or that a gap in the bars
+    stretches more than `max_overshoot` minutes past its end (the 12:20 hand-over's ~2 minutes still grade)."""
     if bars is None or bars.empty:
         return None
     t = pd.Timestamp(t)
@@ -128,12 +133,27 @@ def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: boo
     late = (idx[i] - t) > pd.Timedelta(minutes=5)
     if late and not (from_open and first_of_day and (idx[i] - t) <= pd.Timedelta(hours=66)):
         return None
-    j = idx.searchsorted(idx[i] + pd.Timedelta(minutes=minutes))
-    if j >= len(idx) or idx[j].date() != idx[i].date():
+    end = idx[i] + pd.Timedelta(minutes=minutes)
+    j = idx.searchsorted(end)
+    if j >= len(idx) or idx[j].date() != idx[i].date() or \
+            (max_overshoot is not None and idx[j] - end > pd.Timedelta(minutes=max_overshoot)):
         return None
     a, b = float(bars["close"].iloc[i]), float(bars["close"].iloc[j])
-    fr = math.log(b / a) if a > 0 and b > 0 else None
+    fr = math.log(b / a) if a > 0 and b > 0 else None                  # NaN (masked) at either end: not graded
     return (fr, idx[i]) if with_start and fr is not None else (None if with_start else fr)
+
+
+def unfrozen(bars: dict) -> dict:
+    """F-02: the bars with each frozen index minute (feeds.frozen_minutes) masked to NaN, kept in place so `forward`
+    sees a window that ends in the freeze rather than stretching it to the first live bar after."""
+    out = {}
+    for k, b in bars.items():
+        f = frozen_minutes(b)
+        if len(f):
+            b = b.copy()
+            b.loc[f, ["open", "high", "low", "close"]] = np.nan
+        out[k] = b
+    return out
 
 
 def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0, min_tone: float = 0.15) -> int:
@@ -330,7 +350,7 @@ def grade_armed(mem: Memory, decisions: pd.DataFrame, bars: dict, horizon: int =
         if b is None or None in (lvl, stop, tgt, d):
             continue
         t = pd.Timestamp(r.ts)
-        after = b[(b.index > t) & (b.index <= t + pd.Timedelta(minutes=horizon))]
+        after = b[(b.index > t) & (b.index <= t + pd.Timedelta(minutes=horizon))].dropna(subset=["close"])
         if after.empty:
             continue
         out = 0.0
@@ -355,6 +375,7 @@ def grade_armed(mem: Memory, decisions: pd.DataFrame, bars: dict, horizon: int =
 def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
     """Grade everything from `day` (and anything older not yet graded); returns what was graded."""
     since = str(pd.Timestamp(day) - pd.Timedelta(days=7))[:10]
+    bars = unfrozen(bars)                                       # F-02: no call graded on a frozen index print
     news = journal.df("SELECT * FROM news WHERE ts >= ?", (since,))
     th = journal.df("SELECT ts, symbol, evidence FROM thoughts WHERE ts >= ? ORDER BY ts", (since,))
     tr = journal.df("SELECT * FROM trades WHERE opened_at >= ?", (since,))
@@ -372,6 +393,7 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
 def rebuild(mem: Memory, journal, bars: dict) -> dict:
     """Forget everything graded and grade the whole journal again (after a change to the grading rules)."""
     keep, moves = mem.d.get("lessons", []), mem.d.get("moves", {})
+    bars = unfrozen(bars)
     mem.d = Memory().d
     mem.d["lessons"], mem.d["moves"] = keep, moves             # a session's moves aren't re-derivable from the journal
     news = journal.df("SELECT * FROM news ORDER BY ts")
@@ -409,6 +431,7 @@ def bootstrap(cfg, mem: Memory, bars: dict, journal=None, min_bars: int = 300, m
         eng = IntradayEngine(cfg, ReplayFeed(bars, d), "model", scratch, IntradayBroker(cfg, starting_cash=500000), say=None)
         run_replay(eng)
     th = scratch.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
+    bars = unfrozen(bars)                                       # replayed on what was recorded, graded without the freeze
     got = {"sessions": len(days), "factors": grade_factors(mem, th, bars), "news": 0}
     grade_ic(mem, th, bars)
     from . import relstrength
