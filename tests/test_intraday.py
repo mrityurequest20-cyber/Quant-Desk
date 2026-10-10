@@ -364,3 +364,5 @@ def test_a_forming_5_minute_bar_is_not_complete_after_one_minute(cfg, monkeypatc
     monkeypatch.setattr(feed, "history", lambda symbol, days=55: one)
     got = IntradayFeed.history_bars(feed, "NIFTY")                                  # the default: 1m resampled to 5m
     assert got.index[-1] == pd.Timestamp("2026-10-05 09:55", tz=IST)
+    monkeypatch.setattr(feed, "history", lambda symbol, days=55: pd.DataFrame([]))
+    assert IntradayFeed.history_bars(feed, "NIFTY").empty                            # no history: empty, no error
