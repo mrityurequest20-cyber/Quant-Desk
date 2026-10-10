@@ -663,17 +663,18 @@ function renderRead(v) {
 		h("div", { class: "track-rec" }, a.kind === "none" ? "" : `Doing now: ${a.label}${a.reason ? " · " + a.reason : ""}`),
 		(v.vetoes || []).length ? h("div", { class: "flags" }, v.vetoes.map((x) => h("div", {}, icon("alert"), cap(x)))) : null,
 		v.narrative ? h("p", { class: "narr" }, v.narrative) : null,
-		learned.length ? h("div", { class: "track-rec" }, "Track record · " + learned.sort((x, y) => Math.abs(y.learned - 1) - Math.abs(x.learned - 1)).slice(0, 4)
+		learned.length ? h("div", { class: "track-rec" }, "Track record" + (v.learned_applied === false ? " (recorded, not applied)" : "") + " · "
+			+ learned.sort((x, y) => Math.abs(y.learned - 1) - Math.abs(x.learned - 1)).slice(0, 4)
 			.map((e) => `${factorName(e.factor)} ×${num(e.learned)}`).join(" · ")) : null));
 	const ev = $("#c-evidence");
 	ev.textContent = "";
-	ev.appendChild(evidenceList(v.evidence || [], 6));
+	ev.appendChild(evidenceList(v.evidence || [], 6, v.learned_applied));
 }
 function fact(label, value) { return h("div", {}, h("span", {}, label), h("b", {}, value || "—")); }
 function narrative(text) { return text ? h("p", { class: "narr pad" }, text) : null; }
 const CAT = { trend: "Trend", structure: "Structure", momentum: "Momentum", flow: "Flow", breadth: "Breadth", options: "Options", volatility: "Volatility", news: "News", quant: "Quant", global: "Global" };
 const CAT_G = { trend: "Tape", structure: "Tape", momentum: "Tape", flow: "Flow", breadth: "Breadth", options: "Options", volatility: "Vol", news: "News", quant: "Quant", global: "Global" };
-function evidenceList(list, limit) {
+function evidenceList(list, limit, applied) {	// applied === false: e.learned is the record, not the weight (D-01)
 	const box = h("div", { class: "evl" });
 	if (!list.length) { box.appendChild(empty("info", "No evidence yet.")); return box; }
 	const sorted = [...list].sort((a, b) => Math.abs(b.direction * b.weight) - Math.abs(a.direction * a.weight));
@@ -682,7 +683,7 @@ function evidenceList(list, limit) {
 		const col = probation ? "var(--fg3)" : e.direction >= 0 ? "var(--up)" : "var(--dn)";
 		box.appendChild(h("div", { class: "ev" + (probation ? " probation" : "") },
 			h("div", { class: "f" }, h("b", {}, factorName(e.factor)), h("small", {}, CAT[e.category] || cap(e.category)),
-				probation ? h("span", { class: "ln" }, "probation") : fin(e.learned) && Math.abs(e.learned - 1) >= 0.02 ? h("span", { class: "ln" }, `learned ×${num(e.learned)}`) : null),
+				probation ? h("span", { class: "ln" }, "probation") : fin(e.learned) && Math.abs(e.learned - 1) >= 0.02 ? h("span", { class: "ln" }, `${applied === false ? "recorded, not applied" : "learned"} ×${num(e.learned)}`) : null),
 			h("div", { class: "dv", title: `${signed(e.direction)} × ${e.weight}` },
 				h("i", { style: `${e.direction >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${col}` })),
 			h("span", { class: "w" }, num(e.weight, e.weight >= 10 ? 0 : 2)),
@@ -1209,7 +1210,7 @@ function renderBrain() {
 			h("div", { class: "scroll", id: "bgraph" }))));
 	drawBrainGraph($("#bgraph"), v, hb);
 	// what's pushing the bias
-	body.appendChild(grp("What's pushing the bias", v.bias ? `${cap(v.bias)} ${signed(v.score)}` : "", evidenceList(v.evidence || [], 8)));
+	body.appendChild(grp("What's pushing the bias", v.bias ? `${cap(v.bias)} ${signed(v.score)}` : "", evidenceList(v.evidence || [], 8, v.learned_applied)));
 	if (b && b.flows) body.appendChild(flowsGrp(b.flows, S.brainSym));
 	if (hb.learning) body.appendChild(learnedGrp(hb.learning, S.brainSym));
 	if (hb.autolearn || hb.halts) body.appendChild(lifecycleGrp(hb.autolearn || {}, hb.halts || {}, S.brainSym));
