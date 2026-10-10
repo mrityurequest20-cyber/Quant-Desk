@@ -944,14 +944,16 @@ class IntradayEngine:
         for t in list(self.open_trades):
             try:
                 self._close(t, now, "safe_mode", f"safe mode: {reason[:120]}")
-                flat += 1
+                flat += t not in self.open_trades         # an exit a leg of which didn't fill is still open (H-01)
             except Exception as exc:                      # recorded; the next one is still tried
                 self.journal.event(now, "CRITICAL", "risk", f"safe mode could not close {t.id}: {exc!r:.160}")
         try:
             self._persist()
         except Exception:
             pass
-        self.journal.event(now, "CRITICAL", "risk", f"safe mode: {reason[:200]}; {flat} position(s) squared off, entries halted")
+        still = len(self.open_trades)
+        self.journal.event(now, "CRITICAL", "risk", f"safe mode: {reason[:200]}; {flat} position(s) squared off"
+                           + (f", {still} still open (exit retried)" if still else "") + ", entries halted")
         self.journal.commit()
         self.say(f"  {now:%H:%M} SAFE MODE: {reason[:120]}")
 
