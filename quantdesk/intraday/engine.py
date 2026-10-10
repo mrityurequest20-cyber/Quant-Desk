@@ -707,6 +707,8 @@ class IntradayEngine:
         """Why no new entry can be taken right now (None: one can)."""
         if self.killed:
             return f"halted: kill switch ({self.kill_file.name}) is set"
+        if gap := self.cfg.holiday_gap(now):
+            return f"halted: {gap}"
         if self.health.get("safe_mode"):
             return f"halted: safe mode ({self.health['safe_mode']})"
         if (self.health.get("reconcile") or {}).get("ok") is False:

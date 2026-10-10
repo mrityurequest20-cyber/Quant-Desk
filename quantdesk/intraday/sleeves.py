@@ -306,7 +306,9 @@ class ExpirySeller:
         now = now.tz_localize(IST) if now.tzinfo is None else now.tz_convert(IST)
         notes = self.settle(day, now)
         notes += self.check_settlement(day, now)
-        if self.cal.is_trading_day(day):
+        if gap := self.cfg.holiday_gap(day):
+            notes.append(f"nothing opened: {gap}")         # expiries and trading days are unknown (F-07)
+        elif self.cal.is_trading_day(day):
             notes += self.open(day, now)
         return notes
 

@@ -38,3 +38,39 @@ def test_pick_expiry_respects_min_dte(cfg):
 def test_year_fraction():
     assert year_fraction(dt.date(2026, 1, 1), dt.date(2026, 1, 1)) == 0
     assert abs(year_fraction(dt.date(2026, 1, 1), dt.date(2027, 1, 1)) - 1) < 1e-9
+
+
+def test_a_year_without_its_holiday_list_halts_new_entries_and_sleeves(cfg, tmp_path):
+    """F-07: the config lists 2026's NSE holidays only. In 2027 a holiday would look like a trading day (and an
+    expiry would land on it), so until the list is added the desk opens nothing; self-review asks from 1 December."""
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from quantdesk.intraday.engine import IntradayEngine
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.sleeves import ExpirySeller
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    from quantdesk.ops.selfreview import check_holidays
+
+    assert cfg.holiday_years() == {2026}
+    assert cfg.holiday_gap(dt.date(2026, 12, 31)) is None and cfg.holiday_gap(dt.date(2024, 5, 2)) is None
+    assert "2027" in cfg.holiday_gap(dt.date(2027, 1, 4))
+    bars, _ = simulate_sessions([dt.date(2026, 10, 5)], seed=3)
+    eng = IntradayEngine(cfg, ReplayFeed(bars, dt.date(2026, 10, 5)), "model", Journal(),
+                         IntradayBroker(cfg, starting_cash=500000), say=None)
+    calm = SimpleNamespace(vetoes=[])
+    halt = eng._blocked("NIFTY", calm, pd.Timestamp("2027-01-04 10:00", tz="Asia/Kolkata"))
+    assert halt and halt.startswith("halted: no NSE holiday list for 2027")
+    assert "holiday list" not in (eng._blocked("NIFTY", calm, pd.Timestamp("2026-10-05 10:00", tz="Asia/Kolkata")) or "")
+    seller = ExpirySeller(cfg, tmp_path / "sleeves", tmp_path / "data", say=lambda *a: None)
+    notes = seller.run(dt.date(2027, 1, 4), pd.Timestamp("2027-01-04 15:27", tz="Asia/Kolkata"))
+    assert any(n.startswith("nothing opened: no NSE holiday list for 2027") for n in notes)
+    assert not any(e["event"] == "open" for e in seller.events())
+    assert [f.key for f in check_holidays(cfg, dt.date(2026, 11, 30))] == []
+    assert [f.key for f in check_holidays(cfg, dt.date(2026, 12, 1))] == ["holiday-list:2027"]
+    assert [f.key for f in check_holidays(cfg, dt.date(2027, 1, 4))] == ["holiday-list:2027"]
+    added = cfg.with_overrides({"calendar": {"holiday_years": [2026, 2027]}})           # the owner adds 2027's list
+    assert added.holiday_gap(dt.date(2027, 1, 4)) is None and check_holidays(added, dt.date(2026, 12, 1)) == []
