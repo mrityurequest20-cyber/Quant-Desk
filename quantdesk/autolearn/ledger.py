@@ -172,7 +172,9 @@ class Ledger:
             entry_px = c0 if delay_bars == 0 else float(after["close"].iloc[delay_bars - 1])
             exit_px = float(after["close"].iloc[HORIZON_BARS + delay_bars - 1])
             used = [before.index[-1], *after.index[sorted({HORIZON_BARS - 1, HORIZON_BARS + delay_bars - 1, max(delay_bars - 1, 0)})]]
-            if fz.setdefault(r["symbol"], frozen_minutes(b, min_run=2)).isin(used).any():
+            if r["symbol"] not in fz:
+                fz[r["symbol"]] = frozen_minutes(b, min_run=2)     # once per symbol per call, not per decision
+            if fz[r["symbol"]].isin(used).any():
                 continue                                           # F-02: a stale print is no entry, label or exit
             label_px = float(after["close"].iloc[HORIZON_BARS - 1])  # the existing label: close 30 minutes after ts
             fwd = float(np.log(exit_px / entry_px))

@@ -330,7 +330,10 @@ class IntradayEngine:
             self._close(t, now, reason, note)
         if self.learner is not None:
             self.learner.resolve({u: self.bars.get(u) for u in self.underlyings}, now)
-        self._say_frozen(now)
+        try:
+            self._say_frozen(now)
+        except Exception as e:                            # a note about the feed must never cost the close
+            self.journal.event(now, "WARN", "data", f"frozen-bar check failed: {type(e).__name__}: {e}")
         self._learn(self.day)
         review = self.session_review()
         review += self._reflect(review, now)

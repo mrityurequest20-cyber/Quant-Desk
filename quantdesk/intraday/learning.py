@@ -392,7 +392,7 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
     from . import relstrength
     out["rs"] = relstrength.grade(mem, bars)
     if OVERSHOT[0] > over:
-        out["dropped_overshoot"] = OVERSHOT[0] - over           # windows a gap in the bars stretched too far to grade
+        out["dropped_overshoot"] = OVERSHOT[0] - over           # forward() calls (not unique windows) a gap stretched too far
     if str(day) not in mem.d["days"]:
         mem.d["days"].append(str(day))
     return out
