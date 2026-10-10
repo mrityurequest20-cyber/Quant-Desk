@@ -172,3 +172,105 @@ def test_unreachable_chain_falls_back_to_the_model(cfg, sessions):
     # backs off: ~2×125 refreshes in a session, but only 3 quick tries then one every 15 min per underlying
     assert broken.calls <= 2 * (3 + 26)
     assert all(t.meta.get("quote_source") == "model" for t in eng.closed)
+
+
+# ---- exits never sell more than the broker holds (H-01) -----------------------------------------------------------
+def _spread_engine(cfg, bars, day, tmp_path):
+    """An engine at 10:30 holding one two-leg call debit spread opened by the test itself (the desk is paused, so it
+    opens nothing of its own); journal and broker state on disk, as a restarted runner would find them."""
+    import numpy as np
+    from quantdesk.intraday.analyst import MarketView
+    from quantdesk.intraday.playbook import PlanLeg, TradePlan
+    feed = ReplayFeed(bars, day)
+    eng = IntradayEngine(cfg, feed, "model", Journal(tmp_path / "j.db"),
+                         IntradayBroker(cfg, starting_cash=500000, state_path=tmp_path / "broker.json"), say=None)
+    eng.start_session(day)
+    eng.paused = True
+    feed.clock = feed.open_ts + pd.Timedelta(minutes=75)
+    eng.step()
+    ch = eng.chain_df["NIFTY"]
+    S, ks = float(ch.attrs["spot"]), ch.index.to_numpy(float)
+    k1, k2 = ks[int(np.argmin(np.abs(ks - S)))], ks[int(np.argmin(np.abs(ks - S))) + 2]
+    legs = [PlanLeg(k1, "CE", 1, float(ch.loc[k1].ce_ask), float(ch.loc[k1].ce_ask), float(ch.loc[k1].ce_iv), 0.5),
+            PlanLeg(k2, "CE", -1, float(ch.loc[k2].ce_bid), float(ch.loc[k2].ce_bid), float(ch.loc[k2].ce_iv), 0.35)]
+    plan = TradePlan("probe", "NIFTY", 1, "call debit spread", eng.expiry["NIFTY"], legs, eng.lot("NIFTY"), "probe",
+                     "probe", None, None, 0.99, 50.0, 9999, "model", 0.5)
+    view = MarketView("NIFTY", feed.now(), S, "neutral", 0.0, 0.5, "trend", "fair", None, None, [], [], {}, "probe")
+    eng._open(plan, 1, [], view, {}, feed.now())
+    eng.journal.commit()
+    assert len(eng.open_trades) == 1 and len(eng.broker.positions()) == 2
+    return eng, view
+
+
+def _criticals(j, text):
+    ev = j.events(level="CRITICAL")
+    return ev[ev["message"].str.contains(text, regex=False)]
+
+
+def test_exit_after_a_restart_closes_only_what_the_broker_holds(cfg, sessions, tmp_path):
+    """Scenario 8b: the long leg was closed at the broker (an exit cut short before the journal heard of it). After a
+    restart the journal still holds both legs; the exit must not sell the long leg again into a naked short."""
+    from quantdesk.core.types import Order
+    bars, days = sessions
+    day = days[-1]
+    a, _ = _spread_engine(cfg, bars, day, tmp_path)
+    t = a.open_trades[0]
+    long_leg, short_leg = t.legs
+    a.broker.execute(Order(long_leg.instrument, -long_leg.qty, t.id, "close"), long_leg.entry_price, a.feed.now())
+    assert a.broker.positions() == {short_leg.instrument.symbol: a.broker.positions()[short_leg.instrument.symbol]}
+
+    feed = ReplayFeed(bars, day)
+    feed.clock = a.feed.now() + pd.Timedelta(minutes=2)
+    b = IntradayEngine(cfg, feed, "model", Journal(tmp_path / "j.db"),
+                       IntradayBroker(cfg, starting_cash=500000, state_path=tmp_path / "broker.json"), say=None)
+    b.start_session(day)
+    assert [x.id for x in b.open_trades] == [t.id] and not b.health["reconcile"]["ok"]
+    b._close(b.open_trades[0], feed.now(), "manual", "closed after the restart")
+    assert {s: p["qty"] for s, p in b.broker.positions().items()} == {}        # flat: no naked short on the long leg
+    assert not b.open_trades and b.closed[-1].status == "closed"
+    sym = long_leg.instrument.symbol
+    assert len(_criticals(b.journal, f"exit of {sym} skipped: the broker holds 0")) == 1
+    fills = b.journal.df("SELECT symbol, qty FROM fills WHERE trade_id=?", (t.id,))
+    assert sorted(fills["qty"].tolist()) == sorted([long_leg.qty, short_leg.qty, -short_leg.qty])   # no 2nd sale
+    assert b.closed[-1].legs[0].exit_price is not None                          # marked at the estimated exit price
+
+
+def test_rejected_exit_leg_leaves_the_trade_open_and_is_retried(cfg, sessions, tmp_path):
+    bars, days = sessions
+    eng, view = _spread_engine(cfg, bars, days[-1], tmp_path)
+    t = eng.open_trades[0]
+    short_sym = t.legs[1].instrument.symbol
+    real = eng.broker.execute
+    eng.broker.execute = lambda o, *a, **k: None if o.instrument.symbol == short_sym else real(o, *a, **k)
+    eng._close(t, eng.feed.now(), "manual", "probe")
+    assert eng.open_trades == [t] and t.status == "open" and not eng.closed     # not marked closed
+    for _ in range(2):                                                          # rejected minute after minute
+        eng.feed.advance()
+        eng._close(t, eng.feed.now(), "manual", "probe")
+    assert set(eng.broker.positions()) == {short_sym}                           # the long leg went once, never again
+    assert len(_criticals(eng.journal, "stays open")) == 1                      # said once, not every minute
+    saved = eng.journal.get_state("intraday_open")["trades"]
+    assert [x["id"] for x in saved] == [t.id] and saved[0]["meta"]["exit_pending"][0] == "manual"
+    eng.broker.execute = real                                                   # the broker takes orders again
+    eng._manage("NIFTY", view, eng.feed.now())                                  # the next minute finishes the exit
+    assert not eng.open_trades and eng.broker.positions() == {}
+    assert eng.closed[-1].exit_reason == "manual" and "exit_pending" not in eng.closed[-1].meta
+    assert len(eng.journal.events(level="CRITICAL")) == 1
+
+
+def test_normal_exit_is_unchanged(cfg, sessions, tmp_path):
+    bars, days = sessions
+    eng, _ = _spread_engine(cfg, bars, days[-1], tmp_path)
+    t = eng.open_trades[0]
+    cash0, fees0 = eng.broker.cash(), t.fees
+    eng._close(t, eng.feed.now(), "manual", "probe")
+    assert not eng.open_trades and eng.broker.positions() == {} and t.status == "closed"
+    fills = eng.journal.df("SELECT symbol, qty, price, fees FROM fills WHERE trade_id=? ORDER BY id", (t.id,))
+    assert fills["qty"].tolist() == [l.qty for l in t.legs] + [-l.qty for l in t.legs]
+    exits = fills.iloc[2:]
+    assert [l.exit_price for l in t.legs] == exits["price"].tolist()
+    assert t.fees == pytest.approx(fees0 + exits["fees"].sum())
+    assert t.pnl == pytest.approx(sum(l.qty * (l.exit_price - l.entry_price) for l in t.legs) - t.fees)
+    assert eng.broker.cash() == pytest.approx(cash0 + sum(-q * p for q, p in zip(exits["qty"], exits["price"]))
+                                              - exits["fees"].sum())
+    assert eng.journal.events(level="CRITICAL").empty

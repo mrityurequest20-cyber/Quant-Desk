@@ -267,6 +267,8 @@ class Analyst:
         vetoes = []
         if s["minutes"] < 5:
             vetoes.append("first 5 minutes: price discovery, spreads wide")
+        if not s.get("from_open", True):
+            vetoes.append("today's data starts after the open: opening range, VWAP and day type are unknown")
         if event:
             vetoes.append(f"scheduled event: {event}")
         if news and news.get("breaking"):

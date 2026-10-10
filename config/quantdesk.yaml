@@ -224,11 +224,8 @@ autolearn:
   bootstrap: {samples: 1000, block_days: 3, seed: 7}
   abstain: {min_coverage: 0.10}    # τ must leave at least this share of bars with a signal on the calibration slice
   costs:                           # one unit of the index future per signal, round trip, bps of notional unless ₹
-    brokerage_per_order: 20.0
-    stt_sell_bps: 2.0
-    exchange_bps: 0.173
+    brokerage_per_order: 20.0      # STT, exchange fees and stamp duty: costs.segments.futures (set *_bps here to raise them, never lower)
     sebi_per_crore: 10.0
-    stamp_buy_bps: 0.2
     gst: 0.18
     half_spread_bps: 0.5
     slippage_bps: 1.0
@@ -416,6 +413,11 @@ calendar:
   market_close: "15:30"
   # NSE equity + F&O trading holidays, 2026 (NSE circular CMTR71775). The first six
   # dates were cross-checked; re-verify the rest against the circular.
+  # holiday_years: the years whose list below is entered in full (from the circular above; re-verify dates against it).
+  # On a date in a later year the desk takes no new entries
+  # and the sleeves open nothing (F-07); self-review asks for next year's list from 1 December. When NSE publishes
+  # the 2027 circular (usually December), add its dates below and 2027 here.
+  holiday_years: [2026]
   holidays:
     - 2026-01-15   # Municipal Corporation elections, Maharashtra (NSE holiday master)
     - 2026-01-26   # Republic Day

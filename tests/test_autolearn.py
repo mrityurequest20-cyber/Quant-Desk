@@ -184,7 +184,7 @@ def test_cost_model_and_non_overlapping_simulation():
     c = CostModel(lot={"NIFTY": 65})
     px = 25000.0
     notional = px * 65
-    want = (40 / notional * 1e4 + 2 * 0.173 + 2 * 10 / 1e7 * 1e4 + 2.0 + 0.2
+    want = (40 / notional * 1e4 + 2 * 0.173 + 2 * 10 / 1e7 * 1e4 + 5.0 + 0.2
             + 0.18 * (40 / notional * 1e4 + 2 * 0.173 + 2 * 10 / 1e7 * 1e4) + 2 * 0.5 + 2 * 1.0)
     assert c.round_trip_bps(px, "NIFTY") == pytest.approx(want)
     t0 = ts("2026-06-01 10:00")
@@ -198,6 +198,19 @@ def test_cost_model_and_non_overlapping_simulation():
     assert len(simulate(rows, np.full(8, 0.6), sig, c, overlap=True)) == 6               # capped at 6 a session
     c.max_trades_per_symbol_day = 3
     assert len(simulate(rows, np.full(8, 0.6), sig, c, overlap=True)) == 3
+
+
+def test_the_learner_charges_the_desks_futures_stt_unless_overridden():
+    cfg = Config.load(DEFAULT_CONFIG)
+    c = CostModel.from_cfg(cfg)
+    fut = cfg.get("costs.segments.futures")
+    assert c.stt_sell_bps == 5.0 == pytest.approx(fut["stt_sell"] * 1e4)            # 0.05% on the sell, as the desk charges
+    assert c.exchange_bps == pytest.approx(fut["exchange"] * 1e4) and c.stamp_buy_bps == pytest.approx(fut["stamp_buy"] * 1e4)
+    assert CostModel().stt_sell_bps == 5.0
+    over = CostModel.from_cfg(cfg.with_overrides({"autolearn": {"costs": {"stt_sell_bps": 6.0}}}))
+    assert over.stt_sell_bps == 6.0 and over.exchange_bps == c.exchange_bps         # an override may charge more...
+    low = CostModel.from_cfg(cfg.with_overrides({"autolearn": {"costs": {"stt_sell_bps": 2.0}}}))
+    assert low.stt_sell_bps == 5.0                                                   # ...never less than the statute
 
 
 # ---- the immutable ledger -----------------------------------------------------------------------------------------------

@@ -102,6 +102,21 @@ class Config:
             out.add(h if isinstance(h, dt.date) else dt.date.fromisoformat(str(h)))
         return out
 
+    def holiday_years(self) -> set[int]:
+        """Years whose NSE holiday list is complete here (`calendar.holiday_years`; by default the years the listed
+        holidays fall in). Any other year's calendar is unknown: a holiday would look like a trading day (F-07)."""
+        years = self.get("calendar.holiday_years")
+        return {int(y) for y in years} if years else {d.year for d in self.holidays()}
+
+    def holiday_gap(self, day) -> str | None:
+        """Why `day`'s exchange calendar can't be trusted (None: it can): a year after the last complete list. Earlier
+        years are history, replayed from recorded bars, which show what traded."""
+        years = self.holiday_years()
+        if not years or day.year <= max(years):
+            return None
+        return (f"no NSE holiday list for {day.year} in config/quantdesk.yaml (calendar.holidays, "
+                f"calendar.holiday_years)")
+
     def events(self) -> list[tuple[dt.date, str]]:
         out = []
         for ev in self.get("calendar.events", []) or []:

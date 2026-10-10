@@ -191,8 +191,9 @@ class KotakClient:
             p["expiry"] = expiry.isoformat()
         return self._get("market-data/1.0/watchlist/option-chain", p)
 
-    def candles(self, neosymbol: str, interval: str, start: dt.date, end: dt.date) -> pd.DataFrame:
-        """[timestamp, open, high, low, close, volume, oi] rows → bars indexed in IST (bar start)."""
+    def candles(self, neosymbol: str, interval: str, start: dt.date, end: dt.date, raw: bool = False) -> pd.DataFrame:
+        """[timestamp, open, high, low, close, volume, oi] rows → bars indexed in IST (bar start). `raw` keeps every row
+        as served (the backfill archive keeps raw data); otherwise only rows with every price > 0."""
         body = self._get("market-data/1.0/historical/details", {"neosymbol": neosymbol, "interval": interval,
                                                                 "fromdate": start.isoformat(), "todate": end.isoformat()})
         rows = (body.get("data") or {}).get("candles") or []
@@ -200,7 +201,12 @@ class KotakClient:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         df = pd.DataFrame([r[:6] for r in rows], columns=["ts", "open", "high", "low", "close", "volume"])
         df.index = pd.to_datetime(df.pop("ts"), utc=True).dt.tz_convert(IST)
-        return df.apply(pd.to_numeric, errors="coerce")
+        df = df.apply(pd.to_numeric, errors="coerce")
+        if raw:
+            return df
+        # I-01: Kotak sometimes serves India VIX (or any index) at 0: a price must be > 0 (NaN fails too), so an all-zero
+        # day comes back empty and the feed falls back, as for "no candles yet"
+        return df[(df[["open", "high", "low", "close"]] > 0).all(axis=1)]
 
 
 # ---- the option chain, from Kotak's live book ---------------------------------------------------------------

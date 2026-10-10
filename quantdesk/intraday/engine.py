@@ -133,6 +133,7 @@ class IntradayEngine:
         self.open_trades: list[Trade] = []
         self.closed: list[Trade] = []
         self.views: dict[str, MarketView] = {}
+        self.late_start: set[str] = set()                         # indices whose data began after the open (B-10)
         self.last_thought: dict[str, pd.Timestamp] = {}
         self.last_bias: dict[str, str] = {}
         self.flow = {u: FootprintBuilder(float(cfg.instrument_spec(u).get("tick", 0.05))) for u in self.underlyings}
@@ -167,7 +168,9 @@ class IntradayEngine:
         df = self.bars[u]
         S = float(df.loc[:ts]["close"].iloc[-1])
         v = self.bars.get(self.vix)
-        vix = float(v.loc[:ts]["close"].iloc[-1]) if v is not None and len(v.loc[:ts]) else 14.0
+        c = v.loc[:ts]["close"] if v is not None else pd.Series(dtype=float)
+        c = c[c > 0]                                            # I-01: a 0 / NaN VIX print would price at zero vol
+        vix = float(c.iloc[-1]) if len(c) else 14.0
         return S, vix / 100 * float(self.cfg.instrument_spec(u).get("iv_beta", 1.0))
 
     def pick_expiry(self, u: str, today: dt.date) -> dt.date:
@@ -184,7 +187,7 @@ class IntradayEngine:
         val = 0.0
         for t in self.open_trades:
             S = self.spot(t.symbol)
-            val += sum(l.qty * self.marker.mid(l.instrument, S, now) for l in t.legs)
+            val += sum(l.qty * self.marker.mid(l.instrument, S, now) for l in t.legs if l.exit_price is None)
         return self.broker.cash() + val
 
     def spot(self, u: str) -> float:
@@ -287,6 +290,11 @@ class IntradayEngine:
             s = session_state(self.bars[u], now, cache=self.feature_cache[u])
             if s is None:
                 continue
+            if not s.get("from_open", True) and u not in self.late_start:
+                self.late_start.add(u)                           # once a session: self-review files it (D-07)
+                first = self.bars[u][self.bars[u].index.date == self.day].index[0]
+                self.journal.event(now, "WARN", "data", f"{u}: the opening bars failed to arrive (today's data starts "
+                                   f"{first:%H:%M}), so the analyst stands aside while they are missing")
             if self.learner is not None:                         # every model's prediction, before the outcome exists
                 self.learn_sig[u] = self._guarded(u, now, "learning record", self._learn_step, u, now)
             q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
@@ -415,9 +423,14 @@ class IntradayEngine:
             return None
         today = v[v.index.date == self.day]
         prev = v[v.index.date < self.day]
-        if today.empty:
+        # I-01: a 0 VIX is a bad print, not a -100% move: no valid reading today, or a prior day of only bad prints, is
+        # no state (and no ZeroDivisionError)
+        today, pc = today[today["close"] > 0], prev["close"][prev["close"] > 0]
+        if today.empty or (len(prev) and pc.empty):
             return None
-        base = float(prev["close"].iloc[-1]) if len(prev) else float(today["open"].iloc[0])
+        base = float(pc.iloc[-1]) if len(pc) else float(today["open"].iloc[0])
+        if not base > 0:
+            return None
         return {"last": float(today["close"].iloc[-1]), "chg": float(today["close"].iloc[-1]) / base - 1}
 
     def _flow_state(self, u: str, now) -> dict | None:
@@ -722,6 +735,8 @@ class IntradayEngine:
         """Why no new entry can be taken right now (None: one can)."""
         if self.killed:
             return f"halted: kill switch ({self.kill_file.name}) is set"
+        if gap := self.cfg.holiday_gap(now):
+            return f"halted: {gap}"
         if self.health.get("safe_mode"):
             return f"halted: safe mode ({self.health['safe_mode']})"
         if (self.health.get("reconcile") or {}).get("ok") is False:
@@ -1220,6 +1235,9 @@ class IntradayEngine:
         out = []
         S = view.spot
         for t in [x for x in self.open_trades if x.symbol == u]:
+            if t.meta.get("exit_pending"):                # an exit already under way is finished, whatever the market does
+                out.append(self._close(t, now, *t.meta["exit_pending"]))
+                continue
             marks = {l.instrument.symbol: self.marker.mid(l.instrument, S, now) for l in t.legs}
             t.update_excursions(marks)
             t.bars_held = int((now - t.opened_at).total_seconds() // 60)
@@ -1244,22 +1262,50 @@ class IntradayEngine:
                 reason, note = "time_exit", f"no progress in {t.bars_held} min"
             if reason:
                 out.append(self._close(t, now, reason, note))
-        return out
+        return [m for m in out if m]                      # a silent retry of a stuck exit says nothing
 
     def _close(self, t: Trade, now, reason: str, note: str) -> str:
         S = self.spot(t.symbol)
         live = self._live([l.instrument for l in t.legs], now)
         t.meta["exit_quotes"] = f"live {self.chains.name} book" if len(live) == len(t.legs) else "marked"
+        problems = []
         for l in t.legs:
+            if l.exit_price is not None:                  # closed on an earlier attempt
+                continue
             q = live.get(l.instrument.symbol)
             px = (q[0] if l.qty > 0 else q[1]) if q else self.marker.exit_price(l.instrument, l.qty, S, now)
-            fill = self.broker.execute(Order(l.instrument, -l.qty, t.id, "close"), px, now)
-            if fill is None:
-                self.journal.event(now, "ERROR", "execution", f"exit {l.instrument.symbol} rejected for {t.id}")
+            # never close more than the broker holds: a leg already closed there (by hand, or before a restart)
+            # would otherwise be sold again into a naked position
+            held = int(((self.broker.positions() or {}).get(l.instrument.symbol) or {}).get("qty", 0))
+            sign = 1 if l.qty > 0 else -1
+            qty = sign * min(abs(l.qty), max(0, sign * held))
+            if not qty:
+                l.exit_price = px                         # no order: marked at the estimated exit price
+                problems.append(f"exit of {l.instrument.symbol} skipped: the broker holds {held}")
                 continue
-            self.journal.fill(now, t.id, l.instrument.symbol, -l.qty, fill.price, fill.fees, fill.fee_breakdown)
+            fill = self.broker.execute(Order(l.instrument, -qty, t.id, "close"), px, now)
+            if fill is None:
+                continue
+            if qty != l.qty:
+                problems.append(f"exit of {l.instrument.symbol}: the broker held {held} of {l.qty}; closed {qty}")
+            self.journal.fill(now, t.id, l.instrument.symbol, -qty, fill.price, fill.fees, fill.fee_breakdown)
             l.exit_price = fill.price
             t.fees += fill.fees
+        stuck = [l.instrument.symbol for l in t.legs if l.exit_price is None]
+        first = bool(stuck) and "exit_pending" not in t.meta
+        if problems or first:                             # once per trade for a stuck exit, not on every retry
+            msg = "; ".join(problems + ([f"exit of {', '.join(stuck)} not filled: {t.id} stays open, retried each minute"]
+                                        if first else []))
+            self.journal.event(now, "CRITICAL", "execution", msg, {"trade": t.id, "reason": reason})
+        if stuck:
+            t.meta["exit_pending"] = [reason, note]
+            self._persist()
+            if not first:
+                return ""
+            msg = f"EXIT {t.strategy} {reason} incomplete: {', '.join(stuck)} still open, retrying"
+            self.say(f"  {now:%H:%M} {t.symbol:<9} ▼ {msg}")
+            return msg
+        t.meta.pop("exit_pending", None)
         t.pnl = sum(l.qty * ((l.exit_price or l.entry_price) - l.entry_price) for l in t.legs) - t.fees
         t.mae, t.mfe = min(t.mae, t.pnl), max(t.mfe, t.pnl)
         t.status, t.closed_at, t.exit_reason, t.exit_note, t.exit_underlying = "closed", now, reason, note, S
