@@ -318,3 +318,22 @@ def test_risk_gates(cfg):
     r2.on_close(-1000, ts("2026-09-28 10:10"))
     assert any("cooling off" in x for x in r2.gate(ts("2026-09-28 10:20"), 498000, [], "NIFTY"))
     assert not r2.gate(ts("2026-09-28 10:45"), 498000, [], "NIFTY")
+
+
+def test_opening_range_is_a_clock_window_and_unknown_after_a_late_start(sessions):
+    """B-10: the OR / IB were the first 15 / 60 rows present, so a late start or a gap made any bars 'the open'."""
+    bars, _, days = sessions
+    b = bars["NIFTY"]
+    d = days[-1]
+    full = b[b.index.date <= d]
+    t = pd.Timestamp(f"{d} 11:00", tz=IST)
+    s = session_state(full[full.index <= t], t)
+    day = full[full.index.date == d]
+    first15 = day[day.index < pd.Timestamp(f"{d} 09:30", tz=IST)]
+    assert s["or_done"] and s["or_high"] == float(first15["high"].max()) and s["minutes"] == 105
+    late = full[(full.index.date < d) | (full.index >= pd.Timestamp(f"{d} 10:00", tz=IST))]    # started at 10:00
+    s2 = session_state(late[late.index <= t], t)
+    assert s2["minutes"] == 105                                   # time since 09:15, not since the first bar
+    assert not s2["or_done"] and not s2["ib_done"]                # the opening range is unknown, not 10:00-10:14
+    assert np.isfinite([s2["or_high"], s2["or_low"], s2["ib_high"], s2["ib_low"]]).all()
+
