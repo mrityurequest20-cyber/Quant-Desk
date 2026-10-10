@@ -308,6 +308,7 @@ class ExpirySeller:
         notes += self.check_settlement(day, now)
         if gap := self.cfg.holiday_gap(day):
             notes.append(f"nothing opened: {gap}")         # expiries and trading days are unknown (F-07)
+            notes += self.halted(day, gap)
         elif self.cal.is_trading_day(day):
             notes += self.open(day, now)
         return notes
@@ -417,6 +418,23 @@ class ExpirySeller:
                         self._append({"event": "skip", "sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u,
                                       "expiry": str(exp), "day": str(past), "reason": reason})
                         notes.append(f"skip {s}-{u}-{exp}: {reason}")
+        return notes
+
+    def halted(self, day: dt.date, gap: str) -> list[str]:
+        """F-07: an eve the calendar can't be trusted on is a skip on the record, with why (not a gap that missed()
+        later reads as "the sleeves did not run"). Which days are eves is the calendar's best guess without holidays."""
+        if not self.cal.is_trading_day(day):
+            return []
+        seen = {(e["sleeve"], e["underlying"], e["expiry"]) for e in self.events() if e["event"] in ("open", "skip")}
+        notes = []
+        for u in self.underlyings:
+            exp = self.due(u, day)
+            for s in self.trading(u) if exp else ():
+                if (s, u, str(exp)) not in seen:
+                    reason = f"halted: {gap}"
+                    self._append({"event": "skip", "sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u,
+                                  "expiry": str(exp), "day": str(day), "reason": reason})
+                    notes.append(f"skip {s}-{u}-{exp}: {reason}")
         return notes
 
     def open(self, day: dt.date, now: pd.Timestamp) -> list[str]:

@@ -69,6 +69,15 @@ def test_a_year_without_its_holiday_list_halts_new_entries_and_sleeves(cfg, tmp_
     notes = seller.run(dt.date(2027, 1, 4), pd.Timestamp("2027-01-04 15:27", tz="Asia/Kolkata"))
     assert any(n.startswith("nothing opened: no NSE holiday list for 2027") for n in notes)
     assert not any(e["event"] == "open" for e in seller.events())
+    for d in pd.bdate_range("2027-01-05", "2027-01-22"):                          # every halted day of January
+        seller.run(d.date(), pd.Timestamp(f"{d.date()} 15:27", tz="Asia/Kolkata"))
+    skips = [e for e in seller.events() if e["event"] == "skip"]
+    assert skips and all(e["reason"].startswith("halted: no NSE holiday list for 2027") for e in skips)
+    assert {e["day"] for e in skips} >= {"2027-01-04", "2027-01-11", "2027-01-18"}  # each Tuesday's eve is on the record
+    resumed = ExpirySeller(cfg.with_overrides({"calendar": {"holiday_years": [2026, 2027]}}), tmp_path / "sleeves",
+                           tmp_path / "data", say=lambda *a: None)
+    resumed.run(dt.date(2027, 1, 25), pd.Timestamp("2027-01-25 15:27", tz="Asia/Kolkata"))
+    assert not any("did not run" in e.get("reason", "") for e in resumed.events())   # never mis-recorded as not run
     assert [f.key for f in check_holidays(cfg, dt.date(2026, 11, 30))] == []
     assert [f.key for f in check_holidays(cfg, dt.date(2026, 12, 1))] == ["holiday-list:2027"]
     assert [f.key for f in check_holidays(cfg, dt.date(2027, 1, 4))] == ["holiday-list:2027"]
