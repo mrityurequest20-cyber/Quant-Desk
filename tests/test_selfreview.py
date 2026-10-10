@@ -95,6 +95,22 @@ def test_failure_warnings_are_findings_but_slow_steps_are_not(tmp_path):
     assert "slow step" not in f[0].detail
 
 
+def test_critical_events_are_findings(tmp_path):
+    """H-04: self-review filed only ERRORs, so a CRITICAL (reconciliation failed, the kill switch) was never filed."""
+    day = dt.date(2026, 10, 5)
+    j = _journal(tmp_path / "c.db", day, start=True)
+    j.event(pd.Timestamp(f"{day} 09:15", tz=IST), "CRITICAL", "risk", "reconciliation failed, entries halted: 1 orphan")
+    j.commit()
+    for i in range(7):                                # 7 different errors, twice each: more than the error list shows
+        for _ in range(2):
+            j.event(pd.Timestamp(f"{day} 10:0{i}", tz=IST), "ERROR", "engine", f"error number {i}")
+    j.commit()
+    f = {x.key: x for x in SR.check_session(j, day, True)}
+    assert set(f) == {"engine-critical", "engine-errors"}         # a halt is its own finding, never lost in a long list
+    assert "reconciliation failed, entries halted: 1 orphan" in f["engine-critical"].detail
+    assert "reconciliation" not in f["engine-errors"].detail and f["engine-errors"].title.startswith("14 engine error")
+
+
 def test_no_trades_streak(cfg, tmp_path):
     cal = TradingCalendar(cfg.holidays())
     j = Journal(tmp_path / "j.db")
