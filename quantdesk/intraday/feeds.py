@@ -91,6 +91,8 @@ class IntradayFeed(abc.ABC):
 
     def completed(self, df: pd.DataFrame, bar: pd.Timedelta = BAR) -> pd.DataFrame:
         """Drop the still-forming bar: a bar is complete once its interval (`bar`, a minute by default) has ended."""
+        if df.empty:                                     # no history: nothing to drop (and no time index to shift)
+            return df
         return df[df.index + bar <= self.now()]
 
 
