@@ -258,6 +258,18 @@ def test_rejected_exit_leg_leaves_the_trade_open_and_is_retried(cfg, sessions, t
     assert len(eng.journal.events(level="CRITICAL")) == 1
 
 
+def test_safe_mode_does_not_count_a_stuck_exit_as_squared_off(cfg, sessions, tmp_path):
+    """H-01 review: safe mode said "1 position(s) squared off" while a rejected leg kept the trade open."""
+    bars, days = sessions
+    eng, _ = _spread_engine(cfg, bars, days[-1], tmp_path)
+    short_sym = eng.open_trades[0].legs[1].instrument.symbol
+    real = eng.broker.execute
+    eng.broker.execute = lambda o, *a, **k: None if o.instrument.symbol == short_sym else real(o, *a, **k)
+    eng.enter_safe_mode(eng.feed.now(), "probe")
+    msg = _criticals(eng.journal, "safe mode: probe")["message"].iloc[0]
+    assert "0 position(s) squared off, 1 still open" in msg and len(eng.open_trades) == 1
+
+
 def test_normal_exit_is_unchanged(cfg, sessions, tmp_path):
     bars, days = sessions
     eng, _ = _spread_engine(cfg, bars, days[-1], tmp_path)
