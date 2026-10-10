@@ -130,6 +130,7 @@ def test_engine_thinks_globally(cfg, tmp_path):
 
 def test_probation_drivers_earn_a_vote_only_on_a_long_good_live_record():
     b = brain_with(es_drift=-0.001)                                               # S&P futures sliding this morning
+    b.apply_learned = True              # intraday.learning.apply_factor_weights (off by default, D-01: test_learning)
     us = [e for e in b.think("NIFTY", NOW).evidence if e["factor"] == "global_us"]
     assert us and us[0]["weight"] == 0 and us[0]["direction"] < 0 and "probation, no vote yet: 0 graded" in us[0]["observation"]
     b.learned = {"global_us": (1.2, 12.0)}

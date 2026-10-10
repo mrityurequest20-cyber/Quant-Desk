@@ -65,6 +65,7 @@ def test_new_chain_evidence_votes_only_after_its_live_record_earns_it(cfg):
     assert ev["skew_trend"].direction < 0 and ev["skew_trend"].weight == 0
     assert v.levels["call_add"] == 25800 and v.levels["put_add"] == 25450
     a.graduated, a.learned = {"oi_shift"}, {"oi_shift": 1.2}
+    a.apply_learned = True              # intraday.learning.apply_factor_weights (off by default, D-01: test_learning)
     ev = {e.factor: e for e in a.assess("NIFTY", s, chain).evidence}
     assert ev["oi_shift"].weight == pytest.approx(PROBATION["oi_shift"] * 1.2) and ev["skew_trend"].weight == 0
 

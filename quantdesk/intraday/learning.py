@@ -8,10 +8,16 @@
 * **Pre-break entries**: armed setups the EV gate turned down, replayed on the bars that followed (target or stop
   first, within the setup's time stop), so the desk can see whether waiting for confirmation is costing it.
 
-What it learns changes the desk only through bounded multipliers on things it already weighs: a factor's or a news
-type's weight (0.5×–1.5×) and a setup's conviction (0.6×–1.3×), each shrunk toward 1 until there's enough evidence
-(a prior worth 20 observations), and a setup × day type with a clearly negative record (8+ trades, shrunk mean
-below −0.3R) is stood aside from. One good or bad day can't swing it; a consistent record does.
+What it learns changes the desk only through bounded multipliers on things it already weighs: a news type's weight
+(0.5×–1.5×) and a setup's conviction (0.6×–1.3×), each shrunk toward 1 until there's enough evidence (a prior worth 20
+observations), and a setup × day type with a clearly negative record (8+ trades, shrunk mean below −0.3R) is stood
+aside from. One good or bad day can't swing it; a consistent record does.
+
+**Factor weights are recorded, not applied** (D-01, owner decision): every factor is still graded, and its reliability
+(0.5×–1.5×) and probation "graduation" are kept in the record and shown, but the analyst and the brain weigh evidence
+at its unlearned weight. The audit could not tell the factor record from noise (sign-flip placebo p = 0.70; noise
+graduates a factor in 78% of draws). `intraday.learning.apply_factor_weights: true` turns the old behaviour back on;
+it should stay off until a significance test (placebo-controlled, multiplicity-adjusted) says a factor's record is real.
 The memory lives next to the journal (runtime/intraday/memory.json), so it carries from day to day.
 
 Two research tables ride along (they change nothing by themselves; they're what the record says):
@@ -40,6 +46,12 @@ HORIZON = 30                 # minutes a call is graded over
 READ_EVERY = 5               # minutes between journaled reads
 IC_HORIZONS = (5, 15, 30, 60)
 IC_CLIP_BPS = 150.0          # forward returns clipped for the IC so one shock can't own the correlation
+
+
+def apply_factor_weights(cfg) -> bool:
+    """Whether learned factor weights (and probation graduation) change the analyst's and the brain's evidence.
+    Off by default (D-01): the record is kept and shown, not applied."""
+    return bool(cfg.get("intraday.learning.apply_factor_weights", False)) if cfg is not None else False
 
 
 class Memory:
@@ -422,21 +434,22 @@ def bootstrap(cfg, mem: Memory, bars: dict, journal=None, min_bars: int = 300, m
     return got
 
 
-def summary(mem: Memory, top: int = 6) -> list[str]:
-    """What the desk has learned so far, in lines for the session review."""
+def summary(mem: Memory, top: int = 6, factor_weights_applied: bool = False) -> list[str]:
+    """What the desk has learned so far, in lines for the session review. A factor's weight is marked "recorded, not
+    applied" unless `factor_weights_applied` (intraday.learning.apply_factor_weights, D-01)."""
     L = []
     T = mem.d["tables"]
 
-    def rows(table, label, unit="bps"):
+    def rows(table, label, unit="bps", note=""):
         out = []
         for k, r in sorted((T.get(table) or {}).items(), key=lambda kv: -kv[1]["n"])[:top]:
             if r["n"] < 1:
                 continue
             out.append(f"{label} {k}: {r['n']:.0f} graded, right {r['hits'] / r['n']:.0%}, "
-                       f"{r['sum'] / r['n']:+.1f} {unit} avg → weight ×{mem.reliability(table, k):.2f}")
+                       f"{r['sum'] / r['n']:+.1f} {unit} avg → weight ×{mem.reliability(table, k):.2f}{note}")
         return out
 
-    L += rows("factor", "factor")
+    L += rows("factor", "factor", note="" if factor_weights_applied else " (recorded, not applied)")
     L += rows("news_event", "news")
     L += rows("news_reader", "reader")
     for k, r in sorted((T.get("setup") or {}).items(), key=lambda kv: -kv[1]["n"])[:top]:
