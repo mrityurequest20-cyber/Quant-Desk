@@ -53,6 +53,7 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions: {}              # it only reads the clock and writes its own output: no token rights needed
     outputs:
       go: ${{ steps.when.outputs.go }}
     steps:
