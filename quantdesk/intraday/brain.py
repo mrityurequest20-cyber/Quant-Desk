@@ -235,6 +235,8 @@ class Brain:
         self.gfeed = gfeed
         self.hfeed = hfeed                               # the index heavyweights (HEAVY_UNIVERSE) or None
         self.learned: dict[str, tuple[float, float]] = {}   # factor → (reliability, graded n), from learning.Memory
+        from .learning import apply_factor_weights            # D-01: a probation driver's record is shown, not applied
+        self.apply_learned = apply_factor_weights(cfg)
         self.flows: dict | None = None                   # FII positioning / cash flows (load_flows), or None
         self.stress_z = float(bc.get("stress_z", 2.0))
         self.min_size_mult = float(bc.get("min_size_mult", 0.5))
@@ -405,14 +407,19 @@ class Brain:
             out["against"] = bool(abs(r30) >= 0.001 and abs(index_r30) >= 0.001 and np.sign(r30) != np.sign(index_r30))
         return out
 
-    def _probation_weight(self, factor: str) -> float:
+    def _probation_earned(self, factor: str) -> bool:
         rel, n = self.learned.get(factor, (1.0, 0.0))
-        return PROBATION_W if n >= PROMOTE_N and rel >= PROMOTE_REL else 0.0
+        return n >= PROMOTE_N and rel >= PROMOTE_REL
+
+    def _probation_weight(self, factor: str) -> float:
+        return PROBATION_W if self.apply_learned and self._probation_earned(factor) else 0.0
 
     def _probation_note(self, factor: str) -> str:
         rel, n = self.learned.get(factor, (1.0, 0.0))
         if self._probation_weight(factor):
             return f"earned a vote live: {n:.0f} graded reads, ×{rel:.2f}"
+        if self._probation_earned(factor):
+            return f"its record would earn a vote: {n:.0f} graded reads, ×{rel:.2f}; recorded, not applied"
         return f"probation, no vote yet: {n:.0f} graded reads" + (f", ×{rel:.2f}" if n else "")
 
     def _narrate(self, target: str, st: BrainState) -> str:
