@@ -258,12 +258,16 @@ def test_the_engine_grades_each_session_and_stands_aside_on_a_losing_record(synt
     for setup in cfg.get("intraday.setups"):
         for _ in range(10):
             bad.bump("setup", setup, False, -1.0)
-    run = lambda m: run_replay(e := IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(),
-                                                   IntradayBroker(cfg, starting_cash=500000), say=None, memory=m)) and e
-    plain, e2 = run(None), run(bad)
+    run = lambda m, c=cfg: run_replay(e := IntradayEngine(c, ReplayFeed(bars, days[-1]), "model", Journal(),
+                                                          IntradayBroker(c, starting_cash=500000), say=None, memory=m)) and e
+    plain, e2 = run(None), run(bad, switched_on(cfg))                    # the stand-aside rule is behind the D-01 switch
     dec = e2.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'")
     assert e2.closed == [] and (dec.empty or dec["detail"].str.contains("has lost").all())
     assert not plain.closed or not dec.empty                             # what it would have traded, it refused by record
+    off = run(bad)                                                       # by default the record is shown, not applied
+    assert off.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'").empty
+    book = lambda e: [(t.symbol, t.strategy, t.opened_at, t.exit_reason, round(t.pnl, 2)) for t in e.closed]
+    assert book(off) == book(plain)                                      # ...so the desk trades as if nothing were learned
 
 
 def test_a_night_of_headlines_is_one_observation_not_forty(tmp_path):
