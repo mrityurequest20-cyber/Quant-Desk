@@ -115,7 +115,7 @@ intraday:
   adverse_ticks: 1                 # extra slippage on top of bid/ask fills
   news:                            # live headlines (RSS): tone as evidence, stand aside after breaking news
     enabled: true
-    refresh_min: 4
+    refresh_min: 2                 # 10 plain RSS GETs per refresh (was 4 min)
     window_min: 120                # stories older than this don't count
     half_life_min: 45              # recency weighting of the tone
     min_relevance: 2.0             # keyword relevance to count for an underlying
@@ -123,7 +123,8 @@ intraday:
     # sources: [{name: ..., url: ...}]   # defaults: ET, Moneycontrol, Mint, Business Standard, Google News, RBI
   global:                          # 18 global markets (US, Asia, Europe, $, ₹, crude, gold, UST, US VIX) via Yahoo
     enabled: true
-    refresh_min: 5
+    refresh_min: 5                 # kept at 5: ~29 Yahoo requests per refresh (18 markets + 11 heavyweights) from
+                                   # shared runner IPs, no 429 backoff, and the same IPs serve the index-bar fallback
   brain:                           # global ↔ news ↔ India ↔ decision; votes with research-validated links, and with
                                    # probation drivers only once their live record earns it (30+ graded reads, ≥57.5%)
     stress_z: 2.0                  # global moves bigger than this (σ) shrink size...
