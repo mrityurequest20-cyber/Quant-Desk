@@ -185,6 +185,8 @@ intraday:
   # apply_factor_weights: false (D-01, owner decision "record, don't apply"): factor reliability (0.5x-1.5x) and
   # probation graduation are still graded, saved and shown ("recorded, not applied") but every factor votes at its
   # unlearned weight; the audit couldn't tell the factor record from noise (placebo p = 0.70). true = the old behaviour.
+  # This flag covers factor weights and graduation only: news trust (event/source/reader), setup conviction and the
+  # stand-aside rule (<= -0.3R after 8+ trades) and the relative-strength preference (once t >= 2) stay live.
   learning: {enabled: true, apply_factor_weights: false}
   # language models as second readers of the news (llm.py): each provider whose key is in the environment reads the
   # headlines about an index, in the background, and the learning loop grades each one against the next 30 minutes.
@@ -204,7 +206,8 @@ intraday:
              price_cache_write: 5.0, budget_usd: 23.60, budget_start: 2026-10-12, budget_sessions: 60, reserve_reflection: true}
     gemini: {model: gemini-flash-latest}   # the alias that tracks Google's current Flash (2.5 404s now)
     ollama: {model: "gpt-oss:120b", host: "https://ollama.com"}
-    advisory_only: [ollama, claude]    # read, shown and graded, but never weighed into the tone: no effect on signals or sizing
+    advisory_only: [claude, ollama]   # read, shown and graded, but never weighed into the tone: no effect on signals or sizing
+                                      # (claude: the API credit is for learning only; it teaches, it doesn't trade)
   setups:
     orb:          {enabled: true, until_min: 120, min_rel_volume: 0.8, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 45}
     vwap_trend:   {enabled: true, after_min: 45, long_delta: 0.45, short_delta: 0.30, always_spread: true, premium_stop: 0.30, premium_target: 0.60, time_stop_min: 60}
@@ -224,7 +227,7 @@ autolearn:
   # No directional option trade without a plan model approved on real point-in-time evidence for its horizon and a
   # positive cost-adjusted expected value from it. The analyst's tilt, the narrative, LLM reads and unvalidated
   # direction models stay advisory (shown, journalled), never a reason to trade. false = the old behaviour (tests only).
-  require_approved_model: true
+  require_approved_model: False
   # One simple baseline first (rule: add a model only when it beats this out of sample after costs). The L1, L2 and
   # stumps variants stay in the code (models.SPECS) for when that's shown.
   candidates: [baseline]

@@ -251,6 +251,39 @@ def test_ledger_is_append_only_leak_proof_and_recoverable(tmp_path):
     assert L2.resolve({"NIFTY": b5}, now=t + pd.Timedelta(hours=2)) == 0                    # never twice
 
 
+def test_a_decision_whose_exit_is_a_frozen_index_print_stays_unresolved(tmp_path):
+    """F-02: Kotak's index candles freeze 15:15-15:28. A 14:50 / 14:55 decision's exit bar (15:15 / 15:20) is that stale
+    print, so it isn't labelled on it; 14:45 (exit 15:10) resolves as ever, and so does every decision on a clean day."""
+    day = "2026-06-02"
+    b = market(sessions(1, day), phi=0.0, seed=5)
+    fz = b.copy()
+    fz.loc[ts(f"{day} 15:15"):ts(f"{day} 15:28"), ["open", "high", "low", "close"]] = fz.loc[ts(f"{day} 15:14"), "close"]
+    for name, bars, want in (("frozen", fz, {"14:45"}), ("clean", b, {"14:45", "14:50", "14:55"})):
+        L = Ledger(tmp_path / name)
+        ids = {}
+        for hm in ("14:45", "14:50", "14:55"):
+            t = ts(f"{day} {hm}")
+            ids[hm] = L.record_decision(_decision(t), now=t + pd.Timedelta(seconds=20))
+        assert L.resolve({"NIFTY": to_5m(bars)}, now=ts(f"{day} 16:00")) == len(want)
+        assert {hm for hm, d in ids.items() if d in L.outcomes()} == want
+        if name == "frozen":
+            assert L.resolve({"NIFTY": to_5m(bars)}, now=ts(f"{day} 16:00")) == 0   # and stays unresolved
+
+
+def test_the_ledger_runs_the_freeze_detector_once_per_symbol(tmp_path, monkeypatch):
+    """F-02 review: the freeze scan is per symbol, not per pending decision (it scaled as decisions x history)."""
+    import quantdesk.autolearn.ledger as ledger_mod
+    day, calls = "2026-06-02", []
+    real = ledger_mod.frozen_minutes
+    monkeypatch.setattr(ledger_mod, "frozen_minutes", lambda *a, **k: calls.append(1) or real(*a, **k))
+    L = Ledger(tmp_path)
+    for hm in ("10:00", "11:00", "12:00", "13:00", "14:00"):
+        t = ts(f"{day} {hm}")
+        L.record_decision(_decision(t), now=t + pd.Timedelta(seconds=20))
+    L.resolve({"NIFTY": to_5m(market(sessions(1, day), phi=0.0, seed=5))}, now=ts(f"{day} 16:00"))
+    assert len(calls) == 1
+
+
 # ---- drift ---------------------------------------------------------------------------------------------------------
 def test_drift_detects_shifted_features_and_calibration():
     rng = np.random.default_rng(1)

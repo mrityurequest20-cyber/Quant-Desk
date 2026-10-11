@@ -436,3 +436,11 @@ def test_the_review_and_heartbeat_show_the_credit(cfg):
     assert "fought VWAP" in review and len(fake.calls) == 1                                  # the reflection ran on the credit
     assert "Claude: $0.06 today, $0.06 of $23.60 used, ~" in review and "sessions left at this pace" in review
     assert eng._claude_line() == news.llm.budget.line() and j.get_state("llm_claude_spend")["reflected"] == "2026-10-13"
+
+
+def test_claude_and_ollama_are_advisory_in_the_shipped_config(tmp_path):
+    """The Claude API credit is for learning only: its reads are shown and graded, never weighed into the tone."""
+    from quantdesk.config import DEFAULT_CONFIG, Config
+    cfg = Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path)}})
+    adv = {str(x).lower() for x in cfg.get("intraday.llm.advisory_only", [])}
+    assert {"claude", "ollama"} <= adv

@@ -32,7 +32,7 @@ from .analyst import Analyst, MarketView
 from .chainflow import ChainFlow, chain_step
 from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
 from .features import session_state
-from .feeds import IST, IntradayFeed, ReplayFeed, session_bounds
+from .feeds import IST, IntradayFeed, ReplayFeed, frozen_minutes, session_bounds
 from .ivhist import iv_percentile
 from .orderflow import FootprintBuilder
 from .playbook import Playbook, TradePlan
@@ -330,6 +330,10 @@ class IntradayEngine:
             self._close(t, now, reason, note)
         if self.learner is not None:
             self.learner.resolve({u: self.bars.get(u) for u in self.underlyings}, now)
+        try:
+            self._say_frozen(now)
+        except Exception as e:                            # a note about the feed must never cost the close
+            self.journal.event(now, "WARN", "data", f"frozen-bar check failed: {type(e).__name__}: {e}")
         self._learn(self.day)
         review = self.session_review()
         review += self._reflect(review, now)
@@ -617,6 +621,20 @@ class IntradayEngine:
         if self.news is not None:
             self.news.trust = self.memory.news_trust
             self.news.reader_trust = lambda name: self.memory.reliability("news_reader", name)
+
+    def _say_frozen(self, now) -> None:
+        """F-02: one WARN per index whose bars froze today (Kotak's index series sits flat 15:15-15:28 while the future
+        trades); grading masks those minutes. A vendor's freeze, not the desk's fault, so not worded as a failure."""
+        for u in self.underlyings:
+            b = self.bars.get(u)
+            f = frozen_minutes(b[b.index >= session_bounds(self.day)[0]]) if b is not None and len(b) else []
+            if not len(f):
+                continue
+            new = np.r_[True, (f[1:] - f[:-1]) != pd.Timedelta(minutes=1)]   # a new span wherever a minute is skipped
+            spans = list(zip(f[new], f[np.r_[new[1:], True]]))
+            self.journal.event(now, "WARN", "data", f"{u}: index bars frozen " + ", ".join(
+                f"{a:%H:%M}-{z:%H:%M}" for a, z in spans) + f" ({len(f)} minutes), kept out of grading",
+                {"symbol": u, "spans": [[str(a), str(z)] for a, z in spans]})
 
     def _learn(self, day, catch_up: bool = False) -> None:
         """Grade the day's calls (news, each read's factors, trades, refused pre-break entries) against the bars that
@@ -950,14 +968,16 @@ class IntradayEngine:
         for t in list(self.open_trades):
             try:
                 self._close(t, now, "safe_mode", f"safe mode: {reason[:120]}")
-                flat += 1
+                flat += t not in self.open_trades         # an exit a leg of which didn't fill is still open (H-01)
             except Exception as exc:                      # recorded; the next one is still tried
                 self.journal.event(now, "CRITICAL", "risk", f"safe mode could not close {t.id}: {exc!r:.160}")
         try:
             self._persist()
         except Exception:
             pass
-        self.journal.event(now, "CRITICAL", "risk", f"safe mode: {reason[:200]}; {flat} position(s) squared off, entries halted")
+        still = len(self.open_trades)
+        self.journal.event(now, "CRITICAL", "risk", f"safe mode: {reason[:200]}; {flat} position(s) squared off"
+                           + (f", {still} still open (exit retried)" if still else "") + ", entries halted")
         self.journal.commit()
         self.say(f"  {now:%H:%M} SAFE MODE: {reason[:120]}")
 
