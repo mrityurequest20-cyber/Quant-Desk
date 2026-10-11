@@ -41,6 +41,7 @@ from .risk import IntradayRisk
 from .sim import IntradayBroker, QuoteMarker
 
 log = logging.getLogger(__name__)
+_claude_budget_warned = False                       # the budget display fails quietly: one log line per process, not one a minute
 
 
 class IntradayEngine:
@@ -668,7 +669,11 @@ class IntradayEngine:
             return ""
         out = []
         claude = next((r for r in desk.readers if r.name == "claude"), None)
-        hold = (desk.budget.deny("reflect") if claude is not None and desk.budget is not None else None)   # '' = used up
+        try:
+            hold = (desk.budget.deny("reflect") if claude is not None and desk.budget is not None else None)   # '' = used up
+        except Exception as exc:                      # can't check the credit: Claude skipped (fail closed), the close goes on
+            hold = ""
+            log.warning("claude budget check failed, reflection skipped: %s", exc)
         if claude is not None and self.cfg.get("intraday.llm.claude.reflect", True) and hold is None:
             from .learning import summary
             try:
@@ -677,6 +682,8 @@ class IntradayEngine:
             except Exception as exc:
                 got = None
                 self.journal.event(now, "WARN", "llm", f"reflection failed: {exc!s:.200}")
+            if getattr(claude, "charge_error", None):
+                desk.errors["claude"] = claude.charge_error
             if got and (got["lessons"] or got["watch_tomorrow"]):
                 out += ["", "## Reflection (Claude, after the close)", ""] + [f"- {x}" for x in got["lessons"]]
                 if got["watch_tomorrow"]:
@@ -690,7 +697,11 @@ class IntradayEngine:
                       "cr": (lc.get(k) or {}).get("price_cache_read", 0), "cw": (lc.get(k) or {}).get("price_cache_write", 0)}
                   for k in ("claude", "gemini", "ollama") if (lc.get(k) or {}).get("price_in") is not None}
         cost = cost_line(desk.usage(), prices)
-        bl = desk.budget.line() if desk.budget is not None else ""
+        try:
+            bl = desk.budget.line() if desk.budget is not None else ""
+        except Exception as exc:                      # a display: never abort the session close
+            bl = ""
+            log.warning("claude budget line failed: %s", exc)
         if cost or desk.errors or bl:
             line = "Language models today: " + (cost or "no calls") + (
                 "; problems: " + "; ".join(f"{k}: {v}" for k, v in desk.errors.items()) if desk.errors else "") + (
@@ -1407,8 +1418,15 @@ class IntradayEngine:
 
     def _claude_line(self) -> str | None:
         """'Claude: $X today, $Y of $23.60 used, ~N sessions left at this pace' (None without a credit)."""
-        b = getattr(getattr(self.news, "llm", None), "budget", None) if self.news is not None else None
-        return (b.line() or None) if b is not None else None
+        global _claude_budget_warned
+        try:                                          # a display: whatever is wrong with the ledger must never cost the desk a step
+            b = getattr(getattr(self.news, "llm", None), "budget", None) if self.news is not None else None
+            return (b.line() or None) if b is not None else None
+        except Exception as exc:
+            if not _claude_budget_warned:
+                _claude_budget_warned = True
+                log.warning("claude budget line unavailable (shown once): %s", exc)
+            return None
 
     def _learning_view(self) -> dict | None:
         """What the record says, for the app: factor IC by horizon, the buyer's edge, the probation factors."""

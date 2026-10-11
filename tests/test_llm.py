@@ -444,3 +444,132 @@ def test_claude_and_ollama_are_advisory_in_the_shipped_config(tmp_path):
     cfg = Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path)}})
     adv = {str(x).lower() for x in cfg.get("intraday.llm.advisory_only", [])}
     assert {"claude", "ollama"} <= adv
+
+
+# ---- the credit never costs the desk its trading or its close -----------------------------------------------------
+def a_desk_engine(cfg, desk_readers, journal, day="2026-10-13"):
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-14", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=5)
+    news = NewsDesk(cfg, fetch=lambda url: "", sources=[])
+    news.llm = llm.LLMDesk(cfg, readers=desk_readers, sync=True, clock=Clock(day), journal=journal)
+    return IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", journal, IntradayBroker(cfg, starting_cash=500000),
+                          say=None, news=news), news
+
+
+def boom(msg):
+    def f(*a, **k):
+        raise RuntimeError(msg)
+    return f
+
+
+MALFORMED = [None, "junk", [1, 2], 7, {"total_usd": None}, {"total_usd": "abc", "sessions_used": "x"},
+             {"total_usd": "1.5", "sessions_used": None, "calls": [], "by_day": [1, 2], "last": "x", "closed": "yes"},
+             {"by_day": {"2026-10-13": "oops", "2026-10-12": None, 5: float("nan")}, "total_usd": float("inf")},
+             {"total_usd": 3.0, "by_day": {"2026-10-13": {"a": 1}}, "sessions_used": {}, "day": 20261013, "last": {"read": "x"}}]
+
+
+@pytest.mark.parametrize("bad", MALFORMED)
+def test_a_malformed_ledger_degrades_to_a_default_and_never_raises(bad):
+    from quantdesk.journal.journal import Journal
+    j = Journal()
+    j.set_state("llm_claude_spend", bad)
+    b = llm.ClaudeBudget(Cfg(), j, Clock("2026-10-13"))
+    st = b._load()
+    assert isinstance(st["total_usd"], float) and isinstance(st["sessions_used"], int) and isinstance(st["calls"], int)
+    assert isinstance(st["by_day"], dict) and all(isinstance(v, float) for v in st["by_day"].values())
+    assert b.line().startswith("Claude: ")
+    assert b.deny("read") in (None, "") or isinstance(b.deny("read"), str)
+    assert b.charge(NS(input_tokens=1000, output_tokens=100), "read") > 0
+    assert b.line().startswith("Claude: ")
+
+
+def test_a_journal_that_raises_on_the_ledger_does_not_raise_from_the_line():
+    class Boom:
+        get_state = staticmethod(boom("db gone"))
+    assert llm.ClaudeBudget(Cfg(), Boom(), Clock()).line().startswith("Claude: ")
+
+
+def test_the_heartbeat_survives_a_malformed_ledger_and_logs_it_once(cfg, caplog, monkeypatch):
+    from quantdesk.intraday import engine as eng_mod
+    from quantdesk.journal.journal import Journal
+    j = Journal()
+    eng, news = a_desk_engine(cfg, [Reader("claude")], j)
+    assert news.llm.budget is not None
+    j.set_state("llm_claude_spend", {"total_usd": None, "by_day": [1], "sessions_used": "x"})
+    assert eng._claude_line().startswith("Claude: ")                                          # validated, not raised
+    news.llm.budget.line = boom("ledger exploded")                                            # and even if the line itself dies
+    monkeypatch.setattr(eng_mod, "_claude_budget_warned", False)
+    with caplog.at_level("WARNING", logger=eng_mod.log.name):
+        assert eng._claude_line() is None and eng._claude_line() is None
+        eng._heartbeat(NOW)                                                                   # the step's heartbeat: no raise
+    assert j.get_state("intraday_live")["claude_budget"] is None
+    assert len([r for r in caplog.records if "claude budget" in r.getMessage()]) == 1         # once per process, not per minute
+
+
+def test_the_close_goes_on_when_the_budget_raises(cfg):
+    from quantdesk.journal.journal import Journal
+    j = Journal()
+    claude, fake = claude_with(None, NS(input_tokens=6000, output_tokens=2000),
+                               json.dumps({"lessons": ["should not be asked"], "watch_tomorrow": []}))
+    eng, news = a_desk_engine(cfg, [claude], j)
+    b = news.llm.budget
+    b.deny = boom("ledger gone")
+    out = eng._reflect("a review", NOW)                                                       # no raise
+    assert fake.calls == [] and "Reflection" not in out                                       # Claude skipped: fail closed
+    b.line = boom("line gone")
+    out = eng._reflect("a review", NOW)
+    assert fake.calls == [] and "Claude:" not in out
+
+
+def test_a_budget_check_that_raises_in_the_reader_loop_skips_claude_and_the_others_still_read(cfg):
+    from quantdesk.journal.journal import Journal
+    claude, gem, oll = Reader("claude"), Reader("gemini"), Reader("ollama")
+    desk = llm.LLMDesk(cfg, readers=[claude, gem, oll], sync=True, clock=Clock(), journal=Journal())
+    desk.budget.deny = boom("ledger gone")
+    desk.submit([story("RBI cuts repo rate by 25 bps, Nifty in focus")], NOW)                 # sync: no raise into submit
+    assert claude.seen == [] and len(gem.seen) == 1 and len(oll.seen) == 1
+    assert "budget check failed" in desk.errors["claude"] and "RuntimeError" in desk.errors["claude"]
+    assert {r for _, r, _ in desk.drain()} == {"gemini", "ollama"}
+
+
+def test_a_charge_that_raises_keeps_the_read_and_notes_the_unledgered_spend(cfg):
+    from quantdesk.journal.journal import Journal
+    clk = Clock()
+    b = llm.ClaudeBudget(Cfg(), Journal(), clk)
+    b.charge = boom("journal write failed")
+    claude, fake = claude_with(b, NS(input_tokens=1000, output_tokens=300))
+    got = claude.read([item(1)])
+    assert got["h1"]["NIFTY"] == 0.6 and "not ledgered" in claude.charge_error                # the read is not lost
+    gem = Reader("gemini")
+    desk = llm.LLMDesk(cfg, readers=[claude, gem], sync=True, clock=clk, journal=Journal())
+    desk.budget = claude.budget = b
+    b.deny = lambda kind: None
+    desk.submit([story("RBI cuts repo rate by 25 bps, Nifty in focus")], NOW)
+    assert len(gem.seen) == 1 and "not ledgered" in desk.errors["claude"] and desk.drain()
+
+
+def test_a_desk_without_a_claude_reader_has_no_budget_line(cfg):
+    from quantdesk.journal.journal import Journal
+    for names in (["gemini"], ["ollama"], ["gemini", "ollama"]):
+        j = Journal()
+        eng, news = a_desk_engine(cfg, [Reader(n) for n in names], j)
+        assert news.llm.budget is None and eng._claude_line() is None
+        eng._heartbeat(NOW)
+        assert j.get_state("intraday_live")["claude_budget"] is None
+        assert "Claude:" not in eng._reflect("a review", NOW)
+    assert llm.LLMDesk(cfg, readers=[Reader("claude")], journal=Journal()).budget is not None
+
+
+@pytest.mark.parametrize("used,total", [(60, 0.0), (61, 0.0), (61, 5.0), (80, 0.0), (80, 20.0), (500, 1.0)])
+def test_a_days_allowance_is_capped_at_twice_the_even_pace(used, total):
+    from quantdesk.journal.journal import Journal
+    b = llm.ClaudeBudget(Cfg(), Journal(), Clock())
+    st = {**b._load(), "sessions_used": used, "total_usd": total}
+    assert b.allowance(st, "2026-10-12") == pytest.approx(min(23.60 - total, 2 * 23.60 / 60))
+    assert b.allowance(st, "2026-10-12") <= 0.7867 + 1e-9
+    assert b.allowance({**st, "by_day": {"2026-10-12": 0.3}}, "2026-10-12") <= 0.7867 + 1e-9

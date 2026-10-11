@@ -29,6 +29,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 import queue
 import threading
@@ -234,9 +235,19 @@ class ClaudeBudget:
         return self.usd > 0
 
     def _load(self) -> dict:
-        st = (self.j.get_state(BUDGET_KEY) if self.j is not None else self._mem) or {}
-        return {"total_usd": 0.0, "by_day": {}, "calls": 0, "sessions_used": 0, "day": None, "last": {}, "reflected": None,
-                "closed": False, **st}
+        """The ledger, validated: a non-dict state, or a field of the wrong type, degrades to its default. Never raises."""
+        try:
+            st = (self.j.get_state(BUDGET_KEY) if self.j is not None else self._mem) or {}
+        except Exception:
+            st = {}
+        st = st if isinstance(st, dict) else {}
+        num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+        nums = lambda d: {str(k): x for k, v in d.items() if (x := num(v)) is not None} if isinstance(d, dict) else {}
+        txt = lambda v: v if isinstance(v, str) else None
+        return {"total_usd": max(0.0, num(st.get("total_usd")) or 0.0), "by_day": nums(st.get("by_day")),
+                "calls": max(0, int(num(st.get("calls")) or 0)), "sessions_used": max(0, int(num(st.get("sessions_used")) or 0)),
+                "day": txt(st.get("day")), "last": nums(st.get("last")), "reflected": txt(st.get("reflected")),
+                "closed": st.get("closed") is True}
 
     def _save(self, st: dict) -> None:
         if self.j is not None:
@@ -256,7 +267,9 @@ class ClaudeBudget:
     def allowance(self, st: dict, day: str) -> float:
         """Today's: what was left when the day began over the sessions left (today's included)."""
         began = self.usd - st["total_usd"] + float(st["by_day"].get(day, 0))
-        return max(0.0, began) / max(1, self.sessions - max(0, st["sessions_used"] - 1))
+        # never more than twice the even pace: once the sessions run out (or past) the divisor stops at 1, which would
+        # otherwise hand over everything left in a single day
+        return min(max(0.0, began) / max(1, self.sessions - max(0, st["sessions_used"] - 1)), 2 * self.usd / self.sessions)
 
     def _close(self, st: dict) -> None:
         if not st["closed"] and self.usd - st["total_usd"] < EST_MIN:
@@ -312,17 +325,20 @@ class ClaudeBudget:
         """'Claude: $0.31 today, $4.20 of $23.60 used, ~52 sessions left at this pace' for the review and the heartbeat."""
         if not self.enabled:
             return ""
-        with self.lock:
-            st = self._load()
-        day = str(self.clock().date())
-        if st["closed"]:
-            return f"Claude: credit used up (${st['total_usd']:.2f} of ${self.usd:.2f}); the desk runs on the other readers"
-        if day < self.start:
-            return f"Claude: starts {self.start}, ${self.usd:.2f} over {self.sessions} sessions"
-        pace = st["total_usd"] / max(1, st["sessions_used"])
-        left = (self.usd - st["total_usd"]) / pace if pace > 0 else max(0, self.sessions - st["sessions_used"])
-        return (f"Claude: ${float(st['by_day'].get(day, 0)):.2f} today, ${st['total_usd']:.2f} of ${self.usd:.2f} used, "
-                f"~{left:.0f} sessions left at this pace")
+        try:                                                # a display: whatever is wrong with the ledger, never raise
+            with self.lock:
+                st = self._load()
+            day = str(self.clock().date())
+            if st["closed"]:
+                return f"Claude: credit used up (${st['total_usd']:.2f} of ${self.usd:.2f}); the desk runs on the other readers"
+            if day < self.start:
+                return f"Claude: starts {self.start}, ${self.usd:.2f} over {self.sessions} sessions"
+            pace = st["total_usd"] / max(1, st["sessions_used"])
+            left = (self.usd - st["total_usd"]) / pace if pace > 0 else max(0, self.sessions - st["sessions_used"])
+            return (f"Claude: ${float(st['by_day'].get(day, 0)):.2f} today, ${st['total_usd']:.2f} of ${self.usd:.2f} used, "
+                    f"~{left:.0f} sessions left at this pace")
+        except Exception:
+            return ""
 
 
 # ---- providers ---------------------------------------------------------------------------------------------------
@@ -340,6 +356,7 @@ class ClaudeReader:
         self.client, self.model, self.effort, self.budget = client, model, effort, budget
         self.usage = {"calls": 0, "in": 0, "out": 0, "cr": 0, "cw": 0}
         self.last_raw: dict = {}
+        self.charge_error: str | None = None                # set when the ledger could not be charged for a read
 
     def _call(self, system: str, user: str, schema: dict, effort: str, max_tokens: int, kind: str = "read") -> str | None:
         r = self.client.beta.messages.create(
@@ -354,7 +371,11 @@ class ClaudeReader:
         self.usage["cr"] += int(getattr(u, "cache_read_input_tokens", 0) or 0)
         self.usage["cw"] += int(getattr(u, "cache_creation_input_tokens", 0) or 0)
         if self.budget is not None:                         # the credit: priced from what the API says it billed
-            self.budget.charge(u, kind)
+            try:
+                self.budget.charge(u, kind)
+                self.charge_error = None
+            except Exception as exc:                        # the read was paid for: keep it, and say the spend is unledgered
+                self.charge_error = f"spend not ledgered ({type(exc).__name__}: {str(exc)[:120]})"
         text = "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
         self.last_raw = {"content": text[:600], "stop_reason": r.stop_reason}
         if r.stop_reason == "refusal":                      # the whole fallback chain declined: no read
@@ -504,7 +525,8 @@ class LLMDesk:
         self.sync = sync
         self.clock = clock or (lambda: pd.Timestamp.now(tz=IST))
         # with a journal, Claude is held to its credit (ClaudeBudget); without one (replays, tests) it is as before
-        self.budget = ClaudeBudget(cfg, journal, self.clock) if journal is not None else None
+        self.budget = (ClaudeBudget(cfg, journal, self.clock)
+                       if journal is not None and any(r.name == "claude" for r in self.readers) else None)
         if self.budget is not None and not self.budget.enabled:
             self.budget = None
         for r in self.readers:
@@ -563,7 +585,11 @@ class LLMDesk:
                 self.errors[r.name] = f"daily cap of {self.max_calls} calls reached"
                 continue
             if r.name == "claude" and self.budget is not None:
-                why = self.budget.deny("read")              # '' = not started / credit used up: quiet, never an error
+                try:
+                    why = self.budget.deny("read")          # '' = not started / credit used up: quiet, never an error
+                except Exception as exc:                    # can't check the credit: no Claude call, the others carry on
+                    self.errors[r.name] = f"budget check failed: {type(exc).__name__}: {str(exc)[:120]}"
+                    continue
                 if why is not None:
                     if why:
                         self.errors[r.name] = why
@@ -579,6 +605,8 @@ class LLMDesk:
             at = self.clock()
             for hid, rd in reads.items():
                 self._out.put((hid, r.name, {**rd, "at": str(at)}))
+            if getattr(r, "charge_error", None):
+                self.errors[r.name] = r.charge_error
 
     def drain(self) -> list[tuple[str, str, dict]]:
         out = []
