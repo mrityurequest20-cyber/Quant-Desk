@@ -99,8 +99,9 @@ def settings(raw) -> dict:
     g = raw if isinstance(raw, dict) else {}
     mode = g.get("mode", "off")
     ceil = g.get("ceilings") if isinstance(g.get("ceilings"), dict) else {}
-    return {"mode": mode if mode in MODES else "off", "floor": _clip(_f(g.get("floor"), 0.25), 0.0, 1.0),
-            "start_cap": _clip(_f(g.get("start_cap"), 0.5), 0.0, 1.0),
+    cap = _clip(_f(g.get("start_cap"), 0.5), 0.0, 1.0)
+    return {"mode": mode if mode in MODES else "off", "floor": min(_clip(_f(g.get("floor"), 0.25), 0.0, 1.0), cap),
+            "start_cap": cap,                       # the floor never exceeds the cap: the scale cannot be forced above it
             "ceilings": {k: v for k, x in ceil.items() if (v := _num(x)) is not None and v >= 0}}
 
 

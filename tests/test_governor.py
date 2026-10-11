@@ -545,3 +545,12 @@ def test_a_fresh_engine_restores_nothing_from_a_previous_day(sessions, tmp_path)
     eng.start_session(days[-1])
     assert eng._gov["standdown_until"] is None and eng._gov["day"]["consec"] == 0 and eng.risk.hold_until is None
     assert eng._gov["recent_r"] == old["recent_r"] and eng._gov["since"] == old["since"]     # the record carries over, the day does not
+
+
+def test_a_floor_above_the_cap_cannot_push_the_scale_above_the_cap():
+    """Review finding: floor=0.9 with start_cap=0.5 gave s=0.9. The floor is clamped to the cap, so s <= start_cap."""
+    gc = gov.settings({"mode": "tighten", "floor": 0.9, "start_cap": 0.5, "ceilings": {}})
+    assert gc["floor"] == 0.5 and gc["start_cap"] == 0.5
+    st = {"s_cap": 1.0, "recent_r": [], "peak_equity": 100.0, "day": {"date": "2026-10-12"}}
+    s, _ = gov.scale(st, {"equity": 100.0, "vix_med": None}, gc)
+    assert s <= 0.5
