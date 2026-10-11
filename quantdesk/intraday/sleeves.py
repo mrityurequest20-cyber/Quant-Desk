@@ -177,16 +177,16 @@ def official_close(data_dir: Path, underlying: str, day: dt.date) -> tuple[float
     return None, "no 15:29 bar recorded"
 
 
-def payoff(t: dict, s_t: float) -> dict:
-    """A trade held to cash settlement at index level `s_t`: points, STT on exercised long legs, P&L after the entry
-    fees, and each leg's intrinsic value."""
+def payoff(t: dict, s_t: float, stt_rate: float = STT_EXERCISE) -> dict:
+    """A trade held to cash settlement at index level `s_t`: points, STT on exercised long legs (at `stt_rate`), P&L
+    after the entry fees, and each leg's intrinsic value."""
     lot = int(t["lot"])
     pts, stt, intr_ = 0.0, 0.0, []
     for leg in t["legs"]:
         intr = intrinsic(leg["right"], leg["strike"], s_t)
         pts += -leg["qty"] * leg["fill"] + leg["qty"] * intr
         if leg["qty"] > 0 and intr > 0:
-            stt += STT_EXERCISE * intr * leg["qty"] * lot
+            stt += stt_rate * intr * leg["qty"] * lot
         intr_.append(round(intr, 2))
     return {"pnl_pts": pts, "stt_rs": stt, "pnl_rs": pts * lot - t["entry_fees_rs"] - stt, "intrinsic": intr_}
 
@@ -253,6 +253,11 @@ class ExpirySeller:
         self.underlyings = list(self.spec["underlyings"])
         self.close_fn, self.say = close_fn, say
         self.official_fn = official_fn            # (underlying, day) -> NSE's published close, or None
+
+    def stt_rate(self, t: dict) -> float:
+        """Exercise STT for `t`: the dated `costs.exercise_stt` rate (what the paper broker charges) only for a spec that
+        says `"exercise_stt": "config"`; every earlier spec froze 0.125% and its ledger is never edited (F-05)."""
+        return self.costs.exercise_stt(dt.date.fromisoformat(t["expiry"])) if self.spec.get("exercise_stt") == "config" else STT_EXERCISE
 
     # ---- the ledger ----------------------------------------------------------------------------------------------
     def events(self) -> list[dict]:
@@ -332,7 +337,7 @@ class ExpirySeller:
             if s_t is None or not math.isfinite(s_t):
                 notes.append(f"UNSETTLED {t['id']}: {src}")
                 continue
-            r = payoff(t, s_t)
+            r = payoff(t, s_t, self.stt_rate(t))
             self._append({"event": "settle", "id": t["id"], "settle": round(s_t, 2), "settle_source": src,
                           "intrinsic": r["intrinsic"], "stt_rs": round(r["stt_rs"], 2), "pnl_pts": round(r["pnl_pts"], 2),
                           "pnl_rs": round(r["pnl_rs"], 2)})
@@ -383,7 +388,7 @@ class ExpirySeller:
             v, src = self.official(t["underlying"], exp, nse_only=exp == now.date())
             if v is None:
                 continue
-            r = payoff(t, v)
+            r = payoff(t, v, self.stt_rate(t))
             ev = self._append({"event": "official", "id": t["id"], "official": round(v, 2), "official_source": src,
                                "pnl_rs_official": round(r["pnl_rs"], 2),
                                "settle_gap_bps": round((float(t["settle"]) / v - 1) * 1e4, 2),

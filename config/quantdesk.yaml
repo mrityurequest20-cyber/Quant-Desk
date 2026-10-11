@@ -57,6 +57,12 @@ costs:
     equity_intraday: {stt_buy: 0.0,    stt_sell: 0.00025, exchange: 0.0000297, stamp_buy: 0.00003}
     futures:         {stt_buy: 0.0,    stt_sell: 0.0005,  exchange: 0.0000173, stamp_buy: 0.00002}
     options:         {stt_buy: 0.0,    stt_sell: 0.0015,  exchange: 0.0003503, stamp_buy: 0.00003}
+  # STT on the intrinsic value of a LONG index option cash-settled at expiry. Dated: the latest entry on or before the
+  # settlement day applies. 0.15% from 1-Apr-2026 (owner-confirmed, F-05); the earlier 0.125% is what the code carried
+  # before (start date not verified) and is what the frozen research and pre-registered sleeve specs still use.
+  exercise_stt:
+    2000-01-01: 0.00125
+    2026-04-01: 0.0015
 
 slippage:
   equity_bps: 4
