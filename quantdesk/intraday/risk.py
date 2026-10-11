@@ -13,6 +13,9 @@ def _t(s: str) -> dt.time:
     return dt.time(int(h), int(m))
 
 
+LIMITS = ("risk_per_trade", "max_trades", "max_open", "max_exposure", "daily_loss")     # what the governor may tighten
+
+
 class IntradayRisk:
     def __init__(self, cfg):
         r = cfg.get("intraday.risk", {}) or {}
@@ -30,7 +33,17 @@ class IntradayRisk:
         self.credit_margin = r.get("credit_margin_per_lot", 0.0)
         self.max_lots = r.get("max_lots", 10)
         self.max_exposure = r.get("max_total_outlay", 0.5)      # all open premium together, as a share of equity
+        self.base_limits = {k: getattr(self, k) for k in LIMITS}  # the config's own; the governor (tighten mode) can only go below
+        self.hold_until, self.hold_why = None, ""               # the governor's stand-down (entry pause / day stand-down)
         self.reset(None, 0.0)
+
+    def apply_limits(self, lim: dict | None, hold_until=None, why: str = "") -> None:
+        """The governor's overlay (governor.py, tighten mode on a paper account). Never above the config's own limit,
+        whatever it is handed; None restores the config's limits and clears the hold."""
+        for k in LIMITS:
+            b, v = self.base_limits[k], (lim or {}).get(k)
+            setattr(self, k, b if v is None else (v if b is None else min(v, b)))
+        self.hold_until, self.hold_why = (hold_until, why) if lim else (None, "")
 
     def reset(self, day, equity: float):
         self.day, self.start_equity = day, equity
@@ -61,6 +74,8 @@ class IntradayRisk:
             why.append(f"daily loss limit hit ({dd:.2%} ≤ -{self.daily_loss:.1%}): done for the day")
         if self.cool_until is not None and now < self.cool_until:
             why.append(f"cooling off after {self.consec_losses} straight losses until {self.cool_until:%H:%M}")
+        if self.hold_until is not None and now < self.hold_until:
+            why.append(f"governor stand-down ({self.hold_why}) until {self.hold_until:%H:%M}")
         return why
 
     def size(self, plan, equity: float, cash: float | None = None) -> tuple[int, list[str]]:

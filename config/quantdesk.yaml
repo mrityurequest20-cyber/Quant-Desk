@@ -162,6 +162,13 @@ intraday:
     credit_margin_per_lot: 30000   # SPAN+exposure on a hedged index spread ≈ ₹25-35k/lot: credit trades need a bigger account
     max_lots: 10
     max_total_outlay: 0.5          # all open premium together, fraction of equity (the exposure cap)
+  governor:                        # the risk governor (intraday/governor.py): tightens the limits above by itself, never loosens them
+    mode: shadow                   # off | shadow | tighten  (shadow = computed and journaled, no effect on trading; tighten: paper account only)
+    floor: 0.25                    # the scale never goes below this
+    start_cap: 0.5                 # the earned ceiling on the scale, until the record earns more (nothing raises it yet)
+    # hard envelope: an effective limit is base x scale, clamped to min(the value in risk above, the ceiling here).
+    # These equal today's risk values; raising one of them is a deliberate edit by the owner, never the governor's.
+    ceilings: {risk_per_trade: 0.025, max_trades_per_day: 4, max_open: 2, daily_loss_pct: 0.05, max_total_outlay: 0.5}
   kill_switch_file: KILL           # runtime/KILL present → flatten every paper position, no new entries until removed
   stale_feed_min: 3                # no new entries when the last bar completed more than this many minutes ago
   max_step_failures: 3             # this many failed minutes in a row → safe mode: square off, no entries for the session
