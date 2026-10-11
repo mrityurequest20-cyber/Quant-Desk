@@ -55,7 +55,7 @@ def market(days, phi=0.0, sig=0.0015, seed=0, start=25000.0):
 def cfg_for(tmp_path, **auto):
     a = {"bootstrap": {"samples": 200, "block_days": 3, "seed": 7},
          "promotion": {"min_shadow_sessions": 3, "min_shadow_signals": 10, "max_challenger_days": 45},
-         "candidates": ["baseline", "logit_l1", "stumps"], **auto}
+         "candidates": ["baseline", "logit_l1", "stumps"], "require_approved_model": True, **auto}
     return Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path / "runtime")}, "autolearn": a})
 
 
@@ -575,7 +575,7 @@ def test_cli_cycle_status_verify_recover_rollback(tmp_path, capsys, monkeypatch)
     monkeypatch.setattr(A, "default_loader", lambda cfg, offline=False: loader_of(bars))
     rt = tmp_path / "runtime"
     over = tmp_path / "o.yaml"
-    over.write_text(f"runtime: {{dir: {rt}}}\nautolearn: {{bootstrap: {{samples: 100}}, candidates: [baseline]}}\n")
+    over.write_text(f"runtime: {{dir: {rt}}}\nautolearn: {{bootstrap: {{samples: 100}}, candidates: [baseline], require_approved_model: true}}\n")
     main(["--config", str(over), "autolearn", "cycle", "--offline"])
     out = capsys.readouterr().out
     assert "cycle" in out and ("done" in out or "partial" in out)

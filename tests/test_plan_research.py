@@ -35,7 +35,7 @@ def ts(x):
 
 
 def make_cfg(tmp_path, research=None, intraday=None, **auto):
-    a = {"plan_research": {"bootstrap": {"samples": 100, "block_days": 2, "seed": 7}, **(research or {})}, **auto}
+    a = {"require_approved_model": True, "plan_research": {"bootstrap": {"samples": 100, "block_days": 2, "seed": 7}, **(research or {})}, **auto}
     over = {"runtime": {"dir": str(tmp_path / "runtime")}, "autolearn": a}
     if intraday:
         over["intraday"] = intraday
@@ -619,3 +619,10 @@ def test_armed_orders_pass_the_same_gate(tmp_path):
     assert "no approved plan model" in msg and not eng.open_trades
     d = eng.journal.df("SELECT * FROM decisions")
     assert d.astype(str).apply(lambda r: r.str.contains("no approved plan model")).any(axis=None)   # advisory record kept
+
+
+def test_the_shipped_default_leaves_directional_plans_to_the_other_gates(tmp_path):
+    """Owner decision #36: require_approved_model is false in the shipped config, so a directional plan is not dropped
+    for want of a plan model (that wording is the gated desk's); it meets the EV layer and the rest of the gates."""
+    cfg = Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path / "runtime")}})
+    assert cfg.get("autolearn.require_approved_model") is False
