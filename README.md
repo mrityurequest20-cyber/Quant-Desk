@@ -253,7 +253,7 @@ A small account should buy single options only when there's a real edge. It shou
 
 ## News
 
-Every 4 minutes, in parallel, the desk reads these feeds (all reachable from GitHub's runners): ET Markets, ET Stocks, Moneycontrol, Mint, Business Standard, Google News (India and macro) and RBI press releases. For each story it:
+Every 2 minutes, in parallel, the desk reads these feeds (all reachable from GitHub's runners): ET Markets, ET Stocks, Moneycontrol, Mint, Business Standard, Google News (India and macro) and RBI press releases. For each story it:
 
 - dedupes it across outlets
 - tags what it's about: the index, banks, or macro
