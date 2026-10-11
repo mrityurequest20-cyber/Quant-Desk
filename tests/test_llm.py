@@ -168,14 +168,14 @@ def test_reads_count_from_when_they_arrived_and_by_each_readers_record(cfg):
     x = story("RBI keeps repo rate unchanged, Nifty in focus", 30)   # the rules read it as neutral
     news.add([x])
     later = NOW + pd.Timedelta(minutes=5)
-    news.llm = llm.LLMDesk(cfg, readers=[Reader("claude", tone=0.9), Reader("ollama", tone=-0.9)], sync=True,
+    news.llm = llm.LLMDesk(cfg, readers=[Reader("gemini", tone=0.9), Reader("ollama", tone=-0.9)], sync=True,
                            clock=lambda: later)
     news.llm.submit([x], NOW)
-    assert news.collect() == [x] and set(x.nlp["llm"]["readers"]) == {"claude", "ollama"}
+    assert news.collect() == [x] and set(x.nlp["llm"]["readers"]) == {"gemini", "ollama"}
     assert news.item_tone(x, "NIFTY", NOW) == x.sentiment                       # not arrived yet at 11:00
-    # Ollama is explanatory only (intraday.llm.advisory_only): its read is kept and shown, never weighed
+    # Ollama (and Claude) are explanatory only (intraday.llm.advisory_only): its read is kept and shown, never weighed
     assert news.item_tone(x, "NIFTY", later) == pytest.approx((x.sentiment + 0.9) / 2)
-    news.reader_trust = lambda name: {"rules": 1.0, "claude": 1.5, "ollama": 0.5}[name]
+    news.reader_trust = lambda name: {"rules": 1.0, "gemini": 1.5, "ollama": 0.5}[name]
     assert news.item_tone(x, "NIFTY", later) == pytest.approx((x.sentiment + 1.35) / 2.5)
     news.advisory_only = set()                             # were it weighed, it would pull the tone down
     assert news.item_tone(x, "NIFTY", later) == pytest.approx((x.sentiment + 1.35 - 0.45) / 3)
