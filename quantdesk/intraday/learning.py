@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -174,6 +175,19 @@ def unfrozen(bars: dict) -> dict:
     return out
 
 
+def _obj(v) -> dict:
+    """A JSON column as a dict. A NULL comes back from pandas as NaN (truthy), which is not a dict."""
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v:
+        try:
+            o = json.loads(v)
+        except ValueError:
+            return {}
+        return o if isinstance(o, dict) else {}
+    return {}
+
+
 def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0, min_tone: float = 0.15) -> int:
     """Each headline's tone (each reader's) against the index's next 30 minutes from when the desk could act on it.
     Headlines that share that window are one observation between them, not one each: a night's forty stories are
@@ -184,8 +198,7 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
     for r in news.itertuples():
         if r.id in done:
             continue
-        about = json.loads(r.about) if isinstance(r.about, str) and r.about else (r.about or {})
-        nlp_ = json.loads(r.nlp) if isinstance(getattr(r, "nlp", None), str) and r.nlp else (getattr(r, "nlp", None) or {})
+        about, nlp_ = _obj(r.about), _obj(getattr(r, "nlp", None))
         graded = False
         for sym in ("NIFTY", "BANKNIFTY"):
             if (about.get(sym) or 0) < min_rel:
@@ -216,6 +229,18 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
     return len(rows)
 
 
+_VIX_READ = re.compile(r"India VIX\s+(-?\d+(?:\.\d+)?)")
+
+
+def _dead_read(e: dict) -> bool:
+    """A `vix` read taken while the feed served the index as 0.00 (Kotak does, for INDIAVIX): a constant +1.0 vote that
+    says nothing about volatility. 742 of the 743 vix reads in the 5-9 Oct journal were these; they must not be graded."""
+    if e.get("factor") != "vix":
+        return False
+    m = _VIX_READ.search(str(e.get("observation") or ""))
+    return bool(m) and float(m.group(1)) <= 0
+
+
 def grade_factors(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
     upto = mem.d["graded"]["thoughts_upto"]
     n = 0
@@ -230,7 +255,7 @@ def grade_factors(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
             continue
         for e in json.loads(r.evidence or "[]"):
             d = float(e.get("direction") or 0)
-            if abs(d) < 0.1:
+            if abs(d) < 0.1 or _dead_read(e):
                 continue
             mem.bump("factor", e.get("factor"), d * fr > 0, d * fr * 1e4, READ_EVERY / HORIZON)
             n += 1
@@ -265,7 +290,7 @@ def grade_ic(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
         frs = {h: forward(b, t, minutes=h) for h in IC_HORIZONS}
         for e in json.loads(r.evidence or "[]"):
             d = float(e.get("direction") or 0)
-            if abs(d) < 0.1 or not e.get("factor"):
+            if abs(d) < 0.1 or not e.get("factor") or _dead_read(e):
                 continue
             for h, fr in frs.items():
                 if fr is None:
