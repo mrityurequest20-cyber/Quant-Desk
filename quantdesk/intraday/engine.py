@@ -94,6 +94,16 @@ class IntradayEngine:
         self.quant_on = bool(qc.get("enabled", True))
         # a directional trade needs a plan model approved on real point-in-time evidence (autolearn/research.py)
         self.require_model = bool(cfg.get("autolearn.require_approved_model", True))
+        # paper-only exploration (ships off): while no plan model is approved, a directional plan that passes every other
+        # gate may trade at `lots`, capped, labelled unvalidated and kept out of the paper gate (_explore_off)
+        xc = ic.get("exploration", {}) or {}
+        try:
+            until = pd.Timestamp(str(xc["until"])).date() if xc.get("until") else None
+        except (TypeError, ValueError):
+            until = dt.date.min                                  # an unreadable end date is an expired one
+        self.explore = {"enabled": bool(xc.get("enabled", False)), "max_per_day": int(xc.get("max_per_day", 2)),
+                        "lots": max(1, int(xc.get("lots", 1))), "max_total": int(xc.get("max_total", 40)), "until": until}
+        self._explore_said = False
         self.volf = VolForecaster()
         self.ev = EVEngine(cfg, self.pricer, broker.costs, n_paths=int(qc.get("n_paths", 2000)))
         self.models: dict[str, DirectionModel] = {}
@@ -224,6 +234,7 @@ class IntradayEngine:
                 self.journal.event(session_bounds(day)[0], "INFO", "autolearn",
                                    f"champion {self.learner.champion_id} steers entries"
                                    + (f" (drift {self.learner.drift.get('state')})" if self.learner.drift else ""))
+        self._explore_off(session_bounds(day)[0])                   # live + exploration on: the CRITICAL goes on the record now
         self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
         saved = self._restore(day)
         self._reconcile(day)
@@ -814,7 +825,10 @@ class IntradayEngine:
                 plans, why = [p for p in plans if p.direction == 0], ("standing aside: no approved plan model (the learning "
                                                                     "loop is off); directional reads stay advisory")
             else:
-                plans, why = self.learner.plan_gate(u, plans, now)
+                gated, why = self.learner.plan_gate(u, plans, now)
+                if self.learner.plan is None and any(p.direction for p in plans):     # dropped for want of ANY approved model
+                    gated, why = self._explore(u, plans, gated, why, now)
+                plans = gated
             if not plans:
                 return [], why
         if self.learner is not None:                          # an active champion: only setups its signal agrees with
@@ -822,6 +836,44 @@ class IntradayEngine:
             if why2:
                 return [], why2
         return plans, why
+
+    def _explore_off(self, now) -> str | None:
+        """Why an exploration entry may not be taken now (None: it may). Paper only, ahead of an approved plan model,
+        inside its caps; the counts come from the journal's trades, so a restart can't reset them (unreadable: off)."""
+        x = self.explore
+        if not x["enabled"]:
+            return "exploration is off"
+        if self.cfg.get("account.mode") != "paper" or not isinstance(self.broker, IntradayBroker):
+            if not self._explore_said:
+                self._explore_said = True
+                self.journal.event(now, "CRITICAL", "exploration", "exploration is enabled but this is not the paper account "
+                                   "(account.mode / broker): it never enters outside paper trading")
+            return "exploration is paper only"
+        if self.learner is None or self.learner.plan is not None:
+            return "an approved plan model is steering (or the learning loop is off)"
+        if not self.quant_on:
+            return "the quant layer (the EV floor) is off"
+        if x["until"] is not None and now.date() > x["until"]:
+            return f"exploration ended {x['until']}"
+        try:
+            at = self.journal.df("SELECT opened_at FROM trades WHERE json_extract(meta, '$.mode') = 'exploration'")["opened_at"]
+        except Exception as exc:
+            return f"exploration trades unreadable ({exc!s:.60})"
+        if len(at) >= x["max_total"]:
+            return f"exploration spent its {x['max_total']} trades"
+        if int((at.astype(str).str[:10] == str(now.date())).sum()) >= x["max_per_day"]:
+            return f"exploration took its {x['max_per_day']} for today"
+        return None
+
+    def _explore(self, u: str, plans: list, kept: list, why: str | None, now) -> tuple[list, str | None]:
+        """plan_gate dropped the directional plans because no plan model is approved: when exploration is on and allowed,
+        they go on (tagged, unvalidated) to the champion filter, risk sizing, the EV floor and the live-book checks."""
+        off = self._explore_off(now)
+        if off:
+            return kept, (why if not self.explore["enabled"] else f"{why} [{off}]")
+        for p in (p for p in plans if p.direction):
+            p.notes["mode"] = "exploration"
+        return [p for p in plans if p.direction == 0 or p.notes.get("mode") == "exploration"], None
 
     def _approved(self, u: str, plans: list, eq: float, now):
         """The approved plan model's best plan, sized by the risk engine: (plan, lots, notes), a reason it can't be sized,
@@ -1177,12 +1229,20 @@ class IntradayEngine:
 
     def _open(self, plan: TradePlan, lots: int, notes: list[str], view: MarketView, s: dict, now) -> str:
         u = plan.symbol
+        expl = plan.notes.get("mode") == "exploration"
+        if expl:                                                  # the last word: caps, paper only, and exactly `lots`
+            off = self._explore_off(now)
+            if off or lots < self.explore["lots"]:
+                msg = f"skipped {plan.setup}: exploration " + (off or f"needs {self.explore['lots']} lot(s); risk and cash allow {lots}")
+                self.journal.decision(now, plan.setup, u, "rejected", msg, 0, {"plan": plan.describe()})
+                return msg
+            lots = self.explore["lots"]
         t = Trade(id=new_trade_id("I"), strategy=plan.setup, family="intraday", symbol=u, direction=plan.direction,
                   kind=OPTIONS, legs=[], units=lots, opened_at=now, entry_underlying=view.spot,
                   initial_risk=plan.planned_risk_per_lot() * lots, stop=plan.invalidation, target=plan.target_underlying,
                   exit_rules={"premium_stop": plan.premium_stop, "premium_target": plan.premium_target,
                               "time_stop_min": plan.time_stop_min, "credit": plan.is_credit},
-                  rationale=(f"[{plan.setup}] Trigger: {plan.trigger}. Thesis: {plan.thesis} "
+                  rationale=(("EXPLORATION (unvalidated prior): " if expl else "") + f"[{plan.setup}] Trigger: {plan.trigger}. Thesis: {plan.thesis} "
                              f"Structure: {plan.describe()} (vol view {view.vol_view}). "
                              + (f"Quant: {plan.notes['quant_text']}. " if plan.notes.get("quant_text") else "")
                              + f"Market read: {view.narrative}"),
@@ -1233,8 +1293,12 @@ class IntradayEngine:
         self.open_trades.append(t)
         self.risk.trades_today += 1
         self.journal.open_trade(t, notes)
+        if expl:
+            self.journal.decision(now, plan.setup, u, "exploration", f"EXPLORATION (unvalidated prior): {lots} lot(s), no approved "
+                                  "plan model; outside the paper gate", lots, {"plan": plan.describe(), "trade": t.id})
         self._persist()                                   # the position is on record before anything else can fail
-        msg = f"ENTER {plan.setup} {lots}×{plan.describe()} | stop {plan.invalidation or '—'} | {plan.trigger}"
+        msg = (f"ENTER {plan.setup} {lots}×{plan.describe()} | stop {plan.invalidation or '—'} | {plan.trigger}"
+               + (" | EXPLORATION (unvalidated prior)" if expl else ""))
         self.say(f"  {now:%H:%M} {u:<9} ▲ {msg}")
         return msg
 
@@ -1481,11 +1545,13 @@ class IntradayEngine:
     def session_review(self) -> str:
         day = self.day
         trades = [t for t in self.closed if t.opened_at.date() == day]
+        nx = sum(t.meta.get("mode") == "exploration" for t in trades)
         th = self.journal.thoughts(str(day))
         end_eq = self.broker.cash()
         L = [f"# Intraday session review — {day}", "",
              f"Capital ₹{self.day_start_equity:,.0f} → ₹{end_eq:,.0f} (**{end_eq / self.day_start_equity - 1:+.2%}**, "
-             f"₹{end_eq - self.day_start_equity:+,.0f}); {len(trades)} trade(s); chain source {self.chain_name()}; "
+             f"₹{end_eq - self.day_start_equity:+,.0f}); {len(trades)} trade(s)"
+             + (f" ({nx} exploration: unvalidated prior, outside the paper gate)" if nx else "") + f"; chain source {self.chain_name()}; "
              f"feed {self.feed.name}.", ""]
         if self.events_today:
             L += [f"Events: {'; '.join(self.events_today)}.", ""]
@@ -1512,7 +1578,7 @@ class IntradayEngine:
         if trades:
             L += ["## Trades", "", "| Time | Setup | Structure | Lots | P&L ₹ | R | Exit | Grade |", "|---|---|---|---:|---:|---:|---|---|"]
             for t in trades:
-                L.append(f"| {t.opened_at:%H:%M}–{t.closed_at:%H:%M} | {t.strategy} {t.symbol} | {t.meta.get('structure')} | "
+                L.append(f"| {t.opened_at:%H:%M}–{t.closed_at:%H:%M} | {t.strategy} {t.symbol}{' (exploration)' if t.meta.get('mode') == 'exploration' else ''} | {t.meta.get('structure')} | "
                          f"{t.units} | {t.pnl:,.0f} | {t.r_multiple:+.2f} | {t.exit_reason} | "
                          f"{self._grade(t.id)} |")
             L.append("")
@@ -1520,6 +1586,10 @@ class IntradayEngine:
                 L += [f"**{t.id} · {t.strategy} {t.symbol}** — {t.rationale}", f"Exit: {t.exit_reason} — {t.exit_note}.", ""]
             wins = sum(t.pnl > 0 for t in trades)
             L.append(f"Win rate {wins}/{len(trades)}, net ₹{sum(t.pnl for t in trades):,.0f}, costs ₹{sum(t.fees for t in trades):,.0f}.")
+            if nx:
+                ex = [t for t in trades if t.meta.get("mode") == "exploration"]
+                L.append(f"Exploration: {len(ex)} trade(s), {sum(t.pnl > 0 for t in ex)} win(s), net ₹{sum(t.pnl for t in ex):,.0f}; "
+                         f"the rest: {len(trades) - nx} trade(s), net ₹{sum(t.pnl for t in trades) - sum(t.pnl for t in ex):,.0f}.")
         else:
             reasons = th["action"].str.extract(r"^(standing aside|watching)[^:]*: (.*)$")[1].dropna().value_counts().head(4) \
                 if not th.empty else pd.Series(dtype=int)

@@ -319,12 +319,13 @@ def cmd_command(cfg, a):
 
 def cmd_paper_gate(cfg, a):
     """Read-only check of one strategy's closed, cost-inclusive paper trades against the bar for real money."""
-    from ..research.protocol import evaluate_paper_candidate, real_quote_trades
+    from ..research.protocol import evaluate_paper_candidate, real_quote_trades, without_exploration
     j = Journal(paths(cfg, a.account or "live")["journal"])
     try:
         trades = j.trades()
         trades = trades[(trades["strategy"].astype(str) == a.strategy) &
                         (trades["opened_at"].astype(str) >= a.since)]
+        trades, n_expl = without_exploration(trades)       # unvalidated-prior exploration trades are never evidence
         trades, not_real = real_quote_trades(trades)       # only real point-in-time fills are evidence
         sessions = j.df("SELECT COUNT(DISTINCT substr(ts,1,10)) AS n FROM thoughts WHERE ts >= ?", (a.since,))
         checks = j.checks(a.since)
@@ -341,6 +342,7 @@ def cmd_paper_gate(cfg, a):
                                         float(cfg.get("intraday.capital", 20000)))
         gate.update({"strategy": a.strategy, "since": a.since, "costs_included": True, "paper_account": a.account,
                      "excluded_not_real_point_in_time": not_real,
+                     "excluded_exploration": n_expl,
                      "evidence": "only trades filled at the live book on entry and exit count"})
         print(json.dumps(gate, indent=2, ensure_ascii=False))
     finally:
