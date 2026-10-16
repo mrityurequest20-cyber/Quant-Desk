@@ -7,6 +7,7 @@
   trades    intraday trades with setup, structure, P&L, R, grade
   review    the written session review(s)
   stats     performance across sessions: by setup, structure, day type, time of day, exit
+  clear-halt  lift the entry halt on an inherited position, on the record (--reason; --force to accept it as is)
 """
 from __future__ import annotations
 
@@ -96,7 +97,7 @@ def _live_engine(cfg, a) -> IntradayEngine:
         from .llm import LLMDesk
         from .news import NewsDesk
         news = NewsDesk(cfg)
-        desk = LLMDesk(cfg)
+        desk = LLMDesk(cfg, journal=j)                  # Claude's credit is kept in the journal
         if desk.active:
             news.llm = desk
             print("news: second readers " + ", ".join(r.name for r in desk.readers), flush=True)
@@ -307,6 +308,25 @@ def cmd_restate_trade(cfg, a):
     print(f"trade {r['trade']}: P&L ₹{r['old_pnl']:+,.2f} → ₹{r['new_pnl']:+,.2f} (cash {r['delta']:+,.2f})")
 
 
+def cmd_clear_halt(cfg, a):
+    """The owner's one explicit action that lifts an inherited-position halt (halt.py: H-02/H-03), on the record."""
+    import getpass
+
+    from .feeds import IST
+    from .halt import clear
+    p = paths(cfg, a.account or "live")
+    j = Journal(p["journal"])
+    try:
+        positions = IntradayBroker(cfg, state_path=p["broker"]).positions() if p["broker"].exists() else {}
+        by = a.by or os.environ.get("GITHUB_ACTOR") or getpass.getuser()
+        r = clear(j, positions, pd.Timestamp.now(tz=IST).date(), a.reason, by, force=a.force)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    finally:
+        j.close()
+    print(r["message"], flush=True)
+
+
 def cmd_command(cfg, a):
     """Queue pause / resume / flatten / close for the running engine (same queue the app uses)."""
     from ..web.intraday_api import IntradayAPI
@@ -319,12 +339,13 @@ def cmd_command(cfg, a):
 
 def cmd_paper_gate(cfg, a):
     """Read-only check of one strategy's closed, cost-inclusive paper trades against the bar for real money."""
-    from ..research.protocol import evaluate_paper_candidate, real_quote_trades
+    from ..research.protocol import evaluate_paper_candidate, real_quote_trades, without_exploration
     j = Journal(paths(cfg, a.account or "live")["journal"])
     try:
         trades = j.trades()
         trades = trades[(trades["strategy"].astype(str) == a.strategy) &
                         (trades["opened_at"].astype(str) >= a.since)]
+        trades, n_expl = without_exploration(trades)       # unvalidated-prior exploration trades are never evidence
         trades, not_real = real_quote_trades(trades)       # only real point-in-time fills are evidence
         sessions = j.df("SELECT COUNT(DISTINCT substr(ts,1,10)) AS n FROM thoughts WHERE ts >= ?", (a.since,))
         checks = j.checks(a.since)
@@ -341,6 +362,7 @@ def cmd_paper_gate(cfg, a):
                                         float(cfg.get("intraday.capital", 20000)))
         gate.update({"strategy": a.strategy, "since": a.since, "costs_included": True, "paper_account": a.account,
                      "excluded_not_real_point_in_time": not_real,
+                     "excluded_exploration": n_expl,
                      "evidence": "only trades filled at the live book on entry and exit count"})
         print(json.dumps(gate, indent=2, ensure_ascii=False))
     finally:
@@ -738,6 +760,14 @@ def register(sub):
     x.set_defaults(fn=cmd_doctor)
     x = ss.add_parser("kotak-check", help="what the Kotak Neo consumer key can see (no login, no orders)")
     x.set_defaults(fn=cmd_kotak_check)
+    x = ss.add_parser("clear-halt", help="lift the entry halt on an inherited position (orphan, carried or expired "
+                      "leg) once it is resolved; nothing is closed or settled")
+    x.add_argument("--reason", required=True, help="why it is safe to trade again (on the record)")
+    x.add_argument("--force", action="store_true",
+                   help="clear although the mismatch still exists: it is accepted as it is now, any change halts again")
+    x.add_argument("--by", help="who clears it (default: $GITHUB_ACTOR or the login name)")
+    x.add_argument("--account", help="live (default)")
+    x.set_defaults(fn=cmd_clear_halt)
     x = ss.add_parser("command", help="pause / resume / flatten / close a position on the running engine")
     x.add_argument("cmd", choices=["pause", "resume", "flatten", "close"])
     x.add_argument("id", nargs="?", help="trade id (for close)")

@@ -258,12 +258,16 @@ def test_the_engine_grades_each_session_and_stands_aside_on_a_losing_record(synt
     for setup in cfg.get("intraday.setups"):
         for _ in range(10):
             bad.bump("setup", setup, False, -1.0)
-    run = lambda m: run_replay(e := IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(),
-                                                   IntradayBroker(cfg, starting_cash=500000), say=None, memory=m)) and e
-    plain, e2 = run(None), run(bad)
+    run = lambda m, c=cfg: run_replay(e := IntradayEngine(c, ReplayFeed(bars, days[-1]), "model", Journal(),
+                                                          IntradayBroker(c, starting_cash=500000), say=None, memory=m)) and e
+    plain, e2 = run(None), run(bad, switched_on(cfg))                    # the stand-aside rule is behind the D-01 switch
     dec = e2.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'")
     assert e2.closed == [] and (dec.empty or dec["detail"].str.contains("has lost").all())
     assert not plain.closed or not dec.empty                             # what it would have traded, it refused by record
+    off = run(bad)                                                       # by default the record is shown, not applied
+    assert off.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'").empty
+    book = lambda e: [(t.symbol, t.strategy, t.opened_at, t.exit_reason, round(t.pnl, 2)) for t in e.closed]
+    assert book(off) == book(plain)                                      # ...so the desk trades as if nothing were learned
 
 
 def test_a_night_of_headlines_is_one_observation_not_forty(tmp_path):
@@ -278,6 +282,51 @@ def test_a_night_of_headlines_is_one_observation_not_forty(tmp_path):
     assert graded == 80                                                  # 40 stories × 2 indices were read...
     assert m.stat("news_reader", "rules")["n"] == pytest.approx(2.0)     # ...but they are one opening move per index
     assert m.reliability("news_reader", "rules") < 1.1                   # one good morning is not a record
+
+
+def test_headlines_with_no_nlp_or_about_are_graded_not_a_crash(tmp_path):
+    """Journals from before the headline NLP have NULL nlp (and old rows may lack `about`); pandas reads that back as NaN,
+    which is truthy, so `rebuild` once died on the first such row (907 of 4,071 headlines in the 10 Oct journal)."""
+    from quantdesk.intraday.news import NewsItem, classify
+    j = Journal(tmp_path / "j.db")
+    items = [classify(NewsItem(ts("2026-10-04 21:00") + pd.Timedelta(minutes=10 * i), "ET",
+                               f"Nifty, banks set to rally as FII buying returns, story {i}", id=f"n{i}")) for i in range(6)]
+    j.news_add(items, ts("2026-10-05 08:00"))
+    j.db.execute("UPDATE news SET nlp = NULL WHERE id IN ('n0', 'n1', 'n2')")
+    j.db.execute("UPDATE news SET about = NULL WHERE id = 'n3'")
+    j.commit()
+    news = j.news(n=1000)
+    assert news["nlp"].isna().sum() == 3
+    m = Memory()
+    graded = learning.grade_news(m, news, {"NIFTY": day_bars(), "BANKNIFTY": day_bars(start=55000.0)})
+    assert graded > 0 and m.stat("news_reader", "rules") is not None
+    assert learning._obj(float("nan")) == {} and learning._obj(None) == {} and learning._obj("not json") == {}
+    assert learning._obj('{"a": 1}') == {"a": 1} and learning._obj("[1]") == {}
+
+
+def test_reads_taken_while_the_vix_feed_was_zero_are_not_graded(tmp_path):
+    """Kotak serves INDIAVIX as zeros; the vix factor then voted a constant +1.0 ("India VIX 0.00 (-100.0% today)").
+    Those reads say nothing about volatility and must not become a track record (nor an IC); a real read still counts."""
+    j = Journal(tmp_path / "j.db")
+    dead = [{"factor": "vix", "direction": 1.0, "weight": 1.0, "observation": "India VIX 0.00 (-100.0% today)"},
+            {"factor": "vwap", "direction": 1.0, "weight": 1.0, "observation": "above vwap"}]
+    live = [{"factor": "vix", "direction": 0.63, "weight": 1.0, "observation": "India VIX 14.16 (-3.8% today)"}]
+    for i in range(30):
+        j.db.execute("INSERT INTO thoughts (ts, symbol, bias, score, conviction, day_type, action, narrative, evidence) "
+                     "VALUES (?, 'NIFTY', 'bull', 0.5, 0.5, 'trend', 'watch', 'x', ?)",
+                     (str(ts("2026-10-05 09:30") + pd.Timedelta(minutes=5 * i)), json.dumps(dead if i < 25 else live)))
+    j.commit()
+    th = j.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
+    m = Memory()
+    bars = {"NIFTY": day_bars(day="2026-10-05")}
+    learning.grade_factors(m, th, bars)
+    learning.grade_ic(m, th, bars)
+    vix = m.stat("factor", "vix")
+    assert vix is not None and vix["n"] == pytest.approx(5 * learning.READ_EVERY / learning.HORIZON, rel=0.25)   # the 5 live reads only
+    assert m.stat("factor", "vwap")["n"] > vix["n"]                                                              # the rest of each read still counts
+    ic = m.d["ic"]                                                                                               # the IC table must not take the dead votes either
+    assert ic["vix"]["5"][0] == pytest.approx(5 * min(1.0, learning.READ_EVERY / 5)) and ic["vwap"]["5"][0] > ic["vix"]["5"][0]
+    assert learning._dead_read(dead[0]) and not learning._dead_read(live[0]) and not learning._dead_read(dead[1])
 
 
 def test_bootstrap_seeds_the_record_from_real_sessions(synthetic, tmp_path):

@@ -55,6 +55,8 @@ class IntradayRisk:
             self.cool_until = now + pd.Timedelta(minutes=self.cool_min)
 
     def gate(self, now, equity: float, open_trades: list, symbol: str) -> list[str]:
+        if not math.isfinite(equity):                     # NaN passes every `equity > 0` / `dd <= -x` test: fail closed
+            return ["equity unknown"]
         why = []
         t = now.time()
         if t < self.no_before or t > self.no_after:
@@ -69,7 +71,7 @@ class IntradayRisk:
         if equity > 0 and self.max_exposure is not None and out >= self.max_exposure * equity:
             why.append(f"exposure cap: ₹{out:,.0f} of premium open ≥ {self.max_exposure:.0%} of equity")
         dd = equity / self.start_equity - 1 if self.start_equity else 0
-        if dd <= -self.daily_loss or self.halted:
+        if not dd > -self.daily_loss or self.halted:
             self.halted = True
             why.append(f"daily loss limit hit ({dd:.2%} ≤ -{self.daily_loss:.1%}): done for the day")
         if self.cool_until is not None and now < self.cool_until:
