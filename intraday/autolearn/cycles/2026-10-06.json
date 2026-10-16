@@ -1,0 +1,242 @@
+{
+ "cycle_id": "2026-10-06",
+ "finished": "2026-10-06 22:25:43.481426+05:30",
+ "stages": {
+  "dataset": {
+   "finished": "2026-10-06 22:25:42.246253+05:30",
+   "key": "e870521d7ead1c32",
+   "output": {
+    "created": "2026-10-06 22:25:40.706462+05:30",
+    "days": 55,
+    "feature_version": "f1-ebbe08604e",
+    "fingerprint": "653204504c35ad7c",
+    "first_day": "2026-07-20",
+    "label_version": "y30-h6-93fa9126",
+    "labelled": 7586,
+    "last_day": "2026-10-06",
+    "lockbox_days": [
+     "2026-09-22",
+     "2026-09-23",
+     "2026-09-24",
+     "2026-09-25",
+     "2026-09-28",
+     "2026-09-29",
+     "2026-09-30",
+     "2026-10-01"
+    ],
+    "quality_ok": true,
+    "rows": 8246,
+    "symbols": [
+     "BANKNIFTY",
+     "NIFTY"
+    ]
+   },
+   "status": "done"
+  },
+  "ingest": {
+   "finished": "2026-10-06 22:25:41.789848+05:30",
+   "key": "3a420863246be8b5",
+   "output": {
+    "bars": {
+     "BANKNIFTY": 4123,
+     "NIFTY": 4123
+    },
+    "fingerprints": {
+     "BANKNIFTY": "df5dea27fdcb8e98",
+     "NIFTY": "c71771502487d6fc"
+    },
+    "last_bar": {
+     "BANKNIFTY": "2026-10-06 15:25:00+05:30",
+     "NIFTY": "2026-10-06 15:25:00+05:30"
+    },
+    "outcomes_resolved": 0,
+    "paper_trades_new": 0,
+    "paper_trades_rejected": 0,
+    "quality": {
+     "BANKNIFTY": {
+      "merged": {
+       "conflicting_duplicates": 0,
+       "issues": [],
+       "jump_days": [],
+       "ok": true,
+       "rows_in": 4123,
+       "rows_out": 4123,
+       "usable": true
+      },
+      "recorded": {
+       "issues": [
+        "gaps: 5"
+       ],
+       "ok": true,
+       "rows_in": 1130,
+       "rows_out": 1130
+      },
+      "yahoo": {
+       "issues": [],
+       "ok": true,
+       "rows_in": 3973,
+       "rows_out": 3973
+      }
+     },
+     "NIFTY": {
+      "merged": {
+       "conflicting_duplicates": 0,
+       "issues": [],
+       "jump_days": [],
+       "ok": true,
+       "rows_in": 4123,
+       "rows_out": 4123,
+       "usable": true
+      },
+      "recorded": {
+       "issues": [
+        "gaps: 5"
+       ],
+       "ok": true,
+       "rows_in": 1130,
+       "rows_out": 1130
+      },
+      "yahoo": {
+       "issues": [],
+       "ok": true,
+       "rows_in": 3973,
+       "rows_out": 3973
+      }
+     }
+    }
+   },
+   "status": "done"
+  },
+  "paper": {
+   "finished": "2026-10-06 00:53:56.125786+05:30",
+   "key": "618ea553e4692461",
+   "output": {
+    "drift": null,
+    "evaluated": [],
+    "results": {}
+   },
+   "status": "done"
+  },
+  "promote": {
+   "finished": "2026-10-06 00:53:56.127779+05:30",
+   "key": "0695c53fb2286775",
+   "output": {
+    "champion": null,
+    "checks": {},
+    "decision": "no change"
+   },
+   "status": "done"
+  },
+  "register": {
+   "finished": "2026-10-06 22:25:43.480024+05:30",
+   "key": "cf7ed419d4473528",
+   "output": {
+    "already": [],
+    "registered": []
+   },
+   "status": "done"
+  },
+  "train": {
+   "finished": "2026-10-06 22:25:42.418856+05:30",
+   "key": "3de9f2735655f564",
+   "output": {
+    "cost_bps_typical": 5.817,
+    "failed": {},
+    "folds": [
+     {
+      "embargoed": 0,
+      "fold": 0,
+      "purged": 0,
+      "test_days": [
+       "2026-08-10",
+       "2026-08-18"
+      ],
+      "test_rows": 1050,
+      "train_rows": 2250
+     },
+     {
+      "embargoed": 0,
+      "fold": 1,
+      "purged": 0,
+      "test_days": [
+       "2026-08-19",
+       "2026-08-27"
+      ],
+      "test_rows": 1050,
+      "train_rows": 3300
+     },
+     {
+      "embargoed": 0,
+      "fold": 2,
+      "purged": 0,
+      "test_days": [
+       "2026-08-28",
+       "2026-09-04"
+      ],
+      "test_rows": 900,
+      "train_rows": 4350
+     },
+     {
+      "embargoed": 0,
+      "fold": 3,
+      "purged": 0,
+      "test_days": [
+       "2026-09-07",
+       "2026-09-15"
+      ],
+      "test_rows": 900,
+      "train_rows": 5250
+     },
+     {
+      "embargoed": 0,
+      "fold": 4,
+      "purged": 0,
+      "test_days": [
+       "2026-09-16",
+       "2026-10-06"
+      ],
+      "test_rows": 896,
+      "train_rows": 6150
+     }
+    ],
+    "layout_hash": "eca793a2edc1a517",
+    "trained": [
+     "baseline"
+    ]
+   },
+   "status": "done"
+  },
+  "validate": {
+   "finished": "2026-10-06 22:25:43.470291+05:30",
+   "key": "75c1ef9e5f510d3c",
+   "output": {
+    "failed": [
+     "baseline"
+    ],
+    "passed": [],
+    "summary": {
+     "baseline": {
+      "auc": 0.49755525990069555,
+      "brier_skill": -0.037995083333254076,
+      "ece": 0.07638722225982994,
+      "expectancy_bps": -4.022534705954038,
+      "p_positive": 0.10725229826353422,
+      "reasons": [
+       "failed sample_trades",
+       "failed calibration_ece",
+       "failed calibration_brier_skill",
+       "failed cost_net_expectancy",
+       "failed cost_ci_p_positive",
+       "failed cost_profit_factor",
+       "failed risk_drawdown"
+      ],
+      "trades": 20
+     }
+    }
+   },
+   "status": "done"
+  }
+ },
+ "started": "2026-10-06 00:53:53.736517+05:30",
+ "status": "done"
+}
