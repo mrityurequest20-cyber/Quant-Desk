@@ -213,6 +213,21 @@ def real_quote_trades(trades: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return trades[ok], int((~ok).sum())
 
 
+# What counts as a risk-limit violation against a paper candidate (C-04): one definition for the paper-gate CLI and the
+# learning cycle's promotion check. CRITICAL is what the engine files for safe mode, a failed reconciliation, the kill
+# switch and a stuck exit, so it must count; before, the CLI kept WARN/ERROR only and the cycle ignored `execution`.
+RISK_EVENT_CATEGORIES = ("risk", "risk_limit", "kill_switch", "execution", "reconcile")
+RISK_EVENT_LEVELS = ("WARN", "ERROR", "CRITICAL")
+
+
+def risk_violation_events(events: pd.DataFrame) -> pd.DataFrame:
+    """The journal events (a frame of the `events` table) that count as risk-limit violations."""
+    if events is None or events.empty:
+        return events if events is not None else pd.DataFrame()
+    return events[events["category"].astype(str).str.lower().isin(RISK_EVENT_CATEGORIES)
+                  & events["level"].astype(str).str.upper().isin(RISK_EVENT_LEVELS)]
+
+
 def evaluate_paper_candidate(trades: pd.DataFrame, observed_sessions: int, risk_violations: int,
                              capital: float) -> dict:
     """Read-only, cost-inclusive check of a strategy's closed paper trades: the bar before real money."""

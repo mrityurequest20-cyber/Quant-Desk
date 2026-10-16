@@ -319,7 +319,7 @@ def cmd_command(cfg, a):
 
 def cmd_paper_gate(cfg, a):
     """Read-only check of one strategy's closed, cost-inclusive paper trades against the bar for real money."""
-    from ..research.protocol import evaluate_paper_candidate, real_quote_trades, without_exploration
+    from ..research.protocol import evaluate_paper_candidate, real_quote_trades, risk_violation_events, without_exploration
     j = Journal(paths(cfg, a.account or "live")["journal"])
     try:
         trades = j.trades()
@@ -333,11 +333,7 @@ def cmd_paper_gate(cfg, a):
             checks["name"].astype(str).str.contains(r"risk|limit|kill|reconcil", case=False, regex=True) &
             checks["status"].astype(str).str.upper().isin(["FAIL", "ERROR"])
         ] if not checks.empty else checks
-        events = j.events(a.since)
-        risky_events = events[
-            events["category"].astype(str).str.lower().isin(["risk", "risk_limit", "kill_switch", "execution"]) &
-            events["level"].astype(str).str.upper().isin(["WARN", "ERROR"])
-        ] if not events.empty else events
+        risky_events = risk_violation_events(j.events(a.since))
         gate = evaluate_paper_candidate(trades, int(sessions.iloc[0]["n"]), len(risky_checks) + len(risky_events),
                                         float(cfg.get("intraday.capital", 20000)))
         gate.update({"strategy": a.strategy, "since": a.since, "costs_included": True, "paper_account": a.account,
