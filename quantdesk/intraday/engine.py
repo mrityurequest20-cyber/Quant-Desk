@@ -282,6 +282,7 @@ class IntradayEngine:
                 for t in self.feed.trades(u):
                     self.flow[u].add(t)
         if not got:
+            self._wallclock_exits(now)                    # no new bar is no reason to hold a position past the square-off
             return False
         self._refresh_news(now)
         self._short_legs(now)
@@ -325,14 +326,21 @@ class IntradayEngine:
             if self.anticipate:
                 action = self._arm(u, view, s, now, action)
             self._think(u, view, now, "; ".join(exits + [action]) if exits else action, force=bool(exits))
-        if now.time() >= self.risk.square_off:
-            for t in list(self.open_trades):
-                self._close(t, now, "square_off", f"intraday square-off at {self.risk.square_off:%H:%M}")
+        self._wallclock_exits(now)
         self._snapshot(now)
         self._persist()
         self._heartbeat(now)
         self.journal.commit()
         return True
+
+    def _wallclock_exits(self, now) -> None:
+        """What must happen by the clock, bar or no bar: a stuck exit is retried, and past the square-off time every
+        open position is closed (P1-2: with polls returning nothing from 14:50 the trade sat open to the end of the day)."""
+        for t in list(self.open_trades):
+            if t.meta.get("exit_pending"):
+                self._close(t, now, *t.meta["exit_pending"])
+            elif now.time() >= self.risk.square_off:
+                self._close(t, now, "square_off", f"intraday square-off at {self.risk.square_off:%H:%M}")
 
     def end_session(self, reason: str = "square_off", note: str = "end of session") -> str:
         now = self.feed.now()
@@ -568,6 +576,13 @@ class IntradayEngine:
         positions' stops and targets in real time. A no-op without a realtime feed or anything to watch."""
         if not (getattr(self.feed, "has_ltp", False) and self.day):
             return False
+        if self.open_trades and self.feed.now().time() >= self.risk.square_off:
+            n = len(self.open_trades)
+            self._wallclock_exits(self.feed.now())        # the square-off is the clock's, not the next bar's
+            if len(self.open_trades) < n:
+                self._persist()
+                self.journal.commit()
+                return True
         want = [u for u in self.underlyings if self.armed.get(u) or any(t.symbol == u for t in self.open_trades)]
         if not want:
             return False
@@ -1096,6 +1111,10 @@ class IntradayEngine:
                                                           f"using the last chain{f' — {self.live_fails} in a row' if self.live_fails > 1 else ''}")
             return {}
 
+    def _real_book(self) -> bool:
+        """The chain source is a broker's book (Kotak), as opposed to the model chain: there, no live quote means no entry."""
+        return self.chains is not self.model_chain and (self.chains.name == "kotak" or bool(getattr(self.chains, "book", False)))
+
     def _leg_liquidity(self, u: str, insts, legs, live: dict) -> list[str]:
         """Each leg's book at entry, from the live quotes or else the last chain: e.g. '25000CE ok 0.4%'."""
         ch = self.chain_df.get(u)
@@ -1273,8 +1292,8 @@ class IntradayEngine:
         insts = [Instrument.option(u, plan.expiry, l.strike, l.right, plan.lot_size) for l in plan.legs]
         live = self._live(insts, now)
         t.meta["leg_liquidity"] = self._leg_liquidity(u, insts, plan.legs, live)
-        if live and any(i.symbol not in live for i in insts):
-            # the book answered, but not two-sided for every leg: a real order there may not fill at all
+        if (live or self._real_book()) and any(i.symbol not in live for i in insts):
+            # the book answered, but not two-sided for every leg (or did not answer at all): a real order there may not fill
             missing = ", ".join(f"{l.strike:g}{l.right}" for i, l in zip(insts, plan.legs) if i.symbol not in live)
             msg = f"skipped {plan.setup}: no two-sided quote on {missing} in the live book"
             self.journal.decision(now, plan.setup, u, "rejected", msg, 0,
@@ -1793,6 +1812,10 @@ def run_step(engine: IntradayEngine) -> bool:
         engine.journal.event(now, "ERROR", "engine", repr(exc), {"where": _where(exc)})
         if h["consecutive_failures"] >= engine.max_step_failures:
             engine.enter_safe_mode(now, f"{h['consecutive_failures']} steps failed in a row, last: {exc!r:.120}")
+        try:
+            engine._wallclock_exits(now)                  # a failing step must not cost the 15:15 square-off
+        except Exception:
+            log.exception("wall-clock exits failed")
         try:
             engine.journal.commit()
         except Exception:

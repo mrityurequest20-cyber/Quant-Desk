@@ -44,6 +44,7 @@ def normalise_bars(df: pd.DataFrame) -> pd.DataFrame:
     if "volume" not in df:
         df["volume"] = 0.0
     df = df[["open", "high", "low", "close", "volume"]].astype(float)
+    df = df[(df[["open", "high", "low", "close"]] > 0).all(axis=1)]    # (NaN fails too) Yahoo serves NaN/zero minutes; one NaN poisons VWAP all day
     df = df[~df.index.duplicated(keep="last")].sort_index()
     t = df.index.time
     return df[(t >= OPEN) & (t < CLOSE)]
