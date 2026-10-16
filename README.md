@@ -147,9 +147,9 @@ Other commands:
    - The armed setups are on the app's Desk screen (*Waiting at the level*).
    - Stops and targets are checked on the same 5-second price, not once a minute.
 4. **sizes and executes (simulated):**
-   - **Sizing:** 1% of capital at risk to the plan's stop, scaled by conviction.
+   - **Sizing:** 2.5% of capital at risk to the plan's stop, scaled by conviction (×0.6-1.2, `intraday.risk.risk_per_trade`).
    - **Caps:** lots, premium outlay and margin.
-   - **Daily limits:** 6 trades a day, 2 open, −2.5% daily stop, cooldown after 2 losses.
+   - **Daily limits:** 4 trades a day, 2 open, −5% daily stop, cooldown after 2 losses; all open premium together at most 50% of equity.
    - **Entry window:** new trades only between 09:20 and 14:45.
    - **Fills:** buys at the ask, sells at the bid, plus a tick, plus the full cost stack (STT 0.15% on premium sold). With Kotak, entries and exits use the bid/ask of that moment, and an entry is skipped if the live net premium has moved more than 15% against the plan (a real limit order wouldn't have filled).
 5. **manages:** open options are marked with the IV implied by their last real quote, repriced with the live spot and minute-level time to expiry, so delta, gamma and theta all show up in P&L. Exits happen on invalidation, premium stop/target, underlying target, breakeven trail or time stop. Everything is squared off by 15:15.
@@ -367,8 +367,10 @@ One calibrated-logistic baseline predicts expected net R and abstains below its 
 everything, every configuration is logged with its hash, the replay enforces the engine's position and risk limits,
 and the locked period is opened once.
 
-**No directional trade without an approved plan model** (`autolearn.require_approved_model`). The analyst's read,
-narrative, LLMs and unvalidated models stay advisory.
+**Directional trades are not gated on an approved plan model right now** (`autolearn.require_approved_model: false`,
+the owner's choice of 10 Oct, PR #36). A directional plan still has to pass every other gate: halts, vetoes, the risk
+limits, the EV floor, live-book liquidity and slippage. With `true`, none is taken without a plan champion promoted on
+real point-in-time evidence. LLM reads and unvalidated models stay advisory either way.
 
 ### External index minutes (underlying research only)
 

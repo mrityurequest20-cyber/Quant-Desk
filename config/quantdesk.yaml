@@ -240,9 +240,10 @@ autolearn:
   history_days: 55                 # Yahoo's 5-minute history pulled per cycle (it keeps ~60 days)
   final_test_days: 8               # the locked final test: created once from the newest sessions, never moved
   gate_entries: true               # with an active champion, only take plans its non-abstaining signal agrees with
-  # No directional option trade without a plan model approved on real point-in-time evidence for its horizon and a
-  # positive cost-adjusted expected value from it. The analyst's tilt, the narrative, LLM reads and unvalidated
-  # direction models stay advisory (shown, journalled), never a reason to trade. false = the old behaviour (tests only).
+  # true: no directional option trade without a plan model approved on real point-in-time evidence for its horizon and a
+  # positive cost-adjusted expected value from it. false (the owner's choice, 10 Oct, PR #36): directional plans are not
+  # gated on a plan model; every other gate (halts, vetoes, risk, EV floor, live book) still applies. LLM reads and
+  # unvalidated direction models stay advisory (shown, journalled) either way.
   require_approved_model: False
   # One simple baseline first (rule: add a model only when it beats this out of sample after costs). The L1, L2 and
   # stumps variants stay in the code (models.SPECS) for when that's shown.
