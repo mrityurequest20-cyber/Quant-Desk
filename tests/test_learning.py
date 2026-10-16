@@ -258,12 +258,16 @@ def test_the_engine_grades_each_session_and_stands_aside_on_a_losing_record(synt
     for setup in cfg.get("intraday.setups"):
         for _ in range(10):
             bad.bump("setup", setup, False, -1.0)
-    run = lambda m: run_replay(e := IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(),
-                                                   IntradayBroker(cfg, starting_cash=500000), say=None, memory=m)) and e
-    plain, e2 = run(None), run(bad)
+    run = lambda m, c=cfg: run_replay(e := IntradayEngine(c, ReplayFeed(bars, days[-1]), "model", Journal(),
+                                                          IntradayBroker(c, starting_cash=500000), say=None, memory=m)) and e
+    plain, e2 = run(None), run(bad, switched_on(cfg))                    # the stand-aside rule is behind the D-01 switch
     dec = e2.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'")
     assert e2.closed == [] and (dec.empty or dec["detail"].str.contains("has lost").all())
     assert not plain.closed or not dec.empty                             # what it would have traded, it refused by record
+    off = run(bad)                                                       # by default the record is shown, not applied
+    assert off.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'").empty
+    book = lambda e: [(t.symbol, t.strategy, t.opened_at, t.exit_reason, round(t.pnl, 2)) for t in e.closed]
+    assert book(off) == book(plain)                                      # ...so the desk trades as if nothing were learned
 
 
 def test_a_night_of_headlines_is_one_observation_not_forty(tmp_path):
@@ -288,3 +292,110 @@ def test_bootstrap_seeds_the_record_from_real_sessions(synthetic, tmp_path):
     assert got["sessions"] == 3 and got["factors"] > 300 and m.d["bootstrap"]["days"][-1] == str(days[-1])
     assert m.stat("setup", "orb") is None                                # replay fills don't build a setup record
     assert all(0.5 <= w <= 1.5 for w in m.factor_weights().values()) and len(m.d["days"]) == 3
+
+
+def frozen(b, day="2026-10-05", a="15:15", z="15:28"):
+    """Kotak's index candles: open = high = low = close = the previous close from `a` to `z` (F-02)."""
+    b = b.copy()
+    b.loc[ts(f"{day} {a}"):ts(f"{day} {z}"), ["open", "high", "low", "close"]] = b.loc[ts(f"{day} {a}") - pd.Timedelta(minutes=1), "close"]
+    return b
+
+
+def test_a_read_whose_window_ends_in_the_index_freeze_is_not_graded(tmp_path):
+    """F-02: Kotak's index series sits on the 15:14 close from 15:15 to 15:28 while the future keeps trading. A read
+    whose 30 minutes end in the freeze was graded on that stale print; now it isn't, and a read whose window closes before it grades as it did."""
+    b = frozen(day_bars())
+    j = Journal(tmp_path / "j.db")
+    for t in ("2026-10-05 14:00", "2026-10-05 14:50"):                  # 14:50's window ends at 15:20, in the freeze
+        j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+                (str(ts(t)), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j.commit()
+    m = Memory()
+    assert learning.grade_session(m, j, {"NIFTY": b}, "2026-10-05")["factors"] == 1
+    assert m.stat("factor", "vwap")["n"] == pytest.approx(5 / 30)            # the 14:00 read only
+    assert b.loc[ts("2026-10-05 15:20"), "close"] == 25359                 # the caller's bars are left as they were
+    gone = b[(b.index < ts("2026-10-05 15:15")) | (b.index > ts("2026-10-05 15:28"))]   # the freeze as missing bars
+    assert forward(gone, ts("2026-10-05 14:50")) is None                     # 15:20 → the 15:29 bar: 9 minutes over
+
+
+def test_the_freeze_detector_finds_15_15_to_15_28_within_a_session_only(synthetic):
+    from quantdesk.intraday.feeds import frozen_minutes
+    b = frozen(day_bars())
+    assert frozen_minutes(b).equals(pd.date_range("2026-10-05 15:15", "2026-10-05 15:28", freq="1min", tz=IST))
+    assert frozen_minutes(b, min_run=15).empty
+    masked = learning.unfrozen({"NIFTY": b})["NIFTY"]
+    assert forward(masked, ts("2026-10-05 14:00")) == pytest.approx(np.log(25315 / 25285.0))
+    assert forward(masked, ts("2026-10-05 14:50")) is None and forward(b, ts("2026-10-05 14:50")) is not None
+    a, x = day_bars(), 25000.0 + 372                                         # two flat minutes at one close and two at
+    a.loc[ts("2026-10-05 15:28"):, ["open", "high", "low", "close"]] = x     # the next open are not a 3-minute freeze
+    c = day_bars("2026-10-06", start=x)
+    c.loc[:ts("2026-10-06 09:16"), ["open", "high", "low", "close"]] = x
+    assert frozen_minutes(pd.concat([a, c])).empty
+    _, bars, _ = synthetic
+    assert all(frozen_minutes(s).empty for s in bars.values())               # the synthetic generator never freezes
+    assert learning.unfrozen({"NIFTY": bars["NIFTY"]})["NIFTY"] is bars["NIFTY"]
+
+
+def test_armed_and_ic_grading_cope_with_a_masked_bar_and_overshoot_is_counted(tmp_path):
+    """grade_armed / grade_ic read the masked series without crashing or scoring a NaN; grade_session says how many
+    windows a gap in the bars dropped (and stays silent when none)."""
+    b = learning.unfrozen({"NIFTY": frozen(day_bars())})["NIFTY"]
+    j = Journal(tmp_path / "j.db")
+    j.decision(ts("2026-10-05 14:55"), "orb", "NIFTY", "rejected", "orb reached its level 25,340.00 but EV below the floor",
+               0, {"armed": {"level": 25340.0, "invalidation": 25320.0, "direction": 1}, "target": 25500.0})
+    j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+            (str(ts("2026-10-05 14:50")), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+            (str(ts("2026-10-05 11:50")), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j.commit()
+    m = Memory()
+    assert learning.grade_armed(m, j.df("SELECT * FROM decisions"), {"NIFTY": b}) == 1
+    assert np.isfinite(m.stat("armed_rejected", "orb")["sum"])                # the last live bar (15:29), never a NaN
+    learning.grade_ic(m, j.df("SELECT ts, symbol, evidence FROM thoughts"), {"NIFTY": b})
+    assert all(np.isfinite(v).all() for h in m.d["ic"].values() for v in h.values())
+    hole = day_bars().drop(pd.date_range("2026-10-05 12:20", periods=6, freq="1min", tz=IST))
+    assert "dropped_overshoot" not in learning.grade_session(Memory(), j, {"NIFTY": day_bars()}, "2026-10-05")
+    got = learning.grade_session(Memory(), j, {"NIFTY": hole}, "2026-10-05")
+    assert got["dropped_overshoot"] >= 1                                      # 11:50 → 12:20 lands 6 minutes past the hole
+
+
+def test_a_day_without_a_freeze_grades_as_before(synthetic, tmp_path):
+    """Every 5-minute read of a synthetic session whose 30 minutes fit in it is graded, against the close 30 minutes on."""
+    _, bars, days = synthetic
+    b = bars["NIFTY"]
+    j = Journal(tmp_path / "j.db")
+    reads = pd.date_range(f"{days[-1]} 09:20", f"{days[-1]} 15:25", freq="5min", tz=IST)
+    for t in reads:
+        j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+                (str(t), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j.commit()
+    m = Memory()
+    assert learning.grade_session(m, j, {"NIFTY": b}, days[-1])["factors"] == 68     # 09:20 … 14:55
+    c = b["close"]
+    ups = sum(c[t + pd.Timedelta(minutes=30)] > c[t] for t in reads if t <= ts(f"{days[-1]} 14:55"))
+    assert m.stat("factor", "vwap")["hits"] == pytest.approx(ups * 5 / 30)
+
+
+def test_a_two_minute_gap_still_grades_and_a_long_one_does_not():
+    b = day_bars()
+    handover = b.drop(pd.date_range("2026-10-05 12:20", periods=2, freq="1min", tz=IST))
+    assert forward(handover, ts("2026-10-05 11:50")) == pytest.approx(np.log(25187 / 25155.0))   # 12:20 → 12:22
+    hole = b.drop(pd.date_range("2026-10-05 12:20", periods=6, freq="1min", tz=IST))
+    assert forward(hole, ts("2026-10-05 11:50")) is None                     # 12:20 → 12:26: 6 minutes over
+    assert forward(hole, ts("2026-10-05 11:50"), max_overshoot=None) == pytest.approx(np.log(25191 / 25155.0))
+
+
+def test_the_close_says_which_index_minutes_froze(synthetic):
+    """One WARN `data` event per frozen index, worded so self-review doesn't file a vendor's freeze as our bug."""
+    from quantdesk.intraday.engine import IntradayEngine, run_replay
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    cfg, bars, days = synthetic
+    bars = {**bars, "NIFTY": frozen(bars["NIFTY"], day=str(days[-1]))}
+    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
+                         say=None, memory=Memory())
+    run_replay(eng)
+    ev = eng.journal.events(level="WARN")
+    ev = ev[ev["category"] == "data"]
+    assert list(ev["message"]) == ["NIFTY: index bars frozen 15:15-15:28 (14 minutes), kept out of grading"]
+    assert not ev["message"].str.contains("failed").any()

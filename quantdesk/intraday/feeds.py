@@ -44,9 +44,24 @@ def normalise_bars(df: pd.DataFrame) -> pd.DataFrame:
     if "volume" not in df:
         df["volume"] = 0.0
     df = df[["open", "high", "low", "close", "volume"]].astype(float)
+    df = df[(df[["open", "high", "low", "close"]] > 0).all(axis=1)]    # (NaN fails too) Yahoo serves NaN/zero minutes; one NaN poisons VWAP all day
     df = df[~df.index.duplicated(keep="last")].sort_index()
     t = df.index.time
     return df[(t >= OPEN) & (t < CLOSE)]
+
+
+def frozen_minutes(bars: pd.DataFrame | None, min_run: int = 3) -> pd.DatetimeIndex:
+    """F-02: the minutes of every run of `min_run`+ bars printing open = high = low = close = the previous bar's close,
+    within a session. Kotak's index series does this from 15:15 to 15:28 every session while the future keeps trading;
+    NIFTY or BANKNIFTY never sits on one price for three minutes, so these are stale prints, not prices. A generic
+    detector: an illiquid index or a rounded feed could trip it, and the error is conservative (fewer grades)."""
+    if bars is None or len(bars) < min_run:
+        return pd.DatetimeIndex([], tz=IST)
+    c, d = bars["close"], bars.index.normalize().to_numpy()
+    same_day = np.r_[False, d[1:] == d[:-1]]                       # a session's first bar has no previous close
+    flat = (bars["open"] == c) & (bars["high"] == c) & (bars["low"] == c) & (c == c.shift()) & same_day
+    run = flat.groupby((~flat).cumsum()).transform("sum")          # each flat bar: the length of its run
+    return bars.index[(flat & (run >= min_run)).to_numpy()]
 
 
 class IntradayFeed(abc.ABC):

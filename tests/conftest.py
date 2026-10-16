@@ -12,7 +12,10 @@ from quantdesk.data.synthetic import SyntheticProvider  # noqa: E402
 
 @pytest.fixture
 def cfg(tmp_path):
-    return Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path / "runtime")}})
+    # the shipped default is require_approved_model: false (owner decision, #36); these tests were written for the gated
+    # desk, so they pin it. tests of the open path set it false themselves.
+    return Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path / "runtime")},
+                                                  "autolearn": {"require_approved_model": True}})
 
 
 @pytest.fixture(scope="session")

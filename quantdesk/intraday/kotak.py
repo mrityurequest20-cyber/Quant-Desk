@@ -214,6 +214,7 @@ class KotakOptionChain(ChainSource):
     """Strikes and tokens from Kotak's option chain, then each contract's live bid/ask (and the index, so spot
     and the quotes are from the same instant) from the quotes endpoint: ~3 calls per underlying per refresh."""
     name = "kotak"
+    book = True
 
     def __init__(self, client: KotakClient, strikes: int = 20, refresh_min: int = 1):
         self.k = client
