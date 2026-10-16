@@ -203,6 +203,20 @@ def _obj(v) -> dict:
     return {}
 
 
+def _later(t, other):
+    """The later of a timestamp and an optional second one (a seen-at or read-at that may be missing or unparseable)."""
+    try:
+        o = pd.Timestamp(other) if other is not None and other == other and str(other) else None
+    except (ValueError, TypeError):
+        o = None
+    if o is None:
+        return t
+    a = pd.Timestamp(t)
+    a = a.tz_localize(IST) if a.tzinfo is None else a
+    o = o.tz_localize(IST) if o.tzinfo is None else o
+    return max(a, o)
+
+
 def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0, min_tone: float = 0.15) -> int:
     """Each headline's tone (each reader's) against the index's next 30 minutes from when the desk could act on it.
     Headlines that share that window are one observation between them, not one each: a night's forty stories are
@@ -215,16 +229,22 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
             continue
         about, nlp_ = _obj(r.about), _obj(getattr(r, "nlp", None))
         graded = False
+        # C-07: a read is graded from when the desk could act on it, not when the story was published: the rules
+        # tone from when the desk saw the story (a median 12 minutes after publication, 12-16 Oct), each language
+        # model's from when its read arrived. Graded from publication, a story seen after the move took the credit.
+        seen = _later(r.ts, getattr(r, "seen_at", None))
+        llm_ = ((nlp_.get("llm") or {}).get("readers") or {})
         for sym in ("NIFTY", "BANKNIFTY"):
             if (about.get(sym) or 0) < min_rel:
                 continue
-            got = forward(bars.get(sym), r.ts, from_open=True, with_start=True)
-            if got is None:
-                continue
-            fr, t0 = got
-            graded = True
-            llm_ = ((nlp_.get("llm") or {}).get("readers") or {})
-            for reader, tone in [("rules", r.sentiment)] + [(k, (v or {}).get(sym)) for k, v in llm_.items()]:
+            reads = [("rules", r.sentiment, seen)] + [(k, (v or {}).get(sym), _later(seen, (v or {}).get("at")))
+                                                      for k, v in llm_.items()]
+            for reader, tone, t in reads:
+                got = forward(bars.get(sym), t, from_open=True, with_start=True)
+                if got is None:
+                    continue
+                graded = True
+                fr, t0 = got
                 if tone is None or not tone == tone or abs(tone) < min_tone:
                     continue
                 rows.append((reader, sym, t0.floor(f"{HORIZON}min"), float(tone), fr, nlp_.get("event", "general"), r.source))
