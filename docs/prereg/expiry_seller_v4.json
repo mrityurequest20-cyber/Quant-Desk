@@ -1,0 +1,51 @@
+{
+  "name": "expiry_seller_v4",
+  "registered": "2026-10-10",
+  "kind": "forward paper test (no orders): every trade is decided by the rules below before its outcome exists",
+  "question": "the same forward test as expiry_seller_v1, v2 and v3 (every sleeve they run, on the same underlyings, at the same size), settled at the official index close instead of the 15:00-15:29 mean of the recorded one-minute closes",
+  "why": "audit finding E-01 (P1): Kotak's one-minute index candles go flat (O=H=L=C= the previous close) from 15:15 to about 15:28 every session, so the registered 15:00-15:29 mean is computed partly on stale prints. On the 2026-10-06 NIFTY expiry it missed NSE's official close by -27 bps and flipped both NIFTY trades from profit to loss, and the sleeve rules (cost, consistency, tail) run on that P&L. The histories settle on the official close, so the official close is also the like-for-like comparison",
+  "supersedes": "expiry_seller_v1, expiry_seller_v2 and expiry_seller_v3 for new trades from 2026-10-10. Those specs are not edited and keep running unchanged in parallel, each on its own ledger, as the recorded comparison of the two settlement rules",
+  "settlement": "official_close",
+  "history": {
+    "source": {
+      "A4, B4": "expiry_seller_v1's history: research branch vrp_trades.csv.gz (quantdesk/research/warehouse_research.py), NSE F&O bhavcopy closes 2019-01 to 2026-09",
+      "C4": "expiry_seller_v2's history: expiry_wings_v1 (spec 03ed351842ac), docs/prereg/results/expiry_wings_v1-03ed351842ac.md",
+      "D4, E4": "expiry_seller_v3's history: expiry_eve_law_v1 (spec 51e180594091), docs/prereg/results/expiry_eve_law_v1-51e180594091.md"
+    },
+    "convention": "each sleeve's history exactly as in the spec it comes from (D4 and E4 per reference lot, as expiry_seller_v3); evidence class real_eod_approximation",
+    "per_lot_rupees": {
+      "A4_NIFTY":      {"strategy": "iron_condor_20_10",  "n": 391, "mean": 118,  "sd": 2232, "t": 1.05, "worst": -8457,  "p05": -5066,  "win": 0.744, "credit": 1381},
+      "B4_NIFTY":      {"strategy": "short_strangle_20d", "n": 398, "mean": 649,  "sd": 4816, "t": 2.69, "worst": -39441, "p05": -6869,  "win": 0.774, "credit": 2505},
+      "A4_BANKNIFTY":  {"strategy": "iron_condor_20_10",  "n": 327, "mean": 355,  "sd": 2951, "t": 2.18, "worst": -18655, "p05": -5143,  "win": 0.777, "credit": 1811},
+      "B4_BANKNIFTY":  {"strategy": "short_strangle_20d", "n": 328, "mean": 1074, "sd": 6417, "t": 3.03, "worst": -50684, "p05": -8150,  "win": 0.817, "credit": 3341},
+      "C4_BANKNIFTY":  {"strategy": "iron_condor_20_05",  "n": 326, "mean": 648,  "sd": 4185, "t": 2.66, "worst": -20891, "p05": -8502,  "win": 0.794, "credit": 2562, "max_loss_median": 15222},
+      "D4_FINNIFTY":   {"strategy": "short_strangle_20d", "n": 212, "mean": 971,  "sd": 5645, "worst": -54208, "p05": -9395,  "win": 0.844, "credit": 2904},
+      "D4_MIDCPNIFTY": {"strategy": "short_strangle_20d", "n": 99,  "mean": 1309, "sd": 4994, "worst": -23905, "p05": -8344,  "win": 0.778, "credit": 3565},
+      "D4_SENSEX":     {"strategy": "short_strangle_20d", "n": 142, "mean": 691,  "sd": 5666, "worst": -30229, "p05": -11846, "win": 0.782, "credit": 3228},
+      "E4_FINNIFTY":   {"strategy": "iron_condor_20_05",  "n": 212, "mean": 547,  "sd": 4763, "worst": -48089, "p05": -9482,  "win": 0.825, "credit": 2288, "max_loss_median": 10683},
+      "E4_MIDCPNIFTY": {"strategy": "iron_condor_20_05",  "n": 99,  "mean": 590,  "sd": 4531, "worst": -18069, "p05": -8874,  "win": 0.778, "credit": 2816, "max_loss_median": 16875},
+      "E4_SENSEX":     {"strategy": "iron_condor_20_05",  "n": 142, "mean": 228,  "sd": 4614, "worst": -17243, "p05": -11331, "win": 0.775, "credit": 2536, "max_loss_median": 13089}
+    },
+    "caveats": "as in expiry_seller_v1, v2 and v3"
+  },
+  "sleeves": {
+    "A4": {"strategy": "iron_condor_20_10", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.10], [1, "PE", -0.10]], "underlyings": ["NIFTY", "BANKNIFTY"], "naked": false, "risk": "defined: expiry_seller_v1's sleeve A"},
+    "B4": {"strategy": "short_strangle_20d", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20]], "underlyings": ["NIFTY", "BANKNIFTY"], "naked": true, "risk": "undefined (naked): expiry_seller_v1's sleeve B"},
+    "C4": {"strategy": "iron_condor_20_05", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.05], [1, "PE", -0.05]], "underlyings": ["BANKNIFTY"], "naked": false, "risk": "defined: expiry_seller_v2's sleeve C"},
+    "D4": {"strategy": "short_strangle_20d", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20]], "underlyings": ["FINNIFTY", "MIDCPNIFTY", "SENSEX"], "naked": true, "risk": "undefined (naked): expiry_seller_v3's sleeve D"},
+    "E4": {"strategy": "iron_condor_20_05", "legs": [[-1, "CE", 0.20], [-1, "PE", -0.20], [1, "CE", 0.05], [1, "PE", -0.05]], "underlyings": ["FINNIFTY", "MIDCPNIFTY", "SENSEX"], "naked": false, "risk": "defined: expiry_seller_v3's sleeve E"}
+  },
+  "sleeve_names": "new names (the old letter with the spec's version) so a trade id never repeats an id in the v1-v3 ledgers",
+  "underlyings": {"NIFTY": {"lot": 65, "expiries": "weekly"}, "BANKNIFTY": {"lot": 30, "expiries": "monthly"}, "FINNIFTY": {"lot": 60, "expiries": "monthly"}, "MIDCPNIFTY": {"lot": 120, "expiries": "monthly"}, "SENSEX": {"lot": 20, "expiries": "weekly, Thursday (BSE)"}},
+  "size": "1 lot (D4, E4: 1 reference lot) per sleeve per underlying, as v1-v3; P&L in rupees per lot",
+  "entry": "exactly as expiry_seller_v1: the chain tape's snapshot nearest 15:20 within 15:10-15:25 on the eve, real quotes only, out-of-the-money strikes nearest each delta within 0.08, a two-sided quote on every leg, sells at bid - 0.05, buys at ask + 0.05, statutory fees",
+  "exit": {
+    "rule": "held to expiry, cash-settled; STT 0.125% of intrinsic value on exercised long legs",
+    "settlement_price": "the official index close: NSE's published file (ind_close_all), else the 15:29 one-minute close (equal to NSE's official close on every day the L1 evidence audit checked), else Yahoo's daily close; the source is recorded with every settlement",
+    "when": "on expiry day (from 15:31) only NSE's published file is accepted; the 15:29 close and Yahoo only from the next run on. With no official close yet the trade stays open and the next run tries again: it never falls back to the 15:00-15:29 mean"
+  },
+  "measured_per_trade": "as expiry_seller_v1: P&L, the cost gap against the history's convention at the same snapshot, max loss, margin",
+  "rules": "as expiry_seller_v1 (cost check from 6 settled trades, consistency from 8, the naked tail rule at 1.5 x the history's worst, a loss beyond a defined-risk sleeve's max loss is a bug, a retired sleeve opens nothing more), on this spec's own settled trades only",
+  "eligibility": "as expiry_seller_v1 and v3: reported, never applied; the defined-risk sleeve first on each underlying (A4 on NIFTY and BANKNIFTY, E4 on FINNIFTY, MIDCPNIFTY and SENSEX), the naked one only after it has been eligible for 3 months; real money only on the owner's word. History restarts: this ledger begins empty and no v1-v3 trade is carried into it, so every count (6, 8, 10 settled trades, the 3 months) starts from zero at registration",
+  "changes": "any change is a new spec with its own ledger; this ledger is never edited"
+}

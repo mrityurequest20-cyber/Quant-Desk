@@ -19,6 +19,9 @@ its history.
   evidence audit), while the history settles on the official close. So each settled trade also gets an `official`
   event: the official close (NSE's published file, else the 15:29 one-minute close, which matched it on every day the
   audit checked, else Yahoo's close), the P&L at it, and the gap. The registered settlement stays the result.
+- Settlement by spec (E-01): a spec's `settlement` field names its registered rule. Absent (v1–v3), it is the mean
+  above. `official_close` (v4 on) settles at the official close itself, from the same sources as the check, and a
+  trade with no official close yet waits for the next run: it never falls back to the mean. Settled events are final.
 - Paper only. Nothing here can place an order or promote itself: it reports eligibility by the spec's rules, and a
   registered allocator spec (BACKLOG 9) is what moves an eligible sleeve into the paper account.
 
@@ -59,6 +62,7 @@ NAKED_MARGIN = 0.12                            # rough SPAN + exposure for one s
 B_AFTER_A_DAYS = 91
 WIDE_SPREAD = 0.25                             # a leg whose bid-ask is over 25% of its mid is flagged 'wide'
 LATE_SNAPSHOT_MIN = 5                          # a snapshot more than 5 minutes from 15:20 is flagged 'late'
+SETTLEMENTS = ("closing_mean", "official_close")   # a spec's registered settlement (v1–v3 name none: the mean)
 
 
 def load_spec(path: Path = SPEC_PATH) -> dict:
@@ -253,6 +257,9 @@ class ExpirySeller:
         self.underlyings = list(self.spec["underlyings"])
         self.close_fn, self.say = close_fn, say
         self.official_fn = official_fn            # (underlying, day) -> NSE's published close, or None
+        self.settlement = self.spec.get("settlement", SETTLEMENTS[0])
+        if self.settlement not in SETTLEMENTS:
+            raise ValueError(f"{self.spec['name']}: unknown settlement {self.settlement!r}")
 
     # ---- the ledger ----------------------------------------------------------------------------------------------
     def events(self) -> list[dict]:
@@ -321,14 +328,18 @@ class ExpirySeller:
                 continue
             if exp == now.date() and now.time() < dt.time(15, 31):
                 continue
-            s_t, src = settlement_price(self.data, t["underlying"], exp)
-            if s_t is None and self.close_fn is not None and (exp < now.date() or now.time() >= dt.time(15, 45)):
-                why = src
-                try:
-                    s_t = self.close_fn(t["underlying"], exp)
-                    src = f"Yahoo daily close ({why})"
-                except Exception as exc:
-                    src = f"{why}; Yahoo: {exc!s:.80}"
+            if self.settlement == "official_close":       # E-01: on expiry day NSE's file or nothing; never the mean
+                s_t, src = self.official(t["underlying"], exp, nse_only=exp == now.date())
+                src = src if s_t is not None else f"waiting for the official close ({src})"
+            else:
+                s_t, src = settlement_price(self.data, t["underlying"], exp)
+                if s_t is None and self.close_fn is not None and (exp < now.date() or now.time() >= dt.time(15, 45)):
+                    why = src
+                    try:
+                        s_t = self.close_fn(t["underlying"], exp)
+                        src = f"Yahoo daily close ({why})"
+                    except Exception as exc:
+                        src = f"{why}; Yahoo: {exc!s:.80}"
             if s_t is None or not math.isfinite(s_t):
                 notes.append(f"UNSETTLED {t['id']}: {src}")
                 continue
@@ -372,8 +383,11 @@ class ExpirySeller:
     def check_settlement(self, day: dt.date, now: pd.Timestamp) -> list[str]:
         """Diagnostic: each settled trade's P&L at the official close too, appended once as an `official` event. On
         expiry day (from 15:45) only NSE's published file is accepted; it usually appears in the evening, so the
-        fallbacks are used only from the next run on. The registered settlement is never changed."""
+        fallbacks are used only from the next run on. The registered settlement is never changed. A spec that settles
+        at the official close has nothing to check."""
         notes = []
+        if self.settlement == "official_close":
+            return notes
         for t in self.trades():
             if not t["settled"] or "official" in t:
                 continue

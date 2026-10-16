@@ -287,3 +287,187 @@ def test_settlement_from_the_tape_when_no_bars_are_recorded(tmp_path):
     assert s == pytest.approx(24014.5) and "30 tape index spots" in src       # 15:30 itself is outside the window
     s2, src2 = settlement_price(tmp_path, "SENSEX", day)
     assert s2 is None and "tape has 1" in src2
+
+
+# ---- E-01: expiry_seller_v4 settles at the official close; v1–v3 keep the 15:00–15:29 mean -------------------------
+LOCKED = {"expiry_seller_v1": "5f95229485b8", "expiry_seller_v2": "c3dadb257746", "expiry_seller_v3": "8a79b10d4197"}
+
+
+def spec(name):
+    from quantdesk.intraday.sleeves import specs
+    return next(s for s in specs() if s["name"] == name)
+
+
+def frozen_close(data, u, day, official, last=True, live=SPOT):
+    """Kotak's tape on an expiry day: flat at the previous close from 15:15, then the 15:29 bar at the official close
+    (`last=False`: no 15:29 bar recorded)."""
+    idx = pd.date_range(f"{day} 09:15", f"{day} {'15:29' if last else '15:28'}", freq="1min", tz=IST)
+    c = pd.Series(live, index=idx)
+    if last:
+        c.iloc[-1] = official
+    SessionRecorder(data).record_bars(u, pd.DataFrame({"open": c, "high": c, "low": c, "close": c, "volume": 0.0}, index=idx))
+
+
+def short_strangle(sleeve, u, exp, lot):
+    return {"event": "open", "id": f"{sleeve}-{u}-{exp}", "sleeve": sleeve, "underlying": u, "expiry": str(exp), "lot": lot,
+            "legs": [{"qty": -1, "right": "CE", "strike": SPOT + 200, "fill": 40.0, "mid": 40.1, "model_fill": 39.9},
+                     {"qty": -1, "right": "PE", "strike": SPOT - 200, "fill": 35.0, "mid": 35.1, "model_fill": 34.9}],
+            "entry_fees_rs": 50.0, "cost_gap_rs": 0.0, "max_loss_rs": None}
+
+
+def write(seller, *evs):
+    seller.root.mkdir(parents=True, exist_ok=True)
+    with seller.ledger.open("a") as f:
+        for ev in evs:
+            f.write(json.dumps(ev) + "\n")
+
+
+@pytest.mark.parametrize("name,sleeve,u", [("expiry_seller_v1", "A", "NIFTY"), ("expiry_seller_v2", "C", "BANKNIFTY"),
+                                           ("expiry_seller_v3", "E", "FINNIFTY")])
+def test_v1_to_v3_still_settle_on_the_closing_mean_unchanged(cfg, tmp_path, name, sleeve, u):
+    """The locked specs keep their registered rule to the byte: the 15:00–15:29 mean, frozen prints and all, with an
+    NSE close on hand that they must not use."""
+    _, d, e = eve(cfg)
+    s = spec(name)
+    assert s["_hash"] == LOCKED[name] and "settlement" not in s
+    seller = ExpirySeller(cfg, tmp_path / "sleeves", tmp_path / "data", spec=s, say=lambda *a: None,
+                          official_fn=lambda u_, day: SPOT + 45)
+    assert seller.settlement == "closing_mean"
+    lot = int(s["underlyings"][u]["lot"])
+    write(seller, short_strangle(sleeve, u, e, lot))
+    frozen_close(tmp_path / "data", u, e, SPOT + 60)
+    assert seller.settle(e, at(e, "15:45")) == [f"settled {sleeve}-{u}-{e} at {SPOT + 2:,.2f} (mean of 30 recorded "
+                                                f"15:00–15:29 closes): ₹{75 * lot - 50:+,.0f}/lot"]
+    ev = seller.events()[-1]
+    assert list(ev) == ["spec", "recorded_at", "event", "id", "settle", "settle_source", "intrinsic", "stt_rs", "pnl_pts", "pnl_rs"]
+    assert {k: v for k, v in ev.items() if k != "recorded_at"} == {
+        "spec": LOCKED[name], "event": "settle", "id": f"{sleeve}-{u}-{e}", "settle": SPOT + 2,
+        "settle_source": "mean of 30 recorded 15:00–15:29 closes", "intrinsic": [0.0, 0.0], "stt_rs": 0.0, "pnl_pts": 75.0,
+        "pnl_rs": 75.0 * lot - 50}
+    nxt = TradingCalendar(cfg.holidays()).next_trading_day(e)
+    assert len(seller.check_settlement(nxt, at(nxt, "16:00"))) == 1          # the diagnostic still runs on v1–v3
+    assert seller.trades()[0]["official"] == SPOT + 45 and seller.trades()[0]["settle"] == SPOT + 2
+
+
+def test_v4_settles_at_the_official_close_and_records_its_source(cfg, tmp_path):
+    """Side by side on the same tape: v1 settles on the frozen 15:00–15:29 mean, v4 on NSE's published close (on expiry
+    day), else the 15:29 one-minute close from the next run on. Each spec writes only its own ledger."""
+    cal, d, e = eve(cfg)
+    data, root = tmp_path / "data", tmp_path / "sleeves"
+    nse = {}
+    v1, v4 = (ExpirySeller(cfg, root, data, spec=spec(n), say=lambda *a: None, official_fn=lambda u, day: nse.get((u, day)))
+              for n in ("expiry_seller_v1", "expiry_seller_v4"))
+    assert v4.settlement == "official_close" and v4.ledger.name == "expiry_seller_v4.jsonl"
+    snapshot(cfg, cal, data, d, e, "1520")
+    for s in (v1, v4):
+        s.run(d, now=at(d, "15:40"))
+    assert {t["id"] for t in v1.trades()} == {f"A-NIFTY-{e}", f"B-NIFTY-{e}"}
+    assert {t["id"] for t in v4.trades()} == {f"A4-NIFTY-{e}", f"B4-NIFTY-{e}"}       # no id repeats across ledgers
+    frozen_close(data, "NIFTY", e, SPOT + 60)
+    nse[("NIFTY", e)] = SPOT + 45
+    for s in (v1, v4):
+        s.run(e, now=at(e, "15:45"))
+    assert all(t["settle"] == SPOT + 2 and "15:00–15:29" in t["settle_source"] for t in v1.trades())
+    for t in v4.trades():
+        assert t["settled"] and t["settle"] == SPOT + 45 and t["settle_source"] == "NSE's official close"
+        assert t["pnl_rs"] == pytest.approx(payoff(t, SPOT + 45)["pnl_rs"], abs=0.01) and "official" not in t
+    assert {ev["spec"] for ev in v4.events()} == {spec("expiry_seller_v4")["_hash"]}
+
+    later = ExpirySeller(cfg, tmp_path / "later", data, spec=spec("expiry_seller_v4"), say=lambda *a: None,
+                         official_fn=lambda u, day: None)                      # NSE's file never comes
+    later.run(d, now=at(d, "15:40"))
+    notes = later.run(e, now=at(e, "15:45"))                 # expiry day: NSE's file or nothing, even with a 15:29 bar
+    assert sum("UNSETTLED" in n and "waiting for the official close" in n for n in notes) == 2
+    assert not any(ev["event"] == "settle" for ev in later.events())
+    nxt = cal.next_trading_day(e)
+    later.run(nxt, now=at(nxt, "15:40"))
+    for t in later.trades():
+        assert t["settle"] == SPOT + 60 and t["settle_source"] == "the 15:29 one-minute close"
+
+
+def test_v4_waits_for_the_official_close_and_never_falls_back_to_the_mean(cfg, tmp_path):
+    """No NSE file, no 15:29 bar, no Yahoo: the frozen 15:00–15:28 mean is there, and v4 still waits, run after run."""
+    from quantdesk.intraday.sleeves import settlement_price
+    cal, d, e = eve(cfg)
+    data = tmp_path / "data"
+
+    def no_yahoo(u, day):
+        raise RuntimeError("no Yahoo bar")
+    v4 = ExpirySeller(cfg, tmp_path / "sleeves", data, spec=spec("expiry_seller_v4"), say=lambda *a: None,
+                      close_fn=no_yahoo, official_fn=lambda u, day: None)
+    write(v4, short_strangle("A4", "NIFTY", e, 65))
+    frozen_close(data, "NIFTY", e, None, last=False)
+    assert settlement_price(data, "NIFTY", e)[0] == SPOT                       # the mean v1–v3 would settle on
+    nxt = cal.next_trading_day(e)
+    for day, hhmm in ((e, "15:45"), (e, "18:00"), (nxt, "15:40"), (nxt, "16:00")):
+        notes = v4.settle(day, at(day, hhmm))
+        assert len(notes) == 1 and notes[0].startswith(f"UNSETTLED A4-NIFTY-{e}: waiting for the official close")
+    assert "no 15:29 bar recorded" in notes[0] and "Yahoo daily close: no Yahoo bar" in notes[0]
+    assert [ev["event"] for ev in v4.events()] == ["open"] and not v4.trades()[0]["settled"]
+    v4.close_fn = lambda u, day: SPOT + 30                                      # Yahoo's close arrives
+    v4.settle(nxt, at(nxt, "17:00"))
+    t = v4.trades()[0]
+    assert t["settle"] == SPOT + 30 and t["settle_source"] == "Yahoo daily close"
+
+
+def test_settled_events_are_never_recomputed(cfg, tmp_path):
+    """Every spec runs over ledgers that already hold settled trades (v1 with its `official` check): nothing settled
+    is touched, nothing raises, and the ledgers' bytes stay as they were."""
+    from quantdesk.intraday.sleeves import specs
+    cal, d, e = eve(cfg)
+    data, root = tmp_path / "data", tmp_path / "sleeves"
+    frozen_close(data, "NIFTY", e, SPOT + 60)
+    sellers = [ExpirySeller(cfg, root, data, spec=s, say=lambda *a: None, close_fn=lambda u, day: SPOT + 7,
+                            official_fn=lambda u, day: SPOT + 45) for s in specs()]
+    by = {s.spec["name"]: s for s in sellers}
+    t1, t4 = short_strangle("A", "NIFTY", e, 65), short_strangle("A4", "NIFTY", e, 65)
+    write(by["expiry_seller_v1"], t1, {"event": "settle", "id": t1["id"], "settle": SPOT - 500.0, "settle_source": "old",
+                                       "pnl_rs": -1.0},
+          {"event": "official", "id": t1["id"], "official": SPOT - 400.0, "official_source": "old", "pnl_rs_official": -2.0,
+           "settle_gap_bps": 1.0, "pnl_gap_rs": 1.0})
+    write(by["expiry_seller_v4"], t4, {"event": "settle", "id": t4["id"], "settle": SPOT - 300.0, "settle_source": "old",
+                                       "pnl_rs": -3.0})
+    before = {n: s.ledger.read_text() for n, s in by.items() if s.ledger.exists()}
+    nxt = cal.next_trading_day(e)
+    for s in sellers:
+        s.run(e, now=at(e, "16:00"))
+        s.run(nxt, now=at(nxt, "16:00"))
+        s.report()
+    for n, text in before.items():
+        now = by[n].ledger.read_text()
+        assert now.startswith(text)                                             # nothing rewritten
+        assert {json.loads(x)["event"] for x in now[len(text):].splitlines()} <= {"skip"}   # nor settled again
+    assert by["expiry_seller_v1"].trades()[0]["settle"] == SPOT - 500 and by["expiry_seller_v4"].trades()[0]["settle"] == SPOT - 300
+
+
+def test_every_spec_loads_and_v4_carries_the_live_sleeves_unchanged(cfg, tmp_path):
+    """v1–v3 are byte-for-byte as registered; v4 is every v1–v3 sleeve (same strategy, legs, underlyings, lots and
+    history) under a new name, settled at the official close, with an empty ledger: eligibility starts from zero."""
+    from quantdesk.intraday.sleeves import sleeve_table, specs
+    ss = {s["name"]: s for s in specs()}
+    assert list(ss) == ["expiry_seller_v1", "expiry_seller_v2", "expiry_seller_v3", "expiry_seller_v4"]
+    assert {n: ss[n]["_hash"] for n in LOCKED} == LOCKED
+    v4 = ss["expiry_seller_v4"]
+    assert v4["settlement"] == "official_close" and v4["registered"] == "2026-10-10"
+    assert "E-01" in v4["why"] and "expiry_seller_v3" in v4["supersedes"] and "restarts" in v4["eligibility"]
+    old = {}
+    for n in LOCKED:
+        for k, v in sleeve_table(ss[n]).items():
+            old[k + "4"] = (v, {u: ss[n]["history"]["per_lot_rupees"][f"{k}_{u}"] for u in v["underlyings"]},
+                            {u: ss[n]["underlyings"][u]["lot"] for u in v["underlyings"]})
+    new = sleeve_table(v4)
+    assert set(new) == set(old) == {"A4", "B4", "C4", "D4", "E4"}
+    for k, v in new.items():
+        assert v == old[k][0]
+        assert {u: v4["history"]["per_lot_rupees"][f"{k}_{u}"] for u in v["underlyings"]} == old[k][1]
+        assert {u: v4["underlyings"][u]["lot"] for u in v["underlyings"]} == old[k][2]
+    for s in ss.values():
+        seller = ExpirySeller(cfg, tmp_path / "sleeves", tmp_path / "data", spec=s, say=lambda *a: None)
+        rep = seller.report()
+        assert all(r["n"] == 0 and r["cost"] == "collecting (0/6)" and not r["eligible"] for r in rep["rows"])
+        assert all(seller.eligible_since(u) is None for u in seller.underlyings)
+        assert render(rep)
+    seller = ExpirySeller(cfg, tmp_path / "sleeves", tmp_path / "data", spec=v4, say=lambda *a: None)
+    assert seller.trading("BANKNIFTY") == ["A4", "B4", "C4"] and seller.trading("SENSEX") == ["D4", "E4"]
+    with pytest.raises(ValueError, match="unknown settlement"):
+        ExpirySeller(cfg, tmp_path / "x", tmp_path / "data", spec={**v4, "settlement": "mean_of_whatever"})
