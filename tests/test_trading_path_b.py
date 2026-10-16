@@ -79,7 +79,16 @@ class Stub(ChainSource):
         return ch
 
     def live_quotes(self, insts):
-        return {}
+        """A Kotak-like book: it quotes what the chain shows, two-sided strikes only (an empty book blocks entries)."""
+        out = {}
+        for i in insts:
+            ch = self.eng.chain_df.get(i.underlying)
+            if ch is None or i.strike not in ch.index:
+                continue
+            b, a = float(ch.at[i.strike, f"{i.right.lower()}_bid"]), float(ch.at[i.strike, f"{i.right.lower()}_ask"])
+            if b > 0 and a >= b:
+                out[i.symbol] = (b, a)
+        return out
 
 
 # ---- P1-4: the stale-chain guard ----------------------------------------------------------------------------------

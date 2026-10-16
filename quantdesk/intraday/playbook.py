@@ -156,6 +156,8 @@ class StrikePicker:
         iv = np.where(np.isfinite(implied) & (implied > 0), implied,
                       np.where(np.isfinite(quoted) & (quoted > 0), quoted / 100, np.nan))
         keep = priced & np.isfinite(iv) & (iv > 0)
+        if chain.attrs.get("source") == "kotak":              # a real book: a strike with no bid and offer can't be bought or sold at its LTP
+            keep &= two
         if not keep.any():
             return pd.DataFrame(columns=cols)
         d = np.atleast_1d(np.asarray(self.pricer.greeks(K[keep], right, S, T, iv[keep])["delta"], dtype=float))
@@ -216,6 +218,8 @@ class Playbook:
         S0, atr5 = float(view.spot), float((view.state or {}).get("atr5") or 0)
         if target is not None and not direction * (float(target) - S0) > 0:   # (NaN fails too)
             return None                  # a target behind the entry is "reached" at once: a fake win, not a trade
+        if inval is not None and direction and not direction * (S0 - float(inval)) > 0:   # a stop on the wrong side fires at once
+            return None
         floor = max(float(self.cfg.get("intraday.risk.min_stop_atr5", 0.75)) * atr5, 0.0004 * S0)
         if inval is not None and direction and abs(S0 - inval) < floor:
             inval = S0 - direction * floor
