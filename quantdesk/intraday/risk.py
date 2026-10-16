@@ -65,7 +65,8 @@ class IntradayRisk:
             why.append(f"cooling off after {self.consec_losses} straight losses until {self.cool_until:%H:%M}")
         return why
 
-    def size(self, plan, equity: float, cash: float | None = None) -> tuple[int, list[str]]:
+    def size(self, plan, equity: float, cash: float | None = None, open_risk: float = 0.0,
+             daily_loss_cap: bool = True) -> tuple[int, list[str]]:
         scale = 0.6 + 0.6 * min(max(plan.conviction, 0), 1)
         budget = equity * self.risk_per_trade * scale
         per_lot = plan.planned_risk_per_lot()
@@ -75,6 +76,12 @@ class IntradayRisk:
             return 0, notes + ["undefined risk: refused"]
         lots = math.floor(budget / per_lot)
         caps = {"risk": lots, "max_lots": self.max_lots}
+        if daily_loss_cap and self.start_equity and self.start_equity > 0:
+            # C-06: the daily loss limit is a ceiling, not only a trigger. A new trade's stop-out plus what the open
+            # trades can still lose (their initial risk, the conservative figure) must leave the day above
+            # -daily_loss; the trade is sized down to fit, refused only when not one lot does.
+            room = equity - self.start_equity * (1 - self.daily_loss) - max(float(open_risk or 0.0), 0.0)
+            caps["daily_loss"] = math.floor(room / per_lot) if math.isfinite(room) and room > 0 else 0
         if plan.is_credit:
             # the broker blocks SPAN + exposure margin, not just the spread's max loss
             margin = max(plan.max_loss_per_lot(), self.credit_margin)

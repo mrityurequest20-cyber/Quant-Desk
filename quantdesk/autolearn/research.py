@@ -213,7 +213,8 @@ def replay(best: pd.DataFrame, cfg, rules: P.PlanRules, fees: FeeModel) -> tuple
         if not r.trade:
             counts["abstained"] += 1
             continue
-        lots, _ = risk.size(_PlanShim(r.entry_px, int(r.lot), rules.premium_stop, rules.conviction), equity, cash)
+        lots, _ = risk.size(_PlanShim(r.entry_px, int(r.lot), rules.premium_stop, rules.conviction), equity, cash,
+                            daily_loss_cap=False)   # the registered replay method, unchanged by C-06 (a research-review call)
         if lots < 1:
             counts["unaffordable"] += 1
             continue
