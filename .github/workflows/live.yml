@@ -24,6 +24,10 @@ on:
         description: "Archive the paper account and start fresh at the configured capital"
         type: boolean
         default: false
+      resume_after_cancel:
+        description: "Trade again today although a desk run was cancelled today (the kill switch); off = stay stopped"
+        type: boolean
+        default: false
 
 permissions:
   contents: write            # push the journal and gh-pages branches
@@ -53,24 +57,59 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions: {}              # it only reads the clock and writes its own output: no token rights needed
+    permissions:
+      actions: read              # C-08 (owner-approved 16 Oct): read today's runs of this workflow; no write rights
     outputs:
       go: ${{ steps.when.outputs.go }}
     steps:
       - id: when
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME: ${{ inputs.resume_after_cancel && '1' || '' }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date +%H%M)" -ge 1500 ]; then
             echo "go=false" >> "$GITHUB_OUTPUT"
             echo "::notice::scheduled run started at $(date '+%H:%M') IST, after the session: nothing to do"
-          else
-            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # C-08: cancelling a trading run is the kill switch. A run queued behind it (the 08:52 schedule, a dispatch)
+          # must not start the desk again the same day. Only a run whose "Trade (paper)" step was itself cancelled
+          # counts: GitHub also cancels a run that was merely pending when another queued in the group, and that is
+          # no kill switch. Fail closed: if today's runs can't be read, don't trade.
+          if [ "$RESUME" != "1" ]; then
+            killed=0
+            if ! ids=$(gh run list -R "$GITHUB_REPOSITORY" --workflow live.yml --created "$(date +%F)" --limit 50 \
+                         --json databaseId,conclusion --jq '.[] | select(.conclusion == "cancelled") | .databaseId'); then
+              killed=unknown
+            fi
+            for id in $ids; do
+              if ! n=$(gh run view "$id" -R "$GITHUB_REPOSITORY" --json jobs --jq \
+                         '[.jobs[].steps[]? | select((.name | startswith("Trade (paper)")) and .conclusion == "cancelled")] | length'); then
+                killed=unknown; break
+              fi
+              [ "$n" != "0" ] && killed=$((killed + 1))
+            done
+            if [ "$killed" = "unknown" ]; then
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              echo "::error::could not read today's desk runs to check for a kill switch: not trading (dispatch with resume_after_cancel to override)"
+              exit 0
+            fi
+            if [ "$killed" != "0" ]; then
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::a trading run was cancelled today (kill switch): staying stopped. Dispatch with resume_after_cancel to trade again."
+              exit 0
+            fi
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
 
   morning:
     needs: gate
     if: ${{ needs.gate.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 355
+    outputs:   # C-01: once the morning has traded, the afternoon resumes only from the morning's own save
+      started: ${{ steps.started.outputs.started }}
+      saved: ${{ steps.save.outputs.saved }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -81,6 +120,7 @@ jobs:
       - name: Can this runner see the market?
         run: python -m quantdesk intraday doctor || echo "::warning::doctor says the data feed is down; the engine will retry every minute"
       - name: Restore the journal
+        id: restore
         run: deploy/journal.sh restore
       - name: Fetch the latest edge research (priors that survived out-of-sample testing)
         run: deploy/research.sh
@@ -93,14 +133,20 @@ jobs:
       - name: Start a fresh paper account
         if: ${{ inputs.reset_account }}
         run: python -m quantdesk intraday reset-account --yes
+      - name: From here on the journal holds today's session
+        id: started
+        run: echo "started=true" >> "$GITHUB_OUTPUT"
       - name: Trade (paper) until the hand-over
         run: deploy/run-session.sh --quiet --until "$HANDOVER" --handover
       - name: Kill switch — square off
         if: cancelled()
         run: python -m quantdesk intraday live --close-out && python -m quantdesk intraday export-site --dir _site --sessions 2 && deploy/push-dir.sh _site gh-pages "site (stopped)"
       - name: Save the journal
-        if: always()
-        run: deploy/journal.sh save "morning $(date '+%F %H:%M') IST"
+        id: save
+        if: ${{ always() && steps.restore.outcome == 'success' }}   # C-01: never push over the only copy after a failed restore
+        env:
+          JOURNAL_ALLOW_SHRINK: ${{ inputs.reset_account && '1' || '' }}   # a deliberate reset archives the old record
+        run: deploy/journal.sh save "morning $(date '+%F %H:%M') IST" && echo "saved=true" >> "$GITHUB_OUTPUT"
       # the morning's option-chain snapshots live only on this runner: keep them, or a morning trade's
       # fills can never be checked against the real quotes (29 Sep 2026: they were lost)
       - name: Keep the morning's raw data (bars + option-chain snapshots) for replays
@@ -132,7 +178,16 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Restore the journal
+        id: restore
         run: deploy/journal.sh restore
+      # C-01: if the morning's save didn't land, the journal just restored is last night's. Trading on it would forget
+      # the morning's trades, cash and daily-loss baseline, and the close save would then replace the record for good.
+      - name: Stand down unless the morning's save is what was restored
+        id: standdown
+        if: ${{ needs.morning.outputs.started == 'true' && needs.morning.outputs.saved != 'true' }}
+        run: |
+          echo "::error::the morning's journal save did not complete: the afternoon would resume from last night's state; standing down (nothing is saved over the record)"
+          exit 1
       - name: Fetch the latest edge research
         run: deploy/research.sh
       - name: Fetch context from the data warehouse (heavyweights' results, a year of bhavcopy for the IV percentile)
@@ -140,10 +195,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: deploy/warehouse-context.sh
       - name: Trade (paper) to the close, square off, write the review
+        id: trade
         run: deploy/run-session.sh --quiet
       - name: Kill switch — square off
         if: cancelled()
         run: python -m quantdesk intraday live --close-out && python -m quantdesk intraday export-site --dir _site --sessions 2 && deploy/push-dir.sh _site gh-pages "site (stopped)"
+      # C-03: the engine died (crash, OOM, a hang past the timeout) with nothing left to manage its positions: square
+      # them off now rather than carry them overnight. Idempotent: "nothing open" when the session closed normally.
+      - name: Square off after a failed session
+        if: ${{ failure() && steps.restore.outcome == 'success' && steps.trade.outcome == 'failure' }}
+        run: python -m quantdesk intraday live --close-out
       # the pre-registered expiry sellers (docs/prereg/expiry_seller_v1.json): paper only, from the tape's real 15:20
       # quotes on an expiry's eve, settled at the expiry-day close; before the journal is saved, so the ledger is kept
       - name: Expiry sellers (paper sleeves)
@@ -153,7 +214,7 @@ jobs:
         if: always()
         run: python -m quantdesk intraday progress > /dev/null || echo "::warning::progress snapshot failed"
       - name: Save the journal
-        if: always()
+        if: ${{ always() && steps.restore.outcome == 'success' && steps.standdown.outcome != 'failure' }}   # C-01
         run: deploy/journal.sh save "close $(date '+%F %H:%M') IST"
       - name: Today's review
         if: always()

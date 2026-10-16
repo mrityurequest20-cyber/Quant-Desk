@@ -13,6 +13,7 @@ case "${1:-}" in
     mkdir -p "$rt"
     if git fetch -q --depth 1 origin "$branch" 2>/dev/null; then
       git archive FETCH_HEAD | tar -x -C "$rt"
+      git rev-parse FETCH_HEAD > "$rt/.journal-restored-sha"   # C-12: the save replaces exactly this commit, or nothing
       if [ -f "$rt/intraday/journal.db" ]; then
         python3 - "$rt/intraday/journal.db" <<'PY'
 import sqlite3
@@ -24,6 +25,7 @@ if result != "ok":
     raise SystemExit(f"journal integrity check failed: {result}")
 print("journal: SQLite integrity check passed")
 PY
+        python3 "$here/journal_counts.py" "$rt/intraday/journal.db" > "$rt/.journal-restored.json"
       fi
       echo "journal: restored $(du -sh "$rt/intraday" | cut -f1) from the $branch branch"
     else
@@ -41,6 +43,15 @@ PY
     ;;
   save)
     [ -d "$rt/intraday" ] || { echo "journal: nothing to save"; exit 0; }
+    # C-01: the journal branch is the only copy and every save replaces it. Never push a record smaller than the
+    # one this run restored (a failed or partial restore, a wrong runtime dir): fewer trades, fills, decisions or
+    # events, or a lower last thought/news id. A deliberate account reset sets JOURNAL_ALLOW_SHRINK=1.
+    if [ -f "$rt/.journal-restored.json" ] && [ "${JOURNAL_ALLOW_SHRINK:-}" != "1" ]; then
+      python3 "$here/journal_counts.py" "$rt/intraday/journal.db" --not-below "$rt/.journal-restored.json" || {
+        echo "::error::journal: refusing to save a record smaller than the one restored (see above); nothing pushed" >&2
+        exit 1
+      }
+    fi
     snap=$(mktemp -d)
     trap 'rm -rf "$snap"' EXIT
     mkdir -p "$snap/intraday"
@@ -56,7 +67,12 @@ bars it saw). Rewritten by the workflow after every run. Don't edit by hand.
 Read it locally: `git fetch origin journal && git archive FETCH_HEAD | tar -x -C runtime`, then
 `python -m quantdesk intraday trades` / `stats` / `review`, or `python -m quantdesk serve`.
 MD
-    "$here/push-dir.sh" "$snap" "$branch" "${2:-journal $(date '+%F %H:%M')}"
+    # C-12: compare-and-swap. Every writer (desk, learning cycles, restate) restores, works, then saves; if another
+    # one saved in between, a plain force-push would silently drop its work. The lease refuses that instead.
+    lease=""
+    [ -f "$rt/.journal-restored-sha" ] && lease=$(cat "$rt/.journal-restored-sha")
+    PUSH_LEASE="$lease" PUSH_SHA_OUT="$rt/.journal-restored-sha" \
+      "$here/push-dir.sh" "$snap" "$branch" "${2:-journal $(date '+%F %H:%M')}"
     ;;
   *)
     echo "usage: journal.sh restore | save MESSAGE" >&2

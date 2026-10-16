@@ -1,0 +1,153 @@
+"""The journal save's guards (C-01 shrink, C-12 lease) and the desk's kill-switch gate (C-08), run for real: the shell
+scripts against a local bare remote, the gate's step script against a fake `gh`."""
+import json
+import os
+import sqlite3
+import subprocess
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+GIT = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+
+def sh(cmd, cwd, env=None, check=True):
+    e = {**os.environ, **GIT, **(env or {})}
+    for k in ("GH_TOKEN", "GITHUB_TOKEN"):
+        e.pop(k, None)
+    r = subprocess.run(cmd, cwd=cwd, env=e, shell=isinstance(cmd, str), capture_output=True, text=True)
+    if check and r.returncode:
+        raise AssertionError(f"{cmd} -> {r.returncode}\n{r.stdout}\n{r.stderr}")
+    return r
+
+
+def _journal(path: Path, trades: int, thoughts: int):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as db:
+        for t in ("trades", "fills", "decisions", "events", "thoughts", "news"):
+            db.execute(f"CREATE TABLE IF NOT EXISTS {t} (id INTEGER PRIMARY KEY, x TEXT)")
+        db.executemany("INSERT INTO trades (x) VALUES (?)", [("t",)] * trades)
+        db.executemany("INSERT INTO thoughts (x) VALUES (?)", [("h",)] * thoughts)
+
+
+@pytest.fixture()
+def desk(tmp_path):
+    """A clone with the deploy scripts, whose origin is a bare repo holding a `journal` branch with 3 trades."""
+    remote, seed, work = tmp_path / "remote.git", tmp_path / "seed", tmp_path / "work"
+    sh(["git", "init", "-q", "--bare", str(remote)], tmp_path)
+    sh(["git", "init", "-q", str(seed)], tmp_path)
+    _journal(seed / "intraday" / "journal.db", trades=3, thoughts=10)
+    sh("git checkout -q -b journal && git add -A && git commit -qm j && git remote add origin ../remote.git "
+       "&& git push -q origin journal", seed)
+    sh(["git", "clone", "-q", str(remote), str(work)], tmp_path)
+    (work / "deploy").mkdir()
+    for f in ("journal.sh", "push-dir.sh", "journal_counts.py"):
+        (work / "deploy" / f).write_bytes((ROOT / "deploy" / f).read_bytes())
+        (work / "deploy" / f).chmod(0o755)
+    return work, remote
+
+
+def _head(remote):
+    return sh(["git", "rev-parse", "journal"], remote).stdout.strip()
+
+
+def test_a_normal_save_replaces_the_restored_commit(desk):
+    work, remote = desk
+    sh("deploy/journal.sh restore", work)
+    _journal(work / "runtime" / "intraday" / "journal.db", trades=1, thoughts=5)      # the session adds to it
+    before = _head(remote)
+    sh("deploy/journal.sh save 'close'", work)
+    assert _head(remote) != before
+    assert (work / "runtime" / ".journal-restored-sha").read_text().strip() == _head(remote)   # a 2nd save leases on it
+
+
+def test_a_save_smaller_than_the_restore_is_refused(desk):
+    work, remote = desk
+    sh("deploy/journal.sh restore", work)
+    db = work / "runtime" / "intraday" / "journal.db"
+    db.unlink()
+    _journal(db, trades=1, thoughts=10)                                  # a partial/wrong journal: 1 trade, not 3
+    before = _head(remote)
+    r = sh("deploy/journal.sh save 'close'", work, check=False)
+    assert r.returncode != 0 and "trades is 1, below the 3 restored" in r.stderr
+    assert _head(remote) == before                                       # the only copy is untouched
+
+
+def test_a_deliberate_reset_may_shrink(desk):
+    work, remote = desk
+    sh("deploy/journal.sh restore", work)
+    db = work / "runtime" / "intraday" / "journal.db"
+    db.unlink()
+    _journal(db, trades=0, thoughts=0)
+    sh("deploy/journal.sh save 'reset'", work, env={"JOURNAL_ALLOW_SHRINK": "1"})
+
+
+def test_a_save_never_overwrites_another_jobs_save(desk, tmp_path):
+    work, remote = desk
+    sh("deploy/journal.sh restore", work)
+    other = tmp_path / "other"                                           # a learning cycle saves meanwhile
+    sh(["git", "clone", "-q", "-b", "journal", str(remote), str(other)], tmp_path)
+    _journal(other / "intraday" / "journal.db", trades=2, thoughts=0)
+    sh("git add -A && git commit -qm other && git push -q origin journal", other)
+    theirs = _head(remote)
+    _journal(work / "runtime" / "intraday" / "journal.db", trades=1, thoughts=0)
+    r = sh("deploy/journal.sh save 'close'", work, check=False)
+    assert r.returncode != 0 and "moved since it was restored" in r.stderr
+    assert _head(remote) == theirs
+
+
+# ---- C-08: the gate's kill-switch check --------------------------------------------------------------------------
+def _gate_script():
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "live.yml").read_text(encoding="utf-8"))
+    step = wf["jobs"]["gate"]["steps"][0]
+    return step["run"].replace("${{ github.event_name }}", "workflow_dispatch")
+
+
+def _run_gate(tmp_path, runs, views, fail=False, resume=""):
+    """`runs`: the cancelled run ids gh run list returns; `views`: id -> list of (step name, conclusion)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    (tmp_path / "views.json").write_text(json.dumps({str(k): v for k, v in views.items()}))
+    (bindir / "gh").write_text(f"""#!/usr/bin/env python3
+import json, sys
+if {fail!r}:
+    sys.exit(1)
+a = sys.argv[1:]
+views = json.load(open({str(tmp_path / 'views.json')!r}))
+if a[:2] == ["run", "list"]:
+    print("\\n".join(str(i) for i in {runs!r}))
+elif a[:2] == ["run", "view"]:
+    steps = views.get(a[2], [])
+    print(sum(1 for n, c in steps if n.startswith("Trade (paper)") and c == "cancelled"))
+""")
+    (bindir / "gh").chmod(0o755)
+    out = tmp_path / "out"
+    out.write_text("")
+    sh(["bash", "-c", _gate_script()], tmp_path,
+       env={"PATH": f"{bindir}:{os.environ['PATH']}", "GITHUB_OUTPUT": str(out), "RESUME": resume,
+            "GITHUB_REPOSITORY": "o/r"})
+    return out.read_text().strip().splitlines()[-1]
+
+
+def test_the_gate_trades_on_a_normal_day(tmp_path):
+    assert _run_gate(tmp_path, [], {}) == "go=true"
+
+
+def test_a_superseded_pending_run_is_not_a_kill_switch(tmp_path):
+    """GitHub cancels a run that was only pending when another queued in the group: it never ran a step."""
+    assert _run_gate(tmp_path, [11], {11: []}) == "go=true"
+
+
+def test_a_run_cancelled_while_trading_keeps_the_desk_stopped(tmp_path):
+    assert _run_gate(tmp_path, [11], {11: [("Restore the journal", "success"),
+                                           ("Trade (paper) until the hand-over", "cancelled")]}) == "go=false"
+
+
+def test_the_owner_can_resume_after_a_cancel(tmp_path):
+    assert _run_gate(tmp_path, [11], {11: [("Trade (paper) until the hand-over", "cancelled")]}, resume="1") == "go=true"
+
+
+def test_the_gate_fails_closed_when_runs_cannot_be_read(tmp_path):
+    assert _run_gate(tmp_path, [], {}, fail=True) == "go=false"
