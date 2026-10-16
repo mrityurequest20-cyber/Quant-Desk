@@ -194,3 +194,17 @@ def test_apply_routes_every_tilt_through_the_gate():
     eng, m = _engine("apply")
     assert eng.news.trust("general", "Wire") == 1.0 and eng.news.reader_trust("rules") == 1.0   # unearned: neutral
     assert eng.analyst.learned == {} and eng.analyst.graduated == set()
+
+
+def test_a_gate_that_fails_after_working_does_not_leave_the_raw_record_applied(monkeypatch):
+    """Risk review, 16 Oct: apply mode, the gate works at start, then raises on the post-close re-grade. The fallback
+    restored the raw record but left apply_learned on, so unearned weights and the stand-aside reached trading."""
+    eng, m = _engine("apply")
+    m.d["tables"].setdefault("factor", {})["vwap"] = {"n": 400.0, "hits": 296.0, "sum": 0.0, "sum2": 0.0}
+    for _ in range(10):
+        m.bump("setup", "orb", False, -1.0)
+    assert eng.analyst.apply_learned is True                                     # apply mode, the gate working
+    monkeypatch.setattr(earn_in.Gate, "__init__", lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    eng._apply_memory()
+    assert eng.earn_gate is None and eng.analyst.apply_learned is False
+    assert eng.memory.setup_mult("orb", None, eng.analyst.apply_learned) == (1.0, None)   # no stand-aside comes back

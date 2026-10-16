@@ -737,6 +737,7 @@ class IntradayEngine:
             return
         from .analyst import PROBATION, PROMOTE_N, PROMOTE_REL
         from .earn_in import Gate
+        from .learning import apply_factor_weights
         try:
             self.earn_gate = Gate(self.memory, self.cfg)
         except Exception as exc:                          # the gate failing must not stop the desk: nothing is earned
@@ -764,6 +765,11 @@ class IntradayEngine:
                 self.news.trust = gate.news_trust
                 self.news.reader_trust = lambda name: gate.reliability("news_reader", name)
         else:
+            # As before the gate, and with the config's own switch: an apply-mode gate that failed after an earlier
+            # success must not leave apply_learned on, or the raw, unearned record would reach trading.
+            self.analyst.apply_learned = apply_factor_weights(self.cfg)
+            if self.brain is not None:
+                self.brain.apply_learned = apply_factor_weights(self.cfg)
             self.analyst.learned = self.memory.factor_weights()
             self.analyst.graduated = {f for f in PROBATION if (self.memory.stat("factor", f) or {"n": 0})["n"] >= PROMOTE_N
                                       and self.memory.reliability("factor", f) >= PROMOTE_REL}
