@@ -31,6 +31,8 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from .feeds import refresh_due
+
 KEEP_MIN = 120                       # minutes of breadth history kept per index
 TREND_MIN = 30                       # the window thrusts are measured over
 MIN_COVERAGE = 0.6                   # below this share of members quoted, no read
@@ -181,7 +183,7 @@ class Breadth:
         self.health = ""
 
     def refresh(self, now: pd.Timestamp, force: bool = False) -> bool:
-        if not force and self.at is not None and now - self.at < pd.Timedelta(minutes=self.refresh_min):
+        if not force and not refresh_due(now, self.at, self.refresh_min):
             return False
         self.at = now
         if self.day != now.date():

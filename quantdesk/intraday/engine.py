@@ -35,7 +35,7 @@ from .analyst import Analyst, MarketView
 from .chainflow import ChainFlow, chain_step
 from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
 from .features import session_state
-from .feeds import IST, IntradayFeed, ReplayFeed, frozen_minutes, session_bounds
+from .feeds import IST, IntradayFeed, ReplayFeed, frozen_minutes, refresh_due, session_bounds
 from .halt import CLEAR_CMD, HALT_KEY, book_diff, inherited, leg_key, prune_accepted, summary
 from .halt import accepted as accepted_halt
 from .ivhist import iv_percentile
@@ -464,16 +464,16 @@ class IntradayEngine:
     # ---- data -------------------------------------------------------------------------------------------
     def _refresh_chain(self, u: str, now) -> None:
         at, failed = self.chain_at.get(u), self.chain_failed_at.get(u)
-        if at is not None and (now - at) < pd.Timedelta(minutes=self.refresh_min):
+        if not refresh_due(now, at, self.refresh_min):
             return
-        if failed is not None and (now - failed) < pd.Timedelta(minutes=self.refresh_min):
+        if not refresh_due(now, failed, self.refresh_min):
             return                                            # the last refresh raised: a retry throttle, not a freshness claim
         try:
             ch = None
             fails = self.chain_fail.get(u, 0)
             tried = self.chain_tried.get(u)
             # after 3 straight failures, only retry the real chain every 15 minutes (each try can block ~20s)
-            if self.chains is not self.model_chain and (fails < 3 or tried is None or now - tried >= pd.Timedelta(minutes=15)):
+            if self.chains is not self.model_chain and (fails < 3 or refresh_due(now, tried, 15)):
                 self.chain_tried[u] = now
                 try:
                     ch = self.chains.chain(u, self.expiry[u], spot=self.spot(u), ts=now)
@@ -1115,7 +1115,7 @@ class IntradayEngine:
     def preopen(self, now) -> None:
         """Before the open, every few minutes: GIFT Nifty (NSE IX's NIFTY future, trading since 06:30 IST), the
         overnight cue in one number. Recorded with the session; context for the read, not evidence (untested)."""
-        if self.gift_source is None or (self._gift_at is not None and now - self._gift_at < pd.Timedelta(minutes=4)):
+        if self.gift_source is None or not refresh_due(now, self._gift_at, 4):
             return
         self._gift_at = now
         from ..data.nse import gift_implied_gap

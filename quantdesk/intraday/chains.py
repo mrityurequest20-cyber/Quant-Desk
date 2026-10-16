@@ -28,6 +28,7 @@ import pandas as pd
 from ..core.types import Instrument
 from ..options.pricing import bs_price, greeks, implied_vol, implied_vol_vec
 from ..options.surface import SkewModel
+from .feeds import refresh_due
 
 log = logging.getLogger(__name__)
 IST = "Asia/Kolkata"
@@ -129,7 +130,7 @@ class FallbackChain(ChainSource):
             self.error[underlying] = f"{self.primary.name}: {exc!s:.160}"
         now = pd.Timestamp.now(tz=IST)
         held = self._held.get(underlying)
-        if held and held[1].attrs.get("expiry") == expiry and now - held[0] < pd.Timedelta(minutes=self.secondary_min):
+        if held and held[1].attrs.get("expiry") == expiry and not refresh_due(now, held[0], self.secondary_min):
             return held[1]
         try:
             ch = self.secondary.chain(underlying, expiry, spot=spot, ts=ts)

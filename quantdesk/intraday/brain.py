@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from ..data.global_universe import GLOBAL
+from .feeds import refresh_due
 
 IST = "Asia/Kolkata"
 
@@ -137,8 +138,7 @@ class GlobalFeed:
         return intraday, daily
 
     def refresh(self, now: pd.Timestamp, force: bool = False) -> bool:
-        if not self.enabled or (not force and self.last_fetch is not None
-                                and now - self.last_fetch < pd.Timedelta(minutes=self.refresh_min)):
+        if not self.enabled or (not force and not refresh_due(now, self.last_fetch, self.refresh_min)):
             return False
         self.last_fetch = now
         try:
