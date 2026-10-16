@@ -64,7 +64,7 @@ class Memory:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else None
         self.d: dict = {"version": 1, "tables": {}, "graded": {"news": [], "thoughts_upto": {}, "trades": [], "armed": []},
-                        "days": [], "lessons": []}
+                        "days": [], "lessons": [], "blocks": {}}
         self.corrupt: str | None = None                  # why the saved record didn't load; nothing is saved while set
         if self.path and self.path.exists():
             try:
@@ -90,12 +90,17 @@ class Memory:
             tmp.replace(self.path)
 
     # ---- statistics ---------------------------------------------------------------------------------------------
-    def bump(self, table: str, key: str, hit: bool, x: float, w: float = 1.0) -> None:
+    def bump(self, table: str, key: str, hit: bool, x: float, w: float = 1.0, block: str | None = None) -> None:
         r = self.d["tables"].setdefault(table, {}).setdefault(str(key), {"n": 0.0, "hits": 0.0, "sum": 0.0, "sum2": 0.0})
         r["n"] += w
         r["hits"] += w * bool(hit)
         r["sum"] += w * float(x)
         r["sum2"] += w * float(x) ** 2
+        if block:                                       # the same observation by session x index, for the earn-in gate
+            b = self.d.setdefault("blocks", {}).setdefault(table, {}).setdefault(str(key), {}).setdefault(block, [0.0, 0.0, 0.0])
+            b[0] += w
+            b[1] += w * bool(hit)
+            b[2] += w * float(x)
 
     def stat(self, table: str, key: str) -> dict | None:
         return (self.d["tables"].get(table) or {}).get(str(key))
@@ -257,10 +262,11 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
         w = 1.0 / share[(reader, sym, win)]
         s = float(np.sign(tone))
         hit, bps = s * fr > 0, s * fr * 1e4
-        mem.bump("news_reader", reader, hit, bps, w)
+        blk = f"{win.date()}|{sym}"
+        mem.bump("news_reader", reader, hit, bps, w, blk)
         if reader == "rules":
-            mem.bump("news_event", event, hit, bps, w)
-            mem.bump("news_source", source, hit, bps, w)
+            mem.bump("news_event", event, hit, bps, w, blk)
+            mem.bump("news_source", source, hit, bps, w, blk)
     return len(rows)
 
 
@@ -292,7 +298,8 @@ def grade_factors(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
             d = float(e.get("direction") or 0)
             if abs(d) < 0.1 or _dead_read(e):
                 continue
-            mem.bump("factor", e.get("factor"), d * fr > 0, d * fr * 1e4, READ_EVERY / HORIZON)
+            mem.bump("factor", e.get("factor"), d * fr > 0, d * fr * 1e4, READ_EVERY / HORIZON,
+                     f"{pd.Timestamp(r.ts).date()}|{r.symbol}")
             n += 1
         upto[r.symbol] = max(upto.get(r.symbol, ""), str(r.ts))
     return n
@@ -407,9 +414,10 @@ def grade_trades(mem: Memory, trades: pd.DataFrame) -> int:
             continue
         ctx = json.loads(r.context or "{}") if isinstance(r.context, str) else (r.context or {})
         R = float(np.clip(r.r_multiple, -3, 5))
-        mem.bump("setup", r.strategy, R > 0, R)
+        blk = f"{pd.Timestamp(r.opened_at).date()}|{r.symbol}"
+        mem.bump("setup", r.strategy, R > 0, R, block=blk)
         if ctx.get("regime"):
-            mem.bump("setup", f"{r.strategy}|{ctx['regime']}", R > 0, R)
+            mem.bump("setup", f"{r.strategy}|{ctx['regime']}", R > 0, R, block=blk)
         mem.d["graded"]["trades"].append(r.id)
         n += 1
     return n

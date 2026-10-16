@@ -735,17 +735,51 @@ class IntradayEngine:
         analyst and the brain to show; they apply it only under intraday.learning.apply_factor_weights (D-01)."""
         if self.memory is None:
             return
-        self.analyst.learned = self.memory.factor_weights()
         from .analyst import PROBATION, PROMOTE_N, PROMOTE_REL
-        self.analyst.graduated = {f for f in PROBATION if (self.memory.stat("factor", f) or {"n": 0})["n"] >= PROMOTE_N
-                                  and self.memory.reliability("factor", f) >= PROMOTE_REL}
-        if self.brain is not None:                        # probation drivers earn a vote on their live record
-            self.brain.learned = {k: (self.memory.reliability("factor", k), float(r["n"]))
-                                  for k, r in (self.memory.d["tables"].get("factor") or {}).items()
-                                  if k.startswith(("global_", "heavy_"))}
-        if self.news is not None:
-            self.news.trust = self.memory.news_trust
-            self.news.reader_trust = lambda name: self.memory.reliability("news_reader", name)
+        from .earn_in import Gate
+        try:
+            self.earn_gate = Gate(self.memory, self.cfg)
+        except Exception as exc:                          # the gate failing must not stop the desk: nothing is earned
+            log.exception("earn-in gate failed")
+            self.earn_gate = None
+            try:
+                self.journal.event(self.feed.now(), "WARN", "learning", f"earn-in gate failed, nothing learned is "
+                                   f"applied through it this session: {exc!r:.160}")
+            except Exception:
+                pass
+        gate = self.earn_gate
+        if gate is not None and gate.mode == "apply":
+            # Only what earned its place reaches trading; every other learned tilt is 1.0x (earn_in.py).
+            self.analyst.learned = gate.factor_weights()
+            self.analyst.apply_learned = True
+            self.analyst.graduated = {f for f in PROBATION if gate.earned("factor", f)
+                                      and (self.memory.stat("factor", f) or {"n": 0})["n"] >= PROMOTE_N
+                                      and self.memory.reliability("factor", f) >= PROMOTE_REL}
+            if self.brain is not None:
+                self.brain.apply_learned = True
+                self.brain.learned = {k: (self.memory.reliability("factor", k), float(r["n"]))
+                                      for k, r in (self.memory.d["tables"].get("factor") or {}).items()
+                                      if k.startswith(("global_", "heavy_")) and gate.earned("factor", k)}
+            if self.news is not None:
+                self.news.trust = gate.news_trust
+                self.news.reader_trust = lambda name: gate.reliability("news_reader", name)
+        else:
+            self.analyst.learned = self.memory.factor_weights()
+            self.analyst.graduated = {f for f in PROBATION if (self.memory.stat("factor", f) or {"n": 0})["n"] >= PROMOTE_N
+                                      and self.memory.reliability("factor", f) >= PROMOTE_REL}
+            if self.brain is not None:                    # probation drivers earn a vote on their live record
+                self.brain.learned = {k: (self.memory.reliability("factor", k), float(r["n"]))
+                                      for k, r in (self.memory.d["tables"].get("factor") or {}).items()
+                                      if k.startswith(("global_", "heavy_"))}
+            if self.news is not None:
+                self.news.trust = self.memory.news_trust
+                self.news.reader_trust = lambda name: self.memory.reliability("news_reader", name)
+        if gate is not None and gate.mode != "off":
+            try:                                          # a note about the gate must never cost the engine's start
+                self.journal.event(self.feed.now(), "INFO", "learning", gate.summary(),
+                                   {"mode": gate.mode, "earned": gate.earned_items()})
+            except Exception:
+                log.exception("earn-in summary not journaled")
 
     def _say_frozen(self, now) -> None:
         """F-02: one WARN per index whose bars froze today (Kotak's index series sits flat 15:15-15:28 while the future
@@ -846,7 +880,9 @@ class IntradayEngine:
             return plans, None
         kept, stop = [], None
         for p in plans:
-            m, why = self.memory.setup_mult(p.setup, view.day_type, self.analyst.apply_learned)
+            gate = getattr(self, "earn_gate", None)
+            m, why = (gate.setup_mult(p.setup, view.day_type) if gate is not None and gate.mode == "apply"
+                      else self.memory.setup_mult(p.setup, view.day_type, self.analyst.apply_learned))
             if why:
                 stop = stop or f"its record says no: {why}"
                 said = self._record_said.get((u, p.setup))
