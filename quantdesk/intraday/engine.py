@@ -1222,9 +1222,7 @@ class IntradayEngine:
             qty = leg.ratio * lots * plan.lot_size
             fill = self.broker.execute(Order(inst, qty, t.id, "open"), px[inst.symbol], now)
             if fill is None:
-                for done in t.legs:
-                    self.broker.execute(Order(done.instrument, -done.qty, t.id, "unwind"), done.entry_price, now)
-                return f"order for {inst.symbol} rejected; nothing opened"
+                return self._abort_entry(t, plan, inst.symbol, notes, now)
             self.journal.fill(now, t.id, inst.symbol, qty, fill.price, fill.fees, fill.fee_breakdown)
             t.legs.append(TradeLeg(inst, qty, fill.price))
             t.fees += fill.fees
@@ -1237,6 +1235,47 @@ class IntradayEngine:
         msg = f"ENTER {plan.setup} {lots}×{plan.describe()} | stop {plan.invalidation or '—'} | {plan.trigger}"
         self.say(f"  {now:%H:%M} {u:<9} ▲ {msg}")
         return msg
+
+    def _abort_entry(self, t: Trade, plan: TradePlan, rejected: str, notes: list[str], now) -> str:
+        """A leg of a multi-leg entry was rejected after earlier legs had filled: unwind them. Every unwind fill is
+        journalled and its cost booked into the trade, so the broker's cash equals the sum of trade P&L. The trade is
+        recorded as closed ("entry_aborted"); a leg whose unwind is rejected too keeps the trade open and pending exit
+        (retried each minute by `_close`), so the broker and the journal still agree. No leg filled: nothing to book."""
+        if not t.legs:
+            return f"order for {rejected} rejected; nothing opened"
+        stuck = []
+        for leg in t.legs:
+            fill = self.broker.execute(Order(leg.instrument, -leg.qty, t.id, "unwind"), leg.entry_price, now)
+            if fill is None:
+                stuck.append(leg.instrument.symbol)
+                continue
+            self.journal.fill(now, t.id, leg.instrument.symbol, -leg.qty, fill.price, fill.fees, fill.fee_breakdown)
+            leg.exit_price = fill.price
+            t.fees += fill.fees
+        t.pnl = sum(l.qty * ((l.exit_price if l.exit_price is not None else l.entry_price) - l.entry_price)
+                    for l in t.legs) - t.fees
+        t.last_mark = {l.instrument.symbol: l.entry_price for l in t.legs}
+        t.meta["aborted_entry"] = f"order for {rejected} rejected after {len(t.legs)} leg(s) had filled"
+        self.risk.trades_today += 1
+        self.journal.open_trade(t, notes)
+        if stuck:
+            t.meta["exit_pending"] = ["entry_aborted", t.meta["aborted_entry"]]
+            self.open_trades.append(t)
+            self.journal.event(now, "CRITICAL", "execution",
+                               f"{t.meta['aborted_entry']}; unwind of {', '.join(stuck)} also rejected: {t.id} stays open, "
+                               f"retried each minute", {"trade": t.id})
+            self._persist()
+            return f"order for {rejected} rejected; unwind of {', '.join(stuck)} incomplete, retrying"
+        t.mae, t.mfe = min(t.mae, t.pnl), max(t.mfe, t.pnl)
+        t.status, t.closed_at, t.exit_reason, t.exit_note = "closed", now, "entry_aborted", t.meta["aborted_entry"]
+        t.exit_underlying = t.entry_underlying
+        self.closed.append(t)
+        self.journal.close_trade(t, None)
+        self.risk.on_close(t.pnl, now)
+        self.journal.event(now, "WARN", "execution", f"{t.meta['aborted_entry']}; unwound, cost ₹{-t.pnl:,.2f} booked to {t.id}",
+                           {"trade": t.id, "pnl": t.pnl})
+        self._persist()
+        return f"order for {rejected} rejected; unwound {len(t.legs)} leg(s), ₹{t.pnl:,.2f}"
 
     def _manage(self, u: str, view: MarketView, now) -> list[str]:
         out = []
