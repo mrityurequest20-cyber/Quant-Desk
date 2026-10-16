@@ -161,7 +161,8 @@ class IntradayEngine:
         self.chain_fail: dict[str, int] = {}
         self.chain_tried: dict[str, pd.Timestamp] = {}
         self.chain_failed_at: dict[str, pd.Timestamp] = {}        # a refresh that raised: retried after `refresh_min`, not every minute
-        self._exit_tried: dict[str, pd.Timestamp] = {}            # trade id -> its last stuck-exit retry (`_retry_exit`)
+        self._exit_tried: dict[str, pd.Timestamp] = {}            # trade id -> its last exit attempt (`_close`, `_retry_exit`)
+        self.fallback_since: dict[str, pd.Timestamp] = {}         # index -> when its real chain went down (said once per outage)
         # P2-9 (owner decision 16 Oct: 10%): a drawdown from the account's high-water mark that halts new entries across
         # days until the owner clears it (`quantdesk intraday clear-drawdown-halt`); exits are never held by it.
         self.dd_halt_frac = float(cfg.get("intraday.risk.cross_day_drawdown_halt", 0) or 0)
@@ -425,7 +426,8 @@ class IntradayEngine:
     def _retry_exit(self, t, now) -> str:
         """Finish an exit already under way, once per moment: `_manage`, the wall clock and `tick` all reach for it, and a
         stuck 2-leg spread would otherwise be sent to the broker twice (each retry is already guarded by the broker-held
-        quantity, so this saves traffic, not safety). Cadence is unchanged: every step, every tick."""
+        quantity, so this saves traffic, not safety). `_close` stamps every attempt, so a fresh exit that `_manage` or the
+        wall clock just sent and left stuck is not sent again in the same moment. Cadence is unchanged: every step, every tick."""
         last = self._exit_tried.get(t.id)
         if last is not None and abs((now - last).total_seconds()) < 2:
             return ""
@@ -502,11 +504,25 @@ class IntradayEngine:
             self.chain_an[u] = an
             self.chain_at[u] = self.chain_ok_at[u] = now          # only a refresh that worked counts (P1-4)
             self.chain_failed_at.pop(u, None)
+            self._say_fallback(u, ch, now)
             if self.recorder and ch.attrs.get("source") != "model":
                 self.recorder.record_chain(ch)
         except Exception as exc:                              # chain_at/chain_ok_at stay: the data is as old as its last success
             self.chain_failed_at[u] = now
             self.journal.event(now, "WARN", "chain", f"{u} chain refresh failed: {exc}")
+
+    def _say_fallback(self, u: str, ch: pd.DataFrame, now) -> None:
+        """F-01 on the record: while a configured real chain (Kotak) is down and the data is the fallback's (NSE or the
+        model), entries are skipped on purpose. Said once per outage, not every minute; the next outage says it again."""
+        down = self._real_book() and ch.attrs.get("source") != self.chains.name
+        if not down:
+            self.fallback_since.pop(u, None)
+            return
+        if u not in self.fallback_since:
+            self.fallback_since[u] = now
+            self.journal.event(now, "WARN", "execution", f"{u}: no new entries while the {self.chains.name} chain is down; "
+                               f"entries are skipped on purpose and the data is from the {ch.attrs.get('source')} fallback "
+                               f"(exits and marks carry on)", {"source": ch.attrs.get("source")})
 
     def _refresh_news(self, now) -> None:
         if self.news is None:
@@ -1616,6 +1632,7 @@ class IntradayEngine:
         return [m for m in out if m]                      # a silent retry of a stuck exit says nothing
 
     def _close(self, t: Trade, now, reason: str, note: str) -> str:
+        self._exit_tried[t.id] = now                      # every attempt counts for `_retry_exit`'s once-per-moment rule
         S = self.spot(t.symbol)
         live = self._live([l.instrument for l in t.legs], now)
         t.meta["exit_quotes"] = f"live {self.chains.name} book" if len(live) == len(t.legs) else "marked"

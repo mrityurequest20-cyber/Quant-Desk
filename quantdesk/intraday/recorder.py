@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from .chains import load_chain, save_chain
-from .feeds import normalise_bars
+from .feeds import IST, normalise_bars
 
 
 class SessionRecorder:
@@ -30,8 +30,10 @@ class SessionRecorder:
             path = self.day_dir(day) / f"{symbol}_1m.csv"
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
-                old = pd.read_csv(path, index_col=0, parse_dates=True)
-                part = pd.concat([normalise_bars(old), part])
+                old = pd.read_csv(path, index_col=0, parse_dates=True)   # raw evidence: NaN/zero rows already on disk stay
+                idx = pd.DatetimeIndex(old.index)                        # (the readers normalise); only the index is aligned
+                old.index = (idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)).as_unit("ns")
+                part = pd.concat([old, part])
             part = part[~part.index.duplicated(keep="last")].sort_index()
             part.to_csv(path, index_label="ts")
 

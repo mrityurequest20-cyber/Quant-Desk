@@ -429,6 +429,7 @@ def test_rejected_exit_leg_leaves_the_trade_open_and_is_retried(cfg, sessions, t
     saved = eng.journal.get_state("intraday_open")["trades"]
     assert [x["id"] for x in saved] == [t.id] and saved[0]["meta"]["exit_pending"][0] == "manual"
     eng.broker.execute = real                                                   # the broker takes orders again
+    eng.feed.advance()
     eng._manage("NIFTY", view, eng.feed.now())                                  # the next minute finishes the exit
     assert not eng.open_trades and eng.broker.positions() == {}
     assert eng.closed[-1].exit_reason == "manual" and "exit_pending" not in eng.closed[-1].meta
