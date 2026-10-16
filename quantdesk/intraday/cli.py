@@ -327,7 +327,9 @@ def cmd_paper_gate(cfg, a):
                         (trades["opened_at"].astype(str) >= a.since)]
         trades, n_expl = without_exploration(trades)       # unvalidated-prior exploration trades are never evidence
         trades, not_real = real_quote_trades(trades)       # only real point-in-time fills are evidence
-        sessions = j.df("SELECT COUNT(DISTINCT substr(ts,1,10)) AS n FROM thoughts WHERE ts >= ?", (a.since,))
+        from ..journal.retention import archived_thought_days   # thoughts archived out of the journal were still sessions (C-02)
+        seen = {str(d) for d in j.df("SELECT DISTINCT substr(ts,1,10) AS d FROM thoughts WHERE ts >= ?", (a.since,))["d"]}
+        sessions = pd.DataFrame({"n": [len(seen | archived_thought_days(paths(cfg, a.account or "live")["journal"], str(a.since)[:10]))]})
         checks = j.checks(a.since)
         risky_checks = checks[
             checks["name"].astype(str).str.contains(r"risk|limit|kill|reconcil", case=False, regex=True) &
@@ -494,6 +496,13 @@ def cmd_learn(cfg, a):
         mem.save()
         print(f"bootstrapped from {got['sessions']} session(s): {got['factors']} factor reads, {got['news']} news calls graded")
     if a.rebuild:
+        from ..journal.retention import history_archived
+        gone = history_archived(p["journal"])
+        if gone and not a.allow_partial_journal:
+            sys.exit(f"learn --rebuild refused: {len(gone)} archive run(s) hold thoughts/news no longer in the journal "
+                     f"(manifests: {', '.join(r['manifest'] for r in gone)}). Restore them first "
+                     f"(`quantdesk intraday archive --restore <manifest>`), or pass --allow-partial-journal to regrade only "
+                     f"what is left (this REPLACES the graded record with a shorter one).")
         rec = SessionRecorder(p["data"])
         bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
         got = learning.rebuild(mem, Journal(p["journal"]), bars)
@@ -502,6 +511,25 @@ def cmd_learn(cfg, a):
     lines = learning.summary(mem, top=a.top, factor_weights_applied=learning.apply_factor_weights(cfg))
     print(f"record over {len(mem.d['days'])} session(s) → {p['memory']}")
     print("\n".join(lines) if lines else "nothing graded yet")
+
+
+def cmd_archive(cfg, a):
+    """C-02: archive, verify, then prune old thoughts/news and plan studies (quantdesk/journal/retention.py)."""
+    import datetime as _dt
+    from ..journal import retention
+    root = Path(a.root) if a.root else Path(cfg.runtime_dir)
+    try:
+        if a.restore:
+            retention.restore(a.restore, root)
+            return
+        if not a.out:
+            sys.exit("archive: --out DIR is required (where the dated archive and its manifest are written)")
+        if a.keep_days < retention.MIN_KEEP_DAYS:
+            sys.exit(f"archive: --keep-days must be at least {retention.MIN_KEEP_DAYS} (grading looks back 7 days)")
+        retention.archive(root, a.out, keep_days=a.keep_days, keep_studies=a.keep_studies, dry_run=a.dry_run,
+                          as_of=_dt.date.fromisoformat(a.as_of) if a.as_of else None)
+    except retention.RetentionError as exc:
+        sys.exit(f"::error::journal retention aborted, nothing was deleted: {exc}")
 
 
 def _journal(cfg, a) -> Journal:
@@ -773,10 +801,21 @@ def register(sub):
     x = ss.add_parser("learn", help="what the desk has learned from its calls (news, factors, setups)")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--rebuild", action="store_true", help="grade the whole journal again from the recorded bars")
+    x.add_argument("--allow-partial-journal", action="store_true",
+                   help="with --rebuild: go ahead although part of the journal is archived (see `intraday archive`)")
     x.add_argument("--bootstrap", action="store_true", help="seed the record from the last week's real sessions (replayed)")
     x.add_argument("--if-empty", action="store_true", help="with --bootstrap: only when nothing has been graded yet")
     x.add_argument("--top", type=int, default=12)
     x.set_defaults(fn=cmd_learn)
+    x = ss.add_parser("archive", help="archive, verify, then prune old thoughts/news and plan studies (keeps the journal small)")
+    x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
+    x.add_argument("--out", help="where the dated archive files and the manifest go")
+    x.add_argument("--keep-days", type=int, default=30, help="keep this many days of thoughts/news in the journal")
+    x.add_argument("--keep-studies", type=int, default=3, help="keep the newest N plan studies (never the ones a card or lock uses)")
+    x.add_argument("--dry-run", action="store_true", help="say what would be archived and the projected size; change nothing")
+    x.add_argument("--as-of", help="YYYY-MM-DD: count back from this day instead of today")
+    x.add_argument("--restore", metavar="MANIFEST", help="put an archive run back (rows and studies), verifying its hashes")
+    x.set_defaults(fn=cmd_archive)
     x = ss.add_parser("export-site", help="the web app + an account's data as a read-only static site")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--out", default="quantdesk-snapshot.html")

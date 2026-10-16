@@ -7,6 +7,20 @@
 set -euo pipefail
 dir=$1 branch=$2 msg=${3:-update}
 [ -d "$dir" ] || { echo "push-dir: no such folder $dir" >&2; exit 1; }
+# GitHub rejects any file over 100 MB, and a push that fails after the run would lose the whole session's state. Refuse
+# early, with a message that names the file, while the old journal branch is still intact (finding C-02).
+# QD_MAX_FILE_MB (default 80) is the refusal line, QD_WARN_FILE_MB (default 60) only warns.
+limit_mb=${QD_MAX_FILE_MB:-80} warn_mb=${QD_WARN_FILE_MB:-60}
+big=$(find "$dir" -type f -size +$((limit_mb * 1024 * 1024 - 1))c -printf '%s %P\n' 2>/dev/null || true)
+if [ -n "$big" ]; then
+  while read -r bytes name; do
+    echo "::error::push-dir: $name is $((bytes / 1048576)) MB in the tree for $branch (limit ${limit_mb} MB; GitHub rejects files over 100 MB). Nothing was pushed. Archive and prune it: python -m quantdesk intraday archive --root runtime --out <dir>" >&2
+  done <<< "$big"
+  exit 1
+fi
+find "$dir" -type f -size +$((warn_mb * 1024 * 1024 - 1))c -printf '%s %P\n' 2>/dev/null | while read -r bytes name; do
+  echo "::warning::push-dir: $name is $((bytes / 1048576)) MB (warn at ${warn_mb} MB, refuse at ${limit_mb} MB)" >&2
+done || true
 index=$(mktemp -u)
 trap 'rm -f "$index"' EXIT
 export GIT_INDEX_FILE=$index
