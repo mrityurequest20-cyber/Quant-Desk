@@ -219,7 +219,7 @@ intraday:
     # weight or probation vote, a setup's record) reaches trading only after a walk-forward test beats a session-block
     # placebo, Benjamini-Hochberg across its table. mode: off (as before) | shadow (as before, plus the gate journaled:
     # what it would apply) | apply (only earned items apply; the rest are 1.0x). Ships in shadow: the owner flips it.
-    earn_in: {mode: shadow, min_sessions: 10, min_n: 30, alpha: 0.05, permutations: 4000}
+    earn_in: {mode: shadow, min_sessions: 10, min_n: 30, alpha: 0.05, permutations: 4000, confirm_sessions: 2, window_sessions: 60}
   # language models as second readers of the news (llm.py): each provider whose key is in the environment reads the
   # headlines about an index, in the background, and the learning loop grades each one against the next 30 minutes.
   # Claude also writes the after-close reflection. Keys: ANTHROPIC_API_KEY (or CLAUDE_API_KEY …), GEMINI_API_KEY (or
