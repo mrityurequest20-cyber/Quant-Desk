@@ -505,15 +505,16 @@ def test_a_raising_plan_registry_halts_entries_when_the_plan_model_is_required(t
     assert why and why.startswith("halted: ") and "registry" in why
 
 
-@pytest.mark.xfail(strict=True, reason="REAL BUG (P2-7): a plan registry that RAISES (an unreadable events.jsonl, an I/O error) "
-                   "escapes LiveLearner.start; engine.start_session catches it as 'learning registry unreadable' and sets "
-                   "learner.fault, which halts entries even though require_approved_model is false. Only a plan fault that "
-                   "champion() RETURNS is made advisory. Fix: catch the plan registry's exceptions in LiveLearner.start and "
-                   "route them through the same plan_fault / required branch.")
-def test_a_raising_plan_registry_does_not_halt_the_ungated_desk(tmp_path, sessions):
+def test_a_raising_plan_registry_still_halts_the_ungated_desk(tmp_path, sessions):
+    """Pinned as is, fail-closed (16 Oct). A plan registry that RAISES (an unreadable events.jsonl, an I/O error) escapes
+    LiveLearner.start; start_session records it as 'learning registry unreadable' and entries halt, even with
+    require_approved_model false. Only a plan fault that champion() RETURNS is advisory (P2-7). Making the raising case
+    advisory too would let the desk trade through a broken registry, a loosening of a fail-closed halt: that is the
+    owner's call (remediation log, open items), not a test's. Change this test only with that decision."""
     eng = started(make_cfg(tmp_path, required=False), sessions, tmp_path / "al", corrupt_plan_events)
-    assert eng.learner.fault is None, eng.learner.fault
-    assert eng._blocked("NIFTY", eng.views["NIFTY"], eng.feed.now()) is None
+    assert eng.learner.fault and "unreadable" in eng.learner.fault
+    why = eng._blocked("NIFTY", eng.views["NIFTY"], eng.feed.now())
+    assert why and why.startswith("halted: ")
 
 
 def test_a_direction_champion_that_cannot_be_verified_still_halts_ungated(tmp_path, sessions):
