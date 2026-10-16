@@ -37,6 +37,27 @@ class SessionRecorder:
             part = part[~part.index.duplicated(keep="last")].sort_index()
             part.to_csv(path, index_label="ts")
 
+    def fill_bars(self, symbol: str, df: pd.DataFrame) -> int:
+        """Add only the minutes the day's file lacks (a runner that started mid-day finds the bars it missed in its
+        history, which poll() never returns again); every bar already recorded stays as it was. Returns how many."""
+        if df is None or df.empty:
+            return 0
+        added = 0
+        for day, part in df.groupby(df.index.date):
+            path = self.day_dir(day) / f"{symbol}_1m.csv"
+            if path.exists():
+                old = normalise_bars(pd.read_csv(path, index_col=0, parse_dates=True))
+                part = part[~part.index.isin(old.index)]
+                if part.empty:
+                    continue
+                merged = pd.concat([old, part]).sort_index()
+            else:
+                merged = part.sort_index()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            merged.to_csv(path, index_label="ts")
+            added += len(part)
+        return added
+
     def record_chain(self, chain: pd.DataFrame) -> None:
         ts = pd.Timestamp(chain.attrs["ts"])
         path = (self.day_dir(ts.date()) / "chains" /

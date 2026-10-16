@@ -235,6 +235,63 @@ def test_handover_nobody_picked_up_is_closed_after_the_bell(cfg, sessions, tmp_p
     assert "is over" in run_live(_new_engine(cfg, bars, day, tmp_path, late))
 
 
+class _TodayHistoryFeed(ReplayFeed):
+    """A feed whose history() already holds today's completed bars, as Yahoo's / Kotak's do: a runner that starts mid-day
+    (the afternoon one) finds the bars it missed in history, so poll() never returns them and nothing records them."""
+    def history(self, symbol, days=5):
+        df = self.bars[symbol]
+        return df[df.index + pd.Timedelta(minutes=1) <= self.clock]
+
+
+def test_handover_gap_bars_are_backfilled_into_the_recorder(cfg, sessions, tmp_path):
+    """P2-10: the morning's last recorded bar is 12:19 and the afternoon starts around 12:22 with 12:20-12:21 already in
+    history, so the recorded CSV had a hole there every day. start_session fills the missing minutes, and only those."""
+    from quantdesk.intraday.recorder import SessionRecorder
+    bars, days = sessions
+    day = days[-1]
+    rec = SessionRecorder(tmp_path / "data")
+    morning_end = pd.Timestamp(dt.datetime.combine(day, dt.time(12, 20)), tz=IST)
+    for sym, df in bars.items():
+        rec.record_bars(sym, df[(df.index >= session_bounds(day)[0]) & (df.index < morning_end)])
+    kept = rec.day_dir(day) / "NIFTY_1m.csv"
+    marked = pd.read_csv(kept, index_col=0, parse_dates=True)
+    marked.iloc[100, marked.columns.get_loc("close")] = 12345.0                  # a recorded value must survive the backfill
+    marked.to_csv(kept, index_label="ts")
+
+    feed = _TodayHistoryFeed(bars, day)
+    feed.clock = morning_end + pd.Timedelta(minutes=2, seconds=30)               # 12:22:30, the afternoon job's first seconds
+    eng = IntradayEngine(cfg, feed, "model", Journal(tmp_path / "j.db"),
+                         IntradayBroker(cfg, starting_cash=CAPITAL, state_path=tmp_path / "broker.json"),
+                         recorder=rec, say=None)
+    eng.start_session(day)
+    for sym in ("NIFTY", "BANKNIFTY", "INDIAVIX"):
+        got = pd.read_csv(rec.day_dir(day) / f"{sym}_1m.csv", index_col=0, parse_dates=True)
+        want = pd.date_range(session_bounds(day)[0], morning_end + pd.Timedelta(minutes=1), freq="min")
+        assert list(got.index) == list(want), f"{sym}: missing {sorted(set(want) - set(got.index))[:3]}"
+    assert pd.read_csv(kept, index_col=0, parse_dates=True)["close"].iloc[100] == 12345.0
+    eng.journal.close()
+
+
+def test_handover_morning_stops_at_its_last_step_not_a_minute_later(cfg, sessions, tmp_path, monkeypatch):
+    """P2-10: the 12:20 hand-over used to sleep on to the next minute's step time (12:21:04) before noticing it was out
+    of the window, a whole minute during which neither runner was stepping."""
+    bars, days = sessions
+    day = days[-1]
+    feed = ReplayFeed(bars, day)
+    feed.clock = pd.Timestamp(dt.datetime.combine(day, dt.time(12, 17, 30)), tz=IST)
+    monkeypatch.setattr(engine_mod.time, "sleep", lambda s: setattr(feed, "clock", feed.clock + pd.Timedelta(seconds=s)))
+    stepped = []
+    real = engine_mod.run_step
+    monkeypatch.setattr(engine_mod, "run_step", lambda e: (stepped.append(e.feed.now()), real(e))[1])
+    eng = IntradayEngine(cfg, feed, "model", Journal(tmp_path / "j.db"),
+                         IntradayBroker(cfg, starting_cash=CAPITAL, state_path=tmp_path / "broker.json"), say=None)
+    msg = run_live(eng, HAND_OVER, handover=True)
+    assert msg.startswith("handed over at 12:20")
+    assert stepped[-1].time() == dt.time(12, 20, 4)                             # the last step still happens, at 12:20:04
+    assert feed.now() < pd.Timestamp(dt.datetime.combine(day, dt.time(12, 20, 30)), tz=IST)   # and the runner stops there
+    eng.journal.close()
+
+
 def test_kill_switch_squares_off_at_current_prices(cfg, sessions, tmp_path, sim_clock):
     """The operator cancels the day's run (close_out): what is open is squared off now and the session is closed."""
     bars, days = sessions

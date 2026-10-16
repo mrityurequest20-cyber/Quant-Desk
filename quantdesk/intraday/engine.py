@@ -243,6 +243,7 @@ class IntradayEngine:
             self.bars[sym] = h.tail(375 * self.history_days) if h is not None else \
                 pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
             self.last_ts[sym] = h.index[-1] if h is not None and len(h) else None
+            self._backfill_recorder(sym, h, day)
         self.expiry = {u: self.pick_expiry(u, day) for u in self.underlyings}
         self._learn(day, catch_up=True)
         self._load_heavyweights()
@@ -295,6 +296,18 @@ class IntradayEngine:
             self.journal.event(session_bounds(day)[0], "ERROR", "learning",
                                f"learning memory unreadable ({self.memory.corrupt}): the desk trades on neutral tilts and "
                                f"saves nothing over the file; restore memory.json from the journal branch's evidence")
+
+    def _backfill_recorder(self, sym: str, hist, day: dt.date) -> None:
+        """P2-10: a runner that starts mid-day (the afternoon one, a restart) gets the minutes it missed in its history,
+        so the recorder (which keeps only what poll() returns) had a hole there; fill today's missing minutes. Data only."""
+        if self.recorder is None or hist is None or not len(hist):
+            return
+        try:
+            n = self.recorder.fill_bars(sym, hist[hist.index.date == day])
+            if n:
+                self.journal.event(pd.Timestamp.now(tz=IST), "INFO", "session", f"{sym}: {n} bar(s) from history added to today's record")
+        except Exception as exc:                                  # a recorder fault must never stop the session starting
+            log.warning("recorder backfill %s: %s", sym, exc)
 
     def step(self) -> bool:
         now = self.feed.now()
@@ -2182,6 +2195,8 @@ def run_live(engine: IntradayEngine, stop_at: dt.time | None = None, handover: b
             run_step(engine)
             n = engine.feed.now()
             nxt = n.floor("min") + pd.Timedelta(seconds=64)            # the next minute's step, 4 s after it closes
+            if handover and end < close_ts and nxt >= end + pd.Timedelta(seconds=30):
+                break                                         # P2-10: that step is outside the window; don't idle a minute to find out
             while (left := (nxt - engine.feed.now()).total_seconds()) > 0:
                 ticking = getattr(engine.feed, "has_ltp", False)
                 time.sleep(max(0.5, min(engine.tick_sec, left)) if ticking else left)
