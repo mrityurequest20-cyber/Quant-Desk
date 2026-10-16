@@ -85,6 +85,7 @@ def empty_chain(underlying: str, spot: float, expiry: dt.date, ts, source: str) 
 class ChainSource(abc.ABC):
     name = "base"
     refresh_min: float | None = None           # how often the engine may ask (None: intraday.chain_refresh_min)
+    book = False                               # a broker's live book stands behind it: no live quote, no entry
 
     @abc.abstractmethod
     def expiries(self, underlying: str) -> list[dt.date]:
@@ -108,6 +109,7 @@ class FallbackChain(ChainSource):
         self.primary, self.secondary, self.secondary_min = primary, secondary, secondary_min
         self.name = primary.name
         self.refresh_min = primary.refresh_min
+        self.book = primary.book
         self.error: dict[str, str] = {}
         self._held: dict[str, tuple[pd.Timestamp, pd.DataFrame]] = {}
 

@@ -8,10 +8,16 @@
 * **Pre-break entries**: armed setups the EV gate turned down, replayed on the bars that followed (target or stop
   first, within the setup's time stop), so the desk can see whether waiting for confirmation is costing it.
 
-What it learns changes the desk only through bounded multipliers on things it already weighs: a factor's or a news
-type's weight (0.5×–1.5×) and a setup's conviction (0.6×–1.3×), each shrunk toward 1 until there's enough evidence
-(a prior worth 20 observations), and a setup × day type with a clearly negative record (8+ trades, shrunk mean
-below −0.3R) is stood aside from. One good or bad day can't swing it; a consistent record does.
+What it learns changes the desk only through bounded multipliers on things it already weighs: a news type's weight
+(0.5×–1.5×) and a setup's conviction (0.6×–1.3×), each shrunk toward 1 until there's enough evidence (a prior worth 20
+observations), and a setup × day type with a clearly negative record (8+ trades, shrunk mean below −0.3R) is stood
+aside from. One good or bad day can't swing it; a consistent record does.
+
+**Factor weights are recorded, not applied** (D-01, owner decision): every factor is still graded, and its reliability
+(0.5×–1.5×) and probation "graduation" are kept in the record and shown, but the analyst and the brain weigh evidence
+at its unlearned weight. The audit could not tell the factor record from noise (sign-flip placebo p = 0.70; noise
+graduates a factor in 78% of draws). `intraday.learning.apply_factor_weights: true` turns the old behaviour back on;
+it should stay off until a significance test (placebo-controlled, multiplicity-adjusted) says a factor's record is real.
 The memory lives next to the journal (runtime/intraday/memory.json), so it carries from day to day.
 
 Two research tables ride along (they change nothing by themselves; they're what the record says):
@@ -28,11 +34,17 @@ Two research tables ride along (they change nothing by themselves; they're what 
 from __future__ import annotations
 
 import json
+import logging
 import math
+import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from .feeds import frozen_minutes
+
+log = logging.getLogger(__name__)
 
 IST = "Asia/Kolkata"
 PRIOR = 20.0                 # pseudo-observations at a 50% hit rate / 0R mean
@@ -42,18 +54,32 @@ IC_HORIZONS = (5, 15, 30, 60)
 IC_CLIP_BPS = 150.0          # forward returns clipped for the IC so one shock can't own the correlation
 
 
+def apply_factor_weights(cfg) -> bool:
+    """Whether learned factor weights (and probation graduation) change the analyst's and the brain's evidence.
+    Off by default (D-01): the record is kept and shown, not applied."""
+    return bool(cfg.get("intraday.learning.apply_factor_weights", False)) if cfg is not None else False
+
+
 class Memory:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else None
         self.d: dict = {"version": 1, "tables": {}, "graded": {"news": [], "thoughts_upto": {}, "trades": [], "armed": []},
-                        "days": [], "lessons": []}
+                        "days": [], "lessons": [], "blocks": {}}
+        self.corrupt: str | None = None                  # why the saved record didn't load; nothing is saved while set
         if self.path and self.path.exists():
             try:
                 self.d.update(json.loads(self.path.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as exc:
+                # C-10: never carry on blank over a record that failed to load: the next save (or the morning's
+                # `learn --bootstrap --if-empty`, which sees it as empty) would overwrite every session learned. The
+                # desk trades on neutral tilts, the file is left exactly as it is, and the owner restores it.
+                self.corrupt = f"{type(exc).__name__}: {exc!s:.160}"
+                log.error("learning memory %s unreadable (%s): nothing will be saved over it", self.path, self.corrupt)
 
     def save(self) -> None:
+        if self.corrupt:
+            log.error("learning memory %s not saved: the file on disk failed to load (%s)", self.path, self.corrupt)
+            return
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             g = self.d["graded"]
@@ -64,12 +90,25 @@ class Memory:
             tmp.replace(self.path)
 
     # ---- statistics ---------------------------------------------------------------------------------------------
-    def bump(self, table: str, key: str, hit: bool, x: float, w: float = 1.0) -> None:
+    def bump(self, table: str, key: str, hit: bool, x: float, w: float = 1.0, block: str | None = None,
+             pos: bool | None = None, up: bool | None = None) -> None:
         r = self.d["tables"].setdefault(table, {}).setdefault(str(key), {"n": 0.0, "hits": 0.0, "sum": 0.0, "sum2": 0.0})
         r["n"] += w
         r["hits"] += w * bool(hit)
         r["sum"] += w * float(x)
         r["sum2"] += w * float(x) ** 2
+        if block:                                       # the same observation by session x index, for the earn-in gate
+            # [n, hits, sum, pos, up]: pos = the call was bullish, up = the market rose. With both, the gate measures a
+            # call against the hit rate a coin with the same bias would have had that day, not against 0.5 (a bullish
+            # reader in a rising week is not skilled).
+            b = self.d.setdefault("blocks", {}).setdefault(table, {}).setdefault(str(key), {}).setdefault(
+                block, [0.0, 0.0, 0.0, 0.0, 0.0])
+            b[0] += w
+            b[1] += w * bool(hit)
+            b[2] += w * float(x)
+            if len(b) >= 5:
+                b[3] += w * bool(pos)
+                b[4] += w * bool(up)
 
     def stat(self, table: str, key: str) -> dict | None:
         return (self.d["tables"].get(table) or {}).get(str(key))
@@ -86,8 +125,12 @@ class Memory:
         r = self.stat(table, key) or {"n": 0.0, "sum": 0.0}
         return r["sum"] / (r["n"] + PRIOR)                              # shrunk toward 0
 
-    def setup_mult(self, setup: str, day_type: str | None = None) -> tuple[float, str | None]:
-        """(conviction multiplier, a reason to stand aside or None) from the setup's record of R."""
+    def setup_mult(self, setup: str, day_type: str | None = None, applied: bool = True) -> tuple[float, str | None]:
+        """(conviction multiplier, a reason to stand aside or None) from the setup's record of R. `applied=False`
+        (intraday.learning.apply_factor_weights off, D-01): (1.0, None). A stood-aside setup takes no trade, so its
+        record could never recover (an absorbing state: a zero-edge setup locked itself out 11-12% of the time)."""
+        if not applied:
+            return 1.0, None
         key = f"{setup}|{day_type}" if day_type else setup
         for k in ([key, setup] if day_type else [setup]):
             r = self.stat("setup", k)
@@ -112,10 +155,16 @@ class Memory:
 
 
 # ---- grading ---------------------------------------------------------------------------------------------------------
-def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: bool = False, with_start: bool = False):
+OVERSHOT = [0]                                                  # windows `forward` has dropped for max_overshoot (grade_session reports the change)
+
+
+def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: bool = False, with_start: bool = False,
+            max_overshoot: float | None = 5):
     """Log return of the close from the first bar at/after t to the bar `minutes` later, same session only.
     `from_open`: something seen outside market hours (overnight news) is graded from the next session's first bar,
-    the first moment the desk could act on it (up to a weekend later)."""
+    the first moment the desk could act on it (up to a weekend later).
+    Not graded: a window whose end bar is masked (a frozen index minute, `unfrozen`), or that a gap in the bars
+    stretches more than `max_overshoot` minutes past its end (the 12:20 hand-over's ~2 minutes still grade)."""
     if bars is None or bars.empty:
         return None
     t = pd.Timestamp(t)
@@ -128,12 +177,57 @@ def forward(bars: pd.DataFrame | None, t, minutes: int = HORIZON, from_open: boo
     late = (idx[i] - t) > pd.Timedelta(minutes=5)
     if late and not (from_open and first_of_day and (idx[i] - t) <= pd.Timedelta(hours=66)):
         return None
-    j = idx.searchsorted(idx[i] + pd.Timedelta(minutes=minutes))
+    end = idx[i] + pd.Timedelta(minutes=minutes)
+    j = idx.searchsorted(end)
     if j >= len(idx) or idx[j].date() != idx[i].date():
         return None
+    if max_overshoot is not None and idx[j] - end > pd.Timedelta(minutes=max_overshoot):
+        OVERSHOT[0] += 1
+        return None
     a, b = float(bars["close"].iloc[i]), float(bars["close"].iloc[j])
-    fr = math.log(b / a) if a > 0 and b > 0 else None
+    fr = math.log(b / a) if a > 0 and b > 0 else None                  # NaN (masked) at either end: not graded
     return (fr, idx[i]) if with_start and fr is not None else (None if with_start else fr)
+
+
+def unfrozen(bars: dict) -> dict:
+    """F-02: the bars with each frozen index minute (feeds.frozen_minutes) masked to NaN, kept in place so `forward`
+    sees a window that ends in the freeze rather than stretching it to the first live bar after. Only `rebuild`
+    corrects what `memory.json` already holds (observations graded before this existed stay as they were)."""
+    out = {}
+    for k, b in bars.items():
+        f = frozen_minutes(b)
+        if len(f):
+            b = b.copy()
+            b.loc[f, ["open", "high", "low", "close"]] = np.nan
+        out[k] = b
+    return out
+
+
+def _obj(v) -> dict:
+    """A JSON column as a dict. A NULL comes back from pandas as NaN (truthy), which is not a dict."""
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v:
+        try:
+            o = json.loads(v)
+        except ValueError:
+            return {}
+        return o if isinstance(o, dict) else {}
+    return {}
+
+
+def _later(t, other):
+    """The later of a timestamp and an optional second one (a seen-at or read-at that may be missing or unparseable)."""
+    try:
+        o = pd.Timestamp(other) if other is not None and other == other and str(other) else None
+    except (ValueError, TypeError):
+        o = None
+    if o is None:
+        return t
+    a = pd.Timestamp(t)
+    a = a.tz_localize(IST) if a.tzinfo is None else a
+    o = o.tz_localize(IST) if o.tzinfo is None else o
+    return max(a, o)
 
 
 def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0, min_tone: float = 0.15) -> int:
@@ -146,19 +240,24 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
     for r in news.itertuples():
         if r.id in done:
             continue
-        about = json.loads(r.about) if isinstance(r.about, str) and r.about else (r.about or {})
-        nlp_ = json.loads(r.nlp) if isinstance(getattr(r, "nlp", None), str) and r.nlp else (getattr(r, "nlp", None) or {})
+        about, nlp_ = _obj(r.about), _obj(getattr(r, "nlp", None))
         graded = False
+        # C-07: a read is graded from when the desk could act on it, not when the story was published: the rules
+        # tone from when the desk saw the story (a median 12 minutes after publication, 12-16 Oct), each language
+        # model's from when its read arrived. Graded from publication, a story seen after the move took the credit.
+        seen = _later(r.ts, getattr(r, "seen_at", None))
+        llm_ = ((nlp_.get("llm") or {}).get("readers") or {})
         for sym in ("NIFTY", "BANKNIFTY"):
             if (about.get(sym) or 0) < min_rel:
                 continue
-            got = forward(bars.get(sym), r.ts, from_open=True, with_start=True)
-            if got is None:
-                continue
-            fr, t0 = got
-            graded = True
-            llm_ = ((nlp_.get("llm") or {}).get("readers") or {})
-            for reader, tone in [("rules", r.sentiment)] + [(k, (v or {}).get(sym)) for k, v in llm_.items()]:
+            reads = [("rules", r.sentiment, seen)] + [(k, (v or {}).get(sym), _later(seen, (v or {}).get("at")))
+                                                      for k, v in llm_.items()]
+            for reader, tone, t in reads:
+                got = forward(bars.get(sym), t, from_open=True, with_start=True)
+                if got is None:
+                    continue
+                graded = True
+                fr, t0 = got
                 if tone is None or not tone == tone or abs(tone) < min_tone:
                     continue
                 rows.append((reader, sym, t0.floor(f"{HORIZON}min"), float(tone), fr, nlp_.get("event", "general"), r.source))
@@ -171,11 +270,25 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
         w = 1.0 / share[(reader, sym, win)]
         s = float(np.sign(tone))
         hit, bps = s * fr > 0, s * fr * 1e4
-        mem.bump("news_reader", reader, hit, bps, w)
+        blk = f"{win.date()}|{sym}"
+        pos, up = s > 0, fr > 0
+        mem.bump("news_reader", reader, hit, bps, w, blk, pos, up)
         if reader == "rules":
-            mem.bump("news_event", event, hit, bps, w)
-            mem.bump("news_source", source, hit, bps, w)
+            mem.bump("news_event", event, hit, bps, w, blk, pos, up)
+            mem.bump("news_source", source, hit, bps, w, blk, pos, up)
     return len(rows)
+
+
+_VIX_READ = re.compile(r"India VIX\s+(-?\d+(?:\.\d+)?)")
+
+
+def _dead_read(e: dict) -> bool:
+    """A `vix` read taken while the feed served the index as 0.00 (Kotak does, for INDIAVIX): a constant +1.0 vote that
+    says nothing about volatility. 742 of the 743 vix reads in the 5-9 Oct journal were these; they must not be graded."""
+    if e.get("factor") != "vix":
+        return False
+    m = _VIX_READ.search(str(e.get("observation") or ""))
+    return bool(m) and float(m.group(1)) <= 0
 
 
 def grade_factors(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
@@ -192,9 +305,10 @@ def grade_factors(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
             continue
         for e in json.loads(r.evidence or "[]"):
             d = float(e.get("direction") or 0)
-            if abs(d) < 0.1:
+            if abs(d) < 0.1 or _dead_read(e):
                 continue
-            mem.bump("factor", e.get("factor"), d * fr > 0, d * fr * 1e4, READ_EVERY / HORIZON)
+            mem.bump("factor", e.get("factor"), d * fr > 0, d * fr * 1e4, READ_EVERY / HORIZON,
+                     f"{pd.Timestamp(r.ts).date()}|{r.symbol}", d > 0, fr > 0)
             n += 1
         upto[r.symbol] = max(upto.get(r.symbol, ""), str(r.ts))
     return n
@@ -227,7 +341,7 @@ def grade_ic(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
         frs = {h: forward(b, t, minutes=h) for h in IC_HORIZONS}
         for e in json.loads(r.evidence or "[]"):
             d = float(e.get("direction") or 0)
-            if abs(d) < 0.1 or not e.get("factor"):
+            if abs(d) < 0.1 or not e.get("factor") or _dead_read(e):
                 continue
             for h, fr in frs.items():
                 if fr is None:
@@ -309,9 +423,10 @@ def grade_trades(mem: Memory, trades: pd.DataFrame) -> int:
             continue
         ctx = json.loads(r.context or "{}") if isinstance(r.context, str) else (r.context or {})
         R = float(np.clip(r.r_multiple, -3, 5))
-        mem.bump("setup", r.strategy, R > 0, R)
+        blk = f"{pd.Timestamp(r.opened_at).date()}|{r.symbol}"
+        mem.bump("setup", r.strategy, R > 0, R, block=blk)
         if ctx.get("regime"):
-            mem.bump("setup", f"{r.strategy}|{ctx['regime']}", R > 0, R)
+            mem.bump("setup", f"{r.strategy}|{ctx['regime']}", R > 0, R, block=blk)
         mem.d["graded"]["trades"].append(r.id)
         n += 1
     return n
@@ -330,7 +445,7 @@ def grade_armed(mem: Memory, decisions: pd.DataFrame, bars: dict, horizon: int =
         if b is None or None in (lvl, stop, tgt, d):
             continue
         t = pd.Timestamp(r.ts)
-        after = b[(b.index > t) & (b.index <= t + pd.Timedelta(minutes=horizon))]
+        after = b[(b.index > t) & (b.index <= t + pd.Timedelta(minutes=horizon))].dropna(subset=["close"])
         if after.empty:
             continue
         out = 0.0
@@ -355,6 +470,7 @@ def grade_armed(mem: Memory, decisions: pd.DataFrame, bars: dict, horizon: int =
 def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
     """Grade everything from `day` (and anything older not yet graded); returns what was graded."""
     since = str(pd.Timestamp(day) - pd.Timedelta(days=7))[:10]
+    bars, over = unfrozen(bars), OVERSHOT[0]                    # F-02: no call graded on a frozen index print
     news = journal.df("SELECT * FROM news WHERE ts >= ?", (since,))
     th = journal.df("SELECT ts, symbol, evidence FROM thoughts WHERE ts >= ? ORDER BY ts", (since,))
     tr = journal.df("SELECT * FROM trades WHERE opened_at >= ?", (since,))
@@ -364,6 +480,8 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
     grade_ic(mem, th, bars)
     from . import relstrength
     out["rs"] = relstrength.grade(mem, bars)
+    if OVERSHOT[0] > over:
+        out["dropped_overshoot"] = OVERSHOT[0] - over           # forward() calls (not unique windows) a gap stretched too far
     if str(day) not in mem.d["days"]:
         mem.d["days"].append(str(day))
     return out
@@ -372,6 +490,7 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
 def rebuild(mem: Memory, journal, bars: dict) -> dict:
     """Forget everything graded and grade the whole journal again (after a change to the grading rules)."""
     keep, moves = mem.d.get("lessons", []), mem.d.get("moves", {})
+    bars = unfrozen(bars)
     mem.d = Memory().d
     mem.d["lessons"], mem.d["moves"] = keep, moves             # a session's moves aren't re-derivable from the journal
     news = journal.df("SELECT * FROM news ORDER BY ts")
@@ -409,6 +528,7 @@ def bootstrap(cfg, mem: Memory, bars: dict, journal=None, min_bars: int = 300, m
         eng = IntradayEngine(cfg, ReplayFeed(bars, d), "model", scratch, IntradayBroker(cfg, starting_cash=500000), say=None)
         run_replay(eng)
     th = scratch.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
+    bars = unfrozen(bars)                                       # replayed on what was recorded, graded without the freeze
     got = {"sessions": len(days), "factors": grade_factors(mem, th, bars), "news": 0}
     grade_ic(mem, th, bars)
     from . import relstrength
@@ -422,27 +542,29 @@ def bootstrap(cfg, mem: Memory, bars: dict, journal=None, min_bars: int = 300, m
     return got
 
 
-def summary(mem: Memory, top: int = 6) -> list[str]:
-    """What the desk has learned so far, in lines for the session review."""
+def summary(mem: Memory, top: int = 6, factor_weights_applied: bool = False) -> list[str]:
+    """What the desk has learned so far, in lines for the session review. A factor's weight is marked "recorded, not
+    applied" unless `factor_weights_applied` (intraday.learning.apply_factor_weights, D-01); so is a setup's
+    conviction and stand-aside, which the same switch governs."""
     L = []
     T = mem.d["tables"]
 
-    def rows(table, label, unit="bps"):
+    def rows(table, label, unit="bps", note=""):
         out = []
         for k, r in sorted((T.get(table) or {}).items(), key=lambda kv: -kv[1]["n"])[:top]:
             if r["n"] < 1:
                 continue
             out.append(f"{label} {k}: {r['n']:.0f} graded, right {r['hits'] / r['n']:.0%}, "
-                       f"{r['sum'] / r['n']:+.1f} {unit} avg → weight ×{mem.reliability(table, k):.2f}")
+                       f"{r['sum'] / r['n']:+.1f} {unit} avg → weight ×{mem.reliability(table, k):.2f}{note}")
         return out
 
-    L += rows("factor", "factor")
+    L += rows("factor", "factor", note="" if factor_weights_applied else " (recorded, not applied)")
     L += rows("news_event", "news")
     L += rows("news_reader", "reader")
     for k, r in sorted((T.get("setup") or {}).items(), key=lambda kv: -kv[1]["n"])[:top]:
-        m, why = mem.setup_mult(*k.split("|", 1)) if "|" in k else mem.setup_mult(k)
+        m, why = mem.setup_mult(*k.split("|", 1)) if "|" in k else mem.setup_mult(k)     # the record, applied or not
         L.append(f"setup {k}: {r['n']:.0f} trades, {r['hits'] / r['n']:.0%} won, {r['sum'] / r['n']:+.2f}R avg → "
-                 + (f"stand aside ({why})" if why else f"conviction ×{m:.2f}"))
+                 + (f"stand aside ({why})" if why else f"conviction ×{m:.2f}") + ("" if factor_weights_applied else " (recorded, not applied)"))
     for k, r in (T.get("armed_rejected") or {}).items():
         L.append(f"pre-break {k} entries the EV gate refused: {r['n']:.0f}, would have won {r['hits'] / r['n']:.0%}, "
                  f"{r['sum'] / r['n']:+.2f}R avg")

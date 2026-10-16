@@ -318,3 +318,85 @@ def test_risk_gates(cfg):
     r2.on_close(-1000, ts("2026-09-28 10:10"))
     assert any("cooling off" in x for x in r2.gate(ts("2026-09-28 10:20"), 498000, [], "NIFTY"))
     assert not r2.gate(ts("2026-09-28 10:45"), 498000, [], "NIFTY")
+
+
+def test_no_new_entry_when_the_model_chain_stands_in_for_a_failed_real_one(cfg, sessions):
+    """F-01: when the real chain fails the desk prices off the model chain (fine for marks) but must not open trades
+    on invented quotes; a replay that chose the model chain on purpose is unaffected."""
+    from types import SimpleNamespace
+    from quantdesk.intraday.chains import ChainSource
+
+    class Down(ChainSource):
+        name = "kotak"
+
+        def expiries(self, underlying):
+            raise ConnectionError("kotak down")
+
+        def chain(self, underlying, expiry, spot=None, ts=None):
+            raise ConnectionError("kotak down")
+
+    bars, _, days = sessions
+    calm = SimpleNamespace(vetoes=[])
+    down = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), Down(), Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(down)
+    now = down.last_ts["NIFTY"]
+    assert down.chain_df["NIFTY"].attrs["source"] == "model"
+    assert "kotak option chain unavailable" in (down._blocked("NIFTY", calm, now) or "")
+    assert not down.closed and not down.open_trades                          # nothing opened on invented quotes
+    model = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(model)
+    assert "unavailable" not in (model._blocked("NIFTY", calm, model.last_ts["NIFTY"]) or "")
+
+
+def test_a_forming_5_minute_bar_is_not_complete_after_one_minute(cfg, monkeypatch):
+    """A-18: completed() used a 1-minute bar length on Yahoo's 5-minute history."""
+    import yfinance as yf
+    from quantdesk.intraday.feeds import IntradayFeed, YahooIntradayFeed
+    idx = pd.date_range("2026-10-05 09:15", "2026-10-05 10:00", freq="5min", tz=IST)
+    raw = pd.DataFrame({"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1.0}, index=idx)
+    monkeypatch.setattr(yf, "Ticker", lambda t: type("T", (), {"history": lambda self, **k: raw})())
+    feed = YahooIntradayFeed(cfg)
+    monkeypatch.setattr(feed, "now", lambda: pd.Timestamp("2026-10-05 10:02", tz=IST))
+    got = feed.history_bars("NIFTY")
+    assert got.index[-1] == pd.Timestamp("2026-10-05 09:55", tz=IST)          # 10:00-10:05 is still forming
+    ones = pd.date_range("2026-10-05 09:15", "2026-10-05 10:01", freq="1min", tz=IST)
+    one = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0}, index=ones)
+    monkeypatch.setattr(feed, "history", lambda symbol, days=55: one)
+    got = IntradayFeed.history_bars(feed, "NIFTY")                                  # the default: 1m resampled to 5m
+    assert got.index[-1] == pd.Timestamp("2026-10-05 09:55", tz=IST)
+    monkeypatch.setattr(feed, "history", lambda symbol, days=55: pd.DataFrame([]))
+    assert IntradayFeed.history_bars(feed, "NIFTY").empty                            # no history: empty, no error
+
+
+def test_opening_range_is_a_clock_window_and_unknown_after_a_late_start(cfg, sessions):
+    """B-10: the OR / IB were the first 15 / 60 rows present, so a late start or a gap made any bars 'the open'."""
+    bars, _, days = sessions
+    b = bars["NIFTY"]
+    d = days[-1]
+    full = b[b.index.date <= d]
+    t = pd.Timestamp(f"{d} 11:00", tz=IST)
+    s = session_state(full[full.index <= t], t)
+    day = full[full.index.date == d]
+    first15 = day[day.index < pd.Timestamp(f"{d} 09:30", tz=IST)]
+    assert s["or_done"] and s["or_high"] == float(first15["high"].max()) and s["minutes"] == 105
+    late = full[(full.index.date < d) | (full.index >= pd.Timestamp(f"{d} 10:00", tz=IST))]    # started at 10:00
+    s2 = session_state(late[late.index <= t], t)
+    assert s2["minutes"] == 105                                   # time since 09:15, not since the first bar
+    assert not s2["or_done"] and not s2["ib_done"]                # the opening range is unknown, not 10:00-10:14
+    assert np.isfinite([s2["or_high"], s2["or_low"], s2["ib_high"], s2["ib_low"]]).all()
+    # a late start must not open other setups instead: counting minutes from 09:15 on a partial day would lift the
+    # "forming"/"first 5 minutes" gates over a VWAP built from a few bars, so the analyst stands aside all day
+    from quantdesk.intraday.analyst import Analyst
+    assert s["from_open"] and not s2["from_open"]
+    assert not any("starts after the open" in v for v in Analyst(cfg).assess("NIFTY", s, {"spot": s["last"]}).vetoes)
+    assert any("starts after the open" in v for v in Analyst(cfg).assess("NIFTY", s2, {"spot": s2["last"]}).vetoes)
+    gap = full[(full.index.date < d) | (full.index < pd.Timestamp(f"{d} 09:21", tz=IST)) | (full.index >= pd.Timestamp(f"{d} 10:00", tz=IST))]
+    s3 = session_state(gap[gap.index <= t], t)                   # 09:15-09:20, then nothing until 10:00
+    assert s3["from_open"] and not s3["or_done"] and not s3["ib_done"]   # 6 of 15 bars is not an opening range
+    # the engine says so once, at WARN with "failed", so self-review files it instead of a silent day of standing aside
+    lb = {sym: df[(df.index.date < d) | (df.index >= pd.Timestamp(f"{d} 10:00", tz=IST))] for sym, df in bars.items()}
+    eng = IntradayEngine(cfg, ReplayFeed(lb, d), "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    run_replay(eng)
+    ev = eng.journal.df("SELECT * FROM events WHERE level = 'WARN' AND category = 'data'")
+    assert len(ev) == len(eng.underlyings) and ev["message"].str.contains("opening bars failed to arrive").all()
+

@@ -170,6 +170,14 @@ class Journal:
         self._exec("INSERT INTO events (ts, level, category, message, data) VALUES (?,?,?,?,?)",
                    (str(ts), level, category, message, _json(data or {})))
 
+    def count_events(self, day, levels=("WARN", "ERROR", "CRITICAL"), categories=("data", "quotes", "engine")) -> int:
+        """Events of those levels and categories on `day` (read-only; no commit)."""
+        lo, hi = str(day), str((pd.Timestamp(day) + pd.Timedelta(days=1)).date())
+        with self.lock:
+            return int(self.db.execute(
+                f"SELECT COUNT(*) FROM events WHERE ts >= ? AND ts < ? AND level IN ({','.join('?' * len(levels))}) "
+                f"AND category IN ({','.join('?' * len(categories))})", (lo, hi, *levels, *categories)).fetchone()[0])
+
     def snapshot(self, ts, **row):
         cols = ["equity", "cash", "drawdown", "open_trades", "gross", "net_delta", "vega", "open_risk", "regime"]
         self._exec(f"INSERT OR REPLACE INTO equity (ts, {', '.join(cols)}) VALUES (?{',?' * len(cols)})",
@@ -190,17 +198,31 @@ class Journal:
                     _json(view.vetoes), _json(view.levels), _json(view.chain)))
 
     def news_add(self, items, seen_at) -> None:
-        """Headlines as the desk saw them (with its own sentiment / impact / relevance scores)."""
-        for it in items:
-            r = it.to_record()
-            self._exec("INSERT OR REPLACE INTO news (id, ts, seen_at, source, sources, title, link, summary, sentiment, impact, about, nlp) "
-                       "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (r["id"], r["ts"], str(seen_at), r["source"], _json(r["sources"]),
-                                                            r["title"], r["link"], r["summary"], r["sentiment"], r["impact"],
-                                                            _json(r["about"]), _json(r.get("nlp") or {})))
+        """Headlines as the desk saw them (with its own sentiment / impact / relevance scores). A story already written
+        (an earlier job's, before the afternoon hand-over) keeps when it was first seen, its time and its NLP record;
+        only the outlets that carried it are merged."""
+        with self.lock:
+            for it in items:
+                r = it.to_record()
+                row = self.db.execute("SELECT sources FROM news WHERE id = ?", (r["id"],)).fetchone()
+                sources = list(dict.fromkeys([*(json.loads(row[0]) if row and row[0] else []), *r["sources"]]))
+                self._exec("INSERT INTO news (id, ts, seen_at, source, sources, title, link, summary, sentiment, impact, about, nlp) "
+                           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET sources = excluded.sources",
+                           (r["id"], r["ts"], str(seen_at), r["source"], _json(sources), r["title"], r["link"], r["summary"],
+                            r["sentiment"], r["impact"], _json(r["about"]), _json(r.get("nlp") or {})))
 
     def news_set_nlp(self, news_id: str, nlp: dict) -> None:
-        """A story's NLP record after a language model's read arrived (news_add wrote the rest)."""
-        self._exec("UPDATE news SET nlp = ? WHERE id = ?", (_json(nlp or {}), news_id))
+        """A story's NLP record after a language model's read arrived (news_add wrote the rest). The readers' reads are
+        merged into what is stored, so a later job's reader never erases an earlier reader's read; whatever was stored
+        first (a reader's first read included) is kept."""
+        with self.lock:
+            row = self.db.execute("SELECT nlp FROM news WHERE id = ?", (news_id,)).fetchone()
+            old, new = (json.loads(row[0]) if row and row[0] else {}), dict(nlp or {})
+            merged = {**new, **old}
+            readers = {**((new.get("llm") or {}).get("readers") or {}), **((old.get("llm") or {}).get("readers") or {})}
+            if readers:
+                merged["llm"] = {**(new.get("llm") or {}), **(old.get("llm") or {}), "readers": readers}
+            self._exec("UPDATE news SET nlp = ? WHERE id = ?", (_json(merged), news_id))
 
     def news(self, since: str | None = None, n: int = 200) -> pd.DataFrame:
         q, p = "SELECT * FROM news", []

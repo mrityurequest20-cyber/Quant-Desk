@@ -147,9 +147,9 @@ Other commands:
    - The armed setups are on the app's Desk screen (*Waiting at the level*).
    - Stops and targets are checked on the same 5-second price, not once a minute.
 4. **sizes and executes (simulated):**
-   - **Sizing:** 1% of capital at risk to the plan's stop, scaled by conviction.
+   - **Sizing:** 2.5% of capital at risk to the plan's stop, scaled by conviction (×0.6-1.2, `intraday.risk.risk_per_trade`).
    - **Caps:** lots, premium outlay and margin.
-   - **Daily limits:** 6 trades a day, 2 open, −2.5% daily stop, cooldown after 2 losses.
+   - **Daily limits:** 4 trades a day, 2 open, −5% daily stop, cooldown after 2 losses; all open premium together at most 50% of equity.
    - **Entry window:** new trades only between 09:20 and 14:45.
    - **Fills:** buys at the ask, sells at the bid, plus a tick, plus the full cost stack (STT 0.15% on premium sold). With Kotak, entries and exits use the bid/ask of that moment, and an entry is skipped if the live net premium has moved more than 15% against the plan (a real limit order wouldn't have filled).
 5. **manages:** open options are marked with the IV implied by their last real quote, repriced with the live spot and minute-level time to expiry, so delta, gamma and theta all show up in P&L. Exits happen on invalidation, premium stop/target, underlying target, breakeven trail or time stop. Everything is squared off by 15:15.
@@ -281,8 +281,10 @@ changes how much it trusts each input. It grades at the close, and catches up at
   right counts for more.
 - **Evidence:** every factor in every read (VWAP, ORB, PCR, futures OI, news, global links …) is graded on whether
   its direction called the next 30 minutes. Reads are 5 minutes apart against a 30-minute horizon, so each counts
-  as a sixth of an observation. The factor's weight is multiplied by twice its shrunk hit rate (60% → 1.2×), within
-  0.5×–1.5×. The read says so: *"Track record: vwap ×1.18, pcr ×0.84"*.
+  as a sixth of an observation. The factor's reliability is twice its shrunk hit rate (60% → 1.2×), within
+  0.5×–1.5×. It is **recorded, not applied by default (D-01)**: the audit could not tell the factor record from noise
+  (placebo p ≈ 0.70), so every factor votes at its unlearned weight unless `intraday.learning.apply_factor_weights`
+  is `true`. The read still shows the record: *"Track record: vwap ×1.18, pcr ×0.84 (recorded, not applied)"*.
 - **Setups:** each closed trade's R by setup, and by setup × day type. After 8+ trades the setup's conviction is
   scaled 0.6×–1.3×. A setup that has lost 0.3R a trade or worse (shrunk) stands aside, with the record named in the
   decision.
@@ -293,7 +295,7 @@ changes how much it trusts each input. It grades at the close, and catches up at
 - **Factor IC by horizon.** Each factor's direction is correlated with the move 5, 15, 30 and 60 minutes later. The t-stats use overlap-adjusted samples, so you can see which factors predict and over what holding period.
 - **The buyer's edge.** Each session's realised volatility is set against the ATM IV read at the open, as realised ÷ implied over 20 sessions. A desk that only buys options needs realised to beat implied.
 
-Both are on the Brain tab and in the session review. The option chain is now also tracked through the day (`intraday/chainflow.py`): OI wall migration, the 25Δ skew's trend and ATM IV's trend. The first two are new factors **on probation**: graded live, no vote until 30 graded reads at 1.15×.
+Both are on the Brain tab and in the session review. The option chain is now also tracked through the day (`intraday/chainflow.py`): OI wall migration, the 25Δ skew's trend and ATM IV's trend. The first two are new factors **on probation**: graded live, no vote until 30 graded reads at 1.15×; graduation is part of the factor record, so it is **recorded, not applied by default (D-01)**.
 
 **More reads, each tested before it acts:**
 
@@ -365,8 +367,10 @@ One calibrated-logistic baseline predicts expected net R and abstains below its 
 everything, every configuration is logged with its hash, the replay enforces the engine's position and risk limits,
 and the locked period is opened once.
 
-**No directional trade without an approved plan model** (`autolearn.require_approved_model`). The analyst's read,
-narrative, LLMs and unvalidated models stay advisory.
+**Directional trades are not gated on an approved plan model right now** (`autolearn.require_approved_model: false`,
+the owner's choice of 10 Oct, PR #36). A directional plan still has to pass every other gate: halts, vetoes, the risk
+limits, the EV floor, live-book liquidity and slippage. With `true`, none is taken without a plan champion promoted on
+real point-in-time evidence. LLM reads and unvalidated models stay advisory either way.
 
 ### External index minutes (underlying research only)
 
@@ -671,9 +675,10 @@ The brain connects everything the desk sees into one picture, and it's honest ab
   FII/DII cash flows go into the narrative, from the warehouse.
 - **Probation.** A driver with no validated research link (and the heavyweight pulse) still reports its live
   30-minute move as evidence, with **zero weight**. The learning loop grades it like every other factor. After 30+
-  graded reads at a shrunk hit rate of 57.5% or better, it gets a small vote (0.25, then scaled by its record). If
-  the record slips, it drops back to zero. Validated links vote from the start; everything else has to earn a vote
-  live.
+  graded reads at a shrunk hit rate of 57.5% or better, its record would earn a small vote (0.25, then scaled by its
+  record); if the record slips, it would drop back to zero. That graduation is **recorded, not applied by default
+  (D-01)**: the driver stays at zero weight and the read says what its record would have earned, unless
+  `intraday.learning.apply_factor_weights` is `true`. Validated links vote from the start.
 - **Risk overlay.** Big global moves or a US VIX spike shrink size (volatility targeting). At a 1-lot account size, ≈4σ of global stress means standing aside.
 - **What you see.** The site's **Brain** tab shows:
   - the risk regime

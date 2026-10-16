@@ -40,13 +40,28 @@ def normalise_bars(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns={c: str(c).lower() for c in df.columns})
     idx = pd.DatetimeIndex(df.index)
     idx = idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)
-    df.index = idx.floor("min")
+    df.index = idx.floor("min").as_unit("ns")             # one unit for every source (pandas 3 keeps yfinance's "s")
     if "volume" not in df:
         df["volume"] = 0.0
     df = df[["open", "high", "low", "close", "volume"]].astype(float)
+    df = df[(df[["open", "high", "low", "close"]] > 0).all(axis=1)]    # (NaN fails too) Yahoo serves NaN/zero minutes; one NaN poisons VWAP all day
     df = df[~df.index.duplicated(keep="last")].sort_index()
     t = df.index.time
     return df[(t >= OPEN) & (t < CLOSE)]
+
+
+def frozen_minutes(bars: pd.DataFrame | None, min_run: int = 3) -> pd.DatetimeIndex:
+    """F-02: the minutes of every run of `min_run`+ bars printing open = high = low = close = the previous bar's close,
+    within a session. Kotak's index series does this from 15:15 to 15:28 every session while the future keeps trading;
+    NIFTY or BANKNIFTY never sits on one price for three minutes, so these are stale prints, not prices. A generic
+    detector: an illiquid index or a rounded feed could trip it, and the error is conservative (fewer grades)."""
+    if bars is None or len(bars) < min_run:
+        return pd.DatetimeIndex([], tz=IST)
+    c, d = bars["close"], bars.index.normalize().to_numpy()
+    same_day = np.r_[False, d[1:] == d[:-1]]                       # a session's first bar has no previous close
+    flat = (bars["open"] == c) & (bars["high"] == c) & (bars["low"] == c) & (c == c.shift()) & same_day
+    run = flat.groupby((~flat).cumsum()).transform("sum")          # each flat bar: the length of its run
+    return bars.index[(flat & (run >= min_run)).to_numpy()]
 
 
 class IntradayFeed(abc.ABC):
@@ -85,13 +100,15 @@ class IntradayFeed(abc.ABC):
         return max(0.0, (now - ref) / pd.Timedelta(minutes=1))
 
     def history_bars(self, symbol: str, days: int = 55) -> pd.DataFrame:
-        """Longer 5m history for model training (default: the 1m history resampled)."""
+        """Longer 5m history for model training (default: the 1m history resampled, without a forming 5m bar)."""
         from .quant import to_5m
-        return to_5m(self.history(symbol, days))
+        return self.completed(to_5m(self.history(symbol, days)), bar=pd.Timedelta(minutes=5))
 
-    def completed(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Drop the still-forming bar: a bar is complete once its minute has ended."""
-        return df[df.index + BAR <= self.now()]
+    def completed(self, df: pd.DataFrame, bar: pd.Timedelta = BAR) -> pd.DataFrame:
+        """Drop the still-forming bar: a bar is complete once its interval (`bar`, a minute by default) has ended."""
+        if df.empty:                                     # no history: nothing to drop (and no time index to shift)
+            return df
+        return df[df.index + bar <= self.now()]
 
 
 class YahooIntradayFeed(IntradayFeed):
@@ -124,7 +141,7 @@ class YahooIntradayFeed(IntradayFeed):
                                                       prepost=False)
         if raw is None or raw.empty:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        return to_5m(self.completed(normalise_bars(raw)))
+        return to_5m(self.completed(normalise_bars(raw), bar=pd.Timedelta(minutes=5)))
 
 
 class BarAggregator:

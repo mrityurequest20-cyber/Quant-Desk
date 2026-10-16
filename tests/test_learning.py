@@ -50,6 +50,17 @@ def test_memory_shrinks_bounds_and_survives_a_restart(tmp_path):
     assert again.reliability("factor", "vwap") == m.reliability("factor", "vwap") and again.setup_mult("orb")[0] == 0.0
 
 
+def test_forward_grades_second_resolution_bars_from_a_microsecond_timestamp():
+    """A-02: under pandas 3 Yahoo's 1-minute history has a datetime64[s] index and a thought's ts has microseconds;
+    searchsorted refused to mix the two, so every catch-up grading pass failed."""
+    from quantdesk.intraday.feeds import normalise_bars
+    raw = day_bars()
+    raw.index = raw.index.as_unit("s")
+    b = normalise_bars(raw)
+    assert b.index.unit == "ns"
+    assert forward(b, ts("2026-10-05 10:00:04.408148")) == pytest.approx(np.log((25046 + 30) / 25046.0))
+
+
 def test_forward_stays_in_the_session_and_overnight_news_counts_from_the_open():
     b = pd.concat([day_bars("2026-10-05"), day_bars("2026-10-06", 26000.0)])
     assert forward(b, ts("2026-10-05 10:00")) == pytest.approx(np.log((25045 + 30) / 25045.0))
@@ -95,28 +106,116 @@ def test_grading_news_factors_trades_and_refused_entries(tmp_path):
     assert fresh.d["tables"] == m.d["tables"]
 
 
+def switched_on(cfg):
+    """The old behaviour (before D-01): learned factor weights scale the evidence."""
+    return cfg.with_overrides({"intraday": {"learning": {"apply_factor_weights": True}}})
+
+
+def a_record(good="vwap", bad=None):
+    """A memory whose factor record gives `good` 1.5× (right every time) and `bad` 0.5× (never right)."""
+    m = Memory()
+    for _ in range(200):
+        m.bump("factor", good, True, 5.0)
+        if bad:
+            m.bump("factor", bad, False, -5.0)
+    return m
+
+
+def breadth_read():
+    """A session state and a weak-breadth read (a probation factor's evidence)."""
+    from quantdesk.intraday.features import session_state
+    idx = pd.date_range("2026-10-05 09:15", "2026-10-05 11:00", freq="1min", tz=IST)
+    c = 25600 + np.arange(len(idx)) * 0.5
+    s = session_state(pd.DataFrame({"open": c, "high": c + 2, "low": c - 2, "close": c, "volume": 0.0}, index=idx),
+                      idx[-1] + pd.Timedelta(minutes=1))
+    b = {"n": 50, "members": 50, "adv": 0.3, "dec": 0.7, "above_vwap": 0.28, "ew_chg": -0.002, "median_chg": -0.002,
+         "index": "NIFTY 50", "index_chg": 0.004, "ew_gap": -0.006, "up": [("HDFCBANK", 0.02)], "down": []}
+    return s, b
+
+
 def test_the_analyst_and_the_news_desk_use_the_record(cfg):
+    """With intraday.learning.apply_factor_weights on (the old behaviour), the record scales the evidence."""
     from quantdesk.intraday.analyst import Analyst
     from quantdesk.intraday.features import session_state
     from quantdesk.intraday.news import NewsDesk, NewsItem, classify
     b = day_bars()
     now = ts("2026-10-05 11:00")
     s = session_state(b[b.index + pd.Timedelta(minutes=1) <= now], now)
-    a = Analyst(cfg)
+    a = Analyst(switched_on(cfg))
+    assert a.apply_learned
     plain = a.assess("NIFTY", s, {"spot": s["last"]})
     other = next(e.factor for e in plain.evidence if e.factor != "vwap")
-    a.learned = {"vwap": 1.5, other: 0.5}
+    a.learned = a_record("vwap", other).factor_weights()
+    assert a.learned == {"vwap": 1.5, other: 0.5}
     v = a.assess("NIFTY", s, {"spot": s["last"]})
     w0, w1 = ({e.factor: e.weight for e in x.evidence} for x in (plain, v))
     assert w1["vwap"] == pytest.approx(1.5 * w0["vwap"]) and w1[other] == pytest.approx(0.5 * w0[other])
     track = v.narrative.split("Track record: ")[1]
     assert "vwap ×1.50" in track and f"{other} ×0.50" in track and "Track record" not in plain.narrative
+    assert "not applied" not in track
 
     desk = NewsDesk(cfg, fetch=lambda url: "", sources=[])
     desk.add([classify(NewsItem(now - pd.Timedelta(minutes=10), "ET", "RBI cuts repo rate by 25 bps, Nifty in focus", id="x"))])
     tone = desk.state("NIFTY", now)["tone"]
     desk.trust = lambda event, source: 0.5 if event == "policy" else 1.0
     assert desk.state("NIFTY", now)["tone"] == pytest.approx(tone * 0.5)
+
+
+def test_factor_weights_are_recorded_not_applied_by_default(cfg):
+    """D-01 (owner decision: record, don't apply): the factor record couldn't be told from noise (placebo p = 0.70),
+    so by default the analyst weighs every factor at its unlearned weight, and the narrative shows the record."""
+    from quantdesk.intraday.analyst import Analyst
+    from quantdesk.intraday.features import session_state
+    b = day_bars()
+    now = ts("2026-10-05 11:00")
+    s = session_state(b[b.index + pd.Timedelta(minutes=1) <= now], now)
+    a = Analyst(cfg)
+    assert cfg.get("intraday.learning.apply_factor_weights") is False and not a.apply_learned
+    plain = a.assess("NIFTY", s, {"spot": s["last"]})
+    other = next(e.factor for e in plain.evidence if e.factor != "vwap")
+    a.learned = a_record("vwap", other).factor_weights()
+    assert a.learned == {"vwap": 1.5, other: 0.5}                        # the record says 1.5× and 0.5×...
+    v = a.assess("NIFTY", s, {"spot": s["last"]})
+    assert {e.factor: e.weight for e in v.evidence} == {e.factor: e.weight for e in plain.evidence}   # ...not applied
+    assert v.score == plain.score and v.bias == plain.bias
+    track = v.narrative.split("Track record: ")[1]
+    assert "vwap ×1.50" in track and f"{other} ×0.50" in track and "recorded, not applied" in track
+
+
+def test_a_probation_factor_record_does_not_earn_a_vote_by_default(cfg):
+    """Graduation is the record applied too: a probation factor (analyst) or driver (brain) keeps no vote by default,
+    and says what its record would have earned; with the switch on it votes as before."""
+    from quantdesk.intraday.analyst import PROBATION, Analyst
+    from quantdesk.intraday.brain import PROBATION_W, Brain
+    s, b = breadth_read()
+    for c, applied in ((cfg, False), (switched_on(cfg), True)):
+        a = Analyst(c)
+        a.graduated, a.learned = {"breadth"}, {"breadth": 1.2}
+        e = {e.factor: e for e in a.assess("NIFTY", s, None, breadth=b).evidence}["breadth"]
+        if applied:
+            assert e.weight == pytest.approx(PROBATION["breadth"] * 1.2) and "not applied" not in e.observation
+        else:
+            assert e.weight == 0 and "its record would earn a vote; recorded, not applied" in e.observation
+        br = Brain(c, None)
+        br.learned = {"global_us": (1.2, 40.0)}
+        if applied:
+            assert br._probation_weight("global_us") == PROBATION_W
+            assert br._probation_note("global_us") == "earned a vote live: 40 graded reads, ×1.20"
+        else:
+            assert br._probation_weight("global_us") == 0
+            assert br._probation_note("global_us") == "its record would earn a vote: 40 graded reads, ×1.20; recorded, not applied"
+
+
+def test_the_learning_summary_marks_factor_weights_recorded_not_applied():
+    m = a_record("vwap", "pcr")
+    for _ in range(50):
+        m.bump("news_event", "policy", True, 9.0)
+    lines = learning.summary(m)
+    f = [x for x in lines if x.startswith("factor ")]
+    assert f and all(x.endswith("(recorded, not applied)") for x in f)
+    assert any(x.startswith("factor vwap") and "weight ×1.50" in x for x in f)
+    assert not any("not applied" in x for x in lines if x.startswith("news "))   # news trust is still applied
+    assert not any("not applied" in x for x in learning.summary(m, factor_weights_applied=True))
 
 
 @pytest.fixture(scope="module")
@@ -142,19 +241,33 @@ def test_the_engine_grades_each_session_and_stands_aside_on_a_losing_record(synt
         review = run_replay(eng)
     assert "## What the desk learned" in review and "factor " in review
     saved = json.loads((tmp_path / "memory.json").read_text())
-    assert saved["tables"]["factor"] and len(saved["days"]) == 3
-    assert eng.analyst.learned and all(0.5 <= x <= 1.5 for x in eng.analyst.learned.values())
+    assert saved["tables"]["factor"] and len(saved["days"]) == 3              # grading still updates the record
+    assert eng.analyst.learned and all(0.5 <= x <= 1.5 for x in eng.analyst.learned.values())   # handed over...
+    assert not eng.analyst.apply_learned and "(recorded, not applied)" in review                  # ...not applied (D-01)
+    from quantdesk.intraday.analyst import Analyst
+    u, v = next(iter(eng.views.items()))
+    weights = lambda an: {e.factor: e.weight for e in an.assess(u, v.state, v.chain).evidence}
+    moved = {f for f, x in eng.analyst.learned.items() if abs(x - 1) > 1e-6}
+    assert moved & set(weights(eng.analyst))                              # the record does move a factor in this read
+    assert weights(eng.analyst) == weights(Analyst(cfg))                  # but the read weighs it as if nothing learned
+    on = Analyst(switched_on(cfg))
+    on.learned = eng.analyst.learned
+    assert weights(on) != weights(Analyst(cfg))                           # the switch brings the old behaviour back
 
     bad = Memory()                                                       # every setup has lost 1R a trade, 10 times
     for setup in cfg.get("intraday.setups"):
         for _ in range(10):
             bad.bump("setup", setup, False, -1.0)
-    run = lambda m: run_replay(e := IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(),
-                                                   IntradayBroker(cfg, starting_cash=500000), say=None, memory=m)) and e
-    plain, e2 = run(None), run(bad)
+    run = lambda m, c=cfg: run_replay(e := IntradayEngine(c, ReplayFeed(bars, days[-1]), "model", Journal(),
+                                                          IntradayBroker(c, starting_cash=500000), say=None, memory=m)) and e
+    plain, e2 = run(None), run(bad, switched_on(cfg))                    # the stand-aside rule is behind the D-01 switch
     dec = e2.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'")
     assert e2.closed == [] and (dec.empty or dec["detail"].str.contains("has lost").all())
     assert not plain.closed or not dec.empty                             # what it would have traded, it refused by record
+    off = run(bad)                                                       # by default the record is shown, not applied
+    assert off.journal.df("SELECT * FROM decisions WHERE detail LIKE 'track record:%'").empty
+    book = lambda e: [(t.symbol, t.strategy, t.opened_at, t.exit_reason, round(t.pnl, 2)) for t in e.closed]
+    assert book(off) == book(plain)                                      # ...so the desk trades as if nothing were learned
 
 
 def test_a_night_of_headlines_is_one_observation_not_forty(tmp_path):
@@ -171,6 +284,51 @@ def test_a_night_of_headlines_is_one_observation_not_forty(tmp_path):
     assert m.reliability("news_reader", "rules") < 1.1                   # one good morning is not a record
 
 
+def test_headlines_with_no_nlp_or_about_are_graded_not_a_crash(tmp_path):
+    """Journals from before the headline NLP have NULL nlp (and old rows may lack `about`); pandas reads that back as NaN,
+    which is truthy, so `rebuild` once died on the first such row (907 of 4,071 headlines in the 10 Oct journal)."""
+    from quantdesk.intraday.news import NewsItem, classify
+    j = Journal(tmp_path / "j.db")
+    items = [classify(NewsItem(ts("2026-10-04 21:00") + pd.Timedelta(minutes=10 * i), "ET",
+                               f"Nifty, banks set to rally as FII buying returns, story {i}", id=f"n{i}")) for i in range(6)]
+    j.news_add(items, ts("2026-10-05 08:00"))
+    j.db.execute("UPDATE news SET nlp = NULL WHERE id IN ('n0', 'n1', 'n2')")
+    j.db.execute("UPDATE news SET about = NULL WHERE id = 'n3'")
+    j.commit()
+    news = j.news(n=1000)
+    assert news["nlp"].isna().sum() == 3
+    m = Memory()
+    graded = learning.grade_news(m, news, {"NIFTY": day_bars(), "BANKNIFTY": day_bars(start=55000.0)})
+    assert graded > 0 and m.stat("news_reader", "rules") is not None
+    assert learning._obj(float("nan")) == {} and learning._obj(None) == {} and learning._obj("not json") == {}
+    assert learning._obj('{"a": 1}') == {"a": 1} and learning._obj("[1]") == {}
+
+
+def test_reads_taken_while_the_vix_feed_was_zero_are_not_graded(tmp_path):
+    """Kotak serves INDIAVIX as zeros; the vix factor then voted a constant +1.0 ("India VIX 0.00 (-100.0% today)").
+    Those reads say nothing about volatility and must not become a track record (nor an IC); a real read still counts."""
+    j = Journal(tmp_path / "j.db")
+    dead = [{"factor": "vix", "direction": 1.0, "weight": 1.0, "observation": "India VIX 0.00 (-100.0% today)"},
+            {"factor": "vwap", "direction": 1.0, "weight": 1.0, "observation": "above vwap"}]
+    live = [{"factor": "vix", "direction": 0.63, "weight": 1.0, "observation": "India VIX 14.16 (-3.8% today)"}]
+    for i in range(30):
+        j.db.execute("INSERT INTO thoughts (ts, symbol, bias, score, conviction, day_type, action, narrative, evidence) "
+                     "VALUES (?, 'NIFTY', 'bull', 0.5, 0.5, 'trend', 'watch', 'x', ?)",
+                     (str(ts("2026-10-05 09:30") + pd.Timedelta(minutes=5 * i)), json.dumps(dead if i < 25 else live)))
+    j.commit()
+    th = j.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
+    m = Memory()
+    bars = {"NIFTY": day_bars(day="2026-10-05")}
+    learning.grade_factors(m, th, bars)
+    learning.grade_ic(m, th, bars)
+    vix = m.stat("factor", "vix")
+    assert vix is not None and vix["n"] == pytest.approx(5 * learning.READ_EVERY / learning.HORIZON, rel=0.25)   # the 5 live reads only
+    assert m.stat("factor", "vwap")["n"] > vix["n"]                                                              # the rest of each read still counts
+    ic = m.d["ic"]                                                                                               # the IC table must not take the dead votes either
+    assert ic["vix"]["5"][0] == pytest.approx(5 * min(1.0, learning.READ_EVERY / 5)) and ic["vwap"]["5"][0] > ic["vix"]["5"][0]
+    assert learning._dead_read(dead[0]) and not learning._dead_read(live[0]) and not learning._dead_read(dead[1])
+
+
 def test_bootstrap_seeds_the_record_from_real_sessions(synthetic, tmp_path):
     cfg, bars, days = synthetic
     window = {s: df[df.index.date >= days[-3]] for s, df in bars.items()}
@@ -179,3 +337,110 @@ def test_bootstrap_seeds_the_record_from_real_sessions(synthetic, tmp_path):
     assert got["sessions"] == 3 and got["factors"] > 300 and m.d["bootstrap"]["days"][-1] == str(days[-1])
     assert m.stat("setup", "orb") is None                                # replay fills don't build a setup record
     assert all(0.5 <= w <= 1.5 for w in m.factor_weights().values()) and len(m.d["days"]) == 3
+
+
+def frozen(b, day="2026-10-05", a="15:15", z="15:28"):
+    """Kotak's index candles: open = high = low = close = the previous close from `a` to `z` (F-02)."""
+    b = b.copy()
+    b.loc[ts(f"{day} {a}"):ts(f"{day} {z}"), ["open", "high", "low", "close"]] = b.loc[ts(f"{day} {a}") - pd.Timedelta(minutes=1), "close"]
+    return b
+
+
+def test_a_read_whose_window_ends_in_the_index_freeze_is_not_graded(tmp_path):
+    """F-02: Kotak's index series sits on the 15:14 close from 15:15 to 15:28 while the future keeps trading. A read
+    whose 30 minutes end in the freeze was graded on that stale print; now it isn't, and a read whose window closes before it grades as it did."""
+    b = frozen(day_bars())
+    j = Journal(tmp_path / "j.db")
+    for t in ("2026-10-05 14:00", "2026-10-05 14:50"):                  # 14:50's window ends at 15:20, in the freeze
+        j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+                (str(ts(t)), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j.commit()
+    m = Memory()
+    assert learning.grade_session(m, j, {"NIFTY": b}, "2026-10-05")["factors"] == 1
+    assert m.stat("factor", "vwap")["n"] == pytest.approx(5 / 30)            # the 14:00 read only
+    assert b.loc[ts("2026-10-05 15:20"), "close"] == 25359                 # the caller's bars are left as they were
+    gone = b[(b.index < ts("2026-10-05 15:15")) | (b.index > ts("2026-10-05 15:28"))]   # the freeze as missing bars
+    assert forward(gone, ts("2026-10-05 14:50")) is None                     # 15:20 → the 15:29 bar: 9 minutes over
+
+
+def test_the_freeze_detector_finds_15_15_to_15_28_within_a_session_only(synthetic):
+    from quantdesk.intraday.feeds import frozen_minutes
+    b = frozen(day_bars())
+    assert frozen_minutes(b).equals(pd.date_range("2026-10-05 15:15", "2026-10-05 15:28", freq="1min", tz=IST))
+    assert frozen_minutes(b, min_run=15).empty
+    masked = learning.unfrozen({"NIFTY": b})["NIFTY"]
+    assert forward(masked, ts("2026-10-05 14:00")) == pytest.approx(np.log(25315 / 25285.0))
+    assert forward(masked, ts("2026-10-05 14:50")) is None and forward(b, ts("2026-10-05 14:50")) is not None
+    a, x = day_bars(), 25000.0 + 372                                         # two flat minutes at one close and two at
+    a.loc[ts("2026-10-05 15:28"):, ["open", "high", "low", "close"]] = x     # the next open are not a 3-minute freeze
+    c = day_bars("2026-10-06", start=x)
+    c.loc[:ts("2026-10-06 09:16"), ["open", "high", "low", "close"]] = x
+    assert frozen_minutes(pd.concat([a, c])).empty
+    _, bars, _ = synthetic
+    assert all(frozen_minutes(s).empty for s in bars.values())               # the synthetic generator never freezes
+    assert learning.unfrozen({"NIFTY": bars["NIFTY"]})["NIFTY"] is bars["NIFTY"]
+
+
+def test_armed_and_ic_grading_cope_with_a_masked_bar_and_overshoot_is_counted(tmp_path):
+    """grade_armed / grade_ic read the masked series without crashing or scoring a NaN; grade_session says how many
+    windows a gap in the bars dropped (and stays silent when none)."""
+    b = learning.unfrozen({"NIFTY": frozen(day_bars())})["NIFTY"]
+    j = Journal(tmp_path / "j.db")
+    j.decision(ts("2026-10-05 14:55"), "orb", "NIFTY", "rejected", "orb reached its level 25,340.00 but EV below the floor",
+               0, {"armed": {"level": 25340.0, "invalidation": 25320.0, "direction": 1}, "target": 25500.0})
+    j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+            (str(ts("2026-10-05 14:50")), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+            (str(ts("2026-10-05 11:50")), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j.commit()
+    m = Memory()
+    assert learning.grade_armed(m, j.df("SELECT * FROM decisions"), {"NIFTY": b}) == 1
+    assert np.isfinite(m.stat("armed_rejected", "orb")["sum"])                # the last live bar (15:29), never a NaN
+    learning.grade_ic(m, j.df("SELECT ts, symbol, evidence FROM thoughts"), {"NIFTY": b})
+    assert all(np.isfinite(v).all() for h in m.d["ic"].values() for v in h.values())
+    hole = day_bars().drop(pd.date_range("2026-10-05 12:20", periods=6, freq="1min", tz=IST))
+    assert "dropped_overshoot" not in learning.grade_session(Memory(), j, {"NIFTY": day_bars()}, "2026-10-05")
+    got = learning.grade_session(Memory(), j, {"NIFTY": hole}, "2026-10-05")
+    assert got["dropped_overshoot"] >= 1                                      # 11:50 → 12:20 lands 6 minutes past the hole
+
+
+def test_a_day_without_a_freeze_grades_as_before(synthetic, tmp_path):
+    """Every 5-minute read of a synthetic session whose 30 minutes fit in it is graded, against the close 30 minutes on."""
+    _, bars, days = synthetic
+    b = bars["NIFTY"]
+    j = Journal(tmp_path / "j.db")
+    reads = pd.date_range(f"{days[-1]} 09:20", f"{days[-1]} 15:25", freq="5min", tz=IST)
+    for t in reads:
+        j._exec("INSERT INTO thoughts (ts, symbol, evidence) VALUES (?,?,?)",
+                (str(t), "NIFTY", json.dumps([{"factor": "vwap", "direction": 1.0}])))
+    j.commit()
+    m = Memory()
+    assert learning.grade_session(m, j, {"NIFTY": b}, days[-1])["factors"] == 68     # 09:20 … 14:55
+    c = b["close"]
+    ups = sum(c[t + pd.Timedelta(minutes=30)] > c[t] for t in reads if t <= ts(f"{days[-1]} 14:55"))
+    assert m.stat("factor", "vwap")["hits"] == pytest.approx(ups * 5 / 30)
+
+
+def test_a_two_minute_gap_still_grades_and_a_long_one_does_not():
+    b = day_bars()
+    handover = b.drop(pd.date_range("2026-10-05 12:20", periods=2, freq="1min", tz=IST))
+    assert forward(handover, ts("2026-10-05 11:50")) == pytest.approx(np.log(25187 / 25155.0))   # 12:20 → 12:22
+    hole = b.drop(pd.date_range("2026-10-05 12:20", periods=6, freq="1min", tz=IST))
+    assert forward(hole, ts("2026-10-05 11:50")) is None                     # 12:20 → 12:26: 6 minutes over
+    assert forward(hole, ts("2026-10-05 11:50"), max_overshoot=None) == pytest.approx(np.log(25191 / 25155.0))
+
+
+def test_the_close_says_which_index_minutes_froze(synthetic):
+    """One WARN `data` event per frozen index, worded so self-review doesn't file a vendor's freeze as our bug."""
+    from quantdesk.intraday.engine import IntradayEngine, run_replay
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    cfg, bars, days = synthetic
+    bars = {**bars, "NIFTY": frozen(bars["NIFTY"], day=str(days[-1]))}
+    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
+                         say=None, memory=Memory())
+    run_replay(eng)
+    ev = eng.journal.events(level="WARN")
+    ev = ev[ev["category"] == "data"]
+    assert list(ev["message"]) == ["NIFTY: index bars frozen 15:15-15:28 (14 minutes), kept out of grading"]
+    assert not ev["message"].str.contains("failed").any()

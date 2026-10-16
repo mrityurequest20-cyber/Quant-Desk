@@ -15,6 +15,12 @@ the rules as before.
 The reflection: after the close, Claude reads the session review and the learning record and writes a few
 lessons. They go into the review and the memory for the human. They never touch orders, sizing or risk.
 
+Claude is paid from a fixed credit (ClaudeBudget): every call's real `usage` is priced and added to a ledger in the
+journal, a day's allowance is the credit left over the sessions left (so underspending carries forward), a slice of it
+is held back for the reflection, and when the credit is gone Claude simply stops: one INFO event, no errors, and the
+desk carries on with the other readers and everything it learned. Claude is advisory (news.py), so none of it can
+reach the tone, a signal, a size or a limit.
+
 Keys come from the environment, never from files, and are never printed (`key_for` returns the variable's name for
 reports). Each provider accepts a few common names for its variable, so a repository secret works under any of them.
 """
@@ -23,6 +29,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 import queue
 import threading
@@ -113,6 +120,19 @@ def _clip(x, lo=-1.0, hi=1.0) -> float:
     return max(lo, min(hi, x)) if x == x else 0.0
 
 
+def _out_of_range(x, lo=-1.0, hi=1.0) -> bool:
+    """A value a model gave that isn't a number in [lo, hi]: the read is malformed, not strong (G-03). Missing is fine."""
+    if x is None:
+        return False
+    if isinstance(x, bool):                               # JSON true is not +1.0
+        return True
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return True
+    return not lo <= x <= hi                              # NaN fails both comparisons
+
+
 def _payload(items: list[dict]) -> str:
     lines = [f'{it["id"]} | {it["ts"]} | {it["source"]} | {it["title"]}' + (f' — {it["summary"]}' if it.get("summary") else "")
              for it in items]
@@ -122,6 +142,10 @@ def _payload(items: list[dict]) -> str:
 JSON_SHAPE = ('\n\nAnswer with JSON only, no prose, exactly this shape: {"reads": [{"id": "<id>", "nifty": <-1..1>, '
               '"banknifty": <-1..1>, "confidence": <0..1>, "event": "<one of: ' + ", ".join(EVENTS) + '>", "why": "<≤20 words>"}]}')
 _NUM = r"[^\d+\-−\n]{0,12}([+\-−]?\d*\.?\d+)"
+_VIEW = _NUM + r"(?![\d.]*\s*(?:%|per\s*cent\b|percent\b|pct\b))"   # "fell 0.8%" / "0.8 per cent" is a move, not a view
+_BANK = r"\b(?:bank[\s-]*nifty|nifty\s*bank)\b"                          # Bank Nifty, Bank-Nifty, Nifty Bank (NSE's name)
+# "NIFTY 50"/"Nifty50" is the name; any spelling of Bank Nifty isn't NIFTY
+_NIFTY = r"(?<!bank\s)(?<!bank\s\s)(?<!bank-)(?:\bnifty\s*50\b|\bnifty\b(?!\s*50\b))(?!\s*bank\b)"
 
 
 def _parse_text_reads(text: str, ids: set) -> dict[str, dict]:
@@ -133,22 +157,22 @@ def _parse_text_reads(text: str, ids: set) -> dict[str, dict]:
         if hid in out:
             continue
         block = text[pos:marks[k + 1][0] if k + 1 < len(marks) else len(text)]
-        def num(label):
-            m = re.search(label + _NUM, block, re.I)
+        def num(label, value=_NUM):
+            m = re.search(label + value, block, re.I)
             return float(m.group(1).replace("−", "-")) if m else None
-        n, b = num(r"\bnifty\b"), num(r"\bbank ?nifty\b")
-        if n is None and b is None:
+        n, b, c = num(_NIFTY, _VIEW), num(_BANK, _VIEW), num(r"\bconfidence\b")
+        if n is None and b is None or _out_of_range(n) or _out_of_range(b) or _out_of_range(c, 0.0, 1.0):
             continue
         ev = re.search(r"\bevent\b[^a-z\n]{0,12}([a-z_]+)", block, re.I)
         why = re.search(r"\bwhy\b[^a-z\n]{0,12}(.+)", block, re.I)
-        out[hid] = {"NIFTY": _clip(n), "BANKNIFTY": _clip(b), "confidence": _clip(num(r"\bconfidence\b") or 0.5, 0.0, 1.0),
+        out[hid] = {"NIFTY": _clip(n), "BANKNIFTY": _clip(b), "confidence": _clip(c if c is not None else 0.5, 0.0, 1.0),
                     "event": ev.group(1).lower() if ev and ev.group(1).lower() in EVENTS else "general",
                     "why": (why.group(1).strip() if why else "")[:200]}
     return out
 
 
 def _parse_reads(text: str, ids: set) -> dict[str, dict]:
-    """Lenient: a JSON object with `reads`, or a bare list; unknown ids and junk dropped, numbers clipped. Prose
+    """Lenient: a JSON object with `reads`, or a bare list; unknown ids, junk and out-of-range numbers dropped. Prose
     with the numbers in it is read too (_parse_text_reads)."""
     try:
         data = json.loads(text)
@@ -163,11 +187,158 @@ def _parse_reads(text: str, ids: set) -> dict[str, dict]:
     for r in rows:
         if not isinstance(r, dict) or str(r.get("id")) not in ids:
             continue
+        if _out_of_range(r.get("nifty")) or _out_of_range(r.get("banknifty")) or _out_of_range(r.get("confidence"), 0, 1):
+            continue
         ev = r.get("event") if r.get("event") in EVENTS else "general"
         out[str(r["id"])] = {"NIFTY": _clip(r.get("nifty")), "BANKNIFTY": _clip(r.get("banknifty")),
                              "confidence": _clip(r.get("confidence"), 0.0, 1.0), "event": ev,
                              "why": str(r.get("why") or "")[:200]}
-    return out or _parse_text_reads(text or "", ids)
+    # a read for a known id that was dropped doesn't come back as prose; JSON without one (an example, a wrong key) is
+    # no read, so the prose is still read
+    known = any(isinstance(r, dict) and str(r.get("id")) in ids for r in rows)
+    return out if known else _parse_text_reads(text or "", ids)
+
+
+# ---- the Claude credit ---------------------------------------------------------------------------------------------
+BUDGET_KEY = "llm_claude_spend"                             # journal state: {total_usd, by_day, calls, sessions_used, ...}
+BUDGET_NOTE = ("daily Claude budget", "Claude credit")      # errors the desk files that aren't failures
+EST_REFLECT, EST_MIN = 0.05, 0.02                           # $: a reflection before one has been priced; the least a call costs
+
+
+def usage_usd(u, p: dict) -> float:
+    """What one response's `usage` cost, $ per million tokens in `p`. The API reports input_tokens without the cached
+    tokens (cache_read_input_tokens and cache_creation_input_tokens are separate), and output_tokens includes thinking."""
+    g = (lambda k: (u.get(k) if isinstance(u, dict) else getattr(u, k, 0)) or 0)
+    return (g("input_tokens") * p["in"] + g("output_tokens") * p["out"] + g("cache_read_input_tokens") * p["cr"]
+            + g("cache_creation_input_tokens") * p["cw"]) / 1e6
+
+
+class ClaudeBudget:
+    """A hard-capped, paced credit for Claude (intraday.llm.claude.budget_usd; 0 = no budget, no limit). The ledger lives
+    in the journal so a restart, the 12:20 hand-over and tomorrow's session all see it. Today's allowance is the
+    credit left at the start of the day over the sessions left, minus a reflection's cost held back for the close."""
+
+    def __init__(self, cfg, journal=None, clock=None):
+        c = cfg.get("intraday.llm.claude", {}) or {}
+        self.usd = float(c.get("budget_usd", 0) or 0)
+        self.start = str(c.get("budget_start", "") or "")[:10]
+        self.sessions = max(1, int(c.get("budget_sessions", 60) or 60))
+        self.reserve = bool(c.get("reserve_reflection", True))
+        pin = float(c.get("price_in", 4.0))
+        self.p = {"in": pin, "out": float(c.get("price_out", 20.0)), "cr": float(c.get("price_cache_read", pin / 10)),
+                  "cw": float(c.get("price_cache_write", pin * 1.25))}
+        self.j, self.clock, self.lock = journal, clock or (lambda: pd.Timestamp.now(tz=IST)), threading.RLock()
+        self._mem: dict = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self.usd > 0
+
+    def _load(self) -> dict:
+        """The ledger, validated: a non-dict state, or a field of the wrong type, degrades to its default. Never raises."""
+        try:
+            st = (self.j.get_state(BUDGET_KEY) if self.j is not None else self._mem) or {}
+        except Exception:
+            st = {}
+        st = st if isinstance(st, dict) else {}
+        num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+        nums = lambda d: {str(k): x for k, v in d.items() if (x := num(v)) is not None} if isinstance(d, dict) else {}
+        txt = lambda v: v if isinstance(v, str) else None
+        return {"total_usd": max(0.0, num(st.get("total_usd")) or 0.0), "by_day": nums(st.get("by_day")),
+                "calls": max(0, int(num(st.get("calls")) or 0)), "sessions_used": max(0, int(num(st.get("sessions_used")) or 0)),
+                "day": txt(st.get("day")), "last": nums(st.get("last")), "reflected": txt(st.get("reflected")),
+                "closed": st.get("closed") is True}
+
+    def _save(self, st: dict) -> None:
+        if self.j is not None:
+            self.j.set_state(BUDGET_KEY, st)
+        else:
+            self._mem = st
+
+    def _day(self, st: dict) -> str:
+        day = str(self.clock().date())
+        if day >= self.start and st["day"] != day:          # a session is used the first time it is looked at
+            st["day"], st["sessions_used"] = day, st["sessions_used"] + 1
+        return day
+
+    def _est(self, st: dict, kind: str) -> float:
+        return float((st["last"] or {}).get(kind) or (EST_REFLECT if kind == "reflect" else 0.0))
+
+    def allowance(self, st: dict, day: str) -> float:
+        """Today's: what was left when the day began over the sessions left (today's included)."""
+        began = self.usd - st["total_usd"] + float(st["by_day"].get(day, 0))
+        # never more than twice the even pace: once the sessions run out (or past) the divisor stops at 1, which would
+        # otherwise hand over everything left in a single day
+        return min(max(0.0, began) / max(1, self.sessions - max(0, st["sessions_used"] - 1)), 2 * self.usd / self.sessions)
+
+    def _close(self, st: dict) -> None:
+        if not st["closed"] and self.usd - st["total_usd"] < EST_MIN:
+            st["closed"] = True
+            if self.j is not None:
+                self.j.event(self.clock(), "INFO", "llm", f"Claude credit used up (${self.usd:.2f}); the desk continues on "
+                             "Gemini/Ollama and keeps everything learned", {"total_usd": round(st["total_usd"], 4)})
+
+    def deny(self, kind: str):
+        """None to go ahead; else why not: a note for the review, or '' to stay quiet (not started, used up)."""
+        if not self.enabled:
+            return None
+        with self.lock:
+            st = self._load()
+            before = json.dumps(st, sort_keys=True, default=str)
+            day, why = self._day(st), None
+            self._close(st)
+            left = self.usd - st["total_usd"]
+            if day < self.start or st["closed"]:
+                why = ""
+            elif left < self._est(st, kind):
+                why = f"Claude credit nearly used (${left:.2f} left)"
+            elif kind == "read":
+                spent = float(st["by_day"].get(day, 0))
+                hold = self._est(st, "reflect") if self.reserve and st["reflected"] != day else 0.0
+                allow = self.allowance(st, day)
+                if spent + self._est(st, "read") > allow - hold + 1e-9:
+                    why = f"daily Claude budget reached (${spent:.2f} of ${allow:.2f} today)"
+            if json.dumps(st, sort_keys=True, default=str) != before:
+                self._save(st)
+            return why
+
+    def charge(self, usage, kind: str) -> float:
+        """Price one response's usage and add it to the ledger; returns the cost."""
+        cost = usage_usd(usage, self.p)
+        if not self.enabled:
+            return cost
+        with self.lock:
+            st = self._load()
+            day = self._day(st)
+            st["total_usd"] = round(st["total_usd"] + cost, 6)
+            st["by_day"][day] = round(float(st["by_day"].get(day, 0)) + cost, 6)
+            st["by_day"] = dict(sorted(st["by_day"].items())[-200:])
+            st["calls"] += 1
+            st["last"] = {**(st["last"] or {}), kind: cost}
+            if kind == "reflect":
+                st["reflected"] = day
+            self._close(st)
+            self._save(st)
+        return cost
+
+    def line(self) -> str:
+        """'Claude: $0.31 today, $4.20 of $23.60 used, ~52 sessions left at this pace' for the review and the heartbeat."""
+        if not self.enabled:
+            return ""
+        try:                                                # a display: whatever is wrong with the ledger, never raise
+            with self.lock:
+                st = self._load()
+            day = str(self.clock().date())
+            if st["closed"]:
+                return f"Claude: credit used up (${st['total_usd']:.2f} of ${self.usd:.2f}); the desk runs on the other readers"
+            if day < self.start:
+                return f"Claude: starts {self.start}, ${self.usd:.2f} over {self.sessions} sessions"
+            pace = st["total_usd"] / max(1, st["sessions_used"])
+            left = (self.usd - st["total_usd"]) / pace if pace > 0 else max(0, self.sessions - st["sessions_used"])
+            return (f"Claude: ${float(st['by_day'].get(day, 0)):.2f} today, ${st['total_usd']:.2f} of ${self.usd:.2f} used, "
+                    f"~{left:.0f} sessions left at this pace")
+        except Exception:
+            return ""
 
 
 # ---- providers ---------------------------------------------------------------------------------------------------
@@ -178,15 +349,16 @@ class ClaudeReader:
     name = "claude"
 
     def __init__(self, key: str, model: str = "claude-opus-5-5", effort: str = "low", timeout: float = 60.0,
-                 client=None):
+                 client=None, budget: "ClaudeBudget | None" = None):
         if client is None:
             import anthropic
             client = anthropic.Anthropic(api_key=key, timeout=timeout, max_retries=2)
-        self.client, self.model, self.effort = client, model, effort
-        self.usage = {"calls": 0, "in": 0, "out": 0}
+        self.client, self.model, self.effort, self.budget = client, model, effort, budget
+        self.usage = {"calls": 0, "in": 0, "out": 0, "cr": 0, "cw": 0}
         self.last_raw: dict = {}
+        self.charge_error: str | None = None                # set when the ledger could not be charged for a read
 
-    def _call(self, system: str, user: str, schema: dict, effort: str, max_tokens: int) -> str | None:
+    def _call(self, system: str, user: str, schema: dict, effort: str, max_tokens: int, kind: str = "read") -> str | None:
         r = self.client.beta.messages.create(
             model=self.model, max_tokens=max_tokens, system=system,
             messages=[{"role": "user", "content": user}],
@@ -195,7 +367,15 @@ class ClaudeReader:
         self.usage["calls"] += 1
         u = getattr(r, "usage", None)
         self.usage["in"] += int(getattr(u, "input_tokens", 0) or 0)
-        self.usage["out"] += int(getattr(u, "output_tokens", 0) or 0)
+        self.usage["out"] += int(getattr(u, "output_tokens", 0) or 0)      # thinking is billed as output
+        self.usage["cr"] += int(getattr(u, "cache_read_input_tokens", 0) or 0)
+        self.usage["cw"] += int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+        if self.budget is not None:                         # the credit: priced from what the API says it billed
+            try:
+                self.budget.charge(u, kind)
+                self.charge_error = None
+            except Exception as exc:                        # the read was paid for: keep it, and say the spend is unledgered
+                self.charge_error = f"spend not ledgered ({type(exc).__name__}: {str(exc)[:120]})"
         text = "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
         self.last_raw = {"content": text[:600], "stop_reason": r.stop_reason}
         if r.stop_reason == "refusal":                      # the whole fallback chain declined: no read
@@ -209,7 +389,7 @@ class ClaudeReader:
     def reflect(self, review: str, record: list[str]) -> dict | None:
         user = ("Session review:\n\n" + review[:24000] + "\n\nWhat the desk has learned so far:\n"
                 + ("\n".join(record) if record else "(nothing graded yet)"))
-        text = self._call(REFLECT_SYSTEM, user, REFLECT_SCHEMA, "medium", 6000)
+        text = self._call(REFLECT_SYSTEM, user, REFLECT_SCHEMA, "medium", 6000, "reflect")
         try:
             d = json.loads(text) if text else None
         except ValueError:
@@ -336,7 +516,7 @@ def make_readers(cfg) -> list:
 class LLMDesk:
     """Queues headlines for every reader and hands back reads as they arrive. `sync=True` reads inline (tests)."""
 
-    def __init__(self, cfg, readers: list | None = None, sync: bool = False, clock=None):
+    def __init__(self, cfg, readers: list | None = None, sync: bool = False, clock=None, journal=None):
         lc = cfg.get("intraday.llm", {}) or {}
         self.readers = make_readers(cfg) if readers is None else readers
         self.batch = int(lc.get("batch", 12))
@@ -344,6 +524,14 @@ class LLMDesk:
         self.min_relevance = float(lc.get("min_relevance", 2.0))
         self.sync = sync
         self.clock = clock or (lambda: pd.Timestamp.now(tz=IST))
+        # with a journal, Claude is held to its credit (ClaudeBudget); without one (replays, tests) it is as before
+        self.budget = (ClaudeBudget(cfg, journal, self.clock)
+                       if journal is not None and any(r.name == "claude" for r in self.readers) else None)
+        if self.budget is not None and not self.budget.enabled:
+            self.budget = None
+        for r in self.readers:
+            if r.name == "claude" and self.budget is not None:
+                r.budget = self.budget
         self.calls: dict[str, int] = {}
         self.day: dt.date | None = None
         self.errors: dict[str, str] = {}
@@ -396,6 +584,18 @@ class LLMDesk:
             if self.calls.get(r.name, 0) >= self.max_calls:
                 self.errors[r.name] = f"daily cap of {self.max_calls} calls reached"
                 continue
+            if r.name == "claude" and self.budget is not None:
+                try:
+                    why = self.budget.deny("read")          # '' = not started / credit used up: quiet, never an error
+                except Exception as exc:                    # can't check the credit: no Claude call, the others carry on
+                    self.errors[r.name] = f"budget check failed: {type(exc).__name__}: {str(exc)[:120]}"
+                    continue
+                if why is not None:
+                    if why:
+                        self.errors[r.name] = why
+                    continue
+                if str(self.errors.get(r.name, "")).startswith(BUDGET_NOTE):
+                    del self.errors[r.name]
             self.calls[r.name] = self.calls.get(r.name, 0) + 1
             try:
                 reads = r.read(chunk)
@@ -405,6 +605,8 @@ class LLMDesk:
             at = self.clock()
             for hid, rd in reads.items():
                 self._out.put((hid, r.name, {**rd, "at": str(at)}))
+            if getattr(r, "charge_error", None):
+                self.errors[r.name] = r.charge_error
 
     def drain(self) -> list[tuple[str, str, dict]]:
         out = []
@@ -431,7 +633,8 @@ def cost_line(usage: dict, prices: dict) -> str:
         if not u.get("calls"):
             continue
         p = prices.get(name) or {}
-        usd = u["in"] / 1e6 * float(p.get("in", 0)) + u["out"] / 1e6 * float(p.get("out", 0))
+        usd = (u["in"] * float(p.get("in", 0)) + u["out"] * float(p.get("out", 0)) + u.get("cr", 0) * float(p.get("cr", 0))
+               + u.get("cw", 0) * float(p.get("cw", 0))) / 1e6
         parts.append(f"{name} {u['calls']} calls, {u['in'] / 1000:.0f}k in / {u['out'] / 1000:.0f}k out"
-                     + (f" ≈ ${usd:.2f}" if p else ""))
+                     + (f" (+{u['cr'] / 1000:.0f}k cached)" if u.get("cr") else "") + (f" ≈ ${usd:.2f}" if p else ""))
     return "; ".join(parts)

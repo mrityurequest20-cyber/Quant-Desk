@@ -24,6 +24,8 @@ import math
 import numpy as np
 import pandas as pd
 
+from .feeds import frozen_minutes
+
 PAIR = ("BANKNIFTY", "NIFTY")           # the ratio is PAIR[0] / PAIR[1]
 STEP, H = 5, 30                         # persistence: a point every 5 minutes, 30 minutes back and forward
 CLIP_BPS = 150.0
@@ -86,17 +88,22 @@ def _sigma30(prior: pd.Series, days: int = 10) -> float | None:
 
 def persistence_pairs(a: pd.DataFrame | None, b: pd.DataFrame | None, after: str = "") -> pd.DataFrame:
     """(ts, x, y) for every 5-minute point of every complete session after the date `after` (YYYY-MM-DD): x the
-    ratio's last 30 minutes, y its next 30, both in bps."""
+    ratio's last 30 minutes, y its next 30, both in bps. F-02: a point whose window starts, ends or sits in a masked
+    (NaN) or frozen index minute is not graded; the forward-fill below would otherwise stretch the last live print over it."""
     if a is None or b is None or a.empty or b.empty:
         return pd.DataFrame(columns=["x", "y"])
     lr = _ratio(a, b)
+    dead = set(a.index[a["close"].isna()]) | set(b.index[b["close"].isna()]) | set(frozen_minutes(a)) | set(frozen_minutes(b))
     rows = []
     for d, x in lr.groupby(lr.index.date):
-        if str(d) <= after or len(x) < 300 or (x.index[-1].hour, x.index[-1].minute) < (15, 25):
+        end = max([x.index[-1], *(m for m in dead if m.date() == d)])   # a frozen close still ran the session
+        if str(d) <= after or len(x) < 300 or (end.hour, end.minute) < (15, 25):
             continue                                              # only whole sessions, each graded once
         g = x.resample("1min").last().ffill()
         for t in pd.date_range(f"{d} 09:45", f"{d} 14:55", freq=f"{STEP}min", tz=x.index.tz):
             if t - pd.Timedelta(minutes=H) not in g.index or t + pd.Timedelta(minutes=H) not in g.index or t not in g.index:
+                continue
+            if dead and not dead.isdisjoint((t - pd.Timedelta(minutes=H), t, t + pd.Timedelta(minutes=H))):
                 continue
             x0, x1, x2 = g[t - pd.Timedelta(minutes=H)], g[t], g[t + pd.Timedelta(minutes=H)]
             rows.append((t, (x1 - x0) * 1e4, (x2 - x1) * 1e4))

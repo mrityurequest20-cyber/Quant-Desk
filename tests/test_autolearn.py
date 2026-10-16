@@ -55,7 +55,7 @@ def market(days, phi=0.0, sig=0.0015, seed=0, start=25000.0):
 def cfg_for(tmp_path, **auto):
     a = {"bootstrap": {"samples": 200, "block_days": 3, "seed": 7},
          "promotion": {"min_shadow_sessions": 3, "min_shadow_signals": 10, "max_challenger_days": 45},
-         "candidates": ["baseline", "logit_l1", "stumps"], **auto}
+         "candidates": ["baseline", "logit_l1", "stumps"], "require_approved_model": True, **auto}
     return Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path / "runtime")}, "autolearn": a})
 
 
@@ -138,6 +138,8 @@ def test_walk_forward_purges_overlapping_labels_and_embargoes():
         tampered = s.copy()
         tampered.loc[tampered["day"] == lock["days"][0], "y"] = 1.0
         assert lb.verify(tampered)                               # its labels changed: reported
+        assert lb.verify(tampered.drop(tampered.index[tampered["day"] == lock["days"][0]][:1]))   # …and a row dropped (A-07)
+        assert lb.verify(s.drop(s.index[s["day"] == lock["days"][-1]][:1]))                     # a row dropped alone
         assert lb.record_access("m", "test") == 1 and lb.peeks() == 1
     finally:
         import shutil
@@ -182,7 +184,7 @@ def test_cost_model_and_non_overlapping_simulation():
     c = CostModel(lot={"NIFTY": 65})
     px = 25000.0
     notional = px * 65
-    want = (40 / notional * 1e4 + 2 * 0.173 + 2 * 10 / 1e7 * 1e4 + 2.0 + 0.2
+    want = (40 / notional * 1e4 + 2 * 0.173 + 2 * 10 / 1e7 * 1e4 + 5.0 + 0.2
             + 0.18 * (40 / notional * 1e4 + 2 * 0.173 + 2 * 10 / 1e7 * 1e4) + 2 * 0.5 + 2 * 1.0)
     assert c.round_trip_bps(px, "NIFTY") == pytest.approx(want)
     t0 = ts("2026-06-01 10:00")
@@ -196,6 +198,19 @@ def test_cost_model_and_non_overlapping_simulation():
     assert len(simulate(rows, np.full(8, 0.6), sig, c, overlap=True)) == 6               # capped at 6 a session
     c.max_trades_per_symbol_day = 3
     assert len(simulate(rows, np.full(8, 0.6), sig, c, overlap=True)) == 3
+
+
+def test_the_learner_charges_the_desks_futures_stt_unless_overridden():
+    cfg = Config.load(DEFAULT_CONFIG)
+    c = CostModel.from_cfg(cfg)
+    fut = cfg.get("costs.segments.futures")
+    assert c.stt_sell_bps == 5.0 == pytest.approx(fut["stt_sell"] * 1e4)            # 0.05% on the sell, as the desk charges
+    assert c.exchange_bps == pytest.approx(fut["exchange"] * 1e4) and c.stamp_buy_bps == pytest.approx(fut["stamp_buy"] * 1e4)
+    assert CostModel().stt_sell_bps == 5.0
+    over = CostModel.from_cfg(cfg.with_overrides({"autolearn": {"costs": {"stt_sell_bps": 6.0}}}))
+    assert over.stt_sell_bps == 6.0 and over.exchange_bps == c.exchange_bps         # an override may charge more...
+    low = CostModel.from_cfg(cfg.with_overrides({"autolearn": {"costs": {"stt_sell_bps": 2.0}}}))
+    assert low.stt_sell_bps == 5.0                                                   # ...never less than the statute
 
 
 # ---- the immutable ledger -----------------------------------------------------------------------------------------------
@@ -234,6 +249,39 @@ def test_ledger_is_append_only_leak_proof_and_recoverable(tmp_path):
     c = b5["close"]
     assert o["fwd_ret"] == pytest.approx(np.log(c[t + pd.Timedelta(minutes=25)] / c[t - pd.Timedelta(minutes=5)]))
     assert L2.resolve({"NIFTY": b5}, now=t + pd.Timedelta(hours=2)) == 0                    # never twice
+
+
+def test_a_decision_whose_exit_is_a_frozen_index_print_stays_unresolved(tmp_path):
+    """F-02: Kotak's index candles freeze 15:15-15:28. A 14:50 / 14:55 decision's exit bar (15:15 / 15:20) is that stale
+    print, so it isn't labelled on it; 14:45 (exit 15:10) resolves as ever, and so does every decision on a clean day."""
+    day = "2026-06-02"
+    b = market(sessions(1, day), phi=0.0, seed=5)
+    fz = b.copy()
+    fz.loc[ts(f"{day} 15:15"):ts(f"{day} 15:28"), ["open", "high", "low", "close"]] = fz.loc[ts(f"{day} 15:14"), "close"]
+    for name, bars, want in (("frozen", fz, {"14:45"}), ("clean", b, {"14:45", "14:50", "14:55"})):
+        L = Ledger(tmp_path / name)
+        ids = {}
+        for hm in ("14:45", "14:50", "14:55"):
+            t = ts(f"{day} {hm}")
+            ids[hm] = L.record_decision(_decision(t), now=t + pd.Timedelta(seconds=20))
+        assert L.resolve({"NIFTY": to_5m(bars)}, now=ts(f"{day} 16:00")) == len(want)
+        assert {hm for hm, d in ids.items() if d in L.outcomes()} == want
+        if name == "frozen":
+            assert L.resolve({"NIFTY": to_5m(bars)}, now=ts(f"{day} 16:00")) == 0   # and stays unresolved
+
+
+def test_the_ledger_runs_the_freeze_detector_once_per_symbol(tmp_path, monkeypatch):
+    """F-02 review: the freeze scan is per symbol, not per pending decision (it scaled as decisions x history)."""
+    import quantdesk.autolearn.ledger as ledger_mod
+    day, calls = "2026-06-02", []
+    real = ledger_mod.frozen_minutes
+    monkeypatch.setattr(ledger_mod, "frozen_minutes", lambda *a, **k: calls.append(1) or real(*a, **k))
+    L = Ledger(tmp_path)
+    for hm in ("10:00", "11:00", "12:00", "13:00", "14:00"):
+        t = ts(f"{day} {hm}")
+        L.record_decision(_decision(t), now=t + pd.Timedelta(seconds=20))
+    L.resolve({"NIFTY": to_5m(market(sessions(1, day), phi=0.0, seed=5))}, now=ts(f"{day} 16:00"))
+    assert len(calls) == 1
 
 
 # ---- drift ---------------------------------------------------------------------------------------------------------
@@ -495,6 +543,8 @@ def test_ollama_reads_never_move_the_tone(cfg):
     x.nlp = {"llm": {"readers": {"ollama": {"NIFTY": -1.0, "confidence": 1.0, "at": str(now)}}}}
     assert nd.item_tone(x, "NIFTY", now) == pytest.approx(0.2)                 # explanatory only
     x.nlp["llm"]["readers"]["claude"] = {"NIFTY": -1.0, "confidence": 1.0, "at": str(now)}
+    assert nd.item_tone(x, "NIFTY", now) == pytest.approx(0.2)                 # Claude only learns, too (its own credit)
+    x.nlp["llm"]["readers"]["gemini"] = {"NIFTY": -1.0, "confidence": 1.0, "at": str(now)}
     assert nd.item_tone(x, "NIFTY", now) < 0.2                                 # a weighed reader still counts
     import ast
     import pathlib
@@ -525,7 +575,7 @@ def test_cli_cycle_status_verify_recover_rollback(tmp_path, capsys, monkeypatch)
     monkeypatch.setattr(A, "default_loader", lambda cfg, offline=False: loader_of(bars))
     rt = tmp_path / "runtime"
     over = tmp_path / "o.yaml"
-    over.write_text(f"runtime: {{dir: {rt}}}\nautolearn: {{bootstrap: {{samples: 100}}, candidates: [baseline]}}\n")
+    over.write_text(f"runtime: {{dir: {rt}}}\nautolearn: {{bootstrap: {{samples: 100}}, candidates: [baseline], require_approved_model: true}}\n")
     main(["--config", str(over), "autolearn", "cycle", "--offline"])
     out = capsys.readouterr().out
     assert "cycle" in out and ("done" in out or "partial" in out)

@@ -106,6 +106,7 @@ def test_breadth_goes_to_the_analyst_on_probation(cfg):
     assert ev["breadth_div"].direction < 0 and ev["breadth_div"].weight == 0
     assert "Breadth: 15 of 50 NIFTY 50 stocks up, 14 above their VWAP" in v.narrative
     a.graduated = {"breadth"}
+    a.apply_learned = True              # intraday.learning.apply_factor_weights (off by default, D-01: test_learning)
     ev = {e.factor: e for e in a.assess("NIFTY", s, None, breadth=b).evidence}
     assert ev["breadth"].weight == pytest.approx(PROBATION["breadth"]) and ev["breadth_div"].weight == 0
 
@@ -158,6 +159,30 @@ def test_relative_strength_read_and_its_persistence_record():
     m2 = Memory()
     RS.grade(m2, pair_bars(days, np.random.default_rng(6), persist=0.0, block=1))
     assert not RS.earned(RS.record(m2)) and RS.preference(lead, 1, strong, RS.record(m2)) is None
+
+
+def test_persistence_points_whose_window_ends_in_the_index_freeze_are_not_graded():
+    """F-02: with both indices frozen 15:15-15:28 the 14:45 / 14:50 / 14:55 points (their next 30 minutes end in the
+    freeze) are absent, whether the freeze is raw or masked to NaN; every earlier point is exactly as before. The
+    forward-fill used to carry the 15:14 print over the freeze and grade them on it."""
+    from quantdesk.intraday import learning
+    day = pd.bdate_range("2026-09-01", periods=3)[-1].date()
+    bars = pair_bars([d.date() for d in pd.bdate_range("2026-09-01", periods=3)], np.random.default_rng(7), persist=0.5)
+    ice = {}
+    for k, b in bars.items():
+        b = b.copy()
+        b.loc[ts(f"{day} 15:15"):ts(f"{day} 15:28"), ["open", "high", "low", "close"]] = b.loc[ts(f"{day} 15:14"), "close"]
+        ice[k] = b
+    base = RS.persistence_pairs(bars["BANKNIFTY"], bars["NIFTY"])
+    base = base[base.index.date == day]
+    late = {ts(f"{day} {t}") for t in ("14:45", "14:50", "14:55")}
+    assert late <= set(base.index)
+    for b in (ice, learning.unfrozen(ice)):
+        got = RS.persistence_pairs(b["BANKNIFTY"], b["NIFTY"])
+        got = got[got.index.date == day]
+        assert not late & set(got.index)
+        assert got.equals(base[~base.index.isin(late)])
+    assert len(RS.persistence_pairs(ice["BANKNIFTY"], ice["NIFTY"])) == len(RS.persistence_pairs(bars["BANKNIFTY"], bars["NIFTY"])) - 3
 
 
 # ---- FII index options positioning -----------------------------------------------------------------------------------

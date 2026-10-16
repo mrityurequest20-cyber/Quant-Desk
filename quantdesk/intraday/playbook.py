@@ -156,6 +156,8 @@ class StrikePicker:
         iv = np.where(np.isfinite(implied) & (implied > 0), implied,
                       np.where(np.isfinite(quoted) & (quoted > 0), quoted / 100, np.nan))
         keep = priced & np.isfinite(iv) & (iv > 0)
+        if chain.attrs.get("source") == "kotak":              # a real book: a strike with no bid and offer can't be bought or sold at its LTP
+            keep &= two
         if not keep.any():
             return pd.DataFrame(columns=cols)
         d = np.atleast_1d(np.asarray(self.pricer.greeks(K[keep], right, S, T, iv[keep])["delta"], dtype=float))
@@ -214,6 +216,10 @@ class Playbook:
         # stop 9.5 pts away, σ ≈ 7.6 pts a minute, hit in 2 minutes). Floor the distance at a fraction of the 5m ATR,
         # keep the target at least 1.5× the risk, and say so in the thesis.
         S0, atr5 = float(view.spot), float((view.state or {}).get("atr5") or 0)
+        if target is not None and not direction * (float(target) - S0) > 0:   # (NaN fails too)
+            return None                  # a target behind the entry is "reached" at once: a fake win, not a trade
+        if inval is not None and direction and not direction * (S0 - float(inval)) > 0:   # a stop on the wrong side fires at once
+            return None
         floor = max(float(self.cfg.get("intraday.risk.min_stop_atr5", 0.75)) * atr5, 0.0004 * S0)
         if inval is not None and direction and abs(S0 - inval) < floor:
             inval = S0 - direction * floor
@@ -324,8 +330,8 @@ class Playbook:
             d, edge = 1, s["day_low"]
         else:
             return None
-        if abs(last - s["poc"]) < 0.25 * (s["vah"] - s["val"]):
-            return None
+        if not d * (s["poc"] - last) >= 0.25 * (s["vah"] - s["val"]):   # POC must lie ahead, with room: a fade of
+            return None                                                 # the high below POC has nothing left to rotate to
         atr5 = s.get("atr5", 0) or 0
         inval = edge + (0.2 * atr5 if d < 0 else -0.2 * atr5)
         trig = (f"probe {'above VAH' if d < 0 else 'below VAL'} {s['vah'] if d < 0 else s['val']:,.2f} failed; price back "

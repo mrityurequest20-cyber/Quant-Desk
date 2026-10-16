@@ -13,6 +13,9 @@ def _t(s: str) -> dt.time:
     return dt.time(int(h), int(m))
 
 
+LIMITS = ("risk_per_trade", "max_trades", "max_open", "max_exposure", "daily_loss")     # what the governor may tighten
+
+
 class IntradayRisk:
     def __init__(self, cfg):
         r = cfg.get("intraday.risk", {}) or {}
@@ -30,7 +33,17 @@ class IntradayRisk:
         self.credit_margin = r.get("credit_margin_per_lot", 0.0)
         self.max_lots = r.get("max_lots", 10)
         self.max_exposure = r.get("max_total_outlay", 0.5)      # all open premium together, as a share of equity
+        self.base_limits = {k: getattr(self, k) for k in LIMITS}  # the config's own; the governor (tighten mode) can only go below
+        self.hold_until, self.hold_why = None, ""               # the governor's stand-down (entry pause / day stand-down)
         self.reset(None, 0.0)
+
+    def apply_limits(self, lim: dict | None, hold_until=None, why: str = "") -> None:
+        """The governor's overlay (governor.py, tighten mode on a paper account). Never above the config's own limit,
+        whatever it is handed; None restores the config's limits and clears the hold."""
+        for k in LIMITS:
+            b, v = self.base_limits[k], (lim or {}).get(k)
+            setattr(self, k, b if v is None else (v if b is None else min(v, b)))
+        self.hold_until, self.hold_why = (hold_until, why) if lim else (None, "")
 
     def reset(self, day, equity: float):
         self.day, self.start_equity = day, equity
@@ -42,6 +55,8 @@ class IntradayRisk:
             self.cool_until = now + pd.Timedelta(minutes=self.cool_min)
 
     def gate(self, now, equity: float, open_trades: list, symbol: str) -> list[str]:
+        if not math.isfinite(equity):                     # NaN passes every `equity > 0` / `dd <= -x` test: fail closed
+            return ["equity unknown"]
         why = []
         t = now.time()
         if t < self.no_before or t > self.no_after:
@@ -56,14 +71,17 @@ class IntradayRisk:
         if equity > 0 and self.max_exposure is not None and out >= self.max_exposure * equity:
             why.append(f"exposure cap: ₹{out:,.0f} of premium open ≥ {self.max_exposure:.0%} of equity")
         dd = equity / self.start_equity - 1 if self.start_equity else 0
-        if dd <= -self.daily_loss or self.halted:
+        if not dd > -self.daily_loss or self.halted:
             self.halted = True
             why.append(f"daily loss limit hit ({dd:.2%} ≤ -{self.daily_loss:.1%}): done for the day")
         if self.cool_until is not None and now < self.cool_until:
             why.append(f"cooling off after {self.consec_losses} straight losses until {self.cool_until:%H:%M}")
+        if self.hold_until is not None and now < self.hold_until:
+            why.append(f"governor stand-down ({self.hold_why}) until {self.hold_until:%H:%M}")
         return why
 
-    def size(self, plan, equity: float, cash: float | None = None) -> tuple[int, list[str]]:
+    def size(self, plan, equity: float, cash: float | None = None, open_risk: float = 0.0,
+             daily_loss_cap: bool = True) -> tuple[int, list[str]]:
         scale = 0.6 + 0.6 * min(max(plan.conviction, 0), 1)
         budget = equity * self.risk_per_trade * scale
         per_lot = plan.planned_risk_per_lot()
@@ -73,6 +91,12 @@ class IntradayRisk:
             return 0, notes + ["undefined risk: refused"]
         lots = math.floor(budget / per_lot)
         caps = {"risk": lots, "max_lots": self.max_lots}
+        if daily_loss_cap and self.start_equity and self.start_equity > 0:
+            # C-06: the daily loss limit is a ceiling, not only a trigger. A new trade's stop-out plus what the open
+            # trades can still lose (their initial risk, the conservative figure) must leave the day above
+            # -daily_loss; the trade is sized down to fit, refused only when not one lot does.
+            room = equity - self.start_equity * (1 - self.daily_loss) - max(float(open_risk or 0.0), 0.0)
+            caps["daily_loss"] = math.floor(room / per_lot) if math.isfinite(room) and room > 0 else 0
         if plan.is_credit:
             # the broker blocks SPAN + exposure margin, not just the spread's max loss
             margin = max(plan.max_loss_per_lot(), self.credit_margin)

@@ -177,16 +177,16 @@ def official_close(data_dir: Path, underlying: str, day: dt.date) -> tuple[float
     return None, "no 15:29 bar recorded"
 
 
-def payoff(t: dict, s_t: float) -> dict:
-    """A trade held to cash settlement at index level `s_t`: points, STT on exercised long legs, P&L after the entry
-    fees, and each leg's intrinsic value."""
+def payoff(t: dict, s_t: float, stt_rate: float = STT_EXERCISE) -> dict:
+    """A trade held to cash settlement at index level `s_t`: points, STT on exercised long legs (at `stt_rate`), P&L
+    after the entry fees, and each leg's intrinsic value."""
     lot = int(t["lot"])
     pts, stt, intr_ = 0.0, 0.0, []
     for leg in t["legs"]:
         intr = intrinsic(leg["right"], leg["strike"], s_t)
         pts += -leg["qty"] * leg["fill"] + leg["qty"] * intr
         if leg["qty"] > 0 and intr > 0:
-            stt += STT_EXERCISE * intr * leg["qty"] * lot
+            stt += stt_rate * intr * leg["qty"] * lot
         intr_.append(round(intr, 2))
     return {"pnl_pts": pts, "stt_rs": stt, "pnl_rs": pts * lot - t["entry_fees_rs"] - stt, "intrinsic": intr_}
 
@@ -254,6 +254,11 @@ class ExpirySeller:
         self.close_fn, self.say = close_fn, say
         self.official_fn = official_fn            # (underlying, day) -> NSE's published close, or None
 
+    def stt_rate(self, t: dict) -> float:
+        """Exercise STT for `t`: the dated `costs.exercise_stt` rate (what the paper broker charges) only for a spec that
+        says `"exercise_stt": "config"`; every earlier spec froze 0.125% and its ledger is never edited (F-05)."""
+        return self.costs.exercise_stt(dt.date.fromisoformat(t["expiry"])) if self.spec.get("exercise_stt") == "config" else STT_EXERCISE
+
     # ---- the ledger ----------------------------------------------------------------------------------------------
     def events(self) -> list[dict]:
         if not self.ledger.exists():
@@ -306,7 +311,10 @@ class ExpirySeller:
         now = now.tz_localize(IST) if now.tzinfo is None else now.tz_convert(IST)
         notes = self.settle(day, now)
         notes += self.check_settlement(day, now)
-        if self.cal.is_trading_day(day):
+        if gap := self.cfg.holiday_gap(day):
+            notes.append(f"nothing opened: {gap}")         # expiries and trading days are unknown (F-07)
+            notes += self.halted(day, gap)
+        elif self.cal.is_trading_day(day):
             notes += self.open(day, now)
         return notes
 
@@ -329,7 +337,7 @@ class ExpirySeller:
             if s_t is None or not math.isfinite(s_t):
                 notes.append(f"UNSETTLED {t['id']}: {src}")
                 continue
-            r = payoff(t, s_t)
+            r = payoff(t, s_t, self.stt_rate(t))
             self._append({"event": "settle", "id": t["id"], "settle": round(s_t, 2), "settle_source": src,
                           "intrinsic": r["intrinsic"], "stt_rs": round(r["stt_rs"], 2), "pnl_pts": round(r["pnl_pts"], 2),
                           "pnl_rs": round(r["pnl_rs"], 2)})
@@ -380,7 +388,7 @@ class ExpirySeller:
             v, src = self.official(t["underlying"], exp, nse_only=exp == now.date())
             if v is None:
                 continue
-            r = payoff(t, v)
+            r = payoff(t, v, self.stt_rate(t))
             ev = self._append({"event": "official", "id": t["id"], "official": round(v, 2), "official_source": src,
                                "pnl_rs_official": round(r["pnl_rs"], 2),
                                "settle_gap_bps": round((float(t["settle"]) / v - 1) * 1e4, 2),
@@ -401,7 +409,12 @@ class ExpirySeller:
     def missed(self, day: dt.date) -> list[str]:
         """Eves in the last 10 days (on or after registration) the sleeves never ran on: on the record, not dropped."""
         floor = dt.date.fromisoformat(self.spec["registered"])
-        seen = {(e["sleeve"], e["underlying"], e["expiry"]) for e in self.events() if e["event"] in ("open", "skip")}
+        evs = self.events()
+        seen = {(e["sleeve"], e["underlying"], e["expiry"]) for e in evs if e["event"] in ("open", "skip")}
+        # F-07: days the sleeves were halted for want of a holiday list (once it is added, an expiry a holiday moved can
+        # land on an eve the halted calendar didn't name: that eve was halted too, not "not run")
+        halts = sorted({dt.date.fromisoformat(e["day"]) for e in evs
+                        if e["event"] == "skip" and str(e.get("reason", "")).startswith("halted:")})
         notes = []
         for k in range(10, 0, -1):
             past = day - dt.timedelta(days=k)
@@ -411,10 +424,29 @@ class ExpirySeller:
                 exp = self.due(u, past)
                 for s in self.trading(u) if exp else ():
                     if (s, u, str(exp)) not in seen:
-                        reason = f"the sleeves did not run on the eve ({past})"
+                        near = [h for h in halts if abs((h - past).days) <= 7]
+                        reason = (f"halted on the eve ({past}): no NSE holiday list at the time" if near else
+                                  f"the sleeves did not run on the eve ({past})")
                         self._append({"event": "skip", "sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u,
                                       "expiry": str(exp), "day": str(past), "reason": reason})
                         notes.append(f"skip {s}-{u}-{exp}: {reason}")
+        return notes
+
+    def halted(self, day: dt.date, gap: str) -> list[str]:
+        """F-07: an eve the calendar can't be trusted on is a skip on the record, with why (not a gap that missed()
+        later reads as "the sleeves did not run"). Which days are eves is the calendar's best guess without holidays."""
+        if not self.cal.is_trading_day(day):
+            return []
+        seen = {(e["sleeve"], e["underlying"], e["expiry"]) for e in self.events() if e["event"] in ("open", "skip")}
+        notes = []
+        for u in self.underlyings:
+            exp = self.due(u, day)
+            for s in self.trading(u) if exp else ():
+                if (s, u, str(exp)) not in seen:
+                    reason = f"halted: {gap}"
+                    self._append({"event": "skip", "sleeve": s, "strategy": self.sleeves[s]["strategy"], "underlying": u,
+                                  "expiry": str(exp), "day": str(day), "reason": reason})
+                    notes.append(f"skip {s}-{u}-{exp}: {reason}")
         return notes
 
     def open(self, day: dt.date, now: pd.Timestamp) -> list[str]:

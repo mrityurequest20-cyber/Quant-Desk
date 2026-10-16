@@ -179,6 +179,22 @@ def _json_safe(value):
     return str(value)
 
 
+def without_exploration(trades: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Exploration trades (meta.mode, intraday exploration: no approved plan model, an unvalidated prior) are paper
+    experience for the setup record and EV calibration, never evidence for the paper gate or a promotion.
+    Returns (the other trades, how many were excluded)."""
+    if trades is None or trades.empty or "meta" not in trades:
+        return trades, 0
+
+    def expl(meta) -> bool:
+        try:
+            return (json.loads(meta) if isinstance(meta, str) else (meta or {})).get("mode") == "exploration"
+        except (TypeError, ValueError, AttributeError):
+            return False
+    x = trades["meta"].map(expl)
+    return trades[~x], int(x.sum())
+
+
 def real_quote_trades(trades: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     """Only trades whose entry and exit both filled against the live book (real point-in-time quotes) can count toward
     the paper gate. A fill priced off a modelled or repriced chain, or an exit at a marked price, is not evidence.
@@ -195,6 +211,21 @@ def real_quote_trades(trades: pd.DataFrame) -> tuple[pd.DataFrame, int]:
                 and str(m.get("fill_quotes", "")).startswith("live") and str(m.get("exit_quotes", "")).startswith("live"))
     ok = trades["meta"].map(real) if "meta" in trades else pd.Series(False, index=trades.index)
     return trades[ok], int((~ok).sum())
+
+
+# What counts as a risk-limit violation against a paper candidate (C-04): one definition for the paper-gate CLI and the
+# learning cycle's promotion check. CRITICAL is what the engine files for safe mode, a failed reconciliation, the kill
+# switch and a stuck exit, so it must count; before, the CLI kept WARN/ERROR only and the cycle ignored `execution`.
+RISK_EVENT_CATEGORIES = ("risk", "risk_limit", "kill_switch", "execution", "reconcile")
+RISK_EVENT_LEVELS = ("WARN", "ERROR", "CRITICAL")
+
+
+def risk_violation_events(events: pd.DataFrame) -> pd.DataFrame:
+    """The journal events (a frame of the `events` table) that count as risk-limit violations."""
+    if events is None or events.empty:
+        return events if events is not None else pd.DataFrame()
+    return events[events["category"].astype(str).str.lower().isin(RISK_EVENT_CATEGORIES)
+                  & events["level"].astype(str).str.upper().isin(RISK_EVENT_LEVELS)]
 
 
 def evaluate_paper_candidate(trades: pd.DataFrame, observed_sessions: int, risk_violations: int,

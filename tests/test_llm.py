@@ -15,8 +15,9 @@ NOW = pd.Timestamp("2026-10-05 11:00", tz=IST)
 
 
 class FakeAnthropic:
-    def __init__(self, reply=None, stop="end_turn"):
+    def __init__(self, reply=None, stop="end_turn", usage=None):
         self.calls, self.reply, self.stop = [], reply, stop
+        self.usage = usage or NS(input_tokens=900, output_tokens=300)
         self.beta = NS(messages=NS(create=self.create))
 
     def create(self, **kw):
@@ -25,7 +26,7 @@ class FakeAnthropic:
         body = self.reply if self.reply is not None else json.dumps(
             {"reads": [{"id": i, "nifty": 0.6, "banknifty": 0.9, "confidence": 0.8, "event": "policy", "why": "rate cut"}
                        for i in ids]})
-        return NS(stop_reason=self.stop, usage=NS(input_tokens=900, output_tokens=300),
+        return NS(stop_reason=self.stop, usage=self.usage,
                   content=[NS(type="thinking", thinking="…"), NS(type="text", text=body)] if self.stop != "refusal" else [])
 
 
@@ -39,16 +40,18 @@ def test_claude_reader_asks_for_structured_reads_with_fallbacks():
     assert kw["betas"] == ["server-side-fallback-2026-07-01"]
     assert kw["output_config"]["effort"] == "low" and kw["output_config"]["format"]["type"] == "json_schema"
     assert "thinking" not in kw and kw["max_tokens"] <= 16000                     # Opus 5.5: thinking is always on
-    assert r.usage == {"calls": 1, "in": 900, "out": 300}
+    assert r.usage == {"calls": 1, "in": 900, "out": 300, "cr": 0, "cw": 0}
     assert llm.ClaudeReader("k", client=FakeAnthropic(stop="refusal")).read([{"id": "a1", "ts": "", "source": "", "title": "x"}]) == {}
 
 
-def test_reads_are_parsed_leniently_and_clipped():
+def test_reads_are_parsed_leniently_and_out_of_range_reads_are_dropped():
     ids = {"a", "b"}
     txt = 'Sure: {"reads": [{"id": "a", "nifty": 3, "banknifty": "-0.5", "confidence": 2, "event": "weird", "why": "x"},' \
+          ' {"id": "b", "nifty": 0.4, "banknifty": "-0.5", "confidence": 0.7, "event": "weird", "why": "y"},' \
           ' {"id": "zzz", "nifty": 1}]} trailing'
     got = llm._parse_reads(txt, ids)
-    assert got == {"a": {"NIFTY": 1.0, "BANKNIFTY": -0.5, "confidence": 1.0, "event": "general", "why": "x"}}
+    # G-03: nifty 3 / confidence 2 is a malformed read, not the strongest one: dropped, never clipped to ±1
+    assert got == {"b": {"NIFTY": 0.4, "BANKNIFTY": -0.5, "confidence": 0.7, "event": "general", "why": "y"}}
     assert llm._parse_reads("not json", ids) == {} and llm._parse_reads(None, ids) == {}
     # what gpt-oss:120b on Ollama actually sent on 2 Oct 2026, ignoring the JSON format
     md = ("**t1**  \n- **NIFTY impact:**\u202f+0.6  \n- **BANKNIFTY impact:**\u202f+0.5  \n- **confidence:**\u202f0.7  \n"
@@ -59,6 +62,40 @@ def test_reads_are_parsed_leniently_and_clipped():
     two = "a: NIFTY −0.4, BANKNIFTY −0.6, confidence 0.8, event inflation, why hot CPI\nb: NIFTY 0 BANKNIFTY 0.1"
     r = llm._parse_reads(two, {"a", "b"})
     assert r["a"]["NIFTY"] == -0.4 and r["a"]["event"] == "inflation" and r["b"]["BANKNIFTY"] == 0.1
+
+
+def test_prose_reads_never_take_the_index_name_or_a_level_for_a_view():
+    """G-03: the prose fallback read "NIFTY 50" as +1.0 and "NIFTY at 22,500" as +1.0."""
+    ids = {"t1", "t2", "t3", "t4"}
+    txt = ("t1: The NIFTY 50 may slip on weak global cues.\n"
+           "t2: NIFTY at 22,500, mildly bearish; BANKNIFTY 48,100\n"
+           "t3: NIFTY 50 impact: -0.3, BANKNIFTY impact: -0.2, confidence 0\n"
+           "t4: NIFTY impact +0.5, confidence 3")
+    got = llm._parse_reads(txt, ids)
+    assert set(got) == {"t3"}                                   # t1: no view, t2: levels, t4: confidence out of range
+    assert (got["t3"]["NIFTY"], got["t3"]["BANKNIFTY"], got["t3"]["confidence"]) == (-0.3, -0.2, 0.0)
+    # a dropped JSON read must not come back through the prose fallback reading its own `why`
+    bad = '{"reads":[{"id":"t1","why":"Nifty 50 seen up 0.7% on FII buying","nifty":50,"banknifty":0.2,"confidence":0.8}]}'
+    assert llm._parse_reads(bad, {"t1"}) == {}
+    assert llm._parse_reads('{"reads":[{"id":"t1","nifty":"strong","banknifty":-0.9,"why":"Nifty 50 to gain 0.9%"}]}',
+                            {"t1"}) == {}
+    assert llm._parse_reads('{"reads":[{"id":"t1","nifty":true,"banknifty":0.1}]}', {"t1"}) == {}
+    more = ("t1: The NIFTY 50 may slip. BANKNIFTY impact: -0.3\n"
+            "t2: Nifty 50 index fell 0.8%\n"
+            "t3: Bank Nifty impact -0.6\n"
+            "t4: Nifty50 impact: 0.4")
+    got = llm._parse_reads(more, {"t1", "t2", "t3", "t4"})
+    assert set(got) == {"t1", "t3", "t4"}                       # t2: a % move is not a view
+    assert (got["t1"]["NIFTY"], got["t1"]["BANKNIFTY"]) == (0.0, -0.3)
+    assert (got["t3"]["NIFTY"], got["t3"]["BANKNIFTY"]) == (0.0, -0.6)    # Bank Nifty's view isn't NIFTY's
+    assert got["t4"]["NIFTY"] == 0.4
+    words = ("t1: NIFTY fell 0.8 %\nt2: Nifty fell 0.8 per cent\nt3: Bank-Nifty impact -0.6\n"
+             "t4: Nifty Bank: -0.5, NIFTY impact: 0.2\nt5: Bank  Nifty impact -0.4")
+    got = llm._parse_reads(words, {"t1", "t2", "t3", "t4", "t5"})
+    assert set(got) == {"t3", "t4", "t5"}                       # t1, t2: moves, however % is written
+    assert [(got[t]["NIFTY"], got[t]["BANKNIFTY"]) for t in ("t3", "t4", "t5")] == [(0.0, -0.6), (0.2, -0.5), (0.0, -0.4)]
+    # JSON rows with no known id (a wrong key) are no read, so the text is still read as prose, as on main
+    assert llm._parse_reads('{"reads":[{"headline":"t1","nifty":0.4,"banknifty":0.1}]}', {"t1"})["t1"]["NIFTY"] == 0.4
 
 
 class FakeHTTP:
@@ -132,14 +169,14 @@ def test_reads_count_from_when_they_arrived_and_by_each_readers_record(cfg):
     x = story("RBI keeps repo rate unchanged, Nifty in focus", 30)   # the rules read it as neutral
     news.add([x])
     later = NOW + pd.Timedelta(minutes=5)
-    news.llm = llm.LLMDesk(cfg, readers=[Reader("claude", tone=0.9), Reader("ollama", tone=-0.9)], sync=True,
+    news.llm = llm.LLMDesk(cfg, readers=[Reader("gemini", tone=0.9), Reader("ollama", tone=-0.9)], sync=True,
                            clock=lambda: later)
     news.llm.submit([x], NOW)
-    assert news.collect() == [x] and set(x.nlp["llm"]["readers"]) == {"claude", "ollama"}
+    assert news.collect() == [x] and set(x.nlp["llm"]["readers"]) == {"gemini", "ollama"}
     assert news.item_tone(x, "NIFTY", NOW) == x.sentiment                       # not arrived yet at 11:00
-    # Ollama is explanatory only (intraday.llm.advisory_only): its read is kept and shown, never weighed
+    # Ollama (and Claude) are explanatory only (intraday.llm.advisory_only): its read is kept and shown, never weighed
     assert news.item_tone(x, "NIFTY", later) == pytest.approx((x.sentiment + 0.9) / 2)
-    news.reader_trust = lambda name: {"rules": 1.0, "claude": 1.5, "ollama": 0.5}[name]
+    news.reader_trust = lambda name: {"rules": 1.0, "gemini": 1.5, "ollama": 0.5}[name]
     assert news.item_tone(x, "NIFTY", later) == pytest.approx((x.sentiment + 1.35) / 2.5)
     news.advisory_only = set()                             # were it weighed, it would pull the tone down
     assert news.item_tone(x, "NIFTY", later) == pytest.approx((x.sentiment + 1.35 - 0.45) / 3)
@@ -186,6 +223,27 @@ def test_the_close_writes_claudes_reflection_and_the_cost(cfg, tmp_path):
     assert sent["output_config"]["effort"] == "medium" and "Session review" in sent["messages"][0]["content"]
 
 
+
+def test_a_failed_reader_is_a_warning_and_a_daily_cap_is_not(cfg):
+    """G-05: read timeouts sat inside the INFO cost line, where self-review never looks."""
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine, run_replay
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-14", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=5)
+    news = NewsDesk(cfg, fetch=lambda url: "", sources=[])
+    news.llm = llm.LLMDesk(cfg, readers=[llm.ClaudeReader("k", client=FakeAnthropic(reply="{}"))], sync=True)
+    news.llm.errors = {"ollama": "ReadTimeout: read timed out (90s)", "gemini": "daily cap of 40 calls reached"}
+    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
+                         say=None, news=news)
+    run_replay(eng)
+    ev = eng.journal.events()
+    warn = ev[(ev["level"] == "WARN") & (ev["category"] == "llm")]["message"].tolist()
+    assert warn == ["language model reads failed: ollama: ReadTimeout: read timed out (90s)"]
+
 def test_the_workflows_pass_every_accepted_key_name():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
@@ -213,3 +271,305 @@ def test_gemini_moves_past_a_retired_model():
     assert r.read([{"id": "a", "ts": "", "source": "ET", "title": "x"}])["a"]["NIFTY"] == 0.3
     assert r.model == "gemini-3-flash-preview" and len(h.urls) == 4             # busy model: tried twice; retired: once
     assert r.last_raw["tried"] == ["gemini-2.5-flash 404", "gemini-flash-latest 503", "gemini-3-flash-preview 200"]
+
+
+# ---- the Claude credit: paced, hard-capped, learning only ---------------------------------------------------------
+class Cfg:
+    """Just enough of Config for ClaudeBudget: a dotted lookup in a dict."""
+    def __init__(self, **claude):
+        self.d = {"budget_usd": 23.60, "budget_start": "2026-10-12", "budget_sessions": 60, "reserve_reflection": True,
+                  "price_in": 4.0, "price_out": 20.0, "price_cache_read": 0.20, "price_cache_write": 5.0, **claude}
+
+    def get(self, path, default=None):
+        return self.d if path == "intraday.llm.claude" else default
+
+
+class Clock:
+    def __init__(self, day="2026-10-12"):
+        self.day = day
+
+    def __call__(self):
+        return pd.Timestamp(f"{self.day} 11:00", tz=IST)
+
+
+def item(i):
+    return {"id": f"h{i}", "ts": "2026-10-12 10:00", "source": "ET", "title": "RBI cuts repo rate"}
+
+
+def claude_with(budget, usage, reply=None):
+    fake = FakeAnthropic(reply=reply, usage=usage)
+    return llm.ClaudeReader("k", client=fake, budget=budget), fake
+
+
+def test_spend_is_priced_from_the_usage_the_api_reports_cache_reads_included():
+    from quantdesk.journal.journal import Journal
+    j, clk = Journal(), Clock()
+    b = llm.ClaudeBudget(Cfg(), j, clk)
+    # input_tokens excludes the cached tokens; output_tokens includes thinking; reads cost 0.05x and writes 1.25x input
+    usage = NS(input_tokens=10000, output_tokens=2000, cache_read_input_tokens=5000, cache_creation_input_tokens=1000)
+    r, fake = claude_with(b, usage)
+    r.read([item(1)])
+    r.read([item(2)])
+    st = j.get_state("llm_claude_spend")
+    one = 10000 * 4 / 1e6 + 2000 * 20 / 1e6 + 5000 * 0.20 / 1e6 + 1000 * 5.0 / 1e6               # $0.086
+    assert one == pytest.approx(0.086)
+    assert st["total_usd"] == pytest.approx(2 * one) and st["by_day"] == {"2026-10-12": pytest.approx(2 * one)}
+    assert st["calls"] == 2 and st["sessions_used"] == 1
+    assert r.usage["cr"] == 10000 and r.usage["cw"] == 2000
+    assert "≈ $0.17" in llm.cost_line({"claude": r.usage}, {"claude": {"in": 4, "out": 20, "cr": 0.2, "cw": 5}})
+    assert fake.calls[0]["system"] == fake.calls[1]["system"] == llm.READ_SYSTEM            # byte-stable, no timestamps
+    assert len(llm.READ_SYSTEM) / 3 < 512 and "cache_control" not in str(fake.calls[0])   # under the 512-token minimum: not cached
+
+
+def test_a_days_allowance_stops_the_reads_and_the_reflection_still_runs(cfg):
+    from quantdesk.journal.journal import Journal
+    j = Journal()
+    b = llm.ClaudeBudget(Cfg(), j, Clock())
+    usage = NS(input_tokens=20000, output_tokens=5000)                                       # a read costs $0.18
+    claude, fake = claude_with(b, usage)
+    desk = llm.LLMDesk(cfg, readers=[claude], sync=True, clock=Clock(), journal=j)
+    desk.batch, desk.budget, claude.budget = 1, b, b
+    xs = [story(f"RBI cuts repo rate by {i} bps, Nifty in focus") for i in range(1, 5)]
+    desk.submit(xs, NOW)
+    # allowance 23.60 / 60 = $0.393, less $0.05 held back for the reflection: one read fits, the second would not
+    assert len(fake.calls) == 1 and "daily Claude budget reached" in desk.errors["claude"]
+    assert b.deny("reflect") is None                                                         # the reflection still runs
+    claude.client.reply = json.dumps({"lessons": ["x"], "watch_tomorrow": []})
+    claude.client.usage = NS(input_tokens=6000, output_tokens=2000)                          # $0.064
+    assert claude.reflect("review", [])["lessons"] == ["x"]
+    st = j.get_state("llm_claude_spend")
+    assert st["total_usd"] == pytest.approx(0.18 + 0.064) and st["reflected"] == "2026-10-12"
+    assert st["last"]["reflect"] == pytest.approx(0.064)
+    # without the reserve the second read fits ($0.36 < $0.393)
+    free = llm.ClaudeBudget(Cfg(reserve_reflection=False), Journal(), Clock())
+    free.charge(usage, "read")
+    assert free.deny("read") is None and b.deny("read") is not None
+
+
+def test_what_is_not_spent_carries_forward():
+    from quantdesk.journal.journal import Journal
+    clk = Clock()
+    b = llm.ClaudeBudget(Cfg(), Journal(), clk)
+    assert b.deny("read") is None and b.allowance(b._load(), "2026-10-12") == pytest.approx(23.60 / 60)
+    b.charge(NS(input_tokens=10000, output_tokens=3000), "read")                             # $0.10 of $0.393
+    clk.day = "2026-10-13"
+    assert b.deny("read") is None
+    st = b._load()
+    assert st["sessions_used"] == 2 and b.allowance(st, "2026-10-13") == pytest.approx((23.60 - 0.10) / 59)
+    assert b.allowance(st, "2026-10-13") > 23.60 / 60
+    assert b.line() == "Claude: $0.00 today, $0.10 of $23.60 used, ~470 sessions left at this pace"
+    assert llm.ClaudeBudget(Cfg(), Journal(), Clock("2026-10-09")).deny("read") == ""         # before budget_start: nothing
+
+
+def test_a_spent_credit_stops_every_call_writes_one_info_event_and_never_errors(cfg):
+    from quantdesk.journal.journal import Journal
+    j, clk = Journal(), Clock()
+    b = llm.ClaudeBudget(Cfg(), j, clk)
+    claude, fake = claude_with(b, NS(input_tokens=1000, output_tokens=1000))
+    gem = Reader("gemini")
+    desk = llm.LLMDesk(cfg, readers=[claude, gem], sync=True, clock=clk, journal=j)
+    desk.budget = claude.budget = b
+    b.charge(NS(output_tokens=1_179_500), "read")                                            # $23.59 of $23.60
+    for k in range(3):
+        desk.submit([story(f"Fed raises rates by {k} bps; Nifty, Bank Nifty in focus")], NOW)
+    assert fake.calls == [] and "claude" not in desk.errors and gem.usage["calls"] == 3
+    assert b.deny("reflect") == "" and b.deny("read") == "" and "used up" in b.line()
+    ev = j.events()
+    msgs = ev[(ev["level"] == "INFO") & (ev["category"] == "llm")]["message"].tolist()
+    assert msgs == ["Claude credit used up ($23.60); the desk continues on Gemini/Ollama and keeps everything learned"]
+    assert llm.ClaudeBudget(Cfg(), j, clk).deny("read") == "" and len(j.events()) == 1        # a restart doesn't repeat it
+    assert ev[ev["level"].isin(["WARN", "ERROR"])].empty
+
+
+def test_the_ledger_survives_a_restart_and_the_next_day(tmp_path):
+    from quantdesk.journal.journal import Journal
+    clk = Clock()
+    j1 = Journal(tmp_path / "j.db")
+    b1 = llm.ClaudeBudget(Cfg(), j1, clk)
+    b1.deny("read")
+    b1.charge(NS(input_tokens=10000, output_tokens=2000), "read")
+    j1.commit()
+    j2 = Journal(tmp_path / "j.db")                                                           # the 12:20 hand-over: a new process
+    b2 = llm.ClaudeBudget(Cfg(), j2, clk)
+    assert b2._load()["total_usd"] == pytest.approx(0.08) and b2._load()["sessions_used"] == 1
+    b2.deny("read")
+    b2.charge(NS(input_tokens=10000, output_tokens=2000), "read")
+    assert b2._load()["sessions_used"] == 1                                                   # the same session
+    clk.day = "2026-10-13"
+    b2.deny("read")
+    j2.commit()
+    st = llm.ClaudeBudget(Cfg(), Journal(tmp_path / "j.db"), clk)._load()
+    assert st["total_usd"] == pytest.approx(0.16) and st["calls"] == 2 and st["sessions_used"] == 2
+    assert st["by_day"] == {"2026-10-12": pytest.approx(0.16)}
+
+
+def test_claude_is_learning_only_its_reads_never_move_the_tone(cfg):
+    assert "claude" in cfg.get("intraday.llm.advisory_only")
+    news = NewsDesk(cfg, fetch=lambda url: "", sources=[])
+    x = story("RBI keeps repo rate unchanged, Nifty in focus", 30)
+    news.add([x])
+    later = NOW + pd.Timedelta(minutes=5)
+    news.llm = llm.LLMDesk(cfg, readers=[Reader("claude", tone=-0.9)], sync=True, clock=lambda: later)
+    news.llm.submit([x], NOW)
+    assert news.collect() == [x] and x.nlp["llm"]["readers"]["claude"]["NIFTY"] == -0.9      # read and shown (and graded)...
+    assert news.item_tone(x, "NIFTY", later) == x.sentiment                                  # ...never weighed
+    news.reader_trust = lambda name: 1.5
+    assert news.item_tone(x, "NIFTY", later) == x.sentiment
+
+
+def test_the_review_and_heartbeat_show_the_credit(cfg):
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine, run_replay
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-14", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=5)
+    j = Journal()
+    claude, fake = claude_with(None, NS(input_tokens=6000, output_tokens=2000),
+                               json.dumps({"lessons": ["The ORB long fought VWAP."], "watch_tomorrow": []}))
+    news = NewsDesk(cfg, fetch=lambda url: "", sources=[])
+    news.llm = llm.LLMDesk(cfg, readers=[claude], sync=True, clock=Clock("2026-10-13"), journal=j)
+    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", j, IntradayBroker(cfg, starting_cash=500000), say=None, news=news)
+    review = run_replay(eng)
+    assert "fought VWAP" in review and len(fake.calls) == 1                                  # the reflection ran on the credit
+    assert "Claude: $0.06 today, $0.06 of $23.60 used, ~" in review and "sessions left at this pace" in review
+    assert eng._claude_line() == news.llm.budget.line() and j.get_state("llm_claude_spend")["reflected"] == "2026-10-13"
+
+
+def test_claude_and_ollama_are_advisory_in_the_shipped_config(tmp_path):
+    """The Claude API credit is for learning only: its reads are shown and graded, never weighed into the tone."""
+    from quantdesk.config import DEFAULT_CONFIG, Config
+    cfg = Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path)}})
+    adv = {str(x).lower() for x in cfg.get("intraday.llm.advisory_only", [])}
+    assert {"claude", "ollama"} <= adv
+
+
+# ---- the credit never costs the desk its trading or its close -----------------------------------------------------
+def a_desk_engine(cfg, desk_readers, journal, day="2026-10-13"):
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-14", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=5)
+    news = NewsDesk(cfg, fetch=lambda url: "", sources=[])
+    news.llm = llm.LLMDesk(cfg, readers=desk_readers, sync=True, clock=Clock(day), journal=journal)
+    return IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", journal, IntradayBroker(cfg, starting_cash=500000),
+                          say=None, news=news), news
+
+
+def boom(msg):
+    def f(*a, **k):
+        raise RuntimeError(msg)
+    return f
+
+
+MALFORMED = [None, "junk", [1, 2], 7, {"total_usd": None}, {"total_usd": "abc", "sessions_used": "x"},
+             {"total_usd": "1.5", "sessions_used": None, "calls": [], "by_day": [1, 2], "last": "x", "closed": "yes"},
+             {"by_day": {"2026-10-13": "oops", "2026-10-12": None, 5: float("nan")}, "total_usd": float("inf")},
+             {"total_usd": 3.0, "by_day": {"2026-10-13": {"a": 1}}, "sessions_used": {}, "day": 20261013, "last": {"read": "x"}}]
+
+
+@pytest.mark.parametrize("bad", MALFORMED)
+def test_a_malformed_ledger_degrades_to_a_default_and_never_raises(bad):
+    from quantdesk.journal.journal import Journal
+    j = Journal()
+    j.set_state("llm_claude_spend", bad)
+    b = llm.ClaudeBudget(Cfg(), j, Clock("2026-10-13"))
+    st = b._load()
+    assert isinstance(st["total_usd"], float) and isinstance(st["sessions_used"], int) and isinstance(st["calls"], int)
+    assert isinstance(st["by_day"], dict) and all(isinstance(v, float) for v in st["by_day"].values())
+    assert b.line().startswith("Claude: ")
+    assert b.deny("read") in (None, "") or isinstance(b.deny("read"), str)
+    assert b.charge(NS(input_tokens=1000, output_tokens=100), "read") > 0
+    assert b.line().startswith("Claude: ")
+
+
+def test_a_journal_that_raises_on_the_ledger_does_not_raise_from_the_line():
+    class Boom:
+        get_state = staticmethod(boom("db gone"))
+    assert llm.ClaudeBudget(Cfg(), Boom(), Clock()).line().startswith("Claude: ")
+
+
+def test_the_heartbeat_survives_a_malformed_ledger_and_logs_it_once(cfg, caplog, monkeypatch):
+    from quantdesk.intraday import engine as eng_mod
+    from quantdesk.journal.journal import Journal
+    j = Journal()
+    eng, news = a_desk_engine(cfg, [Reader("claude")], j)
+    assert news.llm.budget is not None
+    j.set_state("llm_claude_spend", {"total_usd": None, "by_day": [1], "sessions_used": "x"})
+    assert eng._claude_line().startswith("Claude: ")                                          # validated, not raised
+    news.llm.budget.line = boom("ledger exploded")                                            # and even if the line itself dies
+    monkeypatch.setattr(eng_mod, "_claude_budget_warned", False)
+    with caplog.at_level("WARNING", logger=eng_mod.log.name):
+        assert eng._claude_line() is None and eng._claude_line() is None
+        eng._heartbeat(NOW)                                                                   # the step's heartbeat: no raise
+    assert j.get_state("intraday_live")["claude_budget"] is None
+    assert len([r for r in caplog.records if "claude budget" in r.getMessage()]) == 1         # once per process, not per minute
+
+
+def test_the_close_goes_on_when_the_budget_raises(cfg):
+    from quantdesk.journal.journal import Journal
+    j = Journal()
+    claude, fake = claude_with(None, NS(input_tokens=6000, output_tokens=2000),
+                               json.dumps({"lessons": ["should not be asked"], "watch_tomorrow": []}))
+    eng, news = a_desk_engine(cfg, [claude], j)
+    b = news.llm.budget
+    b.deny = boom("ledger gone")
+    out = eng._reflect("a review", NOW)                                                       # no raise
+    assert fake.calls == [] and "Reflection" not in out                                       # Claude skipped: fail closed
+    b.line = boom("line gone")
+    out = eng._reflect("a review", NOW)
+    assert fake.calls == [] and "Claude:" not in out
+
+
+def test_a_budget_check_that_raises_in_the_reader_loop_skips_claude_and_the_others_still_read(cfg):
+    from quantdesk.journal.journal import Journal
+    claude, gem, oll = Reader("claude"), Reader("gemini"), Reader("ollama")
+    desk = llm.LLMDesk(cfg, readers=[claude, gem, oll], sync=True, clock=Clock(), journal=Journal())
+    desk.budget.deny = boom("ledger gone")
+    desk.submit([story("RBI cuts repo rate by 25 bps, Nifty in focus")], NOW)                 # sync: no raise into submit
+    assert claude.seen == [] and len(gem.seen) == 1 and len(oll.seen) == 1
+    assert "budget check failed" in desk.errors["claude"] and "RuntimeError" in desk.errors["claude"]
+    assert {r for _, r, _ in desk.drain()} == {"gemini", "ollama"}
+
+
+def test_a_charge_that_raises_keeps_the_read_and_notes_the_unledgered_spend(cfg):
+    from quantdesk.journal.journal import Journal
+    clk = Clock()
+    b = llm.ClaudeBudget(Cfg(), Journal(), clk)
+    b.charge = boom("journal write failed")
+    claude, fake = claude_with(b, NS(input_tokens=1000, output_tokens=300))
+    got = claude.read([item(1)])
+    assert got["h1"]["NIFTY"] == 0.6 and "not ledgered" in claude.charge_error                # the read is not lost
+    gem = Reader("gemini")
+    desk = llm.LLMDesk(cfg, readers=[claude, gem], sync=True, clock=clk, journal=Journal())
+    desk.budget = claude.budget = b
+    b.deny = lambda kind: None
+    desk.submit([story("RBI cuts repo rate by 25 bps, Nifty in focus")], NOW)
+    assert len(gem.seen) == 1 and "not ledgered" in desk.errors["claude"] and desk.drain()
+
+
+def test_a_desk_without_a_claude_reader_has_no_budget_line(cfg):
+    from quantdesk.journal.journal import Journal
+    for names in (["gemini"], ["ollama"], ["gemini", "ollama"]):
+        j = Journal()
+        eng, news = a_desk_engine(cfg, [Reader(n) for n in names], j)
+        assert news.llm.budget is None and eng._claude_line() is None
+        eng._heartbeat(NOW)
+        assert j.get_state("intraday_live")["claude_budget"] is None
+        assert "Claude:" not in eng._reflect("a review", NOW)
+    assert llm.LLMDesk(cfg, readers=[Reader("claude")], journal=Journal()).budget is not None
+
+
+@pytest.mark.parametrize("used,total", [(60, 0.0), (61, 0.0), (61, 5.0), (80, 0.0), (80, 20.0), (500, 1.0)])
+def test_a_days_allowance_is_capped_at_twice_the_even_pace(used, total):
+    from quantdesk.journal.journal import Journal
+    b = llm.ClaudeBudget(Cfg(), Journal(), Clock())
+    st = {**b._load(), "sessions_used": used, "total_usd": total}
+    assert b.allowance(st, "2026-10-12") == pytest.approx(min(23.60 - total, 2 * 23.60 / 60))
+    assert b.allowance(st, "2026-10-12") <= 0.7867 + 1e-9
+    assert b.allowance({**st, "by_day": {"2026-10-12": 0.3}}, "2026-10-12") <= 0.7867 + 1e-9

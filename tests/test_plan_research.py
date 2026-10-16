@@ -35,7 +35,7 @@ def ts(x):
 
 
 def make_cfg(tmp_path, research=None, intraday=None, **auto):
-    a = {"plan_research": {"bootstrap": {"samples": 100, "block_days": 2, "seed": 7}, **(research or {})}, **auto}
+    a = {"require_approved_model": True, "plan_research": {"bootstrap": {"samples": 100, "block_days": 2, "seed": 7}, **(research or {})}, **auto}
     over = {"runtime": {"dir": str(tmp_path / "runtime")}, "autolearn": a}
     if intraday:
         over["intraday"] = intraday
@@ -524,6 +524,33 @@ def test_a_plan_champion_without_real_evidence_halts_entries(tmp_path):
     assert lr.fault and "real point-in-time" in lr.fault and lr.plan is None
 
 
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("break_it", ["evidence", "artifact"])
+def test_a_plan_registry_fault_halts_entries_only_when_the_plan_model_is_required(tmp_path, required, break_it):
+    """With autolearn.require_approved_model false (the shipped config) the plan registry is advisory: a bad plan
+    champion must not stop every entry. With it true, the same fault still halts."""
+    cfg = make_cfg(tmp_path, require_approved_model=required)
+    root = tmp_path / "al"
+    reg = Registry(root / "plan")
+    card = {"code_fingerprint": "c", "feature_version": "f", "label_version": "l", "data_fingerprint": "d", "training_window": {},
+            "validation": {"passed": True}, "family": "plan", "evidence": "real_point_in_time"}
+    mid, _ = reg.register(_policy("3-5"), card)
+    reg.promote(mid, "test", {"forward": True})
+    if break_it == "evidence":
+        reg.update_card(mid, evidence="modelled")
+    else:
+        art = next((root / "plan").rglob(f"{mid}/artifact.json"))
+        art.unlink()                                                         # a champion whose artifact is gone
+    lr = LiveLearner(cfg, root=root, source="replay")
+    lr.start(dt.date(2026, 9, 29))
+    assert lr.plan is None and lr.plan_fault
+    if required:
+        assert lr.fault == lr.plan_fault
+    else:
+        assert lr.fault is None, lr.fault                                     # entries are not halted
+        assert lr.status()["plan_fault"] == lr.plan_fault and any("plan registry" in e for e in lr.errors)
+
+
 # ---- the paper gate counts only real fills ------------------------------------------------------------------------------
 def test_paper_gate_counts_only_trades_filled_at_the_live_book():
     from quantdesk.research.protocol import real_quote_trades
@@ -619,3 +646,10 @@ def test_armed_orders_pass_the_same_gate(tmp_path):
     assert "no approved plan model" in msg and not eng.open_trades
     d = eng.journal.df("SELECT * FROM decisions")
     assert d.astype(str).apply(lambda r: r.str.contains("no approved plan model")).any(axis=None)   # advisory record kept
+
+
+def test_the_shipped_default_leaves_directional_plans_to_the_other_gates(tmp_path):
+    """Owner decision #36: require_approved_model is false in the shipped config, so a directional plan is not dropped
+    for want of a plan model (that wording is the gated desk's); it meets the EV layer and the rest of the gates."""
+    cfg = Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(tmp_path / "runtime")}})
+    assert cfg.get("autolearn.require_approved_model") is False

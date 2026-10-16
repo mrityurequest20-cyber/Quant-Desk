@@ -57,9 +57,10 @@ remains the minimum for that, and it is a separate, human decision.
 
 Modelled-chain results are **scenario analysis only**. Bhavcopy end-of-day results are descriptive.
 
-A directional option trade needs a plan champion promoted on real point-in-time evidence and a positive expected net R
-from it (`autolearn.require_approved_model`). Without one the desk takes no directional trade, and its reads stay
-advisory.
+With `autolearn.require_approved_model: true`, a directional option trade needs a plan champion promoted on real
+point-in-time evidence and a positive expected net R from it; without one the desk takes no directional trade. It is
+currently **false** (owner's choice, PR #36): directional plans are not gated on a plan model, but every other gate
+(halts, vetoes, risk limits, EV floor, live-book liquidity and slippage) still applies.
 
 ## Operational acceptance targets
 

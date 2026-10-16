@@ -83,9 +83,10 @@ trading: no code path places an order, and no language model can change a signal
 - A signal is simulated as one unit of the index future:
   - entered `delay_bars` after the decision and held 30 minutes;
   - one position per symbol at a time, at most 6 a session.
-- Round-trip costs come from config: ₹20 brokerage per order, STT 0.02% on the sell, exchange 0.173 bps per side,
+- Round-trip costs come from config: ₹20 brokerage per order, STT 0.05% on the sell, exchange 0.173 bps per side,
   SEBI ₹10/crore, stamp 0.002% on the buy, GST 18% on brokerage and fees, a 0.5 bps half-spread and 1 bp slippage
-  per side. That is about **5.9 bps per round trip** on NIFTY.
+  per side. STT, exchange fees and stamp duty are the desk's own (`costs.segments.futures`). That is about
+  **8.9 bps per round trip** on NIFTY.
 - The desk expresses the direction with options, which have extra decay. The warehouse research's buyer's-edge table
   measures that separately.
 
@@ -125,7 +126,7 @@ Every check must pass, and a missing number fails its check.
 | Engine failures | each minute's step is contained; 3 failures in a row → safe mode (square off every position, each exit on its own; no entries for the session); slow steps are reported |
 | Model | an unverifiable champion artifact halts entries; a drift alarm makes the champion abstain |
 | Language models | Ollama's reads are `advisory_only`: shown and graded, never weighed into the tone. `quantdesk/autolearn` imports no LLM code (a test checks). |
-| Directional entries | `require_approved_model`: only with a plan champion promoted on real point-in-time evidence, and a positive expected net R from it for that plan's bucket; otherwise none. The analyst's tilt, narrative, LLM reads and direction models are advisory |
+| Directional entries | `require_approved_model` (currently **false**, owner's choice, PR #36): when true, only with a plan champion promoted on real point-in-time evidence and a positive expected net R from it for that plan's bucket; when false, a directional plan passes the same halts, vetoes, risk limits, EV floor and live-book checks without one. LLM reads and direction models are advisory either way |
 
 ## Storage and cost
 

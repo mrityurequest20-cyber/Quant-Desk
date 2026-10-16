@@ -7,6 +7,7 @@
   trades    intraday trades with setup, structure, P&L, R, grade
   review    the written session review(s)
   stats     performance across sessions: by setup, structure, day type, time of day, exit
+  clear-halt  lift the entry halt on an inherited position, on the record (--reason; --force to accept it as is)
 """
 from __future__ import annotations
 
@@ -96,7 +97,7 @@ def _live_engine(cfg, a) -> IntradayEngine:
         from .llm import LLMDesk
         from .news import NewsDesk
         news = NewsDesk(cfg)
-        desk = LLMDesk(cfg)
+        desk = LLMDesk(cfg, journal=j)                  # Claude's credit is kept in the journal
         if desk.active:
             news.llm = desk
             print("news: second readers " + ", ".join(r.name for r in desk.readers), flush=True)
@@ -295,6 +296,30 @@ def cmd_reset_account(cfg, a):
           f"new paper account: ₹{cfg.get('intraday.capital'):,.0f}")
 
 
+def cmd_clear_drawdown_halt(cfg, a):
+    """The owner lifts the cross-day drawdown halt, on the record; the high-water mark restarts at today's equity."""
+    from .engine import DD_KEY, DD_PEAK_KEY
+    j = Journal(paths(cfg, a.account or "live")["journal"])
+    try:
+        halt = j.get_state(DD_KEY)
+        if not halt:
+            print("no drawdown halt is set; nothing to clear")
+            return
+        now = pd.Timestamp.now(tz="Asia/Kolkata")
+        log_ = j.get_state("intraday_drawdown_cleared") or []
+        log_.append({"at": str(now), "by": a.by, "reason": a.reason, "halt": halt})
+        j.set_state("intraday_drawdown_cleared", log_)
+        # the mark restarts at the equity the desk next sees (not the last snapshot, which may be stale and higher)
+        j.set_state(DD_PEAK_KEY, {"peak": 0, "restart": True, "at": str(now), "by": a.by})
+        j.set_state(DD_KEY, None)
+        j.event(now, "WARN", "risk", f"drawdown halt cleared by {a.by}: {a.reason[:200]}; the high-water mark restarts at "
+                f"the desk's next equity", {"halt": halt})
+        j.commit()
+        print("drawdown halt cleared; the high-water mark restarts at the desk's next equity")
+    finally:
+        j.close()
+
+
 def cmd_restate_trade(cfg, a):
     """Correct a closed paper trade's exit price(s), on the record (see account.restate_trade)."""
     exits = {}
@@ -305,6 +330,25 @@ def cmd_restate_trade(cfg, a):
         sys.exit(f"this rewrites trade {a.id}'s exit {exits} and moves paper cash by the difference; add --yes to do it")
     r = restate_trade(cfg, paths(cfg, a.account or "live")["journal"].parent, a.id, exits, a.reason)
     print(f"trade {r['trade']}: P&L ₹{r['old_pnl']:+,.2f} → ₹{r['new_pnl']:+,.2f} (cash {r['delta']:+,.2f})")
+
+
+def cmd_clear_halt(cfg, a):
+    """The owner's one explicit action that lifts an inherited-position halt (halt.py: H-02/H-03), on the record."""
+    import getpass
+
+    from .feeds import IST
+    from .halt import clear
+    p = paths(cfg, a.account or "live")
+    j = Journal(p["journal"])
+    try:
+        positions = IntradayBroker(cfg, state_path=p["broker"]).positions() if p["broker"].exists() else {}
+        by = a.by or os.environ.get("GITHUB_ACTOR") or getpass.getuser()
+        r = clear(j, positions, pd.Timestamp.now(tz=IST).date(), a.reason, by, force=a.force)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    finally:
+        j.close()
+    print(r["message"], flush=True)
 
 
 def cmd_command(cfg, a):
@@ -319,28 +363,28 @@ def cmd_command(cfg, a):
 
 def cmd_paper_gate(cfg, a):
     """Read-only check of one strategy's closed, cost-inclusive paper trades against the bar for real money."""
-    from ..research.protocol import evaluate_paper_candidate, real_quote_trades
+    from ..research.protocol import evaluate_paper_candidate, real_quote_trades, risk_violation_events, without_exploration
     j = Journal(paths(cfg, a.account or "live")["journal"])
     try:
         trades = j.trades()
         trades = trades[(trades["strategy"].astype(str) == a.strategy) &
                         (trades["opened_at"].astype(str) >= a.since)]
+        trades, n_expl = without_exploration(trades)       # unvalidated-prior exploration trades are never evidence
         trades, not_real = real_quote_trades(trades)       # only real point-in-time fills are evidence
-        sessions = j.df("SELECT COUNT(DISTINCT substr(ts,1,10)) AS n FROM thoughts WHERE ts >= ?", (a.since,))
+        from ..journal.retention import archived_thought_days   # thoughts archived out of the journal were still sessions (C-02)
+        seen = {str(d) for d in j.df("SELECT DISTINCT substr(ts,1,10) AS d FROM thoughts WHERE ts >= ?", (a.since,))["d"]}
+        sessions = pd.DataFrame({"n": [len(seen | archived_thought_days(paths(cfg, a.account or "live")["journal"], str(a.since)[:10]))]})
         checks = j.checks(a.since)
         risky_checks = checks[
             checks["name"].astype(str).str.contains(r"risk|limit|kill|reconcil", case=False, regex=True) &
             checks["status"].astype(str).str.upper().isin(["FAIL", "ERROR"])
         ] if not checks.empty else checks
-        events = j.events(a.since)
-        risky_events = events[
-            events["category"].astype(str).str.lower().isin(["risk", "risk_limit", "kill_switch", "execution"]) &
-            events["level"].astype(str).str.upper().isin(["WARN", "ERROR"])
-        ] if not events.empty else events
+        risky_events = risk_violation_events(j.events(a.since))
         gate = evaluate_paper_candidate(trades, int(sessions.iloc[0]["n"]), len(risky_checks) + len(risky_events),
                                         float(cfg.get("intraday.capital", 20000)))
         gate.update({"strategy": a.strategy, "since": a.since, "costs_included": True, "paper_account": a.account,
                      "excluded_not_real_point_in_time": not_real,
+                     "excluded_exploration": n_expl,
                      "evidence": "only trades filled at the live book on entry and exit count"})
         print(json.dumps(gate, indent=2, ensure_ascii=False))
     finally:
@@ -472,6 +516,9 @@ def cmd_learn(cfg, a):
     from . import learning
     p = paths(cfg, a.account or "live")
     mem = learning.Memory(p["memory"])
+    if mem.corrupt:                                         # C-10: a blank bootstrap or rebuild must not overwrite it
+        sys.exit(f"learning: {p['memory']} failed to load ({mem.corrupt}); nothing done. Restore it, or move it aside "
+                 f"deliberately to start a new record.")
     if a.bootstrap:
         if a.if_empty and (mem.d["tables"].get("factor") or mem.d.get("bootstrap")):
             print(f"learning: the record already has {mem.graded('factor'):.0f} graded factor reads; nothing to bootstrap")
@@ -493,14 +540,40 @@ def cmd_learn(cfg, a):
         mem.save()
         print(f"bootstrapped from {got['sessions']} session(s): {got['factors']} factor reads, {got['news']} news calls graded")
     if a.rebuild:
+        from ..journal.retention import history_archived
+        gone = history_archived(p["journal"])
+        if gone and not a.allow_partial_journal:
+            sys.exit(f"learn --rebuild refused: {len(gone)} archive run(s) hold thoughts/news no longer in the journal "
+                     f"(manifests: {', '.join(r['manifest'] for r in gone)}). Restore them first "
+                     f"(`quantdesk intraday archive --restore <manifest>`), or pass --allow-partial-journal to regrade only "
+                     f"what is left (this REPLACES the graded record with a shorter one).")
         rec = SessionRecorder(p["data"])
         bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
         got = learning.rebuild(mem, Journal(p["journal"]), bars)
         mem.save()
         print("rebuilt from the journal: " + ", ".join(f"{v} {k}" for k, v in got.items()))
-    lines = learning.summary(mem, top=a.top)
+    lines = learning.summary(mem, top=a.top, factor_weights_applied=learning.apply_factor_weights(cfg))
     print(f"record over {len(mem.d['days'])} session(s) → {p['memory']}")
     print("\n".join(lines) if lines else "nothing graded yet")
+
+
+def cmd_archive(cfg, a):
+    """C-02: archive, verify, then prune old thoughts/news and plan studies (quantdesk/journal/retention.py)."""
+    import datetime as _dt
+    from ..journal import retention
+    root = Path(a.root) if a.root else Path(cfg.runtime_dir)
+    try:
+        if a.restore:
+            retention.restore(a.restore, root)
+            return
+        if not a.out:
+            sys.exit("archive: --out DIR is required (where the dated archive and its manifest are written)")
+        if a.keep_days < retention.MIN_KEEP_DAYS:
+            sys.exit(f"archive: --keep-days must be at least {retention.MIN_KEEP_DAYS} (grading looks back 7 days)")
+        retention.archive(root, a.out, keep_days=a.keep_days, keep_studies=a.keep_studies, dry_run=a.dry_run,
+                          as_of=_dt.date.fromisoformat(a.as_of) if a.as_of else None)
+    except retention.RetentionError as exc:
+        sys.exit(f"::error::journal retention aborted, nothing was deleted: {exc}")
 
 
 def _journal(cfg, a) -> Journal:
@@ -738,11 +811,24 @@ def register(sub):
     x.set_defaults(fn=cmd_doctor)
     x = ss.add_parser("kotak-check", help="what the Kotak Neo consumer key can see (no login, no orders)")
     x.set_defaults(fn=cmd_kotak_check)
+    x = ss.add_parser("clear-halt", help="lift the entry halt on an inherited position (orphan, carried or expired "
+                      "leg) once it is resolved; nothing is closed or settled")
+    x.add_argument("--reason", required=True, help="why it is safe to trade again (on the record)")
+    x.add_argument("--force", action="store_true",
+                   help="clear although the mismatch still exists: it is accepted as it is now, any change halts again")
+    x.add_argument("--by", help="who clears it (default: $GITHUB_ACTOR or the login name)")
+    x.add_argument("--account", help="live (default)")
+    x.set_defaults(fn=cmd_clear_halt)
     x = ss.add_parser("command", help="pause / resume / flatten / close a position on the running engine")
     x.add_argument("cmd", choices=["pause", "resume", "flatten", "close"])
     x.add_argument("id", nargs="?", help="trade id (for close)")
     x.add_argument("--account", help="live (default)")
     x.set_defaults(fn=cmd_command)
+    x = ss.add_parser("clear-drawdown-halt", help="the owner lifts the cross-day drawdown halt, on the record")
+    x.add_argument("--reason", required=True)
+    x.add_argument("--by", default="owner")
+    x.add_argument("--account", default="live")
+    x.set_defaults(fn=cmd_clear_drawdown_halt)
     x = ss.add_parser("paper-gate", help="read-only check of one strategy's paper record against the bar for real money")
     x.add_argument("--strategy", required=True)
     x.add_argument("--since", required=True, help="paper-trial start date (YYYY-MM-DD)")
@@ -772,10 +858,21 @@ def register(sub):
     x = ss.add_parser("learn", help="what the desk has learned from its calls (news, factors, setups)")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--rebuild", action="store_true", help="grade the whole journal again from the recorded bars")
+    x.add_argument("--allow-partial-journal", action="store_true",
+                   help="with --rebuild: go ahead although part of the journal is archived (see `intraday archive`)")
     x.add_argument("--bootstrap", action="store_true", help="seed the record from the last week's real sessions (replayed)")
     x.add_argument("--if-empty", action="store_true", help="with --bootstrap: only when nothing has been graded yet")
     x.add_argument("--top", type=int, default=12)
     x.set_defaults(fn=cmd_learn)
+    x = ss.add_parser("archive", help="archive, verify, then prune old thoughts/news and plan studies (keeps the journal small)")
+    x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
+    x.add_argument("--out", help="where the dated archive files and the manifest go")
+    x.add_argument("--keep-days", type=int, default=30, help="keep this many days of thoughts/news in the journal")
+    x.add_argument("--keep-studies", type=int, default=3, help="keep the newest N plan studies (never the ones a card or lock uses)")
+    x.add_argument("--dry-run", action="store_true", help="say what would be archived and the projected size; change nothing")
+    x.add_argument("--as-of", help="YYYY-MM-DD: count back from this day instead of today")
+    x.add_argument("--restore", metavar="MANIFEST", help="put an archive run back (rows and studies), verifying its hashes")
+    x.set_defaults(fn=cmd_archive)
     x = ss.add_parser("export-site", help="the web app + an account's data as a read-only static site")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--out", default="quantdesk-snapshot.html")
