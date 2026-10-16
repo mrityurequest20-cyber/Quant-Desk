@@ -463,3 +463,184 @@ def test_normal_exit_is_unchanged(cfg, sessions, tmp_path):
     assert eng.broker.cash() == pytest.approx(cash0 + sum(-q * p for q, p in zip(exits["qty"], exits["price"]))
                                               - exits["fees"].sum())
     assert eng.journal.events(level="CRITICAL").empty
+
+
+# ---- inherited positions: flag, halt entries, the owner clears it (H-02/H-03, owner decision "flag + manual") -------
+IST = "Asia/Kolkata"
+
+
+def _view():
+    from quantdesk.intraday.analyst import MarketView
+    return MarketView("NIFTY", None, 0, "neutral", 0, 0, "", "", None, None, [], [], {}, "")
+
+
+def _live_dir(cfg):
+    from quantdesk.intraday.cli import paths
+    return paths(cfg, "live")["journal"].parent
+
+
+def _desk(cfg, bars, day, clock=None, db="journal.db"):
+    """A runner on the live account's files (journal.db + broker.json), as the workflow restores them."""
+    feed = ReplayFeed(bars, day)
+    if clock is not None:
+        feed.clock = clock
+    return IntradayEngine(cfg, feed, "model", Journal(_live_dir(cfg) / db),
+                          IntradayBroker(cfg, starting_cash=500000, state_path=_live_dir(cfg) / "broker.json"), say=None)
+
+
+def _clear_halt(cfg, *args):
+    from quantdesk.cli import build_parser
+    a = build_parser().parse_args(["intraday", "clear-halt", "--by", "owner", *args])
+    a.fn(cfg, a)
+
+
+def _orphans(cfg, day):
+    """An entry cut short after its first fill (the journal never heard of it) and an expired leg nobody settled."""
+    from quantdesk.core.types import Instrument, Order
+    b = IntradayBroker(cfg, starting_cash=500000, state_path=_live_dir(cfg) / "broker.json")
+    live = Instrument.option("NIFTY", day + dt.timedelta(days=2), 25000.0, "CE", 65)
+    gone = Instrument.option("NIFTY", day - dt.timedelta(days=3), 24800.0, "PE", 65)
+    b.execute(Order(live, 65, "X1", "open"), 100.0, pd.Timestamp(f"{day} 10:02", tz=IST))
+    b.execute(Order(gone, -65, "X0", "open"), 40.0, pd.Timestamp(f"{day - dt.timedelta(days=4)} 14:41", tz=IST))
+    return live.symbol, gone.symbol
+
+
+def test_orphan_leg_at_start_is_named_halts_entries_and_nothing_is_closed(cfg, sessions):
+    bars, days = sessions
+    day = days[-1]
+    live, gone = _orphans(cfg, day)
+    eng = _desk(cfg, bars, day)
+    held = {s: dict(p) for s, p in eng.broker.positions().items()}
+    eng.start_session(day)
+    crit = _criticals(eng.journal, "entries halted until the owner clears it")
+    assert len(crit) == 2
+    msg = " | ".join(crit["message"])
+    assert (f"orphan leg {live}: the broker holds +65, today's open journal trades account for +0; "
+            f"held since {day} 10:02") in msg
+    assert f"orphan, expired leg {gone}: the broker holds -65" in msg and "not settled" in msg and "clear-halt" in msg
+    assert eng._blocked("NIFTY", _view(), eng.feed.now()).startswith("halted")
+    assert eng.journal.get_state("intraday_halt")["items"]                      # on disk, not only in memory
+    for _ in range(30):                                                         # half an hour of the session
+        eng.feed.advance()
+        eng.step()
+    assert eng.broker.positions() == held                                       # nothing closed, adopted or settled
+    assert not eng.open_trades and not eng.closed and eng.journal.trades().empty
+    assert eng.journal.df("SELECT COUNT(*) AS n FROM fills")["n"].iloc[0] == 0
+
+
+def test_inherited_halt_survives_restarts_and_the_next_day(cfg, sessions):
+    from quantdesk.core.types import Instrument, Order
+    bars, days = sessions
+    _orphans(cfg, days[-2])
+    a = _desk(cfg, bars, days[-2])
+    a.start_session(days[-2])
+    assert a._blocked("NIFTY", _view(), a.feed.now()).startswith("halted")
+    a.journal.close()                                                           # the morning runner exits
+    b = _desk(cfg, bars, days[-2], a.feed.open_ts + pd.Timedelta(hours=3))      # the 12:20 runner, same day
+    b.start_session(days[-2])
+    assert b._blocked("NIFTY", _view(), b.feed.now()).startswith("halted")
+    assert len(_criticals(b.journal, "entries halted until the owner clears it")) == 2    # named once, not per restart
+    # someone squares the legs off by hand: the books agree again, but only the owner lifts the halt
+    for p in list(b.broker.positions().values()):
+        b.broker.execute(Order(Instrument.from_dict(p["instrument"]), -p["qty"], "hand", "close"), 50.0, b.feed.now())
+    b.journal.close()
+    c = _desk(cfg, bars, days[-1])                                              # the next morning
+    c.start_session(days[-1])
+    assert c.health["reconcile"]["ok"] is True
+    assert "inherited position awaits the owner" in c._blocked("NIFTY", _view(), c.feed.now())
+    still = _criticals(c.journal, "entries still halted since")
+    assert len(still) == 2 and still["message"].str.contains("no longer present").all()
+
+
+def test_clear_halt_refuses_while_the_orphan_exists_then_force_clears_on_the_record(cfg, sessions, capsys):
+    from quantdesk.core.types import Instrument, Order
+    bars, days = sessions
+    day = days[-1]
+    live, gone = _orphans(cfg, day)
+    first = _desk(cfg, bars, day)
+    first.start_session(day)
+    first.journal.close()
+    with pytest.raises(SystemExit) as no:
+        _clear_halt(cfg, "--reason", "looked fine")
+    assert "refusing to clear: 2 inherited position(s) still unexplained" in str(no.value) and live in str(no.value)
+    with pytest.raises(SystemExit):                                             # a reason is never optional
+        _clear_halt(cfg, "--force")
+    j = Journal(_live_dir(cfg) / "journal.db")
+    assert j.get_state("intraday_halt") and not j.get_state("intraday_halt_cleared")
+    j.close()
+    _clear_halt(cfg, "--force", "--reason", "paper orphans from the 8a probe; accepted as is")
+    assert "entry halt cleared by owner" in capsys.readouterr().out
+    eng = _desk(cfg, bars, day, pd.Timestamp(f"{day} 11:00", tz=IST))
+    rec = eng.journal.get_state("intraday_halt_cleared")[-1]
+    assert rec["by"] == "owner" and rec["forced"] and "8a probe" in rec["reason"] and rec["at"]
+    assert sorted(rec["accepted"]) == sorted([f"leg:{gone}:+0:-65", f"leg:{live}:+0:+65"])
+    info = eng.journal.events(level="INFO")
+    info = info[info["message"].str.contains("entry halt cleared by owner")]
+    assert len(info) == 1 and "forced with 2 still outstanding" in info["message"].iloc[0]
+    n_crit = len(eng.journal.events(level="CRITICAL"))
+    eng.start_session(day)                                                      # the restart after the clear
+    assert eng.halt is None and eng.health["reconcile"]["ok"] is True
+    why = str(eng._blocked("NIFTY", _view(), eng.feed.now()))
+    assert "inherited" not in why and "disagree" not in why
+    assert len(eng.journal.events(level="CRITICAL")) == n_crit
+    assert set(eng.broker.positions()) == {live, gone}                         # still nothing closed or settled
+    # the owner accepted exactly that mismatch: any change to it halts again
+    p = eng.broker.positions()[live]
+    eng.broker.execute(Order(Instrument.from_dict(p["instrument"]), 65, "X2", "open"), 100.0, eng.feed.now())
+    eng.journal.close()
+    again = _desk(cfg, bars, day, pd.Timestamp(f"{day} 11:05", tz=IST))
+    again.start_session(day)
+    assert "the broker holds +130" in again.halt["items"][-1]["detail"]
+    assert again._blocked("NIFTY", _view(), again.feed.now()).startswith("halted")
+
+
+def test_trade_carried_from_yesterday_is_flagged_and_halts_not_dropped(cfg, sessions):
+    bars, days = sessions
+    a, _ = _spread_engine(cfg, bars, days[-2], _live_dir(cfg))
+    t = a.open_trades[0]
+    t.meta["exit_pending"] = ["square_off", "intraday square-off at 15:15"]    # its exit got stuck, then the runner died
+    a._persist()
+    a.journal.close()
+    held = {s: q["qty"] for s, q in a.broker.positions().items()}
+    b = _desk(cfg, bars, days[-1], db="j.db")                                   # _spread_engine's journal
+    b.start_session(days[-1])
+    msg = " | ".join(_criticals(b.journal, "entries halted until the owner clears it")["message"])
+    assert f"carried trade {t.id} (probe NIFTY;" in msg and f"open since {t.opened_at:%Y-%m-%d %H:%M}" in msg
+    assert "its exit was stuck (square_off" in msg
+    for leg in t.legs:
+        assert f"{leg.instrument.symbol} {leg.qty:+d}" in msg
+    assert msg.count(f"a leg of carried trade {t.id}") == 2
+    assert b._blocked("NIFTY", _view(), b.feed.now()).startswith("halted")
+    for _ in range(20):
+        b.feed.advance()
+        b.step()                                                                # saves today's (empty) open state
+    assert not b.open_trades and {s: q["qty"] for s, q in b.broker.positions().items()} == held
+    assert b.journal.trades().set_index("id").loc[t.id, "status"] == "open"    # not closed, not adopted
+    b.journal.close()
+    c = _desk(cfg, bars, days[-1], b.feed.now() + pd.Timedelta(minutes=5), db="j.db")    # restart: the state moved on
+    c.start_session(days[-1])
+    assert c._blocked("NIFTY", _view(), c.feed.now()).startswith("halted")
+    from quantdesk.intraday.halt import inherited                               # still found from the journal itself
+    assert f"trade:{t.id}" in {i["key"] for i in inherited(c.journal, c.broker.positions(), days[-1], [])}
+
+
+def test_clean_start_is_unchanged(cfg, sessions):
+    bars, days = sessions
+    a, _ = _spread_engine(cfg, bars, days[-2], _live_dir(cfg))
+    a._close(a.open_trades[0], a.feed.now(), "manual", "closed the same day")
+    a._persist(ended=True)
+    a.journal.close()
+    b = _desk(cfg, bars, days[-1], db="j.db")
+    n_events = len(b.journal.events())
+    b.start_session(days[-1])
+    b.paused = True
+    b.feed.clock = b.feed.open_ts + pd.Timedelta(minutes=45)
+    b.step()
+    ev = b.journal.events().iloc[n_events:]
+    assert set(ev["level"]) == {"INFO"} and not ev["message"].str.contains("halt|inherited|orphan|carried").any()
+    assert b.health["reconcile"] == {"ok": True, "positions": 0}
+    assert b.journal.get_state("intraday_halt") is None and b.journal.get_state("intraday_halt_cleared") is None
+    why = str(b._blocked("NIFTY", _view(), b.feed.now()))
+    assert "inherited" not in why and "disagree" not in why
+    assert set(b.journal.get_state("intraday_live")["halts"]) == {"kill_switch", "journal", "daily_loss", "safe_mode",
+                                                                   "reconcile"}

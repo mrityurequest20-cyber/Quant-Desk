@@ -69,7 +69,8 @@ class PaperBroker(Broker):
         sym = order.instrument.symbol
         p = self._pos.get(sym)
         if p is None:
-            self._pos[sym] = {"instrument": order.instrument.to_dict(), "qty": order.qty, "avg_price": px}
+            self._pos[sym] = {"instrument": order.instrument.to_dict(), "qty": order.qty, "avg_price": px,
+                              "since": str(pd.Timestamp(ts))}       # when it was opened: an orphan is named by it
         else:
             old_qty = p["qty"]
             new_qty = old_qty + order.qty
@@ -82,6 +83,7 @@ class PaperBroker(Broker):
                 p["qty"] = new_qty
                 if (new_qty > 0) != (old_qty > 0):
                     p["avg_price"] = px
+                    p["since"] = str(pd.Timestamp(ts))
         order.status = "FILLED"
         fill = Fill(order.id, order.instrument, order.qty, px, fees, pd.Timestamp(ts), br)
         self.fills.append(fill)
