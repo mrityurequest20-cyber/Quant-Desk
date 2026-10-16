@@ -295,6 +295,30 @@ def cmd_reset_account(cfg, a):
           f"new paper account: ₹{cfg.get('intraday.capital'):,.0f}")
 
 
+def cmd_clear_drawdown_halt(cfg, a):
+    """The owner lifts the cross-day drawdown halt, on the record; the high-water mark restarts at today's equity."""
+    from .engine import DD_KEY, DD_PEAK_KEY
+    j = Journal(paths(cfg, a.account or "live")["journal"])
+    try:
+        halt = j.get_state(DD_KEY)
+        if not halt:
+            print("no drawdown halt is set; nothing to clear")
+            return
+        now = pd.Timestamp.now(tz="Asia/Kolkata")
+        log_ = j.get_state("intraday_drawdown_cleared") or []
+        log_.append({"at": str(now), "by": a.by, "reason": a.reason, "halt": halt})
+        j.set_state("intraday_drawdown_cleared", log_)
+        # the mark restarts at the equity the desk next sees (not the last snapshot, which may be stale and higher)
+        j.set_state(DD_PEAK_KEY, {"peak": 0, "restart": True, "at": str(now), "by": a.by})
+        j.set_state(DD_KEY, None)
+        j.event(now, "WARN", "risk", f"drawdown halt cleared by {a.by}: {a.reason[:200]}; the high-water mark restarts at "
+                f"the desk's next equity", {"halt": halt})
+        j.commit()
+        print("drawdown halt cleared; the high-water mark restarts at the desk's next equity")
+    finally:
+        j.close()
+
+
 def cmd_restate_trade(cfg, a):
     """Correct a closed paper trade's exit price(s), on the record (see account.restate_trade)."""
     exits = {}
@@ -772,6 +796,11 @@ def register(sub):
     x.add_argument("id", nargs="?", help="trade id (for close)")
     x.add_argument("--account", help="live (default)")
     x.set_defaults(fn=cmd_command)
+    x = ss.add_parser("clear-drawdown-halt", help="the owner lifts the cross-day drawdown halt, on the record")
+    x.add_argument("--reason", required=True)
+    x.add_argument("--by", default="owner")
+    x.add_argument("--account", default="live")
+    x.set_defaults(fn=cmd_clear_drawdown_halt)
     x = ss.add_parser("paper-gate", help="read-only check of one strategy's paper record against the bar for real money")
     x.add_argument("--strategy", required=True)
     x.add_argument("--since", required=True, help="paper-trial start date (YYYY-MM-DD)")

@@ -156,6 +156,8 @@ intraday:
     max_trades_per_day: 4           # a round trip costs ~₹110-130 (≈0.025% of ₹5L): more trades, faster evidence
     max_open: 2                     # NIFTY and BANKNIFTY at once
     daily_loss_limit: 0.05         # ₹25k at ₹5L: about two full stop-outs, then done for the day
+    cross_day_drawdown_halt: 0.10  # owner, 16 Oct: 10% below the account's high-water mark halts new entries across days
+                                   # until the owner clears it (quantdesk intraday clear-drawdown-halt); exits unaffected
     min_stop_atr5: 0.75            # an invalidation closer than this × the 5m ATR is pushed out to it (noise floor)
     cooldown_after_losses: 2
     cooldown_min: 30
