@@ -112,8 +112,11 @@ but nothing waits for one.
    - a change touching orders, brokers, credentials, risk limits, sizing, sleeve rules, registered specs/results or
      workflow permissions needs a **CLEAR** from the `risk-compliance` agent (a VETO is final);
    - a change from a department on probation (`org scorecard`) needs an `internal-auditor` pass first.
-6. **Ship:** merge the branch into main (fast-forward or a merge commit, never a force-push) and push. CI runs on the
-   branch and again on main; a red main becomes tomorrow's self-review finding and the next shift's first job.
+6. **Ship:** open a pull request from the branch to main, with the evidence comment and any reviewer's CLEAR on it.
+   `main`'s ruleset requires a PR, the `tests` and `doctor` checks and an up-to-date branch, so a direct push is
+   refused. **The owner merges** until they decide the engineer may merge its own PRs (G-01, remediation log
+   S0-05). CI runs on the PR and again on main; a red main becomes tomorrow's self-review finding and the next
+   shift's first job.
 7. **Close** each resolved issue with its commit.
 
 ### What it does on its own
