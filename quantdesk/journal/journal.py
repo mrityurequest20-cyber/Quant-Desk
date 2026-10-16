@@ -170,6 +170,14 @@ class Journal:
         self._exec("INSERT INTO events (ts, level, category, message, data) VALUES (?,?,?,?,?)",
                    (str(ts), level, category, message, _json(data or {})))
 
+    def count_events(self, day, levels=("WARN", "ERROR", "CRITICAL"), categories=("data", "quotes", "engine")) -> int:
+        """Events of those levels and categories on `day` (read-only; no commit)."""
+        lo, hi = str(day), str((pd.Timestamp(day) + pd.Timedelta(days=1)).date())
+        with self.lock:
+            return int(self.db.execute(
+                f"SELECT COUNT(*) FROM events WHERE ts >= ? AND ts < ? AND level IN ({','.join('?' * len(levels))}) "
+                f"AND category IN ({','.join('?' * len(categories))})", (lo, hi, *levels, *categories)).fetchone()[0])
+
     def snapshot(self, ts, **row):
         cols = ["equity", "cash", "drawdown", "open_trades", "gross", "net_delta", "vega", "open_risk", "regime"]
         self._exec(f"INSERT OR REPLACE INTO equity (ts, {', '.join(cols)}) VALUES (?{',?' * len(cols)})",

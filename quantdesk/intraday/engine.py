@@ -29,6 +29,7 @@ import pandas as pd
 from ..core.calendar import TradingCalendar
 from ..core.types import OPTIONS, Instrument, Order, Trade, TradeLeg, new_trade_id
 from ..journal.journal import Journal, trade_from_dict, trade_to_dict
+from . import governor
 from .analyst import Analyst, MarketView
 from .chainflow import ChainFlow, chain_step
 from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
@@ -61,6 +62,10 @@ class IntradayEngine:
         self.model_chain = ModelOptionChain(cfg, self.cal, self.model_state, self.pricer)
         self.chains = self.model_chain if chains in (None, "model") else chains
         self.analyst, self.playbook, self.risk = Analyst(cfg), Playbook(cfg, self.pricer), IntradayRisk(cfg)
+        # the risk governor (governor.py): shadow by default (journals what it would do); tighten (paper only) hands the
+        # risk engine tighter limits. State: journal key risk_governor. Any failure → identity limits, never an exception.
+        self._gov_cfg, self._gov_base, self._gov_acct = governor.settings(cfg.get("intraday.governor")), dict(self.risk.base_limits), cfg.get("account.mode")
+        self._gov, self._gov_obs, self._gov_saved = None, {}, None
         self.marker = QuoteMarker(self.pricer)
         self.refresh_min = getattr(self.chains, "refresh_min", None) or ic.get("chain_refresh_min", 3)
         self.max_entry_slip = float(ic.get("max_entry_slip", 0.15))
@@ -256,6 +261,7 @@ class IntradayEngine:
             self.day_start_equity = self.broker.cash() + sum(t.entry_cost for t in self.open_trades)
             self.risk.reset(day, self.day_start_equity)
             self.risk.trades_today = len([t for t in self.closed if t.opened_at.date() == day]) + len(self.open_trades)
+        self._gov_safe(self._gov_start, day)
         if self.quant_on:
             self._train_models(day)
         exp = ", ".join(f"{u} {e:%d-%b}" for u, e in self.expiry.items())
@@ -287,6 +293,7 @@ class IntradayEngine:
             for u in self.underlyings:
                 for t in self.feed.trades(u):
                     self.flow[u].add(t)
+        self._gov_safe(self._gov_step, now)
         if not got:
             self._wallclock_exits(now)                    # no new bar is no reason to hold a position past the square-off
             return False
@@ -1414,6 +1421,7 @@ class IntradayEngine:
         t.last_mark = {l.instrument.symbol: l.entry_price for l in t.legs}
         self.open_trades.append(t)
         self.risk.trades_today += 1
+        self._gov_safe(self._gov_open, t, now)
         self.journal.open_trade(t, notes)
         if expl:
             self.journal.decision(now, plan.setup, u, "exploration", f"EXPLORATION (unvalidated prior): {lots} lot(s), no approved "
@@ -1508,6 +1516,7 @@ class IntradayEngine:
         v = self.views.get(t.symbol)
         rv = self.journal.close_trade(t, v.day_type if v else None)
         self.risk.on_close(t.pnl, now)
+        self._gov_safe(self._gov_close, t, now)
         self._persist()                                   # the exit is on record before anything else can fail
         msg = f"EXIT {t.strategy} {reason}: ₹{t.pnl:,.0f} ({t.r_multiple:+.2f}R, grade {rv['grade']}) — {note}"
         self.say(f"  {now:%H:%M} {t.symbol:<9} ▼ {msg}")
@@ -1654,6 +1663,87 @@ class IntradayEngine:
             "day_start_equity": self.day_start_equity,
             "risk": {"trades_today": r.trades_today, "consec_losses": r.consec_losses, "halted": r.halted,
                      "cool_until": str(r.cool_until) if r.cool_until is not None else None}})
+        self._gov_safe(self._gov_save)
+
+    # ---- risk governor hooks (governor.py): the only places the engine touches it ------------------------------------
+    def _gov_safe(self, fn, *a) -> None:
+        """Run a governor hook. Any failure means identity limits (no change to trading) and one log line per process."""
+        try:
+            fn(*a)
+        except Exception as exc:
+            governor.log_fault(exc)
+            try:
+                self.risk.apply_limits(None)
+            except Exception:
+                pass
+
+    def _gov_start(self, day: dt.date) -> None:
+        """Load (or begin) the governor's state for today and apply it: a restart or the 12:20 hand-over carries on from it."""
+        self._gov, self._gov_obs = None, {}
+        if self._gov_cfg["mode"] == "off":
+            return
+        st = self.journal.get_state("risk_governor")
+        if not (isinstance(st, dict) and st.get("v") == governor.VERSION):
+            rs = self.journal.df("SELECT r_multiple FROM trades WHERE status='closed' AND family='intraday' AND r_multiple IS NOT NULL "
+                                 "ORDER BY closed_at DESC LIMIT 20")["r_multiple"].tolist()[::-1]
+            pk = [x for x in (self.day_start_equity, self.journal.df("SELECT MAX(equity) AS m FROM equity")["m"].iloc[0]) if x is not None and x == x]
+            st = governor.new_state(day, self._gov_cfg, self._gov_base, rs, max(pk))
+        v = self.bars.get(self.vix)
+        prior = v[(v.index.date < day) & (v["close"] > 0)] if v is not None and len(v) else None
+        closes = {str(d): float(c) for d, c in prior["close"].groupby(prior.index.date).last().items()} if prior is not None else {}
+        self._gov = governor.note_vix(st, closes, day)
+        self._gov_refresh(session_bounds(day)[0])
+
+    def _gov_step(self, now) -> None:
+        """Each step: what the governor would do now (cheap), journaled when it changes, used only in tighten mode."""
+        if self._gov is None:
+            return
+        worst = None                                       # the underlying whose realised 30-minute range is biggest vs its forecast
+        for u in self.underlyings:
+            b = self.bars.get(u)
+            w = b.iloc[-30:] if b is not None and len(b) >= 30 else None
+            if w is None or w.index[0].date() != self.day:
+                continue
+            sg = (self.qstate.get(u) or {}).get("sigma_30m_pct")
+            rp = governor.realised_range_pct(w["high"].tolist(), w["low"].tolist(), float(w["close"].iloc[-1]))
+            if rp is not None and sg and (worst is None or rp / sg > worst[0] / worst[1]):
+                worst = (rp, sg)
+        vs = self._vix_state()
+        stale = any(self.feed.realtime_age(now, self.last_ts[u]) > self.stale_feed_min for u in self.underlyings if self.last_ts.get(u) is not None)
+        self._gov_refresh(now, {"equity": self.equity(now), "range_pct": worst and worst[0], "fc_sigma30_pct": worst and worst[1],
+                                "vix": vs and vs["last"], "feed_events": self.journal.count_events(self.day), "stale": stale})
+
+    def _gov_refresh(self, now, obs: dict | None = None) -> None:
+        if self._gov is None:
+            return
+        if obs is not None:
+            self._gov_obs = obs
+        mode = self._gov_cfg["mode"]
+        self._gov, dec = governor.tick(self._gov, self._gov_obs, self._gov_base, self._gov_cfg, now)
+        lim, until, why = governor.effective(dec, mode, self._gov_acct, now)
+        self.risk.apply_limits(lim, pd.Timestamp(until) if until is not None else None, why)
+        how = "applied" if lim is not None else ("proposal, not applied (not a paper account)" if mode == "tighten" else "shadow")
+        for c in dec["changes"]:                           # changes only
+            self.journal.event(now, "INFO", "governor", f"{how}: {c['rule']}: {c['field']} {c['old']} → {c['new']} | {c['reason']}",
+                               {**c, "mode": mode, "applied": lim is not None})
+
+    def _gov_open(self, t: Trade, now) -> None:
+        if self._gov is not None:
+            slip = governor.entry_slippage(t.meta.get("legs_plan"), [l.entry_price for l in t.legs])
+            self._gov = governor.on_open(self._gov, slip, now, self._gov_cfg)
+            self._gov_refresh(now)
+
+    def _gov_close(self, t: Trade, now) -> None:
+        if self._gov is not None:
+            self._gov = governor.on_close(self._gov, t.pnl, t.r_multiple, now, self._gov_cfg)
+            self._gov_refresh(now)
+
+    def _gov_save(self) -> None:
+        if self._gov is not None:
+            js = json.dumps(self._gov, sort_keys=True, default=str)
+            if js != self._gov_saved:
+                self.journal.set_state("risk_governor", self._gov)
+                self._gov_saved = js
 
     def _restore(self, day: dt.date) -> dict:
         """Pick up today's session after a restart: open positions, the trades already closed, the day's
