@@ -23,7 +23,7 @@ journal branch (`deploy/journal.sh restore`), on a copy.
 
 ## What was wrong
 1. **Dead VIX reads (5-9 Oct only).** Kotak served INDIAVIX as zeros then; 12-16 Oct has 0 dead reads and 689 live
-   ones, so the feed or the I-01 guard cured it from 12 Oct. Kotak served INDIAVIX as zeros. The `vix` factor voted a constant +1.0 ("India VIX 0.00 (-100.0%
+   ones, so the feed or the I-01 guard cured it from 12 Oct. The `vix` factor voted a constant +1.0 ("India VIX 0.00 (-100.0%
    today)") on 742 of the 743 `vix` reads in the 5-9 Oct journal. The old record had graded 217 of them as evidence.
    `learning._dead_read` now skips a `vix` read whose observation is 0.00 or below, in both `grade_factors` and
    `grade_ic`. The rebuilt `vix` row holds the one real read (14.16).
