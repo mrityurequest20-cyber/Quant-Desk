@@ -34,6 +34,8 @@ from .chainflow import ChainFlow, chain_step
 from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
 from .features import session_state
 from .feeds import IST, IntradayFeed, ReplayFeed, frozen_minutes, session_bounds
+from .halt import CLEAR_CMD, HALT_KEY, book_diff, inherited, leg_key, prune_accepted, summary
+from .halt import accepted as accepted_halt
 from .ivhist import iv_percentile
 from .orderflow import FootprintBuilder
 from .playbook import Playbook, TradePlan
@@ -133,6 +135,7 @@ class IntradayEngine:
         self.killed = False
         self.stale_feed_min = float(ic.get("stale_feed_min", 3))
         self.journal_fault: str | None = None
+        self.halt: dict | None = None                     # an inherited position awaits the owner (halt.py; H-02/H-03)
         # engine health: failures, slow steps, the reconciliation of broker vs journal, safe mode (all in the heartbeat)
         self.max_step_failures = int(ic.get("max_step_failures", 3))
         self.slow_step_sec = float(ic.get("slow_step_sec", 40))
@@ -241,6 +244,7 @@ class IntradayEngine:
         self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
         saved = self._restore(day)
         self._reconcile(day)
+        self._check_inherited(day)
         if saved.get("day_start_equity"):
             self.day_start_equity = float(saved["day_start_equity"])
             self.risk.reset(day, self.day_start_equity)
@@ -833,6 +837,8 @@ class IntradayEngine:
             return f"halted: safe mode ({self.health['safe_mode']})"
         if (self.health.get("reconcile") or {}).get("ok") is False:
             return f"halted: broker and journal disagree ({self.health['reconcile']['detail']})"
+        if self.halt:
+            return f"halted: inherited position awaits the owner ({summary(self.halt)}); clear with `{CLEAR_CMD}`"
         if self.journal_fault:
             return f"halted: {self.journal_fault}"
         if self.learner is not None and self.learner.fault:
@@ -1066,13 +1072,17 @@ class IntradayEngine:
     def _reconcile(self, day) -> None:
         """Broker positions must equal the legs of the journal's open trades. Anything else (a crash between a fill and
         its journal entry, a hand-edited file) halts new entries until it's explained: fail closed, say exactly what."""
-        want: dict[str, int] = {}
-        for t in self.open_trades:
-            for leg in t.legs:
-                want[leg.instrument.symbol] = want.get(leg.instrument.symbol, 0) + int(leg.qty)
-        have = {sym: int(p.get("qty", 0)) for sym, p in (self.broker.positions() or {}).items() if int(p.get("qty", 0))}
-        want = {k: v for k, v in want.items() if v}
+        want, have = book_diff(self.open_trades, self.broker.positions() or {})
         diff = {k: (want.get(k, 0), have.get(k, 0)) for k in set(want) | set(have) if want.get(k, 0) != have.get(k, 0)}
+        acc = accepted_halt(self.journal) if diff else {}
+        if ok := {k: v for k, v in diff.items() if leg_key(k, *v) in acc}:   # the owner's forced clear took these as is
+            rec = next(iter(acc.values()))                # one record: the last clear accepted them all
+            self.journal.event(session_bounds(day)[0], "WARN", "risk",
+                               f"reconciliation: {len(ok)} leg(s) left as the owner accepted them ({rec.get('by')}, "
+                               f"{str(rec.get('at'))[:16]}: {str(rec.get('reason'))[:120]}): "
+                               + "; ".join(f"{k}: journal {w:+d} vs broker {h:+d}" for k, (w, h) in sorted(ok.items())),
+                               {"accepted": sorted(ok)})
+            diff = {k: v for k, v in diff.items() if k not in ok}
         if not diff:
             self.health["reconcile"] = {"ok": True, "positions": len(have)}
             return
@@ -1081,6 +1091,38 @@ class IntradayEngine:
         self.journal.event(session_bounds(day)[0], "CRITICAL", "risk", f"reconciliation failed, entries halted: {detail}",
                            {"journal": want, "broker": have})
         self.say(f"  RECONCILIATION FAILED: {detail}")
+
+    def _check_inherited(self, day) -> None:
+        """H-02/H-03, owner decision "flag + manual": an orphan broker leg, a trade carried over from another day (a
+        stuck exit included) or an expired leg nobody settled is named in a CRITICAL event and halts new entries until
+        the owner clears it (`quantdesk intraday clear-halt`). The halt is kept in the journal's state, so a restart,
+        the hand-over or the next day doesn't forget it. Nothing is closed, adopted or settled here; exits of the
+        trades the journal holds for today run as before. A clean start (books agree, nothing carried) does nothing."""
+        t0 = session_bounds(day)[0]
+        items = inherited(self.journal, self.broker.positions() or {}, day, self.open_trades, first_seen=t0)
+        if acc := accepted_halt(self.journal):
+            prune_accepted(self.journal, {i["key"] for i in items})
+            items = [i for i in items if i["key"] not in acc]
+        prev = self.journal.get_state(HALT_KEY)
+        if not items and not prev:
+            self.halt = None
+            return
+        prev = prev or {"raised_at": str(t0), "items": []}
+        cur = {i["key"]: i for i in items}
+        known = [cur.get(i["key"], i) for i in prev["items"]]          # as it stands today, or as it was last seen
+        fresh = [i for i in items if i["key"] not in {k["key"] for k in known}]
+        again = known if prev.get("announced") != str(day) else []    # once a day while the halt stands
+        for i in again:
+            gone = "" if i["key"] in cur else " (no longer present: the owner can clear the halt)"
+            self.journal.event(t0, "CRITICAL", "risk", f"entries still halted since {str(prev['raised_at'])[:16]}, "
+                               f"awaiting `{CLEAR_CMD}`: {i['detail']}{gone}", i)
+        for i in fresh:
+            self.journal.event(t0, "CRITICAL", "risk", f"inherited position, entries halted until the owner clears it "
+                               f"(`{CLEAR_CMD}`): {i['detail']}", i)
+        self.halt = {**prev, "items": known + fresh, "announced": str(day)}
+        self.journal.set_state(HALT_KEY, self.halt)
+        for i in again + fresh:
+            self.say(f"  ENTRIES HALTED: {i['detail']}")
 
     def enter_safe_mode(self, now, reason: str) -> None:
         """The engine keeps failing: stop new entries for the session and square off what's open (each exit on its
@@ -1473,6 +1515,9 @@ class IntradayEngine:
 
     # ---- remote control (the app writes commands; the engine executes them) ----------------------------------
     def _commands(self, now) -> None:
+        if self.halt and not self.journal.get_state(HALT_KEY):   # the owner cleared it (clear-halt) mid-session
+            self.halt = None
+            self.say(f"  {now:%H:%M} entry halt cleared by the owner")
         cmds = self.journal.get_state("intraday_cmds") or []
         done = set(self.journal.get_state("intraday_cmds_done") or [])
         todo = [c for c in cmds if c.get("id") not in done]
@@ -1542,7 +1587,8 @@ class IntradayEngine:
             "autolearn": self.learner.status() if self.learner is not None else None,
             "halts": {"kill_switch": self.killed, "journal": self.journal_fault, "daily_loss": self.risk.halted,
                       "safe_mode": self.health.get("safe_mode"),
-                      "reconcile": (self.health.get("reconcile") or {}).get("ok") is False},
+                      "reconcile": (self.health.get("reconcile") or {}).get("ok") is False,
+                      **({"inherited": summary(self.halt)} if self.halt else {})},
             "health": dict(self.health)})
 
     def _claude_line(self) -> str | None:
@@ -1616,7 +1662,8 @@ class IntradayEngine:
         if st.get("day") != str(day):
             if st.get("trades"):
                 self.journal.event(pd.Timestamp.now(tz=IST), "WARN", "session",
-                                   f"{len(st['trades'])} position(s) from {st.get('day')} were never squared off; ignored")
+                                   f"{len(st['trades'])} position(s) from {st.get('day')} were never squared off; not "
+                                   f"restored, entries halted for the owner")
             return {}
         self.open_trades = [trade_from_dict(d) for d in st.get("trades") or []]
         self.closed = [trade_from_dict(d) for d in st.get("closed") or []]

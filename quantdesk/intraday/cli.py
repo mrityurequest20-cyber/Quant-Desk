@@ -7,6 +7,7 @@
   trades    intraday trades with setup, structure, P&L, R, grade
   review    the written session review(s)
   stats     performance across sessions: by setup, structure, day type, time of day, exit
+  clear-halt  lift the entry halt on an inherited position, on the record (--reason; --force to accept it as is)
 """
 from __future__ import annotations
 
@@ -305,6 +306,25 @@ def cmd_restate_trade(cfg, a):
         sys.exit(f"this rewrites trade {a.id}'s exit {exits} and moves paper cash by the difference; add --yes to do it")
     r = restate_trade(cfg, paths(cfg, a.account or "live")["journal"].parent, a.id, exits, a.reason)
     print(f"trade {r['trade']}: P&L ₹{r['old_pnl']:+,.2f} → ₹{r['new_pnl']:+,.2f} (cash {r['delta']:+,.2f})")
+
+
+def cmd_clear_halt(cfg, a):
+    """The owner's one explicit action that lifts an inherited-position halt (halt.py: H-02/H-03), on the record."""
+    import getpass
+
+    from .feeds import IST
+    from .halt import clear
+    p = paths(cfg, a.account or "live")
+    j = Journal(p["journal"])
+    try:
+        positions = IntradayBroker(cfg, state_path=p["broker"]).positions() if p["broker"].exists() else {}
+        by = a.by or os.environ.get("GITHUB_ACTOR") or getpass.getuser()
+        r = clear(j, positions, pd.Timestamp.now(tz=IST).date(), a.reason, by, force=a.force)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    finally:
+        j.close()
+    print(r["message"], flush=True)
 
 
 def cmd_command(cfg, a):
@@ -740,6 +760,14 @@ def register(sub):
     x.set_defaults(fn=cmd_doctor)
     x = ss.add_parser("kotak-check", help="what the Kotak Neo consumer key can see (no login, no orders)")
     x.set_defaults(fn=cmd_kotak_check)
+    x = ss.add_parser("clear-halt", help="lift the entry halt on an inherited position (orphan, carried or expired "
+                      "leg) once it is resolved; nothing is closed or settled")
+    x.add_argument("--reason", required=True, help="why it is safe to trade again (on the record)")
+    x.add_argument("--force", action="store_true",
+                   help="clear although the mismatch still exists: it is accepted as it is now, any change halts again")
+    x.add_argument("--by", help="who clears it (default: $GITHUB_ACTOR or the login name)")
+    x.add_argument("--account", help="live (default)")
+    x.set_defaults(fn=cmd_clear_halt)
     x = ss.add_parser("command", help="pause / resume / flatten / close a position on the running engine")
     x.add_argument("cmd", choices=["pause", "resume", "flatten", "close"])
     x.add_argument("id", nargs="?", help="trade id (for close)")
