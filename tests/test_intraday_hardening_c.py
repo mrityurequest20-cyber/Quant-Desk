@@ -2,6 +2,7 @@
 a prior-day open position has an explicit owner-only resolution, and the intraday desk's cross-day drawdown stop is
 opt-in. Each test was written to fail on the code before the fix."""
 import datetime as dt
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -9,12 +10,13 @@ import pytest
 from quantdesk.config import DEFAULT_CONFIG, Config
 from quantdesk.core.calendar import TradingCalendar
 from quantdesk.intraday.analyst import MarketView
-from quantdesk.intraday.engine import IntradayEngine
+from quantdesk.intraday.engine import IntradayEngine, run_step
 from quantdesk.intraday.feeds import ReplayFeed
 from quantdesk.intraday.playbook import PlanLeg, TradePlan
 from quantdesk.intraday.sim import IntradayBroker
 from quantdesk.intraday.synthetic import simulate_sessions
 from quantdesk.journal.journal import Journal
+from test_trading_path_b import Stub, desk, open_trade, run_to, sessions  # noqa: F401  (sessions: the fixture)
 
 IST = "Asia/Kolkata"
 DAY = dt.date(2026, 9, 29)
@@ -110,3 +112,137 @@ def test_the_first_leg_rejected_books_nothing(cfg):
     msg = eng._open(_spread(dt.date(2026, 10, 6)), 1, [], _view(now), {}, now)
     assert "nothing opened" in msg and not eng.closed and not eng.open_trades
     assert eng.broker.cash() == START and j.db.execute("SELECT COUNT(*) FROM fills").fetchone()[0] == 0
+
+
+# ---- P2-6: the configured lot against the exchange's (Kotak mktLot) ----------------------------------------------------
+class LotStub(Stub):
+    """A 'real' chain reporting `lot` as the exchange's (None: unknown, as when Kotak sends no mktLot)."""
+    def __init__(self, eng, lot):
+        super().__init__(eng)
+        self.lot = lot
+
+    def chain(self, u, expiry, spot=None, ts=None):
+        ch = super().chain(u, expiry, spot=spot, ts=ts)
+        ch.attrs["lot"] = self.lot if u == "NIFTY" else self.eng.lot(u)          # only NIFTY disagrees
+        return ch
+
+
+CALM = SimpleNamespace(vetoes=[])
+
+
+def _lot_desk(cfg, sessions, lot):
+    eng, feed = desk(cfg, sessions, chains=lambda e: LotStub(e, lot))
+    eng.paused = False
+    return eng, feed
+
+
+def _why(eng, feed):
+    return eng._blocked("NIFTY", CALM, feed.now())
+
+
+def test_a_lot_the_exchange_revised_blocks_new_entries_with_one_event_naming_both(cfg, sessions):
+    eng, feed = _lot_desk(cfg, sessions, 70)                                  # config says NIFTY 65
+    assert eng.lot("NIFTY") == 65
+    why = _why(eng, feed)
+    assert why and why.startswith("halted: NIFTY lot size mismatch") and "65" in why and "70" in why
+    assert eng.lot("NIFTY") == 65                                             # never adopted silently
+    run_to(eng, feed, 5)                                                      # five more refreshes: still one event
+    ev = eng.journal.df("SELECT level, category, message FROM events WHERE message LIKE 'NIFTY lot size mismatch%'")
+    assert len(ev) == 1 and ev.level[0] == "ERROR" and ev.category[0] == "data"
+    assert "65" in ev.message[0] and "70" in ev.message[0]
+    assert "lot size" not in str(eng._blocked("BANKNIFTY", CALM, feed.now()))     # only the index that disagrees
+
+
+def test_a_lot_mismatch_leaves_an_open_trade_managed_and_exited(cfg, sessions):
+    eng, feed = _lot_desk(cfg, sessions, 65)
+    t, _ = open_trade(eng, feed)
+    eng.chains.lot = 70                                                       # NSE revises the lot mid-session
+    t.stop = float(eng.chain_df["NIFTY"].attrs["spot"]) + 500                 # and the trade's invalidation is through
+    run_to(eng, feed, 1, run_step)
+    assert "lot size mismatch" in _why(eng, feed)
+    assert not eng.open_trades and [c.exit_reason for c in eng.closed] == ["invalidation"]
+
+
+def test_a_matching_or_unknown_lot_changes_nothing(cfg, sessions):
+    for lot in (65, None, 0, float("nan")):
+        eng, feed = _lot_desk(cfg, sessions, lot)
+        assert "lot size" not in str(_why(eng, feed)) and not eng.lot_mismatch
+        assert eng.journal.df("SELECT * FROM events WHERE message LIKE '%lot size%'").empty
+    eng, feed = desk(cfg, sessions)                                           # the model chain carries no exchange lot
+    assert "lot size" not in str(_why(eng, feed)) and not eng.lot_mismatch
+
+
+def test_the_lot_veto_lifts_when_the_exchange_and_config_agree_again(cfg, sessions):
+    eng, feed = _lot_desk(cfg, sessions, 70)
+    assert "lot size mismatch" in _why(eng, feed)
+    eng.chains.lot = 65
+    run_to(eng, feed, 1)
+    assert "lot size" not in str(_why(eng, feed))
+
+
+# ---- refresh gates: a step that starts a few hundred ms early must not skip a whole cycle -----------------------------
+def test_refresh_due_forgives_jitter_but_not_a_half_interval():
+    from quantdesk.intraday.feeds import REFRESH_JITTER, refresh_due
+    t0 = ts("2026-09-29 11:00:00")
+    for minutes in (1, 4, 15):
+        iv = pd.Timedelta(minutes=minutes)
+        assert refresh_due(t0 + iv, t0, minutes) and refresh_due(t0 + iv - pd.Timedelta(seconds=0.5), t0, minutes)
+        assert not refresh_due(t0 + iv / 2, t0, minutes)
+        assert not refresh_due(t0 + iv - REFRESH_JITTER - pd.Timedelta(seconds=0.5), t0, minutes)   # never sooner than the tolerance
+    assert refresh_due(t0, None, 1)                                                                 # never refreshed: due
+    assert not refresh_due(t0 + pd.Timedelta(seconds=28), t0, 0.5)                                  # a short interval: 5% (1.5 s), not 2 s
+
+
+class CountingStub(Stub):
+    def __init__(self, eng):
+        super().__init__(eng)
+        self.calls = 0
+
+    def chain(self, u, expiry, spot=None, ts=None):
+        self.calls += 1
+        return super().chain(u, expiry, spot=spot, ts=ts)
+
+
+def test_a_chain_refresh_due_now_is_not_skipped_by_jitter(cfg, sessions):
+    eng, feed = desk(cfg, sessions, chains=lambda e: CountingStub(e))
+    iv = pd.Timedelta(minutes=eng.refresh_min)
+    last = eng.chain_at["NIFTY"]
+    calls = eng.chains.calls
+    eng._refresh_chain("NIFTY", last + iv / 2)                                 # half the interval: no
+    eng._refresh_chain("NIFTY", last + iv - pd.Timedelta(seconds=5))           # more than the tolerance early: no
+    assert eng.chains.calls == calls and eng.chain_at["NIFTY"] == last
+    due = last + iv - pd.Timedelta(seconds=0.5)
+    eng._refresh_chain("NIFTY", due)                                           # 0.5 s early: yes
+    assert eng.chains.calls == calls + 1 and eng.chain_at["NIFTY"] == due
+
+
+def test_a_failed_chain_retry_and_the_pre_open_and_news_gates_forgive_jitter_too(cfg, sessions):
+    from quantdesk.intraday.news import NewsDesk
+    eng, feed = desk(cfg, sessions, chains=lambda e: CountingStub(e))
+    eng.chain_at.pop("NIFTY")
+    t = feed.now()
+    eng.chain_failed_at["NIFTY"] = t
+    calls = eng.chains.calls
+    iv = pd.Timedelta(minutes=eng.refresh_min)
+    eng._refresh_chain("NIFTY", t + iv / 2)
+    assert eng.chains.calls == calls
+    eng._refresh_chain("NIFTY", t + iv - pd.Timedelta(seconds=0.5))
+    assert eng.chains.calls == calls + 1
+
+    got = []
+    eng.gift_source = lambda: got.append(1) or {}
+    eng._gift_at = t
+    for secs, n in ((120, 0), (239.5, 1)):                                     # the pre-open print: every 4 minutes
+        try:
+            eng.preopen(t + pd.Timedelta(seconds=secs))
+        except Exception:
+            pass                                                               # what it does with the print is not under test
+        assert len(got) == n
+
+    fetched = []
+    news = NewsDesk(cfg, fetch=lambda url: fetched.append(url) or "", sources=[{"name": "x", "url": "u"}])
+    news.last_fetch = t
+    news.refresh(t + pd.Timedelta(minutes=2))
+    assert not fetched
+    news.refresh(t + pd.Timedelta(minutes=news.refresh_min) - pd.Timedelta(seconds=0.5))
+    assert len(fetched) == 1

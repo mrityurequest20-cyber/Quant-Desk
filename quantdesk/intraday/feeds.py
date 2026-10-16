@@ -25,6 +25,17 @@ log = logging.getLogger(__name__)
 IST = "Asia/Kolkata"
 OPEN, CLOSE = dt.time(9, 15), dt.time(15, 30)
 BAR = pd.Timedelta(minutes=1)
+REFRESH_JITTER = pd.Timedelta(seconds=2)          # a step that starts this much early (loop/cron jitter) still counts as on time
+
+
+def refresh_due(now, last, minutes: float) -> bool:
+    """Whether a refresh every `minutes` is due. A strict `now - last >= interval` skips a whole cycle when a step starts a
+    few hundred ms early, doubling the effective interval; so it is due once within REFRESH_JITTER (at most 5% of the
+    interval) of it. Never due sooner than that, and never used for exits or the square-off."""
+    if last is None:
+        return True
+    interval = pd.Timedelta(minutes=minutes)
+    return now - last >= interval - min(REFRESH_JITTER, interval * 0.05)
 
 
 def ist(ts) -> pd.Timestamp:

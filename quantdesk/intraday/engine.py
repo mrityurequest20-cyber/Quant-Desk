@@ -35,7 +35,7 @@ from .analyst import Analyst, MarketView
 from .chainflow import ChainFlow, chain_step
 from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
 from .features import session_state
-from .feeds import IST, IntradayFeed, ReplayFeed, frozen_minutes, session_bounds
+from .feeds import IST, IntradayFeed, ReplayFeed, frozen_minutes, refresh_due, session_bounds
 from .halt import CLEAR_CMD, HALT_KEY, book_diff, inherited, leg_key, prune_accepted, summary
 from .halt import accepted as accepted_halt
 from .ivhist import iv_percentile
@@ -161,7 +161,10 @@ class IntradayEngine:
         self.chain_fail: dict[str, int] = {}
         self.chain_tried: dict[str, pd.Timestamp] = {}
         self.chain_failed_at: dict[str, pd.Timestamp] = {}        # a refresh that raised: retried after `refresh_min`, not every minute
-        self._exit_tried: dict[str, pd.Timestamp] = {}            # trade id -> its last stuck-exit retry (`_retry_exit`)
+        self._exit_tried: dict[str, pd.Timestamp] = {}            # trade id -> its last exit attempt (`_close`, `_retry_exit`)
+        self.fallback_since: dict[str, pd.Timestamp] = {}         # index -> when its real chain went down (said once per outage)
+        self.lot_mismatch: dict[str, tuple[int, int]] = {}        # P2-6: underlying -> (configured lot, exchange mktLot) while they differ
+        self._lot_said: dict[str, tuple[int, int]] = {}           # the pair last reported (one event per pair per session)
         # P2-9 (owner decision 16 Oct: 10%): a drawdown from the account's high-water mark that halts new entries across
         # days until the owner clears it (`quantdesk intraday clear-drawdown-halt`); exits are never held by it.
         self.dd_halt_frac = float(cfg.get("intraday.risk.cross_day_drawdown_halt", 0) or 0)
@@ -234,11 +237,13 @@ class IntradayEngine:
     # ---- session lifecycle ------------------------------------------------------------------------------
     def start_session(self, day: dt.date) -> None:
         self.day = day
+        self._lot_said.clear()                                # a lot mismatch is reported once per session
         for sym in self.underlyings + [self.vix]:
             h = self.feed.history(sym, self.history_days)
             self.bars[sym] = h.tail(375 * self.history_days) if h is not None else \
                 pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
             self.last_ts[sym] = h.index[-1] if h is not None and len(h) else None
+            self._backfill_recorder(sym, h, day)
         self.expiry = {u: self.pick_expiry(u, day) for u in self.underlyings}
         self._learn(day, catch_up=True)
         self._load_heavyweights()
@@ -291,6 +296,18 @@ class IntradayEngine:
             self.journal.event(session_bounds(day)[0], "ERROR", "learning",
                                f"learning memory unreadable ({self.memory.corrupt}): the desk trades on neutral tilts and "
                                f"saves nothing over the file; restore memory.json from the journal branch's evidence")
+
+    def _backfill_recorder(self, sym: str, hist, day: dt.date) -> None:
+        """P2-10: a runner that starts mid-day (the afternoon one, a restart) gets the minutes it missed in its history,
+        so the recorder (which keeps only what poll() returns) had a hole there; fill today's missing minutes. Data only."""
+        if self.recorder is None or hist is None or not len(hist):
+            return
+        try:
+            n = self.recorder.fill_bars(sym, hist[hist.index.date == day])
+            if n:
+                self.journal.event(pd.Timestamp.now(tz=IST), "INFO", "session", f"{sym}: {n} bar(s) from history added to today's record")
+        except Exception as exc:                                  # a recorder fault must never stop the session starting
+            log.warning("recorder backfill %s: %s", sym, exc)
 
     def step(self) -> bool:
         now = self.feed.now()
@@ -425,7 +442,8 @@ class IntradayEngine:
     def _retry_exit(self, t, now) -> str:
         """Finish an exit already under way, once per moment: `_manage`, the wall clock and `tick` all reach for it, and a
         stuck 2-leg spread would otherwise be sent to the broker twice (each retry is already guarded by the broker-held
-        quantity, so this saves traffic, not safety). Cadence is unchanged: every step, every tick."""
+        quantity, so this saves traffic, not safety). `_close` stamps every attempt, so a fresh exit that `_manage` or the
+        wall clock just sent and left stuck is not sent again in the same moment. Cadence is unchanged: every step, every tick."""
         last = self._exit_tried.get(t.id)
         if last is not None and abs((now - last).total_seconds()) < 2:
             return ""
@@ -459,16 +477,16 @@ class IntradayEngine:
     # ---- data -------------------------------------------------------------------------------------------
     def _refresh_chain(self, u: str, now) -> None:
         at, failed = self.chain_at.get(u), self.chain_failed_at.get(u)
-        if at is not None and (now - at) < pd.Timedelta(minutes=self.refresh_min):
+        if not refresh_due(now, at, self.refresh_min):
             return
-        if failed is not None and (now - failed) < pd.Timedelta(minutes=self.refresh_min):
+        if not refresh_due(now, failed, self.refresh_min):
             return                                            # the last refresh raised: a retry throttle, not a freshness claim
         try:
             ch = None
             fails = self.chain_fail.get(u, 0)
             tried = self.chain_tried.get(u)
             # after 3 straight failures, only retry the real chain every 15 minutes (each try can block ~20s)
-            if self.chains is not self.model_chain and (fails < 3 or tried is None or now - tried >= pd.Timedelta(minutes=15)):
+            if self.chains is not self.model_chain and (fails < 3 or refresh_due(now, tried, 15)):
                 self.chain_tried[u] = now
                 try:
                     ch = self.chains.chain(u, self.expiry[u], spot=self.spot(u), ts=now)
@@ -489,6 +507,7 @@ class IntradayEngine:
                 ch.attrs["spot"] = self.spot(u)
             ch = fill_iv(ch, self.pricer)
             self.chain_df[u] = ch
+            self._check_lot(u, ch, now)
             if self.chains is self.model_chain or ch.attrs.get("source") != "model":
                 # P2-4: a model chain standing in for a failed real one (VIX x beta IV, not this market's) must not
                 # recalibrate the marks of open positions; the replay's own model chain is the market and still does.
@@ -502,11 +521,44 @@ class IntradayEngine:
             self.chain_an[u] = an
             self.chain_at[u] = self.chain_ok_at[u] = now          # only a refresh that worked counts (P1-4)
             self.chain_failed_at.pop(u, None)
+            self._say_fallback(u, ch, now)
             if self.recorder and ch.attrs.get("source") != "model":
                 self.recorder.record_chain(ch)
         except Exception as exc:                              # chain_at/chain_ok_at stay: the data is as old as its last success
             self.chain_failed_at[u] = now
             self.journal.event(now, "WARN", "chain", f"{u} chain refresh failed: {exc}")
+
+    def _say_fallback(self, u: str, ch: pd.DataFrame, now) -> None:
+        """F-01 on the record: while a configured real chain (Kotak) is down and the data is the fallback's (NSE or the
+        model), entries are skipped on purpose. Said once per outage, not every minute; the next outage says it again."""
+        down = self._real_book() and ch.attrs.get("source") != self.chains.name
+        if not down:
+            self.fallback_since.pop(u, None)
+            return
+        if u not in self.fallback_since:
+            self.fallback_since[u] = now
+            self.journal.event(now, "WARN", "execution", f"{u}: no new entries while the {self.chains.name} chain is down; "
+                               f"entries are skipped on purpose and the data is from the {ch.attrs.get('source')} fallback "
+                               f"(exits and marks carry on)", {"source": ch.attrs.get("source")})
+
+    def _check_lot(self, u: str, ch: pd.DataFrame, now) -> None:
+        """P2-6: the configured lot against the exchange's (Kotak's `mktLot`). Orders are sized in the configured multiple, so
+        a lot NSE has revised would put every order in the wrong size: no new entry on `u` until the owner updates the config
+        (never adopted silently; exits are untouched). An unknown lot (no `mktLot`, a model or NSE chain) vetoes nothing."""
+        raw = ch.attrs.get("lot") if ch.attrs.get("source") != "model" else None
+        try:
+            real = int(raw) if raw is not None and float(raw) > 0 else 0
+        except (TypeError, ValueError):
+            real = 0
+        cfg_lot = self.lot(u)
+        if not real or real == cfg_lot:
+            self.lot_mismatch.pop(u, None)
+            return
+        pair = self.lot_mismatch[u] = (cfg_lot, real)
+        if self._lot_said.get(u) != pair:
+            self._lot_said[u] = pair
+            self.journal.event(now, "ERROR", "data", f"{u} lot size mismatch: config says {cfg_lot} but the exchange (Kotak mktLot) "
+                               f"says {real}; no new entries on {u} until instruments.{u}.lot_size is corrected", {"config": cfg_lot, "exchange": real})
 
     def _refresh_news(self, now) -> None:
         if self.news is None:
@@ -950,6 +1002,9 @@ class IntradayEngine:
         if self.chains is not self.model_chain and self.chain_df[u].attrs.get("source") == "model":
             # F-01: the real chain failed and the model stands in; its quotes and OI are invented, not tradable
             return f"standing aside: {u} {self.chains.name} option chain unavailable (model prices are not tradable)"
+        if u in self.lot_mismatch:
+            cfg_lot, real = self.lot_mismatch[u]
+            return f"halted: {u} lot size mismatch (config {cfg_lot}, exchange {real}); the owner corrects instruments.{u}.lot_size"
         age = now - (self.chain_ok_at.get(u) or self.chain_df[u].attrs.get("ts", now))   # the data's age, not the last try's
         if self.chain_df[u].attrs.get("source") != "model" and age > pd.Timedelta(minutes=self.stale_min):
             return f"standing aside: option chain {age.seconds // 60} min old"
@@ -1073,7 +1128,7 @@ class IntradayEngine:
     def preopen(self, now) -> None:
         """Before the open, every few minutes: GIFT Nifty (NSE IX's NIFTY future, trading since 06:30 IST), the
         overnight cue in one number. Recorded with the session; context for the read, not evidence (untested)."""
-        if self.gift_source is None or (self._gift_at is not None and now - self._gift_at < pd.Timedelta(minutes=4)):
+        if self.gift_source is None or not refresh_due(now, self._gift_at, 4):
             return
         self._gift_at = now
         from ..data.nse import gift_implied_gap
@@ -1616,6 +1671,7 @@ class IntradayEngine:
         return [m for m in out if m]                      # a silent retry of a stuck exit says nothing
 
     def _close(self, t: Trade, now, reason: str, note: str) -> str:
+        self._exit_tried[t.id] = now                      # every attempt counts for `_retry_exit`'s once-per-moment rule
         S = self.spot(t.symbol)
         live = self._live([l.instrument for l in t.legs], now)
         t.meta["exit_quotes"] = f"live {self.chains.name} book" if len(live) == len(t.legs) else "marked"
@@ -2139,6 +2195,8 @@ def run_live(engine: IntradayEngine, stop_at: dt.time | None = None, handover: b
             run_step(engine)
             n = engine.feed.now()
             nxt = n.floor("min") + pd.Timedelta(seconds=64)            # the next minute's step, 4 s after it closes
+            if handover and end < close_ts and nxt >= end + pd.Timedelta(seconds=30):
+                break                                         # P2-10: that step is outside the window; don't idle a minute to find out
             while (left := (nxt - engine.feed.now()).total_seconds()) > 0:
                 ticking = getattr(engine.feed, "has_ltp", False)
                 time.sleep(max(0.5, min(engine.tick_sec, left)) if ticking else left)

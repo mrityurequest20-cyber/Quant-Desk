@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from . import nlp
+from .feeds import refresh_due
 
 log = logging.getLogger(__name__)
 IST = "Asia/Kolkata"
@@ -339,8 +340,7 @@ class NewsDesk:
 
     def refresh(self, now: pd.Timestamp, force: bool = False) -> list[NewsItem]:
         """Fetch every source (at most every `refresh_min`); returns the stories that are new."""
-        if not self.enabled or (not force and self.last_fetch is not None
-                                and now - self.last_fetch < pd.Timedelta(minutes=self.refresh_min)):
+        if not self.enabled or (not force and not refresh_due(now, self.last_fetch, self.refresh_min)):
             return []
         self.last_fetch = now
         new: list[NewsItem] = []

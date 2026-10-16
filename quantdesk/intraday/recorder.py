@@ -13,7 +13,16 @@ from pathlib import Path
 import pandas as pd
 
 from .chains import load_chain, save_chain
-from .feeds import normalise_bars
+from .feeds import IST, normalise_bars
+
+
+def _read_raw(path: Path) -> pd.DataFrame:
+    """A day's recorded bars as they are on disk: raw evidence, so NaN/zero rows stay (the readers normalise). Only the
+    index is aligned to IST in ns, so it concatenates with live bars."""
+    old = pd.read_csv(path, index_col=0, parse_dates=True)
+    idx = pd.DatetimeIndex(old.index)
+    old.index = (idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)).as_unit("ns")
+    return old
 
 
 class SessionRecorder:
@@ -30,10 +39,30 @@ class SessionRecorder:
             path = self.day_dir(day) / f"{symbol}_1m.csv"
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
-                old = pd.read_csv(path, index_col=0, parse_dates=True)
-                part = pd.concat([normalise_bars(old), part])
+                part = pd.concat([_read_raw(path), part])
             part = part[~part.index.duplicated(keep="last")].sort_index()
             part.to_csv(path, index_label="ts")
+
+    def fill_bars(self, symbol: str, df: pd.DataFrame) -> int:
+        """Add only the minutes the day's file lacks (a runner that started mid-day finds the bars it missed in its
+        history, which poll() never returns again); every bar already recorded stays as it was. Returns how many."""
+        if df is None or df.empty:
+            return 0
+        added = 0
+        for day, part in df.groupby(df.index.date):
+            path = self.day_dir(day) / f"{symbol}_1m.csv"
+            if path.exists():
+                old = _read_raw(path)
+                part = part[~part.index.isin(old.index)]
+                if part.empty:
+                    continue
+                merged = pd.concat([old, part]).sort_index()
+            else:
+                merged = part.sort_index()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            merged.to_csv(path, index_label="ts")
+            added += len(part)
+        return added
 
     def record_chain(self, chain: pd.DataFrame) -> None:
         ts = pd.Timestamp(chain.attrs["ts"])
