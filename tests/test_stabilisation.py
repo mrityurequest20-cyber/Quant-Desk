@@ -252,3 +252,20 @@ def test_a_drawdown_inside_the_limit_does_not_halt():
                net_delta=0.0, vega=0.0, open_risk=0.0, regime="")
     eng, _ = _dd_engine(j, 485255)                         # today's real figures: -4.9% from the 15 Oct peak
     assert not eng.dd_halt and eng.peak_equity == 510418.0
+
+
+def test_the_high_water_mark_moves_only_on_realised_equity():
+    """A mark taken with a position open (a spurious mid on an expiry-day option, say) must not lift the peak for good."""
+    j = Journal()
+    j.set_state("intraday_account", {"capital": 500000.0, "since": "2026-09-01"})
+    for ts, eq, n in [("2026-09-25 10:50:00+05:30", 510418.0, 1), ("2026-09-25 11:10:00+05:30", 506273.0, 0)]:
+        j.snapshot(ts, equity=eq, cash=eq, drawdown=0.0, open_trades=n, gross=0.0, net_delta=0.0, vega=0.0,
+                   open_risk=0.0, regime="")
+    eng, _ = _dd_engine(j, 485255)
+    assert eng.peak_equity == 506273.0                     # the realised peak, not the 510,418 marked with a trade open
+    eng.open_trades = [SimpleNamespace(initial_risk=0.0)]
+    eng._drawdown_check(eng.feed.now(), 530000.0)          # a big mark while a position is open: no new peak
+    assert eng.peak_equity == 506273.0
+    eng.open_trades = []
+    eng._drawdown_check(eng.feed.now(), 512000.0)          # flat again: a realised high moves it
+    assert eng.peak_equity == 512000.0

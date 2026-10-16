@@ -1159,6 +1159,7 @@ class IntradayEngine:
             self.journal.event(at, "ERROR", "reconcile", f"paper cash ₹{cash:,.2f} differs from capital less fills "
                                f"₹{expect:,.2f} by ₹{gap:+,.2f}: P&L or cash was booked without a fill",
                                {"cash": cash, "expected": expect, "gap": gap})
+
     def _check_inherited(self, day) -> None:
         """H-02/H-03, owner decision "flag + manual": an orphan broker leg, a trade carried over from another day (a
         stuck exit included) or an expired leg nobody settled is named in a CRITICAL event and halts new entries until
@@ -1756,7 +1757,9 @@ class IntradayEngine:
 
     def _drawdown_check(self, now, equity: float) -> None:
         """Track the account's high-water mark (journal state, so it spans days and runners) and halt new entries once
-        equity is `cross_day_drawdown_halt` below it. Re-reads the halt while set, so an owner's clear applies at once."""
+        equity is `cross_day_drawdown_halt` below it. The mark moves only on realised equity (no position open), so a
+        spurious mark on an open option can't lift it for good; the drawdown is measured on marked equity (the
+        conservative side). Re-reads the halt while set, so an owner's clear applies at once."""
         if not self.dd_halt_frac or not math.isfinite(equity) or equity <= 0:
             return
         try:
@@ -1767,14 +1770,16 @@ class IntradayEngine:
                     peak = equity
                     self.journal.set_state(DD_PEAK_KEY, {"peak": peak, "at": str(now), "restarted": st.get("at")})
                 elif not peak:                                  # first run: the account's own record sets the mark
-                    row = self.journal.df("SELECT MAX(equity) AS m FROM equity")
+                    row = self.journal.df("SELECT MAX(equity) AS m FROM equity WHERE COALESCE(open_trades, 0) = 0")
                     m = row["m"].iloc[0] if len(row) else None
                     cap = float((self.journal.get_state("intraday_account") or {}).get("capital") or 0)
-                    peak = max(float(m) if m is not None and m == m else 0.0, cap, equity)
+                    peak = max(float(m) if m is not None and m == m else 0.0, cap,
+                               equity if not self.open_trades else 0.0)
                     self.journal.set_state(DD_PEAK_KEY, {"peak": peak, "at": str(now)})
                 self.peak_equity = peak
-                self.dd_halt = self.journal.get_state(DD_KEY)
-            if equity > self.peak_equity:
+                if not (self.dd_halt or {}).get("fault"):       # a fault halt holds for the session, whatever the state says
+                    self.dd_halt = self.journal.get_state(DD_KEY)
+            if equity > self.peak_equity and not self.open_trades:
                 self.peak_equity = equity
                 self.journal.set_state(DD_PEAK_KEY, {"peak": equity, "at": str(now)})
             dd = equity / self.peak_equity - 1

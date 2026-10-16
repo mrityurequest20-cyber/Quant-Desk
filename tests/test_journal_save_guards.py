@@ -151,3 +151,17 @@ def test_the_owner_can_resume_after_a_cancel(tmp_path):
 
 def test_the_gate_fails_closed_when_runs_cannot_be_read(tmp_path):
     assert _run_gate(tmp_path, [], {}, fail=True) == "go=false"
+
+
+def test_a_failed_look_at_the_remote_retries_instead_of_giving_up(desk):
+    """Push and ls-remote both failing on a blip used to read as 'branch moved' and abort the save at once."""
+    work, remote = desk
+    sh("deploy/journal.sh restore", work)
+    _journal(work / "runtime" / "intraday" / "journal.db", trades=1, thoughts=0)
+    script = (work / "deploy" / "push-dir.sh").read_text()
+    flaky = script.replace('if git push -q "${force[@]}"', 'if [ "$i" -gt 1 ] && git push -q "${force[@]}"').replace(
+        'git ls-remote origin "refs/heads/$branch"', 'false')
+    (work / "deploy" / "push-dir.sh").write_text(flaky.replace("sleep $((i * 5))", "true"))
+    before = _head(remote)
+    sh("deploy/journal.sh save 'close'", work)             # first try fails, the look fails, the retry lands
+    assert _head(remote) != before

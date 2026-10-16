@@ -48,9 +48,12 @@ for i in 1 2 3; do
     echo "push-dir: $branch ← $msg"
     exit 0
   fi
-  if [ -n "${PUSH_LEASE:-}" ] && [ "$(git ls-remote origin "refs/heads/$branch" | cut -f1)" != "$PUSH_LEASE" ]; then
-    echo "::error::push-dir: $branch moved since it was restored (another job saved it): refusing to overwrite its work" >&2
-    exit 1
+  if [ -n "${PUSH_LEASE:-}" ]; then          # only a branch that really moved stops the retries; a failed look retries
+    now=$(git ls-remote origin "refs/heads/$branch" 2>/dev/null | cut -f1 || true)
+    if [ -n "$now" ] && [ "$now" != "$PUSH_LEASE" ]; then
+      echo "::error::push-dir: $branch moved since it was restored (another job saved it): refusing to overwrite its work" >&2
+      exit 1
+    fi
   fi
   sleep $((i * 5))
 done
