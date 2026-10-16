@@ -142,6 +142,8 @@ class IntradayEngine:
         self.chain_ok_at: dict[str, pd.Timestamp] = {}            # ... and the age `_blocked` vetoes on (P1-4)
         self.chain_fail: dict[str, int] = {}
         self.chain_tried: dict[str, pd.Timestamp] = {}
+        self.chain_failed_at: dict[str, pd.Timestamp] = {}        # a refresh that raised: retried after `refresh_min`, not every minute
+        self._exit_tried: dict[str, pd.Timestamp] = {}            # trade id -> its last stuck-exit retry (`_retry_exit`)
         self.expiry: dict[str, dt.date] = {}
         self.open_trades: list[Trade] = []
         self.closed: list[Trade] = []
@@ -380,9 +382,19 @@ class IntradayEngine:
         open position is closed (P1-2: with polls returning nothing from 14:50 the trade sat open to the end of the day)."""
         for t in list(self.open_trades):
             if t.meta.get("exit_pending"):
-                self._close(t, now, *t.meta["exit_pending"])
+                self._retry_exit(t, now)
             elif now.time() >= self.risk.square_off:
                 self._close(t, now, "square_off", f"intraday square-off at {self.risk.square_off:%H:%M}")
+
+    def _retry_exit(self, t, now) -> str:
+        """Finish an exit already under way, once per moment: `_manage`, the wall clock and `tick` all reach for it, and a
+        stuck 2-leg spread would otherwise be sent to the broker twice (each retry is already guarded by the broker-held
+        quantity, so this saves traffic, not safety). Cadence is unchanged: every step, every tick."""
+        last = self._exit_tried.get(t.id)
+        if last is not None and abs((now - last).total_seconds()) < 2:
+            return ""
+        self._exit_tried[t.id] = now
+        return self._close(t, now, *t.meta["exit_pending"])
 
     def end_session(self, reason: str = "square_off", note: str = "end of session") -> str:
         now = self.feed.now()
@@ -409,9 +421,11 @@ class IntradayEngine:
 
     # ---- data -------------------------------------------------------------------------------------------
     def _refresh_chain(self, u: str, now) -> None:
-        at = self.chain_at.get(u)
+        at, failed = self.chain_at.get(u), self.chain_failed_at.get(u)
         if at is not None and (now - at) < pd.Timedelta(minutes=self.refresh_min):
             return
+        if failed is not None and (now - failed) < pd.Timedelta(minutes=self.refresh_min):
+            return                                            # the last refresh raised: a retry throttle, not a freshness claim
         try:
             ch = None
             fails = self.chain_fail.get(u, 0)
@@ -450,9 +464,11 @@ class IntradayEngine:
             an.update(self.chainflow.update(u, an, now, chain_step(ch)))
             self.chain_an[u] = an
             self.chain_at[u] = self.chain_ok_at[u] = now          # only a refresh that worked counts (P1-4)
+            self.chain_failed_at.pop(u, None)
             if self.recorder and ch.attrs.get("source") != "model":
                 self.recorder.record_chain(ch)
         except Exception as exc:                              # chain_at/chain_ok_at stay: the data is as old as its last success
+            self.chain_failed_at[u] = now
             self.journal.event(now, "WARN", "chain", f"{u} chain refresh failed: {exc}")
 
     def _refresh_news(self, now) -> None:
@@ -1387,7 +1403,7 @@ class IntradayEngine:
         S = view.spot
         for t in [x for x in self.open_trades if x.symbol == u]:
             if t.meta.get("exit_pending"):                # an exit already under way is finished, whatever the market does
-                out.append(self._close(t, now, *t.meta["exit_pending"]))
+                out.append(self._retry_exit(t, now))
                 continue
             marks = {l.instrument.symbol: self.marker.mid(l.instrument, S, now) for l in t.legs}
             t.update_excursions(marks)

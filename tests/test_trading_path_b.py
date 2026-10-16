@@ -79,15 +79,15 @@ class Stub(ChainSource):
         return ch
 
     def live_quotes(self, insts):
-        """A Kotak-like book: it quotes what the chain shows, two-sided strikes only (an empty book blocks entries)."""
+        """A two-sided book for every strike the chain has: hardening A refuses entries on a broker chain without one."""
         out = {}
         for i in insts:
             ch = self.eng.chain_df.get(i.underlying)
-            if ch is None or i.strike not in ch.index:
-                continue
-            b, a = float(ch.at[i.strike, f"{i.right.lower()}_bid"]), float(ch.at[i.strike, f"{i.right.lower()}_ask"])
-            if b > 0 and a >= b:
-                out[i.symbol] = (b, a)
+            side = i.right.lower()
+            if ch is not None and i.strike in ch.index:
+                bid, ask = float(ch.at[i.strike, f"{side}_bid"]), float(ch.at[i.strike, f"{side}_ask"])
+                if bid > 0 and ask > bid:
+                    out[i.symbol] = (bid, ask)
         return out
 
 
@@ -268,3 +268,28 @@ def test_the_model_chain_fallback_does_not_recalibrate_open_marks(cfg, sessions)
 def test_a_replay_on_the_model_chain_still_calibrates_its_marks(cfg, sessions):
     eng, feed = desk(cfg, sessions, minutes=2)
     assert eng.chains is eng.model_chain and eng.marker.iv                # the replay's model chain is the market
+
+
+# ---- the two follow-ups of the merge with hardening A ---------------------------------------------------------------
+def test_a_chain_refresh_that_raises_is_retried_after_refresh_min_not_every_minute(cfg, sessions, monkeypatch):
+    """After a good fetch whose analytics raise, chain_at stays (the data is old) but the fetch must not repeat every
+    minute: a persistent error would otherwise flood the journal and hit the source three times as often."""
+    eng, feed = desk(cfg, sessions, chains=lambda e: Stub(e))
+    eng.refresh_min = 3
+    fetches = []
+    real = eng.chains.chain
+    eng.chains.chain = lambda u, *a, **k: (fetches.append(feed.now()) if u == "NIFTY" else None, real(u, *a, **k))[1]
+    monkeypatch.setattr(E, "fill_iv", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad chain")))
+    run_to(eng, feed, 9)
+    assert len(fetches) == 3, fetches                           # 10:16, 10:19, 10:22: one try per refresh_min, not nine
+
+
+def test_a_stuck_exit_is_sent_once_per_step_not_twice(cfg, sessions):
+    """`_manage` and the wall clock both retried a pending exit in the same step: twice the broker traffic."""
+    eng, feed = desk(cfg, sessions)
+    t, _ = open_trade(eng, feed)
+    t.meta["exit_pending"] = ["premium_stop", "stuck"]
+    calls = []
+    eng._close = lambda tr, now, *a: calls.append(now) or ""
+    run_to(eng, feed, 1)
+    assert len(calls) == 1, calls
