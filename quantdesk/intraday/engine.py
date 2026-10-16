@@ -35,9 +35,9 @@ from .features import session_state
 from .feeds import IST, IntradayFeed, ReplayFeed, session_bounds
 from .ivhist import iv_percentile
 from .orderflow import FootprintBuilder
-from .playbook import Playbook, TradePlan
+from .playbook import Armed, Playbook, TradePlan
 from .quant import DirectionModel, EVEngine, VolForecaster, features_5m, load_research, session_sigma, to_5m
-from .risk import IntradayRisk
+from .risk import IntradayRisk, Refusal
 from .sim import IntradayBroker, QuoteMarker
 
 log = logging.getLogger(__name__)
@@ -717,36 +717,36 @@ class IntradayEngine:
         return plans
 
     def _blocked(self, u: str, view: MarketView, now) -> str | None:
-        """Why no new entry can be taken right now (None: one can)."""
+        """Why no new entry can be taken right now (None: one can), as a Refusal: text that names its gate."""
         if self.killed:
-            return f"halted: kill switch ({self.kill_file.name}) is set"
+            return Refusal("halted", f"halted: kill switch ({self.kill_file.name}) is set")
         if gap := self.cfg.holiday_gap(now):
-            return f"halted: {gap}"
+            return Refusal("halted", f"halted: {gap}")
         if self.health.get("safe_mode"):
-            return f"halted: safe mode ({self.health['safe_mode']})"
+            return Refusal("halted", f"halted: safe mode ({self.health['safe_mode']})")
         if (self.health.get("reconcile") or {}).get("ok") is False:
-            return f"halted: broker and journal disagree ({self.health['reconcile']['detail']})"
+            return Refusal("halted", f"halted: broker and journal disagree ({self.health['reconcile']['detail']})")
         if self.journal_fault:
-            return f"halted: {self.journal_fault}"
+            return Refusal("halted", f"halted: {self.journal_fault}")
         if self.learner is not None and self.learner.fault:
-            return f"halted: {self.learner.fault}"
+            return Refusal("halted", f"halted: {self.learner.fault}")
         if self.paused:
-            return "standing aside: new entries paused from the app"
+            return Refusal("paused", "standing aside: new entries paused from the app")
         last = self.last_ts.get(u)
         if last is not None and self.feed.realtime_age(now, last) > self.stale_feed_min:
-            return f"halted: {u} feed stale (last bar {last:%H:%M}, {self.feed.realtime_age(now, last):.0f} min ago)"
+            return Refusal("halted", f"halted: {u} feed stale (last bar {last:%H:%M}, {self.feed.realtime_age(now, last):.0f} min ago)")
         if view.vetoes:
-            return f"standing aside: {view.vetoes[0]}"
+            return Refusal("analyst_veto", f"standing aside: {view.vetoes[0]}")
         if u not in self.chain_df:
-            return "standing aside: no option chain"
+            return Refusal("chain", "standing aside: no option chain")
         if self.chains is not self.model_chain and self.chain_df[u].attrs.get("source") == "model":
             # F-01: the real chain failed and the model stands in; its quotes and OI are invented, not tradable
-            return f"standing aside: {u} {self.chains.name} option chain unavailable (model prices are not tradable)"
+            return Refusal("chain", f"standing aside: {u} {self.chains.name} option chain unavailable (model prices are not tradable)")
         age = now - self.chain_at.get(u, now)
         if self.chain_df[u].attrs.get("source") != "model" and age > pd.Timedelta(minutes=self.stale_min):
-            return f"standing aside: option chain {age.seconds // 60} min old"
+            return Refusal("chain", f"standing aside: option chain {age.seconds // 60} min old")
         gate = self.risk.gate(now, self.equity(now), self.open_trades, u)
-        return f"standing aside: {gate[0]}" if gate else None
+        return Refusal(getattr(gate[0], "gate", "risk"), f"standing aside: {gate[0]}") if gate else None
 
     def _maybe_enter(self, u: str, view: MarketView, s: dict, now) -> str:
         why = self._blocked(u, view, now)

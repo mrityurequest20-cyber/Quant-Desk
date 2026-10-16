@@ -13,6 +13,17 @@ def _t(s: str) -> dt.time:
     return dt.time(int(h), int(m))
 
 
+class Refusal(str):
+    """Why no entry can be taken, as text, carrying the stable slug of the gate that said so (the decision record's
+    `gate`, B-03). It is a plain str everywhere else."""
+    gate = "blocked"
+
+    def __new__(cls, gate: str, text: str):
+        s = super().__new__(cls, text)
+        s.gate = gate
+        return s
+
+
 class IntradayRisk:
     def __init__(self, cfg):
         r = cfg.get("intraday.risk", {}) or {}
@@ -45,22 +56,22 @@ class IntradayRisk:
         why = []
         t = now.time()
         if t < self.no_before or t > self.no_after:
-            why.append(f"outside entry window {self.no_before:%H:%M}–{self.no_after:%H:%M}")
+            why.append(Refusal("entry_window", f"outside entry window {self.no_before:%H:%M}–{self.no_after:%H:%M}"))
         if self.trades_today >= self.max_trades:
-            why.append(f"{self.max_trades} trades already today")
+            why.append(Refusal("max_trades", f"{self.max_trades} trades already today"))
         if len(open_trades) >= self.max_open:
-            why.append(f"{self.max_open} positions already open")
+            why.append(Refusal("max_open", f"{self.max_open} positions already open"))
         if any(tr.symbol == symbol for tr in open_trades):
-            why.append(f"already holding a {symbol} position")
+            why.append(Refusal("position_held", f"already holding a {symbol} position"))
         out = sum(abs(getattr(tr, "entry_cost", 0.0) or 0.0) for tr in open_trades)
         if equity > 0 and self.max_exposure is not None and out >= self.max_exposure * equity:
-            why.append(f"exposure cap: ₹{out:,.0f} of premium open ≥ {self.max_exposure:.0%} of equity")
+            why.append(Refusal("exposure", f"exposure cap: ₹{out:,.0f} of premium open ≥ {self.max_exposure:.0%} of equity"))
         dd = equity / self.start_equity - 1 if self.start_equity else 0
         if dd <= -self.daily_loss or self.halted:
             self.halted = True
-            why.append(f"daily loss limit hit ({dd:.2%} ≤ -{self.daily_loss:.1%}): done for the day")
+            why.append(Refusal("daily_loss", f"daily loss limit hit ({dd:.2%} ≤ -{self.daily_loss:.1%}): done for the day"))
         if self.cool_until is not None and now < self.cool_until:
-            why.append(f"cooling off after {self.consec_losses} straight losses until {self.cool_until:%H:%M}")
+            why.append(Refusal("cooldown", f"cooling off after {self.consec_losses} straight losses until {self.cool_until:%H:%M}"))
         return why
 
     def size(self, plan, equity: float, cash: float | None = None) -> tuple[int, list[str]]:
