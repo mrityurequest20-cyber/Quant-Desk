@@ -8,12 +8,12 @@ It sits alongside the forensic audit (PR #9, `audit/`); it does not modify the a
 | Field | Value |
 |---|---|
 | Programme stage | **S0: readiness and containment** |
-| S0 status | **NO-GO**: critical blockers open (see §3); engineer routine paused (interim) |
-| Last updated | 2026-10-10 04:37 UTC (S0 assessment + remediation PRs #14–#23, session 1; CI green on all PR heads) |
-| Repo revision assessed | `main@c96909f1f0f4e77ad30817ca53f2df7b28bb9098` (2026-10-04 13:09 UTC) |
+| S0 status | **NO-GO, narrowed (2026-10-16)**: 8 of 12 checks pass. Two need the owner's own consoles (S0-07 broker state, S0-12 Actions settings). S0-04 and S0-10 are partial, and the engineer routine stays paused (S0-05). See §1A. The **paper** desk is unaffected and trades as normal |
+| Last updated | 2026-10-16 ~18:00 UTC: re-verification of every S0 check (§1A), work merged 10–16 Oct, owner decisions of 16 Oct. Earlier entry: 2026-10-10 04:37 UTC (S0 assessment + PRs #14–#23) |
+| Repo revision assessed | §1A: `main@3ccdc8d` (#62 merged, 2026-10-16 15:23 UTC). §2: `main@c96909f1f0f4e77ad30817ca53f2df7b28bb9098` (2026-10-04 13:09 UTC) |
 | Audit revision assessed | `claude/exciting-galileo-criwur@813849453aa4` (PR #9, draft, open) |
-| Runtime state assessed | `journal@9cdfbeb` (2026-10-09 22:48 IST), `gh-pages@e80b0ed` (2026-10-09 16:14 IST) |
-| Next item awaiting approval | **Owner review of PRs #14–#23 (§7)**, and owner actions O-2, O-3, O-4b, O-5 |
+| Runtime state assessed | §1A: `journal@8816dd0` (memory install on top of the 16 Oct learning cycle `fbaebaf`), `gh-pages@7424a70` (2026-10-16 15:31 IST). §2: `journal@9cdfbeb`, `gh-pages@e80b0ed` |
+| Next item awaiting approval | **Owner:** O-2 (S0-07 broker consoles), O-6 (S0-12 Actions settings), the S0-04 review-rule decision, and when to flip earn-in to `apply` (agreed: after about 5 shadow sessions). **Engineering:** §1A.5 |
 
 ## Evidence labels
 
@@ -34,11 +34,99 @@ One label never silently becomes another.
 | 3 | 2026-10-09 | O-4a: H–L artifacts committed | S0 | **done**: the owner approved in the audit session; commit `de344bd` (22:47 UTC), independently verified here (S0-02) | owner, in the audit session |
 | 4 | — | Owner actions O-2, O-3, O-4b, O-5 (§6.1) | S0 | **awaiting owner** (O-4b: this session's tag push was refused, 403) | owner only |
 | 5 | 2026-10-09 | A-19 fix | S0 | **PR #14** (draft, not merged) | owner approved the scope |
-| 6 | 2026-10-09 | Further fixes under the owner's "fix everything" instruction | S0/S2/S5 | **PRs #15–#23** (drafts, none merged); see §7 | owner: "do whatever you want"; merging stays with the owner |
+| 6 | 2026-10-09 | Further fixes under the owner's "fix everything" instruction | S0/S2/S5 | **PRs #15–#23**: all **merged** 2026-10-10 (§7) | owner: "do whatever you want"; merging stays with the owner |
+| 7 | 2026-10-10/11 | Audit follow-ups: #24–#36, #42–#47 (VIX, holidays, STT, H-01 exits, I-02 news, D-01 record-only, Claude advisory-only, post-close re-run removed, budget pacing) | S2/S5 | **merged** (§1A.3) | owner merged #36 (`require_approved_model: false`) themselves |
+| 8 | 2026-10-16 | Monday-critical merge order (handoff §5): #60, #61, #49, #41, #48 | S2/S3 | **merged** in that order, each on green `tests`/`doctor` | owner: "merge #61", "merge #49 after #61", "merge #48 then #62" |
+| 9 | 2026-10-16 | Stabilisation sweep C-01…C-12 + 10% cross-day drawdown halt + earn-in gate (shadow) | S1/S3/S4 | **merged** as #62 (owner merged, 15:23 UTC). Independent reviews: risk-compliance CLEAR WITH CONDITIONS (all conditions fixed), research review HIGH (fixed) | owner decisions 2026-10-16 (§1A.4) |
+| 10 | 2026-10-16 | Learning memory rebuild (handoff §6) | S4 | **installed**: `journal@8816dd0`, fast-forward, memory sha256 `a9d82381…ae6e` | owner-approved in the handoff; internal-auditor: INSTALL WITH CONDITIONS |
+| 11 | 2026-10-16 | S0 re-verification (this update) | S0 | **done**: §1A | owner: "update the log and merge #13" |
+
+---
+
+## 1A. Current state, re-verified 2026-10-16 (supersedes the statuses in §2 and §3; those stay as the 9–10 Oct record)
+
+Each line is **VERIFIED NOW** (16 Oct ~17:30–18:00 UTC) unless it is labelled otherwise.
+
+### 1A.1 The twelve S0 checks
+
+| Check | 9–10 Oct (§2) | 2026-10-16 | Evidence now |
+|---|---|---|---|
+| S0-01 Repo baseline | VERIFIED | **PASS** | A snapshot check. `main` has since moved `c96909f` → `3ccdc8d` through PRs #14–#62 |
+| S0-02 Audit evidence | committed; tag open | **PASS** | H–L in `de344bd` (176 files). Tags `evidence/audit-a-l-2026-10-09` and `claude/evidence-audit-a-l-2026-10-09` → `de344bd` (`git ls-remote`). PR #9 is still an open draft: its branch is now pinned by the tag, so merging it is optional |
+| S0-03 Test baseline | red (A-19) | **PASS** | A-19 fixed (#14), dependencies pinned (#15, `requirements.txt` exact versions). `tests` + `doctor` green on main and on every PR merged 10–16 Oct, across several days |
+| S0-04 Branch protection | FAIL | **PARTIAL** | PREVIOUSLY REPORTED (handoff 16 Oct), consistent with every merge this week: a ruleset on `main` requires a PR, the `tests` and `doctor` checks, and an up-to-date branch. **Not met from the pass condition:** "≥1 approving review that is not the author". Claude's PRs are opened under the owner's account, so that rule would also block the owner. Owner decision: accept PR + checks + an independent reviewer agent on every safety-critical change (what was practised 10–16 Oct), or add a second account. Not read via the API: whether admins can bypass (UNKNOWN / OWNER) |
+| S0-05 Engineer routine (G-01) | contained (interim) | **CONTAINED** | `trig_01HMifSht7GsShdv8wm789cn` `enabled: false`, unchanged since 2026-10-09 22:36:11 UTC (read via the API). **Keep it paused:** `docs/AUTONOMY.md:115` still tells the engineer to merge into `main` itself ("Ship: merge the branch into main … and push"). Re-enable only after that rule says "open a PR" |
+| S0-06 Live entry points (repo) | VERIFIED | **PASS** | `account.mode: paper`; `KiteBroker` is still the only order path, and it needs `--live`. No workflow passes `--live` |
+| S0-07 **Live-trading operational state** | BLOCKED: owner | **BLOCKED: OWNER ACTION REQUIRED** | Unchanged. Only the broker consoles can answer (a)–(e). The paper journal is not evidence about broker accounts. **This is the one S0 blocker that matters for any step toward real money** |
+| S0-08 Public site | DOWN | **PASS (cause UNKNOWN / OWNER)** | `https://mrityurequest20-cyber.github.io/Quant-Desk/` and `/data.json` → HTTP 200. `gh-pages@7424a70` "site 2026-10-16 15:31 IST". Who disabled Pages on 8–9 Oct is still unrecorded (owner: security log) |
+| S0-09 Post-close re-run | occurring | **PASS** | #32 removed it. `live.yml`'s only schedule is `22 3 * * 1-5` (08:52 IST) |
+| S0-10 Runtime evidence | AT RISK | **PARTIAL: pass condition met, root cause open** | Met: dated evidence tags exist (`evidence/journal-2026-10-09` → `9cdfbeb`, `evidence/gh-pages-2026-10-09` → `e80b0ed`), as do branches `claude/evidence-journal-2026-10-09` and `…-pre-memory-rebuild-2026-10-10` (both → `9cdfbeb`). #62 adds a shrink guard (C-01) and a compare-and-swap lease (C-12) to every save. **Open (A-10, S1):** each save still writes the journal as an orphan commit. The branch holds 2 commits now (the 16 Oct learning cycle + the memory install), so intermediate states between tags are not kept. **Anomaly:** tag `claude/evidence-journal-2026-10-09` points at `3cffd92`, a `main` code commit (#28), not a journal state. It is misleading but harmless (the correct tag and both branches exist). Left untouched: evidence is never deleted, and this session's tag pushes are refused |
+| S0-11 A-02 catch-up grading | occurring | **PASS** | #16. In `journal@8816dd0`, `"losslessly"` events by day: 10-05 1, 10-06…10-09 2 each, **12–16 Oct: 0** over 5 sessions on the pinned environment (pass condition: 0 over 3) |
+| S0-12 Actions permissions, secrets | PARTIAL: owner | **OPEN: OWNER** | Repo settings are not visible to this session. Workflow scopes unchanged except the gate's `actions: read` in `live.yml` (#62, owner-approved C-08) |
+
+**Tally:** 8 pass (S0-01, 02, 03, 06, 08, 09, 11, plus 10's pass condition), 2 partial (S0-04, S0-10 root cause), 1 contained (S0-05), 2 open and owner-only (S0-07, S0-12).
+
+### 1A.2 Go / no-go (2026-10-16)
+
+**S0 stays NO-GO for anything that touches real money.** The reason has narrowed from five blockers to one: **S0-07**, the broker accounts, is still unverified. S0-12 and the S0-04 review rule are owner settings, not blockers to containment. **Live trading remains OFF and is not authorized by this file.** The paper desk is not gated by S0 and runs as normal.
+
+### 1A.3 Merged since the assessment (2026-10-10 → 16)
+
+- **10 Oct:** #14 A-19 · #15 A-03 · #16 A-02 · #17 D-07 · #18 G-03 · #19 A-07 · #20 G-05 · #21 A-18 · #22 F-01 · #23 B-10 · #24 I-01 · #25 H-04 · #26 F-07 · #27 A-18 follow-up · #28 I-02 · #29 C-04 (STT) · #30 H-01.
+- **11 Oct:**
+  - #33 · #34 · #35 D-01 (record, don't apply) · #45 Claude advisory-only · #36 (owner: `require_approved_model: false`) · #32 S0-09 · #31 · #44 · #47 (red CI on main).
+  - #43 · #42 · #46.
+- **16 Oct:**
+  - #60 hardening A · #61 hardening B (D-01 extended to the setup record) · #49 memory-rebuild fixes · #41 inherited-position halt · #48 risk governor (shadow).
+  - **#62:** stabilisation C-01…C-12, the 10% cross-day drawdown halt and the earn-in gate (shadow). Its PR body carries the findings table and the review verdicts.
+
+### 1A.4 Owner decisions recorded 2026-10-16
+
+| Decision | Choice | Where it lives |
+|---|---|---|
+| D-01 extended to the setup record | signed off: recorded, not applied | #61 |
+| Cross-day drawdown stop | **10%** below the realised high-water mark; entries halt until `quantdesk intraday clear-drawdown-halt` | `intraday.risk.cross_day_drawdown_halt: 0.10` (#62) |
+| Daily-loss halt | blocks entries only, **no flatten** | #62 (C-06 makes the limit a cap on new size) |
+| C-02 journal retention | archive, verify, then prune; 80 MB refusal | #62 (CLI only: **not wired** until the archive has a durable home) |
+| C-08 kill-switch gate | `actions: read` on the `live.yml` gate | #62 |
+| Earn-in gate | ships in `shadow`; flip to `apply` after about **5 clean shadow sessions** (from Mon 19 Oct) | `intraday.learning.earn_in.mode: shadow` |
+
+### 1A.5 Open items after 16 Oct
+
+**Owner (settings and consoles; no code):**
+1. **O-2 / S0-07:** confirm (a)–(e) in the Kite and Kotak Neo consoles.
+2. **O-6 / S0-12:** set Settings → Actions → General: workflow permissions "Read repository contents" by default, and "Allow GitHub Actions to create and approve pull requests" off. Record both here.
+3. **S0-04:** decide on the non-author review rule (see §1A.1).
+4. **S0-08:** record why Pages was off on 8–9 Oct (security log). Optional.
+5. **Risk wording (internal-auditor, 16 Oct, MEDIUM, pre-existing):** a trade's budget is `equity × risk_per_trade × (0.6 + 0.6 × conviction)` (`quantdesk/intraday/risk.py:85-86`), so at conviction 1 it risks 0.030 of equity, not 0.025. The other caps are not scaled by conviction (trades per day, open positions, the daily-loss cap on size, premium outlay, total outlay 0.5). Owner: is 0.025 a cap on *actual* risk? If yes, capping it is a tightening and goes through a risk-compliance review.
+
+**Engineering (one PR each, reviewed):**
+1. Wire C-02 retention only once the archive has a durable home.
+2. A dispatch workflow for `clear-drawdown-halt` / `clear-halt`, so the owner doesn't need a shell.
+3. A-10 / S0-10: give the journal history, not an orphan commit per save (S1 design).
+4. Rewrite the self-merge rule in `docs/AUTONOMY.md:115` to PR-only before S0-05's routine is ever re-enabled.
+5. Memory-rebuild disclosures (internal-auditor, 16 Oct):
+   - 269 of the 3,031 graded headlines (8.9%) are from 28–29 Sep, before the first session day. They are graded against real 29 Sep bars, so their tone grades are valid, but the record is not "10 sessions" for news.
+   - Headlines with NULL `nlp` are filed under event `general`, which is how the live path does it too; #49 fixed only the crash. Proposal: label them `unclassified`.
+   - The report's provenance lines (`8050ab0`, sha `5097edbe`) predate the block recording; the installed file is sha `a9d82381` from `0828211`. The report gets updated to match.
+6. Handoff §7 backlog in its order: hardening-c remainder, B-03, A-05/A-13, remaining register items, Claude-as-teacher (S0–S4, needs the owner's budget split), bounded autonomy, latency.
+
+### 1A.6 Monday 19 Oct (handoff §9)
+
+Read-only checks are scheduled for 08:20 IST (pre-open) and 16:00 IST (post-close). They cover:
+- main is the reviewed head;
+- `paper`, governor `shadow`, earn-in `shadow`;
+- the memory loads from the journal;
+- the trading day and holidays (20 Oct Dussehra; the desk picks the 27 Oct expiry);
+- after the session: step durations, WARN/ERROR events, whether the square-off ran, and every trade or rejection with its reason.
+
+Results go into this log.
 
 ---
 
 ## 2. S0 readiness report
+
+*The 9–10 Oct assessment, kept as recorded. For each check's current status see §1A.1.*
 
 ### S0-01: Repository state and baseline
 
@@ -182,6 +270,8 @@ One label never silently becomes another.
 
 ## 3. S0 go / no-go
 
+*As of 2026-10-10. Current: §1A.2. Blocker 1 (S0-07) is still open; blockers 2, 3 and 5 are contained, partial and partial; S0-08 and S0-09 are fixed; S0-03 passes.*
+
 **Recommendation: NO-GO.** S0 cannot exit, and no S1 work should start yet.
 
 **Critical blockers**
@@ -232,11 +322,12 @@ One label never silently becomes another.
 | ID | Action | Who |
 |---|---|---|
 | O-1 | Pause routine "Quant-Desk engineer shift" before 2026-10-10 12:10 UTC | **done** 2026-10-09 22:36 UTC |
-| O-2 | Answer S0-07 (a)–(e) from the broker consoles | owner only |
-| O-3 | Re-enable Pages from `gh-pages`, after checking the security log | owner only |
+| O-2 | Answer S0-07 (a)–(e) from the broker consoles | owner only: **still open 2026-10-16** |
+| O-3 | Re-enable Pages from `gh-pages`, after checking the security log | **site serving again** (HTTP 200, 2026-10-16); the cause is still unrecorded |
 | O-4a | Get the H–L artifacts committed by the audit session | **done** 2026-10-09 22:47 UTC (`de344bd`) |
-| O-4b | Tag evidence: `claude/exciting-galileo-criwur` (after H–L lands), the `journal` head and the `gh-pages` head | owner, or this session on approval |
-| O-5 | Protect `main` (PR + 1 non-author review + no force-push), adding required check `tests` **after** §6.2 merges | owner only |
+| O-4b | Tag evidence: `claude/exciting-galileo-criwur` (after H–L lands), the `journal` head and the `gh-pages` head | **done**: `evidence/*-2026-10-09` tags on origin (see S0-10 in §1A.1 for one mis-aimed duplicate) |
+| O-5 | Protect `main` (PR + 1 non-author review + no force-push), adding required check `tests` **after** §6.2 merges | **partly done**: ruleset with PR + `tests` + `doctor` + up to date; non-author review still an owner decision |
+| O-6 | Set Actions workflow permissions to read-only by default, and "Allow GitHub Actions to create and approve pull requests" off (S0-12) | owner only: open |
 
 ### 6.2 Smallest first remediation PR: A-19 (test date bomb), zero production behaviour change
 
@@ -253,6 +344,8 @@ One label never silently becomes another.
 ---
 
 ## 7. Remediation PRs (2026-10-09/10; all drafts, none merged)
+
+*Status 2026-10-16: **all of #14–#23 are merged** (10 Oct; #21 as a merge commit). Later work: §1A.3. The text below is the record as written on 10 Oct.*
 
 Every PR changes the fewest lines that fix the finding. Each adds a regression test that **fails on `main` and passes
 with the fix** (reproduced here before the change), and each carries the identical A-19 commit from #14 so its CI can
