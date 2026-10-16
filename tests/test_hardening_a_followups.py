@@ -159,6 +159,25 @@ def test_a_junk_row_on_disk_survives_a_later_record_bars(sessions, tmp_path):
     assert clean.index.equals(normalise_bars(out).index)
 
 
+def test_the_hand_over_backfill_keeps_junk_rows_too(sessions, tmp_path):
+    """P2-10's `fill_bars` (the afternoon filling the minutes it missed) rewrites the day's file; it must keep the raw
+    rows already there, as `record_bars` does, and only add the missing minutes."""
+    bars, days = sessions
+    d = days[-1]
+    b = bars["NIFTY"]
+    day = b[b.index.date == d].iloc[:30]
+    rec = SessionRecorder(tmp_path)
+    rec.record_bars("NIFTY", day.iloc[:10])
+    path = rec.day_dir(d) / "NIFTY_1m.csv"
+    raw = pd.read_csv(path, index_col=0, parse_dates=True)
+    raw.iloc[3, :4] = np.nan
+    raw.iloc[5, :4] = 0.0
+    raw.to_csv(path, index_label="ts")
+    assert rec.fill_bars("NIFTY", day) == 20                 # only the 20 minutes the file lacks
+    out = pd.read_csv(path, index_col=0, parse_dates=True)
+    assert len(out) == 30 and out.iloc[3, :4].isna().all() and (out.iloc[5, :4] == 0).all()
+
+
 # ---- 4. the cases #60 left untested --------------------------------------------------------------------------------------
 def test_tick_squares_off_at_1515_when_the_bars_have_stopped(cfg, sessions):
     eng, feed, d = _engine(cfg, sessions)

@@ -16,6 +16,15 @@ from .chains import load_chain, save_chain
 from .feeds import IST, normalise_bars
 
 
+def _read_raw(path: Path) -> pd.DataFrame:
+    """A day's recorded bars as they are on disk: raw evidence, so NaN/zero rows stay (the readers normalise). Only the
+    index is aligned to IST in ns, so it concatenates with live bars."""
+    old = pd.read_csv(path, index_col=0, parse_dates=True)
+    idx = pd.DatetimeIndex(old.index)
+    old.index = (idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)).as_unit("ns")
+    return old
+
+
 class SessionRecorder:
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -30,10 +39,7 @@ class SessionRecorder:
             path = self.day_dir(day) / f"{symbol}_1m.csv"
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
-                old = pd.read_csv(path, index_col=0, parse_dates=True)   # raw evidence: NaN/zero rows already on disk stay
-                idx = pd.DatetimeIndex(old.index)                        # (the readers normalise); only the index is aligned
-                old.index = (idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)).as_unit("ns")
-                part = pd.concat([old, part])
+                part = pd.concat([_read_raw(path), part])
             part = part[~part.index.duplicated(keep="last")].sort_index()
             part.to_csv(path, index_label="ts")
 
@@ -46,7 +52,7 @@ class SessionRecorder:
         for day, part in df.groupby(df.index.date):
             path = self.day_dir(day) / f"{symbol}_1m.csv"
             if path.exists():
-                old = normalise_bars(pd.read_csv(path, index_col=0, parse_dates=True))
+                old = _read_raw(path)
                 part = part[~part.index.isin(old.index)]
                 if part.empty:
                     continue
