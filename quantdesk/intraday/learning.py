@@ -34,6 +34,7 @@ Two research tables ride along (they change nothing by themselves; they're what 
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from pathlib import Path
@@ -42,6 +43,8 @@ import numpy as np
 import pandas as pd
 
 from .feeds import frozen_minutes
+
+log = logging.getLogger(__name__)
 
 IST = "Asia/Kolkata"
 PRIOR = 20.0                 # pseudo-observations at a 50% hit rate / 0R mean
@@ -61,14 +64,22 @@ class Memory:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else None
         self.d: dict = {"version": 1, "tables": {}, "graded": {"news": [], "thoughts_upto": {}, "trades": [], "armed": []},
-                        "days": [], "lessons": []}
+                        "days": [], "lessons": [], "blocks": {}}
+        self.corrupt: str | None = None                  # why the saved record didn't load; nothing is saved while set
         if self.path and self.path.exists():
             try:
                 self.d.update(json.loads(self.path.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as exc:
+                # C-10: never carry on blank over a record that failed to load: the next save (or the morning's
+                # `learn --bootstrap --if-empty`, which sees it as empty) would overwrite every session learned. The
+                # desk trades on neutral tilts, the file is left exactly as it is, and the owner restores it.
+                self.corrupt = f"{type(exc).__name__}: {exc!s:.160}"
+                log.error("learning memory %s unreadable (%s): nothing will be saved over it", self.path, self.corrupt)
 
     def save(self) -> None:
+        if self.corrupt:
+            log.error("learning memory %s not saved: the file on disk failed to load (%s)", self.path, self.corrupt)
+            return
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             g = self.d["graded"]
@@ -79,12 +90,25 @@ class Memory:
             tmp.replace(self.path)
 
     # ---- statistics ---------------------------------------------------------------------------------------------
-    def bump(self, table: str, key: str, hit: bool, x: float, w: float = 1.0) -> None:
+    def bump(self, table: str, key: str, hit: bool, x: float, w: float = 1.0, block: str | None = None,
+             pos: bool | None = None, up: bool | None = None) -> None:
         r = self.d["tables"].setdefault(table, {}).setdefault(str(key), {"n": 0.0, "hits": 0.0, "sum": 0.0, "sum2": 0.0})
         r["n"] += w
         r["hits"] += w * bool(hit)
         r["sum"] += w * float(x)
         r["sum2"] += w * float(x) ** 2
+        if block:                                       # the same observation by session x index, for the earn-in gate
+            # [n, hits, sum, pos, up]: pos = the call was bullish, up = the market rose. With both, the gate measures a
+            # call against the hit rate a coin with the same bias would have had that day, not against 0.5 (a bullish
+            # reader in a rising week is not skilled).
+            b = self.d.setdefault("blocks", {}).setdefault(table, {}).setdefault(str(key), {}).setdefault(
+                block, [0.0, 0.0, 0.0, 0.0, 0.0])
+            b[0] += w
+            b[1] += w * bool(hit)
+            b[2] += w * float(x)
+            if len(b) >= 5:
+                b[3] += w * bool(pos)
+                b[4] += w * bool(up)
 
     def stat(self, table: str, key: str) -> dict | None:
         return (self.d["tables"].get(table) or {}).get(str(key))
@@ -192,6 +216,20 @@ def _obj(v) -> dict:
     return {}
 
 
+def _later(t, other):
+    """The later of a timestamp and an optional second one (a seen-at or read-at that may be missing or unparseable)."""
+    try:
+        o = pd.Timestamp(other) if other is not None and other == other and str(other) else None
+    except (ValueError, TypeError):
+        o = None
+    if o is None:
+        return t
+    a = pd.Timestamp(t)
+    a = a.tz_localize(IST) if a.tzinfo is None else a
+    o = o.tz_localize(IST) if o.tzinfo is None else o
+    return max(a, o)
+
+
 def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0, min_tone: float = 0.15) -> int:
     """Each headline's tone (each reader's) against the index's next 30 minutes from when the desk could act on it.
     Headlines that share that window are one observation between them, not one each: a night's forty stories are
@@ -204,16 +242,22 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
             continue
         about, nlp_ = _obj(r.about), _obj(getattr(r, "nlp", None))
         graded = False
+        # C-07: a read is graded from when the desk could act on it, not when the story was published: the rules
+        # tone from when the desk saw the story (a median 12 minutes after publication, 12-16 Oct), each language
+        # model's from when its read arrived. Graded from publication, a story seen after the move took the credit.
+        seen = _later(r.ts, getattr(r, "seen_at", None))
+        llm_ = ((nlp_.get("llm") or {}).get("readers") or {})
         for sym in ("NIFTY", "BANKNIFTY"):
             if (about.get(sym) or 0) < min_rel:
                 continue
-            got = forward(bars.get(sym), r.ts, from_open=True, with_start=True)
-            if got is None:
-                continue
-            fr, t0 = got
-            graded = True
-            llm_ = ((nlp_.get("llm") or {}).get("readers") or {})
-            for reader, tone in [("rules", r.sentiment)] + [(k, (v or {}).get(sym)) for k, v in llm_.items()]:
+            reads = [("rules", r.sentiment, seen)] + [(k, (v or {}).get(sym), _later(seen, (v or {}).get("at")))
+                                                      for k, v in llm_.items()]
+            for reader, tone, t in reads:
+                got = forward(bars.get(sym), t, from_open=True, with_start=True)
+                if got is None:
+                    continue
+                graded = True
+                fr, t0 = got
                 if tone is None or not tone == tone or abs(tone) < min_tone:
                     continue
                 rows.append((reader, sym, t0.floor(f"{HORIZON}min"), float(tone), fr, nlp_.get("event", "general"), r.source))
@@ -226,10 +270,12 @@ def grade_news(mem: Memory, news: pd.DataFrame, bars: dict, min_rel: float = 2.0
         w = 1.0 / share[(reader, sym, win)]
         s = float(np.sign(tone))
         hit, bps = s * fr > 0, s * fr * 1e4
-        mem.bump("news_reader", reader, hit, bps, w)
+        blk = f"{win.date()}|{sym}"
+        pos, up = s > 0, fr > 0
+        mem.bump("news_reader", reader, hit, bps, w, blk, pos, up)
         if reader == "rules":
-            mem.bump("news_event", event, hit, bps, w)
-            mem.bump("news_source", source, hit, bps, w)
+            mem.bump("news_event", event, hit, bps, w, blk, pos, up)
+            mem.bump("news_source", source, hit, bps, w, blk, pos, up)
     return len(rows)
 
 
@@ -261,7 +307,8 @@ def grade_factors(mem: Memory, thoughts: pd.DataFrame, bars: dict) -> int:
             d = float(e.get("direction") or 0)
             if abs(d) < 0.1 or _dead_read(e):
                 continue
-            mem.bump("factor", e.get("factor"), d * fr > 0, d * fr * 1e4, READ_EVERY / HORIZON)
+            mem.bump("factor", e.get("factor"), d * fr > 0, d * fr * 1e4, READ_EVERY / HORIZON,
+                     f"{pd.Timestamp(r.ts).date()}|{r.symbol}", d > 0, fr > 0)
             n += 1
         upto[r.symbol] = max(upto.get(r.symbol, ""), str(r.ts))
     return n
@@ -376,9 +423,10 @@ def grade_trades(mem: Memory, trades: pd.DataFrame) -> int:
             continue
         ctx = json.loads(r.context or "{}") if isinstance(r.context, str) else (r.context or {})
         R = float(np.clip(r.r_multiple, -3, 5))
-        mem.bump("setup", r.strategy, R > 0, R)
+        blk = f"{pd.Timestamp(r.opened_at).date()}|{r.symbol}"
+        mem.bump("setup", r.strategy, R > 0, R, block=blk)
         if ctx.get("regime"):
-            mem.bump("setup", f"{r.strategy}|{ctx['regime']}", R > 0, R)
+            mem.bump("setup", f"{r.strategy}|{ctx['regime']}", R > 0, R, block=blk)
         mem.d["graded"]["trades"].append(r.id)
         n += 1
     return n

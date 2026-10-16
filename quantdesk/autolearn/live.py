@@ -47,6 +47,7 @@ class LiveLearner:
         self.models: dict[str, tuple[str, object]] = {}           # model_id → (role, pipeline)
         self.champion_id: str | None = None
         self.fault: str | None = None
+        self.plan_fault: str | None = None                          # the plan registry's fault; halts only if required
         self.drift: dict = {}
         self.last: dict[str, dict] = {}                            # symbol → the champion's latest decision
         self.done: dict[str, pd.Timestamp] = {}
@@ -61,6 +62,7 @@ class LiveLearner:
     def start(self, day) -> None:
         """Load and verify every model the desk will predict with today."""
         self.models, self.fault, self.last, self.done = {}, None, {}, {}
+        self.plan_fault = None
         st = self.reg.state()
         mid, pipe, fault = self.reg.champion()
         self.champion_id = mid
@@ -80,14 +82,18 @@ class LiveLearner:
         self.drift = d if d.get("model_id") == mid else {}
         self.plan, self.feats = None, {}
         pid, pol, pfault = self.plan_reg.champion()
-        if pfault:
-            self.fault = self.fault or pfault
-        elif pid:
+        if not pfault and pid:
             card = self.plan_reg.card(pid) or {}
             if card.get("evidence") != QUALIFYING:                # fail closed: only real point-in-time evidence approves
-                self.fault = self.fault or f"plan champion {pid} has no real point-in-time evidence on its card"
-            else:
-                self.plan = (pid, pol)
+                pfault, pol = f"plan champion {pid} has no real point-in-time evidence on its card", None
+        self.plan_fault = pfault
+        if pfault:
+            if self.require_model:                                # the plan model is required: no trustworthy one, no entries
+                self.fault = self.fault or pfault
+            else:                                                 # not required: shown in status/errors, not fatal
+                self.errors.append(f"plan registry (not required, entries not halted): {pfault!s:.160}")
+        elif pid:
+            self.plan = (pid, pol)
         if self.cal is None:
             from ..core.calendar import TradingCalendar
             self.cal = TradingCalendar(self.cfg.holidays())
@@ -237,7 +243,7 @@ class LiveLearner:
 
     def status(self) -> dict:
         st = self.reg.state()
-        return {"champion": self.champion_id, "active": self.active, "fault": self.fault,
+        return {"champion": self.champion_id, "active": self.active, "fault": self.fault, "plan_fault": self.plan_fault,
                 "challengers": [m for m, (r, _) in self.models.items() if r == "challenger"],
                 "rollback_target": st.get("rollback_target"), "drift": self.drift.get("state"),
                 "drift_reasons": self.drift.get("reasons"), "gate_entries": self.gate_entries,

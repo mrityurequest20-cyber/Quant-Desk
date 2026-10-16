@@ -17,6 +17,7 @@ import datetime as dt
 import json
 import logging
 import math
+import os
 import time
 import traceback
 from dataclasses import replace
@@ -47,6 +48,15 @@ from .sim import IntradayBroker, QuoteMarker
 log = logging.getLogger(__name__)
 _claude_budget_warned = False                       # the budget display fails quietly: one log line per process, not one a minute
 
+
+
+DD_KEY, DD_PEAK_KEY = "intraday_drawdown_halt", "intraday_peak_equity"      # P2-9: the cross-day drawdown halt
+
+def _provenance() -> dict:
+    """C-11: which code made this record (the commit and workflow run on Actions; empty off it). The afternoon job runs
+    the branch tip, so a merge during the day changes behaviour; this puts that on the trade and the session start."""
+    return {k: v for k, v in (("commit", os.environ.get("GITHUB_SHA", "")[:12]), ("run", os.environ.get("GITHUB_RUN_ID", "")))
+            if v}
 
 class IntradayEngine:
     def __init__(self, cfg, feed: IntradayFeed, chains: ChainSource | str | None, journal: Journal,
@@ -150,6 +160,13 @@ class IntradayEngine:
         self.chain_ok_at: dict[str, pd.Timestamp] = {}            # ... and the age `_blocked` vetoes on (P1-4)
         self.chain_fail: dict[str, int] = {}
         self.chain_tried: dict[str, pd.Timestamp] = {}
+        self.chain_failed_at: dict[str, pd.Timestamp] = {}        # a refresh that raised: retried after `refresh_min`, not every minute
+        self._exit_tried: dict[str, pd.Timestamp] = {}            # trade id -> its last stuck-exit retry (`_retry_exit`)
+        # P2-9 (owner decision 16 Oct: 10%): a drawdown from the account's high-water mark that halts new entries across
+        # days until the owner clears it (`quantdesk intraday clear-drawdown-halt`); exits are never held by it.
+        self.dd_halt_frac = float(cfg.get("intraday.risk.cross_day_drawdown_halt", 0) or 0)
+        self.dd_halt: dict | None = None
+        self.peak_equity: float | None = None
         self.expiry: dict[str, dt.date] = {}
         self.open_trades: list[Trade] = []
         self.closed: list[Trade] = []
@@ -261,13 +278,19 @@ class IntradayEngine:
             self.day_start_equity = self.broker.cash() + sum(t.entry_cost for t in self.open_trades)
             self.risk.reset(day, self.day_start_equity)
             self.risk.trades_today = len([t for t in self.closed if t.opened_at.date() == day]) + len(self.open_trades)
+        self._drawdown_check(session_bounds(day)[0], self.day_start_equity)
         self._gov_safe(self._gov_start, day)
         if self.quant_on:
             self._train_models(day)
         exp = ", ".join(f"{u} {e:%d-%b}" for u, e in self.expiry.items())
         self.say(f"── session {day} · capital ₹{self.day_start_equity:,.0f} · expiries {exp} · chain {self.chains.name} "
                  f"· feed {self.feed.name}{' · events: ' + ', '.join(self.events_today) if self.events_today else ''}")
-        self.journal.event(session_bounds(day)[0], "INFO", "session", f"session start; expiries {exp}; chain {self.chains.name}")
+        self.journal.event(session_bounds(day)[0], "INFO", "session", f"session start; expiries {exp}; chain {self.chains.name}",
+                           {**_provenance(), "started_at": str(pd.Timestamp.now(tz="Asia/Kolkata"))})
+        if getattr(self.memory, "corrupt", None):              # C-10: said every session until the owner restores the file
+            self.journal.event(session_bounds(day)[0], "ERROR", "learning",
+                               f"learning memory unreadable ({self.memory.corrupt}): the desk trades on neutral tilts and "
+                               f"saves nothing over the file; restore memory.json from the journal branch's evidence")
 
     def step(self) -> bool:
         now = self.feed.now()
@@ -391,9 +414,23 @@ class IntradayEngine:
         open position is closed (P1-2: with polls returning nothing from 14:50 the trade sat open to the end of the day)."""
         for t in list(self.open_trades):
             if t.meta.get("exit_pending"):
-                self._close(t, now, *t.meta["exit_pending"])
+                self._retry_exit(t, now)
             elif now.time() >= self.risk.square_off:
                 self._close(t, now, "square_off", f"intraday square-off at {self.risk.square_off:%H:%M}")
+
+    def _open_risk(self) -> float:
+        """What the open trades can still lose to their stops, in rupees (their initial risk: the conservative figure)."""
+        return float(sum(max(float(getattr(t, "initial_risk", 0.0) or 0.0), 0.0) for t in self.open_trades))
+
+    def _retry_exit(self, t, now) -> str:
+        """Finish an exit already under way, once per moment: `_manage`, the wall clock and `tick` all reach for it, and a
+        stuck 2-leg spread would otherwise be sent to the broker twice (each retry is already guarded by the broker-held
+        quantity, so this saves traffic, not safety). Cadence is unchanged: every step, every tick."""
+        last = self._exit_tried.get(t.id)
+        if last is not None and abs((now - last).total_seconds()) < 2:
+            return ""
+        self._exit_tried[t.id] = now
+        return self._close(t, now, *t.meta["exit_pending"])
 
     def end_session(self, reason: str = "square_off", note: str = "end of session") -> str:
         now = self.feed.now()
@@ -407,6 +444,7 @@ class IntradayEngine:
             self._say_frozen(now)
         except Exception as e:                            # a note about the feed must never cost the close
             self.journal.event(now, "WARN", "data", f"frozen-bar check failed: {type(e).__name__}: {e}")
+        self._check_cash(now)
         self._learn(self.day)
         review = self.session_review()
         review += self._reflect(review, now)
@@ -420,9 +458,11 @@ class IntradayEngine:
 
     # ---- data -------------------------------------------------------------------------------------------
     def _refresh_chain(self, u: str, now) -> None:
-        at = self.chain_at.get(u)
+        at, failed = self.chain_at.get(u), self.chain_failed_at.get(u)
         if at is not None and (now - at) < pd.Timedelta(minutes=self.refresh_min):
             return
+        if failed is not None and (now - failed) < pd.Timedelta(minutes=self.refresh_min):
+            return                                            # the last refresh raised: a retry throttle, not a freshness claim
         try:
             ch = None
             fails = self.chain_fail.get(u, 0)
@@ -461,9 +501,11 @@ class IntradayEngine:
             an.update(self.chainflow.update(u, an, now, chain_step(ch)))
             self.chain_an[u] = an
             self.chain_at[u] = self.chain_ok_at[u] = now          # only a refresh that worked counts (P1-4)
+            self.chain_failed_at.pop(u, None)
             if self.recorder and ch.attrs.get("source") != "model":
                 self.recorder.record_chain(ch)
         except Exception as exc:                              # chain_at/chain_ok_at stay: the data is as old as its last success
+            self.chain_failed_at[u] = now
             self.journal.event(now, "WARN", "chain", f"{u} chain refresh failed: {exc}")
 
     def _refresh_news(self, now) -> None:
@@ -595,7 +637,7 @@ class IntradayEngine:
                     return msg
                 plan, lots, notes = pick
             else:
-                lots, notes = self.risk.size(plan, eq, self.broker.cash())
+                lots, notes = self.risk.size(plan, eq, self.broker.cash(), self._open_risk())
                 if lots < 1:
                     self.journal.decision(now, plan.setup, u, "rejected", " | ".join(notes), 0, {"plan": plan.describe()})
                     return None
@@ -693,17 +735,57 @@ class IntradayEngine:
         analyst and the brain to show; they apply it only under intraday.learning.apply_factor_weights (D-01)."""
         if self.memory is None:
             return
-        self.analyst.learned = self.memory.factor_weights()
         from .analyst import PROBATION, PROMOTE_N, PROMOTE_REL
-        self.analyst.graduated = {f for f in PROBATION if (self.memory.stat("factor", f) or {"n": 0})["n"] >= PROMOTE_N
-                                  and self.memory.reliability("factor", f) >= PROMOTE_REL}
-        if self.brain is not None:                        # probation drivers earn a vote on their live record
-            self.brain.learned = {k: (self.memory.reliability("factor", k), float(r["n"]))
-                                  for k, r in (self.memory.d["tables"].get("factor") or {}).items()
-                                  if k.startswith(("global_", "heavy_"))}
-        if self.news is not None:
-            self.news.trust = self.memory.news_trust
-            self.news.reader_trust = lambda name: self.memory.reliability("news_reader", name)
+        from .earn_in import Gate
+        from .learning import apply_factor_weights
+        try:
+            self.earn_gate = Gate(self.memory, self.cfg)
+        except Exception as exc:                          # the gate failing must not stop the desk: nothing is earned
+            log.exception("earn-in gate failed")
+            self.earn_gate = None
+            try:
+                self.journal.event(self.feed.now(), "WARN", "learning", f"earn-in gate failed, nothing learned is "
+                                   f"applied through it this session: {exc!r:.160}")
+            except Exception:
+                pass
+        gate = self.earn_gate
+        if gate is not None and gate.mode == "apply":
+            # Only what earned its place reaches trading; every other learned tilt is 1.0x (earn_in.py).
+            self.analyst.learned = gate.factor_weights()
+            self.analyst.apply_learned = True
+            self.analyst.graduated = {f for f in PROBATION if gate.earned("factor", f)
+                                      and (self.memory.stat("factor", f) or {"n": 0})["n"] >= PROMOTE_N
+                                      and self.memory.reliability("factor", f) >= PROMOTE_REL}
+            if self.brain is not None:
+                self.brain.apply_learned = True
+                self.brain.learned = {k: (self.memory.reliability("factor", k), float(r["n"]))
+                                      for k, r in (self.memory.d["tables"].get("factor") or {}).items()
+                                      if k.startswith(("global_", "heavy_")) and gate.earned("factor", k)}
+            if self.news is not None:
+                self.news.trust = gate.news_trust
+                self.news.reader_trust = lambda name: gate.reliability("news_reader", name)
+        else:
+            # As before the gate, and with the config's own switch: an apply-mode gate that failed after an earlier
+            # success must not leave apply_learned on, or the raw, unearned record would reach trading.
+            self.analyst.apply_learned = apply_factor_weights(self.cfg)
+            if self.brain is not None:
+                self.brain.apply_learned = apply_factor_weights(self.cfg)
+            self.analyst.learned = self.memory.factor_weights()
+            self.analyst.graduated = {f for f in PROBATION if (self.memory.stat("factor", f) or {"n": 0})["n"] >= PROMOTE_N
+                                      and self.memory.reliability("factor", f) >= PROMOTE_REL}
+            if self.brain is not None:                    # probation drivers earn a vote on their live record
+                self.brain.learned = {k: (self.memory.reliability("factor", k), float(r["n"]))
+                                      for k, r in (self.memory.d["tables"].get("factor") or {}).items()
+                                      if k.startswith(("global_", "heavy_"))}
+            if self.news is not None:
+                self.news.trust = self.memory.news_trust
+                self.news.reader_trust = lambda name: self.memory.reliability("news_reader", name)
+        if gate is not None and gate.mode != "off":
+            try:                                          # a note about the gate must never cost the engine's start
+                self.journal.event(self.feed.now(), "INFO", "learning", gate.summary(),
+                                   {"mode": gate.mode, "earned": gate.earned_items()})
+            except Exception:
+                log.exception("earn-in summary not journaled")
 
     def _say_frozen(self, now) -> None:
         """F-02: one WARN per index whose bars froze today (Kotak's index series sits flat 15:15-15:28 while the future
@@ -804,7 +886,9 @@ class IntradayEngine:
             return plans, None
         kept, stop = [], None
         for p in plans:
-            m, why = self.memory.setup_mult(p.setup, view.day_type, self.analyst.apply_learned)
+            gate = getattr(self, "earn_gate", None)
+            m, why = (gate.setup_mult(p.setup, view.day_type) if gate is not None and gate.mode == "apply"
+                      else self.memory.setup_mult(p.setup, view.day_type, self.analyst.apply_learned))
             if why:
                 stop = stop or f"its record says no: {why}"
                 said = self._record_said.get((u, p.setup))
@@ -848,6 +932,10 @@ class IntradayEngine:
             return f"halted: inherited position awaits the owner ({summary(self.halt)}); clear with `{CLEAR_CMD}`"
         if self.journal_fault:
             return f"halted: {self.journal_fault}"
+        if self.dd_halt:
+            return (f"halted: equity ₹{self.dd_halt['equity']:,.0f} is {self.dd_halt['drawdown']:.1%} below its peak "
+                    f"₹{self.dd_halt['peak']:,.0f} (limit {self.dd_halt_frac:.0%}); the owner clears it with "
+                    f"`quantdesk intraday clear-drawdown-halt --reason \"…\"`")
         if self.learner is not None and self.learner.fault:
             return f"halted: {self.learner.fault}"
         if self.paused:
@@ -899,7 +987,7 @@ class IntradayEngine:
             plan, lots, notes = pick
             return self._open(plan, lots, notes, view, s, now)
         plan = max(plans, key=lambda p: p.conviction)
-        lots, notes = self.risk.size(plan, eq, self.broker.cash())
+        lots, notes = self.risk.size(plan, eq, self.broker.cash(), self._open_risk())
         if lots < 1:
             self.journal.decision(now, plan.setup, u, "rejected", " | ".join(notes), 0, {"plan": plan.describe()})
             return f"setup {plan.setup} found but sized to 0 lots ({notes[-1]})"
@@ -973,7 +1061,7 @@ class IntradayEngine:
             return None
         plan = max(approved, key=lambda p: p.notes["plan_model"]["ev_R"])
         pm = plan.notes["plan_model"]
-        lots, notes = self.risk.size(plan, eq, self.broker.cash())
+        lots, notes = self.risk.size(plan, eq, self.broker.cash(), self._open_risk())
         if lots < 1:
             self.journal.decision(now, plan.setup, u, "rejected", " | ".join(notes), 0, {"plan": plan.describe()})
             return f"setup {plan.setup} approved by the plan model but sized to 0 lots ({notes[-1]})"
@@ -1081,6 +1169,7 @@ class IntradayEngine:
         its journal entry, a hand-edited file) halts new entries until it's explained: fail closed, say exactly what."""
         want, have = book_diff(self.open_trades, self.broker.positions() or {})
         diff = {k: (want.get(k, 0), have.get(k, 0)) for k in set(want) | set(have) if want.get(k, 0) != have.get(k, 0)}
+        self._check_cash(session_bounds(day)[0])
         acc = accepted_halt(self.journal) if diff else {}
         if ok := {k: v for k, v in diff.items() if leg_key(k, *v) in acc}:   # the owner's forced clear took these as is
             rec = next(iter(acc.values()))                # one record: the last clear accepted them all
@@ -1098,6 +1187,27 @@ class IntradayEngine:
         self.journal.event(session_bounds(day)[0], "CRITICAL", "risk", f"reconciliation failed, entries halted: {detail}",
                            {"journal": want, "broker": have})
         self.say(f"  RECONCILIATION FAILED: {detail}")
+
+    def _check_cash(self, at) -> None:
+        """C-09: paper cash must equal the account's capital less every fill's value and fees. A gap means P&L or cash
+        was booked without a fill (an unjournaled unwind, a leg marked closed with no order): an ERROR on the record
+        (it counts against the paper gate), never a halt."""
+        try:
+            cap = float((self.journal.get_state("intraday_account") or {}).get("capital") or 0)
+            if cap <= 0:
+                return
+            row = self.journal.df("SELECT COALESCE(SUM(qty * price), 0) AS q, COALESCE(SUM(fees), 0) AS f FROM fills")
+            expect = cap - float(row["q"].iloc[0]) - float(row["f"].iloc[0])
+            cash = float(self.broker.cash())
+        except Exception as exc:                          # a check must never cost the session
+            log.warning("cash reconciliation skipped: %r", exc)
+            return
+        gap = cash - expect
+        self.health["cash_reconcile"] = {"ok": abs(gap) <= 1.0, "gap": round(gap, 2)}
+        if abs(gap) > 1.0:
+            self.journal.event(at, "ERROR", "reconcile", f"paper cash ₹{cash:,.2f} differs from capital less fills "
+                               f"₹{expect:,.2f} by ₹{gap:+,.2f}: P&L or cash was booked without a fill",
+                               {"cash": cash, "expected": expect, "gap": gap})
 
     def _check_inherited(self, day) -> None:
         """H-02/H-03, owner decision "flag + manual": an orphan broker leg, a trade carried over from another day (a
@@ -1324,7 +1434,7 @@ class IntradayEngine:
             for v in variants:
                 drift = ((self.research.get(u) or {}).get("drift") or {}).get("per_min", 0.0)
                 e = self.ev.evaluate(v, view.spot, now, q["sigma_min"], p_up if v.direction != 0 else 0.5, minutes_left, drift)
-                lots, notes = self.risk.size(v, eq, self.broker.cash())
+                lots, notes = self.risk.size(v, eq, self.broker.cash(), self._open_risk())
                 cands.append((v, e, lots, notes))
         fits = [c for c in cands if c[2] >= 1]
         ok = [c for c in fits if c[1]["ev"] >= max(floor_inr, floor_r * c[0].planned_risk_per_lot())]
@@ -1381,6 +1491,7 @@ class IntradayEngine:
                            "levels": {k: round(float(v), 2) for k, v in view.levels.items() if v == v and v is not None},
                            "chain": {k: v for k, v in view.chain.items() if isinstance(v, (int, float, str))}},
                   meta={"structure": plan.structure, "expiry": str(plan.expiry), "quote_source": plan.quote_source,
+                        "code": _provenance(),
                         "entry_net_premium_per_lot": plan.net_premium, "max_loss": plan.max_loss_per_lot(),
                         "legs_plan": [(l.strike, l.right, l.ratio, round(l.price, 2), round(l.iv, 2), round(l.delta, 3))
                                       for l in plan.legs], **plan.notes})
@@ -1411,9 +1522,7 @@ class IntradayEngine:
             qty = leg.ratio * lots * plan.lot_size
             fill = self.broker.execute(Order(inst, qty, t.id, "open"), px[inst.symbol], now)
             if fill is None:
-                for done in t.legs:
-                    self.broker.execute(Order(done.instrument, -done.qty, t.id, "unwind"), done.entry_price, now)
-                return f"order for {inst.symbol} rejected; nothing opened"
+                return self._abort_entry(t, plan, inst.symbol, notes, now)
             self.journal.fill(now, t.id, inst.symbol, qty, fill.price, fill.fees, fill.fee_breakdown)
             t.legs.append(TradeLeg(inst, qty, fill.price))
             t.fees += fill.fees
@@ -1432,12 +1541,53 @@ class IntradayEngine:
         self.say(f"  {now:%H:%M} {u:<9} ▲ {msg}")
         return msg
 
+    def _abort_entry(self, t: Trade, plan: TradePlan, rejected: str, notes: list[str], now) -> str:
+        """A leg of a multi-leg entry was rejected after earlier legs had filled: unwind them. Every unwind fill is
+        journalled and its cost booked into the trade, so the broker's cash equals the sum of trade P&L. The trade is
+        recorded as closed ("entry_aborted"); a leg whose unwind is rejected too keeps the trade open and pending exit
+        (retried each minute by `_close`), so the broker and the journal still agree. No leg filled: nothing to book."""
+        if not t.legs:
+            return f"order for {rejected} rejected; nothing opened"
+        stuck = []
+        for leg in t.legs:
+            fill = self.broker.execute(Order(leg.instrument, -leg.qty, t.id, "unwind"), leg.entry_price, now)
+            if fill is None:
+                stuck.append(leg.instrument.symbol)
+                continue
+            self.journal.fill(now, t.id, leg.instrument.symbol, -leg.qty, fill.price, fill.fees, fill.fee_breakdown)
+            leg.exit_price = fill.price
+            t.fees += fill.fees
+        t.pnl = sum(l.qty * ((l.exit_price if l.exit_price is not None else l.entry_price) - l.entry_price)
+                    for l in t.legs) - t.fees
+        t.last_mark = {l.instrument.symbol: l.entry_price for l in t.legs}
+        t.meta["aborted_entry"] = f"order for {rejected} rejected after {len(t.legs)} leg(s) had filled"
+        self.risk.trades_today += 1
+        self.journal.open_trade(t, notes)
+        if stuck:
+            t.meta["exit_pending"] = ["entry_aborted", t.meta["aborted_entry"]]
+            self.open_trades.append(t)
+            self.journal.event(now, "CRITICAL", "execution",
+                               f"{t.meta['aborted_entry']}; unwind of {', '.join(stuck)} also rejected: {t.id} stays open, "
+                               f"retried each minute", {"trade": t.id})
+            self._persist()
+            return f"order for {rejected} rejected; unwind of {', '.join(stuck)} incomplete, retrying"
+        t.mae, t.mfe = min(t.mae, t.pnl), max(t.mfe, t.pnl)
+        t.status, t.closed_at, t.exit_reason, t.exit_note = "closed", now, "entry_aborted", t.meta["aborted_entry"]
+        t.exit_underlying = t.entry_underlying
+        self.closed.append(t)
+        self.journal.close_trade(t, None)
+        self.risk.on_close(t.pnl, now)
+        self.journal.event(now, "WARN", "execution", f"{t.meta['aborted_entry']}; unwound, cost ₹{-t.pnl:,.2f} booked to {t.id}",
+                           {"trade": t.id, "pnl": t.pnl})
+        self._persist()
+        return f"order for {rejected} rejected; unwound {len(t.legs)} leg(s), ₹{t.pnl:,.2f}"
+
     def _manage(self, u: str, view: MarketView, now) -> list[str]:
         out = []
         S = view.spot
         for t in [x for x in self.open_trades if x.symbol == u]:
             if t.meta.get("exit_pending"):                # an exit already under way is finished, whatever the market does
-                out.append(self._close(t, now, *t.meta["exit_pending"]))
+                out.append(self._retry_exit(t, now))
                 continue
             marks = {l.instrument.symbol: self.marker.mid(l.instrument, S, now) for l in t.legs}
             t.update_excursions(marks)
@@ -1654,6 +1804,48 @@ class IntradayEngine:
                               open_trades=len(self.open_trades), gross=0.0, net_delta=0.0, vega=0.0,
                               open_risk=sum(t.initial_risk for t in self.open_trades),
                               regime=",".join(f"{u}:{v.day_type}" for u, v in self.views.items()))
+        self._drawdown_check(now, eq)
+
+    def _drawdown_check(self, now, equity: float) -> None:
+        """Track the account's high-water mark (journal state, so it spans days and runners) and halt new entries once
+        equity is `cross_day_drawdown_halt` below it. The mark moves only on realised equity (no position open), so a
+        spurious mark on an open option can't lift it for good; the drawdown is measured on marked equity (the
+        conservative side). Re-reads the halt while set, so an owner's clear applies at once."""
+        if not self.dd_halt_frac or not math.isfinite(equity) or equity <= 0:
+            return
+        try:
+            if self.peak_equity is None or self.dd_halt:
+                st = self.journal.get_state(DD_PEAK_KEY) or {}
+                peak = float(st.get("peak") or 0)
+                if st.get("restart"):                           # the owner cleared a halt: the mark restarts here
+                    peak = equity
+                    self.journal.set_state(DD_PEAK_KEY, {"peak": peak, "at": str(now), "restarted": st.get("at")})
+                elif not peak:                                  # first run: the account's own record sets the mark
+                    row = self.journal.df("SELECT MAX(equity) AS m FROM equity WHERE COALESCE(open_trades, 0) = 0")
+                    m = row["m"].iloc[0] if len(row) else None
+                    cap = float((self.journal.get_state("intraday_account") or {}).get("capital") or 0)
+                    peak = max(float(m) if m is not None and m == m else 0.0, cap,
+                               equity if not self.open_trades else 0.0)
+                    self.journal.set_state(DD_PEAK_KEY, {"peak": peak, "at": str(now)})
+                self.peak_equity = peak
+                if not (self.dd_halt or {}).get("fault"):       # a fault halt holds for the session, whatever the state says
+                    self.dd_halt = self.journal.get_state(DD_KEY)
+            if equity > self.peak_equity and not self.open_trades:
+                self.peak_equity = equity
+                self.journal.set_state(DD_PEAK_KEY, {"peak": equity, "at": str(now)})
+            dd = equity / self.peak_equity - 1
+            if not self.dd_halt and dd <= -self.dd_halt_frac:
+                self.dd_halt = {"since": str(now), "peak": self.peak_equity, "equity": equity, "drawdown": dd}
+                self.journal.set_state(DD_KEY, self.dd_halt)
+                self.journal.event(now, "CRITICAL", "risk", f"drawdown halt: equity ₹{equity:,.0f} is {dd:.1%} below its "
+                                   f"peak ₹{self.peak_equity:,.0f} (limit {self.dd_halt_frac:.0%}); new entries halted "
+                                   f"until the owner clears it", self.dd_halt)
+                self.say(f"  {now:%H:%M} DRAWDOWN HALT: {dd:.1%} from the peak")
+        except Exception as exc:                          # a tracking fault must not cost the step; it fails closed
+            log.exception("drawdown check failed")
+            if not self.dd_halt:
+                self.dd_halt = {"since": str(now), "peak": self.peak_equity or 0.0, "equity": equity, "drawdown": float("nan"),
+                                "fault": f"{exc!r:.120}"}
 
     def _persist(self, ended: bool = False) -> None:
         r = self.risk

@@ -480,15 +480,25 @@ class Cycle:
             return {"closed_trades": 0}
         t = pd.DataFrame(rows).assign(status="closed")
         cap = float(self.cfg.get("intraday.capital", 20000) or 20000)
-        return evaluate_paper_candidate(t, int(pd.to_datetime(t["closed_at"]).dt.date.nunique()), self._risk_violations(), cap)
+        since = str(pd.to_datetime(t["opened_at"] if "opened_at" in t else t["closed_at"]).min())
+        return evaluate_paper_candidate(t, int(pd.to_datetime(t["closed_at"]).dt.date.nunique()),
+                                        self._risk_violations(since), cap)
 
-    def _risk_violations(self) -> int:
-        """Risk-limit breaches on the journal's record (ERROR events filed under risk)."""
+    def _risk_violations(self, since: str | None = None) -> int:
+        """Risk-limit breaches on the journal's record. Tighten-only (C-04): every risk ERROR/CRITICAL ever filed still
+        counts, as before, and on top of it the paper gate's one definition (`research.protocol.risk_violation_events`:
+        CRITICAL, WARN and `execution` included) counts inside the evidence window starting at `since`."""
+        from ..research.protocol import RISK_EVENT_CATEGORIES, RISK_EVENT_LEVELS
         if not Path(self.journal_path).exists():
             return 0
         import sqlite3
+        cats, lvls = list(RISK_EVENT_CATEGORIES), list(RISK_EVENT_LEVELS)
+        new = (f"(lower(category) IN ({','.join('?' * len(cats))}) AND upper(level) IN ({','.join('?' * len(lvls))})"
+               + (" AND ts >= ?)" if since else ")"))
+        q = f"SELECT COUNT(*) FROM events WHERE (category='risk' AND level IN ('ERROR','CRITICAL')) OR {new}"
+        args = cats + lvls + ([since] if since else [])
         with sqlite3.connect(f"file:{self.journal_path}?mode=ro", uri=True) as db:
-            return int(db.execute("SELECT COUNT(*) FROM events WHERE category='risk' AND level IN ('ERROR','CRITICAL')").fetchone()[0])
+            return int(db.execute(q, args).fetchone()[0])
 
     # ---- g. promote ----------------------------------------------------------------------------------------------
     def _promote(self, st) -> dict:
@@ -508,7 +518,7 @@ class Cycle:
                       "paper_net_expectancy": (r.get("expectancy_bps") or float("-inf")) > self.promo["min_shadow_expectancy_bps"],
                       "paper_drawdown": (r.get("max_drawdown_bps") if r.get("max_drawdown_bps") is not None else float("-inf"))
                       >= -self.promo["max_shadow_drawdown_bps"],
-                      "risk_limits": self._risk_violations() <= self.promo["max_risk_violations"]}
+                      "risk_limits": self._risk_violations(r.get("since")) <= self.promo["max_risk_violations"]}
             try:
                 self.reg.load(mid)
                 checks["artifact_verifies"] = True

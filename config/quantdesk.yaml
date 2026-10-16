@@ -156,6 +156,8 @@ intraday:
     max_trades_per_day: 4           # a round trip costs ~₹110-130 (≈0.025% of ₹5L): more trades, faster evidence
     max_open: 2                     # NIFTY and BANKNIFTY at once
     daily_loss_limit: 0.05         # ₹25k at ₹5L: about two full stop-outs, then done for the day
+    cross_day_drawdown_halt: 0.10  # owner, 16 Oct: 10% below the account's high-water mark halts new entries across days
+                                   # until the owner clears it (quantdesk intraday clear-drawdown-halt); exits unaffected
     min_stop_atr5: 0.75            # an invalidation closer than this × the 5m ATR is pushed out to it (noise floor)
     cooldown_after_losses: 2
     cooldown_min: 30
@@ -210,7 +212,14 @@ intraday:
   # no trades, so its record could never recover (it locked a zero-edge setup out 11-12% of the time). They are graded,
   # saved and shown ("recorded, not applied"); news trust (event/source/reader) and the relative-strength preference
   # (once t >= 2) stay live.
-  learning: {enabled: true, apply_factor_weights: false}
+  learning:
+    enabled: true
+    apply_factor_weights: false
+    # The earn-in gate (quantdesk/intraday/earn_in.py): a learned tilt (news event/source trust, reader trust, a factor's
+    # weight or probation vote, a setup's record) reaches trading only after a walk-forward test beats a session-block
+    # placebo, Benjamini-Hochberg across its table. mode: off (as before) | shadow (as before, plus the gate journaled:
+    # what it would apply) | apply (only earned items apply; the rest are 1.0x). Ships in shadow: the owner flips it.
+    earn_in: {mode: shadow, min_sessions: 10, min_n: 30, alpha: 0.05, permutations: 4000, confirm_sessions: 2, window_sessions: 60}
   # language models as second readers of the news (llm.py): each provider whose key is in the environment reads the
   # headlines about an index, in the background, and the learning loop grades each one against the next 30 minutes.
   # Claude also writes the after-close reflection. Keys: ANTHROPIC_API_KEY (or CLAUDE_API_KEY …), GEMINI_API_KEY (or
@@ -247,9 +256,10 @@ autolearn:
   history_days: 55                 # Yahoo's 5-minute history pulled per cycle (it keeps ~60 days)
   final_test_days: 8               # the locked final test: created once from the newest sessions, never moved
   gate_entries: true               # with an active champion, only take plans its non-abstaining signal agrees with
-  # No directional option trade without a plan model approved on real point-in-time evidence for its horizon and a
-  # positive cost-adjusted expected value from it. The analyst's tilt, the narrative, LLM reads and unvalidated
-  # direction models stay advisory (shown, journalled), never a reason to trade. false = the old behaviour (tests only).
+  # true: no directional option trade without a plan model approved on real point-in-time evidence for its horizon and a
+  # positive cost-adjusted expected value from it. false (the owner's choice, 10 Oct, PR #36): directional plans are not
+  # gated on a plan model; every other gate (halts, vetoes, risk, EV floor, live book) still applies. LLM reads and
+  # unvalidated direction models stay advisory (shown, journalled) either way.
   require_approved_model: False
   # One simple baseline first (rule: add a model only when it beats this out of sample after costs). The L1, L2 and
   # stumps variants stay in the code (models.SPECS) for when that's shown.
