@@ -36,7 +36,7 @@ from .feeds import IST, IntradayFeed, ReplayFeed, session_bounds
 from .ivhist import iv_percentile
 from .orderflow import FootprintBuilder
 from .playbook import Playbook, TradePlan
-from .quant import DirectionModel, EVEngine, VolForecaster, features_5m, load_research, session_sigma, to_5m
+from .quant import DirectionModel, EVEngine, VolForecaster, completed_5m, features_5m, load_research, session_sigma
 from .risk import IntradayRisk
 from .sim import IntradayBroker, QuoteMarker
 
@@ -194,6 +194,12 @@ class IntradayEngine:
         return float(self.bars[u]["close"].iloc[-1])
 
     # ---- session lifecycle ------------------------------------------------------------------------------
+    def _session_ts(self, day: dt.date) -> pd.Timestamp:
+        """When a start-of-session event happened (A-13, I-08): the feed's clock, never before the open, so an afternoon
+        or resumed run's events (and a reconcile failure found at 10:32) aren't back-dated to 09:15."""
+        o, now = session_bounds(day)[0], self.feed.now()
+        return max(o, now) if now.date() == day else o
+
     def start_session(self, day: dt.date) -> None:
         self.day = day
         for sym in self.underlyings + [self.vix]:
@@ -219,9 +225,9 @@ class IntradayEngine:
             except Exception as exc:                          # unreadable registry: no model steers, no entries
                 self.learner.fault = f"learning registry unreadable: {exc!s:.160}"
             if self.learner.fault:
-                self.journal.event(session_bounds(day)[0], "ERROR", "autolearn", f"entries halted: {self.learner.fault}")
+                self.journal.event(self._session_ts(day), "ERROR", "autolearn", f"entries halted: {self.learner.fault}")
             elif self.learner.active:
-                self.journal.event(session_bounds(day)[0], "INFO", "autolearn",
+                self.journal.event(self._session_ts(day), "INFO", "autolearn",
                                    f"champion {self.learner.champion_id} steers entries"
                                    + (f" (drift {self.learner.drift.get('state')})" if self.learner.drift else ""))
         self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
@@ -243,7 +249,7 @@ class IntradayEngine:
         exp = ", ".join(f"{u} {e:%d-%b}" for u, e in self.expiry.items())
         self.say(f"── session {day} · capital ₹{self.day_start_equity:,.0f} · expiries {exp} · chain {self.chains.name} "
                  f"· feed {self.feed.name}{' · events: ' + ', '.join(self.events_today) if self.events_today else ''}")
-        self.journal.event(session_bounds(day)[0], "INFO", "session", f"session start; expiries {exp}; chain {self.chains.name}")
+        self.journal.event(self._session_ts(day), "INFO", "session", f"session start; expiries {exp}; chain {self.chains.name}")
 
     def step(self) -> bool:
         now = self.feed.now()
@@ -896,9 +902,9 @@ class IntradayEngine:
             self.iv_hist = load(self.warehouse_dir, self.underlyings, self.pricer.r, self.pricer.q, self.expiry_min_days, day)
         except Exception as exc:
             self.iv_hist = {}
-            self.journal.event(session_bounds(day)[0], "WARN", "quant", f"ATM IV history unavailable ({exc!s:.160})")
+            self.journal.event(self._session_ts(day), "WARN", "quant", f"ATM IV history unavailable ({exc!s:.160})")
         if self.iv_hist:
-            self.journal.event(session_bounds(day)[0], "INFO", "quant", "ATM IV history for the IV percentile: " +
+            self.journal.event(self._session_ts(day), "INFO", "quant", "ATM IV history for the IV percentile: " +
                                ", ".join(f"{u} {len(h)} sessions to {h['date'].iloc[-1]}" for u, h in self.iv_hist.items()))
 
     def _learn_step(self, u: str, now) -> dict | None:
@@ -930,7 +936,7 @@ class IntradayEngine:
             return
         detail = "; ".join(f"{k}: journal {w:+d} vs broker {h:+d}" for k, (w, h) in sorted(diff.items()))[:300]
         self.health["reconcile"] = {"ok": False, "detail": detail}
-        self.journal.event(session_bounds(day)[0], "CRITICAL", "risk", f"reconciliation failed, entries halted: {detail}",
+        self.journal.event(self._session_ts(day), "CRITICAL", "risk", f"reconciliation failed, entries halted: {detail}",
                            {"journal": want, "broker": have})
         self.say(f"  RECONCILIATION FAILED: {detail}")
 
@@ -975,7 +981,7 @@ class IntradayEngine:
             res = f"unreadable ({exc!s:.80})"
         self.journal_fault = None if res == "ok" else f"journal integrity check failed: {res}"
         if self.journal_fault:
-            self.journal.event(session_bounds(day)[0], "CRITICAL", "risk", self.journal_fault)
+            self.journal.event(self._session_ts(day), "CRITICAL", "risk", self.journal_fault)
 
     def _load_hist_edge(self, day: dt.date) -> None:
         """The warehouse research's buyer's edge (research.sh fetches buyer_edge.json) for today's weekday and the days
@@ -1043,7 +1049,7 @@ class IntradayEngine:
                 h = h[h.index.date < day] if h is not None and len(h) else pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
             except Exception as exc:
                 h = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-                self.journal.event(session_bounds(day)[0], "WARN", "quant", f"{u}: no 5m history for the model ({exc!s:.120})")
+                self.journal.event(self._session_ts(day), "WARN", "quant", f"{u}: no 5m history for the model ({exc!s:.120})")
             self.hist5[u] = h
             m = DirectionModel(min_auc=float(self.qc.get("min_auc", 0.53)))
             diag = m.fit(features_5m(h)) if len(h) else m.diag
@@ -1052,7 +1058,7 @@ class IntradayEngine:
                    + (f" (walk-forward AUC {diag['auc_oos']:.3f}, log-loss skill {diag['logloss_skill_oos']:+.2%}, "
                       f"{diag['samples']:,} samples over {diag['days']} days)" if "auc_oos" in diag else
                       f" ({diag.get('samples', 0)} samples, {diag.get('days', 0)} days)"))
-            self.journal.event(session_bounds(day)[0], "INFO", "quant", msg)
+            self.journal.event(self._session_ts(day), "INFO", "quant", msg)
             self.say("  " + msg)
 
     def _quant_state(self, u: str, now) -> dict:
@@ -1069,16 +1075,16 @@ class IntradayEngine:
         today = df.iloc[c["start"]:]
         m = self.models.get(u)
         p_model = None
-        n5 = len(today) // 5                                        # completed 5m bars (features change only then)
-        if m is not None and m.w is not None and n5 > 0:
+        # A-05: features change only when a clock 5m bucket completes (on the clock and in the data), as in training
+        key = (self.day, min(now, today.index[-1] + pd.Timedelta(minutes=1)).floor("5min")) if len(today) else None
+        if m is not None and m.w is not None and key is not None:
             cached = self._pcache.get(u)
-            if cached and cached[0] == (self.day, n5):
+            if cached and cached[0] == key:
                 p_model = cached[1]
             else:
-                five = to_5m(today.iloc[:n5 * 5])
-                f = features_5m(five, c["prev_close"], c["prev_sig"])
-                p_model = m.predict(f.iloc[-1])
-                self._pcache[u] = ((self.day, n5), p_model)
+                five = completed_5m(today, now)
+                p_model = m.predict(features_5m(five, c["prev_close"], c["prev_sig"]).iloc[-1]) if len(five) else None
+                self._pcache[u] = (key, p_model)
         an = self.chain_an.get(u) or {}
         vol = c["volf"].forecast(df, self.day, an.get("atm_iv"), today_close=today["close"].to_numpy(dtype=float))
         d = (m.diag if m is not None else {}) or {}

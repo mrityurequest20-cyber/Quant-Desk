@@ -191,3 +191,77 @@ def test_quant_failure_degrades_to_standing_aside(cfg, tmp_path):
     assert len(th) > 100 and not len(j.trades())                                    # kept thinking, didn't trade blind
     errs = j.events(level="ERROR")
     assert errs["message"].str.contains("quant state failed").sum() == 2               # once per underlying, not every minute
+
+
+# ---- A-05: the live path's 5m bars are the training path's clock buckets ---------------------------------------------
+def _minutes(day, drop=(), seed=0):
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range(f"{day} 09:15", f"{day} 15:29", freq="1min", tz=IST)
+    c = 22500 * np.exp(np.cumsum(rng.normal(0, 4e-4, len(idx))))
+    o = np.r_[22500, c[:-1]]
+    df = pd.DataFrame({"open": o, "high": np.maximum(o, c) * 1.0002, "low": np.minimum(o, c) * 0.9998, "close": c,
+                       "volume": rng.integers(500, 1500, len(idx)).astype(float)}, index=idx)
+    return df[~idx.strftime("%H:%M").isin(drop)]
+
+
+@pytest.mark.parametrize("drop", [(), ("10:02",), ("12:20", "12:21"), ("12:29",), ("13:05", "13:06", "13:07", "13:08", "13:09")])
+def test_live_5m_bars_are_the_training_resample(drop):
+    """At every minute the live 5m bars, and the model features on them, are exactly the training path's (to_5m, as
+    samples_from_bars builds them) for the clock buckets that have ended: a missing minute shifts no later bucket, and a
+    bucket whose last minute hasn't arrived is waited for, never used short."""
+    from quantdesk.autolearn.features import samples_from_bars
+    from quantdesk.intraday.quant import completed_5m, session_sigma
+    day = dt.date(2026, 10, 8)
+    prior, today = _minutes("2026-10-07", seed=1), _minutes(str(day), drop)
+    train5 = to_5m(pd.concat([prior, today]))
+    samples = samples_from_bars({"NIFTY": pd.concat([prior, today])})[0].set_index("ts")
+    prev_close, prev_sig = float(prior["close"].iloc[-1]), session_sigma(to_5m(prior)["close"].to_numpy(float))
+    waited = 0
+    for now in pd.date_range(f"{day} 09:16:04", f"{day} 15:30:04", freq="1min", tz=IST):
+        seen = today[today.index + pd.Timedelta(minutes=1) <= now]
+        live = completed_5m(seen, now)
+        want = train5[(train5.index.date == day) & (train5.index + pd.Timedelta(minutes=5) <= now)]
+        if list(live.index) != list(want.index):                # only the newest bucket, while its last minute is due
+            assert list(live.index) == list(want.index[:-1]) and want.index[-1] + pd.Timedelta(minutes=4) not in seen.index
+            waited += 1
+        pd.testing.assert_frame_equal(live, train5.loc[live.index], check_freq=False)
+        if len(live):
+            f = features_5m(live, prev_close, prev_sig).iloc[-1]
+            assert np.allclose(f[FEATURES].to_numpy(float), samples.loc[live.index[-1] + pd.Timedelta(minutes=5), FEATURES]
+                               .to_numpy(float), equal_nan=True)
+    assert waited == (1 if drop == ("12:29",) else 0)
+
+
+def test_engine_model_reads_the_training_bars(cfg):
+    """Through the engine: each minute the direction model sees the last ended clock 5m bucket's features, equal to the
+    training resample's, with a missing minute (10:02) and the hand-over hole (12:20-12:21) in today's data."""
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    cal = TradingCalendar(cfg.holidays())
+    days = [d.date() for d in cal.trading_days("2026-09-14", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=5)
+    day, n = days[-1], bars["NIFTY"]
+    bars["NIFTY"] = n[~((n.index.date == day) & n.index.strftime("%H:%M").isin(["10:02", "12:20", "12:21"]))]
+    eng = IntradayEngine(cfg, ReplayFeed(bars, day), "model", Journal(), IntradayBroker(cfg, starting_cash=20000), say=None)
+    eng.start_session(day)
+    seen = []
+
+    class Spy:
+        w, valid, diag = 1.0, False, {}
+
+        def predict(self, row):
+            seen.append((eng.feed.now(), row))
+            return 0.5
+    eng.models["NIFTY"] = Spy()
+    while eng.feed.advance():
+        eng.step()
+    train = features_5m(to_5m(bars["NIFTY"]))
+    train = train[train.index.date == day]
+    assert len(seen) == len(train) and not len(eng.journal.events(level="ERROR"))   # once per completed bucket
+    for now, row in seen:
+        last = train.index[train.index + pd.Timedelta(minutes=5) <= now][-1]       # the newest bucket ended by now
+        assert row.name == last and np.allclose(row[FEATURES].to_numpy(float), train.loc[last, FEATURES].to_numpy(float))

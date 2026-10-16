@@ -23,7 +23,7 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 
-from ..intraday.quant import features_5m, to_5m
+from ..intraday.quant import completed_5m, features_5m, to_5m
 from .cycle import root_of
 from .evaluate import CostModel
 from .features import BAR, FEATURE_VERSION, FEATURES, HORIZON_BARS, fingerprint
@@ -102,15 +102,11 @@ class LiveLearner:
         decision for that bar: {model_id, p, signal, abstained, tau, decision_id, reason}."""
         if not self.models and self.plan is None:
             return None
-        today = bars[bars.index.date == day]
-        n5 = len(today) // 5
-        if n5 < 1:
+        five = completed_5m(bars[bars.index.date == day], now)    # A-05: clock buckets, as training builds them
+        if five.empty:
             return None
-        five = to_5m(today.iloc[:n5 * 5])
         ts = five.index[-1] + BAR                                  # the decision time: the last 5-minute bar's end
         if self.done.get(u) == ts:
-            return self.last.get(u)
-        if now < ts:                                               # never decide on a bar that hasn't finished
             return self.last.get(u)
         f = features_5m(five, prev_close, prev_sig)
         row = f.iloc[[-1]]

@@ -32,6 +32,7 @@ from scipy.stats import norm
 
 from ..core.types import Instrument
 from .chains import IntradayPricer, time_to_expiry
+from .features import _completed
 
 MIN_PER_YEAR = 375 * 252
 FEATURES = ["r5", "r15", "r30", "vwap_z", "close_loc", "or_pos", "ema_gap", "rsi", "tod", "gap"]
@@ -94,6 +95,16 @@ def to_5m(bars: pd.DataFrame) -> pd.DataFrame:
         return bars
     return bars.resample("5min", label="left", closed="left", origin="start_day", offset="15min").agg(
         {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna(subset=["close"])
+
+
+def completed_5m(bars: pd.DataFrame, now) -> pd.DataFrame:
+    """The live path's 5m bars: today's 1m bars bucketed by clock (09:15, 09:20, …) exactly as training resamples them
+    (`to_5m`), keeping only buckets that have ended by `now` and that the data has reached (the last 1m bar's end). A
+    missing minute leaves every other bucket where it is; a bucket whose last minute hasn't arrived waits for it (or for
+    a later bar), so a bar is never used short and then cached."""
+    if bars.empty:
+        return bars
+    return _completed(to_5m(bars), "5min", min(pd.Timestamp(now), bars.index[-1] + pd.Timedelta(minutes=1)))
 
 
 def _ewm(x: np.ndarray, span: float | None = None, alpha: float | None = None) -> np.ndarray:
