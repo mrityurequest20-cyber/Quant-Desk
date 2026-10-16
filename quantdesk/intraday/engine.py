@@ -163,6 +163,8 @@ class IntradayEngine:
         self.chain_failed_at: dict[str, pd.Timestamp] = {}        # a refresh that raised: retried after `refresh_min`, not every minute
         self._exit_tried: dict[str, pd.Timestamp] = {}            # trade id -> its last exit attempt (`_close`, `_retry_exit`)
         self.fallback_since: dict[str, pd.Timestamp] = {}         # index -> when its real chain went down (said once per outage)
+        self.lot_mismatch: dict[str, tuple[int, int]] = {}        # P2-6: underlying -> (configured lot, exchange mktLot) while they differ
+        self._lot_said: dict[str, tuple[int, int]] = {}           # the pair last reported (one event per pair per session)
         # P2-9 (owner decision 16 Oct: 10%): a drawdown from the account's high-water mark that halts new entries across
         # days until the owner clears it (`quantdesk intraday clear-drawdown-halt`); exits are never held by it.
         self.dd_halt_frac = float(cfg.get("intraday.risk.cross_day_drawdown_halt", 0) or 0)
@@ -235,6 +237,7 @@ class IntradayEngine:
     # ---- session lifecycle ------------------------------------------------------------------------------
     def start_session(self, day: dt.date) -> None:
         self.day = day
+        self._lot_said.clear()                                # a lot mismatch is reported once per session
         for sym in self.underlyings + [self.vix]:
             h = self.feed.history(sym, self.history_days)
             self.bars[sym] = h.tail(375 * self.history_days) if h is not None else \
@@ -491,6 +494,7 @@ class IntradayEngine:
                 ch.attrs["spot"] = self.spot(u)
             ch = fill_iv(ch, self.pricer)
             self.chain_df[u] = ch
+            self._check_lot(u, ch, now)
             if self.chains is self.model_chain or ch.attrs.get("source") != "model":
                 # P2-4: a model chain standing in for a failed real one (VIX x beta IV, not this market's) must not
                 # recalibrate the marks of open positions; the replay's own model chain is the market and still does.
@@ -523,6 +527,25 @@ class IntradayEngine:
             self.journal.event(now, "WARN", "execution", f"{u}: no new entries while the {self.chains.name} chain is down; "
                                f"entries are skipped on purpose and the data is from the {ch.attrs.get('source')} fallback "
                                f"(exits and marks carry on)", {"source": ch.attrs.get("source")})
+
+    def _check_lot(self, u: str, ch: pd.DataFrame, now) -> None:
+        """P2-6: the configured lot against the exchange's (Kotak's `mktLot`). Orders are sized in the configured multiple, so
+        a lot NSE has revised would put every order in the wrong size: no new entry on `u` until the owner updates the config
+        (never adopted silently; exits are untouched). An unknown lot (no `mktLot`, a model or NSE chain) vetoes nothing."""
+        raw = ch.attrs.get("lot") if ch.attrs.get("source") != "model" else None
+        try:
+            real = int(raw) if raw is not None and float(raw) > 0 else 0
+        except (TypeError, ValueError):
+            real = 0
+        cfg_lot = self.lot(u)
+        if not real or real == cfg_lot:
+            self.lot_mismatch.pop(u, None)
+            return
+        pair = self.lot_mismatch[u] = (cfg_lot, real)
+        if self._lot_said.get(u) != pair:
+            self._lot_said[u] = pair
+            self.journal.event(now, "ERROR", "data", f"{u} lot size mismatch: config says {cfg_lot} but the exchange (Kotak mktLot) "
+                               f"says {real}; no new entries on {u} until instruments.{u}.lot_size is corrected", {"config": cfg_lot, "exchange": real})
 
     def _refresh_news(self, now) -> None:
         if self.news is None:
@@ -966,6 +989,9 @@ class IntradayEngine:
         if self.chains is not self.model_chain and self.chain_df[u].attrs.get("source") == "model":
             # F-01: the real chain failed and the model stands in; its quotes and OI are invented, not tradable
             return f"standing aside: {u} {self.chains.name} option chain unavailable (model prices are not tradable)"
+        if u in self.lot_mismatch:
+            cfg_lot, real = self.lot_mismatch[u]
+            return f"halted: {u} lot size mismatch (config {cfg_lot}, exchange {real}); the owner corrects instruments.{u}.lot_size"
         age = now - (self.chain_ok_at.get(u) or self.chain_df[u].attrs.get("ts", now))   # the data's age, not the last try's
         if self.chain_df[u].attrs.get("source") != "model" and age > pd.Timedelta(minutes=self.stale_min):
             return f"standing aside: option chain {age.seconds // 60} min old"
