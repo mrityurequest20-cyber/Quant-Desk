@@ -287,3 +287,16 @@ def test_settlement_from_the_tape_when_no_bars_are_recorded(tmp_path):
     assert s == pytest.approx(24014.5) and "30 tape index spots" in src       # 15:30 itself is outside the window
     s2, src2 = settlement_price(tmp_path, "SENSEX", day)
     assert s2 is None and "tape has 1" in src2
+
+
+def test_a_spec_that_asks_for_the_config_rate_gets_it_and_older_specs_keep_theirs(cfg, setup):
+    """F-05: the paper broker and a spec that says `exercise_stt: config` charge the same dated rate; a spec that froze
+    0.125% (every registered one) keeps it, so its ledger and its `official` diagnostics do not move."""
+    seller, cal, data, d, e = setup
+    t = {"expiry": str(e)}
+    assert seller.stt_rate(t) == 0.00125 and "exercise_stt" not in seller.spec
+    cfg_seller = ExpirySeller(cfg, seller.root, data, spec={**seller.spec, "exercise_stt": "config"}, say=lambda *a: None)
+    assert cfg_seller.stt_rate(t) == cfg_seller.costs.exercise_stt(e) == 0.0015
+    trade = {"lot": 65, "entry_fees_rs": 0.0, "legs": [{"right": "CE", "strike": 22_000.0, "qty": 1, "fill": 100.0}]}
+    assert payoff(trade, 22_300.0)["stt_rs"] == pytest.approx(0.00125 * 300 * 65)
+    assert payoff(trade, 22_300.0, cfg_seller.stt_rate(t))["stt_rs"] == pytest.approx(0.0015 * 300 * 65)

@@ -99,3 +99,38 @@ def test_probabilistic_and_deflated_sharpe():
     assert M.probabilistic_sharpe(noise) == pytest.approx(0.5, abs=1e-6)
     # the more variants tried, the higher the bar a Sharpe must clear
     assert M.deflated_sharpe(good, 100, 0.02) < M.deflated_sharpe(good, 2, 0.02) <= M.probabilistic_sharpe(good)
+
+
+# ---- F-05: exercise STT on a long ITM leg held to expiry (0.15% of intrinsic from 2026-04-01, from config) -----------
+def _settle(cfg, qty, strike, right="CE", spot=25_300.0, on="2026-10-27"):
+    inst = Instrument.option("NIFTY", dt.date.fromisoformat(on), strike, right, 65)
+    br = PaperBroker(cfg, starting_cash=1_000_000)
+    br._pos[inst.symbol] = {"instrument": inst.to_dict(), "qty": qty, "avg_price": 100.0}
+    intr = max(spot - strike, 0.0) if right == "CE" else max(strike - spot, 0.0)
+    return br, br.settle_expiry(inst, intr, pd.Timestamp(on, tz="Asia/Kolkata")), intr
+
+
+def test_a_long_itm_leg_held_to_expiry_pays_015pct_of_intrinsic_times_quantity(cfg):
+    br, fill, intr = _settle(cfg, 65, 25_000)
+    stt = 0.0015 * intr * 65
+    assert intr == 300.0 and fill.fees == pytest.approx(stt) and fill.fee_breakdown == {"stt": pytest.approx(stt)}
+    assert br.fees_paid == pytest.approx(stt) and br.fee_breakdown["stt"] == pytest.approx(stt)
+    assert br.cash() == pytest.approx(1_000_000 + 65 * intr - stt) and not br.positions()
+
+
+def test_short_and_otm_legs_pay_no_exercise_stt(cfg):
+    for qty, strike, right in ((-65, 25_000, "CE"), (65, 25_500, "CE"), (65, 25_000, "PE"), (-65, 25_500, "PE")):
+        br, fill, intr = _settle(cfg, qty, strike, right)
+        assert fill.fees == 0.0 and br.fees_paid == 0.0 and br.fee_breakdown == {}
+        assert br.cash() == pytest.approx(1_000_000 + qty * intr)        # the intrinsic cash flow only
+
+
+def test_the_exercise_stt_rate_is_dated_and_comes_from_config(cfg):
+    cm = CostModel(cfg)
+    assert cm.exercise_stt(dt.date(2026, 3, 31)) == pytest.approx(0.00125) and cm.exercise_stt(dt.date(2026, 4, 1)) == pytest.approx(0.0015)
+    assert cm.exercise_stt(pd.Timestamp("2026-10-27", tz="Asia/Kolkata")) == pytest.approx(0.0015)
+    other = cfg.with_overrides({"costs": {"exercise_stt": {dt.date(2026, 4, 1): 0.002}}})
+    br, fill, intr = _settle(other, 65, 25_000)
+    assert fill.fees == pytest.approx(0.002 * intr * 65)                  # the broker follows the config, not a constant
+    br, fill, intr = _settle(cfg, 65, 25_000, on="2026-03-30")            # settled before the revision: the earlier rate
+    assert fill.fees == pytest.approx(0.00125 * intr * 65)
