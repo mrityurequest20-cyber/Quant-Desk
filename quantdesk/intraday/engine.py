@@ -21,6 +21,7 @@ import time
 import traceback
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -137,7 +138,8 @@ class IntradayEngine:
         self.slow_step_sec = float(ic.get("slow_step_sec", 40))
         self.health: dict = {"step_errors": 0, "consecutive_failures": 0, "last_error": None, "slow_steps": 0,
                              "last_step_sec": None, "safe_mode": None, "reconcile": None}
-        self.chain_at: dict[str, pd.Timestamp] = {}
+        self.chain_at: dict[str, pd.Timestamp] = {}               # when a chain refresh last succeeded (throttle) ...
+        self.chain_ok_at: dict[str, pd.Timestamp] = {}            # ... and the age `_blocked` vetoes on (P1-4)
         self.chain_fail: dict[str, int] = {}
         self.chain_tried: dict[str, pd.Timestamp] = {}
         self.expiry: dict[str, dt.date] = {}
@@ -284,6 +286,25 @@ class IntradayEngine:
         if not got:
             self._wallclock_exits(now)                    # no new bar is no reason to hold a position past the square-off
             return False
+        early, tried, fails = self._manage_first(now)          # exits before the optional network refreshes (P2-2)
+        try:
+            self._refresh_optional(now)
+            for u in self.underlyings:                             # one index's failure must not starve the other (P2-2)
+                try:
+                    self._step_underlying(u, now, early, tried)
+                except Exception as exc:
+                    self._step_failed(u, now, exc, fails)
+        finally:                                               # the square-off happens whatever failed above (P2-2)
+            self._wallclock_exits(now)
+        self._snapshot(now)
+        self._persist()
+        self._heartbeat(now)
+        self.journal.commit()
+        if fails:                                              # the step finished for everyone else; run_step still counts it
+            raise fails[0]
+        return True
+
+    def _refresh_optional(self, now) -> None:
         self._refresh_news(now)
         self._short_legs(now)
         if self.brain is not None and self.brain.gfeed is not None:
@@ -296,42 +317,63 @@ class IntradayEngine:
         if all(x in self.underlyings for x in PAIR):
             self.rel = self._guarded("pair", now, "relative strength", rel_strength, self.bars.get(PAIR[0]),
                                      self.bars.get(PAIR[1]), self.day, now)
+
+    def _manage_first(self, now) -> tuple[dict, set, list]:
+        """Exits for open trades come first: refresh the chain they are marked on and run `_manage`, before the news,
+        global, heavyweights and breadth refreshes (steps of 51 s and 65 s were logged; exits waited behind that I/O).
+        -> (exits by index, indices whose chain was just refreshed, failures)."""
+        early, tried, fails = {}, set(), []
         for u in self.underlyings:
-            if u not in self.bars or self.bars[u].empty or self.bars[u].index[-1].date() != self.day:
+            if not any(t.symbol == u for t in self.open_trades) or u not in self.bars or self.bars[u].empty \
+                    or self.bars[u].index[-1].date() != self.day:
                 continue
+            try:
+                self._refresh_chain(u, now)
+                tried.add(u)
+                early[u] = self._manage(u, SimpleNamespace(spot=self.spot(u)), now)
+            except Exception as exc:
+                self._step_failed(u, now, exc, fails)
+        return early, tried, fails
+
+    def _step_failed(self, u: str, now, exc: Exception, fails: list) -> None:
+        """One index's work failed: journal it, keep going, and hand the failure to `step` to re-raise at the end so
+        `run_step` counts it (a persistent failure still ends in safe mode)."""
+        log.exception("%s step failed", u)
+        self.journal.event(now, "WARN", "engine", f"{u}: this minute's work failed, carrying on with the rest: {exc!r:.200}",
+                           {"where": _where(exc)})
+        fails.append(exc)
+
+    def _step_underlying(self, u: str, now, early: dict, tried: set) -> None:
+        if u not in self.bars or self.bars[u].empty or self.bars[u].index[-1].date() != self.day:
+            return
+        if u not in tried:
             self._refresh_chain(u, now)
-            s = session_state(self.bars[u], now, cache=self.feature_cache[u])
-            if s is None:
-                continue
-            if not s.get("from_open", True) and u not in self.late_start:
-                self.late_start.add(u)                           # once a session: self-review files it (D-07)
-                first = self.bars[u][self.bars[u].index.date == self.day].index[0]
-                self.journal.event(now, "WARN", "data", f"{u}: the opening bars failed to arrive (today's data starts "
-                                   f"{first:%H:%M}), so the analyst stands aside while they are missing")
-            if self.learner is not None:                         # every model's prediction, before the outcome exists
-                self.learn_sig[u] = self._guarded(u, now, "learning record", self._learn_step, u, now)
-            q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
-            b = self._guarded(u, now, "brain", self._think_globally, u, now) if self.brain is not None else None
-            blk = self.eventbook.blocking(now)                   # only an announcement inside the session blocks
-            br = self.breadth_state[u] = self.breadth.state(u, s.get("chg"), now) if self.breadth is not None else None
-            view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
-                                       blk.label() if blk else None, self._flow_state(u, now),
-                                       self.news.state(u, now) if self.news is not None else None, q,
-                                       {"evidence": b.evidence, "narrative": b.narrative} if b is not None else None,
-                                       breadth=br, rel=self.rel, hist_edge=self.hist_edge.get(u))
-            self.views[u] = view
-            self._last_s[u] = s
-            exits = self._manage(u, view, now)
-            action = self._maybe_enter(u, view, s, now)
-            if self.anticipate:
-                action = self._arm(u, view, s, now, action)
-            self._think(u, view, now, "; ".join(exits + [action]) if exits else action, force=bool(exits))
-        self._wallclock_exits(now)
-        self._snapshot(now)
-        self._persist()
-        self._heartbeat(now)
-        self.journal.commit()
-        return True
+        s = session_state(self.bars[u], now, cache=self.feature_cache[u])
+        if s is None:
+            return
+        if not s.get("from_open", True) and u not in self.late_start:
+            self.late_start.add(u)                           # once a session: self-review files it (D-07)
+            first = self.bars[u][self.bars[u].index.date == self.day].index[0]
+            self.journal.event(now, "WARN", "data", f"{u}: the opening bars failed to arrive (today's data starts "
+                               f"{first:%H:%M}), so the analyst stands aside while they are missing")
+        if self.learner is not None:                         # every model's prediction, before the outcome exists
+            self.learn_sig[u] = self._guarded(u, now, "learning record", self._learn_step, u, now)
+        q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
+        b = self._guarded(u, now, "brain", self._think_globally, u, now) if self.brain is not None else None
+        blk = self.eventbook.blocking(now)                   # only an announcement inside the session blocks
+        br = self.breadth_state[u] = self.breadth.state(u, s.get("chg"), now) if self.breadth is not None else None
+        view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
+                                   blk.label() if blk else None, self._flow_state(u, now),
+                                   self.news.state(u, now) if self.news is not None else None, q,
+                                   {"evidence": b.evidence, "narrative": b.narrative} if b is not None else None,
+                                   breadth=br, rel=self.rel, hist_edge=self.hist_edge.get(u))
+        self.views[u] = view
+        self._last_s[u] = s
+        exits = early[u] if u in early else self._manage(u, view, now)    # an open trade was managed first
+        action = self._maybe_enter(u, view, s, now)
+        if self.anticipate:
+            action = self._arm(u, view, s, now, action)
+        self._think(u, view, now, "; ".join(exits + [action]) if exits else action, force=bool(exits))
 
     def _wallclock_exits(self, now) -> None:
         """What must happen by the clock, bar or no bar: a stuck exit is retried, and past the square-off time every
@@ -396,18 +438,21 @@ class IntradayEngine:
                 ch.attrs["spot"] = self.spot(u)
             ch = fill_iv(ch, self.pricer)
             self.chain_df[u] = ch
+            if self.chains is self.model_chain or ch.attrs.get("source") != "model":
+                # P2-4: a model chain standing in for a failed real one (VIX x beta IV, not this market's) must not
+                # recalibrate the marks of open positions; the replay's own model chain is the market and still does.
+                # Before the optional analytics (P1-4): an error there must not leave the marks on a stale IV.
+                self.marker.calibrate(ch, self.lot(u))
             an = chain_analytics(ch, self.pricer, self.lot(u))
             if ch.attrs.get("source") != "model":             # the model chain's IV is India VIX's, not this market's
                 an.update(iv_percentile(self.iv_hist.get(u), an.get("atm_iv"), (self.expiry[u] - now.date()).days, now.date()))
             an.update(self._futures(u, now, an.get("spot")))
             an.update(self.chainflow.update(u, an, now, chain_step(ch)))
             self.chain_an[u] = an
-            self.chain_at[u] = now
-            self.marker.calibrate(ch, self.lot(u))
+            self.chain_at[u] = self.chain_ok_at[u] = now          # only a refresh that worked counts (P1-4)
             if self.recorder and ch.attrs.get("source") != "model":
                 self.recorder.record_chain(ch)
-        except Exception as exc:
-            self.chain_at[u] = now
+        except Exception as exc:                              # chain_at/chain_ok_at stay: the data is as old as its last success
             self.journal.event(now, "WARN", "chain", f"{u} chain refresh failed: {exc}")
 
     def _refresh_news(self, now) -> None:
@@ -742,12 +787,13 @@ class IntradayEngine:
 
     def _by_record(self, u: str, plans: list, view: MarketView, now) -> tuple[list, str | None]:
         """Each setup's own record of R (by day type when it has one) scales its conviction, and a clearly losing
-        record stands it aside. A fresh desk changes nothing."""
+        record stands it aside, but only under intraday.learning.apply_factor_weights (D-01): a stood-aside setup takes
+        no more trades, so its record could never recover. A fresh desk changes nothing."""
         if self.memory is None:
             return plans, None
         kept, stop = [], None
         for p in plans:
-            m, why = self.memory.setup_mult(p.setup, view.day_type)
+            m, why = self.memory.setup_mult(p.setup, view.day_type, self.analyst.apply_learned)
             if why:
                 stop = stop or f"its record says no: {why}"
                 said = self._record_said.get((u, p.setup))
@@ -803,7 +849,7 @@ class IntradayEngine:
         if self.chains is not self.model_chain and self.chain_df[u].attrs.get("source") == "model":
             # F-01: the real chain failed and the model stands in; its quotes and OI are invented, not tradable
             return f"standing aside: {u} {self.chains.name} option chain unavailable (model prices are not tradable)"
-        age = now - self.chain_at.get(u, now)
+        age = now - (self.chain_ok_at.get(u) or self.chain_df[u].attrs.get("ts", now))   # the data's age, not the last try's
         if self.chain_df[u].attrs.get("source") != "model" and age > pd.Timedelta(minutes=self.stale_min):
             return f"standing aside: option chain {age.seconds // 60} min old"
         gate = self.risk.gate(now, self.equity(now), self.open_trades, u)

@@ -199,8 +199,10 @@ intraday:
   # apply_factor_weights: false (D-01, owner decision "record, don't apply"): factor reliability (0.5x-1.5x) and
   # probation graduation are still graded, saved and shown ("recorded, not applied") but every factor votes at its
   # unlearned weight; the audit couldn't tell the factor record from noise (placebo p = 0.70). true = the old behaviour.
-  # This flag covers factor weights and graduation only: news trust (event/source/reader), setup conviction and the
-  # stand-aside rule (<= -0.3R after 8+ trades) and the relative-strength preference (once t >= 2) stay live.
+  # The same flag covers setup conviction and the stand-aside rule (<= -0.3R after 8+ trades): a stood-aside setup takes
+  # no trades, so its record could never recover (it locked a zero-edge setup out 11-12% of the time). They are graded,
+  # saved and shown ("recorded, not applied"); news trust (event/source/reader) and the relative-strength preference
+  # (once t >= 2) stay live.
   learning: {enabled: true, apply_factor_weights: false}
   # language models as second readers of the news (llm.py): each provider whose key is in the environment reads the
   # headlines about an index, in the background, and the learning loop grades each one against the next 30 minutes.
