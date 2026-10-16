@@ -470,6 +470,9 @@ def cmd_learn(cfg, a):
     from . import learning
     p = paths(cfg, a.account or "live")
     mem = learning.Memory(p["memory"])
+    if mem.corrupt:                                         # C-10: a blank bootstrap or rebuild must not overwrite it
+        sys.exit(f"learning: {p['memory']} failed to load ({mem.corrupt}); nothing done. Restore it, or move it aside "
+                 f"deliberately to start a new record.")
     if a.bootstrap:
         if a.if_empty and (mem.d["tables"].get("factor") or mem.d.get("bootstrap")):
             print(f"learning: the record already has {mem.graded('factor'):.0f} graded factor reads; nothing to bootstrap")

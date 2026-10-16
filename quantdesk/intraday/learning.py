@@ -34,6 +34,7 @@ Two research tables ride along (they change nothing by themselves; they're what 
 from __future__ import annotations
 
 import json
+import logging
 import math
 from pathlib import Path
 
@@ -41,6 +42,8 @@ import numpy as np
 import pandas as pd
 
 from .feeds import frozen_minutes
+
+log = logging.getLogger(__name__)
 
 IST = "Asia/Kolkata"
 PRIOR = 20.0                 # pseudo-observations at a 50% hit rate / 0R mean
@@ -61,13 +64,21 @@ class Memory:
         self.path = Path(path) if path else None
         self.d: dict = {"version": 1, "tables": {}, "graded": {"news": [], "thoughts_upto": {}, "trades": [], "armed": []},
                         "days": [], "lessons": []}
+        self.corrupt: str | None = None                  # why the saved record didn't load; nothing is saved while set
         if self.path and self.path.exists():
             try:
                 self.d.update(json.loads(self.path.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as exc:
+                # C-10: never carry on blank over a record that failed to load: the next save (or the morning's
+                # `learn --bootstrap --if-empty`, which sees it as empty) would overwrite every session learned. The
+                # desk trades on neutral tilts, the file is left exactly as it is, and the owner restores it.
+                self.corrupt = f"{type(exc).__name__}: {exc!s:.160}"
+                log.error("learning memory %s unreadable (%s): nothing will be saved over it", self.path, self.corrupt)
 
     def save(self) -> None:
+        if self.corrupt:
+            log.error("learning memory %s not saved: the file on disk failed to load (%s)", self.path, self.corrupt)
+            return
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             g = self.d["graded"]

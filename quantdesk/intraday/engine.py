@@ -260,6 +260,10 @@ class IntradayEngine:
         self.say(f"── session {day} · capital ₹{self.day_start_equity:,.0f} · expiries {exp} · chain {self.chains.name} "
                  f"· feed {self.feed.name}{' · events: ' + ', '.join(self.events_today) if self.events_today else ''}")
         self.journal.event(session_bounds(day)[0], "INFO", "session", f"session start; expiries {exp}; chain {self.chains.name}")
+        if getattr(self.memory, "corrupt", None):              # C-10: said every session until the owner restores the file
+            self.journal.event(session_bounds(day)[0], "ERROR", "learning",
+                               f"learning memory unreadable ({self.memory.corrupt}): the desk trades on neutral tilts and "
+                               f"saves nothing over the file; restore memory.json from the journal branch's evidence")
 
     def step(self) -> bool:
         now = self.feed.now()

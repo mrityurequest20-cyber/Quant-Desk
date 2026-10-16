@@ -57,3 +57,48 @@ def test_the_cycle_and_the_cli_count_the_same_events_in_the_window(tmp_path):
     assert cli == 2                                              # the window's CRITICAL execution + ERROR risk
     assert c._risk_violations("2026-10-01") == 3                 # + the old rule: any risk ERROR/CRITICAL ever (tighten-only)
     assert c._risk_violations() == 3
+
+
+# ---- C-10: a memory file that fails to load is never overwritten --------------------------------------------------
+def test_a_corrupt_memory_is_never_saved_over(tmp_path):
+    """A truncated memory.json loaded as a blank record and the next save wiped every learned session."""
+    from quantdesk.intraday.learning import Memory
+    good = Memory(tmp_path / "memory.json")
+    good.d["days"] = [f"2026-10-{d:02d}" for d in range(1, 17)]
+    good.save()
+    raw = (tmp_path / "memory.json").read_text(encoding="utf-8")
+    (tmp_path / "memory.json").write_text(raw[: len(raw) // 2], encoding="utf-8")       # cut off mid-write
+    cut = (tmp_path / "memory.json").read_bytes()
+    m = Memory(tmp_path / "memory.json")
+    assert m.corrupt and m.d["days"] == []
+    m.d["days"].append("2026-10-19")
+    m.save()
+    assert (tmp_path / "memory.json").read_bytes() == cut                             # left exactly as it was
+
+
+def test_learn_refuses_to_bootstrap_over_a_corrupt_memory(tmp_path):
+    import pytest
+    from quantdesk.intraday.cli import cmd_learn, paths
+    cfg = Config.load(DEFAULT_CONFIG).with_overrides({"runtime": {"dir": str(tmp_path)}})
+    paths(cfg, "live")["memory"].write_text('{"days": ["2026-10-1', encoding="utf-8")
+    with pytest.raises(SystemExit, match="failed to load"):
+        cmd_learn(cfg, SimpleNamespace(account="live", bootstrap=True, if_empty=True, rebuild=False))
+    assert paths(cfg, "live")["memory"].read_text(encoding="utf-8") == '{"days": ["2026-10-1'
+
+
+def test_a_session_on_a_corrupt_memory_says_so(tmp_path):
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.learning import Memory
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    cfg = Config.load(DEFAULT_CONFIG)
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=5)
+    (tmp_path / "memory.json").write_text("{not json", encoding="utf-8")
+    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
+                         say=None, memory=Memory(tmp_path / "memory.json"))
+    eng.start_session(days[-1])
+    ev = eng.journal.events()
+    assert ((ev["level"] == "ERROR") & (ev["category"] == "learning") & ev["message"].str.contains("unreadable")).any()
