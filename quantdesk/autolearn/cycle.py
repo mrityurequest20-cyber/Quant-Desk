@@ -243,6 +243,8 @@ class Cycle:
                 bad += 1
                 continue
             m = json.loads(meta or "{}") if isinstance(meta, str) else {}
+            if m.get("mode") == "exploration":              # an unvalidated prior's trade is never promotion evidence
+                continue
             al = m.get("autolearn") or {}
             model = al.get("model_id") or next((mid for t0, mid in reversed(champs) if t0 <= o), None)
             log.append({"trade_id": tid, "strategy": strat, "symbol": sym, "opened_at": str(o), "closed_at": str(c),

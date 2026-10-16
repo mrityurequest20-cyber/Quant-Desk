@@ -197,7 +197,8 @@ class Engine:
                 fill = self.broker.settle_expiry(l.instrument, ref, ts) if hasattr(self.broker, "settle_expiry") else None
                 l.exit_price = ref
                 if fill is not None:
-                    self.journal.fill(ts, t.id, l.instrument.symbol, fill.qty, ref, 0.0, {"settlement": True})
+                    t.fees += fill.fees                    # exercise STT on a long in-the-money leg (F-05)
+                    self.journal.fill(ts, t.id, l.instrument.symbol, fill.qty, ref, fill.fees, {"settlement": True, **fill.fee_breakdown})
             else:
                 fill = self._fill(t, l.instrument, -l.qty, ref, ts, "close")
                 if fill is None:
