@@ -320,6 +320,8 @@ def test_reads_taken_while_the_vix_feed_was_zero_are_not_graded(tmp_path):
     vix = m.stat("factor", "vix")
     assert vix is not None and vix["n"] == pytest.approx(5 * learning.READ_EVERY / learning.HORIZON, rel=0.25)   # the 5 live reads only
     assert m.stat("factor", "vwap")["n"] > vix["n"]                                                              # the rest of each read still counts
+    ic = m.d["ic"]                                                                                               # the IC table must not take the dead votes either
+    assert ic["vix"]["5"][0] == pytest.approx(5 * min(1.0, learning.READ_EVERY / 5)) and ic["vwap"]["5"][0] > ic["vix"]["5"][0]
     assert learning._dead_read(dead[0]) and not learning._dead_read(live[0]) and not learning._dead_read(dead[1])
 
 
