@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
 from pathlib import Path
 
@@ -176,7 +177,7 @@ def cmd_external_import(cfg, a):
           f"{len(man['sessions'])} sessions · report {ds / 'quality.md'}")
 
 
-def _push_run(out: Path, run: Path, prefix: str, names: list[str], title: str, notes: str) -> None:
+def _push_run(out: Path, run: Path, prefix: str, names: list[str], title: str, notes: str, clobber: bool = True) -> None:
     """A run's files to release <prefix>-YYYY, named <as of>_<file>."""
     import shutil
 
@@ -191,7 +192,7 @@ def _push_run(out: Path, run: Path, prefix: str, names: list[str], title: str, n
         dst = f"{as_of}_{n}"
         shutil.copyfile(run / n, stage / dst)
         staged.append(dst)
-    ReleaseStore(release_tag(prefix, as_of), title=title, notes=notes).push(stage, staged)
+    ReleaseStore(release_tag(prefix, as_of), title=title, notes=notes).push(stage, staged, clobber=clobber)
     print(f"pushed {len(staged)} file(s) to release {release_tag(prefix, as_of)}", flush=True)
 
 
@@ -242,12 +243,21 @@ def cmd_stock_minutes(cfg, a):
     man = stock_minutes(client, out, fo, n=a.stocks, days=a.days, today=today, rate=a.rate, budget_s=a.budget_min * 60,
                         say=lambda m: print(m, flush=True))
     run = Path(man["path"])
-    print(f"{run}: " + ", ".join(f"{k} {t['served']}/{t['asked']}" for k, t in man["totals"].items()), flush=True)
+    line = ", ".join(f"{k} {t['served']}/{t['asked']}" for k, t in man["totals"].items())
+    print(f"{run}: {line}", flush=True)
+    short = [k for k, t in man["totals"].items() if t["served"] * 2 < t["asked"]]
+    if short or man.get("stopped"):                 # a Kotak outage or a cut-short run is a warning, not a green step
+        print(f"::warning::stock-minutes: incomplete run ({line}"
+              f"{'; stopped: ' + str(man['stopped'])[:80] if man.get('stopped') else ''})", flush=True)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.write(f"### Stock minutes {run.name}\n{line}{' (stopped: ' + str(man['stopped'])[:80] + ')' if man.get('stopped') else ''}\n")
     if a.release_prefix:
-        try:
+        try:                                        # never overwrite a run already on the release (a same-day re-run)
             _push_run(out, run, a.release_prefix, release_names(run, stocks=True), f"Stock minutes {run.name[:4]}",
                       "Kotak 1-minute candles (traded bars, not quotes) for the cash series and near-month futures of the "
-                      "most liquid F&O stocks; one set per run (quantdesk/data/kotak_backfill.py). Not a software release.")
+                      "most liquid F&O stocks; one set per run (quantdesk/data/kotak_backfill.py). Not a software release.",
+                      clobber=False)
         except Exception as exc:
             print(f"::warning::stock-minutes: files kept on disk only, release push failed ({exc!s:.120})", flush=True)
 

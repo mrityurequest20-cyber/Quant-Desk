@@ -240,7 +240,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python -m quantdesk data kotak-backfill --days 3 --release-prefix option-minutes || echo "::warning::option-minute backfill failed"
       - name: Keep the session's stock minutes (cash and near-month futures of the ~50 most liquid F&O stocks; data only)
-        if: always()
+        if: ${{ !cancelled() }}            # not after the owner's kill switch: square-off is done, don't hold live-desk
         timeout-minutes: 20
         env:
           GH_TOKEN: ${{ github.token }}

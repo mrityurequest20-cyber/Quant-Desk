@@ -319,6 +319,7 @@ class NewsDesk:
         self.window = nc.get("window_min", 120)
         self.min_relevance = nc.get("min_relevance", 2.0)
         self.breaking_min = nc.get("breaking_stand_aside_min", 15)
+        self.deadline_s = float(nc.get("deadline_s", 4.0))   # the longest a refresh holds up the minute step
         self.fetch = fetch or self._http
         self.items: dict[str, NewsItem] = {}
         self.novelty = nlp.Novelty()
@@ -344,15 +345,21 @@ class NewsDesk:
             return []
         self.last_fetch = now
         new: list[NewsItem] = []
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, wait
 
         def one(src):
             try:
                 return src, parse_feed(self.fetch(src["url"]), src["name"], now), None
             except Exception as exc:                                    # one dead feed must not stop the rest
                 return src, [], exc
-        with ThreadPoolExecutor(max_workers=min(8, len(self.sources) or 1)) as pool:   # all feeds at once: ~one timeout, not nine
-            results = list(pool.map(one, self.sources))
+        # every feed at once (one wave, not two), and the minute step waits at most `deadline_s` for them: a slow feed
+        # counts as failed this time and its thread finishes on its own, so a refresh never blocks the step for long
+        pool = ThreadPoolExecutor(max_workers=len(self.sources) or 1)
+        futs = [pool.submit(one, src) for src in self.sources]
+        wait(futs, timeout=self.deadline_s)
+        pool.shutdown(wait=False, cancel_futures=True)
+        results = [f.result() if f.done() else (src, [], TimeoutError(f"no answer within {self.deadline_s:g}s"))
+                   for src, f in zip(self.sources, futs)]
         for src, items, exc in results:
             self.health[src["name"]] = f"fail {str(exc)[:80]}" if exc else f"ok {len(items)}"
             for it in items:
