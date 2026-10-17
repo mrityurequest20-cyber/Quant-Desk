@@ -311,7 +311,15 @@ def test_a_failure_after_the_rows_are_committed_still_leaves_the_permit(tmp_path
     guard = ROOT / "deploy" / "journal_counts.py"
     restored.write_text(subprocess.run([sys.executable, str(guard), str(rt / "intraday" / "journal.db")],
                                        capture_output=True, text=True, check=True).stdout)
-    monkeypatch.setattr(R.shutil, "rmtree", lambda *a, **k: (_ for _ in ()).throw(OSError("disk")))
+    real = R.shutil
+
+    class FailingRmtree:                       # only retention's own rmtree (a study, after the COMMIT): patching the
+        def __getattr__(self, name):           # global shutil also broke tempfile's cleanup before the COMMIT on CI
+            return getattr(real, name)
+
+        def rmtree(self, *a, **k):
+            raise OSError("disk")
+    monkeypatch.setattr(R, "shutil", FailingRmtree())
     res, lines = retain(rt)
     assert res["status"] == "failed" and "disk" in res["error"]
     permit = json.loads((rt / durable.PERMIT).read_text())
