@@ -81,7 +81,7 @@ def _ewma_upto(x: np.ndarray, decisions: list[int]) -> dict[int, np.ndarray]:
     return out
 
 
-def forecasts(r: np.ndarray, s: np.ndarray, valid_prior: np.ndarray) -> dict[str, dict]:
+def forecasts(r: np.ndarray, s: np.ndarray, valid_prior: np.ndarray, decisions: list[int] = DECISIONS) -> dict[str, dict]:
     """Per decision minute: A's and B's per-minute variance and today's deseasonalised RV so far; rows are days."""
     r2 = r ** 2
     r2s = r2 / s
@@ -90,17 +90,18 @@ def forecasts(r: np.ndarray, s: np.ndarray, valid_prior: np.ndarray) -> dict[str
     prior = pd.Series(day_mean).rolling(PRIOR_DAYS).mean().shift(1).to_numpy().copy()
     prior_s = pd.Series(day_mean_s).rolling(PRIOR_DAYS).mean().shift(1).to_numpy().copy()
     prior[~valid_prior], prior_s[~valid_prior] = np.nan, np.nan
-    ea, eb = _ewma_upto(r2, DECISIONS), _ewma_upto(r2s, DECISIONS)
+    ea, eb = _ewma_upto(r2, decisions), _ewma_upto(r2s, decisions)
     csum_s = np.r_[0.0, np.cumsum(s)]
     out = {}
-    for m in DECISIONS:
+    for m in decisions:
         k = m / (m + 60)
         out[m] = {"A": k * ea[m] + (1 - k) * prior, "B": k * eb[m] + (1 - k) * prior_s,
                   "today_s": r2s[:, :m].mean(1), "csum_s": csum_s}
     return out
 
 
-def rows(sym: str, days: pd.Index, r: np.ndarray, missing: np.ndarray, opens: np.ndarray, s: np.ndarray) -> pd.DataFrame:
+def rows(sym: str, days: pd.Index, r: np.ndarray, missing: np.ndarray, opens: np.ndarray, s: np.ndarray,
+         decisions: list[int] = DECISIONS) -> pd.DataFrame:
     """One row per (day, decision, horizon): targets and the A / B forecasts, plus C's regressors."""
     dd = pd.to_datetime(pd.Series(days)).diff().dt.days.to_numpy()
     consecutive = dd <= 4
@@ -111,11 +112,11 @@ def rows(sym: str, days: pd.Index, r: np.ndarray, missing: np.ndarray, opens: np
     prev5 = pd.Series(rv_day).rolling(PRIOR_DAYS).mean().shift(1).to_numpy()
     prev_close = np.r_[np.nan, (opens * np.exp(r.sum(1)))[:-1]]
     gap = np.where(consecutive, np.abs(np.log(opens / prev_close)), np.nan)
-    f = forecasts(r, s, valid_prior)
+    f = forecasts(r, s, valid_prior, decisions)
     cs_r, cs_r2 = np.c_[np.zeros(len(r)), np.cumsum(r, 1)], np.c_[np.zeros(len(r)), np.cumsum(r2, 1)]
     cs_miss = np.c_[np.zeros(len(r)), np.cumsum(missing, 1)]
     parts = []
-    for m in DECISIONS:
+    for m in decisions:
         fm = f[m]
         for h, mins in HORIZONS.items():
             end = N_MIN if mins is None else m + mins
@@ -149,6 +150,15 @@ def fit_c(train: pd.DataFrame) -> dict:
         res = y - X_ @ beta
         out[h] = {"beta": beta.tolist(), "smear": float(np.mean(np.exp(res)))}
     return out
+
+
+def fit_har(sym: str, days: pd.Index, r: np.ndarray, miss: np.ndarray, opens: np.ndarray, train_mask: np.ndarray) -> tuple:
+    """C_har's training, shared by the study and the live desk: the minute-of-day profile and every regressor frame
+    (all days), and the per-horizon fit on the days in `train_mask` only. → (profile, fit, frame)."""
+    s = profile((r ** 2)[train_mask])
+    d = rows(sym, days, r, miss, opens, s)
+    d["lF_B"] = np.log(np.maximum(d["F_B"], FLOOR))
+    return s, fit_c(d[np.isin(pd.Index(d["day"]), days[train_mask])]), d
 
 
 def predict_c(d: pd.DataFrame, fit: dict) -> np.ndarray:
@@ -210,12 +220,9 @@ def run(cfg, ds: Path, spec_path: Path, results_dir: Path, open_lock: bool = Fal
 
     def frame(sym, train_mask, test_mask):
         days, r, miss, opens = grids[sym]
-        s = profile((r ** 2)[train_mask])
-        d = rows(sym, days, r, miss, opens, s)
-        d["lF_B"] = np.log(np.maximum(d["F_B"], FLOOR))
-        dd = pd.Index(d["day"])
-        tr, te = d[np.isin(dd, days[train_mask])], d[np.isin(dd, days[test_mask])].copy()
-        te["F_C"] = predict_c(te, fit_c(tr))
+        s, fit, d = fit_har(sym, days, r, miss, opens, train_mask)
+        te = d[np.isin(pd.Index(d["day"]), days[test_mask])].copy()
+        te["F_C"] = predict_c(te, fit)
         return te, s
 
     dev_scores: dict[str, dict] = {}
