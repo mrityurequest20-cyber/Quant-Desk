@@ -96,7 +96,7 @@ def load_coefs(path) -> tuple[dict | None, str]:
     """(coefficients, "") or (None, why not)."""
     p = Path(path)
     if not p.exists():
-        return None, f"no coefficients file at {p} (python -m quantdesk autolearn vol-har-fit)"
+        return None, f"no coefficients file {p.name} (python -m quantdesk autolearn vol-har-fit)"
     try:
         c = json.loads(p.read_text())
     except (ValueError, OSError) as exc:
