@@ -198,6 +198,42 @@ def cmd_tape(cfg, a):
     tape.run(dt.time.fromisoformat(a.until) if a.until else None)
 
 
+def make_nse_close(cfg, fetch=None):
+    """(underlying, day) -> NSE's official close (ind_close_all), or None when the file has no row for it. A day's file
+    is fetched once per run, and so is a day's failure: when NSE hangs or errors, every later trade asking for that day
+    is refused at once with the first error instead of waiting out the same timeout again before the journal is saved.
+    The two kinds of failure stay apart: a real HTTP 404 raises OfficialAbsent (confirmed absence: the sleeves may fall
+    down their chain); anything else (timeout, 5xx, connection, and an HTML page served with HTTP 200, which can be a
+    WAF or maintenance page) raises RuntimeError (they wait). A file with no row for the index returns None (absent). `fetch(day)` -> that day's index closes (default: the warehouse's
+    copy if it has the day, else NSE's archive)."""
+    closes: dict = {}
+
+    def fetch_day(day):
+        from ..data.nse import NSE, parse_index_close
+        f = Path(cfg.runtime_dir) / "warehouse" / f"nse_index_close_{day.year}.parquet"
+        df = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["date", "symbol", "close"])
+        df = df[pd.to_datetime(df["date"]).dt.date == day]
+        return df if len(df) else parse_index_close(NSE().index_close(day)[0], day)
+
+    def nse_close(underlying, day):
+        from ..data.nse import NotPublished, NotPublishedHtml
+        from .sleeves import OfficialAbsent
+        if day not in closes:
+            try:
+                closes[day] = (fetch or fetch_day)(day)
+            except NotPublishedHtml as exc:               # HTTP 200 with an HTML page: may be a WAF / maintenance page
+                closes[day] = RuntimeError(f"NSE served an HTML page for {day}, not the file ({exc!s:.60})")
+            except NotPublished as exc:                   # a real HTTP 404: NSE answered, there is no file
+                closes[day] = OfficialAbsent(f"NSE has no file for {day} ({exc!s:.60})")
+            except Exception as exc:                      # cached: one failure per day per run; it only means 'ask again'
+                closes[day] = RuntimeError(f"NSE's close for {day} unavailable this run: {exc!s:.80}")
+        if isinstance(closes[day], Exception):
+            raise closes[day]
+        hit = closes[day][closes[day]["symbol"] == underlying]
+        return float(hit["close"].iloc[0]) if len(hit) else None
+    return nse_close
+
+
 def cmd_sleeves(cfg, a):
     """The pre-registered expiry sellers (intraday/sleeves.py): settle what expired, open on an expiry's eve, report."""
     from .feeds import IST
@@ -215,21 +251,14 @@ def cmd_sleeves(cfg, a):
         if d.empty:
             raise RuntimeError(f"no Yahoo bar for {sym} on {day}")
         return float(d["Close"].iloc[-1])
-    closes: dict = {}
-
-    def nse_close(underlying, day):
-        """NSE's official close (ind_close_all): the warehouse's copy if it has the day, else NSE's archive."""
-        if day not in closes:
-            from ..data.nse import NSE, parse_index_close
-            f = Path(cfg.runtime_dir) / "warehouse" / f"nse_index_close_{day.year}.parquet"
-            df = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["date", "symbol", "close"])
-            df = df[pd.to_datetime(df["date"]).dt.date == day]
-            closes[day] = df if len(df) else parse_index_close(NSE().index_close(day)[0], day)
-        hit = closes[day][closes[day]["symbol"] == underlying]
-        return float(hit["close"].iloc[0]) if len(hit) else None
+    nse_close = make_nse_close(cfg)
     for spec in specs():                                  # every registered spec, each with its own ledger
-        seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec,
-                              official_fn=nse_close)
+        try:
+            seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec,
+                                  official_fn=nse_close)
+        except ValueError as exc:                         # a bad spec never stops the others' sleeves
+            print(f"WARN {spec.get('name')}: skipped: {exc}", flush=True)
+            continue
         if not a.report:
             day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
             for line in seller.run(day) or [f"{spec['name']} {day}: nothing to settle or open"]:

@@ -46,6 +46,12 @@ class NotPublished(Exception):
     """NSE has no file for that day (a holiday, a weekend, or not published yet)."""
 
 
+class NotPublishedHtml(NotPublished):
+    """NSE answered HTTP 200 with an HTML page in place of the file. That can be its error page, but also a maintenance,
+    WAF or bot-challenge interstitial, so it does not prove the file is missing. A NotPublished subclass: every caller
+    that catches NotPublished behaves exactly as before; the expiry sleeves tell the two apart."""
+
+
 def sha256(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
@@ -93,7 +99,7 @@ class NSE:
         url = f"{ARCHIVE}{path}"
         r = self._get(url)
         if r.content[:15].lower().startswith((b"<!doctype", b"<html")):
-            raise NotPublished(url)                  # NSE serves an HTML error page with HTTP 200 sometimes
+            raise NotPublishedHtml(url)              # NSE serves an HTML error page with HTTP 200 sometimes
         return r.content, url
 
     def api(self, path: str):
