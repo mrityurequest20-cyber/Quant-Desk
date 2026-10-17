@@ -252,7 +252,6 @@ def cmd_sleeves(cfg, a):
             raise RuntimeError(f"no Yahoo bar for {sym} on {day}")
         return float(d["Close"].iloc[-1])
     nse_close = make_nse_close(cfg)
-    sellers = []
     for spec in specs():                                  # every registered spec, each with its own ledger
         try:
             seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec,
@@ -260,50 +259,12 @@ def cmd_sleeves(cfg, a):
         except ValueError as exc:                         # a bad spec never stops the others' sleeves
             print(f"WARN {spec.get('name')}: skipped: {exc}", flush=True)
             continue
-        sellers.append(seller)
         if not a.report:
             day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
             for line in seller.run(day) or [f"{spec['name']} {day}: nothing to settle or open"]:
                 print(line, flush=True)
             print(flush=True)
         print(render(seller.report()) + "\n", flush=True)
-    _allocator_step(cfg, base, sellers, a)
-
-
-def _allocator_step(cfg, base, sellers, a):
-    """The registered allocator (allocator.py, docs/prereg/allocator_v1.json), PHASE 1: shadow only. After the sleeves have
-    settled and opened, it journals what it would have carried overnight and marks the earlier ones. It holds read-only views
-    of the paper account and cannot change it. A failure here is printed and never stops the sleeves or the post-close steps."""
-    from . import allocator as AL
-    from . import overnight as OV
-    from .feeds import IST
-    if AL.settings(cfg)["mode"] == "off":
-        return
-    j = Journal(base["journal"])
-    try:
-        capital = float((j.get_state("intraday_account") or {}).get("capital") or cfg.get("intraday.capital", 20000))
-        broker = IntradayBroker(cfg, starting_cash=capital, state_path=base["broker"],
-                                adverse_ticks=cfg.get("intraday.adverse_ticks", 1))
-        al = AL.Allocator(cfg, sellers, j, broker, cfg.runtime_dir / "intraday" / "sleeves")
-        if not a.report:
-            day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
-            for line in al.run(day) or [f"allocator {day}: nothing to allocate or settle"]:
-                print(line, flush=True)
-            print(flush=True)
-        print(AL.render(al.report()) + "\n", flush=True)
-        if OV.settings(cfg)["mode"] != "off":
-            print(OV.render(OV.report(OV.load_spec(), OV.Ledger(base["journal"].parent / "overnight_carry_v1.jsonl"))) + "\n", flush=True)
-    except Exception as exc:                                  # a shadow report is never worth a failed step
-        print(f"allocator failed (shadow only; nothing was changed): {exc!r}", flush=True)
-    finally:
-        j.close()
-
-
-def cmd_overnight(cfg, a):
-    """Overnight carry, shadow (overnight.py): what the desk's open positions would have carried, marked at 09:20 real quotes."""
-    from . import overnight as OV
-    p = paths(cfg, a.account or "live")
-    print(OV.render(OV.report(OV.load_spec(), OV.Ledger(p["journal"].parent / "overnight_carry_v1.jsonl"))), flush=True)
 
 
 def cmd_self_review(cfg, a):
@@ -904,9 +865,6 @@ def register(sub):
     x.add_argument("--issues", action="store_true", help="open / comment / close desk-request issues (Actions token)")
     x.add_argument("--json", help="also write the findings here")
     x.set_defaults(fn=cmd_self_review)
-    x = ss.add_parser("overnight", help="overnight carry (shadow only): would-be carries marked at 09:20, the running paired difference")
-    x.add_argument("--account", default=None)
-    x.set_defaults(fn=cmd_overnight)
     x = ss.add_parser("sleeves", help="expiry sellers: paper sleeves pre-registered in docs/prereg/expiry_seller_v*.json")
     x.add_argument("--day", help="YYYY-MM-DD (default: today, IST)")
     x.add_argument("--report", action="store_true", help="only print the sleeves' standing")
