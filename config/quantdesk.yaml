@@ -115,7 +115,8 @@ intraday:
   adverse_ticks: 1                 # extra slippage on top of bid/ask fills
   news:                            # live headlines (RSS): tone as evidence, stand aside after breaking news
     enabled: true
-    refresh_min: 4
+    refresh_min: 2                 # 10 plain RSS GETs per refresh (was 4 min)
+    deadline_s: 4                  # a refresh waits at most this long (all feeds in parallel); a slower feed is skipped
     window_min: 120                # stories older than this don't count
     half_life_min: 45              # recency weighting of the tone
     min_relevance: 2.0             # keyword relevance to count for an underlying
@@ -123,7 +124,8 @@ intraday:
     # sources: [{name: ..., url: ...}]   # defaults: ET, Moneycontrol, Mint, Business Standard, Google News, RBI
   global:                          # 18 global markets (US, Asia, Europe, $, ₹, crude, gold, UST, US VIX) via Yahoo
     enabled: true
-    refresh_min: 5
+    refresh_min: 5                 # kept at 5: ~29 Yahoo requests per refresh (18 markets + 11 heavyweights) from
+                                   # shared runner IPs, no 429 backoff, and the same IPs serve the index-bar fallback
   brain:                           # global ↔ news ↔ India ↔ decision; votes with research-validated links, and with
                                    # probation drivers only once their live record earns it (30+ graded reads, ≥57.5%)
     stress_z: 2.0                  # global moves bigger than this (σ) shrink size...
@@ -142,6 +144,11 @@ intraday:
     min_ev_r: 0.05                 # ...and at least this fraction of the planned risk
     long_deltas: [0.30, 0.40]      # single-option alternatives priced for every directional signal
     spreads: [[0.45, 0.30], [0.50, 0.20]]
+  vol_forecast:                    # HAR volatility forecaster (vol_forecast_v1, passed its locked test), SHADOW ONLY
+    mode: shadow                   # off | shadow. shadow: record HAR beside the desk's own estimate at the opening read and grade
+                                   # both after the horizon (`intraday vol-shadow`); no decision reads it. There is no apply mode.
+                                   # Coefficients: the committed quantdesk/intraday/vol_har_v1.json (`autolearn vol-har-fit`);
+                                   # `path:` points elsewhere. Missing or unusable: a WARN and nothing is recorded
   analyst:
     min_conviction: 0.45
     iv_rv_rich: 1.15
@@ -241,8 +248,13 @@ intraday:
     # ledger in the journal; a day's allowance is the credit left over the sessions left (underspend carries forward) minus a
     # reflection held back for the close; at zero it stops for good (one INFO event) and the desk carries on without it.
     # Cache prices are $ per million tokens (Opus 5.5: reads 0.20 = 0.05x input, 5-minute writes 5.00 = 1.25x).
+    # teach_share (owner, 16 Oct): the credit is split in two buckets, never more than budget_usd between them: reads (the
+    # live reader, paced on 1 - teach_share of what is left, and the reflection) and teaching (teacher.py: after the close
+    # Claude reviews the session's journal and writes ADVISORY lessons; kind "teach" in the same ledger, hard stop at its own
+    # half, one call a day). A lesson can read the journal and write a lesson; it cannot touch config, risk, sizing or gates.
     claude: {model: claude-opus-5-5, effort: low, reflect: true, price_in: 4.0, price_out: 20.0, price_cache_read: 0.20,
-             price_cache_write: 5.0, budget_usd: 23.60, budget_start: 2026-10-12, budget_sessions: 60, reserve_reflection: true}
+             price_cache_write: 5.0, budget_usd: 23.60, budget_start: 2026-10-12, budget_sessions: 60, reserve_reflection: true,
+             teach_share: 0.5, teach: true, teach_effort: medium, teach_max_tokens: 6000}
     gemini: {model: gemini-flash-latest}   # the alias that tracks Google's current Flash (2.5 404s now)
     ollama: {model: "gpt-oss:120b", host: "https://ollama.com"}
     advisory_only: [claude, ollama]   # read, shown and graded, but never weighed into the tone: no effect on signals or sizing

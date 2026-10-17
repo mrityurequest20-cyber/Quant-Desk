@@ -39,9 +39,21 @@ def load_spec(path: Path = SPEC_PATH) -> dict:
 
 
 # ---- the executable side: the sleeves' open events ----------------------------------------------------------------
+def _official_close_ledgers() -> set[str]:
+    """Ledger names of the registered expiry-seller specs that settle on anything but the default 15:00–15:29 mean
+    (expiry_seller_v4 on). Their trades repeat v1–v3's eves, and this study's 'registered settlement' is v1–v3's."""
+    out = set()
+    for p in (ROOT / "docs" / "prereg").glob("expiry_seller_v*.json"):
+        if json.loads(p.read_text()).get("settlement", "closing_mean") != "closing_mean":
+            out.add(p.stem)
+    return out
+
+
 def ledger_events(folder: Path) -> list[dict]:
-    out = []
+    out, skip = [], _official_close_ledgers()
     for p in sorted(Path(folder).glob("*.jsonl")):
+        if p.stem in skip:
+            continue
         out += [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
     return out
 

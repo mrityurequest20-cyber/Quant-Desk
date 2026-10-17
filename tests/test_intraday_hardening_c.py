@@ -242,7 +242,7 @@ def test_a_failed_chain_retry_and_the_pre_open_and_news_gates_forgive_jitter_too
     fetched = []
     news = NewsDesk(cfg, fetch=lambda url: fetched.append(url) or "", sources=[{"name": "x", "url": "u"}])
     news.last_fetch = t
-    news.refresh(t + pd.Timedelta(minutes=2))
+    news.refresh(t + pd.Timedelta(minutes=news.refresh_min) / 2)                # half the cadence: not yet
     assert not fetched
     news.refresh(t + pd.Timedelta(minutes=news.refresh_min) - pd.Timedelta(seconds=0.5))
     assert len(fetched) == 1

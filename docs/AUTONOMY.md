@@ -21,6 +21,34 @@ The engine, risk limits, sleeves and research are deterministic Python. Language
 optional **readers** of the news and an after-close reflection, with no say over orders, sizing or risk. If every key
 fails or a usage limit is hit, the desk runs on its rules, exactly as before (`intraday/llm.py`).
 
+## Claude as reader and as teacher
+
+Claude's whole API credit is one fixed budget (`intraday.llm.claude.budget_usd`), split in half
+(`teach_share: 0.5`, owner decision of 16 Oct). The halves are separate buckets in one ledger (`ClaudeBudget` in
+`intraday/llm.py`, state `llm_claude_spend`): neither can spend the other's. The split is fixed from what was left when
+it took effect, so the total is never raised. When a half is spent, that use is skipped with an INFO event and the desk
+carries on.
+
+- **Reads** (first half): the headline reader during the session and the after-close reflection.
+- **Teaching** (second half, `intraday/teacher.py`): `quantdesk intraday teach`, run by the afternoon job of `Live paper desk` after
+  the square-off and before the journal save (best effort: `continue-on-error`, 10-minute timeout, a warning on failure;
+  the save runs regardless). It refuses before the close and is never called from
+  the minute loop. One call a day: Claude is shown the session's journal (trades, every decision including the refused
+  ones and why, a sample of the analyst's reads, warnings, the latest plan study) and returns JSON lessons, each with a
+  kind (right, wrong, missed, uncertain), the claim and why, **the journal rows it rests on by id**, a confidence, what
+  could make it wrong, and where useful a hypothesis with what would confirm and what would refute it. A lesson with no
+  valid citation, and any output that is not the agreed JSON, is dropped with a WARN.
+
+What a lesson is. It is text, labelled ADVISORY, stored in the journal's `state` table (`teacher:YYYY-MM-DD`, one per
+session, so the journal save and C-01's shrink guard carry it and retention never prunes it) and mirrored in the learning
+memory (`teaching`). The next reflection and the learning cycle may read it (`teacher.advisory_lines`,
+`teacher.hypotheses`). It has no path to configuration, risk limits, sizing, gates, promotion or orders: the module
+imports none of that code (a test enforces it). A lesson that proposes a change is stored as a hypothesis for a
+pre-registered study (`docs/prereg`, `research/memory.py`'s rules), which is a person's or the engineer's decision.
+
+It uses the Claude key `live.yml` already passes at workflow level: no secret, env or permission was added to any
+workflow. With no key the step prints "key not set" and skips.
+
 ## Development requests queue up as GitHub issues
 
 After each session `quantdesk intraday self-review --issues` (`ops/selfreview.py`) files what needs fixing or building
@@ -118,6 +146,17 @@ but nothing waits for one.
    S0-05). CI runs on the PR and again on main; a red main becomes tomorrow's self-review finding and the next
    shift's first job.
 7. **Close** each resolved issue with its commit.
+
+**Standing permission (owner, 17 Oct 2026; decides G-01 for these cases only).** A scheduled engineer session may merge
+its own pull request, by squash with the head sha pinned, when ALL of these hold: `tests` and `doctor` are green on the
+head and the branch is up to date; the independent reviewer this section requires has returned CLEAR on that head
+(`risk-compliance` for order, risk, sizing, cost, spec and workflow changes, `internal-auditor` otherwise); and the change
+is **tighten-only or non-behavioural**: data collection, shadow recording, monitoring, tooling, tests, docs, or a smaller
+size or an extra filter. Everything else is not covered and waits for the owner: anything that raises an exposure or a
+ceiling, loosens a gate, changes sizing upward, flips an `apply` mode, touches workflow permissions or secrets, the
+paper-mode switch, a halt, a locked spec or result, or the real-money switch. If the merge tool is refused, the session
+leaves the pull request open and says so; it never works around a refusal. The learning bot (docs/LEARNBOT.md) keeps its
+own stricter rule: it never merges.
 
 **Halts are the owner's to clear.** No agent or engineer dispatches `Clear a desk halt` (`clear-halt.yml`), runs
 `clear-halt` / `clear-drawdown-halt`, or touches a halt key in the journal, whatever the reason. The workflow runs
