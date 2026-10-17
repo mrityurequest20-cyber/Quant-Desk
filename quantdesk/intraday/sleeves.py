@@ -25,7 +25,9 @@ its history.
   close yet the trade stays open and the next run tries again, and it never falls back to the mean. Such a spec has no
   `official` check (its settlement is the official close). A settled event is final under either rule.
 - Paper only. Nothing here can place an order or promote itself: it reports eligibility by the spec's rules, and a
-  registered allocator spec (BACKLOG 9) is what moves an eligible sleeve into the paper account.
+  registered allocator spec (BACKLOG 9: docs/prereg/allocator_v1.json, intraday/allocator.py) is what would move an eligible
+  DEFINED-RISK sleeve into the paper account. Today that allocator is shadow only: it journals what it would carry and
+  changes nothing. A naked sleeve is never a candidate.
 
 Each spec (docs/prereg/expiry_seller_v*.json) names its sleeves, legs, underlyings and history. A new pre-registered
 sleeve is a new spec file, not new code. One ledger per spec: runtime/intraday/sleeves/<spec name>.jsonl, append-only
