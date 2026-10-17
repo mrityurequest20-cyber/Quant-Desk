@@ -310,8 +310,10 @@ def test_the_save_guard_accepts_an_older_snapshot_without_teacher_rows_and_refus
     assert jc.main(["x", str(path), "--not-below", str(now)]) == 1                          # losing teacher rows is refused
 
 
-# sha256 of the workflows as they were on main aad8470 (before this feature)
-LIVE_BEFORE = "a99c14f69a11c34c6bd849cc3dab5ab3e462da80f43ef2155eeb0d611b60c0a6"
+# live.yml's workflow env and the secrets it references, as on main aad8470 (before this feature); autolearn.yml's bytes
+LIVE_ENV_BEFORE = ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "HANDOVER", "KOTAK_CONSUMER_KEY", "OLLAMA_API_KEY",
+                   "PUBLISH_EVERY_MIN", "PYTHONUNBUFFERED", "TZ"]
+LIVE_SECRETS_BEFORE = "af319594fcfa48a73a25baaf691d86b5c6c08f7d3198dc9c0982cd242d3a91e7"
 AUTOLEARN_BEFORE = "ad6e01c7f52cc5808c1313b71087bfc05af508b7b20e9106a266d9c05d26786d"
 
 
@@ -332,11 +334,13 @@ def test_the_workflow_step_is_in_the_live_afternoon_job_before_the_save_and_wide
     assert "env" not in step and "secrets" not in step["if"] and "!cancelled()" in step["if"]
     # the save runs whatever this step did (always()), so the lessons are saved and a failed or timed-out step blocks nothing
     assert steps[save]["if"].startswith("${{ always()")
-    # nothing else changed: with the teaching step (and its comment) cut out, the file is byte-identical to main aad8470,
-    # so no secret, env or permission was added anywhere in it
-    cut = re.sub(r"      # Claude as a teacher.*?(?=      - name: Save the journal\n        if: \$\{\{ always\(\) && steps\.restore\.outcome == 'success' && steps\.standdown)",
-                 "", text, count=1, flags=re.S)
-    assert hashlib.sha256(cut.encode()).hexdigest() == LIVE_BEFORE
+    # no secret, env or permission was added anywhere in the workflow: the same permissions, the same workflow env and the
+    # same set of secrets referenced as on main aad8470 (structural, so other features' steps in this file don't break it)
+    assert wf["permissions"] == {"contents": "write"} and all("permissions" not in j or j["permissions"] == {"actions": "read"}
+                                                             for j in wf["jobs"].values())
+    assert sorted(wf["env"]) == LIVE_ENV_BEFORE
+    refs = " ".join(sorted(set(re.findall(r"secrets\.[A-Za-z0-9_]+", text))))
+    assert hashlib.sha256(refs.encode()).hexdigest() == LIVE_SECRETS_BEFORE
 
 
 def test_autolearn_is_untouched():
