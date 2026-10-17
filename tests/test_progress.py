@@ -64,3 +64,46 @@ def test_forecast_skill_is_measured_on_resolved_live_predictions(cfg):
     f = P.forecast_skill(cfg)
     assert f["predictions_resolved"] == 80 and abs(f["forecast_skill"] - (1 - 0.04 / 0.25)) < 1e-9
     assert f["signal_hit_rate"] == 1.0 and f["signal_net_bps"] == 7.0
+
+
+def test_v4_is_the_only_sleeve_ledger_in_the_totals(cfg):
+    """v4's trades pair one for one with v1–v3's: the progress totals count the decision ledger once, not both."""
+    root = cfg.runtime_dir / "intraday" / "sleeves"
+    root.mkdir(parents=True)
+
+    def trade(sleeve, pnl):
+        tid = f"{sleeve}-NIFTY-2026-10-20"
+        return [{"event": "open", "id": tid, "sleeve": sleeve, "underlying": "NIFTY", "expiry": "2026-10-20", "day": "2026-10-19",
+                 "lot": 65, "legs": [], "cost_gap_rs": 0.0, "max_loss_rs": 6000.0},
+                {"event": "settle", "id": tid, "pnl_rs": pnl, "settle": 22600.0}]
+    for name, sleeve, pnl in (("expiry_seller_v1", "A", 500.0), ("expiry_seller_v4", "F", 700.0)):
+        (root / f"{name}.jsonl").write_text("\n".join(json.dumps(e) for e in trade(sleeve, pnl)) + "\n")
+    snap = P.snapshot(cfg, dt.date(2026, 10, 21))
+    assert snap["sleeve_trades"] == 1 and snap["sleeve_pnl"] == 700.0
+
+
+def test_comparison_ledgers_stay_visible_and_a_change_of_reading_is_a_reset_not_a_worsening(cfg):
+    """K3: v1–v3 are shown as comparison (outside the KPIs); the snapshot says which reading its sleeve KPIs follow, and
+    when that differs from the earlier snapshot's the sleeve KPIs are 'reset', never 'worse'."""
+    root = cfg.runtime_dir / "intraday" / "sleeves"
+    root.mkdir(parents=True)
+
+    def trade(sleeve, pnl):
+        tid = f"{sleeve}-NIFTY-2026-10-20"
+        return [{"event": "open", "id": tid, "sleeve": sleeve, "underlying": "NIFTY", "expiry": "2026-10-20", "day": "2026-10-19",
+                 "lot": 65, "legs": [], "cost_gap_rs": 0.0, "max_loss_rs": 6000.0},
+                {"event": "settle", "id": tid, "pnl_rs": pnl, "settle": 22600.0}]
+    for name, sleeve, pnl in (("expiry_seller_v1", "A", 500.0), ("expiry_seller_v4", "F", 700.0)):
+        (root / f"{name}.jsonl").write_text("\n".join(json.dumps(e) for e in trade(sleeve, pnl)) + "\n")
+    snap = P.snapshot(cfg, dt.date(2026, 10, 21))
+    assert snap["sleeve_reading"] == "v4" and snap["sleeve_comparison_trades"] == 1 and snap["sleeve_comparison_pnl"] == 500.0
+    assert "sleeve_comparison_trades" not in P.KPIS and "sleeve_comparison_pnl" not in P.KPIS
+    old = {"date": "2026-10-12", "level": 1, "sleeve_trades": 40, "sleeve_pnl": 9000.0, "sleeves_retired": 0, "equity": 500000.0}
+    cur = {**snap, "equity": 499000.0, "sleeve_trades": 1, "sleeve_pnl": 700.0, "sleeves_retired": 1}
+    v = {lab: ver for lab, _, _, ver in P.compare(cur, old)}
+    assert v["forward sleeve trades settled"] == "reset" and v["forward sleeve P&L, ₹/lot"] == "reset"
+    assert v["sleeves retired"] == "reset" and v["paper account equity, ₹"] == "worse"        # other KPIs are unaffected
+    same = {**old, "sleeve_reading": "v4"}
+    assert {lab: ver for lab, _, _, ver in P.compare(cur, same)}["forward sleeve trades settled"] == "worse"
+    md = P.render([old, cur])
+    assert "↺ reset" in md and "Comparison ledgers (v1–v3" in md
