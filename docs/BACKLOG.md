@@ -38,6 +38,12 @@ it with the next tests. In short:
 - expiry_seller_v1, sleeves A and B: NIFTY, BANKNIFTY;
 - expiry_seller_v2, sleeve C: BANKNIFTY far-wing condor;
 - expiry_seller_v3, sleeves D and E: FINNIFTY, MIDCPNIFTY, SENSEX, naked and insured;
+- expiry_seller_v4 (registered 17 Oct 2026, audit E-01): sleeves F to J, the same sleeves as v1-v3 on the same
+  underlyings, settled on NSE's official close (else the 15:29 close, else Yahoo; source recorded) instead of the
+  15:00-15:29 mean. On expiry day only NSE's file counts, so a trade waits for the next run (SENSEX always: NSE's file
+  has no SENSEX row, so it settles on Yahoo's close); after that it falls past NSE only when NSE confirms the file is
+  missing, or after 2 trading days of a silent NSE. v4 is the only decision ledger; v1-v3 keep running unchanged as
+  comparison ledgers;
 - expiry_eve_entry_v1: the history's entry price against the sleeves' real 15:20 fills, paired on the same strikes
   (Study → entry-check; counts only until its decision point);
 - every sleeve settlement is also checked against the official close, and every sleeve reports its skip rate.
