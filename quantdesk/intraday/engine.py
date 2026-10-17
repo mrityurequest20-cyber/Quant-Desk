@@ -157,10 +157,19 @@ class IntradayEngine:
         self.halt: dict | None = None                     # an inherited position awaits the owner (halt.py; H-02/H-03)
         # overnight carry, PHASE 1 (overnight.py, docs/prereg/overnight_carry_v1.json): SHADOW ONLY. A ledger of what each
         # position open at the square-off would have carried; nothing here changes an order, a position or the square-off.
-        jp = str(getattr(journal, "path", ":memory:"))
-        self.ov_ledger = overnight.Ledger((Path(jp).parent if jp != ":memory:" else Path(cfg.runtime_dir) / "intraday")
-                                          / "overnight_carry_v1.jsonl")
-        self.ov_spec = overnight.load_spec()
+        self._ov_off = False                              # True when the spec or the ledger cannot load: the shadow is off
+        try:
+            jp = str(getattr(journal, "path", ":memory:"))
+            self.ov_ledger = overnight.Ledger((Path(jp).parent if jp != ":memory:" else Path(cfg.runtime_dir) / "intraday")
+                                              / "overnight_carry_v1.jsonl")
+            self.ov_spec = overnight.load_spec()
+        except Exception as exc:                          # the engine must construct even if the spec file is missing or corrupt
+            self._ov_off, self.ov_ledger, self.ov_spec = True, None, None
+            try:
+                self.journal.event(pd.Timestamp.now(tz=IST), "WARN", "overnight",
+                                   f"overnight shadow is off: its spec or ledger did not load ({exc!r:.160})")
+            except Exception:
+                pass
         self._ov_pending: set[str] = set()                # recorded at the square-off, awaiting the actual exit
         self._ov_seen: set[str] = set()
         self._ov_virtual: list[dict] = []                 # this session's would-be carries (they would share the limits)
@@ -373,7 +382,10 @@ class IntradayEngine:
         try:
             self._overnight_mark(now)
         except Exception as exc:                                  # a record of the shadow is never worth a failed step
-            self.journal.event(now, "WARN", "overnight", f"09:20 marking failed: {exc!r:.160}")
+            try:
+                self.journal.event(now, "WARN", "overnight", f"09:20 marking failed: {exc!r:.160}")
+            except Exception:                                     # a journal failure never reaches the minute loop
+                pass
         self._snapshot(now)
         self._persist()
         self._heartbeat(now)
@@ -485,7 +497,7 @@ class IntradayEngine:
         else: it never raises, never touches the broker, a position or the order of the square-off."""
         try:
             mode = overnight.settings(self.cfg)["mode"]
-            if mode == "off" or t.id in self._ov_seen or t.meta.get("exit_pending") or not t.legs:
+            if self._ov_off or mode == "off" or t.id in self._ov_seen or t.meta.get("exit_pending") or not t.legs:
                 return
             self._ov_seen.add(t.id)
             eff, why = overnight.effective(mode, self.ov_spec, self.ov_ledger, t.strategy)
@@ -522,7 +534,7 @@ class IntradayEngine:
     def _overnight_mark(self, now) -> None:
         """Mark yesterday's shadow records at this session's first real-quote chain from 09:20 (and give up on any not marked
         by 09:30: unmarked, never filled in). Reads the live chain; places nothing."""
-        if not overnight.MARK_FROM <= now.time() <= dt.time(9, 40) or overnight.settings(self.cfg)["mode"] == "off":
+        if self._ov_off or not overnight.MARK_FROM <= now.time() <= dt.time(9, 40) or overnight.settings(self.cfg)["mode"] == "off":
             return                                            # the window is 09:20-09:30; the run to 09:40 closes it out
         for rec in self.ov_ledger.open_records(self.day):
             ch = self.chain_df.get(rec["underlying"])
@@ -537,6 +549,8 @@ class IntradayEngine:
                                        "why": "no real-quote chain of the position's expiry between 09:20 and 09:30"})
 
     def _overnight_finalize(self, day: dt.date) -> None:
+        if self._ov_off:
+            return
         for rec in self.ov_ledger.stale(day):
             self.ov_ledger.append({"event": "unmarked", "id": rec["id"], "setup": rec["setup"], "day": str(day),
                                    "why": "its marking session passed without a mark"})

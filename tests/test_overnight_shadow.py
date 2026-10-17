@@ -273,3 +273,11 @@ def test_the_command_prints_the_running_paired_difference(cfg, capsys):
     a.fn(cfg, a)
     out = capsys.readouterr().out
     assert "Overnight carry (shadow)" in out and "overnight_carry_v1" in out and "mean carry - close" in out
+
+
+def test_the_engine_constructs_with_a_missing_spec_and_the_shadow_is_off(cfg, monkeypatch):
+    def gone(*a, **k):
+        raise FileNotFoundError("docs/prereg/overnight_carry_v1.json")
+    monkeypatch.setattr(OV, "load_spec", gone)
+    eng = engine(cfg_mode(cfg, "shadow"), DAY1)                 # must not raise: the spec is only the shadow's
+    assert eng._ov_off and eng.ov_spec is None and eng.ov_ledger is None
