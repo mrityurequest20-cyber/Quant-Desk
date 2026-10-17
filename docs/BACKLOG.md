@@ -79,12 +79,6 @@ it with the next tests. In short:
 5. **Overnight theta.**
    - *Blocked until:* 20 tape sessions.
    - *Then:* sell at 15:25, buy back at 09:20, on every taped instrument, pooled.
-   - *Status (17 Oct 2026):* overnight holding of the desk's own defined-risk positions, **buying included**, is
-     registered (`docs/prereg/overnight_carry_v1.json`) and recording in shadow (`quantdesk/intraday/overnight.py`):
-     every position open at 15:15 records what it would carry (sized on the full max loss, at most 2.5% of equity, one
-     night, none over a weekend/holiday or into an expiry) and is marked at the next 09:20 real quotes against its actual
-     exit (`quantdesk intraday overnight`). The history test on the bhavcopy and `apply` are phase 2. The desk's own
-     evidence (L4, overnight theta) leans against carrying.
 6. **Earnings IV crush on stocks.**
    - *Needs:* fo_stock_opts and historical results dates (corp_events history; NSE's board-meeting archive).
    - *Then:* pre-register selling straddles the day before results and buying back the day after, pooled across stocks.
@@ -96,13 +90,6 @@ it with the next tests. In short:
    - a risk-budgeted allocator: per-trade max loss ≤ 4% of equity, correlation-aware, half-Kelly cap;
    - registered as a spec first, then applied to the paper account by the engineer when a sleeve's registered
      eligibility rule says so. Real money stays off.
-   - *Status (17 Oct 2026):* the allocator spec is registered (`docs/prereg/allocator_v1.json`) and built in
-     **shadow only** (`quantdesk/intraday/allocator.py`): defined-risk condors only (sleeves A and C; never a naked
-     sleeve), one night, to the sleeve's own expiry; it journals what it would carry and marks it, and cannot change the
-     paper account. Per-position max loss is at most 2.5% of equity: the "4%" above is over the owner's ceiling
-     (`risk_per_trade`), so the spec uses 2.5%. The correlation-aware and half-Kelly wording is not built (with at most 2
-     positions a flat 2.5% cap is the whole rule). `apply` (registered carries, the square-off exemption, halt recognition)
-     is phase 2, after shadow data; the owner flips it, the engineer never does.
 10. **Live execution through Kotak.** Last. Only after a sleeve passes paper. Real money is the one switch the
     account's owner flips by hand; the engineer builds and tests everything up to it, on paper.
 
