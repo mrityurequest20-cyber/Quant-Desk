@@ -489,10 +489,11 @@ def grade_session(mem: Memory, journal, bars: dict, day) -> dict:
 
 def rebuild(mem: Memory, journal, bars: dict) -> dict:
     """Forget everything graded and grade the whole journal again (after a change to the grading rules)."""
-    keep, moves = mem.d.get("lessons", []), mem.d.get("moves", {})
+    keep, moves, taught = mem.d.get("lessons", []), mem.d.get("moves", {}), mem.d.get("teaching", [])
     bars = unfrozen(bars)
     mem.d = Memory().d
     mem.d["lessons"], mem.d["moves"] = keep, moves             # a session's moves aren't re-derivable from the journal
+    mem.d["teaching"] = taught                                 # nor are the teacher's advisory lessons (teacher.py)
     news = journal.df("SELECT * FROM news ORDER BY ts")
     th = journal.df("SELECT ts, symbol, evidence FROM thoughts ORDER BY ts")
     tr = journal.df("SELECT * FROM trades ORDER BY opened_at")

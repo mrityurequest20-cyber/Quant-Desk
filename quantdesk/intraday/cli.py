@@ -6,6 +6,7 @@
   thoughts  the analyst's reads, newest last
   trades    intraday trades with setup, structure, P&L, R, grade
   review    the written session review(s)
+  teach     after the close: Claude reviews the session's journal and leaves advisory lessons (teaching half of its credit)
   stats     performance across sessions: by setup, structure, day type, time of day, exit
   clear-halt  lift the entry halt on an inherited position, on the record (--reason; --force to accept it as is)
 """
@@ -557,6 +558,29 @@ def cmd_learn(cfg, a):
     print("\n".join(lines) if lines else "nothing graded yet")
 
 
+def cmd_teach(cfg, a):
+    """After the close: Claude reviews the session's journal and leaves ADVISORY lessons (quantdesk/intraday/teacher.py),
+    paid from the teaching half of the Claude credit. Never in the minute loop; it refuses before the close. A skip, a
+    spent half or malformed output is an event and a printed line, never a failure: the exit status is 0."""
+    from . import learning, llm, teacher
+    p = paths(cfg, a.account or "live")
+    if not p["journal"].exists():
+        print(f"teach: no journal at {p['journal']}; nothing to review")
+        return
+    j = Journal(p["journal"])
+    mem = learning.Memory(p["memory"])
+    mem = None if mem.corrupt else mem                      # C-10: a memory that failed to load is left exactly as it is
+    plan = None
+    try:
+        plan = json.loads((cfg.runtime_dir / "intraday" / "autolearn" / "plan" / "latest.json").read_text())
+    except (OSError, ValueError):
+        pass
+    print(f"teach: Claude key {'set' if llm.key_for('claude')[1] else 'not set'}")
+    got = teacher.teach(cfg, j, a.date, mem, plan_latest=plan if isinstance(plan, dict) else None)
+    j.commit()
+    print("teach: " + ", ".join(f"{k} {v}" for k, v in got.items()))
+
+
 def cmd_archive(cfg, a):
     """C-02: archive, verify, then prune old thoughts/news and plan studies (quantdesk/journal/retention.py)."""
     import datetime as _dt
@@ -873,6 +897,11 @@ def register(sub):
     x.add_argument("--if-empty", action="store_true", help="with --bootstrap: only when nothing has been graded yet")
     x.add_argument("--top", type=int, default=12)
     x.set_defaults(fn=cmd_learn)
+    x = ss.add_parser("teach", help="after the close: Claude reviews the session's journal and leaves advisory lessons "
+                                    "(the teaching half of the Claude credit)")
+    x.add_argument("--account", help="live (default), replay, synthetic")
+    x.add_argument("--date", help="YYYY-MM-DD: the session to review (default: the newest in the journal); only once it is over")
+    x.set_defaults(fn=cmd_teach)
     x = ss.add_parser("archive", help="archive, verify, then prune old thoughts/news and plan studies (keeps the journal small)")
     x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
     x.add_argument("--out", help="where the dated archive files and the manifest go")
