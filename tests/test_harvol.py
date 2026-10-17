@@ -394,6 +394,47 @@ def test_vol_har_fit_stores_the_specs_training_window_and_leaves_the_spec_alone(
         acli.cmd_vol_har_fit(cfg, argparse.Namespace(out=None, spec=str(spec_path), to=str(to), asset_sha256=None))
 
 
+def test_the_committed_coefficients_are_the_locked_specs_fit_and_usable():
+    """quantdesk/intraday/vol_har_v1.json: fitted by `autolearn vol-har-fit` on the verified external minutes. Reproduced
+    against the locked test's own C_har QLIKE on the real lock-period data when it was committed (max difference 0.0);
+    here: its provenance matches the spec and window, the numbers are finite and the right shape, and the desk can use it."""
+    root = V.Path(__file__).resolve().parent.parent
+    c, why = harvol.load_coefs(harvol.DEFAULT_PATH)
+    assert why == "" and harvol.DEFAULT_PATH == root / "quantdesk/intraday/vol_har_v1.json"
+    from quantdesk.autolearn.prereg import spec_hash
+    spec_path = root / "docs/prereg/vol_forecast_v1.json"
+    spec = json.loads(spec_path.read_text())
+    locked = json.loads(next((root / "docs/prereg/results").glob("vol_forecast_v1-*.json")).read_text())
+    pv = c["provenance"]
+    assert c["spec"] == pv["spec"] == spec["name"] and c["spec_sha256"] == pv["spec_sha256"] == spec_hash(spec_path) == locked["spec_sha256"]
+    assert c["dev_end"] == pv["training_window"]["end"] == spec["dev"]["end"] == "2018-12-31"
+    assert pv["inputs"]["status"] == "external_verified" and pv["inputs"]["source_commit"] and len(pv["inputs"]["manifest_sha256"]) == 64
+    assert pv["inputs"]["importer_version"] == "aeron7-2" and any(k.startswith("1m/symbol=NIFTY") for k in pv["inputs"]["partitions_1m"])
+    assert pv["code_commit"] and pv["fit_command"].startswith("python -m quantdesk autolearn vol-har-fit") and pv["created_at"]
+    assert set(c["symbols"]) == set(spec["symbols"])
+    for sym, e in c["symbols"].items():
+        assert e["sessions"] == locked["sessions"][sym]["dev"]                       # the same training sessions the study used
+        assert dt.date.fromisoformat(e["trained_through"]) <= DEV_END
+        prof = np.asarray(e["profile"], float)
+        assert prof.shape == (V.N_MIN,) and np.isfinite(prof).all() and (prof > 0).all() and prof.mean() == pytest.approx(1.0)
+        assert set(e["fit"]) == set(V.HORIZONS)
+        for h, p in e["fit"].items():
+            assert len(p["beta"]) == 1 + len(V.C_X) and np.isfinite(p["beta"]).all() and np.isfinite(p["smear"]) and p["smear"] > 0
+        assert harvol.HarVol.for_session(c, sym, dt.date(2026, 10, 19))[0] is not None
+    h = harvol.HarVol(c["symbols"]["NIFTY"])                                          # and it forecasts on desk-shaped bars
+    grid = study_grid()
+    res, why = h.forecast(to_bars(grid), at(grid[0][-1], 15))
+    assert why == "" and all(np.isfinite(v) and v > 0 for v in res["var"].values())
+    from quantdesk.intraday.volshadow import VolShadow
+
+    class _Cfg:
+        runtime_dir = "unused"
+
+        def get(self, key, default=None):
+            return {"intraday.vol_forecast": {"mode": "shadow"}}.get(key, default)
+    assert VolShadow(_Cfg(), journal=None).path == harvol.DEFAULT_PATH               # the desk reads it by default
+
+
 def test_the_vol_shadow_command_reports_from_the_journal_and_the_recorded_bars(cfg, capsys):
     import argparse
 
