@@ -46,8 +46,12 @@ PY
     # C-01: the journal branch is the only copy and every save replaces it. Never push a record smaller than the
     # one this run restored (a failed or partial restore, a wrong runtime dir): fewer trades, fills, decisions or
     # events, or a lower last thought/news id. A deliberate account reset sets JOURNAL_ALLOW_SHRINK=1.
+    # C-02: the one other shrink allowed is thoughts/news after a prune whose archive was downloaded back from its release
+    # and verified (quantdesk/journal/durable.py leaves the permit); journal_counts.py only honours it for the commit restored.
     if [ -f "$rt/.journal-restored.json" ] && [ "${JOURNAL_ALLOW_SHRINK:-}" != "1" ]; then
-      python3 "$here/journal_counts.py" "$rt/intraday/journal.db" --not-below "$rt/.journal-restored.json" || {
+      permit=()
+      [ -f "$rt/.journal-prune-permit.json" ] && permit=(--pruned "$rt/.journal-prune-permit.json" --restored-sha "$(cat "$rt/.journal-restored-sha" 2>/dev/null || true)")
+      python3 "$here/journal_counts.py" "$rt/intraday/journal.db" --not-below "$rt/.journal-restored.json" ${permit[@]+"${permit[@]}"} || {
         echo "::error::journal: refusing to save a record smaller than the one restored (see above); nothing pushed" >&2
         exit 1
       }

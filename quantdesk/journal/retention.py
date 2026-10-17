@@ -379,8 +379,14 @@ def _counts(db: sqlite3.Connection) -> dict:
 
 
 def archive(root: str | Path, out: str | Path, keep_days: int = 30, keep_studies: int = 3, dry_run: bool = False,
-            as_of: dt.date | None = None, vacuum: bool = True, say=print) -> dict:
-    """Archive, verify, then prune. Returns the manifest (also written to `out` unless dry_run)."""
+            as_of: dt.date | None = None, vacuum: bool = True, say=print, extra: dict | None = None,
+            before_prune=None) -> dict:
+    """Archive, verify, then prune. Returns the manifest (also written to `out` unless dry_run).
+
+    `extra` is merged into the manifest (durable.py: the journal commit it came from). `before_prune(manifest, out, mpath)`
+    runs once the archive is verified and the manifest is on disk, still inside the locked transaction: durable.py
+    uploads it to its durable home and checks it restores from there. It returns a dict recorded in the manifest and
+    the ledger under "durable"; anything it raises aborts with nothing deleted."""
     root, out = Path(root), Path(out)
     if keep_days < 1 or keep_studies < 0:
         raise ValueError("keep_days must be >= 1 and keep_studies >= 0")
@@ -434,7 +440,7 @@ def archive(root: str | Path, out: str | Path, keep_days: int = 30, keep_studies
         stamp = rep["as_of"]
         days = _dates(*[tables[t]["min_ts"] for t in tables], *[tables[t]["max_ts"] for t in tables])
         manifest: dict = {**rep, "version": 1, "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-                          "files": {}, "verified": False}
+                          "files": {}, "verified": False, **(extra or {})}
         with tempfile.TemporaryDirectory(dir=out, prefix=".retention-") as scratch_s:
             scratch = Path(scratch_s)
             # 1. archive the rows
@@ -458,6 +464,9 @@ def archive(root: str | Path, out: str | Path, keep_days: int = 30, keep_studies
             mpath = _unique(out / f"archive-manifest-{stamp}.json")
             _write_json_atomic(mpath, manifest)            # the proof exists before anything is deleted
             say(f"retention: archived and verified -> {mpath}")
+            if before_prune is not None:
+                manifest["durable"] = before_prune(manifest, out, mpath)
+                _write_json_atomic(mpath, manifest)
 
             # 3. record in the ledger (before deleting, so a crash never leaves rows gone and unrecorded)
             entry = {"at": manifest["created_at"], "status": "pending", "manifest": mpath.name, "cutoff": rep["cutoff"],
@@ -465,7 +474,7 @@ def archive(root: str | Path, out: str | Path, keep_days: int = 30, keep_studies
                      "tables": {t: {k: v for k, v in tables[t].items() if k != "kept_rows"} for t in PRUNABLE},
                      "thought_days": sorted({r[0] for r in db.execute(
                          f"SELECT DISTINCT substr(ts,1,10) FROM thoughts WHERE {where}")}) if n_rows else [],
-                     "studies": [s.id for s in sel.studies]}
+                     "studies": [s.id for s in sel.studies], **({"durable": manifest["durable"]} if "durable" in manifest else {})}
             led = read_ledger(jpath)
             led["runs"].append(entry)
             _write_json_atomic(ledger_path(jpath), led)

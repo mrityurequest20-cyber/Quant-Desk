@@ -90,6 +90,16 @@ jobs:
       - name: Status
         if: always()
         run: python -m quantdesk autolearn status | tee status.txt
+      # C-02, weekly (intraday.retention): archive old thoughts/news and plan studies to the journal-archive-YYYY release,
+      # download them back and check they restore, and only then prune them; the save below carries the smaller journal.
+      # After the close (16:10 IST) and in the live-desk group, so never while the desk trades. A failure only warns.
+      - name: Journal retention (archive to the release, verify the download, then prune)
+        if: always() && steps.restore.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk intraday retain --root runtime
       - name: Save the journal (only a journal that was restored intact; partial cycle state is resumable)
         if: always() && steps.restore.outcome == 'success'
         run: deploy/journal.sh save "learning cycle $(date '+%F %H:%M') IST"

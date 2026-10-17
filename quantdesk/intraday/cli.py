@@ -576,6 +576,15 @@ def cmd_archive(cfg, a):
         sys.exit(f"::error::journal retention aborted, nothing was deleted: {exc}")
 
 
+def cmd_retain(cfg, a):
+    """C-02: the weekly archive -> upload to the journal-archive release -> verify the download -> prune, run by the
+    post-close job (quantdesk/journal/durable.py). A failure is a warning and prunes nothing; it never fails the job."""
+    import datetime as _dt
+    from ..journal import durable
+    durable.retain(Path(a.root) if a.root else Path(cfg.runtime_dir), cfg.get("intraday.retention"),
+                   as_of=_dt.date.fromisoformat(a.as_of) if a.as_of else None, dry_run=a.dry_run, force=a.force)
+
+
 def _journal(cfg, a) -> Journal:
     return Journal(paths(cfg, a.account or "live")["journal"])
 
@@ -873,6 +882,12 @@ def register(sub):
     x.add_argument("--as-of", help="YYYY-MM-DD: count back from this day instead of today")
     x.add_argument("--restore", metavar="MANIFEST", help="put an archive run back (rows and studies), verifying its hashes")
     x.set_defaults(fn=cmd_archive)
+    x = ss.add_parser("retain", help="weekly: archive to the journal-archive release, verify the download, then prune the journal")
+    x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
+    x.add_argument("--dry-run", action="store_true", help="say what would be archived, pruned and the sizes; change and upload nothing")
+    x.add_argument("--force", action="store_true", help="run even when it is not the weekly run day and the sizes are under their thresholds")
+    x.add_argument("--as-of", help="YYYY-MM-DD: count back from this day instead of today")
+    x.set_defaults(fn=cmd_retain)
     x = ss.add_parser("export-site", help="the web app + an account's data as a read-only static site")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--out", default="quantdesk-snapshot.html")
