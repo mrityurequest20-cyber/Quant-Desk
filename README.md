@@ -341,6 +341,7 @@ python -m quantdesk autolearn rollback --reason "…"
 Operating controls:
 - **Kill switch:** `runtime/KILL` flattens and halts.
 - **Halts:** stale feed, failed journal check, unverifiable champion and drift alarm all stop new entries.
+  The owner clears an inherited-position or 10% drawdown halt from the Actions tab ("Clear a desk halt", between sessions only); see `docs/RECOVERY.md`.
 - **Caps:** an exposure cap on total open premium sits on top of the daily-loss and position limits.
 - **Ollama:** advisory only, never weighed into a signal.
 
@@ -815,6 +816,7 @@ live orders, no looser risk, no promotions, no edits to registered specs.
 - **On Cloudflare too.** Cloudflare Workers Builds deploys the `quant-desk` Worker from `main` with `npx wrangler deploy` (no build command). The Worker (`deploy/cloudflare/worker.js`, configured in `wrangler.jsonc`) passes every request to the GitHub Pages site above, so it serves exactly what the desk last published, with `data.json` never cached at the edge. It only redeploys when those two files change, not on every data update. The site itself is still published to Pages, so Pages must stay on.
 - **App updates** reach the site on their own: `site.yml` re-publishes the site whenever `quantdesk/web/` changes on `main`, after any running desk has finished (a running desk keeps publishing with the code it started with).
 - **The journal** lives on the `journal` branch: the SQLite journal, the paper broker, the reviews and the recorded 1m bars. To read it locally, run `git fetch origin journal && git archive FETCH_HEAD | tar -x -C runtime`, then `quantdesk intraday stats` or `quantdesk serve`.
+  Weekly (`intraday.retention`), the post-close learning job archives thoughts/news older than 21 days and all but the newest plan studies to the `journal-archive-YYYY` release, downloads them back and checks they restore, and only then prunes them, so the branch stays under GitHub's file limit; trades, fills, decisions and events are never pruned. Put an archive back with `quantdesk intraday archive --restore <manifest>`; `quantdesk intraday retain --dry-run` shows the plan.
 - **Kill switch:** in the Actions tab, open the running *Live paper desk* run and press **Cancel**. Open paper positions are squared off at current prices (`live --close-out`), and the site and journal are saved.
 
 One-time setup:

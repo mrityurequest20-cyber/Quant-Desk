@@ -257,8 +257,9 @@ class ReleaseStore:
         cmd = ["gh", *args] + (["-R", self.repo] if self.repo else [])
         return self._run(cmd, check=check, capture_output=True, text=True)
 
-    def assets(self) -> list[str]:
-        r = self._gh("release", "view", self.tag, "--json", "assets", check=False)
+    def assets(self, strict: bool = False) -> list[str]:
+        """Asset names; a missing release (or, unless strict, any failure) reads as none. strict raises on failure."""
+        r = self._gh("release", "view", self.tag, "--json", "assets", check=strict)
         if r.returncode != 0:
             return []
         return [a["name"] for a in json.loads(r.stdout or "{}").get("assets", [])]
@@ -274,12 +275,12 @@ class ReleaseStore:
             self._gh("release", "download", self.tag, "--pattern", n, "--dir", str(dest), "--clobber")
         return names
 
-    def push(self, src: Path, names: list[str]) -> None:
+    def push(self, src: Path, names: list[str], clobber: bool = True) -> None:
         if not names:
             return
         self.ensure()
         for i in range(0, len(names), 20):
-            self._gh("release", "upload", self.tag, *[str(src / n) for n in names[i:i + 20]], "--clobber")
+            self._gh("release", "upload", self.tag, *[str(src / n) for n in names[i:i + 20]], *(["--clobber"] if clobber else []))
 
 
 def needed_assets(start: dt.date, end: dt.date, tables=TABLES) -> list[str]:

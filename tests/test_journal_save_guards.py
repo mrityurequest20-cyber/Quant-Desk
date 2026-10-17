@@ -23,13 +23,14 @@ def sh(cmd, cwd, env=None, check=True):
     return r
 
 
-def _journal(path: Path, trades: int, thoughts: int):
+def _journal(path: Path, trades: int, thoughts: int, news: int = 0):
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as db:
         for t in ("trades", "fills", "decisions", "events", "thoughts", "news"):
             db.execute(f"CREATE TABLE IF NOT EXISTS {t} (id INTEGER PRIMARY KEY, x TEXT)")
         db.executemany("INSERT INTO trades (x) VALUES (?)", [("t",)] * trades)
         db.executemany("INSERT INTO thoughts (x) VALUES (?)", [("h",)] * thoughts)
+        db.executemany("INSERT INTO news (x) VALUES (?)", [("n",)] * news)
 
 
 @pytest.fixture()
@@ -96,6 +97,67 @@ def test_a_save_never_overwrites_another_jobs_save(desk, tmp_path):
     r = sh("deploy/journal.sh save 'close'", work, check=False)
     assert r.returncode != 0 and "moved since it was restored" in r.stderr
     assert _head(remote) == theirs
+
+
+# ---- C-02: the one shrink a verified prune may cause -----------------------------------------------------------------------
+def _restored_with_news(work, news=8):
+    """Restore, give the journal `news` headlines, and take the figures a real restore would have recorded."""
+    sh("deploy/journal.sh restore", work)
+    rt = work / "runtime"
+    _journal(rt / "intraday" / "journal.db", trades=0, thoughts=0, news=news)
+    figures = sh(["python3", "deploy/journal_counts.py", str(rt / "intraday" / "journal.db")], work).stdout
+    (rt / ".journal-restored.json").write_text(figures)
+    return rt, (rt / ".journal-restored-sha").read_text().strip()
+
+
+def _pruned(rt, trades=3, thoughts=10, news=5):
+    """The journal after a prune: news lost its oldest rows and VACUUM renumbered the rest, so the max id fell."""
+    db = rt / "intraday" / "journal.db"
+    db.unlink()
+    _journal(db, trades=trades, thoughts=thoughts, news=news)
+
+
+def _permit(rt, sha, pruned, version=1):
+    (rt / ".journal-prune-permit.json").write_text(json.dumps({"version": version, "restored_sha": sha, "pruned": pruned}))
+
+
+def test_a_save_after_a_verified_prune_passes(desk):
+    work, remote = desk
+    rt, sha = _restored_with_news(work)
+    _pruned(rt)                                                          # news max id 8 -> 5; trades/thoughts untouched
+    before = _head(remote)
+    refused = sh("deploy/journal.sh save 'close'", work, check=False)    # without the permit that is a shrink like any other
+    assert refused.returncode != 0 and "news_max_id is 5, below the 8 restored" in refused.stderr and _head(remote) == before
+    _permit(rt, sha, {"news": 3})
+    sh("deploy/journal.sh save 'close'", work)
+    assert _head(remote) != before
+
+
+@pytest.mark.parametrize("what,expect", [
+    (dict(trades=2), "trades is 2, below the 3 restored"),                # the account's record is never excused
+    (dict(news=4), "news_rows is 4, below the 5 restored"),               # more rows gone than the prune took out
+    (dict(thoughts=9), "thoughts_max_id is 9, below the 10 restored"),    # a table the permit does not name
+])
+def test_the_permit_excuses_nothing_else(desk, what, expect):
+    work, remote = desk
+    rt, sha = _restored_with_news(work)
+    _pruned(rt, **{"trades": 3, "thoughts": 10, "news": 5, **what})
+    _permit(rt, sha, {"news": 3})
+    before = _head(remote)
+    r = sh("deploy/journal.sh save 'close'", work, check=False)
+    assert r.returncode != 0 and expect in r.stderr and _head(remote) == before
+
+
+@pytest.mark.parametrize("permit", [dict(sha="not-the-commit-restored"), dict(pruned={}), dict(version=2),
+                                    dict(pruned={"trades": 1}), dict(pruned={"news": "3"})])
+def test_a_permit_for_another_commit_or_another_table_is_ignored(desk, permit):
+    work, remote = desk
+    rt, sha = _restored_with_news(work)
+    _pruned(rt)
+    _permit(rt, permit.get("sha", sha), permit.get("pruned", {"news": 3}), permit.get("version", 1))
+    before = _head(remote)
+    r = sh("deploy/journal.sh save 'close'", work, check=False)
+    assert r.returncode != 0 and "news_max_id is 5, below the 8 restored" in r.stderr and _head(remote) == before
 
 
 # ---- C-08: the gate's kill-switch check --------------------------------------------------------------------------

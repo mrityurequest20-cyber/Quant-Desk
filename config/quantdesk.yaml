@@ -202,6 +202,13 @@ intraday:
   # the near-month index future (Kotak): its volume goes on the index bars; OI build-up and basis join the read.
   # roll_days: switch to the next month this many days before expiry.
   futures: {roll_days: 3}
+  # journal retention (C-02, quantdesk/journal/durable.py): autolearn.yml's post-close job archives old thoughts/news and
+  # plan studies to the `journal-archive-YYYY` release, downloads them back and checks they restore, and only then prunes
+  # them from the journal. At most weekly (weekday 0 = Monday), earlier if journal.db or the whole tree outgrows its
+  # size (MB; the push refuses a file at 80 MB). keep_days is at least 14 (grading looks back 7 days; earn-in reads
+  # neither thoughts nor news); the newest keep_studies plan studies and every one a registry card or the lock uses stay.
+  # trades, fills, decisions and events are never pruned.
+  retention: {enabled: true, release_prefix: journal-archive, keep_days: 21, keep_studies: 3, weekday: 4, journal_mb: 40, tree_mb: 150}
   # learning: every news call, factor read, trade and refused pre-break entry is graded against the next 30 minutes;
   # the record moves news trust and setup conviction, shrunk until it's long enough.
   # Kept in runtime/intraday/memory.json (saved with the journal).
