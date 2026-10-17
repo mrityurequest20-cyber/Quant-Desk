@@ -128,7 +128,7 @@ class IntradayEngine:
         # intraday.vol_forecast.mode (off | shadow): vol_forecast_v1's HAR forecast is recorded beside the desk's own at the
         # opening read, to be graded later (`intraday vol-shadow`). Nothing reads it: it is not an input to any decision.
         self.volshadow = VolShadow(cfg, journal)
-        self.ev =EVEngine(cfg, self.pricer, broker.costs, n_paths=int(qc.get("n_paths", 2000)))
+        self.ev = EVEngine(cfg, self.pricer, broker.costs, n_paths=int(qc.get("n_paths", 2000)))
         self.models: dict[str, DirectionModel] = {}
         self.hist5: dict[str, pd.DataFrame] = {}
         self.qstate: dict[str, dict] = {}
@@ -295,7 +295,7 @@ class IntradayEngine:
             self.volshadow.start_session(day, session_bounds(day)[0], self.underlyings)
         except Exception as exc:                                   # the shadow may never stop a session from starting
             log.warning("vol shadow could not start: %r", exc)
-        exp =", ".join(f"{u} {e:%d-%b}" for u, e in self.expiry.items())
+        exp = ", ".join(f"{u} {e:%d-%b}" for u, e in self.expiry.items())
         self.say(f"── session {day} · capital ₹{self.day_start_equity:,.0f} · expiries {exp} · chain {self.chains.name} "
                  f"· feed {self.feed.name}{' · events: ' + ', '.join(self.events_today) if self.events_today else ''}")
         self.journal.event(session_bounds(day)[0], "INFO", "session", f"session start; expiries {exp}; chain {self.chains.name}",
@@ -421,7 +421,7 @@ class IntradayEngine:
         if q is not None and self.volshadow.on:
             self._vol_shadow(u, now, q)
         b = self._guarded(u, now, "brain", self._think_globally, u, now) if self.brain is not None else None
-        blk =self.eventbook.blocking(now)                   # only an announcement inside the session blocks
+        blk = self.eventbook.blocking(now)                   # only an announcement inside the session blocks
         br = self.breadth_state[u] = self.breadth.state(u, s.get("chg"), now) if self.breadth is not None else None
         view = self.analyst.assess(u, s, self.chain_an.get(u), self._vix_state(), self.expiry[u] == self.day,
                                    blk.label() if blk else None, self._flow_state(u, now),

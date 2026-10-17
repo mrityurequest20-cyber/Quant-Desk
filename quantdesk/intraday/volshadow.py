@@ -43,12 +43,16 @@ class VolShadow:
     """The engine's hook: record HAR beside the desk's estimate at the opening read. Writes only to the journal."""
 
     def __init__(self, cfg, journal):
-        vf = cfg.get("intraday.vol_forecast", {}) or {}
-        mode = str(vf.get("mode", "off")).strip().lower()
+        raw = cfg.get("intraday.vol_forecast", {})
+        vf = raw if isinstance(raw, dict) else {}
+        mode = vf.get("mode", "off")
+        mode = "off" if mode is False else str(mode).strip().lower()      # YAML 1.1 reads a bare `off` as False
         self.bad_mode = None if mode in MODES else str(vf.get("mode"))
+        if raw is not None and not isinstance(raw, dict):                  # a malformed block: off, with the same WARN
+            self.bad_mode = str(raw)
         self.mode = mode if self.bad_mode is None else "off"
         from .harvol import DEFAULT_PATH
-        self.path = Path(vf.get("path") or DEFAULT_PATH)          # the committed coefficients unless the config points elsewhere
+        self.path = Path(str(vf.get("path") or DEFAULT_PATH))     # the committed coefficients unless the config points elsewhere
         self.journal = journal
         self.har: dict = {}
         self.done: set = set()
