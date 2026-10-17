@@ -1,0 +1,71 @@
+{
+  "name": "overnight_carry_v1",
+  "registered": "2026-10-17",
+  "kind": "registered evidence gate and carry rule for the intraday desk's own positions (long options, debit spreads, the iron fly). Registered before any code or result exists. Shadow first; apply stays off until the owner flips it AND a setup's gate below is met.",
+  "question": "does carrying a setup's defined-risk position overnight, instead of squaring it off at 15:15, earn more than it costs, after every cost, on the desk's own setups; and if it does, how much may be carried",
+  "owner_decision": {
+    "request": "overnight holding must cover BUYING too, not only selling (extends allocator_v1, which covers the defined-risk expiry-seller condors)",
+    "constraints": "naked short options stay banned from the paper account; real money stays off (account.mode paper); no limit, gate or sizing is loosened; halts are the owner's to clear"
+  },
+  "prior": "The desk's own evidence leans AGAINST this. L4: buyers of short-dated options overpay (buyer_edge.json, the warehouse's overnight horizon: an ATM straddle bought at the close and sold at the next close, after a half spread, a tick and fees); the overnight theta of a long option is paid whether or not the market moves; a stop cannot fire overnight and a gap can take the whole premium. The prior is therefore that carrying LOSES. A setup's carry is allowed only if the tests below beat that prior; failing to is the expected outcome, and a failed gate is a result, not an error.",
+  "what_may_carry": {
+    "setups": ["orb", "vwap_trend", "trend_break", "va_reversion", "range_sell"],
+    "rule": "any position the intraday engine opened (a long call or put, a debit spread, the iron fly), still open at the 15:15 square-off, whose every short leg is covered by a long leg of the same right and expiry with at least its quantity: DEFINED RISK. A position with any uncovered short leg is never a carry, whatever else is true.",
+    "not_covered": "the expiry-seller condors (allocator_v1 governs them, with its own sleeve-eligibility gate); any naked short; any position with a leg whose quote cannot be priced"
+  },
+  "carry_rule": {
+    "one_night": "ONE overnight only. A carried position is managed at the next session by its own stop, target and invalidation rules (its time stop is switched off, because it was opened yesterday) and is squared off at that session's 15:15 like any other. It is never carried a second night.",
+    "no_non_trading_day": "refused unless the next trading day is the next calendar day AND the desk has a holiday list for both dates: no weekend, no holiday between the session and the next.",
+    "no_expiry": "STRICTER than the sleeves: refused if any leg of the position expires on or before the NEXT trading day (it would expire, or be an expiry-day position, at the next session). A position carries only when its nearest expiry is at least two trading days after the session.",
+    "sizing_full_max_loss": "The intraday sizer sizes on the stop distance (premium_stop 30% of the premium). A stop cannot fire overnight, so the carry is sized on the FULL max loss. Per lot: the worst payoff of the position at expiry over every index level (a long option or a debit spread: its full debit; the iron fly: the wider wing minus the credit), plus the entry fees already paid, plus the fees of closing every leg at its entry price. A position may carry only the whole lots n, n <= its lots, whose total max loss is at most 2.5% of equity (min of intraday.risk.risk_per_trade and 0.025; equity = broker cash plus the open positions at cost). If it holds more lots than fit, the EXCESS lots are closed at the square-off at the same quotes an ordinary square-off would use, and only the n lots that fit are carried. Never rounded up: if not one lot fits, nothing is carried and the whole position is squared off.",
+    "limits": "every limit is the smaller of the desk's configured value and this ceiling: max_open 2 (carries count; so do positions already carried), max_trades_per_day 4, daily_loss 0.05 (the session's room after reserving the max loss of everything carried, as the intraday sizer's C-06 rule does; and a loss realised at the next open counts against that next session: its starting equity carries the position at cost), max_total_outlay 0.5 (blocked margin: a debit position at its debit, a credit position at the larger of its max loss and intraday.risk.credit_margin_per_lot), cross_day_drawdown_halt 0.10.",
+    "refused_while": "the kill switch file, the app's pause, safe mode, a journal fault, a failed reconciliation, an inherited-position halt, a cross-day drawdown halt, a daily-loss halt, a risk-governor stand-down, equity 10% or more below its peak, the account is not paper, or the broker is not the simulated paper broker. Checking is fail-closed: what cannot be read refuses.",
+    "square_off_exemption": "only a position that is a REGISTERED carry (the allocator_v1 registry, state key overnight_carry) and still matches its registration exactly is left open by the 15:15 square-off and the end-of-session close. The kill switch, safe mode, an owner's flatten and a manual close-out still close it at once.",
+    "inherited_position_halt": "unchanged for everything but an exact registered carry, as in allocator_v1: the journal's trade, the registry and the broker must all hold exactly what was registered, and the session day must be on or before the carry's last day (the next trading day for this spec). Any difference, or a later day, halts entries for the owner.",
+    "registration": "a carry is registered with hold = next_close and last day = the next trading day, in the same step that decides it, after the excess lots are closed; the registered trade is the carried lots only."
+  },
+  "evidence_gate": {
+    "unit": "per setup. A paired difference d for every candidate position, in rupees per lot of the position as opened: d = P_carry - P_close, where P_close is the position's realised P&L when squared off at 15:15 (entry and exit fees included) and P_carry is what the SAME entry would have made had it been held and closed at the next session's open (real exit-side quotes, fees of the closing orders included). Entry fills, entry fees and the strikes cancel in d; what d measures is the overnight, net of the cost of closing at the open.",
+    "a_history_test": {
+      "data": "NSE F&O bhavcopy from the data warehouse (fo_bhav), 2019 onward, NIFTY and BANKNIFTY: for each historical signal of the setup, the OPEN of the next session against the CLOSE of the signal session for each leg of the engine's structure. The bhavcopy close stands in for the 15:15 exit (it is the closest recorded price; this is an approximation and is labelled real_eod_approximation), the bhavcopy open for the next open.",
+      "structure": "the same rule as the engine: the setup's own long and short deltas from config intraday.setups, the nearest expiry that satisfies this spec's no-expiry rule, strikes chosen on the signal session's closing prices by the pricer's implied volatility and delta, spread legs as the playbook builds them, the iron fly's wing multiple. Closing costs: the desk's cost model (execution/costs.CostModel) and the history's half spread and tick (warehouse_research.leg_cost) on each leg, both exits.",
+      "signals": "the days and directions the setup fires, from replaying the setup over the index minute bars where they exist: the desk's recorded sessions and the aeron7 external index minutes (data/external_aeron.py). Sessions with no minute bars have no signal and are not in the test: the test never invents a signal.",
+      "statistic": "mean of d per setup; Newey-West (HAC) t of the mean, one-sided; the sign of the mean in the older two thirds and in the newest third of the dates",
+      "pass": "n >= 100 signals, mean d > 0, one-sided HAC t >= 2.33 (0.01: the 0.05 level split across the 5 setups), AND the mean has the same positive sign in both the older two thirds and the newest third",
+      "fail": "anything else. A failed history test is final for this spec: that setup does not carry, and a later attempt is a new spec. The result is committed whether it passes or fails.",
+      "result_file": "docs/prereg/results/overnight_carry_v1-<spec hash>.json: {spec, generated, setups: {<setup>: {n, mean, t, mean_older, mean_newest, passed}}}. The gate reads this file and nothing else for the history; a missing file, a spec hash that is not this spec's, or a setup that is absent is NOT PASSED."
+    },
+    "b_forward_shadow": {
+      "record": "every position still open at the 15:15 square-off, whether or not it could carry, writes a shadow record at the moment it is squared off: the position, the lots it would have carried under the sizing rule, why not if none, the real quotes and the actual 15:15 exit. The evening after the next session, the record is marked at that session's 09:20 real quotes. The mark source is the engine's own live real-quote chain (the same source filter as kotak or nse). It uses the FIRST chain refresh whose timestamp (same calendar date as the marking session) lies in [09:20, 09:30]; longs are closed at the bid and shorts at the ask, each one paper-broker adverse tick worse per leg, plus the fees of the closing orders. A record with no usable chain by 09:30 is written 'unmarked' and never filled in.",
+      "pass": "at least 30 marked records of the setup, mean d > 0, one-sided t >= 1.645, and consistent with the history: z = (forward mean - history mean) / (history sd / sqrt(n)) >= -1.645",
+      "fail": "at 30 marked records, a forward mean <= 0; or at 60 marked records, not yet passed; or more than 30% of the setup's records unmarked once 30 exist. A failed forward test is final for this spec.",
+      "no_profit_claim": "30 forward trades cannot prove a profit. They can show quickly whether the history's sign and size survive the desk's real quotes at the minute they would have been traded."
+    },
+    "gate": "a setup's carry gate is MET only if the history test passed AND the forward test passed AND at least 5 distinct sessions have a shadow record. Anything else is not met."
+  },
+  "mode": {
+    "key": "intraday.overnight_carry.mode",
+    "values": {
+      "off": "nothing is recorded and nothing carries",
+      "shadow": "DEFAULT. The 15:15 square-off is exactly what it is today. Every candidate is recorded as a would-be carry (lots per the sizing rule) and marked next morning. The paper account is not touched by the allocator logic: positions are squared off as they always were.",
+      "apply": "a candidate of a setup whose gate is MET is carried as the carry rule says. Effective only if the setup's gate is met AND at least 5 distinct shadow sessions are on record. A setup whose gate is not met is squared off and recorded as a shadow record, whatever the mode."
+    },
+    "unknown_value": "any value not listed is shadow",
+    "shipping_default": "shadow. The owner flips apply by hand, after reading at least 5 shadow sessions and the setup's gate (the same shadow-then-apply pattern as intraday.learning.earn_in.mode). The engineer never does."
+  },
+  "records": {
+    "ledger": "runtime/intraday/overnight_carry_v1.jsonl, append-only, saved with the journal: shadow records, marks, gate evaluations. Never edited.",
+    "journal": "a carry is a journal trade (family overnight, the setup's own strategy name) with its fills; the trim of excess lots is journalled as fills on the same trade; the registry is the allocator_v1 registry. An overnight trade is not a playbook setup: it is not graded into the setup record and is excluded from the paper gate's evidence."
+  },
+  "never": [
+    "a naked short option in the paper account at any moment, including while a carry is closed (shorts are bought back before wings are sold)",
+    "real money, a live order, or any broker other than the simulated paper broker",
+    "a limit looser than the desk's configured one or than a ceiling here",
+    "a carry over a weekend or a holiday, into an expiry day, or a second night",
+    "a carry sized on the stop distance or on anything but the full max loss",
+    "apply for a setup whose gate is not met",
+    "an unregistered or changed position being exempt from any halt; clearing a halt is the owner's alone",
+    "editing a registered spec, a ledger or a result, or deleting evidence"
+  ],
+  "changes": "any change to these rules is a new spec (overnight_carry_v2) with its own ledger; this file and its ledger are never edited"
+}
