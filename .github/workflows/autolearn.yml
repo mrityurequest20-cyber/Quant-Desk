@@ -90,6 +90,16 @@ jobs:
       - name: Status
         if: always()
         run: python -m quantdesk autolearn status | tee status.txt
+      # Claude as a teacher (intraday/teacher.py, docs/AUTONOMY.md): after the close it reviews the session's journal and
+      # leaves ADVISORY lessons in the journal (state teacher:YYYY-MM-DD) and the learning memory. It is paid from the
+      # teaching half of the Claude credit, one call a day, and can read the journal and write a lesson, nothing else: no
+      # config, risk, sizing or gate. This job passes no Claude key, so as shipped the step reports "key not set" and skips;
+      # the owner enables teaching by adding the same ANTHROPIC_API_KEY env line live.yml has to this step.
+      - name: Teaching (Claude reviews the session; advisory lessons, best effort)
+        if: always() && steps.restore.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 10
+        run: python -m quantdesk intraday teach
       # C-02, weekly (intraday.retention): archive old thoughts/news and plan studies to the journal-archive-YYYY release,
       # download them back and check they restore, and only then prune them; the save below carries the smaller journal.
       # After the close (16:10 IST) and in the live-desk group, so never while the desk trades. A failure only warns.

@@ -250,6 +250,19 @@ class Journal:
             row = self.db.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
         return json.loads(row[0]) if row else default
 
+    def states(self, prefix: str, n: int | None = None) -> list[tuple[str, object]]:
+        """(key, value) of the state rows whose key starts with `prefix`, newest key first (keys that end in a date)."""
+        with self.lock:
+            rows = self.db.execute("SELECT key, value FROM state WHERE substr(key, 1, ?) = ? ORDER BY key DESC"
+                                   + (" LIMIT ?" if n else ""), (len(prefix), prefix) + ((int(n),) if n else ())).fetchall()
+        out = []
+        for k, v in rows:
+            try:
+                out.append((k, json.loads(v)))
+            except ValueError:
+                continue
+        return out
+
     # ---- reads --------------------------------------------------------------------------------
     def df(self, sql: str, params=()) -> pd.DataFrame:
         with self.lock:

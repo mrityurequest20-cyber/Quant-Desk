@@ -893,8 +893,9 @@ class IntradayEngine:
         if claude is not None and self.cfg.get("intraday.llm.claude.reflect", True) and hold is None:
             from .learning import summary
             try:
-                got = claude.reflect(review, summary(self.memory, factor_weights_applied=self.analyst.apply_learned)
-                                     if self.memory is not None else [])
+                from .teacher import advisory_lines          # yesterday's teaching, labelled advisory: context, never a rule
+                got = claude.reflect(review, (summary(self.memory, factor_weights_applied=self.analyst.apply_learned)
+                                              if self.memory is not None else []) + advisory_lines(self.journal))
             except Exception as exc:
                 got = None
                 self.journal.event(now, "WARN", "llm", f"reflection failed: {exc!s:.200}")
