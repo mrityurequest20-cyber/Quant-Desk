@@ -610,6 +610,16 @@ def cmd_teach(cfg, a):
     print("teach: " + ", ".join(f"{k} {v}" for k, v in got.items()))
 
 
+def cmd_vol_shadow(cfg, a):
+    """Live A (the desk's vol forecaster) vs HAR: the journaled shadow forecasts scored against the recorded bars."""
+    from . import volshadow
+    p = paths(cfg, a.account or "live")
+    ev = Journal(p["journal"]).events(since=a.since)
+    rec = SessionRecorder(p["data"])
+    bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
+    print(volshadow.render(volshadow.compare(ev, bars)))
+
+
 def cmd_archive(cfg, a):
     """C-02: archive, verify, then prune old thoughts/news and plan studies (quantdesk/journal/retention.py)."""
     import datetime as _dt
@@ -931,6 +941,10 @@ def register(sub):
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--date", help="YYYY-MM-DD: the session to review (default: the newest in the journal); only once it is over")
     x.set_defaults(fn=cmd_teach)
+    x = ss.add_parser("vol-shadow", help="live A-vs-HAR volatility forecasts against what the index did (QLIKE, move ratio)")
+    x.add_argument("--account", help="live (default), replay, synthetic")
+    x.add_argument("--since", help="only forecasts from this date (YYYY-MM-DD)")
+    x.set_defaults(fn=cmd_vol_shadow)
     x = ss.add_parser("archive", help="archive, verify, then prune old thoughts/news and plan studies (keeps the journal small)")
     x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
     x.add_argument("--out", help="where the dated archive files and the manifest go")
