@@ -213,6 +213,16 @@ jobs:
       - name: Progress snapshot (is the desk getting smarter? ops/progress.py)
         if: always()
         run: python -m quantdesk intraday progress > /dev/null || echo "::warning::progress snapshot failed"
+      # Claude as a teacher (intraday/teacher.py, docs/AUTONOMY.md): the session is over, so Claude reviews its journal and
+      # leaves ADVISORY lessons (state teacher:YYYY-MM-DD, the learning memory). Paid from the teaching half of the Claude
+      # credit, one call a day; it can write a lesson and nothing else (no config, risk, sizing or gate). It uses the
+      # workflow-level Claude key already here; it refuses before the close; best effort, so it can never fail the job
+      # or block the save below (which runs `always()`), and the save carries the lessons.
+      - name: Teaching (Claude reviews the session; advisory lessons)
+        if: ${{ !cancelled() && steps.restore.outcome == 'success' && steps.standdown.outcome != 'failure' }}
+        timeout-minutes: 10
+        continue-on-error: true                                       # a timeout fails only this step, never the job
+        run: python -m quantdesk intraday teach || echo "::warning::teaching failed"
       - name: Save the journal
         if: ${{ always() && steps.restore.outcome == 'success' && steps.standdown.outcome != 'failure' }}   # C-01
         run: deploy/journal.sh save "close $(date '+%F %H:%M') IST"
