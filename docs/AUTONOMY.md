@@ -147,6 +147,17 @@ but nothing waits for one.
    shift's first job.
 7. **Close** each resolved issue with its commit.
 
+**Standing permission (owner, 17 Oct 2026; decides G-01 for these cases only).** A scheduled engineer session may merge
+its own pull request, by squash with the head sha pinned, when ALL of these hold: `tests` and `doctor` are green on the
+head and the branch is up to date; the independent reviewer this section requires has returned CLEAR on that head
+(`risk-compliance` for order, risk, sizing, cost, spec and workflow changes, `internal-auditor` otherwise); and the change
+is **tighten-only or non-behavioural**: data collection, shadow recording, monitoring, tooling, tests, docs, or a smaller
+size or an extra filter. Everything else is not covered and waits for the owner: anything that raises an exposure or a
+ceiling, loosens a gate, changes sizing upward, flips an `apply` mode, touches workflow permissions or secrets, the
+paper-mode switch, a halt, a locked spec or result, or the real-money switch. If the merge tool is refused, the session
+leaves the pull request open and says so; it never works around a refusal. The learning bot (docs/LEARNBOT.md) keeps its
+own stricter rule: it never merges.
+
 **Halts are the owner's to clear.** No agent or engineer dispatches `Clear a desk halt` (`clear-halt.yml`), runs
 `clear-halt` / `clear-drawdown-halt`, or touches a halt key in the journal, whatever the reason. The workflow runs
 only for the repository owner; that guard can't tell an agent using the owner's own token from the owner, so this rule
