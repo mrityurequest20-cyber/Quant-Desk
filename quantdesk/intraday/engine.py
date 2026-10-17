@@ -30,7 +30,7 @@ import pandas as pd
 from ..core.calendar import TradingCalendar
 from ..core.types import OPTIONS, Instrument, Order, Trade, TradeLeg, new_trade_id
 from ..journal.journal import Journal, trade_from_dict, trade_to_dict
-from . import governor
+from . import governor, overnight
 from .analyst import Analyst, MarketView
 from .chainflow import ChainFlow, chain_step
 from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
@@ -155,6 +155,16 @@ class IntradayEngine:
         self.stale_feed_min = float(ic.get("stale_feed_min", 3))
         self.journal_fault: str | None = None
         self.halt: dict | None = None                     # an inherited position awaits the owner (halt.py; H-02/H-03)
+        # overnight carry, PHASE 1 (overnight.py, docs/prereg/overnight_carry_v1.json): SHADOW ONLY. A ledger of what each
+        # position open at the square-off would have carried; nothing here changes an order, a position or the square-off.
+        jp = str(getattr(journal, "path", ":memory:"))
+        self.ov_ledger = overnight.Ledger((Path(jp).parent if jp != ":memory:" else Path(cfg.runtime_dir) / "intraday")
+                                          / "overnight_carry_v1.jsonl")
+        self.ov_spec = overnight.load_spec()
+        self._ov_pending: set[str] = set()                # recorded at the square-off, awaiting the actual exit
+        self._ov_seen: set[str] = set()
+        self._ov_virtual: list[dict] = []                 # this session's would-be carries (they would share the limits)
+        self._ov_warned = False
         # engine health: failures, slow steps, the reconciliation of broker vs journal, safe mode (all in the heartbeat)
         self.max_step_failures = int(ic.get("max_step_failures", 3))
         self.slow_step_sec = float(ic.get("slow_step_sec", 40))
@@ -274,6 +284,11 @@ class IntradayEngine:
         self._explore_off(session_bounds(day)[0])                   # live + exploration on: the CRITICAL goes on the record now
         self.events_today = self.eventbook.describe(day, self.cal.prev_trading_day(day))
         saved = self._restore(day)
+        self._ov_virtual.clear()
+        try:
+            self._overnight_finalize(day)
+        except Exception as exc:
+            log.warning("overnight finalize: %r", exc)
         self._reconcile(day)
         self._check_inherited(day)
         if saved.get("day_start_equity"):
@@ -355,6 +370,10 @@ class IntradayEngine:
                     self._step_failed(u, now, exc, fails)
         finally:                                               # the square-off happens whatever failed above (P2-2)
             self._wallclock_exits(now)
+        try:
+            self._overnight_mark(now)
+        except Exception as exc:                                  # a record of the shadow is never worth a failed step
+            self.journal.event(now, "WARN", "overnight", f"09:20 marking failed: {exc!r:.160}")
         self._snapshot(now)
         self._persist()
         self._heartbeat(now)
@@ -443,7 +462,84 @@ class IntradayEngine:
             if t.meta.get("exit_pending"):
                 self._retry_exit(t, now)
             elif now.time() >= self.risk.square_off:
+                self._overnight_shadow(t, now)             # a record only; the square-off below is exactly what it was
                 self._close(t, now, "square_off", f"intraday square-off at {self.risk.square_off:%H:%M}")
+
+    # ---- overnight carry, phase 1: shadow records (overnight.py, docs/prereg/overnight_carry_v1.json) ----------------------
+    def _overnight_facts(self, now) -> dict:
+        halts = []
+        for why, on in (("the kill switch is set", self.killed), ("new entries are paused from the app", self.paused),
+                        ("safe mode", self.health.get("safe_mode")),
+                        ("broker and journal disagree", (self.health.get("reconcile") or {}).get("ok") is False),
+                        ("an inherited-position halt is active", self.halt), ("the cross-day drawdown halt is active", self.dd_halt),
+                        ("the journal failed its check", self.journal_fault), ("the day's loss limit was hit", self.risk.halted),
+                        ("the risk governor stood the desk down", self.risk.hold_until is not None and now < self.risk.hold_until)):
+            if on:
+                halts.append(why)
+        return {"equity": self.broker.cash() + sum(x.entry_cost for x in self.open_trades), "day_start_equity": self.day_start_equity,
+                "peak": self.peak_equity, "reserved_loss": sum(v["max_loss"] for v in self._ov_virtual),
+                "reserved_margin": sum(v["margin"] for v in self._ov_virtual), "carries": len(self._ov_virtual), "halts": halts}
+
+    def _overnight_shadow(self, t: Trade, now) -> None:
+        """At the square-off, record what this position would have carried. Writes the ledger and one journal event, nothing
+        else: it never raises, never touches the broker, a position or the order of the square-off."""
+        try:
+            mode = overnight.settings(self.cfg)["mode"]
+            if mode == "off" or t.id in self._ov_seen or t.meta.get("exit_pending") or not t.legs:
+                return
+            self._ov_seen.add(t.id)
+            eff, why = overnight.effective(mode, self.ov_spec, self.ov_ledger, t.strategy)
+            if mode == "apply" and not self._ov_warned:
+                self._ov_warned = True
+                self.journal.event(now, "WARN", "overnight", "intraday.overnight_carry.mode is apply, which is not implemented in "
+                                   "this build: running as shadow (nothing is carried)")
+            pl = overnight.plan(self.cfg, self.cal, t, self.day, self._overnight_facts(now), self.broker.costs)
+            if pl["lots_fit"] >= 1 and not pl["reasons"]:
+                self._ov_virtual.append({"max_loss": pl["max_loss"], "margin": pl["margin"]})
+            self.ov_ledger.append({"event": "candidate", "id": t.id, "day": str(self.day), "mode": mode, "effective": eff,
+                                   "note": why, "lot": int(t.legs[0].instrument.lot_size), "entry_fees": t.fees,
+                                   **{k: v for k, v in pl.items() if k != "economics"}, "max_loss_fit": pl.get("max_loss")})
+            self._ov_pending.add(t.id)
+            self.journal.event(now, "INFO", "overnight", f"shadow: {t.id} {t.strategy} {t.symbol} would carry {pl['lots_fit']} of "
+                               f"{pl['lots']} lot(s)" + (f"; {'; '.join(pl['reasons'])[:200]}" if pl["reasons"] else ""), {"trade": t.id})
+        except Exception as exc:                                  # a record is never worth a missed square-off
+            log.exception("overnight shadow record failed")
+            try:
+                self.journal.event(now, "WARN", "overnight", f"{t.id}: shadow record failed ({exc!r:.160})")
+            except Exception:
+                pass
+
+    def _overnight_exit(self, t: Trade, now) -> None:
+        """The position's actual square-off is final: the half of the paired difference the 09:20 mark is compared with."""
+        if t.id in self._ov_pending:
+            self._ov_pending.discard(t.id)
+            try:
+                self.ov_ledger.append({"event": "exit", "id": t.id, "setup": t.strategy, "day": str(self.day), "pnl": t.pnl,
+                                       "reason": t.exit_reason, "closed_at": str(t.closed_at)})
+            except Exception:
+                log.exception("overnight exit record failed")
+
+    def _overnight_mark(self, now) -> None:
+        """Mark yesterday's shadow records at this session's first real-quote chain from 09:20 (and give up on any not marked
+        by 09:30: unmarked, never filled in). Reads the live chain; places nothing."""
+        if not overnight.MARK_FROM <= now.time() <= dt.time(9, 40) or overnight.settings(self.cfg)["mode"] == "off":
+            return                                            # the window is 09:20-09:30; the run to 09:40 closes it out
+        for rec in self.ov_ledger.open_records(self.day):
+            ch = self.chain_df.get(rec["underlying"])
+            if (ch is not None and overnight.usable_chain(ch, now) and ch.attrs.get("expiry") == dt.date.fromisoformat(rec["expiry"])):
+                pnl = overnight.mark_pnl(rec, ch, self.broker.costs, float(self.broker.costs.opt_half_ticks))
+                if pnl is not None:
+                    self.ov_ledger.append({"event": "mark", "id": rec["id"], "setup": rec["setup"], "day": str(self.day),
+                                           "ts": str(ch.attrs.get("ts")), "source": str(ch.attrs.get("source")), "carry_pnl": pnl})
+                    continue
+            if now.time() > overnight.MARK_TO:
+                self.ov_ledger.append({"event": "unmarked", "id": rec["id"], "setup": rec["setup"], "day": str(self.day),
+                                       "why": "no real-quote chain of the position's expiry between 09:20 and 09:30"})
+
+    def _overnight_finalize(self, day: dt.date) -> None:
+        for rec in self.ov_ledger.stale(day):
+            self.ov_ledger.append({"event": "unmarked", "id": rec["id"], "setup": rec["setup"], "day": str(day),
+                                   "why": "its marking session passed without a mark"})
 
     def _open_risk(self) -> float:
         """What the open trades can still lose to their stops, in rupees (their initial risk: the conservative figure)."""
@@ -1743,6 +1839,7 @@ class IntradayEngine:
         self.closed.append(t)
         v = self.views.get(t.symbol)
         rv = self.journal.close_trade(t, v.day_type if v else None)
+        self._overnight_exit(t, now)
         self.risk.on_close(t.pnl, now)
         self._gov_safe(self._gov_close, t, now)
         self._persist()                                   # the exit is on record before anything else can fail
