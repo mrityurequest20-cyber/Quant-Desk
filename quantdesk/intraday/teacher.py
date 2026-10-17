@@ -279,7 +279,7 @@ def teach(cfg, journal, day: str | None = None, memory=None, reader=None, now: p
     try:
         return _teach(cfg, journal, day, memory, reader, now, plan_latest)
     except Exception as exc:                                  # fail closed: no lesson, a WARN, the close is untouched
-        _log(journal, now, "WARN", f"teaching call failed: {type(exc).__name__}: {str(exc)[:160]}")
+        _log(journal, now, "WARN", f"teaching call errored ({type(exc).__name__}: {str(exc)[:160]})")   # not "failed": selfreview files issues on that
         return {"status": "failed", "why": f"{type(exc).__name__}: {str(exc)[:160]}"}
 
 
@@ -320,6 +320,8 @@ def _teach(cfg, journal, day, memory, reader, now, plan_latest) -> dict:
                      teaching_left_usd=round(budget.teach_left(), 4))
     reader.budget = budget
     raw = reader.teach(TEACH_SYSTEM, text, LESSON_SCHEMA, str(c.get("teach_effort", "medium")), max_tokens)
+    if getattr(reader, "charge_error", None):                 # the call was paid for but the ledger write failed: never silent
+        _log(journal, now, "WARN", f"teaching {reader.charge_error}", {"day": day})
     rec, dropped = parse_lessons(raw, ids, day)
     if rec is None or (dropped and not rec["lessons"]):      # nothing usable (no lessons and a summary, on a thin day, is fine)
         _log(journal, now, "WARN", "teaching output malformed, dropped: " + "; ".join(dropped)[:300],

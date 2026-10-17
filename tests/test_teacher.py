@@ -186,7 +186,8 @@ def test_a_refusal_and_a_failing_client_are_events_not_errors(journal):
     class Boom:
         beta = NS(messages=NS(create=lambda **kw: (_ for _ in ()).throw(RuntimeError("503 overloaded"))))
     got = teacher.teach(CFG, journal, DAY, reader=reader_for(Boom()), now=AFTER)
-    assert got["status"] == "failed" and "teaching call failed" in events(journal, "WARN")["message"].iloc[-1]
+    assert got["status"] == "failed" and "teaching call errored (RuntimeError" in events(journal, "WARN")["message"].iloc[-1]
+    assert "failed" not in events(journal, "WARN")["message"].iloc[-1]       # selfreview.py files an issue for any WARN with "failed"
     assert teacher.recent_lessons(journal) == []
 
 
@@ -259,19 +260,54 @@ def test_a_lesson_that_asks_for_looser_limits_changes_nothing_but_the_journal(jo
     assert not list((ROOT / "docs" / "prereg").glob("*teach*"))               # and it registered no study
 
 
-def test_the_teacher_imports_no_risk_sizing_gate_broker_or_config_writer():
-    tree = ast.parse((ROOT / "quantdesk" / "intraday" / "teacher.py").read_text(encoding="utf-8"))
+ALLOWED_IMPORTS = {"__future__", "pandas", "json", "re", "datetime", "logging", "math", "typing", ".llm", ".learning", ".feeds"}
+
+
+def test_the_teacher_imports_only_an_allow_list_with_no_risk_sizing_gate_broker_or_config_code():
+    src = (ROOT / "quantdesk" / "intraday" / "teacher.py").read_text(encoding="utf-8")
     mods = set()
-    for n in ast.walk(tree):
+    for n in ast.walk(ast.parse(src)):
         if isinstance(n, ast.Import):
             mods |= {a.name for a in n.names}
         elif isinstance(n, ast.ImportFrom):
-            mods |= {("." * n.level) + (n.module or "") + ("." + a.name if not n.module else "") for a in n.names} | \
-                    {("." * n.level) + (n.module or "")}
-    assert {m for m in mods if "risk" in m or "governor" in m or "sim" in m or "account" in m or "engine" in m or "sleeves" in m
-            or "playbook" in m or "execution" in m or "autolearn" in m or "prereg" in m} == set()
-    src = (ROOT / "quantdesk" / "intraday" / "teacher.py").read_text(encoding="utf-8")
+            base = "." * n.level + (n.module or "")
+            mods |= {base} if n.module else {base + a.name for a in n.names}
+    assert mods <= ALLOWED_IMPORTS, sorted(mods - ALLOWED_IMPORTS)
     assert "yaml" not in src and "open(" not in src and "write_text" not in src          # no file or config writes
+
+
+def test_unledgered_spend_is_a_warn_not_silent(journal):
+    class Unledgered(llm.ClaudeReader):
+        def _call(self, *a, **kw):
+            text = super()._call(*a, **kw)
+            self.charge_error = "spend not ledgered (OSError: disk)"
+            return text
+    got = teacher.teach(CFG, journal, DAY, reader=Unledgered("k", client=FakeAnthropic(reply(lesson()))), now=AFTER)
+    assert got["status"] == "taught"
+    assert events(journal, "WARN")["message"].str.contains("spend not ledgered").any()
+
+
+def test_the_save_guard_accepts_an_older_snapshot_without_teacher_rows_and_refuses_losing_them(journal, tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("journal_counts", ROOT / "deploy" / "journal_counts.py")
+    jc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(jc)
+    path = tmp_path / "journal.db"
+    disk = sqlite3.connect(path)
+    journal.db.backup(disk)
+    disk.close()
+    old = {k: v for k, v in jc.figures(str(path)).items() if k != "teacher_sessions"}      # a snapshot from before the teacher
+    snap = tmp_path / "old.json"
+    snap.write_text(json.dumps(old))
+    teacher.teach(CFG, journal, DAY, reader=reader_for(FakeAnthropic(reply(lesson()))), now=AFTER)
+    journal.db.backup(sqlite3.connect(path))
+    assert jc.figures(str(path))["teacher_sessions"] == 1
+    assert jc.main(["x", str(path), "--not-below", str(snap)]) == 0                         # more than the old snapshot had: fine
+    now = tmp_path / "now.json"
+    now.write_text(json.dumps(jc.figures(str(path))))
+    with sqlite3.connect(path) as db:
+        db.execute("DELETE FROM state WHERE key LIKE 'teacher:%'")
+    assert jc.main(["x", str(path), "--not-below", str(now)]) == 1                          # losing teacher rows is refused
 
 
 # sha256 of the workflows as they were on main aad8470 (before this feature)
