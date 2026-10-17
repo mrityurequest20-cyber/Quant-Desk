@@ -6,6 +6,10 @@ that unblocks one.
 
 **Ranking:** expected edge × how soon real evidence can exist.
 
+**Machine learning:** [ML_ROADMAP.md](ML_ROADMAP.md) proposes the learning fabric and its phased work items (ML-0.x to
+ML-5.x). They join this queue, in the order the weekly plan gives them, once the chief of staff adopts them; items
+here that overlap (1, 2, 3, 6 and 9) keep their place.
+
 **Rules for every item:**
 - the spec is committed alone, before code or results;
 - real point-in-time quotes are the only evidence that qualifies anything;
