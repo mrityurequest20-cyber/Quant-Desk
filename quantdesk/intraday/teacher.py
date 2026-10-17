@@ -306,7 +306,7 @@ def _teach(cfg, journal, day, memory, reader, now, plan_latest) -> dict:
         _, key = llm.key_for("claude")
         if not key:
             return _skip(journal, now, "no Claude key in this environment")
-        reader = llm.ClaudeReader(key, c.get("model", "claude-opus-5-5"), c.get("effort", "low"), timeout=120.0)
+        reader = llm.ClaudeReader(key, **({"model": c["model"]} if c.get("model") else {}), timeout=120.0)   # the configured model
     from .learning import summary
     mem_lines = summary(memory, top=4) if memory is not None else []
     text, ids = build_packet(journal, day, plan_latest, mem_lines)
