@@ -6,7 +6,7 @@ look-alike: the features and the fit are volstudy's own functions (`grid`, `rows
 
 Where the coefficients come from: fitted OFFLINE on the external minutes, with the spec's own training window (every
 session up to the spec's dev end, 2018-12-31: exactly what the locked test used), and stored as a small JSON file
-(`python -m quantdesk autolearn vol-har-fit`, default runtime/research/vol_har_v1.json). The desk does not refit at
+(`python -m quantdesk autolearn vol-har-fit`; the result is committed as quantdesk/intraday/vol_har_v1.json). The desk does not refit at
 session start: the 6 sessions of 1-minute bars it loads are too few for a 5-regressor fit per horizon and a minute-of-day
 profile, and a fit on them would be a different, untested model. Point in time: the file records the last session it
 was trained on, and the desk refuses it unless that is before the session being traded.
@@ -33,16 +33,55 @@ MAX_MISSING_TODAY = V.N_MIN - MIN_BARS
 
 
 # ---- offline: fit and store the coefficients ----------------------------------------------------------------------
-def fit_coefs(grids: dict, dev_end: dt.date, spec: str = "", spec_sha256: str = "", dataset: str = "") -> dict:
-    """C_har per symbol on every session up to `dev_end` (the spec's training window); `grids` as volstudy.prepare()."""
+DEFAULT_PATH = Path(__file__).with_name("vol_har_v1.json")     # the committed coefficients; intraday.vol_forecast.path overrides
+
+
+def fit_coefs(grids: dict, dev_end: dt.date, spec: str = "", spec_sha256: str = "", dataset: str = "",
+              provenance: dict | None = None) -> dict:
+    """C_har per symbol on every session up to `dev_end` (the spec's training window); `grids` as volstudy.prepare().
+    `provenance` (who fitted it, from what, with which code) is stored beside the numbers."""
     out = {"schema": SCHEMA, "model": "C_har", "spec": spec, "spec_sha256": spec_sha256, "dataset": dataset,
            "dev_end": str(dev_end), "symbols": {}}
+    if provenance:
+        out["provenance"] = provenance
     for sym, (days, r, miss, opens) in grids.items():
         train = np.array([d <= dev_end for d in days])
         s, fit, _ = V.fit_har(sym, days, r, miss, opens, train)
         out["symbols"][sym] = {"profile": s.tolist(), "fit": fit, "sessions": int(train.sum()),
                                "trained_through": str(max(d for d, t in zip(days, train) if t))}
     return out
+
+
+def _code_state() -> tuple[str | None, bool | None]:
+    """(commit the fit ran against, whether quantdesk/ or the prereg specs had uncommitted changes), or (None, None)."""
+    import subprocess
+    root = Path(__file__).resolve().parents[2]
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, timeout=20).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "quantdesk", "docs/prereg"], cwd=root,
+                               capture_output=True, text=True, timeout=20).stdout.strip()
+        return head or None, bool(dirty)
+    except Exception:
+        return None, None
+
+
+def provenance(spec: dict, spec_sha256: str, spec_file, ds, grids: dict, dev_end: dt.date, archive_sha256: str | None,
+               argv: list) -> dict:
+    """Who fitted these numbers, from what, with which code: stored in the coefficients file."""
+    import hashlib
+    man_path = Path(ds) / "manifest.json"
+    man = json.loads(man_path.read_text())
+    head, dirty = _code_state()
+    return {"spec": spec["name"], "spec_sha256": spec_sha256, "spec_file": str(spec_file),
+            "training_window": {"first_session": str(min(d for g in grids.values() for d in g[0])), "end": str(dev_end),
+                                "rule": "every accepted session up to the spec's dev end: the training the locked test used"},
+            "inputs": {"dataset": Path(ds).name, "status": man.get("status"), "source_url": man.get("source_url"),
+                       "source_commit": man.get("source_commit"), "importer_version": man.get("importer_version"),
+                       "manifest_sha256": hashlib.sha256(man_path.read_bytes()).hexdigest(), "archive_sha256": archive_sha256,
+                       "partitions_1m": {k: v for k, v in man.get("partitions", {}).items() if k.startswith("1m/")}},
+            "code_commit": head, "code_has_uncommitted_changes": dirty,
+            "fit_command": "python -m quantdesk " + " ".join(str(x) for x in argv),
+            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
 
 
 def save_coefs(path, coefs: dict) -> None:
