@@ -47,7 +47,8 @@ class VolShadow:
         mode = str(vf.get("mode", "off")).strip().lower()
         self.bad_mode = None if mode in MODES else str(vf.get("mode"))
         self.mode = mode if self.bad_mode is None else "off"
-        self.path = Path(vf.get("path") or Path(cfg.runtime_dir) / "research" / "vol_har_v1.json")
+        from .harvol import DEFAULT_PATH
+        self.path = Path(vf.get("path") or DEFAULT_PATH)          # the committed coefficients unless the config points elsewhere
         self.journal = journal
         self.har: dict = {}
         self.done: set = set()

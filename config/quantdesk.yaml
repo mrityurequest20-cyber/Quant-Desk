@@ -145,7 +145,8 @@ intraday:
   vol_forecast:                    # HAR volatility forecaster (vol_forecast_v1, passed its locked test), SHADOW ONLY
     mode: shadow                   # off | shadow. shadow: record HAR beside the desk's own estimate at the opening read and grade
                                    # both after the horizon (`intraday vol-shadow`); no decision reads it. There is no apply mode.
-                                   # Needs coefficients: `autolearn vol-har-fit` (runtime/research/vol_har_v1.json); without, a WARN
+                                   # Coefficients: the committed quantdesk/intraday/vol_har_v1.json (`autolearn vol-har-fit`);
+                                   # `path:` points elsewhere. Missing or unusable: a WARN and nothing is recorded
   analyst:
     min_conviction: 0.45
     iv_rv_rich: 1.15

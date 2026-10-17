@@ -372,19 +372,26 @@ def test_vol_har_fit_stores_the_specs_training_window_and_leaves_the_spec_alone(
     before = hashlib.sha256(spec_path.read_bytes()).hexdigest()
     grid = study_grid()
     ds = tmp_path / "ds-1"
+    ds.mkdir()
+    (ds / "manifest.json").write_text(json.dumps({"status": "external_verified", "source_commit": "abc", "importer_version": "aeron7-2",
+                                                  "partitions": {"1m/symbol=NIFTY/year=2018.parquet": "h1", "5m/x": "h2"}}))
     monkeypatch.setattr(X, "latest", lambda root: ds)
     monkeypatch.setattr(V, "prepare", lambda d, symbols: {s: grid for s in symbols})
     to = tmp_path / "coefs.json"
-    acli.cmd_vol_har_fit(cfg, argparse.Namespace(out=None, spec=str(spec_path), to=str(to)))
+    acli.cmd_vol_har_fit(cfg, argparse.Namespace(out=None, spec=str(spec_path), to=str(to), asset_sha256=None))
     coefs, why = harvol.load_coefs(to)
     assert why == "" and coefs["dev_end"] == "2018-12-31" and coefs["spec"] == "vol_forecast_v1" and coefs["dataset"] == "ds-1"
     assert set(coefs["symbols"]) == {"NIFTY", "BANKNIFTY"}
     assert coefs["symbols"]["NIFTY"]["trained_through"] <= "2018-12-31"
     assert coefs["symbols"]["NIFTY"] == harvol.fit_coefs({"NIFTY": grid}, DEV_END)["symbols"]["NIFTY"]
+    pv = coefs["provenance"]
+    assert pv["spec"] == "vol_forecast_v1" and pv["spec_sha256"] == coefs["spec_sha256"] and pv["training_window"]["end"] == "2018-12-31"
+    assert pv["inputs"]["source_commit"] == "abc" and pv["inputs"]["partitions_1m"] == {"1m/symbol=NIFTY/year=2018.parquet": "h1"}
+    assert len(pv["inputs"]["manifest_sha256"]) == 64 and pv["created_at"] and pv["fit_command"].startswith("python -m quantdesk")
     assert hashlib.sha256(spec_path.read_bytes()).hexdigest() == before          # the locked spec is only read
     monkeypatch.setattr(X, "latest", lambda root: None)
     with pytest.raises(SystemExit):
-        acli.cmd_vol_har_fit(cfg, argparse.Namespace(out=None, spec=str(spec_path), to=str(to)))
+        acli.cmd_vol_har_fit(cfg, argparse.Namespace(out=None, spec=str(spec_path), to=str(to), asset_sha256=None))
 
 
 def test_the_vol_shadow_command_reports_from_the_journal_and_the_recorded_bars(cfg, capsys):
