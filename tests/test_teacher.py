@@ -274,16 +274,37 @@ def test_the_teacher_imports_no_risk_sizing_gate_broker_or_config_writer():
     assert "yaml" not in src and "open(" not in src and "write_text" not in src          # no file or config writes
 
 
-def test_the_workflow_step_is_best_effort_and_widens_nothing():
-    text = (ROOT / ".github" / "workflows" / "autolearn.yml").read_text(encoding="utf-8")
+# sha256 of the workflows as they were on main aad8470 (before this feature)
+LIVE_BEFORE = "a99c14f69a11c34c6bd849cc3dab5ab3e462da80f43ef2155eeb0d611b60c0a6"
+AUTOLEARN_BEFORE = "ad6e01c7f52cc5808c1313b71087bfc05af508b7b20e9106a266d9c05d26786d"
+
+
+def test_the_workflow_step_is_in_the_live_afternoon_job_before_the_save_and_widens_nothing():
+    import re
+    text = (ROOT / ".github" / "workflows" / "live.yml").read_text(encoding="utf-8")
     wf = yaml.safe_load(text)
-    assert wf["permissions"] == {"contents": "write"}                          # unchanged
-    steps = wf["jobs"]["cycle"]["steps"]
-    step = next(s for s in steps if "teach" in s.get("run", ""))
-    assert step["continue-on-error"] is True and step["timeout-minutes"] <= 15 and "env" not in step
-    assert "secrets." not in text.replace("secrets.GITHUB", "")                # no secret was added to this workflow
+    steps = wf["jobs"]["afternoon"]["steps"]
     names = [s.get("name", "") for s in steps]
-    assert names.index(step["name"]) < next(i for i, n in enumerate(names) if n.startswith("Save the journal"))
+    step = next(s for s in steps if "intraday teach" in s.get("run", ""))
+    i, save = names.index(step["name"]), names.index("Save the journal")
+    trade = next(i for i, s in enumerate(steps) if s.get("id") == "trade")
+    squares = [i for i, n in enumerate(names) if "square off" in n.lower()]
+    sellers = next(i for i, n in enumerate(names) if n.startswith("Expiry sellers"))
+    progress = next(i for i, n in enumerate(names) if n.startswith("Progress snapshot"))
+    assert max([trade, sellers, progress, *squares]) < i < save                  # after the close; before the save
+    assert step["timeout-minutes"] <= 15 and step["continue-on-error"] is True and "::warning::teaching failed" in step["run"]
+    assert "env" not in step and "secrets" not in step["if"] and "!cancelled()" in step["if"]
+    # the save runs whatever this step did (always()), so the lessons are saved and a failed or timed-out step blocks nothing
+    assert steps[save]["if"].startswith("${{ always()")
+    # nothing else changed: with the teaching step (and its comment) cut out, the file is byte-identical to main aad8470,
+    # so no secret, env or permission was added anywhere in it
+    cut = re.sub(r"      # Claude as a teacher.*?(?=      - name: Save the journal\n        if: \$\{\{ always\(\) && steps\.restore\.outcome == 'success' && steps\.standdown)",
+                 "", text, count=1, flags=re.S)
+    assert hashlib.sha256(cut.encode()).hexdigest() == LIVE_BEFORE
+
+
+def test_autolearn_is_untouched():
+    assert hashlib.sha256((ROOT / ".github" / "workflows" / "autolearn.yml").read_bytes()).hexdigest() == AUTOLEARN_BEFORE
 
 
 def test_the_teach_command_is_registered():

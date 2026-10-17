@@ -30,8 +30,9 @@ it took effect, so the total is never raised. When a half is spent, that use is 
 carries on.
 
 - **Reads** (first half): the headline reader during the session and the after-close reflection.
-- **Teaching** (second half, `intraday/teacher.py`): `quantdesk intraday teach`, run by the `Learning cycle` workflow after
-  16:10 IST (best effort: `continue-on-error`, 10-minute timeout). It refuses before the close and is never called from
+- **Teaching** (second half, `intraday/teacher.py`): `quantdesk intraday teach`, run by the afternoon job of `Live paper desk` after
+  the square-off and before the journal save (best effort: `continue-on-error`, 10-minute timeout, a warning on failure;
+  the save runs regardless). It refuses before the close and is never called from
   the minute loop. One call a day: Claude is shown the session's journal (trades, every decision including the refused
   ones and why, a sample of the analyst's reads, warnings, the latest plan study) and returns JSON lessons, each with a
   kind (right, wrong, missed, uncertain), the claim and why, **the journal rows it rests on by id**, a confidence, what
@@ -45,9 +46,8 @@ memory (`teaching`). The next reflection and the learning cycle may read it (`te
 imports none of that code (a test enforces it). A lesson that proposes a change is stored as a hypothesis for a
 pre-registered study (`docs/prereg`, `research/memory.py`'s rules), which is a person's or the engineer's decision.
 
-Switching it on: the `Learning cycle` job passes no Claude key today, so the step prints "key not set" and skips. The
-owner enables teaching by adding the same `ANTHROPIC_API_KEY` env line that `live.yml` has to that step (a new secret for
-that workflow, deliberately not added here).
+It uses the Claude key `live.yml` already passes at workflow level: no secret, env or permission was added to any
+workflow. With no key the step prints "key not set" and skips.
 
 ## Development requests queue up as GitHub issues
 
