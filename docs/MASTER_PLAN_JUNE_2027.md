@@ -1,5 +1,8 @@
 # Master plan: a self-improving trading desk by 30 June 2027
 
+> Extended on 17 Oct 2026: the deadline is now August 2027 and the scope is open (docs/ROADMAP_AUG_2027.md). The
+> milestones below through June stand as the core acceptance.
+
 Mandate (owner, 17 Oct 2026): by June 2027 the desk is fully self-improving and self-learning, hands-off as far as
 safety allows. The structure may change top to bottom. Nothing later than June 2027.
 
