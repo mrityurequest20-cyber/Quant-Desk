@@ -253,7 +253,7 @@ A small account should buy single options only when there's a real edge. It shou
 
 ## News
 
-Every 4 minutes, in parallel, the desk reads these feeds (all reachable from GitHub's runners): ET Markets, ET Stocks, Moneycontrol, Mint, Business Standard, Google News (India and macro) and RBI press releases. For each story it:
+Every 2 minutes, in parallel, the desk reads these feeds (all reachable from GitHub's runners): ET Markets, ET Stocks, Moneycontrol, Mint, Business Standard, Google News (India and macro) and RBI press releases. For each story it:
 
 - dedupes it across outlets
 - tags what it's about: the index, banks, or macro
@@ -396,6 +396,9 @@ option within 20 strikes of the money on the 4 nearest expiries, plus the index 
 - **Kotak minute backfill** (`kotak-backfill.yml`) runs it once by hand for the last month.
 - After that, the live desk's afternoon job keeps each session's minutes on the `option-minutes-YYYY` release, so a
   contract's last days survive its expiry.
+- **Stock minutes** (`data stock-minutes`): the same candles for the cash series and near-month future of the ~50 most
+  liquid F&O stocks (ranked on the warehouse's `fo_stocks` before today, else a fixed list), paced at 5 requests a second
+  within a 12-minute budget, kept after every session on the `stock-minutes-YYYY` release. Data only: nothing trades stocks.
 
 These are **traded** bars (OHLC of trades, plus volume), not bid/ask, with evidence class `real_trade_minutes`. They
 serve intraday research and checking the cost model against the chain tape's real quotes. They never qualify a
@@ -488,6 +491,12 @@ confidence.
   lessons and three things to watch at the open, into the review and the memory. Nothing it writes touches
   orders, sizing or risk.
 
+- **Teaching:** after the close, and only then, Claude also reviews the session's journal and writes structured
+  lessons: what the desk got right or wrong and why, a concrete hypothesis worth testing, and the evidence that
+  would confirm or refute it. Every lesson cites journal rows by id and states its uncertainty; output that is not
+  the agreed JSON is dropped with a WARN. Lessons are stored as **advisory** text and can never change a setting
+  (see [docs/AUTONOMY.md](docs/AUTONOMY.md#claude-as-reader-and-as-teacher)).
+
 Keys (repository secrets, passed by `live.yml`):
 - `ANTHROPIC_API_KEY`, or `CLAUDE_API_KEY`, `CLAUDE_API`, `CLOUD_API_KEY`
 - `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
@@ -500,6 +509,8 @@ each provider. Locally, run `python -m quantdesk intraday ai-check`.
 - Headlines go 12 per call, at most 40 calls per provider per day (`intraday.llm`).
 - One Claude headline call is ~2k tokens in and ~1k out: about $0.03 at $4/$20 per million.
 - A busy news day costs about $0.50–1.50 for Claude; the reflection is a few cents.
+- The Claude credit (`budget_usd`, $23.60) is split in half: the reads and the reflection may spend one half, teaching
+  the other (`teach_share`, one teaching call a day, roughly $0.15). Each half is enforced on its own.
 - The review ends with the day's calls, tokens and estimated cost.
 
 ## Edge research (real data)

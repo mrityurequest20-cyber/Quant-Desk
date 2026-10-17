@@ -186,3 +186,27 @@ def test_a_re_added_story_keeps_when_it_was_first_seen_and_every_readers_read(tm
     nlp = json.loads(row["nlp"])
     assert set(nlp["llm"]["readers"]) == {"claude", "gemini"}                          # the morning's read survives
     assert nlp["llm"]["readers"]["claude"]["NIFTY"] == 0.7 and nlp["event"] == x.nlp["event"]
+
+
+def test_a_slow_feed_cannot_hold_up_the_minute_step(cfg):
+    """Audit 17 Oct (M1): at a 2-minute cadence the refresh runs inline in the minute step; 10 feeds on 8 workers with
+    an 8 s per-read timeout could block it ~16 s. Now every feed runs at once and the step waits at most deadline_s."""
+    import threading
+    import time
+    release = threading.Event()
+
+    def fetch(url):
+        if url == "slow":
+            release.wait(5)
+        return rss([("Nifty 50 rises on bank gains", rfc("2026-09-29 11:00"))]) if url == "fast" else rss([])
+    srcs = [{"name": f"F{i}", "url": "fast" if i == 0 else "other"} for i in range(9)] + [{"name": "S", "url": "slow"}]
+    nd = NewsDesk(cfg, fetch=fetch, sources=srcs)
+    nd.deadline_s = 0.3
+    t0 = time.monotonic()
+    fresh = nd.refresh(pd.Timestamp("2026-09-29 11:10", tz=IST))
+    took = time.monotonic() - t0
+    release.set()
+    assert took < 1.5, took                                   # not the slow feed's 5 s
+    assert [x.title for x in fresh] == ["Nifty 50 rises on bank gains"]
+    assert nd.health["S"].startswith("fail") and "no answer within" in nd.health["S"]
+    assert all(nd.health[f"F{i}"].startswith("ok") for i in range(9))

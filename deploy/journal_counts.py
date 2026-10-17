@@ -1,8 +1,9 @@
 """journal_counts.py DB [--not-below RESTORED.json [--pruned PERMIT.json --restored-sha SHA]]: the journal's size on the
 record, as JSON (C-01).
 
-Without --not-below it prints {table: n} for the append-only tables and {table_max_id: id} for the ones that may be
-archived and pruned (thoughts, news: their ids only ever grow). With it, it exits 1 naming every figure that is lower
+Without --not-below it prints {table: n} for the append-only tables, {table_max_id: id} for the ones that may be
+archived and pruned (thoughts, news: their ids only ever grow) and {teacher_sessions: n}, the teacher's advisory lessons
+(one `state` row per taught session; retention never touches them, so the count only grows). With it, it exits 1 naming every figure that is lower
 than the restored snapshot's, so a save can refuse to replace the only copy with a smaller one.
 
 One narrow exception (C-02): `--pruned PERMIT.json --restored-sha SHA`. The retention step writes the permit only after
@@ -17,6 +18,7 @@ import sys
 
 COUNTED = ("trades", "fills", "decisions", "events")
 MAX_ID = ("thoughts", "news")
+STATE_PREFIXES = {"teacher_sessions": "teacher:"}      # the teacher's advisory lessons, one state row a session (never pruned)
 
 
 def figures(path: str) -> dict:
@@ -30,6 +32,10 @@ def figures(path: str) -> dict:
             if t in have:
                 out[f"{t}_max_id"] = int(db.execute(f"SELECT COALESCE(MAX(rowid), 0) FROM {t}").fetchone()[0])
                 out[f"{t}_rows"] = int(db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])   # only read with a permit
+        if "state" in have:
+            for name, prefix in STATE_PREFIXES.items():
+                out[name] = int(db.execute("SELECT COUNT(*) FROM state WHERE substr(key, 1, ?) = ?",
+                                           (len(prefix), prefix)).fetchone()[0])
     return out
 
 

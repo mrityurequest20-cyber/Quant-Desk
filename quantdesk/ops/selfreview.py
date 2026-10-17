@@ -167,13 +167,16 @@ def tape_log_coverage(log: Path, start: pd.Timestamp, end: pd.Timestamp) -> dict
             for (u, e), g in lg.groupby(["underlying", "expiry"])}
 
 
-def check_sleeves(seller, day: dt.date) -> list[Finding]:
+def check_sleeves(seller, day: dt.date, comparison: bool = False) -> list[Finding]:
+    """`comparison`: a ledger that only compares settlement rules (v1–v3 once v4 is registered). It still reports data
+    health (bugs, unsettled trades, quotes, skips), but raises no retirement or milestone: its trades pair one for one
+    with the decision ledger's, so those verdicts would count one cost check twice."""
     from ..intraday.sleeves import MIN_COST, MIN_ELIGIBLE
     out = []
     rep = seller.report()
     for r in rep["rows"]:
         tag = f"{rep['spec']}:{r['sleeve']}-{r['underlying']}"
-        if r["retired"]:
+        if r["retired"] and not comparison:
             out.append(Finding(f"sleeve-retired:{tag}", "research", f"Expiry sleeve {tag} retired by its spec",
                                f"{r['retired']}. Trades: {r['n']}, P&L ₹{r['sum']:+,.0f}/lot.",
                                "Write it up (docs/reports), and decide whether a v2 spec with a different rule is "
@@ -182,7 +185,7 @@ def check_sleeves(seller, day: dt.date) -> list[Finding]:
             out.append(Finding(f"sleeve-bug:{rep['spec']}:{b.split(':')[0]}", "bug", "A defined-risk sleeve trade lost more than its max loss",
                                b, "This is impossible by construction: find the settlement or fill bug and fix it.",
                                transient=False))
-        if r["n"] in (MIN_COST, MIN_ELIGIBLE):
+        if r["n"] in (MIN_COST, MIN_ELIGIBLE) and not comparison:
             out.append(Finding(f"sleeve-milestone:{tag}:{r['n']}", "research",
                                f"Expiry sleeve {tag} reached {r['n']} settled trades",
                                f"Cost check: {r['cost']}; consistency: {r['consistency']}; status: {r['status']}. Mean cost "
@@ -193,6 +196,18 @@ def check_sleeves(seller, day: dt.date) -> list[Finding]:
                                transient=False))
     for t in rep["open"]:
         if dt.date.fromisoformat(t["expiry"]) < day:
+            if getattr(seller, "settlement", None) == "official_close":      # v4 waits for the official close and never uses the mean
+                out.append(Finding(f"sleeve-unsettled:{rep['spec']}:{t['id']}", "data",
+                                   f"Sleeve trade {t['id']} past expiry and unsettled (waiting for the official close)",
+                                   f"Expired {t['expiry']}; this spec settles only on the official close (NSE's file, else "
+                                   "the 15:29 one-minute close, else Yahoo's close) and none was available a full session "
+                                   "later. The report counts it at its max loss (defined risk) or the tail bound (naked) "
+                                   "until it settles.",
+                                   "Check whether NSE's ind_close_all file for that day exists and the run could reach "
+                                   "it (the UNSETTLED line of `quantdesk intraday sleeves` names the sources it tried), "
+                                   "then re-run `quantdesk intraday sleeves`. SENSEX has no NSE row: it settles on "
+                                   "Yahoo's close from the next run on."))
+                continue
             out.append(Finding(f"sleeve-unsettled:{rep['spec']}:{t['id']}", "data", f"Sleeve trade {t['id']} past expiry and unsettled",
                                f"Expired {t['expiry']} with no settlement: no recorded closing bars and no Yahoo close.",
                                "Recover the expiry-day close (recorded bars, the backfill's index minutes, or NSE) "
@@ -310,7 +325,7 @@ def check_holidays(cfg, day: dt.date) -> list[Finding]:
 def review(cfg, day: dt.date, gh=None, now: pd.Timestamp | None = None, warehouse: Path | None = None) -> list[Finding]:
     from ..core.calendar import TradingCalendar
     from ..intraday.cli import paths
-    from ..intraday.sleeves import ExpirySeller, specs
+    from ..intraday.sleeves import ExpirySeller, roles, specs
     from ..journal.journal import Journal
     cal = TradingCalendar(cfg.holidays())
     now = now if now is not None else pd.Timestamp.now(tz="Asia/Kolkata")
@@ -324,8 +339,17 @@ def review(cfg, day: dt.date, gh=None, now: pd.Timestamp | None = None, warehous
     finally:
         j.close()
     out += check_tape(p["data"], day, td)
-    for spec in specs():
-        out += check_sleeves(ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", p["data"], spec=spec), day)
+    all_specs = specs()
+    role = roles(all_specs)
+    for spec in all_specs:
+        try:
+            seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", p["data"], spec=spec)
+        except ValueError as exc:                          # a bad spec never hides the others' sleeves
+            out.append(Finding(f"sleeve-spec:{spec.get('name')}", "bug", f"Expiry spec {spec.get('name')} cannot run",
+                               str(exc), "Fix the spec's settlement name (a new spec, never an edit of a registered one) "
+                               "or the code that reads it; the other specs keep running.", transient=False))
+            continue
+        out += check_sleeves(seller, day, comparison=role[spec["name"]] == "comparison")
     out += check_workflows(gh, now)
     out += check_milestones(p["data"])
     out += check_lots(cfg, Path(warehouse or "runtime/warehouse"))
