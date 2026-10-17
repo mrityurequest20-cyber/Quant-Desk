@@ -185,7 +185,7 @@ def _run(cfg, tmp_path, name, vf=None, coefs="fit", seed=5, first="2026-08-20", 
     from quantdesk.journal.journal import Journal
     days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days(first, "2026-09-28")]
     bars, _ = simulate_sessions(days, seed=seed)
-    vf = dict(vf) if vf is not None else {}
+    vf = vf if isinstance(vf, str) else dict(vf or {})                 # a malformed (string) block is passed through as it is
     if coefs == "fit":                                                 # fitted on the sessions before the replayed one only
         grids = {s: V.grid(bars[s][bars[s].index.date < days[-1]]) for s in ("NIFTY", "BANKNIFTY")}
         harvol.save_coefs(tmp_path / f"{name}_har.json", harvol.fit_coefs(grids, days[-2]))
@@ -309,6 +309,59 @@ def test_the_key_absent_means_off(tmp_path):
     vs = volshadow.VolShadow(_Cfg(), journal=None)
     assert vs.mode == "off" and not vs.on and vs.bad_mode is None
     vs.step("NIFTY", at(dt.date(2026, 10, 12), 20), pd.DataFrame(), 12.0)       # off: returns before touching anything
+
+
+class _VCfg:
+    """A config whose only block is `intraday.vol_forecast`, whatever it holds (a dict, a string, a bare `off` read as False)."""
+    runtime_dir = "unused"
+
+    def __init__(self, vf):
+        self.vf = vf
+
+    def get(self, key, default=None):
+        return self.vf if key == "intraday.vol_forecast" else default
+
+
+class _Jnl:
+    def __init__(self):
+        self.rows = []
+
+    def event(self, ts, level, category, message, data=None):
+        self.rows.append((level, message))
+
+
+def test_a_string_block_still_constructs_the_engine_with_the_shadow_off_and_a_warn(cfg, tmp_path):
+    base, j_base, _, _ = _run(cfg, tmp_path, "b", {"mode": "off"})
+    eng, j, _, _ = _run(cfg, tmp_path, "str", "shadow", coefs="none")         # `vol_forecast: shadow` in the YAML
+    assert eng.volshadow.mode == "off" and not eng.volshadow.on
+    assert _books(j, eng) == _books(j_base, base)
+    assert j.events(level="WARN")["message"].str.contains("treated as off").sum() == 1
+    assert len(_shadow_events(j)) == 0 and j.events(level="ERROR").empty
+
+
+def test_a_string_block_never_raises_at_construction_or_session_start(tmp_path):
+    jn = _Jnl()
+    vs = volshadow.VolShadow(_VCfg("shadow"), journal=jn)
+    assert vs.mode == "off" and not vs.on and vs.bad_mode == "shadow"
+    vs.start_session(dt.date(2026, 10, 19), at(dt.date(2026, 10, 19), 0), ["NIFTY"])
+    assert jn.rows == [("WARN", "intraday.vol_forecast.mode 'shadow' is not off or shadow: treated as off (there is no apply mode)")]
+
+
+def test_a_non_string_path_constructs_and_starts_without_an_exception(tmp_path):
+    from pathlib import Path
+    jn = _Jnl()
+    vs = volshadow.VolShadow(_VCfg({"mode": "shadow", "path": 123}), journal=jn)
+    assert vs.path == Path("123") and vs.on and vs.bad_mode is None
+    vs.start_session(dt.date(2026, 10, 19), at(dt.date(2026, 10, 19), 0), ["NIFTY"])   # no coefficients at "123": a WARN, not a raise
+    assert [lvl for lvl, _ in jn.rows] == ["WARN"]
+
+
+def test_mode_false_is_a_bare_off_with_no_warn(tmp_path):
+    jn = _Jnl()
+    vs = volshadow.VolShadow(_VCfg({"mode": False}), journal=jn)
+    assert vs.mode == "off" and not vs.on and vs.bad_mode is None
+    vs.start_session(dt.date(2026, 10, 19), at(dt.date(2026, 10, 19), 0), ["NIFTY"])
+    assert jn.rows == []
 
 
 def test_the_shipped_config_is_shadow_and_paper(cfg):
