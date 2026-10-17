@@ -206,18 +206,6 @@ intraday:
   # this account doesn't have. Below this equity the desk only buys calls and puts; the selling structures stay in the
   # playbook and switch back on by themselves once equity reaches it. null: never sell; 0: always allowed.
   short_legs_from_equity: 300000
-  # Overnight holding, PHASE 1: SHADOW ONLY. Nothing is held overnight and the 15:15 square-off is untouched; `apply` is not
-  # implemented (it runs as shadow, with a warning). What is recorded, to decide whether a later phase should exist:
-  # * allocator (quantdesk/intraday/allocator.py, docs/prereg/allocator_v1.json): each evening, would the registered
-  #   allocator have carried an ELIGIBLE defined-risk expiry-seller condor (never a naked sleeve) one night, how many lots
-  #   (max loss <= 2.5% of equity), and what it would have made, marked at real quotes and settled by the sleeve's own rule.
-  # * overnight_carry (quantdesk/intraday/overnight.py, docs/prereg/overnight_carry_v1.json): every position the desk still
-  #   holds at 15:15 (long options, debit spreads, the iron fly) records what it would have carried, sized on the FULL max
-  #   loss (not the stop distance), marked at the next session's 09:20 real quotes against its actual exit.
-  #   The desk's own evidence (L4: buyers overpay; overnight theta) leans against carrying.
-  # mode: off | shadow (default). Anything else is shadow.
-  allocator: {mode: shadow}
-  overnight_carry: {mode: shadow}
   # the near-month index future (Kotak): its volume goes on the index bars; OI build-up and basis join the read.
   # roll_days: switch to the next month this many days before expiry.
   futures: {roll_days: 3}
