@@ -341,6 +341,7 @@ python -m quantdesk autolearn rollback --reason "…"
 Operating controls:
 - **Kill switch:** `runtime/KILL` flattens and halts.
 - **Halts:** stale feed, failed journal check, unverifiable champion and drift alarm all stop new entries.
+  The owner clears an inherited-position or 10% drawdown halt from the Actions tab ("Clear a desk halt", between sessions only); see `docs/RECOVERY.md`.
 - **Caps:** an exposure cap on total open premium sits on top of the daily-loss and position limits.
 - **Ollama:** advisory only, never weighed into a signal.
 
