@@ -313,3 +313,17 @@ def test_lessons_live_in_state_which_retention_never_prunes_and_the_save_guard_c
     with sqlite3.connect(path) as db:
         db.execute("DELETE FROM state WHERE key LIKE 'teacher:%'")
     assert jc.main(["x", str(path), "--not-below", str(restored)]) == 1        # a save that lost the lessons is refused
+
+
+def test_the_default_reader_is_built_from_the_environment_and_the_configured_model(journal, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
+    made, fake, real = {}, FakeAnthropic(reply(lesson())), llm.ClaudeReader
+
+    def factory(key, **kw):                               # stands in for the SDK-backed reader: nothing leaves the process
+        made.update(kw)
+        return real(key, client=fake)
+    monkeypatch.setattr(llm, "ClaudeReader", factory)
+    assert teacher.teach(CFG, journal, DAY, now=AFTER)["status"] == "taught"
+    assert made["model"] == CFG.get("intraday.llm.claude.model") and len(fake.calls) == 1
+    src = (ROOT / "quantdesk" / "intraday" / "teacher.py").read_text(encoding="utf-8")
+    assert "claude-opus" not in src and "claude-sonnet" not in src          # the model name lives in the config only
