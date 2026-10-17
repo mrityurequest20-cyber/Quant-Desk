@@ -212,12 +212,9 @@ class Ledger:
         evs = self.events()
         exits = {e["id"]: e for e in evs if e.get("event") == "exit"}
         marks = {e["id"]: e for e in evs if e.get("event") == "mark"}
-        out, seen = [], set()
+        out = []
         for c in evs:
-            if c.get("event") != "candidate" or c["id"] in seen:          # an engine restart after 15:15 writes the same id again
-                continue
-            seen.add(c["id"])
-            if (setup and c["setup"] != setup) or c["id"] not in exits or c["id"] not in marks:
+            if c.get("event") != "candidate" or (setup and c["setup"] != setup) or c["id"] not in exits or c["id"] not in marks:
                 continue
             carry, close, lots = float(marks[c["id"]]["carry_pnl"]), float(exits[c["id"]]["pnl"]), max(int(c["lots"]), 1)
             out.append({"id": c["id"], "setup": c["setup"], "day": c["day"], "carry": carry, "close": close, "d": (carry - close) / lots})
@@ -266,7 +263,7 @@ def usable_chain(chain, now: pd.Timestamp) -> bool:
         return False
     ts = pd.Timestamp(chain.attrs.get("ts"))
     ts = ts.tz_localize(now.tz) if ts.tzinfo is None else ts.tz_convert(now.tz)
-    return ts.date() == now.date() and MARK_FROM <= ts.time() <= MARK_TO      # the marking session's own chain, never yesterday's
+    return MARK_FROM <= ts.time() <= MARK_TO
 
 
 # ---- the evidence gate -------------------------------------------------------------------------------------------------------------

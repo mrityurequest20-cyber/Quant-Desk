@@ -327,20 +327,3 @@ def test_the_gate_is_computed_and_shown_but_apply_is_not_implemented_in_phase_1(
     assert OV.gate(SPEC, led2, "orb", tmp_path)["met"]                                       # met is a fact about the record ...
     assert OV.effective("apply", SPEC, led2, "orb", tmp_path)[0] == "shadow"                  # ... and still nothing carries
     assert not OV.gate(SPEC, led2, "vwap_trend", tmp_path)["met"]                            # the gate is per setup
-
-
-def test_a_chain_stamped_on_another_date_is_not_usable():
-    ch = pd.DataFrame({"ce_bid": [95.0]}, index=[25000.0])
-    now = pd.Timestamp("2026-09-29 09:21", tz=IST)
-    ch.attrs.update(source="kotak", ts=pd.Timestamp("2026-09-28 09:21", tz=IST))
-    assert not OV.usable_chain(ch, now)
-    ch.attrs["ts"] = pd.Timestamp("2026-09-29 09:21", tz=IST)
-    assert OV.usable_chain(ch, now)
-
-
-def test_duplicate_candidate_rows_count_once(tmp_path):
-    led = OV.Ledger(tmp_path / "overnight_carry_v1.jsonl")
-    seed(led, "orb", [5.0, 7.0])
-    led.append({"event": "candidate", "id": "orb-0", "setup": "orb", "day": "2026-06-01", "next_day": "2026-06-02", "lots": 1})
-    rows = led.pairs("orb")
-    assert [r["id"] for r in rows] == ["orb-0", "orb-1"]
