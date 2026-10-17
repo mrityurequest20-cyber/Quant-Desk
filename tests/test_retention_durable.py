@@ -303,6 +303,26 @@ def test_the_save_guard_accepts_the_verified_prune_it_was_given(tmp_path, gh):
     assert ok.returncode == 0, ok.stderr
 
 
+def test_a_failure_after_the_rows_are_committed_still_leaves_the_permit(tmp_path, gh, monkeypatch):
+    """Risk review, 17 Oct: once the DELETE is committed the rows are gone; a later failure (VACUUM, a study's rmtree)
+    used to leave no permit, so that day's save was refused. The permit is now written at the commit, exactly once."""
+    rt = runtime(tmp_path)
+    restored = tmp_path / "restored.json"
+    guard = ROOT / "deploy" / "journal_counts.py"
+    restored.write_text(subprocess.run([sys.executable, str(guard), str(rt / "intraday" / "journal.db")],
+                                       capture_output=True, text=True, check=True).stdout)
+    monkeypatch.setattr(R.shutil, "rmtree", lambda *a, **k: (_ for _ in ()).throw(OSError("disk")))
+    res, lines = retain(rt)
+    assert res["status"] == "failed" and "disk" in res["error"]
+    permit = json.loads((rt / durable.PERMIT).read_text())
+    man = json.loads(next(p for p in gh.release.iterdir() if p.name.startswith("archive-manifest")).read_text())
+    assert permit["pruned"] == {t: man["tables"][t]["rows"] for t in R.PRUNABLE}      # once, not doubled
+    cmd = [sys.executable, str(guard), str(rt / "intraday" / "journal.db"), "--not-below", str(restored),
+           "--pruned", str(rt / durable.PERMIT), "--restored-sha", "c0ffee"]
+    ok = subprocess.run(cmd, capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stderr
+
+
 # ---- the workflow --------------------------------------------------------------------------------------------------------------
 def test_the_autolearn_step_is_wired_with_no_new_permission_or_secret():
     text = (ROOT / ".github" / "workflows" / "autolearn.yml").read_text(encoding="utf-8")

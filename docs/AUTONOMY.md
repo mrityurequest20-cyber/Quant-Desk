@@ -119,6 +119,11 @@ but nothing waits for one.
    shift's first job.
 7. **Close** each resolved issue with its commit.
 
+**Halts are the owner's to clear.** No agent or engineer dispatches `Clear a desk halt` (`clear-halt.yml`), runs
+`clear-halt` / `clear-drawdown-halt`, or touches a halt key in the journal, whatever the reason. The workflow runs
+only for the repository owner; that guard can't tell an agent using the owner's own token from the owner, so this rule
+is the other half of it.
+
 ### What it does on its own
 - Fix bugs and failed workflows, with a regression test, after the full suite passes.
 - Data plumbing, checks, reports, docs; new fetchers for public data (see "Going outside").

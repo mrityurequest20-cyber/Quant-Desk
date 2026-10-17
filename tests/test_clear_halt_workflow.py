@@ -58,11 +58,34 @@ def test_no_input_is_interpolated_into_a_script():
     assert env["HALT"] == "${{ inputs.halt }}" and env["REASON"] == "${{ inputs.reason }}" and env["FORCE"] == "${{ inputs.force }}"
 
 
-def test_it_reuses_the_wait_step_and_the_leased_save():
-    wait = _steps("Wait for a running desk")[0]
-    restate_wait = next(s for s in RESTATE["jobs"]["restate"]["steps"] if s.get("name", "").startswith("Wait for a running desk"))
-    assert wait["run"].replace("clearing the halt", "restating").strip() == restate_wait["run"].strip()
-    assert wait["env"] == restate_wait["env"]
+FAKE_GH = """#!/usr/bin/env python3
+import os, sys
+a = sys.argv[1:]
+wf = a[a.index("--workflow") + 1]
+if wf in os.environ.get("GH_FAIL", "").split(","):
+    sys.exit(1)
+print(1 if wf in os.environ.get("GH_BUSY", "").split(",") else 0)
+"""
+
+
+@pytest.mark.parametrize("busy,fail,waits", [
+    ("", "", False), ("live.yml", "", True), ("autolearn.yml", "", True), ("learn.yml", "", True),
+    ("", "autolearn.yml", True),       # can't read a writer's runs: wait rather than guess
+])
+def test_it_waits_for_every_journal_writer(tmp_path, busy, fail, waits):
+    """Risk review, 17 Oct: the wait looked only at live.yml; autolearn.yml (16:10 IST, up to 75 min, now pruning) and
+    learn.yml save the journal too, and a clear that saved over them would make their save fail its lease."""
+    step = dict(_steps("Wait for a running desk")[0])
+    step["run"] = step["run"].replace("seq 320", "seq 1").replace("sleep 60", "true")   # one look, no sleeping
+    r = _run(step, tmp_path, env={"GH_BUSY": busy, "GH_FAIL": fail, "GITHUB_REPOSITORY": "o/r"}, bins={"gh": FAKE_GH})
+    assert (r.returncode != 0) is waits, r.stdout + r.stderr
+
+
+def test_only_the_repository_owner_can_run_it():
+    assert WF["jobs"]["clear"]["if"].replace(" ", "") == "github.actor==github.repository_owner"
+
+
+def test_it_reuses_the_leased_save():
     save = _steps("Save the journal")[0]["run"]
     assert "deploy/journal.sh save" in save and "JOURNAL_ALLOW_SHRINK" not in json.dumps(WF)
     names = [s.get("name", "") for s in STEPS]
@@ -77,8 +100,9 @@ print(datetime.datetime.fromisoformat(os.environ["FAKE_NOW"]).strftime(sys.argv[
 
 
 @pytest.mark.parametrize("now,refused", [
-    ("2026-10-19T08:44", False),     # Monday, a minute before the window
-    ("2026-10-19T08:45", True),
+    ("2026-10-19T07:59", False),     # Monday, a minute before the window (the scheduler wakes the desk from 08:25)
+    ("2026-10-19T08:00", True),
+    ("2026-10-19T08:30", True),
     ("2026-10-19T12:00", True),
     ("2026-10-23T16:15", True),      # Friday, the last minute
     ("2026-10-23T16:16", False),

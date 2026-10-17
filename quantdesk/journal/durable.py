@@ -157,9 +157,9 @@ def retain(root: str | Path, ret: dict | None = None, as_of: dt.date | None = No
                 (out / n).touch()
             sha = root / ".journal-restored-sha"
             man = R.archive(root, out, extra={"journal_commit": sha.read_text().strip() if sha.is_file() else "unknown"},
-                            before_prune=lambda m, o, mp: publish_and_verify(store, m, o, mp), **kw)
+                            before_prune=lambda m, o, mp: publish_and_verify(store, m, o, mp),
+                            on_committed=lambda m: write_permit(root, m), **kw)   # once, the moment the rows are gone
             if man.get("pruned"):
-                write_permit(root, man)
                 return {**res, "status": "pruned", "pruned": True, "manifest": man}
             return {**res, "status": "nothing to archive"}
     except Exception as exc:                                            # noqa: BLE001 - the desk's job must not fail over this

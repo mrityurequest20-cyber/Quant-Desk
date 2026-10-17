@@ -380,7 +380,7 @@ def _counts(db: sqlite3.Connection) -> dict:
 
 def archive(root: str | Path, out: str | Path, keep_days: int = 30, keep_studies: int = 3, dry_run: bool = False,
             as_of: dt.date | None = None, vacuum: bool = True, say=print, extra: dict | None = None,
-            before_prune=None) -> dict:
+            before_prune=None, on_committed=None) -> dict:
     """Archive, verify, then prune. Returns the manifest (also written to `out` unless dry_run).
 
     `extra` is merged into the manifest (durable.py: the journal commit it came from). `before_prune(manifest, out, mpath)`
@@ -491,6 +491,8 @@ def archive(root: str | Path, out: str | Path, keep_days: int = 30, keep_studies
                         raise RetentionError(f"table {t} changed unexpectedly ({n} -> {after.get(t)})")
                 db.execute("COMMIT")
                 manifest["row_counts_after"] = after
+                if on_committed is not None:          # the rows are gone from here on: whatever fails below (VACUUM, a
+                    on_committed(manifest)            # study's rmtree), the caller must still be able to vouch for them
             elif db is not None:
                 db.execute("ROLLBACK")
             if db is not None:
