@@ -511,3 +511,55 @@ checks:
   max_abs_return: 0.20             # a bigger one-day move is flagged as a probable bad tick
   vix_warn: 22
   vix_extreme: 30
+
+# Shadow setup replay (quantdesk/shadow/, `python -m quantdesk shadow ...`): offline and read-only. It runs the desk's own
+# detectors over recorded minutes and labels what would have happened; it never trades and changes no ceiling above.
+# Indices come from `instruments:` and collect_wide.indices; the stocks are collect_wide.stocks (stock_names is the
+# fallback until that section is on main). Stock contract specs below are best-effort and NOT verified against an NSE
+# circular: every row for them carries unverified=true. Replace with verified values (or add an instrument) here only.
+shadow:
+  stock_names: [RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN, BHARTIARTL, ITC, LT, AXISBANK,
+                KOTAKBANK, BAJFINANCE, MARUTI, SUNPHARMA, TATASTEEL, NTPC, HINDUNILVR, ADANIENT, ONGC, HCLTECH]
+  indices: [NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY]
+  tick_size: 0.05
+  stocks:                          # lot_size, strike_step (unverified: true unless stated)
+    RELIANCE:   {lot_size: 500,  strike_step: 10,  unverified: true}
+    HDFCBANK:   {lot_size: 550,  strike_step: 10,  unverified: true}
+    ICICIBANK:  {lot_size: 700,  strike_step: 10,  unverified: true}
+    INFY:       {lot_size: 400,  strike_step: 20,  unverified: true}
+    TCS:        {lot_size: 175,  strike_step: 20,  unverified: true}
+    SBIN:       {lot_size: 750,  strike_step: 5,   unverified: true}
+    BHARTIARTL: {lot_size: 475,  strike_step: 20,  unverified: true}
+    ITC:        {lot_size: 1600, strike_step: 5,   unverified: true}
+    LT:         {lot_size: 175,  strike_step: 20,  unverified: true}
+    AXISBANK:   {lot_size: 625,  strike_step: 10,  unverified: true}
+    KOTAKBANK:  {lot_size: 400,  strike_step: 10,  unverified: true}
+    BAJFINANCE: {lot_size: 750,  strike_step: 10,  unverified: true}
+    MARUTI:     {lot_size: 50,   strike_step: 100, unverified: true}
+    SUNPHARMA:  {lot_size: 350,  strike_step: 10,  unverified: true}
+    TATASTEEL:  {lot_size: 5500, strike_step: 1,   unverified: true}
+    NTPC:       {lot_size: 1500, strike_step: 5,   unverified: true}
+    HINDUNILVR: {lot_size: 300,  strike_step: 20,  unverified: true}
+    ADANIENT:   {lot_size: 300,  strike_step: 20,  unverified: true}
+    ONGC:       {lot_size: 2250, strike_step: 5,   unverified: true}
+    HCLTECH:    {lot_size: 350,  strike_step: 20,  unverified: true}
+  decision_step_min: 1             # minutes between decision points (5 is faster and sees the same 5m bars)
+  min_prior_days: 2                # sessions of history the detectors need before a day is replayed
+  refire: after_exit               # one shadow position per instrument at a time, as the live gate's "already holding"
+  slippage:                        # on top of the desk's own option half-spread (slippage:) and adverse_ticks: pessimistic
+    extra_pct: 0.01                # of the fill price, each leg, each side
+    extra_ticks: 1
+  max_leg_wait_min: 2              # an option leg with no traded bar at the entry minute may fill this much later, else unlabelled
+  quality:                         # data-quality gates; a failing session is excluded and listed, never silently replayed
+    min_bars: 330                  # of 375 session minutes
+    max_gap_min: 5                 # longest run of missing minutes
+    max_stale_run: 20              # equal closes in a row (a frozen feed)
+    max_abs_return: 0.03           # one-minute return beyond this is an outlier tick
+    max_outliers: 0
+    min_option_strikes: 6          # strikes with bars within the ATM band at the open, per expiry used
+    max_bad_session_share: 0.3     # an instrument with more failing sessions than this is excluded entirely
+  plausibility_ratio: 5            # flag an instrument whose setups per session differ from the NIFTY/BANKNIFTY median by this factor
+  validate:                        # shadow validate: replay vs what the live desk did
+    match_threshold: 0.9           # share of live trades the replay must reproduce (PASS/FAIL)
+    time_tol_min: 5                # entry and exit times within this many minutes
+    pnl_tol_frac: 0.25             # |net P&L difference| / max(|live|, planned risk) within this
