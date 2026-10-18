@@ -506,6 +506,23 @@ calendar:
     - {date: 2027-03-17, name: "US FOMC decision", time: "23:30"}
   event_blackout_days: 1
 
+# Wider data collection beside the desk (collect-wide.yml, quantdesk/data/collect_wide.py): read-only, never trades.
+# Index option minutes for all five indices every evening; one end-of-day option-chain snapshot of these stocks at
+# 15:25 IST. Releases are quarterly shards (option-minutes-2026Q4, chains-2026Q4) to stay under GitHub's asset cap.
+# Symbols are Kotak's underlying names: a wrong one shows up as FAILED in the stocks step and the health check.
+collect_wide:
+  indices: [NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY]
+  stocks: [RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN, BHARTIARTL, ITC, LT, AXISBANK,
+           KOTAKBANK, BAJFINANCE, MARUTI, SUNPHARMA, TATASTEEL, NTPC, HINDUNILVR, ADANIENT, ONGC, HCLTECH]
+  stock_expiries: 1                # nearest N expiries per stock (monthly)
+  stock_strikes: 20
+  minute_days: 3                   # overlap heals a missed day; Kotak serves ~30
+  minute_expiries: 3
+  minute_strikes: 20
+  shard: quarter                   # quarter | year
+  min_gap_sec: 0.25                # gentler than the desk's client: the 15:25 run overlaps the session's last minutes
+  stock_deadline: "15:35"          # IST; after it the book is blank and the snapshot is skipped
+
 checks:
   max_data_staleness_days: 4
   max_abs_return: 0.20             # a bigger one-day move is flagged as a probable bad tick

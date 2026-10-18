@@ -32,6 +32,7 @@ def compact_day(day_dir: Path) -> dict[str, pd.DataFrame]:
         snaps.append(df)
     if snaps:
         out["chains"] = pd.concat(snaps, ignore_index=True)
+        out["chains"].attrs.clear()          # one snapshot keeps its attrs (a date), which Parquet's metadata can't write
     bars = []
     for p in sorted(day_dir.glob("*_1m.csv")):
         df = pd.read_csv(p, parse_dates=["ts"])

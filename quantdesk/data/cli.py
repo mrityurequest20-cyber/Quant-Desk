@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import sys
 from pathlib import Path
 
@@ -139,7 +140,19 @@ def register(sub):
     x.add_argument("--symbols", default="NIFTY,BANKNIFTY")
     x.add_argument("--out", help="default runtime/intraday/backfill")
     x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. option-minutes)")
+    x.add_argument("--shard", choices=["year", "quarter"], default="year",
+                   help="release per year (default) or per quarter (<prefix>-2026Q4: stays under GitHub's ~1000 assets)")
+    x.add_argument("--min-gap", type=float, help="seconds between Kotak calls (default: the client's)")
     x.set_defaults(fn=cmd_kotak_backfill)
+    x = ss.add_parser("collect-wide", help="read-only data collection beside the desk (collect-wide.yml): minutes for all "
+                                           "five indices, the liquid stocks' chains, and a per-source health check")
+    x.add_argument("--step", choices=["minutes", "stocks", "health"], required=True)
+    x.add_argument("--day", help="YYYY-MM-DD (default today, IST)")
+    x.add_argument("--part", default="local", help="stocks: which run recorded it (the Actions run id)")
+    x.add_argument("--force", action="store_true", help="stocks: also outside the session or on a non-trading day")
+    x.add_argument("--out", help="default runtime/collect")
+    x.add_argument("--push", action="store_true", help="push to the GitHub releases (needs GH_TOKEN)")
+    x.set_defaults(fn=cmd_collect_wide)
     x = ss.add_parser("truedata-import", help="TrueData Velocity export → audited, immutable Parquet with provenance "
                                               "(raw files untouched; external_unverified until checked)")
     x.add_argument("--source", required=True, help="the export folder (or a clone of the repo holding it)")
@@ -171,9 +184,10 @@ def cmd_kotak_backfill(cfg, a):
     import shutil
 
     from ..intraday.kotak import KotakClient, KotakError
+    from .collect_wide import release_tag
     from .kotak_backfill import backfill, release_names
     try:
-        client = KotakClient.from_env()
+        client = KotakClient.from_env(**({"min_gap": a.min_gap} if getattr(a, "min_gap", None) else {}))
     except KotakError:
         raise SystemExit("kotak-backfill: no KOTAK_CONSUMER_KEY")
     out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "intraday" / "backfill"
@@ -189,11 +203,12 @@ def cmd_kotak_backfill(cfg, a):
             dst = f"{as_of}_{n}"
             shutil.copyfile(run / n, stage / dst)
             names.append(dst)
-        ReleaseStore(f"{a.release_prefix}-{as_of[:4]}", title=f"Option minutes {as_of[:4]}",
+        tag = release_tag(a.release_prefix, dt.date.fromisoformat(as_of), getattr(a, "shard", "year"))
+        ReleaseStore(tag, title=f"Option minutes {tag.rsplit('-', 1)[-1]}",
                      notes="Kotak 1-minute candles (traded bars, not quotes) for NIFTY/BANKNIFTY options near the money, "
                            "the index and its futures; one set per run (quantdesk/data/kotak_backfill.py). Not a software "
                            "release.").push(stage, names)
-        print(f"pushed {len(names)} file(s) to release {a.release_prefix}-{as_of[:4]}", flush=True)
+        print(f"pushed {len(names)} file(s) to release {tag}", flush=True)
 
     # each underlying goes to the release as soon as it is done: a timeout on the next one loses nothing
     man = backfill(client, out, [s.strip().upper() for s in a.symbols.split(",") if s.strip()], days=a.days,
@@ -203,6 +218,88 @@ def cmd_kotak_backfill(cfg, a):
     print(f"{run}: " + ", ".join(f"{u} {r.get('bars', 0):,} option bars" for u, r in man["underlyings"].items()))
     if a.release_prefix:
         push(run)                                   # the final manifest (calls, index/futures of the last underlying)
+
+
+def cmd_collect_wide(cfg, a):
+    """Every step is fail-safe: a problem is a ::warning:: and a health line, the exit status is always 0."""
+    import argparse
+
+    from . import collect_wide as W
+    from .warehouse import ReleaseStore
+    now = pd.Timestamp.now(tz=IST)
+    day = dt.date.fromisoformat(a.day) if a.day else now.date()
+    S = W.settings(cfg)
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "collect"
+    from ..core.calendar import TradingCalendar
+    if a.step != "minutes" and not a.force and not TradingCalendar(cfg.holidays()).is_trading_day(day):
+        print(f"collect-wide {a.step}: {day} is not a trading day; nothing expected")
+        return
+    try:
+        if a.step == "minutes":
+            ns = argparse.Namespace(days=S["minute_days"], expiries=S["minute_expiries"], strikes=S["minute_strikes"],
+                                    symbols=",".join(S["indices"]), out=str(out / "minutes"),
+                                    release_prefix=S["minutes_release"] if a.push else None, shard=S["shard"],
+                                    min_gap=S["min_gap_sec"])
+            cmd_kotak_backfill(cfg, ns)
+        elif a.step == "stocks":
+            from ..intraday.kotak import KotakClient, KotakError, KotakOptionChain
+            from .archive import archive
+            if not a.force and not W.in_stock_window(now, S["stock_deadline"]):
+                print(f"::warning::stock chains skipped: {now:%H:%M} IST is outside the session (the book is blank); "
+                      "nothing recorded today")
+                return
+            if not S["stocks"]:
+                print("::warning::collect_wide.stocks is empty in the config; nothing to capture")
+                return
+            try:
+                client = KotakClient.from_env(min_gap=S["min_gap_sec"])
+            except KotakError:
+                print("::warning::no KOTAK_CONSUMER_KEY; stock chains not captured")
+                return
+            src = KotakOptionChain(client, strikes=S["stock_strikes"])
+            data = out / "stocks"
+            rep = W.snapshot_stocks(src, S["stocks"], data, S["stock_expiries"], now, say=lambda m: print(m, flush=True))
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "stocks_report.json").write_text(json.dumps({"day": str(day), "stocks": rep}, indent=1))
+            bad = [k for k, v in rep.items() if not v["ok"]]
+            print(f"stock chains: {len(rep) - len(bad)}/{len(rep)} captured" + (f"; failed: {', '.join(bad)}" if bad else ""))
+            if bad:
+                print(f"::warning::stock chains failed for {', '.join(bad)}")
+            tag = W.release_tag(S["chains_release"], day, S["shard"])
+            store_for = None
+            if a.push:
+                store_for = lambda y: ReleaseStore(tag, title=f"Option-chain archive {tag.rsplit('-', 1)[-1]}",   # noqa: E731
+                                                   notes="Option-chain snapshots recorded beside the desk (quantdesk/data/"
+                                                         "collect_wide.py, archive.py). Not a software release.")
+            archive(data, f"wide-eod-{a.part}", out / "stocks_parquet", day, store_for, say=lambda m: print(m, flush=True))
+        else:
+            man_path = out / "minutes" / str(day) / "manifest.json"
+            man = json.loads(man_path.read_text()) if man_path.exists() else None
+            wide = tape = None
+            if a.push:
+                wide_store = ReleaseStore(W.release_tag(S["chains_release"], day, S["shard"]))
+                desk_store = ReleaseStore(f"{S['chains_release']}-{day.year}")
+                try:
+                    wide = wide_store.assets(strict=True)
+                except Exception:
+                    wide = None
+                try:
+                    tape = desk_store.assets(strict=True) + (wide or [])
+                except Exception:
+                    tape = None
+            rows = W.health(day, man, wide, tape, S["indices"], len(S["stocks"]))
+            for line in W.render(day, rows):
+                print(line, flush=True)
+            for r in rows:
+                if r["status"] != "OK":
+                    print(f"::warning::collect-wide {r['source']} {r['status']}: {r['detail']}")
+            p = W.write_health(day, rows, out / "health")
+            if a.push:
+                ReleaseStore(W.release_tag(S["minutes_release"], day, S["shard"])).push(p.parent, [p.name])
+    except SystemExit as exc:                    # kotak-backfill's "no key" exit is a skipped step here, not a failed run
+        print(f"::warning::collect-wide {a.step}: {exc}")
+    except Exception as exc:
+        print(f"::warning::collect-wide {a.step} failed: {exc!s:.200}")
 
 
 def cmd_truedata_import(cfg, a):
