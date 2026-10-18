@@ -153,6 +153,15 @@ def register(sub):
     x.add_argument("--out", help="default runtime/collect")
     x.add_argument("--push", action="store_true", help="push to the GitHub releases (needs GH_TOKEN)")
     x.set_defaults(fn=cmd_collect_wide)
+    x = ss.add_parser("daily-history", help="daily OHLCV since ~2013 for the indices and F&O stocks, with split/bonus "
+                                            "adjustment, jump flags, a second-source cross-check and a gap report "
+                                            "(daily-history.yml; read-only, no secret, always exits 0)")
+    x.add_argument("--out", help="default runtime/daily_history")
+    x.add_argument("--symbols", help="only these (comma-separated; indices and stocks), e.g. to test")
+    x.add_argument("--sources", default="nse,yahoo", help="in order of preference (nse, yahoo)")
+    x.add_argument("--from", dest="start", help="YYYY-MM-DD (default: config daily_history.start)")
+    x.add_argument("--push", action="store_true", help="push the shards to the daily-history release (needs GH_TOKEN)")
+    x.set_defaults(fn=cmd_daily_history)
     x = ss.add_parser("truedata-import", help="TrueData Velocity export → audited, immutable Parquet with provenance "
                                               "(raw files untouched; external_unverified until checked)")
     x.add_argument("--source", required=True, help="the export folder (or a clone of the repo holding it)")
@@ -241,6 +250,13 @@ def cmd_collect_wide(cfg, a):
                                     release_prefix=S["minutes_release"] if a.push else None, shard=S["shard"],
                                     min_gap=S["min_gap_sec"])
             cmd_kotak_backfill(cfg, ns)
+            if S["stock_minutes"] and S["stocks"]:
+                try:                                       # the indices' result stands whatever happens to the stocks
+                    stock_minutes(a, S, out, day)
+                except SystemExit as exc:
+                    print(f"::warning::stock option minutes: {exc}")
+                except Exception as exc:
+                    print(f"::warning::stock option minutes failed: {exc!s:.200}")
         elif a.step == "stocks":
             from ..intraday.kotak import KotakClient, KotakError, KotakOptionChain
             from .archive import archive
@@ -287,7 +303,10 @@ def cmd_collect_wide(cfg, a):
                     tape = desk_store.assets(strict=True) + (wide or [])
                 except Exception:
                     tape = None
-            rows = W.health(day, man, wide, tape, S["indices"], len(S["stocks"]))
+            sm_path = out / "minutes_stocks" / str(day) / "stock_manifest.json"
+            sman = json.loads(sm_path.read_text()) if sm_path.exists() else None
+            rows = W.health(day, man, wide, tape, S["indices"], len(S["stocks"]), sman,
+                            S["stocks"] if S["stock_minutes"] else ())
             for line in W.render(day, rows):
                 print(line, flush=True)
             for r in rows:
@@ -300,6 +319,88 @@ def cmd_collect_wide(cfg, a):
         print(f"::warning::collect-wide {a.step}: {exc}")
     except Exception as exc:
         print(f"::warning::collect-wide {a.step} failed: {exc!s:.200}")
+
+
+def cmd_daily_history(cfg, a):
+    """Fail-safe like collect-wide: any problem is a ::warning:: and the exit status is 0."""
+    import shutil
+
+    from . import daily_history as D
+    try:
+        if a.start:
+            cfg.data.setdefault("daily_history", {})["start"] = a.start
+        by = {"nse": lambda: D.NseSource(gap=D.settings(cfg)["gap_sec"]), "yahoo": lambda: D.YahooSource(cfg)}
+        names = [n.strip() for n in a.sources.split(",") if n.strip()]
+        sources = [by[n]() for n in names if n in by]
+        S = D.settings(cfg)
+        todo = None
+        if a.symbols:
+            want = [s.strip().upper() for s in a.symbols.split(",") if s.strip()]
+            todo = [(s, "index" if s in S["indices"] else "equity") for s in want]
+        out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "daily_history"
+        man = D.run(cfg, out, sources, symbols=todo, say=lambda m: print(m, flush=True))
+        for line in D.render(man):
+            print(line, flush=True)
+        bad = man["unverified_series"]
+        if bad:
+            print(f"::warning::daily-history: {len(bad)} series not verified (see manifest.json): {', '.join(bad[:12])}")
+        if a.push:
+            from .warehouse import ReleaseStore
+            ds = Path(man["path"])
+            stage = out / "_release"
+            if stage.exists():
+                shutil.rmtree(stage)
+            stage.mkdir(parents=True)
+            names_out = []
+            for n in D.release_names(ds):
+                shutil.copyfile(ds / n, stage / f"{man['as_of']}_{n}")
+                names_out.append(f"{man['as_of']}_{n}")
+            ReleaseStore("daily-history", title="Daily history",
+                         notes="Daily OHLCV with split/bonus adjustment, jump flags, cross-check and gap report, one immutable "
+                               "dataset per run (quantdesk/data/daily_history.py). Not a software release.").push(
+                stage, names_out, clobber=False)                       # immutable: a name already on the release is never replaced
+            print(f"pushed {len(names_out)} file(s) to release daily-history", flush=True)
+    except Exception as exc:
+        print(f"::warning::daily-history failed: {exc!s:.200}")
+
+
+def stock_minutes(a, S, out: Path, day: dt.date) -> None:
+    """Near-the-money stock option minutes beside the indices': grouped assets in the same quarterly release."""
+    import shutil
+
+    from ..intraday.kotak import KotakClient, KotakError
+    from . import kotak_backfill as K
+    from .collect_wide import release_tag
+    from .warehouse import ReleaseStore
+    try:
+        client = KotakClient.from_env(min_gap=S["min_gap_sec"])
+    except KotakError:
+        raise SystemExit("no KOTAK_CONSUMER_KEY")
+    plan = K.asset_plan(len(S["indices"]), len(S["stocks"]), S["stock_group_size"], S["shard_trading_days"], S["asset_cap"])
+    print(f"stock option minutes: {len(S['stocks'])} stocks in {plan['groups']} group file(s), about {plan['per_day']} "
+          f"assets/day, {plan['per_shard']} per quarterly release (cap {plan['cap']})", flush=True)
+    root = out / "minutes_stocks"
+    tag = release_tag(S["minutes_release"], day, S["shard"])
+
+    def push(_k, run: Path) -> None:
+        if not a.push:
+            return
+        stage = root / "_release"
+        if stage.exists():
+            shutil.rmtree(stage)
+        stage.mkdir(parents=True)
+        names = []
+        for n in K.release_names(run):
+            shutil.copyfile(run / n, stage / f"{run.name}_{n}")
+            names.append(f"{run.name}_{n}")
+        ReleaseStore(tag, title=f"Option minutes {tag.rsplit('-', 1)[-1]}",
+                     notes="Kotak 1-minute candles (traded bars, not quotes); see quantdesk/data/kotak_backfill.py. "
+                           "Not a software release.").push(stage, names)
+        print(f"pushed {len(names)} stock-minute file(s) to release {tag}", flush=True)
+
+    K.backfill_stocks(client, root, K.group_stocks(S["stocks"], plan["group_size"]), days=S["minute_days"],
+                      n_expiries=S["stock_minute_expiries"], window=S["stock_minute_strikes"], today=day,
+                      say=lambda m: print(m, flush=True), on_group=push)
 
 
 def cmd_truedata_import(cfg, a):
