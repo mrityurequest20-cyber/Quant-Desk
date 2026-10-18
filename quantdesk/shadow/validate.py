@@ -72,18 +72,20 @@ def compare(setups: pd.DataFrame, trades: pd.DataFrame, dec: pd.DataFrame, st: d
             why = ("the replay found a different setup there: " + ", ".join(sorted(set(other["setup"] + "/" + other["side"])))
                    if len(other) else "the replay found no setup within the time tolerance (live uses inputs the replay lacks, "
                    "or the live trade came from a different read)")
-            rec.update(matched=False, reasons=[why])
+            rec.update(matched=False, reasons=[why], categories=["setup_not_found"], setup_found=False)
             rows.append(rec)
             continue
         r = c.iloc[(c["decision_time"] - t0).abs().argsort()].iloc[0]
         used.add(r["setup_id"])
-        rec.update(replay_entry=r["decision_time"], replay_setup_id=r["setup_id"], replay_exit_reason=r["exit_reason"]
+        rec.update(setup_found=True, categories=[], replay_entry=r["decision_time"], replay_setup_id=r["setup_id"], replay_exit_reason=r["exit_reason"]
                    if r["status"] == "labelled" else r["u_exit_reason"])
         rx = r["exit_time"] if r["status"] == "labelled" else r["u_exit_time"]
         rec["replay_exit"] = rx
         if rx is None or rx != rx:
             rec["reasons"].append("replay has no exit time")
+            rec["categories"].append("exit_time")
         elif t["closed_at"] is not None and abs(rx - t["closed_at"]) > tol:
+            rec["categories"].append("exit_time")
             rec["reasons"].append(f"exit time differs: live {t['closed_at']:%H:%M} ({t['exit_reason']}) vs replay {rx:%H:%M} "
                                   f"({rec['replay_exit_reason']})")
         if r["status"] == "labelled":
@@ -92,16 +94,18 @@ def compare(setups: pd.DataFrame, trades: pd.DataFrame, dec: pd.DataFrame, st: d
             rec["replay_net_pnl"] = rp
             scale = max(abs(float(t["pnl"])), float(t["initial_risk"] or 0.0), 1.0)
             if abs(rp - float(t["pnl"])) > st["pnl_tol_frac"] * scale:
+                rec["categories"].append("pnl_differs")
                 rec["reasons"].append(f"net P&L differs: live {t['pnl']:+,.0f} vs replay {rp:+,.0f} ({lots} lot)")
         else:
             rec["replay_net_pnl"] = None
             if st["require_pnl"]:
+                rec["categories"].append("pnl_not_comparable")
                 rec["reasons"].append(f"P&L not comparable: replay unlabelled ({r['unlabelled_reason']})")
         rec["matched"] = not rec["reasons"]
         rows.append(rec)
     n = len(rows)
     ok = sum(1 for r in rows if r["matched"])
-    found = sum(1 for r in rows if "replay_setup_id" in r)
+    found = sum(1 for r in rows if r.get("setup_found"))
     rate = ok / n if n else 0.0
     # replay setups the live desk did not take, in the sessions it ran
     extra = []
@@ -117,19 +121,89 @@ def compare(setups: pd.DataFrame, trades: pd.DataFrame, dec: pd.DataFrame, st: d
                 why = "unexplained (live inputs the replay lacks, or no live record)"
             extra.append({"session": r["session"], "instrument": r["instrument"], "setup": r["setup"], "decision_time": r["decision_time"],
                           "explained_by": why})
-    return {"live_trades": n, "setup_found": found, "matched": ok, "match_rate": rate, "rows": rows, "replay_only": extra,
+    rej = reject_classes(dec)
+    return {"live_trades": n, "setup_found": found, "setup_only_rate": (found / n if n else 0.0), "live_rejections": rej,
+            "rejections_replay_cannot_see": rej["total"] - rej["other"], "matched": ok, "match_rate": rate, "rows": rows, "replay_only": extra,
             "threshold": st["match_threshold"], "passed": bool(n > 0 and rate >= st["match_threshold"])}
+
+
+def reject_class(detail: str) -> str:
+    d = (detail or "").lower()
+    if "ev below the floor" in d:
+        return "ev_floor"
+    if "plan model" in d or "approved" in d:
+        return "model_gate"
+    if "veto" in d or "stand" in d or "blackout" in d or "news" in d:
+        return "veto_or_stand_aside"
+    return "other"
+
+
+def reject_classes(dec: pd.DataFrame) -> dict:
+    out = {"total": 0, "ev_floor": 0, "model_gate": 0, "veto_or_stand_aside": 0, "other": 0}
+    for d in (dec[dec["action"] == "rejected"]["detail"] if len(dec) else []):
+        out["total"] += 1
+        out[reject_class(d)] += 1
+    return out
+
+
+EVIDENCE_REPLAY_LACKS = {"pcr", "oi_walls", "max_pain", "iv_move", "flow", "divergence", "news", "model", "research", "fut_oi", "basis",
+                         "vix", "oi_shift", "skew_trend", "breadth", "breadth_div"}
+
+
+def diagnose(rec: dict, decision, thoughts: pd.DataFrame) -> list[str]:
+    """Why the replay did not find a live trade's setup: compare the replay's view at the live minute with the live desk's own
+    recorded read (its `thoughts` row). `decision` is detect.Decision at that minute (or None)."""
+    cats = []
+    th = thoughts[(thoughts["symbol"] == rec["instrument"]) & (thoughts["ts"] <= rec["live_entry"])]
+    live = th.iloc[-1] if len(th) else None
+    if decision is None:
+        return ["replay_no_state"]
+    same = [p for p in list(decision.plans) + list(decision.armed) if p.setup == rec["setup"]]
+    if same and not any(p.direction == rec["side"] for p in same):
+        cats.append("replay_found_opposite_side")
+    if live is not None:
+        ds, dc = abs(float(live["score"]) - decision.view.score), abs(float(live["conviction"]) - decision.view.conviction)
+        if ds > 0.15 or dc > 0.15 or live["day_type"] != decision.view.day_type:
+            try:
+                ev = json.loads(live["evidence"] or "[]")
+            except ValueError:
+                ev = []
+            lacking = sum(abs(e["direction"] * e["weight"]) for e in ev if e["factor"] in EVIDENCE_REPLAY_LACKS)
+            cats.append("analyst_view_differs_chain_flow_news_evidence" if lacking > 0.5 else "analyst_view_differs_other")
+            rec["view_diff"] = {"live_score": float(live["score"]), "replay_score": decision.view.score,
+                                "live_conviction": float(live["conviction"]), "replay_conviction": decision.view.conviction,
+                                "live_day_type": live["day_type"], "replay_day_type": decision.view.day_type,
+                                "live_evidence_replay_lacks": round(lacking, 2)}
+    if not cats:
+        cats.append("view_close_but_setup_conditions_differ")
+    return cats
+
+
+def top_reasons(res: dict) -> list:
+    from collections import Counter
+    c = Counter()
+    for r in res["rows"]:
+        if not r["matched"]:
+            for k in (r.get("diagnosis") or []) + r.get("categories", []):
+                c[k] += 1
+    return c.most_common()
 
 
 def render(res: dict) -> str:
     L = ["Shadow validate: replay vs what the live desk did", "",
          f"  live trades compared    {res['live_trades']}",
-         f"  setup found (time tol)  {res['setup_found']}",
-         f"  fully matched           {res['matched']}   match rate {res['match_rate']:.0%} (threshold {res['threshold']:.0%})", ""]
+         f"  SETUP-ONLY match        {res['setup_found']}/{res['live_trades']} = {res['setup_only_rate']:.0%}   (right setup and side within the time tolerance)",
+         f"  FULL match              {res['matched']}/{res['live_trades']} = {res['match_rate']:.0%}   (threshold {res['threshold']:.0%}; also entry/exit times and net P&L)",
+         f"  live rejections         {res['live_rejections']['total']} records; {res['rejections_replay_cannot_see']} for reasons the replay cannot see "
+         f"(EV floor {res['live_rejections']['ev_floor']}, model gate {res['live_rejections']['model_gate']}, "
+         f"veto/stand-aside {res['live_rejections']['veto_or_stand_aside']})", ""]
     for r in res["rows"]:
         L.append(f"  {'MATCH   ' if r['matched'] else 'MISMATCH'} {r['session']} {r['instrument']:<9} {r['setup']:<12} {r['trade']}")
         for why in r["reasons"]:
             L.append(f"      - {why}")
+    tr = top_reasons(res)
+    if tr:
+        L += ["", "  Top mismatch reasons (counted per live trade; a trade can have several):"] + [f"      {n:>3}  {k}" for k, n in tr]
     if res["replay_only"]:
         n_un = sum(1 for e in res["replay_only"] if e["explained_by"].startswith("unexplained"))
         L += ["", f"  replay setups the live desk did not take: {len(res['replay_only'])} ({n_un} unexplained); first 15:"]

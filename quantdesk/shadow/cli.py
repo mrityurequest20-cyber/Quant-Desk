@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
 
+from .detect import Detector
 from . import loaders, quality, registry, replay, report, validate
 from .loaders import OptionBook
 
@@ -100,6 +102,21 @@ def cmd_validate(cfg, a):
     bars, books, vix = _load(cfg, reg, names, _roots(a), days, _A, print)
     df, qual = replay.run(cfg, days, names, bars, vix, books, reg, step=a.step, say=print)
     res = validate.compare(df, trades, dec, st, instruments=set(names))
+    con = sqlite3.connect(f"file:{jp}?mode=ro", uri=True)
+    try:
+        th = pd.read_sql("SELECT ts, symbol, score, conviction, day_type, evidence FROM thoughts", con)
+    finally:
+        con.close()
+    th["ts"] = th["ts"].map(validate._ts)
+    cal = registry.calendar(cfg)
+    dcfg = registry.derived_config(cfg, reg)
+    for r in res["rows"]:
+        if r["matched"] or r.get("setup_found"):
+            continue
+        det = Detector(dcfg, r["instrument"], cal, vix)
+        day = r["live_entry"].date()
+        exp, _ = det.expiry_for(day, books[r["instrument"]].expiries_on(day))
+        r["diagnosis"] = validate.diagnose(r, det.decide(bars[r["instrument"]], r["live_entry"].floor("min"), exp), th)
     print("\n" + validate.render(res))
     if a.json:
         Path(a.json).write_text(validate.to_json(res))
