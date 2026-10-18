@@ -4,7 +4,8 @@
 #              (quotes are not historical, and the book is blank after the close, so this has to be in-session;
 #              it is a separate workflow rather than a step in live.yml so a failure here cannot reach the desk)
 #   15:45 IST  minutes: Kotak 1-minute option candles for NIFTY, BANKNIFTY, SENSEX (bse_fo), FINNIFTY, MIDCPNIFTY,
-#              then the health check: per source, did today's data arrive (warning + line in the step summary)
+#              then (collect_wide.stock_minutes) the stocks' near-the-money option minutes, grouped into a few assets/day,
+#              then the health check: per source and per stock, did today's data arrive (warning + line in the step summary)
 # Releases are quarterly (option-minutes-2026Q4, chains-2026Q4) to stay under GitHub's ~1000 assets per release.
 # GitHub's cron has run hours late on this repo: a late stocks run records nothing (the book is blank) and the health
 # check says so; the minutes run overlaps 3 days, so a late one loses nothing.
@@ -73,7 +74,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Index option minutes (five indices)
+      - name: Option minutes (five indices, then the stocks near the money)
         continue-on-error: true
         run: |
           echo "KOTAK_CONSUMER_KEY set: $HAS_KOTAK_CONSUMER_KEY"

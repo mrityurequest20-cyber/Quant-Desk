@@ -522,6 +522,30 @@ collect_wide:
   shard: quarter                   # quarter | year
   min_gap_sec: 0.25                # gentler than the desk's client: the 15:25 run overlaps the session's last minutes
   stock_deadline: "15:35"          # IST; after it the book is blank and the snapshot is skipped
+  # Stock option minutes (the 15:45 minutes job): Kotak 1-minute candles of the stocks above, calls and puts, ATM +/- N
+  # strikes of the nearest expiries. Grouped into a few Parquet assets per day (never one per contract or stock).
+  stock_minutes: true
+  stock_minute_strikes: 5          # ATM +/- N strikes
+  stock_minute_expiries: 2         # nearest N expiries
+  stock_group_size: 10             # stocks per asset; grown automatically so a quarter stays under asset_cap
+  shard_trading_days: 66
+  asset_cap: 900                   # planning cap per release (GitHub's limit is ~1000)
+
+# Daily OHLCV history importer (daily-history.yml, quantdesk/data/daily_history.py): read-only, manual, no secret.
+# Stocks = collect_wide.stocks + extra_stocks (cap max_stocks). A series is `verified` only if coverage, jumps,
+# cross-check, gaps and row hygiene all pass; see the manifest for the reasons otherwise.
+daily_history:
+  start: "2013-01-01"
+  extra_stocks: []                 # up to 50 more F&O stocks (Yahoo/NSE symbol names)
+  max_stocks: 70
+  stock_jump: 0.20                 # unexplained one-day move beyond this is flagged
+  index_jump: 0.15
+  accepted_moves: []               # [{symbol: X, date: YYYY-MM-DD}] genuine large moves a person has reviewed
+  corporate_actions: []            # [{symbol: X, date: YYYY-MM-DD, ratio: 5, note: ...}] when the sources miss a split/bonus
+  crosscheck_sample: 60
+  crosscheck_tol: 0.005
+  crosscheck_min_match: 0.98
+  max_gap_fraction: 0.002
 
 checks:
   max_data_staleness_days: 4

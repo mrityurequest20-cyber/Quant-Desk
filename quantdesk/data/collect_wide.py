@@ -36,6 +36,12 @@ DEFAULTS = {
     "minute_days": 3,             # days back each evening (overlap heals a missed day; Kotak serves ~30)
     "minute_expiries": 3,
     "minute_strikes": 20,
+    "stock_minutes": True,        # also capture the stocks' near-the-money option minutes in the minutes job
+    "stock_minute_strikes": 5,    # ATM +/- N strikes
+    "stock_minute_expiries": 2,   # nearest N expiries
+    "stock_group_size": 10,       # stocks per Parquet asset (grown automatically to keep a quarter under the asset cap)
+    "shard_trading_days": 66,     # a quarter's trading days, for the asset budget
+    "asset_cap": 900,             # planning cap per release (GitHub's limit is ~1000)
     "minutes_release": "option-minutes",
     "chains_release": "chains",
     "shard": "quarter",           # quarter | year
@@ -103,8 +109,33 @@ def snapshot_stocks(src, stocks, data_dir: Path, n_expiries: int, now: pd.Timest
 
 
 # ---- health ---------------------------------------------------------------------------------------------------------
+def stock_minute_rows(day: dt.date, man: dict | None, stocks) -> list[dict]:
+    """One row per stock: stock_minutes:<SYM> OK | MISSING | UNKNOWN. `man` is this run's stock_manifest.json (None: the
+    stock-minutes step did not run or wrote nothing, which is UNKNOWN, not MISSING)."""
+    rows = []
+    for s in stocks:
+        if man is None:
+            rows.append({"source": f"stock_minutes:{s}", "status": "UNKNOWN", "detail": "stock minutes step did not run"})
+            continue
+        rep = (man.get("stocks") or {}).get(s)
+        if rep is None:
+            rows.append({"source": f"stock_minutes:{s}", "status": "UNKNOWN", "detail": "stock not reached by the step"})
+        elif not rep.get("bars"):
+            err = next(iter(rep.get("errors") or {}), "no contracts served")
+            rows.append({"source": f"stock_minutes:{s}", "status": "MISSING",
+                         "detail": f"no option bars ({rep.get('served', 0)}/{rep.get('asked', 0)} contracts; {str(err)[:80]})"})
+        elif str(rep.get("last", ""))[:10] != str(day):
+            rows.append({"source": f"stock_minutes:{s}", "status": "MISSING",
+                         "detail": f"latest bar {str(rep.get('last'))[:16]}, not today ({rep['bars']:,} bars)"})
+        else:
+            rows.append({"source": f"stock_minutes:{s}", "status": "OK",
+                         "detail": f"{rep['bars']:,} bars, {rep.get('served')}/{rep.get('asked')} contracts, "
+                                   f"ATM from {rep.get('atm_source')}"})
+    return rows
+
+
 def health(day: dt.date, minutes_manifest: dict | None, stock_assets: list[str] | None, tape_assets: list[str] | None,
-           indices, stocks_expected: int) -> list[dict]:
+           indices, stocks_expected: int, stock_minutes: dict | None = None, minute_stocks=()) -> list[dict]:
     """One row per source: {"source", "status": OK | MISSING | UNKNOWN, "detail"}.
     `minutes_manifest` is this run's kotak_backfill manifest (None: it did not run); the two asset lists are release
     listings (None: could not be read, which is UNKNOWN, not MISSING)."""
@@ -122,6 +153,7 @@ def health(day: dt.date, minutes_manifest: dict | None, stock_assets: list[str] 
         else:
             rows.append({"source": f"minutes:{u}", "status": "OK",
                          "detail": f"{rep['bars']:,} bars, {rep.get('served')}/{rep.get('asked')} contracts"})
+    rows += stock_minute_rows(day, stock_minutes, minute_stocks)
     if stock_assets is None:
         rows.append({"source": "stock_chains", "status": "UNKNOWN", "detail": "release not readable"})
     else:

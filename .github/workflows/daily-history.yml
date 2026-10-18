@@ -1,0 +1,61 @@
+# Daily OHLCV history importer (quantdesk/data/daily_history.py), run by hand only: indices + F&O stocks from ~2013, split/bonus
+# adjusted (raw and adj_ columns), unexplained jumps flagged, a second-source cross-check, a gap report vs the NSE calendar, and
+# `verified` only if all of it passes. Needs no secret (NSE/Yahoo are public). Read-only beside the desk: no journal, no order,
+# no engine. NSE often blocks cloud runners: the importer falls back to Yahoo and records the source per row.
+# Output: the `daily-history` release (immutable shards per year + manifest.json per run; a name already there is not replaced).
+name: Daily history
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "optional: only these symbols (comma-separated), blank = all"
+        default: ""
+      start:
+        description: "optional: first day (YYYY-MM-DD), blank = config daily_history.start"
+        default: ""
+      sources:
+        description: "source order: nse,yahoo | yahoo | nse"
+        default: "nse,yahoo"
+
+permissions:
+  contents: write            # create and upload to the daily-history release (as chain-archive.yml)
+
+concurrency:
+  group: daily-history       # its own group: never queues behind, or holds up, the live desk
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      GH_TOKEN: ${{ github.token }}
+      IN_SYMBOLS: ${{ inputs.symbols }}
+      IN_START: ${{ inputs.start }}
+      IN_SOURCES: ${{ inputs.sources }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        continue-on-error: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        continue-on-error: true
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+        continue-on-error: true
+      - name: Import daily history
+        continue-on-error: true
+        run: |
+          args=(--sources "${IN_SOURCES:-nse,yahoo}" --push)
+          [ -n "$IN_SYMBOLS" ] && args+=(--symbols "$IN_SYMBOLS")
+          [ -n "$IN_START" ] && args+=(--from "$IN_START")
+          python -m quantdesk data daily-history "${args[@]}" | tee daily.txt \
+            || echo "::warning::daily-history import failed"
+      - name: Summary
+        if: always()
+        continue-on-error: true
+        run: |
+          { echo "## Daily history"; echo '```'; tail -n 120 daily.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
