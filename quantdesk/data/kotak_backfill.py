@@ -29,7 +29,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..intraday.feeds import IST
-from ..intraday.kotak import INDEX, KotakFutures, chain_parts, _f
+from ..intraday.kotak import INDEX, KotakFutures, chain_parts, segments, _f, _fo
 
 EVIDENCE = "real_trade_minutes"
 COLS = ["ts", "underlying", "expiry", "strike", "right", "token", "open", "high", "low", "close", "volume"]
@@ -40,8 +40,9 @@ def contracts(client, underlying: str, n_expiries: int, strikes: int, today: dt.
     """Tokens for every strike within `strikes` of the money, CE and PE, for the nearest `n_expiries` expiries."""
     out = []
     count = max(10, int(round(strikes / 10)) * 10)
-    for exp in [e for e in client.expiries(underlying) if e >= today][:n_expiries]:
-        _, calls, puts = chain_parts(client.option_chain(underlying, exp, count))
+    kw = _fo(underlying)                                      # {} for NSE; {"exchange": "bse_fo"} for SENSEX/BANKEX
+    for exp in [e for e in client.expiries(underlying, **kw) if e >= today][:n_expiries]:
+        _, calls, puts = chain_parts(client.option_chain(underlying, exp, count, **kw))
         for right, items in (("CE", calls), ("PE", puts)):
             for item in items:
                 ins = item.get("instrument") or item.get("inst") or {}
@@ -145,7 +146,10 @@ def backfill(client, out_root: Path, underlyings=("NIFTY", "BANKNIFTY"), days: i
             rep["sessions"] = int(opt["ts"].dt.date.nunique())
             rep["first"], rep["last"] = str(opt["ts"].min()), str(opt["ts"].max())
             rep["bars_by_expiry"] = {str(k): int(v) for k, v in opt.groupby("expiry").size().items()}
-        for kind, sym, holder in (("index", f"nse_cm|{INDEX.get(u, u)}", idx_parts), ("futures", None, fut_parts)):
+        bse = segments(u)[0] == "bse_fo"
+        for kind, sym, holder in (("index", f"{segments(u)[1]}|{INDEX.get(u, u)}", idx_parts), ("futures", None, fut_parts)):
+            if bse and kind == "futures":
+                continue                                      # KotakFutures reads nse_fo only; BSE futures are not collected
             try:
                 tok = sym or fut.active(u, today)["token"]
                 df, err = candles(client, tok, start, today)

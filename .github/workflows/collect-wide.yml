@@ -1,0 +1,91 @@
+# Wider data collection, read-only and beside the desk (quantdesk/data/collect_wide.py). Never touches the journal, the
+# engine or an order: it reads Kotak with the consumer key the desk already uses for data and writes Parquet to releases.
+#   15:25 IST  stocks:  one end-of-day option-chain snapshot of the liquid F&O stocks in config collect_wide.stocks
+#              (quotes are not historical, and the book is blank after the close, so this has to be in-session;
+#              it is a separate workflow rather than a step in live.yml so a failure here cannot reach the desk)
+#   15:45 IST  minutes: Kotak 1-minute option candles for NIFTY, BANKNIFTY, SENSEX (bse_fo), FINNIFTY, MIDCPNIFTY,
+#              then the health check: per source, did today's data arrive (warning + line in the step summary)
+# Releases are quarterly (option-minutes-2026Q4, chains-2026Q4) to stay under GitHub's ~1000 assets per release.
+# GitHub's cron has run hours late on this repo: a late stocks run records nothing (the book is blank) and the health
+# check says so; the minutes run overlaps 3 days, so a late one loses nothing.
+name: Collect wide data
+
+on:
+  schedule:
+    - cron: "55 9 * * 1-5"     # 15:25 IST: stock chains, while the book is live
+    - cron: "15 10 * * 1-5"    # 15:45 IST: index minutes + health
+  workflow_dispatch:
+    inputs:
+      step:
+        description: "stocks | minutes | both (stocks outside the session records nothing)"
+        default: "both"
+
+permissions:
+  contents: write            # create and upload to the quarterly releases (as chain-archive.yml)
+
+concurrency:
+  group: collect-wide        # its own group: it must never queue behind, or hold up, the live desk
+  cancel-in-progress: false
+
+jobs:
+  stocks:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.step != 'minutes' || github.event.schedule == '55 9 * * 1-5' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      HAS_KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY != '' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Stock option chains (end-of-day snapshot)
+        continue-on-error: true
+        run: |
+          echo "KOTAK_CONSUMER_KEY set: $HAS_KOTAK_CONSUMER_KEY"
+          python -m quantdesk data collect-wide --step stocks --push --part "${{ github.run_id }}" | tee stocks.txt \
+            || echo "::warning::stock chain snapshot failed"
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## Stock chains"; echo '```'; cat stocks.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  minutes:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.step != 'stocks' || github.event.schedule == '15 10 * * 1-5' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      HAS_KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY != '' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Index option minutes (five indices)
+        continue-on-error: true
+        run: |
+          echo "KOTAK_CONSUMER_KEY set: $HAS_KOTAK_CONSUMER_KEY"
+          python -m quantdesk data collect-wide --step minutes --push | tee minutes.txt \
+            || echo "::warning::option-minute collection failed"
+      - name: Health check (did each source's data arrive today?)
+        if: always()
+        continue-on-error: true
+        run: |
+          python -m quantdesk data collect-wide --step health --push | tee health.txt || echo "::warning::health check failed"
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## Collect wide: health"; echo '```'; cat health.txt 2>/dev/null || echo "no output"; echo '```';
+            echo "## Option minutes"; echo '```'; tail -n 40 minutes.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
