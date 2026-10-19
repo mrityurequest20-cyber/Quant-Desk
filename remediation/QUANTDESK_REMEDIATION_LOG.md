@@ -124,6 +124,50 @@ Results go into this log.
 
 ---
 
+## 1B. Monday 19 Oct 2026: the first live session on the stabilised main (item #13)
+
+Main at the session: `83f28e4` (the #75 squash, on #73 and the #66 squash `aad8470`; CI green). Read-only checks, no orders placed, no secrets printed.
+
+**Pre-open (08:20 IST): all as expected.** `account.mode: paper`; governor `shadow`; earn-in gate `shadow`; Claude budget line present
+($23.60 from 12 Oct, 60 sessions); no halt or kill key in the journal state; journal head `8816dd0`; `memory.json` loads with 2026-10-16 and the
+per-session blocks; 19 Oct is a trading day and 20 Oct (Dussehra) is loaded; one synthetic fixture session ran clean. Not verified by me: the
+desk's expiry choice (the session log shows NIFTY and BANKNIFTY on 27-Oct).
+
+**The session (workflow run 39192571240, success; journal head `d0ea3ec`).** Two trades, both BANKNIFTY and both losses: ORB stopped out at
+09:30 (invalidation, -5,066) and a trend-break time exit (-2,205). Day P&L -7,271 (-1.50%). 95 rejections, every one "EV below the floor".
+0 positions at the close; no halt; drawdown, cash reconcile and memory checks raised nothing; earn-in (shadow): 0 of 350 learned items earned a place.
+WARN: NIFTY and BANKNIFTY index bars frozen 15:15-15:28; Gemini and Ollama reads timed out. Long step (not trading): "Keep the session's option
+minutes" 912 s (the existing `kotak-backfill --days 3` step).
+
+**Finding F-19-1 (engine, ERROR then CRITICAL).** From 15:04 to 15:20 IST the engine raised `TypeError: '>' not supported between
+'numpy.ndarray' and 'Timestamp'` every minute (17 errors) at `quantdesk/intraday/feeds.py:146`, `YahooIntradayFeed.poll`:
+`df[df.index > since]` on the empty frame `_fetch` returns when Yahoo returns nothing (a RangeIndex). `completed()` guards the empty case, `poll`
+does not. After 3 failures in a row (max_step_failures 3) safe mode fired at 15:06: "0 position(s) squared off, entries halted". No position was
+open, so there was no harm. Pre-existing (the file was last changed by #60 and the refresh-jitter PR), not caused by #73 or #75.
+Decision needed (owner): a bare guard would turn a persistent Yahoo outage into "no new bars", so the 3-minute stale-feed rule would stop entries
+but safe mode would no longer square off an open position. The non-behavioural option is to raise a clear feed error (same outcome, readable log);
+anything that changes the outage behaviour is the owner's call. Open.
+
+**Data collection (collect-wide, merged #73 and #75).** Manual run 39243573222 (step=minutes) after the close: all five indices 246/246 contracts with bars
+(NIFTY 161,785; BANKNIFTY 126,927; SENSEX 166,348; FINNIFTY 99,902; MIDCPNIFTY 108,163 option bars, 2 sessions), and all 20 stocks'
+option minutes (44/44 contracts each, ATM from spot; HCLTECH 42/42). Health: every minutes and stock_minutes line OK; `stock_chains`
+UNKNOWN ("release not readable": no stock chain snapshot has run yet). Release `option-minutes-2026Q4` holds 20 assets. The Sunday run had
+SENSEX 196/246, FINNIFTY 68/246 and MIDCPNIFTY 124/246 because the contracts were not yet trading on a weekend; that gap closed on a trading day.
+Only 2 sessions of bars per run, so the 30-day backfill still needs a longer window.
+
+**Scheduler finding F-19-2.** GitHub's native cron did not fire for autolearn (16:10 IST) or the collect-wide 15:25 and 15:45 jobs as of 18:04 IST
+(the known S0-09 lateness). Consequence: the 15:25 stock chain snapshot needs the book, which is blank after the close, so a late run records nothing.
+Option: have the Cloudflare desk scheduler dispatch collect-wide on time (small separate change, needs review). The C-02 retention step (#66)
+could not be read because autolearn had not run. Open.
+
+**Not merged tonight: #67.** It contains live-path changes (news cadence, engine hooks, new sleeves, the teacher and HAR in the live workflow), so
+it is outside the owner's standing permission (tighten-only or non-behavioural); the branch also needs main merged in (conflicts in `cli.py` and
+the config). Owner decision on Friday: merge as is, split (non-behavioural parts first), or hold. Recommended: split.
+
+**Drafts in flight (none merged):** #74 shadow-replay (offline approximation: validation FAIL, setup match 6 of 14, full match 3 of 14, 348 of 351
+live rejections from filters it cannot see; usable only as a labelled candidate-setup dataset) and an engine-replay branch (`engine-shadow`)
+that drives the real decision code over the recorded tape; not started to merge.
+
 ## 2. S0 readiness report
 
 *The 9–10 Oct assessment, kept as recorded. For each check's current status see §1A.1.*
