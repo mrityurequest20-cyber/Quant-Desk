@@ -160,6 +160,14 @@ Only 2 sessions of bars per run, so the 30-day backfill still needs a longer win
 Option: have the Cloudflare desk scheduler dispatch collect-wide on time (small separate change, needs review). The C-02 retention step (#66)
 could not be read because autolearn had not run. Open.
 
+**Update, Thu 22 Oct (read-only check).** Main is still `83f28e4`; #67 is not merged, so HAR shadow, the teacher, the E-01 v4 sleeves and the stock
+cash/futures minutes from #67 have NOT run (the Wed 21 Oct expectation in the routine assumed a Monday merge that did not happen). Desk sessions
+ran clean on Wed 21 Oct (4 trades, +33,780) and Thu 22 Oct (2 trades, -13,043, journal head `592a655`); no ERROR or CRITICAL events on either day, so
+F-19-1 did not recur. Autolearn ran on 20 and 21 Oct (about 21:00 IST, 5 hours after its 16:10 schedule). Collect-wide's scheduled jobs fire about
+4.5 hours late (20:13 IST for the 15:25 job): the minutes job succeeded both days (5 indices 246/246 and 20 stocks 40-44/40-44 contracts, health OK),
+while the stock chain snapshot logged "20:13 IST is outside the session (the book is blank); nothing recorded", so no stock chain snapshot exists
+(F-19-2 confirmed). Fix needed: dispatch collect-wide from the Cloudflare desk scheduler at 15:25 IST. Open.
+
 **Not merged tonight: #67.** It contains live-path changes (news cadence, engine hooks, new sleeves, the teacher and HAR in the live workflow), so
 it is outside the owner's standing permission (tighten-only or non-behavioural); the branch also needs main merged in (conflicts in `cli.py` and
 the config). Owner decision on Friday: merge as is, split (non-behavioural parts first), or hold. Recommended: split.
