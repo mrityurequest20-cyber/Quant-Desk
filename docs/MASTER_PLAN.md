@@ -91,7 +91,7 @@ plan adds (section 3). Items marked TO VERIFY are in section 12.
 | 14 | **Evidence storage** (option-minute releases; chain snapshots as run artifacts, which expire) | Artifact retention lapses before archiving; release limits | **No** | W5 archive check | TO VERIFY that `chain-archive` covers every session; sharded quarterly releases |
 | 15 | **Published site and the Worker's proxy** | Pages stopped deploying and returned 404 on 9 Oct (VERIFIED in the audit); today's state unknown | Unknown | W2 fetches the published JSON | Owner: Settings, Pages, status |
 | 16 | **Alert channel** | Only GitHub issues and the GitHub app; nothing for absence | Partly | The watchdog itself | Section 3 |
-| 17 | **CI and branch protection** (required `tests`, `doctor`; add `Learnbot guard`) | A required check that never runs blocks merges; red `main` | Yes | n/a | Owner adds `Learnbot guard` (name confirmed on PR 94's own run) |
+| 17 | **CI and branch protection** (required `tests`, `doctor`, `Learnbot guard`; the owner added the third on 23 Oct) | A required check that never runs blocks merges; red `main` | Yes | n/a | None open |
 | 18 | **Claude routines** (weekly 09:47 and monthly 10:43 IST learning runs; PR babysitting) | Usage limit; a stored prompt that is stale (the conditional merge path was removed from the monthly prompt by the owner on 23 Oct; both routines now say the bot never merges) | Partly | W8 weekly digest shows the last run | None open |
 | 19 | **Secrets** (Kotak key; AI keys under many alias names; `CF_API_TOKEN` in `ai-check`; `GH_DISPATCH_TOKEN` on the Worker) | Leak, expiry, drift | CI checks permissions and pins only | W7 | Rotation calendar (section 12); never print |
 | 20 | **Time** (IST versus UTC in every cron; Worker and GitHub crons are UTC) | An off-by-5.5-hours schedule | Tests for the Worker crons | W1 | Keep a table of every schedule in UTC and IST in the watchdog code |
@@ -587,7 +587,7 @@ three queued ones are closed; real-money anything.
 1. Cloudflare dashboard: confirm the `quant-desk` Worker shows **4 cron triggers** and was deployed from `main` after PR 92 (a red "Workers Builds" check on PRs is a different thing).
 2. Record **`GH_DISPATCH_TOKEN` expiry** and its scope (it should have only what the Worker needs).
 3. Confirm the Kotak token and TOTP status and write down how and when it is renewed.
-4. Add **`Learnbot guard`** as a required check on `main` (the name was confirmed on its own PR run).
+4. ~~Add `Learnbot guard` as a required check on `main`.~~ **Done by the owner, 23 Oct 2026.**
 5. ~~Delete the conditional-merge clause from the monthly learning routine's stored prompt.~~ **Done by the owner, 23 Oct 2026** (the weekly prompt was already clean).
 6. Install the **ntfy** app, choose a long random topic, and give it to the Worker as a secret; if you prefer email to GitHub's own notification (the recommended path needs no address), tell me which address.
 
