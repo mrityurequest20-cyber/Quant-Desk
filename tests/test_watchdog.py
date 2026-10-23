@@ -98,7 +98,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 def test_the_heartbeat_check_reads_age_halt_and_feed_and_survives_a_bad_site(tmp_path):
     out = _node(tmp_path, HEAD + r"""
 const hb = (minAgo, extra = {}) => ({ ts: new Date(IST("2026-10-23T09:30:00") - minAgo * 60000 + 19800000 - 19800000).toISOString().replace("T", " ").replace("Z", "+00:00"), halted: false, feed: "kotak", ...extra });
-const cases = { fresh: hb(3), stale: hb(25), halted: hb(2, { halted: true }), yahoo: hb(2, { feed: "yahoo" }), missing: undefined, noTs: {} };
+const cases = { fresh: hb(3), warm: hb(15), stale: hb(25), halted: hb(2, { halted: true }), yahoo: hb(2, { feed: "yahoo" }), missing: undefined, noTs: {} };
 out.cases = {};
 for (const [k, v] of Object.entries(cases)) {
   const r = await at("2026-10-23T09:30:00", env(), { hb: v });
@@ -110,6 +110,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 """)
     c = out["cases"]
     assert c["fresh"] == {"alerts": [], "push": 0, "email": 0}
+    assert c["warm"] == {"alerts": [], "push": 0, "email": 0}                      # 15 minutes is publish cadence + Pages lag, not a fault
     assert c["stale"]["alerts"] == ["P1 W2 Stale heartbeat"] and c["stale"]["push"] == 1 and c["stale"]["email"] == 1
     assert c["halted"]["alerts"] == ["P1 W2 Desk halted"]
     assert c["yahoo"] == {"alerts": ["P2 W2 Feed fell back"], "push": 1, "email": 0}          # P2: push only
@@ -160,14 +161,16 @@ out.mon = await t("2026-10-26T07:30:00", "2026-10-27");            // Monday: Fr
 out.expired = await t("2026-10-23T07:30:00", "2026-10-20");
 out.bad = alerts(await at("2026-10-23T07:30:00", env({ CRED_EXPIRY: "{nope" }), {})).filter((a) => a.includes("W7"));
 const r = await at("2026-10-23T07:30:00", reg("2026-10-30"), {});
-out.p1email = emails(r).length;
+out.p1email = emails(r).length; out.p1push = pushes(r).length;
 out.leak = JSON.stringify(r.calls.map((c) => [c.body])).includes("github_pat_");
 console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 """)
     assert out["d14"] == ["P2 W7 GH_DISPATCH_TOKEN expires in 14 day(s)"] and out["d13"] == [] and out["d1"] == []
     assert out["d7"] == ["P1 W7 GH_DISPATCH_TOKEN expires in 7 day(s)"] and out["d2"] == ["P1 W7 GH_DISPATCH_TOKEN expires in 2 day(s)"]
     assert out["mon"] == ["P1 W7 GH_DISPATCH_TOKEN expires in 1 day(s)"] and out["expired"] == ["P1 W7 GH_DISPATCH_TOKEN has expired"]
-    assert out["bad"] == ["P2 W7 Credential expiry register unreadable"] and out["p1email"] == 1 and out["leak"] is False
+    assert out["bad"] == ["P2 W7 Credential expiry register unreadable"] and out["leak"] is False
+    # credential names and dates go by push only: the repository is public, so an issue would publish them
+    assert out["p1push"] == 1 and out["p1email"] == 0
 
 
 @NODE
@@ -223,6 +226,9 @@ def test_the_worker_starts_the_desk_before_the_watchdog_and_the_watchdog_trigger
 calls = []; state = { runs: { live: [] } };
 await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: IST("2026-10-23T09:10:00") }, env(), {});
 out.alarm = calls.map((c) => c.url.split("/").slice(-2).join("/"));
+calls = []; state = { runs: { live: [] } };
+await worker.scheduled({ cron: "*/10 2-9 * * mon-fri", scheduledTime: IST("2026-10-23T09:10:00") }, env(), {});
+out.odd = calls.map((c) => c.url.split("/").slice(-2).join("/"))[0];
 calls = []; state = {};
 await worker.scheduled({ cron: "0,30 10-16 * * *", scheduledTime: IST("2026-10-23T16:00:00") }, env(), {});
 out.watch = calls.some((c) => c.url.includes("scheduler.yml"));
@@ -233,6 +239,7 @@ out.survived = true; out.logs = logs.join(" | ");
 console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 """)
     assert out["alarm"][0] == "scheduler.yml/dispatches"                  # the alarm clock goes first
+    assert out["odd"] == "scheduler.yml/dispatches"                        # a cron string reported differently still starts the desk
     assert any(x == "watchdog-alert.yml/dispatches" for x in out["alarm"])
     assert out["watch"] is False                                           # the fifth trigger does not start the desk
     # the network is down for everything except the scheduler dispatch: the desk is still started, the failed check is reported

@@ -14,16 +14,16 @@ key, a journal value or a position.
 | Check | When | Alert |
 |---|---|---|
 | W1 desk started | 09:10 | **P1** no `Live paper desk` run exists today |
-| W2 heartbeat | 09:30, 11:00, 13:00, 15:00 | **P1** heartbeat older than 10 minutes, or the desk halted; **P2** the feed fell back from Kotak, or the heartbeat is unreadable |
+| W2 heartbeat | 09:30, 11:00, 13:00, 15:00 | **P1** heartbeat older than 20 minutes (the site is republished every 6 minutes plus Pages lag; the drill measures the real figure), or the desk halted; **P2** the feed fell back from Kotak, or the heartbeat is unreadable |
 | W3 after the close | 16:00 | **P1** `Live paper desk` did not run or failed; **P2** `Collect wide data` did not run or failed |
 | W5 evening jobs | 18:00 self-review, 21:00 data warehouse | **P2** did not run or failed |
 | W6 failures | 16:00, 18:00, 21:00 | **P2** a workflow failed (or was cancelled, except the scheduler, site publish and CI) on `main` since the last look |
-| W7 credentials | 07:30 weekdays | **P2** 14 days, **P1** 7, 2 and 0 days before an expiry date you record; **P1** every day once expired |
+| W7 credentials | 07:30 weekdays | **P2** 14 days, **P1** 7, 2 and 0 days before an expiry date you record; **P1** every day once expired. **Push only**: the repository is public, so these never become an issue |
 | W8 digest | Saturday 17:30 | sessions run of expected, failed runs on `main` (low priority push, and an issue) |
 | W9 calendar | 15 Dec, 15 Jun | **P2** the next (or this) year's NSE holiday list is not in `calendar.holiday_years` |
 
 A check that cannot run (GitHub or the site unreachable) is reported as a **P2 "Watchdog could not run a check"**, so blindness is
-never silent. Each check fires at one fixed time, so it alerts at most once a day.
+never silent. Each check slot fires at one fixed time, so a slot alerts at most once a day (W2 has four slots, so it can alert up to four times).
 
 ## Two alert paths, independent of each other
 
@@ -40,8 +40,8 @@ ntfy's anonymous e-mail is disabled on ntfy.sh, so e-mail goes through GitHub, n
    digits (`A-Z a-z 0-9 _ -`, 8 to 64). Anyone who knows the topic can read your alerts, so treat it as a secret.
 2. Cloudflare dashboard, the `quant-desk` Worker, Settings, Variables and Secrets: add the **secret** `NTFY_TOPIC` with that topic.
    In the ntfy app subscribe to the same topic.
-3. Optional **secret** `CRED_EXPIRY`, a JSON object of credential name to expiry date, for example
-   `{"GH_DISPATCH_TOKEN": "2027-01-15", "KOTAK_TOTP": "2026-12-01"}`. Names are only labels in the alert.
+3. Optional **secret** `CRED_EXPIRY`, a JSON object of label to expiry date, for example
+   `{"cred-1": "2027-01-15", "cred-2": "2026-12-01"}`. Use neutral labels you will recognise, not the real secret names: the label appears in the push (never in an issue).
 4. Check the Worker shows **five** cron triggers after the next deploy from `main` (the fifth is `0,30 10-16 * * *`, the
    watchdog's own; it does not start the desk).
 5. In GitHub, Settings, Notifications: make sure you receive email for issues assigned to you (the default).
@@ -66,6 +66,9 @@ ntfy's anonymous e-mail is disabled on ntfy.sh, so e-mail goes through GitHub, n
 - **W2 depends on `data.json`'s `state.heartbeat` fields** (`ts`, `halted`, `feed`). If the published shape changes, W2 raises a
   P2 "Heartbeat unreadable" rather than staying quiet.
 - **GitHub can be the thing that is down.** Push does not depend on it; e-mail does.
+- **W6 sees 08:00 to 21:00 on trading days only.** Overnight and weekend failures are caught by the Saturday digest, which counts at most the last 100 failed runs.
+- **Alerts can be forged by anyone who can dispatch `watchdog-alert.yml`** (write access, or the dispatch token): they can open a convincing issue assigned to you. That is no wider than that token's existing reach (it can already dispatch `clear-halt.yml`). Email dedupe is per check per day, and the workflow runs one at a time per check and day.
+- **`WATCHDOG_TEST=1` alerts at every half-hour firing** (a push and an INFO issue) until the variable is removed.
 - **Five cron triggers is the free plan's limit.** Any new check must reuse these firing times (a test checks every slot against
   the crons).
 - **Not built yet:** the optional dead-man's switch (an external service that alerts if the Worker itself dies), per-sleeve

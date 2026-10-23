@@ -57,9 +57,10 @@ export async function dispatchWorkflow(env, file, inputs) {
 	return { ok: false, why: `GitHub answered ${res.status}${msg ? `: ${msg}` : ""}${needs ? ` (needs ${needs})` : ""}; ${tokenKind(token)}` };
 }
 
-// The crons (as written in wrangler.jsonc, UTC) that ask GitHub to run scheduler.yml now. Any other cron (the watchdog's own
-// half-hourly trigger) must NOT start the desk.
-export const SCHEDULER_CRONS = new Set(["*/10 2-9 * * MON-FRI", "0 12 * * SUN"]);
+// The one cron (as written in wrangler.jsonc, UTC) that must NOT start the desk: the watchdog's own half-hourly trigger.
+// Every other cron asks GitHub to run scheduler.yml now, as before this file had a watchdog, so if Cloudflare ever reports a
+// cron string differently the worst case is one extra, harmless dispatch, never a desk that silently is not started.
+export const WATCHDOG_ONLY_CRON = "0,30 10-16 * * *";
 
 export const dispatchScheduler = (env) => dispatchWorkflow(env, "scheduler.yml");
 export const dispatchCollect = (env, step) => dispatchWorkflow(env, "collect-wide.yml", { step });
@@ -72,7 +73,7 @@ export default {
 			console.log(`collect-wide ${step} ${r.ok ? "dispatched" : "not dispatched"} (${event.cron}): ${r.why}`);
 			return;
 		}
-		if (SCHEDULER_CRONS.has(event.cron)) {
+		if (event.cron !== WATCHDOG_ONLY_CRON) {
 			try {
 				const r = await dispatchScheduler(env);
 				console.log(`desk scheduler ${r.ok ? "dispatched" : "not dispatched"} (${event.cron}): ${r.why}`);

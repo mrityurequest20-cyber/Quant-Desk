@@ -21,7 +21,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: watchdog-alert
+  group: watchdog-alert-${{ inputs.check }}-${{ inputs.day }}
   cancel-in-progress: false
 
 jobs:

@@ -18,6 +18,10 @@
 const IST_MS = 330 * 60 * 1000;
 const DAY_MS = 86400000;
 const DEFAULT_REPO = "mrityurequest20-cyber/Quant-Desk";
+const FETCH_MS = 8000;                       // no read or send may hold a firing open: the alarm clock shares this invocation
+// The published heartbeat is only as fresh as the publish cadence (live.yml republishes every 6 minutes) plus a Pages build and CDN
+// lag, so a healthy desk can show a heartbeat well over 10 minutes old. The limit is measured in the drill; until then it is wide.
+const HEARTBEAT_MAX_MIN = 20;
 
 // NSE trading holidays, copied from config/quantdesk.yaml `calendar.holidays` (a test fails if they differ). A year whose
 // list is not entered is not known: its weekdays are treated as trading days, as the desk does, and W9 asks for the list.
@@ -57,7 +61,7 @@ async function ghGet(env, path, params = {}) {
 	const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "quantdesk-watchdog" };
 	const token = String(env.GH_DISPATCH_TOKEN || "").trim();
 	if (token) headers.authorization = `Bearer ${token}`;          // the repository is public; the token only lifts the rate limit
-	const res = await fetch(url.toString(), { headers });
+	const res = await fetch(url.toString(), { headers, signal: AbortSignal.timeout(FETCH_MS) });
 	if (!res.ok) throw new Error(`GitHub GET ${path} answered ${res.status}`);
 	return res.json();
 }
@@ -74,7 +78,7 @@ export function parseTs(ts) {
 async function readHeartbeat(env) {
 	const origin = String(env.ORIGIN || "").replace(/\/+$/, "");
 	if (!/^https:\/\//.test(origin)) throw new Error("ORIGIN is not set");
-	const res = await fetch(`${origin}/data.json`, { cache: "no-store" });
+	const res = await fetch(`${origin}/data.json`, { cache: "no-store", signal: AbortSignal.timeout(FETCH_MS) });
 	if (!res.ok) throw new Error(`published data.json answered ${res.status}`);
 	const data = await res.json();
 	return (data && data.state && data.state.heartbeat) || null;
@@ -103,9 +107,9 @@ async function w2Heartbeat(c) {
 	}
 	const out = [];
 	const ageMin = (c.nowMs - at) / 60000;
-	if (ageMin > 10) {
+	if (ageMin > HEARTBEAT_MAX_MIN) {
 		out.push({ sev: "P1", check: "W2", title: "Stale heartbeat",
-			body: `The desk's last published heartbeat is ${Math.round(ageMin)} minutes old (limit 10) at ${c.now.hhmm} IST.`, link: actionsUrl(c.env, "live.yml") });
+			body: `The desk's last published heartbeat is ${Math.round(ageMin)} minutes old (limit ${HEARTBEAT_MAX_MIN}) at ${c.now.hhmm} IST.`, link: actionsUrl(c.env, "live.yml") });
 	}
 	if (hb.halted === true) {
 		out.push({ sev: "P1", check: "W2", title: "Desk halted",
@@ -164,7 +168,8 @@ async function w7Expiry(c) {
 		const crossed = [14, 7, 2, 0].find((t) => days <= t && days + gap > t);
 		if (days < 0 || crossed !== undefined) {
 			out.push({ sev: days <= 7 ? "P1" : "P2", check: "W7", title: days < 0 ? `${ascii(name, 40)} has expired` : `${ascii(name, 40)} expires in ${days} day(s)`,
-				body: `Credential ${ascii(name, 40)} expires on ${date}. Renew it before then (the desk or the alarm clock stops without it).`, link: "" });
+				body: `Credential ${ascii(name, 40)} expires on ${date}. Renew it before then (the desk or the alarm clock stops without it).`, link: "",
+				pushOnly: true });                                   // names and dates must not reach a public issue
 		}
 	}
 	return out;
@@ -237,7 +242,7 @@ export async function pushNtfy(env, a) {
 	const headers = { Title: ascii(`${a.sev} ${a.check}: ${a.title}`, 120), Priority: PRIORITY[a.sev] || "default", Tags: TAGS[a.sev] || "warning" };
 	if (link(a.link)) headers.Click = a.link;
 	try {
-		const res = await fetch(`${server}/${topic}`, { method: "POST", headers, body: ascii(a.body, 500) });
+		const res = await fetch(`${server}/${topic}`, { method: "POST", headers, body: ascii(a.body, 500), signal: AbortSignal.timeout(FETCH_MS) });
 		return res.ok ? { ok: true, why: "ntfy accepted it" } : { ok: false, why: `ntfy answered ${res.status}` };
 	} catch (e) {
 		return { ok: false, why: "ntfy was unreachable" };
@@ -254,6 +259,7 @@ export async function sendAlert(env, a, day, dispatchWorkflow) {
 	const push = await pushNtfy(env, a);
 	let email;
 	if (a.sev === "P2") email = { ok: false, why: "P2 goes by push only" };
+	else if (a.pushOnly) email = { ok: false, why: "push only (the repository is public)" };
 	else if (typeof dispatchWorkflow !== "function") email = { ok: false, why: "no dispatcher" };
 	else {
 		try { email = await emailViaIssue(env, a, day, dispatchWorkflow); } catch (e) { email = { ok: false, why: "the email dispatch was unreachable" }; }
