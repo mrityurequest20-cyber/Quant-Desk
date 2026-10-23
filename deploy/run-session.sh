@@ -7,7 +7,7 @@
 # step then squares off open paper positions (`live --close-out`) with its own time budget.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-every=${PUBLISH_EVERY_MIN:-2}
+every=${PUBLISH_EVERY_MIN:-6}
 site=${SITE_DIR:-_site}
 pages=${PAGES_BRANCH:-gh-pages}
 
