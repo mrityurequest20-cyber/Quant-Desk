@@ -134,3 +134,17 @@ def test_the_exercise_stt_rate_is_dated_and_comes_from_config(cfg):
     assert fill.fees == pytest.approx(0.002 * intr * 65)                  # the broker follows the config, not a constant
     br, fill, intr = _settle(cfg, 65, 25_000, on="2026-03-30")            # settled before the revision: the earlier rate
     assert fill.fees == pytest.approx(0.00125 * intr * 65)
+
+
+def test_confidence_scales_a_trade_down_never_past_the_per_trade_limit(cfg):
+    from quantdesk.core.types import TradeIntent
+    rm = RiskManager(cfg)
+    rm.new_bar(pd.Timestamp("2026-01-05"), 1_000_000)
+    budgets = {}
+    for conf in (-1.0, 0.0, 0.5, 1.0, 5.0):
+        intent = TradeIntent("t", "trend", "ITC", 1, "linear", [], 100.0, 1.0, confidence=conf)
+        budgets[conf] = rm.size(intent, 1_000_000, 1.0, [], None).budget
+    ceiling = 1_000_000 * rm.risk_per_trade                 # weight 1.0, no drawdown: the configured limit
+    assert max(budgets.values()) == pytest.approx(ceiling)   # a fully confident trade reaches it, not past it
+    assert budgets[1.0] == budgets[5.0] and budgets[0.0] == budgets[-1.0]   # confidence is clamped to 0..1
+    assert budgets[0.0] == pytest.approx(0.75 * ceiling) and budgets[0.0] < budgets[0.5] < budgets[1.0]
