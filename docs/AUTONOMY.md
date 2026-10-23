@@ -21,34 +21,6 @@ The engine, risk limits, sleeves and research are deterministic Python. Language
 optional **readers** of the news and an after-close reflection, with no say over orders, sizing or risk. If every key
 fails or a usage limit is hit, the desk runs on its rules, exactly as before (`intraday/llm.py`).
 
-## Claude as reader and as teacher
-
-Claude's whole API credit is one fixed budget (`intraday.llm.claude.budget_usd`), split in half
-(`teach_share: 0.5`, owner decision of 16 Oct). The halves are separate buckets in one ledger (`ClaudeBudget` in
-`intraday/llm.py`, state `llm_claude_spend`): neither can spend the other's. The split is fixed from what was left when
-it took effect, so the total is never raised. When a half is spent, that use is skipped with an INFO event and the desk
-carries on.
-
-- **Reads** (first half): the headline reader during the session and the after-close reflection.
-- **Teaching** (second half, `intraday/teacher.py`): `quantdesk intraday teach`, run by the afternoon job of `Live paper desk` after
-  the square-off and before the journal save (best effort: `continue-on-error`, 10-minute timeout, a warning on failure;
-  the save runs regardless). It refuses before the close and is never called from
-  the minute loop. One call a day: Claude is shown the session's journal (trades, every decision including the refused
-  ones and why, a sample of the analyst's reads, warnings, the latest plan study) and returns JSON lessons, each with a
-  kind (right, wrong, missed, uncertain), the claim and why, **the journal rows it rests on by id**, a confidence, what
-  could make it wrong, and where useful a hypothesis with what would confirm and what would refute it. A lesson with no
-  valid citation, and any output that is not the agreed JSON, is dropped with a WARN.
-
-What a lesson is. It is text, labelled ADVISORY, stored in the journal's `state` table (`teacher:YYYY-MM-DD`, one per
-session, so the journal save and C-01's shrink guard carry it and retention never prunes it) and mirrored in the learning
-memory (`teaching`). The next reflection and the learning cycle may read it (`teacher.advisory_lines`,
-`teacher.hypotheses`). It has no path to configuration, risk limits, sizing, gates, promotion or orders: the module
-imports none of that code (a test enforces it). A lesson that proposes a change is stored as a hypothesis for a
-pre-registered study (`docs/prereg`, `research/memory.py`'s rules), which is a person's or the engineer's decision.
-
-It uses the Claude key `live.yml` already passes at workflow level: no secret, env or permission was added to any
-workflow. With no key the step prints "key not set" and skips.
-
 ## Development requests queue up as GitHub issues
 
 After each session `quantdesk intraday self-review --issues` (`ops/selfreview.py`) files what needs fixing or building
