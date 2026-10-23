@@ -87,6 +87,12 @@ def similarity(a: dict, b: dict) -> float:
     return len(pa & pb) / len(pa | pb) if pa | pb else 1.0
 
 
+# A registered spec can't be edited, so a relation a spec only states in prose is recorded here. expiry_seller_v4 settles the
+# same eves, strikes and fills as v1-v3 on NSE's official close: a second reading of the same trades, not an independent
+# experiment, so it is listed beside the others but not counted as one (docs/prereg/expiry_seller_v4.json, `supersedes`).
+RESETTLEMENTS = {"expiry_seller_v4": ("expiry_seller_v1", "expiry_seller_v2", "expiry_seller_v3")}
+
+
 def registry(folder: Path = PREREG) -> list[dict]:
     out = []
     for p in sorted(Path(folder).glob("*.json")):
@@ -210,7 +216,9 @@ def summary(doc: dict | None = None, reg: list[dict] | None = None) -> dict:
     doc = load_principles() if doc is None else doc
     reg = registry() if reg is None else reg
     moves = [dict(e, principle=p["id"]) for p in doc["principles"] for e in p.get("history", [])]
-    return {"experiments": len({r["method"] for r in reg}), "specs": len(reg),
+    names = {r["name"] for r in reg}
+    return {"experiments": len({r["method"] for r in reg if r["name"] not in RESETTLEMENTS}), "specs": len(reg),
+            "resettlements": {k: [x for x in v if x in names] for k, v in RESETTLEMENTS.items() if k in names},
             "with_results": sum(bool(r["results"]) for r in reg), "duplicates": duplicates(reg),
             "history_problems": history_problems(doc), "moves": moves,
             "open_caveats": sum(len(p.get("caveats", [])) for p in doc["principles"]),
@@ -221,10 +229,13 @@ def render(s: dict, reg: list[dict]) -> str:
     out = ["# Research memory", "",
            f"{s['specs']} registered specs, {s['experiments']} distinct experiments (by method fingerprint), "
            f"{s['with_results']} with a recorded result. Duplicates: {s['duplicates'] or 'none'}. "
-           f"History problems: {s['history_problems'] or 'none'}.", "",
-           "| spec | registered | fingerprint | method | results |", "|---|---|---|---|---|"]
-    out += [f"| {r['name']} | {r['registered']} | `{r['fingerprint']}` | `{r['method']}` | {', '.join(r['results']) or '–'} |"
-            for r in reg]
+           f"History problems: {s['history_problems'] or 'none'}.", ""]
+    out += [f"{k} re-settles {', '.join(v)} on the same trades: listed, but not counted as an independent experiment."
+            for k, v in s.get("resettlements", {}).items()]
+    out += ["", "| spec | registered | fingerprint | method | results |", "|---|---|---|---|---|"]
+    mark = lambda name: " (re-settlement)" if name in s.get("resettlements", {}) else ""            # noqa: E731
+    out += [f"| {r['name']}{mark(r['name'])} | {r['registered']} | `{r['fingerprint']}` | `{r['method']}` | "
+            f"{', '.join(r['results']) or '–'} |" for r in reg]
     out += ["", "## How the beliefs moved", "", "| date | principle | move | reason | evidence |", "|---|---|---|---|---|"]
     out += [f"| {m['date']} | {m['principle']} | {m['from']} → {m['to']} ({m['kind']}) | {m['reason']} | {m['ref']} |"
             for m in s["moves"]]

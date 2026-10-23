@@ -54,6 +54,7 @@ class Finding:
     detail: str
     action: str
     transient: bool = True    # closes by itself when the check passes again
+    once: bool = False        # closing the issue acknowledges it: never file this key again (a condition that cannot clear)
 
     def body(self, day) -> str:
         return (f"{self.detail}\n\n**What to do:** {self.action}\n\n_Filed by the desk's self-review on {day}. "
@@ -220,7 +221,9 @@ def check_sleeves(seller, day: dt.date, comparison: bool = False) -> list[Findin
                            "as a decision (the spec's exit.statistics_and_sources).",
                            "Check why NSE's file was missing or unreachable (a real 404, the index name not matching "
                            "INDEX_NAMES, a CDN lag), compare the settlement with NSE's published close for that day, and "
-                           "record the cause. The trade stays in the statistics and the verdict notes it. Do not edit the ledger.", transient=False))
+                           "record the cause. The trade stays in the statistics and the verdict notes it. Do not edit the ledger. "
+                           "Closing this issue acknowledges it: the trade stays settled on the fallback forever, so it is not "
+                           "filed again.", transient=False, once=True))
     for t in seller.trades():
         if str(t.get("day", "")) == str(day) and t.get("quote_flags"):
             legs = "; ".join(f"{x['strike']:.0f}{x['right']}: {', '.join(x['flags'])} (spread {x['spread_pct']:.0%}"
@@ -403,6 +406,10 @@ class GitHub:
         params = {"labels": label, "state": state, "per_page": 100, **({"since": since} if since else {})}
         return [i for i in self._req("GET", "/issues", params=params) if "pull_request" not in i]
 
+    def closed_issues(self) -> list[dict]:
+        return [i for i in self._req("GET", "/issues", params={"labels": LABEL, "state": "closed", "per_page": 100})
+                if "pull_request" not in i]
+
     def issue_titled(self, title: str, label: str) -> dict | None:
         for i in self._req("GET", "/issues", params={"labels": label, "state": "open", "per_page": 100}):
             if i.get("title") == title and "pull_request" not in i:
@@ -427,7 +434,7 @@ class GitHub:
 
 def sync(gh, findings: list[Finding], day: dt.date, say=print) -> dict:
     """One open issue per finding key. New → created; seen again → one comment a day; a transient finding that's gone
-    → closed. Returns what happened."""
+    → closed. A `once` finding whose issue someone has closed is not filed again. Returns what happened."""
     done = {"created": [], "commented": [], "closed": []}
     for name, color in [(LABEL, "1d76db"), AUTO, *KIND_LABELS.values()]:
         gh.ensure_label(name, color)
@@ -437,7 +444,15 @@ def sync(gh, findings: list[Finding], day: dt.date, say=print) -> dict:
         if m:
             open_[m.group(1)] = i
     keys = {f.key for f in findings}
+    acknowledged: set[str] = set()
+    if any(f.once for f in findings) and hasattr(gh, "closed_issues"):
+        for i in gh.closed_issues():
+            m = MARKER.search(i.get("body") or "")
+            if m:
+                acknowledged.add(m.group(1))
     for f in findings:
+        if f.once and f.key in acknowledged and f.key not in open_:
+            continue                    # someone closed it: that is the acknowledgement, and the condition will never clear
         if f.key in open_:
             i = open_[f.key]
             if f.transient and str(i.get("updated_at", ""))[:10] < str(day):     # a recurring problem, not a request

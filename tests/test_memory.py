@@ -100,3 +100,27 @@ def test_a_move_is_recorded_with_its_reason_and_checked():
         M.move(doc, "A", "found", "", "x")
     doc["principles"][2]["status"] = "found"                            # a status nobody explained
     assert M.history_problems(doc) == ["C: status 'found' but its history ends at 'rejected'"]
+
+
+def test_a_re_settlement_is_listed_but_not_counted_as_an_independent_experiment():
+    """expiry_seller_v4 re-reads v1-v3's trades on NSE's official close; counting it would overstate independent evidence."""
+    doc = M.load_principles()
+    reg = [{"name": n, "file": n + ".json", "hash": "h", "fingerprint": "f" + n, "method": "m" + n, "registered": "2026-10-01",
+            "results": []} for n in ("expiry_seller_v1", "expiry_seller_v2", "expiry_seller_v3", "expiry_seller_v4", "other_v1")]
+    s = M.summary(doc, reg)
+    assert s["specs"] == 5 and s["experiments"] == 4                  # v4 is not a fifth experiment
+    assert s["resettlements"] == {"expiry_seller_v4": ["expiry_seller_v1", "expiry_seller_v2", "expiry_seller_v3"]}
+    text = M.render(s, reg)
+    assert "expiry_seller_v4 re-settles expiry_seller_v1, expiry_seller_v2, expiry_seller_v3 on the same trades" in text
+    assert "| expiry_seller_v4 (re-settlement) |" in text and "| expiry_seller_v3 |" in text
+    older = M.summary(doc, reg[:3])                                    # before v4 exists nothing is marked
+    assert older["experiments"] == 3 and older["resettlements"] == {} and "re-settles" not in M.render(older, reg[:3])
+
+
+def test_the_registered_v4_is_the_re_settlement_the_code_says_it_is():
+    reg = M.registry()
+    names = {r["name"] for r in reg}
+    assert set(M.RESETTLEMENTS["expiry_seller_v4"]) <= names and "expiry_seller_v4" in names
+    s = M.summary(reg=reg)
+    assert s["experiments"] == len({r["method"] for r in reg if r["name"] != "expiry_seller_v4"})
+    assert s["resettlements"]["expiry_seller_v4"] == list(M.RESETTLEMENTS["expiry_seller_v4"])

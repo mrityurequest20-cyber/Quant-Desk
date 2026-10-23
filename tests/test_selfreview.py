@@ -219,3 +219,66 @@ def test_comparison_ledgers_raise_no_verdicts_and_v4_waiting_is_worded_for_the_o
     comparison = SR.check_sleeves(RowSeller(), day, comparison=True)                    # v1–v3 once v4 is registered
     assert keys(comparison) == ["sleeve-bug", "sleeve-unsettled"]                       # data health stays; no verdicts
     assert "no recorded closing bars" in comparison[-1].detail                          # the mean-rule wording is unchanged
+
+
+class ClosedAwareGitHub(FakeGitHub):
+    def closed_issues(self):
+        return [i for i in self.issues.values() if i["state"] == "closed"]
+
+
+def test_a_closed_once_finding_is_not_filed_again_but_everything_else_is():
+    """A trade settled on a fallback stays that way forever, so closing its issue is the acknowledgement; the next
+    self-review used to file it again every session. Only a finding marked `once` is spared."""
+    gh = ClosedAwareGitHub()
+    fb = SR.Finding("sleeve-fallback:expiry_seller_v4:T1", "data", "settled on a fallback", "d", "a", transient=False, once=True)
+    ask = SR.Finding("tape-milestone:10", "research", "10 tape sessions", "d", "a", transient=False)
+    SR.sync(gh, [fb, ask], dt.date(2026, 10, 27), say=lambda *a: None)
+    assert len(gh.issues) == 2
+    for i in gh.issues.values():                                        # the owner closes both
+        i["state"] = "closed"
+    SR.sync(gh, [fb, ask], dt.date(2026, 10, 28), say=lambda *a: None)
+    titles = sorted(i["title"] for i in gh.issues.values() if i["state"] == "open")
+    assert titles == ["[desk] 10 tape sessions"]                        # the ordinary finding is re-filed; the once one is not
+
+
+def test_a_once_finding_is_still_filed_the_first_time_and_when_the_helper_cannot_list_closed_issues():
+    gh = ClosedAwareGitHub()
+    fb = SR.Finding("sleeve-fallback:v4:T2", "data", "settled on a fallback", "d", "a", transient=False, once=True)
+    SR.sync(gh, [fb], dt.date(2026, 10, 27), say=lambda *a: None)
+    assert len(gh.issues) == 1                                          # first time: filed
+    old = FakeGitHub()                                                  # a helper with no closed_issues(): behaves as before
+    SR.sync(old, [fb], dt.date(2026, 10, 27), say=lambda *a: None)
+    next(iter(old.issues.values()))["state"] = "closed"
+    SR.sync(old, [fb], dt.date(2026, 10, 28), say=lambda *a: None)
+    assert len(old.issues) == 2
+
+
+def test_the_sleeve_fallback_finding_is_the_one_marked_once():
+    class FallbackSeller(FakeSeller):
+        def fallback_settlements(self):
+            return [{"id": "T9", "underlying": "NIFTY", "settle": 24000.0, "settle_source": "yahoo daily close"}]
+    leg = {"strike": 81200.0, "right": "CE", "flags": ["wide"], "spread_pct": 0.31, "touch_qty": 10.0}
+    quotes = {"id": "E-1", "day": "2026-10-07", "quote_flags": ["wide"], "legs": [leg]}
+    found = SR.check_sleeves(FallbackSeller([quotes], {}), dt.date(2026, 10, 7))
+    assert {x.key.split(":")[0]: x.once for x in found} == {"sleeve-fallback": True, "sleeve-quotes": False}
+    assert "not filed again" in next(x for x in found if x.once).action
+
+
+def test_the_real_helper_asks_github_for_closed_issues():
+    calls = []
+
+    class Session:
+        headers = {}
+
+        def request(self, method, url, **kw):
+            calls.append((method, url.split("/repos/")[1], kw.get("params")))
+
+            class R:
+                status_code, content = 200, b"[]"
+
+                def json(self):
+                    return [{"number": 1, "body": "x <!-- desk-key: k -->"}, {"number": 2, "pull_request": {}}]
+            return R()
+    gh = SR.GitHub("o/r", "token", session=Session())
+    assert [i["number"] for i in gh.closed_issues()] == [1]            # a pull request is not an issue
+    assert calls == [("GET", "o/r/issues", {"labels": SR.LABEL, "state": "closed", "per_page": 100})]
