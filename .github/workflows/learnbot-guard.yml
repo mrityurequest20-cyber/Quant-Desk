@@ -6,8 +6,8 @@
 #   checked out or executed), so a pull request cannot weaken or skip the check that judges it.
 # - It judges the exact head the event named; if the pull request moved since, this run fails as stale and the newer run
 #   judges the new head.
-# - It fails closed: if the guard is missing from the base branch the check is red, except for the one pull request that
-#   itself adds the guard (the bootstrap).
+# - It fails closed: if the guard is missing from the base branch the check is red, except for a pull request (never a
+#   learnbot/ one) that itself adds the guard (the bootstrap).
 # - It holds contents: read and nothing else, uses no secret, and installs nothing (the guard is standard library only).
 #   The checkout keeps its read-only token so the pull request's ref can be fetched from a private repository.
 name: Learnbot guard
@@ -42,6 +42,9 @@ jobs:
             exit 1
           fi
           if [ ! -f quantdesk/learnbot/guard.py ]; then
+            case "${HEAD_REF,,}" in
+              learnbot/*) echo "A learnbot/ pull request needs the guard on the base branch: refusing to pass." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1 ;;
+            esac
             if git cat-file -e "$HEAD_SHA:quantdesk/learnbot/guard.py" 2>/dev/null; then
               echo "Bootstrap: this pull request adds the guard; there is nothing on the base branch to judge it with." | tee -a "$GITHUB_STEP_SUMMARY"
               exit 0

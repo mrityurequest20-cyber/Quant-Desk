@@ -220,6 +220,37 @@ def test_a_sleeve_spec_is_an_engineer_pull_request(repo):
     assert not res.ok and any("engineer pull request" in p for p in res.problems)
 
 
+def test_a_spec_the_memory_cannot_fingerprint_is_refused(repo):
+    """risk-compliance re-verification: a lone surrogate and deep nesting passed, then broke memory.registry()."""
+    deep = '{"name": "deep_v1", "registered": "2026-10-20", "x": ' + "[" * 960 + "]" * 960 + "}"
+    res = ship(repo, {"docs/prereg/deep_v1.json": deep})
+    assert not res.ok and any("nested more than" in p for p in res.problems)
+    absurd = '{"name": "abs_v1", "registered": "2026-10-20", "x": ' + "[" * 20000 + "]" * 20000 + "}"
+    res = ship(repo, {"docs/prereg/abs_v1.json": absurd}, branch="learnbot/abs")
+    assert not res.ok and any("nested too deeply" in p or "nested more than" in p for p in res.problems)
+    sur = '{"name": "sur_v1", "registered": "2026-10-20", "x": "\\ud800"}'
+    res = ship(repo, {"docs/prereg/sur_v1.json": sur}, branch="learnbot/sur")
+    assert not res.ok and any("lone surrogate" in p for p in res.problems)
+    shallow = '{"name": "ok_v1", "registered": "2026-10-20", "x": ' + "[" * 20 + "]" * 20 + "}"
+    assert ship(repo, {"docs/prereg/ok_v1.json": shallow}, branch="learnbot/ok").ok
+
+
+def test_a_key_and_its_value_are_read_together_and_ordinary_words_are_not_refused(repo):
+    """risk-compliance re-verification: {"api_key": "<long>"} slipped through because key and value were scanned apart."""
+    key = json.dumps({"name": "kv_v1", "registered": "2026-10-20", "api_key": "Zq8xW2mN4vB7cK9pL3sD6fG1"})
+    res = ship(repo, {"docs/prereg/kv_v1.json": key})
+    assert not res.ok and any("secret" in p for p in res.problems)
+    prose = ("tokenizer = whitespace_and_lowercase_normalised_pipeline_v2\n"
+             "token: reproducibility-of-the-registered-results-ledger\n"
+             "secret = the_registered_hash_of_the_expiry_eve_law_v1_audit_spec\n"
+             "sk-learning-rate-schedule-for-the-vol-forecast-study is a name, not a key\n")
+    assert ship(repo, {"docs/reports/2026-10-24_words.md": prose}, branch="learnbot/words").ok
+
+
+def test_the_inventory_defangs_markdown_links():
+    assert "](" not in I.clean("see [the docs](http://evil.example/x) now")
+
+
 def test_a_spec_that_passes_the_guard_loads_in_the_research_memory(repo, tmp_path):
     from quantdesk.research import memory as M
     res = ship(repo, {"docs/prereg/fine_v1.json": spec("fine_v1")})
@@ -256,7 +287,7 @@ def test_a_hostile_file_name_cannot_forge_log_lines(repo):
 @pytest.mark.parametrize("secret", [
     "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0k1", "AIza" + "SyA1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q", "Authorization: Bearer abcdefghij0123456789klmn",
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop", "KOTAK_CONSUMER_KEY=ab12-cd34-ef56-gh78-ij90-kl12",
-    'api_key = "abc.def.ghi.jkl.mno.pqr.stu"', "client_secret: abc.def-ghi.jkl-mno.pqr", "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY",
+    'api_key = "abc1.def2.ghi3.jkl4.mno5.pqr6.stu7"', "client_secret: abc1.def2-ghi3.jkl4-mno5.pqr6", "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY",
     "https://hooks.slack.com/services/T000/B000/XXXXXXXX", "postgres://admin:hunter22pw@db.example.com/x",
     "ghp_\u200b" + "a1B2c3D4e5F6g7H8i9J0k1L2",      # a zero-width space inside the key
     "gho_" + "a1B2c3D4e5F6g7H8i9J0k1L2", "ghs_" + "a1B2c3D4e5F6g7H8i9J0k1L2", "ghu_" + "a1B2c3D4e5F6g7H8i9J0k1L2",
@@ -597,5 +628,6 @@ def test_the_guard_workflow_is_least_privilege_and_judges_from_the_base():
     assert wf["jobs"]["guard"]["name"] == "Learnbot guard"                          # the required-check context the doc names
     assert '--head "$HEAD_SHA"' in run and 'rev-parse refs/remotes/pr/head' in run   # the exact head the event named
     bootstrap = run[run.index("quantdesk/learnbot/guard.py ]"):]
-    assert bootstrap.index("exit 0") < bootstrap.index("exit 1") and "refusing to pass" in run   # missing guard: red, bar the bootstrap
+    assert "learnbot/*)" in bootstrap and bootstrap.index("learnbot/*)") < bootstrap.index("exit 0")   # a learnbot/ PR is never waved through
+    assert bootstrap.index("exit 0") < bootstrap.rindex("exit 1") and "refusing to pass" in run          # missing guard: red, bar the bootstrap
     assert not re.search(r"\$\{\{[^}]*(head|title|body|ref)[^}]*\}\}", run)         # nothing from the PR is spliced into the script

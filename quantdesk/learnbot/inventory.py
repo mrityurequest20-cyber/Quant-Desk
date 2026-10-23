@@ -42,7 +42,7 @@ def clean(x, n: int = CLIP) -> str:
     backticks or angle brackets, at most `n` characters."""
     s = "".join(c for c in str(x) if unicodedata.category(c) != "Cf")
     s = re.sub(r"\s+", " ", _CTRL.sub(" ", s)).strip()
-    s = s.replace("`", "'").replace("<", "‹").replace(">", "›")
+    s = s.replace("`", "'").replace("<", "‹").replace(">", "›").replace("](", "] (")     # no live code spans, tags or links
     return s if len(s) <= n else s[:n - 1] + "…"
 
 

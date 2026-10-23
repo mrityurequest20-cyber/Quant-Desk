@@ -38,6 +38,7 @@ ALLOWED = (
 # engineer pull request with a risk-compliance review, never a learnbot/ one
 SLEEVE_SPEC = re.compile(r"docs/prereg/expiry_seller_.*\.json")
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+MAX_DEPTH = 32                                     # real specs are a handful of levels deep; the memory recurses over them
 # why a path outside the allow-list is refused (the first matching prefix is quoted; any other path gets the default)
 REFUSED_BECAUSE = (
     (".github/", "workflows, permissions and secrets are the owner's"),
@@ -51,13 +52,15 @@ REFUSED_BECAUSE = (
     ("docs/LEARNBOT.md", "the learning bot's own rules are the owner's"),
     ("docs/principles.json", "a principle moves up the ladder on a registered result, in an engineer pull request"),
 )
+# the generic shapes (sk-..., and key/secret/token = value) require three digits in the value: a random key has several, a
+# hyphenated name like "..._v1_audit_spec" has one, so ordinary prose is not refused. A heuristic, not a vault.
 SECRET = re.compile("|".join((
-    r"gh[pousr]_[A-Za-z0-9]{20,}", r"github_pat_[A-Za-z0-9_]{20,}", r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}", r"AKIA[0-9A-Z]{16}",
+    r"gh[pousr]_[A-Za-z0-9]{20,}", r"github_pat_[A-Za-z0-9_]{20,}", r"\bsk-(?:ant-|proj-)?(?=(?:[A-Za-z0-9_-]*\d){3})[A-Za-z0-9_-]{16,}", r"AKIA[0-9A-Z]{16}", r"(?i:aws_secret_access_key)\s*[:=]\s*[\"']?[A-Za-z0-9/+=]{30,}",
     r"AIza[0-9A-Za-z_-]{30,}", r"xox[baprs]-[A-Za-z0-9-]{10,}", r"hooks\.slack\.com/services/[A-Za-z0-9/]+",
     r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
     r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{20,}", r"://[^/\s:@]+:[^/\s@]{3,}@",
     r"(?i:api[_-]?key|secret|token|passwd|password|consumer[_-]?key|access[_-]?key|authorization)[\w\"']{0,20}\s*[:=]\s*"
-    r"[\"']?[A-Za-z0-9/+_=.\-]{20,}")))
+    r"[\"']?(?=(?:[A-Za-z0-9/+_=.\-]*\d){3})[A-Za-z0-9/+_=.\-]{20,}")))
 MONTHLY = re.compile(r"^docs/reports/(\d{4}-\d{2}-\d{2})_learnbot_monthly\.md$")
 # the monthly report's required sections (docs/LEARNBOT.md); the quarter-month run adds the independent review
 REPORT_SECTIONS = ("Milestones", "Models", "Data health", "Paper record", "Usage", "NEEDS OWNER")
@@ -127,9 +130,31 @@ def _report_problems(path: str, text: str) -> list[str]:
     return out
 
 
+def _walk(o, depth: int = 0):
+    """Every (depth, string) in a decoded JSON value, keys included; stops descending past MAX_DEPTH."""
+    if isinstance(o, str):
+        yield depth, o
+    elif depth <= MAX_DEPTH and isinstance(o, dict):
+        for k, v in o.items():
+            yield from _walk(k, depth + 1)
+            yield from _walk(v, depth + 1)
+    elif depth <= MAX_DEPTH and isinstance(o, list):
+        for v in o:
+            yield from _walk(v, depth + 1)
+
+
+def _depth(o, d: int = 1) -> int:
+    """Nesting depth, capped: anything beyond MAX_DEPTH is reported as MAX_DEPTH + 1 without walking further."""
+    if d > MAX_DEPTH:
+        return d
+    kids = list(o.values()) if isinstance(o, dict) else o if isinstance(o, list) else []
+    return max([d] + [_depth(k, d + 1) for k in kids if isinstance(k, (dict, list))])
+
+
 def _spec_problems(path: str, data) -> list[str]:
     """Every docs/prereg/*.json is loaded by the research memory (and some by the sleeves), so its shape is checked here:
-    a spec that parses but is not a mapping, or has no name or date, would break the desk's own jobs."""
+    a spec that parses but is not a mapping, has no name or date, nests deeper than the memory can recurse, or holds a string
+    that cannot be encoded would break the desk's own jobs."""
     if not isinstance(data, dict):
         return [f"{ascii(path)}: a spec must be a JSON object"]
     out = []
@@ -137,6 +162,15 @@ def _spec_problems(path: str, data) -> list[str]:
         out.append(f"{ascii(path)}: the spec's \"name\" must equal the file name without .json")
     if not (isinstance(data.get("registered"), str) and ISO_DATE.fullmatch(data["registered"])):
         out.append(f"{ascii(path)}: the spec needs \"registered\": \"YYYY-MM-DD\"")
+    if _depth(data) > MAX_DEPTH:
+        out.append(f"{ascii(path)}: nested more than {MAX_DEPTH} levels deep")
+    else:
+        for _, text in _walk(data):
+            try:
+                text.encode("utf-8")
+            except UnicodeEncodeError:
+                out.append(f"{ascii(path)}: a string in the spec is not valid text (a lone surrogate)")
+                break
     return out
 
 
@@ -146,20 +180,22 @@ def _secret_in(text: str) -> bool:
     def norm(t: str) -> str:
         return "".join(c for c in unicodedata.normalize("NFKC", t) if unicodedata.category(c) != "Cf")
 
-    def strings(o):
+    def strings(o, depth=0):
         if isinstance(o, str):
             yield o
-        elif isinstance(o, dict):
+        elif depth <= MAX_DEPTH and isinstance(o, dict):
             for k, v in o.items():
-                yield from strings(k)
-                yield from strings(v)
-        elif isinstance(o, list):
+                yield from strings(k, depth + 1)
+                yield from strings(v, depth + 1)
+                if isinstance(v, str):
+                    yield f"{k}: {v}"                      # a key and its value together, as a person would write them
+        elif depth <= MAX_DEPTH and isinstance(o, list):
             for v in o:
-                yield from strings(v)
+                yield from strings(v, depth + 1)
     texts = [norm(text)]
     try:
         texts += [norm(x) for x in strings(json.loads(text))]
-    except ValueError:
+    except (ValueError, RecursionError):
         pass
     return any(SECRET.search(t) for t in texts)
 
@@ -226,8 +262,8 @@ def check_diff(base: str, head: str = "HEAD", branch: str | None = None, repo: P
         if path.endswith(".json"):
             try:
                 data = json.loads(text)
-            except ValueError as exc:
-                res.problems.append(f"{ascii(path)}: not valid JSON: {exc}")
+            except (ValueError, RecursionError) as exc:
+                res.problems.append(f"{ascii(path)}: not valid JSON (or nested too deeply): {type(exc).__name__}")
             else:
                 if path.startswith("docs/prereg/"):
                     res.problems += _spec_problems(path, data)
