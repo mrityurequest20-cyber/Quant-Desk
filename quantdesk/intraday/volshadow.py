@@ -263,7 +263,8 @@ def _pooled(d: pd.DataFrame) -> dict:
     # have been taken yet). Until a run reaches it, the latest run counts, so a change restarts an unfinished count from zero.
     run = next((r for r in runs if len(r) >= TARGET_SESSIONS), runs[-1] if runs else [])
     per = per_all.loc[run] if run else per_all.iloc[:0]
-    out = {"sessions_both": int(len(per)), "sessions_excluded": int(len(per_all) - len(per)), "pooled": None}
+    out = {"sessions_both": int(len(per)), "sessions_excluded": int(len(per_all) - len(per)), "pooled": None,
+           "restarts": max(len(runs) - 1, 0), "restart_dates": [str(r[0]) for r in runs[1:] if r]}
     if len(per):
         first = per.iloc[:TARGET_SESSIONS]
         n = len(first)
@@ -273,6 +274,19 @@ def _pooled(d: pd.DataFrame) -> dict:
         desk_q = float(use.groupby("day")["desk_q"].mean().mean())
         out["pooled"] = {"sessions": int(n), "mean_diff": float(first.mean()),
                          "gain_pct": float(100 * first.mean() / desk_q) if desk_q > 0 else None, "nw_t": t, "p_one_sided": p}
+    return out
+
+
+def rule_hashes() -> dict:
+    """sha256 of the rule as it stood when the read was taken: this file (the 60-session target, the 0.05 cut-off, COEF_PIN, BACKSTOP,
+    the statistic) and the protocol text. They are stored in the read, so a later change to either shows against it."""
+    here = Path(__file__).resolve()
+    out = {}
+    for name, path in (("volshadow_py", here), ("protocol_md", here.parents[2] / "docs" / "VOL_SHADOW_PROTOCOL.md")):
+        try:
+            out[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            out[name] = None
     return out
 
 
@@ -305,9 +319,12 @@ def read_once(journal, rep: dict, today: dt.date) -> dict:
             ok = pl["mean_diff"] > 0 and pl["p_one_sided"] == pl["p_one_sided"] and pl["p_one_sided"] < 0.05
             rec = {"read_on": str(today), "sessions": pl["sessions"], "mean_diff": pl["mean_diff"], "gain_pct": pl["gain_pct"],
                    "nw_t": pl["nw_t"], "p_one_sided": pl["p_one_sided"], "verdict": "PASS" if ok else "NOT CONFIRMED",
-                   "coef_pin": COEF_PIN}
+                   "coef_pin": COEF_PIN, "rules": rule_hashes(), "restarts": int(rep.get("restarts", 0)),
+                   "restart_dates": list(rep.get("restart_dates", []))}
         elif today > BACKSTOP:
-            rec = {"read_on": str(today), "sessions": int(n), "verdict": "NOT CONFIRMED (underpowered)", "coef_pin": COEF_PIN}
+            rec = {"read_on": str(today), "sessions": int(n), "verdict": "NOT CONFIRMED (underpowered)", "coef_pin": COEF_PIN,
+                   "rules": rule_hashes(), "restarts": int(rep.get("restarts", 0)),
+                   "restart_dates": list(rep.get("restart_dates", []))}
         else:
             return rep
         if _insert_once(journal, rec):
@@ -318,7 +335,7 @@ def read_once(journal, rep: dict, today: dt.date) -> dict:
         row = _stored_row(journal)                      # whoever won a race, the stored record is the one that counts
     try:
         got = json.loads(row[0]) if row else None
-    except ValueError:
+    except (ValueError, TypeError):                       # corrupt JSON, or a NULL value
         got = None
     if isinstance(got, dict) and got.get("verdict"):
         rep["stored"] = got
@@ -376,6 +393,8 @@ def render(rep: dict) -> str:
     L = ["# Live vol shadow: the desk's forecaster (A) vs HAR", "",
          f"{rep['forecasts']} journaled forecasts, {rep['scored']} (forecast, horizon) pairs with a completed horizon; "
          f"{rep.get('sessions', 0)} sessions graded, {rep.get('sessions_both', 0)} of {TARGET_SESSIONS} with both indices "
+         + (f"counted (the first {TARGET_SESSIONS} are used) " if rep.get("sessions_both", 0) > TARGET_SESSIONS else "")
+         + f"({rep.get('restarts', 0)} restart(s) of the count so far) "
          f"(docs/VOL_SHADOW_PROTOCOL.md: only those count, with all four horizons and one pin; there is no read before {TARGET_SESSIONS}; "
          "nothing here is acted on).",
          "Shadow WARNs by reason (sessions or index-sessions with no gradable record): "
@@ -403,12 +422,21 @@ def render(rep: dict) -> str:
     if st:
         L += ["The per-cell tables below keep updating on every graded session and are descriptive only: they are not the test, "
               "and the verdict above does not change.", ""]
+    if rep.get("restarts"):
+        L += [f"The count has restarted {rep['restarts']} time(s), from the session(s) of {', '.join(rep.get('restart_dates', []))}. "
+              "A restart that no reviewed change caused is a protocol breach and must be stated in the verdict.", ""]
     if rep.get("sessions_excluded"):
         L += [f"{rep['sessions_excluded']} graded session(s) do not count: recorded under a different pin (a refit, or a change to "
               "harvol.py / quant.py / volstudy.py, restarts the count) or without one.", ""]
     ready = bool(st)
     if not rep["by"]:
         return "\n".join(L + ["Nothing to score yet."]) + "\n"
+    if not ready:
+        L += ["The per-cell scores (QLIKE, gain, DM t, move ratios) are withheld until the single read is taken: before it they would show "
+              "which way the count is trending, and a restart chosen on that basis is not allowed (docs/VOL_SHADOW_PROTOCOL.md).", "",
+              "| index · horizon | days graded |", "|---|---|"]
+        L += [f"| {k} | {c['days']} |" for k, c in rep["by"].items()]
+        return "\n".join(L) + "\n"
     L += ["| index · horizon | days | QLIKE A | QLIKE HAR | gain | DM t | move ratio A | move ratio HAR |",
           "|---|---|---|---|---|---|---|---|"]
     for k, c in rep["by"].items():

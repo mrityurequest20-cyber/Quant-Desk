@@ -629,6 +629,7 @@ def test_a_pin_change_restarts_the_count_and_unpinned_or_wrongly_pinned_sessions
     _, b = _sessions(10, start=dt.date(2026, 11, 20), pin=other)                     # the code pin changed on 20 Nov
     out = volshadow._pooled(pd.DataFrame(a + b))
     assert out["sessions_both"] == 10 and out["sessions_excluded"] == 30             # the count restarted; the old ones are shown
+    assert out["restarts"] == 1                                                      # and the report says it restarted
     _, c = _sessions(10, start=dt.date(2027, 1, 5), pin=None)
     assert volshadow._pooled(pd.DataFrame(a + c))["sessions_both"] == 0              # no pin recorded: never counts
     refit = f"{'e' * 64}:{'c' * 64}"                                                  # a different coefficient file
@@ -711,6 +712,8 @@ def test_the_primary_read_is_taken_once_stored_and_never_recomputed(tmp_path):
     rec = first["stored"]
     assert first["first_read"] and rec["verdict"] == "PASS" and rec["sessions"] == 60 and rec["coef_pin"] == volshadow.COEF_PIN
     assert j.get_state(volshadow.STATE_KEY) == rec and _reads(j) == 1                    # the verdict is also in the append-only events
+    assert rec["restarts"] == 0 and set(rec["rules"]) == {"volshadow_py", "protocol_md"}   # the rule is recorded with the read
+    assert all(isinstance(h, str) and len(h) == 64 for h in rec["rules"].values())
     again = volshadow.read_once(j, _rep(75, worse=True), dt.date(2027, 2, 1))           # more sessions, and now they look terrible
     assert again["stored"] == rec and "first_read" not in again and _reads(j) == 1       # the stored record, not a recomputation
     text = volshadow.render(again)
@@ -796,3 +799,36 @@ def test_the_command_takes_the_single_read_once_on_the_live_journal(cfg, capsys,
     cli.cmd_vol_shadow(cfg, argparse.Namespace(account="replay", since=None))
     assert "applies to the live journal only" in capsys.readouterr().out
     assert Journal(cli.paths(cfg, "replay")["journal"]).get_state(volshadow.STATE_KEY) is None
+
+
+def test_the_report_counts_restarts_and_labels_a_count_over_sixty():
+    rep = _rep(70)
+    assert rep["sessions_both"] == 70 and rep["pooled"]["sessions"] == 60 and rep["restarts"] == 0
+    text = volshadow.render(rep)
+    assert "counted (the first 60 are used)" in text and "0 restart(s)" in text
+    assert "counted (the first 60 are used)" not in volshadow.render(_rep(59))
+
+
+def _cell():
+    side = {"qlike": 0.3, "move_ratio": 1.1, "move_ratio_by_time": {"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0}}
+    return {"days": 12, "desk": side, "har": dict(side), "qlike_gain_pct": 9.9, "dm_t": 3.3}
+
+
+def test_per_cell_scores_are_withheld_until_the_read_and_restarts_are_shown():
+    rep = {"forecasts": 2, "scored": 8, "sessions": 12, "sessions_both": 12, "sessions_excluded": 3, "pooled": None,
+           "restarts": 2, "restart_dates": ["2026-11-02", "2026-11-20"], "skips": {}, "by": {"NIFTY 30m": _cell()}}
+    text = volshadow.render(rep)
+    assert "withheld until the single read is taken" in text and "| NIFTY 30m | 12 |" in text
+    assert "9.9" not in text and "3.30" not in text and "QLIKE A" not in text                   # no trend to act on
+    assert "restarted 2 time(s)" in text and "2026-11-02, 2026-11-20" in text
+    after = volshadow.render({**rep, "stored": {"read_on": "2026-12-21", "verdict": "PASS", "sessions": 60}})
+    assert "QLIKE A" in after and "+9.9%" in after                                              # after the read they appear
+
+
+def test_a_null_state_value_is_reported_as_unreadable_not_a_crash(tmp_path):
+    j = _journal(tmp_path)
+    with j.lock:
+        j.db.execute("INSERT INTO state (key, value) VALUES (?, NULL)", (volshadow.STATE_KEY,))
+    j.commit()
+    rep = volshadow.read_once(j, _rep(60), dt.date(2026, 12, 21))
+    assert rep.get("stored_unreadable") and "first_read" not in rep and "stored" not in rep

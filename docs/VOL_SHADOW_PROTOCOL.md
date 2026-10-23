@@ -50,6 +50,17 @@ Any edit to those three files, comments included, changes the second pin: that i
 to `quant.py` or `volstudy.py` during the run cost sessions. **Outside the pin:** the grading code (`volshadow._pooled`,
 `prereg.nw_t`). A change to it is a protocol amendment made in this file and re-reviewed, not a restart.
 
+**No restart on purpose.** A pin change, even a comment edit in `quant.py` or `volstudy.py`, restarts an unfinished count, so a
+restart could be used to discard a run that looks bad. That is not allowed, and it is closed two ways. Until the single read is
+taken the report withholds every per-cell score (QLIKE, gain, DM t, move ratios) and shows only the number of days graded, so
+there is no trend to act on. And it prints the number of restarts and the date each began; the stored read records both
+(`restarts`, `restart_dates`). A restart that no reviewed change caused is a protocol breach and is stated in the verdict.
+
+**The rule is recorded with the read.** The 60-session target, the 0.05 cut-off, `COEF_PIN`, `BACKSTOP` and the statistic live in
+`volshadow.py`, and this text lives here, both outside the pin. The stored read carries the sha256 of `volshadow.py` and of this
+file as they stood when it was taken (`rules`), so anyone can compare them with the committed versions at the date the first
+forecast was recorded: a difference is an amendment after data and must be disclosed.
+
 ## How many sessions, and why
 The lock implies, for NIFTY, 40 to 53 sessions for 80% power at one-sided alpha 0.05 (daily SD implied by the reported
 Newey-West t); for BANKNIFTY alone 57 to 290. 20 sessions gives about 50% power on NIFTY and 16 to 43% on BANKNIFTY. So:
@@ -59,7 +70,7 @@ correlation of 0.6), not 80%, and BANKNIFTY is the weak part of the pool. The ef
 09:30 effect is not in the recorded result.
 After the read, the per-cell tables keep updating on every graded session; they are descriptive only and are not the test.
 Interim output (`intraday vol-shadow`) is progress reporting only: until 60 sessions with both indices are graded it
-withholds the primary statistic and the per-cell DM t. Looking earlier and stopping on a good number is not allowed.
+withholds the primary statistic and every per-cell score (days graded only). Looking earlier and stopping on a good number is not allowed.
 
 ## Stopping rule and backstop
 The test is read **exactly once**, at the 60th counted session, by `intraday vol-shadow` (the statistic is computed in
@@ -71,6 +82,10 @@ recompute it, whatever `--since` says or however many sessions have been added. 
 the first run after that date stores "NOT CONFIRMED (underpowered, n = ...)". The shadow is neither extended nor re-read without
 a new protocol. Limit: the record lives in the journal state, so restoring an older journal copy would let the read be taken
 again; this is a convention with code behind it, not a cryptographic seal.
+
+The stored `read_on` is the date the command was run, not the date the 60th session completed. Run `intraday vol-shadow` after the
+close of the session that makes 60 (the report says when 60 are counted); the count label shows "counted (the first 60 are used)"
+when more than 60 are present.
 
 ## Failure rule (so that it can fail)
 At 60 sessions: PASS only if the primary statistic's mean is positive **and** its one-sided Newey-West p < 0.05.
