@@ -400,3 +400,22 @@ def test_opening_range_is_a_clock_window_and_unknown_after_a_late_start(cfg, ses
     ev = eng.journal.df("SELECT * FROM events WHERE level = 'WARN' AND category = 'data'")
     assert len(ev) == len(eng.underlyings) and ev["message"].str.contains("opening bars failed to arrive").all()
 
+
+
+def test_a_yahoo_poll_with_no_bars_is_a_readable_error_not_a_type_error(cfg, monkeypatch):
+    """F-19-1 (19 Oct, 17 errors): Yahoo returned nothing, `_fetch` gave a column-only frame, and `df.index > since` raised a
+    TypeError. It must still raise (the step counts a failure and an outage ends in safe mode, as before) but say why; an
+    empty frame that does carry a time index (every bar filtered out) is still just 'no new bars'."""
+    import pytest
+    from quantdesk.intraday.feeds import YahooIntradayFeed
+    feed = YahooIntradayFeed(cfg)
+    since = pd.Timestamp("2026-10-19 15:03", tz=IST)
+    nothing = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    monkeypatch.setattr(feed, "_fetch", lambda symbol, period: nothing)
+    with pytest.raises(RuntimeError, match="yahoo returned no 1-minute bars for NIFTY"):
+        feed.poll("NIFTY", since)
+    assert feed.poll("NIFTY", None).empty                                     # first poll of a session: nothing to filter, as before
+    idx = pd.date_range("2026-10-19 15:00", periods=3, freq="1min", tz=IST)
+    old = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0}, index=idx)
+    monkeypatch.setattr(feed, "_fetch", lambda symbol, period: old)
+    assert feed.poll("NIFTY", since).empty                                    # a real frame, all older than `since`: no error
