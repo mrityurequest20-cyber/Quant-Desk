@@ -212,6 +212,15 @@ def check_sleeves(seller, day: dt.date, comparison: bool = False) -> list[Findin
                                f"Expired {t['expiry']} with no settlement: no recorded closing bars and no Yahoo close.",
                                "Recover the expiry-day close (recorded bars, the backfill's index minutes, or NSE) "
                                "and re-run `quantdesk intraday sleeves`."))
+    for t in getattr(seller, "fallback_settlements", lambda: [])():     # v4 only: an NSE-index trade settled off NSE's file
+        out.append(Finding(f"sleeve-fallback:{rep['spec']}:{t['id']}", "data",
+                           f"Sleeve trade {t['id']} settled on a fallback, not NSE's official close",
+                           f"Settled {t.get('settle')} on \"{t.get('settle_source')}\" ({t['underlying']} is an NSE index, so NSE's "
+                           "file should have been used). Until this is resolved a verdict on this sleeve is not recorded "
+                           "as a decision (the spec's exit.statistics_and_sources).",
+                           "Check why NSE's file was missing or unreachable (a real 404, the index name not matching "
+                           "INDEX_NAMES, a CDN lag), compare the settlement with NSE's published close for that day, and "
+                           "record whether the trade stands. Do not edit the ledger.", transient=False))
     for t in seller.trades():
         if str(t.get("day", "")) == str(day) and t.get("quote_flags"):
             legs = "; ".join(f"{x['strike']:.0f}{x['right']}: {', '.join(x['flags'])} (spread {x['spread_pct']:.0%}"

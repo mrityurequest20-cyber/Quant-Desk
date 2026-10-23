@@ -539,7 +539,12 @@ def test_every_spec_loads_and_v4_carries_the_live_sleeves_unchanged(cfg, tmp_pat
     assert list(ss) == ["expiry_seller_v1", "expiry_seller_v2", "expiry_seller_v3", "expiry_seller_v4"]
     assert {n: ss[n]["_hash"] for n in LOCKED} == LOCKED
     v4 = ss["expiry_seller_v4"]
-    assert v4["settlement"] == "official_close" and v4["registered"] == "2026-10-17"
+    assert v4["settlement"] == "official_close" and v4["registered"] == "2026-10-26"
+    # review of #89: registered is the first trading day after the merge (the floor for 'did not run' skips); the 17 Oct
+    # first publication and its git blob are kept on record, and the forward start is stated
+    assert "aac2b22" in v4["first_published"] and "9fd9088803b472121fe4f5f11f52a650284b77dc" in v4["first_published"]
+    assert "first trading day after the merge" in v4["forward_start"] and v4["reading"]["from"] == v4["registered"]
+    assert "settlements are Yahoo's daily close of the BSE index, not an official close" in v4["exit"]["statistics_and_sources"]
     assert "E-01" in v4["why"] and "v3" in v4["supersedes"] and "restarts" in v4["eligibility"]
     letters = dict(zip("ABCDE", "FGHIJ"))
     old = {}
@@ -795,15 +800,19 @@ def test_the_nse_client_keeps_a_missing_file_and_a_failure_apart(cfg):
 def test_the_report_shows_where_v4_settlements_came_from(cfg, tmp_path):
     cal, d, e = eve(cfg)
     v4 = _v4_with_nse(cfg, tmp_path, lambda u, day: None)
-    trades = [{"settled": True, "settle_source": s, "expiry": str(e)} for s in
-              ("NSE's official close", "NSE's official close", "NSE's official close", "the 15:29 one-minute close",
-               "Yahoo daily close (NSE unreachable for 2 trading days)")]
+    trades = [{"settled": True, "settle_source": s, "expiry": str(e), "underlying": u} for s, u in
+              (("NSE's official close", "NIFTY"), ("NSE's official close", "BANKNIFTY"), ("NSE's official close", "FINNIFTY"),
+               ("the 15:29 one-minute close", "NIFTY"), ("Yahoo daily close (NSE unreachable for 2 trading days)", "NIFTY"),
+               ("Yahoo daily close of the BSE index", "SENSEX"))]
     trades.append({"settled": False, "expiry": str(e)})
-    assert v4.settle_sources(trades, today=e) == {"nse": 3, "bar_1529": 1, "yahoo": 1, "other": 0, "unsettled": 1}
+    # SENSEX on Yahoo is by design ("yahoo"); Yahoo on an NSE index is a fallback, like the 15:29 bar
+    assert v4.settle_sources(trades, today=e) == {"nse": 3, "bar_1529": 1, "yahoo": 1, "yahoo_fallback": 1, "other": 0,
+                                                    "unsettled": 1}
     assert v4.settle_sources([{"settled": False, "expiry": str(e)}], today=d) == {
-        "nse": 0, "bar_1529": 0, "yahoo": 0, "other": 0, "unsettled": 0}
+        "nse": 0, "bar_1529": 0, "yahoo": 0, "yahoo_fallback": 0, "other": 0, "unsettled": 0}
     md = render({**v4.report(), "open": [], "fills": {}, "settle_sources": v4.settle_sources(trades, today=e)})
-    assert "Settlement sources" in md and "NSE's file 3 (50%)" in md and "waiting 1 (17%)" in md
+    assert "Settlement sources" in md and "NSE's file 3 (43%)" in md and "waiting 1 (14%)" in md
+    assert "Yahoo's close (SENSEX, by design) 1" in md and "Yahoo's close (fallback on an NSE index) 1" in md
     v1 = ExpirySeller(cfg, tmp_path / "v1", tmp_path / "nodata", spec=spec("expiry_seller_v1"), say=lambda *a: None)
     assert v1.settle_sources(trades, today=e) == {} and "Settlement sources" not in render(v1.report())
 
@@ -865,3 +874,24 @@ def test_nse_py_keeps_its_behaviour_for_other_callers_and_marks_the_html_case():
             N.NSE(session=Sess(Resp(200, body)), gap=0).archive("/x")
         assert type(eh.value) is N.NotPublishedHtml
     assert N.NSE(session=Sess(Resp(200, b"Index Name,Closing Index Value\n")), gap=0).archive("/x")[0].startswith(b"Index")
+
+
+def test_a_v4_trade_on_an_nse_index_settled_off_nses_file_is_an_incident_but_sensex_is_not(cfg, tmp_path):
+    """Review of #89 (F1): Yahoo on SENSEX is by design, Yahoo or the 15:29 bar on an NSE index is a fallback that the
+    self-review files as a data finding (so a wrong index-name mapping cannot settle silently on Yahoo); v1-v3 raise none."""
+    from quantdesk.ops.selfreview import check_sleeves
+    v4 = _v4_with_nse(cfg, tmp_path, lambda u, day: None)
+    rows = [("A1", "NIFTY", "NSE's official close"), ("A2", "NIFTY", "the 15:29 one-minute close"),
+            ("A3", "FINNIFTY", "Yahoo daily close (NSE's file has no row for it)"), ("A4", "SENSEX", "Yahoo daily close of the BSE index")]
+    base = {"event": "open", "sleeve": "F", "expiry": "2026-10-20", "day": "2026-10-19", "legs": [], "settled": True}
+    trades = [{**base, "id": i, "underlying": u, "settle_source": src, "settle": 100.0} for i, u, src in rows]
+    v4.trades = lambda: trades                                      # the merged ledger view the real method builds
+    v4.report = lambda: {"spec": "expiry_seller_v4", "rows": [], "open": [], "fills": {}, "skips": []}
+    assert [t["id"] for t in v4.fallback_settlements()] == ["A2", "A3"]
+    found = [f for f in check_sleeves(v4, dt.date(2026, 10, 27)) if f.key.startswith("sleeve-fallback:")]
+    assert sorted(f.key.split(":")[-1] for f in found) == ["A2", "A3"] and all(f.kind == "data" and not f.transient for f in found)
+    v1 = ExpirySeller(cfg, tmp_path / "v1", tmp_path / "nodata", spec=spec("expiry_seller_v1"), say=lambda *a: None)
+    v1.trades = lambda: trades
+    assert v1.fallback_settlements() == []
+    v1.report = v4.report
+    assert [f for f in check_sleeves(v1, dt.date(2026, 10, 27), comparison=True) if f.key.startswith("sleeve-fallback:")] == []

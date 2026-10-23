@@ -61,6 +61,7 @@ SETTLE_FROM, MIN_SETTLE_BARS = dt.time(15, 0), 20
 MIN_COST, MIN_CONSISTENCY, MIN_ELIGIBLE = 6, 8, 10
 Z90, Z95 = 1.2816, 1.645
 NSE_WAIT_DAYS = 2                              # v4: trading days after expiry to wait on a silent (not absent) NSE
+BSE_INDEX = "SENSEX"                        # a BSE index: no row in NSE's file, so it settles on Yahoo's close by design
 TAIL_MULT = 1.5                               # a naked sleeve retires on a loss beyond 1.5 x the history's worst
 NAKED_MARGIN = 0.12                            # rough SPAN + exposure for one side of a naked index strangle
 B_AFTER_A_DAYS = 91
@@ -628,20 +629,31 @@ class ExpirySeller:
 
     def settle_sources(self, trades: list[dict], today: dt.date | None = None) -> dict:
         """A spec that settles at the official close: how many of its settlements came from each link of the chain (nse,
-        bar_1529, yahoo, other) and how many trades are still waiting at or past their expiry (unsettled). {} for a spec
-        that settles on the mean."""
+        bar_1529, yahoo, yahoo_fallback, other) and how many trades are still waiting at or past their expiry (unsettled).
+        `yahoo` is SENSEX, which has no row in NSE's file and settles on Yahoo's close of the BSE index by design;
+        `yahoo_fallback` is Yahoo's close on an NSE index (NSE's file was missing or unreachable), which `bar_1529`
+        also is. Only `nse` and the by-design `yahoo` are expected. {} for a spec that settles on the mean."""
         if self.settlement != "official_close":
             return {}
         today = today or pd.Timestamp.now(tz=IST).date()
-        out = {"nse": 0, "bar_1529": 0, "yahoo": 0, "other": 0, "unsettled": 0}
+        out = {"nse": 0, "bar_1529": 0, "yahoo": 0, "yahoo_fallback": 0, "other": 0, "unsettled": 0}
         for t in trades:
             if t["settled"]:
                 s = str(t.get("settle_source", ""))
                 out["nse" if s.startswith("NSE") else "bar_1529" if s.startswith("the 15:29") else
-                    "yahoo" if s.startswith("Yahoo") else "other"] += 1
+                    ("yahoo" if t.get("underlying") == BSE_INDEX else "yahoo_fallback") if s.startswith("Yahoo")
+                    else "other"] += 1
             elif dt.date.fromisoformat(t["expiry"]) <= today:
                 out["unsettled"] += 1
         return out
+
+    def fallback_settlements(self) -> list[dict]:
+        """Settled trades on an NSE index whose settlement did not come from NSE's file (the 15:29 bar, Yahoo, or anything
+        else): an incident to look at, never silently a clean result. [] for a spec that settles on the mean."""
+        if self.settlement != "official_close":
+            return []
+        return [t for t in self.trades() if t["settled"] and t.get("underlying") != BSE_INDEX
+                and not str(t.get("settle_source", "")).startswith("NSE")]
 
     def report(self) -> dict:
         rows, evs = [], self.events()
@@ -770,8 +782,8 @@ def render(rep: dict) -> str:
     src = rep.get("settle_sources") or {}
     if src and sum(src.values()):
         n = sum(src.values())
-        names = {"nse": "NSE's file", "bar_1529": "the 15:29 bar", "yahoo": "Yahoo's close", "other": "other",
-                 "unsettled": "waiting"}
+        names = {"nse": "NSE's file", "bar_1529": "the 15:29 bar (fallback)", "yahoo": "Yahoo's close (SENSEX, by design)",
+                 "yahoo_fallback": "Yahoo's close (fallback on an NSE index)", "other": "other", "unsettled": "waiting"}
         out += ["", f"**Settlement sources (v4 settles on the official close; {n} trades):** " + ", ".join(
             f"{names[k]} {v} ({v / n:.0%})" for k, v in src.items() if v)]
     if rep.get("unsettled"):
