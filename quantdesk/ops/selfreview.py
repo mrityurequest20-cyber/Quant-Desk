@@ -220,7 +220,7 @@ def check_sleeves(seller, day: dt.date, comparison: bool = False) -> list[Findin
                            "as a decision (the spec's exit.statistics_and_sources).",
                            "Check why NSE's file was missing or unreachable (a real 404, the index name not matching "
                            "INDEX_NAMES, a CDN lag), compare the settlement with NSE's published close for that day, and "
-                           "record whether the trade stands. Do not edit the ledger.", transient=False))
+                           "record the cause. The trade stays in the statistics and the verdict notes it. Do not edit the ledger.", transient=False))
     for t in seller.trades():
         if str(t.get("day", "")) == str(day) and t.get("quote_flags"):
             legs = "; ".join(f"{x['strike']:.0f}{x['right']}: {', '.join(x['flags'])} (spread {x['spread_pct']:.0%}"
