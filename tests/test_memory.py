@@ -111,7 +111,7 @@ def test_a_re_settlement_is_listed_but_not_counted_as_an_independent_experiment(
     assert s["specs"] == 5 and s["experiments"] == 4                  # v4 is not a fifth experiment
     assert s["resettlements"] == {"expiry_seller_v4": ["expiry_seller_v1", "expiry_seller_v2", "expiry_seller_v3"]}
     text = M.render(s, reg)
-    assert "expiry_seller_v4 re-settles expiry_seller_v1, expiry_seller_v2, expiry_seller_v3 on the same trades" in text
+    assert "expiry_seller_v4 re-settles expiry_seller_v1, expiry_seller_v2, expiry_seller_v3 on the same eves, strikes and fills, settled differently" in text
     assert "| expiry_seller_v4 (re-settlement) |" in text and "| expiry_seller_v3 |" in text
     older = M.summary(doc, reg[:3])                                    # before v4 exists nothing is marked
     assert older["experiments"] == 3 and older["resettlements"] == {} and "re-settles" not in M.render(older, reg[:3])

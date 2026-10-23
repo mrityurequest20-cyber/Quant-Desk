@@ -87,9 +87,10 @@ def similarity(a: dict, b: dict) -> float:
     return len(pa & pb) / len(pa | pb) if pa | pb else 1.0
 
 
-# A registered spec can't be edited, so a relation a spec only states in prose is recorded here. expiry_seller_v4 settles the
-# same eves, strikes and fills as v1-v3 on NSE's official close: a second reading of the same trades, not an independent
-# experiment, so it is listed beside the others but not counted as one (docs/prereg/expiry_seller_v4.json, `supersedes`).
+# A registered spec can't be edited, so a relation a spec only states in prose is recorded here. expiry_seller_v4 uses the same
+# eves, strikes and fills as v1-v3 and settles them differently (NSE's official close, and its own exercise STT): a second reading
+# of the same trade design, not an independent experiment, so it is listed beside the others but not counted as one
+# (docs/prereg/expiry_seller_v4.json, `supersedes`).
 RESETTLEMENTS = {"expiry_seller_v4": ("expiry_seller_v1", "expiry_seller_v2", "expiry_seller_v3")}
 
 
@@ -230,7 +231,7 @@ def render(s: dict, reg: list[dict]) -> str:
            f"{s['specs']} registered specs, {s['experiments']} distinct experiments (by method fingerprint), "
            f"{s['with_results']} with a recorded result. Duplicates: {s['duplicates'] or 'none'}. "
            f"History problems: {s['history_problems'] or 'none'}.", ""]
-    out += [f"{k} re-settles {', '.join(v)} on the same trades: listed, but not counted as an independent experiment."
+    out += [f"{k} re-settles {', '.join(v)} on the same eves, strikes and fills, settled differently: listed, but not counted as an independent experiment."
             for k, v in s.get("resettlements", {}).items()]
     out += ["", "| spec | registered | fingerprint | method | results |", "|---|---|---|---|---|"]
     mark = lambda name: " (re-settlement)" if name in s.get("resettlements", {}) else ""            # noqa: E731

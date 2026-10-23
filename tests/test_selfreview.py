@@ -262,6 +262,7 @@ def test_the_sleeve_fallback_finding_is_the_one_marked_once():
     found = SR.check_sleeves(FallbackSeller([quotes], {}), dt.date(2026, 10, 7))
     assert {x.key.split(":")[0]: x.once for x in found} == {"sleeve-fallback": True, "sleeve-quotes": False}
     assert "not filed again" in next(x for x in found if x.once).action
+    assert "comparison with NSE's published close" in next(x for x in found if x.once).action   # a bare close does not lift the hold
 
 
 def test_the_real_helper_asks_github_for_closed_issues():
@@ -281,4 +282,35 @@ def test_the_real_helper_asks_github_for_closed_issues():
             return R()
     gh = SR.GitHub("o/r", "token", session=Session())
     assert [i["number"] for i in gh.closed_issues()] == [1]            # a pull request is not an issue
-    assert calls == [("GET", "o/r/issues", {"labels": SR.LABEL, "state": "closed", "per_page": 100})]
+    assert calls == [("GET", "o/r/issues", {"labels": SR.LABEL, "state": "closed", "per_page": 100, "page": 1})]
+
+
+def test_closed_issues_reads_every_page_until_a_short_one():
+    pages = {1: [{"number": n, "body": ""} for n in range(100)], 2: [{"number": 100 + n, "body": ""} for n in range(30)]}
+    seen = []
+
+    class Session:
+        headers = {}
+
+        def request(self, method, url, **kw):
+            seen.append(kw["params"]["page"])
+
+            class R:
+                status_code, content = 200, b"x"
+
+                def json(self_inner):
+                    return pages.get(kw["params"]["page"], [])
+            return R()
+    got = SR.GitHub("o/r", "token", session=Session()).closed_issues()
+    assert len(got) == 130 and seen == [1, 2]                           # a full page asks for the next; a short one stops
+
+
+def test_an_unreadable_closed_list_does_not_stop_the_other_findings():
+    class Broken(ClosedAwareGitHub):
+        def closed_issues(self):
+            raise RuntimeError("GitHub GET /issues: 502")
+    gh, said = Broken(), []
+    fb = SR.Finding("sleeve-fallback:v4:T3", "data", "settled on a fallback", "d", "a", transient=False, once=True)
+    other = SR.Finding("tape-milestone:20", "research", "20 tape sessions", "d", "a", transient=False)
+    SR.sync(gh, [fb, other], dt.date(2026, 10, 27), say=said.append)
+    assert len(gh.issues) == 2 and any("could not list closed issues" in m for m in said)
