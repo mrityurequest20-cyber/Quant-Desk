@@ -154,7 +154,9 @@ class VolShadow:
 
 def pins(coef_path: Path) -> dict:
     """The inputs the protocol pins, as sha256 hex, recorded with every forecast: the coefficient file, and the code whose
-    change voids the count (harvol.py and the desk's own forecaster, quant.py). A value is None when it cannot be read."""
+    change voids the count: harvol.py, the desk's own forecaster quant.py, and volstudy.py (which builds the grid and the QLIKE).
+    The grading code (this file's _pooled, prereg.nw_t) is outside the pin: a change to it is a protocol amendment, not a restart.
+    A value is None when it cannot be read."""
     def sha(*paths):
         try:
             h = hashlib.sha256()
@@ -164,7 +166,7 @@ def pins(coef_path: Path) -> dict:
         except OSError:
             return None
     here = Path(__file__).parent
-    return {"coef": sha(coef_path), "code": sha(here / "harvol.py", here / "quant.py")}
+    return {"coef": sha(coef_path), "code": sha(here / "harvol.py", here / "quant.py", here.parent / "autolearn" / "volstudy.py")}
 
 
 def shadow_rows(events: pd.DataFrame) -> pd.DataFrame:
@@ -239,13 +241,27 @@ def _pooled(d: pd.DataFrame) -> dict:
     both = d[d["day"].isin(have[have].index)]
     per_all = both.groupby("day")["diff"].mean().sort_index()
     pin_of = both.groupby("day")["pin"].agg(lambda s: s.iloc[0] if s.nunique(dropna=False) == 1 else None).reindex(per_all.index)
-    run: list = []
-    if len(pin_of) and isinstance(pin_of.iloc[-1], str) and pin_of.iloc[-1].split(":")[0] == COEF_PIN:
-        for day, pin in reversed(list(pin_of.items())):
-            if pin != pin_of.iloc[-1]:
-                break
-            run.append(day)
-        run.reverse()
+    # Runs of consecutive sessions under one valid pin. A session with a bad or missing pin ends the run and starts an empty one.
+    runs: list[list] = []
+    cur: list = []
+    prev = None
+    for day, pin in pin_of.items():
+        if not (isinstance(pin, str) and pin.split(":")[0] == COEF_PIN):
+            if cur:
+                runs.append(cur)
+            cur, prev = [], None
+            runs.append([])
+            continue
+        if cur and pin != prev:
+            runs.append(cur)
+            cur = []
+        cur.append(day)
+        prev = pin
+    if cur:
+        runs.append(cur)
+    # The FIRST run that reaches the target is the one that counts: a change after an earned 60 cannot void it (the read may not
+    # have been taken yet). Until a run reaches it, the latest run counts, so a change restarts an unfinished count from zero.
+    run = next((r for r in runs if len(r) >= TARGET_SESSIONS), runs[-1] if runs else [])
     per = per_all.loc[run] if run else per_all.iloc[:0]
     out = {"sessions_both": int(len(per)), "sessions_excluded": int(len(per_all) - len(per)), "pooled": None}
     if len(per):
@@ -260,27 +276,54 @@ def _pooled(d: pd.DataFrame) -> dict:
     return out
 
 
+def _stored_row(journal):
+    with journal.lock:
+        return journal.db.execute("SELECT value FROM state WHERE key=?", (STATE_KEY,)).fetchone()
+
+
+def _insert_once(journal, rec: dict) -> bool:
+    """Write the read only if no row exists under the key, whatever it holds. True when this call wrote it."""
+    with journal.lock:
+        cur = journal.db.execute("INSERT OR IGNORE INTO state (key, value) VALUES (?, ?)", (STATE_KEY, json.dumps(rec)))
+        wrote = cur.rowcount == 1
+    journal.commit()
+    return wrote
+
+
 def read_once(journal, rep: dict, today: dt.date) -> dict:
     """The protocol's single read, kept: at the 60th counted session (or, if fewer than 60 by BACKSTOP, after it) the verdict is
     computed once, stored in the journal's state, and every later run shows that record without recomputing. `--since`, a new
-    session or a second run cannot change it. The record carries the pin it was made under."""
-    got = journal.get_state(STATE_KEY)
+    session or a second run cannot change it. The record carries the pin it was made under.
+
+    The seal fails closed: ANY existing row under the key means the read has been taken, whatever it holds (a damaged or emptied
+    record is reported as unreadable and is never overwritten). The write is INSERT OR IGNORE, so an earlier verdict can never be
+    replaced, and the verdict is also appended to the events table, which is append-only, as a history."""
+    row = _stored_row(journal)
+    if row is None:
+        pl, n = rep.get("pooled"), rep.get("sessions_both", 0)
+        if n >= TARGET_SESSIONS and pl:
+            ok = pl["mean_diff"] > 0 and pl["p_one_sided"] == pl["p_one_sided"] and pl["p_one_sided"] < 0.05
+            rec = {"read_on": str(today), "sessions": pl["sessions"], "mean_diff": pl["mean_diff"], "gain_pct": pl["gain_pct"],
+                   "nw_t": pl["nw_t"], "p_one_sided": pl["p_one_sided"], "verdict": "PASS" if ok else "NOT CONFIRMED",
+                   "coef_pin": COEF_PIN}
+        elif today > BACKSTOP:
+            rec = {"read_on": str(today), "sessions": int(n), "verdict": "NOT CONFIRMED (underpowered)", "coef_pin": COEF_PIN}
+        else:
+            return rep
+        if _insert_once(journal, rec):
+            journal.event(pd.Timestamp.now(tz="Asia/Kolkata"), "INFO", "quant", f"vol shadow primary read taken: {rec['verdict']}",
+                          {"vol_shadow_read": rec})
+            journal.commit()
+            rep["first_read"] = True
+        row = _stored_row(journal)                      # whoever won a race, the stored record is the one that counts
+    try:
+        got = json.loads(row[0]) if row else None
+    except ValueError:
+        got = None
     if isinstance(got, dict) and got.get("verdict"):
         rep["stored"] = got
-        return rep
-    pl, n = rep.get("pooled"), rep.get("sessions_both", 0)
-    if n >= TARGET_SESSIONS and pl:
-        ok = pl["mean_diff"] > 0 and pl["p_one_sided"] == pl["p_one_sided"] and pl["p_one_sided"] < 0.05
-        rec = {"read_on": str(today), "sessions": pl["sessions"], "mean_diff": pl["mean_diff"], "gain_pct": pl["gain_pct"],
-               "nw_t": pl["nw_t"], "p_one_sided": pl["p_one_sided"], "verdict": "PASS" if ok else "NOT CONFIRMED",
-               "coef_pin": COEF_PIN}
-    elif today > BACKSTOP:
-        rec = {"read_on": str(today), "sessions": int(n), "verdict": "NOT CONFIRMED (underpowered)", "coef_pin": COEF_PIN}
     else:
-        return rep
-    journal.set_state(STATE_KEY, rec)
-    journal.commit()
-    rep["stored"], rep["first_read"] = rec, True
+        rep["stored_unreadable"] = True
     return rep
 
 
@@ -338,21 +381,31 @@ def render(rep: dict) -> str:
          "Shadow WARNs by reason (sessions or index-sessions with no gradable record): "
          + ("; ".join(f"{n} x {why}" for why, n in rep.get("skips", {}).items()) or "none") + ".", ""]
     st, n = rep.get("stored"), rep.get("sessions_both", 0)
-    if st:
-        gp = "n/a" if st.get("gain_pct") is None else format(st["gain_pct"], "+.1f") + "%"
-        body = (f"{st['sessions']} sessions, mean QLIKE gain {st['mean_diff']:+.4f} ({gp}), NW t {st['nw_t']:+.2f}, one-sided p "
-                f"{st['p_one_sided']:.3f} (Student t): " if "mean_diff" in st else f"{st['sessions']} sessions counted: ")
-        L += [f"**Primary statistic, READ ONCE on {st['read_on']}** (stored in the journal; every later run shows this record and "
-              f"does not recompute it): {body}**{st['verdict']}** (PASS needs a positive mean and p < 0.05).", ""]
+
+    def num(x, spec):
+        return format(x, spec) if isinstance(x, (int, float)) and x == x else "n/a"
+    if rep.get("stored_unreadable"):
+        L += ["**The single read was already taken, but its stored record is unreadable or incomplete.** It is NOT retaken. "
+              f"Look at the journal's state row `{STATE_KEY}` and the `vol shadow primary read taken` event for the verdict.", ""]
+    elif st:
+        gp = num(st.get("gain_pct"), "+.1f") + ("%" if isinstance(st.get("gain_pct"), (int, float)) else "")
+        body = (f"{st.get('sessions', '?')} sessions, mean QLIKE gain {num(st.get('mean_diff'), '+.4f')} ({gp}), NW t "
+                f"{num(st.get('nw_t'), '+.2f')}, one-sided p {num(st.get('p_one_sided'), '.3f')} (Student t): "
+                if "mean_diff" in st else f"{st.get('sessions', '?')} sessions counted: ")
+        L += [f"**Primary statistic, READ ONCE on {st.get('read_on', '?')}** (stored in the journal; every later run shows this record "
+              f"and does not recompute it): {body}**{st['verdict']}** (PASS needs a positive mean and p < 0.05).", ""]
     elif n >= TARGET_SESSIONS:
         L += [f"Primary statistic: {n} sessions are counted, so the single read is due; it is taken and stored by "
               "`intraday vol-shadow` on the live journal.", ""]
     else:
         L += [f"Primary statistic (the protocol's): withheld until {TARGET_SESSIONS} sessions with both indices are graded "
               f"({n} so far; backstop {BACKSTOP:%d %b %Y}). The per-cell DM t below is withheld too.", ""]
+    if st:
+        L += ["The per-cell tables below keep updating on every graded session and are descriptive only: they are not the test, "
+              "and the verdict above does not change.", ""]
     if rep.get("sessions_excluded"):
         L += [f"{rep['sessions_excluded']} graded session(s) do not count: recorded under a different pin (a refit, or a change to "
-              "harvol.py / quant.py, restarts the count) or without one.", ""]
+              "harvol.py / quant.py / volstudy.py, restarts the count) or without one.", ""]
     ready = bool(st)
     if not rep["by"]:
         return "\n".join(L + ["Nothing to score yet."]) + "\n"

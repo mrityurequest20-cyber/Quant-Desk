@@ -639,6 +639,21 @@ def test_a_pin_change_restarts_the_count_and_unpinned_or_wrongly_pinned_sessions
     assert volshadow._pooled(pd.DataFrame(mixed))["sessions_both"] == 0              # the two indices disagree on the pin
 
 
+def test_an_earned_60_survives_a_later_pin_change_but_an_unfinished_count_restarts():
+    """research-reviewer MEDIUM-1: nothing schedules the read, so a change after session 60 but before the first run voided it."""
+    other = f"{volshadow.COEF_PIN}:{'d' * 64}"
+    _, a = _sessions(60, pin=GOOD_PIN)
+    _, b = _sessions(15, start=dt.date(2027, 1, 5), pin=other)                         # the code pin changes after session 60
+    out = volshadow._pooled(pd.DataFrame(a + b))
+    assert out["sessions_both"] == 60 and out["sessions_excluded"] == 15 and out["pooled"]["sessions"] == 60
+    _, short = _sessions(40, pin=GOOD_PIN)
+    out = volshadow._pooled(pd.DataFrame(short + b))                                   # only 40 before the change: restart
+    assert out["sessions_both"] == 15 and out["sessions_excluded"] == 40
+    _, c = _sessions(8, start=dt.date(2027, 3, 1), pin=GOOD_PIN)                       # and a return to the first pin is a new run
+    out = volshadow._pooled(pd.DataFrame(short + b + c))
+    assert out["sessions_both"] == 8 and out["sessions_excluded"] == 55
+
+
 def test_a_session_needs_all_four_horizons_for_both_indices():
     """research-reviewer MEDIUM-3: a report run at 11:00 counted 30m and 60m only."""
     _, rows = _sessions(12)
@@ -670,19 +685,9 @@ def test_the_p_value_is_students_t_not_the_liberal_normal_tail():
     assert pl["p_one_sided"] > float(norm.sf(pl["nw_t"])) > 0                           # more conservative than the normal tail
 
 
-class _Memory:
-    """The journal state the one read is kept in."""
-    def __init__(self):
-        self.s, self.commits = {}, 0
-
-    def get_state(self, k, default=None):
-        return self.s.get(k, default)
-
-    def set_state(self, k, v):
-        self.s[k] = v
-
-    def commit(self):
-        self.commits += 1
+def _journal(tmp_path, name="seal.db"):
+    from quantdesk.journal.journal import Journal
+    return Journal(tmp_path / name)
 
 
 def _rep(n, diff=0.5, worse=False):
@@ -693,34 +698,66 @@ def _rep(n, diff=0.5, worse=False):
     return {"forecasts": 2 * n, "scored": 8 * n, "sessions": n, "by": {}, "skips": {}, **out}
 
 
-def test_the_primary_read_is_taken_once_stored_and_never_recomputed():
-    j = _Memory()
+def _reads(j):
+    ev = j.events()
+    return int(ev["message"].str.contains("vol shadow primary read taken", regex=False).sum()) if len(ev) else 0
+
+
+def test_the_primary_read_is_taken_once_stored_and_never_recomputed(tmp_path):
+    j = _journal(tmp_path)
     early = volshadow.read_once(j, _rep(59), dt.date(2026, 12, 20))
-    assert "stored" not in early and j.s == {}                                       # before 60: no read, nothing kept
+    assert "stored" not in early and j.get_state(volshadow.STATE_KEY) is None            # before 60: no read, nothing kept
     first = volshadow.read_once(j, _rep(60), dt.date(2026, 12, 21))
     rec = first["stored"]
     assert first["first_read"] and rec["verdict"] == "PASS" and rec["sessions"] == 60 and rec["coef_pin"] == volshadow.COEF_PIN
-    assert j.s[volshadow.STATE_KEY] == rec and j.commits == 1
-    again = volshadow.read_once(j, _rep(75, worse=True), dt.date(2027, 2, 1))       # more sessions, and now they look terrible
-    assert again["stored"] == rec and "first_read" not in again and j.commits == 1   # the stored record, not a recomputation
+    assert j.get_state(volshadow.STATE_KEY) == rec and _reads(j) == 1                    # the verdict is also in the append-only events
+    again = volshadow.read_once(j, _rep(75, worse=True), dt.date(2027, 2, 1))           # more sessions, and now they look terrible
+    assert again["stored"] == rec and "first_read" not in again and _reads(j) == 1       # the stored record, not a recomputation
     text = volshadow.render(again)
     assert "READ ONCE on 2026-12-21" in text and "**PASS**" in text and "does not recompute it" in text
+    assert "descriptive only" in text
 
 
-def test_a_failing_read_is_stored_as_not_confirmed():
-    j = _Memory()
+def test_a_failing_read_is_stored_as_not_confirmed(tmp_path):
+    j = _journal(tmp_path)
     rec = volshadow.read_once(j, _rep(60, worse=True), dt.date(2026, 12, 21))["stored"]
     assert rec["verdict"] == "NOT CONFIRMED" and rec["mean_diff"] < 0
     assert "**NOT CONFIRMED**" in volshadow.render({**_rep(60), "stored": rec})
 
 
-def test_the_backstop_stores_not_confirmed_underpowered_after_31_march():
-    j = _Memory()
-    assert "stored" not in volshadow.read_once(j, _rep(40), dt.date(2027, 3, 31))     # the backstop day itself is not past it
+def test_the_backstop_stores_not_confirmed_underpowered_after_31_march(tmp_path):
+    j = _journal(tmp_path)
+    assert "stored" not in volshadow.read_once(j, _rep(40), dt.date(2027, 3, 31))        # the backstop day itself is not past it
     rec = volshadow.read_once(j, _rep(40), dt.date(2027, 4, 1))["stored"]
     assert rec["verdict"] == "NOT CONFIRMED (underpowered)" and rec["sessions"] == 40
     assert "**NOT CONFIRMED (underpowered)**" in volshadow.render({**_rep(40), "stored": rec})
-    assert volshadow.read_once(j, _rep(60), dt.date(2027, 5, 1))["stored"] == rec     # and it is final
+    assert volshadow.read_once(j, _rep(60), dt.date(2027, 5, 1))["stored"] == rec        # and it is final
+
+
+@pytest.mark.parametrize("value", ["[1, 2]", '"PASS"', "null", "{}", '{"verdict": ""}', "{not json", '{"verdict": "PASS"}'])
+def test_the_seal_fails_closed_whatever_a_damaged_record_holds(tmp_path, value):
+    """risk-compliance MEDIUM: null, {}, a list or a string let the read be retaken, and INSERT OR REPLACE erased the verdict."""
+    j = _journal(tmp_path)
+    with j.lock:
+        j.db.execute("INSERT INTO state (key, value) VALUES (?, ?)", (volshadow.STATE_KEY, value))
+    j.commit()
+    rep = volshadow.read_once(j, _rep(60), dt.date(2026, 12, 21))
+    assert "first_read" not in rep and _reads(j) == 0                                    # NOT retaken
+    with j.lock:
+        assert j.db.execute("SELECT value FROM state WHERE key=?", (volshadow.STATE_KEY,)).fetchone()[0] == value   # untouched
+    text = volshadow.render(rep)                                                         # and rendering never crashes
+    assert ("unreadable or incomplete" in text) == bool(rep.get("stored_unreadable"))
+    if value == '{"verdict": "PASS"}':                                                   # a bare verdict is readable, with n/a for the rest
+        assert rep["stored"]["verdict"] == "PASS" and "READ ONCE" in text and "? sessions counted" in text
+    else:
+        assert rep["stored_unreadable"] is True
+
+
+def test_an_earlier_verdict_can_never_be_overwritten(tmp_path):
+    j = _journal(tmp_path)
+    assert volshadow._insert_once(j, {"verdict": "PASS", "read_on": "2026-12-21", "sessions": 60}) is True
+    assert volshadow._insert_once(j, {"verdict": "NOT CONFIRMED", "read_on": "2027-02-01", "sessions": 75}) is False   # a lost race
+    assert j.get_state(volshadow.STATE_KEY)["verdict"] == "PASS"
 
 
 def test_the_pins_are_the_sha256_of_the_files_the_protocol_names(tmp_path):
@@ -730,7 +767,8 @@ def test_the_pins_are_the_sha256_of_the_files_the_protocol_names(tmp_path):
     got = volshadow.pins(f)
     assert got["coef"] == hashlib.sha256(b"coefficients").hexdigest()
     here = Path(volshadow.__file__).parent
-    assert got["code"] == hashlib.sha256((here / "harvol.py").read_bytes() + (here / "quant.py").read_bytes()).hexdigest()
+    assert got["code"] == hashlib.sha256((here / "harvol.py").read_bytes() + (here / "quant.py").read_bytes()
+                                         + (here.parent / "autolearn" / "volstudy.py").read_bytes()).hexdigest()   # the forecast pipeline is pinned too
     assert volshadow.pins(tmp_path / "missing.json")["coef"] is None                 # unreadable: recorded as None, never counted
     assert hashlib.sha256((here / "vol_har_v1.json").read_bytes()).hexdigest() == volshadow.COEF_PIN
 
