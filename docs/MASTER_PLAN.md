@@ -76,7 +76,7 @@ plan adds (section 3). Items marked TO VERIFY are in section 12.
 | # | Link | How it fails | Detected today? | Watchdog check | Action / owner |
 |---|---|---|---|---|---|
 | 1 | **Trading calendar** (`calendar.holidays`, `holiday_years: [2026]`) | The 2027 list is not entered: from 1 Jan 2027 the desk treats NSE holidays as trading days (VERIFIED: only 2026 is complete) | Partly (a holiday-year guard exists) | W9 calendar | Enter the 2027 NSE list from the circular **by 15 Dec 2026** (owner or agent) |
-| 2 | **Cloudflare Worker** (the alarm clock; 4 cron triggers; free plan allows 5) | Not deployed from `main`, trigger lost, plan limit, Cloudflare outage | **No** | W1, W2 | Owner confirms 4 triggers and last deploy (section 12) |
+| 2 | **Cloudflare Worker** (the alarm clock and the watchdog; 5 cron triggers, the free plan's limit; VERIFIED 24 Oct) | Not deployed from `main`, trigger lost, plan limit, Cloudflare outage | **No** | W1, W2 | Owner confirms 4 triggers and last deploy (section 12) |
 | 3 | **`GH_DISPATCH_TOKEN`** (Worker's key to start workflows) | Expires or is revoked: the Worker silently stops dispatching and the desk relies on GitHub's late cron | **No** | W7 expiry register | Owner records the expiry date; rotate 14 days before |
 | 4 | **GitHub cron fallbacks** (`live.yml` 08:52 IST, `scheduler.yml` every 10 min, `collect-wide` 15:25/15:45 IST) | 4.5 to 7 hours late (VERIFIED in the audit and in `worker.js` comments) | Partly (scheduler logic) | W1 | Fallback only; Worker is primary |
 | 5 | **GitHub Actions platform and runners** | Queue delay, outage, concurrency group `live-desk` blocking | **No** | W1, W9 | Public repo: standard-runner minutes are not a constraint (VERIFIED: `private: false`); TO VERIFY the account's Actions policy |
@@ -180,6 +180,7 @@ is what covers that.
 | NSE | Public chain, bhavcopy (daily F&O, UDiFF), index closes, indices | Bhavcopy 2019+ | `data`, `daily-history`, `collect-wide` | HTML-200 detection, retries, findings |
 | BSE | SENSEX closes | Daily | via Yahoo | Labelled by design |
 | Vendor minutes (already held) | Index minutes to Feb 2023 | 2007 to Feb 2023 | locked HAR study | Self-reported digests (disclosed) |
+| Kaggle index minutes (owner, 24 Oct) | NIFTY, BANKNIFTY and INDIA VIX minutes | 2015 to 14 May 2026; realised variance matches the vendor set (median ratio 1.000); VIX has 2,547 bad rows in 2018 to 2019; licence unknown | `docs/data/INTAKE_2026-10-24.md` | `external_unverified` until imported through the validation; nothing public until the licence allows |
 | Stock minutes and chains | Top F&O stocks | From Oct 2026 | `collect-wide`, `kotak-backfill` | Quarterly shards; health check |
 | News RSS | Headlines for the stand-aside gate | Live only | `live` | Deadline clamp |
 | Teacher lessons | Advisory text | Nightly | `live` (post-close) | Advisory only; never gates a trade |
@@ -413,10 +414,10 @@ budget; milestone table (due, days late). Delivered by the Saturday digest (W8) 
 | Phase | Window | In scope (and nothing else) | Exit test |
 |---|---|---|---|
 | **P0 Protect the evidence** | 23 Oct to 6 Nov | Finish the merge chain; verify the Worker, token and Kotak status (owner); build and deploy the watchdog (section 3); first observed start on Mon 26 Oct; first v4 settlement and HAR sessions; first weekly learning run (Sat 24 Oct); enter token expiry dates; owner decisions listed in section 12 | 10 consecutive trading days with every session run and alerted-on if not (a miss restarts the count, so 6 Nov is an estimate, not a deadline); watchdog drill: a deliberately stopped workflow produces a push and an email within 15 minutes |
-| **P1 Trust the record (S1 to S3)** | 9 Nov to mid Jan | **Re-triage the audit's 115 findings against `main` first (two weeks)** so we stop fixing what is fixed; evidence integrity and provenance (append-only or anchored journal, one clock); data-validity layer and quarantine; crash, restart and order-state safety | A replayed session reproduces its decisions exactly from persisted evidence; zero zero-VIX-style bars recorded as valid over 5 sessions; restart tests in CI. **S1 to S3 exit in mid January (the first part of G1; G1 itself needs S0 to S6, see April)** |
+| **P1 Trust the record (S1 to S3)** | **24 Oct** to mid Jan | **Re-triage the audit's 115 findings against `main` first (two weeks)** so we stop fixing what is fixed; evidence integrity and provenance (append-only or anchored journal, one clock); data-validity layer and quarantine; crash, restart and order-state safety | A replayed session reproduces its decisions exactly from persisted evidence; zero zero-VIX-style bars recorded as valid over 5 sessions; restart tests in CI. **S1 to S3 exit in mid January (the first part of G1; G1 itself needs S0 to S6, see April)** |
 | **P2 Execution realism and live-readiness (S8, S9)** | Dec to Mar | Depth recording if available; TCA on all fills; depth-capped fills and one cost source; order state machine on a fake broker; pre-trade checks; reconciliation; kill-switch drill; the dry-run mode | S9 fake-broker tests pass; monthly TCA table; modelled versus real cost within a stated band. **G3 around April or later** |
 | **P3 Strategy factory and scope ladder** | Continuous from Nov (ladder starts after the P0 exit) | Section 5 cadence; first queue; the builder (5a); one index and two or three stocks admitted a month (4a); monthly review | One idea closed with a written lesson every month; zero repeats (fingerprint); one admission report per instrument; no ceiling raised |
-| **P4 Models** | Platform from Nov; models from mid Jan | [ML_ROADMAP.md](ML_ROADMAP.md) Phase 0, then M1 to M8 as data allows | Each model: spec, locked test, shadow verdict. **ML-ready bar = S1 to S3 exit tests plus the discipline of section 0** |
+| **P4 Models** | **Platform (ML Phase 0) from 24 Oct**; models from mid Jan | [ML_ROADMAP.md](ML_ROADMAP.md) Phase 0, then M1 to M8 as data allows | Each model: spec, locked test, shadow verdict. **ML-ready bar = S1 to S3 exit tests plus the discipline of section 0** |
 | **P5 Institutional controls** | Jan to Apr | S4 to S7: honest UI and status, e2e deterministic trade test, observability complete, statistical hygiene (placebo and CI gate, demotion); stress/scenario report; margin monitor; daily digest; restore drill; security review (public repo decision, secret rotation); daily pack | **G2 around March.** Restore drill passes; e2e test asserts every row |
 | **P6 Unattended loop and soak** | Apr to Jul | Four-week unattended run; auto-demotion drill; second independent audit; 90 clean paper sessions | Drill passed; 90 clean sessions |
 | **P7 Acceptance** | 30 Jun, final 31 Aug | Acceptance against [MASTER_PLAN_JUNE_2027.md](MASTER_PLAN_JUNE_2027.md) section 1, then the handover report | Signed checklist |
@@ -446,7 +447,7 @@ order applies and nothing else is added.
 
 **November 2026: Eyes open.**
 - *Built:* the watchdog (section 3) with push and email; the merge queue finished (#87, #93, #88, #97 to #99); the audit's 115
-  findings re-triaged against `main` so we know what is still open; ML Phase 0 started (dataset builder skeleton); the instrument
+  findings re-triaged against `main` so we know what is still open; ML Phase 0 under way since 24 Oct (work plan in [ML_PHASE0.md](ML_PHASE0.md); the data holes intake in [data/INTAKE_2026-10-24.md](data/INTAKE_2026-10-24.md)); the instrument
   registry designed.
 - *Strategy builder:* SB1 idea-card template and the spec template written down; the first queue item (L1 regime caveat) drafted.
 - *Scope:* after the P0 exit, SENSEX enters Shadow (section 4a) and its admission report is written; the stock quote record is designed; the **correlated-exposure cap** is built and risk-compliance reviewed, so that it is in force before SENSEX, the third index, reaches Paper in December. RELIANCE, HDFCBANK, ICICIBANK enter Shadow once the stock quote record has 20 clean sessions (target December).
@@ -579,14 +580,14 @@ already built is the hard part: a desk that will not lie to itself.
 
 Forex trading, and US and European options (Tier 4 stays evaluation only until the P1 and P2 exits); commodities are evaluated in March under section 4a and traded only if that memo says go; sequence
 models; buying historical data; a second broker; a web UI redesign beyond S4's honesty fixes; any new strategy family before the
-three queued ones are closed; real-money anything; a tick-by-tick **Live Tape** phone view (parked by the owner, 23 Oct: it would add a Durable Object, new secrets and an engine thread for no trading benefit; the real-time question is answered by measuring data freshness and source share instead); Kotak's WebSocket stream (needs the daily TOTP and MPIN login, so it waits for the live-readiness work in section 6).
+three queued ones are closed; real-money anything; **Hugging Face and any pre-trained or hosted model** (parked by the owner, 23 Oct: everything stays home-built; revisit only after the P4 models have earned their gates); a tick-by-tick **Live Tape** phone view (parked by the owner, 23 Oct: it would add a Durable Object, new secrets and an engine thread for no trading benefit; the real-time question is answered by measuring data freshness and source share instead); Kotak's WebSocket stream (needs the daily TOTP and MPIN login, so it waits for the live-readiness work in section 6).
 
 ---
 
 ## 12. Owner checklist and open verifications (what only you can do, and by when)
 
 **By Monday 26 Oct (before the first forward sessions):**
-1. Cloudflare dashboard: confirm the `quant-desk` Worker shows **4 cron triggers** and was deployed from `main` after PR 92 (a red "Workers Builds" check on PRs is a different thing).
+1. ~~Cloudflare dashboard: confirm the `quant-desk` Worker shows 4 cron triggers and was deployed from `main` after PR 92.~~ **Done 23 Oct (4 triggers, deployed after PR 92); after the watchdog merged it shows 5.** (A red "Workers Builds" check on PRs is a different thing.)
 2. Record **`GH_DISPATCH_TOKEN` expiry** and its scope (it should have only what the Worker needs).
 3. Kotak: the desk needs only the Trade API **consumer key** (no TOTP or MPIN). Note any expiry date the Neo app shows for the application; the 23 Oct session used the Kotak chain, so the key works. (`GH_DISPATCH_TOKEN` has no expiry, so it needs no register entry.)
 4. ~~Add `Learnbot guard` as a required check on `main`.~~ **Done by the owner, 23 Oct 2026.**
@@ -608,7 +609,7 @@ three queued ones are closed; real-money anything; a tick-by-tick **Live Tape** 
 - A veto on any instrument in the ladder (section 4a) before its month; otherwise the admission report decides.
 - Whether to buy any data later (out of scope for now).
 
-**TO VERIFY at build or on first use (I will report each):** BSE quotes and expiry handling for SENSEX and BANKEX; whether the broker serves commodity options, futures and minutes, and how an evening session would run; the broker's quote-call budget and the live job's runtime with more underlyings; (VERIFIED 23 Oct: the published JSON carries `ts`, `feed` and `halted` under `state.heartbeat`); that the Actions bot (not a personal token) produces a GitHub email and app push; whether Kotak's API exposes market depth, and whether it documents a pre-order validation call (using one would need an `AUTONOMY.md` amendment); what happens at the live-job hand-off over five production sessions; that `chain-archive` covers every session before artifacts expire; that the Worker still proxies the published site (the audit says it did); ntfy throttling from a shared Cloudflare address; the Actions policy on the account.
+**TO VERIFY at build or on first use (I will report each):** BSE quotes and expiry handling for SENSEX and BANKEX; whether the broker serves commodity options, futures and minutes, and how an evening session would run; the broker's quote-call budget and the live job's runtime with more underlyings; (VERIFIED 23 Oct: the published JSON carries `ts`, `feed` and `halted` under `state.heartbeat`); (VERIFIED 24 Oct: the Actions bot's issue notifies the owner); whether Kotak's API exposes market depth, and whether it documents a pre-order validation call (using one would need an `AUTONOMY.md` amendment); what happens at the live-job hand-off over five production sessions; that `chain-archive` covers every session before artifacts expire; that the Worker still proxies the published site (the audit says it did); ntfy throttling from a shared Cloudflare address; the Actions policy on the account.
 
 ---
 
