@@ -307,6 +307,21 @@ def _similar(a: str, b: str) -> bool:
     return len(ta & tb) / len(ta | tb) >= 0.55
 
 
+_FETCH_TIMEOUT_S = 8                                  # the per-read timeout of a feed fetch
+DEADLINE_DEFAULT_S = 6.0
+
+
+def _deadline(raw) -> float:
+    """intraday.news.deadline_s: how long a refresh may hold up the minute step. Anything that is not a number between
+    0.5 s and the per-read timeout falls back to the default, so a config typo can neither switch the news off (0, a
+    negative, nan) nor stop the session starting. Below the read timeout, a feed that answers in time is not dropped."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return DEADLINE_DEFAULT_S
+    return v if 0.5 <= v <= _FETCH_TIMEOUT_S else DEADLINE_DEFAULT_S
+
+
 class NewsDesk:
     """Holds the day's headlines, fetches new ones, and summarises them per underlying."""
 
@@ -319,7 +334,7 @@ class NewsDesk:
         self.window = nc.get("window_min", 120)
         self.min_relevance = nc.get("min_relevance", 2.0)
         self.breaking_min = nc.get("breaking_stand_aside_min", 15)
-        self.deadline_s = float(nc.get("deadline_s", 4.0))   # the longest a refresh holds up the minute step
+        self.deadline_s = _deadline(nc.get("deadline_s"))      # the longest a refresh holds up the minute step
         self.fetch = fetch or self._http
         self.items: dict[str, NewsItem] = {}
         self.novelty = nlp.Novelty()
@@ -334,7 +349,7 @@ class NewsDesk:
 
     def _http(self, url: str) -> str:
         import requests
-        r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 (QuantDesk news reader)",
+        r = requests.get(url, timeout=_FETCH_TIMEOUT_S, headers={"User-Agent": "Mozilla/5.0 (QuantDesk news reader)",
                                                  "Accept": "application/rss+xml, application/xml, text/xml, */*"})
         r.raise_for_status()
         return r.text
@@ -358,7 +373,7 @@ class NewsDesk:
         futs = [pool.submit(one, src) for src in self.sources]
         wait(futs, timeout=self.deadline_s)
         pool.shutdown(wait=False, cancel_futures=True)
-        results = [f.result() if f.done() else (src, [], TimeoutError(f"no answer within {self.deadline_s:g}s"))
+        results = [f.result() if f.done() and not f.cancelled() else (src, [], TimeoutError(f"no answer within {self.deadline_s:g}s"))
                    for src, f in zip(self.sources, futs)]
         for src, items, exc in results:
             self.health[src["name"]] = f"fail {str(exc)[:80]}" if exc else f"ok {len(items)}"

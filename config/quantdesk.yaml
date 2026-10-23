@@ -116,7 +116,9 @@ intraday:
   news:                            # live headlines (RSS): tone as evidence, stand aside after breaking news
     enabled: true
     refresh_min: 2                 # 10 plain RSS GETs per refresh (was 4 min)
-    deadline_s: 4                  # a refresh waits at most this long (all feeds in parallel); a slower feed is skipped
+    deadline_s: 6                  # a refresh waits at most this long (all feeds in parallel); a slower feed is skipped.
+                                   # 0.5-8 (the per-read timeout is 8); outside that, or not a number: 6. Kept near the read
+                                   # timeout on purpose: a feed dropped here is breaking news the stand-aside gate cannot see
     window_min: 120                # stories older than this don't count
     half_life_min: 45              # recency weighting of the tone
     min_relevance: 2.0             # keyword relevance to count for an underlying

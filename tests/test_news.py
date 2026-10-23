@@ -210,3 +210,14 @@ def test_a_slow_feed_cannot_hold_up_the_minute_step(cfg):
     assert [x.title for x in fresh] == ["Nifty 50 rises on bank gains"]
     assert nd.health["S"].startswith("fail") and "no answer within" in nd.health["S"]
     assert all(nd.health[f"F{i}"].startswith("ok") for i in range(9))
+
+
+def test_a_bad_deadline_cannot_switch_the_news_off_or_stop_the_session():
+    """Review of #90 (F2): deadline_s outside 0.5..8 s, nan/inf or not a number falls back to the default; real values
+    in range are kept. (0 or a negative would otherwise drop every feed as 'no answer'; a string would fail startup.)"""
+    from quantdesk.intraday.news import DEADLINE_DEFAULT_S, _deadline
+    for bad in (0, -3, 0.1, 9, 1e9, float("nan"), float("inf"), "abc", None, [], {}):
+        assert _deadline(bad) == DEADLINE_DEFAULT_S, bad
+    for ok in (0.5, 4, "6", 7.5, 8):
+        assert _deadline(ok) == float(ok)
+    assert DEADLINE_DEFAULT_S < 8                                    # under the per-read timeout, so the step is still bounded
