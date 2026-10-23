@@ -98,7 +98,8 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 def test_the_heartbeat_check_reads_age_halt_and_feed_and_survives_a_bad_site(tmp_path):
     out = _node(tmp_path, HEAD + r"""
 const hb = (minAgo, extra = {}) => ({ ts: new Date(IST("2026-10-23T09:30:00") - minAgo * 60000 + 19800000 - 19800000).toISOString().replace("T", " ").replace("Z", "+00:00"), halted: false, feed: "kotak", ...extra });
-const cases = { fresh: hb(3), warm: hb(15), stale: hb(25), halted: hb(2, { halted: true }), yahoo: hb(2, { feed: "yahoo" }), missing: undefined, noTs: {} };
+const cases = { fresh: hb(3), warm: hb(15), stale: hb(25), halted: hb(2, { halted: true }), yahoo: hb(2, { feed: "yahoo" }), mixedOk: hb(2, { feed: "kotak+yahoo (190 of 570 polls from Yahoo)" }),
+  mixedBad: hb(2, { feed: "kotak+yahoo (400 of 570 polls from Yahoo)" }), missing: undefined, noTs: {} };
 out.cases = {};
 for (const [k, v] of Object.entries(cases)) {
   const r = await at("2026-10-23T09:30:00", env(), { hb: v });
@@ -114,6 +115,8 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
     assert c["stale"]["alerts"] == ["P1 W2 Stale heartbeat"] and c["stale"]["push"] == 1 and c["stale"]["email"] == 1
     assert c["halted"]["alerts"] == ["P1 W2 Desk halted"]
     assert c["yahoo"] == {"alerts": ["P2 W2 Feed fell back"], "push": 1, "email": 0}          # P2: push only
+    assert c["mixedOk"]["alerts"] == []                                            # the real label on 23 Oct: a third from Yahoo is normal
+    assert c["mixedBad"]["alerts"] == ["P2 W2 Feed mostly Yahoo"]
     assert c["missing"]["alerts"] == ["P2 W2 Heartbeat unreadable"] and c["noTs"]["alerts"] == ["P2 W2 Heartbeat unreadable"]
     assert out["down"]["alerts"] == ["P2 W2 Watchdog could not run a check"] and out["down"]["email"] == 0   # blind is reported, not silent
 
@@ -316,3 +319,15 @@ def test_the_alert_workflow_is_least_privilege_and_never_expands_inputs_into_a_s
     script = steps[0]["run"]
     assert "--assignee" in script and "watchdog-key" in script and "gh issue comment" in script   # notifies the owner; one issue per check per day
     assert "exit 1" in script                                                      # bad severity/day/check is refused
+
+
+@NODE
+def test_the_real_heartbeat_timestamp_format_parses(tmp_path):
+    """Copied from the published data.json on 23 Oct 2026: pandas writes microseconds and an IST offset with a space, not a T."""
+    out = _node(tmp_path, HEAD + r"""
+out.real = W.parseTs("2026-10-23 15:30:04.402768+05:30");
+out.expect = Date.parse("2026-10-23T15:30:04.402+05:30");
+out.bad = [W.parseTs(null), W.parseTs("nonsense"), W.parseTs(12345)].map((x) => Number.isNaN(x));
+console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
+""")
+    assert out["real"] == out["expect"] and out["bad"] == [True, True, True]

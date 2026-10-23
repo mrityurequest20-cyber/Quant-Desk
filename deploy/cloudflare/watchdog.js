@@ -22,6 +22,7 @@ const FETCH_MS = 8000;                       // no read or send may hold a firin
 // The published heartbeat is only as fresh as the publish cadence (live.yml republishes every 6 minutes) plus a Pages build and CDN
 // lag, so a healthy desk can show a heartbeat well over 10 minutes old. The limit is measured in the drill; until then it is wide.
 const HEARTBEAT_MAX_MIN = 20;
+const YAHOO_SHARE_MAX = 0.5;                 // a normal day was 190 of 570 (33%); more than half is the real feed failing
 
 // NSE trading holidays, copied from config/quantdesk.yaml `calendar.holidays` (a test fails if they differ). A year whose
 // list is not entered is not known: its weekdays are treated as trading days, as the desk does, and W9 asks for the list.
@@ -115,9 +116,18 @@ async function w2Heartbeat(c) {
 		out.push({ sev: "P1", check: "W2", title: "Desk halted",
 			body: "The desk reports halted. Clearing a halt is the owner's decision (clear-halt workflow).", link: "" });
 	}
-	if (typeof hb.feed === "string" && hb.feed && !/kotak/i.test(hb.feed)) {
-		out.push({ sev: "P2", check: "W2", title: "Feed fell back",
-			body: `The desk's live feed is "${ascii(hb.feed, 40)}", not Kotak.`, link: "" });
+	// The label is "kotak" when all is well, "kotak+yahoo (190 of 570 polls from Yahoo)" when some polls fell back (VERIFIED on the
+	// published data.json, 23 Oct: about a third on a normal day), and has no "kotak" at all when the real feed is gone.
+	if (typeof hb.feed === "string" && hb.feed) {
+		const m = /\((\d+) of (\d+) polls from yahoo\)/i.exec(hb.feed);
+		const share = m && Number(m[2]) > 0 ? Number(m[1]) / Number(m[2]) : 0;
+		if (!/kotak/i.test(hb.feed)) {
+			out.push({ sev: "P2", check: "W2", title: "Feed fell back",
+				body: `The desk's live feed is "${ascii(hb.feed, 60)}", not Kotak.`, link: "" });
+		} else if (share > YAHOO_SHARE_MAX) {
+			out.push({ sev: "P2", check: "W2", title: "Feed mostly Yahoo",
+				body: `The desk's live feed is "${ascii(hb.feed, 60)}": more than ${Math.round(YAHOO_SHARE_MAX * 100)}% of polls came from Yahoo.`, link: "" });
+		}
 	}
 	return out;
 }

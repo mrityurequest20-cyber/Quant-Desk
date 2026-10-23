@@ -14,7 +14,7 @@ key, a journal value or a position.
 | Check | When | Alert |
 |---|---|---|
 | W1 desk started | 09:10 | **P1** no `Live paper desk` run exists today |
-| W2 heartbeat | 09:30, 11:00, 13:00, 15:00 | **P1** heartbeat older than 20 minutes (the site is republished every 6 minutes plus Pages lag; the drill measures the real figure), or the desk halted; **P2** the feed fell back from Kotak, or the heartbeat is unreadable |
+| W2 heartbeat | 09:30, 11:00, 13:00, 15:00 | **P1** heartbeat older than 20 minutes (the site is republished every 6 minutes plus Pages lag; the drill measures the real figure), or the desk halted; **P2** the feed fell back from Kotak (no "kotak" in the label) or more than half of polls came from Yahoo (a normal day on 23 Oct was a third: `kotak+yahoo (190 of 570 polls from Yahoo)`), or the heartbeat is unreadable |
 | W3 after the close | 16:00 | **P1** `Live paper desk` did not run or failed; **P2** `Collect wide data` did not run or failed |
 | W5 evening jobs | 18:00 self-review, 21:00 data warehouse | **P2** did not run or failed |
 | W6 failures | 16:00, 18:00, 21:00 | **P2** a workflow failed (or was cancelled, except the scheduler, site publish and CI) on `main` since the last look |
@@ -63,8 +63,8 @@ ntfy's anonymous e-mail is disabled on ntfy.sh, so e-mail goes through GitHub, n
 - **Holidays are a copy.** The Worker holds its own list of 2026 NSE holidays (a test fails if it differs from
   `config/quantdesk.yaml`). 2027 is not entered, so until it is, 2027 holidays look like trading days and W1 would raise a false
   P1 on one. W9 asks for the list on 15 Dec.
-- **W2 depends on `data.json`'s `state.heartbeat` fields** (`ts`, `halted`, `feed`). If the published shape changes, W2 raises a
-  P2 "Heartbeat unreadable" rather than staying quiet.
+- **W2 depends on `data.json`'s `state.heartbeat` fields** (`ts`, `halted`, `feed`), which exist in the published file (checked 23 Oct
+  2026). If the shape changes, W2 raises a P2 "Heartbeat unreadable" rather than staying quiet.
 - **GitHub can be the thing that is down.** Push does not depend on it; e-mail does.
 - **W6 sees 08:00 to 21:00 on trading days only.** Overnight and weekend failures are caught by the Saturday digest, which counts at most the last 100 failed runs.
 - **Alerts can be forged by anyone who can dispatch `watchdog-alert.yml`** (write access, or the dispatch token): they can open a convincing issue assigned to you. That is no wider than that token's existing reach (it can already dispatch `clear-halt.yml`). Email dedupe is per check per day, and the workflow runs one at a time per check and day.
