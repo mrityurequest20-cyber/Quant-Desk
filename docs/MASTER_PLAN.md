@@ -92,7 +92,7 @@ plan adds (section 3). Items marked TO VERIFY are in section 12.
 | 15 | **Published site and the Worker's proxy** | Pages stopped deploying and returned 404 on 9 Oct (VERIFIED in the audit); today's state unknown | Unknown | W2 fetches the published JSON | Owner: Settings, Pages, status |
 | 16 | **Alert channel** | Only GitHub issues and the GitHub app; nothing for absence | Partly | The watchdog itself | Section 3 |
 | 17 | **CI and branch protection** (required `tests`, `doctor`; add `Learnbot guard`) | A required check that never runs blocks merges; red `main` | Yes | n/a | Owner adds `Learnbot guard` (name confirmed on PR 94's own run) |
-| 18 | **Claude routines** (weekly 09:47 and monthly 10:43 IST learning runs; PR babysitting) | Usage limit; a stored prompt that is stale; the monthly prompt still describes a conditional merge path | Partly | W8 weekly digest shows the last run | Owner deletes the conditional-merge clause from the monthly routine |
+| 18 | **Claude routines** (weekly 09:47 and monthly 10:43 IST learning runs; PR babysitting) | Usage limit; a stored prompt that is stale (the conditional merge path was removed from the monthly prompt by the owner on 23 Oct; both routines now say the bot never merges) | Partly | W8 weekly digest shows the last run | None open |
 | 19 | **Secrets** (Kotak key; AI keys under many alias names; `CF_API_TOKEN` in `ai-check`; `GH_DISPATCH_TOKEN` on the Worker) | Leak, expiry, drift | CI checks permissions and pins only | W7 | Rotation calendar (section 12); never print |
 | 20 | **Time** (IST versus UTC in every cron; Worker and GitHub crons are UTC) | An off-by-5.5-hours schedule | Tests for the Worker crons | W1 | Keep a table of every schedule in UTC and IST in the watchdog code |
 | 21 | **The owner** (Kotak renewal, billing, decisions) | Unavailable | n/a | W8 digest, W7 reminders | The charter already assumes the owner is mostly absent: nothing here may need daily attention |
@@ -588,7 +588,7 @@ three queued ones are closed; real-money anything.
 2. Record **`GH_DISPATCH_TOKEN` expiry** and its scope (it should have only what the Worker needs).
 3. Confirm the Kotak token and TOTP status and write down how and when it is renewed.
 4. Add **`Learnbot guard`** as a required check on `main` (the name was confirmed on its own PR run).
-5. Delete the **conditional-merge clause** from the monthly learning routine's stored prompt.
+5. ~~Delete the conditional-merge clause from the monthly learning routine's stored prompt.~~ **Done by the owner, 23 Oct 2026** (the weekly prompt was already clean).
 6. Install the **ntfy** app, choose a long random topic, and give it to the Worker as a secret; if you prefer email to GitHub's own notification (the recommended path needs no address), tell me which address.
 
 **By 6 Nov:** Settings, Pages: is the published site up? Set a Claude billing alert. Decide the watchdog's optional dead-man's-switch.
