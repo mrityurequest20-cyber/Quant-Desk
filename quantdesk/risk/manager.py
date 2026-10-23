@@ -154,7 +154,9 @@ class RiskManager:
         if len(open_trades) >= self.max_open:
             return SizingDecision(0, False, 0.0, weight, [f"{self.max_open} trades already open"], "max_open")
         scale = self.dd_scale(equity)
-        conf_mult = 0.75 + 0.5 * intent.confidence
+        # Confidence only scales a trade down from the per-trade limit (0.75-1.0), never above it: the
+        # old 0.75-1.25 range let a confident trade risk up to 1.25x the configured ceiling.
+        conf_mult = 0.75 + 0.25 * min(max(intent.confidence, 0.0), 1.0)
         base = self.opt_max_loss if intent.kind == "options" else self.risk_per_trade
         budget = equity * base * weight * scale * conf_mult
         reasons = [f"budget ₹{budget:,.0f} = equity ₹{equity:,.0f} × {base:.2%} × weight {weight:.2f} × "
