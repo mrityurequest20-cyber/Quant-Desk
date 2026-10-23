@@ -24,6 +24,13 @@ def test_wrangler_config_is_deployable():
     assert c["vars"]["ORIGIN"].startswith("https://") and not c["vars"]["ORIGIN"].endswith("/")
 
 
+def stage_worker(tmp_path):
+    """The Worker and the watchdog it imports, in a folder Node reads as ES modules."""
+    shutil.copyfile(ROOT / _config()["main"], tmp_path / "worker.mjs")
+    shutil.copyfile(ROOT / "deploy" / "cloudflare" / "watchdog.js", tmp_path / "watchdog.js")
+    (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+
+
 HARNESS = r"""
 import worker from "./worker.mjs";
 const calls = [];
@@ -53,7 +60,7 @@ console.log(JSON.stringify(out));
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_worker_passes_requests_to_pages(tmp_path):
-    shutil.copyfile(ROOT / _config()["main"], tmp_path / "worker.mjs")
+    stage_worker(tmp_path)
     (tmp_path / "harness.mjs").write_text(HARNESS, encoding="utf-8")
     run = subprocess.run(["node", "harness.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert run.returncode == 0, run.stderr
@@ -93,7 +100,8 @@ def test_cron_triggers_start_the_desk_scheduler():
     # 07:30-15:20 IST Mon-Fri, plus a Sunday 17:30 IST token check (Cloudflare cron is UTC, and its weekday 1 is SUNDAY:
     # numeric days are refused here so "1-5" can't silently mean Sunday-Thursday again)
     # plus 15:25 / 15:45 IST (09:55 / 10:15 UTC) Mon-Fri, which start collect-wide.yml on time (F-19-2)
-    assert c["triggers"]["crons"] == ["*/10 2-9 * * MON-FRI", "55 9 * * MON-FRI", "15 10 * * MON-FRI", "0 12 * * SUN"]
+    # plus the watchdog's own half-hourly trigger 15:30-22:00 IST (10:00-16:30 UTC), which must not start the desk: five, the free limit
+    assert c["triggers"]["crons"] == ["*/10 2-9 * * MON-FRI", "55 9 * * MON-FRI", "15 10 * * MON-FRI", "0 12 * * SUN", "0,30 10-16 * * *"]
     for cron in c["triggers"]["crons"]:
         dow = cron.split()[4]
         assert dow == "*" or dow.replace("-", "").replace(",", "").isalpha(), cron
@@ -101,7 +109,7 @@ def test_cron_triggers_start_the_desk_scheduler():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_the_worker_dispatches_the_scheduler(tmp_path):
-    shutil.copyfile(ROOT / _config()["main"], tmp_path / "worker.mjs")
+    stage_worker(tmp_path)
     (tmp_path / "sched.mjs").write_text(SCHED, encoding="utf-8")
     run = subprocess.run(["node", "sched.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert run.returncode == 0, run.stderr
@@ -132,7 +140,7 @@ process.stdout.write(JSON.stringify({ calls, logs }) + "\n");
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_the_worker_starts_collect_wide_on_time_and_the_scheduler_as_before(tmp_path):
     """F-19-2: GitHub's cron ran collect-wide.yml 4.5 hours late and the 15:25 stock snapshot (live book only) was lost."""
-    shutil.copyfile(ROOT / _config()["main"], tmp_path / "worker.mjs")
+    stage_worker(tmp_path)
     (tmp_path / "collect.mjs").write_text(COLLECT, encoding="utf-8")
     run = subprocess.run(["node", "collect.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert run.returncode == 0, run.stderr

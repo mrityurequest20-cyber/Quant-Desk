@@ -1,0 +1,70 @@
+# The email path of the desk's watchdog (deploy/cloudflare/watchdog.js, docs/MASTER_PLAN.md section 3). The Cloudflare
+# Worker dispatches this workflow when a P1 check fails and for the weekly digest; it opens (or comments on) an issue as
+# the Actions bot and assigns the repository owner, so GitHub emails and pushes it. (An issue opened with the owner's own
+# token would notify nobody: GitHub does not notify you of your own actions.) It reads nothing, runs no repository code,
+# uses no secret and installs nothing. Inputs are passed through the environment and written with printf, never expanded
+# into a script. Push alerts do not depend on this workflow: the Worker sends those itself.
+name: Watchdog alert
+
+on:
+  workflow_dispatch:
+    inputs:
+      severity: {description: "P1, P2 or INFO", required: true, type: string}
+      check: {description: "Check id, for example W1", required: true, type: string}
+      title: {description: "Short title", required: true, type: string}
+      body: {description: "What happened", required: true, type: string}
+      link: {description: "Link to the run or workflow, if any", required: false, type: string, default: ""}
+      day: {description: "IST date (YYYY-MM-DD)", required: true, type: string}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: watchdog-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Open or update the alert issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          SEV: ${{ inputs.severity }}
+          CHECK: ${{ inputs.check }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+          LINK: ${{ inputs.link }}
+          DAY: ${{ inputs.day }}
+        run: |
+          set -euo pipefail
+          clean() { printf '%s' "$1" | tr -cd '[:print:]' | cut -c1-"$2"; }
+          sev=$(clean "$SEV" 8); check=$(clean "$CHECK" 12); title=$(clean "$TITLE" 120)
+          body=$(clean "$BODY" 600); day=$(clean "$DAY" 10)
+          case "$sev" in P1|P2|INFO) ;; *) echo "::error::unknown severity"; exit 1;; esac
+          [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "::error::bad day"; exit 1; }
+          [[ "$check" =~ ^[A-Za-z0-9-]+$ ]] || { echo "::error::bad check"; exit 1; }
+          link=""
+          case "$LINK" in https://github.com/*) link=$(clean "$LINK" 300);; esac
+          key="watchdog-key: ${check}|${day}"
+          gh label create watchdog --color d93f0b --description "Raised by the desk watchdog" 2>/dev/null || true
+          gh label create desk:ops --color 1d76db --description "Operations" 2>/dev/null || true
+          {
+            printf '%s\n\n' "$body"
+            [ -n "$link" ] && printf 'Link: %s\n\n' "$link"
+            printf 'Raised by the Cloudflare Worker watchdog (check %s, %s). Details: docs/MASTER_PLAN.md section 3.\n\n' "$check" "$day"
+            printf '<!-- %s -->\n' "$key"
+          } > body.md
+          existing=$(gh issue list --label watchdog --state open --json number,body --limit 100 \
+            | jq -r --arg k "$key" '[.[] | select(.body | contains($k))][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file body.md
+          else
+            gh issue create --title "[watchdog] ${sev} ${check}: ${title}" --body-file body.md \
+              --label watchdog --label desk:ops --assignee "$OWNER" \
+              || gh issue create --title "[watchdog] ${sev} ${check}: ${title}" --body-file body.md --label watchdog --label desk:ops
+          fi
