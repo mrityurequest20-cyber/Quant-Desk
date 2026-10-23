@@ -348,11 +348,37 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--issues", action="store_true", help="rota: file today's audits as desk:audit issues")
     s.add_argument("--studies", help="rota: write Sunday's Study runs to this file, one 'study spec' per line")
     s.set_defaults(fn=cmd_org)
+    s = sub.add_parser("learnbot", help="the learning bot's tools (docs/LEARNBOT.md): inventory what the desk learned, or "
+                                          "check-diff a learnbot/ pull request")
+    s.add_argument("action", choices=["inventory", "check-diff"])
+    s.add_argument("--period", choices=["week", "month"], default="week", help="inventory: the window to read")
+    s.add_argument("--day", help="inventory: the run date YYYY-MM-DD (default: today, IST)")
+    s.add_argument("--journal", help="inventory: a restored journal.db (default: runtime/intraday/journal.db); opened read-only")
+    s.add_argument("--json", action="store_true", help="inventory: print JSON instead of markdown")
+    s.add_argument("--base", default="origin/main", help="check-diff: the branch the pull request targets")
+    s.add_argument("--head", default="HEAD", help="check-diff: the commit to judge (default: HEAD)")
+    s.add_argument("--branch", help="check-diff: the pull request's branch name (default: the head's branch)")
+    s.set_defaults(fn=cmd_learnbot)
     s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
     s.set_defaults(fn=cmd_wings)
     return p
+
+
+def cmd_learnbot(cfg, a):
+    """The learning bot's two tools: a read-only inventory, and the guard for its pull requests (learnbot/)."""
+    from .learnbot import guard as G
+    from .learnbot import inventory as I
+    if a.action == "check-diff":
+        res = G.check_diff(a.base, a.head, a.branch)
+        print(G.render(res))
+        if not res.ok:
+            raise SystemExit(1)
+        return
+    import datetime as dt
+    inv = I.inventory(cfg, a.period, dt.date.fromisoformat(a.day) if a.day else None, Path(a.journal) if a.journal else None)
+    print(json.dumps(inv, indent=2, default=str) if a.json else I.render(inv))
 
 
 def cmd_wings(cfg, a):

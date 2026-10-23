@@ -1,0 +1,37 @@
+# The Learnbot guard (docs/LEARNBOT.md): a pull request from a learnbot/ branch may only add a new pre-registered spec, a
+# dated report or a learning note. Any other branch passes at once, so this can be a required check on main.
+#
+# Two properties matter more than the rest:
+# - It runs the guard from the BASE branch's code and reads the pull request only as git objects (a fetched ref, never
+#   checked out), so a pull request cannot weaken or skip the check that judges it.
+# - It holds contents: read and nothing else, uses no secret, and installs nothing (the guard is standard library only).
+name: Learnbot guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      - name: Judge the pull request
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ ! -f quantdesk/learnbot/guard.py ]; then
+            echo "The guard is not on the base branch yet; nothing to judge." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          python3 -m quantdesk.learnbot.guard --base "$BASE_SHA" --head refs/remotes/pr/head --branch "$HEAD_REF" | tee -a "$GITHUB_STEP_SUMMARY"
