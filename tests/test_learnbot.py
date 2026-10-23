@@ -713,6 +713,19 @@ def test_no_folder_is_created_when_the_runtime_is_missing(cfg, tmp_path):
     assert not runtime.exists()
 
 
+def test_an_empty_plan_registry_is_reported_not_rebuilt(cfg):
+    """risk-compliance final review: status() writes plan/registry/state.json when that folder exists without one."""
+    base = populated_runtime(cfg)
+    (base / "autolearn" / "plan" / "registry").mkdir(parents=True)
+    before = tree_digest(cfg.runtime_dir)
+    inv = I.inventory(cfg, "week", dt.date(2026, 10, 24))
+    assert "plan registry" in inv["models"]["error"] and "models" in inv["incomplete"]
+    assert tree_digest(cfg.runtime_dir) == before and not (base / "autolearn" / "plan" / "registry" / "state.json").exists()
+    (base / "autolearn" / "plan" / "registry" / "state.json").write_text("{}")             # a readable one is fine
+    before = tree_digest(cfg.runtime_dir)
+    assert "error" not in I.inventory(cfg, "week", dt.date(2026, 10, 24))["models"] and tree_digest(cfg.runtime_dir) == before
+
+
 def test_an_unreadable_model_registry_is_reported_not_rebuilt(cfg):
     base = populated_runtime(cfg)
     (base / "autolearn" / "registry" / "state.json").write_text("{not json")

@@ -238,9 +238,12 @@ def models(cfg) -> dict:
     from ..autolearn.status import status
     from ..autolearn.store import read_json
     root = _runtime(cfg) / str(cfg.get("autolearn.dir", "intraday/autolearn"))
-    if (root / "registry").exists() and not isinstance(read_json(root / "registry" / "state.json"), dict):
-        # status() would rebuild (write) a missing or unreadable registry state; a read-only inventory must not
-        return {"error": "the model registry's state.json is missing or unreadable; not rebuilt here"}
+    for folder in (root, root / "plan"):
+        if (folder / "registry").exists() and not isinstance(read_json(folder / "registry" / "state.json"), dict):
+            # status() would rebuild (write) a missing or unreadable registry state, for the model registry and for the
+            # plan registry alike; a read-only inventory must not
+            where = "model" if folder == root else "plan"
+            return {"error": f"the {where} registry's state.json is missing or unreadable; not rebuilt here"}
     s = status(cfg)
     ch, cyc, plan = s.get("champion") or {}, s.get("last_cycle") or {}, (s.get("plan") or {})
     by_model = ((s.get("paper") or {}).get("by_model") or {})

@@ -60,8 +60,9 @@ git objects only and never runs anything from the branch it judges. A `learnbot/
 
 Everything else is refused: any change to an existing file, any deletion, any code, test, configuration, deployment or
 workflow file, any locked result under `docs/prereg/results/`, `docs/principles.json`, `docs/AUTONOMY.md` and this file,
-symlinks and executables, binary files, anything that looks like a secret (a heuristic: common key shapes, also inside
-JSON strings and after Unicode normalisation; not a substitute for never pasting one), more than 12 files or 200 kB a file,
+symlinks and executables, binary files, anything that looks like a secret (a heuristic, **not a secret scanner**: vendor
+key shapes, and key/value pairs whose value has three or more digits, also inside JSON strings and after Unicode
+normalisation; it misses short or low-digit keys, so never paste one), more than 12 files or 200 kB a file,
 and an empty diff. A path nobody listed is refused, not waved through. A branch whose name does not start with
 `learnbot/` (any case) is not judged by this command.
 
@@ -81,7 +82,8 @@ and an empty diff. A path nobody listed is refused, not waved through. A branch 
    not enforce it). Add a short dated report that says why this test is next and what the memory's caveat is, and a note
    `docs/learnbot/<key>.md` that contains the key. **`check-diff` requires the note, and requires the branch to be named
    `learnbot/YYYY-MM-DD-<key>`, for any pull request that adds a spec.** Once the note is merged the action is no longer
-   proposed. (A key merely quoted in a report or another note does not count; a report may also say `Shipped: <key>` on a
+   proposed. (The note and branch rule is bookkeeping that stops re-proposals; it does not prove the spec answers that action,
+   so the reviewer still reads the spec against the inventory.) (A key merely quoted in a report or another note does not count; a report may also say `Shipped: <key>` on a
    line of its own.) Do not run the study in the same pull request.
 4. `python -m quantdesk learnbot check-diff --branch learnbot/<the branch>` until it passes. **Always pass `--branch`**: on a
    detached head the command cannot tell which branch it is judging and refuses rather than guess.
