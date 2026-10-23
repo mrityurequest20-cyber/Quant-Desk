@@ -147,7 +147,7 @@ Other commands:
    - The armed setups are on the app's Desk screen (*Waiting at the level*).
    - Stops and targets are checked on the same 5-second price, not once a minute.
 4. **sizes and executes (simulated):**
-   - **Sizing:** 2.5% of capital at risk to the plan's stop, scaled by conviction (×0.6-1.2, `intraday.risk.risk_per_trade`).
+   - **Sizing:** 2.5% of capital at risk to the plan's stop, scaled down by conviction (×0.6-1.0, never above `intraday.risk.risk_per_trade`).
    - **Caps:** lots, premium outlay and margin.
    - **Daily limits:** 4 trades a day, 2 open, −5% daily stop, cooldown after 2 losses; all open premium together at most 50% of equity.
    - **Entry window:** new trades only between 09:20 and 14:45.

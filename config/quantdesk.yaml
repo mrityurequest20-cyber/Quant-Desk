@@ -154,7 +154,7 @@ intraday:
   risk:
     # Re-set for ₹5,00,000 (4 Oct 2026). The ₹20k account needed 8% per trade just to afford one lot. At
     # ₹5L the same lot is ~0.3% of equity, and 8% would be ₹40k a trade: the 10-12 losses in a row the
-    # backtests have seen would take ~60%. Now 2.5% × a conviction scale (0.6-1.2), i.e. ₹7.5-15k a trade.
+    # backtests have seen would take ~60%. Now 2.5% × a conviction scale (0.6-1.0, capped at the ceiling), i.e. ₹7.5-12.5k a trade.
     # "Aggressive" means scaling up a measured edge (half-Kelly), never betting big on an unproven one.
     risk_per_trade: 0.025
     max_trades_per_day: 4           # a round trip costs ~₹110-130 (≈0.025% of ₹5L): more trades, faster evidence
