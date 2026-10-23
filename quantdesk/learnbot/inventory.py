@@ -40,7 +40,7 @@ _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 def clean(x, n: int = CLIP) -> str:
     """One line of plain text: no escapes, control or invisible formatting characters (zero-width, bidi overrides), no
     backticks or angle brackets, at most `n` characters."""
-    s = "".join(c for c in str(x) if unicodedata.category(c) != "Cf")
+    s = "".join(c for c in ("" if x is None else str(x)) if unicodedata.category(c) != "Cf")
     s = re.sub(r"\s+", " ", _CTRL.sub(" ", s)).strip()
     s = s.replace("`", "'").replace("<", "‹").replace(">", "›").replace("](", "] (")     # no live code spans, tags or links
     return s if len(s) <= n else s[:n - 1] + "…"
@@ -66,6 +66,12 @@ def _num(x):
         return round(float(x), 4) if x is not None and float(x) == float(x) else None
     except (TypeError, ValueError):
         return None
+
+
+def _count(x):
+    """An integer or None, for things that are counted (not 22.0 trades)."""
+    n = _num(x)
+    return None if n is None else int(round(n))
 
 
 def _flag(x):
@@ -211,6 +217,10 @@ def desk(cfg, db, base: Path) -> dict:
             wins += round(r["win"] * r["n"]) if r["n"] else 0
             eligible += bool(r["eligible"])
             retired += bool(r["retired"])
+    skill = {}
+    if _runtime(cfg).exists():                 # forecast_skill resolves the autolearn folder through cfg.runtime_dir
+        skill = P.forecast_skill(cfg)
+    out.update({k: skill.get(k) for k in ("forecast_skill", "signal_hit_rate", "signal_net_bps", "predictions_resolved")})
     eq = _q(db, "SELECT equity FROM equity ORDER BY ts")["equity"].dropna()
     closed = _q(db, "SELECT COUNT(*) n, COALESCE(SUM(pnl),0) pnl FROM trades WHERE status='closed'").iloc[0]
     out.update({"sleeve_trades": trades, "sleeve_pnl": round(pnl, 2), "sleeve_win": round(wins / trades, 4) if trades else None,
@@ -237,15 +247,34 @@ def models(cfg) -> dict:
     return {"champion": clean(ch.get("model_id") or "none", 80), "since": clean(ch.get("since") or "", 40),
             "validation": {k: _num(v) for k, v in (ch.get("validation") or {}).items()
                            if not isinstance(v, (list, dict))} or None,
-            "challengers": len(s.get("challengers") or []), "rejected": _num(s.get("rejected")),
-            "by_model": [{"model": clean(m, 60), "trades": _num(v.get("count")), "pnl": _num(v.get("sum"))}
+            "challengers": len(s.get("challengers") or []), "rejected": _count(s.get("rejected")),
+            "cards": _cards(root, ch.get("model_id"), s.get("challengers") or []),
+            "by_model": [{"model": clean(m, 60), "trades": _count(v.get("count")), "pnl": _num(v.get("sum"))}
                          for m, v in list(by_model.items())[:8] if isinstance(v, dict)],
             "plan": {"champion": clean(plan.get("champion") or "none", 80), "challengers": len(plan.get("challengers") or [])},
             "last_cycle": {"id": clean(cyc.get("id") or "", 40), "status": clean(cyc.get("status") or "", 20)},
             "drift": {"state": clean((s.get("drift") or {}).get("state") or "", 60),
                       "reasons": clean((s.get("drift") or {}).get("reasons") or "", 200)},
-            "lockbox_peeks": _num((s.get("lockbox") or {}).get("peeks")),
+            "lockbox_peeks": _count((s.get("lockbox") or {}).get("peeks")),
             "kill_switch": bool((s.get("risk") or {}).get("kill_switch"))}
+
+
+def _cards(root: Path, champion, challengers) -> list[dict]:
+    """Each model's grading and verdict status from its registry card (read-only): status, the approval or rejection reason,
+    and the validation expectancy with its interval."""
+    from ..autolearn.registry import Registry
+    reg = Registry(root)
+    ids = [champion] + [c if isinstance(c, str) else (c or {}).get("model_id") for c in challengers]
+    out = []
+    for mid in dict.fromkeys(i for i in ids if i):
+        card = reg.card(mid) or {}
+        val = ((card.get("validation") or {}).get("metrics") or {})
+        exp = ((val.get("trading") or {}).get("expectancy_bps"))
+        ci = ((val.get("ci") or {}).get("expectancy_bps") or {})
+        out.append({"model": clean(mid, 60), "status": clean(card.get("status") or "", 20),
+                    "verdict": clean(((card.get("approval") or {}).get("reason")) or "", 160),
+                    "expectancy_bps": _num(exp), "ci_lo": _num(ci.get("lo")), "ci_hi": _num(ci.get("hi"))})
+    return out[:8]
 
 
 def milestones(day: dt.date, path: Path | None = None) -> dict:
@@ -270,15 +299,22 @@ def action_key(p: dict) -> str:
 
 
 def _covered(test: str, key: str, root: Path) -> str | None:
-    """Why a proposal needs no new pull request: its test names a spec that already exists, or it was already shipped."""
+    """Why a proposal needs no new pull request. Two rules, both visible in the output with their reason:
+    - its test names a spec that already exists (a whole word, a stem of 8+ characters), or
+    - it was shipped: `docs/learnbot/<key>.md` exists, or a report has a line starting `Shipped:` that names the key. A key
+      merely quoted in a report or a note does not count: a report that lists the inventory must not suppress its actions."""
     for f in sorted((root / "docs" / "prereg").glob("*.json")):
-        if len(f.stem) >= 8 and f.stem in test:
+        if len(f.stem) >= 8 and re.search(rf"(?<![A-Za-z0-9_]){re.escape(f.stem)}(?![A-Za-z0-9_])", test):
             return f"the test names the existing spec {f.stem}"
-    for folder in ("docs/learnbot", "docs/reports"):
-        for f in sorted((root / folder).glob("*.md")):
-            if key in f.read_text(errors="ignore"):
-                return f"already shipped: {folder}/{f.name}"
+    if (root / "docs" / "learnbot" / f"{key}.md").exists():
+        return f"already shipped: docs/learnbot/{key}.md"
+    for f in sorted((root / "docs" / "reports").glob("*.md")):
+        if any(line.startswith("Shipped:") and key in line for line in f.read_text(errors="ignore").splitlines()):
+            return f"already shipped: docs/reports/{f.name}"
     return None
+
+
+NEEDS_CODE = re.compile(r"BACKLOG|not (?:yet )?collected", re.I)    # a test that waits on data or a build is not docs-only
 
 
 def actions(period: str, day: dt.date, root: Path | None = None) -> dict:
@@ -288,8 +324,9 @@ def actions(period: str, day: dt.date, root: Path | None = None) -> dict:
     from ..research import memory as M
     root = root or ROOT
     props = [p for p in M.summary()["proposals"] if p["kind"] not in ("closed", "collect")]
+    docs_only = [p for p in props if p["kind"] in DOCS_ONLY and not NEEDS_CODE.search(p["test"])]
     todo, skipped = [], []
-    for p in (q for q in props if q["kind"] in DOCS_ONLY):
+    for p in docs_only:
         key = action_key(p)
         why = _covered(p["test"], key, root)
         (skipped if why else todo).append((p, key, why))
@@ -304,7 +341,7 @@ def actions(period: str, day: dt.date, root: Path | None = None) -> dict:
                       for p, key, _ in later],
             "skipped": [{"key": key, "why": clean(why, 160)} for _, key, why in skipped[:8]],
             "needs_engineering": [{"principle": clean(p["principle"], 60), "kind": p["kind"], "test": clean(p["test"], 200)}
-                                  for p in props if p["kind"] not in DOCS_ONLY][:5]}
+                                  for p in props if p not in docs_only][:5]}
 
 
 def last_monthly_report(day: dt.date, reports: Path | None = None) -> dict:
@@ -403,10 +440,12 @@ def _tape(L: list[str], d: dict) -> None:
 
 
 def _models(L: list[str], d: dict) -> None:
-    L.append(_kv({k: v for k, v in d.items() if k not in ("validation", "last_cycle", "drift", "by_model", "plan")})
+    L.append(_kv({k: v for k, v in d.items() if k not in ("validation", "last_cycle", "drift", "by_model", "plan", "cards")})
              + f"; plan {_kv(d['plan'])}; last cycle {_kv(d['last_cycle'])}; drift {_kv(d['drift'])}"
              + (f"; validation {_kv(d['validation'])}" if d.get("validation") else ""))
     L += [f"- model {x['model']}: {x['trades']} paper trades, P&L {x['pnl']}" for x in d["by_model"]]
+    L += [f"- card {x['model']}: {x['status'] or 'no card'}; verdict: {x['verdict'] or 'none recorded'}; validation expectancy "
+          f"{x['expectancy_bps']} bps (interval {x['ci_lo']} to {x['ci_hi']})" for x in d["cards"]]
 
 
 def _milestones(L: list[str], d: dict) -> None:

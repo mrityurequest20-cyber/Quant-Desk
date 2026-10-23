@@ -43,7 +43,12 @@ def repo(tmp_path):
     return r
 
 
-def ship(repo, files: dict, branch="learnbot/2026-10-24-l1-caveat", delete=(), mode=None):
+def ship(repo, files: dict, branch="learnbot/2026-10-24-l1-caveat", delete=(), mode=None, note=True):
+    """Commit `files` on `branch` and judge it. A research branch (one that adds a spec) gets its note unless note=False."""
+    files = dict(files)
+    m = G.KEY_BRANCH.fullmatch(branch.lower())
+    if note and m and any(p.startswith("docs/prereg/") for p in files) and f"docs/learnbot/{m['key']}.md" not in files:
+        files[f"docs/learnbot/{m['key']}.md"] = f"key {m['key']}"
     git(repo, "checkout", "-q", "-B", branch, "main")
     for path, text in files.items():
         (repo / path).parent.mkdir(parents=True, exist_ok=True)
@@ -59,8 +64,8 @@ def ship(repo, files: dict, branch="learnbot/2026-10-24-l1-caveat", delete=(), m
 
 def test_a_new_spec_and_a_dated_report_pass(repo):
     res = ship(repo, {"docs/prereg/new_v1.json": spec("new_v1"), "docs/reports/2026-10-24_l1_caveat.md": "findings"})
-    assert res.ok and not res.skipped and [f["path"] for f in res.files] == ["docs/prereg/new_v1.json",
-                                                                              "docs/reports/2026-10-24_l1_caveat.md"]
+    assert res.ok and not res.skipped and sorted(f["path"] for f in res.files) == [
+        "docs/learnbot/l1-caveat.md", "docs/prereg/new_v1.json", "docs/reports/2026-10-24_l1_caveat.md"]
 
 
 @pytest.mark.parametrize("path,why", [
@@ -141,6 +146,26 @@ def test_the_quarter_months_need_the_independent_review(repo):
     assert ship(repo, {path: REPORT_OK + "\n## Independent review\nrisk-compliance: CLEAR"}, branch="learnbot/q").ok
 
 
+def test_a_research_pull_request_needs_its_branch_pattern_and_its_note(repo):
+    """internal-auditor R5: without the note the same action is proposed again on every run."""
+    files = {"docs/prereg/new_v1.json": spec("new_v1")}
+    res = ship(repo, files, note=False)
+    assert not res.ok and any("needs its note docs/learnbot/l1-caveat.md" in p for p in res.problems)
+    res = ship(repo, files, branch="learnbot/whatever", note=False)
+    assert not res.ok and any("must be on a branch named learnbot/YYYY-MM-DD-<key>" in p for p in res.problems)
+    res = ship(repo, {**files, "docs/learnbot/l1-caveat.md": "a note with no key in it"}, note=False)
+    assert not res.ok and any("must contain the key l1-caveat" in p for p in res.problems)
+    assert ship(repo, {**files, "docs/learnbot/l1-caveat.md": "key l1-caveat"}, note=False).ok
+    assert ship(repo, {"docs/reports/2026-10-24_x.md": "a report, no spec"}, branch="learnbot/anything", note=False).ok
+
+
+def test_sleeve_specs_and_json_reports_follow_their_rules(repo):
+    """internal-auditor R7 survivors: the sleeve pattern is wider than `_v<number>`; a .json report is allowed."""
+    res = ship(repo, {"docs/prereg/expiry_seller_x.json": spec("expiry_seller_x")})
+    assert not res.ok and any("engineer pull request" in p for p in res.problems)
+    assert ship(repo, {"docs/reports/2026-10-24_data.json": '{"rows": 3}'}, branch="learnbot/r").ok
+
+
 def test_the_learnbot_note_folder_is_allowed(repo):
     res = ship(repo, {"docs/learnbot/l1-caveat-3fa91c.md": "key l1-caveat-3fa91c"})
     assert res.ok and res.files[0]["kind"] == "a note for the next learning run"
@@ -211,7 +236,7 @@ def test_a_spec_the_desks_own_jobs_could_not_load_is_refused(repo):
     for name, body in {"zz.json": "[]", "empty_v1.json": "{}", "wrong_v1.json": spec("other_v1"),
                        "nodate_v1.json": json.dumps({"name": "nodate_v1"}),
                        "baddate_v1.json": json.dumps({"name": "baddate_v1", "registered": "soon"})}.items():
-        res = ship(repo, {f"docs/prereg/{name}": body}, branch="learnbot/spec")
+        res = ship(repo, {f"docs/prereg/{name}": body}, branch="learnbot/2026-10-24-spec")
         assert not res.ok, name
 
 
@@ -226,13 +251,13 @@ def test_a_spec_the_memory_cannot_fingerprint_is_refused(repo):
     res = ship(repo, {"docs/prereg/deep_v1.json": deep})
     assert not res.ok and any("nested more than" in p for p in res.problems)
     absurd = '{"name": "abs_v1", "registered": "2026-10-20", "x": ' + "[" * 20000 + "]" * 20000 + "}"
-    res = ship(repo, {"docs/prereg/abs_v1.json": absurd}, branch="learnbot/abs")
+    res = ship(repo, {"docs/prereg/abs_v1.json": absurd}, branch="learnbot/2026-10-24-abs")
     assert not res.ok and any("nested too deeply" in p or "nested more than" in p for p in res.problems)
     sur = '{"name": "sur_v1", "registered": "2026-10-20", "x": "\\ud800"}'
-    res = ship(repo, {"docs/prereg/sur_v1.json": sur}, branch="learnbot/sur")
+    res = ship(repo, {"docs/prereg/sur_v1.json": sur}, branch="learnbot/2026-10-24-sur")
     assert not res.ok and any("lone surrogate" in p for p in res.problems)
     shallow = '{"name": "ok_v1", "registered": "2026-10-20", "x": ' + "[" * 20 + "]" * 20 + "}"
-    assert ship(repo, {"docs/prereg/ok_v1.json": shallow}, branch="learnbot/ok").ok
+    assert ship(repo, {"docs/prereg/ok_v1.json": shallow}, branch="learnbot/2026-10-24-ok").ok
 
 
 def test_a_key_and_its_value_are_read_together_and_ordinary_words_are_not_refused(repo):
@@ -451,6 +476,8 @@ def edge_journal(path):
     for d in ("2026-10-17", "2026-10-18", "2026-10-24", "2026-10-25"):
         j.set_state(f"teacher:{d}", {"day": d, "lessons": [{"id": d, "kind": "right", "claim": "c", "confidence": 0.5}]})
     j.set_state("teacher:2026-10-20", [1, 2])                           # not a record: ignored
+    j.set_state("teachers2026-10-21", {"day": "2026-10-21", "lessons": [{"id": "x", "kind": "right", "claim": "not the teacher's"}]})
+    j.set_state("teacher:2026-10-2.", {"day": "x", "lessons": [{"id": "junk", "kind": "right", "claim": "c"}]})   # in range, not a date
     j.set_state("teacher:2026-10-21", {"day": "2026-10-21", "lessons": []})   # taught nothing: still a session with a record
     j.commit()
     j.close()
@@ -518,7 +545,7 @@ def test_each_action_has_its_own_branch_and_a_shipped_one_is_not_proposed_again(
     (root / "docs" / "prereg").mkdir(parents=True)
     (root / "docs" / "prereg" / "expiry_eve_entry_v1.json").write_text("{}")
     (root / "docs" / "learnbot").mkdir()
-    (root / "docs" / "learnbot" / "note.md").write_text(f"shipped: {I.action_key(props[0])}")
+    (root / "docs" / "learnbot" / f"{I.action_key(props[0])}.md").write_text(f"key {I.action_key(props[0])}")
     month = I.actions("month", dt.date(2026, 11, 2), root)
     keys = [a["key"] for a in month["do"]]
     assert len(keys) == len(set(keys)) == 3 and len({a["branch"] for a in month["do"]}) == 3
@@ -526,6 +553,120 @@ def test_each_action_has_its_own_branch_and_a_shipped_one_is_not_proposed_again(
     assert not any("expiry_eve_entry_v1" in a["test"] for a in month["do"])     # names an existing spec: skipped
     assert {x["why"].split(":")[0].split(" spec")[0] for x in month["skipped"]} == {"already shipped", "the test names the existing"}
     assert I.actions("week", dt.date(2026, 11, 2), root)["do"][0]["key"] == keys[0]
+
+
+def test_a_key_quoted_in_a_report_does_not_suppress_its_action(tmp_path, monkeypatch):
+    """internal-auditor R2: a report that merely listed the inventory made the next run drop L2, L3 and L4 as 'shipped'."""
+    from quantdesk.research import memory as M
+    props = [{"principle": "L1", "kind": "caveat", "rank": 1, "why": "w", "test": "first idea"},
+             {"principle": "L2", "kind": "caveat", "rank": 1, "why": "w", "test": "second idea"},
+             {"principle": "L3", "kind": "find", "rank": 1, "why": "w", "test": "third idea"}]
+    monkeypatch.setattr(M, "summary", lambda: {"proposals": props})
+    root = tmp_path / "repo"
+    for d in ("prereg", "reports"):
+        (root / "docs" / d).mkdir(parents=True)
+    (root / "docs" / "learnbot").mkdir()
+    k = [I.action_key(p) for p in props]
+    (root / "docs" / "reports" / "2026-10-24_inv.md").write_text(f"The inventory listed {k[0]} and {k[1]} and {k[2]}\n")
+    (root / "docs" / "learnbot" / "other.md").write_text(f"mentions {k[1]}")                # a note not named after the key
+    assert [a["key"] for a in I.actions("month", dt.date(2026, 11, 2), root)["do"]] == k    # nothing suppressed
+    (root / "docs" / "learnbot" / f"{k[0]}.md").write_text(f"key {k[0]}")                   # shipped: the note named after the key
+    (root / "docs" / "reports" / "2026-10-25_ship.md").write_text(f"Shipped: {k[1]} in learnbot/2026-10-25-x\n")
+    done = I.actions("month", dt.date(2026, 11, 2), root)
+    assert [a["key"] for a in done["do"]] == [k[2]] and {x["key"] for x in done["skipped"]} == {k[0], k[1]}
+
+
+def test_what_waits_on_a_build_or_on_uncollected_data_is_not_docs_only(tmp_path, monkeypatch):
+    """internal-auditor R4: two 'stock options (BACKLOG 1)' caveats were proposed as docs-only."""
+    from quantdesk.research import memory as M
+    props = [{"principle": "L1", "kind": "caveat", "rank": 1, "why": "w", "test": "stock options (BACKLOG 1) and the sleeves"},
+             {"principle": "L1", "kind": "caveat", "rank": 1, "why": "w", "test": "needs data that is not yet collected"},
+             {"principle": "L2", "kind": "caveat", "rank": 1, "why": "w", "test": "a plain registered test"}]
+    monkeypatch.setattr(M, "summary", lambda: {"proposals": props})
+    a = I.actions("month", dt.date(2026, 11, 2), tmp_path)
+    assert [x["test"] for x in a["do"]] == ["a plain registered test"] and len(a["needs_engineering"]) == 2
+
+
+def test_the_skip_rule_matches_whole_spec_names_of_eight_characters_or_more(tmp_path, monkeypatch):
+    from quantdesk.research import memory as M
+    (tmp_path / "docs" / "prereg").mkdir(parents=True)
+    for n in ("ab", "expiry_eve_entry_v1"):
+        (tmp_path / "docs" / "prereg" / f"{n}.json").write_text("{}")
+    props = [{"principle": "L1", "kind": "caveat", "rank": 1, "why": "w", "test": "tab and cab are not the spec ab"},
+             {"principle": "L2", "kind": "caveat", "rank": 1, "why": "w", "test": "compare with expiry_eve_entry_v1 first"},
+             {"principle": "L3", "kind": "caveat", "rank": 1, "why": "w", "test": "my_expiry_eve_entry_v1b is another thing"}]
+    monkeypatch.setattr(M, "summary", lambda: {"proposals": props})
+    a = I.actions("month", dt.date(2026, 11, 2), tmp_path)
+    assert [x["principle"] for x in a["do"]] == ["L1", "L3"] and a["skipped"][0]["why"].endswith("expiry_eve_entry_v1")
+
+
+def test_the_desk_numbers_are_all_time_correct_and_complete(cfg, tmp_path):
+    """internal-auditor H5/R1/R7: drawdown from the all-time peak, open trades not counted, forecast skill present."""
+    jp = tmp_path / "j.db"
+    j = Journal(jp)
+    for d, e in [("2026-10-19", 100.0), ("2026-10-20", 120.0), ("2026-10-24", 90.0)]:
+        j.db.execute("INSERT INTO equity (ts, equity, cash, drawdown) VALUES (?,?,?,?)", (f"{d}T15:30:00+05:30", e, e, 0))
+    for i, (st, pnl) in enumerate([("closed", 10.0), ("open", 99.0)]):
+        j.db.execute("INSERT INTO trades (id, strategy, symbol, status, closed_at, pnl, exit_reason) VALUES (?,?,?,?,?,?,?)",
+                     (f"t{i}", "s", "NIFTY", st, "2026-10-20T10:00:00+05:30", pnl, "x"))
+    j.commit()
+    j.close()
+    desk = I.inventory(cfg, "week", dt.date(2026, 10, 24), jp)["desk"]
+    assert desk["drawdown"] == 0.25 and desk["equity"] == 90.0 and desk["paper_trades"] == 1 and desk["paper_pnl"] == 10.0
+    assert {"forecast_skill", "signal_hit_rate", "signal_net_bps", "predictions_resolved"} <= set(desk)
+
+
+def test_edges_of_checks_equity_tape_and_milestones(cfg, tmp_path):
+    jp = tmp_path / "j.db"
+    j = Journal(jp)
+    for d in ("2026-10-17", "2026-10-18", "2026-10-24", "2026-10-25"):
+        j.db.execute("INSERT INTO equity (ts, equity, cash, drawdown) VALUES (?,?,?,?)", (f"{d}T15:30:00+05:30", 1.0, 1.0, 0))
+        for status in ("ok", "FAIL"):
+            j.db.execute("INSERT INTO checks (ts, routine, name, status, detail) VALUES (?,?,?,?,?)",
+                         (f"{d}T10:00:00+05:30", "r", "n", status, "d"))
+    j.commit()
+    j.close()
+    base = populated_runtime(cfg)
+    for d in ("2026-10-17", "2026-10-24", "2026-10-25"):                          # tape on the last day counts; either side does not
+        (base / "data" / d).mkdir(parents=True, exist_ok=True)
+        (base / "data" / d / "tape.csv").write_text("ok\n" + "True\n" * 310)
+    inv = I.inventory(cfg, "week", dt.date(2026, 10, 24), jp)
+    assert inv["health"]["sessions_recorded"] == 2                               # 18th and 24th: the window's first and last day
+    assert [(c["status"], c["n"]) for c in inv["health"]["failed_checks"]] == [("FAIL", 2)]   # ok rows are not failures
+    assert sorted(inv["tape"]["sessions"]) == ["2026-10-21", "2026-10-24"]
+    road = tmp_path / "road.md"
+    road.write_text("| 31 Oct | a |\n| 30 Sep | b |\n")
+    on_time, slip = I.milestones(dt.date(2026, 11, 14), road)["rows"][0], I.milestones(dt.date(2026, 11, 15), road)["rows"][0]
+    assert on_time["days_overdue"] == 14 and "slip" not in on_time["when"] and "slip" in slip["when"]      # more than 14, not 14
+    assert I.milestones(dt.date(2026, 11, 14), road)["rows"][1]["due"] == "2027-09-30"                  # only Oct-Dec are 2026
+
+
+def test_models_show_each_ones_grading_and_whole_numbers(cfg, monkeypatch):
+    from quantdesk.autolearn import registry as R
+    from quantdesk.autolearn import status as S
+    populated_runtime(cfg)
+    monkeypatch.setattr(S, "status", lambda c: {
+        "champion": {"model_id": "m1", "validation": {"auc": 0.61}}, "challengers": ["m2", {"model_id": "m3"}], "rejected": 4.0,
+        "lockbox": {"peeks": 2.0}, "paper": {"by_model": {"m1": {"count": 22.0, "sum": 5.5}}}})
+    cards = {"m1": {"status": "champion", "approval": {"reason": "passed gates"},
+                    "validation": {"metrics": {"trading": {"expectancy_bps": 3.2}, "ci": {"expectancy_bps": {"lo": 0.4, "hi": 6.0}}}}},
+             "m2": {"status": "rejected", "approval": {"reason": "failed the lockbox"}}}
+    monkeypatch.setattr(R.Registry, "card", lambda self, mid: cards.get(mid))
+    m = I.inventory(cfg, "week", dt.date(2026, 10, 24))["models"]
+    assert [c["model"] for c in m["cards"]] == ["m1", "m2", "m3"] and m["cards"][0]["verdict"] == "passed gates"
+    assert (m["cards"][0]["expectancy_bps"], m["cards"][0]["ci_lo"], m["cards"][0]["ci_hi"]) == (3.2, 0.4, 6.0)
+    assert m["cards"][1]["status"] == "rejected" and m["cards"][2]["status"] == ""
+    assert m["rejected"] == 4 and isinstance(m["rejected"], int) and m["by_model"][0]["trades"] == 22
+    assert isinstance(m["lockbox_peeks"], int) and "failed the lockbox" in I.render(I.inventory(cfg, "week", dt.date(2026, 10, 24)))
+
+
+def test_a_lesson_without_a_claim_does_not_print_none(cfg, tmp_path):
+    jp = tmp_path / "j.db"
+    j = Journal(jp)
+    j.set_state("teacher:2026-10-21", {"day": "2026-10-21", "lessons": [{"id": "x", "kind": "right", "claim": None}]})
+    j.commit()
+    j.close()
+    assert "None" not in I.render(I.inventory(cfg, "week", dt.date(2026, 10, 24), jp)).split("Teacher lessons")[1].split("##")[0].replace("confidence None", "")
 
 
 def tree_digest(root):

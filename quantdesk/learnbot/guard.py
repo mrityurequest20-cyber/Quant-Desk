@@ -37,6 +37,9 @@ ALLOWED = (
 # `sleeves.specs()` loads every docs/prereg/expiry_seller_*.json as a paper sleeve with its own legs and sizes: that is an
 # engineer pull request with a risk-compliance review, never a learnbot/ one
 SLEEVE_SPEC = re.compile(r"docs/prereg/expiry_seller_.*\.json")
+# a research pull request (one that adds a spec) is on learnbot/YYYY-MM-DD-<key> and carries docs/learnbot/<key>.md, which
+# is what stops the inventory proposing the same action again once it is merged
+KEY_BRANCH = re.compile(r"learnbot/\d{4}-\d{2}-\d{2}-(?P<key>[a-z0-9][a-z0-9-]*)")
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 MAX_DEPTH = 32                                     # real specs are a handful of levels deep; the memory recurses over them
 # why a path outside the allow-list is refused (the first matching prefix is quoted; any other path gets the default)
@@ -174,6 +177,19 @@ def _spec_problems(path: str, data) -> list[str]:
     return out
 
 
+def _note_problems(branch: str, texts: dict[str, str]) -> list[str]:
+    m = KEY_BRANCH.fullmatch(branch.lower())
+    if not m:
+        return ["a research pull request (it adds a spec) must be on a branch named learnbot/YYYY-MM-DD-<key>"]
+    key = m["key"]
+    note = f"docs/learnbot/{key}.md"
+    if note not in texts:
+        return [f"a research pull request needs its note {note} (it is what stops the action being proposed again)"]
+    if key not in texts[note]:
+        return [f"{note} must contain the key {key}"]
+    return []
+
+
 def _secret_in(text: str) -> bool:
     """The patterns run on the text as written, normalised (NFKC, zero-width characters dropped), and on every string a JSON
     file decodes to, so an escape or a hidden character does not hide a key."""
@@ -225,6 +241,7 @@ def check_diff(base: str, head: str = "HEAD", branch: str | None = None, repo: P
         res.problems.append("the diff is empty")
     if len(rows) > MAX_FILES:
         res.problems.append(f"{len(rows)} files changed; a learnbot/ pull request is at most {MAX_FILES}")
+    texts: dict[str, str] = {}
     for r in rows:
         path, why = r["path"], None
         kind = next((k for rx, k in ALLOWED if rx.fullmatch(path)), None)
@@ -255,6 +272,7 @@ def check_diff(base: str, head: str = "HEAD", branch: str | None = None, repo: P
         except UnicodeDecodeError:
             res.problems.append(f"{ascii(path)}: not UTF-8 text")
             continue
+        texts[path] = text
         if "\0" in text:
             res.problems.append(f"{ascii(path)}: binary content")
         if _secret_in(text):
@@ -268,6 +286,8 @@ def check_diff(base: str, head: str = "HEAD", branch: str | None = None, repo: P
                 if path.startswith("docs/prereg/"):
                     res.problems += _spec_problems(path, data)
         res.problems += _report_problems(path, text)
+    if any(f["path"].startswith("docs/prereg/") for f in res.files):
+        res.problems += _note_problems(branch, texts)
     return res
 
 

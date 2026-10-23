@@ -28,11 +28,15 @@ opened with SQLite's read-only mode, so nothing is written. It prints, for the w
 date; month: the previous calendar month):
 
 - the research actions to ship (one for the week, three for the month), each with its `key` and branch name, and the
-  proposals skipped because their test names a spec that already exists or they were already shipped;
+  proposals skipped, each with its reason: the test names a spec that already exists (a whole word, 8+ characters), or the
+  action was shipped. A skip is a heuristic, so it is shown, not silent: if you think an action was skipped wrongly, say so
+  under NEEDS OWNER instead of shipping it. Tests that wait on a build or on data not yet collected (they name a
+  BACKLOG item) are listed as needing engineering, never as docs-only;
 - the desk's state (**all-time**, not the window), the paper record by strategy (the window), the nightly teacher's lessons
   (with the sessions that have a teacher record, so "the teacher did not run" differs from "found nothing"), health
   (sessions recorded against the trading calendar, WARN/ERROR counts, failed checks, halts as of the last heartbeat), the
-  chain tape including trading days with no tape, the models (champion, plan, paper P&L by model, drift);
+  chain tape including trading days with no tape, the models (champion, plan, each model's registry card with its status, verdict and validation expectancy, paper P&L by
+  model, drift), the live forecast skill and signal hit rate and net bps;
 - the roadmap's milestone table with each row dated and how many days past due (more than 14 is a slip unless met);
 - what it could not read. A broken section says so and the others still arrive, and the output opens with **INCOMPLETE**
   when any section failed: do not write a report from what is missing, say what was unavailable.
@@ -75,8 +79,10 @@ and an empty diff. A path nobody listed is refused, not waved through. A branch 
    data, the statistic and the sources, the decision rule and what would count as failing, **fixed before any result**.
    Keep it free of code and results: commit the spec before anything that depends on it (this is the rule; the guard does
    not enforce it). Add a short dated report that says why this test is next and what the memory's caveat is, and a note
-   `docs/learnbot/<key>.md` that contains the key (that is what stops the action being proposed again once merged). Do not
-   run the study in the same pull request.
+   `docs/learnbot/<key>.md` that contains the key. **`check-diff` requires the note, and requires the branch to be named
+   `learnbot/YYYY-MM-DD-<key>`, for any pull request that adds a spec.** Once the note is merged the action is no longer
+   proposed. (A key merely quoted in a report or another note does not count; a report may also say `Shipped: <key>` on a
+   line of its own.) Do not run the study in the same pull request.
 4. `python -m quantdesk learnbot check-diff --branch learnbot/<the branch>` until it passes. **Always pass `--branch`**: on a
    detached head the command cannot tell which branch it is judging and refuses rather than guess.
 5. Open it as a **draft**. A new spec needs the research-reviewer's verdict (is it a repeat, is it powered, can it fail):
