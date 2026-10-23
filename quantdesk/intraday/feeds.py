@@ -143,7 +143,15 @@ class YahooIntradayFeed(IntradayFeed):
 
     def poll(self, symbol, since):
         df = self._fetch(symbol, "1d")
-        return df if since is None else df[df.index > since]
+        if since is None:
+            return df
+        if df.empty and not isinstance(df.index, pd.DatetimeIndex):
+            # Yahoo answered with nothing (`_fetch` hands back a column-only frame with no time index to filter). This used
+            # to surface as "TypeError: '>' not supported between ndarray and Timestamp" from the comparison below; it is
+            # still an error, so the step counts a failure exactly as before (an outage still ends in safe mode and the
+            # square-off), but now it says what happened. F-19-1.
+            raise RuntimeError(f"yahoo returned no 1-minute bars for {symbol}")
+        return df[df.index > since]
 
     def history_bars(self, symbol, days=55):
         import yfinance as yf

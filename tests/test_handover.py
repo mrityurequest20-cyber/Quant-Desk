@@ -695,6 +695,8 @@ def test_clean_start_is_unchanged(cfg, sessions):
     b.feed.clock = b.feed.open_ts + pd.Timedelta(minutes=45)
     b.step()
     ev = b.journal.events().iloc[n_events:]
+    own = (ev["level"] == "WARN") & (ev["category"] == "quant") & ev["message"].str.contains("vol shadow", regex=False)
+    ev = ev[~own]                          # the shadow warns because the fixture has fewer than 5 prior sessions; that quant WARN, and only that, is not a handover event
     assert set(ev["level"]) == {"INFO"} and not ev["message"].str.contains("halt|inherited|orphan|carried").any()
     assert b.health["reconcile"] == {"ok": True, "positions": 0}
     assert b.journal.get_state("intraday_halt") is None and b.journal.get_state("intraday_halt_cleared") is None
