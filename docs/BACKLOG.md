@@ -38,9 +38,17 @@ it with the next tests. In short:
 - expiry_seller_v1, sleeves A and B: NIFTY, BANKNIFTY;
 - expiry_seller_v2, sleeve C: BANKNIFTY far-wing condor;
 - expiry_seller_v3, sleeves D and E: FINNIFTY, MIDCPNIFTY, SENSEX, naked and insured;
+- expiry_seller_v4 (first published 17 Oct 2026, registered 26 Oct 2026, audit E-01; a re-settlement of v1-v3 on the same
+  trades, NOT an independent test): sleeves F to J, the same sleeves as v1-v3 on the same
+  underlyings, settled on NSE's official close (else the 15:29 close, else Yahoo; source recorded) instead of the
+  15:00-15:29 mean. On expiry day only NSE's file counts, so a trade waits for the next run (SENSEX always: NSE's file
+  has no SENSEX row, so it settles on Yahoo's close); after that it falls past NSE only when NSE confirms the file is
+  missing, or after 2 trading days of a silent NSE. A fallback settlement on an NSE index is filed as a data finding by the
+  self-review. v4 is the only decision ledger; v1-v3 keep running unchanged as
+  comparison ledgers;
 - expiry_eve_entry_v1: the history's entry price against the sleeves' real 15:20 fills, paired on the same strikes
   (Study → entry-check; counts only until its decision point);
-- every sleeve settlement is also checked against the official close, and every sleeve reports its skip rate.
+- every v1-v3 sleeve settlement is also checked against the official close (v4 settles on it), and every sleeve reports its skip rate.
 
 ## The queue
 
@@ -58,7 +66,14 @@ it with the next tests. In short:
    - *Steps:* one pre-registered rule, tested on all 7 index instruments at once (the law table).
 3. **L3 everywhere.**
    - *Steps:*
-     - wire the HAR forecaster in shadow next to the desk's, for 20 sessions;
+     - wire the HAR forecaster in shadow next to the desk's, for 60 sessions (docs/VOL_SHADOW_PROTOCOL.md);
+       - *Wired in shadow, 23 Oct 2026* (`intraday.vol_forecast.mode: shadow`): at each session's opening read the desk
+         journals the HAR forecast and its own estimate for 30m / 60m / 120m / the close. `intraday vol-shadow` grades
+         both against the realised variance (QLIKE, move ratio) and counts the sessions with both indices toward the 60.
+         The comparator is the desk's live estimate, not the study's candidate A (it leaves out the opening return).
+         It changes no decision and has no apply mode. The coefficients are committed
+         (`quantdesk/intraday/vol_har_v1.json`, with provenance); if they are missing or unusable the desk warns and
+         records nothing.
      - test it pooled across the indices and liquid stocks: a law of volatility, not of NIFTY.
    - *Then:* a pre-registered filter. Sell only when implied variance exceeds forecast variance by k.
 4. **Expiry-day 0-DTE decay.**

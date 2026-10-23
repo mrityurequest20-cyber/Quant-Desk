@@ -92,7 +92,8 @@ def test_cron_triggers_start_the_desk_scheduler():
     c = _config()
     # 07:30-15:20 IST Mon-Fri, plus a Sunday 17:30 IST token check (Cloudflare cron is UTC, and its weekday 1 is SUNDAY:
     # numeric days are refused here so "1-5" can't silently mean Sunday-Thursday again)
-    assert c["triggers"]["crons"] == ["*/10 2-9 * * MON-FRI", "0 12 * * SUN"]
+    # plus 15:25 / 15:45 IST (09:55 / 10:15 UTC) Mon-Fri, which start collect-wide.yml on time (F-19-2)
+    assert c["triggers"]["crons"] == ["*/10 2-9 * * MON-FRI", "55 9 * * MON-FRI", "15 10 * * MON-FRI", "0 12 * * SUN"]
     for cron in c["triggers"]["crons"]:
         dow = cron.split()[4]
         assert dow == "*" or dow.replace("-", "").replace(",", "").isalpha(), cron
@@ -113,3 +114,51 @@ def test_the_worker_dispatches_the_scheduler(tmp_path):
     why = out["refused"]["why"]                                    # a refusal says why, and which token kind, never the token
     assert out["refused"]["ok"] is False and why.startswith("GitHub answered 403: Resource not accessible")
     assert "(needs actions=write)" in why and "fine-grained token, 93 characters" in why and "xxxx" not in why
+
+
+COLLECT = r"""
+import worker from "./worker.mjs";
+const calls = [];
+globalThis.fetch = async (url, init) => { calls.push({ url: String(url), body: JSON.parse(init.body), auth: new Headers(init.headers).get("authorization") });
+  return new Response(null, { status: 204 }); };
+const logs = []; console.log = (m) => logs.push(m);
+const env = { GH_DISPATCH_TOKEN: "t0k" };
+for (const cron of ["55 9 * * MON-FRI", "15 10 * * MON-FRI", "*/10 2-9 * * MON-FRI", "0 12 * * SUN"]) await worker.scheduled({ cron }, env, {});
+await worker.scheduled({ cron: "55 9 * * MON-FRI" }, {}, {});          // no token: logs why, calls nothing
+process.stdout.write(JSON.stringify({ calls, logs }) + "\n");
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_worker_starts_collect_wide_on_time_and_the_scheduler_as_before(tmp_path):
+    """F-19-2: GitHub's cron ran collect-wide.yml 4.5 hours late and the 15:25 stock snapshot (live book only) was lost."""
+    shutil.copyfile(ROOT / _config()["main"], tmp_path / "worker.mjs")
+    (tmp_path / "collect.mjs").write_text(COLLECT, encoding="utf-8")
+    run = subprocess.run(["node", "collect.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+    base = "https://api.github.com/repos/mrityurequest20-cyber/Quant-Desk/actions/workflows/"
+    got = [(c["url"], c["body"]) for c in out["calls"]]
+    assert got == [
+        (base + "collect-wide.yml/dispatches", {"ref": "main", "inputs": {"step": "stocks"}}),      # 15:25 IST
+        (base + "collect-wide.yml/dispatches", {"ref": "main", "inputs": {"step": "minutes"}}),     # 15:45 IST
+        (base + "scheduler.yml/dispatches", {"ref": "main"}),                                       # unchanged, no inputs
+        (base + "scheduler.yml/dispatches", {"ref": "main"}),                                       # the Sunday token check
+    ]
+    assert all(c["auth"] == "Bearer t0k" for c in out["calls"])
+    assert out["logs"][0].startswith("collect-wide stocks dispatched") and out["logs"][1].startswith("collect-wide minutes dispatched")
+    assert out["logs"][2].startswith("desk scheduler dispatched")
+    assert out["logs"][4].startswith("collect-wide stocks not dispatched") and "GH_DISPATCH_TOKEN" in out["logs"][4]
+
+
+def test_the_collect_wide_crons_match_the_workflows_own_schedule():
+    """The Worker's two crons are the same UTC times as collect-wide.yml's schedule (15:25 and 15:45 IST), and the step names
+    are the workflow's own dispatch inputs, so a change to one cannot silently drift from the other."""
+    import re
+    wf = (ROOT / ".github" / "workflows" / "collect-wide.yml").read_text(encoding="utf-8")
+    sched = set(re.findall(r'cron:\s*"([^"]+)"', wf))
+    worker = (ROOT / _config()["main"]).read_text(encoding="utf-8")
+    crons = dict(re.findall(r'"([^"]+)":\s*"(stocks|minutes)"', worker.split("COLLECT_CRONS")[1].split("\n")[0]))
+    assert crons == {"55 9 * * MON-FRI": "stocks", "15 10 * * MON-FRI": "minutes"}
+    assert {c.replace("MON-FRI", "1-5") for c in crons} == sched                    # GitHub numbers Mon-Fri 1-5, Cloudflare by name
+    assert "stocks | minutes" in wf                                                  # the workflow_dispatch step input the Worker sets

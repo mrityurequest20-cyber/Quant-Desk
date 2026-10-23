@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import json
 import sys
 from pathlib import Path
@@ -162,6 +163,15 @@ def register(sub):
     x.add_argument("--from", dest="start", help="YYYY-MM-DD (default: config daily_history.start)")
     x.add_argument("--push", action="store_true", help="push the shards to the daily-history release (needs GH_TOKEN)")
     x.set_defaults(fn=cmd_daily_history)
+    x = ss.add_parser("stock-minutes", help="1-minute candles for the cash series and near-month futures of the most "
+                                            "liquid F&O stocks (data collection only; traded bars, not quotes)")
+    x.add_argument("--stocks", type=int, default=50, help="how many stocks (ranked on the warehouse's fo_stocks, else a fixed list)")
+    x.add_argument("--days", type=int, default=3)
+    x.add_argument("--rate", type=float, default=5.0, help="requests a second (Kotak allows 25)")
+    x.add_argument("--budget-min", type=float, default=12.0, help="stop after this many minutes and record what is missing")
+    x.add_argument("--out", help="default runtime/intraday/backfill")
+    x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. stock-minutes)")
+    x.set_defaults(fn=cmd_stock_minutes)
     x = ss.add_parser("truedata-import", help="TrueData Velocity export → audited, immutable Parquet with provenance "
                                               "(raw files untouched; external_unverified until checked)")
     x.add_argument("--source", required=True, help="the export folder (or a clone of the repo holding it)")
@@ -401,6 +411,68 @@ def stock_minutes(a, S, out: Path, day: dt.date) -> None:
     K.backfill_stocks(client, root, K.group_stocks(S["stocks"], plan["group_size"]), days=S["minute_days"],
                       n_expiries=S["stock_minute_expiries"], window=S["stock_minute_strikes"], today=day,
                       say=lambda m: print(m, flush=True), on_group=push)
+
+
+def _push_run(out: Path, run: Path, tag: str, names: list[str], title: str, notes: str, clobber: bool = True) -> None:
+    """A run's files to release `tag`, named <as of>_<file>."""
+    import shutil
+
+    from .warehouse import ReleaseStore
+    stage = out / "_release"
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
+    as_of, staged = run.name, []
+    for n in names:
+        dst = f"{as_of}_{n}"
+        shutil.copyfile(run / n, stage / dst)
+        staged.append(dst)
+    ReleaseStore(tag, title=title, notes=notes).push(stage, staged, clobber=clobber)
+    print(f"pushed {len(staged)} file(s) to release {tag}", flush=True)
+
+
+def cmd_stock_minutes(cfg, a):
+    """1-minute candles for the top F&O stocks' cash series and near-month futures; never fails on a Kotak problem."""
+    from ..intraday.feeds import IST as TZ
+    from ..intraday.kotak import KotakClient, KotakError
+    from .collect_wide import release_tag
+    from .kotak_backfill import release_names, stock_minutes
+    from .warehouse import ReleaseStore, Warehouse
+    try:
+        client = KotakClient.from_env()
+    except KotakError:
+        raise SystemExit("stock-minutes: no KOTAK_CONSUMER_KEY")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "intraday" / "backfill"
+    today = pd.Timestamp.now(tz=TZ).date()
+    root = Path(cfg.runtime_dir) / "warehouse"
+    fo = None
+    try:                                  # the universe is ranked on the warehouse's fo_stocks (two months is plenty)
+        root.mkdir(parents=True, exist_ok=True)
+        ReleaseStore("warehouse").pull(root, [f"fo_stocks_{p}.parquet" for p in pd.period_range(end=pd.Timestamp(today), periods=2, freq="M")])
+        fo = Warehouse(root).read("fo_stocks", start=today - dt.timedelta(days=45), end=today)
+    except Exception as exc:
+        print(f"stock-minutes: no fo_stocks to rank on ({exc!s:.100}); using the fixed list", flush=True)
+    man = stock_minutes(client, out, fo, n=a.stocks, days=a.days, today=today, rate=a.rate, budget_s=a.budget_min * 60,
+                        say=lambda m: print(m, flush=True))
+    run = Path(man["path"])
+    line = ", ".join(f"{k} {t['served']}/{t['asked']}" for k, t in man["totals"].items())
+    print(f"{run}: {line}", flush=True)
+    short = [k for k, t in man["totals"].items() if t["served"] * 2 < t["asked"]]
+    if short or man.get("stopped"):                 # a Kotak outage or a cut-short run is a warning, not a green step
+        print(f"::warning::stock-minutes: incomplete run ({line}"
+              f"{'; stopped: ' + str(man['stopped'])[:80] if man.get('stopped') else ''})", flush=True)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.write(f"### Stock minutes {run.name}\n{line}{' (stopped: ' + str(man['stopped'])[:80] + ')' if man.get('stopped') else ''}\n")
+    if a.release_prefix:
+        try:                                        # never overwrite a run already on the release (a same-day re-run)
+            _push_run(out, run, release_tag(a.release_prefix, dt.date.fromisoformat(run.name), "year"),
+                      release_names(run, stocks=True), f"Stock minutes {run.name[:4]}",
+                      "Kotak 1-minute candles (traded bars, not quotes) for the cash series and near-month futures of the "
+                      "most liquid F&O stocks; one set per run (quantdesk/data/kotak_backfill.py). Not a software release.",
+                      clobber=False)
+        except Exception as exc:
+            print(f"::warning::stock-minutes: files kept on disk only, release push failed ({exc!s:.120})", flush=True)
 
 
 def cmd_truedata_import(cfg, a):

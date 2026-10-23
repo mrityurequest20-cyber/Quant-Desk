@@ -198,6 +198,42 @@ def cmd_tape(cfg, a):
     tape.run(dt.time.fromisoformat(a.until) if a.until else None)
 
 
+def make_nse_close(cfg, fetch=None):
+    """(underlying, day) -> NSE's official close (ind_close_all), or None when the file has no row for it. A day's file
+    is fetched once per run, and so is a day's failure: when NSE hangs or errors, every later trade asking for that day
+    is refused at once with the first error instead of waiting out the same timeout again before the journal is saved.
+    The two kinds of failure stay apart: a real HTTP 404 raises OfficialAbsent (confirmed absence: the sleeves may fall
+    down their chain); anything else (timeout, 5xx, connection, and an HTML page served with HTTP 200, which can be a
+    WAF or maintenance page) raises RuntimeError (they wait). A file with no row for the index returns None (absent). `fetch(day)` -> that day's index closes (default: the warehouse's
+    copy if it has the day, else NSE's archive)."""
+    closes: dict = {}
+
+    def fetch_day(day):
+        from ..data.nse import NSE, parse_index_close
+        f = Path(cfg.runtime_dir) / "warehouse" / f"nse_index_close_{day.year}.parquet"
+        df = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["date", "symbol", "close"])
+        df = df[pd.to_datetime(df["date"]).dt.date == day]
+        return df if len(df) else parse_index_close(NSE().index_close(day)[0], day)
+
+    def nse_close(underlying, day):
+        from ..data.nse import NotPublished, NotPublishedHtml
+        from .sleeves import OfficialAbsent
+        if day not in closes:
+            try:
+                closes[day] = (fetch or fetch_day)(day)
+            except NotPublishedHtml as exc:               # HTTP 200 with an HTML page: may be a WAF / maintenance page
+                closes[day] = RuntimeError(f"NSE served an HTML page for {day}, not the file ({exc!s:.60})")
+            except NotPublished as exc:                   # a real HTTP 404: NSE answered, there is no file
+                closes[day] = OfficialAbsent(f"NSE has no file for {day} ({exc!s:.60})")
+            except Exception as exc:                      # cached: one failure per day per run; it only means 'ask again'
+                closes[day] = RuntimeError(f"NSE's close for {day} unavailable this run: {exc!s:.80}")
+        if isinstance(closes[day], Exception):
+            raise closes[day]
+        hit = closes[day][closes[day]["symbol"] == underlying]
+        return float(hit["close"].iloc[0]) if len(hit) else None
+    return nse_close
+
+
 def cmd_sleeves(cfg, a):
     """The pre-registered expiry sellers (intraday/sleeves.py): settle what expired, open on an expiry's eve, report."""
     from .feeds import IST
@@ -215,21 +251,14 @@ def cmd_sleeves(cfg, a):
         if d.empty:
             raise RuntimeError(f"no Yahoo bar for {sym} on {day}")
         return float(d["Close"].iloc[-1])
-    closes: dict = {}
-
-    def nse_close(underlying, day):
-        """NSE's official close (ind_close_all): the warehouse's copy if it has the day, else NSE's archive."""
-        if day not in closes:
-            from ..data.nse import NSE, parse_index_close
-            f = Path(cfg.runtime_dir) / "warehouse" / f"nse_index_close_{day.year}.parquet"
-            df = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["date", "symbol", "close"])
-            df = df[pd.to_datetime(df["date"]).dt.date == day]
-            closes[day] = df if len(df) else parse_index_close(NSE().index_close(day)[0], day)
-        hit = closes[day][closes[day]["symbol"] == underlying]
-        return float(hit["close"].iloc[0]) if len(hit) else None
+    nse_close = make_nse_close(cfg)
     for spec in specs():                                  # every registered spec, each with its own ledger
-        seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec,
-                              official_fn=nse_close)
+        try:
+            seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec,
+                                  official_fn=nse_close)
+        except ValueError as exc:                         # a bad spec never stops the others' sleeves
+            print(f"WARN {spec.get('name')}: skipped: {exc}", flush=True)
+            continue
         if not a.report:
             day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
             for line in seller.run(day) or [f"{spec['name']} {day}: nothing to settle or open"]:
@@ -581,6 +610,28 @@ def cmd_teach(cfg, a):
     print("teach: " + ", ".join(f"{k} {v}" for k, v in got.items()))
 
 
+def cmd_vol_shadow(cfg, a):
+    """Live A (the desk's vol forecaster) vs HAR: the journaled shadow forecasts scored against the recorded bars. The protocol's
+    single read (60 counted sessions, or the 31 Mar 2027 backstop) is taken here once on the live journal and stored; after
+    that this command shows the stored record. `--since` narrows only the per-cell tables, never the primary statistic."""
+    import pandas as pd
+
+    from . import volshadow
+    p = paths(cfg, a.account or "live")
+    j = Journal(p["journal"])
+    rec = SessionRecorder(p["data"])
+    bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
+    rep = volshadow.compare(j.events(), bars)
+    if a.since:
+        part = volshadow.compare(j.events(since=a.since), bars)
+        rep = {**part, **{k: rep[k] for k in ("pooled", "sessions_both", "sessions_excluded") if k in rep}}
+    if (a.account or "live") == "live":
+        rep = volshadow.read_once(j, rep, pd.Timestamp.now(tz="Asia/Kolkata").date())
+    else:
+        print(f"(account {a.account}: the protocol's single read applies to the live journal only and is not taken here)")
+    print(volshadow.render(rep))
+
+
 def cmd_archive(cfg, a):
     """C-02: archive, verify, then prune old thoughts/news and plan studies (quantdesk/journal/retention.py)."""
     import datetime as _dt
@@ -902,6 +953,10 @@ def register(sub):
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--date", help="YYYY-MM-DD: the session to review (default: the newest in the journal); only once it is over")
     x.set_defaults(fn=cmd_teach)
+    x = ss.add_parser("vol-shadow", help="live A-vs-HAR volatility forecasts against what the index did (QLIKE, move ratio)")
+    x.add_argument("--account", help="live (default), replay, synthetic")
+    x.add_argument("--since", help="only forecasts from this date (YYYY-MM-DD)")
+    x.set_defaults(fn=cmd_vol_shadow)
     x = ss.add_parser("archive", help="archive, verify, then prune old thoughts/news and plan studies (keeps the journal small)")
     x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
     x.add_argument("--out", help="where the dated archive files and the manifest go")

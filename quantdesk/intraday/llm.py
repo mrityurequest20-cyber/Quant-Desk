@@ -391,7 +391,7 @@ class ClaudeBudget:
         return cost
 
     def line(self) -> str:
-        """'Claude: $0.31 today, $4.20 of $23.60 used, ~52 sessions left at this pace' for the review and the heartbeat."""
+        """'Claude: $0.31 today, $4.20 of $20.00 used, ~52 sessions left at this pace' for the review and the heartbeat."""
         if not self.enabled:
             return ""
         try:                                                # a display: whatever is wrong with the ledger, never raise

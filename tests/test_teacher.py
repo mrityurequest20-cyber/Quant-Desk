@@ -238,7 +238,7 @@ def test_a_ledger_with_no_teaching_half_means_no_teaching(journal):
 
 
 def test_the_total_budget_is_unchanged_by_the_split():
-    assert CFG.get("intraday.llm.claude.budget_usd") == 23.60 and CFG.get("intraday.llm.claude.teach_share") == 0.5
+    assert CFG.get("intraday.llm.claude.budget_usd") == 20.0 and CFG.get("intraday.llm.claude.teach_share") == 0.5
 
 
 # ---- advisory only: nothing here can reach config, risk, sizing or gates --------------------------------------------------

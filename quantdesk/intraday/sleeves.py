@@ -19,6 +19,11 @@ its history.
   evidence audit), while the history settles on the official close. So each settled trade also gets an `official`
   event: the official close (NSE's published file, else the 15:29 one-minute close, which matched it on every day the
   audit checked, else Yahoo's close), the P&L at it, and the gap. The registered settlement stays the result.
+- Settlement by spec (E-01): a spec's `settlement` field names its registered rule. Absent (v1–v3, which are never
+  edited), it is the mean above. `official_close` (v4) settles at that official close itself, by the same fallback
+  chain, and records the source with every settlement. On expiry day only NSE's file is accepted; with no official
+  close yet the trade stays open and the next run tries again, and it never falls back to the mean. Such a spec has no
+  `official` check (its settlement is the official close). A settled event is final under either rule.
 - Paper only. Nothing here can place an order or promote itself: it reports eligibility by the spec's rules, and a
   registered allocator spec (BACKLOG 9) is what moves an eligible sleeve into the paper account.
 
@@ -55,10 +60,19 @@ DELTA_TOL = 0.08                               # as in the history (warehouse_re
 SETTLE_FROM, MIN_SETTLE_BARS = dt.time(15, 0), 20
 MIN_COST, MIN_CONSISTENCY, MIN_ELIGIBLE = 6, 8, 10
 Z90, Z95 = 1.2816, 1.645
+NSE_WAIT_DAYS = 2                              # v4: trading days after expiry to wait on a silent (not absent) NSE
+BSE_INDEX = "SENSEX"                        # a BSE index: no row in NSE's file, so it settles on Yahoo's close by design
+TAIL_MULT = 1.5                               # a naked sleeve retires on a loss beyond 1.5 x the history's worst
 NAKED_MARGIN = 0.12                            # rough SPAN + exposure for one side of a naked index strangle
 B_AFTER_A_DAYS = 91
 WIDE_SPREAD = 0.25                             # a leg whose bid-ask is over 25% of its mid is flagged 'wide'
 LATE_SNAPSHOT_MIN = 5                          # a snapshot more than 5 minutes from 15:20 is flagged 'late'
+SETTLEMENTS = ("closing_mean", "official_close")   # a spec's registered settlement rule (v1–v3 name none: the mean)
+
+
+class OfficialAbsent(Exception):
+    """An `official_fn` raises this when NSE answered and has no file for that day (a real HTTP 404; an HTML page served with HTTP 200 is NOT this, it can be a WAF page): its
+    absence is confirmed, as opposed to a timeout, a 5xx or a refused connection, which only mean 'ask again'."""
 
 
 def load_spec(path: Path = SPEC_PATH) -> dict:
@@ -72,6 +86,19 @@ def specs(folder: Path = PREREG) -> list[dict]:
     """Every registered expiry-seller spec, oldest version first."""
     return [load_spec(p) for p in sorted(Path(folder).glob("expiry_seller_v*.json"),
                                          key=lambda p: int(re.sub(r"\D", "", p.stem.rsplit("_v", 1)[1]) or 0))]
+
+
+def roles(all_specs: list[dict]) -> dict[str, str]:
+    """{spec name: "decision" | "comparison"}. Every spec feeds decisions (eligibility, milestones, retirement findings,
+    the progress totals) unless a registered spec's `reading.comparison_ledgers` names it: v4 is the only decision
+    ledger from its registration, because its trades pair one for one with v1–v3's (same snapshots, strikes, fills), so
+    counting both would count one cost check twice."""
+    out = {s["name"]: "decision" for s in all_specs}
+    for s in all_specs:
+        for name in (s.get("reading") or {}).get("comparison_ledgers", ()):
+            if name in out and name != s["name"]:
+                out[name] = "comparison"
+    return out
 
 
 def sleeve_table(spec: dict) -> dict:
@@ -228,7 +255,7 @@ def assess(trades: list[dict], hist: dict, naked: bool) -> dict:
             out["retired"] = out["retired"] or f"forward mean ₹{mean:,.0f} breaks from the history's ₹{hist['mean']:,.0f} (z {z:.2f})"
         else:
             out["consistency"] = "consistent"
-    if naked and n and min(pnl) < -1.5 * abs(hist["worst"]):
+    if naked and n and min(pnl) < -TAIL_MULT * abs(hist["worst"]):
         out["tail"] = "breached"
         out["retired"] = out["retired"] or f"a loss of ₹{min(pnl):,.0f} beyond 1.5× the history's worst"
     for t in trades:
@@ -253,6 +280,9 @@ class ExpirySeller:
         self.underlyings = list(self.spec["underlyings"])
         self.close_fn, self.say = close_fn, say
         self.official_fn = official_fn            # (underlying, day) -> NSE's published close, or None
+        self.settlement = self.spec.get("settlement", SETTLEMENTS[0])
+        if self.settlement not in SETTLEMENTS:
+            raise ValueError(f"{self.spec['name']}: unknown settlement {self.settlement!r}")
 
     def stt_rate(self, t: dict) -> float:
         """Exercise STT for `t`: the dated `costs.exercise_stt` rate (what the paper broker charges) only for a spec that
@@ -326,23 +356,74 @@ class ExpirySeller:
                 continue
             if exp == now.date() and now.time() < dt.time(15, 31):
                 continue
-            s_t, src = settlement_price(self.data, t["underlying"], exp)
-            if s_t is None and self.close_fn is not None and (exp < now.date() or now.time() >= dt.time(15, 45)):
-                why = src
-                try:
-                    s_t = self.close_fn(t["underlying"], exp)
-                    src = f"Yahoo daily close ({why})"
-                except Exception as exc:
-                    src = f"{why}; Yahoo: {exc!s:.80}"
+            if self.settlement == "official_close":       # E-01: NSE's file first; never the mean
+                s_t, src = self.settle_official(t["underlying"], exp, now)
+                if s_t is None:
+                    src = f"waiting for the official close ({src})"
+            else:
+                s_t, src = settlement_price(self.data, t["underlying"], exp)
+                if s_t is None and self.close_fn is not None and (exp < now.date() or now.time() >= dt.time(15, 45)):
+                    why = src
+                    try:
+                        s_t = self.close_fn(t["underlying"], exp)
+                        src = f"Yahoo daily close ({why})"
+                    except Exception as exc:
+                        src = f"{why}; Yahoo: {exc!s:.80}"
             if s_t is None or not math.isfinite(s_t):
                 notes.append(f"UNSETTLED {t['id']}: {src}")
                 continue
             r = payoff(t, s_t, self.stt_rate(t))
-            self._append({"event": "settle", "id": t["id"], "settle": round(s_t, 2), "settle_source": src,
+            rule = {"settle_rule": self.settlement} if self.settlement != SETTLEMENTS[0] else {}   # v1–v3 events unchanged
+            self._append({"event": "settle", "id": t["id"], "settle": round(s_t, 2), "settle_source": src, **rule,
                           "intrinsic": r["intrinsic"], "stt_rs": round(r["stt_rs"], 2), "pnl_pts": round(r["pnl_pts"], 2),
                           "pnl_rs": round(r["pnl_rs"], 2)})
             notes.append(f"settled {t['id']} at {s_t:,.2f} ({src}): ₹{r['pnl_rs']:+,.0f}/lot")
         return notes
+
+    def nse_state(self, underlying: str, day: dt.date) -> tuple[float | None, str, str]:
+        """NSE's published close with what the answer means: (value, "ok", "") when the file has the row; (None,
+        "absent", why) when NSE answered and the file or the row is missing (a real 404, no row for this
+        index, or no NSE source at all); (None, "transient", why) when NSE did not answer (timeout, 5xx, connection)."""
+        if self.official_fn is None:
+            return None, "absent", ""
+        try:
+            v = self.official_fn(underlying, day)
+        except OfficialAbsent as exc:
+            return None, "absent", f"NSE's official close: {exc!s:.60}"
+        except Exception as exc:
+            return None, "transient", f"NSE's official close: {exc!s:.60}"
+        if v is None or not math.isfinite(v) or v <= 0:
+            return None, "absent", "NSE's official close: none"
+        return float(v), "ok", ""
+
+    def trading_days_after(self, expiry: dt.date, today: dt.date) -> int:
+        """Trading sessions (by the holiday calendar) after `expiry` up to and including `today`."""
+        n, d = 0, expiry
+        while d < today:
+            d += dt.timedelta(days=1)
+            n += self.cal.is_trading_day(d)
+        return n
+
+    def settle_official(self, underlying: str, expiry: dt.date, now: pd.Timestamp) -> tuple[float | None, str]:
+        """The settlement price of a spec that settles at the official close (E-01 v4):
+        - NSE's file when it has the row, at any time;
+        - on expiry day nothing else, even when NSE is silent (its file comes out in the evening);
+        - after expiry the 15:29 one-minute close, then Yahoo's close, only when NSE's absence is CONFIRMED (it
+          answered and the file or the row is missing: SENSEX has none) or when NSE has failed to answer for
+          NSE_WAIT_DAYS trading days after expiry; a transient error (timeout, 5xx, connection) means wait, and the next
+          run asks again. The source says which."""
+        v, state, why = self.nse_state(underlying, expiry)
+        if v is not None:
+            return v, "NSE's official close"
+        if expiry >= now.date():
+            return None, why or "NSE's file not published yet"
+        waited = self.trading_days_after(expiry, now.date())
+        if state == "transient" and waited < NSE_WAIT_DAYS:
+            return None, f"{why}; NSE did not answer, trading day {waited} of {NSE_WAIT_DAYS} after expiry, will retry"
+        v, src = self.official(underlying, expiry)
+        if v is not None and state == "transient" and src != "NSE's official close":
+            src = f"{src} (NSE unreachable for {waited} trading days)"
+        return v, src
 
     def official(self, underlying: str, day: dt.date, nse_only: bool = False) -> tuple[float | None, str]:
         """The official close for the settlement check: NSE's published file, else the 15:29 one-minute close, else
@@ -377,8 +458,11 @@ class ExpirySeller:
     def check_settlement(self, day: dt.date, now: pd.Timestamp) -> list[str]:
         """Diagnostic: each settled trade's P&L at the official close too, appended once as an `official` event. On
         expiry day (from 15:45) only NSE's published file is accepted; it usually appears in the evening, so the
-        fallbacks are used only from the next run on. The registered settlement is never changed."""
+        fallbacks are used only from the next run on. The registered settlement is never changed. A spec that settles
+        at the official close has nothing to check."""
         notes = []
+        if self.settlement == "official_close":
+            return notes
         for t in self.trades():
             if not t["settled"] or "official" in t:
                 continue
@@ -526,6 +610,51 @@ class ExpirySeller:
                 f"cost gap vs history's convention ₹{ev['cost_gap_rs']:+,.0f}")
 
     # ---- the report ----------------------------------------------------------------------------------------------
+    def unsettled(self, trades: list[dict], today: dt.date | None = None) -> list[dict]:
+        """A spec that waits for the official close (v4): trades still open a full session past their expiry, each
+        counted at its max loss (defined risk) or at the tail-rule bound, 1.5 x the history's worst (naked), until it
+        settles. A spec that settles on the mean has none to report (its trades settle from the bars or Yahoo)."""
+        if self.settlement != "official_close":
+            return []
+        today = today or pd.Timestamp.now(tz=IST).date()
+        out = []
+        for t in trades:
+            if t["settled"] or dt.date.fromisoformat(t["expiry"]) >= today:
+                continue
+            bound = t.get("max_loss_rs")
+            if bound is None:
+                bound = TAIL_MULT * abs(self.hist[f"{t['sleeve']}_{t['underlying']}"]["worst"])
+            out.append({"id": t["id"], "expiry": t["expiry"], "counted_at_rs": float(bound)})
+        return out
+
+    def settle_sources(self, trades: list[dict], today: dt.date | None = None) -> dict:
+        """A spec that settles at the official close: how many of its settlements came from each link of the chain (nse,
+        bar_1529, yahoo, yahoo_fallback, other) and how many trades are still waiting at or past their expiry (unsettled).
+        `yahoo` is SENSEX, which has no row in NSE's file and settles on Yahoo's close of the BSE index by design;
+        `yahoo_fallback` is Yahoo's close on an NSE index (NSE's file was missing or unreachable), which `bar_1529`
+        also is. Only `nse` and the by-design `yahoo` are expected. {} for a spec that settles on the mean."""
+        if self.settlement != "official_close":
+            return {}
+        today = today or pd.Timestamp.now(tz=IST).date()
+        out = {"nse": 0, "bar_1529": 0, "yahoo": 0, "yahoo_fallback": 0, "other": 0, "unsettled": 0}
+        for t in trades:
+            if t["settled"]:
+                s = str(t.get("settle_source", ""))
+                out["nse" if s.startswith("NSE") else "bar_1529" if s.startswith("the 15:29") else
+                    ("yahoo" if t.get("underlying") == BSE_INDEX else "yahoo_fallback") if s.startswith("Yahoo")
+                    else "other"] += 1
+            elif dt.date.fromisoformat(t["expiry"]) <= today:
+                out["unsettled"] += 1
+        return out
+
+    def fallback_settlements(self) -> list[dict]:
+        """Settled trades on an NSE index whose settlement did not come from NSE's file (the 15:29 bar, Yahoo, or anything
+        else): an incident to look at, never silently a clean result. [] for a spec that settles on the mean."""
+        if self.settlement != "official_close":
+            return []
+        return [t for t in self.trades() if t["settled"] and t.get("underlying") != BSE_INDEX
+                and not str(t.get("settle_source", "")).startswith("NSE")]
+
     def report(self) -> dict:
         rows, evs = [], self.events()
         for u in self.underlyings:
@@ -545,6 +674,7 @@ class ExpirySeller:
         trades = self.trades()
         return {"spec": self.spec["name"], "spec_hash": self.spec["_hash"], "rows": rows,
                 "fills": fill_quality(evs), "settlement": settlement_check(trades),
+                "unsettled": self.unsettled(trades), "settle_sources": self.settle_sources(trades),
                 "open": [t for t in trades if not t["settled"]],
                 "recent": [t for t in trades if t["settled"]][-8:],
                 "skips": [e for e in evs if e["event"] == "skip"][-8:]}
@@ -649,6 +779,17 @@ def render(rep: dict) -> str:
         out += ["", "**Open:** " + "; ".join(
             f"{t['id']} credit ₹{t['credit_pts'] * t['lot']:,.0f}" + (f", max loss ₹{t['max_loss_rs']:,.0f}" if t["max_loss_rs"] else "")
             + f", margin ~₹{t['margin_est_rs']:,.0f}" for t in rep["open"])]
+    src = rep.get("settle_sources") or {}
+    if src and sum(src.values()):
+        n = sum(src.values())
+        names = {"nse": "NSE's file", "bar_1529": "the 15:29 bar (fallback)", "yahoo": "Yahoo's close (SENSEX, by design)",
+                 "yahoo_fallback": "Yahoo's close (fallback on an NSE index)", "other": "other", "unsettled": "waiting"}
+        out += ["", f"**Settlement sources (v4 settles on the official close; {n} trades):** " + ", ".join(
+            f"{names[k]} {v} ({v / n:.0%})" for k, v in src.items() if v)]
+    if rep.get("unsettled"):
+        out += ["", "**Unsettled past expiry (waiting for the official close; counted at the max loss / tail bound):** " + "; ".join(
+            f"{u['id']} (expired {u['expiry']}) ₹{u['counted_at_rs']:,.0f}" for u in rep["unsettled"])
+            + f"; total ₹{sum(u['counted_at_rs'] for u in rep['unsettled']):,.0f}"]
     if rep["recent"]:
         out += ["", "**Settled (latest):** " + "; ".join(f"{t['id']} {rs(t['pnl_rs'])} at {t['settle']:,.2f}" for t in rep["recent"])]
     if rep["skips"]:

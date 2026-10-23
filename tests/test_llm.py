@@ -434,7 +434,7 @@ def test_the_review_and_heartbeat_show_the_credit(cfg):
     eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", j, IntradayBroker(cfg, starting_cash=500000), say=None, news=news)
     review = run_replay(eng)
     assert "fought VWAP" in review and len(fake.calls) == 1                                  # the reflection ran on the credit
-    assert "Claude: $0.06 today, $0.06 of $23.60 used, ~" in review and "sessions left at this pace" in review
+    assert "Claude: $0.06 today, $0.06 of $20.00 used, ~" in review and "sessions left at this pace" in review
     assert eng._claude_line() == news.llm.budget.line() and j.get_state("llm_claude_spend")["reflected"] == "2026-10-13"
 
 
