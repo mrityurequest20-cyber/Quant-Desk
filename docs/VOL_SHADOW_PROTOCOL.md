@@ -29,11 +29,25 @@ Per session, the mean over the four horizons (30m, 60m, 120m, close) and the two
 Newey-West t (5 lags) on the per-session series, `nw_t` in `quantdesk/autolearn/prereg.py`. The four horizons share one
 realised path and the two indices are strongly correlated, so **the session is the unit of evidence**, not the 8 cells.
 
+## Inputs pinned (a change voids the count)
+The model and the comparator must not move during the run. Pinned at the merge of this file:
+`quantdesk/intraday/vol_har_v1.json` sha256 `de59c4ab9496e9ae2bc828741686949bf5608a2c4af548ce064afa25b3bef56a`. A refit, any
+change to that file or to `harvol.py`, or any change to the desk's `VolForecaster` (`quantdesk/intraday/quant.py`) voids the
+count: it restarts from zero on the date of the change, which is recorded here. The run starts with the first session recorded
+after this file is on `main`; a session recorded before that does not count.
+
 ## How many sessions, and why
 The lock implies, for NIFTY, 40 to 53 sessions for 80% power at one-sided alpha 0.05 (daily SD implied by the reported
 Newey-West t); for BANKNIFTY alone 57 to 290. 20 sessions gives about 50% power on NIFTY and 16 to 43% on BANKNIFTY. So:
-**no read before 60 sessions with both indices recorded.** Interim output (`intraday vol-shadow`) is progress
-reporting only. Looking earlier and stopping on a good number is not allowed.
+**no read before 60 sessions with both indices recorded.** The pooled statistic has less power than the best single cells:
+my estimate for it at 60 sessions is about 0.6 to 0.9 (central 0.75), not 80%, and BANKNIFTY is the weak part of the pool.
+Interim output (`intraday vol-shadow`) is progress reporting only: until 60 sessions with both indices are graded it
+withholds the primary statistic and the per-cell DM t. Looking earlier and stopping on a good number is not allowed.
+
+## Stopping rule and backstop
+The test is read **exactly once**, at the 60th session with both indices graded, by `intraday vol-shadow` (the statistic is
+computed in `volshadow._pooled`, not by hand). If fewer than 60 are graded by **31 Mar 2027**, the result is recorded as
+"not confirmed (underpowered, n = ...)" and the shadow is neither extended nor re-read without a new protocol.
 
 ## Failure rule (so that it can fail)
 At 60 sessions: PASS only if the primary statistic's mean is positive **and** its one-sided Newey-West p < 0.05.
@@ -45,9 +59,12 @@ Otherwise it is **not confirmed**. In both cases:
 - A skipped or short session never counts as a pass or a fail; it is shown in the report (see below).
 
 ## Visibility of what is not recorded
-`intraday vol-shadow` prints the shadow's WARNs by reason (no HAR forecast by 10:00, the desk had no estimate, coefficients
-unusable, error). A runner that starts after 10:00 records nothing for that session. Cells with more than 20% missing
-bars, or a missing last bar of the horizon, are not graded (the second condition is stricter than the study's rule).
+`intraday vol-shadow` prints the shadow's WARNs by reason: no HAR forecast by 10:00, a late start (the engine first reached
+the opening read after 10:00), the desk had no estimate, coefficients missing or unusable, could not start, a bad
+`vol_forecast` setting, error. They are sessions or index-sessions without a gradable record. A session in which the engine
+never ran leaves nothing to journal and cannot be listed. The header counts sessions with both indices graded, the only ones
+that count toward 60. Cells with more than 20% missing bars, or a missing last bar of the horizon, are not graded (the second
+condition is stricter than the study's rule).
 
 ## Known limits, stated now
 - The live feed (Kotak or Yahoo, with futures) differs from the vendor minutes the HAR coefficients were fitted on; the

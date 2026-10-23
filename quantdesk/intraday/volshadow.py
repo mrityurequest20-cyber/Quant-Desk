@@ -36,6 +36,7 @@ from ..autolearn.prereg import nw_t
 
 CANDS = ("desk", "har")
 MIN_DAYS_FOR_T = 10
+INDICES = ("NIFTY", "BANKNIFTY")           # the protocol's session counts only when both have a gradable record
 TARGET_SESSIONS = 60                       # docs/VOL_SHADOW_PROTOCOL.md: no read before this many sessions (20 has about 50% power on NIFTY)
 MODES = ("off", "shadow")                  # no apply mode: a forecast that decides nothing is the whole feature
 OPEN_READ = 15                             # minutes after 09:15: 09:30, the first decision point the study covered
@@ -109,6 +110,9 @@ class VolShadow:
             if u in self.tried:
                 self.journal.event(now, "WARN", "quant", f"{u} vol shadow: no HAR forecast at the opening read "
                                                          f"({self.why.get(u, 'not available')}); nothing is recorded for today")
+            else:                                                # the engine reached this index only after the window
+                self.journal.event(now, "WARN", "quant", f"{u} vol shadow: the engine first reached the opening read at "
+                                                         f"{now:%H:%M}, after 10:00 (a late start); nothing is recorded for today")
             return
         self.tried.add(u)
         try:
@@ -163,10 +167,11 @@ def realised(bars: pd.DataFrame) -> dict:
     return {d: (r[i], miss[i]) for i, d in enumerate(days)}
 
 
-_SKIP_REASONS = (("no HAR forecast at the opening read", "no HAR forecast by 10:00 (too little history, a gap, or a late start)"),
+_SKIP_REASONS = (("no HAR forecast at the opening read", "no HAR forecast by 10:00 (too little history or a gap)"),
+                 ("after 10:00 (a late start)", "late start (the engine first reached the read after 10:00)"),
                  ("no realised-vol estimate", "the desk had no estimate (HAR recorded, not graded)"),
-                 ("could not start", "could not start"), ("failed", "error while recording"),
-                 ("unavailable", "coefficients missing or unusable"), ("bad ", "bad vol_forecast config"))
+                 ("could not start", "could not start"), ("unavailable", "coefficients missing or unusable"),
+                 ("is not off or shadow", "bad vol_forecast config (treated as off)"), ("failed", "error while recording"))
 
 
 def skips(events: pd.DataFrame) -> dict:
@@ -174,12 +179,33 @@ def skips(events: pd.DataFrame) -> dict:
     out: dict[str, int] = {}
     if events is None or not len(events) or "message" not in events:
         return out
-    w = events[(events["category"] == "quant") & events["message"].astype(str).str.contains("vol shadow", regex=False)]
+    msg = events["message"].astype(str)
+    w = events[(events["category"] == "quant") & (msg.str.contains("vol shadow", regex=False) | msg.str.contains("vol_forecast", regex=False))]
     if "level" in w:
         w = w[w["level"].isin(["WARN", "ERROR", "CRITICAL"])]
     for msg in w["message"].astype(str):
         why = next((label for key, label in _SKIP_REASONS if key in msg), "other")
         out[why] = out.get(why, 0) + 1
+    return out
+
+
+def _pooled(d: pd.DataFrame) -> dict:
+    """The protocol's ONE primary statistic (docs/VOL_SHADOW_PROTOCOL.md): per session, the mean over both indices and the
+    four horizons of QLIKE(desk) - QLIKE(HAR) (positive: HAR better); the session is the unit; only sessions in which both
+    indices have a gradable record count; one-sided Newey-West t (5 lags) and its normal p. n is `sessions_both`."""
+    d = d.assign(diff=V.qlike(d["rv"].to_numpy(float), d["F_desk"].to_numpy(float))
+                 - V.qlike(d["rv"].to_numpy(float), d["F_har"].to_numpy(float)),
+                 desk_q=V.qlike(d["rv"].to_numpy(float), d["F_desk"].to_numpy(float)))
+    have = d.groupby("day")["symbol"].agg(lambda s: set(INDICES) <= set(s))
+    both = d[d["day"].isin(have[have].index)]
+    per = both.groupby("day")["diff"].mean().sort_index()
+    out = {"sessions_both": int(len(per)), "pooled": None}
+    if len(per):
+        t = nw_t(per.to_numpy()) if len(per) >= MIN_DAYS_FOR_T else float("nan")
+        p = 0.5 * math.erfc(t / math.sqrt(2)) if t == t else float("nan")
+        desk_q = float(both.groupby("day")["desk_q"].mean().mean())
+        out["pooled"] = {"sessions": int(len(per)), "mean_diff": float(per.mean()),
+                         "gain_pct": float(100 * per.mean() / desk_q) if desk_q > 0 else None, "nw_t": t, "p_one_sided": p}
     return out
 
 
@@ -206,6 +232,7 @@ def compare(events: pd.DataFrame, bars: dict[str, pd.DataFrame]) -> dict:
            "skips": skips(events)}
     if d.empty:
         return rep
+    rep.update(_pooled(d))
     for (sym, hz), g in d.groupby(["symbol", "horizon"]):
         cell = {"n": int(len(g)), "days": int(g["day"].nunique())}
         for c in CANDS:
@@ -230,16 +257,28 @@ def compare(events: pd.DataFrame, bars: dict[str, pd.DataFrame]) -> dict:
 def render(rep: dict) -> str:
     L = ["# Live vol shadow: the desk's forecaster (A) vs HAR", "",
          f"{rep['forecasts']} journaled forecasts, {rep['scored']} (forecast, horizon) pairs with a completed horizon; "
-         f"{rep.get('sessions', 0)} of {TARGET_SESSIONS} sessions graded (docs/VOL_SHADOW_PROTOCOL.md: no read before {TARGET_SESSIONS}; "
-         "nothing here is acted on).",
-         "Skipped index-sessions (the shadow's WARNs): " + ("; ".join(f"{n} x {why}" for why, n in rep.get("skips", {}).items())
-                                                          or "none") + ".", ""]
+         f"{rep.get('sessions', 0)} sessions graded, {rep.get('sessions_both', 0)} of {TARGET_SESSIONS} with both indices "
+         f"(docs/VOL_SHADOW_PROTOCOL.md: only those count, and there is no read before {TARGET_SESSIONS}; nothing here is acted on).",
+         "Shadow WARNs by reason (sessions or index-sessions with no gradable record): "
+         + ("; ".join(f"{n} x {why}" for why, n in rep.get("skips", {}).items()) or "none") + ".", ""]
+    pl, ready = rep.get("pooled"), rep.get("sessions_both", 0) >= TARGET_SESSIONS
+    if ready and pl:
+        ok = pl["mean_diff"] > 0 and pl["p_one_sided"] == pl["p_one_sided"] and pl["p_one_sided"] < 0.05
+        gp = "n/a" if pl["gain_pct"] is None else format(pl["gain_pct"], "+.1f") + "%"
+        verdict = "PASS" if ok else "NOT CONFIRMED"
+        L += [f"**Primary statistic at {pl['sessions']} sessions (the protocol's, read once):** mean QLIKE gain "
+              f"{pl['mean_diff']:+.4f} ({gp}), NW t {pl['nw_t']:+.2f}, one-sided p {pl['p_one_sided']:.3f}: **{verdict}** "
+              "(PASS needs a positive mean and p < 0.05)."]
+        L.append("")
+    else:
+        L += [f"Primary statistic (the protocol's): withheld until {TARGET_SESSIONS} sessions with both indices are graded "
+              f"({rep.get('sessions_both', 0)} so far). The per-cell DM t below is withheld too.", ""]
     if not rep["by"]:
         return "\n".join(L + ["Nothing to score yet."]) + "\n"
     L += ["| index · horizon | days | QLIKE A | QLIKE HAR | gain | DM t | move ratio A | move ratio HAR |",
           "|---|---|---|---|---|---|---|---|"]
     for k, c in rep["by"].items():
-        g, t = c["qlike_gain_pct"], c["dm_t"]
+        g, t = c["qlike_gain_pct"], (c["dm_t"] if ready else None)
         L.append(f"| {k} | {c['days']} | {c['desk']['qlike']:.4f} | {c['har']['qlike']:.4f} | "
                  f"{'n/a' if g is None else f'{g:+.1f}%'} | {'n/a' if t is None or t != t else f'{t:+.2f}'} | "
                  f"{c['desk']['move_ratio']:.2f} | {c['har']['move_ratio']:.2f} |")
@@ -249,7 +288,7 @@ def render(rep: dict) -> str:
             return " · ".join("-" if v is None else f"{v:.2f}" for v in x["move_ratio_by_time"].values())
         L.append(f"- {k}: A {fmt(c['desk'])}  |  HAR {fmt(c['har'])}")
     L += ["", "QLIKE: lower is better; gain is HAR's improvement over A. Move ratio: realised mean |move| over the forecast's "
-          "expected |move|; 1.00 is calibrated, above 1 too small, below 1 too big. DM t appears from "
-          f"{MIN_DAYS_FOR_T} days. Realised-volatility forecasts only: the implied blend is in neither number, and A is the desk's live estimate, "
+          "expected |move|; 1.00 is calibrated, above 1 too small, below 1 too big. DM t appears only once the protocol's "
+          f"{TARGET_SESSIONS} sessions are in. Realised-volatility forecasts only: the implied blend is in neither number, and A is the desk's live estimate, "
           "not the study's candidate A (see docs/VOL_SHADOW_PROTOCOL.md)."]
     return "\n".join(L) + "\n"

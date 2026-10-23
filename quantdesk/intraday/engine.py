@@ -295,6 +295,10 @@ class IntradayEngine:
             self.volshadow.start_session(day, session_bounds(day)[0], self.underlyings)
         except Exception as exc:                                   # the shadow may never stop a session from starting
             log.warning("vol shadow could not start: %r", exc)
+            try:                                                   # ...and on the record, so the report can count it
+                self.journal.event(self.feed.now(), "WARN", "quant", f"vol shadow could not start: {exc!r:.160}")
+            except Exception:
+                pass
         exp = ", ".join(f"{u} {e:%d-%b}" for u, e in self.expiry.items())
         self.say(f"── session {day} · capital ₹{self.day_start_equity:,.0f} · expiries {exp} · chain {self.chains.name} "
                  f"· feed {self.feed.name}{' · events: ' + ', '.join(self.events_today) if self.events_today else ''}")

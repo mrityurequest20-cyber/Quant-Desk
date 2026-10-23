@@ -401,7 +401,7 @@ def test_compare_scores_qlike_and_move_ratio_against_the_recorded_bars():
     desk_less = pd.DataFrame([_ev_row(idx[15], "NIFTY", 15, {"30m": 30}, {}, {"30m": f_har})])
     assert volshadow.compare(desk_less, {"NIFTY": bars})["scored"] == 0     # nothing to compare HAR against
     text = volshadow.render(rep)
-    assert "1 of 60 sessions graded" in text
+    assert "1 sessions graded, 0 of 60 with both indices" in text and "withheld until 60 sessions" in text
     assert "NIFTY 30m" in text and "QLIKE" in text
     assert "Nothing to score" in volshadow.render(volshadow.compare(pd.DataFrame(columns=["ts", "category", "data"]), {}))
 
@@ -507,7 +507,7 @@ def test_the_vol_shadow_command_reports_from_the_journal_and_the_recorded_bars(c
     j.commit()
     cli.cmd_vol_shadow(cfg, argparse.Namespace(account=None, since=None))
     out = capsys.readouterr().out
-    assert "NIFTY 30m" in out and "1 of 60 sessions graded" in out
+    assert "NIFTY 30m" in out and "of 60 with both indices" in out
 
 
 def test_the_report_says_why_sessions_have_no_record(cfg):
@@ -521,9 +521,73 @@ def test_the_report_says_why_sessions_have_no_record(cfg):
                        {"ts": "2026-10-26 10:02:00", "level": "INFO", "category": "quant", "message": "vol shadow NIFTY 09:30: ok", "data": None},
                        {"ts": "2026-10-26 10:03:00", "level": "WARN", "category": "risk", "message": "vol shadow in a risk event", "data": None}])
     got = volshadow.skips(ev)
-    assert got == {"no HAR forecast by 10:00 (too little history, a gap, or a late start)": 2,
+    assert got == {"no HAR forecast by 10:00 (too little history or a gap)": 2,
                    "the desk had no estimate (HAR recorded, not graded)": 1, "error while recording": 1}
     assert volshadow.skips(pd.DataFrame(columns=["ts", "category", "message"])) == {}
     text = volshadow.render({"forecasts": 0, "scored": 0, "by": {}, "skips": got, "sessions": 0})
-    assert "2 x no HAR forecast by 10:00" in text and "of 60 sessions graded" in text
+    assert "2 x no HAR forecast by 10:00" in text and "of 60 with both indices" in text
     assert "none" in volshadow.render({"forecasts": 0, "scored": 0, "by": {}, "skips": {}})
+
+
+def test_every_skip_the_shadow_can_emit_is_counted_by_reason():
+    """Delta review of #87: a late start, a failed start_session and a bad mode setting must be visible in the report; a
+    coefficient error whose text contains 'failed' is still 'coefficients missing', not 'error while recording'."""
+    def warn(msg):
+        return {"ts": "2026-10-26 10:05:00", "level": "WARN", "category": "quant", "message": msg, "data": None}
+    ev = pd.DataFrame([warn("NIFTY vol shadow: the engine first reached the opening read at 10:07, after 10:00 (a late start); nothing is recorded for today"),
+                       warn("vol shadow could not start: ValueError('x')"),
+                       warn("intraday.vol_forecast.mode 'x' is not off or shadow: treated as off (there is no apply mode)"),
+                       warn("vol shadow unavailable (HAR could not load (failed to read)): nothing is recorded today")])
+    assert volshadow.skips(ev) == {"late start (the engine first reached the read after 10:00)": 1, "could not start": 1,
+                                   "bad vol_forecast config (treated as off)": 1, "coefficients missing or unusable": 1}
+
+
+def test_a_runner_that_first_reaches_an_index_after_10_leaves_a_warn(cfg, tmp_path):
+    """The protocol says a late start is visible; it is only true if the shadow journals it."""
+    from quantdesk.journal.journal import Journal
+    j = Journal(tmp_path / "late.db")
+    vs = volshadow.VolShadow(cfg.with_overrides({"intraday": {"vol_forecast": {"mode": "shadow"}}}), j)
+    vs.har = {"NIFTY": object()}                                           # the index is loaded, but the engine arrives late
+    vs.day = dt.date(2026, 10, 26)
+    vs.step("NIFTY", pd.Timestamp("2026-10-26 10:07", tz=IST), pd.DataFrame(), 15.0)
+    msgs = list(j.events()["message"])
+    assert any("after 10:00 (a late start)" in m for m in msgs)
+    n = len(msgs)
+    vs.step("NIFTY", pd.Timestamp("2026-10-26 10:08", tz=IST), pd.DataFrame(), 15.0)
+    assert len(j.events()) == n                                            # once, not every minute
+
+
+def test_a_failed_start_session_is_on_the_record_and_never_stops_the_session(cfg, tmp_path):
+    def boom(eng):
+        eng.volshadow.start_session = lambda *a, **k: (_ for _ in ()).throw(ValueError("no coefficients today"))
+    eng, j, day, bars = _run(cfg, tmp_path, "boom", hook=boom)
+    assert any("vol shadow could not start" in m for m in j.events()["message"])
+    assert len(j.trades()) >= 0 and eng.health.get("safe_mode") is None      # the session ran
+
+
+def _day_rows(day, symbol, base_diff, n_cells=4):
+    return [{"symbol": symbol, "day": day, "m": 15, "horizon": f"h{i}", "rv": 1.0, "ret": 0.0,
+             "F_desk": 1.0 + base_diff, "F_har": 1.0} for i in range(n_cells)]
+
+
+def test_the_pooled_statistic_counts_only_sessions_with_both_indices_and_is_withheld_until_60():
+    days = [dt.date(2026, 10, 1) + dt.timedelta(days=i) for i in range(70)]
+    rows = []
+    for k, d in enumerate(days):
+        rows += _day_rows(d, "NIFTY", 0.5 + 0.1 * (k % 3))                           # HAR better every session
+        if k % 2 == 0:
+            rows += _day_rows(d, "BANKNIFTY", 0.4)                                    # BANKNIFTY on every other session only
+    out = volshadow._pooled(pd.DataFrame(rows))
+    assert out["sessions_both"] == 35 and out["pooled"]["sessions"] == 35
+    assert out["pooled"]["mean_diff"] > 0 and out["pooled"]["nw_t"] > 3 and out["pooled"]["p_one_sided"] < 0.01
+    rep = {"forecasts": 70, "scored": 280, "sessions": 70, "by": {}, "skips": {}, **out}
+    assert "withheld until 60 sessions" in volshadow.render(rep) and "PASS" not in volshadow.render(rep)
+    rows += [r for d in days[1::2] for r in _day_rows(d, "BANKNIFTY", 0.4)]          # now both indices on all 70 sessions
+    out = volshadow._pooled(pd.DataFrame(rows))
+    assert out["sessions_both"] == 70
+    text = volshadow.render({"forecasts": 140, "scored": 560, "sessions": 70, "by": {}, "skips": {}, **out})
+    assert "Primary statistic at 70 sessions" in text and "**PASS**" in text
+    worse = pd.DataFrame([{**r, "F_desk": 1.0, "F_har": 1.5} for r in rows])             # HAR worse: cannot pass
+    out = volshadow._pooled(worse)
+    assert out["pooled"]["mean_diff"] < 0
+    assert "**NOT CONFIRMED**" in volshadow.render({"forecasts": 140, "scored": 560, "sessions": 70, "by": {}, "skips": {}, **out})
