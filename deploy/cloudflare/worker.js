@@ -10,6 +10,11 @@
 // three times in a day. Cloudflare's cron triggers fire on the minute, so every 10 minutes on weekday mornings and
 // through the session (wrangler.jsonc) this asks GitHub to run scheduler.yml now (workflow_dispatch runs at once).
 // scheduler.py then decides: start the desk if it should be running and isn't, never after a manual cancel.
+// The same clock starts the wide data collection on time (F-19-2): the 15:25 IST stock-chain snapshot is only possible
+// while the book is live (it is blank after the close), and GitHub's own cron for collect-wide.yml arrived 4.5 hours late
+// on this repository. So at 15:25 and 15:45 IST this also dispatches collect-wide.yml (step stocks / minutes); that workflow
+// is read-only data collection beside the desk and keeps its own GitHub schedule as a fallback (a late duplicate is
+// harmless: the stock snapshot refuses to record outside the session, and the minutes overlap and de-duplicate).
 // It needs GH_DISPATCH_TOKEN: a fine-grained GitHub token for this repository with "Actions: read and write",
 // saved as a secret of this Worker (Cloudflare dashboard → the Worker → Settings → Variables and Secrets).
 
@@ -24,15 +29,18 @@ export function tokenKind(token) {
 	return `${kind} token, ${t.length} characters`;
 }
 
-export async function dispatchScheduler(env) {
+// The collect-wide.yml steps this Worker starts, by the cron (as written in wrangler.jsonc, UTC) that fires them.
+export const COLLECT_CRONS = { "55 9 * * MON-FRI": "stocks", "15 10 * * MON-FRI": "minutes" };    // 15:25 and 15:45 IST
+
+export async function dispatchWorkflow(env, file, inputs) {
 	const token = String(env.GH_DISPATCH_TOKEN || "").trim();       // a pasted newline would break the header
 	if (!token) return { ok: false, why: "GH_DISPATCH_TOKEN is not set on this Worker: the desk relies on GitHub's own cron" };
 	const repo = String(env.GH_REPO || "mrityurequest20-cyber/Quant-Desk");
-	const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/scheduler.yml/dispatches`, {
+	const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${file}/dispatches`, {
 		method: "POST",
 		headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28",
 			"user-agent": "quantdesk-worker", "content-type": "application/json" },
-		body: JSON.stringify({ ref: String(env.GH_REF || "main") }),
+		body: JSON.stringify({ ref: String(env.GH_REF || "main"), ...(inputs ? { inputs } : {}) }),
 	});
 	if (res.status === 204) return { ok: true, why: "GitHub answered 204" };
 	// GitHub says why it refused, and on a 403 which permission the call needed: log both (never the token)
@@ -42,8 +50,17 @@ export async function dispatchScheduler(env) {
 	return { ok: false, why: `GitHub answered ${res.status}${msg ? `: ${msg}` : ""}${needs ? ` (needs ${needs})` : ""}; ${tokenKind(token)}` };
 }
 
+export const dispatchScheduler = (env) => dispatchWorkflow(env, "scheduler.yml");
+export const dispatchCollect = (env, step) => dispatchWorkflow(env, "collect-wide.yml", { step });
+
 export default {
 	async scheduled(event, env, ctx) {
+		const step = COLLECT_CRONS[event.cron];
+		if (step) {                                              // 15:25 / 15:45 IST: wide data collection, on time
+			const r = await dispatchCollect(env, step);
+			console.log(`collect-wide ${step} ${r.ok ? "dispatched" : "not dispatched"} (${event.cron}): ${r.why}`);
+			return;
+		}
 		const r = await dispatchScheduler(env);
 		console.log(`desk scheduler ${r.ok ? "dispatched" : "not dispatched"} (${event.cron}): ${r.why}`);
 	},
