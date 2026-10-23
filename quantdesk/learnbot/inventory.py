@@ -263,13 +263,17 @@ def models(cfg) -> dict:
 
 
 def _cards(root: Path, champion, challengers) -> list[dict]:
-    """Each model's grading and verdict status from its registry card (read-only): status, the approval or rejection reason,
-    and the validation expectancy with its interval."""
+    """Each model's grading and verdict status from its registry card (read-only): status, the approval or rejection reason, and the
+    validation expectancy with its interval. The champion, the challengers, then the rejected and retired models (a rejection's reason
+    is a verdict), at most 8 in all."""
     from ..autolearn.registry import Registry
+    from ..autolearn.store import read_json
+    state = read_json(root / "registry" / "state.json")
+    state = state if isinstance(state, dict) else {}
+    named = [champion] + list(challengers) + list(state.get("rejected") or []) + list(state.get("retired") or [])
     reg = Registry(root)
-    ids = [champion] + [c if isinstance(c, str) else (c or {}).get("model_id") for c in challengers]
     out = []
-    for mid in dict.fromkeys(i for i in ids if i):
+    for mid in dict.fromkeys(i for i in (x if isinstance(x, str) else (x or {}).get("model_id") for x in named) if i):
         card = reg.card(mid) or {}
         val = ((card.get("validation") or {}).get("metrics") or {})
         exp = ((val.get("trading") or {}).get("expectancy_bps"))
@@ -317,7 +321,7 @@ def _covered(test: str, key: str, root: Path) -> str | None:
     return None
 
 
-NEEDS_CODE = re.compile(r"BACKLOG|not (?:yet )?collected", re.I)    # a test that waits on data or a build is not docs-only
+NEEDS_CODE = re.compile(r"BACKLOG|not (?:yet )?collected|fo_stock_opts|\bonce\b.{0,80}\ballow", re.I)    # a test that waits on data or a build is not docs-only
 
 
 def actions(period: str, day: dt.date, root: Path | None = None) -> dict:

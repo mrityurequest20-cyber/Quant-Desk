@@ -40,6 +40,8 @@ SLEEVE_SPEC = re.compile(r"docs/prereg/expiry_seller_.*\.json")
 # a research pull request (one that adds a spec) is on learnbot/YYYY-MM-DD-<key> and carries docs/learnbot/<key>.md, which
 # is what stops the inventory proposing the same action again once it is merged
 KEY_BRANCH = re.compile(r"learnbot/\d{4}-\d{2}-\d{2}-(?P<key>[a-z0-9][a-z0-9-]*)")
+# an action key is principle-kind-<6 hex>: a note named like one marks that action shipped, so it needs its spec in the same PR
+KEY_SHAPE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{6}")
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 MAX_DEPTH = 32                                     # real specs are a handful of levels deep; the memory recurses over them
 # why a path outside the allow-list is refused (the first matching prefix is quoted; any other path gets the default)
@@ -288,6 +290,12 @@ def check_diff(base: str, head: str = "HEAD", branch: str | None = None, repo: P
         res.problems += _report_problems(path, text)
     if any(f["path"].startswith("docs/prereg/") for f in res.files):
         res.problems += _note_problems(branch, texts)
+    else:
+        for f in res.files:
+            stem = PurePosixPath(f["path"]).stem
+            if f["path"].startswith("docs/learnbot/") and KEY_SHAPE.fullmatch(stem):
+                res.problems.append(f"{ascii(f['path'])}: a note named like an action key marks that action shipped, so it "
+                                    "needs its spec in the same pull request")
     return res
 
 

@@ -146,6 +146,15 @@ def test_the_quarter_months_need_the_independent_review(repo):
     assert ship(repo, {path: REPORT_OK + "\n## Independent review\nrisk-compliance: CLEAR"}, branch="learnbot/q").ok
 
 
+def test_a_key_note_without_its_spec_is_refused(repo):
+    """internal-auditor Q1: a note-only PR passed, and once merged it marked the action shipped with no spec behind it."""
+    res = ship(repo, {"docs/learnbot/l1-caveat-f28331.md": "key l1-caveat-f28331"}, branch="learnbot/2026-11-02-l1-caveat-f28331")
+    assert not res.ok and any("needs its spec in the same pull request" in p for p in res.problems)
+    assert ship(repo, {"docs/learnbot/free-form-note.md": "a plain note for the next run"}, branch="learnbot/2026-11-02-n").ok
+    both = {"docs/prereg/new_v1.json": spec("new_v1")}
+    assert ship(repo, both, branch="learnbot/2026-11-02-l1-caveat-f28331", note=True).ok     # with its spec, the note is welcome
+
+
 def test_a_research_pull_request_needs_its_branch_pattern_and_its_note(repo):
     """internal-auditor R5: without the note the same action is proposed again on every run."""
     files = {"docs/prereg/new_v1.json": spec("new_v1")}
@@ -167,7 +176,7 @@ def test_sleeve_specs_and_json_reports_follow_their_rules(repo):
 
 
 def test_the_learnbot_note_folder_is_allowed(repo):
-    res = ship(repo, {"docs/learnbot/l1-caveat-3fa91c.md": "key l1-caveat-3fa91c"})
+    res = ship(repo, {"docs/learnbot/watch-the-opening-bar.md": "look at the opening bar next time"})
     assert res.ok and res.files[0]["kind"] == "a note for the next learning run"
 
 
@@ -576,6 +585,23 @@ def test_a_key_quoted_in_a_report_does_not_suppress_its_action(tmp_path, monkeyp
     assert [a["key"] for a in done["do"]] == [k[2]] and {x["key"] for x in done["skipped"]} == {k[0], k[1]}
 
 
+def test_the_forecast_skill_reaches_the_desk_section_and_waits_for_the_runtime(cfg, tmp_path, monkeypatch):
+    """internal-auditor Q4: the wiring of forecast_skill into desk() was untested."""
+    from quantdesk.ops import progress as P
+    calls = []
+    monkeypatch.setattr(P, "forecast_skill", lambda c: calls.append(1) or {"forecast_skill": 0.12, "signal_hit_rate": 0.55,
+                                                                           "signal_net_bps": 3.5, "predictions_resolved": 41})
+    jp = tmp_path / "j.db"
+    make_journal(jp)
+    no_runtime = I.inventory(cfg, "week", dt.date(2026, 10, 24), jp)["desk"]
+    assert calls == [] and no_runtime["forecast_skill"] is None                       # no runtime folder: not called, nothing created
+    assert not (tmp_path / "runtime").exists()
+    populated_runtime(cfg)
+    desk = I.inventory(cfg, "week", dt.date(2026, 10, 24), jp)["desk"]
+    assert calls == [1]
+    assert (desk["forecast_skill"], desk["signal_hit_rate"], desk["signal_net_bps"], desk["predictions_resolved"]) == (0.12, 0.55, 3.5, 41)
+
+
 def test_what_waits_on_a_build_or_on_uncollected_data_is_not_docs_only(tmp_path, monkeypatch):
     """internal-auditor R4: two 'stock options (BACKLOG 1)' caveats were proposed as docs-only."""
     from quantdesk.research import memory as M
@@ -587,6 +613,14 @@ def test_what_waits_on_a_build_or_on_uncollected_data_is_not_docs_only(tmp_path,
     assert [x["test"] for x in a["do"]] == ["a plain registered test"] and len(a["needs_engineering"]) == 2
 
 
+def test_a_secret_hidden_by_a_json_escape_in_the_key_is_read_with_its_value(repo):
+    """internal-auditor Q4: key and value are scanned as a pair; an escaped key hides it from the raw text."""
+    body = '{"name": "esc2_v1", "registered": "2026-10-20", "api\\u005fkey": "Zq8xW2mN4vB7cK9pL3sD6fG1"}'
+    assert "api_key" not in body
+    res = ship(repo, {"docs/prereg/esc2_v1.json": body})
+    assert not res.ok and any("secret" in p for p in res.problems)
+
+
 def test_the_skip_rule_matches_whole_spec_names_of_eight_characters_or_more(tmp_path, monkeypatch):
     from quantdesk.research import memory as M
     (tmp_path / "docs" / "prereg").mkdir(parents=True)
@@ -594,10 +628,11 @@ def test_the_skip_rule_matches_whole_spec_names_of_eight_characters_or_more(tmp_
         (tmp_path / "docs" / "prereg" / f"{n}.json").write_text("{}")
     props = [{"principle": "L1", "kind": "caveat", "rank": 1, "why": "w", "test": "tab and cab are not the spec ab"},
              {"principle": "L2", "kind": "caveat", "rank": 1, "why": "w", "test": "compare with expiry_eve_entry_v1 first"},
-             {"principle": "L3", "kind": "caveat", "rank": 1, "why": "w", "test": "my_expiry_eve_entry_v1b is another thing"}]
+             {"principle": "L3", "kind": "caveat", "rank": 1, "why": "w", "test": "my_expiry_eve_entry_v1b is another thing"},
+             {"principle": "L4", "kind": "caveat", "rank": 1, "why": "w", "test": "my_expiry_eve_entry_v1 is another thing too"}]
     monkeypatch.setattr(M, "summary", lambda: {"proposals": props})
     a = I.actions("month", dt.date(2026, 11, 2), tmp_path)
-    assert [x["principle"] for x in a["do"]] == ["L1", "L3"] and a["skipped"][0]["why"].endswith("expiry_eve_entry_v1")
+    assert [x["principle"] for x in a["do"]] == ["L1", "L3", "L4"] and a["skipped"][0]["why"].endswith("expiry_eve_entry_v1")
 
 
 def test_the_desk_numbers_are_all_time_correct_and_complete(cfg, tmp_path):
