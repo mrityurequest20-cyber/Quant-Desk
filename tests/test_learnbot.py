@@ -258,7 +258,9 @@ def test_a_spec_the_memory_cannot_fingerprint_is_refused(repo):
     """risk-compliance re-verification: a lone surrogate and deep nesting passed, then broke memory.registry()."""
     deep = '{"name": "deep_v1", "registered": "2026-10-20", "x": ' + "[" * 960 + "]" * 960 + "}"
     res = ship(repo, {"docs/prereg/deep_v1.json": deep})
-    assert not res.ok and any("nested more than" in p for p in res.problems)
+    # refused either way: Python 3.13 parses 960 levels and the depth cap catches it; 3.11 under pytest's deeper stack hits its
+    # recursion limit inside json.loads first (CI saw "nested too deeply"). The test must not depend on which interpreter it is.
+    assert not res.ok and any("nested" in p for p in res.problems)
     absurd = '{"name": "abs_v1", "registered": "2026-10-20", "x": ' + "[" * 20000 + "]" * 20000 + "}"
     res = ship(repo, {"docs/prereg/abs_v1.json": absurd}, branch="learnbot/2026-10-24-abs")
     assert not res.ok and any("nested too deeply" in p or "nested more than" in p for p in res.problems)
