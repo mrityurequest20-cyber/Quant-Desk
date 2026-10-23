@@ -44,6 +44,7 @@ from .playbook import Playbook, TradePlan
 from .quant import DirectionModel, EVEngine, VolForecaster, features_5m, load_research, session_sigma, to_5m
 from .risk import IntradayRisk
 from .sim import IntradayBroker, QuoteMarker
+from .volshadow import VolShadow
 
 log = logging.getLogger(__name__)
 _claude_budget_warned = False                       # the budget display fails quietly: one log line per process, not one a minute
@@ -124,6 +125,9 @@ class IntradayEngine:
                         "lots": max(1, int(xc.get("lots", 1))), "max_total": int(xc.get("max_total", 40)), "until": until}
         self._explore_said = False
         self.volf = VolForecaster()
+        # intraday.vol_forecast.mode (off | shadow): vol_forecast_v1's HAR forecast is recorded beside the desk's own at the
+        # opening read, to be graded later (`intraday vol-shadow`). Nothing reads it: it is not an input to any decision.
+        self.volshadow = VolShadow(cfg, journal)
         self.ev = EVEngine(cfg, self.pricer, broker.costs, n_paths=int(qc.get("n_paths", 2000)))
         self.models: dict[str, DirectionModel] = {}
         self.hist5: dict[str, pd.DataFrame] = {}
@@ -287,6 +291,14 @@ class IntradayEngine:
         self._gov_safe(self._gov_start, day)
         if self.quant_on:
             self._train_models(day)
+        try:
+            self.volshadow.start_session(day, session_bounds(day)[0], self.underlyings)
+        except Exception as exc:                                   # the shadow may never stop a session from starting
+            log.warning("vol shadow could not start: %r", exc)
+            try:                                                   # ...and on the record, so the report can count it
+                self.journal.event(self.feed.now(), "WARN", "quant", f"vol shadow could not start: {exc!r:.160}")
+            except Exception:
+                pass
         exp = ", ".join(f"{u} {e:%d-%b}" for u, e in self.expiry.items())
         self.say(f"── session {day} · capital ₹{self.day_start_equity:,.0f} · expiries {exp} · chain {self.chains.name} "
                  f"· feed {self.feed.name}{' · events: ' + ', '.join(self.events_today) if self.events_today else ''}")
@@ -410,6 +422,8 @@ class IntradayEngine:
         if self.learner is not None:                         # every model's prediction, before the outcome exists
             self.learn_sig[u] = self._guarded(u, now, "learning record", self._learn_step, u, now)
         q = self._guarded(u, now, "quant state", self._quant_state, u, now) if self.quant_on else None
+        if q is not None and self.volshadow.on:
+            self._vol_shadow(u, now, q)
         b = self._guarded(u, now, "brain", self._think_globally, u, now) if self.brain is not None else None
         blk = self.eventbook.blocking(now)                   # only an announcement inside the session blocks
         br = self.breadth_state[u] = self.breadth.state(u, s.get("chg"), now) if self.breadth is not None else None
@@ -1403,6 +1417,20 @@ class IntradayEngine:
                 self.journal.event(now, "ERROR", "quant", f"{u} {what} failed: {exc!r:.200}", {"where": _where(exc)})
             return None
 
+    def _vol_shadow(self, u: str, now, q: dict) -> None:
+        """Record the HAR forecast beside the desk's (volshadow.py). Read-only on everything the engine decides with."""
+        try:
+            self.volshadow.step(u, now, self.bars[u], q.get("rv_ann"), (self.chain_an.get(u) or {}).get("atm_iv"),
+                                q.get("sigma_30m_pct"))
+        except Exception as exc:
+            key = (self.day, u, "vol shadow")
+            if key not in self._qerrors:
+                self._qerrors.add(key)
+                try:
+                    self.journal.event(now, "WARN", "quant", f"{u} vol shadow failed (no decision is affected): {exc!r:.200}")
+                except Exception:                      # the shadow's own report of a failure must not itself stop the step
+                    log.exception("vol shadow failed and could not be journaled")
+
     def _train_models(self, day) -> None:
         """Fit each underlying's direction model on sessions before `day` only, and say how it tested."""
         for u in self.underlyings:
@@ -1807,7 +1835,7 @@ class IntradayEngine:
             "health": dict(self.health)})
 
     def _claude_line(self) -> str | None:
-        """'Claude: $X today, $Y of $23.60 used, ~N sessions left at this pace' (None without a credit)."""
+        """'Claude: $X today, $Y of $20.00 used, ~N sessions left at this pace' (None without a credit)."""
         global _claude_budget_warned
         try:                                          # a display: whatever is wrong with the ledger must never cost the desk a step
             b = getattr(getattr(self.news, "llm", None), "budget", None) if self.news is not None else None

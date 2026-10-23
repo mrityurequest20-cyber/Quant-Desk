@@ -586,6 +586,28 @@ def cmd_learn(cfg, a):
     print("\n".join(lines) if lines else "nothing graded yet")
 
 
+def cmd_vol_shadow(cfg, a):
+    """Live A (the desk's vol forecaster) vs HAR: the journaled shadow forecasts scored against the recorded bars. The protocol's
+    single read (60 counted sessions, or the 31 Mar 2027 backstop) is taken here once on the live journal and stored; after
+    that this command shows the stored record. `--since` narrows only the per-cell tables, never the primary statistic."""
+    import pandas as pd
+
+    from . import volshadow
+    p = paths(cfg, a.account or "live")
+    j = Journal(p["journal"])
+    rec = SessionRecorder(p["data"])
+    bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
+    rep = volshadow.compare(j.events(), bars)
+    if a.since:
+        part = volshadow.compare(j.events(since=a.since), bars)
+        rep = {**part, **{k: rep[k] for k in ("pooled", "sessions_both", "sessions_excluded") if k in rep}}
+    if (a.account or "live") == "live":
+        rep = volshadow.read_once(j, rep, pd.Timestamp.now(tz="Asia/Kolkata").date())
+    else:
+        print(f"(account {a.account}: the protocol's single read applies to the live journal only and is not taken here)")
+    print(volshadow.render(rep))
+
+
 def cmd_archive(cfg, a):
     """C-02: archive, verify, then prune old thoughts/news and plan studies (quantdesk/journal/retention.py)."""
     import datetime as _dt
@@ -902,6 +924,10 @@ def register(sub):
     x.add_argument("--if-empty", action="store_true", help="with --bootstrap: only when nothing has been graded yet")
     x.add_argument("--top", type=int, default=12)
     x.set_defaults(fn=cmd_learn)
+    x = ss.add_parser("vol-shadow", help="live A-vs-HAR volatility forecasts against what the index did (QLIKE, move ratio)")
+    x.add_argument("--account", help="live (default), replay, synthetic")
+    x.add_argument("--since", help="only forecasts from this date (YYYY-MM-DD)")
+    x.set_defaults(fn=cmd_vol_shadow)
     x = ss.add_parser("archive", help="archive, verify, then prune old thoughts/news and plan studies (keeps the journal small)")
     x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
     x.add_argument("--out", help="where the dated archive files and the manifest go")
