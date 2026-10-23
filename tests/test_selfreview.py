@@ -189,3 +189,33 @@ def test_questionable_fills_and_an_optimistic_cost_model_are_findings():
     assert "81200CE: wide, thin (spread 31%, 10 at the touch)" in f[0].detail and "9 min from 15:20" in f[0].detail
     assert "2.6x" in f[1].title
     assert SR.check_sleeves(FakeSeller([t], {}), dt.date(2026, 10, 8)) == []      # another day: nothing new
+
+
+class RowSeller:
+    """A report with one retired sleeve at its 6-trade milestone, one bug and one trade past expiry."""
+    def __init__(self, settlement=None):
+        if settlement:
+            self.settlement = settlement
+
+    def report(self):
+        row = {"sleeve": "F", "underlying": "NIFTY", "retired": "real quotes cost more than the edge", "n": 6, "sum": -900.0,
+               "bugs": ["F-NIFTY-x: lost ₹9,000, beyond its max loss ₹6,000"], "cost": "failed", "consistency": "collecting (6/8)",
+               "status": "retired", "gap_mean": -400.0}
+        return {"spec": "expiry_seller_v4", "rows": [row], "skips": [], "fills": {},
+                "open": [{"id": "F-NIFTY-2026-10-06", "expiry": "2026-10-06"}]}
+
+    def trades(self):
+        return []
+
+
+def test_comparison_ledgers_raise_no_verdicts_and_v4_waiting_is_worded_for_the_official_close():
+    day = dt.date(2026, 10, 8)
+    keys = lambda f: [x.key.split(":")[0] for x in f]                                  # noqa: E731
+    decision = SR.check_sleeves(RowSeller("official_close"), day)
+    assert keys(decision) == ["sleeve-retired", "sleeve-bug", "sleeve-milestone", "sleeve-unsettled"]
+    unsettled = decision[-1]
+    assert "waiting for the official close" in unsettled.title and "no recorded closing bars" not in unsettled.detail
+    assert "SENSEX" in unsettled.action and "max loss" in unsettled.detail
+    comparison = SR.check_sleeves(RowSeller(), day, comparison=True)                    # v1–v3 once v4 is registered
+    assert keys(comparison) == ["sleeve-bug", "sleeve-unsettled"]                       # data health stays; no verdicts
+    assert "no recorded closing bars" in comparison[-1].detail                          # the mean-rule wording is unchanged
