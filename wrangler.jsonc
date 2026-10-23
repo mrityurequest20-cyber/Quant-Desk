@@ -16,7 +16,9 @@
   // meant Sunday-Thursday and skipped every Friday until 4 Oct 2026.
   // Also 15:25 and 15:45 IST Mon-Fri (09:55 and 10:15 UTC): start collect-wide.yml's stocks and minutes steps on time instead
   // of waiting for GitHub's cron, which has been hours late (F-19-2; the stock snapshot only exists while the book is live).
-  // Four cron triggers in all (Cloudflare's free plan allows five per account).
+  // The watchdog (deploy/cloudflare/watchdog.js) runs inside these same firings; its after-close checks and the Saturday digest
+  // need a fifth trigger, every half hour from 15:30 to 22:00 IST (10:00-16:30 UTC), every day. That one does NOT start the desk.
+  // Five cron triggers in all: the limit of Cloudflare's free plan, so any further check must reuse these patterns.
   // Needs the Worker secret GH_DISPATCH_TOKEN; without it the trigger logs why and does nothing.
-  "triggers": { "crons": ["*/10 2-9 * * MON-FRI", "55 9 * * MON-FRI", "15 10 * * MON-FRI", "0 12 * * SUN"] }
+  "triggers": { "crons": ["*/10 2-9 * * MON-FRI", "55 9 * * MON-FRI", "15 10 * * MON-FRI", "0 12 * * SUN", "0,30 10-16 * * *"] }
 }

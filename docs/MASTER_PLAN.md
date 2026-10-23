@@ -81,7 +81,7 @@ plan adds (section 3). Items marked TO VERIFY are in section 12.
 | 4 | **GitHub cron fallbacks** (`live.yml` 08:52 IST, `scheduler.yml` every 10 min, `collect-wide` 15:25/15:45 IST) | 4.5 to 7 hours late (VERIFIED in the audit and in `worker.js` comments) | Partly (scheduler logic) | W1 | Fallback only; Worker is primary |
 | 5 | **GitHub Actions platform and runners** | Queue delay, outage, concurrency group `live-desk` blocking | **No** | W1, W9 | Public repo: standard-runner minutes are not a constraint (VERIFIED: `private: false`); TO VERIFY the account's Actions policy |
 | 6 | **Session hand-off between jobs** (`live.yml` job limits 355 and 300 minutes; a session is 08:30 to 15:31) | A gap or duplicate at the hand-off; two desks on one journal | Partly (`tests/test_handover.py`) | W2 heartbeat gap | TO VERIFY behaviour in production over 5 sessions |
-| 7 | **Kotak Neo session** (consumer key, token, TOTP) | Token or TOTP lapses: the desk silently falls back to Yahoo bars and NSE's public chain | Partly (`doctor` warns at start; `broker-check` is manual) | W2 reads the feed label | Owner: renewal procedure and expiry date (section 12) |
+| 7 | **Kotak Neo consumer key** (data endpoints only: no TOTP, no MPIN, no daily login, VERIFIED in `kotak.py` and the README) | The key is revoked or lapses: the desk silently falls back to Yahoo bars and NSE's public chain | Partly (`doctor` warns at start; `broker-check` is manual) | W2 reads the feed label (alerts when the label has no Kotak, or more than half the polls came from Yahoo) | Owner: note any expiry date the Neo app shows for the Trade API application (section 12) |
 | 8 | **Yahoo** (via `yfinance`, unofficial) | Rate limit, format change, empty frames | Partly (readable error, stale-feed gate at 3 min, safe mode, square-off) | W2 | Keep as fallback only; never the sole source for a decision that matters |
 | 9 | **NSE endpoints** (`nseindia.com`, `nsearchives`, chains, bhavcopy, index closes) | Anti-bot blocks on cloud IPs, cookie changes, UDiFF format change, HTML 200 pages | Partly (`NotPublishedHtml`, retries, data findings) | W3, W5 | Findings auto-filed; no second source for the chain beyond Kotak |
 | 10 | **BSE / SENSEX** | No NSE row; Yahoo close only | By design, labelled | n/a | Documented in the v4 spec |
@@ -122,7 +122,7 @@ proxy. It sends alerts. It never starts a trade, touches a journal, or sees a se
 | # | When | Check | Raises |
 |---|---|---|---|
 | W1 | 08:50, 09:00, 09:10, 09:20 (the `*/10` pattern has no :55 firing) | A `Live paper desk` run exists for today and has started | P1 "desk not started" (the Worker also re-dispatches, as it does now) |
-| W2 | 09:30, 11:00, 13:00, 15:00 | The run is still in progress; the published heartbeat is under 10 minutes old; the feed label (Kotak or Yahoo) and the halted flag | P1 stale heartbeat or halted; P2 "feed fell back to Yahoo". TO VERIFY that the published JSON carries `ts`, feed and halted |
+| W2 | 09:30, 11:00, 13:00, 15:00 | The run is still in progress; the published heartbeat is under 20 minutes old (publish cadence plus Pages lag); the feed label (Kotak or Yahoo) and the halted flag | P1 stale heartbeat or halted; P2 feed fell back to Yahoo or is mostly Yahoo. The published JSON carries `ts`, `feed` and `halted` (VERIFIED 23 Oct) |
 | W3 | 16:00 | Live run completed successfully; sleeves step succeeded; journal save succeeded; `collect-wide` stocks (15:25) and minutes (15:45) runs exist and succeeded | P1 any missing or failed |
 | W4 | 17:00 | Learning cycle (16:10) succeeded | P2 |
 | W5 | 18:00 and 21:00 | Self-review (17:10), Org (17:20), Data warehouse (20:15) ran; archive covered today's chains | P2; P1 if the archive is missing |
@@ -183,6 +183,8 @@ is what covers that.
 | Stock minutes and chains | Top F&O stocks | From Oct 2026 | `collect-wide`, `kotak-backfill` | Quarterly shards; health check |
 | News RSS | Headlines for the stand-aside gate | Live only | `live` | Deadline clamp |
 | Teacher lessons | Advisory text | Nightly | `live` (post-close) | Advisory only; never gates a trade |
+
+**Data truth (first, from records we already keep).** The Saturday digest and the watchdog report the Kotak versus Yahoo share of bar polls, the frozen or stale minutes (Kotak's and Yahoo's index series both print one flat price from 15:15 to 15:28 while the future trades; the desk squares off at 15:15 and flags those minutes) and gaps in the tape. 23 Oct: 190 of 570 bar polls came from Yahoo, and the desk's bars matched Yahoo's to a median 0.10 points. Delay in seconds is not yet measured: derive it from existing fetch times, and only if that is impossible propose a small, reviewed logging addition.
 
 **Data rules.** Add, never delete. Every record carries source and time (S1). A series that fails validity (non-positive, flat,
 stale) is quarantined, never silently used (S2; the India VIX zero-bar incident is the standing example). Raw payloads for new
@@ -577,7 +579,7 @@ already built is the hard part: a desk that will not lie to itself.
 
 Forex trading, and US and European options (Tier 4 stays evaluation only until the P1 and P2 exits); commodities are evaluated in March under section 4a and traded only if that memo says go; sequence
 models; buying historical data; a second broker; a web UI redesign beyond S4's honesty fixes; any new strategy family before the
-three queued ones are closed; real-money anything.
+three queued ones are closed; real-money anything; a tick-by-tick **Live Tape** phone view (parked by the owner, 23 Oct: it would add a Durable Object, new secrets and an engine thread for no trading benefit; the real-time question is answered by measuring data freshness and source share instead); Kotak's WebSocket stream (needs the daily TOTP and MPIN login, so it waits for the live-readiness work in section 6).
 
 ---
 
@@ -586,7 +588,7 @@ three queued ones are closed; real-money anything.
 **By Monday 26 Oct (before the first forward sessions):**
 1. Cloudflare dashboard: confirm the `quant-desk` Worker shows **4 cron triggers** and was deployed from `main` after PR 92 (a red "Workers Builds" check on PRs is a different thing).
 2. Record **`GH_DISPATCH_TOKEN` expiry** and its scope (it should have only what the Worker needs).
-3. Confirm the Kotak token and TOTP status and write down how and when it is renewed.
+3. Kotak: the desk needs only the Trade API **consumer key** (no TOTP or MPIN). Note any expiry date the Neo app shows for the application; the 23 Oct session used the Kotak chain, so the key works. (`GH_DISPATCH_TOKEN` has no expiry, so it needs no register entry.)
 4. ~~Add `Learnbot guard` as a required check on `main`.~~ **Done by the owner, 23 Oct 2026.**
 5. ~~Delete the conditional-merge clause from the monthly learning routine's stored prompt.~~ **Done by the owner, 23 Oct 2026** (the weekly prompt was already clean).
 6. Install the **ntfy** app, choose a long random topic, and give it to the Worker as a secret; if you prefer email to GitHub's own notification (the recommended path needs no address), tell me which address.
@@ -606,7 +608,7 @@ three queued ones are closed; real-money anything.
 - A veto on any instrument in the ladder (section 4a) before its month; otherwise the admission report decides.
 - Whether to buy any data later (out of scope for now).
 
-**TO VERIFY at build or on first use (I will report each):** BSE quotes and expiry handling for SENSEX and BANKEX; whether the broker serves commodity options, futures and minutes, and how an evening session would run; the broker's quote-call budget and the live job's runtime with more underlyings; that the published JSON carries timestamp, feed and halted fields; that the Actions bot (not a personal token) produces a GitHub email and app push; whether Kotak's API exposes market depth, and whether it documents a pre-order validation call (using one would need an `AUTONOMY.md` amendment); what happens at the live-job hand-off over five production sessions; that `chain-archive` covers every session before artifacts expire; that the Worker still proxies the published site (the audit says it did); ntfy throttling from a shared Cloudflare address; the Actions policy on the account.
+**TO VERIFY at build or on first use (I will report each):** BSE quotes and expiry handling for SENSEX and BANKEX; whether the broker serves commodity options, futures and minutes, and how an evening session would run; the broker's quote-call budget and the live job's runtime with more underlyings; (VERIFIED 23 Oct: the published JSON carries `ts`, `feed` and `halted` under `state.heartbeat`); that the Actions bot (not a personal token) produces a GitHub email and app push; whether Kotak's API exposes market depth, and whether it documents a pre-order validation call (using one would need an `AUTONOMY.md` amendment); what happens at the live-job hand-off over five production sessions; that `chain-archive` covers every session before artifacts expire; that the Worker still proxies the published site (the audit says it did); ntfy throttling from a shared Cloudflare address; the Actions policy on the account.
 
 ---
 
