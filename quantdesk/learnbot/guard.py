@@ -2,8 +2,11 @@
 
 A research pull request from the learning bot may only ADD documents of three kinds: a new pre-registered spec, a dated
 report, a note for the next run. Everything else is refused, so the bot cannot change code, configuration, a risk limit, a
-workflow, a locked result or an existing file however its session goes. The rule is an allow-list on purpose: a path nobody
-thought of is refused, not waved through.
+workflow, a locked result or an existing file. The rule is an allow-list on purpose: a path nobody thought of is refused,
+not waved through.
+
+It judges only branches named learnbot/ (any case). It cannot make the bot use that name and it cannot stop a merge: the
+routine's prompt, its token and main's ruleset do that (docs/LEARNBOT.md, "What the guard cannot do").
 
 The check reads git objects only. It never imports, runs or evaluates anything from the branch it is judging, and in CI it
 runs from the BASE branch's code (see .github/workflows/learnbot-guard.yml), so a pull request cannot weaken the guard that
@@ -17,8 +20,9 @@ import datetime as dt
 import json
 import re
 import subprocess
+import unicodedata
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "learnbot/"
@@ -30,6 +34,10 @@ ALLOWED = (
     (re.compile(r"^docs/reports/\d{4}-\d{2}-\d{2}_[a-z0-9_]+\.(md|json)$"), "a dated report"),
     (re.compile(r"^docs/learnbot/[A-Za-z0-9_.-]+\.md$"), "a note for the next learning run"),
 )
+# `sleeves.specs()` loads every docs/prereg/expiry_seller_*.json as a paper sleeve with its own legs and sizes: that is an
+# engineer pull request with a risk-compliance review, never a learnbot/ one
+SLEEVE_SPEC = re.compile(r"docs/prereg/expiry_seller_.*\.json")
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # why a path outside the allow-list is refused (the first matching prefix is quoted; any other path gets the default)
 REFUSED_BECAUSE = (
     (".github/", "workflows, permissions and secrets are the owner's"),
@@ -43,15 +51,19 @@ REFUSED_BECAUSE = (
     ("docs/LEARNBOT.md", "the learning bot's own rules are the owner's"),
     ("docs/principles.json", "a principle moves up the ladder on a registered result, in an engineer pull request"),
 )
-SECRET = re.compile(
-    r"ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[ousr]_[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{10,}|AKIA[0-9A-Z]{16}"
-    r"|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
-    r"|(?i:api[_-]?key|secret|token|passwd|password)[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9/+_=-]{24,}")
+SECRET = re.compile("|".join((
+    r"gh[pousr]_[A-Za-z0-9]{20,}", r"github_pat_[A-Za-z0-9_]{20,}", r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}", r"AKIA[0-9A-Z]{16}",
+    r"AIza[0-9A-Za-z_-]{30,}", r"xox[baprs]-[A-Za-z0-9-]{10,}", r"hooks\.slack\.com/services/[A-Za-z0-9/]+",
+    r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{20,}", r"://[^/\s:@]+:[^/\s@]{3,}@",
+    r"(?i:api[_-]?key|secret|token|passwd|password|consumer[_-]?key|access[_-]?key|authorization)[\w\"']{0,20}\s*[:=]\s*"
+    r"[\"']?[A-Za-z0-9/+_=.\-]{20,}")))
 MONTHLY = re.compile(r"^docs/reports/(\d{4}-\d{2}-\d{2})_learnbot_monthly\.md$")
 # the monthly report's required sections (docs/LEARNBOT.md); the quarter-month run adds the independent review
 REPORT_SECTIONS = ("Milestones", "Models", "Data health", "Paper record", "Usage", "NEEDS OWNER")
 REVIEW_SECTION = "Independent review"
 REVIEW_MONTHS = (1, 4, 7, 10)
+MIN_SECTION_CHARS = 8                              # "none" is enough; an empty heading is not
 
 
 @dataclass
@@ -88,26 +100,84 @@ def _changes(repo: Path, base: str, head: str) -> list[dict]:
     return rows
 
 
+def _sections(text: str) -> dict[str, str]:
+    """{heading (lower case): the text under it, up to the next heading of any level}."""
+    parts = re.split(r"^#{1,3}\s+(.+?)\s*$", text, flags=re.M)
+    return {parts[i].strip().lower(): parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+
+
 def _report_problems(path: str, text: str) -> list[str]:
     m = MONTHLY.match(path)
     if not m:
         return []
-    headings = {h.strip().lower() for h in re.findall(r"^#{1,3}\s+(.+?)\s*$", text, flags=re.M)}
+    sections = _sections(text)
     need = list(REPORT_SECTIONS)
-    if dt.date.fromisoformat(m.group(1)).month in REVIEW_MONTHS:
-        need.append(REVIEW_SECTION)
-    return [f"{path}: the monthly report has no '{n}' section" for n in need if n.lower() not in headings]
+    try:
+        if dt.date.fromisoformat(m.group(1)).month in REVIEW_MONTHS:
+            need.append(REVIEW_SECTION)
+    except ValueError:
+        return [f"{ascii(path)}: the date in the file name is not a real date"]
+    out = []
+    for n in need:
+        body = sections.get(n.lower())
+        if body is None:
+            out.append(f"{ascii(path)}: the monthly report has no '{n}' section")
+        elif len(body.strip()) < MIN_SECTION_CHARS:
+            out.append(f"{ascii(path)}: the '{n}' section is empty (under {MIN_SECTION_CHARS} characters)")
+    return out
+
+
+def _spec_problems(path: str, data) -> list[str]:
+    """Every docs/prereg/*.json is loaded by the research memory (and some by the sleeves), so its shape is checked here:
+    a spec that parses but is not a mapping, or has no name or date, would break the desk's own jobs."""
+    if not isinstance(data, dict):
+        return [f"{ascii(path)}: a spec must be a JSON object"]
+    out = []
+    if data.get("name") != PurePosixPath(path).stem:
+        out.append(f"{ascii(path)}: the spec's \"name\" must equal the file name without .json")
+    if not (isinstance(data.get("registered"), str) and ISO_DATE.fullmatch(data["registered"])):
+        out.append(f"{ascii(path)}: the spec needs \"registered\": \"YYYY-MM-DD\"")
+    return out
+
+
+def _secret_in(text: str) -> bool:
+    """The patterns run on the text as written, normalised (NFKC, zero-width characters dropped), and on every string a JSON
+    file decodes to, so an escape or a hidden character does not hide a key."""
+    def norm(t: str) -> str:
+        return "".join(c for c in unicodedata.normalize("NFKC", t) if unicodedata.category(c) != "Cf")
+
+    def strings(o):
+        if isinstance(o, str):
+            yield o
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                yield from strings(k)
+                yield from strings(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from strings(v)
+    texts = [norm(text)]
+    try:
+        texts += [norm(x) for x in strings(json.loads(text))]
+    except ValueError:
+        pass
+    return any(SECRET.search(t) for t in texts)
 
 
 def check_diff(base: str, head: str = "HEAD", branch: str | None = None, repo: Path = ROOT) -> Result:
     """Judge `head` against `base` (the pull request's merge-base diff). `branch` is the pull request's branch name; a
     branch that does not start with learnbot/ is not the learning bot's and is not judged here."""
+    guessed = not branch
     try:
         branch = branch or _git(repo, "rev-parse", "--abbrev-ref", head).decode().strip()
     except subprocess.CalledProcessError:
         branch = ""
     res = Result(branch=branch)
-    if not branch.startswith(BRANCH_PREFIX):
+    if guessed and branch in ("", "HEAD"):
+        # a detached head, or a ref that does not exist: "not a learnbot branch" would pass a bad diff, so refuse to guess
+        res.problems.append("could not tell which branch this is (detached head or unknown ref): pass --branch")
+        return res
+    if not branch.lower().startswith(BRANCH_PREFIX):
         res.skipped = True
         return res
     try:
@@ -121,9 +191,11 @@ def check_diff(base: str, head: str = "HEAD", branch: str | None = None, repo: P
         res.problems.append(f"{len(rows)} files changed; a learnbot/ pull request is at most {MAX_FILES}")
     for r in rows:
         path, why = r["path"], None
-        kind = next((k for rx, k in ALLOWED if rx.match(path)), None)
+        kind = next((k for rx, k in ALLOWED if rx.fullmatch(path)), None)
         if ".." in Path(path).parts or path.startswith("/"):
             why = "not a plain repository path"
+        elif SLEEVE_SPEC.fullmatch(path):
+            why = "a sleeve spec starts a paper sleeve with its own legs and sizes: an engineer pull request, reviewed by risk-compliance"
         elif kind is None:
             why = _refused_because(path)
         elif r["status"] != "A":
@@ -131,31 +203,34 @@ def check_diff(base: str, head: str = "HEAD", branch: str | None = None, repo: P
         elif r["mode"] != "100644":
             why = "a symlink, an executable or a submodule"
         if why:
-            res.problems.append(f"{path}: refused: {why}")
+            res.problems.append(f"{ascii(path)}: refused: {why}")
             continue
         res.files.append({"path": path, "kind": kind})
         try:
             raw = _git(repo, "show", f"{head}:{path}")
         except subprocess.CalledProcessError:
-            res.problems.append(f"{path}: could not be read from {head}")
+            res.problems.append(f"{ascii(path)}: could not be read from {head}")
             continue
         if len(raw) > MAX_BYTES:
-            res.problems.append(f"{path}: {len(raw):,} bytes; the limit is {MAX_BYTES:,}")
+            res.problems.append(f"{ascii(path)}: {len(raw):,} bytes; the limit is {MAX_BYTES:,}")
             continue
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
-            res.problems.append(f"{path}: not UTF-8 text")
+            res.problems.append(f"{ascii(path)}: not UTF-8 text")
             continue
         if "\0" in text:
-            res.problems.append(f"{path}: binary content")
-        if SECRET.search(text):
-            res.problems.append(f"{path}: looks like it contains a secret (the match is not printed)")
+            res.problems.append(f"{ascii(path)}: binary content")
+        if _secret_in(text):
+            res.problems.append(f"{ascii(path)}: looks like it contains a secret (the match is not printed)")
         if path.endswith(".json"):
             try:
-                json.loads(text)
+                data = json.loads(text)
             except ValueError as exc:
-                res.problems.append(f"{path}: not valid JSON: {exc}")
+                res.problems.append(f"{ascii(path)}: not valid JSON: {exc}")
+            else:
+                if path.startswith("docs/prereg/"):
+                    res.problems += _spec_problems(path, data)
         res.problems += _report_problems(path, text)
     return res
 
@@ -164,7 +239,7 @@ def render(res: Result) -> str:
     if res.skipped:
         return f"learnbot check-diff: '{res.branch or '(no branch)'}' is not a {BRANCH_PREFIX} branch; nothing to judge"
     head = f"learnbot check-diff: {res.branch}: " + ("PASS" if res.ok else "FAIL")
-    lines = [head] + [f"  + {f['path']} ({f['kind']})" for f in res.files] + [f"  ! {p}" for p in res.problems]
+    lines = [head] + [f"  + {ascii(f['path'])} ({f['kind']})" for f in res.files] + [f"  ! {p}" for p in res.problems]
     return "\n".join(lines)
 
 
