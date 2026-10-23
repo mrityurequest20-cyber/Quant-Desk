@@ -14,9 +14,12 @@ on:
       strikes:
         description: "Strikes each side of the money (rounded to 10s)"
         default: "20"
+      stocks:
+        description: "Also pull the cash and futures minutes of this many top F&O stocks (0 = skip)"
+        default: "50"
 
 permissions:
-  contents: write            # create and upload to the option-minutes-YYYY release
+  contents: write            # create and upload to the option-minutes-YYYY and stock-minutes-YYYY releases
 
 concurrency:
   group: kotak-backfill
@@ -34,6 +37,7 @@ jobs:
       DAYS: ${{ inputs.days }}
       EXPIRIES: ${{ inputs.expiries }}
       STRIKES: ${{ inputs.strikes }}
+      STOCKS: ${{ inputs.stocks }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -45,8 +49,14 @@ jobs:
         run: |
           python -m quantdesk data kotak-backfill --days "$DAYS" --expiries "$EXPIRIES" --strikes "$STRIKES" \
             --release-prefix option-minutes | tee backfill.txt
+      - name: Pull the top F&O stocks' minutes and keep them on the stock-minutes release
+        if: ${{ always() && inputs.stocks != '0' }}
+        run: |
+          set -o pipefail                 # so a failed run reaches the warning below, not tee's exit 0
+          python -m quantdesk data stock-minutes --days "$DAYS" --stocks "$STOCKS" --budget-min 60 \
+            --release-prefix stock-minutes | tee stocks.txt || echo "::warning::stock-minute backfill failed"
       - name: Summary
         if: always()
         run: |
-          { echo "## Kotak minute backfill"; echo '```'; cat backfill.txt 2>/dev/null || echo "no output"; echo '```';
+          { echo "## Kotak minute backfill"; echo '```'; cat backfill.txt 2>/dev/null || echo "no output"; cat stocks.txt 2>/dev/null; echo '```';
             echo '```json'; cat runtime/intraday/backfill/*/manifest.json 2>/dev/null | head -c 6000; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

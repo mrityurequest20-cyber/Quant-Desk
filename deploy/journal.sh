@@ -59,7 +59,7 @@ PY
     snap=$(mktemp -d)
     trap 'rm -rf "$snap"' EXIT
     mkdir -p "$snap/intraday"
-    ( cd "$rt/intraday" && tar -c --exclude='./data/*/chains' --exclude='*.tmp' --exclude='*-journal' . ) | tar -x -C "$snap/intraday"
+    ( cd "$rt/intraday" && tar -c --exclude='./data/*/chains' --exclude='./backfill' --exclude='*.tmp' --exclude='*-journal' . ) | tar -x -C "$snap/intraday"
     cat > "$snap/README.md" <<'MD'
 # QuantDesk journal (machine-written)
 
