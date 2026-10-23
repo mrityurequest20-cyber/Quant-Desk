@@ -52,6 +52,7 @@ jobs:
       - name: Pull the top F&O stocks' minutes and keep them on the stock-minutes release
         if: ${{ always() && inputs.stocks != '0' }}
         run: |
+          set -o pipefail                 # so a failed run reaches the warning below, not tee's exit 0
           python -m quantdesk data stock-minutes --days "$DAYS" --stocks "$STOCKS" --budget-min 60 \
             --release-prefix stock-minutes | tee stocks.txt || echo "::warning::stock-minute backfill failed"
       - name: Summary

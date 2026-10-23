@@ -203,6 +203,139 @@ def release_names(run: Path, stocks: bool = False) -> list[str]:
             if p.suffix in (".parquet", ".json") and p.name.startswith("stocks_") == stocks]
 
 
+# ---- stock options: near-the-money window, grouped assets ----------------------------------------------------------------
+STOCK_EVIDENCE = "real_trade_minutes"
+
+
+def _ltp(item: dict) -> float:
+    return _f((item.get("quote") or {}).get("ltp"))
+
+
+def _strike(item: dict) -> float:
+    ins = item.get("instrument") or item.get("inst") or {}
+    return _f(ins.get("strikePrice", ins.get("strkPrc")))
+
+
+def chain_spot(calls: list, puts: list) -> float:
+    """A stock's price from its own chain by put-call parity (K + call - put where the two LTPs are closest): the chain
+    endpoint carries no cash price for a stock. NaN when no strike has both a call and a put LTP > 0."""
+    ce = {k: _ltp(i) for i in calls if (k := _strike(i)) > 0}
+    pe = {k: _ltp(i) for i in puts if (k := _strike(i)) > 0}
+    both = [k for k in ce if k in pe and ce[k] > 0 and pe[k] > 0]
+    if not both:
+        return float("nan")
+    k = min(both, key=lambda x: abs(ce[x] - pe[x]))
+    return float(k + ce[k] - pe[k])
+
+
+def select_window(strikes, spot: float, n: int) -> tuple[list[float], str]:
+    """The strikes within n steps of the money: the one nearest `spot` plus n each side (2n+1 in all, fewer at the edge of
+    the chain). With no usable spot the chain's middle strike stands in for the money and the source says so (Kotak's
+    chain is centred on the money; not verified without a key). -> (strikes, "spot" | "chain-middle")."""
+    ks = sorted({float(k) for k in strikes if k == k and k > 0})
+    if not ks:
+        return [], "none"
+    if spot == spot and spot and spot > 0:
+        i, src = min(range(len(ks)), key=lambda j: abs(ks[j] - spot)), "spot"
+    else:
+        i, src = len(ks) // 2, "chain-middle"
+    return ks[max(0, i - n): i + n + 1], src
+
+
+def stock_contracts(client, underlying: str, n_expiries: int, window: int, today: dt.date,
+                    spot: float | None = None) -> tuple[list[dict], dict]:
+    """Near-the-money contracts of a stock: the nearest `n_expiries` live expiries, calls and puts, ATM +/- `window` strikes.
+    The money comes from `spot` if given (e.g. the day's close), else from the chain's put-call parity, else the chain's
+    middle strike. Tokens are Kotak's own neoSymbols from the chain endpoint, so no symbol format is assumed.
+    -> (contracts, {"atm_source": ..., "spot": ...})"""
+    out, info = [], {"atm_source": "none", "spot": None}
+    count = max(10, int(-(-(window + 2) // 10)) * 10)              # the API wants a multiple of 10 strikes each side
+    exps = [e for e in client.expiries(underlying) if e >= today][:n_expiries]
+    for exp in exps:
+        _, calls, puts = chain_parts(client.option_chain(underlying, exp, count))
+        s = spot if spot and spot > 0 else chain_spot(calls, puts)
+        keep, src = select_window([_strike(i) for i in calls + puts], s, window)
+        info["atm_source"] = src if info["atm_source"] in ("none", src) else "mixed"
+        info["spot"] = round(s, 2) if s == s and s else info["spot"]
+        for right, items in (("CE", calls), ("PE", puts)):
+            for item in items:
+                ins = item.get("instrument") or item.get("inst") or {}
+                k, tok = _strike(item), str(ins.get("neoSymbol") or "")
+                if k in keep and "|" in tok:
+                    out.append({"underlying": underlying, "expiry": exp, "strike": k, "right": right, "token": tok})
+    return out, info
+
+
+def asset_plan(n_indices: int, n_stocks: int, group_size: int, days_per_shard: int = 66, cap: int = 900) -> dict:
+    """Release-asset budget of a quarterly shard. Per trading day: one options file per index, index, futures, the index
+    manifest and the health file, plus one options file per stock GROUP and the stock manifest. Groups grow until the
+    quarter fits under `cap` (the release limit is ~1000), so a long stock list never means a file per contract or stock."""
+    base = n_indices + 4
+    size = max(1, int(group_size))
+    groups = -(-n_stocks // size) if n_stocks else 0
+    while groups > 1 and (base + 1 + groups) * days_per_shard > cap:
+        size += 1
+        groups = -(-n_stocks // size)
+    per_day = base + (groups + 1 if n_stocks else 0)               # + the stock manifest
+    return {"group_size": size, "groups": groups, "per_day": per_day, "per_shard": per_day * days_per_shard,
+            "cap": cap, "fits": per_day * days_per_shard <= cap}
+
+
+def group_stocks(stocks: list[str], group_size: int) -> list[list[str]]:
+    return [stocks[i:i + group_size] for i in range(0, len(stocks), group_size)]
+
+
+def backfill_stocks(client, out_root: Path, groups: list[list[str]], days: int = 3, n_expiries: int = 2, window: int = 5,
+                    today: dt.date | None = None, spots: dict | None = None, say=print, on_group=None) -> dict:
+    """Stock option minutes: ATM +/- `window` strikes, nearest `n_expiries` expiries, calls and puts, one Parquet per
+    GROUP of stocks (options_STOCKS-<k>.parquet) and one stock_manifest.json: never a file per contract or per stock.
+    A stock that fails is a line in the manifest; the rest continue. Only live contracts are asked for."""
+    today = today or pd.Timestamp.now(tz=IST).date()
+    start = today - dt.timedelta(days=days)
+    run = Path(out_root) / str(today)
+    run.mkdir(parents=True, exist_ok=True)
+    man = {"evidence": STOCK_EVIDENCE, "as_of": str(today), "window": [str(start), str(today)], "strike_window": window,
+           "expiries": n_expiries, "groups": {f"STOCKS-{k + 1}": g for k, g in enumerate(groups)}, "stocks": {},
+           "note": "traded 1-minute bars of near-the-money stock options (not bid/ask); research and cost calibration only"}
+    for k, grp in enumerate(groups):
+        parts = []
+        for s in grp:
+            rep = man["stocks"][s] = {"asked": 0, "served": 0, "empty": 0, "failed": 0, "bars": 0, "errors": {}}
+            try:
+                cs, info = stock_contracts(client, s, n_expiries, window, today, (spots or {}).get(s))
+            except Exception as exc:
+                rep["errors"]["contracts"] = f"{exc!s:.160}"
+                say(f"  {s}: no contracts ({exc!s:.100})")
+                continue
+            rep.update(info, asked=len(cs), expiries=sorted({str(c["expiry"]) for c in cs}))
+            sp = []
+            for c in cs:
+                df, err = candles(client, c["token"], start, today)
+                if err and df.empty:
+                    rep["failed"] += 1
+                    rep["errors"][err] = rep["errors"].get(err, 0) + 1
+                elif df.empty:
+                    rep["empty"] += 1
+                else:
+                    rep["served"] += 1
+                    sp.append(_frame(df, c))
+            if sp:
+                o = pd.concat(sp, ignore_index=True)
+                rep["bars"], rep["first"], rep["last"] = int(len(o)), str(o["ts"].min()), str(o["ts"].max())
+                parts.append(o)
+            say(f"  {s}: {rep['served']}/{rep['asked']} contracts with bars ({rep['empty']} empty, {rep['failed']} failed), "
+                f"{rep['bars']:,} bars, ATM from {rep.get('atm_source')}")
+        if parts:
+            pd.concat(parts, ignore_index=True).to_parquet(run / f"options_STOCKS-{k + 1}.parquet", index=False,
+                                                           compression="zstd")
+        man["calls"] = dict(getattr(client, "calls", {}) or {})
+        (run / "stock_manifest.json").write_text(json.dumps(man, indent=1, default=str))
+        if on_group:
+            on_group(k, run)
+    man["path"] = str(run)
+    return man
+
+
 # ---- stock minutes -------------------------------------------------------------------------------------------------
 # The most liquid F&O stocks by near-month option turnover (late 2025). Used only when the warehouse's `fo_stocks`
 # table is not at hand to rank on; `universe()` says which was used. The one place this list lives.

@@ -219,8 +219,9 @@ def test_overlapping_runs_deduplicate_on_load(tmp_path):
 
 
 def test_release_naming_and_the_two_kinds_of_files_stay_apart(tmp_path):
-    assert B.release_tag("stock-minutes", "2026-10-05") == "stock-minutes-2026"
-    assert B.release_tag("option-minutes", "2027-01-02") == "option-minutes-2027"
+    from quantdesk.data.collect_wide import release_tag          # one naming rule for every minutes release (year shard)
+    assert release_tag("stock-minutes", dt.date(2026, 10, 5), "year") == "stock-minutes-2026"
+    assert release_tag("option-minutes", dt.date(2027, 1, 2), "year") == "option-minutes-2027"
     run_dir = tmp_path / "2026-10-05"
     run_dir.mkdir()
     for n in ("options_NIFTY.parquet", "index.parquet", "manifest.json", "stocks_cash.parquet", "stocks_manifest.json", "x.txt"):
@@ -230,7 +231,7 @@ def test_release_naming_and_the_two_kinds_of_files_stay_apart(tmp_path):
 
 
 # ---- live.yml ------------------------------------------------------------------------------------------------------
-def test_live_yml_stock_step_is_always_warn_only_and_adds_no_secret_or_permission():
+def test_live_yml_stock_step_is_warn_only_skipped_after_a_cancel_and_adds_no_secret_or_permission():
     root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
     text = (root / "live.yml").read_text(encoding="utf-8")
     wf = yaml.safe_load(text)
@@ -239,7 +240,8 @@ def test_live_yml_stock_step_is_always_warn_only_and_adds_no_secret_or_permissio
     j = next(i for i, s in enumerate(steps) if "option-minutes" in s.get("run", ""))
     step = steps[i]
     assert i == j + 1                                                       # right after the option-minutes step
-    assert step["if"] == "always()" and 0 < step["timeout-minutes"] <= 30
+    # runs after a failed session too, never after the owner cancels it (the kill switch; audit 17 Oct L1)
+    assert step["if"].replace(" ", "") == "${{!cancelled()}}" and 0 < step["timeout-minutes"] <= 30
     assert '|| echo "::warning::' in step["run"] and "--live" not in step["run"]
     assert step["env"] == steps[j]["env"] == {"GH_TOKEN": "${{ github.token }}"}          # no secret, same as its neighbour
     assert set(step) <= {"name", "if", "timeout-minutes", "env", "run"} and "secrets." not in json.dumps(step)
@@ -248,3 +250,43 @@ def test_live_yml_stock_step_is_always_warn_only_and_adds_no_secret_or_permissio
     manual = yaml.safe_load((root / "kotak-backfill.yml").read_text(encoding="utf-8"))
     assert manual[True]["workflow_dispatch"]["inputs"]["stocks"]["default"] == "50"
     assert manual["permissions"] == {"contents": "write"}
+
+
+def _run_cli(monkeypatch, tmp_path, totals, stopped=None):
+    import argparse
+    import types
+
+    from quantdesk.data import cli as C
+    from quantdesk.data import warehouse as W
+    from quantdesk.intraday import kotak as K
+    pushed = []
+    run = tmp_path / "out" / "2026-10-19"
+    run.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(K.KotakClient, "from_env", classmethod(lambda cls: object()))
+    monkeypatch.setattr(W.ReleaseStore, "pull", lambda self, dest, names: [])
+    monkeypatch.setattr(B, "stock_minutes", lambda *a, **k: {"path": str(run), "totals": totals, "stopped": stopped})
+    monkeypatch.setattr(B, "release_names", lambda run, stocks=False: ["stocks_manifest.json"])
+    monkeypatch.setattr(C, "_push_run", lambda *a, **k: pushed.append(k))
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    cfg = types.SimpleNamespace(runtime_dir=str(tmp_path / "rt"))
+    a = argparse.Namespace(out=str(tmp_path / "out"), stocks=50, days=3, rate=5.0, budget_min=12,
+                           release_prefix="stock-minutes")
+    C.cmd_stock_minutes(cfg, a)
+    return pushed, summary.read_text()
+
+
+def test_an_incomplete_run_warns_and_never_overwrites_the_release(monkeypatch, tmp_path, capsys):
+    """Audit 17 Oct: M2 (a Kotak outage made the step green with no warning) and M3 (a same-day re-run could clobber
+    a good day's assets on the release)."""
+    pushed, summary = _run_cli(monkeypatch, tmp_path, {"cash": {"served": 3, "asked": 50}, "futures": {"served": 48, "asked": 50}})
+    out = capsys.readouterr().out
+    assert "::warning::stock-minutes: incomplete run" in out and "cash 3/50" in summary
+    assert pushed and pushed[0]["clobber"] is False
+
+
+def test_a_full_run_is_quiet_and_a_stopped_one_warns(monkeypatch, tmp_path, capsys):
+    _run_cli(monkeypatch, tmp_path, {"cash": {"served": 50, "asked": 50}, "futures": {"served": 49, "asked": 50}})
+    assert "::warning::" not in capsys.readouterr().out
+    _run_cli(monkeypatch, tmp_path, {"cash": {"served": 50, "asked": 50}}, stopped="time budget (720s) used up")
+    assert "stopped: time budget" in capsys.readouterr().out
