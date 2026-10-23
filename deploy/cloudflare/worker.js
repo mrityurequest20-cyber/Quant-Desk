@@ -17,6 +17,13 @@
 // harmless: the stock snapshot refuses to record outside the session, and the minutes overlap and de-duplicate).
 // It needs GH_DISPATCH_TOKEN: a fine-grained GitHub token for this repository with "Actions: read and write",
 // saved as a secret of this Worker (Cloudflare dashboard → the Worker → Settings → Variables and Secrets).
+//
+// And it is the desk's watchdog (watchdog.js): after the alarm-clock job of each firing, the checks due at that IST time
+// run (is the desk up, is its heartbeat fresh, did the evening workflows run, credential expiry, the weekly digest) and
+// alert by push (ntfy, secret NTFY_TOPIC) and by email (watchdog-alert.yml opens an issue as the Actions bot). The watchdog
+// never throws into this handler: the alarm clock always goes first.
+
+import { runWatchdog } from "./watchdog.js";
 
 const LIVE = /(^|\/)(data\.json|sw\.js)$/;         // live data and the service worker: never from an edge cache
 const PASS = ["accept", "accept-encoding", "if-none-match", "if-modified-since", "range"];
@@ -50,6 +57,11 @@ export async function dispatchWorkflow(env, file, inputs) {
 	return { ok: false, why: `GitHub answered ${res.status}${msg ? `: ${msg}` : ""}${needs ? ` (needs ${needs})` : ""}; ${tokenKind(token)}` };
 }
 
+// The one cron (as written in wrangler.jsonc, UTC) that must NOT start the desk: the watchdog's own half-hourly trigger.
+// Every other cron asks GitHub to run scheduler.yml now, as before this file had a watchdog, so if Cloudflare ever reports a
+// cron string differently the worst case is one extra, harmless dispatch, never a desk that silently is not started.
+export const WATCHDOG_ONLY_CRON = "0,30 10-16 * * *";
+
 export const dispatchScheduler = (env) => dispatchWorkflow(env, "scheduler.yml");
 export const dispatchCollect = (env, step) => dispatchWorkflow(env, "collect-wide.yml", { step });
 
@@ -61,8 +73,19 @@ export default {
 			console.log(`collect-wide ${step} ${r.ok ? "dispatched" : "not dispatched"} (${event.cron}): ${r.why}`);
 			return;
 		}
-		const r = await dispatchScheduler(env);
-		console.log(`desk scheduler ${r.ok ? "dispatched" : "not dispatched"} (${event.cron}): ${r.why}`);
+		if (event.cron !== WATCHDOG_ONLY_CRON) {
+			try {
+				const r = await dispatchScheduler(env);
+				console.log(`desk scheduler ${r.ok ? "dispatched" : "not dispatched"} (${event.cron}): ${r.why}`);
+			} catch (e) {                                        // a network error here must not silence the watchdog below
+				console.log(`desk scheduler not dispatched (${event.cron}): ${String(e && e.message).slice(0, 200)}`);
+			}
+		}
+		try {                                                    // the alarm clock above always goes first and is never held up by this
+			await runWatchdog(event, env, { dispatchWorkflow });
+		} catch (e) {
+			console.log(`watchdog failed (${event.cron}): ${String(e && e.message).slice(0, 200)}`);
+		}
 	},
 
 	async fetch(request, env) {

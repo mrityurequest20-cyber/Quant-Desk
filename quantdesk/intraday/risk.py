@@ -82,7 +82,10 @@ class IntradayRisk:
 
     def size(self, plan, equity: float, cash: float | None = None, open_risk: float = 0.0,
              daily_loss_cap: bool = True) -> tuple[int, list[str]]:
-        scale = 0.6 + 0.6 * min(max(plan.conviction, 0), 1)
+        # Conviction shrinks the budget (0.6x at none) but never grows it past the ceiling: risk_per_trade is the most a
+        # stop-out may cost (the owner's ceiling). The scale used to run to 1.2, so a full-conviction trade risked 3.0%
+        # of equity against a 2.5% ceiling (internal-auditor, 16 Oct 2026).
+        scale = min(0.6 + 0.6 * min(max(plan.conviction, 0), 1), 1.0)
         budget = equity * self.risk_per_trade * scale
         per_lot = plan.planned_risk_per_lot()
         notes = [f"risk budget ₹{budget:,.0f} = equity ₹{equity:,.0f} × {self.risk_per_trade:.2%} × conviction scale {scale:.2f}",
