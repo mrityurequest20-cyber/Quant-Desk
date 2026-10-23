@@ -187,6 +187,72 @@ asks) is the cheapest large upgrade to execution realism: TO VERIFY whether Kota
 
 ---
 
+## 4a. The scope ladder: one more index and a few more stocks every month
+
+**Where we are (VERIFIED in `config/quantdesk.yaml`, 23 Oct).** The chain tape records all five indices every minute (NIFTY,
+BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY). `collect-wide` collects option minutes for all five indices every evening, and
+option-chain snapshots plus option minutes for 20 F&O stocks. The instrument registry already holds lot size, strike step and
+expiry rule for the five indices. The intraday desk **trades two**: `intraday.underlyings: [NIFTY, BANKNIFTY]`. So the data side is
+ahead of the trading side, and the ladder mostly turns collected instruments into traded ones, one step at a time, so that the
+desk is the same machine on day one of live as it is today, only with more instruments.
+
+**Each instrument climbs three steps.**
+
+| Step | Meaning | Entry condition |
+|---|---|---|
+| **Collected** | Tape and option minutes recorded, validity layer applied | Registry entry verified against the broker (lot, strike step, expiry day); no `unverified` flag |
+| **Shadow** | The engine plans and journals the trades it would take on real quotes; no paper fills | At least 20 clean sessions of tape; admission report (below) |
+| **Paper** | Full paper trading under the same ceilings, costs and checks as NIFTY | At least 10 shadow sessions; risk-compliance CLEAR (adding an underlying touches the live path) |
+
+**The rules of the ladder.**
+
+1. **Each month admits one index and two or three stocks** (the table below), starting only after the P0 exit test. Collection leads
+   trading by a month, so by the time an instrument enters Shadow it has at least 20 clean sessions of tape.
+2. **The admission report** is a recorded document per instrument: registry values checked against the broker, tape coverage and
+   gaps, median spread and open interest measured from our own tape, statutory costs in the cost model, and a one-line verdict. A
+   stock that fails (for example a lot so large that planned risk per lot exceeds the per-trade ceiling at the current account size)
+   is **not admitted**, and that is a valid, recorded result.
+3. **Instruments add evidence, not risk budget.** Every ceiling (per trade, per day, open positions, drawdown halt) is shared across
+   all instruments; none is raised to make room. Index trades on the same day are strongly correlated, so a **correlated-exposure
+   cap** (tighten-only, risk-compliance reviewed) goes in before the third index reaches Paper, and gate reports state that trades
+   within a session are not independent samples. Gates still count sessions.
+4. **Capacity is checked, not assumed.** Each admission measures the minute-loop duration, the broker quote-call budget and the live
+   job's runtime limit (355/300 minutes with a hand-off, TO VERIFY at each step). If the budget would be exceeded, the ladder pauses
+   rather than squeezing the loop.
+5. **The ladder pauses for a month** if the P0 or P1 exit test is red, the watchdog recorded an unalerted failure, last month's
+   instruments have not reached Paper, or the tape health check is failing. Section 0's cut order applies: stock-option paper trading
+   is cut before index trading.
+6. **Selection by measurement, not by name.** The stock list below is a candidate order taken from the 20 already collected. At
+   admission the order is re-sorted by measured open interest and spread; a candidate that is thin moves down.
+7. **A passing strategy is replicated, not rediscovered.** When an instrument reaches Paper, each strategy that has passed its gate
+   is registered as a *replication* on it (section 5a), which is the cheapest honest source of new evidence.
+8. **Live-readiness, honestly.** Running every instrument through the same paper pipeline (costs, TCA, pre-trade checks,
+   reconciliation tests) makes the later live decision a decision rather than a project. Paper cannot prove how stock options fill
+   in size; that is learned from the fill-cost comparison (section 6) and stays a condition of G4.
+
+**The ladder** (candidates; the admission report decides; each month is shadow from the start of the month and paper from about the
+middle of it if the checklist passes).
+
+| Month | Index added | Stocks added (candidates) | Note |
+|---|---|---|---|
+| Nov 2026 | SENSEX (BSE, weekly, Thursday) | RELIANCE, HDFCBANK, ICICIBANK | TO VERIFY BSE quotes and expiry handling on real data first |
+| Dec 2026 | FINNIFTY (monthly expiry only) | INFY, SBIN, TCS | Fewer expiry days, so slower evidence |
+| Jan 2027 | MIDCPNIFTY (monthly, lot 120) | BHARTIARTL, AXISBANK, KOTAKBANK | Thin: expect wider spreads |
+| Feb 2027 | BANKEX (BSE, monthly) or another listed index, TO VERIFY it has quotable options | LT, ITC, BAJFINANCE | If none is quotable, no index this month |
+| Mar 2027 | none; the **commodities memo** | MARUTI, SUNPHARMA, TATASTEEL | `collect_wide.stocks` extended by the next batch so collection stays a month ahead |
+| Apr 2027 | first commodity in Shadow **only if the memo says go** | NTPC, HINDUNILVR, HCLTECH | Otherwise nothing replaces it |
+| May 2027 | the commodity in Paper if its Shadow was clean | ADANIENT, ONGC | The unattended month: fixes only for the engine, so no new engine changes |
+| Jun to Aug 2027 | none | the extension batch, two or three a month, only if the ladder has not paused | Acceptance and handover take priority |
+
+**Commodities (March and April, only if we are doing well).** "Doing well" is measured, not felt: G1 declared, no unalerted failure
+in the previous two months, no open P1 finding, and the ladder not paused. The March memo must answer, with sources, each of:
+does the broker serve commodity options and futures quotes and minutes; are the quotes point-in-time; what are the lot, expiry,
+margin and cost rules; and how does the desk run an evening session (commodity markets trade well beyond the 09:15 to 15:30 window
+the engine and the live job are built for, which is real engineering, not configuration). Any "no" means no. Forex, US and European
+options stay in the parking lot.
+
+---
+
 ## 5. Strategy factory: how strategies are built, tested and promoted
 
 **Pipeline (every strategy, no exceptions).**
@@ -226,19 +292,50 @@ way in the research memory); a sleeve that fails its retirement rule is retired 
 
 ### 5a. The strategy builder, end to end (what we are building toward)
 
-The goal is a **strategy builder**: you describe an idea in plain words, and the desk turns it into a tested, paper-traded,
-reported strategy, with no step skipped and no way to fool ourselves. It is a *pipeline with templates and checks*, not an AI that
-invents profit. The AI's job is to propose, draft and test inside the same rules a human researcher would follow.
+The goal is a **strategy builder that works on its own**: it decides what to study next, drafts the pre-registration, runs the
+study, builds the paper sleeve, tracks it against the gate, retires what fails, and writes the report, with no step skipped and no
+way to fool ourselves. You do not have to hand it ideas; you can, and it treats yours like any other. It is a *pipeline with
+templates and checks*, not an AI that invents profit. The AI proposes, drafts and tests inside the same rules a human researcher
+would follow, and the rules (section 5a, "Autonomy and its guardrails") are what make doing it unsupervised safe.
 
 | Step | What it does | Who does it | Exists today? | Built in |
 |---|---|---|---|---|
-| **SB1 Idea card** | One short structured note: the idea, why it might work, what would prove it wrong | You, the learning bot, or a teacher lesson | The memory's proposals and teacher hypotheses exist; no common card | Nov (template) |
+| **SB1 Idea generator and card** | Picks the next idea from the fixed sources below and writes one structured card: the idea, why it might work, what would prove it wrong | **The builder** (the learning bot's weekly proposals are its first version); you may add one | The memory's proposals and teacher hypotheses exist; no common card or generator | Nov (card and weekly proposals), Feb (generator on its own) |
 | **SB2 Spec drafter** | Turns a card into a pre-registration draft (question, data, statistic, decision rule, costs at 2x, capacity, variants) and checks it is not a repeat | An agent drafts; the research-reviewer approves | `experiments --check` and the spec format exist; a `strategy` command group that drafts one does not | Dec (v1) |
 | **SB3 Study runner** | Runs the registered study on bhavcopy or our own tape in the `Study` workflow and locks the result | Automatic | `Study` workflow and locked results exist; not generic | Jan |
 | **SB4 Sleeve generator** | Turns an approved spec into a forward paper sleeve with its own ledger, no bespoke code | Automatic | Sleeves exist for the expiry option-selling family only | Feb |
 | **SB5 Gate evaluator** | Computes the paper gate ([RELEASE_GATES.md](RELEASE_GATES.md)) and the retirement rule per sleeve, weekly | Automatic | The gate command exists for one strategy at a time | Mar |
 | **SB6 Allocator** | Sizes sleeves by earn-in eligibility, under the owner's ceilings | Automatic | Specified (BACKLOG 9), partly built | Apr |
 | **SB7 Strategy report** | One page per strategy: idea, spec, study, forward record, costs, verdict, what it taught | Automatic, learning bot summarises | Reports exist ad hoc | Apr |
+
+**Autonomy and its guardrails.** An unsupervised idea generator will, left alone, find something that looks good by luck. These
+rules are what keep it honest:
+
+1. **A fixed menu of idea sources, nothing else:** (a) the research memory's ranked gaps and caveats; (b) the nightly teacher's
+   hypotheses; (c) screens over the free deep data (bhavcopy, our own tape); (d) volatility-forecast conditions (HAR, then M1);
+   (e) **replications** of strategies that passed their gate, on each newly admitted instrument (section 4a). Tips, tweets and
+   outside "systems" are not sources.
+2. **A trial ledger.** Every idea the builder starts, including the ones it kills, is counted. The thresholds a strategy must clear
+   are deflated by that count (the registered `variants tried` field and the placebo gate, S7). The builder cannot reset or edit the
+   ledger. This is the defence against the builder winning by trying more things.
+3. **Throughput caps** (section 5): at most three pre-registrations open, one new idea a week, and a cap on sleeves in Shadow.
+4. **Spec before result, reviewed by someone else.** The builder never reviews its own spec: the research-reviewer (is it a repeat,
+   is it powered, can it fail) reads every one, and anything touching order, risk, sizing or workflow code goes to risk-compliance,
+   whose veto is final.
+5. **No bespoke order code.** A builder strategy is a spec plus configuration run by the generic sleeve generator (SB4). If an idea
+   needs new code, it becomes an engineer pull request with the full review, not an autonomous change.
+6. **Retirement is automatic.** A sleeve that fails its gate or its retirement rule is retired without asking, and its failure is
+   written up as a result.
+7. **What the builder never does**, with or without any permission: raise an exposure, loosen a gate, edit a locked spec or result,
+   flip an apply mode, clear a halt, touch workflow permissions or secrets, merge its own pull request, or turn live trading on.
+
+**Autonomy arrives in stages.** *Stage A (now to Jan):* the builder proposes, drafts and runs studies, and every pull request is a
+draft that a person (or an engineer session under the rules) merges. *Stage B (from about Feb, SB4):* it starts a forward sleeve in
+**Shadow** from a reviewed, registered spec. *Stage C (Apr to May, the unattended month):* it runs the loop weekly with no human
+step except merges. Moving from Stage A to B needs one thing only the owner can give: a standing permission in
+[AUTONOMY.md](AUTONOMY.md) for the builder to start a Shadow sleeve from a reviewed spec without a per-sleeve merge, with the caps
+above. **I will not edit AUTONOMY.md; until you add that paragraph, Stage A's rule (draft pull requests, a person merges) stays in
+force and the builder simply waits.** That keeps the pace of the system set by the safety rules rather than the other way round.
 
 **What "self-improving" means here, exactly.** The loop (trade, nightly teacher, weekly learning bot, monthly review, retrain,
 shadow, demote) gets *better at finding out what works and at dropping what does not*. It can propose ideas, draft specs, run
@@ -304,7 +401,7 @@ budget; milestone table (due, days late). Delivered by the Saturday digest (W8) 
 | **P0 Protect the evidence** | 23 Oct to 6 Nov | Finish the merge chain; verify the Worker, token and Kotak status (owner); build and deploy the watchdog (section 3); first observed start on Mon 26 Oct; first v4 settlement and HAR sessions; first weekly learning run (Sat 24 Oct); enter token expiry dates; owner decisions listed in section 12 | 10 consecutive trading days with every session run and alerted-on if not; watchdog drill: a deliberately stopped workflow produces a push and an email within 15 minutes |
 | **P1 Trust the record (S1 to S3)** | 9 Nov to mid Jan | **Re-triage the audit's 115 findings against `main` first (two weeks)** so we stop fixing what is fixed; evidence integrity and provenance (append-only or anchored journal, one clock); data-validity layer and quarantine; crash, restart and order-state safety | A replayed session reproduces its decisions exactly from persisted evidence; zero zero-VIX-style bars recorded as valid over 5 sessions; restart tests in CI. **G1 in mid January** |
 | **P2 Execution realism and live-readiness (S8, S9)** | Dec to Mar | Depth recording if available; TCA on all fills; depth-capped fills and one cost source; order state machine on a fake broker; pre-trade checks; reconciliation; kill-switch drill; the dry-run mode | S9 fake-broker tests pass; monthly TCA table; modelled versus real cost within a stated band. **G3 around April or later** |
-| **P3 Strategy factory** | Continuous from Nov | Section 5 cadence; first queue; monthly review | One idea closed with a written lesson every month; zero repeats (fingerprint) |
+| **P3 Strategy factory and scope ladder** | Continuous from Nov (ladder starts after the P0 exit) | Section 5 cadence; first queue; the builder (5a); one index and two or three stocks admitted a month (4a); monthly review | One idea closed with a written lesson every month; zero repeats (fingerprint); one admission report per instrument; no ceiling raised |
 | **P4 Models** | Platform from Nov; models from mid Jan | [ML_ROADMAP.md](ML_ROADMAP.md) Phase 0, then M1 to M8 as data allows | Each model: spec, locked test, shadow verdict. **ML-ready bar = S1 to S3 exit tests plus the discipline of section 0** |
 | **P5 Institutional controls** | Jan to Apr | S4 to S7: honest UI and status, e2e deterministic trade test, observability complete, statistical hygiene (placebo and CI gate, demotion); stress/scenario report; margin monitor; daily digest; restore drill; security review (public repo decision, secret rotation); daily pack | **G2 around March.** Restore drill passes; e2e test asserts every row |
 | **P6 Unattended loop and soak** | Apr to Jul | Four-week unattended run; auto-demotion drill; second independent audit; 90 clean paper sessions | Drill passed; 90 clean sessions |
@@ -338,6 +435,7 @@ order applies and nothing else is added.
   findings re-triaged against `main` so we know what is still open; ML Phase 0 started (dataset builder skeleton); the instrument
   registry designed.
 - *Strategy builder:* SB1 idea-card template and the spec template written down; the first queue item (L1 regime caveat) drafted.
+- *Scope:* after the P0 exit, SENSEX plus RELIANCE, HDFCBANK, ICICIBANK enter Shadow (section 4a); admission reports written.
 - *Self-improvement:* the learning bot's four weekly runs observed; its first monthly run is on **2 Nov** (covering October), the next on 2 Dec.
 - *You do (about 2 h):* the five setup items in section 12; decide on merging the open PRs; try the watchdog drill once.
 - *You will see:* a push and an email when something is wrong, a Saturday digest, draft PRs from the learning bot.
@@ -348,6 +446,7 @@ order applies and nothing else is added.
   the 2027 NSE holiday list (by 15 Dec); restore drill #1 from [RECOVERY.md](RECOVERY.md); S2 validity layer started.
 - *Strategy builder:* SB2 v1, a `strategy` command that drafts a spec from an idea card and runs the repeat, overlap and cost
   checks; the L1 regime-caveat study registered through it.
+- *Scope:* SENSEX and the first three stocks reach Paper if their checklist passed; FINNIFTY plus INFY, SBIN, TCS enter Shadow.
 - *Self-improvement:* the teacher's hypotheses flow into the idea queue; the 2 Nov and 2 Dec monthly reports reviewed.
 - *You do (about 2 h):* review the monthly report; enter or approve the holiday list; decide the public/private question.
 - *You will see:* the first one-page monthly pack against this plan's dates.
@@ -356,8 +455,9 @@ order applies and nothing else is added.
 **January 2027: G1 and the first model verdicts.**
 - *Built:* S2 finished (quarantine of invalid series); S3: crash, restart and order-state safety in CI; **G1 declared if its tests
   pass (mid-January)**; ML dataset builder and test harness (purged walk-forward, leakage tests) done; the soak counter starts.
-- *Strategy builder:* SB3 study runner: a registered spec runs on bhavcopy in the `Study` workflow and its result is locked with no
+- *Strategy builder (Stage A):* SB3 study runner: a registered spec runs on bhavcopy in the `Study` workflow and its result is locked with no
   manual step; the first new-idea result recorded.
+- *Scope:* MIDCPNIFTY plus BHARTIARTL, AXISBANK, KOTAKBANK enter Shadow; the correlated-exposure cap is in before the third index is traded.
 - *Self-improvement:* the quarterly independent risk-compliance review; the demotion rule exists for shadow models. The HAR shadow
   reaches 60 counted sessions at the earliest in late January and is read once.
 - *You do (about 3 h):* G1 sign-off; read the quarterly review.
@@ -369,6 +469,7 @@ order applies and nothing else is added.
   a fake broker.
 - *Strategy builder:* **SB4 sleeve generator**: an approved spec becomes a forward paper sleeve with its own ledger and no bespoke
   code. First non-expiry sleeve starts in shadow.
+- *Scope:* BANKEX (or another quotable index, if any) plus LT, ITC, BAJFINANCE enter Shadow; passed strategies are registered as replications on SENSEX.
 - *Self-improvement:* **M1 (volatility ML versus HAR)** locked-test verdict; the monthly run proposes up to three research actions
   and at least one idea is closed each month with a written lesson.
 - *You do (about 2 h):* approve or reject the monthly proposals.
@@ -380,6 +481,7 @@ order applies and nothing else is added.
   drill; the stress/scenario report; the placebo and confidence-interval gate (S7); the HAR 31 March backstop.
 - *Strategy builder:* **SB5 gate evaluator** computes the paper gate for every sleeve weekly; the forex/commodities go or no-go memo
   started (Tier 3).
+- *Scope:* MARUTI, SUNPHARMA, TATASTEEL enter Shadow; **the commodities memo** (section 4a); collection list extended.
 - *Self-improvement:* auto-demotion drill scheduled for April.
 - *You do (about 3 h):* G2 sign-off; the multi-day drawdown-halt value if still open.
 - *You will see:* a weekly table of every strategy against the gate.
@@ -390,6 +492,7 @@ order applies and nothing else is added.
   the **live dry-run mode** (builds the exact broker order, validates it, never sends; depends on what the broker's API offers,
   TO VERIFY); security review (secret rotation, public-repo decision made); the second independent audit; **G3** about now or a
   little later.
+- *Scope:* NTPC, HINDUNILVR, HCLTECH enter Shadow; the first commodity enters Shadow only if the memo said go.
 - *Strategy builder:* **SB6 allocator** and **SB7 strategy reports**. End of April is also the roadmap's switch to maintenance mode
   (usage budget in [ROADMAP_AUG_2027.md](ROADMAP_AUG_2027.md) section 5): mostly scripts, about three agent sessions a week.
 - *Self-improvement:* the auto-demotion drill passed.
@@ -401,6 +504,7 @@ order applies and nothing else is added.
 - *Built:* nothing new. Fixes only.
 - *Self-improvement:* the four-week run in which the desk, the learning bot and the retrain jobs run with no human in the loop; the
   dry run compares would-be live fills with paper fills for 20 sessions; the Tier 3 decision.
+- *Scope:* ADANIENT and ONGC enter Shadow; the commodity moves to Paper if clean. No new engine changes this month.
 - *You do (about 1 h):* read the Saturday digests.
 - *You will see:* that nothing needed you.
 - *Exit:* four weeks with no manual engineering in the loop and no unalerted failure.
@@ -411,7 +515,7 @@ order applies and nothing else is added.
   written pack on whether any strategy is a candidate for G4 and what the evidence is.
 - *Exit:* a signed checklist. The 90-session soak completes around the end of May if no reset occurs.
 
-**July 2027: Soak and scope.** Tier 4 (US and European options) in shadow or cut; fixes only; the quarterly review. *You do (about 1 h).*
+**July 2027: Soak and scope.** Tier 4 (US and European options) in shadow or cut; two or three more stocks only if the ladder has not paused; fixes only; the quarterly review. *You do (about 1 h).*
 
 **August 2027: Handover.** The final acceptance report on 31 August and the "what we learned" book: every idea tested, its verdict,
 and whether anything earned its way toward live. *You do (about 3 h): decide what comes next.*
@@ -450,13 +554,15 @@ already built is the hard part: a desk that will not lie to itself.
 | Review everything to the same depth | Proportional review (section 0, rule 4) | Cost of seven rounds on tooling |
 | `expiry_seller_v4` counted as another experiment | Listed but **not counted** as independent (re-settlement of v1 to v3) | Avoids overstating evidence |
 | Models and sleeves, no common way to add a strategy | **Strategy builder SB1 to SB7** (section 5a), delivered November to April | The owner's stated end goal: describe an idea, get a tested, paper-traded, reported strategy |
+| Five indices on paper by 30 Nov; stock options in shadow in Dec; stock paper trading by 31 Jan | **One index and two or three stocks a month** (section 4a), each through Collected, Shadow, Paper with an admission report | The owner asked for steady scope growth; a single step at a time keeps the evidence and the risk review clean |
+| The owner supplies strategy ideas | The **builder generates its own ideas** from a fixed menu, with a trial ledger and guardrails (section 5a) | The owner's stated end goal; autonomy needs a count of everything tried or it fools itself |
 | 90 clean sessions at the end | The soak counter starts at G1 (mid January); 90 trading days end about the end of May | So acceptance in June is not the first time the claim is tested |
 
 ---
 
 ## 11. Parking lot (deliberately not now)
 
-Forex and commodities trading, US and European options (Tier 3 and 4 stay evaluation only until the P1 and P2 exits); sequence
+Forex trading, and US and European options (Tier 4 stays evaluation only until the P1 and P2 exits); commodities are evaluated in March under section 4a and traded only if that memo says go; sequence
 models; buying historical data; a second broker; a web UI redesign beyond S4's honesty fixes; any new strategy family before the
 three queued ones are closed; real-money anything.
 
@@ -483,9 +589,11 @@ three queued ones are closed; real-money anything.
 - `docs/principles.json` L3 wording: it says "locked 2019-26" and that HAR "beat the desk's forecaster"; the lock's sessions end 28 Feb 2023 and it beat the study's candidate A, not the live desk estimate.
 - Disable non-production Cloudflare builds (they fail on every PR and are noise).
 - Capture one raw Kotak INDIA VIX candle response (settles N1 before S2's design is fixed).
+- Whether to grant the **builder's standing permission** (a paragraph in `AUTONOMY.md`, which only you edit): start a Shadow sleeve from a reviewed, registered spec without a per-sleeve merge, with the caps in section 5a. Until then the builder only opens draft pull requests.
+- A veto on any instrument in the ladder (section 4a) before its month; otherwise the admission report decides.
 - Whether to buy any data later (out of scope for now).
 
-**TO VERIFY at build or on first use (I will report each):** that the published JSON carries timestamp, feed and halted fields; that the Actions bot (not a personal token) produces a GitHub email and app push; whether Kotak's API exposes market depth and a pre-order validation call; what happens at the live-job hand-off over five production sessions; that `chain-archive` covers every session before artifacts expire; that the Worker still proxies the published site (the audit says it did); ntfy throttling from a shared Cloudflare address; the Actions policy on the account.
+**TO VERIFY at build or on first use (I will report each):** BSE quotes and expiry handling for SENSEX and BANKEX; whether the broker serves commodity options, futures and minutes, and how an evening session would run; the broker's quote-call budget and the live job's runtime with more underlyings; that the published JSON carries timestamp, feed and halted fields; that the Actions bot (not a personal token) produces a GitHub email and app push; whether Kotak's API exposes market depth and a pre-order validation call; what happens at the live-job hand-off over five production sessions; that `chain-archive` covers every session before artifacts expire; that the Worker still proxies the published site (the audit says it did); ntfy throttling from a shared Cloudflare address; the Actions policy on the account.
 
 ---
 
