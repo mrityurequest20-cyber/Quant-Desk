@@ -300,14 +300,14 @@ def test_total_open_premium_over_half_of_equity_refuses_a_new_entry(cfg, session
 
 
 def test_risk_per_trade_bounds_what_a_stop_out_can_cost(cfg, sessions):
-    """Sizing: lots x planned risk <= equity x risk_per_trade (2.5%) x the top conviction scale (1.2). Fails if sizing
-    stops using risk_per_trade (or it is loosened) on the ungated path."""
+    """Sizing: lots x planned risk <= equity x risk_per_trade (2.5%), the ceiling itself: conviction only scales a trade
+    down (0.6-1.0), never past it. Fails if sizing stops using risk_per_trade (or it is loosened) on the ungated path."""
     eng, feed = live_desk(cfg, sessions)
     eq = eng.equity(feed.now())
     msg, _ = enter(eng, feed, -1)
     assert msg.startswith("ENTER")
     t = eng.open_trades[0]
-    assert 0 < t.initial_risk <= eq * 0.025 * 1.2
+    assert 0 < t.initial_risk <= eq * 0.025
     assert 1 <= t.units <= eng.risk.max_lots
     assert t.units < eng.risk.max_lots                                       # the risk budget, not the lot cap, set the size
 
