@@ -1835,7 +1835,7 @@ class IntradayEngine:
             "health": dict(self.health)})
 
     def _claude_line(self) -> str | None:
-        """'Claude: $X today, $Y of $23.60 used, ~N sessions left at this pace' (None without a credit)."""
+        """'Claude: $X today, $Y of $20.00 used, ~N sessions left at this pace' (None without a credit)."""
         global _claude_budget_warned
         try:                                          # a display: whatever is wrong with the ledger must never cost the desk a step
             b = getattr(getattr(self.news, "llm", None), "budget", None) if self.news is not None else None

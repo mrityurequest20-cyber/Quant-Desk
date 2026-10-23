@@ -159,7 +159,7 @@ intraday:
   risk:
     # Re-set for ₹5,00,000 (4 Oct 2026). The ₹20k account needed 8% per trade just to afford one lot. At
     # ₹5L the same lot is ~0.3% of equity, and 8% would be ₹40k a trade: the 10-12 losses in a row the
-    # backtests have seen would take ~60%. Now 2.5% × a conviction scale (0.6-1.2), i.e. ₹7.5-15k a trade.
+    # backtests have seen would take ~60%. Now 2.5% × a conviction scale (0.6-1.0, capped at the ceiling), i.e. ₹7.5-12.5k a trade.
     # "Aggressive" means scaling up a measured edge (half-Kelly), never betting big on an unproven one.
     risk_per_trade: 0.025
     max_trades_per_day: 4           # a round trip costs ~₹110-130 (≈0.025% of ₹5L): more trades, faster evidence
@@ -250,8 +250,10 @@ intraday:
     # ledger in the journal; a day's allowance is the credit left over the sessions left (underspend carries forward) minus a
     # reflection held back for the close; at zero it stops for good (one INFO event) and the desk carries on without it.
     # Cache prices are $ per million tokens (Opus 5.5: reads 0.20 = 0.05x input, 5-minute writes 5.00 = 1.25x).
+    # budget_usd is the credit actually on the Anthropic account: $20 (owner, 23 Oct 2026; it had said 23.60, which the account
+    # does not hold). The ledger counts what was spent since budget_start, so lowering this only shrinks what is left.
     claude: {model: claude-opus-5-5, effort: low, reflect: true, price_in: 4.0, price_out: 20.0, price_cache_read: 0.20,
-             price_cache_write: 5.0, budget_usd: 23.60, budget_start: 2026-10-12, budget_sessions: 60, reserve_reflection: true}
+             price_cache_write: 5.0, budget_usd: 20.00, budget_start: 2026-10-12, budget_sessions: 60, reserve_reflection: true}
     gemini: {model: gemini-flash-latest}   # the alias that tracks Google's current Flash (2.5 404s now)
     ollama: {model: "gpt-oss:120b", host: "https://ollama.com"}
     advisory_only: [claude, ollama]   # read, shown and graded, but never weighed into the tone: no effect on signals or sizing
