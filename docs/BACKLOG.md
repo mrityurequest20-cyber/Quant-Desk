@@ -67,7 +67,7 @@ it with the next tests. In short:
 3. **L3 everywhere.**
    - *Steps:*
      - wire the HAR forecaster in shadow next to the desk's, for 60 sessions (docs/VOL_SHADOW_PROTOCOL.md);
-       - *Wired in shadow, 17 Oct 2026* (`intraday.vol_forecast.mode: shadow`): at each session's opening read the desk
+       - *Wired in shadow, 23 Oct 2026* (`intraday.vol_forecast.mode: shadow`): at each session's opening read the desk
          journals the HAR forecast and its own estimate for 30m / 60m / 120m / the close. `intraday vol-shadow` grades
          both against the realised variance (QLIKE, move ratio) and counts the sessions with both indices toward the 60.
          The comparator is the desk's live estimate, not the study's candidate A (it leaves out the opening return).

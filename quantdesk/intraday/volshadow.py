@@ -24,12 +24,14 @@ reported and not acted on: it scores the realised-volatility forecasts only, not
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import t as student_t
 
 from ..autolearn import volstudy as V
 from ..autolearn.prereg import nw_t
@@ -38,6 +40,10 @@ CANDS = ("desk", "har")
 MIN_DAYS_FOR_T = 10
 INDICES = ("NIFTY", "BANKNIFTY")           # the protocol's session counts only when both have a gradable record
 TARGET_SESSIONS = 60                       # docs/VOL_SHADOW_PROTOCOL.md: no read before this many sessions (20 has about 50% power on NIFTY)
+HORIZONS = ("30m", "60m", "120m", "close")  # a session counts only with all four graded, for both indices
+COEF_PIN = "de59c4ab9496e9ae2bc828741686949bf5608a2c4af548ce064afa25b3bef56a"   # sha256 of vol_har_v1.json, as the protocol pins it
+BACKSTOP = dt.date(2027, 3, 31)            # docs/VOL_SHADOW_PROTOCOL.md: fewer than 60 by then is "not confirmed (underpowered)"
+STATE_KEY = "vol_shadow:primary_read"      # the one stored read (journal state): later runs show it, they do not recompute
 MODES = ("off", "shadow")                  # no apply mode: a forecast that decides nothing is the whole feature
 OPEN_READ = 15                             # minutes after 09:15: 09:30, the first decision point the study covered
 OPEN_READ_UNTIL = 45                       # ...retried until 10:00, then given up on (once, with a WARN)
@@ -56,7 +62,11 @@ class VolShadow:
         if raw is not None and not isinstance(raw, dict):                  # a malformed block: off, with the same WARN
             self.bad_mode = str(raw)
         self.mode = mode if self.bad_mode is None else "off"
-        from .harvol import DEFAULT_PATH
+        try:
+            from .harvol import DEFAULT_PATH
+        except Exception as exc:                                  # an import failure must not stop the engine being built
+            DEFAULT_PATH = Path(__file__).with_name("vol_har_v1.json")
+            self.bad_mode, self.mode = f"harvol could not be imported ({exc!r:.80})", "off"
         self.path = Path(str(vf.get("path") or DEFAULT_PATH))     # the committed coefficients unless the config points elsewhere
         self.journal = journal
         self.har: dict = {}
@@ -64,6 +74,7 @@ class VolShadow:
         self.tried: set = set()
         self.why: dict = {}
         self.day = None
+        self.pin: dict | None = None
 
     @property
     def on(self) -> bool:
@@ -89,6 +100,7 @@ class VolShadow:
                     self.har[u] = h
         except Exception as exc:                                  # nothing here may stop the desk
             self.har, why = {}, f"HAR could not load ({exc!r:.120})"
+        self.pin = pins(self.path) if self.har else None
         if self.har:
             self.journal.event(t0, "INFO", "quant", f"vol shadow: HAR (vol_forecast_v1) will be recorded beside the desk's "
                                f"estimate at the opening read for {', '.join(self.har)}; it changes no decision")
@@ -137,7 +149,22 @@ class VolShadow:
                            + (f" vs desk {math.sqrt(desk[h30]) * 100:.3f}%" if h30 in desk else ""),
                            {"vol_shadow": {"symbol": u, "m": res["m"], "model": "C_har", "atm_iv": atm_iv, "minutes": mins,
                                            "desk": desk, "har": {h: r6(v) for h, v in res["var"].items()},
-                                           "used_sigma_30m_pct": used_sigma_30m_pct}})
+                                           "used_sigma_30m_pct": used_sigma_30m_pct, "pin": self.pin}})
+
+
+def pins(coef_path: Path) -> dict:
+    """The inputs the protocol pins, as sha256 hex, recorded with every forecast: the coefficient file, and the code whose
+    change voids the count (harvol.py and the desk's own forecaster, quant.py). A value is None when it cannot be read."""
+    def sha(*paths):
+        try:
+            h = hashlib.sha256()
+            for q in paths:
+                h.update(Path(q).read_bytes())
+            return h.hexdigest()
+        except OSError:
+            return None
+    here = Path(__file__).parent
+    return {"coef": sha(coef_path), "code": sha(here / "harvol.py", here / "quant.py")}
 
 
 def shadow_rows(events: pd.DataFrame) -> pd.DataFrame:
@@ -151,9 +178,11 @@ def shadow_rows(events: pd.DataFrame) -> pd.DataFrame:
             except ValueError:
                 continue
             if d and d.get("symbol") and "m" in d and isinstance(d.get("minutes"), dict):
+                pin = d.get("pin") if isinstance(d.get("pin"), dict) else {}
                 out.append({"ts": pd.Timestamp(e.ts), "symbol": d["symbol"], "m": int(d["m"]), "minutes": d["minutes"],
-                            "desk": d.get("desk") or {}, "har": d.get("har") or {}})
-    df = pd.DataFrame(out, columns=["ts", "symbol", "m", "minutes", "desk", "har"])
+                            "desk": d.get("desk") or {}, "har": d.get("har") or {},
+                            "pin": f"{pin['coef']}:{pin['code']}" if isinstance(pin.get("coef"), str) and isinstance(pin.get("code"), str) else None})
+    df = pd.DataFrame(out, columns=["ts", "symbol", "m", "minutes", "desk", "har", "pin"])
     if df.empty:
         return df
     df["day"] = [t.date() for t in df["ts"]]
@@ -190,23 +219,69 @@ def skips(events: pd.DataFrame) -> dict:
 
 
 def _pooled(d: pd.DataFrame) -> dict:
-    """The protocol's ONE primary statistic (docs/VOL_SHADOW_PROTOCOL.md): per session, the mean over both indices and the
-    four horizons of QLIKE(desk) - QLIKE(HAR) (positive: HAR better); the session is the unit; only sessions in which both
-    indices have a gradable record count; one-sided Newey-West t (5 lags) and its normal p. n is `sessions_both`."""
+    """The protocol's ONE primary statistic (docs/VOL_SHADOW_PROTOCOL.md). Per session, the mean over both indices and the four
+    horizons of QLIKE(desk) - QLIKE(HAR) (positive: HAR better); the session is the unit; one-sided Newey-West t (5 lags) read
+    against Student's t with n - 1 degrees of freedom. What counts, enforced here:
+    - a session needs all four horizons graded, for both indices;
+    - every forecast carries the pins it was made under; only the trailing run of sessions under ONE pin counts, and the coefficient
+      pin must equal COEF_PIN (a refit or a change to harvol.py / quant.py restarts the count on that date; a session recorded
+      without a pin never counts);
+    - the statistic uses the FIRST `TARGET_SESSIONS` of that run, so a session 61 cannot move it.
+    `sessions_both` is the number that count; `sessions_excluded` the graded sessions that do not (shown, never hidden)."""
     d = d.assign(diff=V.qlike(d["rv"].to_numpy(float), d["F_desk"].to_numpy(float))
                  - V.qlike(d["rv"].to_numpy(float), d["F_har"].to_numpy(float)),
                  desk_q=V.qlike(d["rv"].to_numpy(float), d["F_desk"].to_numpy(float)))
+    if "pin" not in d:
+        d["pin"] = None
+    whole = d.groupby(["day", "symbol"])["horizon"].agg(lambda s: set(HORIZONS) <= set(s))
+    d = d[[bool(whole.get((a, b), False)) for a, b in zip(d["day"], d["symbol"])]]
     have = d.groupby("day")["symbol"].agg(lambda s: set(INDICES) <= set(s))
     both = d[d["day"].isin(have[have].index)]
-    per = both.groupby("day")["diff"].mean().sort_index()
-    out = {"sessions_both": int(len(per)), "pooled": None}
+    per_all = both.groupby("day")["diff"].mean().sort_index()
+    pin_of = both.groupby("day")["pin"].agg(lambda s: s.iloc[0] if s.nunique(dropna=False) == 1 else None).reindex(per_all.index)
+    run: list = []
+    if len(pin_of) and isinstance(pin_of.iloc[-1], str) and pin_of.iloc[-1].split(":")[0] == COEF_PIN:
+        for day, pin in reversed(list(pin_of.items())):
+            if pin != pin_of.iloc[-1]:
+                break
+            run.append(day)
+        run.reverse()
+    per = per_all.loc[run] if run else per_all.iloc[:0]
+    out = {"sessions_both": int(len(per)), "sessions_excluded": int(len(per_all) - len(per)), "pooled": None}
     if len(per):
-        t = nw_t(per.to_numpy()) if len(per) >= MIN_DAYS_FOR_T else float("nan")
-        p = 0.5 * math.erfc(t / math.sqrt(2)) if t == t else float("nan")
-        desk_q = float(both.groupby("day")["desk_q"].mean().mean())
-        out["pooled"] = {"sessions": int(len(per)), "mean_diff": float(per.mean()),
-                         "gain_pct": float(100 * per.mean() / desk_q) if desk_q > 0 else None, "nw_t": t, "p_one_sided": p}
+        first = per.iloc[:TARGET_SESSIONS]
+        n = len(first)
+        t = nw_t(first.to_numpy()) if n >= MIN_DAYS_FOR_T else float("nan")
+        p = float(student_t.sf(t, df=n - 1)) if t == t else float("nan")
+        use = both[both["day"].isin(first.index)]
+        desk_q = float(use.groupby("day")["desk_q"].mean().mean())
+        out["pooled"] = {"sessions": int(n), "mean_diff": float(first.mean()),
+                         "gain_pct": float(100 * first.mean() / desk_q) if desk_q > 0 else None, "nw_t": t, "p_one_sided": p}
     return out
+
+
+def read_once(journal, rep: dict, today: dt.date) -> dict:
+    """The protocol's single read, kept: at the 60th counted session (or, if fewer than 60 by BACKSTOP, after it) the verdict is
+    computed once, stored in the journal's state, and every later run shows that record without recomputing. `--since`, a new
+    session or a second run cannot change it. The record carries the pin it was made under."""
+    got = journal.get_state(STATE_KEY)
+    if isinstance(got, dict) and got.get("verdict"):
+        rep["stored"] = got
+        return rep
+    pl, n = rep.get("pooled"), rep.get("sessions_both", 0)
+    if n >= TARGET_SESSIONS and pl:
+        ok = pl["mean_diff"] > 0 and pl["p_one_sided"] == pl["p_one_sided"] and pl["p_one_sided"] < 0.05
+        rec = {"read_on": str(today), "sessions": pl["sessions"], "mean_diff": pl["mean_diff"], "gain_pct": pl["gain_pct"],
+               "nw_t": pl["nw_t"], "p_one_sided": pl["p_one_sided"], "verdict": "PASS" if ok else "NOT CONFIRMED",
+               "coef_pin": COEF_PIN}
+    elif today > BACKSTOP:
+        rec = {"read_on": str(today), "sessions": int(n), "verdict": "NOT CONFIRMED (underpowered)", "coef_pin": COEF_PIN}
+    else:
+        return rep
+    journal.set_state(STATE_KEY, rec)
+    journal.commit()
+    rep["stored"], rep["first_read"] = rec, True
+    return rep
 
 
 def compare(events: pd.DataFrame, bars: dict[str, pd.DataFrame]) -> dict:
@@ -226,7 +301,7 @@ def compare(events: pd.DataFrame, bars: dict[str, pd.DataFrame]) -> dict:
             if not all(h in getattr(e, c) and getattr(e, c)[h] > 0 for c in CANDS):
                 continue
             recs.append({"symbol": e.symbol, "day": day, "m": e.m, "horizon": h, "rv": float((r[e.m:end] ** 2).sum()),
-                         "ret": float(r[e.m:end].sum()), "F_desk": float(e.desk[h]), "F_har": float(e.har[h])})
+                         "ret": float(r[e.m:end].sum()), "F_desk": float(e.desk[h]), "F_har": float(e.har[h]), "pin": e.pin})
     d = pd.DataFrame(recs)
     rep = {"forecasts": int(len(rows)), "scored": int(len(d)), "sessions": int(d["day"].nunique()) if len(d) else 0, "by": {},
            "skips": skips(events)}
@@ -258,21 +333,27 @@ def render(rep: dict) -> str:
     L = ["# Live vol shadow: the desk's forecaster (A) vs HAR", "",
          f"{rep['forecasts']} journaled forecasts, {rep['scored']} (forecast, horizon) pairs with a completed horizon; "
          f"{rep.get('sessions', 0)} sessions graded, {rep.get('sessions_both', 0)} of {TARGET_SESSIONS} with both indices "
-         f"(docs/VOL_SHADOW_PROTOCOL.md: only those count, and there is no read before {TARGET_SESSIONS}; nothing here is acted on).",
+         f"(docs/VOL_SHADOW_PROTOCOL.md: only those count, with all four horizons and one pin; there is no read before {TARGET_SESSIONS}; "
+         "nothing here is acted on).",
          "Shadow WARNs by reason (sessions or index-sessions with no gradable record): "
          + ("; ".join(f"{n} x {why}" for why, n in rep.get("skips", {}).items()) or "none") + ".", ""]
-    pl, ready = rep.get("pooled"), rep.get("sessions_both", 0) >= TARGET_SESSIONS
-    if ready and pl:
-        ok = pl["mean_diff"] > 0 and pl["p_one_sided"] == pl["p_one_sided"] and pl["p_one_sided"] < 0.05
-        gp = "n/a" if pl["gain_pct"] is None else format(pl["gain_pct"], "+.1f") + "%"
-        verdict = "PASS" if ok else "NOT CONFIRMED"
-        L += [f"**Primary statistic at {pl['sessions']} sessions (the protocol's, read once):** mean QLIKE gain "
-              f"{pl['mean_diff']:+.4f} ({gp}), NW t {pl['nw_t']:+.2f}, one-sided p {pl['p_one_sided']:.3f}: **{verdict}** "
-              "(PASS needs a positive mean and p < 0.05)."]
-        L.append("")
+    st, n = rep.get("stored"), rep.get("sessions_both", 0)
+    if st:
+        gp = "n/a" if st.get("gain_pct") is None else format(st["gain_pct"], "+.1f") + "%"
+        body = (f"{st['sessions']} sessions, mean QLIKE gain {st['mean_diff']:+.4f} ({gp}), NW t {st['nw_t']:+.2f}, one-sided p "
+                f"{st['p_one_sided']:.3f} (Student t): " if "mean_diff" in st else f"{st['sessions']} sessions counted: ")
+        L += [f"**Primary statistic, READ ONCE on {st['read_on']}** (stored in the journal; every later run shows this record and "
+              f"does not recompute it): {body}**{st['verdict']}** (PASS needs a positive mean and p < 0.05).", ""]
+    elif n >= TARGET_SESSIONS:
+        L += [f"Primary statistic: {n} sessions are counted, so the single read is due; it is taken and stored by "
+              "`intraday vol-shadow` on the live journal.", ""]
     else:
         L += [f"Primary statistic (the protocol's): withheld until {TARGET_SESSIONS} sessions with both indices are graded "
-              f"({rep.get('sessions_both', 0)} so far). The per-cell DM t below is withheld too.", ""]
+              f"({n} so far; backstop {BACKSTOP:%d %b %Y}). The per-cell DM t below is withheld too.", ""]
+    if rep.get("sessions_excluded"):
+        L += [f"{rep['sessions_excluded']} graded session(s) do not count: recorded under a different pin (a refit, or a change to "
+              "harvol.py / quant.py, restarts the count) or without one.", ""]
+    ready = bool(st)
     if not rep["by"]:
         return "\n".join(L + ["Nothing to score yet."]) + "\n"
     L += ["| index · horizon | days | QLIKE A | QLIKE HAR | gain | DM t | move ratio A | move ratio HAR |",

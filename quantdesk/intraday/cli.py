@@ -587,13 +587,25 @@ def cmd_learn(cfg, a):
 
 
 def cmd_vol_shadow(cfg, a):
-    """Live A (the desk's vol forecaster) vs HAR: the journaled shadow forecasts scored against the recorded bars."""
+    """Live A (the desk's vol forecaster) vs HAR: the journaled shadow forecasts scored against the recorded bars. The protocol's
+    single read (60 counted sessions, or the 31 Mar 2027 backstop) is taken here once on the live journal and stored; after
+    that this command shows the stored record. `--since` narrows only the per-cell tables, never the primary statistic."""
+    import pandas as pd
+
     from . import volshadow
     p = paths(cfg, a.account or "live")
-    ev = Journal(p["journal"]).events(since=a.since)
+    j = Journal(p["journal"])
     rec = SessionRecorder(p["data"])
     bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
-    print(volshadow.render(volshadow.compare(ev, bars)))
+    rep = volshadow.compare(j.events(), bars)
+    if a.since:
+        part = volshadow.compare(j.events(since=a.since), bars)
+        rep = {**part, **{k: rep[k] for k in ("pooled", "sessions_both", "sessions_excluded") if k in rep}}
+    if (a.account or "live") == "live":
+        rep = volshadow.read_once(j, rep, pd.Timestamp.now(tz="Asia/Kolkata").date())
+    else:
+        print(f"(account {a.account}: the protocol's single read applies to the live journal only and is not taken here)")
+    print(volshadow.render(rep))
 
 
 def cmd_archive(cfg, a):

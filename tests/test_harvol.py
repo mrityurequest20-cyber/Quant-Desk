@@ -2,8 +2,11 @@
 past, the desk's trading is identical with the shadow on or off, one record per index per session goes in the journal at
 the opening read, missing inputs are a WARN not an exception, and the grading arithmetic is right."""
 import datetime as dt
+import hashlib
 import json
 import math
+import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -262,6 +265,9 @@ def test_one_record_per_index_per_session_at_the_opening_read_with_both_forecast
         assert pd.Timestamp(row.iloc[0]["ts"]).strftime("%H:%M") == "09:30"          # the first decision point the study covered
         d = json.loads(row.iloc[0]["data"])["vol_shadow"]
         assert d["symbol"] == u and d["model"] == "C_har" and d["m"] == 15
+        assert d["pin"]["coef"] == hashlib.sha256((tmp_path / "sh_har.json").read_bytes()).hexdigest()   # the file this run loaded
+        assert d["pin"]["coef"] != volshadow.COEF_PIN                                    # a fixture fit is not the protocol's pinned file
+        assert re.fullmatch(r"[0-9a-f]{64}", d["pin"]["code"])
         assert set(d["desk"]) == set(d["har"]) == {"30m", "60m", "120m", "close"} and d["minutes"]["close"] == 375 - 15
         assert all(v > 0 for v in d["desk"].values()) and all(v > 0 for v in d["har"].values())
         assert d["desk"]["60m"] == pytest.approx(2 * d["desk"]["30m"], rel=1e-4)       # the desk's: per-minute variance x minutes
@@ -565,9 +571,21 @@ def test_a_failed_start_session_is_on_the_record_and_never_stops_the_session(cfg
     assert len(j.trades()) >= 0 and eng.health.get("safe_mode") is None      # the session ran
 
 
-def _day_rows(day, symbol, base_diff, n_cells=4):
-    return [{"symbol": symbol, "day": day, "m": 15, "horizon": f"h{i}", "rv": 1.0, "ret": 0.0,
-             "F_desk": 1.0 + base_diff, "F_har": 1.0} for i in range(n_cells)]
+GOOD_PIN = f"{volshadow.COEF_PIN}:{'c' * 64}"           # the pinned coefficient file and one code pin
+
+
+def _day_rows(day, symbol, base_diff, horizons=volshadow.HORIZONS, pin=GOOD_PIN):
+    return [{"symbol": symbol, "day": day, "m": 15, "horizon": h, "rv": 1.0, "ret": 0.0, "F_desk": 1.0 + base_diff,
+             "F_har": 1.0, "pin": pin} for h in horizons]
+
+
+def _sessions(n, start=dt.date(2026, 10, 1), pin=GOOD_PIN, diff=0.5, indices=("NIFTY", "BANKNIFTY")):
+    days = [start + dt.timedelta(days=i) for i in range(n)]
+    rows = []
+    for k, d in enumerate(days):
+        for u in indices:
+            rows += _day_rows(d, u, diff + 0.1 * (k % 3), pin=pin)
+    return days, rows
 
 
 def test_the_pooled_statistic_counts_only_sessions_with_both_indices_and_is_withheld_until_60():
@@ -584,10 +602,159 @@ def test_the_pooled_statistic_counts_only_sessions_with_both_indices_and_is_with
     assert "withheld until 60 sessions" in volshadow.render(rep) and "PASS" not in volshadow.render(rep)
     rows += [r for d in days[1::2] for r in _day_rows(d, "BANKNIFTY", 0.4)]          # now both indices on all 70 sessions
     out = volshadow._pooled(pd.DataFrame(rows))
-    assert out["sessions_both"] == 70
-    text = volshadow.render({"forecasts": 140, "scored": 560, "sessions": 70, "by": {}, "skips": {}, **out})
-    assert "Primary statistic at 70 sessions" in text and "**PASS**" in text
+    assert out["sessions_both"] == 70 and out["pooled"]["sessions"] == volshadow.TARGET_SESSIONS   # the first 60 only
+    due = volshadow.render({"forecasts": 140, "scored": 560, "sessions": 70, "by": {}, "skips": {}, **out})
+    assert "the single read is due" in due and "**PASS**" not in due                # computing is not reading: read_once reads
     worse = pd.DataFrame([{**r, "F_desk": 1.0, "F_har": 1.5} for r in rows])             # HAR worse: cannot pass
-    out = volshadow._pooled(worse)
-    assert out["pooled"]["mean_diff"] < 0
-    assert "**NOT CONFIRMED**" in volshadow.render({"forecasts": 140, "scored": 560, "sessions": 70, "by": {}, "skips": {}, **out})
+    assert volshadow._pooled(worse)["pooled"]["mean_diff"] < 0
+
+
+def test_only_the_first_60_sessions_enter_the_statistic():
+    """research-reviewer HIGH-1: a rerun on day 61, 62 ... was optional stopping; session 61 can no longer move the number."""
+    _, rows = _sessions(60)
+    base = volshadow._pooled(pd.DataFrame(rows))["pooled"]
+    _, more = _sessions(65)
+    later = volshadow._pooled(pd.DataFrame(more))
+    assert later["sessions_both"] == 65 and later["pooled"]["sessions"] == 60
+    assert later["pooled"]["mean_diff"] == base["mean_diff"] and later["pooled"]["nw_t"] == base["nw_t"]
+    bad = pd.DataFrame(more)
+    bad.loc[bad["day"] == bad["day"].max(), "F_desk"] = 1.0                           # a terrible 65th session
+    assert volshadow._pooled(bad)["pooled"]["mean_diff"] == base["mean_diff"]
+
+
+def test_a_pin_change_restarts_the_count_and_unpinned_or_wrongly_pinned_sessions_never_count():
+    """research-reviewer HIGH-2: a refit or a change to harvol.py / quant.py must not mix regimes in the 60."""
+    other = f"{volshadow.COEF_PIN}:{'d' * 64}"
+    _, a = _sessions(30, pin=GOOD_PIN)
+    _, b = _sessions(10, start=dt.date(2026, 11, 20), pin=other)                     # the code pin changed on 20 Nov
+    out = volshadow._pooled(pd.DataFrame(a + b))
+    assert out["sessions_both"] == 10 and out["sessions_excluded"] == 30             # the count restarted; the old ones are shown
+    _, c = _sessions(10, start=dt.date(2027, 1, 5), pin=None)
+    assert volshadow._pooled(pd.DataFrame(a + c))["sessions_both"] == 0              # no pin recorded: never counts
+    refit = f"{'e' * 64}:{'c' * 64}"                                                  # a different coefficient file
+    _, r = _sessions(30, pin=refit)
+    assert volshadow._pooled(pd.DataFrame(r))["sessions_both"] == 0
+    _, mixed = _sessions(5, pin=GOOD_PIN)
+    mixed = [{**row, "pin": other} if row["symbol"] == "BANKNIFTY" else row for row in mixed]
+    assert volshadow._pooled(pd.DataFrame(mixed))["sessions_both"] == 0              # the two indices disagree on the pin
+
+
+def test_a_session_needs_all_four_horizons_for_both_indices():
+    """research-reviewer MEDIUM-3: a report run at 11:00 counted 30m and 60m only."""
+    _, rows = _sessions(12)
+    short = [r for r in rows if not (r["symbol"] == "BANKNIFTY" and r["horizon"] == "close" and r["day"].day % 2 == 0)]
+    out = volshadow._pooled(pd.DataFrame(short))
+    assert out["sessions_both"] == 6                                                  # 12 days, the 6 even ones lack a BANKNIFTY close
+    assert volshadow._pooled(pd.DataFrame([r for r in rows if r["horizon"] != "120m"]))["sessions_both"] == 0
+
+
+def _noisy_rows(n, seed=7):
+    """Sessions with realistic scatter: the desk a little biased and noisy, HAR noisy, so t is moderate (not 45)."""
+    rng = np.random.default_rng(seed)
+    days = [dt.date(2026, 10, 1) + dt.timedelta(days=i) for i in range(n)]
+    rows = []
+    for d in days:
+        for u in volshadow.INDICES:
+            f_desk, f_har = 1.08 + 0.1 * rng.standard_normal(), 1.0 + 0.1 * rng.standard_normal()
+            rows += [{"symbol": u, "day": d, "m": 15, "horizon": h, "rv": 1.0, "ret": 0.0, "F_desk": f_desk, "F_har": f_har,
+                      "pin": GOOD_PIN} for h in volshadow.HORIZONS]
+    return rows
+
+
+def test_the_p_value_is_students_t_not_the_liberal_normal_tail():
+    from scipy.stats import norm
+    from scipy.stats import t as student
+    pl = volshadow._pooled(pd.DataFrame(_noisy_rows(60)))["pooled"]
+    assert 1.0 < pl["nw_t"] < 3 and 0.02 < pl["p_one_sided"] < 0.15                    # a moderate positive t, where the tails differ
+    assert pl["p_one_sided"] == pytest.approx(float(student.sf(pl["nw_t"], df=59)), rel=1e-9)
+    assert pl["p_one_sided"] > float(norm.sf(pl["nw_t"])) > 0                           # more conservative than the normal tail
+
+
+class _Memory:
+    """The journal state the one read is kept in."""
+    def __init__(self):
+        self.s, self.commits = {}, 0
+
+    def get_state(self, k, default=None):
+        return self.s.get(k, default)
+
+    def set_state(self, k, v):
+        self.s[k] = v
+
+    def commit(self):
+        self.commits += 1
+
+
+def _rep(n, diff=0.5, worse=False):
+    _, rows = _sessions(n, diff=diff)
+    if worse:                                                    # HAR is the one that is wrong (QLIKE is smallest at F = rv = 1)
+        rows = [{**r, "F_desk": 1.0, "F_har": 1.5} for r in rows]
+    out = volshadow._pooled(pd.DataFrame(rows))
+    return {"forecasts": 2 * n, "scored": 8 * n, "sessions": n, "by": {}, "skips": {}, **out}
+
+
+def test_the_primary_read_is_taken_once_stored_and_never_recomputed():
+    j = _Memory()
+    early = volshadow.read_once(j, _rep(59), dt.date(2026, 12, 20))
+    assert "stored" not in early and j.s == {}                                       # before 60: no read, nothing kept
+    first = volshadow.read_once(j, _rep(60), dt.date(2026, 12, 21))
+    rec = first["stored"]
+    assert first["first_read"] and rec["verdict"] == "PASS" and rec["sessions"] == 60 and rec["coef_pin"] == volshadow.COEF_PIN
+    assert j.s[volshadow.STATE_KEY] == rec and j.commits == 1
+    again = volshadow.read_once(j, _rep(75, worse=True), dt.date(2027, 2, 1))       # more sessions, and now they look terrible
+    assert again["stored"] == rec and "first_read" not in again and j.commits == 1   # the stored record, not a recomputation
+    text = volshadow.render(again)
+    assert "READ ONCE on 2026-12-21" in text and "**PASS**" in text and "does not recompute it" in text
+
+
+def test_a_failing_read_is_stored_as_not_confirmed():
+    j = _Memory()
+    rec = volshadow.read_once(j, _rep(60, worse=True), dt.date(2026, 12, 21))["stored"]
+    assert rec["verdict"] == "NOT CONFIRMED" and rec["mean_diff"] < 0
+    assert "**NOT CONFIRMED**" in volshadow.render({**_rep(60), "stored": rec})
+
+
+def test_the_backstop_stores_not_confirmed_underpowered_after_31_march():
+    j = _Memory()
+    assert "stored" not in volshadow.read_once(j, _rep(40), dt.date(2027, 3, 31))     # the backstop day itself is not past it
+    rec = volshadow.read_once(j, _rep(40), dt.date(2027, 4, 1))["stored"]
+    assert rec["verdict"] == "NOT CONFIRMED (underpowered)" and rec["sessions"] == 40
+    assert "**NOT CONFIRMED (underpowered)**" in volshadow.render({**_rep(40), "stored": rec})
+    assert volshadow.read_once(j, _rep(60), dt.date(2027, 5, 1))["stored"] == rec     # and it is final
+
+
+def test_the_pins_are_the_sha256_of_the_files_the_protocol_names(tmp_path):
+    import hashlib
+    f = tmp_path / "c.json"
+    f.write_bytes(b"coefficients")
+    got = volshadow.pins(f)
+    assert got["coef"] == hashlib.sha256(b"coefficients").hexdigest()
+    here = Path(volshadow.__file__).parent
+    assert got["code"] == hashlib.sha256((here / "harvol.py").read_bytes() + (here / "quant.py").read_bytes()).hexdigest()
+    assert volshadow.pins(tmp_path / "missing.json")["coef"] is None                 # unreadable: recorded as None, never counted
+    assert hashlib.sha256((here / "vol_har_v1.json").read_bytes()).hexdigest() == volshadow.COEF_PIN
+
+
+def test_the_command_takes_the_single_read_once_on_the_live_journal(cfg, capsys, monkeypatch):
+    import argparse
+
+    from quantdesk.intraday import cli
+    from quantdesk.journal.journal import Journal
+    p = cli.paths(cfg, "live")
+    base = {"forecasts": 120, "scored": 480, "sessions": 60, "by": {}, "skips": {}}
+    calls = []
+
+    def fake_compare(events, bars):
+        calls.append(1)
+        return {**base, **volshadow._pooled(pd.DataFrame(_sessions(60 if len(calls) < 3 else 80)[1]))}
+    monkeypatch.setattr(volshadow, "compare", fake_compare)
+    cli.cmd_vol_shadow(cfg, argparse.Namespace(account=None, since=None))
+    first = capsys.readouterr().out
+    assert "READ ONCE" in first and "**PASS**" in first
+    assert Journal(p["journal"]).get_state(volshadow.STATE_KEY)["verdict"] == "PASS"
+    cli.cmd_vol_shadow(cfg, argparse.Namespace(account=None, since="2020-01-01"))        # a second look, with --since, on worse data
+    second = capsys.readouterr().out
+    assert "**PASS**" in second and "does not recompute it" in second                    # still the stored record
+    cli.cmd_vol_shadow(cfg, argparse.Namespace(account="replay", since=None))
+    assert "applies to the live journal only" in capsys.readouterr().out
+    assert Journal(cli.paths(cfg, "replay")["journal"]).get_state(volshadow.STATE_KEY) is None

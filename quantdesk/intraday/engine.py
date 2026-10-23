@@ -1426,7 +1426,10 @@ class IntradayEngine:
             key = (self.day, u, "vol shadow")
             if key not in self._qerrors:
                 self._qerrors.add(key)
-                self.journal.event(now, "WARN", "quant", f"{u} vol shadow failed (no decision is affected): {exc!r:.200}")
+                try:
+                    self.journal.event(now, "WARN", "quant", f"{u} vol shadow failed (no decision is affected): {exc!r:.200}")
+                except Exception:                      # the shadow's own report of a failure must not itself stop the step
+                    log.exception("vol shadow failed and could not be journaled")
 
     def _train_models(self, day) -> None:
         """Fit each underlying's direction model on sessions before `day` only, and say how it tested."""
