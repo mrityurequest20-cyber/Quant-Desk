@@ -401,7 +401,7 @@ def test_compare_scores_qlike_and_move_ratio_against_the_recorded_bars():
     desk_less = pd.DataFrame([_ev_row(idx[15], "NIFTY", 15, {"30m": 30}, {}, {"30m": f_har})])
     assert volshadow.compare(desk_less, {"NIFTY": bars})["scored"] == 0     # nothing to compare HAR against
     text = volshadow.render(rep)
-    assert "1 of 20 sessions graded" in text
+    assert "1 of 60 sessions graded" in text
     assert "NIFTY 30m" in text and "QLIKE" in text
     assert "Nothing to score" in volshadow.render(volshadow.compare(pd.DataFrame(columns=["ts", "category", "data"]), {}))
 
@@ -507,4 +507,23 @@ def test_the_vol_shadow_command_reports_from_the_journal_and_the_recorded_bars(c
     j.commit()
     cli.cmd_vol_shadow(cfg, argparse.Namespace(account=None, since=None))
     out = capsys.readouterr().out
-    assert "NIFTY 30m" in out and "1 of 20 sessions graded" in out
+    assert "NIFTY 30m" in out and "1 of 60 sessions graded" in out
+
+
+def test_the_report_says_why_sessions_have_no_record(cfg):
+    """Research review of #87: skipped index-sessions must be visible, by reason, not only buried in the journal."""
+    def warn(msg):
+        return {"ts": "2026-10-26 10:01:00", "level": "WARN", "category": "quant", "message": msg, "data": None}
+    ev = pd.DataFrame([warn("NIFTY vol shadow: no HAR forecast at the opening read (too few prior sessions); nothing is recorded for today"),
+                       warn("BANKNIFTY vol shadow: no HAR forecast at the opening read (a gap); nothing is recorded for today"),
+                       warn("NIFTY vol shadow: the desk has no realised-vol estimate at the opening read; HAR is recorded alone"),
+                       warn("NIFTY vol shadow failed (no decision is affected): ValueError()"),
+                       {"ts": "2026-10-26 10:02:00", "level": "INFO", "category": "quant", "message": "vol shadow NIFTY 09:30: ok", "data": None},
+                       {"ts": "2026-10-26 10:03:00", "level": "WARN", "category": "risk", "message": "vol shadow in a risk event", "data": None}])
+    got = volshadow.skips(ev)
+    assert got == {"no HAR forecast by 10:00 (too little history, a gap, or a late start)": 2,
+                   "the desk had no estimate (HAR recorded, not graded)": 1, "error while recording": 1}
+    assert volshadow.skips(pd.DataFrame(columns=["ts", "category", "message"])) == {}
+    text = volshadow.render({"forecasts": 0, "scored": 0, "by": {}, "skips": got, "sessions": 0})
+    assert "2 x no HAR forecast by 10:00" in text and "of 60 sessions graded" in text
+    assert "none" in volshadow.render({"forecasts": 0, "scored": 0, "by": {}, "skips": {}})

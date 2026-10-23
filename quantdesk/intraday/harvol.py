@@ -1,7 +1,7 @@
 """The live HAR volatility forecast: vol_forecast_v1's C_har (autolearn/volstudy.py) on the desk's own 1-minute bars.
 
 The pre-registered study fitted a HAR log regression per horizon (30m / 60m / 120m / to the close) on 13 years of index
-minutes and passed its locked 2019-26 test on both indices (docs/EXTERNAL_DATA.md). This module runs that model, not a
+minutes and passed its locked test (2019 to Feb 2023) on both indices (docs/EXTERNAL_DATA.md). This module runs that model, not a
 look-alike: the features and the fit are volstudy's own functions (`grid`, `rows`, `fit_har`, `predict_c`).
 
 Where the coefficients come from: fitted OFFLINE on the external minutes, with the spec's own training window (every

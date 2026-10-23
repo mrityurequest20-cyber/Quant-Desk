@@ -5,7 +5,11 @@ forecast can be computed (retried until 10:00), one INFO `quant` journal event c
 variance over the next 30m / 60m / 120m / to the close (`data.vol_shadow`). "HAR" is vol_forecast_v1's locked C_har
 (harvol.py: coefficients fitted offline with the spec's own training window, no refit here). "Desk" is the desk's
 VolForecaster realised estimate at that minute (the per-minute variance it feeds the EV Monte Carlo, before the implied
-blend; horizon variance = per-minute variance x minutes, the study's candidate A).
+blend; horizon variance = per-minute variance x minutes). This is the desk's live estimate and NOT the study's candidate
+A: the live forecaster works on close-to-close returns and leaves out each day's opening return, the study's A includes
+it, so at 09:30 the desk figure is expected to run roughly 20% below A. What this shadow compares is therefore HAR against
+what the desk actually uses, not a replication of the locked comparison. The protocol it is judged by (one decision
+point, the pooled statistic, N sessions, the failure rule) is fixed in docs/VOL_SHADOW_PROTOCOL.md.
 
 Shadow means no decision reads it: nothing here writes anything the engine uses, every failure is caught and journaled
 as a WARN, the inputs are bars the desk already holds, and there is no network call. There is no apply mode.
@@ -32,7 +36,7 @@ from ..autolearn.prereg import nw_t
 
 CANDS = ("desk", "har")
 MIN_DAYS_FOR_T = 10
-TARGET_SESSIONS = 20                       # BACKLOG item 3: the shadow runs this many sessions before anyone reads into it
+TARGET_SESSIONS = 60                       # docs/VOL_SHADOW_PROTOCOL.md: no read before this many sessions (20 has about 50% power on NIFTY)
 MODES = ("off", "shadow")                  # no apply mode: a forecast that decides nothing is the whole feature
 OPEN_READ = 15                             # minutes after 09:15: 09:30, the first decision point the study covered
 OPEN_READ_UNTIL = 45                       # ...retried until 10:00, then given up on (once, with a WARN)
@@ -159,6 +163,26 @@ def realised(bars: pd.DataFrame) -> dict:
     return {d: (r[i], miss[i]) for i, d in enumerate(days)}
 
 
+_SKIP_REASONS = (("no HAR forecast at the opening read", "no HAR forecast by 10:00 (too little history, a gap, or a late start)"),
+                 ("no realised-vol estimate", "the desk had no estimate (HAR recorded, not graded)"),
+                 ("could not start", "could not start"), ("failed", "error while recording"),
+                 ("unavailable", "coefficients missing or unusable"), ("bad ", "bad vol_forecast config"))
+
+
+def skips(events: pd.DataFrame) -> dict:
+    """Why index-sessions have no gradable record: the shadow's own WARNs, counted by reason (it is journaled, never silent)."""
+    out: dict[str, int] = {}
+    if events is None or not len(events) or "message" not in events:
+        return out
+    w = events[(events["category"] == "quant") & events["message"].astype(str).str.contains("vol shadow", regex=False)]
+    if "level" in w:
+        w = w[w["level"].isin(["WARN", "ERROR", "CRITICAL"])]
+    for msg in w["message"].astype(str):
+        why = next((label for key, label in _SKIP_REASONS if key in msg), "other")
+        out[why] = out.get(why, 0) + 1
+    return out
+
+
 def compare(events: pd.DataFrame, bars: dict[str, pd.DataFrame]) -> dict:
     """Score every journaled shadow forecast whose horizon has completed in `bars` ({symbol: 1m bars})."""
     rows = shadow_rows(events)
@@ -178,7 +202,8 @@ def compare(events: pd.DataFrame, bars: dict[str, pd.DataFrame]) -> dict:
             recs.append({"symbol": e.symbol, "day": day, "m": e.m, "horizon": h, "rv": float((r[e.m:end] ** 2).sum()),
                          "ret": float(r[e.m:end].sum()), "F_desk": float(e.desk[h]), "F_har": float(e.har[h])})
     d = pd.DataFrame(recs)
-    rep = {"forecasts": int(len(rows)), "scored": int(len(d)), "sessions": int(d["day"].nunique()) if len(d) else 0, "by": {}}
+    rep = {"forecasts": int(len(rows)), "scored": int(len(d)), "sessions": int(d["day"].nunique()) if len(d) else 0, "by": {},
+           "skips": skips(events)}
     if d.empty:
         return rep
     for (sym, hz), g in d.groupby(["symbol", "horizon"]):
@@ -205,8 +230,10 @@ def compare(events: pd.DataFrame, bars: dict[str, pd.DataFrame]) -> dict:
 def render(rep: dict) -> str:
     L = ["# Live vol shadow: the desk's forecaster (A) vs HAR", "",
          f"{rep['forecasts']} journaled forecasts, {rep['scored']} (forecast, horizon) pairs with a completed horizon; "
-         f"{rep.get('sessions', 0)} of {TARGET_SESSIONS} sessions graded (BACKLOG item 3: the shadow runs {TARGET_SESSIONS} before anyone reads "
-         "into it; nothing here is acted on).", ""]
+         f"{rep.get('sessions', 0)} of {TARGET_SESSIONS} sessions graded (docs/VOL_SHADOW_PROTOCOL.md: no read before {TARGET_SESSIONS}; "
+         "nothing here is acted on).",
+         "Skipped index-sessions (the shadow's WARNs): " + ("; ".join(f"{n} x {why}" for why, n in rep.get("skips", {}).items())
+                                                          or "none") + ".", ""]
     if not rep["by"]:
         return "\n".join(L + ["Nothing to score yet."]) + "\n"
     L += ["| index · horizon | days | QLIKE A | QLIKE HAR | gain | DM t | move ratio A | move ratio HAR |",
@@ -223,5 +250,6 @@ def render(rep: dict) -> str:
         L.append(f"- {k}: A {fmt(c['desk'])}  |  HAR {fmt(c['har'])}")
     L += ["", "QLIKE: lower is better; gain is HAR's improvement over A. Move ratio: realised mean |move| over the forecast's "
           "expected |move|; 1.00 is calibrated, above 1 too small, below 1 too big. DM t appears from "
-          f"{MIN_DAYS_FOR_T} days. Realised-volatility forecasts only: the implied blend is in neither number."]
+          f"{MIN_DAYS_FOR_T} days. Realised-volatility forecasts only: the implied blend is in neither number, and A is the desk's live estimate, "
+          "not the study's candidate A (see docs/VOL_SHADOW_PROTOCOL.md)."]
     return "\n".join(L) + "\n"
