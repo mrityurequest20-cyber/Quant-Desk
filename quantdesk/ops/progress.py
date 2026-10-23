@@ -51,6 +51,8 @@ KPIS = {"level": ("evidence level (0-4)", 1), "principles_tested": ("principles 
         "entry_check_eves": ("eves collected for expiry_eve_entry_v1 (decision at 40+)", 1),
         "self_found_share": ("defects the desk found itself, share of all found (the north star)", 1),
         "escapes_30d": ("defects an outside reviewer found first, last 30 days", -1)}
+SLEEVE_KPIS = {"sleeve_trades", "sleeve_pnl", "sleeves_eligible", "sleeves_retired", "sleeve_pnl_per_trade", "sleeve_win",
+               "sleeve_real_vs_model_cost", "sleeve_skip_rate"}      # follow the snapshot's `sleeve_reading`
 FULL_TAPE = 300
 
 
@@ -95,7 +97,7 @@ def forecast_skill(cfg) -> dict:
 
 def snapshot(cfg, day: dt.date, gh=None) -> dict:
     from ..intraday.cli import paths
-    from ..intraday.sleeves import ExpirySeller, specs
+    from ..intraday.sleeves import ExpirySeller, roles, specs
     from ..journal.journal import Journal
     p = paths(cfg, "live")
     pr = principles()
@@ -107,10 +109,23 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
     gaps, real, model = [], 0.0, 0.0
     due = skipped = 0
     settle_gaps: list[float] = []
-    for spec in specs():
-        rep = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", p["data"], spec=spec).report()
-        for c in (rep.get("settlement") or {}).values():
+    comp_trades, comp_pnl = 0, 0.0
+    all_specs = specs()
+    role = roles(all_specs)
+    # which reading of the sleeve evidence the sleeve KPIs follow: the spec that names comparison ledgers (v4), else all
+    reading = next((s["name"].rsplit("_", 1)[1] for s in all_specs if (s.get("reading") or {}).get("comparison_ledgers")), "all")
+    for spec in all_specs:
+        try:
+            rep = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", p["data"], spec=spec).report()
+        except ValueError as exc:                          # a bad spec never hides the others
+            print(f"WARN {spec.get('name')}: skipped: {exc}", flush=True)
+            continue
+        for c in (rep.get("settlement") or {}).values():   # the settlement check only exists on the comparison ledgers
             settle_gaps += [c["mean_abs_gap_bps"]] * c["days"]
+        if role[spec["name"]] != "decision":               # v4's trades pair with v1–v3's: count the evidence once
+            comp_trades += sum(r["n"] for r in rep["rows"])    # ... and keep them visible, outside the KPIs
+            comp_pnl += sum(r["sum"] for r in rep["rows"])
+            continue
         for f in rep.get("fills", {}).values():
             if f["legs"] and f["model_cost_pts"]:
                 real += f["real_cost_pts"] * f["legs"]
@@ -138,7 +153,9 @@ def snapshot(cfg, day: dt.date, gh=None) -> dict:
     snap.update({"sleeve_pnl_per_trade": round(pnl / trades, 2) if trades else None,
                  "sleeve_win": round(wins / trades, 4) if trades else None})
     snap.update({"sleeve_trades": trades, "sleeve_pnl": round(pnl, 2), "sleeves_eligible": eligible,
-                 "sleeves_retired": retired, "sleeve_cost_gap": round(sum(gaps) / len(gaps), 2) if gaps else None})
+                 "sleeves_retired": retired, "sleeve_cost_gap": round(sum(gaps) / len(gaps), 2) if gaps else None,
+                 "sleeve_reading": reading, "sleeve_comparison_trades": comp_trades,
+                 "sleeve_comparison_pnl": round(comp_pnl, 2)})
     j = Journal(p["journal"])
     try:
         eq = j.equity()
@@ -191,10 +208,16 @@ def record(snap: dict, path: Path) -> list[dict]:
 
 
 def compare(curr: dict, prev: dict | None) -> list[tuple[str, object, object, str]]:
+    """Each KPI against the earlier snapshot. The sleeve KPIs follow one reading of the sleeve evidence
+    (`sleeve_reading`); when the reading changed between the two snapshots (v4 became the only decision ledger) their
+    values are not comparable, so the verdict is "reset", never "worse"."""
     out = []
+    changed = prev is not None and prev.get("sleeve_reading") != curr.get("sleeve_reading")
     for k, (label, better) in KPIS.items():
         a, b = (prev or {}).get(k), curr.get(k)
-        if a is None or b is None:
+        if changed and k in SLEEVE_KPIS and a is not None and b is not None:
+            verdict = "reset"
+        elif a is None or b is None:
             verdict = "new" if b is not None else "–"
         elif b == a:
             verdict = "same"
@@ -215,7 +238,8 @@ def baseline(hist: list[dict], days: int = 7) -> dict | None:
 
 def render(hist: list[dict]) -> str:
     cur = hist[-1]
-    mark = {"improved": "⬆ improved", "worse": "⬇ worse", "same": "= same", "new": "new", "–": "–"}
+    mark = {"improved": "⬆ improved", "worse": "⬇ worse", "same": "= same", "new": "new", "–": "–",
+            "reset": "↺ reset (the sleeve evidence is now read from v4 alone)"}
 
     def v(x):
         return "–" if x is None else (f"{x:,.2f}" if isinstance(x, float) else f"{x:,}")
@@ -233,6 +257,9 @@ def render(hist: list[dict]) -> str:
                 "| measure | then | now | verdict |", "|---|---:|---:|---|"]
         out += [f"| {lab} | {v(a)} | {v(b)} | {mark[ver]} |" for lab, a, b, ver in rows]
         out.append("")
+    if cur.get("sleeve_comparison_trades"):
+        out += [f"_Comparison ledgers (v1–v3, settled on the 15:00–15:29 mean; not evidence, not in the sleeve measures "
+                f"above): {cur['sleeve_comparison_trades']:,} settled trades, ₹{cur.get('sleeve_comparison_pnl', 0):,.0f}/lot._", ""]
     if cur.get("next_tests"):
         out += ["### What the evidence says to test next", ""] + [f"{i}. {t}" for i, t in enumerate(cur["next_tests"], 1)] + [""]
     out.append("The level climbs only on registered evidence (docs/prereg); docs/principles.json says why each rung was reached "
