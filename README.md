@@ -396,6 +396,9 @@ option within 20 strikes of the money on the 4 nearest expiries, plus the index 
 - **Kotak minute backfill** (`kotak-backfill.yml`) runs it once by hand for the last month.
 - After that, the live desk's afternoon job keeps each session's minutes on the `option-minutes-YYYY` release, so a
   contract's last days survive its expiry.
+- **Stock minutes** (`data stock-minutes`): the same candles for the cash series and near-month future of the ~50 most
+  liquid F&O stocks (ranked on the warehouse's `fo_stocks` before today, else a fixed list), paced at 5 requests a second
+  within a 12-minute budget, kept after every session on the `stock-minutes-YYYY` release. Data only: nothing trades stocks.
 
 These are **traded** bars (OHLC of trades, plus volume), not bid/ask, with evidence class `real_trade_minutes`. They
 serve intraday research and checking the cost model against the chain tape's real quotes. They never qualify a

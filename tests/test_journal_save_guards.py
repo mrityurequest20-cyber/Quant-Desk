@@ -227,3 +227,17 @@ def test_a_failed_look_at_the_remote_retries_instead_of_giving_up(desk):
     before = _head(remote)
     sh("deploy/journal.sh save 'close'", work)             # first try fails, the look fails, the retry lands
     assert _head(remote) != before
+
+
+def test_backfilled_minutes_never_go_into_the_journal(desk):
+    """Audit 17 Oct (M4): the option/stock minute backfills write under runtime/intraday/backfill and go to their own
+    releases; only step order kept them out of the journal tree. The snapshot now excludes that directory."""
+    work, remote = desk
+    sh("deploy/journal.sh restore", work)
+    _journal(work / "runtime" / "intraday" / "journal.db", trades=1, thoughts=5)
+    bf = work / "runtime" / "intraday" / "backfill" / "2026-10-19"
+    bf.mkdir(parents=True)
+    (bf / "stocks_cash.parquet").write_bytes(b"x" * 1000)
+    sh("deploy/journal.sh save 'close'", work)
+    tree = sh(["git", "ls-tree", "-r", "--name-only", "journal"], remote).stdout
+    assert "intraday/journal.db" in tree and "backfill" not in tree
