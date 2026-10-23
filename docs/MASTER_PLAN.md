@@ -224,6 +224,30 @@ way in the research memory); a sleeve that fails its retirement rule is retired 
 
 ---
 
+### 5a. The strategy builder, end to end (what we are building toward)
+
+The goal is a **strategy builder**: you describe an idea in plain words, and the desk turns it into a tested, paper-traded,
+reported strategy, with no step skipped and no way to fool ourselves. It is a *pipeline with templates and checks*, not an AI that
+invents profit. The AI's job is to propose, draft and test inside the same rules a human researcher would follow.
+
+| Step | What it does | Who does it | Exists today? | Built in |
+|---|---|---|---|---|
+| **SB1 Idea card** | One short structured note: the idea, why it might work, what would prove it wrong | You, the learning bot, or a teacher lesson | The memory's proposals and teacher hypotheses exist; no common card | Nov (template) |
+| **SB2 Spec drafter** | Turns a card into a pre-registration draft (question, data, statistic, decision rule, costs at 2x, capacity, variants) and checks it is not a repeat | An agent drafts; the research-reviewer approves | `experiments --check` and the spec format exist; a `strategy` command group that drafts one does not | Dec (v1) |
+| **SB3 Study runner** | Runs the registered study on bhavcopy or our own tape in the `Study` workflow and locks the result | Automatic | `Study` workflow and locked results exist; not generic | Jan |
+| **SB4 Sleeve generator** | Turns an approved spec into a forward paper sleeve with its own ledger, no bespoke code | Automatic | Sleeves exist for the expiry option-selling family only | Feb |
+| **SB5 Gate evaluator** | Computes the paper gate ([RELEASE_GATES.md](RELEASE_GATES.md)) and the retirement rule per sleeve, weekly | Automatic | The gate command exists for one strategy at a time | Mar |
+| **SB6 Allocator** | Sizes sleeves by earn-in eligibility, under the owner's ceilings | Automatic | Specified (BACKLOG 9), partly built | Apr |
+| **SB7 Strategy report** | One page per strategy: idea, spec, study, forward record, costs, verdict, what it taught | Automatic, learning bot summarises | Reports exist ad hoc | Apr |
+
+**What "self-improving" means here, exactly.** The loop (trade, nightly teacher, weekly learning bot, monthly review, retrain,
+shadow, demote) gets *better at finding out what works and at dropping what does not*. It can propose ideas, draft specs, run
+studies, retrain models, and demote a model that degrades without asking. It **cannot** raise an exposure, loosen a gate, flip an
+apply mode, merge to `main` on its own authority, clear a halt, or switch live trading on: those stay yours. It does not promise
+profit. A strategy that fails its gate is a finished, useful result.
+
+---
+
 ## 6. Execution and live-readiness: the institutional stack, built paper-first
 
 Everything below is built and tested on a fake broker and in paper. **None of it sends a live order.** The owner alone authorises
@@ -289,6 +313,132 @@ budget; milestone table (due, days late). Delivered by the Saturday digest (W8) 
 
 ---
 
+## 9a. Month by month (November 2026 to August 2027)
+
+How to read a month: **Theme** is the one sentence. **Built** is engineering. **Strategy builder / Self-improvement** are the
+steps from 5a and the loop that arrive that month. **You do** is your time, in hours, and it is deliberately small. **You will see**
+is what appears without you asking. **Exit** is the recorded fact that says the month is done. If a month slips, section 0's cut
+order applies and nothing else is added.
+
+| Month | Theme |
+|---|---|
+| **Nov 2026** | Eyes open: nothing fails without you hearing about it |
+| **Dec 2026** | Trust the record |
+| **Jan 2027** | G1: the paper system is correct and recoverable; first model verdicts |
+| **Feb 2027** | Ideas become paper strategies without bespoke code |
+| **Mar 2027** | Execution is realistic; the statistics are clean (G2) |
+| **Apr 2027** | Institutional controls and the live dry run |
+| **May 2027** | The unattended month |
+| **Jun 2027** | Acceptance |
+| **Jul 2027** | Soak and scope decisions |
+| **Aug 2027** | Handover |
+
+**November 2026: Eyes open.**
+- *Built:* the watchdog (section 3) with push and email; the merge queue finished (#87, #93, #88, #97 to #99); the audit's 115
+  findings re-triaged against `main` so we know what is still open; ML Phase 0 started (dataset builder skeleton); the instrument
+  registry designed.
+- *Strategy builder:* SB1 idea-card template and the spec template written down; the first queue item (L1 regime caveat) drafted.
+- *Self-improvement:* the learning bot's four weekly runs observed; its first monthly run is on **2 Nov** (covering October), the next on 2 Dec.
+- *You do (about 2 h):* the five setup items in section 12; decide on merging the open PRs; try the watchdog drill once.
+- *You will see:* a push and an email when something is wrong, a Saturday digest, draft PRs from the learning bot.
+- *Exit:* ten trading days in a row with every session run, and a deliberately stopped workflow raising a push and an email within 15 minutes.
+
+**December 2026: Trust the record.**
+- *Built:* S1: an append-only or anchored journal, provenance on every decision (code, config, model, chain snapshot), one clock;
+  the 2027 NSE holiday list (by 15 Dec); restore drill #1 from [RECOVERY.md](RECOVERY.md); S2 validity layer started.
+- *Strategy builder:* SB2 v1, a `strategy` command that drafts a spec from an idea card and runs the repeat, overlap and cost
+  checks; the L1 regime-caveat study registered through it.
+- *Self-improvement:* the teacher's hypotheses flow into the idea queue; the 2 Nov and 2 Dec monthly reports reviewed.
+- *You do (about 2 h):* review the monthly report; enter or approve the holiday list; decide the public/private question.
+- *You will see:* the first one-page monthly pack against this plan's dates.
+- *Exit:* a replayed session reproduces its decisions exactly from persisted evidence alone.
+
+**January 2027: G1 and the first model verdicts.**
+- *Built:* S2 finished (quarantine of invalid series); S3: crash, restart and order-state safety in CI; **G1 declared if its tests
+  pass (mid-January)**; ML dataset builder and test harness (purged walk-forward, leakage tests) done; the soak counter starts.
+- *Strategy builder:* SB3 study runner: a registered spec runs on bhavcopy in the `Study` workflow and its result is locked with no
+  manual step; the first new-idea result recorded.
+- *Self-improvement:* the quarterly independent risk-compliance review; the demotion rule exists for shadow models. The HAR shadow
+  reaches 60 counted sessions at the earliest in late January and is read once.
+- *You do (about 3 h):* G1 sign-off; read the quarterly review.
+- *You will see:* the G1 checklist, the first locked result from the builder.
+- *Exit:* zero invalid-series bars recorded as valid over 5 sessions; restart tests green.
+
+**February 2027: Ideas become paper strategies.**
+- *Built:* P2 begins: transaction-cost analysis on every fill; depth recording if the broker offers it; the order state machine on
+  a fake broker.
+- *Strategy builder:* **SB4 sleeve generator**: an approved spec becomes a forward paper sleeve with its own ledger and no bespoke
+  code. First non-expiry sleeve starts in shadow.
+- *Self-improvement:* **M1 (volatility ML versus HAR)** locked-test verdict; the monthly run proposes up to three research actions
+  and at least one idea is closed each month with a written lesson.
+- *You do (about 2 h):* approve or reject the monthly proposals.
+- *You will see:* a strategy appear on the dashboard that you described in words.
+- *Exit:* one new strategy runs as a paper sleeve end to end (card, spec, study, sleeve) without a line of bespoke code.
+
+**March 2027: Realistic execution and clean statistics (G2).**
+- *Built:* S8: depth-capped fills and one cost source; S9: pre-trade checks (price band, duplicate, rate), reconciliation, kill-switch
+  drill; the stress/scenario report; the placebo and confidence-interval gate (S7); the HAR 31 March backstop.
+- *Strategy builder:* **SB5 gate evaluator** computes the paper gate for every sleeve weekly; the forex/commodities go or no-go memo
+  started (Tier 3).
+- *Self-improvement:* auto-demotion drill scheduled for April.
+- *You do (about 3 h):* G2 sign-off; the multi-day drawdown-halt value if still open.
+- *You will see:* a weekly table of every strategy against the gate.
+- *Exit:* **G2** around now; the kill-switch drill recorded.
+
+**April 2027: Institutional controls and the live dry run.**
+- *Built:* S4 to S6: honest status and UI, the deterministic end-to-end trade test; margin and exposure monitor in the daily digest;
+  the **live dry-run mode** (builds the exact broker order, validates it, never sends; depends on what the broker's API offers,
+  TO VERIFY); security review (secret rotation, public-repo decision made); the second independent audit; **G3** about now or a
+  little later.
+- *Strategy builder:* **SB6 allocator** and **SB7 strategy reports**. End of April is also the roadmap's switch to maintenance mode
+  (usage budget in [ROADMAP_AUG_2027.md](ROADMAP_AUG_2027.md) section 5): mostly scripts, about three agent sessions a week.
+- *Self-improvement:* the auto-demotion drill passed.
+- *You do (about 3 h):* read the audit; decide anything it raises.
+- *You will see:* one-page reports per strategy; the dry-run comparison started.
+- *Exit:* the end-to-end test asserts every row; the audit's P1 findings are closed or explained.
+
+**May 2027: The unattended month.**
+- *Built:* nothing new. Fixes only.
+- *Self-improvement:* the four-week run in which the desk, the learning bot and the retrain jobs run with no human in the loop; the
+  dry run compares would-be live fills with paper fills for 20 sessions; the Tier 3 decision.
+- *You do (about 1 h):* read the Saturday digests.
+- *You will see:* that nothing needed you.
+- *Exit:* four weeks with no manual engineering in the loop and no unalerted failure.
+
+**June 2027: Acceptance.**
+- *Built:* runbooks and documentation finished; the final month's independent review.
+- *You do (about 3 h):* the acceptance review on 30 June against [MASTER_PLAN_JUNE_2027.md](MASTER_PLAN_JUNE_2027.md) section 1; a
+  written pack on whether any strategy is a candidate for G4 and what the evidence is.
+- *Exit:* a signed checklist. The 90-session soak completes around the end of May if no reset occurs.
+
+**July 2027: Soak and scope.** Tier 4 (US and European options) in shadow or cut; fixes only; the quarterly review. *You do (about 1 h).*
+
+**August 2027: Handover.** The final acceptance report on 31 August and the "what we learned" book: every idea tested, its verdict,
+and whether anything earned its way toward live. *You do (about 3 h): decide what comes next.*
+
+---
+
+## 9b. The end state, and your part in it
+
+**A day in August 2027, if the plan holds.** At 08:50 the Worker starts the desk; nothing tells you because nothing is wrong. The paper
+desk runs its strategies; the watchdog stays quiet. After the close the teacher writes its lessons and the retrain jobs run. On
+Saturday you get one digest: sessions run, strategies and their gate status, what the learning bot proposed, anything that needs
+you. Once a month you get a one-page pack and a short list of decisions. That list is your job.
+
+**How you add a strategy.** You write an idea in plain words, for example "sell expiry-day strangles only when the vol forecast is
+well below implied". The desk makes an idea card, drafts a spec, the research-reviewer checks it is new, can fail and is powered, the
+study runs on the free deep data, and, if it survives, a paper sleeve starts. After 60 sessions and 30 trades the gate reports. You
+see a one-page report with a verdict, whichever way it goes.
+
+**What stays yours, always.** Switching live trading on. Raising any ceiling. Clearing a halt. Anything that spends money. Keeping the
+rules in [AUTONOMY.md](AUTONOMY.md).
+
+**Your part, honestly.** You set direction and make the few decisions only you can. You do not need to read code. The most useful things
+you can do are the five setup items, a monthly look at the pack, and saying "no" when something is not worth building. What you have
+already built is the hard part: a desk that will not lie to itself.
+
+---
+
 ## 10. Adjustments to the earlier plans (this file wins)
 
 | Earlier statement | Now | Why |
@@ -299,6 +449,8 @@ budget; milestone table (due, days late). Delivered by the Saturday digest (W8) 
 | Many separate stabilisation items | Grouped as P1 (S1 to S3) then P2 and P5 | One order to follow |
 | Review everything to the same depth | Proportional review (section 0, rule 4) | Cost of seven rounds on tooling |
 | `expiry_seller_v4` counted as another experiment | Listed but **not counted** as independent (re-settlement of v1 to v3) | Avoids overstating evidence |
+| Models and sleeves, no common way to add a strategy | **Strategy builder SB1 to SB7** (section 5a), delivered November to April | The owner's stated end goal: describe an idea, get a tested, paper-traded, reported strategy |
+| 90 clean sessions at the end | The soak counter starts at G1 (mid January); 90 trading days end about the end of May | So acceptance in June is not the first time the claim is tested |
 
 ---
 
