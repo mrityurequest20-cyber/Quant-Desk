@@ -159,3 +159,24 @@ def test_fill_audit_compares_paper_fills_with_recorded_quotes(cfg, tmp_path):
     assert entry["better_than_market"] == pytest.approx(0, abs=0.01)
     assert exit_["better_than_market"] == pytest.approx((7 + 0.05) * 65, abs=0.5)
     assert r["pnl_at_quotes"] < 0 < r["pnl_booked"]            # bought at the ask, sold at the bid a minute later: a loss
+
+
+def test_conviction_scales_a_trade_down_never_past_the_risk_per_trade_ceiling(cfg):
+    """Internal-auditor, 16 Oct 2026: the budget was equity x risk_per_trade x (0.6 + 0.6 x conviction), so a full-conviction
+    trade risked 3.0% of equity against the 2.5% ceiling. The scale is now capped at 1.0: no conviction makes a stop-out
+    cost more than risk_per_trade of equity."""
+    r = IntradayRisk(cfg)
+    ceiling = cfg.get("intraday.risk.risk_per_trade")
+    assert ceiling == 0.025
+    legs = [PlanLeg(22850, "CE", 1, 120.0, 119, 13, 0.45), PlanLeg(23000, "CE", -1, 59.2, 60, 13, 0.30)]
+    equity, budgets = 500000, {}
+    for conviction in (0.0, 0.25, 0.5, 2 / 3, 0.8, 1.0, 5.0, -1.0):                  # out-of-range values are clamped as before
+        p = plan("NIFTY", 65, legs, conviction=conviction)
+        lots, notes = r.size(p, equity, equity)
+        per_lot = p.planned_risk_per_lot()
+        assert lots * per_lot <= equity * ceiling + 1e-6, (conviction, lots, per_lot, notes)
+        budgets[conviction] = float(notes[0].split("₹")[1].split(" ")[0].replace(",", ""))
+    assert budgets[0.0] == equity * ceiling * 0.6                                      # no conviction: still 0.6x, unchanged
+    assert budgets[1.0] == budgets[5.0] == budgets[0.8] == equity * ceiling            # capped at the ceiling, not 1.2x
+    assert budgets[-1.0] == budgets[0.0] and budgets[0.25] < budgets[0.5] < budgets[0.8]   # still increasing below the cap
+    assert "conviction scale 1.00" in r.size(plan("NIFTY", 65, legs, conviction=1.0), equity, equity)[1][0]
