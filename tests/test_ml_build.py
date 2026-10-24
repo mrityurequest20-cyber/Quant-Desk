@@ -776,12 +776,13 @@ def test_the_command_refuses_an_output_folder_inside_the_repository(tmp_path):
     assert not (REPO / "docs" / "ml_tables_probe").exists()
 
 
-def make_dataset_dir(tmp_path, digest="d" * 64, status="external_verified", verification=True, name="ds"):
+def make_dataset_dir(tmp_path, digest="d" * 64, status="external_verified", verification=True, name="ds", symbols_verified=("SYN",)):
     d = tmp_path / name
     d.mkdir()
     (d / "manifest.json").write_text(json.dumps({"digest": digest, "status": status}))
     if verification:
-        (d / "verification.json").write_text(json.dumps({"digest": digest, "passed": True, "check": "yahoo daily and the aeron7 overlap"}))
+        (d / "verification.json").write_text(json.dumps({"digest": digest, "passed": True, "check": "p06-v1", "symbols_verified": list(symbols_verified),
+                                                         "criteria_sha256": __import__("quantdesk.ml.intake", fromlist=["x"]).VERIFICATION_CRITERIA["p06-v1"]}))
     return d
 
 
