@@ -2124,7 +2124,7 @@ class IntradayEngine:
 
 CHAIN_VIEW = ("source", "atm_iv", "atm_ivp", "implied_move", "straddle", "dte_days", "pcr_oi", "pcr_doi", "max_pain",
               "call_wall", "put_wall", "top_call_adds", "top_put_adds", "skew_25d", "gex_state", "gamma_flip",
-              "fut_basis", "fut_carry", "fut_buildup")
+              "fut_basis", "fut_carry", "fut_buildup", "oi_quarantined")
 
 
 def _chain_view(an: dict | None) -> dict | None:

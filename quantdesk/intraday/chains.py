@@ -35,6 +35,8 @@ IST = "Asia/Kolkata"
 SIDES = ("ce", "pe")
 FIELDS = ("ltp", "bid", "ask", "iv", "oi", "doi", "vol")
 COLUMNS = [f"{s}_{f}" for s in SIDES for f in FIELDS]
+OI_MAX = 1e12          # an OI print above this (or negative, or infinite) is a feed fault, not a position: the recorded tape holds about +-1e18 (near 2**63)
+                       # in 1% of snapshots, real OI is below 1e9. Kept equal to ml.oi.OI_MAX by a test; the live path does not import the ml package.
 DEPTH = [f"{s}_{f}" for s in SIDES for f in ("bidq", "askq")]   # size at the best bid / offer, where the source has a book
 
 
@@ -409,6 +411,22 @@ def mid(row, side: str) -> float:
     return float(l) if pd.notna(l) else float("nan")
 
 
+def plausible_oi(df: pd.DataFrame) -> bool:
+    """False if any OI print (open interest or its day change) in the chain is infinite, negative where it cannot be, or beyond OI_MAX. One bad print
+    quarantines the whole snapshot's OI: the feed's fault is not known to be confined to the strike that shows it, and nothing is clipped or repaired."""
+    for c in ("ce_oi", "pe_oi"):
+        x = df[c].to_numpy(float)
+        x = x[~np.isnan(x)]
+        if len(x) and (np.isinf(x).any() or (x < 0).any() or (x > OI_MAX).any()):
+            return False
+    for c in ("ce_doi", "pe_doi"):                      # a day change may be negative, but not beyond the same bound
+        x = df[c].to_numpy(float)
+        x = x[~np.isnan(x)]
+        if len(x) and (np.isinf(x).any() or (np.abs(x) > OI_MAX).any()):
+            return False
+    return True
+
+
 def chain_analytics(df: pd.DataFrame, pricer: IntradayPricer | None = None, lot: int | None = None) -> dict:
     """ATM IV, implied move, PCR, max pain, OI walls, OI build-up, skew, ATM spread."""
     if df is None or df.empty:
@@ -428,7 +446,10 @@ def chain_analytics(df: pd.DataFrame, pricer: IntradayPricer | None = None, lot:
     if pd.notna(row.get("ce_bid")) and pd.notna(row.get("ce_ask")) and ce_m > 0:
         out["atm_spread_pct"] = float((row["ce_ask"] - row["ce_bid"]) / ce_m)
     ce_oi, pe_oi = df["ce_oi"].fillna(0), df["pe_oi"].fillna(0)
-    if ce_oi.sum() > 0:
+    oi_ok = plausible_oi(df)
+    if not oi_ok:                                       # no PCR, walls, max pain, OI adds or GEX from a snapshot with a faulty print: the votes see nothing
+        out["oi_quarantined"] = True
+    if oi_ok and ce_oi.sum() > 0:
         out["pcr_oi"] = float(pe_oi.sum() / ce_oi.sum())
         d_ce, d_pe = df["ce_doi"].fillna(0).sum(), df["pe_doi"].fillna(0).sum()
         out["pcr_doi"] = float(d_pe / d_ce) if d_ce > 0 else np.nan
@@ -456,7 +477,8 @@ def chain_analytics(df: pd.DataFrame, pricer: IntradayPricer | None = None, lot:
     try:                                                # dealer gamma (naive sign) and the options-implied forward
         from ..options.gex import gamma_exposure, implied_forward
         units = 1.0 if df.attrs.get("source") == "kotak" else float(lot or 1)   # Kotak reports OI in shares
-        out.update(gamma_exposure(df, S, max(T, 1 / 365 / 24), pricer.r, pricer.q, units))
+        if oi_ok:
+            out.update(gamma_exposure(df, S, max(T, 1 / 365 / 24), pricer.r, pricer.q, units))
         out.update(implied_forward(df, S, max(T, 1 / 365 / 24), pricer.r))
     except Exception:
         pass
