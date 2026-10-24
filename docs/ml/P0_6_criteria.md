@@ -22,15 +22,18 @@ compares with any reference. (Revised once before merge after an independent rev
 - **Agree (daily):** `|ours/ref − 1|` at most 0.2% on high, 0.2% on low, and the close rule above (the tolerances of `external_aeron.TOLERANCE`).
 - **Gross error:** a compared session off by more than 1.5% on high or low, or on the close under **both** close definitions (15:29 close and the 15:00 to 15:29 mean).
 - **References, pinned:** Yahoo Finance daily bars for `^NSEI` and `^NSEBANK` via `yfinance` with `auto_adjust=False`, retrieved on the day of the run (date
-  recorded). NSE: the closing value of the NIFTY 50 and NIFTY BANK daily index history from the Bhavcopy source (`get_index_history`); the raw download is saved
-  and its sha256 recorded, and so is the sha256 of the `date,symbol,close` CSV built from it. Only the sha256 and aggregates are committed, never reference rows.
+  recorded). NSE: NSE's own daily index file `https://archives.nseindia.com/content/indices/ind_close_all_<DDMMYYYY>.csv`, the rows `Nifty 50` and
+  `Nifty Bank`, field `Closing Index Value` (the file also carries open, high and low; only the close is used). One file is fetched per weekday of the window;
+  every raw file is saved, and the sha256 of each file, of a manifest listing them and of the `date,symbol,close` CSV built from them is recorded. A weekday
+  whose file answers HTTP 404 is a day NSE published no index file (a holiday or a closure) and is not an error; any other HTTP error, a timeout, or a file
+  without the two rows is an error and voids the run (see "one run"). Only the sha256 and aggregates are committed, never reference rows.
 
 ## The checks (per symbol; every rule must hold)
 
-**Coverage (A and B).** A *phantom* session is an accepted session on a day absent from the NSE index history; one phantom session fails the symbol. A
+**Coverage (A and B).** A *phantom* session is an accepted session on a day with no NSE index file; one phantom session fails the symbol. A
 session in the window with no Yahoo (or NSE) row is *not compared*, and every one is listed in the record. At least 500 sessions and at least 95% of the accepted
 sessions in the window are compared, and more than 1% of accepted sessions uncompared fails the symbol. Accepted sessions must be at least **97% of the NSE
-index history's trading days** in the window (importer rejections must not flatter the pass rate).
+index files' days** in the window (importer rejections must not flatter the pass rate).
 
 **A. Yahoo daily OHLC, new window.** At least **95%** of compared sessions agree; no gross error anywhere (any one fails the symbol); **no calendar month with
 fewer than 80% agreeing** (months with fewer than 10 compared sessions are reported, not judged); **no run of more than 5 consecutive failing compared sessions**
