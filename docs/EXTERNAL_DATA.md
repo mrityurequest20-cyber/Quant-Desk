@@ -248,8 +248,8 @@ at 09:26: the new `truncated` rule drops it (checked: the new dataset's rows are
   three highest-variance days of 2015 to 2026 (ranks 1 and 3), so it is censored at the tail unless they are admitted first; (2) a daily or lagged series built
   from the kept sessions has multi-day gaps where a session is out (the overnight gap spanning the removed 23 Mar 2020 is -10.3% simple
   (-10.8% log) for NIFTY: the 24 Mar open against the last minute close of 20 Mar), so a "previous session" feature is the previous *kept* session; (3) a kept session can have up to 14 missing minutes inside
-  it; realised variance as a sum of squared consecutive returns treats a gap as one return, and forward-filling to a regular grid would
-  remove that variance; (4) there is no volume; (5) **what the Mar 2023 to May 2026 window itself loses** (NIFTY: 792 session rows through 14 May 2026, 786 of them weekdays and 6 weekend rows, 784 kept): the default set
+  it; the study's grid (`volstudy.grid`) forward-fills the close over a missing minute, so the move across the gap lands in the next present minute as one
+  larger return: the variance is kept, in the wrong minute, and the table's `miss_frac` says how much of a label window was filled (windows above 20% are dropped); (4) there is no volume; (5) **what the Mar 2023 to May 2026 window itself loses** (NIFTY: 792 session rows through 14 May 2026, 786 of them weekdays and 6 weekend rows, 784 kept): the default set
   drops the window's 3rd and 10th highest-variance days (2026-02-01 and 2025-02-01, both scheduled Budget days; 4th and 7th for BANKNIFTY), so the full-sample
   ranks (34 and 100) understate the loss for a window evaluation: admit them first or say the evaluation is censored there; the hard-rejected special sessions
   (the Muhurat evenings of 2023-11-12, 2024-11-01 and 2025-10-21, the 105-minute Saturdays 2024-03-02 and 2024-05-18, and 15 May 2026) are part of the sample

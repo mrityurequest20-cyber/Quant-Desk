@@ -33,6 +33,29 @@ card and a registry. It is **offline and read-only**:
 *P0.2 status (24 Oct): built for the index minutes, `quantdesk/ml/intake.py` with `python -m quantdesk ml import`; `load()` refuses a dataset without a manifest, one whose manifest or partitions no longer hash to their digest, and unverified data unless asked. The option and tape tiers (T2) are not covered yet.*
 
 Order: P0.1 and P0.2 first (this week), then P0.3 and P0.4 together. P0.6 can start now that the owner's source is imported. P0.7 and P0.8 are last.
+## Status (24 Oct 2026)
+
+- **P0.2 done** (merged, #107): `python -m quantdesk ml import`; dataset `ml-intake-2-feae259bdba6`, still `external_unverified` until P0.6.
+- **P0.3 built** (`quantdesk/ml/build.py`, `python -m quantdesk ml build --dataset <dir> --profile-end <date>`): the M1 table, one row per
+  (symbol, day, decision minute, horizon), made by the study's own `volstudy` code (called, not copied) and equal to `volstudy.fit_har`'s frame bit for bit
+  (458,623 rows for NIFTY and BANKNIFTY on the Kaggle source, 9 s). Labels never reach past the session (checked on every build and every load). The
+  seasonal profile is a **fit**, so it is fitted on sessions up to `--profile-end` and every row carries `in_profile`; a study scores only rows with
+  `in_profile == False`, or rebuilds per fold. The point-in-time canary (`ml/pit.py`) runs against the real builder in the tests: after a decision everything is
+  replaced with different data and the decision's features must not move; a leak injected into the builder is caught.
+  **Deviation from the exit test as worded ("identical digests"):** a table's identity (its folder name and manifest digest) is a hash of the input dataset's
+  digest, the recipe and the source of the functions that make the rows, and is identical on any machine. The *values* are floats from numpy reductions that
+  can differ in the last bit with memory alignment, so they are not hashed; the stored file is pinned by the sha256 of its bytes, and a rebuild is compared
+  with a stated tolerance (rtol 1e-9; measured difference 0 on this machine).
+- **P0.4 harness built** (`ml/splits.py`, `ml/pit.py`, `ml/reproduce.py`): purged walk-forward, combinatorial purged CV with embargo and its backtest paths, a verifier
+  that the tests inject leaks against, and `python -m quantdesk ml reproduce --dataset <aeron7 dir>`, which reruns the locked HAR study into a scratch folder
+  (refused inside `docs/prereg/results`) and compares **every number** with the committed result. Exit test met on 24 Oct: **8 of 8 cells, 1,132 numbers, largest
+  difference 0**, nothing written under `docs/`. **Not yet:** the baseline comparison (a scorer that grades any model against HAR and the desk's forecaster
+  on the same folds) lands with the evaluation toolkit.
+- **A boundary note.** The builder calls the locked study's code, and that code reaches (through `autolearn.prereg` → `evaluate` → `features`) the desk's pure
+  computation modules `intraday.quant`, `.chains`, `.feeds`, `.orderflow` and `options.*`. They hold a data-feed adapter and a broker adapter whose network
+  clients and secrets are used only inside methods, never at import. `tests/test_ml_build.py` names those five modules as the only live-package modules an ml
+  module may load, and fails on any other (orders, journal, risk, engine, web) or on `requests`, `kiteconnect`, `yfinance` or `anthropic` being loaded.
+
 Target: Phase 0 done by **mid November**, as the ML roadmap says. If it slips, section 0's cut order in the master plan applies.
 
 ## Data tiers

@@ -364,25 +364,44 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", default="_wings")
     s.set_defaults(fn=cmd_wings)
     s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
-                                  "immutable dataset (never touches the live desk)")
-    s.add_argument("action", choices=["import"])
-    s.add_argument("--source", required=True, help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...)")
-    s.add_argument("--out", help="import: output root (default runtime/external)")
+                                  "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result "
+                                  "(never touches the live desk)")
+    s.add_argument("action", choices=["import", "build", "reproduce"])
+    s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...)")
+    s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
+                                 "reproduce: an empty scratch folder (default: a new temporary one; never docs/prereg/results)")
     s.add_argument("--version", default="", help="import: the source's version label (documentation only; the file hashes are the identity)")
     s.add_argument("--reviewed", help="import: a reviewed-sessions file (default quantdesk/ml/reviewed_sessions.json)")
+    s.add_argument("--dataset", help="build: an imported dataset folder; reproduce: the aeron7 dataset the locked result was computed on")
+    s.add_argument("--symbols", default="NIFTY,BANKNIFTY", help="build: comma-separated symbols of the dataset")
+    s.add_argument("--profile-end", help="build: the last session the seasonal profile may be fitted on (required; rows up to it are marked in_profile)")
+    s.add_argument("--allow-unverified", action="store_true", help="build: accept a dataset that is external_unverified (the table says so)")
+    s.add_argument("--spec", default="docs/prereg/vol_forecast_v1.json", help="reproduce: the pre-registered spec")
+    s.add_argument("--committed", help="reproduce: the committed result (default: docs/prereg/results/<name>-<spec hash>.json)")
+    s.add_argument("--rtol", type=float, default=1e-9, help="reproduce: relative tolerance for every number")
     s.set_defaults(fn=cmd_ml)
     return p
 
 
 def cmd_ml(cfg, a):
-    """P0.2: validate and import the external index minutes. Offline and read-only: the live desk is not involved."""
+    """P0.2 import, P0.3 build, P0.4 reproduce. Offline and read-only: the live desk is not involved."""
     from .data.external_aeron import ImmutableViolation
     from .ml import intake as I
-    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
     try:
-        man = I.import_source(Path(a.source), out, version=a.version, reviewed_path=Path(a.reviewed) if a.reviewed else None)
-    except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError) as exc:
-        raise SystemExit(f"ml import: {exc}")
+        if a.action == "import":
+            return _ml_import(cfg, a, I)
+        if a.action == "build":
+            return _ml_build(cfg, a)
+        return _ml_reproduce(a)
+    except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
+        raise SystemExit(f"ml {a.action}: {exc}")
+
+
+def _ml_import(cfg, a, I):
+    if not a.source:
+        raise SystemExit("ml import: --source is required")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
+    man = I.import_source(Path(a.source), out, version=a.version, reviewed_path=Path(a.reviewed) if a.reviewed else None)
     ds = out / man["source"]["name"] / man["dataset"]
     n = {k: sum(1 for s in man["sessions"] if s["status"] == k) for k in ("accepted", "accepted_reviewed", "review", "rejected")}
     print(f"{man['dataset']}: status {man['status']} · digest {man['digest'][:16]} · sessions {n} · report {ds / 'quality.md'}")
@@ -390,6 +409,31 @@ def cmd_ml(cfg, a):
         print(f"  reviewed entry not applied: {r['session']}: {r['why']}")
     for u in man["reviewed_unused"]:
         print(f"  reviewed entry matches no session: {u}")
+
+
+def _ml_build(cfg, a):
+    from .ml import build as B
+    if not a.dataset or not a.profile_end:
+        raise SystemExit("ml build: --dataset and --profile-end are required")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_tables"
+    symbols = [s.strip() for s in a.symbols.split(",") if s.strip()]
+    folder = B.build(Path(a.dataset), symbols, a.profile_end, out, allow_unverified=a.allow_unverified)
+    print(f"table {folder}")
+
+
+def _ml_reproduce(a):
+    import json as _json
+    from .autolearn.prereg import spec_hash
+    from .ml import reproduce as R
+    if not a.dataset:
+        raise SystemExit("ml reproduce: --dataset is required")
+    spec = Path(a.spec)
+    name = _json.loads(spec.read_text())["name"]
+    committed = Path(a.committed) if a.committed else R.PROTECTED / f"{name}-{spec_hash(spec)[:12]}.json"
+    cmp = R.reproduce(Path(a.dataset), spec, committed, results_dir=Path(a.out) if a.out else None, rtol=a.rtol)
+    print(R.render(cmp, _json.loads(committed.read_text())))
+    if not cmp.ok:
+        raise SystemExit(1)
 
 
 def cmd_learnbot(cfg, a):
