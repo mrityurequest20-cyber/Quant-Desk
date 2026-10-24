@@ -381,11 +381,15 @@ def cmd_ml(cfg, a):
     out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
     try:
         man = I.import_source(Path(a.source), out, version=a.version, reviewed_path=Path(a.reviewed) if a.reviewed else None)
-    except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation) as exc:
+    except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError) as exc:
         raise SystemExit(f"ml import: {exc}")
     ds = out / man["source"]["name"] / man["dataset"]
     n = {k: sum(1 for s in man["sessions"] if s["status"] == k) for k in ("accepted", "accepted_reviewed", "review", "rejected")}
     print(f"{man['dataset']}: status {man['status']} · digest {man['digest'][:16]} · sessions {n} · report {ds / 'quality.md'}")
+    for r in man["reviewed_not_applied"]:
+        print(f"  reviewed entry not applied: {r['session']}: {r['why']}")
+    for u in man["reviewed_unused"]:
+        print(f"  reviewed entry matches no session: {u}")
 
 
 def cmd_learnbot(cfg, a):
