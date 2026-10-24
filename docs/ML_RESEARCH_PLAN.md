@@ -140,7 +140,7 @@ out of the money as a percentage of the entry spot. Paper fills; a small sample;
   With the buckets fixed in code (`quantdesk/ml/tradesplit.py`: strike distance against the entry spot, buckets closed below and open above), the split is 2 trades (+5,342) up to
   0.25%, 13 (-30,552) from 0.25% to 0.75%, and 11 (+40,119) beyond. It differs from the table above because six trades sit within 0.03 of a boundary (0.243 to 0.279) and the
   first table's spot reference put three of them in a different bucket. That is the honest reading of "26 trades cannot settle it": the answer moves with a hundredth of a percent.
-  Without the best three trades every sleeve and every bucket is negative. The VWAP check: all three `vwap_trend` trades had the underlying move *against* the trade (-0.08%,
+  Without the best three trades, every sleeve and bucket with more than three trades is negative (orb -19,872, trend_break -32,540; the two larger buckets -54,042 and -18,931). The VWAP check: all three `vwap_trend` trades had the underlying move *against* the trade (-0.08%,
   -0.17%, -0.15% in the trade's direction), so on this sample the losses are the signal, not the exit or cost rules; three trades is not a finding either.
 - To redo it: restore the `journal` branch (`git fetch --depth 1 origin journal`, `git archive FETCH_HEAD`), open `intraday/journal.db`
   read-only (`mode=ro`), table `trades`, strikes in the `legs` JSON.
