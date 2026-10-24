@@ -65,15 +65,22 @@ def test_the_day_bootstrap_is_deterministic_needs_two_days_and_brackets_the_mean
     mean = sum(t["pnl"] for t in ts) / 20
     assert a == b and a[0] <= mean <= a[1]
     assert all(math.isnan(x) for x in T.day_bootstrap(ts[:1]))
+    four = [{"opened_at": f"2026-10-{12 + i} 10:00", "pnl": float(i)} for i in range(T.MIN_DAYS - 1)]
+    assert all(math.isnan(x) for x in T.day_bootstrap(four))                                       # fewer than MIN_DAYS days: no interval, it would be the day means
+    uneven = [{"opened_at": f"2026-10-{12 + d} 10:00", "pnl": p} for d, p in [(0, 10.0), (0, 20.0), (0, 30.0), (1, -5.0), (2, 7.0), (3, 1.0), (4, 2.0), (5, 3.0)]]
+    lo, hi = T.day_bootstrap(uneven)
+    assert lo <= sum(t["pnl"] for t in uneven) / 8 <= hi
     assert all(math.isnan(x) for x in T.day_bootstrap([{"opened_at": "2026-10-12 10:00", "pnl": 1.0}, {"opened_at": "2026-10-12 11:00", "pnl": 2.0}]))   # one day
 
 
 def test_a_cell_reports_concentration_and_flags_few_trades():
     ts = [{"opened_at": f"2026-10-{12 + i} 10:00", "pnl": p, "fees": 1.0} for i, p in enumerate([1000.0, 900.0, 800.0, -10.0, -20.0])]
     c = T.cell(ts)
-    assert c["n"] == 5 and c["wins"] == 3 and c["pnl"] == 2670.0 and c["top3"] == [1000.0, 900.0, 800.0] and c["pnl_without_top3"] == -30.0
+    assert c["n"] == 5 and c["wins"] == 3 and c["pnl"] == 2670.0 and c["top3"] == [1000.0, 900.0, 800.0]
     assert c["too_few"] and c["fees"] == 5.0 and c["days"] == 5
-    assert math.isnan(T.cell(ts[:3])["pnl_without_top3"])                                           # nothing left to show when there are three or fewer
+    assert math.isnan(c["pnl_without_top3"])                                                        # under MIN_TOP3 trades the exclusion says nothing
+    more = ts + [{"opened_at": f"2026-10-{20 + i} 10:00", "pnl": -5.0, "fees": 1.0} for i in range(5)]
+    assert T.cell(more)["pnl_without_top3"] == pytest.approx(-55.0)                                # 2,645 in total less the best three (2,700)
 
 
 def test_the_report_makes_no_claim_below_the_declared_floor_and_only_descriptive_above(tmp_path):
@@ -138,8 +145,8 @@ def test_the_sleeve_check_separates_a_wrong_underlying_from_a_trade_lost_while_r
             trade(3, "vwap_trend", direction=-1, exit_u=990.0, pnl=700.0, day="2026-10-14"),              # short, underlying fell: right and won
             trade(4, "orb")]
     c = T.sleeve_check(T.load_closed(make_db(tmp_path, rows)), "vwap_trend")
-    assert c["n"] == 3 and c["wins"] == 1 and c["underlying_wrong"] == 1 and c["underlying_right_trade_lost"] == 1
-    assert [r["verdict"] for r in c["trades"]] == ["underlying wrong", "underlying right, trade lost: exit/theta/cost", "won"]
+    assert c["n"] == 3 and c["wins"] == 1 and c["underlying_against"] == 1 and c["underlying_with_trade_lost"] == 1
+    assert [r["verdict"] for r in c["trades"]] == ["underlying against, trade lost", "underlying with, trade lost: exit/theta/cost", "won"]
     assert c["trades"][0]["pnl_before_fees"] == -480.0 and c["trades"][2]["underlying_move_in_trade_direction_pct"] == pytest.approx(1.0)
     assert T.sleeve_check([], "vwap_trend")["n"] == 0
 
@@ -148,8 +155,39 @@ def test_the_command_prints_the_report_and_needs_a_journal(tmp_path, capsys):
     p = make_db(tmp_path, [trade(i, "vwap_trend", day=f"2026-10-{12 + i}") for i in range(3)])
     main(["ml", "trades", "--journal", str(p), "--sleeve", "vwap_trend"])
     out = capsys.readouterr().out
-    assert "3 closed trades; no claim" in out and "By sleeve:" in out and "Close look at vwap_trend" in out and "[too few]" in out
+    assert "3 closed trades (0 unwound entries left out); no claim" in out and "All: 3 trades" in out and "this labels, it does not separate" in out and "By sleeve:" in out and "Close look at vwap_trend" in out and "[too few]" in out
     with pytest.raises(SystemExit, match="--journal"):
         main(["ml", "trades"])
     with pytest.raises(SystemExit, match="no journal"):
         main(["ml", "trades", "--journal", str(tmp_path / "x.db")])
+
+
+def test_a_path_with_special_characters_is_opened_read_only_and_creates_nothing(tmp_path):
+    for name in ("a?b.db", "c#d.db", "e%20f.db"):
+        d = tmp_path / name.replace("?", "q").replace("#", "h").replace("%", "p")
+        d.mkdir()
+        p = d / name
+        with sqlite3.connect(p) as db:
+            db.execute(f"CREATE TABLE trades ({COLS})")
+            db.execute("INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", trade(1))
+        before = sorted(x.name for x in d.iterdir())
+        assert [t["id"] for t in T.load_closed(p)] == ["T1"]
+        assert sorted(x.name for x in d.iterdir()) == before                                         # no stray file from a misparsed URI
+
+
+def test_unwound_entries_are_counted_apart_and_never_called_losses_or_right_calls(tmp_path):
+    rows = [trade(1, pnl=100.0), trade(2, pnl=-12.0, fees=12.0, reason="entry_aborted", legs=[], exit_u=1000.0), trade(3, "vwap_trend", pnl=-50.0, reason="entry_aborted", legs=[], exit_u=1000.0)]
+    got = T.load_closed(make_db(tmp_path, rows))
+    rep = T.split(got)
+    assert rep["total_trades"] == 1 and rep["aborted_entries"] == 2 and "entry_aborted" not in rep["exit_reason"] and "no long option leg" not in rep["strike_distance"]
+    assert T.sleeve_check(got, "vwap_trend")["n"] == 0
+    assert "_bucket" not in got[0]                                                                  # the caller's records are not modified
+
+
+def test_a_flat_underlying_is_flat_and_a_win_is_a_win_whatever_the_spot_did():
+    assert T._verdict(0.0, -10.0) == "underlying flat, trade lost" and T._verdict(-0.3, 50.0) == "won" and T._verdict(float("nan"), 1.0) == "no exit price"
+
+
+def test_bucket_edges_through_the_distance_function():
+    f = lambda strike: T.bucket(T.long_leg_distance_pct({"entry_underlying": 1000.0, "legs": json.dumps([leg("CE", strike)])}))
+    assert f(1002.5) == "0.25% to 0.75% OTM" and f(1002.4) == "up to 0.25% OTM" and f(1007.5) == "over 0.75% OTM" and f(1007.4) == "0.25% to 0.75% OTM"

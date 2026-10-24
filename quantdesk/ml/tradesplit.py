@@ -14,6 +14,7 @@ pre-registered version, never an edit of a locked one.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import sqlite3
@@ -23,6 +24,9 @@ import numpy as np
 
 BUCKETS = ((None, 0.25, "up to 0.25% OTM"), (0.25, 0.75, "0.25% to 0.75% OTM"), (0.75, None, "over 0.75% OTM"))
 MIN_CELL = 20
+MIN_DAYS = 5                    # a by-day interval from fewer days is just the day means, and reads as evidence it is not
+MIN_TOP3 = 10                   # the best-three exclusion means little on a handful of trades
+ABORTED = "entry_aborted"       # the engine's unwound entries (pnl = -fees): not trades the desk chose to hold, counted apart
 MIN_TRADES = 100
 BOOT = 2000
 SEED = 20261024
@@ -38,7 +42,7 @@ def load_closed(journal: Path) -> list[dict]:
     if not p.is_file():
         raise JournalError(f"no journal at {p}")
     try:
-        with sqlite3.connect(f"file:{p}?mode=ro", uri=True) as db:
+        with contextlib.closing(sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro", uri=True)) as db:       # as_uri escapes ? # % so mode=ro cannot be swallowed by the path
             db.row_factory = sqlite3.Row
             rows = db.execute("SELECT * FROM trades WHERE status = 'closed' ORDER BY opened_at, id").fetchall()
     except sqlite3.Error as exc:
@@ -102,7 +106,7 @@ def day_bootstrap(trades: list[dict], key=lambda t: t["pnl"], level: float = 0.9
     for t in trades:
         days.setdefault(day_of(t), []).append(float(key(t)))
     names = sorted(days)
-    if len(names) < 2:
+    if len(names) < MIN_DAYS:
         return (float("nan"), float("nan"))
     rng = np.random.default_rng(SEED)
     sums = np.array([sum(days[d]) for d in names])
@@ -115,18 +119,20 @@ def day_bootstrap(trades: list[dict], key=lambda t: t["pnl"], level: float = 0.9
 
 def cell(trades: list[dict]) -> dict:
     n = len(trades)
-    net = [float(t["pnl"]) - 0.0 for t in trades]
+    net = [float(t["pnl"]) for t in trades]
     wins = sum(1 for x in net if x > 0)
     lo, hi = wilson(wins, n)
     top3 = sorted(net, reverse=True)[:3]
     b = day_bootstrap(trades)
     return {"n": n, "wins": wins, "win_rate": wins / n if n else float("nan"), "win_ci90": [lo, hi], "pnl": sum(net), "fees": sum(float(t["fees"] or 0) for t in trades),
-            "mean_pnl": sum(net) / n if n else float("nan"), "mean_pnl_ci90_by_day": list(b), "pnl_without_top3": sum(net) - sum(top3) if n > 3 else float("nan"),
+            "mean_pnl": sum(net) / n if n else float("nan"), "mean_pnl_ci90_by_day": list(b), "pnl_without_top3": sum(net) - sum(top3) if n >= MIN_TOP3 else float("nan"),
             "top3": top3, "days": len({day_of(t) for t in trades}), "too_few": n < MIN_CELL}
 
 
 def split(trades: list[dict]) -> dict:
-    """The fixed splits of the closed trades."""
+    """The fixed splits of the closed trades (the engine's unwound entries are counted apart and left out of every cell)."""
+    aborted = sum(1 for t in trades if t.get("exit_reason") == ABORTED)
+    trades = [dict(t) for t in trades if t.get("exit_reason") != ABORTED]                      # a copy: the caller's dicts are not changed
     for t in trades:
         t["_dist"] = long_leg_distance_pct(t)
         t["_bucket"] = bucket(t["_dist"])
@@ -138,7 +144,8 @@ def split(trades: list[dict]) -> dict:
     groups["exit_reason"] = _by(trades, lambda t: t["exit_reason"])
     out = {k: {name: cell(v) for name, v in g.items()} for k, g in groups.items()}
     out["total_trades"] = len(trades)
-    out["claim"] = ("no claim: fewer than %d closed trades" % MIN_TRADES) if len(trades) < MIN_TRADES else "descriptive only: a finding needs a pre-registered spec"
+    out["aborted_entries"] = aborted
+    out["claim"] = ("no claim: fewer than %d closed trades" % MIN_TRADES) if len(trades) < MIN_TRADES else "descriptive only: a finding needs a pre-registered spec (about 30 cells over five split families are shown: look at them as a family, not one by one)"
     return out
 
 
@@ -149,24 +156,41 @@ def _by(trades, key) -> dict:
     return dict(sorted(g.items()))
 
 
+def _verdict(move: float, pnl: float) -> str:
+    """Exit-time spot against entry spot only: it cannot separate a wrong signal from an exit that fired because the spot had already moved (an invalidation exit does
+    exactly that), so it labels what happened and infers nothing."""
+    if move != move:
+        return "no exit price"
+    if pnl > 0:
+        return "won"
+    if move == 0:
+        return "underlying flat, trade lost"
+    return "underlying against, trade lost" if move < 0 else "underlying with, trade lost: exit/theta/cost"
+
+
 def sleeve_check(trades: list[dict], sleeve: str) -> dict:
     """The close look at one sleeve (the VWAP check): was the underlying right and the trade still lost (exit, theta and cost rules), or was the underlying wrong (the logic)?"""
-    mine = [t for t in trades if t["strategy"] == sleeve]
+    mine = [t for t in trades if t["strategy"] == sleeve and t.get("exit_reason") != ABORTED]
     rows = []
     for t in mine:
         move = float(t["direction"]) * (float(t["exit_underlying"]) - float(t["entry_underlying"])) / float(t["entry_underlying"]) * 100 if t["exit_underlying"] and t["entry_underlying"] else float("nan")
         pnl, fees = float(t["pnl"]), float(t["fees"] or 0)
         rows.append({"id": t["id"], "day": day_of(t), "symbol": t["symbol"], "exit_reason": t["exit_reason"], "underlying_move_in_trade_direction_pct": move,
                      "pnl": pnl, "fees": fees, "pnl_before_fees": pnl + fees,
-                     "verdict": ("underlying wrong" if move < 0 else "underlying right, trade lost: exit/theta/cost" if pnl <= 0 else "won") if move == move else "no exit price"})
+                     "verdict": _verdict(move, pnl)})
     return {"sleeve": sleeve, "trades": rows, "n": len(rows), "wins": sum(1 for r in rows if r["pnl"] > 0),
-            "underlying_wrong": sum(1 for r in rows if r["verdict"] == "underlying wrong"),
-            "underlying_right_trade_lost": sum(1 for r in rows if r["verdict"].startswith("underlying right")), "fees": sum(r["fees"] for r in rows)}
+            "underlying_against": sum(1 for r in rows if r["verdict"] == "underlying against, trade lost"),
+            "underlying_with_trade_lost": sum(1 for r in rows if r["verdict"].startswith("underlying with")), "fees": sum(r["fees"] for r in rows)}
 
 
 def render(rep: dict, check: dict | None = None) -> str:
     f = lambda x: "n/a" if x != x else f"{x:,.0f}"
-    L = [f"{rep['total_trades']} closed trades; {rep['claim']}.", ""]
+    L = [f"{rep['total_trades']} closed trades ({rep['aborted_entries']} unwound entries left out); {rep['claim']}.", ""]
+    a = rep["all"]["all"]
+    L.append(f"All: {a['n']} trades on {a['days']} days, {a['wins']} wins, P&L {f(a['pnl'])} net of {f(a['fees'])} fees, without the best three {f(a['pnl_without_top3'])} "
+             f"(best three: {', '.join(f(x) for x in a['top3'])})")
+    L.append("Win-rate intervals treat trades as independent; the by-day interval resamples days and is shown from %d days." % MIN_DAYS)
+    L.append("")
     for title, key in (("By sleeve", "sleeve"), ("By long-leg strike distance", "strike_distance"), ("By symbol", "symbol"), ("By exit reason", "exit_reason"), ("By day", "day")):
         L.append(f"{title}:")
         for name, c in rep[key].items():
@@ -177,7 +201,8 @@ def render(rep: dict, check: dict | None = None) -> str:
                      + ("  [too few]" if c["too_few"] else ""))
         L.append("")
     if check:
-        L.append(f"Close look at {check['sleeve']}: {check['n']} trades, {check['wins']} wins; underlying wrong {check['underlying_wrong']}, underlying right but the trade lost {check['underlying_right_trade_lost']}; fees {f(check['fees'])}")
+        L.append(f"Close look at {check['sleeve']}: {check['n']} trades, {check['wins']} wins; underlying against {check['underlying_against']}, underlying with but the trade lost {check['underlying_with_trade_lost']}; fees {f(check['fees'])}. "
+                 f"Exit-time spot against entry spot only, {check['n']} trades: this labels, it does not separate the signal from the exit rules.")
         for r in check["trades"]:
             L.append(f"  {r['day']} {r['symbol']} {r['exit_reason']}: underlying {r['underlying_move_in_trade_direction_pct']:+.2f}% in the trade's direction, P&L {f(r['pnl'])} "
                      f"(before fees {f(r['pnl_before_fees'])}) - {r['verdict']}")
