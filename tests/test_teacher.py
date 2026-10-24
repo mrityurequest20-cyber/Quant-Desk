@@ -388,3 +388,31 @@ def test_the_default_reader_is_built_from_the_environment_and_the_configured_mod
     assert made["model"] == CFG.get("intraday.llm.claude.model") and len(fake.calls) == 1
     src = (ROOT / "quantdesk" / "intraday" / "teacher.py").read_text(encoding="utf-8")
     assert "claude-opus" not in src and "claude-sonnet" not in src          # the model name lives in the config only
+
+
+# ---- nothing that looks like a credential leaves the machine --------------------------------------------------------------
+@pytest.mark.parametrize("text", ["Authorization: Bearer abcDEF123456789xyz", "api_key=sk-ant-abcdef123456", "GET https://x/y?token=abc123&z=1",
+                                  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcd1234", "key AbC123dEf456GhI789jKl012MnO345pQr678StU9",
+                                  "mail me at a.b@example.com", "password: hunter2", "ucc=AB1234", "account no: 12345678", "mobile: 9876543210"])
+def test_credential_like_strings_are_masked(text):
+    out, n = teacher.redact(text)
+    assert n >= 1 and "[redacted]" in out
+    for secret in ("abcDEF123456789xyz", "sk-ant-abcdef123456", "abc123", "eyJzdWIi", "AbC123dEf456", "a.b@example.com", "hunter2", "AB1234", "12345678", "9876543210"):
+        assert secret not in out
+
+
+@pytest.mark.parametrize("text", ["+54700PE@506.30", "trade:I261012-0001-0cea", "pnl 2941.605976843998 R 0.32277810442249855", "NSE:NIFTY 25000 CE @ 120.5",
+                                  "decision:12 | 10:06 | orb NIFTY | rejected | outlay above max_total_outlay", "tokens per minute fell", "premium_target on BANKNIFTY27OCT2654700PE"])
+def test_ordinary_journal_text_is_untouched(text):
+    assert teacher.redact(text) == (text, 0)
+
+
+def test_a_credential_in_a_journal_row_never_reaches_the_reader_and_is_journaled_as_a_count(journal):
+    journal.event(f"{DAY} 12:30:00", "WARN", "broker", "login failed: Authorization: Bearer SUPERSECRETTOKEN123456 for user a.b@example.com")
+    journal.commit()
+    fake = FakeAnthropic(reply(lesson(evidence=["trade:T1"])))
+    got = teacher.teach(CFG, journal, DAY, reader=reader_for(fake), now=AFTER)
+    sent = fake.calls[0]["messages"][0]["content"]
+    assert got["status"] == "taught" and "SUPERSECRETTOKEN123456" not in sent and "a.b@example.com" not in sent and "[redacted]" in sent
+    assert any("credential-like string" in m for m in events(journal, "WARN")["message"])
+    assert not any("SUPERSECRET" in m or "a.b@example.com" in m for m in events(journal)["message"].astype(str))    # the teaching events hold a count, never the string
