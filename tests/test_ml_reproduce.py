@@ -167,7 +167,7 @@ def test_a_reproduction_is_refused_where_it_could_replace_or_be_mistaken_for_a_c
 def test_nothing_inside_the_repository_is_a_valid_scratch_folder(lab, where):
     """The guard is the whole repository, not only the results folder: a result-lookalike with a spent lock must not sit in a tracked tree."""
     before = sorted(p.name for p in (R.REPO / where).resolve().glob("unit_vol-*.json"))
-    with pytest.raises(R.ReproductionRefused, match="inside the repository"):
+    with pytest.raises(R.ReproductionRefused, match="inside a git working tree"):
         R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=R.REPO / where, say=lambda *a: None)
     assert sorted(p.name for p in (R.REPO / where).resolve().glob("unit_vol-*.json")) == before
 
@@ -336,3 +336,16 @@ def test_the_command_exits_nonzero_on_a_mismatch(lab, tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         main(["ml", "reproduce", "--dataset", str(lab["ds"]), "--spec", str(lab["spec"]), "--committed", str(f)])
     assert e.value.code == 1 and "DOES NOT MATCH" in capsys.readouterr().out
+
+
+def test_a_scratch_folder_inside_any_git_working_tree_is_refused_not_only_this_checkout(lab, tmp_path):
+    other = tmp_path / "another_clone"
+    (other / ".git").mkdir(parents=True)
+    with pytest.raises(R.ReproductionRefused, match="inside a git working tree"):
+        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=other / "scratch", say=lambda *a: None)
+    with pytest.raises(R.ReproductionRefused, match="inside a git working tree"):
+        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=other, say=lambda *a: None)
+    (tmp_path / "worktree").mkdir()
+    (tmp_path / "worktree" / ".git").write_text("gitdir: /elsewhere")                         # a worktree has a .git file, not a folder
+    with pytest.raises(R.ReproductionRefused, match="inside a git working tree"):
+        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=tmp_path / "worktree" / "x", say=lambda *a: None)

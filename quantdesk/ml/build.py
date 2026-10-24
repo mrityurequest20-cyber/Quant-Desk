@@ -13,7 +13,10 @@ table per fold, which is cheap.
 **Identity.** The table's folder is `ml-build-1-<12 hex>`, the hash of the input dataset's digest **and its status and tier**, the recipe
 (symbols, profile_end, every constant and the source of the functions that make the rows) and the builder version. The same inputs give
 the same identity anywhere; a table built from an unverified dataset cannot be relabelled verified by editing its manifest, because the
-status is part of the name the manifest must hash to (a rebuild after verification is a new table). The status and the restriction
+status is part of the name the manifest must hash to (a rebuild after verification is a new table). That makes a casual edit of the manifest,
+its digest or the status alone detectable; it is tamper-evident, not tamper-proof: someone with write access to the table folder who also renames
+the folder, rewrites the file's metadata and recomputes both hashes can still relabel a table, unless the caller passes `dataset=` to `load_table`, which
+re-derives the status from the dataset's own verification record (`intake.effective_status`). The status and the restriction
 (`not_for`) are also written into the parquet file's own metadata, so a copy of the file still says what it is. The *values* are floats from numpy reductions that can change in the last bit with memory alignment, so a
 hash of values is not an identity: the stored file is pinned by the sha256 of its bytes (it detects any change to what was
 written), and a rebuild is compared with `tables_close` at a stated tolerance (default 1e-9; measured 0 on this machine).
@@ -45,6 +48,7 @@ from ..autolearn import volstudy as V
 from ..data.external_aeron import ALLOWED_USES, FORBIDDEN_NOTE, ForbiddenUse, ImmutableViolation
 from .intake import VERIFIED
 
+REPO = Path(__file__).resolve().parents[2]
 BUILDER_VERSION = "ml-build-1"
 TABLE = "m1_move_size"
 MIN_PROFILE_DAYS = 250                                       # a minute-of-day profile from fewer sessions is mostly noise
@@ -75,6 +79,18 @@ def recipe(symbols, profile_end) -> dict:
             "constants": {"N_MIN": V.N_MIN, "DECISIONS": V.DECISIONS, "HORIZONS": V.HORIZONS, "LAM": V.LAM,
                           "PRIOR_DAYS": V.PRIOR_DAYS, "FLOOR": V.FLOOR, "MIN_PROFILE_DAYS": MIN_PROFILE_DAYS},
             "code_sha256": _code_digest()}
+
+
+def refuse_tracked_tree(path: Path, what: str) -> None:
+    """Tables derived from third-party data must not be written where they could be committed: refuse any folder inside a git working tree
+    (this repository, another clone, a worktree) unless it is under that tree's gitignored `runtime/` folder."""
+    p = Path(path).resolve()
+    for anc in (p, *p.parents):
+        if (anc / ".git").exists():
+            if (anc / "runtime") in (p, *p.parents):
+                return
+            raise ForbiddenUse(f"{what} {path} is inside a git working tree ({anc}) outside its runtime/ folder: a table derived from third-party "
+                               "data must not be written where it could be committed")
 
 
 def _canon(obj) -> str:
@@ -251,6 +267,7 @@ def build(dataset: Path, symbols, profile_end, out_root: Path, loader=None, allo
     `out_root / m1 / <identity>`. An existing folder with the same identity is verified, never rewritten. `loader` is a test hook: the
     command line never passes one, and a loader of one's own is not covered by the importer's checks."""
     from . import intake
+    refuse_tracked_tree(out_root, "the tables folder")
     loader = loader or intake.load
     bars = loader(Path(dataset), list(symbols), use="regime_research", allow_unverified=allow_unverified, expected_digest=expected_digest)
     attrs = dict(bars.attrs)
@@ -319,15 +336,28 @@ def _read_checked(folder: Path) -> tuple[pd.DataFrame, dict]:
 
 
 def load_table(folder: Path, use: str = "regime_research", allow_unverified: bool = False, scoring_only: bool = True,
-               reserved_spec: Path | None = None) -> pd.DataFrame:
+               reserved_spec: Path | None = None, dataset: Path | None = None) -> pd.DataFrame:
     """Read a built table back for a declared use. Refused: a use outside the dataset's `ALLOWED_USES`; a table built from data that is not
     `external_verified` unless the caller says it accepts that (as `intake.load` does); anything `_read_checked` refuses. By default the rows
     a study must not score are withheld: those whose seasonal profile was fitted on later days (`scoring_only`), and those in the reserved
-    window from `RESERVED_FROM`, unless `reserved_spec` names the pre-registered spec that reads them (recorded in `attrs`)."""
+    window from `RESERVED_FROM`, unless `reserved_spec` names the pre-registered spec that reads them (recorded in `attrs`). With `dataset=`
+    the table's status is re-derived from that dataset's own manifest and verification record: a different dataset, or one whose status has changed
+    since the table was built (verified since, or no longer), is refused and the table must be rebuilt."""
     if use not in ALLOWED_USES:
         raise ForbiddenUse(f"use {use!r} refused: {FORBIDDEN_NOTE}")
     d, man = _read_checked(folder)
     inp = man["input"]
+    if dataset is not None:
+        from .intake import effective_status
+        try:
+            dm = json.loads((Path(dataset) / "manifest.json").read_text())
+        except (OSError, ValueError) as exc:
+            raise ImmutableViolation(f"{dataset}: no readable manifest to check {man['name']} against") from exc
+        if dm.get("digest") != inp["digest"]:
+            raise ImmutableViolation(f"{man['name']} was not built from {Path(dataset).name} (digest {str(dm.get('digest'))[:12]} ≠ {inp['digest'][:12]})")
+        now = effective_status(Path(dataset), dm)
+        if now != inp.get("status"):
+            raise ImmutableViolation(f"{man['name']} says {inp.get('status')} but the dataset is {now} now: rebuild the table")
     if inp.get("status") != VERIFIED and not allow_unverified:
         raise ForbiddenUse(f"{man['name']} was built from {inp.get('status')} data: run the verification and rebuild, or pass allow_unverified=True "
                            "and label the results as unverified")

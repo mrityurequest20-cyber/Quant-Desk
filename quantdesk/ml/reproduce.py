@@ -111,9 +111,10 @@ def reproduce(dataset: Path, spec_path: Path, committed_path: Path, results_dir:
         raise ReproductionRefused(f"{committed_path.name} has no opened lock to reproduce")
     scratch = Path(results_dir) if results_dir else Path(tempfile.mkdtemp(prefix="reproduce-"))
     resolved = scratch.resolve()
-    if REPO in (resolved, *resolved.parents):
-        raise ReproductionRefused(f"{scratch} is inside the repository ({REPO}): a reproduction carries a spent lock and must be written "
-                                  "outside any tracked tree, never beside the committed results")
+    for anc in (REPO, *[a for a in (resolved, *resolved.parents) if (a / ".git").exists()][:1]):
+        if anc in (resolved, *resolved.parents):
+            raise ReproductionRefused(f"{scratch} is inside a git working tree ({anc}): a reproduction carries a spent lock and must be written "
+                                      "outside any tracked tree, never beside the committed results")
     try:
         name = f"{json.loads(spec_path.read_text())['name']}-{h[:12]}.json"             # the file volstudy.run will write
     except (KeyError, TypeError) as exc:

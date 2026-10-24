@@ -668,6 +668,79 @@ def test_build_does_not_accept_unverified_data_by_default(grid, tmp_path):
     assert [c["allow_unverified"] for c in loader.calls] == [True]
 
 
+# ---- where a table may be written, and checking its status against the dataset --------------------------------------
+def test_tables_are_not_written_where_they_could_be_committed(tmp_path, grid):
+    clone = tmp_path / "clone"
+    (clone / ".git").mkdir(parents=True)
+    for bad in (clone, clone / "docs" / "x", clone / "tables"):
+        with pytest.raises(ForbiddenUse, match="inside a git working tree"):
+            B.refuse_tracked_tree(bad, "the tables folder")
+        with pytest.raises(ForbiddenUse, match="inside a git working tree"):
+            B.build(Path("ds"), ["SYN"], PROFILE_END, bad, loader=StubLoader(grid), allow_unverified=True, say=lambda *_: None)
+    assert not (clone / "docs").exists() and not (clone / "tables").exists()                      # refused before anything was written
+    B.refuse_tracked_tree(clone / "runtime" / "ml_tables", "the tables folder")                  # the gitignored runtime folder is the one place allowed
+    B.refuse_tracked_tree(clone / "runtime", "the tables folder")
+    B.refuse_tracked_tree(tmp_path / "outside" / "anywhere", "the tables folder")
+    with pytest.raises(ForbiddenUse):
+        B.refuse_tracked_tree(clone / "runtime2", "the tables folder")                           # only the folder named runtime, not a prefix of it
+    with pytest.raises(ForbiddenUse):
+        B.refuse_tracked_tree(B.REPO / "docs" / "ml_tables", "the tables folder")
+
+
+def test_the_command_refuses_an_output_folder_inside_the_repository(tmp_path):
+    from quantdesk.cli import main
+    with pytest.raises(SystemExit, match="ml build: .*inside a git working tree"):
+        main(["ml", "build", "--dataset", str(tmp_path), "--profile-end", "2022-12-31", "--out", str(REPO / "docs" / "ml_tables_probe")])
+    assert not (REPO / "docs" / "ml_tables_probe").exists()
+
+
+def make_dataset_dir(tmp_path, digest="d" * 64, status="external_verified", verification=True, name="ds"):
+    d = tmp_path / name
+    d.mkdir()
+    (d / "manifest.json").write_text(json.dumps({"digest": digest, "status": status}))
+    if verification:
+        (d / "verification.json").write_text(json.dumps({"digest": digest, "passed": True, "check": "yahoo daily and the aeron7 overlap"}))
+    return d
+
+
+def test_the_status_can_be_re_derived_from_the_dataset_itself(built_verified, built, tmp_path):
+    ds = make_dataset_dir(tmp_path)
+    assert B.load_table(built_verified, dataset=ds).attrs["input_status"] == "external_verified"                    # still verified: accepted
+    no_record = make_dataset_dir(tmp_path, verification=False, name="ds2")                                         # a manifest that only says so
+    with pytest.raises(ImmutableViolation, match="says external_verified but the dataset is external_unverified"):
+        B.load_table(built_verified, dataset=no_record)
+    other = make_dataset_dir(tmp_path, digest="e" * 64, name="ds3")
+    with pytest.raises(ImmutableViolation, match="was not built from"):
+        B.load_table(built_verified, dataset=other)
+    with pytest.raises(ImmutableViolation, match="no readable manifest"):
+        B.load_table(built_verified, dataset=tmp_path / "nowhere")
+    # a table built while unverified goes stale the day the dataset is verified: it must be rebuilt (and is a different table)
+    folder, _, _ = built
+    unverified = make_dataset_dir(tmp_path, status="external_unverified", verification=False, name="ds4")
+    assert len(B.load_table(folder, allow_unverified=True, dataset=unverified)) > 0
+    with pytest.raises(ImmutableViolation, match="rebuild the table"):
+        B.load_table(folder, allow_unverified=True, dataset=make_dataset_dir(tmp_path, name="ds5"))
+
+
+def test_a_full_forgery_is_caught_when_the_caller_names_the_dataset(built, tmp_path):
+    """Relabel the table verified everywhere (manifest, file, folder name, hashes): self-consistent, so only the dataset can contradict it."""
+    src = copy_of(built, tmp_path / "src")
+    m = json.loads((src / "manifest.json").read_text())
+    m["input"]["status"] = "external_verified"
+    new = f"{m['builder']}-{B.identity(m['input']['digest'], m['recipe'], 'external_verified', m['input']['tier'])}"
+    m["name"] = new
+    dst = tmp_path / "forged" / new
+    dst.mkdir(parents=True)
+    B._write_parquet(pd.read_parquet(src / "table.parquet"), dst / "table.parquet", "external_verified", m["input"]["not_for"])
+    m["table_sha256"] = B.sha256_file(dst / "table.parquet")
+    m["digest"] = B.manifest_digest(m)
+    (dst / "manifest.json").write_text(json.dumps(m))
+    assert B.load_table(dst, scoring_only=False).attrs["input_status"] == "external_verified"          # on its own, the forgery loads
+    honest = make_dataset_dir(tmp_path, status="external_unverified", verification=False, name="honest")
+    with pytest.raises(ImmutableViolation, match="says external_verified but the dataset is external_unverified"):
+        B.load_table(dst, scoring_only=False, dataset=honest)
+
+
 # ---- the boundary ---------------------------------------------------------------------------------------------------
 # The builder calls the locked study's code. That reaches, through autolearn.prereg -> evaluate -> features, the desk's pure-computation
 # modules below (and options pricing, and the data loaders). They hold a data-feed adapter and a broker adapter whose network clients and
@@ -707,6 +780,7 @@ WORK = {
               "M.load_table(f)"),
     "splits": "import numpy as np\nM.walk_forward(np.arange(10), np.arange(10) + 1, [0, 5, 10])",
     "pit": "pass",
+    "study": "pass",                                                         # study imports the builder, the splits and the study at import
     "reproduce": "import quantdesk.autolearn.volstudy",                     # what reproduce() imports when it runs
 }
 
