@@ -366,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report"])
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "oi-daily"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
@@ -386,6 +386,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
     s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
+    s.add_argument("--today", help="oi-daily: grade every forward weekday up to this date (default: today, IST)")
+    s.add_argument("--days-only", action="store_true", help="oi-daily: print the forward weekdays to fetch and stop")
     s.add_argument("--accept-gaps", default="", help="oi-report --readout final: comma-separated weekdays (YYYY-MM-DD) that have no table because they were exchange holidays")
     s.set_defaults(fn=cmd_ml)
     return p
@@ -400,7 +402,7 @@ def cmd_ml(cfg, a):
             return _ml_import(cfg, a, I)
         if a.action == "build":
             return _ml_build(cfg, a)
-        if a.action in ("oi", "oi-report"):
+        if a.action in ("oi", "oi-report", "oi-daily"):
             return _ml_oi(cfg, a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
@@ -431,6 +433,11 @@ def _ml_build(cfg, a):
     print(f"table {folder}")
 
 
+def pd_today_ist():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=5, minutes=30))).date()
+
+
 def _ml_oi(cfg, a):
     """The open-interest shadow (docs/prereg/oi_shadow_v1.json): `oi` grades one session of the desk's own chain tape and writes its tables once;
     `oi-report` prints a read-out of every session written. Offline: nothing here votes, sizes, gates, enters or exits."""
@@ -444,6 +451,20 @@ def _ml_oi(cfg, a):
         man = OI.run_day(Path(a.source), a.day, out)
         print(f"{man['day']}: rows {man['rows']} · usable at 60 minutes {man['usable60']} · quarantined snapshots "
               f"{ {u: q['quarantined'] for u, q in man['quarantine'].items()} } · code {man['code_sha256'][:12]}")
+        return
+    if a.action == "oi-daily":
+        from .ml import build as B
+        from .ml import oi_daily as OD
+        today = a.today or str(pd_today_ist())
+        if a.days_only:
+            print("\n".join(OD.forward_weekdays(today)))
+            return
+        if not a.source:
+            raise SystemExit("ml oi-daily: --source (the tape folder) is required")
+        out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_oi_daily"          # never the folder the read-out reads
+        B.refuse_tracked_tree(out, "ml oi-daily --out")
+        if not OD.grade_all(Path(a.source), out, today)["ok"]:
+            raise SystemExit(1)
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
     print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
