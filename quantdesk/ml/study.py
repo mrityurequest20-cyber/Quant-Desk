@@ -48,7 +48,7 @@ def _frame(grids: dict, sym: str, profile_end, train_days: list, test_days: set,
     set than the builder's `in_profile` window is a leak or a bug, not a result."""
     table = B.build_tables({sym: grids[sym]}, profile_end, tier, allow_leading_gap=True)
     train = table[table["day"].isin({str(d) for d in train_days})]
-    if len(train) != int(table["in_profile"].sum()):
+    if set(train["day"]) != set(table.loc[table["in_profile"], "day"]):
         raise S.LeakError(f"{sym}: the split's training sessions ({len(train)} rows) are not the sessions the profile was fitted on "
                           f"({int(table['in_profile'].sum())} rows)")
     te = table[table["day"].isin(test_days)].copy()

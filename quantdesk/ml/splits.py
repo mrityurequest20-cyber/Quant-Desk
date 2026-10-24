@@ -128,7 +128,8 @@ def group_edges(t0, n_groups: int) -> np.ndarray:
     return np.linspace(0, n, n_groups + 1).round().astype(int)
 
 
-def cpcv(t0, t1, n_groups: int, n_test: int, *, embargo: int, session=None, lookback_sessions: int | None = None) -> list[Fold]:
+def cpcv(t0, t1, n_groups: int, n_test: int, *, embargo: int, session=None, lookback_sessions: int | None = None,
+         samples_independent: bool = False) -> list[Fold]:
     """Combinatorial purged CV. The samples are sorted by t0 and cut into `n_groups` contiguous groups; every combination of
     `n_test` groups is a test set (C(n_groups, n_test) folds). Each fold's training set is everything else minus the samples
     whose interval overlaps a test group's time window, minus those that start within `embargo` after it.
@@ -138,9 +139,15 @@ def cpcv(t0, t1, n_groups: int, n_test: int, *, embargo: int, session=None, look
     just before it. A time embargo cannot say "five sessions" (holidays and dropped sessions stretch five sessions over more than nine days, and
     the measured real spans reach 19), so give `session` (each sample's ordinal in the feature builder's calendar, the M1 table's `session`
     column) and `lookback_sessions`: every training sample whose feature window contains a test session is then removed as well
-    (`feature_window_hits`). Both or neither."""
+    (`feature_window_hits`). Both or neither. With neither and `embargo == 0` the split assumes the features of one sample never read another's period:
+    say so with `samples_independent=True` (it is true of samples whose features are built from data before their own decision and not from
+    neighbouring samples' sessions, and false for the M1 table, for which use `build.cpcv_for`). Pooling several symbols through `session=` over-purges
+    safely (their ordinals collide) but `cpcv_for` takes one symbol at a time."""
     if embargo < 0:
         raise ValueError("embargo cannot be negative")
+    if session is None and embargo == 0 and not samples_independent:
+        raise ValueError("embargo=0 without session and lookback_sessions assumes the features never read a neighbouring sample's period: say so with "
+                         "samples_independent=True, or give session and lookback_sessions (build.cpcv_for does for the M1 table)")
     if (session is None) != (lookback_sessions is None):
         raise ValueError("session and lookback_sessions go together")
     session = None if session is None else np.asarray(session, dtype="int64")
