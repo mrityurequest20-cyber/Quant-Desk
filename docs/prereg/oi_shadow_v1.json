@@ -11,7 +11,7 @@
  "code": {
   "module": "quantdesk/ml/oi.py",
   "run": "ml-oi-1",
-  "code_sha256": "ea05bc16576410aae4e55b4e519755eddc4902fd63579dab7d73a87850c4a911",
+  "code_sha256": "c9aebbc4202c97d251fa2bee2db5d6933a7faadd615f1341534a827c4f8e4044",
   "rule": "a session whose table was produced by other code than this hash is refused by the report; changing a definition below changes the hash and is a new spec"
  },
  "decision_points": "every 15 minutes from 09:30 to 15:00 IST; the snapshot is the last valid one at or before the decision and at most 150 seconds old, else there is no decision",
@@ -42,7 +42,7 @@
  "forward_rule": "the sample is every session on or after 2026-10-26, in the order they occur, with no session selected or dropped for its outcome; the tables are written once by `ml oi` and a rerun must reproduce them",
  "readouts": {
   "interim": "after 60 forward sessions (about late January 2027), and at any time after that on request: the estimate and its 90% interval on all forward sessions so far, descriptive; no claim",
-  "final": "computed on the first 120 forward sessions in date order and nothing else (a session is a day with a table); rerunning it later, with more sessions present, returns the same numbers, so there is no optional stopping. About mid April 2027. Nothing before it is a finding. Sessions after the 120th are a different sample and need a new spec"
+  "final": "computed on the first 120 forward sessions in date order and nothing else (a session is a day with a table); rerunning it later, with more sessions present, returns the same numbers, so there is no optional stopping. About mid April 2027. Nothing before it is a finding. Sessions after the 120th are a different sample and need a new spec. It is confirmatory only if every weekday up to the 120th session that has no table is listed by the owner as an exchange holiday (`ml oi-report --accept-gaps`, named in the report); otherwise the look is reported as not confirmatory and the missing sessions must be graded from the archive first"
  },
  "power": "recomputed on 24 Oct 2026 for the model above from the development sessions only (12 sessions for NIFTY, 10 for BANKNIFTY once the restriction and the two-decisions-a-session rule are applied; 102 and 116 decisions): the cluster-robust standard error of beta scaled to 120 sessions is about 0.17 for NIFTY and 0.14 for BANKNIFTY (per full rank range), each uncertain by about a quarter because it comes from 10 to 12 clusters. A one-sided 5% test then has about 32% power for beta = 0.2, 55% for 0.3 and 76% for 0.4 on NIFTY, and about 40%, 68% and 88% on BANKNIFTY. Earlier drafts quoted 0.09 and 0.17 and higher power; they came from a looser set-up and are superseded by this. Only an effect of 30 to 40 points more containment between the weakest and strongest wall can be confirmed with reasonable probability; for smaller true effects, an inconclusive final read-out is the likely outcome for both indices, and that is the stated limit of this spec",
  "kill_rule": "per index, at the final read-out, the idea is retired if the upper end of the two-sided 90% interval for beta is below 0.10. Said plainly: with a standard error of 0.14 to 0.17 this fires with probability about 14% to 17% when the true beta is 0 and about 1% when it is 0.2, so it retires only an index whose estimate is clearly negative; the threshold sits below the smallest effect the test can confirm, so a true effect of 0.1 to 0.25 is expected to end inconclusive",
@@ -108,6 +108,7 @@
   "the rule that the outcome window ends by 15:30 is enforced only through the 80% sampling-coverage rule, not by a separate check",
   "BANKNIFTY has monthly expiries only, so the 14 development sessions cover about one expiry cycle: after the October expiry rolls, wall strength may drift or sit at the ends of the frozen rank map. The breakpoints are never refitted (that would be a fork); if the rank has no variation within sessions the test is reported as insufficient and that is the result",
   "a fault in the volume or quote-size columns would not quarantine a snapshot; none has been seen, and it would touch only exploratory features",
-  "the tables of a session are a deterministic function of its tape files and of the code; the report verifies each table's sha256 against its manifest and the code against the hash pinned here, and lists weekdays with no table, but it does not recompute from the archive"
+  "the tables of a session are a deterministic function of its tape files and of the code; the report verifies each table's sha256 against its manifest and the code against the hash pinned here, and lists weekdays with no table, but it does not recompute from the archive",
+  "the manifest holds the table's sha256 beside the table and is not signed: the check is tamper-evident, not tamper-proof (whoever can write both files can make a forged table load; regrading from the archive with `ml oi` refuses it)"
  ]
 }
