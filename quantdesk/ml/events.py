@@ -13,15 +13,16 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 SCHEMA_VERSION = 1
 PREDICTION = "ml_prediction"
 OUTCOME = "ml_outcome"
 LIVE_STATUSES = ("shadow", "applied")
 HORIZONS = (30, 60, 120, "close")
-_HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 class BadEvent(ValueError):
@@ -31,7 +32,18 @@ class BadEvent(ValueError):
 
 
 def _finite(x) -> bool:
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    try:
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    except OverflowError:                                                           # an int too large for a float
+        return False
+
+
+def _horizon_ok(h) -> bool:
+    return h == "close" or (type(h) is int and h in HORIZONS)                       # not 60.0, not True
+
+
+def _text(x) -> bool:
+    return isinstance(x, str) and bool(x.strip())
 
 
 def _ts(x):
@@ -49,11 +61,13 @@ def check_prediction(ev: dict) -> list[str]:
             p.append(f"missing {k}")
     if p:
         return p
-    if ev["schema_version"] != SCHEMA_VERSION:
-        p.append(f"schema_version must be {SCHEMA_VERSION}")
-    if not _ID.match(str(ev["model_id"])):
+    if type(ev["schema_version"]) is not int or ev["schema_version"] != SCHEMA_VERSION:
+        p.append(f"schema_version must be the integer {SCHEMA_VERSION}")
+    if not (isinstance(ev["model_id"], str) and _ID.fullmatch(ev["model_id"])):
         p.append("model_id is not a valid model id")
-    if not _HEX64.match(str(ev["card_digest"])):
+    if not _text(ev["symbol"]) or not _text(ev["target"]):
+        p.append("symbol and target must be non-blank text")
+    if not (isinstance(ev["card_digest"], str) and _HEX64.fullmatch(ev["card_digest"])):
         p.append("card_digest must be the 64-hex digest of the model's card (no card, no prediction)")
     if ev["status"] not in LIVE_STATUSES:
         p.append(f"status must be one of {LIVE_STATUSES}: an offline model makes no live event")
@@ -64,15 +78,23 @@ def check_prediction(ev: dict) -> list[str]:
         p.append("feature_ts_max must be an ISO timestamp with a zone")
     if ts is not None and fts is not None and fts > ts:
         p.append("feature_ts_max is later than ts: a feature from the future (point in time)")
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(ev["session"])):
-        p.append("session must be YYYY-MM-DD (a session is the unit)")
-    if ev["horizon"] not in HORIZONS:
+    sd = None
+    if isinstance(ev["session"], str) and _DAY.fullmatch(ev["session"]):
+        try:
+            sd = date.fromisoformat(ev["session"])
+        except ValueError:
+            sd = None
+    if sd is None:
+        p.append("session must be a real YYYY-MM-DD date (a session is the unit)")
+    elif ts is not None and sd != ts.date():
+        p.append("session must be the date of ts (in ts's own zone)")
+    if not _horizon_ok(ev["horizon"]):
         p.append(f"horizon must be one of {HORIZONS}")
     if not _finite(ev["prediction"]):
         p.append("prediction must be a finite number")
     if "baseline_prediction" in ev and ev["baseline_prediction"] is not None and not _finite(ev["baseline_prediction"]):
         p.append("baseline_prediction must be a finite number or null")
-    if not _HEX64.match(str(ev["features_digest"])):
+    if not (isinstance(ev["features_digest"], str) and _HEX64.fullmatch(ev["features_digest"])):
         p.append("features_digest must be a 64-hex digest of the inputs")
     return p
 
@@ -84,10 +106,14 @@ def check_outcome(ev: dict) -> list[str]:
             p.append(f"missing {k}")
     if p:
         return p
-    if ev["schema_version"] != SCHEMA_VERSION:
-        p.append(f"schema_version must be {SCHEMA_VERSION}")
+    if type(ev["schema_version"]) is not int or ev["schema_version"] != SCHEMA_VERSION:
+        p.append(f"schema_version must be the integer {SCHEMA_VERSION}")
+    if not (isinstance(ev["model_id"], str) and _ID.fullmatch(ev["model_id"])):
+        p.append("model_id is not a valid model id")
+    if not (_text(ev["loss_name"])):
+        p.append("loss_name must name the loss")
     ref = ev["ref"]
-    if not (isinstance(ref, dict) and all(ref.get(k) not in (None, "") for k in ("ts", "symbol", "horizon"))):
+    if not (isinstance(ref, dict) and _text(ref.get("ts")) and _text(ref.get("symbol")) and ref.get("horizon") not in (None, "")):
         p.append("ref needs the graded prediction's ts, symbol and horizon")
     else:
         rts, gts = _ts(ref["ts"]), _ts(ev["graded_at"])
@@ -95,7 +121,9 @@ def check_outcome(ev: dict) -> list[str]:
             p.append("ref.ts and graded_at must be ISO timestamps with a zone")
         elif gts <= rts:
             p.append("graded_at must be after the prediction it grades")
-        if ref["horizon"] not in HORIZONS:
+        elif type(ref["horizon"]) is int and ref["horizon"] in HORIZONS and gts < rts + timedelta(minutes=ref["horizon"]):
+            p.append("graded_at is before the prediction's horizon has elapsed: the outcome cannot be known yet")
+        if not _horizon_ok(ref["horizon"]):
             p.append(f"ref.horizon must be one of {HORIZONS}")
     for k in ("realised", "loss", "baseline_loss"):
         if not _finite(ev[k]):

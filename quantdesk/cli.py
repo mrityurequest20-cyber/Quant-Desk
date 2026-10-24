@@ -446,7 +446,13 @@ def _ml_card(cfg, a):
     B.refuse_tracked_tree(out, "ml card --out")                  # a card names data digests and our own results; it is not written where it could be committed by accident
     try:
         run = _json.loads(Path(a.run).read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"ml card: cannot read --run {a.run}: {exc}")
+    try:
         card = MC.build_card(run)
+        repo_problems = MC.check_against_repo(run, Path(__file__).resolve().parents[1])
+        if repo_problems:
+            raise MC.MissingProvenance(repo_problems)
         jp, mp = MC.write_card(out, card)
     except MC.MissingProvenance as exc:
         raise SystemExit("ml card: " + "\n  - ".join(["no model card, the run lacks provenance:"] + exc.problems))

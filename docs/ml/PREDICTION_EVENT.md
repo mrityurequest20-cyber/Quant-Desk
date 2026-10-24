@@ -39,10 +39,30 @@ event that points back at it.
 
 ## Status and demotion
 
-`offline -> shadow` is a normal promotion. `shadow -> applied` needs the owner's recorded apply switch (`owner_apply` with `by`, `ts`, `rule`) and
-nothing else can set it; demotion in the other direction needs nobody. `rolling_grade` compares the model's mean loss with its baseline's over the last
-60 graded predictions (non-finite losses are dropped and counted, never averaged in), and `should_demote` fires when at least 30 are graded and the
-model is **worse** than its baseline. The demotion rule only ever tightens: it can switch a model down, never up.
+`offline -> shadow` is a normal promotion. `shadow -> applied` is refused by the code unless the run record carries an `owner_apply` entry (`by`, `ts`,
+`rule`). That entry is free text today (see below), so this is a guard against a slip, not against someone who writes the record. Demotion needs nobody.
+Because a card is written once, **a status change is a new version of the card**; nothing yet records the link between the two, and the registry change
+that does is a later one.
+
+`rolling_grade` takes the last 60 graded predictions, **oldest first, in the order the caller gives them** (it does not sort), and compares the model's
+mean loss with its baseline's. Non-finite losses inside that window are counted (`dropped_non_finite`) and left out of the means, never averaged in or
+repaired. `should_demote` returns true when at least 30 predictions are in the window and either (a) 20% or more of them are non-finite (a model that emits
+NaN is not working), or (b) the model is **worse** than its baseline. Where the outcomes name their `session`, fewer than 5 distinct sessions is no verdict
+at all (a session is the unit: 40 predictions from one busy day are one observation). The demotion rule only ever tightens: it can switch a model down,
+never up.
+
+## What a card checks, and what it cannot
+
+`build_card` refuses a run record unless: the model id and the version are file-safe names; the spec has a file and a 64-hex sha256; the code commit is a
+full 40-hex commit; every data tier has a name, a manifest, a hex digest and a status from the importer's list; the training window holds real dates with
+`start <= end <= cutoff`; the settings hold plain finite JSON and an integer seed; the variants tried is an integer of at least 1; the baseline has a name
+and a version; the out-of-sample block has a metric, a model and a baseline score, a difference that **equals model minus baseline**, an interval that
+contains it with its level and method, and a session count; and the leakage tests are `{name, passed}` entries that all passed. `ml card` then checks the
+record against the repository: the spec file exists inside it and hashes to `spec.sha256`, and the code commit is a commit of it.
+
+It cannot know that a run record was honestly written (for example that the tree was clean), that a leakage test was really run, or that the numbers are the
+run's. Those are the job of the harness that writes the record (P0.8). The card's digest is an **unkeyed sha256**: it makes an edit visible, and it does not
+stop someone who edits the card and recomputes the digest. Authority comes from where cards are kept and reviewed, not from the digest.
 
 ## What is not trusted yet
 

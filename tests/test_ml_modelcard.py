@@ -7,6 +7,7 @@ the difference, the owner's switch for applied) is broken on its own.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import subprocess
 import sys
@@ -30,8 +31,9 @@ def good_run(**over):
         "settings": {"params": {"lags": 5}, "seed": 7},
         "variants_tried": 4,
         "baseline": {"name": "A_desk", "version": "1"},
-        "oos": {"metric": "QLIKE", "model": 0.155, "baseline": 0.20, "diff": -0.045, "interval": [-0.07, -0.02], "n_sessions": 1000},
-        "leakage_tests": ["perturbation canary", "purged walk-forward"],
+        "oos": {"metric": "QLIKE", "model": 0.155, "baseline": 0.20, "diff": -0.045, "interval": [-0.07, -0.02], "interval_level": 0.9,
+                "interval_method": "Newey-West, 5 lags", "n_sessions": 1000},
+        "leakage_tests": [{"name": "perturbation canary", "passed": True}, {"name": "purged walk-forward", "passed": True}],
         "status": "offline",
     }
     run.update(over)
@@ -79,10 +81,10 @@ def test_every_missing_field_is_named_in_one_refusal():
     ({"code_commit": "b" * 39 + "-dirty"}, "full 40-hex commit"),
     ({"spec": {"file": "x.json", "sha256": "xyz"}}, "64-hex sha256"),
     ({"spec": {"sha256": SHA}}, "a file and a 64-hex sha256"),
-    ({"data": {"T1": {"manifest": "m", "digest": "d"}}}, "manifest, digest and status"),
+    ({"data": {"T1": {"manifest": "m", "digest": "d"}}}, "a manifest name, a hex digest"),
     ({"training_window": {"start": "2010-01-04", "end": "2019-06-30", "cutoff": "2018-12-31"}}, "start <= end <= cutoff"),
     ({"training_window": {"start": "2010-01-04", "end": "2018-12-31"}}, "start, end and cutoff"),
-    ({"settings": {"params": {}}}, "params and seed"),
+    ({"settings": {"params": {}}}, "params and an integer seed"),
     ({"variants_tried": 0}, ">= 1"),
     ({"variants_tried": True}, ">= 1"),
     ({"variants_tried": 2.0}, ">= 1"),
@@ -170,12 +172,12 @@ def test_an_edited_card_fails_verification_and_is_not_written(tmp_path):
 
 
 # ---- rolling grade and automatic demotion -------------------------------------------------------------------------------------
-def test_the_rolling_grade_compares_the_last_window_with_the_baseline_and_leaves_out_non_finite_losses():
+def test_the_rolling_grade_compares_the_last_window_with_the_baseline_and_counts_non_finite_losses_in_that_window():
     outs = [{"loss": 1.0, "baseline_loss": 2.0}] * 10 + [{"loss": 3.0, "baseline_loss": 2.0}] * 5 + [{"loss": float("nan"), "baseline_loss": 2.0}]
-    g = MC.rolling_grade(outs, window=5)
-    assert g["n"] == 5 and g["dropped_non_finite"] == 1 and g["gain"] == pytest.approx(-1.0) and g["mean_loss"] == pytest.approx(3.0)
+    g = MC.rolling_grade(outs, window=5)                                              # the last 5 predictions: four losses of 3 and one NaN
+    assert g["n"] == 4 and g["dropped_non_finite"] == 1 and g["gain"] == pytest.approx(-1.0) and g["mean_loss"] == pytest.approx(3.0)
     g_all = MC.rolling_grade(outs, window=60)
-    assert g_all["n"] == 15 and g_all["gain"] == pytest.approx((2.0 * 15 - (10 + 15)) / 15)
+    assert g_all["n"] == 15 and g_all["dropped_non_finite"] == 1 and g_all["gain"] == pytest.approx((2.0 * 15 - (10 + 15)) / 15)
     assert MC.rolling_grade([], 5)["gain"] is None
     with pytest.raises(ValueError):
         MC.rolling_grade(outs, window=0)
@@ -195,12 +197,23 @@ def _cli(*args):
     return subprocess.run([sys.executable, "-m", "quantdesk", "ml", "card", *args], capture_output=True, text=True)
 
 
+REPO = __import__("pathlib").Path(__file__).resolve().parents[1]
+
+
+def real_run(**over):
+    """A run record whose spec file and commit exist in this repository."""
+    spec = "docs/ml/SPEC_TEMPLATE.md"
+    sha = hashlib.sha256((REPO / spec).read_bytes()).hexdigest()
+    head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    return good_run(spec={"file": spec, "sha256": sha}, code_commit=head, **over)
+
+
 def test_the_command_builds_a_card_from_a_run_record_and_refuses_without_provenance(tmp_path):
     run = tmp_path / "run.json"
-    run.write_text(json.dumps(good_run()))
+    run.write_text(json.dumps(real_run()))
     ok = _cli("--run", str(run), "--out", str(tmp_path / "cards"))
     assert ok.returncode == 0 and "digest" in ok.stdout and (tmp_path / "cards" / "har-c-1.card.md").exists()
-    bad = good_run()
+    bad = real_run()
     del bad["code_commit"]
     del bad["variants_tried"]
     run.write_text(json.dumps(bad))
@@ -208,6 +221,30 @@ def test_the_command_builds_a_card_from_a_run_record_and_refuses_without_provena
     assert refused.returncode != 0 and "code_commit" in refused.stderr and "variants_tried" in refused.stderr
     assert not (tmp_path / "cards2").exists()
     assert _cli("--out", str(tmp_path / "x")).returncode != 0                      # --run is required
+
+
+def test_the_command_checks_the_run_against_the_repository(tmp_path):
+    run = tmp_path / "run.json"
+    for over, why in (({"spec": {"file": "docs/ml/SPEC_TEMPLATE.md", "sha256": "a" * 64}}, "does not hash to spec.sha256"),
+                      ({"spec": {"file": "docs/ml/NO_SUCH_FILE.md", "sha256": "a" * 64}}, "is not a file inside the repository"),
+                      ({"spec": {"file": "../../etc/hostname", "sha256": "a" * 64}}, "is not a file inside the repository"),
+                      ({"code_commit": "0" * 40}, "is not a commit of this repository")):
+        rec = real_run()
+        rec.update(over)
+        run.write_text(json.dumps(rec))
+        r = _cli("--run", str(run), "--out", str(tmp_path / "cards"))
+        assert r.returncode != 0 and why in r.stderr, (over, r.stderr)
+        assert not (tmp_path / "cards").exists()
+
+
+def test_the_command_refuses_a_file_that_is_not_a_run_record_without_a_traceback(tmp_path):
+    for text in ("[1, 2]", "not json", "123", "null"):
+        run = tmp_path / "run.json"
+        run.write_text(text)
+        r = _cli("--run", str(run), "--out", str(tmp_path / "cards"))
+        assert r.returncode != 0 and "Traceback" not in r.stderr, text
+    r = _cli("--run", str(tmp_path / "missing.json"), "--out", str(tmp_path / "cards"))
+    assert r.returncode != 0 and "Traceback" not in r.stderr
 
 
 # ---- prediction events --------------------------------------------------------------------------------------------------------
@@ -301,3 +338,163 @@ def test_the_command_refuses_an_output_folder_inside_a_git_working_tree(tmp_path
     refused = _cli("--run", str(run), "--out", str(probe))
     assert refused.returncode != 0 and "inside a git working tree" in refused.stderr
     assert not probe.exists()
+
+
+# ---- audit round: provenance is checked for substance, not only for shape -------------------------------------------------------------
+@pytest.mark.parametrize("over,why", [
+    ({"data": {"T1": {"manifest": "m", "digest": "x", "status": "external_unverified"}}}, "a hex digest"),                  # 'x' is not a digest
+    ({"data": {"T1": {"manifest": "m", "digest": "47d28d6376ca63af", "status": "fake"}}}, "a status in"),                  # a made-up status
+    ({"data": {"": {"manifest": "m", "digest": "47d28d6376ca63af", "status": "verified"}}}, "tier name"),                    # an empty tier name
+    ({"data": {"T 1": {"manifest": "m", "digest": "47d28d6376ca63af", "status": "verified"}}}, "tier name"),
+    ({"data": {"T1": {"manifest": "m", "digest": "47D28D6376CA63AF", "status": "verified"}}}, "a hex digest"),             # lower-case hex only
+    ({"settings": {"params": {}, "seed": None}}, "integer seed"),
+    ({"settings": {"params": {}, "seed": True}}, "integer seed"),
+    ({"settings": {"params": {}, "seed": 1.5}}, "integer seed"),
+    ({"settings": {"params": {"a": float("nan")}, "seed": 1}}, "plain JSON with finite numbers"),
+    ({"leakage_tests": ["perturbation canary"]}, "list of {name, passed}"),                                                 # a bare string is not a result
+    ({"leakage_tests": [{"name": "canary", "passed": False}]}, "did not pass: canary"),
+    ({"leakage_tests": [{"name": "canary", "passed": "yes"}]}, "did not pass: canary"),
+    ({"leakage_tests": [{"name": "canary"}]}, "did not pass: canary"),
+    ({"leakage_tests": [{"name": " ", "passed": True}]}, "list of {name, passed}"),
+    ({"baseline": {"name": "A_desk", "version": "  "}}, "a name and a version"),
+    ({"spec": {"file": " ", "sha256": SHA}}, "a file and a 64-hex"),
+    ({"code_commit": COMMIT + "\n"}, "full 40-hex"),                                                                       # a trailing newline is not part of a commit
+    ({"spec": {"file": "x.json", "sha256": SHA + "\n"}}, "64-hex sha256"),
+    ({"training_window": {"start": "9999-99-99", "end": "9999-99-99", "cutoff": "9999-99-99"}}, "real YYYY-MM-DD"),
+    ({"training_window": {"start": "2010-01-04\n", "end": "2018-12-31", "cutoff": "2018-12-31"}}, "real YYYY-MM-DD"),
+    ({"training_window": {"start": "2010-02-30", "end": "2018-12-31", "cutoff": "2018-12-31"}}, "real YYYY-MM-DD"),
+])
+def test_provenance_is_checked_for_substance(over, why):
+    with pytest.raises(MC.MissingProvenance, match=why):
+        MC.build_card(good_run(**over))
+
+
+@pytest.mark.parametrize("oos,why", [
+    ({"metric": ""}, "oos.metric"), ({"metric": None}, "oos.metric"), ({"metric": 5}, "oos.metric"),
+    ({"n_sessions": True}, "n_sessions"), ({"n_sessions": 1.0}, "n_sessions"),
+    ({"model": 1.0, "baseline": 2.0, "diff": 5.0, "interval": [4.0, 6.0]}, "must equal oos.model - oos.baseline"),            # diff not tied to the two scores
+    ({"diff": -0.03}, "must equal oos.model - oos.baseline"),
+    ({"interval_level": 0}, "interval_level"), ({"interval_level": 1.0}, "interval_level"), ({"interval_level": True}, "interval_level"),
+    ({"interval_method": ""}, "interval_method"),
+    ({"model": 10**400}, "finite"),                                                                                          # an int too large for a float: refuse, do not crash
+])
+def test_the_out_of_sample_block_cannot_be_hollow(oos, why):
+    run = good_run()
+    run["oos"] = {**run["oos"], **oos}
+    with pytest.raises(MC.MissingProvenance, match=why):
+        MC.build_card(run)
+    for k in ("interval_level", "interval_method"):
+        broken = good_run()
+        del broken["oos"][k]
+        with pytest.raises(MC.MissingProvenance, match=k):
+            MC.build_card(broken)
+
+
+def test_a_run_that_is_not_an_object_or_holds_huge_numbers_is_refused_not_crashed():
+    for bad in ([], "x", 5, None):
+        assert MC.check_run(bad) == ["the run record must be a JSON object"]
+    forged = MC.build_card(good_run())
+    forged["settings"] = {"params": {"a": float("nan")}, "seed": 1}
+    assert any("plain JSON" in p for p in MC.verify_card(forged))                                                           # verify returns problems, it does not raise
+    assert MC.verify_card([]) == ["a card must be a JSON object"]
+
+
+def test_the_cards_digest_is_unkeyed_so_a_forged_card_with_a_recomputed_digest_verifies():
+    """Said plainly, as the docs say: the digest makes an edit visible, it does not stop someone who recomputes it. Authority comes from where cards are kept."""
+    import hashlib as h
+    card = MC.build_card(good_run())
+    forged = copy.deepcopy(card)
+    forged["oos"] = {**forged["oos"], "model": 0.1, "diff": -0.1, "interval": [-0.12, -0.08]}
+    forged["digest"] = h.sha256(MC._canon({k: v for k, v in forged.items() if k != "digest"}).encode()).hexdigest()
+    assert MC.verify_card(forged) == []
+
+
+# ---- audit round: demotion ------------------------------------------------------------------------------------------------------------
+def test_a_model_that_emits_non_finite_losses_is_demoted_and_cannot_hide_behind_them():
+    g = MC.rolling_grade([{"loss": float("nan"), "baseline_loss": 2.0}] * 100, window=60)
+    assert g["n"] == 0 and g["dropped_non_finite"] == 60 and g["gain"] is None
+    assert MC.should_demote(g) is True
+    some = [{"loss": 1.0, "baseline_loss": 2.0}] * 40 + [{"loss": float("inf"), "baseline_loss": 2.0}] * 10
+    assert MC.should_demote(MC.rolling_grade(some, window=60)) is True                                                      # 20% of the window is not finite
+    few = [{"loss": 1.0, "baseline_loss": 2.0}] * 48 + [{"loss": float("nan"), "baseline_loss": 2.0}] * 2
+    assert MC.should_demote(MC.rolling_grade(few, window=60)) is False                                                      # 4%: one bad forecast is not a verdict
+    assert MC.should_demote(MC.rolling_grade([{"loss": float("nan"), "baseline_loss": 2.0}] * 10, window=60)) is False       # too few graded for a verdict
+
+
+def test_a_verdict_needs_enough_distinct_sessions_when_the_outcomes_name_them():
+    one_day = [{"loss": 3.0, "baseline_loss": 2.0, "session": "2026-10-26"}] * 40
+    g = MC.rolling_grade(one_day, window=60)
+    assert g["n"] == 40 and g["sessions"] == 1 and MC.should_demote(g) is False                                              # 40 predictions of one session are one observation
+    many = [{"loss": 3.0, "baseline_loss": 2.0, "session": f"2026-10-{d:02d}"} for d in range(1, 9)] * 5
+    g = MC.rolling_grade(many, window=60)
+    assert g["sessions"] == 8 and MC.should_demote(g) is True
+    assert MC.rolling_grade([{"loss": 1.0, "baseline_loss": 2.0}] * 40)["sessions"] is None                                  # no session names: the count is unknown, not zero
+
+
+def test_the_window_is_the_last_predictions_in_the_order_given():
+    old_bad = [{"loss": 9.0, "baseline_loss": 1.0}] * 30
+    recent_good = [{"loss": 0.5, "baseline_loss": 1.0}] * 60
+    g = MC.rolling_grade(old_bad + recent_good, window=60)
+    assert g["gain"] == pytest.approx(0.5) and MC.should_demote(g) is False
+    assert MC.rolling_grade(recent_good + old_bad, window=60)["gain"] < 0                                                    # the caller's order decides: oldest first
+
+
+# ---- audit round: the file written ---------------------------------------------------------------------------------------------------------
+def test_a_deleted_or_stale_markdown_is_repaired_on_a_rerun_and_an_edited_json_is_never_overwritten(tmp_path):
+    card = MC.build_card(good_run())
+    jp, mp = MC.write_card(tmp_path, card)
+    mp.unlink()
+    MC.write_card(tmp_path, card)
+    assert mp.read_text().startswith("# Model card: har-c v1")
+    mp.write_text("tampered")
+    MC.write_card(tmp_path, card)
+    assert mp.read_text().startswith("# Model card: har-c v1")
+    jp.write_text(jp.read_text().replace("0.155", "0.1"))
+    with pytest.raises(FileExistsError, match="new version"):
+        MC.write_card(tmp_path, card)
+
+
+def test_a_multi_line_optional_field_cannot_break_the_markdown_table():
+    card = MC.build_card(good_run(weaknesses="line one\n| fake | row |\nline three"))
+    md = MC.render_markdown(card)
+    assert "\nline three" not in md and "| Known weaknesses and where it fails | line one / fake / row / line three |" in md
+    assert [ln for ln in md.splitlines() if ln.startswith("|")] and all(ln.endswith("|") for ln in md.splitlines() if ln.startswith("|"))
+
+
+def test_the_applied_status_is_reachable_only_with_an_owner_switch_and_only_from_shadow():
+    assert MC.can_transition("offline", "applied", OWNER)[0] is False
+    assert MC.can_transition("shadow", "applied", {"by": "x", "ts": "", "rule": "r"})[0] is False
+    assert MC.can_transition("shadow", "applied", OWNER)[0] is True
+
+
+# ---- audit round: events ---------------------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("over,why", [
+    ({"schema_version": True}, "integer 1"), ({"schema_version": 1.0}, "integer 1"),
+    ({"horizon": 60.0}, "horizon"), ({"horizon": True}, "horizon"),
+    ({"session": "2026-13-45"}, "real YYYY-MM-DD"), ({"session": "2026-10-27"}, "date of ts"),                              # the session is the date of ts
+    ({"symbol": "  "}, "non-blank"), ({"target": " "}, "non-blank"),
+    ({"prediction": 10**400}, "finite"),
+    ({"card_digest": "0" * 63 + "G"}, "card_digest"), ({"card_digest": SHA + "\n"}, "card_digest"),
+    ({"model_id": "x" * 65}, "model_id"),
+])
+def test_a_prediction_event_cannot_slip_through_on_type_or_date_tricks(over, why):
+    with pytest.raises(EV.BadEvent, match=why):
+        EV.validate(good_prediction(**over), EV.PREDICTION)
+
+
+@pytest.mark.parametrize("over,why", [
+    ({"model_id": "bad id"}, "model_id"), ({"model_id": 5}, "model_id"),
+    ({"schema_version": True}, "integer 1"),
+    ({"graded_at": "2026-10-26T09:30:01+05:30"}, "horizon has elapsed"),                                                    # a 60-minute outcome cannot be known after one second
+    ({"graded_at": "2026-10-26T10:29:59+05:30"}, "horizon has elapsed"),
+    ({"loss_name": " "}, "loss_name"),
+    ({"loss": 10**400}, "finite"),
+    ({"ref": {"ts": "2026-10-26T09:30:00+05:30", "symbol": " ", "horizon": 60}}, "ref needs"),
+    ({"ref": {"ts": "2026-10-26T09:30:00+05:30", "symbol": "NIFTY", "horizon": 60.0}}, "horizon"),
+])
+def test_an_outcome_event_cannot_be_graded_before_it_can_be_known(over, why):
+    with pytest.raises(EV.BadEvent, match=why):
+        EV.validate(good_outcome(**over), EV.OUTCOME)
+    assert EV.validate(good_outcome(graded_at="2026-10-26T10:30:00+05:30"), EV.OUTCOME)                                       # exactly at the horizon is knowable
+    assert EV.validate(good_outcome(ref={"ts": "2026-10-26T09:30:00+05:30", "symbol": "NIFTY", "horizon": "close"},
+                                    graded_at="2026-10-26T15:31:00+05:30"), EV.OUTCOME)
