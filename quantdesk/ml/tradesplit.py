@@ -183,6 +183,69 @@ def sleeve_check(trades: list[dict], sleeve: str) -> dict:
             "underlying_with_trade_lost": sum(1 for r in rows if r["verdict"].startswith("underlying with")), "fees": sum(r["fees"] for r in rows)}
 
 
+def _long_premium(trade: dict) -> tuple[float, float] | None:
+    """(premium paid, premium received at exit) for the trade's long option legs, or None."""
+    try:
+        legs = json.loads(trade.get("legs") or "[]")
+    except (TypeError, ValueError):
+        return None
+    paid = got = 0.0
+    for leg in legs if isinstance(legs, list) else []:
+        if not isinstance(leg, dict) or (leg.get("instrument") or {}).get("kind") != "option" or not (leg.get("qty") or 0) > 0:
+            continue
+        try:
+            paid += float(leg["entry_price"]) * float(leg["qty"])
+            got += float(leg["exit_price"]) * float(leg["qty"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    return (paid, got) if paid > 0 else None
+
+
+def decomposition(trades: list[dict]) -> dict:
+    """Does strike distance matter, or is it the underlying's move? Per distance bucket: the premium paid, how often the underlying moved the trade's way, its mean move, and the
+    return on the premium; and the correlation of distance with the underlying's move and with the return across all trades. If distance carried information, the last two
+    would not be near zero. Descriptive, like everything here (same floors and no-claim rule)."""
+    rows = []
+    for t in trades:
+        if t.get("exit_reason") == ABORTED:
+            continue
+        d, pr = long_leg_distance_pct(t), _long_premium(t)
+        try:
+            move = float(t["direction"]) * (float(t["exit_underlying"]) - float(t["entry_underlying"])) / float(t["entry_underlying"]) * 100
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        if d is None or pr is None or move != move:
+            continue
+        rows.append({"bucket": bucket(d), "d": d, "premium": pr[0], "ret": (pr[1] - pr[0]) / pr[0] * 100, "move": move, "pnl": float(t["pnl"])})
+    by: dict = {}
+    for r in rows:
+        by.setdefault(r["bucket"], []).append(r)
+    cells = {b: {"n": len(v), "mean_premium": sum(x["premium"] for x in v) / len(v), "underlying_right": sum(1 for x in v if x["move"] > 0),
+                 "mean_underlying_move_pct": sum(x["move"] for x in v) / len(v), "mean_return_on_premium_pct": sum(x["ret"] for x in v) / len(v),
+                 "too_few": len(v) < MIN_CELL} for b, v in sorted(by.items())}
+
+    def corr(a, b):
+        if len(a) < 3 or len(set(a)) < 2 or len(set(b)) < 2:
+            return float("nan")
+        return float(np.corrcoef(a, b)[0, 1])
+    d_, m_, r_ = [r["d"] for r in rows], [r["move"] for r in rows], [r["ret"] for r in rows]
+    # how much of the return follows the underlying: slope of return on move (percent of premium per percent of underlying)
+    slope = float(np.polyfit(m_, r_, 1)[0]) if len(rows) >= 3 and len(set(m_)) > 1 else float("nan")
+    return {"n": len(rows), "buckets": cells, "corr_distance_move": corr(d_, m_), "corr_distance_return": corr(d_, r_), "corr_move_return": corr(m_, r_),
+            "return_per_underlying_pct": slope}
+
+
+def render_decomposition(dec: dict) -> str:
+    f = lambda x: "n/a" if x != x else f"{x:+.2f}"
+    L = [f"Strike distance or the underlying? ({dec['n']} trades with a long option leg)"]
+    for b, c in dec["buckets"].items():
+        L.append(f"  {b}: {c['n']} trades, premium paid {c['mean_premium']:,.0f} on average, the underlying moved the trade's way in {c['underlying_right']}, "
+                 f"mean move {c['mean_underlying_move_pct']:+.2f}%, mean return on premium {c['mean_return_on_premium_pct']:+.1f}%" + ("  [too few]" if c["too_few"] else ""))
+    L.append(f"  correlation of distance with the underlying's move {f(dec['corr_distance_move'])}, with the return {f(dec['corr_distance_return'])}; "
+             f"of the move with the return {f(dec['corr_move_return'])} (return on premium per 1% of underlying: {f(dec['return_per_underlying_pct'])})")
+    return "\n".join(L)
+
+
 def render(rep: dict, check: dict | None = None) -> str:
     f = lambda x: "n/a" if x != x else f"{x:,.0f}"
     L = [f"{rep['total_trades']} closed trades ({rep['aborted_entries']} unwound entries left out); {rep['claim']}.", ""]

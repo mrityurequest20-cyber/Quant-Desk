@@ -191,3 +191,34 @@ def test_a_flat_underlying_is_flat_and_a_win_is_a_win_whatever_the_spot_did():
 def test_bucket_edges_through_the_distance_function():
     f = lambda strike: T.bucket(T.long_leg_distance_pct({"entry_underlying": 1000.0, "legs": json.dumps([leg("CE", strike)])}))
     assert f(1002.5) == "0.25% to 0.75% OTM" and f(1002.4) == "up to 0.25% OTM" and f(1007.5) == "over 0.75% OTM" and f(1007.4) == "0.25% to 0.75% OTM"
+
+
+# ---- strike distance or the underlying? -----------------------------------------------------------------------------------
+def leg_px(right, strike, entry, exit_, qty=10):
+    return [{"instrument": {"kind": "option", "strike": strike, "right": right}, "qty": qty, "entry_price": entry, "exit_price": exit_}]
+
+
+def test_the_decomposition_reads_premium_move_and_return_per_bucket(tmp_path):
+    rows = [trade(1, legs=leg_px("CE", 1001.0, 10.0, 12.0), exit_u=1010.0, pnl=20.0, day="2026-10-12"),                    # 0.1% out, +1% underlying, +20% on premium
+            trade(2, legs=leg_px("CE", 1050.0, 5.0, 4.0), exit_u=990.0, pnl=-10.0, day="2026-10-13"),                      # 5% out, -1% underlying, -20%
+            trade(3, legs=leg_px("PE", 995.0, 8.0, 9.6), direction=-1, exit_u=990.0, pnl=16.0, day="2026-10-14")]            # 0.5% out, short underlying fell 1%: +1% in the trade's way
+    dec = T.decomposition(T.load_closed(make_db(tmp_path, rows)))
+    assert dec["n"] == 3 and set(dec["buckets"]) == {"up to 0.25% OTM", "0.25% to 0.75% OTM", "over 0.75% OTM"}
+    b = dec["buckets"]["up to 0.25% OTM"]
+    assert b["n"] == 1 and b["underlying_right"] == 1 and b["mean_underlying_move_pct"] == pytest.approx(1.0) and b["mean_return_on_premium_pct"] == pytest.approx(20.0)
+    assert dec["buckets"]["over 0.75% OTM"]["underlying_right"] == 0 and dec["buckets"]["over 0.75% OTM"]["mean_return_on_premium_pct"] == pytest.approx(-20.0)
+    assert dec["corr_move_return"] == pytest.approx(1.0) and dec["return_per_underlying_pct"] == pytest.approx(20.0)
+
+
+def test_the_decomposition_skips_trades_it_cannot_read_and_unwound_entries_and_never_crashes(tmp_path):
+    rows = [trade(1, legs=leg_px("CE", 1001.0, 10.0, 12.0), exit_u=1010.0), trade(2, legs=[], exit_u=1010.0), trade(3, legs=leg_px("CE", 1001.0, 10.0, 12.0), reason="entry_aborted"),
+            trade(4, legs=[{"instrument": {"kind": "option", "strike": 1001.0, "right": "CE"}, "qty": 1}], exit_u=1010.0)]                # no prices
+    dec = T.decomposition(T.load_closed(make_db(tmp_path, rows)))
+    assert dec["n"] == 1 and math.isnan(dec["corr_distance_move"]) and math.isnan(dec["return_per_underlying_pct"])                          # one trade: no correlation to speak of
+    assert "1 trades with a long option leg" in T.render_decomposition(dec)
+
+
+def test_the_command_prints_the_decomposition_after_the_split(tmp_path, capsys):
+    main(["ml", "trades", "--journal", str(make_db(tmp_path, [trade(i, legs=leg_px("CE", 1001.0 + i, 10.0, 11.0), day=f"2026-10-{12 + i}") for i in range(4)]))])
+    out = capsys.readouterr().out
+    assert "By sleeve:" in out and "Strike distance or the underlying?" in out and "[too few]" in out

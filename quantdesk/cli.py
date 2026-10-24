@@ -460,6 +460,8 @@ def _ml_trades(a):
         raise SystemExit("ml trades: --journal is required")
     trades = TS.load_closed(Path(a.journal))
     print(TS.render(TS.split(trades), TS.sleeve_check(trades, a.sleeve) if a.sleeve else None))
+    print()
+    print(TS.render_decomposition(TS.decomposition(trades)))
 
 
 def _ml_reproduce(a):

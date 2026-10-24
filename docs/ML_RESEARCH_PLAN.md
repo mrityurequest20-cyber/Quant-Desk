@@ -147,6 +147,12 @@ out of the money as a percentage of the entry spot. Paper fills; a small sample;
   the trade at exit (-0.08%, -0.17%, -0.15%). With three trades and exit-time spot only, that does not separate the signal from the exit rules (an invalidation exit fires because the
   spot has already moved against the trade); it is a reason to look again at 30
   trades, not a finding.
+- **Strike distance or the underlying? (24 Oct, `ml trades` prints this block too).** Premium paid is about the same in every bucket (32,600 to 34,400 on average: positions are
+  sized by outlay), so distance changes how many contracts, not how much money is at risk. What moves the P&L is whether the underlying moved the trade's way by exit: the return on
+  the premium follows the underlying's move almost one for one (correlation 0.94; about +100% of premium per +1% of the underlying), and **distance is uncorrelated with the move
+  (-0.03) and with the return (+0.03)**. The underlying moved the trade's way in 12 of 26 trades (2 of 2 at up to 0.25%, 4 of 13 at 0.25% to 0.75%, 6 of 11 beyond). The five trades
+  that ended on a target exit (three premium targets, two underlying targets) made +79.6k; the other 21 lost 64.7k together. So on this sample the strike is not where the profit comes from, and the near-the-money
+  impression is not supported; what the data does say is that the entries are right about half the time and the exits decide the size. Still 26 trades, still descriptive.
 - To redo it: restore the `journal` branch (`git fetch --depth 1 origin journal`, `git archive FETCH_HEAD`), open `intraday/journal.db`
   read-only (`mode=ro`), table `trades`, strikes in the `legs` JSON.
 
