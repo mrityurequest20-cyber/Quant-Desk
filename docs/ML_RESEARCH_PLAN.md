@@ -122,7 +122,7 @@ below its baseline drops back to shadow by itself.
 | Multi-day drawdown halt value | owner |
 | Scope ladder (more indices, stocks, commodities): admissions after the Phase 0 exit | next session, if the desk is doing well |
 | Source for 15 May to early Sep 2026 index minutes, or accept the hole | next session |
-| Check that journal text sent to the teacher holds nothing private (account numbers, keys, tokens). **Done 24 Oct:** the packets of all 14 sessions to date (290k characters: trades, decisions, reads, warnings) were scanned for tokens, keys, e-mail, account and phone patterns: nothing private (the only matches were strike@price strings and long floats). To keep it so, `teacher.redact` now masks anything credential-like in the packet before it leaves the machine (and journals a count). (The tape records bid and ask: confirmed, section 3.) | done |
+| Check that journal text sent to the teacher holds nothing private (account numbers, keys, tokens). **Done 24 Oct:** the packets of all 14 sessions to date (290k characters: trades, decisions, reads, warnings) were scanned for tokens, keys, e-mail, account and phone patterns: nothing private (the only matches were strike@price strings and long floats). To keep it so, `teacher.redact` now masks what looks like a credential, token or e-mail address in the packet before it leaves the machine (heuristic, best effort; it journals a count). (The tape records bid and ask: confirmed, section 3.) | done |
 | First teaching run: confirm its log line after a session; spend stays inside its half of the $20 | next session |
 
 ## 7b. Baseline: the first 26 paper trades (read from the `journal` branch, 24 Oct)

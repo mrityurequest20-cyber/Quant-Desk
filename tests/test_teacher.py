@@ -416,3 +416,26 @@ def test_a_credential_in_a_journal_row_never_reaches_the_reader_and_is_journaled
     assert got["status"] == "taught" and "SUPERSECRETTOKEN123456" not in sent and "a.b@example.com" not in sent and "[redacted]" in sent
     assert any("credential-like string" in m for m in events(journal, "WARN")["message"])
     assert not any("SUPERSECRET" in m or "a.b@example.com" in m for m in events(journal)["message"].astype(str))    # the teaching events hold a count, never the string
+
+
+@pytest.mark.parametrize("text,secret", [("KITE_ACCESS_TOKEN=abcDEF123456789xyzABC", "abcDEF123456789xyzABC"), ("KITE_API_KEY=k123456", "k123456"), ("KOTAK_CONSUMER_KEY=3f2504e0-4f89-11d3", "3f2504e0"),
+                                         ("client_secret=s3cr3t", "s3cr3t"), ("my_password=pw99", "pw99"), ("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI", "wJalrXUtnFEMI"),
+                                         ("Authorization: Token abc123", "abc123"), ("authorization: Bearer abcd", "abcd"), ('password="abc def"', "def"),
+                                         ("Authorization: token key123:access456", "access456")])
+def test_environment_style_names_and_authorization_schemes_are_masked_whole(text, secret):
+    out, n = teacher.redact(text)
+    assert n >= 1 and secret not in out, out
+
+
+@pytest.mark.parametrize("text", ["basic structure intact", "Basic strategies worked", "basic breakouts failed", "orb rejected: premium_target not reached"])
+def test_ordinary_prose_with_basic_is_untouched(text):
+    assert teacher.redact(text) == (text, 0)
+
+
+def test_redaction_is_linear_on_an_unbroken_run():
+    import time
+    t0 = time.time()
+    teacher.redact("a" * 200_000)
+    teacher.redact("a.b" * 70_000)
+    teacher.redact("x" * 100_000 + "@")
+    assert time.time() - t0 < 3.0
