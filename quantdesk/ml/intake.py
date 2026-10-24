@@ -598,6 +598,8 @@ def load(ds: Path, symbols, use: str, allow_unverified: bool = False, expected_d
     symbols = list(symbols)                              # a generator is consumed once: validate and load the same list
     if not symbols:
         raise ValueError("symbols must be a non-empty list of symbols, not one string")
+    if len(set(symbols)) != len(symbols):                # a symbol twice would hand every one of its rows back twice
+        raise ValueError(f"symbols repeats a symbol: {sorted(s for s in set(symbols) if symbols.count(s) > 1)}")
     ds = Path(ds)
     mp = ds / "manifest.json"
     if not mp.is_file():

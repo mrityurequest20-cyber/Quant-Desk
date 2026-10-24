@@ -181,7 +181,7 @@ no volume**: it is 0 in every row of all three files, so no volume-based feature
 | A stamp more than 15 seconds past the minute | dropped and counted (11 per file), never rounded: `09:19:55` could belong to either neighbouring minute |
 | Minutes outside 09:15 to 15:29 | dropped and counted |
 | A minute with two identical bars / two different bars | one kept / both dropped (3, 2 and 3 minutes per file) |
-| Fewer than 360 of the 375 regular minutes; a first or last bar more than 5 minutes from the open or the close; a 15:30 bar and no 09:15 bar on a day | session **rejected** (`short_session`, `truncated`, `end_labelled`; a short weekend session is also `weekend`). The last one catches a day labelled by its end inside a file that is otherwise bar-start, which the whole-file check cannot see |
+| Fewer than 360 of the 375 regular minutes; a first or last bar more than 5 minutes from the open or the close; a 15:30 bar and no 09:15 bar on a day | session **rejected** (`short_session`, `truncated`, `end_labelled`; a short weekend session is also `weekend`). The last one catches a day that has a 15:30 bar and no 09:15 bar inside a file that is otherwise bar-start, which the whole-file check cannot see; a shifted day that has no 15:30 bar, or that also carries a 09:15 bar, would not be seen (this source has no 15:30 bar at all) |
 | A one-minute **log** return above 5% (indices only); more than 3% of the bars stale (indices only); 10 or more consecutive stale bars; a weekend date with a full session | session goes to **review**: out by default |
 
 A stale bar is `open = high = low = close = the previous close` on consecutive minutes. The jump rule is on log returns, the quantity a
@@ -205,7 +205,7 @@ digest), the code commit, and one dataset digest. The import time, the status, t
 not part of the digest. A partition is written once; the same inputs reproduce the same digest, and a different digest in the same
 folder is an `ImmutableViolation`. `load()` recomputes the manifest's digest and checks the folder name against it, refuses a
 folder without a manifest, unverified data unless the caller says so, a use outside `ALLOWED_USES`, a symbol that is not in the
-dataset, and a partition added, missing, or no longer hashing to the manifest. `external_verified` counts only when a
+dataset or is named twice, and a partition added, missing, or no longer hashing to the manifest. `external_verified` counts only when a
 `verification.json` written by the P0.6 check names this digest and says it passed; the word in the manifest is not evidence.
 **What this protects, and what it does not:** it catches an accidental or careless change (a hand-edited partition, a hand-edited
 manifest, a different source file). It cannot stop someone who rewrites a partition, its hash in the manifest and the manifest's digest

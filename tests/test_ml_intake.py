@@ -606,6 +606,9 @@ def test_load_refuses_a_bare_string_unknown_or_empty_symbol_lists(imported):
     for bad in (["NIFTYX"], ["NIFTY", "SENSEX"]):
         with pytest.raises(ValueError, match="is not in"):
             I.load(ds, bad, use="development_folds", allow_unverified=True)
+    for twice in (["NIFTY", "NIFTY"], ["NIFTY", "BANKNIFTY", "NIFTY"]):
+        with pytest.raises(ValueError, match="repeats a symbol"):
+            I.load(ds, twice, use="development_folds", allow_unverified=True)
     for empty in ([], (), iter([]), pd.Index([])):
         with pytest.raises(ValueError, match="non-empty"):
             I.load(ds, empty, use="development_folds", allow_unverified=True)
@@ -920,6 +923,18 @@ def test_the_unparsable_share_bound_is_one_percent(tmp_path, reviewed_none):
     assert next(f for f in ok["source"]["files"] if f["symbol"] == "NIFTY")["unparsed"] == 7
     with pytest.raises(I.SourceFormatError, match="unparsable"):
         run_import(source_with(8, "s8"), tmp_path / "o8", reviewed_none)                                              # 1.07%: stops
+
+
+def test_exactly_one_percent_unparsable_still_imports(tmp_path, reviewed_none):
+    """The bound is 'more than 1%': 8 unparsable rows of exactly 800 is 1.000% and imports; the earlier test has 7/750 and 8/750."""
+    day0 = pd.concat([make_day(DAYS[0], 25000, 0), make_day(DAYS[0], 25000, 9, n=50, first=(15, 30))])        # 50 after-hours rows
+    src = build_source(tmp_path / "src", nifty=[day0, make_day(DAYS[1], 25000, 1)])                            # 375 + 50 + 375 = 800 rows
+    t = pd.read_csv(src / "NIFTY.csv", dtype=str)
+    t.loc[list(range(100, 108)), "close"] = "oops"
+    t.to_csv(src / "NIFTY.csv", index=False)
+    man = run_import(src, tmp_path / "out", reviewed_none)
+    f = next(f for f in man["source"]["files"] if f["symbol"] == "NIFTY")
+    assert (f["rows_in"], f["unparsed"]) == (800, 8) and f["unparsed"] / f["rows_in"] == I.MAX_UNPARSED_SHARE
 
 
 def test_the_stale_share_is_of_the_bars_the_session_has_not_of_375():
