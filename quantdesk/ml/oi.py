@@ -726,14 +726,19 @@ def run_day(source: Path, day: str, out_dir: Path) -> dict:
     input files' sha256, the table's own sha256, the counts). The JSON is written last and is the commit marker: a parquet without one is an
     interrupted write and is replaced. A committed day is not rewritten: a second run must reproduce it (same code, same inputs, every key,
     feature and label equal in the same order) or it raises."""
+    cur, pinned = code_sha256(), pinned_code_sha256()
+    if pinned != cur:                                                        # tables made by other code would be refused at load, and could not be rewritten
+        raise RuntimeError(f"the code ({cur[:12]}) is not the code the registered spec pins ({pinned[:12]}): a changed definition is a new spec")
     day = str(pd.Timestamp(day).date())
     files = tape_files(source, day)
     if not files:
         raise FileNotFoundError(f"no chain files for {day} in {source}")
     chains = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
     chains = chains[chains["source"] == "kotak"].drop_duplicates(["underlying", "expiry", "ts", "strike"])        # a row of another source must not displace a kotak row
+    if not (chains["ts"].dt.tz_convert(IST).dt.date == pd.Timestamp(day).date()).any():        # the wrong day's file must not leave an empty, permanent table
+        raise FileNotFoundError(f"no kotak chain rows for {day} in {source}: nothing is written")
     table = pd.concat([decision_table(chains, day, u) for u in INDICES], ignore_index=True)
-    man = {"run": RUN_VERSION, "spec": SPEC, "day": day, "code_sha256": code_sha256(), "forward": day >= FORWARD_START,
+    man = {"run": RUN_VERSION, "spec": SPEC, "day": day, "code_sha256": cur, "forward": day >= FORWARD_START,
            "inputs": {f.name: sha256_file(f) for f in files}, "rows": {u: int((table["underlying"] == u).sum()) for u in INDICES},
            "usable60": {u: int(table.loc[table["underlying"] == u, "contained60"].notna().sum()) for u in INDICES},
            "quarantine": {u: quarantine_report(chains, day, u) for u in INDICES}}

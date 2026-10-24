@@ -1314,3 +1314,20 @@ def test_a_missing_spec_makes_the_pin_check_an_error_not_a_skip(monkeypatch, tmp
     monkeypatch.setattr(oi, "__file__", str(tmp_path / "a" / "b" / "oi.py"))
     with pytest.raises(FileNotFoundError, match="pin cannot be checked"):
         oi.load_tables(out)
+
+
+def test_the_wrong_days_tape_writes_nothing_and_a_later_correct_run_still_works(tmp_path):
+    tape = _tape(tmp_path)                                                           # holds DAY only
+    out = tmp_path / "tables"
+    with pytest.raises(FileNotFoundError, match="no kotak chain rows"):
+        oi.run_day(tape / f"{DAY}_0_chains.parquet", "2026-10-14", out)              # a single file handed over for another day
+    assert not out.exists() or not list(out.iterdir())
+    assert oi.run_day(tape, DAY, out)["day"] == DAY
+
+
+def test_a_session_is_not_written_by_code_the_spec_does_not_pin(tmp_path, monkeypatch):
+    tape, out = _tape(tmp_path), tmp_path / "tables"
+    monkeypatch.setattr(oi, "pinned_code_sha256", lambda: "f" * 64)
+    with pytest.raises(RuntimeError, match="not the code the registered spec pins"):
+        oi.run_day(tape, DAY, out)
+    assert not out.exists() or not list(out.iterdir())

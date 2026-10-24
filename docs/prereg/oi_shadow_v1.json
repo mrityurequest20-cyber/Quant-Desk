@@ -11,7 +11,7 @@
  "code": {
   "module": "quantdesk/ml/oi.py",
   "run": "ml-oi-1",
-  "code_sha256": "13059c69b6f03aec7b097e7df45ef2aa229cee5696b053890e15a789d4c48c6b",
+  "code_sha256": "ea05bc16576410aae4e55b4e519755eddc4902fd63579dab7d73a87850c4a911",
   "rule": "a session whose table was produced by other code than this hash is refused by the report; changing a definition below changes the hash and is a new spec"
  },
  "decision_points": "every 15 minutes from 09:30 to 15:00 IST; the snapshot is the last valid one at or before the decision and at most 150 seconds old, else there is no decision",
