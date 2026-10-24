@@ -1,0 +1,113 @@
+{
+ "name": "oi_shadow_v1",
+ "registered": "2026-10-24",
+ "dataset": "the desk's own chain tape (tier T2): Kotak option-chain snapshots about every minute (real bid, ask, OI, IV), archived as Parquet on the chains-2026 release; NIFTY and BANKNIFTY, source kotak only. Development: the 14 sessions 2026-10-05 to 2026-10-23. Forward: every session from 2026-10-26.",
+ "not_for": "shadow only: nothing here is a vote, a size, a gate, an entry, an exit or a promotion, and it changes no live component. It qualifies no option strategy and supports no profitability claim",
+ "question": "is an open-interest wall stickier than the option market's own volatility says a barrier at that distance should be: among decisions with the same implied probability of staying between the put wall and the call wall, does the excess of actual containment over that probability rise with the walls' strength, within a session",
+ "symbols": [
+  "NIFTY",
+  "BANKNIFTY"
+ ],
+ "code": {
+  "module": "quantdesk/ml/oi.py",
+  "run": "ml-oi-1",
+  "code_sha256": "e7e7a878eb1def16dabfbda8f8595b1a82611ae5a61efde9aab710494917afcb",
+  "rule": "a session whose table was produced by other code than this hash is refused by the report; changing a definition below changes the hash and is a new spec"
+ },
+ "decision_points": "every 15 minutes from 09:30 to 15:00 IST; the snapshot is the last valid one at or before the decision and at most 150 seconds old, else there is no decision",
+ "expiry_rule": "the nearest expiry on or after the day with at least 60 minutes to run at the decision",
+ "data_quality": "a snapshot with any OI print below 0, above 1e12 or infinite is quarantined whole (dropped and counted, never clipped): the Kotak feed returns values near +-9e18 in about 1.1% of snapshots (518 of 46,978 in 5 to 23 Oct), which turn a put-call ratio into 1e11 and move a wall by 1,600 points. A quarantined snapshot is replaced by the last valid one only inside the 150 second limit",
+ "wall_definition": {
+  "call_wall": "the strike above spot with the most call OI",
+  "put_wall": "the strike below spot with the most put OI",
+  "implied_move": "the at-the-money straddle, mid of bid and ask else last, in index points",
+  "multiple": "the wall's OI over the median OI of that side's strikes with OI above 0 inside spot +- 3 implied moves",
+  "strength": "the geometric mean of the call and put multiples",
+  "rank": "strength mapped to [0, 1] by 21 frozen breakpoints per index from the 14 development sessions, linear between them, clipped (STRENGTH_BREAKS in the module)"
+ },
+ "target": "contained over h minutes = spot stayed strictly between the put wall and the call wall for the next h minutes, from the tape's own spot samples (about one a minute); needs at least 80% of the window's minutes sampled; the window must end by 15:30. Primary horizon h = 60",
+ "baseline": "the implied probability: the survival probability of a driftless Brownian motion between ln(put wall / spot) and ln(call wall / spot) over h minutes with sigma = ATM IV x sqrt(h / (252 x 375))",
+ "primary_test": {
+  "model": "(contained - implied probability) = session effect + beta x rank(strength) + c1 x p + c2 x p^2 + c3 x u + c4 x u^2 + error, with p the implied probability and u = (minutes after 09:15 - 180) / 180 the decision's time of day",
+  "estimation": "OLS with a fixed effect per session; standard errors robust to any correlation within a session: CR1 as G/(G-1) times the cluster sandwich, without the (N-1)/(N-K) factor (negligible at these sizes); one-sided t with sessions - 1 degrees of freedom; two-sided 90% interval from the same t",
+  "hypothesis": "beta > 0, one-sided",
+  "restriction": "decisions with implied probability between 0.15 and 0.90",
+  "per": "index, separately",
+  "family": "the two indices, Holm-Bonferroni at 0.05 as a family of two whatever the status of either: an index with no test (insufficient) counts as p = 1",
+  "unit": "the session; at least 10 sessions and 30 decisions or the test is reported as insufficient",
+  "controls_why": "the variance premium and wall strength both move through the day, so a time-of-day pattern that strength merely tracks would otherwise be credited to the wall (a planted case in the tests does exactly that); p enters with a square because the barrier is sampled about once a minute and priced at one ATM volatility, a bias that is not linear in p. Expiry-day and other session-level traits are absorbed by the session effect"
+ },
+ "why_a_contrast": "implied volatility is usually above the volatility that follows, so every barrier is breached less often than the implied probability says whatever sits behind it (development: 78.5% contained against 64.0% implied, on 587 decisions). That is the variance premium. The session effect and the implied-probability control remove it; only an effect of wall strength within a session is left",
+ "development_use": "the 14 development sessions fixed the definitions, the restriction, the rank map and the power below. They are not evidence and no result from them is reported as one. The first design (a high-against-low contrast across sessions) was dropped because wall strength is mostly a session-level trait (in the restricted development set only one session per index had decisions in both the top and the bottom third of strength). The controls in the primary model were added after the research review of 24 Oct 2026 and before any forward session; the power above was recomputed for the final model",
+ "forward_rule": "the sample is every session on or after 2026-10-26, in the order they occur, with no session selected or dropped for its outcome; the tables are written once by `ml oi` and a rerun must reproduce them",
+ "readouts": {
+  "interim": "after 60 forward sessions (about late January 2027), and at any time after that on request: the estimate and its 90% interval on all forward sessions so far, descriptive; no claim",
+  "final": "computed on the first 120 forward sessions in date order and nothing else (a session is a day with a table); rerunning it later, with more sessions present, returns the same numbers, so there is no optional stopping. About mid April 2027. Nothing before it is a finding. Sessions after the 120th are a different sample and need a new spec"
+ },
+ "power": "recomputed on 24 Oct 2026 for the model above from the development sessions only (12 sessions for NIFTY, 10 for BANKNIFTY once the restriction and the two-decisions-a-session rule are applied; 102 and 116 decisions): the cluster-robust standard error of beta scaled to 120 sessions is about 0.17 for NIFTY and 0.14 for BANKNIFTY (per full rank range), each uncertain by about a quarter because it comes from 10 to 12 clusters. A one-sided 5% test then has about 32% power for beta = 0.2, 55% for 0.3 and 76% for 0.4 on NIFTY, and about 40%, 68% and 88% on BANKNIFTY. Earlier drafts quoted 0.09 and 0.17 and higher power; they came from a looser set-up and are superseded by this. Only an effect of 30 to 40 points more containment between the weakest and strongest wall can be confirmed with reasonable probability; for smaller true effects, an inconclusive final read-out is the likely outcome for both indices, and that is the stated limit of this spec",
+ "kill_rule": "per index, at the final read-out, the idea is retired if the upper end of the two-sided 90% interval for beta is below 0.10. Said plainly: with a standard error of 0.14 to 0.17 this fires with probability about 14% to 17% when the true beta is 0 and about 1% when it is 0.2, so it retires only an index whose estimate is clearly negative; the threshold sits below the smallest effect the test can confirm, so a true effect of 0.1 to 0.25 is expected to end inconclusive",
+ "exploratory": [
+  "the 30 minute horizon",
+  "expiry days against other days",
+  "the build-up features (call and put writing, buying and unwinding, the centre-of-mass shift) against the next 30 minute return",
+  "the link between wall strength and the realised variance forecast of M1",
+  "each of the 40 advanced features against the 30 and 60 minute outcomes"
+ ],
+ "exploratory_rule": "recorded in the same tables and described, never tested for significance and never reported as a finding; any of them that looks interesting becomes a new spec",
+ "variants_counted": "6 (the development sessions were looked at while these were chosen): the first design (a high-against-low contrast across sessions, dropped); the 0.15 to 0.90 restriction on the implied probability; the 60 minute primary horizon against 30; the 21-breakpoint rank map; the within-session model with the implied-probability control; and the time-of-day and squared-implied-probability controls added at the research review on 24 Oct 2026, before registration and before any forward session",
+ "use_if_passed": "nothing automatically. The owner's wish is that a confirmed effect goes live once there is enough data: the route is the one in `deployment.promotion`; the apply switch stays the owner's, and the first live use can only tighten",
+ "advanced_features": {
+  "status": "recorded in the same tables from the first forward session, exploratory: described, never tested for significance, never reported as a finding; any that looks interesting becomes its own spec",
+  "gamma": {
+   "gex_ratio": "(sum of gamma x call OI - sum of gamma x put OI) / their sum, over the band; Black-Scholes gamma at each strike's own volatility, rate and dividend zero, calendar time to expiry (at least one hour); carries no dealer-sign assumption",
+   "gwall_c_dist, gwall_p_dist": "distance in implied moves to the strike with the most gamma x OI above (below) spot",
+   "gwall_c_is_oi_wall, gwall_p_is_oi_wall": "1 if that strike is also the OI wall",
+   "gex_flip_dist": "signed distance in implied moves (within +-3) at which sum of gamma(spot') x (call OI - put OI) changes sign, the crossing nearest spot; NaN if none"
+  },
+  "dynamics": {
+   "wall_c_shift30, wall_p_shift30": "the wall now minus the wall 30 minutes ago (each defined against its own spot), in implied moves",
+   "wall_c_oi_growth30, wall_p_oi_growth30": "OI now at today's wall strike over its OI 30 minutes ago, minus 1",
+   "wall_c_stable, wall_p_stable": "how many of the snapshots 30 and 60 minutes ago had today's wall strike as their wall (0 to 2)",
+   "maxpain_shift30": "max pain now minus 30 minutes ago, in implied moves",
+   "net_write_accel": "(call writing - put writing) over the last 30 minutes minus the same over the 30 before"
+  },
+  "concentration": {
+   "hhi_c, hhi_p": "normalised Herfindahl index of the band's OI (0 even, 1 all in one strike)",
+   "entropy_c, entropy_p": "normalised Shannon entropy of the band's OI",
+   "top3_c, top3_p": "share of the three largest strikes",
+   "pin_share": "share of the band's call + put OI within half an implied move of spot"
+  },
+  "quotes": {
+   "spread_atm_c/p": "quoted spread over mid of the at-the-money call / put",
+   "spread_wall_c/p": "the same at the wall strike",
+   "qimb_atm_c/p, qimb_wall_c/p": "(bid size - ask size) / (bid size + ask size) at the touch, at the money and at the wall"
+  },
+  "volume": {
+   "pcr_vol": "put over call volume in the band (the day's running totals)",
+   "turnover_c, turnover_p": "the band's running volume over its OI",
+   "vol30_pcr": "put over call volume traded in the last 30 minutes (NaN if a running total fell: a reset)",
+   "wall_defense_c/p": "volume traded at the wall strike in the last 30 minutes over its OI"
+  },
+  "term_forward_skew": {
+   "iv_term": "next expiry's at-the-money IV minus the front's (points)",
+   "oi_roll_share": "the next expiry's OI over the front band's strikes, as a share of both",
+   "fwd_basis_bps": "(strike + call mid - put mid) / spot - 1 at the money, in basis points, rate zero",
+   "rr_1m": "put IV one implied move below spot minus call IV one above",
+   "fly_1m": "the mean of those two minus the at-the-money IV"
+  }
+ },
+ "deployment": {
+  "mode": "shadow. The tape and its archive already record every chain every minute; nothing new runs in the live process and nothing is added to a workflow. `python -m quantdesk ml oi --source <tape folder> --day <day> [--out <folder>]` grades one session after the close and writes its table once (a rerun must reproduce it exactly, or it refuses); `python -m quantdesk ml oi-report [--out <folder>] [--readout interim|final]` reads the tables written, refuses any whose bytes differ from the manifest or whose code is not the code pinned here, and lists weekdays that have no table (exchange holidays included). A missing session is therefore visible, never silently dropped; it is made from the archive with the same command",
+  "from": "the first forward session, Monday 2026-10-26",
+  "monitoring": "`ml oi` prints the session's counts (rows, usable decisions, quarantined snapshots); the desk engineer runs it after each close. The output folder is refused inside a git working tree (the tape comes from a broker feed), default runtime/ml_oi",
+  "promotion": "recorded -> shadow (now) -> graded at the pre-registered read-outs -> only if confirmed, a separate independently reviewed change proposes a tighten-only use (stand aside, shrink a size; never enter, never raise exposure, never loosen a gate), graded in shadow again before the owner's apply switch"
+ },
+ "inconclusive_rule": "if the final read-out neither rejects nor retires an index, it is recorded as inconclusive and the shadow recording of that index may continue as description, but it is not extended on this spec and nothing is proposed for live use from it; a longer sample would be a new spec registered before it is looked at",
+ "limitations": [
+  "the decision's snapshot can be up to 150 seconds older than the decision time while the outcome window starts at the decision time: at most 2.5 minutes of a 60 minute window",
+  "the rule that the outcome window ends by 15:30 is enforced only through the 80% sampling-coverage rule, not by a separate check",
+  "BANKNIFTY has monthly expiries only, so the 14 development sessions cover about one expiry cycle: after the October expiry rolls, wall strength may drift or sit at the ends of the frozen rank map. The breakpoints are never refitted (that would be a fork); if the rank has no variation within sessions the test is reported as insufficient and that is the result",
+  "a fault in the volume or quote-size columns would not quarantine a snapshot; none has been seen, and it would touch only exploratory features",
+  "the tables of a session are a deterministic function of its tape files and of the code; the report verifies each table's sha256 against its manifest and the code against the hash pinned here, and lists weekdays with no table, but it does not recompute from the archive"
+ ]
+}
