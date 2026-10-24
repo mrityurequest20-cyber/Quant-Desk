@@ -80,8 +80,12 @@ def check_out(out: Path, models: tuple[Refit, ...]) -> Path:
     for m in models:
         if m.committed.resolve().parent == resolved or m.committed.resolve() == resolved:
             raise RetrainRefused(f"{out} holds a registered model file ({m.committed.name}): the drill must not write beside what the desk loads")
-    if (resolved / REPORT_NAME).exists() or (resolved / REPORT_NAME).is_symlink():
-        raise RetrainRefused(f"{resolved / REPORT_NAME} exists: a report is written once; use a new folder")
+    if resolved == REPO or REPO in resolved.parents:
+        if not (REPO / "runtime" == resolved or REPO / "runtime" in resolved.parents):
+            raise B.ForbiddenUse(f"the retrain folder {out} is inside this repository outside its runtime/ folder")
+    for name in (REPORT_NAME, *(f"{m.id}.refit.json" for m in models)):
+        if (resolved / name).exists() or (resolved / name).is_symlink():
+            raise RetrainRefused(f"{resolved / name} exists: a report and its refits are written once; use a new folder")
     return resolved
 
 
@@ -131,9 +135,11 @@ def drill(dataset: Path, out: Path, rtol: float = RTOL, atol: float = ATOL, mode
     `report["ok"]` is True only if every model's refit matches its committed file within the tolerance and the inputs were the recorded ones."""
     if not 0 <= rtol <= R.RTOL_MAX:
         raise ValueError(f"rtol {rtol:g} is outside 0 to {R.RTOL_MAX:g}: a refit that needs a wider tolerance is not a reproduction")
-    if atol < 0 or atol > 1e-9:
-        raise ValueError(f"atol {atol:g} is outside 0 to 1e-9")
+    if not 0 <= atol <= ATOL:                          # written so that NaN fails; P0.4 runs at exactly this absolute tolerance, so it is a cap, not a default
+        raise ValueError(f"atol {atol:g} is outside 0 to {ATOL:g}")
     models = models if models is not None else registry()
+    if not models:
+        raise RetrainRefused("no registered model: an empty registry reproduces nothing")
     out = check_out(out, models)
     dataset = Path(dataset)
     inputs = _inputs(dataset)
@@ -144,9 +150,12 @@ def drill(dataset: Path, out: Path, rtol: float = RTOL, atol: float = ATOL, mode
         fresh = m.fit(dataset, m.spec)
         cmp = R.compare_results({k: v for k, v in committed.items() if k != "provenance"}, {k: v for k, v in fresh.items() if k != "provenance"},
                                 rtol=rtol, atol=atol, ignore=frozenset())
+        if cmp.numbers == 0:
+            raise RetrainRefused(f"{m.id}: no number was compared (the committed file or the refit holds none): that is not a reproduction")
         findings = _input_findings(committed, inputs)
         out.mkdir(parents=True, exist_ok=True)
-        (out / f"{m.id}.refit.json").write_text(json.dumps(fresh, indent=1))
+        with open(out / f"{m.id}.refit.json", "x") as fh:                                          # never follows or replaces an existing path
+            fh.write(json.dumps(fresh, indent=1))
         verdict = "reproduced" if cmp.ok and not findings else ("differs" if not cmp.ok else "reproduced_on_different_inputs")
         rows.append({"id": m.id, "verdict": verdict, "committed_file": m.committed.name, "committed_sha256": hashlib.sha256(committed_text.encode()).hexdigest(),
                      "committed_numbers_sha256": _sha({k: v for k, v in committed.items() if k != "provenance"}),
@@ -160,6 +169,7 @@ def drill(dataset: Path, out: Path, rtol: float = RTOL, atol: float = ATOL, mode
                                          "a fresh import is external_unverified and nothing here qualifies data or a model",
               "code_commit": _code_commit(), "versions": _versions(),
               "ran_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "models": rows}
-    (out / REPORT_NAME).write_text(json.dumps(report, indent=1))
+    with open(out / REPORT_NAME, "x") as fh:
+        fh.write(json.dumps(report, indent=1))
     say(f"report {out / REPORT_NAME}: {'ALL REPRODUCED' if report['ok'] else 'NOT REPRODUCED'}")
     return report

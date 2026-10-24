@@ -191,11 +191,32 @@ def test_a_symlinked_report_name_is_refused_too(lab):
         drill(lab, out)
 
 
-@pytest.mark.parametrize("kw", [{"rtol": 1e-5}, {"rtol": -1.0}, {"atol": 1e-6}, {"atol": -1e-12}])
+@pytest.mark.parametrize("kw", [{"rtol": 1e-5}, {"rtol": -1.0}, {"rtol": float("nan")}, {"atol": 1e-9}, {"atol": 1e-11}, {"atol": -1e-12}, {"atol": float("nan")}])
 def test_the_tolerance_cannot_be_widened_past_the_reproduction_cap(lab, kw):
     with pytest.raises(ValueError):
         drill(lab, **kw)
     assert not (lab["root"] / "out").exists()
+
+
+def test_an_empty_registry_and_a_comparison_of_nothing_are_refused(lab):
+    with pytest.raises(RT.RetrainRefused, match="empty registry"):
+        RT.drill(lab["ds"], lab["root"] / "e", models=(), say=quiet)
+    empty = lab["root"] / "empty.json"
+    empty.write_text("{}")
+    nothing = (RT.Refit("none", empty, lab["spec"], lambda ds, sp: {}),)
+    with pytest.raises(RT.RetrainRefused, match="no number was compared"):
+        RT.drill(lab["ds"], lab["root"] / "n", models=nothing, say=quiet)
+    assert not (lab["root"] / "n" / RT.REPORT_NAME).exists()
+
+
+def test_a_planted_symlink_for_the_refit_cannot_make_the_drill_overwrite_the_file_the_desk_loads(lab):
+    before = sha_of(lab["file"])
+    out = lab["root"] / "planted"
+    out.mkdir()
+    (out / "c_har.refit.json").symlink_to(lab["file"])
+    with pytest.raises(RT.RetrainRefused, match="exists"):
+        drill(lab, out)
+    assert sha_of(lab["file"]) == before and not (out / RT.REPORT_NAME).exists()
 
 
 def test_rounding_noise_passes_and_a_real_difference_does_not(lab):
@@ -272,6 +293,8 @@ def test_the_scheduled_workflow_is_read_only_secretless_and_changes_nothing():
     runs = "\n".join(s["run"] for s in steps if "run" in s)
     assert "ml retrain" in runs and "external-import" in runs and "vol_har_v1.json" in runs
     assert "--out runtime/ml_retrain" in runs                                                  # the gitignored folder the command accepts
+    assert wf["defaults"]["run"]["shell"] == "bash" and all("shell" not in s for s in steps)  # bash -e -o pipefail: `| tee` cannot hide a failure
+    assert all("${{" not in s["run"] for s in steps if "run" in s)                             # no expression is interpolated into a shell script
 
 
 def test_the_workflow_reads_the_pinned_commit_from_the_committed_coefficients():

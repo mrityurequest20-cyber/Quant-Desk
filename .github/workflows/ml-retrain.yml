@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash              # bash -e -o pipefail: a failing command in front of `| tee` fails the step
+
 concurrency:
   group: ml-retrain
   cancel-in-progress: false
@@ -35,16 +39,18 @@ jobs:
         id: pin
         run: |
           commit=$(python -c "import json; print(json.load(open('quantdesk/intraday/vol_har_v1.json'))['provenance']['inputs']['source_commit'])")
-          echo "$commit" | grep -Eq '^[0-9a-f]{40}$' || { echo "no 40-hex source commit in the committed coefficients: $commit"; exit 1; }
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "no single 40-hex source commit in the committed coefficients"; exit 1; }
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - name: Sparse fetch of the index files at that commit (the whole repository is ~22 GB)
+        env:
+          SRC_COMMIT: ${{ steps.pin.outputs.commit }}
         run: |
           git init -q src
           git -C src remote add origin https://github.com/aeron7/nifty-banknifty-intraday-data
           git -C src sparse-checkout set --no-cone '**/NIFTY.txt' '**/BANKNIFTY.txt'
-          git -C src fetch -q --depth 1 --filter=blob:none origin "${{ steps.pin.outputs.commit }}"
+          git -C src fetch -q --depth 1 --filter=blob:none origin "$SRC_COMMIT"
           git -C src checkout -q FETCH_HEAD
-          test "$(git -C src rev-parse HEAD)" = "${{ steps.pin.outputs.commit }}"
+          test "$(git -C src rev-parse HEAD)" = "$SRC_COMMIT"
           find src -name '*.txt' | wc -l
       - name: Import (validated, immutable, external_unverified)
         run: python -m quantdesk data external-import --source src --out runtime/external | tee import.txt
