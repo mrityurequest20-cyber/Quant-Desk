@@ -129,19 +129,24 @@ def reproduce(dataset: Path, spec_path: Path, committed_path: Path, results_dir:
 
 
 def provenance_line(dataset: Path) -> str:
-    """What a reproduction ran on: the dataset (its name and manifest digest when it has one) and the library versions that can move a last bit."""
+    """What a reproduction ran on: the dataset (its name, source commit, importer and status, and a manifest digest when it has one) and the library
+    versions that can move a last bit."""
     import platform
     import numpy
     import pandas
     import scipy
-    digest = ""
     try:
         man = json.loads((Path(dataset) / "manifest.json").read_text())
-        digest = f", manifest digest {str(man.get('digest') or man.get('sha256') or 'none recorded')[:16]}"
+        bits = [f"dataset {man.get('dataset') or Path(dataset).name}"]
+        for key, label in (("source_commit", "source commit"), ("importer_version", "importer"), ("status", "status"), ("digest", "digest")):
+            if man.get(key):
+                bits.append(f"{label} {str(man[key])[:16] if key in ('source_commit', 'digest') else man[key]}")
+        if not man.get("digest"):
+            bits.append("no manifest digest recorded")
+        desc = ", ".join(bits)
     except (OSError, ValueError):
-        digest = ", no readable manifest"
-    return (f"ran on dataset {Path(dataset).name}{digest}; python {platform.python_version()}, numpy {numpy.__version__}, "
-            f"pandas {pandas.__version__}, scipy {scipy.__version__}")
+        desc = f"dataset {Path(dataset).name}, no readable manifest"
+    return f"ran on {desc}; python {platform.python_version()}, numpy {numpy.__version__}, pandas {pandas.__version__}, scipy {scipy.__version__}"
 
 
 def render(cmp: Comparison, committed: dict) -> str:

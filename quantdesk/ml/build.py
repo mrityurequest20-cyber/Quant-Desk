@@ -52,11 +52,10 @@ REPO = Path(__file__).resolve().parents[2]
 BUILDER_VERSION = "ml-build-1"
 TABLE = "m1_move_size"
 MIN_PROFILE_DAYS = 250                                       # a minute-of-day profile from fewer sessions is mostly noise
-FEATURE_LOOKBACK_SESSIONS = V.PRIOR_DAYS                     # x_prev5 and the A / B priors read this many earlier sessions
-EMBARGO_NS = 10 * 86_400 * 10 ** 9                           # five sessions can span nine calendar days (a long weekend and a holiday): ten is safe
+FEATURE_LOOKBACK_SESSIONS = V.PRIOR_DAYS                     # x_prev5 and the A / B priors read this many earlier sessions of the grid
 RESERVED_FROM = "2023-03-01"                                 # the one-shot evaluation window starts here (ML_PHASE0.md, T1b)
 IST = "Asia/Kolkata"
-COLUMNS = ["symbol", "day", "year", "m", "horizon", "minutes", "rv", "ret", "miss_frac", "F_A", "F_B",
+COLUMNS = ["symbol", "day", "session", "year", "m", "horizon", "minutes", "rv", "ret", "miss_frac", "F_A", "F_B",
            "x_prev", "x_prev5", "x_today", "x_gap", "lF_B", "tier", "in_profile"]
 FEATURES = ["F_A", "F_B", "x_prev", "x_prev5", "x_today", "x_gap", "lF_B"]
 LABELS = ["rv", "ret"]
@@ -160,36 +159,64 @@ def check_table(d: pd.DataFrame) -> None:
         raise TableError("a label window with more than 20% of its minutes missing was kept")
     if d["in_profile"].dtype != bool:
         raise TableError("in_profile must be boolean")
+    if d["session"].dtype.kind not in "iu" or (d["session"] < 0).any():
+        raise TableError("session must be a non-negative integer (the day's ordinal in the feature builder's calendar)")
+    if (d.groupby(["symbol", "day"])["session"].nunique() != 1).any():
+        raise TableError("one day carries more than one session ordinal")
     if not d["tier"].map(lambda t: isinstance(t, str) and bool(t.strip())).all():
         raise TableError("a row without a tier: every row says which data tier it came from")
     order = list(zip(d["symbol"], d["day"], d["m"], d["horizon"].map(_HORIZON_ORDER)))
     if order != sorted(order):
         raise TableError("rows are not in (symbol, day, decision, horizon) order")
+    if not d.groupby("symbol")["session"].apply(lambda x: x.is_monotonic_increasing).all():
+        raise TableError("session ordinals do not increase with the day")
 
 
-def build_tables(grids: dict, profile_end, tier: str, allow_leading_gap: bool = False) -> pd.DataFrame:
+def _as_date(x):
+    import datetime as dt
+    return x if isinstance(x, dt.date) else dt.date.fromisoformat(str(x))
+
+
+def fit_profile(grid: tuple, profile_end) -> np.ndarray:
+    """The minute-of-day variance profile fitted on the sessions of `grid` (the output of `volstudy.grid`) up to and including `profile_end`: the
+    builder's one fit, exposed so a reproduction can compare it."""
+    days, r, _, _ = grid
+    pe = _as_date(profile_end)
+    train = np.array([d <= pe for d in days])
+    if int(train.sum()) < MIN_PROFILE_DAYS:
+        raise ValueError(f"only {int(train.sum())} sessions up to {pe}; a seasonal profile needs {MIN_PROFILE_DAYS}")
+    return V.profile((r ** 2)[train])
+
+
+def build_tables(grids: dict, profile_end, tier: str, allow_leading_gap: bool = False, allow_reserved_profile: bool = False) -> pd.DataFrame:
     """{symbol: (days, r, missing, opens)} (the output of `volstudy.grid`) -> the M1 table. The minute-of-day profile is fitted on the
     sessions up to and including `profile_end` only. `tier` is the data tier every row came from (ML_PHASE0.md rule 2). A session whose first
     minute is missing is refused: `volstudy.grid` back-fills its opening bars from a later close, which would put the future into the first
     features. `allow_leading_gap=True` is for reproducing a result that was computed that way (the locked HAR study's aeron7 data has such
-    sessions); the caller must then report them (`leading_gap_sessions`). Pure: no I/O, no clock, no randomness."""
-    import datetime as dt
+    sessions); the caller must then report them (`leading_gap_sessions`). A `profile_end` inside the reserved window (from `RESERVED_FROM`) is
+    refused: the profile would be fitted on the stretch kept for the one-shot evaluation and every row after it would be contaminated;
+    `allow_reserved_profile=True` is for that evaluation's own spec. Each row's `session` is its day's ordinal in the symbol's grid, the calendar
+    the features' lookback is counted in. Pure: no I/O, no clock, no randomness."""
     if not isinstance(tier, str) or not tier.strip():
         raise ValueError("tier must name the data tier the rows came from (T1, T1b, ...)")
-    pe = profile_end if isinstance(profile_end, dt.date) else dt.date.fromisoformat(str(profile_end))
+    pe = _as_date(profile_end)
+    if str(pe) >= RESERVED_FROM and not allow_reserved_profile:
+        raise ValueError(f"profile_end {pe} is inside the reserved window (from {RESERVED_FROM}): the seasonal profile would be fitted on the stretch "
+                         "kept for the one-shot evaluation")
     parts = []
     for sym in sorted(grids):
         days, r, miss, opens = grids[sym]
         lead = np.flatnonzero(np.asarray(miss)[:, 0])
         if len(lead) and not allow_leading_gap:
             raise ValueError(f"{sym}: {len(lead)} sessions have no bar at the open (first {days[lead[0]]}); the grid would fill them from a later close")
-        train = np.array([d <= pe for d in days])
-        if int(train.sum()) < MIN_PROFILE_DAYS:
-            raise ValueError(f"{sym}: only {int(train.sum())} sessions up to {pe}; a seasonal profile needs {MIN_PROFILE_DAYS}")
-        s = V.profile((r ** 2)[train])
+        try:
+            s = fit_profile(grids[sym], pe)
+        except ValueError as exc:
+            raise ValueError(f"{sym}: {exc}") from exc
         d = V.rows(sym, days, r, miss, opens, s)
         d["lF_B"] = np.log(np.maximum(d["F_B"], V.FLOOR))
         d["in_profile"] = (pd.Index(d["day"]) <= pe)
+        d["session"] = pd.Index(days).get_indexer(d["day"]).astype("int64")
         d["day"] = pd.Index(d["day"]).map(str)
         d["tier"] = tier
         parts.append(d)
@@ -208,12 +235,23 @@ def leading_gap_sessions(grids: dict) -> dict:
 
 def t0_t1(table: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Each row's decision time and the time its label ends, as int64 nanoseconds UTC, for `splits`: t0 is the session open plus the decision
-    minute, t1 is t0 plus the label window. Pair every split with `embargo=EMBARGO_NS`: the features reach `FEATURE_LOOKBACK_SESSIONS` back."""
+    minute, t1 is t0 plus the label window. The features reach `FEATURE_LOOKBACK_SESSIONS` sessions back, which a time embargo cannot express (holidays
+    and dropped sessions stretch five sessions over up to 19 calendar days and more): use `cpcv_for`, or pass the `session` column to `splits.cpcv`."""
     open_ = pd.to_datetime(table["day"]).dt.tz_localize(IST) + pd.Timedelta(hours=9, minutes=15)
     t0 = open_ + pd.to_timedelta(table["m"].to_numpy(), unit="min")
     t1 = t0 + pd.to_timedelta(table["minutes"].to_numpy(), unit="min")
     ns = lambda x: pd.DatetimeIndex(x).tz_convert("UTC").as_unit("ns").asi8.astype("int64")
     return ns(t0), ns(t1)
+
+
+def cpcv_for(table: pd.DataFrame, n_groups: int, n_test: int):
+    """Combinatorial purged CV on one symbol of the M1 table with the purge its features need: label overlap, and every training sample whose
+    feature window (this session up to its decision and the `FEATURE_LOOKBACK_SESSIONS` before it) contains a test session."""
+    from . import splits as S
+    if table["symbol"].nunique() != 1:
+        raise ValueError("cpcv_for takes one symbol at a time: each symbol has its own calendar of sessions")
+    t0, t1 = t0_t1(table)
+    return S.cpcv(t0, t1, n_groups, n_test, embargo=0, session=table["session"].to_numpy(), lookback_sessions=FEATURE_LOOKBACK_SESSIONS)
 
 
 def accounting(grids: dict, table: pd.DataFrame) -> dict:
@@ -297,7 +335,7 @@ def build(dataset: Path, symbols, profile_end, out_root: Path, loader=None, allo
            "accounting": accounting(grids, table),
            "scoring_rows": int((~table["in_profile"]).sum()),
            "reserved_from": RESERVED_FROM, "reserved_rows": int((table["day"] >= RESERVED_FROM).sum()),
-           "feature_lookback_sessions": FEATURE_LOOKBACK_SESSIONS, "embargo_ns": EMBARGO_NS,
+           "feature_lookback_sessions": FEATURE_LOOKBACK_SESSIONS,
            "table_sha256": sha256_file(path),
            "tolerance": {"rtol": 1e-9, "scale": "the column's median magnitude",
                          "why": "numpy reductions can differ in the last bit; compare, do not hash, float values"}}
@@ -381,5 +419,5 @@ def load_table(folder: Path, use: str = "regime_research", allow_unverified: boo
     d = d.reset_index(drop=True)
     d.attrs.update({"table": man["name"], "input_digest": inp["digest"], "input_status": inp.get("status"), "profile_end": man["recipe"]["profile_end"],
                     "not_for": inp.get("not_for") or FORBIDDEN_NOTE, "use": use, "withheld": withheld, "reserved_spec": spec_name,
-                    "embargo_ns": man.get("embargo_ns", EMBARGO_NS), "scoring_only": scoring_only})
+                    "scoring_only": scoring_only})
     return d

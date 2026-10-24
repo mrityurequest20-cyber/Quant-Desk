@@ -174,6 +174,10 @@ BROKEN = {                                                                      
     "NaN return": (lambda t: put(t, "ret", np.nan), "ret holds a NaN"),
     "zero B forecast": (lambda t: put(t, "F_B", 0.0), "non-positive forecast"),
     "blank tier": (lambda t: put(t, "tier", "  "), "without a tier"),
+    "negative session": (lambda t: t.__setitem__("session", t["session"] - 10 ** 6), "session must be"),
+    "float session": (lambda t: t.__setitem__("session", t["session"].astype(float)), "session must be"),
+    "two sessions one day": (lambda t: put(t, "session", int(t["session"].iloc[0]) + 1), "more than one session"),
+    "sessions that go backwards": (lambda t: t.__setitem__("session", t["session"].iloc[::-1].to_numpy()), "do not increase"),
     "missing tier": (lambda t: put(t, "tier", None), "without a tier"),
     "in_profile not boolean": (lambda t: t.__setitem__("in_profile", t["in_profile"].astype(int)), "boolean"),
     "out of order": (lambda t: t.__setitem__("day", t["day"].iloc[::-1].to_numpy()), "order"),
@@ -453,6 +457,40 @@ def test_a_session_without_a_bar_at_the_open_is_refused(grid):
     assert len(B.build_tables(grids_of(g), PROFILE_END, TIER, allow_leading_gap=True)) > 0
 
 
+def test_the_leading_gap_guard_reads_minute_zero_and_only_minute_zero(grid):
+    first_only = grid["missing"].copy()
+    first_only[40, 0] = True                                                       # only the opening bar is absent
+    with pytest.raises(ValueError, match="no bar at the open"):
+        B.build_tables(grids_of({**grid, "missing": first_only}), PROFILE_END, TIER)
+    second_only = grid["missing"].copy()
+    second_only[40, 1] = True                                                      # the opening bar is there, the next is not: not a leading gap
+    B.build_tables(grids_of({**grid, "missing": second_only}), PROFILE_END, TIER)
+
+
+def test_a_profile_fitted_on_the_reserved_window_is_refused_unless_the_spec_says_so(grid):
+    g = synth_grid(n_days=420, seed=9, start="2022-01-03")                       # runs well past 1 Mar 2023
+    with pytest.raises(ValueError, match="inside the reserved window"):
+        B.build_tables(grids_of(g), "2023-03-01", TIER)
+    with pytest.raises(ValueError, match="inside the reserved window"):
+        B.build_tables(grids_of(g), dt.date(2023, 6, 1), TIER)
+    B.build_tables(grids_of(g), "2023-02-28", TIER)                                # the day before is fine
+    assert len(B.build_tables(grids_of(g), "2023-06-01", TIER, allow_reserved_profile=True)) > 0
+
+
+def test_the_profile_fit_is_exposed_and_is_what_the_table_uses(grid):
+    s = B.fit_profile((grid["days"], grid["r"], grid["missing"], grid["opens"]), PROFILE_END)
+    train = np.array([d <= PROFILE_END for d in grid["days"]])
+    np.testing.assert_array_equal(s, V.profile((grid["r"] ** 2)[train]))
+    with pytest.raises(ValueError, match="needs 250"):
+        B.fit_profile((grid["days"], grid["r"], grid["missing"], grid["opens"]), dt.date(2018, 3, 1))
+
+
+def test_the_session_column_is_the_days_ordinal_in_the_symbols_own_grid(grid, table):
+    ordinal = {str(d): i for i, d in enumerate(grid["days"])}
+    assert (table["session"].to_numpy() == table["day"].map(ordinal).to_numpy()).all()
+    assert table["session"].min() >= 5                                              # the first five sessions of a series have no row
+
+
 def test_the_profile_minimum_is_exactly_250_sessions(grid):
     days = list(grid["days"])
     B.build_tables(grids_of(grid), days[249], TIER)                               # 250 sessions up to and including the 250th
@@ -539,18 +577,62 @@ def test_t0_t1_are_the_decision_time_and_the_end_of_the_label_in_utc_nanoseconds
     assert (np.diff(t0[table["horizon"] == "30m"]) >= 0).all()                    # the table's order is time order within a horizon
 
 
-def test_a_cpcv_on_this_tables_shape_leaks_without_the_feature_lookback_embargo(table):
-    """The auditor's scenario: x_prev, x_prev5 and the priors read earlier sessions, so a sample just after a test block carries its labels."""
+def sparse_calendar(dense_before=200, sparse=80, step=4, dense_after=60):
+    """Dense weekdays, then a stretch where sessions are 4 calendar days apart (each step still counts as consecutive for the study's rule, which
+    allows a gap of up to 4 days), then dense again: five sessions span 20 calendar days there, as in the thin parts of the real data."""
+    start = pd.Timestamp("2017-01-02")
+    dense1 = list(pd.bdate_range(start, periods=dense_before))
+    thin = [dense1[-1] + pd.Timedelta(days=step * (i + 1)) for i in range(sparse)]
+    dense2 = list(pd.bdate_range(thin[-1] + pd.Timedelta(days=1), periods=dense_after))
+    return pd.Index([d.date() for d in dense1 + thin + dense2])
+
+
+def brute_force_leaks(t0, session, folds, lookback):
+    """Training samples whose feature window holds a test sample's data, found without the module's logic: for each training sample, compare it with
+    every test sample directly (a test sample in one of its previous `lookback` sessions, or earlier the same day)."""
+    out = 0
+    for f in folds:
+        st, tt = session[f.test], t0[f.test]
+        for i in f.train:
+            si, ti = session[i], t0[i]
+            if (((st >= si - lookback) & (st < si)) | ((st == si) & (tt < ti))).any():
+                out += 1
+    return out
+
+
+def test_a_cpcv_on_a_calendar_with_a_thin_stretch_needs_the_session_aware_purge_and_gets_it():
+    """The auditor's scenario: five sessions can span up to 20 calendar days, so a ten-day embargo leaves a training sample whose x_prev5 contains
+    a test label; the session-aware purge removes it."""
     from quantdesk.ml import splits as S
-    t = table[table["horizon"] == "close"].reset_index(drop=True)
+    days = sparse_calendar()
+    g = synth_grid(n_days=len(days), seed=8)
+    g["days"] = days
+    t = B.build_tables(grids_of(g), dt.date(2018, 12, 31), TIER)
+    t = t[t["horizon"] == "close"].reset_index(drop=True)
+    spans = pd.Series(pd.to_datetime(pd.Series(list(days)))).diff(5).dt.days
+    assert spans.max() >= 20 and len(t) > 300                                       # five sessions over twenty days, and rows exist there: the premise
     t0, t1 = B.t0_t1(t)
-    leaky = S.cpcv(t0, t1, 8, 2, embargo=0)
-    S.check_no_overlap(leaky, t0, t1, embargo=0, windows=S.windows_of(leaky, t0, t1))                  # passes the plain verifier...
-    with pytest.raises(S.LeakError):
-        S.check_no_overlap(leaky, t0, t1, embargo=B.EMBARGO_NS, windows=S.windows_of(leaky, t0, t1))   # ...but not the lookback-aware one
-    safe = S.cpcv(t0, t1, 8, 2, embargo=B.EMBARGO_NS)
-    S.check_no_overlap(safe, t0, t1, embargo=B.EMBARGO_NS, windows=S.windows_of(safe, t0, t1))
-    assert B.FEATURE_LOOKBACK_SESSIONS == V.PRIOR_DAYS == 5 and B.EMBARGO_NS >= 9 * 86_400 * 10 ** 9      # nine calendar days: five sessions over a long weekend and a holiday
+    ten_days = 10 * 86_400 * 10 ** 9
+    naive = S.cpcv(t0, t1, 6, 2, embargo=ten_days)
+    assert brute_force_leaks(t0, t["session"].to_numpy(), naive, 5) > 0               # the time embargo leaves leaks (some fold, some training sample)
+    with pytest.raises(S.LeakError, match="feature window"):
+        S.check_no_overlap(naive, t0, t1, embargo=ten_days, windows=S.windows_of(naive, t0, t1), session=t["session"].to_numpy(), lookback_sessions=5)
+    safe = B.cpcv_for(t, 6, 2)
+    assert brute_force_leaks(t0, t["session"].to_numpy(), safe, 5) == 0
+    S.check_no_overlap(safe, t0, t1, windows=S.windows_of(safe, t0, t1), session=t["session"].to_numpy(), lookback_sessions=5)
+    assert sum(f.embargoed for f in safe) > 0 and all(len(f.train) > 0 for f in safe)
+
+
+def test_cpcv_for_takes_one_symbol_and_a_matching_session_column(table):
+    two = pd.concat([table.assign(symbol="AAA"), table.assign(symbol="ZZZ")], ignore_index=True)
+    with pytest.raises(ValueError, match="one symbol"):
+        B.cpcv_for(two, 4, 1)
+    from quantdesk.ml import splits as S
+    t0, t1 = B.t0_t1(table)
+    with pytest.raises(ValueError, match="go together"):
+        S.cpcv(t0, t1, 4, 1, embargo=0, session=table["session"].to_numpy())
+    with pytest.raises(ValueError, match="one entry per sample"):
+        S.cpcv(t0, t1, 4, 1, embargo=0, session=table["session"].to_numpy()[:-1], lookback_sessions=5)
 
 
 def test_scoring_rows_are_the_only_ones_a_fold_may_test_on(table):
@@ -620,7 +702,7 @@ def test_the_manifest_accounts_for_what_the_study_dropped_and_names_the_reserved
     assert acc["rows_possible"] == N_DAYS * 84 and acc["rows_kept"] == len(table) and acc["rows_dropped"] == acc["rows_possible"] - len(table)
     assert acc["sessions_with_rows"] == N_DAYS - 5
     assert man["reserved_from"] == B.RESERVED_FROM == "2023-03-01" and man["reserved_rows"] == 0
-    assert man["feature_lookback_sessions"] == 5 and man["embargo_ns"] == B.EMBARGO_NS
+    assert man["feature_lookback_sessions"] == 5 and "embargo_ns" not in man and not hasattr(B, "EMBARGO_NS")
 
 
 def test_the_manifest_counts_the_rows_in_the_reserved_window(built_verified):

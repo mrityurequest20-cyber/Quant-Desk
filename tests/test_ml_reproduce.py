@@ -251,22 +251,76 @@ def test_the_study_rebuilt_through_the_builder_and_the_splits_matches_the_commit
     assert cmp.numbers > 150 and cmp.max_abs < 1e-9
 
 
-def test_a_builder_that_fits_the_profile_on_the_wrong_days_is_caught_by_the_reproduction(lab, monkeypatch):
+def test_a_builder_that_fits_the_profile_on_the_wrong_days_is_refused_before_any_number_is_compared(lab, monkeypatch):
     real = B.build_tables
 
-    def early(grids, pe, tier, **kw):                                            # the profile fitted on 200 days fewer than it should be
+    def early(grids, pe, tier, **kw):                                            # the profile fitted on 200 days fewer than the split's training window
         return real(grids, (pd.Timestamp(pe) - pd.Timedelta(days=200)).date(), tier, **kw)
 
     monkeypatch.setattr(B, "build_tables", early)
+    with pytest.raises(S.LeakError, match="not the sessions the profile was fitted on"):
+        ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+
+
+def test_a_wrong_profile_fit_that_keeps_the_window_is_caught_by_the_numbers(lab, monkeypatch):
+    """A fit that uses the right rows' window for in_profile but computes the wrong profile: only the comparison can see it."""
+    real = B.fit_profile
+    monkeypatch.setattr(B, "fit_profile", lambda grid, pe: real(grid, pe) * np.linspace(0.8, 1.2, V.N_MIN) / np.linspace(0.8, 1.2, V.N_MIN).mean())
     cmp = ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
-    assert not cmp.ok and cmp.mismatches
+    assert not cmp.ok and any("/lock/profile" in m or "qlike" in m for m in cmp.mismatches)
 
 
 def test_a_builder_whose_profile_covers_its_test_rows_is_refused_not_just_wrong(lab, monkeypatch):
     real = B.build_tables
-    monkeypatch.setattr(B, "build_tables", lambda grids, pe, tier, **kw: real(grids, "2099-12-31", tier, **kw))      # every row inside the profile window
-    with pytest.raises(S.LeakError, match="not allowed to be scored"):
+    monkeypatch.setattr(B, "build_tables", lambda grids, pe, tier, **kw: real(grids, "2022-12-31", tier, **kw))      # every row inside the profile window
+    with pytest.raises(S.LeakError):
         ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+
+
+def test_a_split_that_drops_old_training_years_is_refused_because_it_is_not_the_profile_window(lab, monkeypatch):
+    """The auditor's surviving bug: walk_forward giving a shorter training set used to be invisible (only its last day was read)."""
+    real = S.walk_forward
+
+    def short(*a, **k):
+        return [S.Fold(f.train[len(f.train) // 3:], f.test, f.label) for f in real(*a, **k)]
+
+    monkeypatch.setattr(S, "walk_forward", short)
+    with pytest.raises(S.LeakError, match="not the sessions the profile was fitted on"):
+        ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+
+
+def test_the_fitted_profile_is_part_of_what_is_compared(lab, tmp_path):
+    bad = json.loads(lab["committed"].read_text())
+    sym = next(iter(bad["lock"]["profile"]))
+    key = next(iter(bad["lock"]["profile"][sym]))
+    bad["lock"]["profile"][sym][key] += 0.01
+    f = tmp_path / lab["committed"].name
+    f.write_text(json.dumps(bad))
+    cmp = ST.reproduce_through_platform(lab["ds"], lab["spec"], f)
+    assert not cmp.ok and any(f"/lock/profile/{sym}/{key}" in m for m in cmp.mismatches)
+    good = ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+    committed_numbers = R.compare_results(json.loads(lab["committed"].read_text()), json.loads(lab["committed"].read_text())).numbers
+    assert good.numbers == committed_numbers                                       # every number of the committed file, not a subset
+
+
+def test_a_different_dataset_is_refused_before_anything_is_computed(lab, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    spec = json.loads(lab["spec"].read_text())
+    moved = json.loads(lab["committed"].read_text())
+    moved["sessions"][spec["symbols"][0]]["last"] = "2099-01-01"                    # the result says it ended later than this dataset does
+    f = tmp_path / lab["committed"].name
+    f.write_text(json.dumps(moved))
+    with pytest.raises(R.ReproductionRefused, match="not the dataset the result was computed on"):
+        ST.reproduce_through_platform(lab["ds"], lab["spec"], f)
+
+
+def test_the_provenance_line_names_the_source_commit_and_the_importer(lab):
+    (lab["ds"] / "manifest.json").write_text(json.dumps({"status": "external_verified", "dataset": "aeron7-test", "source_commit": "906fc2378b82e50d",
+                                                         "importer_version": "aeron7-2"}))
+    line = R.provenance_line(lab["ds"])
+    assert "dataset aeron7-test" in line and "source commit 906fc2378b82e50d" in line and "importer aeron7-2" in line and "status external_verified" in line
+    assert "no manifest digest recorded" in line
 
 
 def test_a_split_that_puts_test_sessions_in_training_is_refused(lab, monkeypatch):

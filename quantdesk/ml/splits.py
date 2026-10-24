@@ -73,6 +73,28 @@ def overlaps(t0: np.ndarray, t1: np.ndarray, windows: list[tuple[int, int]], emb
     return hit
 
 
+def feature_window_hits(t0: np.ndarray, session: np.ndarray, lookback_sessions: int, test: np.ndarray, cand: np.ndarray) -> np.ndarray:
+    """Mask over `cand` (training candidates): samples whose features read data from a test sample's session. A sample decided at time t in
+    session s has features built from session s up to t and from the `lookback_sessions` sessions before it (for the M1 table, the grid sessions
+    `x_prev5` and the A / B priors average), so it is contaminated when a test sample sits in one of those sessions, or in session s itself
+    earlier in the day than t. `session` is each sample's ordinal in the feature builder's own calendar, so a holiday cluster or a dropped
+    session cannot make five sessions look like nine days."""
+    if lookback_sessions < 0:
+        raise ValueError("lookback_sessions cannot be negative")
+    ts_all = session[test]
+    ordered = np.argsort(ts_all, kind="stable")
+    ts_sorted = ts_all[ordered]
+    first = pd.Series(t0[test][ordered]).groupby(ts_sorted).min()                 # earliest test decision in each test session
+    sess, first_t0 = first.index.to_numpy(), first.to_numpy()
+    sc, tc = session[cand], t0[cand]
+    lo = np.searchsorted(sess, sc - lookback_sessions, side="left")
+    hi = np.searchsorted(sess, sc, side="left")
+    earlier_session = hi > lo                                                      # some test session in [s - L, s - 1]
+    j = np.minimum(hi, len(sess) - 1)
+    same_session = (hi < len(sess)) & (sess[j] == sc) & (first_t0[j] < tc)         # a test decision earlier the same day
+    return earlier_session | same_session
+
+
 def walk_forward(t0, t1, test_edges, gap: int = 0, rolling: int | None = None, min_train: int = 1) -> list[Fold]:
     """Folds whose test set is the samples with t0 in [test_edges[j], test_edges[j+1]) and whose train set is every earlier
     sample whose label ended at least `gap` before the test period began (`gap` 0 is the plain purge: a label that reaches the
@@ -106,16 +128,24 @@ def group_edges(t0, n_groups: int) -> np.ndarray:
     return np.linspace(0, n, n_groups + 1).round().astype(int)
 
 
-def cpcv(t0, t1, n_groups: int, n_test: int, *, embargo: int) -> list[Fold]:
+def cpcv(t0, t1, n_groups: int, n_test: int, *, embargo: int, session=None, lookback_sessions: int | None = None) -> list[Fold]:
     """Combinatorial purged CV. The samples are sorted by t0 and cut into `n_groups` contiguous groups; every combination of
     `n_test` groups is a test set (C(n_groups, n_test) folds). Each fold's training set is everything else minus the samples
     whose interval overlaps a test group's time window, minus those that start within `embargo` after it.
 
     `embargo` (nanoseconds) has no default and cannot be negative, because the right value is a property of the features, not of the
     split: a sample's features that look back over earlier sessions (the M1 table's reach five) read the test labels of a block that ended
-    just before it. Pass at least the longest feature lookback (`ml/build.EMBARGO_NS` for the M1 table) and verify with `check_no_overlap`."""
+    just before it. A time embargo cannot say "five sessions" (holidays and dropped sessions stretch five sessions over more than nine days, and
+    the measured real spans reach 19), so give `session` (each sample's ordinal in the feature builder's calendar, the M1 table's `session`
+    column) and `lookback_sessions`: every training sample whose feature window contains a test session is then removed as well
+    (`feature_window_hits`). Both or neither."""
     if embargo < 0:
         raise ValueError("embargo cannot be negative")
+    if (session is None) != (lookback_sessions is None):
+        raise ValueError("session and lookback_sessions go together")
+    session = None if session is None else np.asarray(session, dtype="int64")
+    if session is not None and session.shape != np.shape(t0):
+        raise ValueError("session must have one entry per sample")
     t0, t1 = as_ns(t0), as_ns(t1)
     _check_times(t0, t1)
     if not 1 <= n_test < n_groups:
@@ -130,6 +160,8 @@ def cpcv(t0, t1, n_groups: int, n_test: int, *, embargo: int) -> list[Fold]:
         cand = np.setdiff1d(np.arange(len(t0)), test)
         win = [windows[g] for g in combo]
         hit_plain, hit_emb = overlaps(t0[cand], t1[cand], win, 0), overlaps(t0[cand], t1[cand], win, embargo)
+        if session is not None:
+            hit_emb = hit_emb | feature_window_hits(t0, session, lookback_sessions, test, cand)
         folds.append(Fold(cand[~hit_emb], test, "groups " + ",".join(map(str, combo)),
                           purged=int(hit_plain.sum()), embargoed=int((hit_emb & ~hit_plain).sum())))
     return folds
@@ -154,10 +186,14 @@ def check_test_mask(folds: list[Fold], allowed: np.ndarray) -> None:
             raise LeakError(f"fold {k} ({f.label}): {int(bad.sum())} test samples are not allowed to be scored")
 
 
-def check_no_overlap(folds: list[Fold], t0, t1, embargo: int = 0, windows: list[list[tuple[int, int]]] | None = None) -> None:
+def check_no_overlap(folds: list[Fold], t0, t1, embargo: int = 0, windows: list[list[tuple[int, int]]] | None = None,
+                     session=None, lookback_sessions: int | None = None) -> None:
     """Raise LeakError unless every fold's training samples are clear of its test windows (and embargo), and train and test are
     disjoint. A fold's test window defaults to the single span from its first t0 to its last t1; pass `windows` (one list per
-    fold) when the test set is several separated groups, as in CPCV."""
+    fold) when the test set is several separated groups, as in CPCV. With `session` and `lookback_sessions` it also raises if any training sample's
+    feature window contains a test session (`feature_window_hits`): the check a time embargo cannot make."""
+    if (session is None) != (lookback_sessions is None):
+        raise ValueError("session and lookback_sessions go together")
     t0, t1 = as_ns(t0), as_ns(t1)
     for k, f in enumerate(folds):
         if np.intersect1d(f.train, f.test).size:
@@ -168,6 +204,10 @@ def check_no_overlap(folds: list[Fold], t0, t1, embargo: int = 0, windows: list[
         bad = overlaps(t0[f.train], t1[f.train], w, embargo)
         if bad.any():
             raise LeakError(f"fold {k} ({f.label}): {int(bad.sum())} training samples overlap a test window")
+        if session is not None:
+            hit = feature_window_hits(t0, np.asarray(session, dtype="int64"), lookback_sessions, f.test, f.train)
+            if hit.any():
+                raise LeakError(f"fold {k} ({f.label}): {int(hit.sum())} training samples have a test session inside their feature window")
 
 
 def windows_of(folds: list[Fold], t0, t1) -> list[list[tuple[int, int]]]:

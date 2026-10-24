@@ -235,3 +235,46 @@ def test_check_test_mask_refuses_a_fold_that_scores_a_flagged_sample():
         S.check_test_mask(folds, allowed)
     allowed[15], allowed[3] = True, False                                        # a training-only sample being flagged is not a test leak
     S.check_test_mask(folds, allowed)
+
+
+# ---- the feature-window purge ---------------------------------------------------------------------------------------------
+def test_feature_window_hits_by_hand():
+    """Sessions 0 to 9, two decisions a session; test = both decisions of session 4 and the second decision of session 7; look back 2 sessions."""
+    session = np.repeat(np.arange(10), 2)
+    t0 = np.arange(20) * 10
+    test = np.array([8, 9, 15])                                                    # session 4 (both) and session 7's second decision
+    cand = np.setdiff1d(np.arange(20), test)
+    hit = dict(zip(map(int, cand), map(bool, S.feature_window_hits(t0, session, 2, test, cand))))
+    contaminated = {10, 11, 12, 13,                                                # sessions 5 and 6 look back to session 4
+                    16, 17, 18, 19}                                                # sessions 8 and 9 look back to session 7 (7's first decision, 14, does not)
+    assert {i for i, h in hit.items() if h} == contaminated
+    assert not hit[14]                                                             # same session as the test decision but earlier in the day
+    assert not any(hit[i] for i in (0, 1, 2, 3, 4, 5, 6, 7))                       # sessions 0 to 3 are before the test session
+    assert not S.feature_window_hits(t0, session, 0, test, cand)[list(cand).index(10)]      # with no lookback the next session is clean
+
+
+def test_a_test_decision_earlier_the_same_day_contaminates_a_later_training_decision_only():
+    session = np.array([3, 3, 3])
+    t0 = np.array([100, 200, 300])
+    test, cand = np.array([1]), np.array([0, 2])
+    hit = S.feature_window_hits(t0, session, 5, test, cand)
+    assert list(hit) == [False, True]
+
+
+def test_feature_window_hits_agrees_with_the_definition_on_random_input():
+    rng = np.random.default_rng(3)
+    for _ in range(60):
+        n = int(rng.integers(5, 60))
+        session = np.sort(rng.integers(0, 20, n))
+        t0 = rng.permutation(n) * 7 + session * 1000
+        order = np.argsort(t0, kind="stable")
+        session, t0 = session[order], t0[order]
+        test = np.flatnonzero(rng.random(n) < 0.3)
+        if not len(test):
+            continue
+        cand = np.setdiff1d(np.arange(n), test)
+        L = int(rng.integers(0, 6))
+        want = np.array([((session[test] >= session[i] - L) & (session[test] < session[i])).any() or ((session[test] == session[i]) & (t0[test] < t0[i])).any() for i in cand])
+        assert (S.feature_window_hits(t0, session, L, test, cand) == want).all()
+    with pytest.raises(ValueError, match="negative"):
+        S.feature_window_hits(t0, session, -1, test, cand)
