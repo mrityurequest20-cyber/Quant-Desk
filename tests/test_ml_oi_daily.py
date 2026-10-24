@@ -30,7 +30,8 @@ def with_tape(tmp_path, days, name="t"):
     d = tmp_path / name
     d.mkdir(exist_ok=True)
     for day in days:
-        (d / f"{day}_morning-1_chains.parquet").write_bytes(b"x")
+        for part in ("morning-1", "afternoon-1"):
+            (d / f"{day}_{part}_chains.parquet").write_bytes(b"x")
     return d
 
 
@@ -69,6 +70,46 @@ def test_a_session_that_does_not_grade_is_a_finding_with_its_reason_and_does_not
     assert "RuntimeError: does not reproduce" in rep["days"][1]["error"]
 
 
+def test_a_day_with_only_the_morning_part_or_an_empty_index_is_partial_and_fails(tmp_path):
+    one = tmp_path / "m"
+    one.mkdir()
+    (one / "2026-10-26_morning-1_chains.parquet").write_bytes(b"x")
+    rep = OD.grade_all(one, tmp_path / "o", "2026-10-26", say=quiet, grade=fake_grade())
+    assert not rep["ok"] and rep["partial"] == ["2026-10-26"] and "morning" in rep["days"][0]["why"]
+    both = with_tape(tmp_path, [], "b")
+    for part in ("morning-1", "afternoon-1"):
+        (both / f"2026-10-26_{part}_chains.parquet").write_bytes(b"x")
+    assert OD.grade_all(both, tmp_path / "o", "2026-10-26", say=quiet, grade=fake_grade())["ok"]
+    def empty_index(source, day, out):
+        return {"rows": {"NIFTY": 23, "BANKNIFTY": 0}, "usable60": {"NIFTY": 20, "BANKNIFTY": 0},
+                "quarantine": {"NIFTY": {"snapshots": 375, "quarantined": 0}, "BANKNIFTY": {"snapshots": 0, "quarantined": 0}}}
+    rep = OD.grade_all(both, tmp_path / "o", "2026-10-26", say=quiet, grade=empty_index)
+    assert not rep["ok"] and "BANKNIFTY" in rep["days"][0]["why"]
+
+
+def test_an_uncovered_year_warns_loudly_but_does_not_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(OD, "exchange_holidays", lambda: (set(), {2026}))
+    said = []
+    rep = OD.grade_all(with_tape(tmp_path, [], "u"), tmp_path / "o", "2027-01-05", say=said.append, grade=fake_grade())
+    assert rep["unknown"] and any(m.startswith("::warning::") for m in said)
+
+
+def test_the_default_day_is_the_last_session_that_should_be_complete(monkeypatch):
+    import datetime as dt
+    import quantdesk.cli as cli
+    class Fake(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 27, *Fake.t, tzinfo=tz)
+    monkeypatch.setattr(dt, "datetime", Fake)
+    Fake.t = (16, 59)
+    assert str(cli.last_completed_session_day()) == "2026-10-26"
+    Fake.t = (17, 0)
+    assert str(cli.last_completed_session_day()) == "2026-10-27"
+    Fake.t = (0, 5)
+    assert str(cli.last_completed_session_day()) == "2026-10-26"                              # a cron that arrives after midnight still means yesterday's session
+
+
 def test_the_real_grader_runs_end_to_end_on_a_synthetic_tape(tmp_path):
     days = ["2026-10-26", "2026-10-27"]
     tape = tape_dir(tmp_path, days=tuple(days))
@@ -93,6 +134,8 @@ def test_the_command_exits_one_on_a_missing_day_zero_otherwise_and_never_writes_
     assert e.value.code == 1
     with pytest.raises(SystemExit, match="git working tree"):
         main(["ml", "oi-daily", "--source", str(tape), "--out", str(OD.__file__.rsplit("/quantdesk/", 1)[0] + "/docs/probe"), "--today", "2026-10-26"])
+    with pytest.raises(SystemExit, match="folder the read-out reads"):
+        main(["ml", "oi-daily", "--source", str(tape), "--out", "runtime/ml_oi", "--today", "2026-10-26"])
     with pytest.raises(SystemExit, match="--source"):
         main(["ml", "oi-daily", "--today", "2026-10-26"])
 

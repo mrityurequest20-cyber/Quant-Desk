@@ -386,7 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
     s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
-    s.add_argument("--today", help="oi-daily: grade every forward weekday up to this date (default: today, IST)")
+    s.add_argument("--today", help="oi-daily: grade every forward weekday up to this date (default: the last session that should be complete: today from 17:00 IST, else yesterday)")
     s.add_argument("--days-only", action="store_true", help="oi-daily: print the forward weekdays to fetch and stop")
     s.add_argument("--accept-gaps", default="", help="oi-report --readout final: comma-separated weekdays (YYYY-MM-DD) that have no table because they were exchange holidays")
     s.set_defaults(fn=cmd_ml)
@@ -433,9 +433,12 @@ def _ml_build(cfg, a):
     print(f"table {folder}")
 
 
-def pd_today_ist():
+def last_completed_session_day():
+    """The IST date whose session (and its archive, about 16:15) should be complete now: today from 17:00 IST, else yesterday. A run that is hours late, or
+    started by hand before the archive lands, then neither reports tomorrow as missing nor today as missing."""
     import datetime as _dt
-    return _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=5, minutes=30))).date()
+    now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=5, minutes=30)))
+    return (now if now.hour >= 17 else now - _dt.timedelta(days=1)).date()
 
 
 def _ml_oi(cfg, a):
@@ -455,7 +458,7 @@ def _ml_oi(cfg, a):
     if a.action == "oi-daily":
         from .ml import build as B
         from .ml import oi_daily as OD
-        today = a.today or str(pd_today_ist())
+        today = a.today or str(last_completed_session_day())
         if a.days_only:
             print("\n".join(OD.forward_weekdays(today)))
             return
@@ -463,6 +466,8 @@ def _ml_oi(cfg, a):
             raise SystemExit("ml oi-daily: --source (the tape folder) is required")
         out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_oi_daily"          # never the folder the read-out reads
         B.refuse_tracked_tree(out, "ml oi-daily --out")
+        if out.resolve() == (Path(cfg.runtime_dir) / "ml_oi").resolve():
+            raise SystemExit("ml oi-daily: --out is the folder the read-out reads (runtime/ml_oi); its scratch tables must not go there")
         if not OD.grade_all(Path(a.source), out, today)["ok"]:
             raise SystemExit(1)
         return
