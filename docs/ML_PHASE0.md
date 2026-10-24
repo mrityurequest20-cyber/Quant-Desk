@@ -111,6 +111,12 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
    artifacts with a manifest; a source with a restrictive licence stays out of the public repository (decide with the owner before import).
 6. **Home-built.** Small models in our own code (gradient boosting, quantile regression, ridge, logistic). Neural networks only after the simpler models show signal and a spec earns them.
 
+   *Dependencies (added by the PR that introduced `requirements-ml.txt`, 24 Oct).* Five specialist libraries, exact-pinned like `requirements.txt`, in a
+   separate file so the desk's own installs are unchanged: `arch` (GARCH-family volatility benchmark for M1), `statsmodels` (quantile and OLS regression
+   with robust errors, time-series tests for the leakage harness), `scikit-learn` (ridge, logistic, metrics, calibration), `lightgbm` (CPU gradient
+   boosting) and `duckdb` (in-process SQL over the Parquet warehouse for point-in-time dataset builds). None is imported by the trading path: no
+   workflow installs `requirements-ml.txt`, nothing outside `quantdesk/ml/` may import these libraries, and Phase 0 stays offline and read-only (above).
+
 ## What I need from the owner (only for P0.6)
 
 *Update 24 Oct: the owner named the source (Kaggle `debashis74017/nifty-50-minute-data`) and it is imported. Still open: its licence (the owner chose not to chase it, so nothing is published) and a source for 15 May to early Sep 2026.*
