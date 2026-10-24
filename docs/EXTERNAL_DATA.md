@@ -213,7 +213,7 @@ together (the folder name covers the source files, the rules and the reviewed li
 passes it to `load(expected_digest=...)`, and the P0.6 record should carry a hash of the check's output. A reviewed entry's reviewer is free text and the
 numbers it carries are compared only for the codes the session trips: the list is accountable through review of the commit that adds an entry.
 
-**The record (Kaggle version 18, 24 Oct 2026; dataset `ml-intake-2-85616532c0f9`, digest `e29525e7be95588d`).**
+**The record (Kaggle version 18, 24 Oct 2026; dataset `ml-intake-2-feae259bdba6`, digest `47d28d6376ca63af`, imported from a clean tree at code commit `10a40f5`).**
 
 | | NIFTY | BANKNIFTY | INDIA VIX |
 |---|---|---|---|
