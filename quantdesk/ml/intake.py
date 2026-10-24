@@ -22,8 +22,9 @@ What the importer does that the rules in ML_PHASE0.md ask for:
   digest, and a different file, rule or reviewed list is a different dataset folder.
 
 What the digest is and is not: it detects an accidental or careless change (a hand-edited partition, a hand-edited manifest, a
-different source file). It cannot stop someone who rewrites the manifest, its digest and the folder name together; for that, a
-spec records the digest it was run on and passes it to `load(expected_digest=...)`.
+different source file). It cannot stop someone who rewrites a partition, its hash in the manifest and the manifest's digest
+together (the folder name does not cover the partitions); for that, a spec records the digest it was run on and passes it to
+`load(expected_digest=...)`, and the P0.6 record should carry a hash of the check's output.
 
 Layout:
 
@@ -68,7 +69,7 @@ CORROBORATE = 0.03                                      # the other index moved 
 STALE_RUN = 10                                          # consecutive flat bars repeating the previous close: halt or frozen feed
 STALE_SHARE = 0.03                                      # ...or more than 3% of the session's bars stale, in however many runs
 REVIEW_CODES = ("jump", "stale_run", "stale_share", "weekend_full")
-HARD_CODES = ("weekend", "short_session", "truncated")
+HARD_CODES = ("weekend", "short_session", "truncated", "end_labelled")
 OBSERVED = {"jump": "max_1m_move_at", "stale_run": "longest_stale_run", "stale_share": "stale_bars", "weekend_full": "minutes"}
 EVIDENCE_MIN_CHARS, EVIDENCE_MIN_WORDS = 40, 6
 _ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -217,7 +218,8 @@ def check_session(g: pd.DataFrame, day: dt.date, index_rules: bool = True) -> tu
 
     Hard rejections (the session is out): fewer than MIN_MINUTES of the 375 regular minutes (a weekend one is also coded
     'weekend'); a first or last bar more than MAX_EDGE_GAP minutes from the open or the close ('truncated': a "to the close"
-    label would sit on a session that does not reach the close).
+    label would sit on a session that does not reach the close); a 15:30 bar and no 09:15 bar ('end_labelled': every bar of
+    that day would be a minute late, which the whole-file check in read_minutes cannot see in a file that mixes labellings).
     Review (out unless a reviewer admits it): a one-minute log return above JUMP and more than STALE_SHARE of the bars stale
     (both index kinds only: a volatility index is noisy and legitimately prints flat minutes); STALE_RUN or more consecutive
     flat bars repeating the previous close (every kind); a weekend date with a full session ('weekend_full': the Budget
@@ -257,6 +259,8 @@ def check_session(g: pd.DataFrame, day: dt.date, index_rules: bool = True) -> tu
     hard = (["weekend"] if weekend and short else []) + (["short_session"] if short else [])
     if n and (v["head_gap_min"] > MAX_EDGE_GAP or v["tail_gap_min"] > MAX_EDGE_GAP):
         hard.append("truncated")
+    if bool((mod == LAST_MOD + 1).any()) and not bool((mod == FIRST_MOD).any()):
+        hard.append("end_labelled")
     found = set()
     if index_rules and v["max_1m_move"] > JUMP:
         found.add("jump")
@@ -271,7 +275,8 @@ def check_session(g: pd.DataFrame, day: dt.date, index_rules: bool = True) -> tu
     v["status"] = "rejected" if hard else ("review" if review else "accepted")
     v["reasons"] = ([f"{n} of {SESSION_MINUTES} minutes" if k == "short_session" else
                      f"first bar {v['head_gap_min']} min after the open, last bar {v['tail_gap_min']} min before the close"
-                     if k == "truncated" else k for k in hard]
+                     if k == "truncated" else "a 15:30 bar and no 09:15 bar: the day looks end-labelled" if k == "end_labelled"
+                     else k for k in hard]
                     + ([f"{v['max_1m_move']:.1%} one-minute log move at {v['max_1m_move_at']}"] if "jump" in review else [])
                     + ([f"{v['longest_stale_run']} consecutive stale bars"] if "stale_run" in review else [])
                     + ([f"{v['stale_bars']} of {n} bars stale"] if "stale_share" in review else [])
@@ -575,6 +580,8 @@ def effective_status(ds: Path, man: dict) -> str:
         rec = json.loads(vp.read_text())
     except (OSError, ValueError):
         return UNVERIFIED
+    if not isinstance(rec, dict):
+        return UNVERIFIED
     return VERIFIED if rec.get("digest") == man.get("digest") and rec.get("passed") is True and rec.get("check") else UNVERIFIED
 
 
@@ -586,7 +593,10 @@ def load(ds: Path, symbols, use: str, allow_unverified: bool = False, expected_d
     dataset, digest, status, the restriction, and the sessions left out for review."""
     if use not in ALLOWED_USES:
         raise ForbiddenUse(f"use {use!r} refused: {FORBIDDEN_NOTE}")
-    if isinstance(symbols, str) or not symbols:
+    if isinstance(symbols, str):
+        raise ValueError("symbols must be a non-empty list of symbols, not one string")
+    symbols = list(symbols)                              # a generator is consumed once: validate and load the same list
+    if not symbols:
         raise ValueError("symbols must be a non-empty list of symbols, not one string")
     ds = Path(ds)
     mp = ds / "manifest.json"
@@ -618,12 +628,17 @@ def load(ds: Path, symbols, use: str, allow_unverified: bool = False, expected_d
             if canonical_hash(df) != man["partitions"][rel]["sha256"]:
                 raise ImmutableViolation(f"{rel} no longer hashes to the manifest: the dataset was altered")
             parts.append(df)
-    out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-    out.attrs.update({"source": man["source"]["url"], "dataset": man["dataset"], "digest": man["digest"], "status": status,
-                      "tier": man["tier"], "use": use, "not_for": FORBIDDEN_NOTE,
+    out = pd.concat(parts, ignore_index=True)
+    asked = set(symbols)
+    # everything a consumer will quote comes from what the digest covers (the sessions) or from the rows, never from a manifest
+    # field that sits outside it
+    tiers = sorted(out["tier"].unique())
+    out.attrs.update({"source": man["source"]["url"], "dataset": ds.name, "digest": man["digest"], "status": status,
+                      "tier": tiers[0] if len(tiers) == 1 else tiers, "use": use, "not_for": FORBIDDEN_NOTE,
                       "excluded_review": [f"{s['symbol']} {s['day']}" for s in man["sessions"]
-                                          if s["symbol"] in set(symbols) and s["status"] == "review"],
-                      "admitted_reviewed": [a for a in man["reviewed_applied"] if a.split()[0] in set(symbols)]})
+                                          if s["symbol"] in asked and s["status"] == "review"],
+                      "admitted_reviewed": [f"{s['symbol']} {s['day']}" for s in man["sessions"]
+                                            if s["symbol"] in asked and s["status"] == "accepted_reviewed"]})
     return out
 
 

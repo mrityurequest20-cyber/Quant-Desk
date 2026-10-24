@@ -181,7 +181,7 @@ no volume**: it is 0 in every row of all three files, so no volume-based feature
 | A stamp more than 15 seconds past the minute | dropped and counted (11 per file), never rounded: `09:19:55` could belong to either neighbouring minute |
 | Minutes outside 09:15 to 15:29 | dropped and counted |
 | A minute with two identical bars / two different bars | one kept / both dropped (3, 2 and 3 minutes per file) |
-| Fewer than 360 of the 375 regular minutes; a first or last bar more than 5 minutes from the open or the close | session **rejected** (`short_session`, `truncated`; a short weekend session is also `weekend`) |
+| Fewer than 360 of the 375 regular minutes; a first or last bar more than 5 minutes from the open or the close; a 15:30 bar and no 09:15 bar on a day | session **rejected** (`short_session`, `truncated`, `end_labelled`; a short weekend session is also `weekend`). The last one catches a day labelled by its end inside a file that is otherwise bar-start, which the whole-file check cannot see |
 | A one-minute **log** return above 5% (indices only); more than 3% of the bars stale (indices only); 10 or more consecutive stale bars; a weekend date with a full session | session goes to **review**: out by default |
 
 A stale bar is `open = high = low = close = the previous close` on consecutive minutes. The jump rule is on log returns, the quantity a
@@ -208,8 +208,10 @@ folder without a manifest, unverified data unless the caller says so, a use outs
 dataset, and a partition added, missing, or no longer hashing to the manifest. `external_verified` counts only when a
 `verification.json` written by the P0.6 check names this digest and says it passed; the word in the manifest is not evidence.
 **What this protects, and what it does not:** it catches an accidental or careless change (a hand-edited partition, a hand-edited
-manifest, a different source file). It cannot stop someone who rewrites the partition, the manifest, its digest and the folder name
-together; for that a spec records the digest it was run on and passes it to `load(expected_digest=...)`.
+manifest, a different source file). It cannot stop someone who rewrites a partition, its hash in the manifest and the manifest's digest
+together (the folder name covers the source files, the rules and the reviewed list, not the partitions); for that a spec records the digest it was run on and
+passes it to `load(expected_digest=...)`, and the P0.6 record should carry a hash of the check's output. A reviewed entry's reviewer is free text and the
+numbers it carries are compared only for the codes the session trips: the list is accountable through review of the commit that adds an entry.
 
 **The record (Kaggle version 18, 24 Oct 2026; dataset `ml-intake-2-85616532c0f9`, digest `e29525e7be95588d`).**
 
@@ -239,20 +241,31 @@ at 09:26: the new `truncated` rule drops it (checked: the new dataset's rows are
   0.92% below it; the BANKNIFTY daily low (21,351.7) is below its minute low (21,397.45). So the minute and daily series disagree
   about this session, which is a reason to keep it out until someone decides. **2020-03-23:** 43 (NIFTY) and 50 (BANKNIFTY) flat bars,
   the same pattern, no jump. **2022-03-07:** NIFTY near-frozen in runs of 7, 5, 10 and 14 (37 of 372 bars stale) while BANKNIFTY has
-  only 325 minutes: the one day in eleven years on which the indices disagree about a day. The VIX has seven further sessions with
-  runs of 18 to 155 bars.
+  only 325 minutes: the one day in eleven years on which the indices disagree about a day. The VIX has seven sessions with frozen
+  runs of 18 to 155 bars: three on dates already listed (2017-07-10, 13 and 23 Mar 2020) and four of its own (2019-12-02, 2020-01-06, 2020-03-24, 2021-12-06).
 - **Correction to the intake report.** The 6% one-minute move is 13 March 2020, not the 4 June 2024 election result the report guessed.
 - **For the HAR specification.** It must state: (1) the default set excludes the review sessions above, among them, for NIFTY, two of the
   three highest-variance days of 2015 to 2026 (ranks 1 and 3), so it is censored at the tail unless they are admitted first; (2) a daily or lagged series built
-  from the kept sessions has multi-day gaps where a session is out (the overnight gap spanning the removed 23 Mar 2020 is -10.3% for
-  NIFTY: the 24 Mar open against the last minute close of 20 Mar), so a "previous session" feature is the previous *kept* session; (3) a kept session can have up to 14 missing minutes inside
+  from the kept sessions has multi-day gaps where a session is out (the overnight gap spanning the removed 23 Mar 2020 is -10.3% simple
+  (-10.8% log) for NIFTY: the 24 Mar open against the last minute close of 20 Mar), so a "previous session" feature is the previous *kept* session; (3) a kept session can have up to 14 missing minutes inside
   it; realised variance as a sum of squared consecutive returns treats a gap as one return, and forward-filling to a regular grid would
-  remove that variance; (4) there is no volume.
+  remove that variance; (4) there is no volume; (5) **what the Mar 2023 to May 2026 window itself loses** (NIFTY: 793 weekdays with a row, 784 kept): the default set
+  drops the window's 3rd and 10th highest-variance days (2026-02-01 and 2025-02-01, both scheduled Budget days; 4th and 7th for BANKNIFTY), so the full-sample
+  ranks (34 and 100) understate the loss for a window evaluation: admit them first or say the evaluation is censored there; the hard-rejected special sessions
+  (the Muhurat evenings of 2023-11-12, 2024-11-01 and 2025-10-21, the 105-minute Saturdays 2024-03-02 and 2024-05-18, and 15 May 2026) are part of the sample
+  definition and the spec should list them; together with the review sessions they carry about 1.8% of the window's NIFTY variance; (6) the Monday after a dropped
+  Budget day (2025-02-03, 2026-02-02) takes its lagged features from the Friday; (7) from March 2023 there is **no second source**: the aeron7 overlap ends in
+  Feb 2023, so the 99.8% variance agreement says nothing about the window, and the only anchors are the provider's own daily file and Yahoo (P0.6, not done);
+  (8) the locked HAR was fitted on the aeron7 data, so the realised-variance definition must be the same on both sides (close-to-close agrees across the
+  sources; highs and lows differ on 12 to 15% of minutes, so no range-based input); (9) the last minute's close is not NSE's official close (0.05% median, 0.30%
+  NIFTY and 0.44% BANKNIFTY at the 99th percentile); (10) the spec records the `expected_digest` it ran on.
 - **Not done here, and the limits.** No independent check (P0.6: Yahoo daily bars, the aeron7 overlap to Feb 2023, NSE's official
   close). The only anchors so far are this provider's own daily file and the two indices against each other: the daily file agrees with
-  the minute bars closely on every kept day (NIFTY: high and low within 0.05% at the 99th percentile, the close within 0.30%;
-  BANKNIFTY: within 0.09%, 0.12% and 0.44%) but is the same provider's and is itself unreliable on at least one day (2015-08-10,
-  per the data steward; not re-run); a feed that lags smoothly, a common-mode timestamp shift, or a history the
+  the minute bars closely on 99% of kept days (high, low, close at the 99th percentile: NIFTY 0.05%, 0.05%, 0.30%; BANKNIFTY 0.09%, 0.12%,
+  0.44%) but not on every day: the worst are NIFTY 0.68% on the high (2016-01-20), 0.35% on the low, 1.22% on the close (2015-08-10), BANKNIFTY
+  1.05% (2015-03-09), 1.30% (2018-04-23) and 1.31% (2015-08-10); one NIFTY day and five BANKNIFTY days are off by more than 1% on some field (the
+  BANKNIFTY daily file repeats some dates; the last row of a repeated date is used). It is the same provider's, and 2015-08-10 looks like an error in the
+  daily file (the minutes slide smoothly into their close); a feed that lags smoothly, a common-mode timestamp shift, or a history the
   provider reconstructed would not be seen. No exchange-holiday calendar is applied before the desk's own (the data steward's check against 46 known
   weekday holidays found none present, which is evidence, not proof; not re-run). The last session, 15 May 2026, stops at 13:20 (NIFTY), 13:48
   (BANKNIFTY) and 13:07 (VIX) and is rejected as short. The hole from 15 May to early September 2026 is still open.

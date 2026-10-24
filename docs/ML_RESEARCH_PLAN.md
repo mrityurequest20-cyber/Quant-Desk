@@ -56,7 +56,8 @@ training cut-off and code hash), frozen before grading, graded on the same live 
 - **Confirmed (24 Oct): our tape records real bid and ask**, and the size resting at the best bid and offer. The tape is Kotak-only by design (NSE's public chain and the
   model chain are excluded). In the one file checked, the 23 Oct morning (68,306 rows, 1,666 snapshots, five underlyings) a usable bid and ask is present on 99.8% of rows,
   and the median spread as a share of the mid widens with distance from spot: about 0.45 to 0.5% within 0.25%, 0.6 to 0.75% at 0.75 to 1.5%, and 1.1 to 1.45% beyond 1.5%
-  (calls wider than puts). One morning only; other days and the afternoon are not checked. The `chains-2026` release holds chain files from 29 Sep (16 sessions to
+  (calls wider than puts; beyond 3% out of the money the median is higher still, about 2.2% for calls and 1.3% for puts, and it differs a lot between underlyings, NIFTY
+  about 0.5% and FINNIFTY about 2.6%). One morning only; other days and the afternoon are not checked. The `chains-2026` release holds chain files from 29 Sep (16 sessions to
   23 Oct), earlier than the sentence above assumes; how many of those sessions are complete is not yet checked.
 
 **Correction to the execution model (M8).** Paper fills are *simulated*, not real fills, and live trading is off. A model trained on
@@ -67,8 +68,10 @@ the tape), and a stop gets a slippage allowance by strike distance and liquidity
 
 ## 4. Data status (details in [data/INTAKE_2026-10-24.md](data/INTAKE_2026-10-24.md))
 
-- Index minutes (NIFTY, BANKNIFTY, INDIA VIX), 2015 to 14 May 2026: validated; realised variance agrees with the older source on 99.8%
-  of sessions. Same upstream as the older source, so not independent of it; Yahoo daily bars and the desk's conventions are the anchors.
+- Index minutes (NIFTY, BANKNIFTY, INDIA VIX), 2015 to 14 May 2026: **imported and checked by the importer** (`quantdesk/ml/intake.py`, EXTERNAL_DATA.md), not yet
+  independently verified. Their realised variance agrees with the older source (aeron7) within 10% on 99.8% of NIFTY sessions and 99.7% of BANKNIFTY sessions
+  (from the intake report; not re-run here, and only to Feb 2023). The two may share an upstream, so that agreement is not independent evidence; Yahoo daily
+  bars, NSE's official close and the desk's conventions are the anchors still to be used (P0.6).
 - Hole: **15 May to early Sep 2026** (about 75 sessions), still open. No option history between 25 Mar 2026 and our own tape.
 - `external_unverified` applies to all of it until the importer's validation passes. None of it counts as evidence for a gate or a
   model promotion, and none of it goes in the public repository or a release until its licence is known.

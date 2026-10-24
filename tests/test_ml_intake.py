@@ -103,12 +103,15 @@ def run_import(src_dir, out_dir, reviewed, **kw):
 EVIDENCE = "NIFTY and BANKNIFTY both stopped, then moved together after the halt; the provider's daily file shows the same range."
 
 
+OBSERVED_LITERAL = {"jump": "max_1m_move_at", "stale_run": "longest_stale_run", "stale_share": "stale_bars", "weekend_full": "minutes"}
+
+
 def entry(man, symbol, day, codes, **over):
     """A reviewed entry for a session of an already-imported manifest, filled with the facts it must match."""
     s = next(x for x in man["sessions"] if x["symbol"] == symbol and x["day"] == day)
     e = {"symbol": symbol, "day": day, "codes": codes, "decision": "admit", "evidence": EVIDENCE, "reviewer": "A. Reviewer",
          "date": "2026-10-25", "file_sha256": man["source"]["files"][s["file_id"]]["sha256"],
-         "observed": {I.OBSERVED[k]: s[I.OBSERVED[k]] for k in codes}}
+         "observed": {OBSERVED_LITERAL[k]: s[OBSERVED_LITERAL[k]] for k in codes}}
     e.update(over)
     return e
 
@@ -166,6 +169,12 @@ def test_a_different_header_or_an_end_labelled_file_is_refused_not_guessed(tmp_p
     write_csv(tmp_path / "end.csv", [d])
     with pytest.raises(I.SourceFormatError, match="end-labelled"):
         I.read_minutes(tmp_path / "end.csv", "NIFTY")
+    # rows that do not parse are not evidence of a labelling: two garbage rows at 15:30 against one real bar at 09:15
+    q = tmp_path / "garbage.csv"
+    q.write_text("date,open,high,low,close,volume\n2024-01-01 09:15:00,100,101,99,100.5,0\n"
+                 "2024-01-01 15:30:00,x,y,z,w,0\n2024-01-02 15:30:00,x,y,z,w,0\n")
+    df, rep, _ = I.read_minutes(q, "NIFTY")
+    assert len(df) == 1 and rep["unparsed"] == 2
 
 
 # ---- one session ----------------------------------------------------------------------------------------------------
@@ -232,8 +241,8 @@ def test_the_declared_rules_are_pinned():
     assert (I.FIRST_MOD, I.LAST_MOD, I.SESSION_MINUTES) == (555, 929, 375)
     assert r["importer_version"] == "ml-intake-2" and r["header"] == ["date", "open", "high", "low", "close", "volume"]
     assert I.REVIEW_CODES == ("jump", "stale_run", "stale_share", "weekend_full")
-    assert I.HARD_CODES == ("weekend", "short_session", "truncated")
-    assert set(I.OBSERVED) == set(I.REVIEW_CODES)
+    assert I.HARD_CODES == ("weekend", "short_session", "truncated", "end_labelled")
+    assert I.OBSERVED == OBSERVED_LITERAL                       # which number a reviewer's entry is bound to, per code
 
 
 @pytest.mark.parametrize("length, codes", [(9, []), (10, ["stale_run"]), (60, ["stale_run", "stale_share"])])
@@ -572,7 +581,10 @@ def test_verified_needs_a_verification_record_that_names_this_digest(imported):
     vp = ds / "verification.json"
     for rec in ({"digest": "0" * 64, "passed": True, "check": "yahoo-daily"},                     # another dataset's record
                 {"digest": man["digest"], "passed": False, "check": "yahoo-daily"},               # a failed check
-                {"digest": man["digest"], "passed": True}):                                        # no named check
+                {"digest": man["digest"], "passed": "no", "check": "yahoo-daily"},                # truthy, but not a pass
+                {"digest": man["digest"], "passed": 1, "check": "yahoo-daily"},
+                {"digest": man["digest"], "passed": True},                                         # no named check
+                ["digest", man["digest"]]):                                                        # not even an object
         vp.write_text(json.dumps(rec))
         with pytest.raises(legacy.ForbiddenUse, match="external_unverified"):
             I.load(ds, ["NIFTY"], use="regime_research")
@@ -591,9 +603,12 @@ def test_load_refuses_a_bare_string_unknown_or_empty_symbol_lists(imported):
     ds = ds_of(out, man)
     with pytest.raises(ValueError, match="not one string"):
         I.load(ds, "NIFTY", use="development_folds", allow_unverified=True)
-    for bad in (["NIFTYX"], ["NIFTY", "SENSEX"], []):
-        with pytest.raises(ValueError):
+    for bad in (["NIFTYX"], ["NIFTY", "SENSEX"]):
+        with pytest.raises(ValueError, match="is not in"):
             I.load(ds, bad, use="development_folds", allow_unverified=True)
+    for empty in ([], (), iter([]), pd.Index([])):
+        with pytest.raises(ValueError, match="non-empty"):
+            I.load(ds, empty, use="development_folds", allow_unverified=True)
 
 
 def test_a_missing_source_file_or_one_that_is_not_the_format_stops_the_import(tmp_path, reviewed_none):
@@ -641,6 +656,7 @@ def test_bad_sessions_are_kept_out_of_the_partitions_and_say_why(tmp_path, revie
     md = (ds / "quality.md").read_text()
     assert "Days the indices disagree about (4" in md and "The default set excludes 2 sessions in review" in md
     assert "Volume is not used" in md and "realised-variance rank" in md and "highest-variance of them is NIFTY" in md
+    assert "A study on the default set is censored at the tail until a reviewer admits them" in md
 
 
 def test_the_rows_dropped_in_a_session_include_an_unparsable_number_on_a_dated_row(tmp_path, reviewed_none):
@@ -825,6 +841,104 @@ def test_canonical_hash_does_not_confuse_kinds_zones_or_string_boundaries():
     assert I.canonical_hash(pd.DataFrame({"x": [True, False]})) != I.canonical_hash(pd.DataFrame({"x": ["True", "False"]}))
     assert I.canonical_hash(pd.DataFrame({"x": np.array([1, 2], dtype="int32")})) == I.canonical_hash(
         pd.DataFrame({"x": np.array([1, 2], dtype="int64")}))                              # width is representation, not content
+
+
+# ---- review round 2 --------------------------------------------------------------------------------------------------
+def test_a_day_that_is_end_labelled_inside_a_start_labelled_file_is_rejected(tmp_path, reviewed_none):
+    """The whole-file check cannot see a file that mixes labellings: three start-labelled days outnumber two shifted ones."""
+    v = check(make_day(DAYS[0], first=(9, 16)))
+    assert v["status"] == "rejected" and "end_labelled" in v["hard_codes"] and v["head_gap_min"] == 1
+    assert "looks end-labelled" in " ".join(v["reasons"])
+    nifty = [make_day(DAYS[0], 25000, 0), make_day(DAYS[1], 25000, 1), make_day(DAYS[2], 25000, 2),
+             make_day(DAYS[3], 25000, 3, first=(9, 16)), make_day(DAYS[4], 25000, 4, first=(9, 16))]
+    man = run_import(build_source(tmp_path / "src", nifty=nifty), tmp_path / "out", reviewed_none)       # the file-level guard passes
+    st = {s["day"]: (s["status"], s["hard_codes"]) for s in man["sessions"] if s["symbol"] == "NIFTY"}
+    assert [st[d][0] for d in DAYS] == ["accepted"] * 3 + ["rejected"] * 2
+    assert all("end_labelled" in st[d][1] for d in DAYS[3:])
+
+
+def test_load_takes_any_iterable_of_symbols_and_never_silently_returns_nothing(imported):
+    _, out, man, _ = imported
+    ds = ds_of(out, man)
+    gen = I.load(ds, (s for s in ["NIFTY", "BANKNIFTY"]), use="development_folds", allow_unverified=True)
+    assert set(gen["symbol"]) == {"NIFTY", "BANKNIFTY"} and len(gen) == 2 * 5 * 375
+    assert len(I.load(ds, pd.Index(["NIFTY"]), use="development_folds", allow_unverified=True)) == 5 * 375
+    assert len(I.load(ds, ("NIFTY",), use="development_folds", allow_unverified=True)) == 5 * 375
+
+
+def test_what_load_reports_comes_from_what_the_digest_covers_and_is_filtered_by_symbol(tmp_path, reviewed_none):
+    src = stale_source(tmp_path)
+    base = run_import(src, tmp_path / "out", reviewed_none)
+    adm = run_import(src, tmp_path / "out", reviewed_file(tmp_path, [entry(base, "NIFTY", DAYS[1], BOTH)]))
+    ds = ds_of(tmp_path / "out", adm)
+    nifty = I.load(ds, ["NIFTY"], use="development_folds", allow_unverified=True)
+    bank = I.load(ds, ["BANKNIFTY"], use="development_folds", allow_unverified=True)
+    assert nifty.attrs["admitted_reviewed"] == [f"NIFTY {DAYS[1]}"] and nifty.attrs["excluded_review"] == [f"NIFTY {SAT}"]
+    assert bank.attrs["admitted_reviewed"] == [] and bank.attrs["excluded_review"] == []         # only the symbols that were asked for
+    mp = ds / "manifest.json"
+    m = json.loads(mp.read_text())
+    m.update(tier="T1", reviewed_applied=["BANKNIFTY 2020-03-13"], allowed_uses=["everything"], not_for="nothing")   # outside the digest
+    mp.write_text(json.dumps(m))
+    again = I.load(ds, ["BANKNIFTY"], use="development_folds", allow_unverified=True)
+    assert again.attrs["tier"] == "T1b" and again.attrs["admitted_reviewed"] == [] and again.attrs["not_for"] == legacy.FORBIDDEN_NOTE
+    assert again.attrs["dataset"] == ds.name and set(again["tier"]) == {"T1b"}
+
+
+def test_the_review_queue_ranks_by_realised_variance_largest_first(tmp_path, reviewed_none):
+    nifty = [make_day(DAYS[0], 25000, 0), make_day(DAYS[1], 25000, 1), jumped(make_day(DAYS[2], 25000, 2), 1.07),
+             steady_day(1.0, day=SAT)]                                    # the Saturday has almost no variance at all
+    man = run_import(build_source(tmp_path / "src", nifty=nifty), tmp_path / "out", reviewed_none)
+    ranks = {r["day"]: (r["rv_rank"], r["rv_of"]) for r in I.quality(man)["review_queue"] if r["symbol"] == "NIFTY"}
+    assert ranks == {DAYS[2]: (1, 4), SAT: (4, 4)}
+    rv = {s["day"]: s["rv"] for s in man["sessions"] if s["symbol"] == "NIFTY"}
+    assert rv[DAYS[2]] > rv[DAYS[0]] > rv[SAT] and rv[SAT] > 0
+
+
+def test_the_code_commit_records_whether_the_tree_was_dirty(monkeypatch):
+    def fake(dirty, fail=False):
+        def run(cmd, **kw):
+            if fail:
+                raise OSError("no git")
+            return subprocess.CompletedProcess(cmd, 0, stdout="abc123\n" if "rev-parse" in cmd else (" M x.py\n" if dirty else ""), stderr="")
+        return run
+    monkeypatch.setattr(I.subprocess, "run", fake(True))
+    assert I.code_commit() == {"commit": "abc123", "dirty": True}
+    monkeypatch.setattr(I.subprocess, "run", fake(False))
+    assert I.code_commit() == {"commit": "abc123", "dirty": False}
+    monkeypatch.setattr(I.subprocess, "run", fake(False, fail=True))
+    assert I.code_commit() == {"commit": None, "dirty": None}
+
+
+def test_the_unparsable_share_bound_is_one_percent(tmp_path, reviewed_none):
+    def source_with(k, name):
+        src = build_source(tmp_path / name, nifty=[make_day(DAYS[0], 25000, 0), make_day(DAYS[1], 25000, 1)])          # 750 rows
+        t = pd.read_csv(src / "NIFTY.csv", dtype=str)
+        t.loc[list(range(100, 100 + k)), "close"] = "oops"
+        t.to_csv(src / "NIFTY.csv", index=False)
+        return src
+    ok = run_import(source_with(7, "s7"), tmp_path / "o7", reviewed_none)                                             # 0.93%: imports
+    assert next(f for f in ok["source"]["files"] if f["symbol"] == "NIFTY")["unparsed"] == 7
+    with pytest.raises(I.SourceFormatError, match="unparsable"):
+        run_import(source_with(8, "s8"), tmp_path / "o8", reviewed_none)                                              # 1.07%: stops
+
+
+def test_the_stale_share_is_of_the_bars_the_session_has_not_of_375():
+    d = make_day(DAYS[0]).drop(index=range(150, 165)).reset_index(drop=True)                                          # 360 minutes
+    d = make_stale(make_stale(d, 20, 5), 60, 6)                                                                       # 11 stale bars
+    v = check(d)
+    assert v["minutes"] == 360 and v["stale_bars"] == 11 and v["longest_stale_run"] == 6
+    assert v["review_codes"] == ["stale_share"]                                                                       # 3.06% of 360; 2.93% of 375
+
+
+def test_the_quality_report_counts_the_minutes_dropped_for_conflicts_and_the_repeats_collapsed(tmp_path, reviewed_none):
+    d = make_day(DAYS[0], 25000, 0)
+    clash = d.iloc[[20]].copy()
+    clash[["open", "high", "low", "close"]] = [1.0, 2.0, 0.5, 1.5]
+    nifty = [pd.concat([d, clash, d.iloc[[40]]]).reset_index(drop=True)] + [make_day(x, 25000, i + 1) for i, x in enumerate(DAYS[1:])]
+    man = run_import(build_source(tmp_path / "src", nifty=nifty), tmp_path / "out", reviewed_none)
+    b = I.quality(man)["by_symbol"]["NIFTY"]
+    assert b["conflicting_duplicate_minutes"] == 1 and b["identical_duplicate_rows"] == 1
+    assert "two different bars in one minute: 1 (identical repeats collapsed: 1)" in I.render_quality(I.quality(man), man)
 
 
 # ---- the phase-0 boundary -------------------------------------------------------------------------------------------
