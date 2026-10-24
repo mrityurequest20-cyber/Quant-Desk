@@ -117,6 +117,27 @@ below its baseline drops back to shadow by itself.
 | Confirm the tape records bid and ask; check that journal text sent to the teacher holds nothing private (account numbers, keys, tokens) | next session |
 | First teaching run: confirm its log line after a session; spend stays inside its half of the $20 | next session |
 
+## 7b. Baseline: the first 26 paper trades (read from the `journal` branch, 24 Oct)
+
+Read-only, 12 to 23 Oct (9 sessions, 26 closed trades, every one a single-leg long option). Strike distance is the long leg's distance
+out of the money as a percentage of the entry spot. Paper fills; a small sample; use as a starting point, not a conclusion.
+
+- Total **+14,909** after 3,311 of fees. By sleeve: `orb` 8 trades, 4 wins, +22,512; `trend_break` 13, 6, +9,014; `va_reversion` 2, 1, -1,690;
+  `vwap_trend` **3, 0 wins, -14,927**.
+- By strike distance: up to 0.25% out of the money 3 trades (+1,451); 0.25 to 0.75% 13 trades (-5,562); over 0.75% 10 trades (+19,022).
+  The owner's impression that near-the-money strikes carry the profit is **not visible** here, and 26 trades cannot settle it.
+- **Concentration:** three `premium_target` winners made +60,197 (at 0.26%, 0.75% and 0.91% out of the money); the other 23 trades lost 45,288
+  together. Exits: `invalidation` 7 trades (-39,568), `time_exit` 11 (-15,690), `premium_target` 3 (+60,197).
+- To redo it: restore the `journal` branch (`git fetch --depth 1 origin journal`, `git archive FETCH_HEAD`), open `intraday/journal.db`
+  read-only (`mode=ro`), table `trades`, strikes in the `legs` JSON.
+
+## 7c. Rebuilding the scratch data (the session's scratch folder does not carry over)
+
+The Kaggle files were downloaded with `kagglehub` into a scratch cache: `debashis74017/nifty-50-minute-data`,
+`pariminikhil/nifty-option-chain-3-oct-24-to-24-mar-26`, `sandeepkapri/banknifty-data-upto-2024`, `kaalicharan9080/nse-future-and-options-data`,
+`ayushsacri/indian-nifty-and-banknifty-options-data-2020-2024` (6.6 GB), `vivek603/stock-market-data`. Download each into its own empty
+directory and read it with `python -I`; never commit or publish any of it.
+
 ## 8. Honest expectations
 
 - ML will not conjure an edge. Direction research found none after costs. The realistic gains are volatility and move-size forecasts,
