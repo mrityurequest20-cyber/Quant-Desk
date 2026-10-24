@@ -1287,7 +1287,7 @@ def test_the_code_hash_covers_the_analysis_and_the_gamma_constants(monkeypatch):
         assert oi.code_sha256() != base
         monkeypatch.undo()
     src = oi.inspect.getsource(oi.code_sha256)
-    for fn in ("wall_test", "fit_within", "holm", "oi_report", "_spot_path", "tape_files", "quarantine_report", "run_day"):
+    for fn in ("wall_test", "fit_within", "holm", "oi_report", "_spot_path", "tape_files", "quarantine_report", "run_day", "exchange_holidays"):
         assert fn in src
 
 
@@ -1331,3 +1331,54 @@ def test_a_session_is_not_written_by_code_the_spec_does_not_pin(tmp_path, monkey
     with pytest.raises(RuntimeError, match="not the code the registered spec pins"):
         oi.run_day(tape, DAY, out)
     assert not out.exists() or not list(out.iterdir())
+
+
+# ---- the final read-out and sessions that were never graded --------------------------------------------------------------
+def _days(n, skip=()):
+    return [str(d.date()) for d in pd.bdate_range("2026-10-26", periods=n + len(skip)) if str(d.date()) not in set(skip)][:n]
+
+
+def _ok_test(monkeypatch):
+    monkeypatch.setattr(oi, "wall_test", lambda table, u, horizon=60: {"status": "ok", "p_one_sided": 0.001, "ci90": [0.1, 0.5], "beta": 0.3, "se": 0.1, "t": 3.0,
+                                                                          "n": 900, "sessions": 120, "underlying": u, "controls": {"p_iv": 0.0}})
+
+
+def test_the_final_readout_is_not_confirmatory_while_a_weekday_before_the_120th_session_has_no_table(monkeypatch):
+    _ok_test(monkeypatch)
+    hol = sorted(oi.exchange_holidays()[0])
+    gap = next(h for h in hol if h > "2026-11-01" and pd.Timestamp(h).weekday() < 5)  # a real NSE holiday on a weekday after the forward start
+    days = pd.DataFrame({"day": _days(120, skip=[gap])})                              # 120 sessions with one weekday missing
+    rep = oi.oi_report(days, "final")
+    assert not rep["confirmatory"] and gap in rep["note"] and "rejected" not in rep and rep["accepted_gaps"] == []
+    ok = oi.oi_report(days, "final", accept_gaps=[gap])
+    assert ok["confirmatory"] and ok["accepted_gaps"] == [gap] and ok["rejected"] == {"NIFTY": True, "BANKNIFTY": True}
+    assert "accepted as exchange holidays" in oi.render_report(ok)
+
+
+def test_a_gap_after_the_120th_session_does_not_matter_and_an_accepted_date_that_is_no_gap_is_ignored(monkeypatch):
+    _ok_test(monkeypatch)
+    days = _days(130, skip=["2027-05-03"])
+    assert "2027-05-03" > days[119]                                                    # the missing weekday lies after the 120th session
+    hol = sorted(oi.exchange_holidays()[0])
+    rep = oi.oi_report(pd.DataFrame({"day": days}), "final", accept_gaps=[next(h for h in hol if h > "2026-11-01")])
+    assert rep["confirmatory"] and rep["accepted_gaps"] == []
+
+
+def test_the_cli_takes_the_accepted_gaps(tmp_path, capsys):
+    from quantdesk.cli import build_parser
+    a = build_parser().parse_args(["ml", "oi-report", "--readout", "final", "--accept-gaps", "2026-11-10, 2026-11-14"])
+    assert a.accept_gaps == "2026-11-10, 2026-11-14"
+
+
+def test_only_listed_exchange_holidays_can_be_accepted_and_weekend_tables_are_not_sessions(monkeypatch):
+    _ok_test(monkeypatch)
+    days = _days(120)
+    hols, years = oi.exchange_holidays()
+    ordinary = next(d for d in _days(60) if d > "2026-11-01" and d not in hols)               # a weekday that is no holiday
+    with pytest.raises(ValueError, match="not an exchange holiday"):
+        oi.oi_report(pd.DataFrame({"day": days}), "final", accept_gaps=[ordinary])           # outage days cannot be labelled holidays
+    assert 2026 in years and "2026-01-26" in hols
+    with_weekend = pd.DataFrame({"day": days + ["2026-11-07", "2026-11-08"]})                 # a Saturday and a Sunday special session
+    rep = oi.oi_report(with_weekend, "interim")
+    assert rep["forward_sessions"] == 120 and "2026-11-07" not in rep["weekdays_without_tables"]
+    assert oi.oi_report(with_weekend, "final")["confirmatory"] and oi.oi_report(with_weekend, "final")["sessions_used"] == 120
