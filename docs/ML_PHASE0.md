@@ -116,6 +116,15 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
    with robust errors, time-series tests for the leakage harness), `scikit-learn` (ridge, logistic, metrics, calibration), `lightgbm` (CPU gradient
    boosting) and `duckdb` (in-process SQL over the Parquet warehouse for point-in-time dataset builds). None is imported by the trading path: no
    workflow installs `requirements-ml.txt`, nothing outside `quantdesk/ml/` may import these libraries, and Phase 0 stays offline and read-only (above).
+- **OI daily check** (`quantdesk/ml/oi_daily.py`, `python -m quantdesk ml oi-daily --source <tape>`, `.github/workflows/oi-daily.yml`): the spec has the desk engineer run
+  `ml oi` after each close; this runs the same grading for every forward weekday so far on a fresh machine each weekday at 17:47 IST (tape fetched from the `chains-YYYY`
+  releases), so a trading day with no archived tape, or a session that no longer grades, fails the run the day it happens. A weekday without a tape is `holiday` if
+  `config/quantdesk.yaml` lists it, `unknown` if the list does not cover the year, otherwise `missing`; only `missing` and `failed` fail the run, and a missing day stays
+  failing until it is archived; a day with only the morning part archived, or an index with nothing to grade, is `partial` and fails too; an `unknown` day prints a warning
+  annotation (from 1 Jan 2027 until the 2027 holiday list is entered, every tape-less weekday is `unknown`). **It is monitoring, not the record, and the owner should accept it:**
+  the registered spec's `deployment` text says "nothing is added to a workflow" and has the desk engineer run `ml oi` after each close. This is a new, separate monitoring
+  workflow that text did not anticipate. It changes no definition, no rule of the test and no table the read-out uses (its scratch tables, in `runtime/ml_oi_daily`, are thrown away with the machine; the tables that count are still the ones `ml oi`
+  writes, reproducible from the archive). `contents: read`, no secret, a counts-only text summary kept 30 days.
 
 ## What I need from the owner (only for P0.6)
 
