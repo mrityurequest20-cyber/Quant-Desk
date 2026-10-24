@@ -125,7 +125,7 @@ FEATURES = [c for c in COLUMNS if c not in KEY + ["expiry", "ts"]]
 
 def code_sha256() -> str:
     """The source of every function that makes a feature, a label or an implied probability."""
-    fns = (survival_prob, rank_strength, fit_within, wall_test, holm, oi_report, _spot_path, _mid, _snapshot, _wall, _multiple, _buildup, _max_pain, _gamma, _gamma_grid, _nearest_crossing, _conc, _spread_pct, _qimb, _iv_at, _atm_iv, advanced_features, _asof, snapshot_features, valid_oi, Snapshots, decision_row, decision_table, labels_for)
+    fns = (survival_prob, rank_strength, fit_within, wall_test, holm, oi_report, _spot_path, _mid, _snapshot, _wall, _multiple, _buildup, _max_pain, _gamma, _gamma_grid, _nearest_crossing, _conc, _spread_pct, _qimb, _iv_at, _atm_iv, advanced_features, _asof, snapshot_features, valid_oi, Snapshots, decision_row, decision_table, labels_for, tape_files, quarantine_report, run_day)
     src = "\n".join(inspect.getsource(f) for f in fns)
     consts = repr((SPEC, N_MIN, DECISIONS, HORIZONS, LOOKBACK, MAX_AGE_S, MIN_TO_EXPIRY, BAND, NEAR, MIN_COVER, TRADING_MIN_PER_YEAR, OI_MAX, FORWARD_START, P_IV_RANGE, MIN_T_YEARS, FLIP_STEPS, STRENGTH_BREAKS, COLUMNS))
     return hashlib.sha256((src + consts).encode()).hexdigest()
@@ -730,7 +730,8 @@ def run_day(source: Path, day: str, out_dir: Path) -> dict:
     files = tape_files(source, day)
     if not files:
         raise FileNotFoundError(f"no chain files for {day} in {source}")
-    chains = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True).drop_duplicates(["underlying", "expiry", "ts", "strike"])
+    chains = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    chains = chains[chains["source"] == "kotak"].drop_duplicates(["underlying", "expiry", "ts", "strike"])        # a row of another source must not displace a kotak row
     table = pd.concat([decision_table(chains, day, u) for u in INDICES], ignore_index=True)
     man = {"run": RUN_VERSION, "spec": SPEC, "day": day, "code_sha256": code_sha256(), "forward": day >= FORWARD_START,
            "inputs": {f.name: sha256_file(f) for f in files}, "rows": {u: int((table["underlying"] == u).sum()) for u in INDICES},
@@ -761,10 +762,12 @@ def run_day(source: Path, day: str, out_dir: Path) -> dict:
     return man
 
 
-def pinned_code_sha256() -> str | None:
-    """The code hash the registered spec pins (docs/prereg/oi_shadow_v1.json next to this package), or None where the spec is not beside the code."""
+def pinned_code_sha256() -> str:
+    """The code hash the registered spec pins (docs/prereg/oi_shadow_v1.json next to this package). A missing spec is an error, not a skipped check."""
     path = Path(__file__).resolve().parents[2] / "docs" / "prereg" / "oi_shadow_v1.json"
-    return json.loads(path.read_text())["code"]["code_sha256"] if path.exists() else None
+    if not path.exists():
+        raise FileNotFoundError(f"the registered spec {path} is not beside the code: the pin cannot be checked")
+    return json.loads(path.read_text())["code"]["code_sha256"]
 
 
 def load_tables(folder: Path) -> pd.DataFrame:
@@ -772,7 +775,7 @@ def load_tables(folder: Path) -> pd.DataFrame:
     is not the current code (a session graded by other definitions than the ones the spec froze would be a different experiment); a session whose
     table is not the bytes that were written (its sha256 is in the manifest, so a table edited after the fact does not load)."""
     cur, pinned = code_sha256(), pinned_code_sha256()
-    if pinned is not None and pinned != cur:
+    if pinned != cur:
         raise RuntimeError(f"the code ({cur[:12]}) is not the code the registered spec pins ({pinned[:12]}): a changed definition is a new spec")
     parts = []
     for mp in sorted(Path(folder).glob("oi_*.json")):

@@ -1287,5 +1287,30 @@ def test_the_code_hash_covers_the_analysis_and_the_gamma_constants(monkeypatch):
         assert oi.code_sha256() != base
         monkeypatch.undo()
     src = oi.inspect.getsource(oi.code_sha256)
-    for fn in ("wall_test", "fit_within", "holm", "oi_report", "_spot_path"):
+    for fn in ("wall_test", "fit_within", "holm", "oi_report", "_spot_path", "tape_files", "quarantine_report", "run_day"):
         assert fn in src
+
+
+def test_a_row_of_another_source_never_displaces_a_kotak_row(tmp_path):
+    clean = gen(minutes=range(0, 375, 5))
+    other = clean.copy()
+    other["source"] = "yfinance"
+    other["ce_oi"] = 7.0                                                             # same keys, different content, listed first
+    folder = tmp_path / "tape"
+    folder.mkdir()
+    pd.concat([other, clean], ignore_index=True).to_parquet(folder / f"{DAY}_0_chains.parquet", index=False)
+    mixed = oi.run_day(folder, DAY, tmp_path / "a")
+    ref_dir = tmp_path / "tape2"
+    ref_dir.mkdir()
+    clean.to_parquet(ref_dir / f"{DAY}_0_chains.parquet", index=False)
+    oi.run_day(ref_dir, DAY, tmp_path / "b")
+    a, b = pd.read_parquet(tmp_path / "a" / f"oi_{DAY}.parquet"), pd.read_parquet(tmp_path / "b" / f"oi_{DAY}.parquet")
+    assert len(a) > 0 and a.drop(columns="ts").equals(b.drop(columns="ts")) and mixed["rows"] == oi.run_day(ref_dir, DAY, tmp_path / "b")["rows"]
+
+
+def test_a_missing_spec_makes_the_pin_check_an_error_not_a_skip(monkeypatch, tmp_path):
+    tape, out = _tape(tmp_path), tmp_path / "tables"
+    oi.run_day(tape, DAY, out)
+    monkeypatch.setattr(oi, "__file__", str(tmp_path / "a" / "b" / "oi.py"))
+    with pytest.raises(FileNotFoundError, match="pin cannot be checked"):
+        oi.load_tables(out)
