@@ -288,3 +288,10 @@ def test_a_zero_embargo_without_a_feature_lookback_must_be_acknowledged():
     assert len(S.cpcv(t0, t1, 4, 1, embargo=0, samples_independent=True)) == 4
     assert len(S.cpcv(t0, t1, 4, 1, embargo=DAY)) == 4                                    # a real embargo needs no acknowledgement
     assert len(S.cpcv(t0, t1, 4, 1, embargo=0, session=np.arange(40), lookback_sessions=3)) == 4          # nor does a feature lookback
+
+
+def test_an_empty_test_set_contaminates_nothing():
+    session = np.arange(5)
+    t0 = np.arange(5) * 10
+    assert S.feature_window_hits(t0, session, 3, np.array([], dtype=int), np.arange(5)).tolist() == [False] * 5
+    S.check_no_overlap([S.Fold(np.arange(5), np.array([], dtype=int), "empty")], t0, t0 + 1, session=session, lookback_sessions=3)

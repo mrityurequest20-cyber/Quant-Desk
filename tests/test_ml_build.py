@@ -869,7 +869,7 @@ WORK = {
 
 def probe(module, work):
     out = subprocess.run([sys.executable, "-c", PROBE.format(module=module, work=work)], cwd=REPO, capture_output=True, text=True, check=True,
-                         env={**os.environ, "PYTHONPATH": str(REPO)}).stdout.splitlines()
+                         env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), "PYTHONPATH": str(REPO)}).stdout.splitlines()   # no tokens or keys in a child that runs repo code
     events = next(l for l in out if l.startswith("EVENTS"))
     return events, set(out) - {events}
 

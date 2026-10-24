@@ -81,6 +81,8 @@ def feature_window_hits(t0: np.ndarray, session: np.ndarray, lookback_sessions: 
     session cannot make five sessions look like nine days."""
     if lookback_sessions < 0:
         raise ValueError("lookback_sessions cannot be negative")
+    if len(test) == 0:                                                              # nothing is being tested, so nothing is contaminated
+        return np.zeros(len(cand), dtype=bool)
     ts_all = session[test]
     ordered = np.argsort(ts_all, kind="stable")
     ts_sorted = ts_all[ordered]
