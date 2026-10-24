@@ -393,7 +393,7 @@ def load_table(folder: Path, use: str = "regime_research", allow_unverified: boo
             raise ImmutableViolation(f"{dataset}: no readable manifest to check {man['name']} against") from exc
         if dm.get("digest") != inp["digest"]:
             raise ImmutableViolation(f"{man['name']} was not built from {Path(dataset).name} (digest {str(dm.get('digest'))[:12]} ≠ {inp['digest'][:12]})")
-        now = effective_status(Path(dataset), dm)
+        now = effective_status(Path(dataset), dm, man["recipe"]["symbols"])
         if now != inp.get("status"):
             raise ImmutableViolation(f"{man['name']} says {inp.get('status')} but the dataset is {now} now: rebuild the table")
     if inp.get("status") != VERIFIED and not allow_unverified:
