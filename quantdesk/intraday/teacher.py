@@ -89,6 +89,32 @@ def _clip(x, n: int) -> str:
     return " ".join(str(x if x is not None else "").split())[:n]
 
 
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\bauthorization\s*[:=]\s*(?:(?:bearer|basic|token|digest|negotiate)\s+)?\S+(?:\s+\S+)?"),               # an Authorization header, with or without a scheme word ("token key:secret")
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"),                                                               # a bearer token on its own
+    re.compile(r"(?i)(?<![A-Za-z0-9])(?:[a-z0-9]+[_-])*(?:api[ _-]?key|apikey|secret(?:[ _-]?(?:key|access[ _-]?key))?|password|passwd|pwd|access[ _-]?token|refresh[ _-]?token|token|mpin|totp|otp"
+               r"|consumer[ _-]?(?:key|secret)|session[ _-]?id|ucc|pan|aadhaar|mobile|phone|user[ _-]?id|client[ _-]?id|account[ _-]?(?:no|number|id))\b(\W{0,3})([:=])\s*(?:\"[^\"]*\"|'[^']*'|\S+)"),
+    re.compile(r"(?i)([?&](?:key|apikey|api_key|token|access_token|sig|signature|secret|password|auth|x-amz-signature|x-amz-credential)=)[^&\s]+"),     # a credential in a URL query
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"),                                      # a JSON web token
+    re.compile(r"(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{40,}(?![A-Za-z0-9_-])"),   # a long mixed token (journal ids are shorter)
+    re.compile(r"(?<![\w.+-])[\w.+-]{1,64}@(?!\d)[A-Za-z][\w-]*\.[A-Za-z][\w.]+"),                                      # an e-mail address (not strike@price); anchored and bounded, so linear in the text
+)
+
+
+def redact(text: str) -> tuple[str, int]:
+    """Mask what looks like a credential, a token or an e-mail address (heuristic, best effort: a secret in a form none of the patterns knows passes through), and say how many were masked. The journal is the desk's own text and holds none
+    today (14 sessions were scanned on 24 Oct); this is for the day an exception message or a news headline carries one into a packet that leaves the machine."""
+    n = 0
+
+    def sub(m):
+        nonlocal n
+        n += 1
+        return (m.group(1) + "[redacted]") if m.re.groups == 1 and m.group(1).endswith(("=",)) else "[redacted]"
+    for pat in _SECRET_PATTERNS:
+        text = pat.sub(sub, text)
+    return text, n
+
+
 def _next_day(day: str) -> str:
     return str((pd.Timestamp(day) + pd.Timedelta(days=1)).date())
 
@@ -312,6 +338,9 @@ def _teach(cfg, journal, day, memory, reader, now, plan_latest) -> dict:
     text, ids = build_packet(journal, day, plan_latest, mem_lines)
     if not ids:
         return _skip(journal, now, f"nothing was journaled on {day}")
+    text, masked = redact(text)                              # nothing that looks like a credential leaves the machine, whatever a journal row happens to hold
+    if masked:
+        _log(journal, now, "WARN", f"{masked} credential-like string(s) were masked in the teaching packet", {"day": day})
     max_tokens = max(1000, min(16000, int(c.get("teach_max_tokens", 6000) or 6000)))
     est = llm.usage_usd({"input_tokens": int((len(TEACH_SYSTEM) + len(text)) / 2.5), "output_tokens": max_tokens}, budget.p)
     why = budget.deny("teach", est=est)                      # the teaching half only; '' = not started / used up
