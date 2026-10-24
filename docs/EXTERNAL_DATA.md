@@ -160,3 +160,61 @@ The first pre-registered result in this project to pass its locked period. Its u
 desk's realised-volatility input. Whether it improves option plans is a question for plan research on real
 point-in-time quotes, not for this study. The live forecaster's 30% IV blend was not tested here (no IV in this
 dataset).
+
+## Kaggle index minutes (`quantdesk/ml/intake.py`, P0.2)
+
+`python -m quantdesk ml import --source <folder> [--out DIR] [--version 18] [--reviewed FILE]`. Tier T1b of
+[ML_PHASE0.md](ML_PHASE0.md). The source is the owner's `debashis74017/nifty-50-minute-data` (one CSV per symbol,
+`date,open,high,low,close,volume`, bar-start labels): NIFTY 50, NIFTY BANK and INDIA VIX, 2015-01-09 to 2026-05-15. Status
+`external_unverified` until the independent check of P0.6; licence unknown, so nothing is published; the same allowed uses and the
+same refusals as above (`ALLOWED_USES` and `FORBIDDEN_NOTE` are the aeron7 importer's own, imported, not restated).
+
+**Rules** (pre-declared; every one is in the manifest, and a test pins each number):
+
+| Check | Treatment |
+|---|---|
+| Header is not exactly `date,open,high,low,close,volume`; a listed file is missing | the import stops; nothing is guessed |
+| Unparsable or non-finite row; bad price (≤ 0, high < low, open or close outside the range); negative or fractional volume | dropped and counted |
+| A stamp 1 to 15 seconds past the minute | floored to the minute and counted. In this source it is 2015 only (about 10,700 rows per file) |
+| A stamp more than 15 seconds past the minute | dropped and counted (11 per file), never rounded |
+| Minutes outside 09:15 to 15:29 | dropped and counted |
+| A minute with two identical bars / two different bars | one kept / both dropped |
+| Weekend date; fewer than 360 of the 375 regular minutes | session **rejected** (the special Saturday, Sunday and Muhurat sessions land here) |
+| A one-minute move above 5% (indices only, not the VIX); 10 or more consecutive flat bars repeating the previous close | session goes to **review**: out by default |
+
+**Review, not a blanket drop.** The old rule dropped any session with a move above 5%, which deletes real crash days. A move that
+big, or a run of stale bars, is either the market (a halt and its rebound) or a data fault (a frozen feed), and only a person can
+tell. Those sessions are excluded and listed in `quality.md` with their evidence (the other index moving the same way within a
+minute; both indices disagreeing about the day). `quantdesk/ml/reviewed_sessions.json` admits one, with evidence of at least 40
+characters, the codes it covers, and no hard rejection. It ships empty. Its hash is part of the dataset identity, so admitting a
+session is a new dataset, never an edit.
+
+**Identity.** `dataset = ml-intake-1-<12 hex>`, from the source files' sha256, the rules and the reviewed list. The manifest holds
+each file's sha256 and drop counts, each partition's canonical content hash (independent of pandas version, datetime unit and
+string dtype), every session's validation, and one dataset digest. The import time, the status and the source's version label are
+not part of the digest. A partition is written once; the same inputs reproduce the same digest anywhere, and a different digest in
+the same folder is an `ImmutableViolation`. `load()` also refuses: a folder without a manifest, unverified data unless the caller
+says so, a use outside `ALLOWED_USES`, a partition added, missing, or no longer hashing to the manifest.
+
+**The record (Kaggle version 18, 24 Oct 2026; digest `d5115969ec8a94ea`).**
+
+| | NIFTY | BANKNIFTY | INDIA VIX |
+|---|---|---|---|
+| Rows | 1,048,738 | 1,048,705 | 1,048,338 |
+| Sessions kept / in review / rejected (of) | 2,781 / 4 / 24 (2,809) | 2,781 / 3 / 25 (2,809) | 2,749 / 7 / 52 (2,808) |
+| Rejected for: weekend / fewer than 360 minutes (a session can be both) | 11 / 19 | 11 / 20 | 11 / 47 |
+| Stamps floored / dropped as ambiguous | 10,682 / 11 | 10,684 / 11 | 10,740 / 11 |
+| Bad-price rows dropped | 0 | 0 | 2,547 |
+| Missing-minute rate in the sessions kept | 0.009% | 0.009% | 0.010% |
+
+- **Review queue (14 sessions).** 2017-07-10: a freeze of 60 (NIFTY) to 110 (BANKNIFTY) bars, cause unknown. 2020-03-13: flat
+  bars during the morning, then a +6.0% (NIFTY) and +5.9% (BANKNIFTY) move in the *same minute*, 10:20 to 10:21; the provider's
+  own daily low (8,555.15) is the last print before the jump. Both indices corroborate each other, which fits a halt and a
+  rebound on resumption; not yet matched to an NSE notice. 2020-03-23: 43 and 50 flat bars, also both indices. 2022-03-07: NIFTY has
+  a 14-bar freeze while BANKNIFTY has only 325 minutes, the one day in 11 years the two indices disagree about. The VIX has seven
+  (stale runs of 18 to 155 bars).
+- **Correction to the intake report.** The 6% one-minute move is 13 March 2020, not the 4 June 2024 election result the report
+  guessed.
+- **Not done here.** No independent check (P0.6: Yahoo daily bars, the aeron7 overlap to Feb 2023, NSE's official close); no
+  exchange-holiday calendar for the years before the desk's own; the last session, 15 May 2026, is cut off at 13:20 and is
+  rejected as short; the hole from 15 May to early September 2026 is still open.

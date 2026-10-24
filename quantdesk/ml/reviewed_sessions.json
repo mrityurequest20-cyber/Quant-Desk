@@ -1,0 +1,5 @@
+{
+ "schema": 1,
+ "note": "Sessions that the importer sent to review (a one-minute move above 5%, or a run of 10+ stale bars) and that a reviewer has admitted, with the evidence. Empty means every review session stays out. An entry applies only while the session's review codes are all listed in it and it has no hard rejection; the file's hash is part of the dataset identity, so a change here makes a new dataset.",
+ "sessions": []
+}
