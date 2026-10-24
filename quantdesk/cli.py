@@ -442,6 +442,8 @@ def _ml_card(cfg, a):
     if not a.run:
         raise SystemExit("ml card: --run (a JSON run record) is required")
     out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_cards"
+    from .ml import build as B
+    B.refuse_tracked_tree(out, "ml card --out")                  # a card names data digests and our own results; it is not written where it could be committed by accident
     try:
         run = _json.loads(Path(a.run).read_text())
         card = MC.build_card(run)

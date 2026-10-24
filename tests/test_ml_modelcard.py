@@ -270,3 +270,34 @@ def test_the_event_modules_import_nothing_from_the_desk():
             "print(sorted(m for m in sys.modules if m.startswith('quantdesk')))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == "['quantdesk', 'quantdesk.ml', 'quantdesk.ml.events', 'quantdesk.ml.modelcard']"
+
+
+# ---- review fixes: the version is part of a file name; an interrupted write is redone; the command will not write into a tracked folder ----
+@pytest.mark.parametrize("version", ["../x", "..", "a/b", "a\\b", ".hidden", "", "  ", "x" * 65, "v 1", "1\n2"])
+def test_a_version_that_could_leave_the_folder_is_refused_before_anything_is_written(tmp_path, version):
+    with pytest.raises(MC.MissingProvenance, match="version"):                 # "" is caught earlier as a missing field, the rest by the name rule
+        MC.build_card(good_run(version=version))
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("version", ["1", "2.1", "v3", "2026-10-26", "a_b-c"])
+def test_ordinary_versions_are_accepted_and_stay_inside_the_folder(tmp_path, version):
+    jp, mp = MC.write_card(tmp_path / "cards", MC.build_card(good_run(version=version)))
+    assert jp.parent == mp.parent == tmp_path / "cards" and jp.name == f"har-c-{version}.card.json"
+
+
+def test_an_interrupted_write_is_redone_not_half_kept(tmp_path):
+    card = MC.build_card(good_run())
+    (tmp_path / "har-c-1.card.md").write_text("half")                      # the .md was written, the .json (the commit marker) was not
+    jp, mp = MC.write_card(tmp_path, card)
+    assert jp.exists() and mp.read_text().startswith("# Model card: har-c v1")
+
+
+def test_the_command_refuses_an_output_folder_inside_a_git_working_tree(tmp_path):
+    from pathlib import Path
+    probe = Path(__file__).resolve().parents[1] / "docs" / "ml_cards_probe"
+    run = tmp_path / "run.json"
+    run.write_text(json.dumps(good_run()))
+    refused = _cli("--run", str(run), "--out", str(probe))
+    assert refused.returncode != 0 and "inside a git working tree" in refused.stderr
+    assert not probe.exists()

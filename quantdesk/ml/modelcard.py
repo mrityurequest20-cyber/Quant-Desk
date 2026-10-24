@@ -52,8 +52,8 @@ def check_run(run: dict) -> list[str]:
         return p                                                                    # the checks below assume the fields are there
     if not _ID.match(str(run["model_id"])):
         p.append("model_id must be 1 to 64 characters of letters, digits, _ . -")
-    if not str(run["version"]).strip():
-        p.append("version is empty")
+    if not _ID.match(str(run["version"])):
+        p.append("version must be letters, digits, '_', '-' or '.', starting with a letter or digit, up to 64 characters (it is part of the file name)")
     spec = run["spec"]
     if not (isinstance(spec, dict) and spec.get("file") and _HEX64.match(str(spec.get("sha256", "")))):
         p.append("spec needs a file and a 64-hex sha256")
@@ -174,8 +174,8 @@ def write_card(folder: Path, card: dict) -> tuple[Path, Path]:
         if jp.read_text() != text:
             raise FileExistsError(f"{jp.name} already exists with different content: a changed model is a new version, not an edited card")
         return jp, mp
+    mp.write_text(render_markdown(card))                      # the .json is the commit marker: written last, so an interrupted write is redone, not half-kept
     jp.write_text(text)
-    mp.write_text(render_markdown(card))
     return jp, mp
 
 

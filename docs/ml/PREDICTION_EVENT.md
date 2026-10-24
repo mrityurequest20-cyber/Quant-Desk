@@ -44,6 +44,12 @@ nothing else can set it; demotion in the other direction needs nobody. `rolling_
 60 graded predictions (non-finite losses are dropped and counted, never averaged in), and `should_demote` fires when at least 30 are graded and the
 model is **worse** than its baseline. The demotion rule only ever tightens: it can switch a model down, never up.
 
+## What is not trusted yet
+
+- **`owner_apply` is free text in the run record.** Today nothing reads a card, so it changes nothing. Before any emitter or engine reader exists, the check for `applied` must be made against a record the owner controls (a committed or signed owner entry), not against a field the author of the run record can write. That belongs to the later, reviewed change that wires cards to the engine.
+- **`card_digest` is only checked for shape** (64 hex). The later emitter must also verify that a stored card with that digest exists and says `shadow` or `applied`.
+- **Where cards are written:** `ml card` refuses an output folder inside a git working tree unless it is under the gitignored `runtime/` folder (as `ml oi` does). A card that is meant to be committed is placed there by a reviewed change, not written there by the command.
+
 ## What is not here
 
 No emitter, no scheduler, no change to the engine, risk, execution or journal. The model card (`python -m quantdesk ml card --run <run.json>`) is
