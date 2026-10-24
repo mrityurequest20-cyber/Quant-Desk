@@ -32,6 +32,8 @@ import json
 import math
 from pathlib import Path
 
+import yaml
+
 import numpy as np
 import pandas as pd
 from scipy.stats import norm, t as student_t
@@ -125,7 +127,7 @@ FEATURES = [c for c in COLUMNS if c not in KEY + ["expiry", "ts"]]
 
 def code_sha256() -> str:
     """The source of every function that makes a feature, a label or an implied probability."""
-    fns = (survival_prob, rank_strength, fit_within, wall_test, holm, oi_report, _spot_path, _mid, _snapshot, _wall, _multiple, _buildup, _max_pain, _gamma, _gamma_grid, _nearest_crossing, _conc, _spread_pct, _qimb, _iv_at, _atm_iv, advanced_features, _asof, snapshot_features, valid_oi, Snapshots, decision_row, decision_table, labels_for, tape_files, quarantine_report, run_day)
+    fns = (survival_prob, rank_strength, fit_within, wall_test, holm, exchange_holidays, oi_report, _spot_path, _mid, _snapshot, _wall, _multiple, _buildup, _max_pain, _gamma, _gamma_grid, _nearest_crossing, _conc, _spread_pct, _qimb, _iv_at, _atm_iv, advanced_features, _asof, snapshot_features, valid_oi, Snapshots, decision_row, decision_table, labels_for, tape_files, quarantine_report, run_day)
     src = "\n".join(inspect.getsource(f) for f in fns)
     consts = repr((SPEC, N_MIN, DECISIONS, HORIZONS, LOOKBACK, MAX_AGE_S, MIN_TO_EXPIRY, BAND, NEAR, MIN_COVER, TRADING_MIN_PER_YEAR, OI_MAX, FORWARD_START, P_IV_RANGE, MIN_T_YEARS, FLIP_STEPS, STRENGTH_BREAKS, COLUMNS))
     return hashlib.sha256((src + consts).encode()).hexdigest()
@@ -645,12 +647,22 @@ def holm(pvals: dict[str, float], alpha: float = 0.05) -> dict[str, bool]:
     return out
 
 
+def exchange_holidays() -> tuple[set[str], set[int]]:
+    """(the dates, the years) of the NSE holiday list in config/quantdesk.yaml next to this package: `calendar.holidays` and `calendar.holiday_years`."""
+    path = Path(__file__).resolve().parents[2] / "config" / "quantdesk.yaml"
+    cal = yaml.safe_load(path.read_text())["calendar"]
+    return {str(pd.Timestamp(d).date()) for d in cal["holidays"]}, {int(y) for y in cal["holiday_years"]}
+
+
 def oi_report(table: pd.DataFrame, readout: str, accept_gaps=()) -> dict:
     """The pre-registered read-out on the forward decisions of `table` (all sessions on or after FORWARD_START). `readout`: "interim" (all forward
     sessions so far, descriptive: no claim is made from it) or "final" (the FIRST 120 forward sessions in date order, a session being a day present in
     the table; the confirmatory test, Holm over the two indices as a family of two whatever each index's status: an index without a test counts as p = 1).
     The final read-out is confirmatory only if every weekday up to the 120th session that has no table is named in `accept_gaps` (the exchange
-    holidays, listed by the owner): a session that was never graded would otherwise shift the window without anyone seeing it."""
+    holidays, listed by the owner, and each must be a date in the `holidays` of config/quantdesk.yaml or the report refuses it): a session that was
+    never graded would otherwise shift the window without anyone seeing it. Only weekdays are sessions: a table for a Saturday or Sunday special
+    session is neither counted nor used."""
+    table = table[pd.to_datetime(table["day"]).dt.weekday < 5]
     days = sorted(table.loc[table["day"] >= FORWARD_START, "day"].unique())
     sessions = len(days)
     have = set(days)
@@ -665,6 +677,10 @@ def oi_report(table: pd.DataFrame, readout: str, accept_gaps=()) -> dict:
             rep["sessions_used"] = 120
             gaps = [str(d.date()) for d in pd.bdate_range(FORWARD_START, days[119]) if str(d.date()) not in have]
             accepted = {str(pd.Timestamp(g).date()) for g in accept_gaps}
+            holidays, years = exchange_holidays()
+            not_holidays = sorted(accepted - holidays)
+            if not_holidays:
+                raise ValueError(f"not an exchange holiday in config/quantdesk.yaml (holiday_years {sorted(years)}): {', '.join(not_holidays)}; only listed holidays can be accepted")
             rep["accepted_gaps"] = sorted(set(gaps) & accepted)
             unaccepted = [g for g in gaps if g not in accepted]
             if unaccepted:
