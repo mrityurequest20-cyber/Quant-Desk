@@ -121,6 +121,13 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
    with robust errors, time-series tests for the leakage harness), `scikit-learn` (ridge, logistic, metrics, calibration), `lightgbm` (CPU gradient
    boosting) and `duckdb` (in-process SQL over the Parquet warehouse for point-in-time dataset builds). None is imported by the trading path: no
    workflow installs `requirements-ml.txt`, nothing outside `quantdesk/ml/` may import these libraries, and Phase 0 stays offline and read-only (above).
+- **Live OI-feed guard** (`chains.plausible_oi`, in `chain_analytics`): the recorded tape holds OI prints near +-1e18 in about 1% of snapshots; the offline test quarantines such
+  a snapshot, but the live desk's PCR, OI walls, max pain, OI adds and GEX read the same feed unguarded. Now one implausible print (infinite, negative open interest, a
+  day change beyond +-1e12, or an OI above 1e12; real OI is below 1e9) withholds every OI-derived read of that snapshot and sets `oi_quarantined` (shown in the chain view, and
+  journaled as one WARN per outage). **What changes in the weighing:** the analyst counts the withheld OI votes (PCR, walls, wall shift, and max pain on expiry day) as *neutral
+  evidence at their own weights*, so a fault can only dilute the score and never raises conviction by dropping a disagreeing vote (a test holds a quarantined read to be no more
+  convincing than a read with no OI at all). Nothing is clipped or repaired, no threshold, limit, gate or size changes, and the recorder still writes the raw print. The bound equals
+  `ml.oi.OI_MAX` (a test holds them equal). Known cost: one bad print in the day's first read disables that day's wall-shift comparison (chainflow keeps its first read).
 
 ## What I need from the owner (only for P0.6)
 

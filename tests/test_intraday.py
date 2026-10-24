@@ -419,3 +419,80 @@ def test_a_yahoo_poll_with_no_bars_is_a_readable_error_not_a_type_error(cfg, mon
     old = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0}, index=idx)
     monkeypatch.setattr(feed, "_fetch", lambda symbol, period: old)
     assert feed.poll("NIFTY", since).empty                                    # a real frame, all older than `since`: no error
+
+
+# ---- a faulty OI print quarantines the snapshot's OI ----------------------------------------------------------------------
+def oi_chain():
+    df = NSEOptionChain.parse(NSE_V3, "NIFTY", dt.date(2026, 10, 6))
+    return fill_iv(df, IntradayPricer())
+
+
+OI_KEYS = ("pcr_oi", "pcr_doi", "call_wall", "put_wall", "max_pain", "top_call_adds", "top_put_adds", "gex_cr_per_1pct", "gex_state", "gamma_flip")
+
+
+@pytest.mark.parametrize("col,bad", [("ce_oi", 1e18), ("pe_oi", 9.2e18), ("ce_oi", float("inf")), ("pe_oi", -5.0), ("ce_doi", 1e15), ("pe_doi", -1e15),
+                                      ("ce_doi", float("inf"))])
+def test_a_faulty_oi_print_removes_every_oi_read_and_leaves_the_price_reads(col, bad):
+    from quantdesk.intraday.chains import plausible_oi
+    good = oi_chain()
+    assert plausible_oi(good) and "oi_quarantined" not in chain_analytics(good)
+    df = good.copy()
+    df.iloc[0, df.columns.get_loc(col)] = bad
+    assert not plausible_oi(df)
+    a, b = chain_analytics(df), chain_analytics(good)
+    assert a["oi_quarantined"] is True and not [k for k in OI_KEYS if k in a]
+    assert a["atm_strike"] == b["atm_strike"] and a["atm_iv"] == b["atm_iv"] and a["straddle"] == b["straddle"] and a["implied_move"] == b["implied_move"]
+    assert any(k in b for k in ("pcr_oi", "max_pain"))                                          # the clean chain still has them (the test means something)
+
+
+def test_ordinary_oi_changes_and_missing_oi_are_not_a_fault():
+    from quantdesk.intraday.chains import plausible_oi
+    df = oi_chain()
+    df["ce_doi"], df["pe_doi"] = -4.0e7, 2.5e8                                                  # big real day changes, either sign
+    df["ce_oi"], df["pe_oi"] = 9.0e8, np.nan                                                    # a large real position; a side with no OI at all
+    assert plausible_oi(df)
+    df["ce_oi"] = 1e12                                                                          # exactly the bound is allowed, beyond it is not
+    assert plausible_oi(df)
+    df["ce_oi"] = np.nextafter(1e12, 1e13)
+    assert not plausible_oi(df)
+
+
+def test_the_live_bound_equals_the_offline_one():
+    from quantdesk.intraday import chains
+    from quantdesk.ml import oi
+    assert chains.OI_MAX == oi.OI_MAX
+
+
+def test_the_app_view_carries_the_quarantine_flag_and_no_oi_read():
+    from quantdesk.intraday.engine import _chain_view
+    df = oi_chain()
+    df.iloc[0, df.columns.get_loc("ce_oi")] = 1e18
+    v = _chain_view(chain_analytics(df))
+    assert v["oi_quarantined"] is True and "pcr_oi" not in v and "max_pain" not in v
+
+
+def test_a_quarantined_oi_read_counts_as_neutral_evidence_and_can_only_dilute(cfg, sessions):
+    """The OI votes are withheld on a faulty print, but they stay in the weighing at their own weights with no direction: dropping a disagreeing vote must not raise conviction."""
+    from quantdesk.intraday.analyst import Analyst
+    bars, _, days = sessions
+    now = ts(f"{days[-1]} 11:00")
+    s = session_state(bars["NIFTY"][bars["NIFTY"].index + pd.Timedelta(minutes=1) <= now], now)
+    good = oi_chain()
+    good.attrs["spot"] = s["last"]
+    good["pe_oi"] = good["pe_oi"] * good["ce_oi"].sum() / good["pe_oi"].sum()                    # PCR 1.0: the clean OI votes are near neutral
+    bad = good.copy()
+    bad.iloc[0, bad.columns.get_loc("ce_oi")] = 1e18
+    out = {}
+    for name, d in (("clean", good), ("quarantined", bad)):
+        an = chain_analytics(d)
+        an["source"] = "nse"
+        out[name] = Analyst(cfg).assess("NIFTY", s, an)
+    bare = chain_analytics(good)
+    for k in OI_KEYS:
+        bare.pop(k, None)
+    bare["source"] = "nse"
+    nothing = Analyst(cfg).assess("NIFTY", s, bare)                                              # no OI evidence at all
+    q = out["quarantined"]
+    assert {"pcr", "oi_walls"} <= {e.factor for e in q.evidence if e.direction == 0 and "withheld" in e.observation}
+    assert abs(q.score) <= abs(nothing.score) + 1e-12 and q.conviction <= nothing.conviction + 1e-12      # never more convincing than "no OI reads"
+    assert out["clean"].evidence and "OI feed fault" not in " ".join(e.observation for e in out["clean"].evidence)
