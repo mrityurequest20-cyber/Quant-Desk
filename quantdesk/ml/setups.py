@@ -1,24 +1,39 @@
-"""The labelled-setup counter (P0.7 of docs/ML_PHASE0.md). **Design level: nothing produces these records yet.**
+"""The labelled-setup counter (P0.7 of docs/ML_PHASE0.md).
 
-The entry filter (M4) needs about 300 to 500 *labelled setups*: a setup the desk saw (live in the Shadow stage, or replayed offline) whose outcome is now
-known. This module defines the record of one such setup, validates it, and counts them per week and toward that target, in one line for the Saturday
-digest. A record is the `data` of a journal event of category `setup_labelled`; this module does not import the journal and no emitter exists: the Shadow
-stage of the scope ladder, and the replay that labels past setups, are later, separately reviewed changes. Until then the line honestly reads zero.
+The entry filter (M4) needs about 300 to 500 *labelled setups*: a setup the desk saw whose outcome is now known. Three kinds exist, and the counter says
+which is which:
 
-Counting rules, so the number cannot flatter itself: a setup counts once however many times it was recorded (by `setup_id`); a record that fails validation
-is not counted and is reported; a setup counts in the week of its **label date** (when its outcome became known), because that is when it became usable;
-and the unit of statistics stays the session, so the line also gives the number of distinct sessions the setups come from.
+* `paper`: a paper trade the desk took and closed: its label is the trade's R multiple (journal table `trades`, status `closed`, a finite `r_multiple`).
+* `replay`: an armed setup the EV gate refused, replayed afterwards on the bars that followed and graded (`intraday/learning.py: grade_armed`; the journal's
+  `decisions` rows whose detail says the entry level was reached, and whose key `ts|symbol|strategy` is in the learning memory's graded list). Its label is known
+  once its 45-minute window has closed; the value of the label is kept only as an aggregate in the memory, so a replay setup counts but carries no outcome here.
+* `shadow`: a setup the engine journals on an instrument in the Shadow stage of the scope ladder. **That stage does not exist yet**; the source is reserved and the
+  count of it is zero until the stage is built (a separate, reviewed change).
+
+Counting rules, so the number cannot flatter itself: a setup counts once however many times it was recorded (by `setup_id`); a record that fails validation is
+not counted and is reported; a setup counts in the week of its **label date** (when its outcome became known); and the unit of statistics stays the session, so the
+line also gives the number of distinct sessions the setups come from. Trades on the same day move together, so 300 setups from 40 sessions are not 300 independent
+samples; the line shows both.
+
+Everything here is read-only and imports nothing from the desk: `from_journal` opens the journal file read-only with `sqlite3` and reads the memory as JSON.
+`line` is what the Saturday digest shows; the site export publishes it in `data.json` (`setups`) and the watchdog's W8 digest reads it from there.
 """
 from __future__ import annotations
 
+import json
 import math
 import re
-from datetime import date, datetime, timedelta
+import sqlite3
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 CATEGORY = "setup_labelled"
-SOURCES = ("shadow", "replay")
+SOURCES = ("paper", "replay", "shadow")
 TARGET = (300, 500)
-_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,95}")
+REPLAY_HORIZON_MIN = 45                                       # learning.grade_armed(horizon=45): the label is known when this window has closed
+ARMED_MARK = "reached its level"                              # learning.grade_armed's filter on a decision's detail
+IST = timezone(timedelta(hours=5, minutes=30))
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/|+-]{0,127}")
 
 
 class BadSetup(ValueError):
@@ -43,17 +58,18 @@ def _finite(x) -> bool:
 
 
 def check_setup(rec) -> list[str]:
-    """Every reason `rec` is not a labelled setup (empty if none)."""
+    """Every reason `rec` is not a labelled setup (empty if none). `outcome` is required except for a `replay` setup, whose value lives in the memory's aggregate."""
     if not isinstance(rec, dict):
         return ["a setup record must be an object"]
     p: list[str] = []
-    for k in ("setup_id", "source", "symbol", "session", "ts", "labelled_at", "outcome"):
+    need = ("setup_id", "source", "symbol", "session", "ts", "labelled_at") + (() if rec.get("source") == "replay" else ("outcome",))
+    for k in need:
         if k not in rec or rec[k] in (None, ""):
             p.append(f"missing {k}")
     if p:
         return p
     if not (isinstance(rec["setup_id"], str) and _ID.fullmatch(rec["setup_id"])):
-        p.append("setup_id must be a short identifier (letters, digits, _ . : / -)")
+        p.append("setup_id must be a short identifier (letters, digits, _ . : / | + -)")
     if rec["source"] not in SOURCES:
         p.append(f"source must be one of {SOURCES}")
     if not (isinstance(rec["symbol"], str) and rec["symbol"].strip()):
@@ -71,7 +87,7 @@ def check_setup(rec) -> list[str]:
         p.append("session must be a real YYYY-MM-DD date")
     elif ts is not None and sd != ts.date():
         p.append("session must be the date of ts (in ts's own zone)")
-    if not _finite(rec["outcome"]):
+    if rec.get("outcome") is not None and not _finite(rec["outcome"]):
         p.append("outcome must be a finite number (the label)")
     return p
 
@@ -107,26 +123,97 @@ def count(records, today: date) -> dict:
         by_week.setdefault(w, {s: 0 for s in SOURCES})[r["source"]] += 1
     this = by_week.get(str(wk), {s: 0 for s in SOURCES})
     total = len(good)
-    return {"total": total, "this_week": sum(this.values()), "this_week_by_source": this, "week_start": str(wk), "by_week": dict(sorted(by_week.items())),
-            "sessions": len({r["session"] for r in good}), "target": TARGET, "progress_low": total / TARGET[0], "progress_high": total / TARGET[1],
-            "invalid": bad, "duplicates_ignored": len(records) - len(good) - len(bad)}
+    by_source = {s: sum(1 for r in good if r["source"] == s) for s in SOURCES}
+    return {"total": total, "by_source": by_source, "this_week": sum(this.values()), "this_week_by_source": this, "week_start": str(wk),
+            "by_week": dict(sorted(by_week.items())), "sessions": len({r["session"] for r in good}), "target": TARGET, "progress_low": total / TARGET[0],
+            "progress_high": total / TARGET[1], "invalid": bad, "duplicates_ignored": len(records) - len(good) - len(bad)}
+
+
+def line(c: dict) -> str:
+    """The one line for the Saturday digest, from `count`'s result."""
+    s = c["this_week_by_source"]
+    out = (f"Labelled setups: {c['this_week']} this week (paper {s['paper']}, replay {s['replay']}, shadow {s['shadow']}); {c['total']} in total from "
+           f"{c['sessions']} sessions, {c['total'] / TARGET[0]:.0%} of the {TARGET[0]} the entry filter needs at least ({TARGET[0]} to {TARGET[1]}).")
+    if c["invalid"]:
+        out += f" {len(c['invalid'])} record(s) failed validation and are not counted."
+    return out
 
 
 def digest_line(records, today: date) -> str:
-    """One line for the Saturday digest."""
-    c = count(records, today)
-    s = c["this_week_by_source"]
-    line = (f"Labelled setups: {c['this_week']} this week (shadow {s['shadow']}, replay {s['replay']}); {c['total']} in total from {c['sessions']} sessions, "
-            f"{c['total'] / TARGET[0]:.0%} of the {TARGET[0]} the entry filter needs at least ({TARGET[0]} to {TARGET[1]}).")
-    if c["invalid"]:
-        line += f" {len(c['invalid'])} record(s) failed validation and are not counted."
-    return line
+    return line(count(records, today))
 
 
 def from_events(events) -> list:
-    """The setup records inside journal events (dicts with `category` and `data`): the events of category `setup_labelled`, their payloads, in order."""
-    out = []
-    for ev in events:
-        if isinstance(ev, dict) and ev.get("category") == CATEGORY and isinstance(ev.get("data"), dict):
-            out.append(ev["data"])
+    """The setup records inside journal events (dicts with `category` and `data`): the events of category `setup_labelled`, their payloads, in order. The producer
+    of such events is the Shadow stage, which does not exist yet."""
+    return [ev["data"] for ev in events if isinstance(ev, dict) and ev.get("category") == CATEGORY and isinstance(ev.get("data"), dict)]
+
+
+# ---- the journal ------------------------------------------------------------------------------------------------------------------------------
+def _aware(x):
+    """A journal timestamp as an aware datetime; a naive one is the desk's own clock, India Standard Time."""
+    try:
+        t = datetime.fromisoformat(str(x).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo is not None else t.replace(tzinfo=IST)
+
+
+def _sid(prefix: str, raw) -> str:
+    return re.sub(r"[^A-Za-z0-9_.:/|+-]", "_", f"{prefix}:{raw}")[:128]
+
+
+def _trade_record(row) -> dict | None:
+    tid, opened, closed, r = row
+    o, c = _aware(opened), _aware(closed)
+    if o is None or c is None or not _finite(r):
+        return None
+    return {"setup_id": _sid("trade", tid), "source": "paper", "symbol": "", "session": str(o.date()), "ts": o.isoformat(), "labelled_at": c.isoformat(), "outcome": float(r)}
+
+
+def from_journal(journal_db, memory_json, notes: list | None = None) -> list[dict]:
+    """The labelled setups of one account, read-only: its closed trades (journal) and its graded armed setups (the learning memory's list of graded keys that the
+    journal's decisions still hold). `notes` collects what could not be read; nothing here raises on a missing or unreadable file, because a digest must still go out."""
+    notes = notes if notes is not None else []
+    out: list[dict] = []
+    jp = Path(journal_db)
+    if not jp.exists():
+        notes.append(f"no journal at {jp.name}")
+        return out
+    try:
+        db = sqlite3.connect(f"file:{jp.resolve()}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error as exc:
+        notes.append(f"journal not readable: {exc!s:.80}")
+        return out
+    try:
+        for tid, symbol, opened, closed, r in db.execute("SELECT id, symbol, opened_at, closed_at, r_multiple FROM trades WHERE status = 'closed'"):
+            rec = _trade_record((tid, opened, closed, r))
+            if rec is not None:
+                rec["symbol"] = str(symbol or "")
+                out.append(rec)
+        graded: set = set()
+        try:
+            graded = set(json.loads(Path(memory_json).read_text(encoding="utf-8"))["graded"]["armed"])
+        except (OSError, ValueError, KeyError, TypeError):
+            notes.append("learning memory not readable: replay setups are not counted")
+        if graded:
+            for ts, symbol, strategy, detail in db.execute("SELECT ts, symbol, strategy, detail FROM decisions WHERE detail LIKE ?", (f"%{ARMED_MARK}%",)):
+                key = f"{ts}|{symbol}|{strategy}"
+                t = _aware(ts)
+                if key in graded and t is not None:
+                    sid = _sid("armed", f"{t.isoformat()}|{symbol}|{strategy}")
+                    out.append({"setup_id": sid, "source": "replay", "symbol": str(symbol or ""), "session": str(t.date()), "ts": t.isoformat(),
+                                "labelled_at": (t + timedelta(minutes=REPLAY_HORIZON_MIN)).isoformat(), "outcome": None})
+    except sqlite3.Error as exc:
+        notes.append(f"journal query failed: {exc!s:.80}")
+    finally:
+        db.close()
     return out
+
+
+def block(journal_db, memory_json, today: date) -> dict:
+    """What the site export publishes in `data.json` as `setups`: the digest line, the counts, and what could not be read."""
+    notes: list = []
+    c = count(from_journal(journal_db, memory_json, notes), today)
+    return {"line": line(c), "total": c["total"], "this_week": c["this_week"], "week_start": c["week_start"], "sessions": c["sessions"], "by_source": c["by_source"],
+            "target": list(TARGET), "invalid": len(c["invalid"]), "notes": notes}

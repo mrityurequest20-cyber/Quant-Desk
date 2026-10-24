@@ -185,6 +185,24 @@ async function w7Expiry(c) {
 	return out;
 }
 
+// P0.7: the labelled-setup line the site publishes in data.json (quantdesk/ml/setups.py). The digest is never held back by it: whatever goes wrong becomes a line that
+// says so, because silence would hide a broken count.
+export async function readSetupsLine(env) {
+	try {
+		const origin = String(env.ORIGIN || "").replace(/\/+$/, "");
+		if (!/^https:\/\//.test(origin)) return "Labelled setups: not available (ORIGIN is not set).";
+		const res = await fetch(`${origin}/data.json`, { cache: "no-store", signal: AbortSignal.timeout(FETCH_MS) });
+		if (!res.ok) return `Labelled setups: not available (data.json answered ${res.status}).`;
+		const data = await res.json();
+		const line = data && data.setups && data.setups.line;
+		if (typeof line === "string" && line.trim()) return line.trim();
+		const why = data && data.setups && data.setups.error;
+		return why ? `Labelled setups: not available (${String(why).slice(0, 80)}).` : "Labelled setups: not published in data.json.";
+	} catch (e) {
+		return "Labelled setups: not available (data.json could not be read).";
+	}
+}
+
 // W8: the Saturday digest
 async function w8Digest(c) {
 	const days = [];
@@ -196,7 +214,7 @@ async function w8Digest(c) {
 	const failed = await allRuns(c.env, { status: "failure", per_page: 100, created: `>=${addDays(c.now.date, -8)}` });
 	const onMain = failed.filter((r) => r.head_branch === "main" && Date.parse(r.updated_at) >= c.nowMs - 7 * DAY_MS);
 	return [{ sev: "INFO", check: "W8", title: "Weekly digest",
-		body: `Sessions run ${got} of ${expected.length} expected in the last 7 days. Workflow runs failed on main: ${onMain.length}. Details: the learning bot's weekly and monthly reports, and docs/MASTER_PLAN.md section 8.`,
+		body: `Sessions run ${got} of ${expected.length} expected in the last 7 days. Workflow runs failed on main: ${onMain.length}. ${await readSetupsLine(c.env)} Details: the learning bot's weekly and monthly reports, and docs/MASTER_PLAN.md section 8.`,
 		link: `https://github.com/${repoOf(c.env)}/actions` }];
 }
 
