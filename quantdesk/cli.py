@@ -366,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report"])
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "trades"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
@@ -386,6 +386,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
     s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
+    s.add_argument("--journal", help="trades: a journal database (intraday/journal.db, e.g. from the journal branch); opened read-only")
+    s.add_argument("--sleeve", help="trades: also take a close look at one sleeve's trades (the VWAP check: vwap_trend)")
     s.add_argument("--accept-gaps", default="", help="oi-report --readout final: comma-separated weekdays (YYYY-MM-DD) that have no table because they were exchange holidays")
     s.set_defaults(fn=cmd_ml)
     return p
@@ -402,6 +404,8 @@ def cmd_ml(cfg, a):
             return _ml_build(cfg, a)
         if a.action in ("oi", "oi-report"):
             return _ml_oi(cfg, a)
+        if a.action == "trades":
+            return _ml_trades(a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
         raise SystemExit(f"ml {a.action}: {exc}")
@@ -447,6 +451,15 @@ def _ml_oi(cfg, a):
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
     print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
+
+
+def _ml_trades(a):
+    """The fixed read-only splits of the paper desk's closed trades (quantdesk/ml/tradesplit.py). Descriptive; writes nothing."""
+    from .ml import tradesplit as TS
+    if not a.journal:
+        raise SystemExit("ml trades: --journal is required")
+    trades = TS.load_closed(Path(a.journal))
+    print(TS.render(TS.split(trades), TS.sleeve_check(trades, a.sleeve) if a.sleeve else None))
 
 
 def _ml_reproduce(a):
