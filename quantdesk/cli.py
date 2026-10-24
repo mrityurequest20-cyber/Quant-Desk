@@ -363,7 +363,33 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
     s.set_defaults(fn=cmd_wings)
+    s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
+                                  "immutable dataset (never touches the live desk)")
+    s.add_argument("action", choices=["import"])
+    s.add_argument("--source", required=True, help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...)")
+    s.add_argument("--out", help="import: output root (default runtime/external)")
+    s.add_argument("--version", default="", help="import: the source's version label (documentation only; the file hashes are the identity)")
+    s.add_argument("--reviewed", help="import: a reviewed-sessions file (default quantdesk/ml/reviewed_sessions.json)")
+    s.set_defaults(fn=cmd_ml)
     return p
+
+
+def cmd_ml(cfg, a):
+    """P0.2: validate and import the external index minutes. Offline and read-only: the live desk is not involved."""
+    from .data.external_aeron import ImmutableViolation
+    from .ml import intake as I
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
+    try:
+        man = I.import_source(Path(a.source), out, version=a.version, reviewed_path=Path(a.reviewed) if a.reviewed else None)
+    except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError) as exc:
+        raise SystemExit(f"ml import: {exc}")
+    ds = out / man["source"]["name"] / man["dataset"]
+    n = {k: sum(1 for s in man["sessions"] if s["status"] == k) for k in ("accepted", "accepted_reviewed", "review", "rejected")}
+    print(f"{man['dataset']}: status {man['status']} · digest {man['digest'][:16]} · sessions {n} · report {ds / 'quality.md'}")
+    for r in man["reviewed_not_applied"]:
+        print(f"  reviewed entry not applied: {r['session']}: {r['why']}")
+    for u in man["reviewed_unused"]:
+        print(f"  reviewed entry matches no session: {u}")
 
 
 def cmd_learnbot(cfg, a):

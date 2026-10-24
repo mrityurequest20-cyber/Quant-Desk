@@ -1,0 +1,5 @@
+{
+ "schema": 2,
+ "note": "Sessions that the importer sent to review (a one-minute log move above 5%, a frozen feed, or a full-length weekend session) and that a reviewer has admitted. Empty means every review session stays out. An entry names the reviewer, the date, the sha256 of the source file it was reviewed on, the evidence (at least 40 characters and 6 words), and `observed`: one number per code (jump: max_1m_move_at, stale_run: longest_stale_run, stale_share: stale_bars, weekend_full: minutes). It applies only while the session has no hard rejection, its codes are all listed, and its file and facts are the ones reviewed. The file's hash is part of the dataset identity, so a change here makes a new dataset.",
+ "sessions": []
+}
