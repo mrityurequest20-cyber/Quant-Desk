@@ -22,7 +22,10 @@ def sha_of(p: Path) -> str:
 
 
 def write_manifest(ds: Path, **over) -> dict:
-    parts = {f"1m/symbol=NIFTY/{p.name}": sha_of(p) for p in sorted((ds / "1m" / "symbol=NIFTY").glob("*.parquet"))}
+    import pandas as pd
+
+    from quantdesk.data import external_aeron as X
+    parts = {f"1m/symbol=NIFTY/{p.name}": X.frame_hash(pd.read_parquet(p)) for p in sorted((ds / "1m" / "symbol=NIFTY").glob("*.parquet"))}
     man = {"status": "external_verified", "dataset": ds.name, "source_url": "https://example.invalid/src", "source_commit": "a" * 40,
            "importer_version": "aeron7-2", "partitions": parts, **over}
     (ds / "manifest.json").write_text(json.dumps(man))
@@ -142,7 +145,7 @@ def test_a_partition_that_no_longer_hashes_to_the_recorded_one_is_named(lab):
     man["partitions"][k] = "0" * 64
     (lab["ds"] / "manifest.json").write_text(json.dumps(man))
     rep = drill(lab)
-    assert not rep["ok"] and any("partitions differ" in x and k in x for x in rep["models"][0]["input_findings"])
+    assert not rep["ok"] and any("do not match the files" in x and k in x for x in rep["models"][0]["input_findings"])
 
 
 def test_a_committed_file_without_partition_hashes_cannot_vouch_for_its_inputs(lab):
@@ -301,3 +304,55 @@ def test_the_workflow_reads_the_pinned_commit_from_the_committed_coefficients():
     (m,) = RT.registry()
     commit = json.loads(m.committed.read_text())["provenance"]["inputs"]["source_commit"]
     assert len(commit) == 40 and set(commit) <= set("0123456789abcdef")
+
+
+# ---- the audit's follow-ups ----------------------------------------------------------------------------------------
+def test_a_partition_changed_after_the_manifest_was_written_is_caught_from_the_files_not_the_manifest(lab):
+    import pandas as pd
+    part = sorted((lab["ds"] / "1m" / "symbol=NIFTY").glob("year=2014.parquet"))[0]            # after the fit's training window: the numbers would not move
+    df = pd.read_parquet(part)
+    df["close"] = df["close"] * 1.5
+    df.to_parquet(part)
+    rep = drill(lab)
+    row = rep["models"][0]
+    assert not rep["ok"] and row["verdict"] == "reproduced_on_different_inputs"
+    assert any("do not match the files" in x and "year=2014" in x for x in row["input_findings"]), row["input_findings"]
+
+
+def test_an_extra_partition_file_or_manifest_entry_is_named(lab):
+    import shutil
+    extra = lab["ds"] / "1m" / "symbol=NIFTY" / "year=2099.parquet"
+    shutil.copy(lab["ds"] / "1m" / "symbol=NIFTY" / "year=2014.parquet", extra)
+    f = drill(lab)["models"][0]["input_findings"]
+    assert any("not in the manifest" in x and "year=2099" in x for x in f), f
+    extra.unlink()
+    man = json.loads((lab["ds"] / "manifest.json").read_text())
+    man["partitions"]["1m/symbol=NIFTY/year=2098.parquet"] = "f" * 24                            # in the manifest, not on disk
+    (lab["ds"] / "manifest.json").write_text(json.dumps(man))
+    f = drill(lab, lab["root"] / "again")["models"][0]["input_findings"]
+    assert any("could not be read" in x for x in f), f
+
+
+def test_a_different_importer_version_is_an_input_finding(lab):
+    write_manifest(lab["ds"], importer_version="aeron7-3")
+    row = drill(lab)["models"][0]
+    assert row["verdict"] == "reproduced_on_different_inputs" and any("importer_version" in x for x in row["input_findings"])
+
+
+def test_the_report_records_the_spec_the_code_state_and_what_reproduced_means(lab):
+    rep = drill(lab)
+    row = rep["models"][0]
+    assert row["spec_sha256"] == spec_hash(lab["spec"]) and "code_has_uncommitted_changes" in rep and len(rep["dataset"]["manifest_sha256"]) == 64
+    assert "repeatability, not correctness" in rep["meaning"]
+
+
+def test_the_drill_refit_is_what_the_real_fit_command_writes(lab, tmp_path):
+    """Pins `_har` to `autolearn vol-har-fit` itself (the committed numbers come from that command): run the command on the same dataset and compare every number."""
+    import shutil
+    root = tmp_path / "ext"
+    shutil.copytree(lab["ds"], root / "aeron7" / "aeron7-2-lab")
+    out = tmp_path / "from_command.json"
+    main(["autolearn", "vol-har-fit", "--out", str(root), "--spec", str(lab["spec"]), "--to", str(out)])
+    command = json.loads(out.read_text())
+    mine = RT._har(root / "aeron7" / "aeron7-2-lab", lab["spec"])
+    assert {k: v for k, v in command.items() if k != "provenance"} == mine

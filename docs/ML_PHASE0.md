@@ -121,7 +121,7 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
   committed coefficients (P0.4's comparison: relative tolerance 1e-9, never wider than 1e-6; provenance is not compared as numbers). It also checks that the
   rebuilt dataset has the recorded source commit, importer and 1-minute partition hashes, and says `reproduced_on_different_inputs` when the numbers match
   but the inputs do not. **First drill (24 Oct, local, the true dataset): 809 numbers, largest difference exactly 0.** The workflow runs Sundays and on
-  demand; `permissions: contents: read`, no secret, no token, no push or release, checkout without credentials, the report kept as a 30-day run
+  demand; `permissions: contents: read`, no secret and no write token (the job's read-only token is used by checkout, which keeps no credentials), no push or release, the report kept as a 30-day run
   artifact (a test pins all of that). It fetches the source repository at the commit recorded in the committed coefficients, imports it
   (`external_unverified`; the refit reads it anyway and the report says so), refits, and fails the run on any mismatch. The output folder must be outside
   every git tree or under the gitignored `runtime/`, and a report is written once. What it does not do yet: rebuild the Kaggle tables (that data stays

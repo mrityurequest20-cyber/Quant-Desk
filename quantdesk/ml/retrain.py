@@ -8,7 +8,9 @@ What it will not do, by construction:
   has `contents: read` and no secret; this module reads files and writes into the output folder only.
 - accept a wider tolerance than P0.4's: `reproduce.RTOL_MAX` (1e-6). A refit that needs more is not a reproduction.
 - say a model is reproduced when its inputs were not the ones it was fitted on. The rebuilt dataset's source commit, importer and 1-minute partition
-  hashes are compared with the ones recorded in the committed file's provenance and reported beside the verdict.
+  hashes (recomputed from the Parquet files, not read from the manifest, which `X.load` does not check against the files) are compared with the ones
+  recorded in the committed file's provenance and reported beside the verdict. "Reproduced" certifies repeatability, not correctness: a flaw of the fit
+  itself is reproduced too, and the report says so.
 
 The dataset a scheduled run uses is freshly imported, so its status is `external_unverified`: the refit reads it anyway (the report says so). That
 is right for a drill and wrong for anything else; nothing here qualifies data or a model.
@@ -64,6 +66,11 @@ def registry() -> tuple[Refit, ...]:
     return (Refit("c_har", Path(DEFAULT_PATH), REPO / "docs" / "prereg" / "vol_forecast_v1.json", _har),)
 
 
+def _spec_sha(spec: Path) -> str:
+    from ..autolearn.prereg import spec_hash
+    return spec_hash(Path(spec))
+
+
 def _canon(obj) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -90,10 +97,25 @@ def check_out(out: Path, models: tuple[Refit, ...]) -> Path:
 
 
 def _inputs(dataset: Path) -> dict:
+    """What the dataset is: the manifest's identity fields, and the content hash of every 1-minute partition *recomputed from the files* (the importer's own `frame_hash`),
+    beside what the manifest says. `X.load` does not check the manifest against the files, so the manifest alone would only attest itself."""
+    import pandas as pd
+
+    from ..data import external_aeron as X
     man = json.loads((Path(dataset) / "manifest.json").read_text())
+    recorded = {k: v for k, v in sorted(man.get("partitions", {}).items()) if k.startswith("1m/")}
+    actual, unreadable = {}, []
+    for k in recorded:
+        try:
+            actual[k] = X.frame_hash(pd.read_parquet(Path(dataset) / k))
+        except (OSError, ValueError) as exc:
+            unreadable.append(f"{k}: {type(exc).__name__}")
+    on_disk = sorted(str(p.relative_to(dataset)) for p in (Path(dataset) / "1m").rglob("*.parquet")) if (Path(dataset) / "1m").is_dir() else []
     return {"dataset": man.get("dataset") or Path(dataset).name, "status": man.get("status"), "source_url": man.get("source_url"),
             "source_commit": man.get("source_commit"), "importer_version": man.get("importer_version"),
-            "partitions_1m": {k: v for k, v in sorted(man.get("partitions", {}).items()) if k.startswith("1m/")}}
+            "manifest_sha256": hashlib.sha256((Path(dataset) / "manifest.json").read_bytes()).hexdigest(),
+            "partitions_1m": actual, "manifest_partitions_1m": recorded, "unreadable_partitions": unreadable,
+            "unlisted_partitions": sorted(set(on_disk) - set(recorded))}
 
 
 def _input_findings(committed: dict, now: dict) -> list[str]:
@@ -103,6 +125,13 @@ def _input_findings(committed: dict, now: dict) -> list[str]:
     for k in ("source_url", "source_commit", "importer_version"):
         if was.get(k) != now.get(k):
             out.append(f"{k}: {was.get(k)!r} committed, {now.get(k)!r} rebuilt")
+    if now.get("unreadable_partitions"):
+        out.append(f"{len(now['unreadable_partitions'])} 1-minute partition(s) could not be read: {now['unreadable_partitions'][0]}")
+    if now.get("unlisted_partitions"):
+        out.append(f"{len(now['unlisted_partitions'])} 1-minute partition file(s) are not in the manifest (first: {now['unlisted_partitions'][0]})")
+    if now.get("manifest_partitions_1m") != now.get("partitions_1m") and not now.get("unreadable_partitions"):
+        bad = sorted(k for k in now.get("manifest_partitions_1m", {}) if now["manifest_partitions_1m"][k] != now["partitions_1m"].get(k))
+        out.append(f"the manifest's hashes do not match the files for {len(bad)} partition(s) (first: {bad[0] if bad else '?'}): the dataset was changed after it was imported")
     a, b = was.get("partitions_1m") or {}, now.get("partitions_1m") or {}
     if not a:
         out.append("the committed file records no 1-minute partition hashes: the inputs cannot be compared")
@@ -121,13 +150,15 @@ def _versions() -> dict:
             "platform": platform.platform()}
 
 
-def _code_commit() -> str | None:
+def _code_state() -> tuple[str | None, bool | None]:
+    """(commit, whether quantdesk/ or docs/prereg had uncommitted changes), or (None, None): the same facts the committed coefficients record."""
     import subprocess
     try:
-        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, timeout=20)
-        return r.stdout.strip() or None
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, timeout=20).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "quantdesk", "docs/prereg"], cwd=REPO, capture_output=True, text=True, timeout=20).stdout.strip()
+        return head or None, bool(dirty)
     except Exception:
-        return None
+        return None, None
 
 
 def drill(dataset: Path, out: Path, rtol: float = RTOL, atol: float = ATOL, models: tuple[Refit, ...] | None = None, say=print) -> dict:
@@ -143,6 +174,7 @@ def drill(dataset: Path, out: Path, rtol: float = RTOL, atol: float = ATOL, mode
     out = check_out(out, models)
     dataset = Path(dataset)
     inputs = _inputs(dataset)
+    head, dirty = _code_state()
     rows = []
     for m in models:
         committed_text = m.committed.read_text()
@@ -158,7 +190,7 @@ def drill(dataset: Path, out: Path, rtol: float = RTOL, atol: float = ATOL, mode
             fh.write(json.dumps(fresh, indent=1))
         verdict = "reproduced" if cmp.ok and not findings else ("differs" if not cmp.ok else "reproduced_on_different_inputs")
         rows.append({"id": m.id, "verdict": verdict, "committed_file": m.committed.name, "committed_sha256": hashlib.sha256(committed_text.encode()).hexdigest(),
-                     "committed_numbers_sha256": _sha({k: v for k, v in committed.items() if k != "provenance"}),
+                     "spec_sha256": _spec_sha(m.spec), "committed_numbers_sha256": _sha({k: v for k, v in committed.items() if k != "provenance"}),
                      "refit_numbers_sha256": _sha({k: v for k, v in fresh.items() if k != "provenance"}),
                      "numbers": cmp.numbers, "max_abs": cmp.max_abs, "max_rel": cmp.max_rel, "worst": cmp.worst,
                      "mismatches": cmp.mismatches[:50], "n_mismatches": len(cmp.mismatches), "input_findings": findings})
@@ -167,7 +199,9 @@ def drill(dataset: Path, out: Path, rtol: float = RTOL, atol: float = ATOL, mode
     report = {"schema": SCHEMA, "ok": all(r["verdict"] == "reproduced" for r in rows), "rtol": rtol, "atol": atol,
               "dataset": inputs, "note": "a drill: it reproduces the committed numbers from a rebuilt dataset and replaces nothing; "
                                          "a fresh import is external_unverified and nothing here qualifies data or a model",
-              "code_commit": _code_commit(), "versions": _versions(),
+              "code_commit": head, "code_has_uncommitted_changes": dirty, "versions": _versions(),
+              "meaning": "repeatability, not correctness: the refit reproduces the committed numbers from the same inputs, including any flaw of the fit itself "
+                         "(for example the first bars of some sessions back-filled from a later close by volstudy.grid, see docs/ML_PHASE0.md P0.3)",
               "ran_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "models": rows}
     with open(out / REPORT_NAME, "x") as fh:
         fh.write(json.dumps(report, indent=1))
