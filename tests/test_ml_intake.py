@@ -628,7 +628,9 @@ def test_the_status_is_per_symbol_and_the_record_must_name_its_criteria(imported
     with pytest.raises(legacy.ForbiddenUse, match="external_unverified"):                          # one covered symbol does not carry the other
         I.load(ds, ["NIFTY", "INDIAVIX"], use="regime_research")
     assert I.load(ds, ["INDIAVIX"], use="regime_research", allow_unverified=True).attrs["status"] == I.UNVERIFIED     # allowed on request, and labelled
-    assert I.effective_status(ds, m) == I.UNVERIFIED                                               # the dataset as a whole holds INDIAVIX
+    assert I.effective_status(ds, m, ["NIFTY", "BANKNIFTY", "INDIAVIX"]) == I.UNVERIFIED          # the dataset as a whole holds INDIAVIX
+    with pytest.raises(TypeError):                                                                 # `symbols` is required: there is no unscoped answer
+        I.effective_status(ds, m)
     assert I.effective_status(ds, m, ["NIFTY"]) == I.VERIFIED
     assert I.effective_status(ds, m, "NIFTY") == I.VERIFIED                                        # a bare string is one symbol, not a set of letters
     assert I.effective_status(ds, m, ["NIFTY", "SENSEX"]) == I.UNVERIFIED
@@ -651,7 +653,7 @@ def test_a_record_without_its_scope_or_with_other_criteria_verifies_nothing(impo
             rec[k] = v
     m = mark_verified(ds, rec)
     assert I.effective_status(ds, m, ["NIFTY"]) == I.UNVERIFIED
-    assert I.effective_status(ds, m) == I.UNVERIFIED
+    assert I.effective_status(ds, m, ["NIFTY", "BANKNIFTY", "INDIAVIX"]) == I.UNVERIFIED
     with pytest.raises(legacy.ForbiddenUse, match="external_unverified"):
         I.load(ds, ["NIFTY"], use="regime_research")
 
@@ -671,8 +673,7 @@ def test_the_pinned_criteria_hash_is_the_hash_of_the_criteria_file():
     """The pin is the sha256 of docs/ml/P0_6_criteria.md as merged: a changed criteria file is a new check name, added by a reviewed change."""
     import hashlib
     f = REPO / "docs" / "ml" / "P0_6_criteria.md"
-    if not f.exists():
-        pytest.skip("the criteria file is not in this tree yet")
+    assert f.exists(), "the criteria file must be committed before the loader pins it"
     assert hashlib.sha256(f.read_bytes()).hexdigest() == I.VERIFICATION_CRITERIA["p06-v1"]
 
 
@@ -1091,3 +1092,10 @@ def test_the_cli_imports_and_reports_and_bad_input_exits_cleanly(tmp_path, capsy
         main(["ml", "import", "--source", str(src), "--out", str(tmp_path / "out3"), "--reviewed", str(broken)])
     with pytest.raises(SystemExit, match="ml import"):
         main(["ml", "import", "--source", str(src), "--out", str(tmp_path / "out4"), "--reviewed", str(tmp_path / "missing.json")])
+
+
+def test_a_deeply_nested_record_is_unverified_not_a_crash(imported):
+    _, out, man, _ = imported
+    ds = ds_of(out, man)
+    m = mark_verified(ds, "[" * 200000)
+    assert I.effective_status(ds, m, ["NIFTY"]) == I.UNVERIFIED

@@ -797,6 +797,11 @@ def test_the_status_can_be_re_derived_from_the_dataset_itself(built_verified, bu
         B.load_table(built_verified, dataset=other)
     with pytest.raises(ImmutableViolation, match="no readable manifest"):
         B.load_table(built_verified, dataset=tmp_path / "nowhere")
+    elsewhere = make_dataset_dir(tmp_path, symbols_verified=("OTHER",), name="ds_elsewhere")                                 # a record that covers some other symbol, not the table's SYN
+    with pytest.raises(ImmutableViolation, match="says external_verified but the dataset is external_unverified now: rebuild the table"):
+        B.load_table(built_verified, dataset=elsewhere)
+    both = make_dataset_dir(tmp_path, symbols_verified=("SYN", "OTHER"), name="ds_both")                                # covering more than the table needs is fine
+    assert B.load_table(built_verified, dataset=both).attrs["input_status"] == "external_verified"
     # a table built while unverified goes stale the day the dataset is verified: it must be rebuilt (and is a different table)
     folder, _, _ = built
     unverified = make_dataset_dir(tmp_path, status="external_unverified", verification=False, name="ds4")

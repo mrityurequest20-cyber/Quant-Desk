@@ -575,18 +575,18 @@ def render_quality(q: dict, man: dict) -> str:
 VERIFICATION_CRITERIA = {"p06-v1": "0958f8b96ce36fbac44921f326c3e649663dc1607e014ed99557ed6186bcf21c"}
 
 
-def effective_status(ds: Path, man: dict, symbols=None) -> str:
+def effective_status(ds: Path, man: dict, symbols) -> str:
     """`external_verified` only if a verification record (written by the P0.6 check) names this manifest's digest, says it passed, names a check
     whose criteria hash it carries (`VERIFICATION_CRITERIA`), and lists the symbols it covered (`symbols_verified`); and then only for those
-    symbols. Asked about `symbols` that the record does not cover, or (with `symbols=None`) about a dataset that holds a symbol it does not cover
-    (the volatility index, say), the answer is `external_unverified`; so is a record without `symbols_verified` or `criteria_sha256`. The word
-    in the manifest alone is not evidence."""
+    symbols. Asked about `symbols` that the record does not cover (the volatility index, say), the answer is `external_unverified`; so is a
+    record without `symbols_verified` or `criteria_sha256`. `symbols` is required: a caller names what it is about to use, and a whole-dataset
+    question is asked by naming every symbol in it. The word in the manifest alone is not evidence."""
     if man.get("status") != VERIFIED:
         return UNVERIFIED
     vp = Path(ds) / "verification.json"
     try:
         rec = json.loads(vp.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):                    # unreadable, not JSON, or nested so deep that the parser gives up
         return UNVERIFIED
     if not isinstance(rec, dict) or rec.get("digest") != man.get("digest") or rec.get("passed") is not True:
         return UNVERIFIED
@@ -596,7 +596,7 @@ def effective_status(ds: Path, man: dict, symbols=None) -> str:
     covered = rec.get("symbols_verified")
     if not (isinstance(covered, list) and covered and all(isinstance(c, str) and c for c in covered)):
         return UNVERIFIED
-    asked = {symbols} if isinstance(symbols, str) else set(symbols) if symbols is not None else {x.get("symbol") for x in man.get("sessions", [])}
+    asked = {symbols} if isinstance(symbols, str) else set(symbols)
     return VERIFIED if asked and asked <= set(covered) else UNVERIFIED
 
 
