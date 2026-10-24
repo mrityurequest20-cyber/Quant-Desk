@@ -20,7 +20,7 @@ IST = "Asia/Kolkata"
 def doc():
     return {"spec": "x", "ok": True, "n": 3, "label": "C_har", "none": None,
             "cells": {"a": {"t": 4.65, "gain": 12.9, "passed": True, "days": 1023}, "b": {"t": 5.07, "gain": 18.2, "passed": True, "days": 1023}},
-            "dev": [0.1, 0.2, 0.3], "opened": "2026-10-04T00:58:21+05:30"}
+            "dev": [0.1, 0.2, 0.3], "lock": {"opened": "2026-10-04T00:58:21+05:30"}}
 
 
 def test_identical_results_match_and_count_their_numbers():
@@ -69,12 +69,19 @@ def test_everything_that_is_not_a_tolerated_number_must_match_exactly(change):
     assert not R.compare_results(doc(), d).ok
 
 
-def test_only_the_declared_keys_are_ignored():
+def test_only_the_declared_path_is_ignored():
     d = doc()
-    d["opened"] = "another time"
+    d["lock"]["opened"] = "another time"                                     # the one timestamp that differs by construction
     assert R.compare_results(doc(), d).ok
-    d["cells"]["a"]["opened"] = "x"                                          # ignored at any depth, by name: documented
-    assert R.compare_results(doc(), d).ok
+    assert R.IGNORED == frozenset({"/lock/opened"})
+    for name, edit in (("a path only in the reproduction", lambda e: e.update(path="/tmp/x")),
+                       ("opened at the top", lambda e: e.update(opened="x")),
+                       ("opened inside a cell", lambda e: e["cells"]["a"].update(opened="x")),
+                       ("path inside a cell", lambda e: e["cells"]["a"].update(path="x")),
+                       ("opened under another parent", lambda e: e.update(other={"opened": "x"}))):
+        e = doc()
+        edit(e)
+        assert not R.compare_results(doc(), e).ok, name                      # the same key name anywhere else is a real difference
     assert not R.compare_results(doc(), d, ignore=frozenset()).ok            # and only because the caller left the default
 
 
@@ -84,10 +91,10 @@ SPEC = {"name": "unit_vol", "registered": "2026-10-24", "dataset": "synthetic", 
 
 
 def synthetic_dataset(root: Path) -> Path:
-    """A small aeron7-format dataset (manifest + 1m partitions) of stochastic-volatility minute bars, 2012-06 to 2014-12."""
+    """A small aeron7-format dataset (manifest + 1m partitions) of stochastic-volatility minute bars, 2011-01 to 2014-12 (the first yearly fold needs a 250-session profile)."""
     ds = root / "aeron7-test"
     rng = np.random.default_rng(11)
-    days = pd.bdate_range("2012-06-01", "2014-12-31")
+    days = pd.bdate_range("2011-01-03", "2014-12-31")
     sig = 2.5e-4 * np.exp(np.cumsum(rng.standard_normal(len(days)) * 0.15) * 0.3)
     shape = 1 + 0.6 * np.exp(-np.arange(375) / 40) + 0.3 * np.exp(-(374 - np.arange(375)) / 30)
     r = rng.standard_normal((len(days), 375)) * sig[:, None] * np.sqrt(shape)[None, :]
@@ -146,13 +153,60 @@ def test_a_tampered_committed_result_is_detected(lab, tmp_path):
 
 
 def test_a_reproduction_is_refused_where_it_could_replace_or_be_mistaken_for_a_committed_result(lab, tmp_path):
+    run = lambda d, committed=None: R.reproduce(lab["ds"], lab["spec"], committed or lab["committed"], results_dir=d, say=lambda *a: None)
     with pytest.raises(R.ReproductionRefused, match="inside"):
-        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=R.PROTECTED / "scratch", say=lambda *a: None)
+        run(R.PROTECTED / "scratch")
     with pytest.raises(R.ReproductionRefused, match="inside"):
-        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=R.PROTECTED, say=lambda *a: None)
+        run(R.PROTECTED)
     assert not (R.PROTECTED / "scratch").exists()
     with pytest.raises(R.ReproductionRefused, match="already exists"):
-        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=lab["committed"].parent, say=lambda *a: None)   # would be the committed file itself
+        run(lab["committed"].parent)                                         # would be the committed file itself
+
+
+@pytest.mark.parametrize("where", ["docs/prereg", "docs", ".", "quantdesk", "docs/prereg/results/../.."])
+def test_nothing_inside_the_repository_is_a_valid_scratch_folder(lab, where):
+    """The guard is the whole repository, not only the results folder: a result-lookalike with a spent lock must not sit in a tracked tree."""
+    before = sorted(p.name for p in (R.REPO / where).resolve().glob("unit_vol-*.json"))
+    with pytest.raises(R.ReproductionRefused, match="inside the repository"):
+        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=R.REPO / where, say=lambda *a: None)
+    assert sorted(p.name for p in (R.REPO / where).resolve().glob("unit_vol-*.json")) == before
+
+
+def test_a_symlink_into_the_repository_is_followed_before_judging(lab, tmp_path):
+    link = tmp_path / "link"
+    link.symlink_to(R.PROTECTED)
+    with pytest.raises(R.ReproductionRefused, match="inside"):
+        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=link, say=lambda *a: None)
+    with pytest.raises(R.ReproductionRefused, match="inside"):
+        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=link / "new", say=lambda *a: None)      # a not-yet-existing subfolder of it
+
+
+def test_the_output_name_is_the_one_the_study_writes_not_the_committed_copys(lab, tmp_path):
+    """A committed copy under another name must not hide a stale file or a dangling link at the name volstudy.run will use."""
+    other = tmp_path / "renamed.json"
+    other.write_text(lab["committed"].read_text())
+    name = lab["committed"].name
+    scratch = tmp_path / "s1"
+    scratch.mkdir()
+    (scratch / name).write_text("{}")
+    with pytest.raises(R.ReproductionRefused, match="already exists"):
+        R.reproduce(lab["ds"], lab["spec"], other, results_dir=scratch, say=lambda *a: None)
+    scratch2 = tmp_path / "s2"
+    scratch2.mkdir()
+    (scratch2 / name).symlink_to(R.PROTECTED / "does-not-exist.json")      # dangling: exists() is False, writing would follow it
+    with pytest.raises(R.ReproductionRefused, match="already exists"):
+        R.reproduce(lab["ds"], lab["spec"], other, results_dir=scratch2, say=lambda *a: None)
+    assert not (R.PROTECTED / "does-not-exist.json").exists()
+
+
+@pytest.mark.parametrize("rtol", [1.1e-6, 1e-3, 1.0, 1e9, -1e-12])
+def test_the_tolerance_cannot_be_widened_until_everything_matches(lab, tmp_path, rtol):
+    with pytest.raises(ValueError, match="not a reproduction"):
+        R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=tmp_path / "x", rtol=rtol, say=lambda *a: None)
+    assert not (tmp_path / "x").exists()
+    ok = R.reproduce(lab["ds"], lab["spec"], lab["committed"], results_dir=tmp_path / "y", rtol=R.RTOL_MAX, say=lambda *a: None)
+    assert ok.ok and "WIDER" in R.render(ok, json.loads(lab["committed"].read_text()))
+    assert "WIDER" not in R.render(R.compare_results(doc(), doc()), json.loads(lab["committed"].read_text()))
 
 
 def test_a_spec_edited_after_its_result_or_a_result_without_a_lock_is_refused(lab, tmp_path):
@@ -181,3 +235,104 @@ def test_the_locked_har_result_is_reproduced_in_all_eight_cells(tmp_path):
     got = json.loads(committed.read_text())["lock"]["tests"]
     assert len(got) == 8 and all(t["passed"] for t in got.values())
     assert cmp.ok, R.render(cmp, json.loads(committed.read_text()))
+
+
+# ---- reproduction through the platform (the P0.4 exit test) ---------------------------------------------------------------
+from quantdesk.ml import build as B          # noqa: E402
+from quantdesk.ml import splits as S         # noqa: E402
+from quantdesk.ml import study as ST         # noqa: E402
+
+
+def test_the_study_rebuilt_through_the_builder_and_the_splits_matches_the_committed_result(lab):
+    """The locked study's dev selection and lock, recomputed with build_tables per fold, walk_forward and the study's own fit and scorers: every
+    number equals the committed one. This is what exercises the new pieces; reproduce() alone only reruns the old study."""
+    cmp = ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+    assert cmp.ok, cmp.mismatches[:5]
+    assert cmp.numbers > 150 and cmp.max_abs < 1e-9
+
+
+def test_a_builder_that_fits_the_profile_on_the_wrong_days_is_caught_by_the_reproduction(lab, monkeypatch):
+    real = B.build_tables
+
+    def early(grids, pe, tier, **kw):                                            # the profile fitted on 200 days fewer than it should be
+        return real(grids, (pd.Timestamp(pe) - pd.Timedelta(days=200)).date(), tier, **kw)
+
+    monkeypatch.setattr(B, "build_tables", early)
+    cmp = ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+    assert not cmp.ok and cmp.mismatches
+
+
+def test_a_builder_whose_profile_covers_its_test_rows_is_refused_not_just_wrong(lab, monkeypatch):
+    real = B.build_tables
+    monkeypatch.setattr(B, "build_tables", lambda grids, pe, tier, **kw: real(grids, "2099-12-31", tier, **kw))      # every row inside the profile window
+    with pytest.raises(S.LeakError, match="not allowed to be scored"):
+        ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+
+
+def test_a_split_that_puts_test_sessions_in_training_is_refused(lab, monkeypatch):
+    real = S.walk_forward
+
+    def leaky(*a, **k):
+        return [S.Fold(np.union1d(f.train, f.test), f.test, f.label) for f in real(*a, **k)]
+
+    monkeypatch.setattr(S, "walk_forward", leaky)
+    with pytest.raises(S.LeakError, match="both train and test"):
+        ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+
+
+def test_a_tampered_committed_result_fails_the_platform_reproduction_too(lab, tmp_path):
+    bad = json.loads(lab["committed"].read_text())
+    key = next(iter(bad["lock"]["tests"]))
+    bad["lock"]["tests"][key]["scores"]["A_desk"]["qlike"] += 0.5
+    f = tmp_path / lab["committed"].name
+    f.write_text(json.dumps(bad))
+    cmp = ST.reproduce_through_platform(lab["ds"], lab["spec"], f)
+    assert not cmp.ok and any("qlike" in m for m in cmp.mismatches)
+
+
+def test_the_platform_reproduction_writes_nothing_and_refuses_what_the_study_rerun_refuses(lab, tmp_path):
+    before = sorted(p.name for p in lab["root"].rglob("*"))
+    ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"])
+    assert sorted(p.name for p in lab["root"].rglob("*")) == before            # not a file, not even a scratch folder
+    edited = tmp_path / "unit_vol.json"
+    edited.write_text(json.dumps({**SPEC, "question": "another"}))
+    with pytest.raises(R.ReproductionRefused, match="no longer hashes"):
+        ST.reproduce_through_platform(lab["ds"], edited, lab["committed"])
+    nolock = tmp_path / "nolock.json"
+    nolock.write_text(json.dumps({**json.loads(lab["committed"].read_text()), "lock": None}))
+    with pytest.raises(R.ReproductionRefused, match="no opened lock"):
+        ST.reproduce_through_platform(lab["ds"], lab["spec"], nolock)
+    for rtol in (1.1e-6, 1.0, -1e-9):
+        with pytest.raises(ValueError, match="not a reproduction"):
+            ST.reproduce_through_platform(lab["ds"], lab["spec"], lab["committed"], rtol=rtol)
+
+
+@pytest.mark.skipif(not REAL_DS, reason="set QD_AERON7_DS to the extracted aeron7-2-906fc2378b dataset to reproduce the locked HAR result through the platform")
+def test_the_locked_har_result_is_reproduced_through_the_platform_in_all_eight_cells():
+    committed = next(R.PROTECTED.glob("vol_forecast_v1-*.json"))
+    spec = R.REPO / "docs" / "prereg" / "vol_forecast_v1.json"
+    cmp = ST.reproduce_through_platform(Path(REAL_DS), spec, committed)
+    assert cmp.ok, cmp.mismatches[:5]
+    cells = json.loads(committed.read_text())["lock"]["tests"]
+    assert len(cells) == 8 and all(c["selected"] == "C_har" and c["passed"] for c in cells.values())
+    assert cmp.numbers > 1000 and cmp.max_abs < 1e-9
+
+
+def test_the_command_reproduces_through_the_platform_by_default_and_prints_what_it_ran_on(lab, capsys):
+    from quantdesk.cli import main
+    main(["ml", "reproduce", "--dataset", str(lab["ds"]), "--spec", str(lab["spec"]), "--committed", str(lab["committed"])])
+    out = capsys.readouterr().out
+    assert "MATCHES" in out and "ran on dataset aeron7-test" in out and "numpy " in out and "pandas " in out and "python " in out
+    with pytest.raises(SystemExit, match="outside 0 to 1e-06|not a reproduction"):
+        main(["ml", "reproduce", "--dataset", str(lab["ds"]), "--spec", str(lab["spec"]), "--committed", str(lab["committed"]), "--rtol", "0.5"])
+
+
+def test_the_command_exits_nonzero_on_a_mismatch(lab, tmp_path, capsys):
+    from quantdesk.cli import main
+    bad = json.loads(lab["committed"].read_text())
+    bad["selected"][next(iter(bad["selected"]))]["candidate"] = "A_desk"
+    f = tmp_path / lab["committed"].name
+    f.write_text(json.dumps(bad))
+    with pytest.raises(SystemExit) as e:
+        main(["ml", "reproduce", "--dataset", str(lab["ds"]), "--spec", str(lab["spec"]), "--committed", str(f)])
+    assert e.value.code == 1 and "DOES NOT MATCH" in capsys.readouterr().out

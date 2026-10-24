@@ -101,7 +101,7 @@ def test_the_verifier_catches_overlap_with_the_embargo_and_a_shared_sample():
 
 def test_cpcv_without_a_purge_is_caught_and_the_real_one_passes():
     t0, t1 = daily(60, 4)
-    real = S.cpcv(t0, t1, n_groups=6, n_test=2)
+    real = S.cpcv(t0, t1, n_groups=6, n_test=2, embargo=0)
     S.check_no_overlap(real, t0, t1, windows=S.windows_of(real, t0, t1))
     unpurged = [S.Fold(np.setdiff1d(np.arange(60), f.test), f.test, f.label) for f in real]
     with pytest.raises(S.LeakError):
@@ -112,7 +112,7 @@ def test_a_test_set_of_separated_groups_needs_its_own_windows_not_one_span():
     """Using one span from the first to the last test sample would purge the training samples between the groups for no reason and,
     worse, would hide which windows matter. windows_of gives one window per contiguous run."""
     t0, t1 = daily(60, 2)
-    folds = S.cpcv(t0, t1, 6, 2)
+    folds = S.cpcv(t0, t1, 6, 2, embargo=0)
     sep = next(k for k, fold in enumerate(folds) if fold.label == "groups 0,3")
     w = S.windows_of(folds, t0, t1)[sep]
     assert len(w) == 2 and w[0][1] < w[1][0]
@@ -123,7 +123,7 @@ def test_a_test_set_of_separated_groups_needs_its_own_windows_not_one_span():
 @pytest.mark.parametrize("n, k", [(6, 2), (5, 1), (8, 3), (4, 3)])
 def test_cpcv_counts_folds_groups_and_paths(n, k):
     t0, t1 = daily(96, 2)
-    folds = S.cpcv(t0, t1, n, k)
+    folds = S.cpcv(t0, t1, n, k, embargo=0)
     assert len(folds) == math.comb(n, k)
     for f in folds:
         assert np.intersect1d(f.train, f.test).size == 0 and len(f.test) == pytest.approx(96 * k / n, abs=k)
@@ -140,7 +140,7 @@ def test_cpcv_counts_folds_groups_and_paths(n, k):
 
 def test_cpcv_embargo_removes_the_samples_that_start_just_after_a_test_group():
     t0, t1 = daily(60, 1)
-    plain = S.cpcv(t0, t1, 6, 1)
+    plain = S.cpcv(t0, t1, 6, 1, embargo=0)
     emb = S.cpcv(t0, t1, 6, 1, embargo=3 * DAY)
     f0, e0 = plain[2], emb[2]                                                                   # test group 2 = samples 20..29
     assert f0.test.tolist() == list(range(20, 30))
@@ -153,7 +153,7 @@ def test_cpcv_rejects_impossible_shapes():
     t0, t1 = daily(10, 1)
     for n, k in ((1, 1), (6, 0), (6, 6), (20, 2)):
         with pytest.raises(ValueError):
-            S.cpcv(t0, t1, n, k)
+            S.cpcv(t0, t1, n, k, embargo=0)
 
 
 def test_folds_are_deterministic_and_do_not_depend_on_input_order():
@@ -183,3 +183,55 @@ def test_random_samples_every_split_is_clean_and_loses_only_what_it_must(seed):
     S.check_no_overlap(cp, t0, t1, embargo=0, windows=S.windows_of(cp, t0, t1))
     for f in cp:                                                                                  # accounting: train + dropped + test = everyone
         assert len(f.train) + f.purged + f.embargoed + len(f.test) == n
+
+
+# ---- the guards added after review of the first head ------------------------------------------------------------------
+def test_the_embargo_is_required_and_cannot_be_negative():
+    t0 = np.arange(40) * DAY
+    t1 = t0 + 1
+    with pytest.raises(TypeError):
+        S.cpcv(t0, t1, 4, 1)                                           # no default: the right value belongs to the features
+    with pytest.raises(TypeError):
+        S.cpcv(t0, t1, 4, 1, 0)                                        # and it is keyword-only, so it cannot be a stray positional
+    with pytest.raises(ValueError, match="negative"):
+        S.cpcv(t0, t1, 4, 1, embargo=-DAY)
+    with pytest.raises(ValueError, match="negative"):
+        S.overlaps(t0, t1, [(0, 1)], embargo=-1)
+    with pytest.raises(ValueError, match="negative"):
+        S.check_no_overlap(S.cpcv(t0, t1, 4, 1, embargo=0), t0, t1, embargo=-1)
+
+
+def test_a_missing_time_is_refused_not_turned_into_the_smallest_integer():
+    good = pd.date_range("2024-01-01", periods=5, freq="D")
+    for bad in (good.insert(2, pd.NaT), np.array(["2024-01-01", "NaT"], dtype="datetime64[ns]"), pd.Series(good.insert(1, pd.NaT)),
+                pd.date_range("2024-01-01", periods=3, freq="D", tz="Asia/Kolkata").insert(1, pd.NaT)):
+        with pytest.raises(ValueError, match="NaT"):
+            S.as_ns(bad)
+    assert S.as_ns(good).dtype == np.int64
+
+
+def test_a_feature_lookback_longer_than_the_embargo_is_caught_by_the_verifier_and_closed_by_the_embargo():
+    """Features that read the last five sessions: a sample just after a test block has the block's labels in its inputs."""
+    days = np.repeat(np.arange(60), 4)                                          # 60 sessions, four decisions each
+    t0 = days * DAY + np.tile(np.arange(4), 60) * (DAY // 8)
+    t1 = t0 + DAY // 8                                                           # a label ends within the session
+    lookback = 5 * DAY
+    leaky = S.cpcv(t0, t1, 6, 2, embargo=0)
+    S.check_no_overlap(leaky, t0, t1, embargo=0, windows=S.windows_of(leaky, t0, t1))               # the plain verifier is satisfied...
+    with pytest.raises(S.LeakError):
+        S.check_no_overlap(leaky, t0, t1, embargo=lookback, windows=S.windows_of(leaky, t0, t1))    # ...the lookback-aware one is not
+    safe = S.cpcv(t0, t1, 6, 2, embargo=lookback)
+    S.check_no_overlap(safe, t0, t1, embargo=lookback, windows=S.windows_of(safe, t0, t1))
+    assert sum(f.embargoed for f in safe) > 0 and all(len(f.train) < len(g.train) for f, g in zip(safe, leaky) if f.embargoed)
+
+
+def test_check_test_mask_refuses_a_fold_that_scores_a_flagged_sample():
+    t0 = np.arange(30) * DAY
+    folds = S.walk_forward(t0, t0 + 1, [10 * DAY, 20 * DAY, 30 * DAY])
+    allowed = np.ones(30, dtype=bool)
+    S.check_test_mask(folds, allowed)
+    allowed[15] = False                                                          # a sample in the second fold's test set
+    with pytest.raises(S.LeakError, match="1 test samples"):
+        S.check_test_mask(folds, allowed)
+    allowed[15], allowed[3] = True, False                                        # a training-only sample being flagged is not a test leak
+    S.check_test_mask(folds, allowed)

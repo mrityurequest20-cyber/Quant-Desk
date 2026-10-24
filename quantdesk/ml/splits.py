@@ -38,13 +38,18 @@ class Fold:
 
 
 def as_ns(x) -> np.ndarray:
-    """int64 nanoseconds since the epoch (UTC) from datetime64, a DatetimeIndex, a datetime Series or integers."""
+    """int64 nanoseconds since the epoch (UTC) from datetime64, a DatetimeIndex, a datetime Series or integers. A missing time (NaT) is refused:
+    it would become the smallest integer and sit in every fold's training set."""
     if isinstance(x, pd.Series):
         x = x.to_numpy() if not isinstance(x.dtype, pd.DatetimeTZDtype) else pd.DatetimeIndex(x)
     if isinstance(x, pd.DatetimeIndex):
+        if x.isna().any():
+            raise ValueError("a time is missing (NaT)")
         return (x.tz_convert("UTC") if x.tz is not None else x).as_unit("ns").asi8.astype("int64")
     a = np.asarray(x)
     if np.issubdtype(a.dtype, np.datetime64):
+        if np.isnat(a).any():
+            raise ValueError("a time is missing (NaT)")
         return a.astype("datetime64[ns]").astype("int64")
     if np.issubdtype(a.dtype, np.integer):
         return a.astype("int64")
@@ -60,6 +65,8 @@ def _check_times(t0: np.ndarray, t1: np.ndarray) -> None:
 
 def overlaps(t0: np.ndarray, t1: np.ndarray, windows: list[tuple[int, int]], embargo: int = 0) -> np.ndarray:
     """Mask of samples whose closed interval [t0, t1] intersects any closed window (a, b), or starts in (b, b + embargo]."""
+    if embargo < 0:
+        raise ValueError("embargo cannot be negative")
     hit = np.zeros(len(t0), dtype=bool)
     for a, b in windows:
         hit |= (t0 <= b + embargo) & (t1 >= a)
@@ -99,10 +106,16 @@ def group_edges(t0, n_groups: int) -> np.ndarray:
     return np.linspace(0, n, n_groups + 1).round().astype(int)
 
 
-def cpcv(t0, t1, n_groups: int, n_test: int, embargo: int = 0) -> list[Fold]:
+def cpcv(t0, t1, n_groups: int, n_test: int, *, embargo: int) -> list[Fold]:
     """Combinatorial purged CV. The samples are sorted by t0 and cut into `n_groups` contiguous groups; every combination of
     `n_test` groups is a test set (C(n_groups, n_test) folds). Each fold's training set is everything else minus the samples
-    whose interval overlaps a test group's time window, minus those that start within `embargo` after it."""
+    whose interval overlaps a test group's time window, minus those that start within `embargo` after it.
+
+    `embargo` (nanoseconds) has no default and cannot be negative, because the right value is a property of the features, not of the
+    split: a sample's features that look back over earlier sessions (the M1 table's reach five) read the test labels of a block that ended
+    just before it. Pass at least the longest feature lookback (`ml/build.EMBARGO_NS` for the M1 table) and verify with `check_no_overlap`."""
+    if embargo < 0:
+        raise ValueError("embargo cannot be negative")
     t0, t1 = as_ns(t0), as_ns(t1)
     _check_times(t0, t1)
     if not 1 <= n_test < n_groups:
@@ -129,6 +142,16 @@ def cpcv_paths(n_groups: int, n_test: int) -> list[dict[int, int]]:
     per_group = {g: [i for i, c in enumerate(combos) if g in c] for g in range(n_groups)}
     n_paths = math.comb(n_groups - 1, n_test - 1)
     return [{g: per_group[g][p] for g in range(n_groups)} for p in range(n_paths)]
+
+
+def check_test_mask(folds: list[Fold], allowed: np.ndarray) -> None:
+    """Raise LeakError if any fold tests on a sample the mask does not allow (for the M1 table: rows with `in_profile` True, whose seasonal
+    features were fitted on days after them, must never be scored)."""
+    allowed = np.asarray(allowed, dtype=bool)
+    for k, f in enumerate(folds):
+        bad = ~allowed[f.test]
+        if bad.any():
+            raise LeakError(f"fold {k} ({f.label}): {int(bad.sum())} test samples are not allowed to be scored")
 
 
 def check_no_overlap(folds: list[Fold], t0, t1, embargo: int = 0, windows: list[list[tuple[int, int]]] | None = None) -> None:

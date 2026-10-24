@@ -150,3 +150,37 @@ def test_perturb_minute_grid_changes_exactly_the_future():
     assert out["days"] is grid["days"] and out["missing"] is grid["missing"]
     assert np.array_equal(P.perturb_minute_grid(grid, (5, 100), np.random.default_rng(1))["r"], out["r"])             # a day index works too
     assert dt.date(2021, 1, 4) == grid["days"][0]
+
+
+# ---- the perturbation's own reach (surviving mutants of the first review) -------------------------------------------------
+def planted(kind):
+    """A builder over the minute grid whose feature peeks at the future in one specific way."""
+    def build(g):
+        s = V.profile((g["r"] ** 2)[:40])
+        d = V.rows("X", g["days"], g["r"], g["missing"], g["opens"], s)
+        i = pd.Index(g["days"]).get_indexer(d["day"])
+        peek = {"one_bar_ahead": g["r"][i, d["m"].to_numpy()],                              # the return of the minute AT the decision: not yet known
+                "next_day_first_bar": g["r"][np.minimum(i + 1, len(g["days"]) - 1), 0],
+                "next_day_open": g["opens"][np.minimum(i + 1, len(g["days"]) - 1)]}[kind]
+        return d.assign(peek=peek)
+    return build
+
+
+@pytest.mark.parametrize("kind", ["one_bar_ahead", "next_day_first_bar", "next_day_open"])
+def test_the_canary_catches_a_peek_of_one_bar_or_one_day(kind):
+    """A feature that reads exactly one bar, or exactly one day, beyond the decision: the perturbation must reach that far and be large enough to show."""
+    grid = minute_grid()
+    keys = [(grid["days"][20], 105), (grid["days"][35], 195)]
+    rep = P.check_point_in_time(planted(kind), grid, keys, P.perturb_minute_grid, ["day", "m", "horizon"], ["peek"], ["rv"])
+    assert not rep.ok and rep.max_rel_diff["peek"] > 1e-6, kind
+
+
+def test_the_perturbation_is_not_a_rounding_error():
+    grid = minute_grid(20)
+    out = P.perturb_minute_grid(grid, (grid["days"][5], 100), np.random.default_rng(1))
+    typical = np.abs(grid["r"]).mean()
+    assert np.abs(out["r"][5, 100:] - grid["r"][5, 100:]).mean() > 0.1 * typical                  # of the order of the data, not 1e-12 of it
+    assert np.abs(out["r"][6:] - grid["r"][6:]).mean() > 0.1 * typical
+    assert np.abs(out["opens"][6:] / grid["opens"][6:] - 1).mean() > 1e-3
+    assert np.array_equal(out["r"][5, 100], out["r"][5, 100]) and out["r"][5, 100] != grid["r"][5, 100]       # the bar at the decision minute itself moves
+    assert out["r"][6, 0] != grid["r"][6, 0]                                                       # and the next day's first bar

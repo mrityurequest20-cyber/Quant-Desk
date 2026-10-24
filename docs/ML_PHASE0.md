@@ -33,30 +33,47 @@ card and a registry. It is **offline and read-only**:
 *P0.2 status (24 Oct): built for the index minutes, `quantdesk/ml/intake.py` with `python -m quantdesk ml import`; `load()` refuses a dataset without a manifest, one whose manifest or partitions no longer hash to their digest, and unverified data unless asked. The option and tape tiers (T2) are not covered yet.*
 
 Order: P0.1 and P0.2 first (this week), then P0.3 and P0.4 together. P0.6 can start now that the owner's source is imported. P0.7 and P0.8 are last.
+
+Target: Phase 0 done by **mid November**, as the ML roadmap says. If it slips, section 0's cut order in the master plan applies.
+
 ## Status (24 Oct 2026)
 
 - **P0.2 done** (merged, #107): `python -m quantdesk ml import`; dataset `ml-intake-2-feae259bdba6`, still `external_unverified` until P0.6.
 - **P0.3 built** (`quantdesk/ml/build.py`, `python -m quantdesk ml build --dataset <dir> --profile-end <date>`): the M1 table, one row per
   (symbol, day, decision minute, horizon), made by the study's own `volstudy` code (called, not copied) and equal to `volstudy.fit_har`'s frame bit for bit
-  (458,623 rows for NIFTY and BANKNIFTY on the Kaggle source, 9 s). Labels never reach past the session (checked on every build and every load). The
-  seasonal profile is a **fit**, so it is fitted on sessions up to `--profile-end` and every row carries `in_profile`; a study scores only rows with
-  `in_profile == False`, or rebuilds per fold. The point-in-time canary (`ml/pit.py`) runs against the real builder in the tests: after a decision everything is
-  replaced with different data and the decision's features must not move; a leak injected into the builder is caught.
-  **Deviation from the exit test as worded ("identical digests"):** a table's identity (its folder name and manifest digest) is a hash of the input dataset's
-  digest, the recipe and the source of the functions that make the rows, and is identical on any machine. The *values* are floats from numpy reductions that
-  can differ in the last bit with memory alignment, so they are not hashed; the stored file is pinned by the sha256 of its bytes, and a rebuild is compared
-  with a stated tolerance (rtol 1e-9; measured difference 0 on this machine).
-- **P0.4 harness built** (`ml/splits.py`, `ml/pit.py`, `ml/reproduce.py`): purged walk-forward, combinatorial purged CV with embargo and its backtest paths, a verifier
-  that the tests inject leaks against, and `python -m quantdesk ml reproduce --dataset <aeron7 dir>`, which reruns the locked HAR study into a scratch folder
-  (refused inside `docs/prereg/results`) and compares **every number** with the committed result. Exit test met on 24 Oct: **8 of 8 cells, 1,132 numbers, largest
-  difference 0**, nothing written under `docs/`. **Not yet:** the baseline comparison (a scorer that grades any model against HAR and the desk's forecaster
-  on the same folds) lands with the evaluation toolkit.
-- **A boundary note.** The builder calls the locked study's code, and that code reaches (through `autolearn.prereg` → `evaluate` → `features`) the desk's pure
-  computation modules `intraday.quant`, `.chains`, `.feeds`, `.orderflow` and `options.*`. They hold a data-feed adapter and a broker adapter whose network
-  clients and secrets are used only inside methods, never at import. `tests/test_ml_build.py` names those five modules as the only live-package modules an ml
-  module may load, and fails on any other (orders, journal, risk, engine, web) or on `requests`, `kiteconnect`, `yfinance` or `anthropic` being loaded.
-
-Target: Phase 0 done by **mid November**, as the ML roadmap says. If it slips, section 0's cut order in the master plan applies.
+  (458,623 rows for NIFTY and BANKNIFTY on the Kaggle source, 9 s). Labels never reach past the session (checked on every build and every load). What a reader must know:
+  - **The seasonal profile is a fit.** It is fitted on sessions up to `--profile-end` and every row carries `in_profile`. `load_table` withholds those rows by default
+    (`scoring_only`), `splits.check_test_mask` refuses a fold that would score one, and a study that needs the profile refitted per fold rebuilds the table per fold
+    (that is what the reproduction below does).
+  - **Three things depend on the future by construction**, and are not features: `miss_frac` (the share of the *label* window that was missing), whether a row exists at all
+    (windows more than 20% missing are dropped), and the profile of the `in_profile` rows. The point-in-time canary (`ml/pit.py`) runs against the real builder and a planted leak is caught,
+    but it perturbs returns, never the missing-minute mask, so it cannot see the first two.
+  - **Reserved window.** Rows from 1 Mar 2023 are the stretch kept for the one-shot, pre-registered evaluation of the locked HAR model; `load_table` withholds them unless a spec is named.
+  - **Provenance.** Every row has a `tier`; the file's own metadata and the manifest carry the input's status and the `not_for` restriction; `load_table` refuses a table built from
+    `external_unverified` data unless `allow_unverified=True`, and refuses a use outside the dataset's allowed uses. The status is part of the table's identity, so a rebuild after P0.6 is a new table.
+  - **What the study dropped.** The manifest counts, per symbol, the sessions in the grid and with rows, the rows possible and kept, and lists the sessions lost (the study's own rules lose the first five sessions of a series
+    and five after any break longer than four days; windows above 20% missing are dropped). The default dataset also omits the review sessions, among them the two highest-variance days of 2015 to 2026 for NIFTY (13 and 23 Mar 2020, EXTERNAL_DATA.md item 1).
+  - **Leading gaps.** A session with no bar at the open is refused (`volstudy.grid` back-fills its first bars from a later close). The aeron7 data the locked study used has five such sessions for each index, the latest on 9 Jul 2018; the locked run included them, so
+    the reproduction allows them explicitly and prints them. Their effect on the locked result is small (five sessions among thousands, all in the development years) but it is a look-ahead in the locked run that nobody had recorded; it has not been quantified.
+  - **Identity, and a deviation from the exit test as worded ("identical digests").** The table's folder name is a hash of the input dataset's digest, status and tier, the recipe (symbols, `profile_end`, constants, the source of the functions that make the rows) and the builder version: identical on any machine. The manifest digest is not a pure function of the inputs
+    (it also covers the parquet file's bytes). On this machine and under Python 3.11 and 3.13 the table's bytes were identical, but float values come from numpy reductions that can differ in the last bit elsewhere, so a rebuild is compared with a stated tolerance
+    (`rtol` 1e-9 against the larger of the two values and the column's median magnitude) instead of a value hash. `intake.canonical_hash` would allow a 12-digit-rounded value hash; it was not used.
+- **P0.4 harness built** (`ml/splits.py`, `ml/pit.py`, `ml/reproduce.py`, `ml/study.py`): purged walk-forward, combinatorial purged CV and its backtest paths (the embargo is a required keyword; `build.EMBARGO_NS` is the feature lookback, ten calendar days for the five-session reach of `x_prev5` and the priors, and a test shows
+  that a CPCV without it leaks on this table and passes the plain verifier), a verifier that the tests inject leaks against, and a perturbation canary.
+  **Exit test, met on 24 Oct through the platform:** `python -m quantdesk ml reproduce --dataset <aeron7 dir>` recomputes the locked study's dev selection and its lock with `build_tables` per fold (profile fitted on that fold's training sessions only),
+  `walk_forward` for the yearly folds and the study's own scorers, writes nothing, and compares every number with the committed result: **8 of 8 cells, 1,056 numbers, largest difference 3.7e-14, 22 s**. Planted bugs (a profile fitted on the wrong days, a split with test sessions in training, a profile covering its test rows) fail it.
+  `--through study` is the older route: it reruns `volstudy.run` into a scratch folder outside the repository, and shows only that the old study is deterministic and the committed file untampered. CI does not have the aeron7 data, so the real-data test is skipped there; a synthetic equivalent runs in CI.
+  **Not yet:** the baseline comparison (a scorer that grades any model against HAR and the desk's forecaster on the same folds) lands with the evaluation toolkit.
+- **A boundary note.** The ml modules' own imports do not reach the engine, journal, risk or execution: the builder calls the locked study's code, which reaches (through `autolearn.prereg` → `evaluate` → `features`) the desk's pure
+  computation modules `intraday.quant`, `.chains`, `.feeds`, `.orderflow` and `options.*`, whose network clients and secrets are used only inside methods, never at import. `tests/test_ml_build.py` is an **allowlist**: after each ml module has done its work (the builder
+  builds and loads, `reproduce` imports the study) in a clean interpreter, the only `quantdesk` modules loaded must be the ml package, the study's own imports and those modules; any other, any socket opened or resolved, any process started, or any of `requests`, `kiteconnect`, `yfinance`,
+  `anthropic` loaded, fails it. **The command line process is different:** `quantdesk.cli` builds every subcommand's parser, which imports the whole desk (58 modules, including the engine and the broker adapter). That is import only, nothing in it runs, and it was already so for `ml import`;
+  the claim here is about the ml modules, not the process.
+- **Review of the first head (`ad88888`).** Risk and compliance: CLEAR, no veto, five should-fixes. Auditor: NOT CLEAR, three blockers and eight should-fixes. All were made in the next commit except the ones listed here: the reproduction
+  guard now refuses any folder inside the repository (symlinks and `..` resolved; the output name is the one the study writes), the tolerance is capped at 1e-6 and only `/lock/opened` is ignored, `embargo` is required and a missing time is refused, the exit test runs through the platform,
+  the table's status and tier are in its identity and in the file, the leading-gap guard, the `tier` column, the scoring-only and reserved-window gates, the manifest accounting, the per-column tolerance, and tests for every surviving mutant. Said plainly and not changed:
+  `volstudy.run` writes `"evidence": "external_verified (underlying only)"` into every result it produces (pre-existing); `--dataset` can point a reproduction at any dataset, in which case the comparison fails; and the reserved-window guard is against accident, not intent
+  (anyone can name a spec file).
 
 ## Data tiers
 

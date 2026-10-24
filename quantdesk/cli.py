@@ -378,7 +378,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--allow-unverified", action="store_true", help="build: accept a dataset that is external_unverified (the table says so)")
     s.add_argument("--spec", default="docs/prereg/vol_forecast_v1.json", help="reproduce: the pre-registered spec")
     s.add_argument("--committed", help="reproduce: the committed result (default: docs/prereg/results/<name>-<spec hash>.json)")
-    s.add_argument("--rtol", type=float, default=1e-9, help="reproduce: relative tolerance for every number")
+    s.add_argument("--rtol", type=float, default=1e-9, help="reproduce: relative tolerance for every number (at most 1e-6)")
+    s.add_argument("--through", choices=["platform", "study"], default="platform",
+                   help="reproduce: 'platform' recomputes the locked study with the builder, the splits and the study's scorers and writes nothing "
+                        "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
     s.set_defaults(fn=cmd_ml)
     return p
 
@@ -425,13 +428,23 @@ def _ml_reproduce(a):
     import json as _json
     from .autolearn.prereg import spec_hash
     from .ml import reproduce as R
+    from .ml import study as ST
     if not a.dataset:
         raise SystemExit("ml reproduce: --dataset is required")
     spec = Path(a.spec)
-    name = _json.loads(spec.read_text())["name"]
+    try:
+        name = _json.loads(spec.read_text())["name"]
+    except (KeyError, TypeError) as exc:
+        raise SystemExit(f"ml reproduce: {spec} has no name") from exc
     committed = Path(a.committed) if a.committed else R.PROTECTED / f"{name}-{spec_hash(spec)[:12]}.json"
-    cmp = R.reproduce(Path(a.dataset), spec, committed, results_dir=Path(a.out) if a.out else None, rtol=a.rtol)
+    if a.through == "platform":
+        if a.out:
+            raise SystemExit("ml reproduce: --out applies to --through study only (the platform route writes nothing)")
+        cmp = ST.reproduce_through_platform(Path(a.dataset), spec, committed, rtol=a.rtol)
+    else:
+        cmp = R.reproduce(Path(a.dataset), spec, committed, results_dir=Path(a.out) if a.out else None, rtol=a.rtol)
     print(R.render(cmp, _json.loads(committed.read_text())))
+    print(R.provenance_line(Path(a.dataset)))
     if not cmp.ok:
         raise SystemExit(1)
 
