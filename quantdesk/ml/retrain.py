@@ -48,22 +48,35 @@ class Refit:
     fit: Callable[[Path, Path], dict]              # (dataset folder, spec file) -> coefficients in the committed file's shape
 
 
+HAR_SCHEMA = 1                                                       # harvol.SCHEMA; a test holds it equal
+HAR_FILE = REPO / "quantdesk" / "intraday" / "vol_har_v1.json"       # harvol.DEFAULT_PATH, the file the desk loads; a test holds it equal (this package never imports the live engine)
+
+
 def _har(dataset: Path, spec_path: Path) -> dict:
-    """C_har exactly as `autolearn vol-har-fit` makes it, minus the provenance block. The study's own `volstudy.prepare` refuses a dataset that is
-    not external_verified; a drill on a fresh import has to read it unverified, so the three lines of `prepare` are repeated here (a test holds them equal)."""
+    """C_har exactly as `autolearn vol-har-fit` makes it (harvol.fit_coefs, repeated here because quantdesk.ml may not import the live packages: a test holds the two
+    equal on a dataset, and a test runs the real command), minus the provenance block. The study's own `volstudy.prepare` refuses a dataset that is not external_verified;
+    a drill on a fresh import has to read it unverified, so the three lines of `prepare` are repeated as well."""
+    import numpy as np
+
     from ..autolearn import volstudy as V
     from ..autolearn.prereg import spec_hash
     from ..data import external_aeron as X
-    from ..intraday.harvol import fit_coefs
     spec = json.loads(Path(spec_path).read_text())
     bars = X.load(Path(dataset), "1m", spec["symbols"], use="regime_research", allow_unverified=True)
     grids = {sym: V.grid(bars[bars["symbol"] == sym]) for sym in spec["symbols"]}
-    return fit_coefs(grids, dt.date.fromisoformat(spec["dev"]["end"]), spec["name"], spec_hash(Path(spec_path)), Path(dataset).name)
+    dev_end = dt.date.fromisoformat(spec["dev"]["end"])
+    out = {"schema": HAR_SCHEMA, "model": "C_har", "spec": spec["name"], "spec_sha256": spec_hash(Path(spec_path)), "dataset": Path(dataset).name,
+           "dev_end": str(dev_end), "symbols": {}}
+    for sym, (days, r, miss, opens) in grids.items():
+        train = np.array([d <= dev_end for d in days])
+        s, fit, _ = V.fit_har(sym, days, r, miss, opens, train)
+        out["symbols"][sym] = {"profile": s.tolist(), "fit": fit, "sessions": int(train.sum()),
+                               "trained_through": str(max(d for d, t in zip(days, train) if t))}
+    return out
 
 
 def registry() -> tuple[Refit, ...]:
-    from ..intraday.harvol import DEFAULT_PATH
-    return (Refit("c_har", Path(DEFAULT_PATH), REPO / "docs" / "prereg" / "vol_forecast_v1.json", _har),)
+    return (Refit("c_har", HAR_FILE, REPO / "docs" / "prereg" / "vol_forecast_v1.json", _har),)
 
 
 def _spec_sha(spec: Path) -> str:

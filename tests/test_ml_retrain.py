@@ -233,6 +233,11 @@ def test_rounding_noise_passes_and_a_real_difference_does_not(lab):
 
 
 # ---- the shipped registry ---------------------------------------------------------------------------------------------
+def test_the_constants_repeated_from_the_live_package_equal_the_originals():
+    from quantdesk.intraday import harvol
+    assert RT.HAR_SCHEMA == harvol.SCHEMA and RT.HAR_FILE.resolve() == Path(harvol.DEFAULT_PATH).resolve()
+
+
 def test_the_shipped_registry_names_the_file_the_desk_loads_and_the_spec_that_pins_it():
     from quantdesk.intraday.harvol import DEFAULT_PATH
     (m,) = RT.registry()
