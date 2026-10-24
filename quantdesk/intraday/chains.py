@@ -420,6 +420,8 @@ def plausible_oi(df: pd.DataFrame) -> bool:
         if len(x) and (np.isinf(x).any() or (x < 0).any() or (x > OI_MAX).any()):
             return False
     for c in ("ce_doi", "pe_doi"):                      # a day change may be negative, but not beyond the same bound
+        if c not in df.columns:
+            continue
         x = df[c].to_numpy(float)
         x = x[~np.isnan(x)]
         if len(x) and (np.isinf(x).any() or (np.abs(x) > OI_MAX).any()):

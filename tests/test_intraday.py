@@ -469,3 +469,30 @@ def test_the_app_view_carries_the_quarantine_flag_and_no_oi_read():
     df.iloc[0, df.columns.get_loc("ce_oi")] = 1e18
     v = _chain_view(chain_analytics(df))
     assert v["oi_quarantined"] is True and "pcr_oi" not in v and "max_pain" not in v
+
+
+def test_a_quarantined_oi_read_counts_as_neutral_evidence_and_can_only_dilute(cfg, sessions):
+    """The OI votes are withheld on a faulty print, but they stay in the weighing at their own weights with no direction: dropping a disagreeing vote must not raise conviction."""
+    from quantdesk.intraday.analyst import Analyst
+    bars, _, days = sessions
+    now = ts(f"{days[-1]} 11:00")
+    s = session_state(bars["NIFTY"][bars["NIFTY"].index + pd.Timedelta(minutes=1) <= now], now)
+    good = oi_chain()
+    good.attrs["spot"] = s["last"]
+    good["pe_oi"] = good["pe_oi"] * good["ce_oi"].sum() / good["pe_oi"].sum()                    # PCR 1.0: the clean OI votes are near neutral
+    bad = good.copy()
+    bad.iloc[0, bad.columns.get_loc("ce_oi")] = 1e18
+    out = {}
+    for name, d in (("clean", good), ("quarantined", bad)):
+        an = chain_analytics(d)
+        an["source"] = "nse"
+        out[name] = Analyst(cfg).assess("NIFTY", s, an)
+    bare = chain_analytics(good)
+    for k in OI_KEYS:
+        bare.pop(k, None)
+    bare["source"] = "nse"
+    nothing = Analyst(cfg).assess("NIFTY", s, bare)                                              # no OI evidence at all
+    q = out["quarantined"]
+    assert {"pcr", "oi_walls"} <= {e.factor for e in q.evidence if e.direction == 0 and "withheld" in e.observation}
+    assert abs(q.score) <= abs(nothing.score) + 1e-12 and q.conviction <= nothing.conviction + 1e-12      # never more convincing than "no OI reads"
+    assert out["clean"].evidence and "OI feed fault" not in " ".join(e.observation for e in out["clean"].evidence)

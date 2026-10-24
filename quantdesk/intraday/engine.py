@@ -528,6 +528,12 @@ class IntradayEngine:
                 # Before the optional analytics (P1-4): an error there must not leave the marks on a stale IV.
                 self.marker.calibrate(ch, self.lot(u))
             an = chain_analytics(ch, self.pricer, self.lot(u))
+            faults = self.__dict__.setdefault("_oi_fault", set())
+            if an.get("oi_quarantined") and u not in faults:        # once per outage: a feed that is bad every snapshot must not be silent, nor flood the journal
+                faults.add(u)
+                self.journal.event(now, "WARN", "chain", f"{u} chain has an implausible OI print: every OI read (PCR, walls, max pain, GEX) is withheld and counted as neutral")
+            elif not an.get("oi_quarantined"):
+                faults.discard(u)
             if ch.attrs.get("source") != "model":             # the model chain's IV is India VIX's, not this market's
                 an.update(iv_percentile(self.iv_hist.get(u), an.get("atm_iv"), (self.expiry[u] - now.date()).days, now.date()))
             an.update(self._futures(u, now, an.get("spot")))
