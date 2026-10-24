@@ -645,26 +645,36 @@ def holm(pvals: dict[str, float], alpha: float = 0.05) -> dict[str, bool]:
     return out
 
 
-def oi_report(table: pd.DataFrame, readout: str) -> dict:
+def oi_report(table: pd.DataFrame, readout: str, accept_gaps=()) -> dict:
     """The pre-registered read-out on the forward decisions of `table` (all sessions on or after FORWARD_START). `readout`: "interim" (all forward
     sessions so far, descriptive: no claim is made from it) or "final" (the FIRST 120 forward sessions in date order, a session being a day present in
-    the table; the confirmatory test, Holm over the two indices as a family of two whatever each index's status: an index without a test counts as p = 1)."""
+    the table; the confirmatory test, Holm over the two indices as a family of two whatever each index's status: an index without a test counts as p = 1).
+    The final read-out is confirmatory only if every weekday up to the 120th session that has no table is named in `accept_gaps` (the exchange
+    holidays, listed by the owner): a session that was never graded would otherwise shift the window without anyone seeing it."""
     days = sorted(table.loc[table["day"] >= FORWARD_START, "day"].unique())
     sessions = len(days)
+    have = set(days)
     rep = {"spec": SPEC, "readout": readout, "forward_sessions": sessions, "confirmatory": False,
-           "weekdays_without_tables": [str(d.date()) for d in pd.bdate_range(FORWARD_START, days[-1]) if str(d.date()) not in set(days)] if days else []}
-    used = table
+           "weekdays_without_tables": [str(d.date()) for d in pd.bdate_range(FORWARD_START, days[-1]) if str(d.date()) not in have] if days else []}
+    used, unaccepted = table, []
     if readout == "final":
         if sessions < 120:
             rep["note"] = f"{sessions} forward sessions: the final read-out needs 120; this is an interim look and makes no claim"
         else:
             used = table[(table["day"] < FORWARD_START) | table["day"].isin(days[:120])]
             rep["sessions_used"] = 120
+            gaps = [str(d.date()) for d in pd.bdate_range(FORWARD_START, days[119]) if str(d.date()) not in have]
+            accepted = {str(pd.Timestamp(g).date()) for g in accept_gaps}
+            rep["accepted_gaps"] = sorted(set(gaps) & accepted)
+            unaccepted = [g for g in gaps if g not in accepted]
+            if unaccepted:
+                rep["note"] = (f"{len(unaccepted)} weekday(s) before the 120th session have no table and are not accepted as exchange holidays "
+                               f"({', '.join(unaccepted[:10])}{' ...' if len(unaccepted) > 10 else ''}): grade them from the archive or list them; this look makes no claim")
     else:
         rep["note"] = "interim, descriptive: an estimate and its interval, not a finding"
     tests = {u: wall_test(used, u) for u in INDICES}
     rep["tests"] = tests
-    if readout == "final" and sessions >= 120:
+    if readout == "final" and sessions >= 120 and not unaccepted:
         rep["confirmatory"] = True
         rep["rejected"] = holm({u: (t["p_one_sided"] if t["status"] == "ok" else 1.0) for u, t in tests.items()})
         rep["retired"] = {u: bool(t["status"] == "ok" and t["ci90"][1] < 0.10) for u, t in tests.items()}
@@ -682,6 +692,8 @@ def render_report(rep: dict) -> str:
                      f"[{t['ci90'][0]:+.3f}, {t['ci90'][1]:+.3f}]; {t['sessions']} sessions, {t['n']} decisions; implied-probability slope {t['controls']['p_iv']:+.3f}")
         if rep["confirmatory"]:
             lines.append(f"    rejected at the family level: {rep['rejected'].get(u, False)}; retired by the kill rule: {rep['retired'][u]}")
+    if rep.get("accepted_gaps"):
+        lines.append(f"  accepted as exchange holidays by the owner: {', '.join(rep['accepted_gaps'])}")
     gaps = rep.get("weekdays_without_tables", [])
     if gaps:
         lines.append(f"  {len(gaps)} weekday(s) since {FORWARD_START} have no table (exchange holidays included; any other is a missing session, never dropped for its outcome): "

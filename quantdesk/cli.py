@@ -386,6 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
     s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
+    s.add_argument("--accept-gaps", default="", help="oi-report --readout final: comma-separated weekdays (YYYY-MM-DD) that have no table because they were exchange holidays")
     s.set_defaults(fn=cmd_ml)
     return p
 
@@ -444,7 +445,8 @@ def _ml_oi(cfg, a):
         print(f"{man['day']}: rows {man['rows']} · usable at 60 minutes {man['usable60']} · quarantined snapshots "
               f"{ {u: q['quarantined'] for u, q in man['quarantine'].items()} } · code {man['code_sha256'][:12]}")
         return
-    print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout)))
+    gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
+    print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
 
 
 def _ml_reproduce(a):

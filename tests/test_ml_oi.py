@@ -1331,3 +1331,38 @@ def test_a_session_is_not_written_by_code_the_spec_does_not_pin(tmp_path, monkey
     with pytest.raises(RuntimeError, match="not the code the registered spec pins"):
         oi.run_day(tape, DAY, out)
     assert not out.exists() or not list(out.iterdir())
+
+
+# ---- the final read-out and sessions that were never graded --------------------------------------------------------------
+def _days(n, skip=()):
+    return [str(d.date()) for d in pd.bdate_range("2026-10-26", periods=n + len(skip)) if str(d.date()) not in set(skip)][:n]
+
+
+def _ok_test(monkeypatch):
+    monkeypatch.setattr(oi, "wall_test", lambda table, u, horizon=60: {"status": "ok", "p_one_sided": 0.001, "ci90": [0.1, 0.5], "beta": 0.3, "se": 0.1, "t": 3.0,
+                                                                          "n": 900, "sessions": 120, "underlying": u, "controls": {"p_iv": 0.0}})
+
+
+def test_the_final_readout_is_not_confirmatory_while_a_weekday_before_the_120th_session_has_no_table(monkeypatch):
+    _ok_test(monkeypatch)
+    skip = ["2026-11-10"]
+    days = pd.DataFrame({"day": _days(120, skip=skip)})                              # 120 sessions with one weekday missing
+    rep = oi.oi_report(days, "final")
+    assert not rep["confirmatory"] and "2026-11-10" in rep["note"] and "rejected" not in rep and rep["accepted_gaps"] == []
+    ok = oi.oi_report(days, "final", accept_gaps=["2026-11-10"])
+    assert ok["confirmatory"] and ok["accepted_gaps"] == ["2026-11-10"] and ok["rejected"] == {"NIFTY": True, "BANKNIFTY": True}
+    assert "accepted as exchange holidays" in oi.render_report(ok)
+
+
+def test_a_gap_after_the_120th_session_does_not_matter_and_an_accepted_date_that_is_no_gap_is_ignored(monkeypatch):
+    _ok_test(monkeypatch)
+    days = _days(130, skip=["2027-05-03"])
+    assert "2027-05-03" > days[119]                                                    # the missing weekday lies after the 120th session
+    rep = oi.oi_report(pd.DataFrame({"day": days}), "final", accept_gaps=["2026-11-03"])
+    assert rep["confirmatory"] and rep["accepted_gaps"] == []
+
+
+def test_the_cli_takes_the_accepted_gaps(tmp_path, capsys):
+    from quantdesk.cli import build_parser
+    a = build_parser().parse_args(["ml", "oi-report", "--readout", "final", "--accept-gaps", "2026-11-10, 2026-11-14"])
+    assert a.accept_gaps == "2026-11-10, 2026-11-14"
