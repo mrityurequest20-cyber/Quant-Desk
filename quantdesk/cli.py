@@ -366,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report"])
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
@@ -387,6 +387,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
     s.add_argument("--accept-gaps", default="", help="oi-report --readout final: comma-separated weekdays (YYYY-MM-DD) that have no table because they were exchange holidays")
+    s.add_argument("--run", help="card: a JSON run record (spec, code commit, data digests, training window, settings, variants, baseline, out-of-sample result, "
+                                 "leakage tests, status); the card is built from it or refused, naming what is missing")
     s.set_defaults(fn=cmd_ml)
     return p
 
@@ -402,6 +404,8 @@ def cmd_ml(cfg, a):
             return _ml_build(cfg, a)
         if a.action in ("oi", "oi-report"):
             return _ml_oi(cfg, a)
+        if a.action == "card":
+            return _ml_card(cfg, a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
         raise SystemExit(f"ml {a.action}: {exc}")
@@ -429,6 +433,30 @@ def _ml_build(cfg, a):
     symbols = [s.strip() for s in a.symbols.split(",") if s.strip()]
     folder = B.build(Path(a.dataset), symbols, a.profile_end, out, allow_unverified=a.allow_unverified)
     print(f"table {folder}")
+
+
+def _ml_card(cfg, a):
+    """P0.5: the model card of a run, or a refusal naming every missing piece of provenance. Offline: reads one JSON file, writes one card once."""
+    import json as _json
+    from .ml import modelcard as MC
+    if not a.run:
+        raise SystemExit("ml card: --run (a JSON run record) is required")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_cards"
+    from .ml import build as B
+    B.refuse_tracked_tree(out, "ml card --out")                  # a card names data digests and our own results; it is not written where it could be committed by accident
+    try:
+        run = _json.loads(Path(a.run).read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"ml card: cannot read --run {a.run}: {exc}")
+    try:
+        card = MC.build_card(run)
+        repo_problems = MC.check_against_repo(run, Path(__file__).resolve().parents[1])
+        if repo_problems:
+            raise MC.MissingProvenance(repo_problems)
+        jp, mp = MC.write_card(out, card)
+    except MC.MissingProvenance as exc:
+        raise SystemExit("ml card: " + "\n  - ".join(["no model card, the run lacks provenance:"] + exc.problems))
+    print(f"card {jp} · digest {card['digest'][:16]} · status {card['status']}")
 
 
 def _ml_oi(cfg, a):
