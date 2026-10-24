@@ -142,9 +142,10 @@ out of the money as a percentage of the entry spot. Paper fills; a small sample;
   earlier table differs because **two trades flipped bucket**, both by rounding to two decimals with an inclusive upper edge: a `va_reversion` loss at 0.2549% (-3,891) was counted in
   the first bucket, and an `orb` `premium_target` winner at 0.7527% (+21,098) in the middle one. Eight trades lie within 0.03 of one of the two edges, and the single trade 0.003 past
   0.75% moved 21k of P&L: the split follows a hundredth of a percent, which is what "26 trades cannot settle it" means.
-  Without the best three trades in each cell (a per-cell measure, trivially negative for a cell that is already losing, and shown only from 10 trades), `orb` is -19,872 and
-  `trend_break` -32,540. The VWAP check: all three `vwap_trend` trades had the underlying move *against* the trade at exit (-0.08%, -0.17%, -0.15%). With three trades and exit-time spot
-  only, that does not separate the signal from the exit rules (an invalidation exit fires because the spot has already moved against the trade); it is a reason to look again at 30
+  Without the desk's best three trades the other 23 lose 45,288 (the report's "All" line). Per cell the same exclusion is shown only from 10 trades and is trivially negative for a
+  cell that is already losing: of the sleeves only `trend_break` (13 trades) qualifies, at -32,540. The VWAP check: all three `vwap_trend` trades had the underlying move *against*
+  the trade at exit (-0.08%, -0.17%, -0.15%). With three trades and exit-time spot only, that does not separate the signal from the exit rules (an invalidation exit fires because the
+  spot has already moved against the trade); it is a reason to look again at 30
   trades, not a finding.
 - To redo it: restore the `journal` branch (`git fetch --depth 1 origin journal`, `git archive FETCH_HEAD`), open `intraday/journal.db`
   read-only (`mode=ro`), table `trades`, strikes in the `legs` JSON.
