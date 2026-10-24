@@ -1,0 +1,22 @@
+# ML platform libraries (docs/ML_PHASE0.md, rule 6). OFFLINE research only: nothing under quantdesk/ outside quantdesk/ml/
+# may import these, and no workflow that runs the desk (live, scheduler, data, ...) installs this file. Install with:
+#     pip install -r requirements-ml.txt
+# Same convention as requirements.txt (A-03): exact versions, transitive packages pinned too. To upgrade, change a pin and
+# let CI pass before merging. The base pins are included, so numpy, pandas and scipy cannot drift from what the desk runs on.
+-r requirements.txt
+
+arch==8.0.0              # GARCH-family volatility models: the benchmark that HAR and later volatility models must beat (M1)
+statsmodels==0.15.0      # OLS / quantile regression with robust errors, time-series tests (ADF, Ljung-Box) for the leakage harness
+scikit-learn==1.9.1      # ridge, logistic, metrics, calibration: the "small models" of rule 6
+lightgbm==4.7.0          # gradient boosting on CPU: the heaviest model rule 6 allows
+duckdb==2.0.0            # SQL over the Parquet warehouse for point-in-time dataset builds, in process, no server
+
+# what the packages above pull in, pinned too
+cloudpickle==3.1.2
+formulaic==1.2.2
+interface-meta==2.0.1
+joblib==1.6.0
+narwhals==2.27.1
+patsy==1.0.3
+threadpoolctl==3.7.0
+wrapt==2.5.1             # pinned to the stable release: formulaic's range (>=1.17.0rc1) lets pip pick the 2.5.2rc1 pre-release
