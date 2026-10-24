@@ -23,10 +23,10 @@ compares with any reference. (Revised once before merge after an independent rev
 - **Gross error:** a compared session off by more than 1.5% on high or low, or on the close under **both** close definitions (15:29 close and the 15:00 to 15:29 mean).
 - **References, pinned:** Yahoo Finance daily bars for `^NSEI` and `^NSEBANK` via `yfinance` with `auto_adjust=False`, retrieved on the day of the run (date
   recorded). NSE: NSE's own daily index file `https://archives.nseindia.com/content/indices/ind_close_all_<DDMMYYYY>.csv`, the rows `Nifty 50` and
-  `Nifty Bank`, field `Closing Index Value` (the file also carries open, high and low; only the close is used). One file is fetched per weekday of the window;
+  `Nifty Bank`, field `Closing Index Value` (the file also carries open, high and low; only the close is used). One file is fetched per weekday of the window, and also for the date of every accepted session that falls on a weekend (a Budget or Muhurat special session);
   every raw file is saved, and the sha256 of each file, of a manifest listing them and of the `date,symbol,close` CSV built from them is recorded. A weekday
   whose file answers HTTP 404 is a day NSE published no index file (a holiday or a closure) and is not an error; any other HTTP error, a timeout, or a file
-  without the two rows is an error and voids the run (see "one run"). Only the sha256 and aggregates are committed, never reference rows.
+  without the two rows is an error and voids the run (see "one run"). The file's `Index Date` must equal the date in its name, otherwise it is an error. If more than 10% of the weekdays answer 404 the run is void (the archive layout changed; holidays are about 6% of weekdays). Requests carry a browser `User-Agent`, because the archive may refuse requests without one (a 403 voids the run). Only the sha256 and aggregates are committed, never reference rows.
 
 ## The checks (per symbol; every rule must hold)
 
