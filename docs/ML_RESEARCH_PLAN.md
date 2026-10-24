@@ -55,9 +55,10 @@ training cut-off and code hash), frozen before grading, graded on the same live 
   Early gaps are not read as results. Apply-ready for options is not before mid 2027.
 - **Confirmed (24 Oct): our tape records real bid and ask**, and the size resting at the best bid and offer. The tape is Kotak-only by design (NSE's public chain and the
   model chain are excluded). In the one file checked, the 23 Oct morning (68,306 rows, 1,666 snapshots, five underlyings) a usable bid and ask is present on 99.8% of rows,
-  and the median spread as a share of the mid widens with distance from spot: about 0.45 to 0.5% within 0.25%, 0.6 to 0.75% at 0.75 to 1.5%, and 1.1 to 1.45% beyond 1.5%
-  (calls wider than puts; beyond 3% out of the money the median is higher still, about 2.2% for calls and 1.3% for puts, and it differs a lot between underlyings, NIFTY
-  about 0.5% and FINNIFTY about 2.6%). One morning only; other days and the afternoon are not checked. The `chains-2026` release holds chain files from 29 Sep (16 sessions to
+  and the median spread as a share of the mid widens with distance from spot, in either direction: about 0.45 to 0.5% within 0.25%, 0.5 to 0.75% at 0.75 to 1.5%, about 1.0 to 1.2%
+  at 1.5 to 3%. Beyond 3% from spot it depends on the side, and **a cost model needs the out-of-the-money side**: calls 0.88% out of the money and 5.72% in the money, puts
+  1.17% out of the money and 1.54% in the money (the pooled 'calls 2.2%' is driven by deep in-the-money calls). It also differs a lot between underlyings (NIFTY about
+  0.5 to 0.6% across all strikes, FINNIFTY about 2.4 to 2.9%). One morning only; other days and the afternoon are not checked. The `chains-2026` release holds chain files from 29 Sep (16 sessions to
   23 Oct), earlier than the sentence above assumes; how many of those sessions are complete is not yet checked.
 
 **Correction to the execution model (M8).** Paper fills are *simulated*, not real fills, and live trading is off. A model trained on

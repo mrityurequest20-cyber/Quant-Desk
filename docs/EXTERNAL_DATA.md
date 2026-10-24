@@ -249,7 +249,7 @@ at 09:26: the new `truncated` rule drops it (checked: the new dataset's rows are
   from the kept sessions has multi-day gaps where a session is out (the overnight gap spanning the removed 23 Mar 2020 is -10.3% simple
   (-10.8% log) for NIFTY: the 24 Mar open against the last minute close of 20 Mar), so a "previous session" feature is the previous *kept* session; (3) a kept session can have up to 14 missing minutes inside
   it; realised variance as a sum of squared consecutive returns treats a gap as one return, and forward-filling to a regular grid would
-  remove that variance; (4) there is no volume; (5) **what the Mar 2023 to May 2026 window itself loses** (NIFTY: 793 weekdays with a row, 784 kept): the default set
+  remove that variance; (4) there is no volume; (5) **what the Mar 2023 to May 2026 window itself loses** (NIFTY: 792 session rows through 14 May 2026, 786 of them weekdays and 6 weekend rows, 784 kept): the default set
   drops the window's 3rd and 10th highest-variance days (2026-02-01 and 2025-02-01, both scheduled Budget days; 4th and 7th for BANKNIFTY), so the full-sample
   ranks (34 and 100) understate the loss for a window evaluation: admit them first or say the evaluation is censored there; the hard-rejected special sessions
   (the Muhurat evenings of 2023-11-12, 2024-11-01 and 2025-10-21, the 105-minute Saturdays 2024-03-02 and 2024-05-18, and 15 May 2026) are part of the sample
@@ -258,13 +258,20 @@ at 09:26: the new `truncated` rule drops it (checked: the new dataset's rows are
   Feb 2023, so the 99.8% variance agreement says nothing about the window, and the only anchors are the provider's own daily file and Yahoo (P0.6, not done);
   (8) the locked HAR was fitted on the aeron7 data, so the realised-variance definition must be the same on both sides (close-to-close agrees across the
   sources; highs and lows differ on 12 to 15% of minutes, so no range-based input); (9) the last minute's close is not NSE's official close (0.05% median, 0.30%
-  NIFTY and 0.44% BANKNIFTY at the 99th percentile); (10) the spec records the `expected_digest` it ran on.
+  NIFTY and 0.44% BANKNIFTY at the 99th percentile); (10) the spec records the `expected_digest` it ran on; (11) the first 22 window sessions need minutes from before March 2023 for their lagged features: the
+  spec must name which source supplies them (aeron7 and Kaggle agree on close-to-close variance and differ on highs and lows); (12) whether to admit any review session is
+  decided and recorded **before** the evaluation run, because admitting one changes the dataset and its digest, and `expected_digest` is the digest after that decision;
+  (13) 51 of the window's 837 weekdays have no row; all are exchange holidays (the 8 in 2026 match the desk's own holiday list, the 43 before it were matched from the
+  data steward's knowledge of NSE's calendars), and the spec should record that check; (14) the window effectively ends on 14 May 2026: the cut-off 15 May session
+  (246 NIFTY and 274 BANKNIFTY bars, 0.11% of the window's NIFTY variance) is rejected, so a target 'to the close' must not use it; (15) six kept window sessions have
+  missing minutes (the largest, 7 on 2023-06-14 and 6 on 2024-04-23), so a realised variance defined on a regular grid must say what it does there.
 - **Not done here, and the limits.** No independent check (P0.6: Yahoo daily bars, the aeron7 overlap to Feb 2023, NSE's official
   close). The only anchors so far are this provider's own daily file and the two indices against each other: the daily file agrees with
   the minute bars closely on 99% of kept days (high, low, close at the 99th percentile: NIFTY 0.05%, 0.05%, 0.30%; BANKNIFTY 0.09%, 0.12%,
   0.44%) but not on every day: the worst are NIFTY 0.68% on the high (2016-01-20), 0.35% on the low, 1.22% on the close (2015-08-10), BANKNIFTY
-  1.05% (2015-03-09), 1.30% (2018-04-23) and 1.31% (2015-08-10); one NIFTY day and five BANKNIFTY days are off by more than 1% on some field (the
-  BANKNIFTY daily file repeats some dates; the last row of a repeated date is used). It is the same provider's, and 2015-08-10 looks like an error in the
+  1.05% (2015-03-09), 1.30% (2018-04-23) and 1.21% (2020-03-18); one NIFTY day and four BANKNIFTY days are off by more than 1% on the high, low or close (eight BANKNIFTY
+  days if the open is included, the worst 2.91% on 2015-03-04). The BANKNIFTY daily file repeats three dates in the kept range (2015-06-29, 2015-07-02, 2015-08-10) as
+  intraday snapshots with scrape-time stamps, not daily bars, and they are left out of this comparison. It is the same provider's, and 2015-08-10 looks like an error in the
   daily file (the minutes slide smoothly into their close); a feed that lags smoothly, a common-mode timestamp shift, or a history the
   provider reconstructed would not be seen. No exchange-holiday calendar is applied before the desk's own (the data steward's check against 46 known
   weekday holidays found none present, which is evidence, not proof; not re-run). The last session, 15 May 2026, stops at 13:20 (NIFTY), 13:48
