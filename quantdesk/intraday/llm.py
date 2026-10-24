@@ -21,6 +21,12 @@ is held back for the reflection, and when the credit is gone Claude simply stops
 desk carries on with the other readers and everything it learned. Claude is advisory (news.py), so none of it can
 reach the tone, a signal, a size or a limit.
 
+The credit is split into two buckets (`teach_share`, owner decision 16 Oct: half and half): the desk's reads (the live
+reader, paced on its half, and the reflection) and teaching (teacher.py: after the close, Claude reviews the session's
+journal and writes advisory lessons). Teaching is recorded in the same ledger as kind "teach" and held to its own bucket;
+the buckets are fixed from what was left when the split took effect (re-fixed at the start of a day if the share changes),
+so neither can spend the other's half. The total is unchanged: this only divides it.
+
 Keys come from the environment, never from files, and are never printed (`key_for` returns the variable's name for
 reports). Each provider accepts a few common names for its variable, so a repository secret works under any of them.
 """
@@ -224,6 +230,10 @@ class ClaudeBudget:
         self.start = str(c.get("budget_start", "") or "")[:10]
         self.sessions = max(1, int(c.get("budget_sessions", 60) or 60))
         self.reserve = bool(c.get("reserve_reflection", True))
+        try:
+            self.teach = min(1.0, max(0.0, float(c.get("teach_share", 0) or 0)))
+        except (TypeError, ValueError):
+            self.teach = 0.0                                 # a share that isn't a number is no teaching pot
         pin = float(c.get("price_in", 4.0))
         self.p = {"in": pin, "out": float(c.get("price_out", 20.0)), "cr": float(c.get("price_cache_read", pin / 10)),
                   "cw": float(c.get("price_cache_write", pin * 1.25))}
@@ -244,10 +254,16 @@ class ClaudeBudget:
         num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
         nums = lambda d: {str(k): x for k, v in d.items() if (x := num(v)) is not None} if isinstance(d, dict) else {}
         txt = lambda v: v if isinstance(v, str) else None
+        pots = nums(st.get("pots"))
+        noted = {str(k): v for k, v in st["noted"].items() if isinstance(v, str)} if isinstance(st.get("noted"), dict) else {}
         return {"total_usd": max(0.0, num(st.get("total_usd")) or 0.0), "by_day": nums(st.get("by_day")),
                 "calls": max(0, int(num(st.get("calls")) or 0)), "sessions_used": max(0, int(num(st.get("sessions_used")) or 0)),
                 "day": txt(st.get("day")), "last": nums(st.get("last")), "reflected": txt(st.get("reflected")),
-                "closed": st.get("closed") is True}
+                "closed": st.get("closed") is True,
+                # teaching (kind "teach") is in total_usd but not in by_day, which is the live reader's spend
+                "teach_usd": max(0.0, num(st.get("teach_usd")) or 0.0), "teach_by_day": nums(st.get("teach_by_day")),
+                "pots": pots if {"share", "left", "total", "teach"} <= set(pots) else None,
+                "noted": noted}               # bucket -> the day its "spent" INFO event was written (one a day)
 
     def _save(self, st: dict) -> None:
         if self.j is not None:
@@ -264,12 +280,30 @@ class ClaudeBudget:
     def _est(self, st: dict, kind: str) -> float:
         return float((st["last"] or {}).get(kind) or (EST_REFLECT if kind == "reflect" else 0.0))
 
+    def _pots(self, st: dict, day: str) -> tuple[float, float]:
+        """(what the live reader has left, what teaching has left), $. The split is fixed from what was left when the
+        day began, the first time it applies or when the share changes; after that each pot only shrinks by its own
+        spend, so the two never exceed the credit between them."""
+        left = max(0.0, self.usd - st["total_usd"])
+        if self.teach <= 0:
+            return left, 0.0
+        p = st["pots"]
+        if p is None or abs(p["share"] - self.teach) > 1e-9:
+            live_t, teach_t = float(st["by_day"].get(day, 0)), float(st["teach_by_day"].get(day, 0))
+            p = st["pots"] = {"share": self.teach, "left": max(0.0, self.usd - (st["total_usd"] - live_t - teach_t)),
+                              "total": st["total_usd"] - live_t - teach_t, "teach": st["teach_usd"] - teach_t}
+        teach_spent = st["teach_usd"] - p["teach"]
+        live_spent = st["total_usd"] - p["total"] - teach_spent
+        return (min(left, max(0.0, (1 - self.teach) * p["left"] - live_spent)),
+                min(left, max(0.0, self.teach * p["left"] - teach_spent)))
+
     def allowance(self, st: dict, day: str) -> float:
-        """Today's: what was left when the day began over the sessions left (today's included)."""
-        began = self.usd - st["total_usd"] + float(st["by_day"].get(day, 0))
+        """Today's: what the live reader's pot held when the day began over the sessions left (today's included)."""
+        began = self._pots(st, day)[0] + float(st["by_day"].get(day, 0))
         # never more than twice the even pace: once the sessions run out (or past) the divisor stops at 1, which would
         # otherwise hand over everything left in a single day
-        return min(max(0.0, began) / max(1, self.sessions - max(0, st["sessions_used"] - 1)), 2 * self.usd / self.sessions)
+        return min(max(0.0, began) / max(1, self.sessions - max(0, st["sessions_used"] - 1)),
+                   2 * self.usd * (1 - self.teach) / self.sessions)
 
     def _close(self, st: dict) -> None:
         if not st["closed"] and self.usd - st["total_usd"] < EST_MIN:
@@ -278,8 +312,9 @@ class ClaudeBudget:
                 self.j.event(self.clock(), "INFO", "llm", f"Claude credit used up (${self.usd:.2f}); the desk continues on "
                              "Gemini/Ollama and keeps everything learned", {"total_usd": round(st["total_usd"], 4)})
 
-    def deny(self, kind: str):
-        """None to go ahead; else why not: a note for the review, or '' to stay quiet (not started, used up)."""
+    def deny(self, kind: str, est: float | None = None):
+        """None to go ahead; else why not: a note for the review, or '' to stay quiet (not started, used up). `est` is what
+        the call is expected to cost (teaching knows: its prompt size and output cap); otherwise the last call's cost."""
         if not self.enabled:
             return None
         with self.lock:
@@ -288,10 +323,25 @@ class ClaudeBudget:
             day, why = self._day(st), None
             self._close(st)
             left = self.usd - st["total_usd"]
+            live_left, teach_left = self._pots(st, day)
+            need = float(est) if est is not None else self._est(st, kind)
             if day < self.start or st["closed"]:
                 why = ""
-            elif left < self._est(st, kind):
+            elif left < need:
                 why = f"Claude credit nearly used (${left:.2f} left)"
+            elif kind == "teach":
+                if self.teach <= 0:
+                    why = "teaching has no pot (intraday.llm.claude.teach_share is 0)"
+                elif teach_left < max(need, EST_MIN):
+                    why = f"teaching pot nearly used (${teach_left:.2f} left, ${need:.2f} needed)"
+            elif live_left < max(need, EST_MIN):
+                why = f"Claude reads budget nearly used (${live_left:.2f} left of the reads' half)"
+                if self.teach > 0 and kind == "read" and st["noted"].get("reads") != day:
+                    st["noted"]["reads"] = day
+                    if self.j is not None:
+                        self.j.event(self.clock(), "INFO", "llm", "Claude reads budget (its half of the credit) is spent; "
+                                     "reads are skipped, the desk carries on with the other readers",
+                                     {"reads_left_usd": round(live_left, 4), "teaching_left_usd": round(teach_left, 4)})
             elif kind == "read":
                 spent = float(st["by_day"].get(day, 0))
                 hold = self._est(st, "reflect") if self.reserve and st["reflected"] != day else 0.0
@@ -302,17 +352,36 @@ class ClaudeBudget:
                 self._save(st)
             return why
 
+    def teach_left(self) -> float:
+        """What teaching may still spend, $ (0 when there is no pot, the credit has not started or it is used up)."""
+        if not self.enabled:
+            return 0.0
+        with self.lock:
+            st = self._load()
+            before = json.dumps(st, sort_keys=True, default=str)
+            day = self._day(st)
+            self._close(st)
+            left = 0.0 if day < self.start or st["closed"] else self._pots(st, day)[1]
+            if json.dumps(st, sort_keys=True, default=str) != before:
+                self._save(st)
+            return left
+
     def charge(self, usage, kind: str) -> float:
-        """Price one response's usage and add it to the ledger; returns the cost."""
+        """Price one response's usage and add it to the ledger; returns the cost. Kind "teach" is the teacher's, held to
+        its own pot; the others (read, reflect) are the reads' half."""
         cost = usage_usd(usage, self.p)
         if not self.enabled:
             return cost
         with self.lock:
             st = self._load()
             day = self._day(st)
+            self._pots(st, day)                              # fix the split before this spend lands in the ledger
             st["total_usd"] = round(st["total_usd"] + cost, 6)
-            st["by_day"][day] = round(float(st["by_day"].get(day, 0)) + cost, 6)
-            st["by_day"] = dict(sorted(st["by_day"].items())[-200:])
+            by, total = ("teach_by_day", "teach_usd") if kind == "teach" else ("by_day", None)
+            st[by][day] = round(float(st[by].get(day, 0)) + cost, 6)
+            st[by] = dict(sorted(st[by].items())[-200:])
+            if total:
+                st[total] = round(st[total] + cost, 6)
             st["calls"] += 1
             st["last"] = {**(st["last"] or {}), kind: cost}
             if kind == "reflect":
@@ -335,8 +404,9 @@ class ClaudeBudget:
                 return f"Claude: starts {self.start}, ${self.usd:.2f} over {self.sessions} sessions"
             pace = st["total_usd"] / max(1, st["sessions_used"])
             left = (self.usd - st["total_usd"]) / pace if pace > 0 else max(0, self.sessions - st["sessions_used"])
+            teach = f"; teaching ${st['teach_usd']:.2f}, ${self._pots(st, day)[1]:.2f} left in its pot" if self.teach > 0 else ""
             return (f"Claude: ${float(st['by_day'].get(day, 0)):.2f} today, ${st['total_usd']:.2f} of ${self.usd:.2f} used, "
-                    f"~{left:.0f} sessions left at this pace")
+                    f"~{left:.0f} sessions left at this pace" + teach)
         except Exception:
             return ""
 
@@ -385,6 +455,10 @@ class ClaudeReader:
     def read(self, items: list[dict]) -> dict[str, dict]:
         text = self._call(READ_SYSTEM, _payload(items), READ_SCHEMA, self.effort, 4000)
         return _parse_reads(text, {it["id"] for it in items}) if text else {}
+
+    def teach(self, system: str, user: str, schema: dict, effort: str, max_tokens: int) -> str | None:
+        """One teaching call, charged to the teaching bucket (kind "teach"). The caller has already asked the budget."""
+        return self._call(system, user, schema, effort, max_tokens, "teach")
 
     def reflect(self, review: str, record: list[str]) -> dict | None:
         user = ("Session review:\n\n" + review[:24000] + "\n\nWhat the desk has learned so far:\n"

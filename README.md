@@ -492,6 +492,12 @@ confidence.
   lessons and three things to watch at the open, into the review and the memory. Nothing it writes touches
   orders, sizing or risk.
 
+- **Teaching:** after the close, and only then, Claude also reviews the session's journal and writes structured
+  lessons: what the desk got right or wrong and why, a concrete hypothesis worth testing, and the evidence that
+  would confirm or refute it. Every lesson cites journal rows by id and states its uncertainty; output that is not
+  the agreed JSON is dropped with a WARN. Lessons are stored as **advisory** text and can never change a setting
+  (enforced in `quantdesk/intraday/teacher.py` and tested in `tests/test_teacher.py`; the general limits are in [docs/AUTONOMY.md](docs/AUTONOMY.md)).
+
 Keys (repository secrets, passed by `live.yml`):
 - `ANTHROPIC_API_KEY`, or `CLAUDE_API_KEY`, `CLAUDE_API`, `CLOUD_API_KEY`
 - `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
@@ -504,6 +510,8 @@ each provider. Locally, run `python -m quantdesk intraday ai-check`.
 - Headlines go 12 per call, at most 40 calls per provider per day (`intraday.llm`).
 - One Claude headline call is ~2k tokens in and ~1k out: about $0.03 at $4/$20 per million.
 - A busy news day costs about $0.50–1.50 for Claude; the reflection is a few cents.
+- The Claude credit (`budget_usd`, $20, the amount the account holds) is split in half: the reads and the reflection may spend one half, teaching
+  the other (`teach_share`, one teaching call a day, roughly $0.15). Each half is enforced on its own.
 - The review ends with the day's calls, tokens and estimated cost.
 
 ## Edge research (real data)
