@@ -79,6 +79,15 @@ Target: Phase 0 done by **mid November**, as the ML roadmap says. If it slips, s
   **Second review (`2060e3d`).** Risk and compliance: CLEAR again (two should-fixes: tables never written inside a git working tree, and `load_table(dataset=)` re-deriving the status from the dataset's verification record). Auditor: NOT CLEAR, one blocker and six should-fixes, all made: the time embargo could not cover a five-*session* lookback (now the session-aware purge above,
   and the false "ten days is safe" claim is gone), the reproduction now compares the fitted profile (1,132 of 1,132 numbers, not 1,056), the split's training sessions must equal the profile window, a `profile_end` inside the reserved window is refused, the dataset must be the one the result was computed on, the provenance line names the source commit and importer,
   and the leading-gap guard is tested at minute 0 and not minute 1. Said plainly: a forger with write access to the table folder can still relabel a table unless the caller names the dataset; the five back-filled aeron7 sessions per index are an unquantified look-ahead in the locked run and want a desk-request issue.
+- **OI shadow (`ml/oi.py`, `docs/prereg/oi_shadow_v1.json`, `python -m quantdesk ml oi --source <tape> --day <date>` and `ml oi-report`)**: open-interest features and a
+  pre-registered test, offline and shadow only from Mon 26 Oct 2026. Nothing here votes, sizes, gates, enters or exits, and a promotion to live use is a separate, independently
+  reviewed, tighten-only change behind the owner's apply switch after the 120-session read-out. It reads the desk's own chain tape (tier T2), never third-party data. Each session's
+  tables are written once (a rerun must reproduce them or it refuses), carry the hash of the code that made them, and the report refuses sessions made by other code. 14 development
+  sessions (5 to 23 Oct) fixed the definitions and are not evidence. The primary test is one regression per index (does wall strength predict containment beyond what the
+  options market's own implied probability says, within a session); the spec states its power plainly (BANKNIFTY will likely be inconclusive). 40 advanced features (gamma and the
+  gamma flip, wall dynamics, concentration, quote microstructure, volume, term, forward and skew) are recorded from the first session, exploratory: described, never tested for
+  significance. A feed fault (OI above 1e12 or negative, about 1.1% of snapshots) quarantines the whole snapshot, never clipped. Tests: the module's 98-test file with every
+  feature's expected value computed independently; mutation runs of 145 mutants (82 on the OI features, 63 on the advanced ones), the survivors being equivalent mutants.
 
 ## Data tiers
 
@@ -101,6 +110,12 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
 5. **Public repository.** Raw third-party data is not committed or published unless its licence allows redistribution. Datasets live in releases or
    artifacts with a manifest; a source with a restrictive licence stays out of the public repository (decide with the owner before import).
 6. **Home-built.** Small models in our own code (gradient boosting, quantile regression, ridge, logistic). Neural networks only after the simpler models show signal and a spec earns them.
+
+   *Dependencies (added by the PR that introduced `requirements-ml.txt`, 24 Oct).* Five specialist libraries, exact-pinned like `requirements.txt`, in a
+   separate file so the desk's own installs are unchanged: `arch` (GARCH-family volatility benchmark for M1), `statsmodels` (quantile and OLS regression
+   with robust errors, time-series tests for the leakage harness), `scikit-learn` (ridge, logistic, metrics, calibration), `lightgbm` (CPU gradient
+   boosting) and `duckdb` (in-process SQL over the Parquet warehouse for point-in-time dataset builds). None is imported by the trading path: no
+   workflow installs `requirements-ml.txt`, nothing outside `quantdesk/ml/` may import these libraries, and Phase 0 stays offline and read-only (above).
 
 ## What I need from the owner (only for P0.6)
 

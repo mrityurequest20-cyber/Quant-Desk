@@ -366,10 +366,12 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce"])
-    s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...)")
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report"])
+    s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
+                                    "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
-                                 "reproduce: an empty scratch folder (default: a new temporary one; never docs/prereg/results)")
+                                 "reproduce: an empty scratch folder (default: a new temporary one; never docs/prereg/results); "
+                                 "oi, oi-report: the session tables (default runtime/ml_oi)")
     s.add_argument("--version", default="", help="import: the source's version label (documentation only; the file hashes are the identity)")
     s.add_argument("--reviewed", help="import: a reviewed-sessions file (default quantdesk/ml/reviewed_sessions.json)")
     s.add_argument("--dataset", help="build: an imported dataset folder; reproduce: the aeron7 dataset the locked result was computed on")
@@ -382,6 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--through", choices=["platform", "study"], default="platform",
                    help="reproduce: 'platform' recomputes the locked study with the builder, the splits and the study's scorers and writes nothing "
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
+    s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
+    s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
     s.set_defaults(fn=cmd_ml)
     return p
 
@@ -395,6 +399,8 @@ def cmd_ml(cfg, a):
             return _ml_import(cfg, a, I)
         if a.action == "build":
             return _ml_build(cfg, a)
+        if a.action in ("oi", "oi-report"):
+            return _ml_oi(cfg, a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
         raise SystemExit(f"ml {a.action}: {exc}")
@@ -422,6 +428,23 @@ def _ml_build(cfg, a):
     symbols = [s.strip() for s in a.symbols.split(",") if s.strip()]
     folder = B.build(Path(a.dataset), symbols, a.profile_end, out, allow_unverified=a.allow_unverified)
     print(f"table {folder}")
+
+
+def _ml_oi(cfg, a):
+    """The open-interest shadow (docs/prereg/oi_shadow_v1.json): `oi` grades one session of the desk's own chain tape and writes its tables once;
+    `oi-report` prints a read-out of every session written. Offline: nothing here votes, sizes, gates, enters or exits."""
+    from .ml import oi as OI
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_oi"
+    if a.action == "oi":
+        if not a.source or not a.day:
+            raise SystemExit("ml oi: --source (the tape folder) and --day are required")
+        from .ml import build as B
+        B.refuse_tracked_tree(out, "ml oi --out")                    # the tape comes from a broker feed: its tables are never written where they could be committed
+        man = OI.run_day(Path(a.source), a.day, out)
+        print(f"{man['day']}: rows {man['rows']} · usable at 60 minutes {man['usable60']} · quarantined snapshots "
+              f"{ {u: q['quarantined'] for u, q in man['quarantine'].items()} } · code {man['code_sha256'][:12]}")
+        return
+    print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout)))
 
 
 def _ml_reproduce(a):
