@@ -26,11 +26,13 @@ card and a registry. It is **offline and read-only**:
 | P0.3 | **Dataset builder** | `python -m quantdesk ml build`: point-in-time tables, first from index minutes and daily bars for M1 (features at a decision time, labels over 30m / 60m / 120m / close that never reach past the session) | Two builds from the same inputs give identical digests; no table uses data after its decision time | P0.2 |
 | P0.4 | **Leakage tests and purged walk-forward harness** | Splits with purge and embargo, a test that injects a known leak and must fail, a baseline comparison | The injected leak is caught; **the harness reproduces the locked HAR result on 2019 to Feb 2023** (8 of 8 cells) within a stated tolerance | P0.3 |
 | P0.5 | **Registry and prediction-event schema** | Model id, version, provenance (data digests, code commit, training window), status (offline, shadow, applied), rolling grade; the journal event format for a live prediction (design only; the engine side is a later, reviewed change) | A model card is generated for every run and refuses to build without its provenance | P0.1, P0.4 |
-| P0.6 | **Intake of the 2023 to 2026 index minutes** | The missing stretch (Mar 2023 to Sep 2026) imported through the same validation as the 2007 to Feb 2023 set, verified against Yahoo and Kotak overlap and NSE's daily index OHLC | Status `verified`, or rejected with reasons; coverage and quality report | **the owner's source (name, format, licence)** |
+| P0.6 | **Independent check of the 2023 to 2026 index minutes** | The import exists (P0.2); this is the check that can make it `external_verified`: Yahoo daily bars, the aeron7 overlap to Feb 2023, the Kotak overlap and NSE's official daily close, written as a `verification.json` that names the dataset digest; plus a source for 15 May to early Sep 2026 | Status `verified`, or rejected with reasons; coverage and quality report | **the owner's source (name, format, licence)** |
 | P0.7 | **Labelled-setup counter** | The number of labelled shadow setups per week (live Shadow stage and the offline replay), in the Saturday digest; progress toward the 300 to 500 the entry filter needs | The digest line appears and matches the journal | the scope ladder's Shadow stage |
 | P0.8 | **Retrain job** | A scheduled read-only workflow on CPU that rebuilds datasets and re-fits registered models (no write permission, no secret) | A drill run reproduces the committed HAR coefficients | P0.3 to P0.5; workflow review |
 
-Order: P0.1 and P0.2 first (this week), then P0.3 and P0.4 together. P0.6 starts when the owner names the source. P0.7 and P0.8 are last.
+*P0.2 status (24 Oct): built for the index minutes, `quantdesk/ml/intake.py` with `python -m quantdesk ml import`; `load()` refuses a dataset without a manifest, one whose manifest or partitions no longer hash to their digest, and unverified data unless asked. The option and tape tiers (T2) are not covered yet.*
+
+Order: P0.1 and P0.2 first (this week), then P0.3 and P0.4 together. P0.6 can start now that the owner's source is imported. P0.7 and P0.8 are last.
 Target: Phase 0 done by **mid November**, as the ML roadmap says. If it slips, section 0's cut order in the master plan applies.
 
 ## Data tiers
@@ -38,7 +40,7 @@ Target: Phase 0 done by **mid November**, as the ML roadmap says. If it slips, s
 | Tier | What | Window | Status and use |
 |---|---|---|---|
 | T1 | Index 1-minute bars (aeron7 import) and daily bars, F&O bhavcopy | 2007 to Feb 2023 minutes; daily longer; bhavcopy 2019+ | The locked HAR lock used 2019 to Feb 2023. `external_unverified` until verified; underlying-price research only |
-| T1b | Index 1-minute bars, Mar 2023 to Sep 2026 (owner's source) | to be imported (P0.6) | Same rules as T1. A **pre-registered, one-shot out-of-sample evaluation of the locked HAR model** on this stretch is written *before* the data is loaded |
+| T1b | Index 1-minute bars (owner's Kaggle source; every row of the import is tagged T1b: 2015-01-09 to 2026-05-15, so it overlaps T1 until Feb 2023, which is what lets P0.6 check the two against each other) | imported by P0.2 on 24 Oct, `external_unverified`; the independent check is P0.6; the hole from 15 May to early Sep 2026 is open | Same rules as T1. A **pre-registered, one-shot out-of-sample evaluation of the locked HAR model** on this stretch is written *before* the data is loaded |
 | T2 | Our own point-in-time tape: option chains each minute, option minutes, stock minutes | Oct 2026 onwards (about 28 real sessions by late November) | The only source for option-level models. Never mixed with T1 without a provenance column |
 | T3 | The journal: decisions, trades, rejections, thoughts, events, plan studies, shadow records | Since the desk started | Labels and counterfactuals |
 
@@ -56,6 +58,8 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
 6. **Home-built.** Small models in our own code (gradient boosting, quantile regression, ridge, logistic). Neural networks only after the simpler models show signal and a spec earns them.
 
 ## What I need from the owner (only for P0.6)
+
+*Update 24 Oct: the owner named the source (Kaggle `debashis74017/nifty-50-minute-data`) and it is imported. Still open: its licence (the owner chose not to chase it, so nothing is published) and a source for 15 May to early Sep 2026.*
 
 The source of the Mar 2023 to Sep 2026 NIFTY and BANKNIFTY minutes: where it comes from, the file format and columns, the coverage, and whether
 it may be redistributed (it will sit in a public repository's release unless you want it kept private). Nothing else in Phase 0 waits on you.

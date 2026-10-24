@@ -53,7 +53,11 @@ training cut-off and code hash), frozen before grading, graded on the same live 
   starts. A gap inside the margin is a tie and the window extends. Sixty sessions separate large differences only.
 - Our own option tape began in Oct 2026 (about 28 sessions by late November), so arm A is not solid before about **Feb to Mar 2027**.
   Early gaps are not read as results. Apply-ready for options is not before mid 2027.
-- Whether our tape records bid and ask is **to be confirmed** before the spec is written; the A-full arm depends on it.
+- **Confirmed (24 Oct): our tape records real bid and ask**, and the size resting at the best bid and offer. The tape is Kotak-only by design (NSE's public chain and the
+  model chain are excluded). In the one file checked, the 23 Oct morning (68,306 rows, 1,666 snapshots, five underlyings) a usable bid and ask is present on 99.8% of rows,
+  and the median spread as a share of the mid widens with distance from spot: about 0.45 to 0.5% within 0.25%, 0.6 to 0.75% at 0.75 to 1.5%, and 1.1 to 1.45% beyond 1.5%
+  (calls wider than puts). One morning only; other days and the afternoon are not checked. The `chains-2026` release holds chain files from 29 Sep (16 sessions to
+  23 Oct), earlier than the sentence above assumes; how many of those sessions are complete is not yet checked.
 
 **Correction to the execution model (M8).** Paper fills are *simulated*, not real fills, and live trading is off. A model trained on
 them would learn our own simulator. The cost model is therefore built from the **quotes in our chain tape** (spread by strike
@@ -114,7 +118,7 @@ below its baseline drops back to shadow by itself.
 | Multi-day drawdown halt value | owner |
 | Scope ladder (more indices, stocks, commodities): admissions after the Phase 0 exit | next session, if the desk is doing well |
 | Source for 15 May to early Sep 2026 index minutes, or accept the hole | next session |
-| Confirm the tape records bid and ask; check that journal text sent to the teacher holds nothing private (account numbers, keys, tokens) | next session |
+| Check that journal text sent to the teacher holds nothing private (account numbers, keys, tokens). (The tape records bid and ask: confirmed, section 3.) | next session |
 | First teaching run: confirm its log line after a session; spend stays inside its half of the $20 | next session |
 
 ## 7b. Baseline: the first 26 paper trades (read from the `journal` branch, 24 Oct)
