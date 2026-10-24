@@ -5,6 +5,8 @@ trained on CPU. No pre-trained models or hosted model services (Hugging Face and
 [MASTER_PLAN.md](MASTER_PLAN.md) section 11). This file is the work plan for Phase 0 of [ML_ROADMAP.md](ML_ROADMAP.md); that file
 keeps the rules (section 2) and the model list. Where they differ on *dates*, [MASTER_PLAN.md](MASTER_PLAN.md) wins.
 
+The model programme, the twin test for options and the open items are in [ML_RESEARCH_PLAN.md](ML_RESEARCH_PLAN.md).
+
 ## What Phase 0 is, and what it must never do
 
 Phase 0 builds the tools every later model needs: a spec template, a dataset builder, labels, a leak-proof test harness, a model
