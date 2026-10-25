@@ -7,25 +7,45 @@
 > method is used. The trial now asks whether to **keep** the attachment and the subscription, on the measures below. The separate tick recorder described further down is
 > optional and secondary: it measures latency (C3) and real order flow (C4) and is not needed for the decision.
 >
-> **Credentials under v2 (supersedes the "Operating notes" below).** `KITE_API_KEY` and `KITE_API_SECRET` are repository secrets (added by the owner on 25 Oct). The API secret is read by
-> exactly three steps: the daily "Kite token" workflow (it exchanges the owner's single-use `request_token` for the day's access token), the same workflow's encryption step, and the
-> live desk's optional "Kite token" step (it decrypts the file). The access token is stored AES-256 encrypted, with a key derived from the API secret, as one file on a `kite-token`
-> branch, and is masked in the logs before it is exported; it expires within a day. No password or TOTP is stored. No order method is called anywhere (a test greps for it).
+> **Credentials under v2 (supersedes the "Operating notes" below).** `KITE_API_KEY` and `KITE_API_SECRET` are repository secrets (added by the owner on 25 Oct). Inside jobs they are
+> exposed only as `KITE_DATA_KEY`, `KITE_DATA_SECRET` and `KITE_DATA_TOKEN`, **never** as the names the broker adapter (`execution/kite.py`) reads, so the day's token cannot switch that
+> adapter's credentials on. The API secret is read by exactly three steps: the daily "Kite token" workflow (it exchanges the owner's single-use `request_token` for the day's access token),
+> the same workflow's encryption step, and the live desk's optional "Kite token" step (it decrypts the file; the library install is a separate step with no secret). The access token is stored
+> AES-256 encrypted, with a key derived from the API secret, as one file on a `kite-token` branch of this (public) repository; every day's ciphertext stays in git history, the token expires
+> within a day, and CBC carries no integrity check, so the desk accepts only a decrypted value of token shape (16 to 64 letters and digits) before exporting it. No password or TOTP is stored. No
+> order method is called anywhere (a test greps for it). **Disclosed for the owner's decision:** `docs/AUTONOMY.md` says the engineer never touches broker credentials; these are
+> data-only credentials used on the owner's explicit instruction, and the owner may wish to write that exception into their own file.
 >
-> > **Measures for the attached desk (fixed now), over counted sessions (a weekday on which the websocket started; 26 to 30 Oct are shake-down and not counted; read-out 20 Nov):**
+> **Licence.** Kite market data is the subscriber's. Minutes served from Kite are kept out of the recorder (`unrecorded`), so they do not reach the public run artifacts or the `chains-YYYY`
+> release; the app's Data panel shows how old each tick is, never a Kite price. What cannot be avoided: the desk's own decisions, trades and its Markets view are computed from the index level
+> whatever feed served it, as they were with Kotak and Yahoo. If the owner reads the licence more strictly than that, the answer is `intraday.kite.live: false`.
 >
-> | # | Measure | Source | Pass if |
+> **What changes for registered paper evaluations.** `intraday_direction_v1` and `oi_shadow_v1` read the desk's own record; sessions that ran on the Kite feed are marked by the heartbeat's
+> feed name and the counter events below. Their pre-registered definitions are unchanged.
+>
+> **Counted sessions (replaces the v1 definition).** Every trading weekday from 2 Nov, **whether or not a token was loaded**: a day without a token fails E1 and E6 and is not excluded. 26 to 30
+> Oct are shake-down and not counted. Read-out 20 Nov.
+>
+> **Measures for the attached desk (fixed now).** Read from the journal's INFO events of category `feed` whose message starts `kite feed counters` (written every 5 minutes by the engine, as JSON
+> of the feed's own counters), because the counters live in one process and the morning and the afternoon runner each start from zero: per runner, the last event of the day is taken and the two are
+> summed. Reading resolution is the 5 minutes between events (about 1% of a session).
+>
+> | # | Measure | How it is read | Pass if |
 > |---|---|---|---|
-> | E1 | **Kite share of minutes** | the feed's own counters, in the session review: minutes served from Kite over minutes in the session | at least 99% of the session's minutes, in every counted session |
-> | E2 | **Yahoo dependence** | polls served by Yahoo, in the review (19 Oct: 190 of 570) | at most 1% of polls |
-> | E3 | **Late-session index** | `frozen_minutes` on the desk's recorded index bars for 15:15 to 15:28 (Kotak alone: 14 of 14 frozen) | at most 10% of those minutes frozen |
-> | E4 | **Disagreement** | Kite minutes rejected for differing from the fallback by more than 0.5%, from the review | at most 0.5% of minutes, and none that a later check shows was Kite right and the fallback wrong |
-> | E5 | **No harm** | engine ERROR or CRITICAL events whose text names the Kite feed; sessions where a Kite fault changed a trade the fallback would not have | none |
-> | E6 | **Manual steps** | the daily request_token run (D2 below) | at most one per trading day |
+> | E1 | **Kite share of minutes** | `minutes` ÷ (3 symbols × minutes from the runner's first event to its last), summed over the day's runners | at least 99% in every counted session |
+> | E2 | **Fallback dependence** | (`fallback_polls` − `sampled_polls`) ÷ `polls`: polls on which the other feeds had to be asked because Kite could not serve (every tenth otherwise-Kite-only poll asks them on purpose, to give E4 a denominator, and is counted apart) | at most 1% of polls |
+> | E3 | **Late-session index** | `late_flat` ÷ `late_minutes`: of the Kite-served NIFTY and BANKNIFTY minutes from 15:15 to 15:28 (Kotak's frozen window), the share with open = high = low = close | at most 10% flat |
+> | E4 | **Disagreement** | `rejected` ÷ `compared`: Kite minutes (and live-price jumps) not used because they differed from the other feeds by more than 0.5%, over the minutes compared. Compared minutes are the first poll, every hole and one poll in ten. The few rejected minutes are cross-checked by hand against Kite's own historical candle for that day | at most 0.5%, and none that the hand check shows was Kite right and the other feed wrong |
+> | E5 | **No harm** | the counter `faults` (a fault inside the Kite logic that was handed to the other feeds) and any engine ERROR or CRITICAL event naming `kitelive` | none |
+> | E6 | **Manual steps** | the daily request_token run (D2 below) and any restart | at most one per trading day; a day with no token counts against E1 and E6 |
+>
+> Kite minutes are not served on a minute whose first tick came more than 15 s after the minute began (a late connect or a reconnect) and only inside 09:15 to 15:29; a live price more than 0.5%
+> from the last served close is used only if the other feed's price agrees; none of these is a trial measure, they are the safeguards the review required.
 >
 > **Decision on 20 Nov (fixed now):** KEEP if E1 to E4 pass in at least 90% of counted sessions, E5 has no failure, and E6 holds; otherwise REMOVE the attachment (one config line,
 > `intraday.kite.live: false`) and do not renew the subscription. EXTEND once by the missing sessions if fewer than 10 were counted. A hand-checked candle comparison (Kite's own
-> historical minutes against the desk's recorded bars, as B1 below) is run on the first and last counted weeks as a cross-check on E4.
+> historical minutes against the desk's bars, as B1 below) is run on the first and last counted weeks as a cross-check on E4. The separate tick recorder described further down is optional and
+> secondary: it measures latency (C3) and real order flow (C4) and is not needed for the decision.
 
 **Status:** criteria v1, committed alone before any code or data. Registered 24 Oct 2026. The owner pays for one month of Kite Connect market data; the engineer records it
 from Monday 26 Oct for four weeks and reports on 20 Nov. **Nothing in this trial places an order, changes a feed the desk trades on, a limit or a gate.** Live trading stays off.
