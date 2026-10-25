@@ -72,13 +72,19 @@ numbers fixed in advance, whether it is better than what the desk has, and what 
 ## What is recorded (a separate process, never the trading path)
 
 - **Instruments:** NIFTY 50, NIFTY BANK, INDIA VIX (indices), and the near-month future of NIFTY and BANKNIFTY. Options are not recorded in the first two weeks.
-- **Per tick:** instrument token, exchange timestamp, receipt time (the recorder's clock), last price, cumulative volume, open interest (futures), best bid and ask. One-minute bars are
-  built from the ticks by the recorder and kept beside the raw ticks.
+- **Per tick:** instrument token, exchange timestamp, receipt time (the recorder's clock), last price, last traded quantity, cumulative volume, open interest (futures), best bid and ask and
+  the day's total buy and sell quantities; and for the **futures, all five levels of market depth on each side (price, quantity, number of orders)**. Indices carry no depth. One-minute bars are
+  built from the ticks by the measures and kept beside the raw ticks.
 - **After the close:** Kite's own historical minute candles for the same instruments are fetched once, as the reference for the comparison.
-- **Where it lives:** a private release asset set (`kite-trial-YYYY`) and nowhere else. Kite market data is licensed to the subscriber: it never enters the repository, a public
-  release or a model card, and no derived table is published. Only counts and ratios (the numbers below) may be quoted in the repository.
-- **How it runs:** its own process, started beside the desk, with its own credentials. A recorder failure, a token that has expired or a dropped connection never reaches the desk: no
-  shared state, no import from the engine, no exception that propagates. The credential is read from the environment; nothing is written to a log.
+- **Where it lives (v2):** this repository is public, so a "private release" does not exist. The recorder runs on a hosted runner (`.github/workflows/kite-record.yml`, scheduled 08:55 IST on
+  trading days, in two jobs), and its raw ticks are **encrypted on the runner with the owner's Kite API secret (AES-256) before anything is uploaded**; the uploaded workflow artifacts
+  (`kite-raw-1`, `kite-raw-2`, 90 days) are ciphertext that only the owner can open, with `deploy/kite-decrypt.sh` on their own machine. Kite market data is licensed to the subscriber: it never
+  enters the repository, a release or a model card unencrypted, and no derived table is published. The run summary and the `kite-metrics` artifact carry **counts and ratios only** (the numbers
+  below). Longer retention than 90 days is the owner's to arrange by downloading the artifacts.
+- **No extra manual step.** The recorder uses the same day's token the "Kite token" workflow stores for the desk; with no token it records nothing and the run succeeds. Kite allows three websocket
+  connections per key: the desk uses one, the recorder one.
+- **How it runs:** its own process, started beside the desk, with the data-only credentials (`KITE_DATA_KEY`, `KITE_DATA_TOKEN`). A recorder failure, a token that has expired or a dropped
+  connection never reaches the desk: no shared state, no import from the engine, no exception that propagates. The credential is read from the environment; nothing is written to a log.
 
 ## Counted sessions
 
