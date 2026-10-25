@@ -7,7 +7,12 @@
 > method is used. The trial now asks whether to **keep** the attachment and the subscription, on the measures below. The separate tick recorder described further down is
 > optional and secondary: it measures latency (C3) and real order flow (C4) and is not needed for the decision.
 >
-> **Measures for the attached desk (fixed now), over counted sessions (a weekday on which the websocket started; 26 to 30 Oct are shake-down and not counted; read-out 20 Nov):**
+> **Credentials under v2 (supersedes the "Operating notes" below).** `KITE_API_KEY` and `KITE_API_SECRET` are repository secrets (added by the owner on 25 Oct). The API secret is read by
+> exactly three steps: the daily "Kite token" workflow (it exchanges the owner's single-use `request_token` for the day's access token), the same workflow's encryption step, and the
+> live desk's optional "Kite token" step (it decrypts the file). The access token is stored AES-256 encrypted, with a key derived from the API secret, as one file on a `kite-token`
+> branch, and is masked in the logs before it is exported; it expires within a day. No password or TOTP is stored. No order method is called anywhere (a test greps for it).
+>
+> > **Measures for the attached desk (fixed now), over counted sessions (a weekday on which the websocket started; 26 to 30 Oct are shake-down and not counted; read-out 20 Nov):**
 >
 > | # | Measure | Source | Pass if |
 > |---|---|---|---|
