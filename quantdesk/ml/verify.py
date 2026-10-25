@@ -47,8 +47,11 @@ C_COVERAGE, CORR_SESSION, CORR_SHARE, CORR_MEDIAN, MIN_COMMON_MINUTES = 0.95, 0.
 MAX_404_SHARE = 0.10
 PRIOR_EXPOSURE = ("On 2026-10-25, before the counted run, the engineer rehearsed this code on a copy of the real Kaggle dataset with SYNTHETIC Yahoo and NSE references built from the dataset's "
                   "own bars (code identical to commit a76684bf of ml-p06-verify2). Check C compares two local datasets, so it necessarily ran against the real aeron7 data (manifest sha256 "
-                  "d149dc29…): NIFTY C passed, BANKNIFTY C failed only the month rule (2020-03, 79% agreeing). No rule, threshold or verifier logic was changed because of it, and the "
-                  "rehearsal's files were deleted. The counted run is therefore not blind for C; A and B had not been seen against any real reference. Any later criteria v2 is post hoc.")
+                  "d149dc29…): NIFTY C passed (worst month 2015-08 at 81%, close to the 80% floor), BANKNIFTY C failed only the month rule (2020-03: 15 of 19 compared sessions agree, 16 "
+                  "would pass). THIS RECORD IS THEREFORE EXPECTED TO BE passed:false WITH NO SYMBOL LICENSED, whatever A and B show. The internal auditor reproduced the C numbers "
+                  "independently on 2026-10-25 and fetched a few NSE files and a Yahoo window only to check formats, NaN rows and duplicates (none found), with no A/B comparison. No rule, "
+                  "threshold or verifier logic was changed because of any of this, and the rehearsal's files were deleted. The counted run is not blind for C; A and B had not been seen "
+                  "against any real reference. Any later criteria v2 is post hoc.")
 SCOPE = {"new_window": "2023-03-01 to 2026-05-15: the DAILY ENVELOPE only (high, low, close against Yahoo; close against NSE's official file). Nothing independent checks minute timestamps "
                        "or the intraday path in this window. B is nearly the same quantity as A's close (Yahoo's index data derive from NSE's), so it is not a second vendor.",
          "overlap": "sessions also in the verified aeron7 data (to Feb 2023): daily envelope to 0.1% and 1-minute return correlation. This is consistency with aeron7, not independent accuracy: "

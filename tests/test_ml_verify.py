@@ -277,13 +277,13 @@ def test_fetch_nse_treats_404_as_no_file_everything_else_as_void_and_saves_what_
             V.fetch_nse(days[:3], tmp_path / "c2", broken, say=lambda *_: None)
 
 
-def test_more_than_ten_percent_of_weekdays_without_a_file_voids_the_run_but_weekend_sessions_do_not_count():
+def test_more_than_ten_percent_of_weekdays_without_a_file_voids_the_run_but_weekend_sessions_do_not_count(tmp_path):
     days = weekdays("2024-01-01", 20)
     gone = set(days[:3])                                                                                   # 15% of the weekdays
     with pytest.raises(V.VoidRun, match="archive layout changed"):
-        V.fetch_nse(days, Path("/tmp/does-not-matter-p06-a"), lambda u: None if dt.datetime.strptime(u.rsplit("_", 1)[1][:8], "%d%m%Y").date() in gone else nse_file(dt.datetime.strptime(u.rsplit("_", 1)[1][:8], "%d%m%Y").date()), say=lambda *_: None)
+        V.fetch_nse(days, Path(str(tmp_path / "a")), lambda u: None if dt.datetime.strptime(u.rsplit("_", 1)[1][:8], "%d%m%Y").date() in gone else nse_file(dt.datetime.strptime(u.rsplit("_", 1)[1][:8], "%d%m%Y").date()), say=lambda *_: None)
     two = set(days[:2])                                                                                    # 10% exactly: allowed
-    V.fetch_nse(days, Path("/tmp/does-not-matter-p06-b"), lambda u: None if dt.datetime.strptime(u.rsplit("_", 1)[1][:8], "%d%m%Y").date() in two else nse_file(dt.datetime.strptime(u.rsplit("_", 1)[1][:8], "%d%m%Y").date()), say=lambda *_: None)
+    V.fetch_nse(days, Path(str(tmp_path / "b")), lambda u: None if dt.datetime.strptime(u.rsplit("_", 1)[1][:8], "%d%m%Y").date() in two else nse_file(dt.datetime.strptime(u.rsplit("_", 1)[1][:8], "%d%m%Y").date()), say=lambda *_: None)
 
 
 def test_the_window_is_every_weekday_and_every_accepted_weekend_session():
@@ -806,3 +806,20 @@ def test_the_exclusive_write_still_refuses_when_hard_links_are_unavailable(tmp_p
     with pytest.raises(V.AlreadyChecked):
         V._write_once(tmp_path / "r.json", {"a": 2})
     assert json.loads((tmp_path / "r.json").read_text()) == {"a": 1} and not list(tmp_path.glob(".r.json.*"))
+
+
+def test_the_disclosure_states_the_expected_outcome_plainly():
+    t = V.PRIOR_EXPOSURE
+    assert "EXPECTED TO BE passed:false" in t and "15 of 19" in t and "2015-08" in t and "independently" in t and "post hoc" in t
+
+
+def test_an_undefined_correlation_pulls_the_median_down_not_out():
+    vals = [float("nan"), 0.5, 0.6, 0.7, 0.96, 0.985, 0.99, 0.99, 0.99, 0.99]             # 10 sessions, one undefined (-1): the median is (0.96 + 0.985) / 2 = 0.9725; dropping it would give 0.985
+    _, med, why = V.corr_verdict(vals)
+    assert abs(med - 0.9725) < 1e-12 and float(np.nanmedian(vals)) == 0.985
+    assert any("median minute-return correlation 0.9725" in r for r in why)               # and 0.9725 < 0.98 fails the median rule, which dropping the undefined one would have passed
+
+
+def test_equality_at_the_per_session_correlation_limit_counts_as_good():
+    share, _, _ = V.corr_verdict([V.CORR_SESSION] * 10)
+    assert share == 1.0
