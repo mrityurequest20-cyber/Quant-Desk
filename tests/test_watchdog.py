@@ -42,7 +42,7 @@ globalThis.fetch = async (url, init = {}) => {
   if (url.startsWith("https://ntfy.sh/")) return new Response("{}", { status: 200 });
   if (url.endsWith("/data.json")) {
     if (state.hbStatus) return new Response("no", { status: state.hbStatus });
-    return json({ state: { heartbeat: state.hb } });
+    return json({ state: { heartbeat: state.hb }, setups: state.setups });
   }
   const wf = url.match(/\/actions\/workflows\/([a-z-]+)\.yml\/runs/);
   if (wf) { if (state.ghFail) return new Response("x", { status: 500 }); return json({ workflow_runs: (state.runs || {})[wf[1]] || [] }); }
@@ -174,6 +174,42 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
     assert out["bad"] == ["P2 W7 Credential expiry register unreadable"] and out["leak"] is False
     # credential names and dates go by push only: the repository is public, so an issue would publish them
     assert out["p1push"] == 1 and out["p1email"] == 0
+
+
+@NODE
+def test_the_saturday_digest_carries_the_labelled_setup_line_and_is_never_held_back_by_it(tmp_path):
+    out = _node(tmp_path, HEAD + r"""
+const D = ["2026-10-19", "2026-10-21", "2026-10-22", "2026-10-23"];
+const base = { runs: { live: D.map((d) => run(d + "T08:52:00")) }, failed: { failure: [] } };
+const LINE = "Labelled setups: 4 this week from the Monday 2026-10-19 (paper 2, replay 2, shadow 0); 4 counted in total, from 2 sessions and 3 session-symbol pairs (setups on one day move together, so they are not independent samples); 1% of the 300 the entry filter needs at least (300 to 500).";
+const digest = async (extra, e = env()) => {
+  const r = await at("2026-10-24T17:30:00", e, { ...base, ...extra });
+  return { body: r.results.flatMap((x) => x.alerts.map((a) => a.body))[0], pushes: pushes(r).length, emails: emails(r).length };
+};
+out.ok = await digest({ setups: { line: LINE, total: 4 } });
+out.missing = await digest({});
+out.errored = await digest({ setups: { line: null, error: "AttributeError" } });
+out.hostile = await digest({ setups: { line: "Labelled setups: see [this](https://evil.example) @someone #123 `x` <img src=x>" } });
+out.long = await digest({ setups: { line: "Labelled setups: " + "x".repeat(700) } });
+out.notstring = await digest({ setups: { line: { a: 1 } } });
+out.down = await digest({ hbStatus: 503 });
+out.noorigin = await digest({}, env({ ORIGIN: "" }));
+out.blank = await digest({ setups: { line: "   " } });
+console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
+""")
+    assert "Sessions run 4 of 4 expected" in out["ok"]["body"] and "Labelled setups: 4 this week from the Monday 2026-10-19 (paper 2, replay 2, shadow 0); 4 counted in total" in out["ok"]["body"]
+    assert out["ok"]["body"].index("Labelled setups") < out["ok"]["body"].index("Details:")
+    assert "Labelled setups: not published in data.json." in out["missing"]["body"]
+    assert "Labelled setups: not available (the site export reported an error)." in out["errored"]["body"]
+    for k in ("hostile", "long", "notstring"):                                                                    # text from the site never reaches an issue body unless it is a plain sentence
+        body = out[k]["body"]
+        assert "evil.example" not in body and "@someone" not in body and "<img" not in body and "xxxxxxxxxx" not in body, k
+        assert "Labelled setups: not published in data.json." in body and out[k]["pushes"] == 1 and out[k]["emails"] == 1, k
+    assert "Labelled setups: not available (data.json answered 503)." in out["down"]["body"]
+    assert "Labelled setups: not available (ORIGIN is not set)." in out["noorigin"]["body"]
+    assert "Labelled setups: not published in data.json." in out["blank"]["body"]
+    for k in out:                                                                       # whatever the line says, the digest itself goes out once by push and once by email
+        assert out[k]["pushes"] == 1 and out[k]["emails"] == 1 and out[k]["body"].startswith("Sessions run 4 of 4 expected")
 
 
 @NODE

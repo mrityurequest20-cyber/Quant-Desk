@@ -101,6 +101,18 @@ def _body_and_style(html: str) -> tuple[str, str]:
     return style, body
 
 
+def _setups_block(api, account: str) -> dict:
+    """P0.7: the labelled-setup count (ml/setups.py) for `data.json`, which the watchdog's Saturday digest reads. Read-only on the journal and the learning
+    memory; if anything at all goes wrong it says so in the block instead of failing the publish."""
+    import datetime as _dt
+    try:
+        from ..ml import setups as SETUPS
+        d = api._dir(account)
+        return SETUPS.block(d / "journal.db", d / "memory.json", _dt.datetime.now(SETUPS.IST).date())
+    except Exception as exc:                                    # a digest line is never worth a missed publish
+        return {"line": None, "error": type(exc).__name__}
+
+
 def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, live: bool = False,
               max_trade_details: int = 150) -> dict:
     """Everything the app reads, as one JSON-able object (the same shapes the server's API returns)."""
@@ -125,6 +137,7 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
         "label": label or ("Live paper desk" if live else f"{account.capitalize()} snapshot"),
         "short": short, "live": live,
         "state": {**state, "age_sec": 0},
+        "setups": _setups_block(api, account),
         "thoughts": thoughts,
         "trades": trades,
         "trade": {t["id"]: api.trade(account, t["id"]) for t in trades[:max_trade_details]},
