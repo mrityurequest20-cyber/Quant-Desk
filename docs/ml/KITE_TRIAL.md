@@ -1,5 +1,27 @@
 # Kite Connect market-data trial: criteria (written before any Kite data exists)
 
+> **Amendment v2, 25 Oct 2026, before any Kite data exists (owner decision).** The websocket is **attached directly to the running paper desk**, not recorded in shadow: when
+> `KITE_API_KEY` and the day's access token are present, Kite serves the index bars and the live index price, and the existing feeds (Kotak, then Yahoo) are the automatic
+> fallback for every minute Kite lacks, for any minute whose close differs from the fallback's by more than 0.5%, and for any failure. History, the futures volume on index bars
+> and the option chain stay as they are, and no tick-level order flow is added (that would change vote inputs and is its own reviewed step). Live trading stays off; no order
+> method is used. The trial now asks whether to **keep** the attachment and the subscription, on the measures below. The separate tick recorder described further down is
+> optional and secondary: it measures latency (C3) and real order flow (C4) and is not needed for the decision.
+>
+> **Measures for the attached desk (fixed now), over counted sessions (a weekday on which the websocket started; 26 to 30 Oct are shake-down and not counted; read-out 20 Nov):**
+>
+> | # | Measure | Source | Pass if |
+> |---|---|---|---|
+> | E1 | **Kite share of minutes** | the feed's own counters, in the session review: minutes served from Kite over minutes in the session | at least 99% of the session's minutes, in every counted session |
+> | E2 | **Yahoo dependence** | polls served by Yahoo, in the review (19 Oct: 190 of 570) | at most 1% of polls |
+> | E3 | **Late-session index** | `frozen_minutes` on the desk's recorded index bars for 15:15 to 15:28 (Kotak alone: 14 of 14 frozen) | at most 10% of those minutes frozen |
+> | E4 | **Disagreement** | Kite minutes rejected for differing from the fallback by more than 0.5%, from the review | at most 0.5% of minutes, and none that a later check shows was Kite right and the fallback wrong |
+> | E5 | **No harm** | engine ERROR or CRITICAL events whose text names the Kite feed; sessions where a Kite fault changed a trade the fallback would not have | none |
+> | E6 | **Manual steps** | the daily request_token run (D2 below) | at most one per trading day |
+>
+> **Decision on 20 Nov (fixed now):** KEEP if E1 to E4 pass in at least 90% of counted sessions, E5 has no failure, and E6 holds; otherwise REMOVE the attachment (one config line,
+> `intraday.kite.live: false`) and do not renew the subscription. EXTEND once by the missing sessions if fewer than 10 were counted. A hand-checked candle comparison (Kite's own
+> historical minutes against the desk's recorded bars, as B1 below) is run on the first and last counted weeks as a cross-check on E4.
+
 **Status:** criteria v1, committed alone before any code or data. Registered 24 Oct 2026. The owner pays for one month of Kite Connect market data; the engineer records it
 from Monday 26 Oct for four weeks and reports on 20 Nov. **Nothing in this trial places an order, changes a feed the desk trades on, a limit or a gate.** Live trading stays off.
 
