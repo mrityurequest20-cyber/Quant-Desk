@@ -1,0 +1,62 @@
+# Once a day, by hand, before the desk starts (about 08:45 IST): log in at the Kite login URL for the API key, copy the `request_token` from the address you are sent back to, and run
+# this workflow with it. It exchanges the single-use request_token for the day's access token (the API secret is used here), encrypts the token with the API secret and stores
+# it on the `kite-token` branch; the live desk (live.yml) and the trial recorder read it from there. No other file, no other branch, and no order method anywhere in this code.
+# If this is not run, the desk simply uses its existing feeds. The login is not automated with a stored password or TOTP.
+name: Kite token
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_token:
+        description: "Kite request_token from today's login redirect (single use, expires in minutes)"
+        required: true
+        type: string
+
+permissions:
+  contents: write            # push the kite-token branch (one encrypted file)
+
+defaults:
+  run:
+    shell: bash              # bash -e -o pipefail
+
+concurrency:
+  group: kite-token
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Kolkata
+
+jobs:
+  token:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-kite.txt
+      - name: Exchange the request token and encrypt the day's access token
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_REQUEST_TOKEN: ${{ inputs.request_token }}
+        run: |
+          python -m quantdesk data kite-token --out "$RUNNER_TEMP/kite_token"
+          openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/kite_token" -out "$RUNNER_TEMP/kite_token.enc" -pass env:KITE_API_SECRET
+          rm -f "$RUNNER_TEMP/kite_token"
+      - name: Store it on the kite-token branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch -q --depth 1 origin kite-token; then
+            git checkout -q -B kite-token FETCH_HEAD
+          else
+            git checkout -q --orphan kite-token
+            git rm -rfq . || true
+          fi
+          cp "$RUNNER_TEMP/kite_token.enc" kite_token.enc
+          git add kite_token.enc
+          git commit -q -m "Kite token for $(date +%F)"
+          git push -q origin kite-token

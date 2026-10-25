@@ -88,6 +88,11 @@ def _live_engine(cfg, a) -> IntradayEngine:
     else:
         from .feeds import YahooIntradayFeed
         feed, kite = YahooIntradayFeed(cfg), None
+    if cfg.get("intraday.kite.live", False) and feed_name != "kite":      # the Kite websocket in front of the feed above; every failure leaves that feed as it was
+        from .kitelive import KiteBackedFeed, make_live
+        live = make_live(cfg, list(underlyings) + [cfg.get("universe.volatility_index")], say=lambda m: print(m, flush=True))
+        if live is not None:
+            feed = KiteBackedFeed(feed, live)
     chains = _chain_source(cfg, chain_name, kite, kotak)
     j = Journal(p["journal"], autocommit_every=1)
     capital = ensure_account(cfg, j, p["broker"], _say(a.quiet))

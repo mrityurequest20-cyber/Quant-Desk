@@ -121,6 +121,12 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
    with robust errors, time-series tests for the leakage harness), `scikit-learn` (ridge, logistic, metrics, calibration), `lightgbm` (CPU gradient
    boosting) and `duckdb` (in-process SQL over the Parquet warehouse for point-in-time dataset builds). None is imported by the trading path: no
    workflow installs `requirements-ml.txt`, nothing outside `quantdesk/ml/` may import these libraries, and Phase 0 stays offline and read-only (above).
+- **Kite websocket attached to the desk** (`intraday/kitelive.py`, `intraday.kite.live: true`, `deploy/kite-token.sh`, `.github/workflows/kite-token.yml`; criteria `docs/ml/KITE_TRIAL.md` v2): owner decision
+  of 25 Oct, the websocket is attached directly, not in shadow. With `KITE_API_KEY` and the day's token present, Kite serves the index bars (and the live index price); Kotak and Yahoo
+  stay behind it as the automatic fallback for any minute Kite lacks, any minute that differs from the fallback by more than 0.5%, and any failure (no token, expired token, library
+  missing, silent socket): the desk then runs exactly as before. No order method is used and nothing reaches the broker, risk or sizing code; no tick-level order flow is added (separate,
+  reviewed step). The day's token comes from a once-a-day manual run of the `Kite token` workflow with the login's request_token (the API secret encrypts the token on a `kite-token`
+  branch; the live jobs read it in one optional step). The session review shows `kite (N minutes in K polls, R rejected) over <fallback>`.
 
 ## What I need from the owner (only for P0.6)
 

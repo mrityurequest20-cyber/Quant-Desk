@@ -44,6 +44,8 @@ env:
   # Kotak Neo data (live option bid/ask, chain, 1m bars): consumer key only — no login, no orders, no static IP.
   # Unset: the desk uses Yahoo bars and NSE's public chain, as before.
   KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+  # Kite Connect websocket (intraday.kite.live): index bars and the live price when this key and the day's token (the step below) are present; otherwise the feeds above, unchanged.
+  KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
   # Language models as second news readers and the after-close reflection (intraday/llm.py). Each is used only when
   # its key is set; several secret names are accepted for each.
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY || secrets.CLAUDE_KEY || secrets.CLAUDE_API || secrets.CLOUD_API_KEY || secrets.CLOUD_API || secrets.CLAUDE_API_TOKEN || secrets.ANTHROPIC_API || secrets.ANTHROPIC_KEY || secrets.ANTHROPIC || secrets.CLAUDE || secrets.CLOUDE_API || secrets.CLOUDE_API_KEY || secrets.CLAUDE_AI_API_KEY }}
@@ -136,6 +138,13 @@ jobs:
       - name: From here on the journal holds today's session
         id: started
         run: echo "started=true" >> "$GITHUB_OUTPUT"
+      - name: Kite token (optional; without it the desk uses its existing feeds)
+        continue-on-error: true
+        env:
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+        run: |
+          pip install -r requirements-kite.txt || echo "::warning::kiteconnect could not be installed; the desk uses its existing feeds"
+          deploy/kite-token.sh
       - name: Trade (paper) until the hand-over
         run: deploy/run-session.sh --quiet --until "$HANDOVER" --handover
       - name: Kill switch — square off
@@ -194,6 +203,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: deploy/warehouse-context.sh
+      - name: Kite token (optional; without it the desk uses its existing feeds)
+        continue-on-error: true
+        env:
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+        run: |
+          pip install -r requirements-kite.txt || echo "::warning::kiteconnect could not be installed; the desk uses its existing feeds"
+          deploy/kite-token.sh
       - name: Trade (paper) to the close, square off, write the review
         id: trade
         run: deploy/run-session.sh --quiet
