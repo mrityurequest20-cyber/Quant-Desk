@@ -317,7 +317,13 @@ def world(tmp_path, monkeypatch):
     ours = {s: I.load(ds, [s], use="development_folds", allow_unverified=True) for s in V.SYMBOLS}
     aeron = tmp_path / "aeron"
     aeron.mkdir()
-    (aeron / "manifest.json").write_text(json.dumps({"status": ea.VERIFIED, "dataset": "aeron7-unit", "digest": "ab" * 32}))
+    # the real aeron7 manifest has no "digest" key: the fixture carries the keys the real one has
+    (aeron / "manifest.json").write_text(json.dumps({"status": ea.VERIFIED, "dataset": "aeron7-unit", "source_url": "https://example.invalid/aeron", "source_commit": "c" * 40,
+                                                     "importer_version": 2, "partitions": {}, "sessions": []}))
+    monkeypatch.setattr(V, "DATASET_DIGEST", man["digest"])
+    monkeypatch.setattr(V, "AERON_DATASET", "aeron7-unit")
+    monkeypatch.setattr(V, "AERON_MANIFEST_SHA256", hashlib.sha256((aeron / "manifest.json").read_bytes()).hexdigest())
+    monkeypatch.setattr(V, "verify_aeron_partitions", lambda *_: None)                                       # exercised on real parquet files in its own test below
     monkeypatch.setattr(ea, "load", lambda ds_, kind, symbols, use, allow_unverified=False: ours[symbols[0]].copy())
     monkeypatch.setattr(V, "NEW_START", D(2024, 1, 1))
     monkeypatch.setattr(V, "WINDOW_END", D(2024, 1, 10))
@@ -479,3 +485,303 @@ def test_an_undefined_correlation_counts_against_the_median_too():
     flat = base.assign(close=100.0)
     r = V.check_c(flat, flat)
     assert any("median minute-return correlation" in x for x in r["reasons"]) and r["corr_undefined"] >= 1
+
+
+# ======================================================================================================================================================
+# The auditor's real-data rehearsal and mutation run (5e52a0d): pins, the record's contents, the once-only write, the cache, Yahoo's edge cases, the
+# unlogged crash class, and the direction of every boundary.
+# ======================================================================================================================================================
+import sys
+import types
+import urllib.error
+
+
+def test_the_defaults_are_the_ones_the_criteria_name_and_min_sessions_is_five_hundred(monkeypatch):
+    monkeypatch.undo()                                                                                     # the autouse fixture lowered it for the small fixtures
+    t = (REPO / "docs" / "ml" / "P0_6_criteria.md").read_text()
+    assert V.MIN_SESSIONS == 500 and "at least 500 sessions" in t
+    assert V.DATASET_DIGEST in t and V.AERON_DATASET in t and V.DATASET_DIGEST[:12] == "47d28d6376ca"
+
+
+def test_a_different_dataset_or_reference_is_refused_before_anything_is_fetched(world, monkeypatch):
+    ds, aeron, cache, fetch, yahoo, _ = world
+    calls = []
+    spy = lambda url: calls.append(url) or fetch(url)
+    man = json.loads((ds / "manifest.json").read_text())
+    monkeypatch.setattr(V, "DATASET_DIGEST", "0" * 64)
+    with pytest.raises(ValueError, match="not the one docs/ml/P0_6_criteria.md names"):
+        V.run(ds, aeron, cache, yahoo, spy, lambda *_: None)
+    monkeypatch.setattr(V, "DATASET_DIGEST", man["digest"])
+    monkeypatch.setattr(V, "AERON_DATASET", "aeron7-other")
+    with pytest.raises(ValueError, match="C reference must be"):
+        V.run(ds, aeron, cache, yahoo, spy, lambda *_: None)
+    monkeypatch.setattr(V, "AERON_DATASET", "aeron7-unit")
+    monkeypatch.setattr(V, "AERON_MANIFEST_SHA256", "0" * 64)
+    with pytest.raises(ValueError, match="not the one that was verified"):
+        V.run(ds, aeron, cache, yahoo, spy, lambda *_: None)
+    assert calls == [] and not (ds / "verification.json").exists() and not list(ds.glob("void_run_*.json"))      # refused, not voided: no run was spent
+
+
+def test_the_aeron7_partitions_are_rehashed_from_their_files(tmp_path):
+    aer = tmp_path / "a"
+    parts = {}
+    for sym in V.SYMBOLS:
+        df = pd.DataFrame({"ts": pd.date_range("2022-01-03 09:15", periods=3, freq="min", tz="Asia/Kolkata"), "close": [1.0, 2.0, 3.0]})
+        k = f"1m/symbol={sym}/year=2022.parquet"
+        (aer / k).parent.mkdir(parents=True)
+        df.to_parquet(aer / k)
+        parts[k] = ea.frame_hash(pd.read_parquet(aer / k))
+    V.verify_aeron_partitions(aer, {"partitions": parts})                                                   # as imported: fine
+    pd.DataFrame({"ts": pd.date_range("2022-01-03 09:15", periods=3, freq="min", tz="Asia/Kolkata"), "close": [1.0, 2.0, 3.5]}).to_parquet(aer / "1m/symbol=NIFTY/year=2022.parquet")
+    with pytest.raises(ValueError, match="no longer hashes"):
+        V.verify_aeron_partitions(aer, {"partitions": parts})
+    with pytest.raises(ValueError, match="lists no 1-minute partitions for BANKNIFTY"):
+        V.verify_aeron_partitions(aer, {"partitions": {k: v for k, v in parts.items() if "NIFTY/" in k and "BANK" not in k}})
+
+
+def test_the_record_holds_what_the_criteria_require_to_be_recorded(world):
+    ds, aeron, cache, fetch, yahoo, _ = world
+    rec = V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
+    nse = rec["references"]["nse"]
+    csv_text = (cache / "nse_closes.csv").read_text()
+    assert csv_text.startswith("date,symbol,close\n") and hashlib.sha256(csv_text.encode()).hexdigest() == nse["closes_csv_sha256"]
+    manifest = (cache / "nse_files_manifest.json").read_text()
+    assert hashlib.sha256(manifest.encode()).hexdigest() == nse["files_manifest_sha256"] and set(json.loads(manifest)["files"]) == set(nse["file_hashes"])
+    for name, h in nse["file_hashes"].items():
+        assert hashlib.sha256((cache / name).read_bytes()).hexdigest() == h                              # every raw file saved, each hash recorded
+    for sym in V.SYMBOLS:
+        y = rec["references"]["yahoo_frames"][sym]
+        assert len(y["sha256"]) == 64 and y["rows"] == 8 and y["rows_unusable"] == 0 and y["requested"] == [str(DAYS[0]), str(DAYS[-1])]
+    assert "yfinance" in rec["references"]["yahoo"] and rec["references"]["aeron7"]["manifest_sha256"] == V.AERON_MANIFEST_SHA256
+    assert rec["references"]["aeron7"]["source_commit"] == "c" * 40
+
+
+def test_the_record_is_written_exclusively_so_a_second_writer_cannot_replace_the_first(world):
+    ds, aeron, cache, fetch, yahoo, _ = world
+
+    def racing(url):
+        (ds / "verification.json").write_text(json.dumps({"passed": False, "by": "the other run"}))        # another run finishes while this one is fetching
+        return fetch(url)
+    with pytest.raises(V.AlreadyChecked, match="appeared while this run was computing"):
+        V.run(ds, aeron, cache, yahoo, racing, lambda *_: None)
+    assert json.loads((ds / "verification.json").read_text()) == {"passed": False, "by": "the other run"}
+    assert not list(ds.glob(".verification.json.*.tmp"))
+    (ds / "verification.json").unlink()
+    (ds / "verification_p06-v1.json").write_text("{}")                                                    # the superseded-record guard
+    with pytest.raises(V.AlreadyChecked):
+        V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
+
+
+def test_a_bad_file_never_stays_in_the_cache_to_void_every_rerun(world):
+    ds, aeron, cache, fetch, yahoo, _ = world
+    html = lambda url: b"<html>Access Denied</html>"
+    with pytest.raises(V.VoidRun):
+        V.run(ds, aeron, cache, yahoo, html, lambda *_: None)
+    assert not list(cache.glob("ind_close_all_*.csv"))                                                    # nothing that failed to parse was kept
+    calls = []
+    rec = V.run(ds, aeron, cache, yahoo, lambda url: calls.append(url) or fetch(url), lambda *_: None)      # the rerun fetches afresh and counts
+    assert rec["passed"] and calls
+    # and a bad file that is already in the cache is dropped the first time it is found bad
+    (ds / "verification.json").unlink()
+    first = sorted(cache.glob("ind_close_all_*.csv"))[0]
+    first.write_bytes(b"not an index file")
+    with pytest.raises(V.VoidRun):
+        V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
+    assert not first.exists()
+
+
+def test_yahoo_rows_with_missing_numbers_are_not_compared_and_duplicate_dates_void_the_run(world):
+    idx = [D(2024, 1, 1), D(2024, 1, 2), D(2024, 1, 3)]
+    df = pd.DataFrame({"high": [10.0, float("nan"), 12.0], "low": [9.0, 9.0, 0.0], "close": [9.5, 9.5, 11.0]}, index=idx)
+    assert list(V.clean_yahoo(df, "NIFTY").index) == [idx[0]]
+    with pytest.raises(V.VoidRun, match="two rows for one date"):
+        V.clean_yahoo(pd.concat([df, df.iloc[:1]]), "NIFTY")
+    ds, aeron, cache, fetch, yahoo, closes = world
+    dup = lambda sym, a, b: pd.concat([closes[sym][["high", "low", "close"]], closes[sym][["high", "low", "close"]].iloc[:1]])
+    with pytest.raises(V.VoidRun, match="two rows for one date"):
+        V.run(ds, aeron, cache, dup, fetch, lambda *_: None)
+    assert len(list(ds.glob("void_run_*.json"))) == 1 and not (ds / "verification.json").exists()
+
+
+def test_an_empty_yahoo_answer_is_a_void_run_by_decision(monkeypatch):
+    fake = types.SimpleNamespace(download=lambda *a, **k: pd.DataFrame())
+    monkeypatch.setitem(sys.modules, "yfinance", fake)
+    with pytest.raises(V.VoidRun, match="no usable daily bars"):
+        V.yahoo_daily("NIFTY", D(2024, 1, 1), D(2024, 1, 10))
+
+
+def test_any_exception_the_code_raises_is_a_logged_void_not_an_unlogged_crash(world, monkeypatch):
+    ds, aeron, cache, fetch, yahoo, closes = world
+    boom = lambda sym, a, b: (_ for _ in ()).throw(KeyError("close"))
+    with pytest.raises(V.VoidRun, match="Yahoo for NIFTY could not be fetched"):
+        V.run(ds, aeron, cache, boom, fetch, lambda *_: None)
+    monkeypatch.setattr(V, "check_a", lambda *a, **k: (_ for _ in ()).throw(TypeError("a bug in the compute phase")))
+    with pytest.raises(V.VoidRun, match="TypeError"):
+        V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
+    logs = [json.loads(p.read_text()) for p in ds.glob("void_run_*.json")]
+    assert sorted(l["void"].split(":")[0] for l in logs) == ["TypeError", "VoidRun"]               # both are on the record, with the exception type
+    assert not (ds / "verification.json").exists()
+
+
+def test_http_fetch_sends_a_browser_user_agent_to_the_named_host_and_only_a_404_is_no_file(monkeypatch):
+    seen = {}
+
+    class R:
+        def __init__(self, b):
+            self.b = b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return self.b
+
+    def opener(req, timeout):
+        seen["url"], seen["ua"] = req.full_url, req.get_header("User-agent")
+        return R(b"ok")
+    monkeypatch.setattr(V.urllib.request, "urlopen", opener)
+    assert V.http_fetch(V.NSE_URL.format(ddmmyyyy="14052026")) == b"ok"
+    assert seen["url"] == "https://archives.nseindia.com/content/indices/ind_close_all_14052026.csv" and "Mozilla/5.0" in seen["ua"]
+
+    def err(code):
+        def f(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, code, "x", {}, None)
+        return f
+    monkeypatch.setattr(V.urllib.request, "urlopen", err(404))
+    assert V.http_fetch("https://archives.nseindia.com/x") is None
+    for code in (403, 429, 500):
+        monkeypatch.setattr(V.urllib.request, "urlopen", err(code))
+        with pytest.raises(urllib.error.HTTPError):
+            V.http_fetch("https://archives.nseindia.com/x")
+
+
+def test_weekend_404s_do_not_count_toward_the_ten_percent_rule(tmp_path):
+    weekdays_ = [D(2024, 1, 1) + dt.timedelta(days=i) for i in range(14) if (D(2024, 1, 1) + dt.timedelta(days=i)).weekday() < 5]       # 10 weekdays
+    weekend = [D(2024, 1, 6), D(2024, 1, 7), D(2024, 1, 13), D(2024, 1, 14)]
+    days = sorted(weekdays_ + weekend)
+    holiday = {weekdays_[0]}                                                                                # 1 of 10 weekdays = exactly 10%: allowed
+    f = lambda url: None if dt.datetime.strptime(url.rsplit("_", 1)[1][:8], "%d%m%Y").date() in holiday or dt.datetime.strptime(url.rsplit("_", 1)[1][:8], "%d%m%Y").date() in weekend \
+        else nse_file(dt.datetime.strptime(url.rsplit("_", 1)[1][:8], "%d%m%Y").date())
+    V.fetch_nse(days, tmp_path / "c1", f, lambda *_: None)                                                  # 5 weekend 404s would be 5/14 > 10% if they counted
+    holiday.add(weekdays_[1])                                                                               # 2 of 10 weekdays: void
+    with pytest.raises(V.VoidRun, match="archive layout changed"):
+        V.fetch_nse(days, tmp_path / "c2", f, lambda *_: None)
+
+
+# ---- the direction of every boundary -------------------------------------------------------------------------------------------------------------
+def _frames(n, off=None, base=1000.0):
+    """ours / reference daily frames over n consecutive weekdays; `off` maps a day index to a factor on ours' close (high and low untouched, close30 equal to the 15:29 close)."""
+    days = [d.date() for d in pd.bdate_range("2024-01-01", periods=n)]
+    ref = pd.DataFrame({"high": base + 5, "low": base - 5, "close": base}, index=days)
+    ours = ref.copy()
+    ours["close30"] = ours["close"]
+    for i, f in (off or {}).items():
+        ours.iloc[i, ours.columns.get_loc("close")] = base * f
+        ours.iloc[i, ours.columns.get_loc("close30")] = base * f
+    return days, ours, ref
+
+
+def test_the_pass_rate_boundary_is_at_least_ninety_five_percent():
+    days, ours, ref = _frames(20, {0: 1.01})                                                                # 19 of 20 agree = exactly 95%: passes the rate rule
+    s, why = V.judge(V.compare(ours, ref, days, "A"), 20)
+    assert s["pass_rate"] == 0.95 and not any("agree" in r for r in why)
+    days, ours, ref = _frames(20, {0: 1.01, 7: 1.01})
+    s, why = V.judge(V.compare(ours, ref, days, "A"), 20)
+    assert any("90.0% of compared sessions agree" in r for r in why)
+
+
+def test_the_tolerance_and_gross_boundaries_include_equality(monkeypatch):
+    days, ours, ref = _frames(3, {0: 1.0})
+    ours.iloc[0, ours.columns.get_loc("high")] = 1005.0 * (1 + 0.002)
+    r = V._rel(ours.iloc[0]["high"], ref.iloc[0]["high"])
+    monkeypatch.setitem(V.TOL_A, "high", r)                                                                 # tolerance exactly the observed difference
+    assert bool(V.compare(ours, ref, days, "A").iloc[0]["pass"])
+    monkeypatch.setitem(V.TOL_A, "high", r * 0.999999)
+    assert not bool(V.compare(ours, ref, days, "A").iloc[0]["pass"])
+    monkeypatch.setattr(V, "GROSS", r)
+    assert not bool(V.compare(ours, ref, days, "A").iloc[0]["gross"])                                       # exactly the gross limit is not gross
+    monkeypatch.setattr(V, "GROSS", r * 0.999999)
+    assert bool(V.compare(ours, ref, days, "A").iloc[0]["gross"])
+
+
+def test_in_b_a_gross_close_needs_both_definitions_to_be_off():
+    days, ours, ref = _frames(3)
+    ours.iloc[0, ours.columns.get_loc("close")] = 1000.0 * 1.05                                             # the 15:29 close is 5% off, the 15:00-15:29 mean is exact
+    t = V.compare(ours, ref, days, "B")
+    assert bool(t.iloc[0]["pass"]) and not bool(t.iloc[0]["gross"])
+    ours.iloc[0, ours.columns.get_loc("close30")] = 1000.0 * 1.05
+    t = V.compare(ours, ref, days, "B")
+    assert not bool(t.iloc[0]["pass"]) and bool(t.iloc[0]["gross"])
+
+
+def test_a_month_needs_ten_sessions_to_be_judged_and_eighty_percent_of_them_to_agree():
+    days, ours, ref = _frames(10, {0: 1.01, 1: 1.01})                                                        # one month, 10 sessions, 8 agree = exactly 80%
+    s, why = V.judge(V.compare(ours, ref, days, "A"), 10)
+    assert not any("month" in r for r in why) and s["worst_month"][1] == 0.8
+    days, ours, ref = _frames(10, {0: 1.01, 1: 1.01, 3: 1.01})                                               # 7 of 10: fails the month rule
+    s, why = V.judge(V.compare(ours, ref, days, "A"), 10)
+    assert any("month 2024-01 has 70% agreeing" in r for r in why)
+    days, ours, ref = _frames(9, {i: 1.01 for i in range(9)})                                                # 9 sessions: reported, not judged
+    s, why = V.judge(V.compare(ours, ref, days, "A"), 9)
+    assert s["worst_month"] is None and s["months_reported_not_judged"] == ["2024-01"] and not any("month" in r for r in why)
+
+
+def test_accepted_sessions_must_be_at_least_ninety_seven_percent_of_nses_index_days():
+    nse_days = {D(2024, 1, 1) + dt.timedelta(days=i) for i in range(100)}
+    ok = sorted(nse_days)[:97]
+    ref = set(ok)
+    _, why = V.coverage(ok, ref, nse_days, "A")
+    assert not any("of NSE's index days" in r for r in why)
+    _, why = V.coverage(sorted(nse_days)[:96], set(sorted(nse_days)[:96]), nse_days, "A")
+    assert any("96.0% of NSE's index days" in r for r in why)
+
+
+def test_the_correlation_rule_boundaries():
+    good, mid = 0.99, 0.96
+    share, med, why = V.corr_verdict([mid] * 9 + [0.5])                                                      # 9 of 10 at >= 0.95 = exactly 90%, but the median is below 0.98
+    assert share == 0.9 and not any("have minute-return" in r for r in why) and any("median" in r for r in why)
+    share, med, why = V.corr_verdict([good] * 9 + [0.5])                                                     # median 0.99: both pass
+    assert why == []
+    _, _, why = V.corr_verdict([good] * 8 + [0.5, 0.5])                                                      # 80%: the share rule fails
+    assert any("80.0% of common sessions" in r for r in why)
+    _, med, why = V.corr_verdict([V.CORR_MEDIAN] * 10)                                                       # a median exactly at the limit passes
+    assert why == [] and med == V.CORR_MEDIAN
+    _, _, why = V.corr_verdict([float("nan")] * 4 + [good] * 6)                                              # undefined counts as a failure: 60% < 90%
+    assert any("60.0%" in r for r in why)
+
+
+def test_a_correlation_needs_thirty_common_minute_returns():
+    rng = np.random.default_rng(3)
+
+    def pair(n):
+        idx = pd.date_range("2024-01-01 09:15", periods=n, freq="min", tz="Asia/Kolkata")
+        c = 100 + rng.normal(0, 1, n).cumsum()
+        a = pd.DataFrame({"ts": idx, "close": c})
+        return a, a.assign(close=c + rng.normal(0, 0.01, n))
+    a, b = pair(31)                                                                                         # 31 minutes = 30 returns: defined
+    assert not np.isnan(V.minute_corr(a, b)[D(2024, 1, 1)])
+    a, b = pair(30)                                                                                         # 29 returns: undefined
+    assert np.isnan(V.minute_corr(a, b)[D(2024, 1, 1)])
+
+
+def test_c_coverage_counts_only_the_aeron7_sessions_from_our_first_day_on(monkeypatch):
+    def m1(days):
+        frames = [minutes([d.isoformat()], 25000.0, i) for i, d in enumerate(days)]
+        return pd.concat(frames, ignore_index=True)
+    early = [D(2023, 12, 18) + dt.timedelta(days=i) for i in range(5)]                                      # aeron7 days before ours begins: not our miss
+    common = weekdays("2024-01-01", 8)
+    ours, ref = m1(common), m1(early + common)
+    r = V.check_c(ours, ref)
+    assert r["coverage_of_aeron7"] == 1.0 and not any("also accepted here" in x for x in r["reasons"])
+
+
+def test_a_failed_integrity_check_fails_the_record_and_leaves_no_licence(world, monkeypatch):
+    ds, aeron, cache, fetch, yahoo, _ = world
+    man = json.loads((ds / "manifest.json").read_text())
+    assert V.check_d({**man, "digest": "0" * 64}, {})["passed"] is False
+    monkeypatch.setattr(V, "check_d", lambda *_: {"passed": False, "reasons": ["D: planted"]})
+    rec = V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
+    assert not rec["passed"] and rec["symbols_verified"] == [] and "D: planted" in rec["reasons"]

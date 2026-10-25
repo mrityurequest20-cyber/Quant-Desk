@@ -17,6 +17,7 @@ import datetime as dt
 import hashlib
 import io
 import json
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -28,6 +29,9 @@ from . import intake
 
 CHECK = "p06-v1"
 CRITERIA_PATH = Path(__file__).resolve().parents[2] / "docs" / "ml" / "P0_6_criteria.md"
+DATASET_DIGEST = "47d28d6376ca63af6f435c7a7fab16dc403cc99a7c49ab954ded2c68ed98e9b8"          # the manifest digest docs/ml/P0_6_criteria.md names: any other dataset is refused
+AERON_DATASET = "aeron7-2-906fc2378b"                                                      # the verified reference the criteria name for C
+AERON_MANIFEST_SHA256 = "d149dc2937d9859b7d6cdb7ab26593ff3fabbb26612d926f2140b47bc60b3708"   # its manifest file, as imported and verified
 SYMBOLS = ("NIFTY", "BANKNIFTY")                                    # INDIAVIX is not covered by any claim
 YAHOO = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"}
 NSE_ROW = {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank"}
@@ -212,6 +216,21 @@ def minute_corr(a: pd.DataFrame, b: pd.DataFrame) -> dict:
     return out
 
 
+def corr_verdict(vals) -> tuple[float, float, list[str]]:
+    """The 1-minute-return correlation rule of C: at least CORR_SHARE of common sessions at CORR_SESSION or better, and the median at CORR_MEDIAN or better; an undefined
+    correlation (NaN) counts as a failure in both."""
+    vals = np.asarray(vals, float)
+    filled = np.nan_to_num(vals, nan=-1.0)
+    share = float((filled >= CORR_SESSION).mean()) if len(vals) else 0.0
+    med = float(np.median(filled)) if len(vals) else float("nan")
+    reasons = []
+    if share < CORR_SHARE:
+        reasons.append(f"C: {share:.1%} of common sessions have minute-return correlation >= {CORR_SESSION}, at least {CORR_SHARE:.0%} needed")
+    if not (med >= CORR_MEDIAN):
+        reasons.append(f"C: median minute-return correlation {med:.4f}, at least {CORR_MEDIAN} needed")
+    return share, med, reasons
+
+
 def check_c(ours_m1: pd.DataFrame, ref_m1: pd.DataFrame) -> dict:
     od, rd = daily(ours_m1), daily(ref_m1)
     ours_days, ref_days = set(od.index), set(rd.index)
@@ -226,12 +245,8 @@ def check_c(ours_m1: pd.DataFrame, ref_m1: pd.DataFrame) -> dict:
         reasons.append(f"C: {cov_share:.1%} of aeron7's accepted sessions in the overlap are also accepted here, at least {C_COVERAGE:.0%} needed")
     corr = minute_corr(ours_m1, ref_m1)
     vals = np.array([corr.get(d, float("nan")) for d in common])
-    share = float((np.nan_to_num(vals, nan=-1.0) >= CORR_SESSION).mean()) if len(vals) else 0.0
-    med = float(np.median(np.nan_to_num(vals, nan=-1.0))) if len(vals) else float("nan")      # an undefined correlation is a failure, here too
-    if share < CORR_SHARE:
-        reasons.append(f"C: {share:.1%} of common sessions have minute-return correlation >= {CORR_SESSION}, at least {CORR_SHARE:.0%} needed")
-    if not (med >= CORR_MEDIAN):
-        reasons.append(f"C: median minute-return correlation {med:.4f}, at least {CORR_MEDIAN} needed")
+    share, med, r3 = corr_verdict(vals)
+    reasons += r3
     return {**s, "common_sessions": len(common), "coverage_of_aeron7": cov_share, "only_here_not_gating": len(ours_days - ref_days),
             "corr_share_ok": share, "corr_median": med, "corr_undefined": int(np.isnan(vals).sum()), "passed": not reasons, "reasons": reasons}
 
@@ -306,7 +321,8 @@ def fetch_nse(days: list, cache: Path, fetch=http_fetch, say=print) -> tuple[dic
         name = f"ind_close_all_{d:%d%m%Y}.csv"
         p = cache / name
         raw = p.read_bytes() if p.exists() else None
-        if raw is None:
+        fetched = raw is None
+        if fetched:
             try:
                 raw = fetch(NSE_URL.format(ddmmyyyy=f"{d:%d%m%Y}"))
             except Exception as exc:                                # any failure to fetch is a void run, not a verdict
@@ -314,9 +330,16 @@ def fetch_nse(days: list, cache: Path, fetch=http_fetch, say=print) -> tuple[dic
             if raw is None:
                 none.append(d)
                 continue
-            p.write_bytes(raw)
+        try:
+            parsed = parse_nse(raw, d)
+        except VoidRun:
+            if not fetched:
+                p.unlink(missing_ok=True)                           # a bad file already in the cache must not void every rerun: the next run fetches it afresh
+            raise
+        if fetched:
+            p.write_bytes(raw)                                      # only a file that parsed is kept
         files[name] = hashlib.sha256(raw).hexdigest()
-        for sym, v in parse_nse(raw, d).items():
+        for sym, v in parsed.items():
             closes[sym][d] = v
     weekdays = [d for d in days if d.weekday() < 5]
     n404 = sum(1 for d in none if d.weekday() < 5)
@@ -338,6 +361,72 @@ def yahoo_daily(symbol: str, start, end) -> pd.DataFrame:
         raise VoidRun(f"Yahoo returned no usable daily bars for {symbol}")
     d.index = pd.to_datetime(d.index).date
     return d[["high", "low", "close"]]
+
+
+def clean_yahoo(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """A Yahoo row with a missing or non-positive number is a session with no reference row (not compared). Two rows for one date are ambiguous: the run is void."""
+    if df.index.has_duplicates:
+        raise VoidRun(f"Yahoo returned two rows for one date for {symbol}")
+    bad = df[["high", "low", "close"]].isna().any(axis=1) | (df[["high", "low", "close"]] <= 0).any(axis=1)
+    return df[~bad]
+
+
+def _sha_csv(df: pd.DataFrame) -> str:
+    return hashlib.sha256(df.round(6).to_csv().encode()).hexdigest()
+
+
+def reference_files(nse: dict, files: dict, cache: Path) -> dict:
+    """The `date,symbol,close` CSV built from the NSE files and a manifest of the files, both saved beside the cache, with their sha256."""
+    rows = sorted((str(d), sym, float(v)) for sym, df in nse.items() for d, v in df["close"].items())
+    csv_text = "date,symbol,close\n" + "".join(f"{d},{sym},{v!r}\n" for d, sym, v in rows)
+    man_text = json.dumps({"files": files, "source": NSE_URL}, sort_keys=True, indent=1)
+    (Path(cache) / "nse_closes.csv").write_text(csv_text)
+    (Path(cache) / "nse_files_manifest.json").write_text(man_text)
+    return {"closes_csv_sha256": hashlib.sha256(csv_text.encode()).hexdigest(), "files_manifest_sha256": hashlib.sha256(man_text.encode()).hexdigest()}
+
+
+def _yf_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("yfinance")
+    except Exception:
+        return "unknown"
+
+
+def check_pins(man: dict, ref_man: dict, aeron_ds: Path) -> None:
+    """The run is about one named dataset and one named reference. Anything else is refused before a single fetch."""
+    if man.get("digest") != DATASET_DIGEST:
+        raise ValueError(f"{man.get('dataset')}: its digest is not the one docs/ml/P0_6_criteria.md names ({DATASET_DIGEST[:12]}…): refused")
+    if ref_man.get("dataset") != AERON_DATASET:
+        raise ValueError(f"the C reference must be {AERON_DATASET}, not {ref_man.get('dataset')}")
+    if hashlib.sha256((Path(aeron_ds) / "manifest.json").read_bytes()).hexdigest() != AERON_MANIFEST_SHA256:
+        raise ValueError(f"{AERON_DATASET}: its manifest is not the one that was verified and named in the criteria: refused")
+    verify_aeron_partitions(aeron_ds, ref_man)
+
+
+def verify_aeron_partitions(aeron_ds: Path, ref_man: dict) -> None:
+    """The manifest's word is not enough: every 1-minute partition of the two symbols is re-hashed from its file."""
+    from ..data import external_aeron as ea
+    parts = {k: v for k, v in (ref_man.get("partitions") or {}).items() if k.startswith(tuple(f"1m/symbol={s}/" for s in SYMBOLS))}
+    for s in SYMBOLS:
+        if not any(k.startswith(f"1m/symbol={s}/") for k in parts):
+            raise ValueError(f"the aeron7 manifest lists no 1-minute partitions for {s}")
+    for k, want in sorted(parts.items()):
+        if ea.frame_hash(pd.read_parquet(Path(aeron_ds) / k)) != want:
+            raise ValueError(f"aeron7 partition {k} no longer hashes to its manifest: refused")
+
+
+def _write_once(path: Path, obj) -> None:
+    """Exclusive create: a second writer (a concurrent run, a copied folder racing) fails instead of replacing the first record."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(obj, indent=1, default=str, sort_keys=True))
+    try:
+        os.link(tmp, path)                                          # fails if `path` exists
+    except FileExistsError as exc:
+        raise AlreadyChecked(f"{path} appeared while this run was computing: this check is run once") from exc
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # ---- the run ----------------------------------------------------------------------------------------------------------------------------------
@@ -362,40 +451,46 @@ def run(ds: Path, aeron_ds: Path, cache: Path, yahoo=yahoo_daily, fetch=http_fet
     ref_man = json.loads((aeron_ds / "manifest.json").read_text())
     if ref_man.get("status") != ea.VERIFIED:
         raise ValueError("the aeron7 dataset used for check C must itself be external_verified")
+    check_pins(man, ref_man, aeron_ds)
     try:
         rec = _run(ds, aeron_ds, man, ref_man, cache, yahoo, fetch, say, ea)
-    except VoidRun as exc:
-        stamp = pd.Timestamp.now(tz=intake.IST).strftime("%Y%m%dT%H%M%S")
-        intake._write_json(ds / f"void_run_{stamp}.json", {"check": CHECK, "dataset": man["dataset"], "digest": man["digest"], "void": str(exc), "at": stamp})
-        raise
-    intake._write_json(vp, rec)
+    except Exception as exc:                                        # any exception the code raises is a void run: logged with its reason, nothing else written, the check may be run again
+        stamp = pd.Timestamp.now(tz=intake.IST).strftime("%Y%m%dT%H%M%S%f")                  # to the microsecond, and written exclusively: a void log never replaces another
+        _write_once(ds / f"void_run_{stamp}.json", {"check": CHECK, "dataset": man["dataset"], "digest": man["digest"],
+                                                   "void": f"{type(exc).__name__}: {exc!s:.300}", "at": stamp})
+        raise exc if isinstance(exc, VoidRun) else VoidRun(f"{type(exc).__name__}: {exc!s:.200}") from exc
+    _write_once(vp, rec)
     return rec
 
 
 def _run(ds, aeron_ds, man, ref_man, cache, yahoo, fetch, say, ea) -> dict:
     loaded, accepted = {}, {}
     for sym in SYMBOLS:
-        m1 = intake.load(ds, [sym], use="development_folds", allow_unverified=True, expected_digest=man["digest"])
+        m1 = intake.load(ds, [sym], use="development_folds", allow_unverified=True, expected_digest=DATASET_DIGEST)
         loaded[sym] = m1
         accepted[sym] = sorted(d for d in m1["ts"].dt.date.unique() if NEW_START <= d <= WINDOW_END)
     wdays = window_days(accepted)
     nse, files, no_file = fetch_nse(wdays, cache, fetch, say)
     nse_days = set(wdays) - set(no_file)
+    ref_hashes = reference_files(nse, files, Path(cache))
     rec = {"check": CHECK, "criteria_sha256": pinned_criteria_sha256(), "dataset": man["dataset"], "digest": man["digest"], "code": intake.code_commit(),
-           "scope": SCOPE, "references": {"yahoo": "Yahoo Finance daily OHLC (^NSEI, ^NSEBANK), yfinance, auto_adjust=False",
+           "scope": SCOPE, "references": {"yahoo": f"Yahoo Finance daily OHLC (^NSEI, ^NSEBANK), yfinance {_yf_version()}, auto_adjust=False, fetched {pd.Timestamp.now(tz=intake.IST).date()}",
                                           "nse": {"source": NSE_URL, "files": len(files), "days_without_a_file": [str(d) for d in no_file],
-                                                  "files_sha256": hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest(), "file_hashes": files},
-                                          "aeron7": {"dataset": ref_man["dataset"], "digest": ref_man["digest"]}},
+                                                  **ref_hashes, "file_hashes": files},
+                                          "aeron7": {"dataset": ref_man["dataset"], "manifest_sha256": AERON_MANIFEST_SHA256, "source_commit": ref_man.get("source_commit")}},
            "at": str(pd.Timestamp.now(tz=intake.IST)), "symbols": {}, "info_only": info_only(man), "reasons": []}
     yd, refs = {}, {}
     for sym in SYMBOLS:                                                  # every fetch and every read happens before anything is computed or shown: a void can then never follow a verdict
         days = accepted[sym]
         try:
-            yd[sym] = yahoo(sym, days[0], days[-1]) if days else pd.DataFrame(columns=["high", "low", "close"])
+            raw_y = yahoo(sym, days[0], days[-1]) if days else pd.DataFrame(columns=["high", "low", "close"])
         except VoidRun:
             raise
         except Exception as exc:
             raise VoidRun(f"Yahoo for {sym} could not be fetched: {exc!s:.120}") from exc
+        yd[sym] = clean_yahoo(raw_y, sym)
+        rec["references"].setdefault("yahoo_frames", {})[sym] = {"sha256": _sha_csv(raw_y), "rows": int(len(raw_y)), "rows_unusable": int(len(raw_y) - len(yd[sym])),
+                                                              "requested": [str(days[0]), str(days[-1])] if days else None}
         refs[sym] = ea.load(aeron_ds, "1m", [sym], use="development_folds")
     for sym in SYMBOLS:
         od = daily(loaded[sym])
