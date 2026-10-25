@@ -9,6 +9,9 @@ Owner decision (25 Oct 2026): the Kite websocket is attached directly to the run
 - **Everything else is the wrapped feed's:** history (Yahoo, what the models were built on), the near-month futures volume put on index bars, the Kotak chain. No tick-level order
   flow yet (`has_ticks` stays False): trades from ticks would change vote inputs, which is a separate reviewed step.
 - **Failure is invisible to the desk:** no key, no token, a refused connection, an expired token, a silent socket: every one leaves the wrapped feed exactly as it was.
+- **The settlement window is the other feeds' (15:00 to 15:29).** The expiry sleeves settle on the mean of the recorded 15:00 to 15:29 closes and on the 15:29 close (`sleeves.settlement_price`,
+  `official_close`). To change nothing about what they read, no poll that reaches 15:00 is answered from Kite alone: the wrapped feed is asked, and its bars stand for every minute it has (Kite is
+  compared with them, never overlaid). Kite fills only a minute the wrapped feed lacks. Kite is measured there, not used (E3).
 - **Licence.** Kite's market data is the subscriber's: the minutes this module serves are not written to the recorder (`unrecorded`), so they never reach the public run artifacts or
   the `chains-YYYY` release. The app shows only how old the last tick is, never a Kite price.
 - **Market data only.** No order method is used anywhere in this module (a test checks), and nothing here reaches the broker, risk or sizing code.
@@ -34,6 +37,7 @@ COLUMNS = ["open", "high", "low", "close", "volume"]
 TOKEN_RE = re.compile(r"[A-Za-z0-9]{16,64}")      # the shape of a Kite access token; anything else (a bad decrypt, a newline) is never exported
 FIRST_TICK_S = 15.0                 # a minute whose first tick came later than this after the minute began is partial (late connect, reconnect) and is not served from Kite
 FUTURE_S = 5.0                      # a tick stamped this far ahead of our clock is dropped
+SETTLE_FROM_MIN = 15 * 60                           # minute of day: from 15:00 the wrapped feed's bars stand (settlement input of the expiry sleeves)
 SAMPLE_EVERY = 10                   # every Nth otherwise-Kite-only poll per symbol also asks the fallback, so the disagreement rule (E4) has a denominator
 
 
@@ -197,7 +201,7 @@ class KiteBackedFeed:
         self._last_close: dict[str, float] = {}
         self._kite_ts: dict[str, set] = {}                            # minutes whose numbers came from Kite (kept out of the recorder)
         self._fast: Counter = Counter()
-        self._late_seen: dict[str, set] = {}                          # 15:15 to 15:28 index minutes already counted (E3)
+        self.started = str(inner.now())                               # which runner these counters belong to (the morning and the afternoon job each start from zero)
 
     def __getattr__(self, name):                                      # history, history_bars, completed, now, realtime_age, has_ticks, trades, fut_bars, ...
         return getattr(self._inner, name)
@@ -230,23 +234,9 @@ class KiteBackedFeed:
         if out is not None and len(out):
             try:
                 self._last_close[symbol] = float(out["close"].iloc[-1])
-                self._count_late(symbol, out)
             except Exception as exc:                                   # bookkeeping: never the engine's problem
                 self.last_error = type(exc).__name__
         return out
-
-    def _count_late(self, symbol, out) -> None:
-        """E3 of docs/ml/KITE_TRIAL.md: of the Kite-served index minutes from 15:15 to 15:28 (where Kotak's index series is frozen), how many are flat (open = high = low = close)."""
-        if symbol not in ("NIFTY", "BANKNIFTY"):
-            return
-        mine, seen = self._kite_ts.get(symbol, ()), self._late_seen.setdefault(symbol, set())
-        for ts in out.index:
-            if ts in mine and ts not in seen and ts.hour == 15 and 15 <= ts.minute <= 28:
-                seen.add(ts)
-                r = out.loc[ts]
-                self.served["late_minutes"] += 1
-                if float(r["open"]) == float(r["high"]) == float(r["low"]) == float(r["close"]):
-                    self.served["late_flat"] += 1
 
     def unrecorded(self, symbol) -> set:
         """Minutes of `symbol` served from Kite: the engine keeps them out of the recorder (Kite's licence; they would reach public run artifacts and a public release)."""
@@ -272,8 +262,9 @@ class KiteBackedFeed:
             sl = live_df[live_df.index > since] if since is not None else live_df
             if len(sl):
                 expected = pd.date_range(need_from if need_from is not None else sl.index[0], last_done, freq="min", tz=IST)
+                in_settle = last_done.hour * 60 + last_done.minute >= SETTLE_FROM_MIN
                 if (len(expected) and sl.index.isin(expected).all() and expected.isin(sl.index).all() and since is not None and self.live.healthy(symbol)
-                        and not self._jumps(symbol, sl)):
+                        and not in_settle and not self._jumps(symbol, sl)):
                     self._fast[symbol] += 1
                     if not self._fast[symbol] % SAMPLE_EVERY:
                         self.served["sampled"] += 1                    # asked on purpose, not because Kite could not serve: counted apart so the fallback's real use is readable
@@ -299,12 +290,21 @@ class KiteBackedFeed:
         for ts, row in live_df.iterrows():
             if since is not None and ts <= since:
                 continue
+            minute = ts.hour * 60 + ts.minute
             if ts in merged.index:
                 ref = float(merged.at[ts, "close"])
                 self.served["compared"] += 1
+                if symbol in ("NIFTY", "BANKNIFTY") and 15 * 60 + 15 <= minute <= 15 * 60 + 28:      # E3: where the wrapped feed's index is flat (Kotak freezes here), does Kite move?
+                    fb_row = merged.loc[ts]
+                    if float(fb_row["open"]) == float(fb_row["high"]) == float(fb_row["low"]) == float(fb_row["close"]):
+                        self.served["late_fb_flat"] += 1
+                        if not float(row["open"]) == float(row["high"]) == float(row["low"]) == float(row["close"]):
+                            self.served["late_kite_moved"] += 1
                 if ref > 0 and abs(float(row["close"]) - ref) / ref > MAX_DISAGREE:
                     self.served["rejected"] += 1
                     continue
+                if minute >= SETTLE_FROM_MIN:
+                    continue                                           # the settlement window keeps the wrapped feed's own bar; Kite was compared, not used
                 for c in ("open", "high", "low", "close"):
                     merged.at[ts, c] = row[c]                          # the fallback's volume (futures volume for an index) stays
                 used += 1
@@ -314,8 +314,12 @@ class KiteBackedFeed:
                 prev_ts = ts - BAR
                 adjacent = prev_ts in merged.index or (since is not None and prev_ts == since)
                 prev = float(merged.at[prev_ts, "close"]) if prev_ts in merged.index else (float(before.iloc[-1]) if len(before) else self._last_close.get(symbol))
-                if not adjacent or (prev is not None and prev > 0 and abs(float(row["close"]) - prev) / prev > MAX_DISAGREE):
-                    self.served["rejected" if adjacent else "holes"] += 1
+                if not adjacent:
+                    self.served["holes"] += 1
+                    continue
+                self.served["compared"] += 1                           # checked against the minute before it
+                if prev is not None and prev > 0 and abs(float(row["close"]) - prev) / prev > MAX_DISAGREE:
+                    self.served["rejected"] += 1
                     continue
                 merged = pd.concat([merged, pd.DataFrame([row[COLUMNS].to_numpy()], index=pd.DatetimeIndex([ts]), columns=COLUMNS)]).sort_index()
                 kite_only.append(ts)
@@ -375,7 +379,7 @@ class KiteBackedFeed:
             syms[sym] = {"age_s": round((now - ts).total_seconds(), 1) if ts is not None else None}
         c = self.served
         return {"attached": True, "connected": bool(self.live.connected), "live": bool(self.live.healthy()), "polls": int(c["polls"]), "kite_polls": int(c["kite"]),
-                "fallback_polls": int(c["fallback"]), "sampled_polls": int(c["sampled"]), "late_minutes": int(c["late_minutes"]), "late_flat": int(c["late_flat"]), "minutes": int(c["minutes"]), "compared": int(c["compared"]), "rejected": int(c["rejected"]), "ltp_rejected": int(c["ltp_rejected"]), "faults": int(c["kite_faults"]),
+                "fallback_polls": int(c["fallback"]), "sampled_polls": int(c["sampled"]), "late_fb_flat": int(c["late_fb_flat"]), "late_kite_moved": int(c["late_kite_moved"]), "started": self.started, "minutes": int(c["minutes"]), "compared": int(c["compared"]), "rejected": int(c["rejected"]), "ltp_rejected": int(c["ltp_rejected"]), "faults": int(c["kite_faults"]),
                 "dropped": dict(self.live.dropped), "symbols": syms, "last_error": self.last_error[:60]}
 
     def ltp(self, symbols):

@@ -697,22 +697,119 @@ def test_the_kite_feeds_counters_are_journaled_every_five_minutes_so_they_outliv
     assert {pd.Timestamp(t).minute % 5 for t in rows["ts"]} == {0}
 
 
-def test_late_session_index_minutes_served_from_kite_are_counted_and_flat_ones_flagged():
+def test_in_the_settlement_window_the_wrapped_feeds_bars_stand_and_kite_is_measured_not_used():
+    """From 15:00 the expiry sleeves settle on the recorded closes (sleeves.settlement_price / official_close): no poll that reaches 15:00 is answered from Kite alone and a minute
+    the wrapped feed has is never overlaid. E3 is read by comparison: where the wrapped feed's index is flat (Kotak's frozen window), did Kite move?"""
     clock = Clock("2026-10-26 15:14:00")
-    f, live, ws, inner = wrapped(clock)
+    flat = bars("2026-10-26 15:14:00", [25000.0] * 4).assign(open=25000.0, high=25000.0, low=25000.0, close=25000.0)        # the wrapped feed: frozen from 15:14
+    f, live, ws, inner = wrapped(clock, {"NIFTY": flat})
     f._last_close["NIFTY"] = 25000.0
     since = pd.Timestamp("2026-10-26 15:13:00", tz=IST)
-    ws.on_ticks(ws, [tick(1, 25000.0, "2026-10-26 15:14:00")])                              # first tick of 15:14: not in the 15:15 to 15:28 window
-    for m, px in (("15:14", 25000.0), ("15:15", 25000.0), ("15:16", 25004.0)):
+    for m, px in (("15:14", 25000.0), ("15:15", 25000.0), ("15:16", 25004.0), ("15:17", 25006.0)):
         t0 = pd.Timestamp(f"2026-10-26 {m}:00")
-        if m != "15:14":
-            clock.set(t0 + pd.Timedelta(seconds=1))
-        for sec in (1, 20, 40, 58):                                                          # a flat minute ticks the same price; a live one moves
+        for sec in (1, 20, 40, 58):
             clock.set(t0 + pd.Timedelta(seconds=sec))
             ws.on_ticks(ws, [tick(1, px if m == "15:15" else px + sec / 100.0, t0 + pd.Timedelta(seconds=sec))])
-    clock.set("2026-10-26 15:17:10")
-    ws.on_ticks(ws, [tick(1, 25004.5, "2026-10-26 15:17:08")])
-    f.poll("NIFTY", since)
-    assert f.served["late_minutes"] == 2 and f.served["late_flat"] == 1 and f.status()["late_minutes"] == 2
-    f.poll("NIFTY", since)                                                                    # polled again: the same minutes are not counted twice
-    assert f.served["late_minutes"] == 2
+    clock.set("2026-10-26 15:18:10")
+    ws.on_ticks(ws, [tick(1, 25006.5, "2026-10-26 15:18:08")])
+    got = f.poll("NIFTY", since)
+    assert f.served["late_fb_flat"] == 3 and f.served["late_kite_moved"] == 2               # 15:15 to 15:17 are in the window and flat in the wrapped feed; Kite moved in two of them
+    assert (got["close"] == 25000.0).all() and f.unrecorded("NIFTY") == set() and f.served["minutes"] == 0     # the wrapped feed's bars stand: Kite served and recorded nothing
+    assert inner.calls == 1 and f.status()["late_fb_flat"] == 3
+
+
+def test_a_poll_that_reaches_the_settlement_window_is_never_answered_from_kite_alone():
+    clock = Clock("2026-10-26 14:55:00")
+    inner_bars = {"NIFTY": bars("2026-10-26 14:56:00", [25000.0 + i for i in range(5)])}
+    f, live, ws, inner = wrapped(clock, inner_bars)
+    f._fast["NIFTY"] = 1                                                                    # not the sampled poll: it would be the fast path anywhere else
+    for i, m in enumerate(("14:58", "14:59", "15:00", "15:01")):
+        feed_minutes(live, ws, clock, 1, f"2026-10-26 {m}:00", [25000.0 + i + 2])
+    clock.set("2026-10-26 15:02:10")
+    ws.on_ticks(ws, [tick(1, 25006.5, "2026-10-26 15:02:08")])
+    before = inner.calls
+    got = f.poll("NIFTY", pd.Timestamp("2026-10-26 14:57:00", tz=IST))
+    assert inner.calls == before + 1                                                         # the wrapped feed was asked although Kite was complete and fresh
+    t1500, t1501 = pd.Timestamp("2026-10-26 15:00:00", tz=IST), pd.Timestamp("2026-10-26 15:01:00", tz=IST)
+    assert float(got.loc[t1500, "close"]) == 25004.0 and t1500 not in f.unrecorded("NIFTY")    # the wrapped feed has 15:00: its bar stands, Kite's 25005 was compared and not used
+    assert t1501 in got.index                                                                  # a minute the wrapped feed lacks may still be filled from Kite
+
+
+# ---- end to end: the real wrapper through the real engine, the recorder and the sleeves' settlement -----------------------------------------------
+def _run_day(cfg, tmp_path, kite: bool, name: str):
+    """One replay day through the engine. kite=True: a KiteLive fed minute by minute from the same bars (ticks at :01, :20, :40, :58) under the real KiteBackedFeed, a real recorder."""
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.learning import Memory
+    from quantdesk.intraday.recorder import SessionRecorder
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
+    bars_, _ = simulate_sessions(days, seed=11)
+
+    class Today(ReplayFeed):                                         # like the real feeds, the history holds today's bars up to now
+        def history(self, symbol, days=5):
+            df = self.bars.get(symbol)
+            return df[df.index <= self.now()] if df is not None else pd.DataFrame(columns=KL.COLUMNS)
+    feed = Today(bars_, days[-1])
+    toks = {"NIFTY": 1, "BANKNIFTY": 2, "INDIAVIX": 3}
+    ws = FakeWS()
+    live = KL.KiteLive(toks, lambda: ws, now=feed.now)
+    live.start()
+    fed = KL.KiteBackedFeed(feed, live) if kite else feed
+    rec = SessionRecorder(tmp_path / name / "data")
+    j = Journal()
+    eng = IntradayEngine(cfg, fed, "model", j, IntradayBroker(cfg, starting_cash=500000), recorder=rec, say=None, memory=Memory(tmp_path / name / "m.json"))
+    eng.start_session(days[-1])
+    while feed.clock < feed.close_ts:
+        m = feed.clock
+        if kite:
+            for sym, tok in toks.items():
+                df = feed.bars.get(sym)
+                if df is None or m not in df.index:
+                    continue
+                r = df.loc[m]
+                for sec, px in ((1, r.open), (20, r.high), (40, r.low), (58, r.close)):
+                    feed.clock = m + pd.Timedelta(seconds=sec)
+                    ws.on_ticks(ws, [tick(tok, float(px), m + pd.Timedelta(seconds=sec))])
+            feed.clock = m + pd.Timedelta(minutes=1)
+        else:
+            feed.clock = m + pd.Timedelta(minutes=1)
+        eng.step()
+    eng.end_session()
+    return eng, fed, rec, j, days[-1]
+
+
+def test_a_whole_kite_day_leaves_the_sleeves_settlement_inputs_exactly_as_a_plain_day_does_and_the_trial_measures_can_be_computed(cfg, tmp_path):
+    from quantdesk.intraday.sleeves import official_close, settlement_price
+    eng_k, fed, rec_k, j, day = _run_day(cfg, tmp_path, True, "kite")
+    eng_p, _, rec_p, _, _ = _run_day(cfg, tmp_path, False, "plain")
+    for sym in ("NIFTY", "BANKNIFTY"):
+        kite_px, why_k = settlement_price(rec_k.root, sym, day)
+        plain_px, why_p = settlement_price(rec_p.root, sym, day)
+        assert kite_px is not None and kite_px == plain_px and why_k == why_p                       # the mean of the recorded 15:00 to 15:29 closes: identical to a day without Kite
+        assert official_close(rec_k.root, sym, day) == official_close(rec_p.root, sym, day)          # and so is the 15:29 close
+        a = pd.read_csv(rec_k.day_dir(day) / f"{sym}_1m.csv", index_col=0, parse_dates=True)
+        b = pd.read_csv(rec_p.day_dir(day) / f"{sym}_1m.csv", index_col=0, parse_dates=True)
+        late = lambda d: d[(d.index.hour == 15) & (d.index.minute < 30)]
+        assert len(late(a)) == 30 and late(a).equals(late(b))                                        # all thirty settlement bars are the wrapped feed's own
+        assert len(a) == len(b)                                                                      # and after the close-time gap fill, no hole in the day
+    # the minutes served from Kite stayed out of the recorder until the gap fill brought the other feeds' own bars in
+    assert sum(len(fed.unrecorded(s)) for s in ("NIFTY", "BANKNIFTY", "INDIAVIX")) > 300
+    # E1 to E6 from the journal events, as docs/ml/KITE_TRIAL.md reads them
+    ev = j.events()
+    rows = ev[ev["message"].str.startswith("kite feed counters")]
+    cs = [(pd.Timestamp(r.ts), json.loads(r.message.split("kite feed counters ", 1)[1])) for r in rows.itertuples()]
+    assert len(cs) >= 60 and len({c["started"] for _, c in cs}) == 1                                # one runner here: one start stamp on every event
+    cs = [(t, c) for t, c in cs if t.hour < 15]                                                      # E1 is read up to 15:00: the settlement window is the other feeds'
+    (t0, c0), (t1, c1) = cs[0], cs[-1]
+    e1 = (c1["minutes"] - c0["minutes"]) / (3 * (t1 - t0).total_seconds() / 60)
+    assert 0.95 <= e1 <= 1.02
+    last = c1                                                                                        # E2 and E4 are read at the same last event before 15:00 (from then on the other feeds are asked on purpose)
+    assert (last["fallback_polls"] - last["sampled_polls"]) / last["polls"] < 0.02                  # E2: the other feeds were asked on purpose, not because Kite could not serve
+    final = json.loads(rows.iloc[-1]["message"].split("kite feed counters ", 1)[1])
+    assert final["late_fb_flat"] >= 0 and "late_kite_moved" in final                                # E3 is read at the last event of the day
+    assert last["rejected"] <= last["compared"] and last["faults"] == 0                              # E4's numerator is part of its denominator; E5: no Kite fault
+    assert all(0 <= c["minutes"] for _, c in cs) and all(b["minutes"] >= a["minutes"] for (_, a), (_, b) in zip(cs, cs[1:]))
