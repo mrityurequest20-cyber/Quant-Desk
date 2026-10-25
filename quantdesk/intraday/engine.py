@@ -1821,10 +1821,16 @@ class IntradayEngine:
                               "legs": [{"symbol": l.instrument.symbol, "qty": l.qty, "entry": l.entry_price,
                                         "mark": marks[l.instrument.symbol]} for l in t.legs],
                               "rationale": t.rationale[:600]})
+        data = self._data_status(now)
+        if now.minute % 5 == 0 and isinstance(data, dict) and isinstance(data.get("kite"), dict):
+            try:                                                    # the Kite feed's counters outlive this process (the morning and the afternoon runner each start from zero): docs/ml/KITE_TRIAL.md reads them from here
+                self.journal.event(now, "INFO", "feed", "kite feed counters " + json.dumps({k: v for k, v in data["kite"].items() if k != "symbols"}, sort_keys=True))
+            except Exception:
+                pass
         self.journal.set_state("intraday_live", {
             "ts": str(now), "day": str(self.day), "equity": eq, "day_start_equity": self.day_start_equity,
             "day_pnl": eq - self.day_start_equity, "paused": self.paused, "halted": self.risk.halted,
-            "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(), "data": self._data_status(now),
+            "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(), "data": data,
             "views": views, "positions": positions,
             "armed": [a.to_record() for u in self.underlyings for a in self.armed.get(u, []) if now <= a.expires],
             "news_health": dict(self.news.health) if self.news is not None else None,

@@ -197,6 +197,7 @@ class KiteBackedFeed:
         self._last_close: dict[str, float] = {}
         self._kite_ts: dict[str, set] = {}                            # minutes whose numbers came from Kite (kept out of the recorder)
         self._fast: Counter = Counter()
+        self._late_seen: dict[str, set] = {}                          # 15:15 to 15:28 index minutes already counted (E3)
 
     def __getattr__(self, name):                                      # history, history_bars, completed, now, realtime_age, has_ticks, trades, fut_bars, ...
         return getattr(self._inner, name)
@@ -228,7 +229,21 @@ class KiteBackedFeed:
             out = self._inner.poll(symbol, since)
         if out is not None and len(out):
             self._last_close[symbol] = float(out["close"].iloc[-1])
+            self._count_late(symbol, out)
         return out
+
+    def _count_late(self, symbol, out) -> None:
+        """E3 of docs/ml/KITE_TRIAL.md: of the Kite-served index minutes from 15:15 to 15:28 (where Kotak's index series is frozen), how many are flat (open = high = low = close)."""
+        if symbol not in ("NIFTY", "BANKNIFTY"):
+            return
+        mine, seen = self._kite_ts.get(symbol, ()), self._late_seen.setdefault(symbol, set())
+        for ts in out.index:
+            if ts in mine and ts not in seen and ts.hour == 15 and 15 <= ts.minute <= 28:
+                seen.add(ts)
+                r = out.loc[ts]
+                self.served["late_minutes"] += 1
+                if float(r["open"]) == float(r["high"]) == float(r["low"]) == float(r["close"]):
+                    self.served["late_flat"] += 1
 
     def unrecorded(self, symbol) -> set:
         """Minutes of `symbol` served from Kite: the engine keeps them out of the recorder (Kite's licence; they would reach public run artifacts and a public release)."""
@@ -257,6 +272,8 @@ class KiteBackedFeed:
                 if (len(expected) and sl.index.isin(expected).all() and expected.isin(sl.index).all() and since is not None and self.live.healthy(symbol)
                         and not self._jumps(symbol, sl)):
                     self._fast[symbol] += 1
+                    if not self._fast[symbol] % SAMPLE_EVERY:
+                        self.served["sampled"] += 1                    # asked on purpose, not because Kite could not serve: counted apart so the fallback's real use is readable
                     if self._fast[symbol] % SAMPLE_EVERY:              # complete and fresh: no other source is asked, except every Nth time (below)
                         self.served["kite"] += 1
                         self.served["minutes"] += len(sl)
@@ -355,7 +372,7 @@ class KiteBackedFeed:
             syms[sym] = {"age_s": round((now - ts).total_seconds(), 1) if ts is not None else None}
         c = self.served
         return {"attached": True, "connected": bool(self.live.connected), "live": bool(self.live.healthy()), "polls": int(c["polls"]), "kite_polls": int(c["kite"]),
-                "fallback_polls": int(c["fallback"]), "minutes": int(c["minutes"]), "compared": int(c["compared"]), "rejected": int(c["rejected"]), "faults": int(c["kite_faults"]),
+                "fallback_polls": int(c["fallback"]), "sampled_polls": int(c["sampled"]), "late_minutes": int(c["late_minutes"]), "late_flat": int(c["late_flat"]), "minutes": int(c["minutes"]), "compared": int(c["compared"]), "rejected": int(c["rejected"]), "faults": int(c["kite_faults"]),
                 "dropped": dict(self.live.dropped), "symbols": syms, "last_error": self.last_error[:60]}
 
     def ltp(self, symbols):

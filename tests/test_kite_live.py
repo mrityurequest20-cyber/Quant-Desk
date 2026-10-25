@@ -566,6 +566,7 @@ def test_every_tenth_otherwise_kite_only_poll_also_asks_the_fallback_so_disagree
         ws.on_ticks(ws, [tick(1, 25000.0 + i, f"2026-10-26 10:{i + 1:02d}:08")])
         f.poll("NIFTY", pd.Timestamp(f"2026-10-26 10:{i - 1:02d}:00", tz=IST))                 # the engine's last bar is the minute before
     assert f.served["fallback"] >= 2 and f.served["compared"] >= 2                             # the fallback was consulted on a sample, and minutes were compared
+    assert f.served["sampled"] == 2 and f.status()["sampled_polls"] == 2                       # and the sampled polls are counted apart from polls that needed the fallback
     assert f.served["polls"] == 20
 
 
@@ -661,3 +662,50 @@ def test_a_garbage_decrypt_with_a_newline_can_never_inject_into_the_job_environm
     bad = repo_with_token(tmp_path / "bad", token="line1\nEVIL=1")                              # a "valid" file whose plaintext is not token-shaped
     r = run_script(bad, {"KITE_DATA_SECRET": "S3CRET", "GITHUB_ENV": str(genv)})
     assert r.returncode == 0 and not genv.exists() and "not token-shaped" in r.stdout
+
+
+def test_the_kite_feeds_counters_are_journaled_every_five_minutes_so_they_outlive_the_process(cfg, tmp_path):
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine, run_replay
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.learning import Memory
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
+    bars_, _ = simulate_sessions(days, seed=11)
+
+    class WithStatus(ReplayFeed):
+        def status(self):
+            return {"attached": True, "live": True, "polls": 7, "kite_polls": 5, "fallback_polls": 2, "minutes": 9, "compared": 3, "rejected": 1, "faults": 0,
+                    "symbols": {"NIFTY": {"age_s": 1.0}}, "last_error": ""}
+    j = Journal()
+    eng = IntradayEngine(cfg, WithStatus(bars_, days[-1]), "model", j, IntradayBroker(cfg, starting_cash=500000), say=None, memory=Memory(tmp_path / "m.json"))
+    run_replay(eng)
+    ev = j.events()
+    rows = ev[ev["message"].str.startswith("kite feed counters")]
+    assert len(rows) >= 10 and all(r.level == "INFO" and r.category == "feed" for r in rows.itertuples())
+    body = json.loads(rows.iloc[0]["message"].split("kite feed counters ", 1)[1])
+    assert body["kite_polls"] == 5 and body["fallback_polls"] == 2 and body["compared"] == 3 and "symbols" not in body
+    assert {pd.Timestamp(t).minute % 5 for t in rows["ts"]} == {0}
+
+
+def test_late_session_index_minutes_served_from_kite_are_counted_and_flat_ones_flagged():
+    clock = Clock("2026-10-26 15:14:00")
+    f, live, ws, inner = wrapped(clock)
+    f._last_close["NIFTY"] = 25000.0
+    since = pd.Timestamp("2026-10-26 15:13:00", tz=IST)
+    ws.on_ticks(ws, [tick(1, 25000.0, "2026-10-26 15:14:00")])                              # first tick of 15:14: not in the 15:15 to 15:28 window
+    for m, px in (("15:14", 25000.0), ("15:15", 25000.0), ("15:16", 25004.0)):
+        t0 = pd.Timestamp(f"2026-10-26 {m}:00")
+        if m != "15:14":
+            clock.set(t0 + pd.Timedelta(seconds=1))
+        for sec in (1, 20, 40, 58):                                                          # a flat minute ticks the same price; a live one moves
+            clock.set(t0 + pd.Timedelta(seconds=sec))
+            ws.on_ticks(ws, [tick(1, px if m == "15:15" else px + sec / 100.0, t0 + pd.Timedelta(seconds=sec))])
+    clock.set("2026-10-26 15:17:10")
+    ws.on_ticks(ws, [tick(1, 25004.5, "2026-10-26 15:17:08")])
+    f.poll("NIFTY", since)
+    assert f.served["late_minutes"] == 2 and f.served["late_flat"] == 1 and f.status()["late_minutes"] == 2
+    f.poll("NIFTY", since)                                                                    # polled again: the same minutes are not counted twice
+    assert f.served["late_minutes"] == 2
