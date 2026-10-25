@@ -336,7 +336,10 @@ class IntradayEngine:
                 for ts, b in new.iterrows():                   # no live price: each new bar's range decides the armed orders
                     self._fire_armed(sym, now, bar=(float(b["open"]), float(b["high"]), float(b["low"])))
             if self.recorder:
-                self.recorder.record_bars(sym, new)
+                rec_new = new
+                if hasattr(type(self.feed), "unrecorded"):      # minutes served from Kite stay out of the recorder: its licence is the subscriber's, and the recording reaches public artifacts
+                    rec_new = new[~new.index.isin(list(self.feed.unrecorded(sym)))]
+                self.recorder.record_bars(sym, rec_new)
                 fb = getattr(self.feed, "fut_bars", {}).get(sym)
                 if fb is not None and len(fb):                  # the futures' own bars, for the chart and replays
                     self.recorder.record_bars(f"{sym}-FUT", fb[fb.index.date == fb.index[-1].date()])

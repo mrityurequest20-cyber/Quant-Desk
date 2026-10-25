@@ -418,9 +418,10 @@ function renderData(hb) {
 	const rows = [dataRow("Feed", d.feed || "—", k ? "Kite websocket first; the other feeds fill any gap" : "Kite websocket not attached")];
 	if (k) {
 		const state = k.live ? ["live", "up"] : k.connected ? ["silent", "dn"] : ["not connected", "dn"];
-		rows.push(dataRow("Kite websocket", state[0], `${k.minutes} minutes served in ${k.polls} polls today` + (k.rejected ? ` · ${k.rejected} minute(s) rejected for disagreeing with the fallback` : "")
-			+ (k.last_error ? ` · fallback said: ${k.last_error}` : ""), open ? state[1] : ""));
-		for (const [sym, v] of Object.entries(k.symbols || {})) rows.push(dataRow(`${sym} live price`, fin(v.ltp) ? num(v.ltp) : "—", `last tick ${age(v.age_s)}`, open && fin(v.age_s) && v.age_s > 20 ? "dn" : ""));
+		rows.push(dataRow("Kite websocket", state[0], `${k.kite_polls} of ${k.polls} polls and ${k.minutes} minutes served from Kite · ${k.fallback_polls} polls asked the other feeds`
+			+ (k.compared ? ` · ${k.compared} minutes compared, ${k.rejected} rejected` : "") + (k.faults ? ` · ${k.faults} Kite fault(s) handed to the other feeds` : "")
+			+ (k.last_error ? ` · last: ${k.last_error}` : ""), open ? state[1] : ""));
+		for (const [sym, v] of Object.entries(k.symbols || {})) rows.push(dataRow(`${sym} websocket tick`, age(v.age_s), "Kite prices are not published, only how fresh they are", open && fin(v.age_s) && v.age_s > 20 ? "dn" : ""));
 	}
 	for (const [sym, b] of Object.entries(d.bars || {})) if (b) rows.push(dataRow(`${sym} last bar`, ist(b.last_bar), age(b.age_s), open && b.age_s > 150 ? "dn" : ""));
 	const hbAge = (Date.now() - tms(hb.ts)) / 1000;

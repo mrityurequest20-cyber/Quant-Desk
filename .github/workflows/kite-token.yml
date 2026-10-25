@@ -39,12 +39,12 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-kite.txt
       - name: Exchange the request token and encrypt the day's access token
         env:
-          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
-          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_DATA_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
           KITE_REQUEST_TOKEN: ${{ inputs.request_token }}
         run: |
           python -m quantdesk data kite-token --out "$RUNNER_TEMP/kite_token"
-          openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/kite_token" -out "$RUNNER_TEMP/kite_token.enc" -pass env:KITE_API_SECRET
+          openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/kite_token" -out "$RUNNER_TEMP/kite_token.enc" -pass env:KITE_DATA_SECRET
           rm -f "$RUNNER_TEMP/kite_token"
       - name: Store it on the kite-token branch
         run: |
