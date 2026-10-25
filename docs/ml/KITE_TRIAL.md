@@ -26,16 +26,24 @@
 > **Counted sessions (replaces the v1 definition).** Every trading weekday from 2 Nov, **whether or not a token was loaded**: a day without a token fails E1 and E6 and is not excluded. 26 to 30
 > Oct are shake-down and not counted. Read-out 20 Nov.
 >
-> **Measures for the attached desk (fixed now).** Read from the journal's INFO events of category `feed` whose message starts `kite feed counters` (written every 5 minutes by the engine, as JSON
-> of the feed's own counters), because the counters live in one process and the morning and the afternoon runner each start from zero: per runner, the last event of the day is taken and the two are
-> summed. Reading resolution is the 5 minutes between events (about 1% of a session).
+> **The settlement window is not Kite's (15:00 to 15:29).** The expiry sleeves settle on the mean of the *recorded* 15:00 to 15:29 closes and on the 15:29 close (`sleeves.settlement_price`,
+> `official_close`). To change nothing they read, no poll that reaches 15:00 is answered from Kite alone: the other feeds are asked and their bars stand for every minute they have; Kite is
+> compared with them, never overlaid, and fills only a minute they lack. Kite's minutes are kept out of the recorder (licence), and the other feeds' own history for today fills those holes every
+> 30 minutes and at the close (`fill_bars` adds only what is missing), so the recorded file is whole. An end-to-end test runs one day plain and one day under Kite and asserts that the recorded
+> 15:00 to 15:29 bars, the settlement price and the official close are identical. Kite's live price still serves exits after 15:00, and Kite remains the *measure* of whether the late index is
+> frozen (E3).
+>
+> **Measures for the attached desk (fixed now).** Read from the journal's INFO events of category `feed` whose message starts `kite feed counters` (written every 5 minutes by the engine, one per
+> minute, as JSON of the feed's own counters). The counters are cumulative **per process**: each event carries `started`, the runner's start stamp, and the morning and the afternoon runner are read
+> separately. Rates are read from **differences between a runner's first event and its last event at or before 15:00**, so a runner that starts at 12:20 is not credited with the morning and the
+> five-minute reading resolution is the only unmeasured margin. A runner with no event before 15:00 is not read for E1, E2 and E4.
 >
 > | # | Measure | How it is read | Pass if |
 > |---|---|---|---|
-> | E1 | **Kite share of minutes** | `minutes` ÷ (3 symbols × minutes from the runner's first event to its last), summed over the day's runners | at least 99% in every counted session |
-> | E2 | **Fallback dependence** | (`fallback_polls` − `sampled_polls`) ÷ `polls`: polls on which the other feeds had to be asked because Kite could not serve (every tenth otherwise-Kite-only poll asks them on purpose, to give E4 a denominator, and is counted apart) | at most 1% of polls |
-> | E3 | **Late-session index** | `late_flat` ÷ `late_minutes`: of the Kite-served NIFTY and BANKNIFTY minutes from 15:15 to 15:28 (Kotak's frozen window), the share with open = high = low = close | at most 10% flat |
-> | E4 | **Disagreement** | `rejected` ÷ `compared`: Kite minutes (and live-price jumps) not used because they differed from the other feeds by more than 0.5%, over the minutes compared. Compared minutes are the first poll, every hole and one poll in ten. The few rejected minutes are cross-checked by hand against Kite's own historical candle for that day | at most 0.5%, and none that the hand check shows was Kite right and the other feed wrong |
+> | E1 | **Kite share of minutes** | Δ`minutes` ÷ (3 symbols × Δ minutes elapsed between the runner's first event and its last event at or before 15:00); the day's value weights each runner by its elapsed minutes | at least 99% in every counted session |
+> | E2 | **Fallback dependence** | Δ(`fallback_polls` − `sampled_polls`) ÷ Δ`polls`, same window: polls on which the other feeds had to be asked because Kite could not serve (every tenth otherwise-Kite-only poll asks them on purpose, to give E4 a denominator, and is counted apart) | at most 1% of polls |
+> | E3 | **Late-session index** | at the day's last event, `late_kite_moved` ÷ `late_fb_flat`: of the minutes from 15:15 to 15:28 in which the other feeds' NIFTY or BANKNIFTY bar was flat (open = high = low = close; Kotak's frozen window), the share in which Kite's bar was not | at least 90%; if `late_fb_flat` is under 20 in a session, that session is "not measured" for E3 |
+> | E4 | **Disagreement** | Δ`rejected` ÷ Δ`compared`, same window as E1: Kite minutes not used because they differed from the other feeds' bar by more than 0.5% (or, for a minute they lack, from the minute before it), over the minutes checked. Checks happen on the first poll, on every hole and on one poll in ten. Live-price rejections are counted apart (`ltp_rejected`). The rejected minutes are cross-checked by hand against Kite's own historical candle for that day | at most 0.5%, and none that the hand check shows was Kite right and the other feed wrong |
 > | E5 | **No harm** | the counter `faults` (a fault inside the Kite logic that was handed to the other feeds) and any engine ERROR or CRITICAL event naming `kitelive` | none |
 > | E6 | **Manual steps** | the daily request_token run (D2 below) and any restart | at most one per trading day; a day with no token counts against E1 and E6 |
 >
