@@ -364,23 +364,25 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", default="_wings")
     s.set_defaults(fn=cmd_wings)
     s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
-                                  "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result "
-                                  "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card"])
+                                  "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result, "
+                                  "refit the registered models as a drill (never touches the live desk)")
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card", "retrain"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
                                  "reproduce: an empty scratch folder (default: a new temporary one; never docs/prereg/results); "
-                                 "oi, oi-report: the session tables (default runtime/ml_oi)")
+                                 "oi, oi-report: the session tables (default runtime/ml_oi); "
+                                 "retrain: a new folder for the report and the refits (default runtime/ml_retrain)")
     s.add_argument("--version", default="", help="import: the source's version label (documentation only; the file hashes are the identity)")
     s.add_argument("--reviewed", help="import: a reviewed-sessions file (default quantdesk/ml/reviewed_sessions.json)")
-    s.add_argument("--dataset", help="build: an imported dataset folder; reproduce: the aeron7 dataset the locked result was computed on")
+    s.add_argument("--dataset", help="build: an imported dataset folder; reproduce: the aeron7 dataset the locked result was computed on; "
+                                      "retrain: the aeron7 dataset to refit from (default: the latest import under runtime/external)")
     s.add_argument("--symbols", default="NIFTY,BANKNIFTY", help="build: comma-separated symbols of the dataset")
     s.add_argument("--profile-end", help="build: the last session the seasonal profile may be fitted on (required; rows up to it are marked in_profile)")
     s.add_argument("--allow-unverified", action="store_true", help="build: accept a dataset that is external_unverified (the table says so)")
     s.add_argument("--spec", default="docs/prereg/vol_forecast_v1.json", help="reproduce: the pre-registered spec")
     s.add_argument("--committed", help="reproduce: the committed result (default: docs/prereg/results/<name>-<spec hash>.json)")
-    s.add_argument("--rtol", type=float, default=1e-9, help="reproduce: relative tolerance for every number (at most 1e-6)")
+    s.add_argument("--rtol", type=float, default=1e-9, help="reproduce, retrain: relative tolerance for every number (at most 1e-6)")
     s.add_argument("--through", choices=["platform", "study"], default="platform",
                    help="reproduce: 'platform' recomputes the locked study with the builder, the splits and the study's scorers and writes nothing "
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
@@ -406,6 +408,8 @@ def cmd_ml(cfg, a):
             return _ml_oi(cfg, a)
         if a.action == "card":
             return _ml_card(cfg, a)
+        if a.action == "retrain":
+            return _ml_retrain(cfg, a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
         raise SystemExit(f"ml {a.action}: {exc}")
@@ -475,6 +479,21 @@ def _ml_oi(cfg, a):
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
     print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
+
+
+def _ml_retrain(cfg, a):
+    """P0.8: refit every registered model from the dataset into a scratch folder and compare with the numbers the desk loads. Exit 1 unless all match."""
+    from .data import external_aeron as X
+    from .ml import retrain as RT
+    if a.dataset:
+        ds = Path(a.dataset)
+    else:
+        ds = X.latest(Path(cfg.runtime_dir) / "external")
+        if ds is None:
+            raise SystemExit("ml retrain: no imported dataset: pass --dataset or run `ml import` / `data external-import` first")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_retrain"
+    if not RT.drill(ds, out, rtol=a.rtol)["ok"]:
+        raise SystemExit(1)
 
 
 def _ml_reproduce(a):
