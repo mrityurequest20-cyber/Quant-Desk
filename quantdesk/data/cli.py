@@ -132,6 +132,17 @@ def register(sub):
                                          "token, written to --out (mode 0600) and never printed. Market data only (docs/ml/KITE_TRIAL.md).")
     x.add_argument("--out", required=True)
     x.set_defaults(fn=cmd_kite_token)
+    x = ss.add_parser("kite-record", help="Kite: record websocket ticks (with five-level depth for the futures) to Parquet until --until (IST), market data only; docs/ml/KITE_TRIAL.md")
+    x.add_argument("--out", required=True, help="folder for the ticks (never inside a git tree outside runtime/)")
+    x.add_argument("--until", required=True, help="HH:MM IST")
+    x.add_argument("--with-reference", action="store_true", help="after the close, also fetch Kite's historical minute candles as the reference")
+    x.set_defaults(fn=cmd_kite_record)
+    x = ss.add_parser("kite-compare", help="Kite: the session's measures from a recorded folder (counts and ratios only)")
+    x.add_argument("--dir", required=True)
+    x.add_argument("--day", required=True, help="YYYY-MM-DD")
+    x.add_argument("--desk-dir", help="the desk journal's data/<day> folder with <symbol>_1m.csv, for C2")
+    x.add_argument("--json-out", help="write the report here")
+    x.set_defaults(fn=cmd_kite_compare)
     x = ss.add_parser("external-verify", help="compare random sessions with an independent daily source (Yahoo) and set "
                                               "the dataset's status")
     x.add_argument("--out", help="output root (default runtime/external)")
@@ -192,6 +203,28 @@ def register(sub):
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")
     x.add_argument("--all", action="store_true", help="with --release: pull every table (large)")
     x.set_defaults(fn=cmd_status)
+
+
+def cmd_kite_record(cfg, a):
+    from . import kite_record as K
+    if not (os.environ.get("KITE_DATA_KEY") and os.environ.get("KITE_DATA_TOKEN")):
+        print("kite-record: no Kite key or no token for today (the 'Kite token' workflow was not run); nothing recorded")
+        return
+    try:
+        rep = K.run_session(Path(a.out), a.until, with_reference=a.with_reference)
+    except (K.KiteRecordError, ValueError) as exc:
+        raise SystemExit(f"kite-record: {exc}") from None
+    print(f"kite-record: {rep['day']}: {rep['ticks']:,} ticks in {rep['parts']} parts, instruments {sorted(rep['tokens'])}")
+
+
+def cmd_kite_compare(cfg, a):
+    import json as _json
+
+    from . import kite_compare as KC
+    rep = KC.session_report(Path(a.dir), a.day, Path(a.desk_dir) if a.desk_dir else None)
+    print(KC.render(rep))
+    if a.json_out:
+        Path(a.json_out).write_text(_json.dumps(rep, indent=1, default=str))
 
 
 def cmd_external_import(cfg, a):

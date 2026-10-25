@@ -1,0 +1,151 @@
+# Private Kite tick recorder (docs/ml/KITE_TRIAL.md): record the Kite websocket's ticks (index ticks, and the near-month NIFTY and BANKNIFTY futures with five levels of depth) for the
+# whole session, beside the desk and entirely apart from it. Market data only: no order method is called anywhere in this code (a test checks).
+#
+# No extra manual step: it uses the same day's token the "Kite token" workflow stores for the desk. With no token for the day it records nothing and succeeds.
+#
+# Kite's data is licensed to the subscriber and this repository is public, so the raw ticks never leave the runner unencrypted: they are encrypted with the owner's API secret
+# (AES-256) before they are uploaded as workflow artifacts (90 days), and only the owner can read them (deploy/kite-decrypt.sh). The repository, the releases and the run summary get
+# counts and ratios only (kite_metrics.json). Two jobs because a hosted job may run at most six hours and the session plus the wait is longer.
+name: Kite tick recorder
+
+on:
+  schedule:
+    - cron: "25 3 * * 1-5"       # 08:55 IST Mon-Fri (GitHub runs it a little late; the recorder starts when the job does)
+  workflow_dispatch:
+    inputs:
+      first_until:
+        description: "First job records until (HH:MM IST)"
+        default: "14:25"
+        type: string
+      second_until:
+        description: "Second job records until (HH:MM IST)"
+        default: "15:32"
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash              # bash -e -o pipefail
+
+concurrency:
+  group: kite-record
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+  KITE_DATA_KEY: ${{ secrets.KITE_API_KEY }}
+
+jobs:
+  record-1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-kite.txt
+      - name: The day's Kite token (optional; without it nothing is recorded)
+        continue-on-error: true
+        env:
+          KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
+        run: deploy/kite-token.sh
+      - name: Record ticks
+        env:
+          UNTIL: ${{ inputs.first_until || '14:25' }}
+        run: python -m quantdesk data kite-record --out runtime/kite --until "$UNTIL"
+      - name: Encrypt the ticks with the owner's API secret
+        if: always()
+        env:
+          KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
+        run: |
+          if [ -d runtime/kite ] && [ -n "$(ls -A runtime/kite)" ]; then
+            tar -C runtime/kite -cf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KITE_DATA_SECRET -out kite_raw_1.tar.enc
+          fi
+      - name: Keep the encrypted ticks
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kite-raw-1
+          path: kite_raw_1.tar.enc
+          if-no-files-found: ignore
+          retention-days: 90
+
+  record-2:
+    needs: record-1
+    if: ${{ always() && needs.record-1.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-kite.txt
+      - name: The day's Kite token (optional; without it nothing is recorded)
+        continue-on-error: true
+        env:
+          KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
+        run: deploy/kite-token.sh
+      - name: Bring the first job's encrypted ticks
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kite-raw-1
+          path: first
+      - name: Decrypt the first job's ticks (for the session's measures only)
+        env:
+          KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
+        run: |
+          mkdir -p runtime/kite_1
+          if [ -f first/kite_raw_1.tar.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:KITE_DATA_SECRET -in first/kite_raw_1.tar.enc | tar -C runtime/kite_1 -xf -
+          fi
+      - name: Record ticks to the close and fetch Kite's own candles as the reference
+        env:
+          UNTIL: ${{ inputs.second_until || '15:32' }}
+        run: python -m quantdesk data kite-record --out runtime/kite --until "$UNTIL" --with-reference
+      - name: Measures for the session (counts and ratios only)
+        run: |
+          if ls runtime/kite/ticks_*.parquet runtime/kite_1/ticks_*.parquet >/dev/null 2>&1; then
+            mkdir -p runtime/kite_all
+            cp -n runtime/kite_1/* runtime/kite_all/ 2>/dev/null || true
+            cp -n runtime/kite/* runtime/kite_all/ 2>/dev/null || true
+            python -m quantdesk data kite-compare --dir runtime/kite_all --day "$(date +%F)" --json-out kite_metrics.json | tee kite_summary.txt
+            { echo '```'; cat kite_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No ticks today (no token, or a holiday)."
+          fi
+      - name: Encrypt the ticks with the owner's API secret
+        if: always()
+        env:
+          KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
+        run: |
+          if [ -d runtime/kite ] && [ -n "$(ls -A runtime/kite)" ]; then
+            tar -C runtime/kite -cf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KITE_DATA_SECRET -out kite_raw_2.tar.enc
+          fi
+      - name: Keep the encrypted ticks
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kite-raw-2
+          path: kite_raw_2.tar.enc
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Keep the measures (counts and ratios only)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kite-metrics
+          path: kite_metrics.json
+          if-no-files-found: ignore
+          retention-days: 90
