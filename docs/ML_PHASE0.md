@@ -127,6 +127,17 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
   missing, silent socket): the desk then runs exactly as before. No order method is used and nothing reaches the broker, risk or sizing code; no tick-level order flow is added (separate,
   reviewed step). The day's token comes from a once-a-day manual run of the `Kite token` workflow with the login's request_token (the API secret encrypts the token on a `kite-token`
   branch; the live jobs read it in one optional step). The session review shows `kite (N minutes in K polls, R rejected) over <fallback>`.
+- **P0.8 built** (`quantdesk/ml/retrain.py`, `python -m quantdesk ml retrain [--dataset <dir>] [--out <new folder>]`, `.github/workflows/ml-retrain.yml`):
+  a drill that refits every registered model (today `c_har`, the file the desk loads) from the aeron7 dataset and compares it field by field with the
+  committed coefficients (P0.4's comparison: relative tolerance 1e-9, never wider than 1e-6; provenance is not compared as numbers). It also checks that the
+  rebuilt dataset has the recorded source commit, importer and 1-minute partition hashes, and says `reproduced_on_different_inputs` when the numbers match
+  but the inputs do not. **First drill (24 Oct, local, the true dataset): 809 numbers, largest difference exactly 0.** The workflow runs Sundays and on
+  demand; `permissions: contents: read`, no secret and no write token (the job's read-only token is used by checkout, which keeps no credentials), no push or release, the report kept as a 30-day run
+  artifact (a test pins all of that). It fetches the source repository at the commit recorded in the committed coefficients, imports it
+  (`external_unverified`; the refit reads it anyway and the report says so), refits, and fails the run on any mismatch. The output folder must be outside
+  every git tree or under the gitignored `runtime/`, and a report is written once. What it does not do yet: rebuild the Kaggle tables (that data stays
+  out of the repository and out of CI), write a model card (a refit has no out-of-sample block until a model with one is registered), or retrain
+  anything that is not in `retrain.registry()`; adding a model there is a reviewed change.
 
 ## What I need from the owner (only for P0.6)
 
