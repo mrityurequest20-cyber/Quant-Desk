@@ -395,3 +395,57 @@ def test_live_yml_has_the_api_key_at_workflow_level_and_the_secret_only_in_the_t
         tok = next(i for i, n in enumerate(names) if n.startswith("Kite token"))
         trade = next(i for i, n in enumerate(names) if n.startswith("Trade (paper)"))
         assert tok < trade
+
+
+# ---- the Data panel (display only) ----------------------------------------------------------------------------------------------
+def test_status_tells_the_panel_whether_the_websocket_is_delivering_and_how_old_each_price_is():
+    clock = Clock("2026-10-26 10:00:00")
+    f, live, ws, inner = wrapped(clock)
+    st = f.status()
+    assert st["attached"] and st["connected"] and not st["live"] and st["polls"] == 0
+    assert st["symbols"] == {"NIFTY": {"ltp": None, "age_s": None}, "INDIAVIX": {"ltp": None, "age_s": None}}
+    clock.set("2026-10-26 10:00:20")
+    ws.on_ticks(ws, [tick(1, 25000.0, "2026-10-26 10:00:19")])
+    clock.set("2026-10-26 10:00:25")
+    st = f.status()
+    assert st["live"] and st["symbols"]["NIFTY"] == {"ltp": 25000.0, "age_s": 5.0} and st["symbols"]["INDIAVIX"]["ltp"] is None
+    clock.set("2026-10-26 10:05:00")                                                           # silent for minutes: not live, and the age says so
+    st = f.status()
+    assert not st["live"] and st["symbols"]["NIFTY"]["age_s"] == 280.0
+    inner.boom = RuntimeError("yahoo is down " + "x" * 400)
+    with pytest.raises(RuntimeError):                                                          # nothing from Kite and the fallback down: the error still surfaces
+        f.poll("NIFTY", None)
+    assert 0 < len(f.status()["last_error"]) <= 160
+
+
+def test_the_heartbeat_carries_the_data_block_and_a_broken_status_costs_it_nothing(cfg, tmp_path):
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine, run_replay
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.learning import Memory
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
+    bars, _ = simulate_sessions(days, seed=11)
+    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
+                         say=None, memory=Memory(tmp_path / "memory.json"))
+    run_replay(eng)
+    d = eng.journal.get_state("intraday_live")["data"]
+    assert d["feed"] == eng.feed.name and d["kite"] is None                                    # a feed without a websocket has no Kite block
+    assert set(d["bars"]) == {*eng.underlyings, eng.vix} and all(b["last_bar"] and b["age_s"] >= 0 for b in d["bars"].values())
+    eng.feed.status = lambda: {"attached": True, "live": True}                                  # a feed that has one: carried through as is
+    assert eng._data_status(eng.last_ts[eng.underlyings[0]])["kite"] == {"attached": True, "live": True}
+
+    def boom():
+        raise RuntimeError("broken")
+    eng.feed.status = boom
+    assert eng._data_status(eng.last_ts[eng.underlyings[0]]) is None                           # never costs the desk its heartbeat
+
+
+def test_the_app_has_a_data_panel_that_hides_itself_without_data():
+    html = (ROOT / "quantdesk/web/static/app/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "quantdesk/web/static/app/app.js").read_text(encoding="utf-8")
+    assert 'id="d-data-wrap"' in html and 'id="d-data"' in html and 'id="d-data-hint"' in html
+    assert "function renderData(hb)" in js and "renderData(hb);" in js and "wrap.hidden = !d" in js
+    assert "hb.data" in js

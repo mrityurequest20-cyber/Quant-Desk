@@ -1821,7 +1821,7 @@ class IntradayEngine:
         self.journal.set_state("intraday_live", {
             "ts": str(now), "day": str(self.day), "equity": eq, "day_start_equity": self.day_start_equity,
             "day_pnl": eq - self.day_start_equity, "paused": self.paused, "halted": self.risk.halted,
-            "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(),
+            "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(), "data": self._data_status(now),
             "views": views, "positions": positions,
             "armed": [a.to_record() for u in self.underlyings for a in self.armed.get(u, []) if now <= a.expires],
             "news_health": dict(self.news.health) if self.news is not None else None,
@@ -1834,6 +1834,19 @@ class IntradayEngine:
                       "reconcile": (self.health.get("reconcile") or {}).get("ok") is False,
                       **({"inherited": summary(self.halt)} if self.halt else {})},
             "health": dict(self.health)})
+
+    def _data_status(self, now) -> dict | None:
+        """Where the desk's market data comes from and how fresh it is, for the app's Data panel: the feed's name, its Kite status if the websocket is attached, and each
+        index's last bar and its age. A display: whatever is wrong with it must never cost the desk a heartbeat."""
+        try:
+            bars = {}
+            for u in self.underlyings + [self.vix]:
+                ts = self.last_ts.get(u)
+                bars[u] = {"last_bar": str(ts), "age_s": round((now - ts).total_seconds(), 1)} if ts is not None else None
+            st = getattr(self.feed, "status", None)
+            return {"feed": self.feed.name, "kite": st() if callable(st) else None, "bars": bars}
+        except Exception:
+            return None
 
     def _claude_line(self) -> str | None:
         """'Claude: $X today, $Y of $20.00 used, ~N sessions left at this pace' (None without a credit)."""

@@ -259,6 +259,16 @@ class KiteBackedFeed:
         except Exception:
             return df
 
+    def status(self) -> dict:
+        """For the app's Data panel: is the websocket delivering, what it served, and each index's last Kite price and its age. Display only."""
+        now = self._inner.now()
+        syms = {}
+        for sym in self.live.tokens:
+            ts = self.live.last_tick.get(sym)
+            syms[sym] = {"ltp": self.live.last_price.get(sym), "age_s": round((now - ts).total_seconds(), 1) if ts is not None else None}
+        return {"attached": True, "connected": bool(self.live.connected), "live": bool(self.live.healthy()), "polls": int(self.served["kite"]),
+                "minutes": int(self.served["minutes"]), "rejected": int(self.served["rejected"]), "symbols": syms, "last_error": self.last_error[:160]}
+
     def ltp(self, symbols):
         out = {}
         for s in symbols:
