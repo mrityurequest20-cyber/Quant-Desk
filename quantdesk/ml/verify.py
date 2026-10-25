@@ -41,8 +41,14 @@ MIN_SESSIONS, PASS_RATE, UNCOMPARED_MAX, ACCEPTED_FLOOR = 500, 0.95, 0.01, 0.97
 MONTH_FLOOR, MONTH_MIN, MAX_RUN = 0.80, 10, 5
 C_COVERAGE, CORR_SESSION, CORR_SHARE, CORR_MEDIAN, MIN_COMMON_MINUTES = 0.95, 0.95, 0.90, 0.98, 30
 MAX_404_SHARE = 0.10
-SCOPE = {"new_window": "daily envelope only (high, low, close against Yahoo; close against NSE)",
-         "overlap": "daily envelope and 1-minute returns against the verified aeron7 minutes"}
+SCOPE = {"new_window": "2023-03-01 to 2026-05-15: the DAILY ENVELOPE only (high, low, close against Yahoo; close against NSE's official file). Nothing independent checks minute timestamps "
+                       "or the intraday path in this window. B is nearly the same quantity as A's close (Yahoo's index data derive from NSE's), so it is not a second vendor.",
+         "overlap": "sessions also in the verified aeron7 data (to Feb 2023): daily envelope to 0.1% and 1-minute return correlation. This is consistency with aeron7, not independent accuracy: "
+                    "the two vendors may share an upstream feed.",
+         "not_covered": "Kaggle-only sessions before 2023-03-01 that aeron7 lacks, and the gap between aeron7's last day and 2023-03-01, are counted (`only_here_not_gating`) but not checked by anything; "
+                        "15 May to early Sep 2026 does not exist in the dataset. A pass allows up to 5% of compared sessions to disagree on the daily envelope. The label `external_verified` "
+                        "means this scope and nothing more, and it covers NIFTY and BANKNIFTY only (not INDIAVIX, and not option, bid/ask, IV or execution data).",
+         "review_and_rejected": "listed, not run through A and B: the loaded partitions do not hold those sessions' minutes (the criteria's information-only runs on them are not possible from the import)"}
 
 
 class VoidRun(RuntimeError):
@@ -221,7 +227,7 @@ def check_c(ours_m1: pd.DataFrame, ref_m1: pd.DataFrame) -> dict:
     corr = minute_corr(ours_m1, ref_m1)
     vals = np.array([corr.get(d, float("nan")) for d in common])
     share = float((np.nan_to_num(vals, nan=-1.0) >= CORR_SESSION).mean()) if len(vals) else 0.0
-    med = float(np.nanmedian(vals)) if len(vals) and not np.isnan(vals).all() else float("nan")
+    med = float(np.median(np.nan_to_num(vals, nan=-1.0))) if len(vals) else float("nan")      # an undefined correlation is a failure, here too
     if share < CORR_SHARE:
         reasons.append(f"C: {share:.1%} of common sessions have minute-return correlation >= {CORR_SESSION}, at least {CORR_SHARE:.0%} needed")
     if not (med >= CORR_MEDIAN):
@@ -381,25 +387,29 @@ def _run(ds, aeron_ds, man, ref_man, cache, yahoo, fetch, say, ea) -> dict:
                                                   "files_sha256": hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest(), "file_hashes": files},
                                           "aeron7": {"dataset": ref_man["dataset"], "digest": ref_man["digest"]}},
            "at": str(pd.Timestamp.now(tz=intake.IST)), "symbols": {}, "info_only": info_only(man), "reasons": []}
-    for sym in SYMBOLS:
-        od = daily(loaded[sym])
+    yd, refs = {}, {}
+    for sym in SYMBOLS:                                                  # every fetch and every read happens before anything is computed or shown: a void can then never follow a verdict
         days = accepted[sym]
         try:
-            ydf = yahoo(sym, days[0], days[-1]) if days else pd.DataFrame(columns=["high", "low", "close"])
+            yd[sym] = yahoo(sym, days[0], days[-1]) if days else pd.DataFrame(columns=["high", "low", "close"])
         except VoidRun:
             raise
         except Exception as exc:
             raise VoidRun(f"Yahoo for {sym} could not be fetched: {exc!s:.120}") from exc
-        ref_m1 = ea.load(aeron_ds, "1m", [sym], use="development_folds")
-        rec["symbols"][sym] = {"A": check_a(od, ydf, days, nse_days), "B": check_b(od, nse[sym], days, nse_days), "C": check_c(loaded[sym], ref_m1)}
+        refs[sym] = ea.load(aeron_ds, "1m", [sym], use="development_folds")
+    for sym in SYMBOLS:
+        od = daily(loaded[sym])
+        days = accepted[sym]
+        rec["symbols"][sym] = {"A": check_a(od, yd[sym], days, nse_days), "B": check_b(od, nse[sym], days, nse_days), "C": check_c(loaded[sym], refs[sym])}
+    for sym in SYMBOLS:
         for k, v in rec["symbols"][sym].items():
             say(f"  {sym} {k}: " + ("pass" if v["passed"] else "FAIL " + "; ".join(v["reasons"])))
     rec["D"] = check_d(man, loaded)
     for sym, checks in rec["symbols"].items():
         rec["reasons"] += [f"{sym} {r}" for v in checks.values() for r in v["reasons"]]
     rec["reasons"] += rec["D"]["reasons"]
-    rec["symbols_verified"] = [s for s, c in rec["symbols"].items() if all(v["passed"] for v in c.values())] if rec["D"]["passed"] else []
     rec["passed"] = not rec["reasons"]
+    rec["symbols_verified"] = [s for s in SYMBOLS if all(v["passed"] for v in rec["symbols"][s].values())] if rec["passed"] else []     # no partial licence: all rules for both symbols
     return rec
 
 
@@ -413,7 +423,10 @@ def flip_status(ds: Path) -> str:
     except (OSError, ValueError) as exc:
         raise ValueError(f"{ds}: no readable manifest.json and verification.json") from exc
     if not (isinstance(rec, dict) and rec.get("digest") == man.get("digest") and rec.get("passed") is True and rec.get("check") == CHECK
-            and rec.get("criteria_sha256") == pinned_criteria_sha256() and rec.get("symbols_verified")):
+            and rec.get("criteria_sha256") == pinned_criteria_sha256() and rec.get("symbols_verified")
+            and set(rec["symbols_verified"]) <= set(SYMBOLS) and not rec.get("reasons") and (rec.get("D") or {}).get("passed") is True
+            and all(v.get("passed") is True for s_ in SYMBOLS for v in (rec.get("symbols") or {}).get(s_, {"x": {}}).values())
+            and set(rec.get("symbols") or {}) >= set(SYMBOLS)):
         raise ValueError(f"{ds.name}: the verification record does not name this digest, did not pass, or is not a p06-v1 record with its scope: status unchanged")
     if man.get("status") != intake.VERIFIED:
         man["status"] = intake.VERIFIED

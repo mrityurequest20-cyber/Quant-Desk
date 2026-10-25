@@ -342,7 +342,9 @@ def test_a_passing_run_writes_the_record_once_and_leaves_the_status_alone_until_
     assert rec["passed"] and rec["reasons"] == [] and rec["check"] == "p06-v1" and rec["symbols_verified"] == ["NIFTY", "BANKNIFTY"]
     vr = json.loads((ds / "verification.json").read_text())
     assert vr["digest"] == json.loads((ds / "manifest.json").read_text())["digest"] and vr["criteria_sha256"] == I.VERIFICATION_CRITERIA["p06-v1"]
-    assert "overlap" in vr["scope"] and "daily envelope only" in vr["scope"]["new_window"]
+    assert "overlap" in vr["scope"] and "DAILY ENVELOPE only" in vr["scope"]["new_window"] and "2023-03-01" in vr["scope"]["new_window"]
+    assert "Nothing independent checks minute timestamps" in vr["scope"]["new_window"] and "not independent accuracy" in vr["scope"]["overlap"]
+    assert "up to 5%" in vr["scope"]["not_covered"] and "INDIAVIX" in vr["scope"]["not_covered"]
     assert len(vr["references"]["nse"]["file_hashes"]) == 8 and vr["references"]["nse"]["days_without_a_file"] == []
     assert all(len(h) == 64 for h in vr["references"]["nse"]["file_hashes"].values())
     assert "INDIAVIX" not in json.dumps(vr["symbols"])
@@ -368,7 +370,7 @@ def test_a_failing_run_records_why_lists_what_passed_and_the_flip_refuses_it(wor
     ds, aeron, cache, fetch, yahoo, closes = world
     bad = lambda sym, a, b: closes[sym][["high", "low", "close"]] * (1.02 if sym == "BANKNIFTY" else 1.0)     # Yahoo disagrees by 2% on one symbol only
     rec = V.run(ds, aeron, cache, bad, fetch, lambda *_: None)
-    assert not rec["passed"] and rec["symbols_verified"] == ["NIFTY"] and any("BANKNIFTY A:" in r for r in rec["reasons"])
+    assert not rec["passed"] and rec["symbols_verified"] == [] and any("BANKNIFTY A:" in r for r in rec["reasons"])      # no partial licence
     assert rec["symbols"]["BANKNIFTY"]["B"]["passed"] and rec["symbols"]["BANKNIFTY"]["C"]["passed"]          # the other checks are still reported
     assert json.loads((ds / "verification.json").read_text())["passed"] is False
     with pytest.raises(ValueError, match="status unchanged"):
@@ -419,7 +421,9 @@ def test_the_flip_refuses_a_record_for_another_digest_without_scope_or_with_othe
     ds, aeron, cache, fetch, yahoo, _ = world
     V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
     good = json.loads((ds / "verification.json").read_text())
-    for over in ({"digest": "0" * 64}, {"passed": "yes"}, {"check": "p06-v2"}, {"criteria_sha256": "0" * 64}, {"symbols_verified": []}):
+    for over in ({"digest": "0" * 64}, {"passed": "yes"}, {"check": "p06-v2"}, {"criteria_sha256": "0" * 64}, {"symbols_verified": []},
+                 {"symbols_verified": ["NIFTY", "BANKNIFTY", "INDIAVIX"]}, {"reasons": ["something failed"]}, {"D": {"passed": False, "reasons": []}},
+                 {"symbols": {"NIFTY": good["symbols"]["NIFTY"]}}):
         (ds / "verification.json").write_text(json.dumps({**good, **over}))
         with pytest.raises(ValueError, match="status unchanged"):
             V.flip_status(ds)
@@ -441,3 +445,37 @@ def test_the_command_needs_its_arguments_and_will_not_cache_inside_a_git_tree(tm
     assert not (REPO / "docs" / "nse_cache_probe").exists()
     with pytest.raises(SystemExit, match="no readable manifest.json and verification.json"):
         main(["ml", "verify", "--dataset", str(tmp_path), "--flip"])
+
+
+def test_nothing_is_shown_before_every_reference_is_in_so_a_void_cannot_follow_a_verdict(world):
+    ds, aeron, cache, fetch, yahoo, closes = world
+    shown = []
+
+    def flaky(sym, a, b):
+        if sym == "BANKNIFTY":
+            raise RuntimeError("429 too many requests")
+        return closes[sym][["high", "low", "close"]]
+    with pytest.raises(V.VoidRun, match="BANKNIFTY"):
+        V.run(ds, aeron, cache, flaky, fetch, shown.append)
+    assert not any("NIFTY A:" in str(x) or "NIFTY B:" in str(x) or "NIFTY C:" in str(x) for x in shown)        # no verdict (the NSE fetch lines are not verdicts)
+    assert not (ds / "verification.json").exists() and len(list(ds.glob("void_run_*.json"))) == 1
+
+
+def test_the_thresholds_are_the_ones_the_criteria_text_states():
+    t = (REPO / "docs" / "ml" / "P0_6_criteria.md").read_text()
+    assert (V.TOL_A["high"], V.TOL_A["low"], V.TOL_A["close"], V.TOL_C, V.GROSS) == (0.002, 0.002, 0.003, 0.001, 0.015)
+    assert (V.PASS_RATE, V.UNCOMPARED_MAX, V.ACCEPTED_FLOOR, V.MONTH_FLOOR, V.MONTH_MIN, V.MAX_RUN) == (0.95, 0.01, 0.97, 0.80, 10, 5)
+    assert (V.C_COVERAGE, V.CORR_SESSION, V.CORR_SHARE, V.CORR_MEDIAN, V.MIN_COMMON_MINUTES, V.MAX_404_SHARE) == (0.95, 0.95, 0.90, 0.98, 30, 0.10)
+    assert V.NEW_START == D(2023, 3, 1) and V.WINDOW_END == D(2026, 5, 15)
+    for needle in ("at least 500 sessions", "0.3%", "0.2%", "1.5%", "97%", "80%", "more than 5 consecutive", "0.95", "0.98", "10% of the weekdays", "ind_close_all_<DDMMYYYY>.csv"):
+        assert needle in t, needle
+
+
+def test_an_undefined_correlation_counts_against_the_median_too():
+    idx = pd.date_range("2024-01-01 09:15", periods=375, freq="min", tz="Asia/Kolkata")
+    rng = np.random.default_rng(1)
+    base = pd.DataFrame({"ts": idx, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100 + rng.normal(0, 1, 375).cumsum(), "volume": 1.0})
+    # a flat series has no defined correlation: with only such sessions the median must fail, not be skipped
+    flat = base.assign(close=100.0)
+    r = V.check_c(flat, flat)
+    assert any("median minute-return correlation" in x for x in r["reasons"]) and r["corr_undefined"] >= 1
