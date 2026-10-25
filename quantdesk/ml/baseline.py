@@ -5,25 +5,26 @@ better), keeps the sessions both have a finite loss for, and returns the out-of-
 minus baseline, so **negative is better**), a Newey-West interval for it, the level and method of that interval, and the number of sessions. The session is
 the unit (docs/ML_PHASE0.md, rule 3): losses are per session, never per decision, and the sessions must be ISO dates so that their order is time.
 
-The interval is the desk's own long-run-variance estimate (the same Bartlett-weighted sum as `autolearn.prereg.nw_t`, 5 lags by default) used with a normal
-quantile; with fewer than `min_sessions` sessions, or a difference that never varies, there is no honest interval and the function refuses rather than guess.
+The interval is the desk's own long-run-variance estimate (the same Bartlett-weighted sum as `autolearn.prereg.nw_t`, 5 lags by default) used with a Student-t
+quantile on n-1 degrees of freedom (the normal quantile is too narrow when the variance is estimated); with fewer than `min_sessions` sessions, or a difference that never varies, there is no honest interval and the function refuses rather than guess.
 Pure functions over plain dicts; nothing here reads the journal, the engine or any data.
 """
 from __future__ import annotations
 
 import math
+import numbers
 from datetime import date
 
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import t as student_t
 
 NW_LAGS = 5
-MIN_SESSIONS = 10
+MIN_SESSIONS = 60           # below this the 5-lag long-run variance is too noisy for a labelled 90% interval (simulated coverage of a nominal 90% interval with independent differences: 69% at 10 sessions, 87% at 60, 88% at 100, 90% at 250; 81% to 84% when the differences have an autocorrelation of 0.5)
 
 
 def _finite(x) -> bool:
     try:
-        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+        return isinstance(x, numbers.Real) and not isinstance(x, bool) and math.isfinite(x)
     except OverflowError:
         return False
 
@@ -70,11 +71,13 @@ def oos_block(model: dict, baseline: dict, metric: str, level: float = 0.9, lags
     m = np.array([p[1] for p in pairs], float)
     b = np.array([p[2] for p in pairs], float)
     _, se = newey_west(m - b, lags)
-    if not (se > 0):
+    scale = max(1.0, float(np.abs(m).mean()), float(np.abs(b).mean()))
+    if not (se > 1e-9 * scale) or float(np.std(m - b)) <= 1e-9 * scale:
         raise ValueError("the loss difference does not vary across sessions: there is no interval to give")
     mean_m, mean_b = float(m.mean()), float(b.mean())
     diff = mean_m - mean_b
-    z = float(norm.ppf((1 + level) / 2))
+    z = float(student_t.ppf((1 + level) / 2, n - 1))
+    used = min(lags, n - 1)
     return {"metric": metric, "model": mean_m, "baseline": mean_b, "diff": diff, "interval": [diff - z * se, diff + z * se], "interval_level": float(level),
-            "interval_method": f"Newey-West, {lags} lags, normal", "n_sessions": n, "t": diff / se,
+            "interval_method": f"Newey-West, {used} lags, Student-t on {n - 1} df (approximate: simulated coverage of a nominal 90% is 87% at 60 sessions, 88% at 100, 90% at 250 for independent differences, 81% to 84% at autocorrelation 0.5)", "n_sessions": n, "t": diff / se,
             "sessions_dropped_non_finite": len(both) - n, "sessions_unmatched": len(set(model) ^ set(baseline))}

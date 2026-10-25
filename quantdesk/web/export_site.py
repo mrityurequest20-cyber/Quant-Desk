@@ -110,7 +110,7 @@ def _setups_block(api, account: str) -> dict:
         d = api._dir(account)
         return SETUPS.block(d / "journal.db", d / "memory.json", _dt.datetime.now(SETUPS.IST).date())
     except Exception as exc:                                    # a digest line is never worth a missed publish
-        return {"line": None, "error": f"{type(exc).__name__}: {exc!s:.120}"}
+        return {"line": None, "error": type(exc).__name__}
 
 
 def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, live: bool = False,

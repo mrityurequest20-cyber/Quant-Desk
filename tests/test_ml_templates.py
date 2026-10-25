@@ -26,22 +26,43 @@ def test_the_template_has_its_seven_sections_in_order_and_says_to_commit_before_
     assert "before any result exists" in t and "experiments --check" in t
 
 
-def test_a_spec_written_from_the_template_is_new_to_the_research_memory(tmp_path):
-    """A draft whose keys are the template's fields, with a method nobody has registered."""
-    draft = {"name": "template_probe_v1", "registered": "2026-10-24",
-             "question": "does a made-up probe feature predict the 47 minute move better than the desk's forecaster",
-             "decision": {"may_change": "shrink a size only", "component": "M1"},
-             "target": {"definition": "realised variance over the next 47 minutes", "horizon_minutes": 47},
-             "baseline": {"name": "A_desk", "metric": "QLIKE", "decision_rule": "fails if the 90% interval for the difference contains 0.137"},
-             "data": {"tiers": ["T1"], "features": ["probe_feature_47"], "excluded": ["anything after the decision time"]},
-             "split": {"train": ["2013-01-01", "2018-12-31"], "validation": ["2019-01-01", "2019-12-31"], "locked_test": ["2020-01-01", "2020-12-31"], "purge_sessions": 3,
-                       "cutoff": "2019-12-31"},
-             "model": {"family": "ridge", "alpha_grid": [0.0731, 0.731, 7.31]}, "variants_tried": 3, "multiple_testing": "Holm",
-             "evidence": {"power_sessions": 211, "cost_stress": 2.0, "shadow_sessions": 37},
-             "kill": {"rule": "the 90% interval for the QLIKE difference includes 0.137"}}
+def _skeleton() -> dict:
+    t = SPEC_TEMPLATE.read_text()
+    m = re.search(r"```json\n(.*?)\n```", t, flags=re.S)
+    assert m, "the template carries no machine-readable skeleton"
+    return json.loads(m.group(1))
+
+
+def _fill(node, tag):
+    """Every `<placeholder>` string becomes a distinct concrete value, every zero a distinct number: a stand-in for an author filling the template in."""
+    if isinstance(node, dict):
+        return {k: _fill(v, f"{tag}.{k}") for k, v in node.items()}
+    if isinstance(node, list):
+        return [_fill(v, f"{tag}.{i}") for i, v in enumerate(node)]
+    if isinstance(node, str) and node.startswith("<"):
+        return f"probe {tag} 47 minutes 0.137"
+    if isinstance(node, (int, float)) and not isinstance(node, bool):
+        return node + 1 + (abs(hash(tag)) % 97) / 1000
+    return node
+
+
+def test_the_skeleton_in_the_template_has_a_field_for_each_of_the_seven_sections():
+    sk = _skeleton()
+    owner = {"question": 1, "decision": 1, "target": 2, "baseline": 2, "data": 3, "split": 4, "model": 5, "variants_tried": 5, "multiple_testing": 5, "evidence": 6, "kill": 7}
+    assert {k for k in sk if k not in ("name", "registered")} == set(owner)
+    assert set(owner.values()) == {1, 2, 3, 4, 5, 6, 7}
+    assert isinstance(sk["kill"]["threshold"], (int, float)) and "threshold" in sk["kill"]               # the number a spec can fail on is a number
+
+
+def test_a_spec_filled_in_from_the_template_is_new_to_the_research_memory(tmp_path):
+    """The draft is the template's own skeleton with its placeholders filled in, not a hand-built dict."""
+    draft = _fill(_skeleton(), "t")
+    draft["name"], draft["registered"] = "template_probe_v1", "2026-10-24"
+    assert "<" not in json.dumps(draft)                                                                    # nothing left unfilled
     r = check(draft, tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "new: no registered spec has this method" in r.stdout and "fingerprint" in r.stdout
+
 
 
 def test_a_reworded_copy_of_a_registered_spec_is_refused_as_the_same_experiment(tmp_path):

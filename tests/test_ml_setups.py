@@ -79,9 +79,11 @@ def test_progress_is_against_the_three_hundred_to_five_hundred_the_entry_filter_
 
 def test_the_digest_line_says_zero_when_there_is_nothing_and_names_what_it_did_not_count():
     zero = S.digest_line([], date(2026, 10, 24))
-    assert zero.startswith("Labelled setups: 0 this week (paper 0, replay 0, shadow 0); 0 in total from 0 sessions, 0% of the 300")
+    assert zero.startswith("Labelled setups: 0 this week from the Monday 2026-10-19 (paper 0, replay 0, shadow 0); 0 counted in total, from 0 sessions and 0 session-symbol pairs")
+    assert "not independent samples" in zero and "0% of the 300" in zero
     line = S.digest_line([setup(1), setup(2, outcome=float("inf"))], date(2026, 10, 28))
-    assert "1 this week (paper 1, replay 0, shadow 0); 1 in total from 1 sessions" in line and "1 record(s) failed validation and are not counted" in line
+    assert "1 this week from the Monday 2026-10-26 (paper 1, replay 0, shadow 0); 1 counted in total, from 1 sessions and 1 session-symbol pairs" in line
+    assert "1 record(s) failed validation and are not counted" in line
 
 
 def test_the_records_are_read_from_journal_events_of_the_one_category():
@@ -127,26 +129,65 @@ def test_closed_trades_with_a_finite_r_are_paper_setups_and_nothing_else_in_the_
     assert r6["ts"].endswith("+05:30") and r6["session"] == "2026-10-27" and r6["symbol"] == "BANKNIFTY" and r6["outcome"] == 0.4
     assert all(S.check_setup(r) == [] for r in recs)
     assert any("learning memory" in n for n in notes)                                                          # no memory file: replay setups are not counted, and it says so
+    stats = {}
+    S.from_journal(jp, mp, [], stats)
+    assert stats["trades_skipped"] == 2                                                                         # t4 and t5 are closed but carry no usable R: counted as skipped, not silently lost
 
 
 def test_the_digest_line_matches_the_journal(tmp_path):
     """P0.7's exit test: write known rows into a journal, and the published block counts exactly them."""
     detail = "the market reached its level: the EV gate refused it"
-    decisions = [("2026-10-26 09:50:00+05:30", "orb", "NIFTY", "rejected", 0, detail, "{}"),
-                 ("2026-10-26 10:20:00+05:30", "orb", "NIFTY", "rejected", 0, detail, "{}"),
-                 ("2026-10-27 09:50:00+05:30", "vwap_trend", "BANKNIFTY", "rejected", 0, detail, "{}"),
+    decisions = [("2026-10-26 13:00:00+05:30", "orb", "NIFTY", "rejected", 0, detail, "{}"),
+                 ("2026-10-26 14:20:00+05:30", "orb", "NIFTY", "rejected", 0, detail, "{}"),
+                 ("2026-10-27 13:50:00+05:30", "vwap_trend", "BANKNIFTY", "rejected", 0, detail, "{}"),
                  ("2026-10-27 11:00:00+05:30", "orb", "NIFTY", "rejected", 0, "another reason entirely", "{}"),      # not an armed-level refusal
                  ("2026-10-27 12:00:00+05:30", "orb", "NIFTY", "approved", 1, "approved", "{}")]
-    graded = ["2026-10-26 09:50:00+05:30|NIFTY|orb", "2026-10-27 09:50:00+05:30|BANKNIFTY|vwap_trend"]      # the memory graded two of the three refusals so far
+    graded = ["2026-10-26 13:00:00+05:30|NIFTY|orb", "2026-10-27 13:50:00+05:30|BANKNIFTY|vwap_trend"]      # the memory graded two of the three refusals so far
     trades = [("t1", "orb", "NIFTY", "closed", "2026-10-26 09:45:00+05:30", "2026-10-26 11:10:00+05:30", 1.2),
               ("t2", "orb", "NIFTY", "closed", "2026-10-27 10:00:00+05:30", "2026-10-27 10:40:00+05:30", -1.0)]
     jp, mp = make_journal(tmp_path, trades=trades, decisions=decisions, graded=graded)
     b = S.block(jp, mp, date(2026, 10, 28))
     assert b["total"] == 4 and b["by_source"] == {"paper": 2, "replay": 2, "shadow": 0} and b["this_week"] == 4 and b["sessions"] == 2 and b["invalid"] == 0
-    assert b["line"].startswith("Labelled setups: 4 this week (paper 2, replay 2, shadow 0); 4 in total from 2 sessions") and b["notes"] == []
+    assert b["line"].startswith("Labelled setups: 4 this week from the Monday 2026-10-26 (paper 2, replay 2, shadow 0); 4 counted in total, from 2 sessions and 3 session-symbol pairs")
+    assert b["notes"] == [] and b["replay_collapsed"] == 0
     assert b["week_start"] == "2026-10-26" and b["target"] == [300, 500]
     jp2, mp2 = make_journal(tmp_path / "empty" if (tmp_path / "empty").mkdir() is None else tmp_path, graded=[])
     assert S.block(jp2, mp2, date(2026, 10, 28))["total"] == 0
+
+
+def test_one_idea_re_armed_every_minute_or_fired_as_a_trade_counts_once(tmp_path):
+    detail = "reached its level"
+    minutes = ["10:10", "10:11", "10:12", "10:13", "10:14"]                                                    # the engine re-arms the same ORB level each minute
+    decisions = [(f"2026-10-26 {m}:00+05:30", "orb", "NIFTY", "rejected", 0, detail, "{}") for m in minutes]
+    decisions += [("2026-10-26 11:30:00+05:30", "orb", "NIFTY", "rejected", 0, detail, "{}"),                  # the same level again, but its window had closed: a new setup
+                  ("2026-10-26 10:12:00+05:30", "orb", "BANKNIFTY", "rejected", 0, detail, "{}"),               # another symbol: its own setup
+                  ("2026-10-26 14:00:00+05:30", "vwap_trend", "NIFTY", "rejected", 0, detail, "{}")]           # fired later as a paper trade 10 minutes after: counted there only
+    graded = [f"{d[0]}|{d[2]}|{d[1]}" for d in decisions]
+    trades = [("t1", "vwap_trend", "NIFTY", "closed", "2026-10-26 14:10:00+05:30", "2026-10-26 14:50:00+05:30", 0.8)]
+    jp, mp = make_journal(tmp_path, trades=trades, decisions=decisions, graded=graded)
+    stats = {}
+    recs = S.from_journal(jp, mp, [], stats)
+    replay = sorted((r["symbol"], r["ts"][11:16]) for r in recs if r["source"] == "replay")
+    assert replay == [("BANKNIFTY", "10:12"), ("NIFTY", "10:10"), ("NIFTY", "11:30")]
+    assert sum(1 for r in recs if r["source"] == "paper") == 1 and stats["replay_collapsed"] == 5               # four re-arms of the 10:10 level, plus the 14:00 refusal that became the 14:10 trade
+
+
+def test_a_count_that_could_not_be_read_is_not_shown_as_zero(tmp_path):
+    bad = tmp_path / "bad.db"
+    bad.write_bytes(b"this is not a sqlite file at all")
+    b = S.block(bad, tmp_path / "m.json", date(2026, 10, 28))
+    assert b["line"].startswith("Labelled setups: not available (") and "0 this week" not in b["line"]
+    assert S.block(tmp_path / "missing.db", tmp_path / "m.json", date(2026, 10, 28))["line"] == "Labelled setups: not available (no journal at missing.db)."
+    jp, mp = make_journal(tmp_path / "ok" if (tmp_path / "ok").mkdir() is None else tmp_path,
+                          trades=[("t1", "orb", "NIFTY", "closed", "2026-10-26 09:45:00+05:30", "2026-10-26 11:10:00+05:30", 1.0)])
+    part = S.block(jp, mp, date(2026, 10, 28))                                                                 # a readable journal, an unreadable memory: counted, and says what is missing
+    assert part["total"] == 1 and "Not fully counted: the learning memory could not be read" in part["line"]
+
+
+def test_the_week_is_the_week_in_india_whatever_zone_the_stamp_is_in():
+    r = {"setup_id": "x", "source": "paper", "symbol": "NIFTY", "session": "2026-10-25", "ts": "2026-10-25T17:00:00+00:00", "labelled_at": "2026-10-25T19:00:00+00:00", "outcome": 1.0}
+    c = S.count([r], date(2026, 10, 28))                      # 19:00 UTC on Sunday is 00:30 on Monday 26 Oct in India
+    assert c["this_week"] == 1 and list(c["by_week"]) == ["2026-10-26"]
 
 
 def test_a_replay_setup_is_labelled_when_its_window_closes_not_when_it_was_graded(tmp_path):
@@ -163,14 +204,14 @@ def test_an_unreadable_journal_or_memory_gives_a_count_and_a_note_not_an_error(t
     bad = tmp_path / "bad.db"
     bad.write_bytes(b"this is not a sqlite file at all")
     notes = []
-    assert S.from_journal(bad, tmp_path / "m.json", notes) == [] and notes and "journal" in notes[0]
+    assert S.from_journal(bad, tmp_path / "m.json", notes) == [] and notes and "journal" in notes[0] and "this is not" not in notes[0]
     jp, mp = make_journal(tmp_path / "ok" if (tmp_path / "ok").mkdir() is None else tmp_path)
     mp.write_text("{not json")
     notes = []
     S.from_journal(jp, mp, notes)
-    assert any("learning memory not readable" in n for n in notes)
+    assert any("learning memory could not be read" in n for n in notes)
     b = S.block(bad, mp, date(2026, 10, 28))
-    assert b["total"] == 0 and b["line"].startswith("Labelled setups: 0 this week")
+    assert b["total"] == 0 and b["line"].startswith("Labelled setups: not available")
 
 
 def test_the_journal_is_opened_read_only(tmp_path):
@@ -194,4 +235,4 @@ def test_the_site_export_publishes_the_block_and_never_fails_the_publish(tmp_pat
     b = E._setups_block(Api(tmp_path), "live")
     assert b["total"] == 1 and b["line"].startswith("Labelled setups:") and "error" not in b
     boom = E._setups_block(object(), "live")                                          # an api with no _dir: the block says what went wrong
-    assert boom["line"] is None and "AttributeError" in boom["error"]
+    assert boom["line"] is None and boom["error"] == "AttributeError"                  # the class name only: this block goes on a public site
