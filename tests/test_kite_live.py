@@ -469,7 +469,7 @@ def test_a_jump_in_the_live_price_is_believed_only_if_the_wrapped_feed_agrees():
     clock.set("2026-10-26 10:00:30")
     ws.on_ticks(ws, [tick(1, 26500.0, "2026-10-26 10:00:29")])                                 # 6% from the last served close
     assert f.ltp(["NIFTY"]) == {"NIFTY": 1.0}                                                   # the wrapped feed says 1.0: the tick is not believed, the wrapped feed answers
-    assert f.served["rejected"] == 1
+    assert f.served["ltp_rejected"] == 1 and f.served["rejected"] == 0                          # counted apart from rejected minutes (E4's numerator)
     inner.ltp = lambda syms: {s: 26490.0 for s in syms}                                         # the wrapped feed agrees (within 0.5%): a real move
     assert f.ltp(["NIFTY"]) == {"NIFTY": 26500.0}
     ws.on_ticks(ws, [tick(1, 25010.0, "2026-10-26 10:00:31")])                                  # an ordinary move: no second opinion asked
@@ -583,12 +583,13 @@ def test_kite_served_minutes_are_kept_out_of_the_recorder_by_the_engine(cfg, tmp
 
     class Rec:
         def __init__(self):
-            self.rows = []
+            self.rows, self.filled = [], []
 
         def record_bars(self, sym, df):
             self.rows.append((sym, df))
 
-        def fill_bars(self, *a):
+        def fill_bars(self, sym, df):
+            self.filled.append((sym, df))
             return 0
 
         def __getattr__(self, name):
@@ -601,6 +602,10 @@ def test_kite_served_minutes_are_kept_out_of_the_recorder_by_the_engine(cfg, tmp
 
         def _all_index(self, sym):
             return [t for df in self._seen.get(sym, []) for t in df.index]
+
+        def history(self, symbol, days=5):                           # like the real feeds, today's bars up to now are in the history (ReplayFeed's is prior sessions only)
+            df = self.bars.get(symbol)
+            return df[df.index <= self.now()] if df is not None else pd.DataFrame(columns=KL.COLUMNS)
 
         def poll(self, symbol, since):
             out = super().poll(symbol, since)
@@ -615,6 +620,8 @@ def test_kite_served_minutes_are_kept_out_of_the_recorder_by_the_engine(cfg, tmp
     recorded = [t for sym, df in rec.rows if "-FUT" not in sym for t in df.index]
     assert recorded and not any(t.hour == 10 for t in recorded)                                  # nothing the feed flagged reached the recorder
     assert any(t.hour == 11 for t in recorded) or any(t.hour == 12 for t in recorded)           # and everything else did
+    filled = [t for sym, df in rec.filled for t in df.index]
+    assert any(t.hour == 10 for t in filled)                                                    # the other feeds' own history fills the holes, so the chart and the loader see a whole day
 
 
 def test_the_token_command_exists_exchanges_with_the_data_names_and_never_prints_the_token(tmp_path, monkeypatch, capsys):

@@ -228,8 +228,11 @@ class KiteBackedFeed:
             self.served["fallback"] += 1
             out = self._inner.poll(symbol, since)
         if out is not None and len(out):
-            self._last_close[symbol] = float(out["close"].iloc[-1])
-            self._count_late(symbol, out)
+            try:
+                self._last_close[symbol] = float(out["close"].iloc[-1])
+                self._count_late(symbol, out)
+            except Exception as exc:                                   # bookkeeping: never the engine's problem
+                self.last_error = type(exc).__name__
         return out
 
     def _count_late(self, symbol, out) -> None:
@@ -372,7 +375,7 @@ class KiteBackedFeed:
             syms[sym] = {"age_s": round((now - ts).total_seconds(), 1) if ts is not None else None}
         c = self.served
         return {"attached": True, "connected": bool(self.live.connected), "live": bool(self.live.healthy()), "polls": int(c["polls"]), "kite_polls": int(c["kite"]),
-                "fallback_polls": int(c["fallback"]), "sampled_polls": int(c["sampled"]), "late_minutes": int(c["late_minutes"]), "late_flat": int(c["late_flat"]), "minutes": int(c["minutes"]), "compared": int(c["compared"]), "rejected": int(c["rejected"]), "faults": int(c["kite_faults"]),
+                "fallback_polls": int(c["fallback"]), "sampled_polls": int(c["sampled"]), "late_minutes": int(c["late_minutes"]), "late_flat": int(c["late_flat"]), "minutes": int(c["minutes"]), "compared": int(c["compared"]), "rejected": int(c["rejected"]), "ltp_rejected": int(c["ltp_rejected"]), "faults": int(c["kite_faults"]),
                 "dropped": dict(self.live.dropped), "symbols": syms, "last_error": self.last_error[:60]}
 
     def ltp(self, symbols):
@@ -393,7 +396,7 @@ class KiteBackedFeed:
             if last and abs(p - last) / last > MAX_DISAGREE:           # a jump from the last served close: believed only if the wrapped feed's price agrees
                 fb = (self._inner.ltp([s]) or {}).get(s) if hasattr(self._inner, "ltp") else None
                 if not fb or abs(p - fb) / fb > MAX_DISAGREE:
-                    self.served["rejected"] += 1
+                    self.served["ltp_rejected"] += 1                   # apart from `rejected`, which is minutes only (E4's numerator)
                     continue
             out[s] = p
         missing = [s for s in symbols if s not in out]

@@ -321,8 +321,24 @@ class IntradayEngine:
         except Exception as exc:                                  # a recorder fault must never stop the session starting
             log.warning("recorder backfill %s: %s", sym, exc)
 
+    def _fill_recorder_gaps(self, now, force: bool = False) -> None:
+        """Minutes served from Kite are kept out of the recorder (its licence), so the day's 1-minute file would have holes that the chart and the learning loader read. Every 30
+        minutes, and once more at the close, the other feeds' own history for today fills exactly the minutes the file lacks (`fill_bars` adds nothing that is already there)."""
+        if self.recorder is None or self.day is None or not hasattr(type(self.feed), "unrecorded"):
+            return
+        last = getattr(self, "_gap_fill_at", None)
+        if not force and last is not None and now - last < pd.Timedelta(minutes=30):
+            return
+        self._gap_fill_at = now
+        for sym in self.underlyings + [self.vix]:
+            try:
+                self._backfill_recorder(sym, self.feed.history(sym, 2), self.day)
+            except Exception as exc:                                  # a data nicety: never the session's problem
+                log.warning("recorder gap fill %s: %s", sym, exc)
+
     def step(self) -> bool:
         now = self.feed.now()
+        self._fill_recorder_gaps(now)
         self._commands(now)
         self._kill_switch(now)
         got = False
@@ -468,6 +484,7 @@ class IntradayEngine:
         return self._close(t, now, *t.meta["exit_pending"])
 
     def end_session(self, reason: str = "square_off", note: str = "end of session") -> str:
+        self._fill_recorder_gaps(self.feed.now(), force=True)
         now = self.feed.now()
         for u in {t.symbol for t in self.open_trades} - set(self.chain_df):
             self._refresh_chain(u, now)                 # exits priced off a calibrated chain, never a default IV
@@ -1822,7 +1839,8 @@ class IntradayEngine:
                                         "mark": marks[l.instrument.symbol]} for l in t.legs],
                               "rationale": t.rationale[:600]})
         data = self._data_status(now)
-        if now.minute % 5 == 0 and isinstance(data, dict) and isinstance(data.get("kite"), dict):
+        if now.minute % 5 == 0 and getattr(self, "_counter_event_at", None) != now.floor("min") and isinstance(data, dict) and isinstance(data.get("kite"), dict):
+            self._counter_event_at = now.floor("min")
             try:                                                    # the Kite feed's counters outlive this process (the morning and the afternoon runner each start from zero): docs/ml/KITE_TRIAL.md reads them from here
                 self.journal.event(now, "INFO", "feed", "kite feed counters " + json.dumps({k: v for k, v in data["kite"].items() if k != "symbols"}, sort_keys=True))
             except Exception:
