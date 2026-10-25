@@ -45,6 +45,10 @@ MIN_SESSIONS, PASS_RATE, UNCOMPARED_MAX, ACCEPTED_FLOOR = 500, 0.95, 0.01, 0.97
 MONTH_FLOOR, MONTH_MIN, MAX_RUN = 0.80, 10, 5
 C_COVERAGE, CORR_SESSION, CORR_SHARE, CORR_MEDIAN, MIN_COMMON_MINUTES = 0.95, 0.95, 0.90, 0.98, 30
 MAX_404_SHARE = 0.10
+PRIOR_EXPOSURE = ("On 2026-10-25, before the counted run, the engineer rehearsed this code on a copy of the real Kaggle dataset with SYNTHETIC Yahoo and NSE references built from the dataset's "
+                  "own bars (code identical to commit a76684bf of ml-p06-verify2). Check C compares two local datasets, so it necessarily ran against the real aeron7 data (manifest sha256 "
+                  "d149dc29…): NIFTY C passed, BANKNIFTY C failed only the month rule (2020-03, 79% agreeing). No rule, threshold or verifier logic was changed because of it, and the "
+                  "rehearsal's files were deleted. The counted run is therefore not blind for C; A and B had not been seen against any real reference. Any later criteria v2 is post hoc.")
 SCOPE = {"new_window": "2023-03-01 to 2026-05-15: the DAILY ENVELOPE only (high, low, close against Yahoo; close against NSE's official file). Nothing independent checks minute timestamps "
                        "or the intraday path in this window. B is nearly the same quantity as A's close (Yahoo's index data derive from NSE's), so it is not a second vendor.",
          "overlap": "sessions also in the verified aeron7 data (to Feb 2023): daily envelope to 0.1% and 1-minute return correlation. This is consistency with aeron7, not independent accuracy: "
@@ -422,9 +426,16 @@ def _write_once(path: Path, obj) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(obj, indent=1, default=str, sort_keys=True))
     try:
-        os.link(tmp, path)                                          # fails if `path` exists
-    except FileExistsError as exc:
-        raise AlreadyChecked(f"{path} appeared while this run was computing: this check is run once") from exc
+        try:
+            os.link(tmp, path)                                      # fails if `path` exists
+        except FileExistsError as exc:
+            raise AlreadyChecked(f"{path} appeared while this run was computing: this check is run once") from exc
+        except OSError:                                             # a filesystem without hard links: exclusive create still refuses an existing file
+            try:
+                with open(path, "x") as fh:
+                    fh.write(tmp.read_text())
+            except FileExistsError as exc:
+                raise AlreadyChecked(f"{path} appeared while this run was computing: this check is run once") from exc
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -460,6 +471,9 @@ def run(ds: Path, aeron_ds: Path, cache: Path, yahoo=yahoo_daily, fetch=http_fet
                                                    "void": f"{type(exc).__name__}: {exc!s:.300}", "at": stamp})
         raise exc if isinstance(exc, VoidRun) else VoidRun(f"{type(exc).__name__}: {exc!s:.200}") from exc
     _write_once(vp, rec)
+    for sym in SYMBOLS:                                             # shown only once the record exists: a verdict is never seen before it is final
+        for k, v in rec["symbols"][sym].items():
+            say(f"  {sym} {k}: " + ("pass" if v["passed"] else "FAIL " + "; ".join(v["reasons"])))
     return rec
 
 
@@ -474,7 +488,7 @@ def _run(ds, aeron_ds, man, ref_man, cache, yahoo, fetch, say, ea) -> dict:
     nse_days = set(wdays) - set(no_file)
     ref_hashes = reference_files(nse, files, Path(cache))
     rec = {"check": CHECK, "criteria_sha256": pinned_criteria_sha256(), "dataset": man["dataset"], "digest": man["digest"], "code": intake.code_commit(),
-           "scope": SCOPE, "references": {"yahoo": f"Yahoo Finance daily OHLC (^NSEI, ^NSEBANK), yfinance {_yf_version()}, auto_adjust=False, fetched {pd.Timestamp.now(tz=intake.IST).date()}",
+           "scope": SCOPE, "prior_exposure": PRIOR_EXPOSURE, "references": {"yahoo": f"Yahoo Finance daily OHLC (^NSEI, ^NSEBANK), yfinance {_yf_version()}, auto_adjust=False, fetched {pd.Timestamp.now(tz=intake.IST).date()}",
                                           "nse": {"source": NSE_URL, "files": len(files), "days_without_a_file": [str(d) for d in no_file],
                                                   **ref_hashes, "file_hashes": files},
                                           "aeron7": {"dataset": ref_man["dataset"], "manifest_sha256": AERON_MANIFEST_SHA256, "source_commit": ref_man.get("source_commit")}},
@@ -496,9 +510,6 @@ def _run(ds, aeron_ds, man, ref_man, cache, yahoo, fetch, say, ea) -> dict:
         od = daily(loaded[sym])
         days = accepted[sym]
         rec["symbols"][sym] = {"A": check_a(od, yd[sym], days, nse_days), "B": check_b(od, nse[sym], days, nse_days), "C": check_c(loaded[sym], refs[sym])}
-    for sym in SYMBOLS:
-        for k, v in rec["symbols"][sym].items():
-            say(f"  {sym} {k}: " + ("pass" if v["passed"] else "FAIL " + "; ".join(v["reasons"])))
     rec["D"] = check_d(man, loaded)
     for sym, checks in rec["symbols"].items():
         rec["reasons"] += [f"{sym} {r}" for v in checks.values() for r in v["reasons"]]

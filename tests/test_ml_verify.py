@@ -785,3 +785,24 @@ def test_a_failed_integrity_check_fails_the_record_and_leaves_no_licence(world, 
     monkeypatch.setattr(V, "check_d", lambda *_: {"passed": False, "reasons": ["D: planted"]})
     rec = V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
     assert not rec["passed"] and rec["symbols_verified"] == [] and "D: planted" in rec["reasons"]
+
+
+def test_the_record_carries_the_rehearsal_disclosure_and_the_verdict_is_shown_only_after_it_is_written(world, monkeypatch):
+    ds, aeron, cache, fetch, yahoo, _ = world
+    seen = []
+
+    def say(x):
+        if "NIFTY A:" in str(x):
+            seen.append(((ds / "verification.json").exists(), str(x)))
+    rec = V.run(ds, aeron, cache, yahoo, fetch, say)
+    assert "SYNTHETIC" in rec["prior_exposure"] and "not blind for C" in rec["prior_exposure"] and "post hoc" in rec["prior_exposure"]
+    assert seen and all(existed for existed, _ in seen)                                                    # the file was already there when the verdict was printed
+
+
+def test_the_exclusive_write_still_refuses_when_hard_links_are_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(V.os, "link", lambda *a, **k: (_ for _ in ()).throw(OSError("no hard links here")))
+    V._write_once(tmp_path / "r.json", {"a": 1})
+    assert json.loads((tmp_path / "r.json").read_text()) == {"a": 1}
+    with pytest.raises(V.AlreadyChecked):
+        V._write_once(tmp_path / "r.json", {"a": 2})
+    assert json.loads((tmp_path / "r.json").read_text()) == {"a": 1} and not list(tmp_path.glob(".r.json.*"))
