@@ -88,6 +88,11 @@ Target: Phase 0 done by **mid November**, as the ML roadmap says. If it slips, s
   gamma flip, wall dynamics, concentration, quote microstructure, volume, term, forward and skew) are recorded from the first session, exploratory: described, never tested for
   significance. A feed fault (OI above 1e12 or negative, about 1.1% of snapshots) quarantines the whole snapshot, never clipped. Tests: the module's 98-test file with every
   feature's expected value computed independently; mutation runs of 145 mutants (82 on the OI features, 63 on the advanced ones), the survivors being equivalent mutants.
+- **P0.5 built** (`ml/modelcard.py`, `ml/events.py`, `python -m quantdesk ml card --run <run.json>`, `docs/ml/PREDICTION_EVENT.md`): a model card that refuses to build without its provenance
+  (spec hash, a full 40-hex code commit, data manifests and digests by tier, a training window that ends on or before the cut-off, settings and seed, variants tried, baseline,
+  an out-of-sample result whose interval contains its difference, leakage tests, status); it is written once per version and is tamper-evident (digest). Status is offline, shadow or
+  applied, and `applied` needs the owner's recorded switch. A rolling grade and an automatic demotion that only tightens. The prediction/outcome journal events are design only:
+  validated and mapped to the journal call, imported by nothing in the engine. The registry in `autolearn/registry.py` is not duplicated.
 
 ## Data tiers
 
