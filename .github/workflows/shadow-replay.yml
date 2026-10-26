@@ -1,0 +1,82 @@
+# Shadow setup replay (quantdesk/shadow): offline, read-only, never trades. Replays a date range through the desk's own
+# detectors on archived minutes and writes shadow-setups-YYYYQn.parquet to a release. Manual only (no schedule yet).
+# It reads the already-archived option-minutes releases and the journal branch's recorded bars with the default token, so it
+# needs no secret. The live ceilings are only evaluated, never changed.
+name: Shadow replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "From date (YYYY-MM-DD)"
+        required: true
+      end:
+        description: "To date (YYYY-MM-DD)"
+        required: true
+      instruments:
+        description: "all | indices | stocks | comma list"
+        default: "all"
+      push:
+        description: "Push the shards to releases shadow-setups-YYYYQn (true | false)"
+        default: "false"
+
+permissions:
+  contents: write            # create and upload to the shadow-setups-YYYYQn releases (as chain-archive.yml)
+
+concurrency:
+  group: shadow-replay       # its own group: it must never queue behind, or hold up, the live desk
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+      GH_TOKEN: ${{ github.token }}
+      START: ${{ inputs.start }}
+      END: ${{ inputs.end }}
+      INSTRUMENTS: ${{ inputs.instruments }}
+      PUSH: ${{ inputs.push }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        continue-on-error: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        continue-on-error: true
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        continue-on-error: true
+        run: pip install -r requirements.txt
+      - name: Recorded bars from the journal branch (read-only)
+        continue-on-error: true
+        run: |
+          mkdir -p runtime
+          git fetch -q --depth 1 origin journal && git archive FETCH_HEAD intraday/data | tar -x -C runtime \
+            || echo "::warning::no recorded bars from the journal branch"
+      - name: Data-quality report
+        continue-on-error: true
+        run: |
+          python -m quantdesk shadow quality --from "$START" --to "$END" --instruments "$INSTRUMENTS" \
+            --pull option-minutes | tee quality.txt || echo "::warning::quality report failed"
+      - name: Replay
+        continue-on-error: true
+        run: |
+          flag=""; [ "$PUSH" = "true" ] && flag="--release"
+          python -m quantdesk shadow replay --from "$START" --to "$END" --instruments "$INSTRUMENTS" \
+            --pull option-minutes --out _shadow $flag | tee replay.txt || echo "::warning::shadow replay failed"
+      - name: Summary
+        if: always()
+        continue-on-error: true
+        run: |
+          { echo "## Shadow replay"; echo '```'; tail -n 80 replay.txt 2>/dev/null || echo "no output"; echo '```';
+            echo "## Data quality"; echo '```'; head -n 60 quality.txt 2>/dev/null || echo "no output"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        continue-on-error: true
+        with:
+          name: shadow-setups
+          path: _shadow
+          if-no-files-found: ignore
