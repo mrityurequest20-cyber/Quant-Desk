@@ -1,7 +1,7 @@
 # P0.6 criteria: the independent check of the Kaggle index minutes (version 2)
 
 Committed **alone, before any verifier change and before any A or B result** (check C had been rehearsed on 25 Oct, see "Prior exposure"). This is `P0_6_criteria_v2.md`; `P0_6_criteria.md` (version 1) is untouched and stays as merged.
-**Version 2 is identical to version 1 in every rule, number and threshold except one reference-file rule, stated in "The one changed rule" below; "Wording corrected from version 1" separately lists three sentences of version 1 reworded to match the reviewed verifier, none of which changes a gate.** It was written after a **void**
+**Version 2 changes one rule of version 1, the reference-file date rule, stated in "The one changed rule" below, and no number or threshold. "Wording corrected from version 1" separately lists three sentences of version 1 reworded to match the reviewed verifier, which already behaves as the new words say; one of them changes the written condition for an undefined minute-return correlation from "fewer than 30 common minutes" to "fewer than 30 return pairs from consecutive common minutes". None changes a gate of the verifier.** It was written after a **void**
 version 1 run, not after a failed one: that run produced no comparison of any kind, so **no result of the dataset against Yahoo or NSE (checks A and B) and no result of the
 version 1 run existed when this file was written**. That is not the same as the engineer having no earlier information; see "Prior exposure" below, which says what was known.
 Edit this file after a result and the check is void: a changed rule is a new file.
