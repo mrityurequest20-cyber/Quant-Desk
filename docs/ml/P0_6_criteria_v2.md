@@ -1,7 +1,7 @@
 # P0.6 criteria: the independent check of the Kaggle index minutes (version 2)
 
 Committed **alone, before any verifier change and before any A or B result** (check C had been rehearsed on 25 Oct, see "Prior exposure"). This is `P0_6_criteria_v2.md`; `P0_6_criteria.md` (version 1) is untouched and stays as merged.
-**Version 2 is identical to version 1 in every rule, number and threshold except one reference-file rule, stated in "The one changed rule" below.** It was written after a **void**
+**Version 2 is identical to version 1 in every rule, number and threshold except one reference-file rule, stated in "The one changed rule" below; "Wording corrected from version 1" separately lists three sentences of version 1 reworded to match the reviewed verifier, none of which changes a gate.** It was written after a **void**
 version 1 run, not after a failed one: that run produced no comparison of any kind, so **no result of the dataset against Yahoo or NSE (checks A and B) and no result of the
 version 1 run existed when this file was written**. That is not the same as the engineer having no earlier information; see "Prior exposure" below, which says what was known.
 Edit this file after a result and the check is void: a changed rule is a new file.
@@ -16,7 +16,7 @@ outcome says so.
   for 2023-04-06 and logged `void_run_20261030T134834279524.json` (`VoidRun: NSE file for 2023-04-06 says Index Date 2023-06-04`). It compared nothing: no dataset value was
   read against any reference, so no result exists. That is a void by the version 1 rule ("a run is void only on an exception or HTTP error raised by the code").
 - The cause is a defect **inside NSE's own archive**: that file's `Index Date` field reads `04-06-2023`, the file's date with day and month swapped. Version 1 says such a file
-  "is an error", so version 1 can **never** complete: the file will always be mislabelled and a rerun with the same rules voids at the same file.
+  "is an error", so while the archive stays as it was on 30 Oct 2026 version 1 **cannot complete**: a rerun with the same rules voids at the same file. NSE could correct the file later (version 2 therefore accepts zero swapped files); the engineer does not wait for that, because the run is one counted run and the owner chose version 2.
 - **Before writing this file, the engineer scanned the reference files only** (not the dataset): all 838 weekdays from 2023-03-01 to 2026-05-15, comparing each file's `Index Date`
   with its name. 51 answered HTTP 404 (6.1%). Of the other 787, **exactly three files** carry a swapped label, on both index rows each: 2023-04-06 (`04-06-2023`), 2023-04-10
   (`04-10-2023`) and 2023-04-11 (`04-11-2023`); no file has any other date problem, a missing row or a bad format. Nothing about how the dataset compares with any reference
@@ -90,14 +90,14 @@ quantity as A's close** (Yahoo's index data derive from NSE's), so it adds prote
 Kaggle-accepted (the reverse direction is reported, not gating; aeron7 is not a trading calendar). Daily high, low and close agree to **0.1%** (tighter than A: two minute vendors
 should agree to a few basis points; the close rule above is not used here, both sides are last prints); at least **95%** agree; no gross error; the month rule
 and the run rule of A apply. And the correlation of 1-minute log returns, **taken only between consecutive minutes present in both series**, is at least 0.95 in
-at least **90%** of common sessions and at least 0.98 at the median session; an undefined correlation (fewer than 30 common minutes) counts as a failure. A
+at least **90%** of common sessions and at least 0.98 at the median session; an undefined correlation (fewer than 30 one-minute return pairs from consecutive common minutes; see "Wording corrected from version 1") counts as a failure. A
 one-minute labelling shift would drive this to about zero, which is the point. **C shows consistency with aeron7, not independent accuracy:** the two vendors
 may share an upstream feed, and aeron7 was itself checked only on 80-session samples.
 
 **D. Integrity only (not evidence).** The manifest digest recomputes, partitions hash to the manifest and the accepted-session list matches the minutes loaded.
 The loader already enforces this; it is listed so a failure is on the record.
 
-**Information only (never gating).** The record lists, per symbol, the sessions in `review` and `rejected` with counts, and runs A and B on them. It reports
+**Information only (never gating).** The record lists, per symbol, the sessions in `review` and `rejected` with counts, and does not run A and B on them (see "Wording corrected from version 1"). It reports
 `accepted_reviewed` sessions separately: if a reviewer's evidence cited Yahoo or NSE, they are not independent of A and B. Admitting a session after the run
 changes the manifest digest and voids the record.
 
@@ -106,15 +106,28 @@ changes the manifest digest and voids the record.
 - **Scope of the claim:** NIFTY and BANKNIFTY. In the **new window** only the **daily envelope** (high, low, close) is independently checked; nothing independent
   checks minute timestamps or the intraday path after Feb 2023. In the **overlap** the daily envelope and 1-minute returns agree with aeron7. Any study quoting the
   label `external_verified` states this scope. The record carries `symbols_verified` and `scope` fields saying so.
-- **The status label is dataset-wide today** (`intake.effective_status`). The record therefore cannot flip the manifest to `external_verified` until the loader
-  returns `external_unverified` for any symbol not in `symbols_verified` and checks this file's sha256 (`criteria_sha256`). That loader change is a separate,
-  independently reviewed, tighten-only change, merged first. It must also treat a record **without** `symbols_verified` or `criteria_sha256` as unverified for
-  every symbol (the manifest status is outside the digest and a hand edit of it must not make a record dataset-wide verified), and it compares
-  `criteria_sha256` with the sha256 of this file as merged. Until then a pass writes `verification.json` but leaves the manifest `external_unverified`. After the
-  loader change merges, flipping the manifest status is a **status-only step** that copies `passed` from the existing record; it is not a second run and re-compares
-  nothing.
+- **The status label and the loader.** The manifest `status` is dataset-wide and sits outside the digest, so it is not evidence by itself. `intake.effective_status` (merged with the
+  version 1 verifier) already returns `external_unverified` for any symbol not in the record's `symbols_verified`, treats a record **without** `symbols_verified` or `criteria_sha256`
+  as unverified for every symbol, and accepts a record only when its `check` is registered in `intake.VERIFICATION_CRITERIA` and its `criteria_sha256` equals the pinned hash. No new
+  loader logic is needed. What remains for version 2 is a separate, independently reviewed, tighten-only change that registers `p06-v2` in `VERIFICATION_CRITERIA` with the sha256 of this
+  file **as merged**, and updates the verifier (the pinned-criteria check, `date_label_swapped`, `supersedes`, `post_hoc`, the void-log sha256, `PRIOR_EXPOSURE` carried verbatim) and the
+  status-only flip to emit and accept a `p06-v2` record. Until then a pass writes `verification.json` but leaves the manifest `external_unverified`. After that change merges, flipping the
+  manifest status is a **status-only step** that copies `passed` from the existing record; it is not a second run and re-compares nothing.
 - Index minutes are not option-chain, bid/ask, IV or execution data and cannot qualify an option strategy, a DTE change, the paper gate, a promotion or a
   profitability claim, whatever this check says.
+
+## Wording corrected from version 1
+
+Three sentences of version 1 do not describe what the merged verifier (`quantdesk/ml/verify.py` at `8220039`) does, and version 2 states what it does. None changes a gate number or loosens a rule; the
+verifier is not changed by this file.
+
+- **Minute-return correlation, undefined.** Version 1 says "fewer than 30 common minutes". The verifier computes the correlation only between consecutive minutes present in both series and calls it
+  undefined (a failure) when it has **fewer than 30 such return pairs** (`MIN_COMMON_MINUTES = 30`, counted in pairs). A session with exactly 30 common minutes has at most 29 pairs, so the verifier is
+  stricter than version 1's words by at most one minute.
+- **Information only.** Version 1 says the record "runs A and B on" the `review` and `rejected` sessions. The verifier **lists** them (`info_only`: counts and days, per symbol) and does not compare them:
+  the loader builds the partitions from `accepted` and `accepted_reviewed` sessions only. Nothing gated on that run, so no pass or fail changes; the information version 1 promised is simply not produced.
+- **The record file name.** Version 1 and the verifier write `verification.json` and refuse to run while it, or `verification_<check>.json`, exists. Version 1's phrase "kept as `verification_p06-v1.json`"
+  means the record is moved to that name before a later criteria file runs; version 2 says so in "After a failure".
 
 ## Not done, and why
 
@@ -135,6 +148,7 @@ changes the manifest digest and voids the record.
 
 ## After a failure
 
-If a failure looks benign, the next step is a new criteria file written after it, committed before any rerun. The record of this run is kept as `verification_p06-v2.json` and never
-overwritten. Any quote of the verified label states that version 2 was written after a void version 1 run, before any comparison of A or B, for the one reason given above, that it
+If a failure looks benign, the next step is a new criteria file written after it, committed before any rerun. The record of this run is `verification.json` (see "Outcome and one run"). Before any later
+criteria file is run, that record is **moved, not overwritten,** to `verification_p06-v2.json` (the verifier refuses to run while either file exists), and a later pass records
+`supersedes: p06-v2`. Any quote of the verified label states that version 2 was written after a void version 1 run, before any comparison of A or B, for the one reason given above, that it
 departs from version 1's rule of rerunning with the same rules, that check C had been exercised on 25 Oct ("Prior exposure"), and that the record carries `date_label_swapped` and `post_hoc: true`.
