@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from quantdesk.data import kite_compare as KC
 from quantdesk.data import kite_record as K
@@ -273,7 +274,7 @@ def test_the_recorder_workflow_is_read_only_encrypts_before_it_uploads_and_holds
     steps = [(j, s) for j, job in wf["jobs"].items() for s in job["steps"]]
     assert all("${{" not in s["run"] for _, s in steps if "run" in s)                              # times come in through env, never into a script
     holders = [(j, s.get("name")) for j, s in steps if "KITE_API_SECRET" in json.dumps(s.get("env", {}))]
-    token_step, enc_step, dec_step = "The day's Kite token (optional; without it nothing is recorded)", "Encrypt the ticks with the owner's API secret", "Decrypt the first job's ticks (for the session's measures only)"
+    token_step, enc_step, dec_step = "The day's Kite token (optional; without it nothing is recorded)", "Encrypt the ticks with the owner's API secret", "Decrypt the first job's ticks (for the session's measures only; a failure here never stops the recording)"
     assert holders == [("record-1", token_step), ("record-1", enc_step), ("record-2", token_step), ("record-2", dec_step), ("record-2", enc_step)]      # exactly these five, no others
     for s_ in (s for _, s in steps if "KITE_API_SECRET" in json.dumps(s.get("env", {}))):
         assert "pip install" not in s_.get("run", "")                                              # the library install never holds the secret
@@ -326,3 +327,64 @@ def test_the_owners_script_decrypts_what_the_workflow_encrypts_and_nothing_else_
     assert bad.returncode != 0 or not (tmp_path / "out2" / "ticks_x_0001.parquet").exists()
     assert subprocess.run(["bash", str(ROOT / "deploy" / "kite-decrypt.sh"), str(enc), str(tmp_path / "o3")], env={k: v for k, v in os.environ.items() if k != "KITE_DATA_SECRET"},
                           capture_output=True, text=True).returncode == 2
+
+
+def test_a_token_that_decrypts_but_is_stale_ends_the_command_cleanly_not_with_a_traceback(tmp_path, monkeypatch, capsys):
+    from quantdesk.cli import main
+    monkeypatch.setenv("KITE_DATA_KEY", "k")
+    monkeypatch.setenv("KITE_DATA_TOKEN", "STALE1234567890ABCDEF")
+
+    def boom(*a, **k):
+        raise RuntimeError("TokenException: Incorrect api_key or access_token")
+    monkeypatch.setattr(K, "run_session", boom)
+    main(["data", "kite-record", "--out", str(tmp_path / "k"), "--until", "15:30"])               # returns: no SystemExit, no traceback
+    assert "no usable session today (RuntimeError)" in capsys.readouterr().out
+
+
+def test_one_instruments_reference_failing_costs_the_session_only_that_instrument(tmp_path):
+    class Flaky(FakeKite):
+        def historical_data(self, tok, a, b, interval, oi=False):
+            if tok == 260105:
+                raise RuntimeError("rate limit")
+            return super().historical_data(tok, a, b, interval, oi)
+    path = K.fetch_reference(Flaky(), {"NIFTY": 256265, "BANKNIFTY": 260105}, dt.date(2026, 10, 26), tmp_path)
+    df = pd.read_parquet(path)
+    assert set(df["symbol"]) == {"NIFTY"} and len(df) == 3
+
+
+def test_a_failed_write_keeps_the_ticks_for_the_next_flush(tmp_path, monkeypatch):
+    clock, ticker = Clock(), FakeTicker()
+    rec = K.Recorder(tmp_path, {"NIFTY": 256265}, lambda: ticker, now=clock, flush_seconds=30)
+    ticker.connect()
+    ticker.on_ticks(ticker, [kite_tick(256265, 25000.0, pd.Timestamp("2026-10-26 09:15:01"), depth=False)])
+    real = pd.DataFrame.to_parquet
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda *a, **k: (_ for _ in ()).throw(OSError("disk")))
+    assert rec.flush() is None and len(rec.rows) == 1                                             # not lost, not written
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", real)
+    p = rec.flush()
+    assert p is not None and len(pd.read_parquet(p)) == 1 and p.name.endswith("_0001.parquet")
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl is needed")
+def test_the_decrypt_script_refuses_a_file_that_does_not_match_the_digest_it_was_given(tmp_path):
+    src = tmp_path / "kite"
+    src.mkdir()
+    (src / "events.jsonl").write_text('{"kind": "connect"}\n')
+    enc = tmp_path / "kite_raw_1.tar.enc"
+    env = {**os.environ, "KITE_DATA_SECRET": "THE-API-SECRET"}
+    subprocess.run(f"tar -C {src} -cf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KITE_DATA_SECRET -out {enc}", shell=True, check=True, env=env)
+    import hashlib
+    good = hashlib.sha256(enc.read_bytes()).hexdigest()
+    ok = subprocess.run(["bash", str(ROOT / "deploy" / "kite-decrypt.sh"), str(enc), str(tmp_path / "a"), good], env=env, capture_output=True, text=True)
+    assert ok.returncode == 0 and (tmp_path / "a" / "events.jsonl").exists()
+    bad = subprocess.run(["bash", str(ROOT / "deploy" / "kite-decrypt.sh"), str(enc), str(tmp_path / "b"), "0" * 64], env=env, capture_output=True, text=True)
+    assert bad.returncode == 1 and not (tmp_path / "b").exists()
+
+
+def test_the_second_job_cannot_lose_the_first_jobs_events_and_the_measures_run_whatever_happened():
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "kite-record.yml").read_text())
+    steps = {s.get("name"): s for s in wf["jobs"]["record-2"]["steps"]}
+    m = steps["Measures for the session (counts and ratios only)"]
+    assert m["if"] == "always()" and "cat runtime/kite_1/events.jsonl runtime/kite/events.jsonl" in m["run"] and "cp -n" not in m["run"]
+    d = next(s for n, s in steps.items() if n and n.startswith("Decrypt the first job"))
+    assert d["continue-on-error"] is True and "sha256sum -c" in d["run"]

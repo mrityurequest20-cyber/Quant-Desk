@@ -128,16 +128,26 @@ class Recorder:
             rows, self.rows = self.rows, []
             events, self.events = self.events, []
         if events:
-            with open(self.out / "events.jsonl", "a") as fh:
-                fh.write("".join(json.dumps(e) + "\n" for e in events))
+            try:
+                with open(self.out / "events.jsonl", "a") as fh:
+                    fh.write("".join(json.dumps(e) + "\n" for e in events))
+            except Exception:                                      # put back for the next flush, never lost
+                with self.lock:
+                    self.events = events + self.events
         if not rows:
             return None
-        self.part += 1
-        path = self.out / f"ticks_{self.tag}_{self.part:04d}.parquet"
-        df = pd.DataFrame(rows, columns=TICK_COLUMNS)
-        tmp = path.with_name(path.name + ".part")
-        df.to_parquet(tmp, index=False)
-        tmp.replace(path)
+        part = self.part + 1
+        path = self.out / f"ticks_{self.tag}_{part:04d}.parquet"
+        try:
+            df = pd.DataFrame(rows, columns=TICK_COLUMNS)
+            tmp = path.with_name(path.name + ".part")
+            df.to_parquet(tmp, index=False)
+            tmp.replace(path)
+        except Exception:                                          # a failed write keeps the rows for the next flush instead of dropping them
+            with self.lock:
+                self.rows = rows + self.rows
+            return None
+        self.part = part
         return path
 
     def run(self, until: pd.Timestamp, sleep=time.sleep) -> dict:
@@ -163,7 +173,11 @@ def fetch_reference(kite, tokens: dict[str, int], day: dt.date, out_dir: Path) -
     start = dt.datetime.combine(day, dt.time(9, 0))
     end = dt.datetime.combine(day, dt.time(15, 40))
     for sym, tok in tokens.items():
-        for c in kite.historical_data(tok, start, end, "minute", oi=sym.endswith("-FUT")) or []:
+        try:
+            candles = kite.historical_data(tok, start, end, "minute", oi=sym.endswith("-FUT")) or []
+        except Exception:                                          # one instrument's reference failing (rate limit, no add-on) must not cost the session its other measures
+            continue
+        for c in candles:
             rows.append({"symbol": sym, "ts": _ist(c["date"]), "open": c["open"], "high": c["high"], "low": c["low"], "close": c["close"], "volume": c.get("volume"), "oi": c.get("oi")})
     df = pd.DataFrame(rows, columns=["symbol", "ts", "open", "high", "low", "close", "volume", "oi"])
     path = Path(out_dir) / "reference_minutes.parquet"

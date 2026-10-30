@@ -15,7 +15,7 @@ on:
     inputs:
       first_until:
         description: "First job records until (HH:MM IST)"
-        default: "14:25"
+        default: "14:45"
         type: string
       second_until:
         description: "Second job records until (HH:MM IST)"
@@ -41,7 +41,9 @@ env:
 jobs:
   record-1:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 358             # the hosted limit is 360; 08:55 to 14:45 is 350 minutes, so the second job's start follows within two to three minutes
+    outputs:
+      sha: ${{ steps.enc.outputs.sha }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -58,15 +60,19 @@ jobs:
         run: deploy/kite-token.sh
       - name: Record ticks
         env:
-          UNTIL: ${{ inputs.first_until || '14:25' }}
+          UNTIL: ${{ inputs.first_until || '14:45' }}
         run: python -m quantdesk data kite-record --out runtime/kite --until "$UNTIL"
       - name: Encrypt the ticks with the owner's API secret
+        id: enc
         if: always()
         env:
           KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
         run: |
           if [ -d runtime/kite ] && [ -n "$(ls -A runtime/kite)" ]; then
             tar -C runtime/kite -cf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KITE_DATA_SECRET -out kite_raw_1.tar.enc
+            sha="$(sha256sum kite_raw_1.tar.enc | cut -d' ' -f1)"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "kite_raw_1.tar.enc sha256 $sha" >> "$GITHUB_STEP_SUMMARY"      # CBC has no integrity check of its own: this digest, kept by GitHub, is what a download is checked against
           fi
       - name: Keep the encrypted ticks
         if: always()
@@ -102,12 +108,15 @@ jobs:
         with:
           name: kite-raw-1
           path: first
-      - name: Decrypt the first job's ticks (for the session's measures only)
+      - name: Decrypt the first job's ticks (for the session's measures only; a failure here never stops the recording)
+        continue-on-error: true
         env:
           KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
+          EXPECT_SHA: ${{ needs.record-1.outputs.sha }}
         run: |
           mkdir -p runtime/kite_1
           if [ -f first/kite_raw_1.tar.enc ]; then
+            if [ -n "$EXPECT_SHA" ]; then echo "$EXPECT_SHA  first/kite_raw_1.tar.enc" | sha256sum -c -; fi
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:KITE_DATA_SECRET -in first/kite_raw_1.tar.enc | tar -C runtime/kite_1 -xf -
           fi
       - name: Record ticks to the close and fetch Kite's own candles as the reference
@@ -115,11 +124,22 @@ jobs:
           UNTIL: ${{ inputs.second_until || '15:32' }}
         run: python -m quantdesk data kite-record --out runtime/kite --until "$UNTIL" --with-reference
       - name: Measures for the session (counts and ratios only)
+        if: always()
         run: |
           if ls runtime/kite/ticks_*.parquet runtime/kite_1/ticks_*.parquet >/dev/null 2>&1; then
             mkdir -p runtime/kite_all
-            cp -n runtime/kite_1/* runtime/kite_all/ 2>/dev/null || true
-            cp -n runtime/kite/* runtime/kite_all/ 2>/dev/null || true
+            cp runtime/kite_1/ticks_* runtime/kite_all/ 2>/dev/null || true       # tick files are named by job and part: no collision
+            cp runtime/kite/ticks_* runtime/kite/reference_minutes.parquet runtime/kite_all/ 2>/dev/null || true
+            cat runtime/kite_1/events.jsonl runtime/kite/events.jsonl > runtime/kite_all/events.jsonl 2>/dev/null || true       # both jobs' reconnects count, not only the first's
+            python - <<'PY'
+          import json, pathlib
+          t = {}
+          for d in ("runtime/kite_1", "runtime/kite"):
+              f = pathlib.Path(d) / "tokens.json"
+              if f.exists():
+                  t.update(json.loads(f.read_text()))
+          pathlib.Path("runtime/kite_all/tokens.json").write_text(json.dumps(t))
+          PY
             python -m quantdesk data kite-compare --dir runtime/kite_all --day "$(date +%F)" --json-out kite_metrics.json | tee kite_summary.txt
             { echo '```'; cat kite_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           else
@@ -132,6 +152,7 @@ jobs:
         run: |
           if [ -d runtime/kite ] && [ -n "$(ls -A runtime/kite)" ]; then
             tar -C runtime/kite -cf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KITE_DATA_SECRET -out kite_raw_2.tar.enc
+            echo "kite_raw_2.tar.enc sha256 $(sha256sum kite_raw_2.tar.enc | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Keep the encrypted ticks
         if: always()

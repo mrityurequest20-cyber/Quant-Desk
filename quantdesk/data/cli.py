@@ -214,6 +214,9 @@ def cmd_kite_record(cfg, a):
         rep = K.run_session(Path(a.out), a.until, with_reference=a.with_reference)
     except (K.KiteRecordError, ValueError) as exc:
         raise SystemExit(f"kite-record: {exc}") from None
+    except Exception as exc:                                       # a token that decrypts but is no longer valid (the daily workflow was not run), a holiday, an API refusal: a clean exit, never a traceback
+        print(f"::warning::kite-record: no usable session today ({type(exc).__name__}); nothing recorded")
+        return
     print(f"kite-record: {rep['day']}: {rep['ticks']:,} ticks in {rep['parts']} parts, instruments {sorted(rep['tokens'])}")
 
 
