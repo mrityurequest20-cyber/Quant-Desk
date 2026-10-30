@@ -9,8 +9,10 @@
 >
 > **Credentials under v2 (supersedes the "Operating notes" below).** `KITE_API_KEY` and `KITE_API_SECRET` are repository secrets (added by the owner on 25 Oct). Inside jobs they are
 > exposed only as `KITE_DATA_KEY`, `KITE_DATA_SECRET` and `KITE_DATA_TOKEN`, **never** as the names the broker adapter (`execution/kite.py`) reads, so the day's token cannot switch that
-> adapter's credentials on. The API secret is read by exactly three steps: the daily "Kite token" workflow (it exchanges the owner's single-use `request_token` for the day's access token),
-> the same workflow's encryption step, and the live desk's optional "Kite token" step (it decrypts the file; the library install is a separate step with no secret). The access token is stored
+> adapter's credentials on. The API secret is read by exactly these steps: the daily "Kite token" workflow (it exchanges the owner's single-use `request_token` for the day's access token),
+> the same workflow's encryption step, the live desk's optional "Kite token" step (it decrypts the file; the library install is a separate step with no secret), and, in each of the
+> tick recorder's two jobs, its token step (it decrypts the same file) and its tick-encryption step (the recorder workflow arrives with its own pull request). The `--feed kite` option of
+> the intraday command (`KiteIntradayFeed`, which reads the broker adapter's names) is not used by any workflow and is untouched; the attachment reads only the `KITE_DATA_*` names. The access token is stored
 > AES-256 encrypted, with a key derived from the API secret, as one file on a `kite-token` branch of this (public) repository; every day's ciphertext stays in git history, the token expires
 > within a day, and CBC carries no integrity check, so the desk accepts only a decrypted value of token shape (16 to 64 letters and digits) before exporting it. No password or TOTP is stored. No
 > order method is called anywhere (a test greps for it). **Disclosed for the owner's decision:** `docs/AUTONOMY.md` says the engineer never touches broker credentials; these are
@@ -42,7 +44,7 @@
 > |---|---|---|---|
 > | E1 | **Kite share of minutes** | Δ`minutes` ÷ (3 symbols × Δ minutes elapsed between the runner's first event and its last event at or before 15:00); the day's value weights each runner by its elapsed minutes | at least 99% in every counted session |
 > | E2 | **Fallback dependence** | Δ(`fallback_polls` − `sampled_polls`) ÷ Δ`polls`, same window: polls on which the other feeds had to be asked because Kite could not serve (every tenth otherwise-Kite-only poll asks them on purpose, to give E4 a denominator, and is counted apart) | at most 1% of polls |
-> | E3 | **Late-session index** | at the day's last event, `late_kite_moved` ÷ `late_fb_flat`: of the minutes from 15:15 to 15:28 in which the other feeds' NIFTY or BANKNIFTY bar was flat (open = high = low = close; Kotak's frozen window), the share in which Kite's bar was not | at least 90%; if `late_fb_flat` is under 20 in a session, that session is "not measured" for E3 |
+> | E3 | **Late-session index** | at the day's last event, `late_kite_moved` ÷ `late_fb_flat`: of the minutes from 15:15 to 15:28 in which the other feeds' NIFTY or BANKNIFTY bar was flat (open = high = low = close; Kotak's frozen window), the share in which Kite's bar was not | at least 90%; if `late_fb_flat` is under 20 in a session, that session is "not measured" for E3: it is left out of E3's count (neither a pass nor a fail), and KEEP needs E3 measured in at least 5 counted sessions |
 > | E4 | **Disagreement** | Δ`rejected` ÷ Δ`compared`, same window as E1: Kite minutes not used because they differed from the other feeds' bar by more than 0.5% (or, for a minute they lack, from the minute before it), over the minutes checked. Checks happen on the first poll, on every hole and on one poll in ten. Live-price rejections are counted apart (`ltp_rejected`). The rejected minutes are cross-checked by hand against Kite's own historical candle for that day | at most 0.5%, and none that the hand check shows was Kite right and the other feed wrong |
 > | E5 | **No harm** | the counter `faults` (a fault inside the Kite logic that was handed to the other feeds) and any engine ERROR or CRITICAL event naming `kitelive` | none |
 > | E6 | **Manual steps** | the daily request_token run (D2 below) and any restart | at most one per trading day; a day with no token counts against E1 and E6 |
@@ -50,13 +52,13 @@
 > Kite minutes are not served on a minute whose first tick came more than 15 s after the minute began (a late connect or a reconnect) and only inside 09:15 to 15:29; a live price more than 0.5%
 > from the last served close is used only if the other feed's price agrees; none of these is a trial measure, they are the safeguards the review required.
 >
-> **Decision on 20 Nov (fixed now):** KEEP if E1 to E4 pass in at least 90% of counted sessions, E5 has no failure, and E6 holds; otherwise REMOVE the attachment (one config line,
+> **Decision on 20 Nov (fixed now):** KEEP if E1 to E4 pass in at least 90% of counted sessions (E3 over the sessions in which it was measured, and at least 5 of those; with fewer, EXTEND as below), E5 has no failure, and E6 holds; otherwise REMOVE the attachment (one config line,
 > `intraday.kite.live: false`) and do not renew the subscription. EXTEND once by the missing sessions if fewer than 10 were counted. A hand-checked candle comparison (Kite's own
 > historical minutes against the desk's bars, as B1 below) is run on the first and last counted weeks as a cross-check on E4. The separate tick recorder described further down is optional and
 > secondary: it measures latency (C3) and real order flow (C4) and is not needed for the decision.
 
 **Status:** criteria v1, committed alone before any code or data. Registered 24 Oct 2026. The owner pays for one month of Kite Connect market data; the engineer records it
-from Monday 26 Oct for four weeks and reports on 20 Nov. **Nothing in this trial places an order, changes a feed the desk trades on, a limit or a gate.** Live trading stays off.
+from Monday 26 Oct for four weeks and reports on 20 Nov. **Nothing in this trial places a live order or changes a live-trading feed, a limit or a gate.** Under amendment v2 the paper desk's own decisions, and so the inputs of the registered paper evaluations, can change (see v2). Live trading stays off.
 
 ## Why a trial
 
@@ -83,7 +85,7 @@ numbers fixed in advance, whether it is better than what the desk has, and what 
   below). Longer retention than 90 days is the owner's to arrange by downloading the artifacts.
 - **No extra manual step.** The recorder uses the same day's token the "Kite token" workflow stores for the desk; with no token it records nothing and the run succeeds. Kite allows three websocket
   connections per key: the desk uses one, the recorder one.
-- **How it runs:** its own process, started beside the desk, with the data-only credentials (`KITE_DATA_KEY`, `KITE_DATA_TOKEN`). A recorder failure, a token that has expired or a dropped
+- **How it runs:** its own process, started beside the desk, with the data-only credentials (`KITE_DATA_KEY`, `KITE_DATA_TOKEN`, and `KITE_DATA_SECRET` for the encryption of its raw ticks). A recorder failure, a token that has expired or a dropped
   connection never reaches the desk: no shared state, no import from the engine, no exception that propagates. The credential is read from the environment; nothing is written to a log.
 
 ## Counted sessions
@@ -104,9 +106,9 @@ For each counted session and each recorded index and future, over the minutes 09
 | B2 | **Bar range** | share of minutes whose tick-built high and low are each within 0.05% of the candle's | at least 97% |
 | C1 | **Late-session index** | share of 15:15 to 15:28 index minutes that are **not** frozen by `feeds.frozen_minutes` (open = high = low = close = previous close, runs of 3 or more) | at least 90%, where Kotak's is about 0% |
 | C2 | **Yahoo dependence** | of the minutes the desk journal shows as served by Yahoo or missing from Kotak, the share the Kite bars cover | at least 99% (if there are none that session, not measured) |
-| C3 | **Latency** | receipt time minus exchange timestamp, per tick | median at most 1.0 s and 99th percentile at most 3.0 s |
+| C3 | **Latency** | receipt time minus exchange timestamp, per tick, corrected for the recorder clock's offset from a time server (measured and recorded at the start and end of each session) | median at most 1.0 s and 99th percentile at most 3.0 s; C3 is not measured in a session whose offset was not recorded |
 | C4 | **Real order flow** | descriptive only: correlation of the minute CVD built from tick-rule trades with the desk's close-location CVD; no threshold | reported |
-| D1 | **Reconnects** | websocket disconnections per session | reported; a session with a disconnection longer than 60 s fails A2 anyway |
+| D1 | **Reconnects** | websocket disconnections per session | reported; a disconnection that leaves a run of more than 3 minutes without ticks fails A2 |
 | D2 | **Manual steps** | times the owner had to act (new access token, restart) | at most one per trading day (the daily token) |
 | D3 | **Volume** | recorded size per session | reported (a release asset must stay under 2 GB) |
 
