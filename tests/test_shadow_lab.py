@@ -126,3 +126,74 @@ def test_one_synthetic_session_is_replayed_offline_into_labelled_rows_and_leaves
     assert rows[0]["idea_first"] is True and [r["ts"] for r in rows] == sorted(r["ts"] for r in rows)
     assert (work / "journal.db").is_file()                                       # the throwaway journal is under the work folder ...
     assert not list((tmp_path / "runtime").rglob("*.db")) and not (L.REPO / "journal.db").exists()      # ... and the configured runtime is untouched
+
+
+# ---- stocks, resume safety, atomic parts -------------------------------------------------------------------------------------------
+def test_a_stock_spec_is_marked_approximate_and_picks_a_step_near_six_tenths_of_a_percent():
+    assert L.stock_spec(1200.0)["strike_step"] == 5.0 and L.stock_spec(100.0)["strike_step"] == 0.5
+    for price in (50, 100, 1200, 4000):
+        spec = L.stock_spec(price)
+        assert spec["approx"] is True and spec["kind"] == "equity" and spec["lot_size"] == 1 and spec["iv_beta"] == L.STOCK_IV_BETA
+        assert spec["strike_step"] in L._STEPS
+
+
+def test_a_resumed_run_must_match_the_parts_it_adds_to(tmp_path):
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    L._bind_parts(parts, {"kind": "dataset", "symbols": ["NIFTY"], "horizon": 45})
+    L._bind_parts(parts, {"kind": "dataset", "symbols": ["NIFTY"], "horizon": 45})            # the same run again: fine
+    with pytest.raises(L.Refused, match="other parameters"):
+        L._bind_parts(parts, {"kind": "dataset", "symbols": ["NIFTY", "BANKNIFTY"], "horizon": 45})
+
+
+def test_a_part_is_written_atomically_and_only_the_drawn_sessions_are_merged(tmp_path):
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    rows = lambda d: [{"day": d, "symbol": "NIFTY", "idea_first": True, "data_clean": True, "r_underlying": 1.0}]
+    L._write_part(rows("2026-01-05"), parts, "2026-01-05")
+    L._write_part(rows("2026-01-06"), parts, "2026-01-06")
+    assert sorted(p.name for p in parts.iterdir()) == ["2026-01-05.parquet", "2026-01-06.parquet"]          # no temporary file is left behind
+    out = tmp_path / "out"
+    out.mkdir()
+    man = L._finish(out, parts, ["2026-01-05"], [], {"symbols": ["NIFTY"]}, lambda *_: None)             # a part outside the drawn keys is not merged
+    merged = pd.read_parquet(out / "shadow_setups.parquet")
+    assert list(merged["day"]) == ["2026-01-05"] and man["rows"] == 1 and man["ideas"] == 1 and man["sessions_drawn"] == 1
+
+
+def test_a_requested_symbol_the_dataset_lacks_is_refused_not_a_keyerror(tmp_path):
+    def loader(ds, symbols, use, allow_unverified):
+        idx = pd.date_range("2026-01-05 09:15", periods=3, freq="min", tz=IST)
+        return pd.DataFrame({"ts": idx, "symbol": "NIFTY", "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0})
+    with pytest.raises(L.Refused, match="no minutes for BANKNIFTY"):
+        L.run(tmp_path / "ds", tmp_path / "out", ["NIFTY", "BANKNIFTY"], loader=loader)
+
+
+def test_the_coverage_of_a_session_is_counted_per_symbol():
+    idx = pd.date_range("2026-01-05 09:15", periods=10, freq="min", tz=IST)
+    bars = {"NIFTY": pd.DataFrame({"close": 1.0}, index=idx)}
+    assert L._coverage(bars, dt.date(2026, 1, 5), ["NIFTY", "BANKNIFTY"]) == {"NIFTY": 10, "BANKNIFTY": 0}
+
+
+def _stock_file(path, rows):
+    pd.DataFrame(rows).to_parquet(path, index=False)
+
+
+def test_the_stock_files_are_united_and_deduplicated_and_an_empty_folder_is_refused(tmp_path):
+    with pytest.raises(L.Refused, match="no \\*_stocks_cash.parquet"):
+        L.load_stock_bars(tmp_path)
+    mk = lambda t, c: {"ts": pd.Timestamp(t, tz=IST), "symbol": "RELIANCE", "token": "x", "open": c, "high": c, "low": c, "close": c, "volume": 1}
+    _stock_file(tmp_path / "2026-10-29_stocks_cash.parquet", [mk("2026-10-29 09:15", 1.0), mk("2026-10-29 09:16", 2.0)])
+    _stock_file(tmp_path / "2026-10-30_stocks_cash.parquet", [mk("2026-10-29 09:16", 2.0), mk("2026-10-30 09:15", 3.0)])      # the rolling windows overlap
+    bars = L.load_stock_bars(tmp_path)
+    assert list(bars) == ["RELIANCE"] and len(bars["RELIANCE"]) == 3 and bars["RELIANCE"].index.is_monotonic_increasing
+
+
+def test_the_stock_run_refuses_a_git_tree_an_unknown_stock_and_a_folder_with_too_little_history(tmp_path):
+    mk = lambda t: {"ts": pd.Timestamp(t, tz=IST), "symbol": "RELIANCE", "token": "x", "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1}
+    _stock_file(tmp_path / "2026-10-30_stocks_cash.parquet", [mk("2026-10-30 09:15")])
+    with pytest.raises(L.Refused, match="git working tree"):
+        L.run_stocks(tmp_path, L.REPO / "stock_out_should_never_exist")
+    with pytest.raises(L.Refused, match="no minutes for TCS"):
+        L.run_stocks(tmp_path, tmp_path / "o1", symbols=["TCS"])
+    with pytest.raises(L.Refused, match="enough minutes and prior sessions"):
+        L.run_stocks(tmp_path, tmp_path / "o2")

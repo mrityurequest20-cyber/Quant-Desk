@@ -432,8 +432,16 @@ def _synthetic_bars(cfg, n: int, seed: int):
 
 def cmd_shadow_replay(cfg, a):
     from . import shadowlab
+    syms = [x.strip() for x in a.symbols.split(",") if x.strip()]
+    if sum(map(bool, (a.dataset, a.tape, a.stocks))) != 1:
+        sys.exit("shadow lab refused, nothing replayed: give exactly one of --dataset, --tape and --stocks")
     try:
-        shadowlab.run(Path(a.dataset), Path(a.out), [x.strip() for x in a.symbols.split(",") if x.strip()], a.sample, a.seed, a.first, a.last, a.jobs)
+        if a.stocks:
+            shadowlab.run_stocks(Path(a.stocks), Path(a.out), Path(a.vix_from) if a.vix_from else None, None if a.symbols == "NIFTY,BANKNIFTY" else syms, a.first, a.last, a.jobs)
+        elif a.tape:
+            shadowlab.run_tape(Path(a.tape), Path(a.out), syms, a.first, a.last, a.adverse_ticks, a.jobs)
+        else:
+            shadowlab.run(Path(a.dataset), Path(a.out), syms, a.sample, a.seed, a.first, a.last, a.jobs)
     except shadowlab.Refused as exc:
         sys.exit(f"shadow lab refused, nothing replayed: {exc}")
 
@@ -939,7 +947,11 @@ def register(sub):
     x.add_argument("--no-learn", action="store_true", help="don't grade or apply the account's track record")
     x.set_defaults(fn=cmd_replay)
     x = ss.add_parser("shadow-replay", help="the shadow lab: replay past sessions through the real engine offline and label every armed setup (places nothing)")
-    x.add_argument("--dataset", required=True, help="an ml-intake dataset folder (index minutes)")
+    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes): years of history on the model chain")
+    x.add_argument("--tape", help="the desk's own recorded sessions (the data folder the live jobs upload): real recorded option quotes")
+    x.add_argument("--stocks", help="a folder of the stock-minutes-2026 release's *_stocks_cash.parquet files: replay every liquid F&O stock")
+    x.add_argument("--vix-from", help="with --stocks: the desk's recorder folder, for the recorded INDIAVIX")
+    x.add_argument("--adverse-ticks", type=int, default=1, help="slippage on top of bid/ask fills, in ticks (the live desk uses 1; stress it)")
     x.add_argument("--out", required=True, help="a new folder outside every git tree")
     x.add_argument("--symbols", default="NIFTY,BANKNIFTY")
     x.add_argument("--sample", type=int, help="replay N sessions drawn at random (default: all)")
