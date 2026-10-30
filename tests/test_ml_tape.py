@@ -278,3 +278,47 @@ def test_a_single_file_source_registers_and_loads_and_no_manifest_is_ever_left_t
     assert not list(ds.glob(".manifest.*")) and json.loads((ds / "manifest.json").read_text())["digest"] == man["digest"]
     again = T.import_tape(f, out, say=lambda *_: None)                         # the first registration stands
     assert again["digest"] == man["digest"]
+
+
+def _load_day(tape, df, day="2026-10-29"):
+    src, out = tape
+    write(src, f"{day}_morning-7_chains.parquet", df)
+    man = T.import_tape(src, out, say=lambda *_: None)
+    return T.load(out / "tape" / man["dataset"], src, "oi_shadow", days=[day]), T.load(out / "tape" / man["dataset"], src, "oi_shadow", days=[day], clean=False)
+
+
+def test_load_drops_a_snapshot_with_an_implausible_change_in_oi_and_counts_it(tape):
+    df = tape_df("2026-10-29", n_snap=3)
+    df.loc[0, "pe_doi"] = -1.6e18
+    clean, raw = _load_day(tape, df)
+    assert len(raw) == 6 and len(clean) == 4                                                          # the faulty row's snapshot (both strikes) is gone, nothing else
+    assert clean.attrs["dropped"]["implausible_doi_snapshot"] == 2 and clean.attrs["dropped"]["implausible_oi_snapshot"] == 0
+    assert (clean["pe_doi"].abs() < 1e12).all()
+
+
+def test_a_row_with_two_faults_is_counted_once_under_the_first_fault_in_the_order(tape):
+    df = tape_df("2026-10-29", n_snap=1, start="08:00")                                               # outside the session ...
+    df.loc[0, "ce_oi"] = 1e18                                                                         # ... and in an implausible-OI snapshot
+    clean, raw = _load_day(tape, df)
+    d = clean.attrs["dropped"]
+    assert len(raw) == 2 and len(clean) == 0
+    assert d["implausible_oi_snapshot"] == 2 and d["outside_session"] == 0 and sum(d.values()) == 2   # DROP_ORDER: the OI fault names it first; no row is counted twice
+
+
+def test_the_session_window_is_from_09_15_up_to_but_not_including_15_30(tape):
+    parts = [tape_df("2026-10-29", n_snap=1, start=s) for s in ("09:14", "09:15", "15:29", "15:30")]
+    df = pd.concat(parts, ignore_index=True)
+    clean, raw = _load_day(tape, df)
+    kept = sorted(clean["ts"].dt.tz_convert(IST).dt.strftime("%H:%M").unique())
+    assert kept == ["09:15", "15:29"] and clean.attrs["dropped"]["outside_session"] == 4              # 09:14 and 15:30 are out, 09:15 and 15:29 are in
+
+
+def test_the_load_says_what_it_is_for_and_whether_it_was_cleaned(tape):
+    df = tape_df("2026-10-29", n_snap=2)
+    df = pd.concat([df, tape_df("2026-10-29", source="model", start="10:30")], ignore_index=True)
+    clean, raw = _load_day(tape, df)
+    for out in (clean, raw):
+        assert out.attrs["not_for"] == T.NOT_FOR and "gate or a promotion" in out.attrs["not_for"]  # the warning travels with the data
+        assert out.attrs["tier"] == "T2" and out.attrs["status"] == "internal_recording"
+    assert clean.attrs["clean"] is True and raw.attrs["clean"] is False
+    assert raw.attrs["dropped"] == {} and (raw["source"] == "model").any()                          # an uncleaned load still holds the model rows, and says so by its flag
