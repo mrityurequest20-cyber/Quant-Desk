@@ -145,6 +145,19 @@ These are not questions. The engineer never asks about them; it simply does not 
   - **Exception, data only (owner-authorised 25 Oct 2026):** the Kite Connect market-data credentials
     held as the repository secrets `KITE_API_KEY` and `KITE_API_SECRET`, and the daily access token made
     from them, may be used to read market data only (websocket ticks, quotes, instrument lists, historical
+    candles) and to exchange the owner's single-use request token for the day's access token. The engineer
+    never calls an order, position, holding, margin or profile method; never exposes these credentials to a
+    job under the names the broker adapter reads (`KITE_API_KEY`, `KITE_ACCESS_TOKEN` in `execution/kite.py`;
+    the data path uses `KITE_DATA_KEY`, `KITE_DATA_SECRET`, `KITE_DATA_TOKEN`); and never prints, logs or
+    publishes them. The only thing that may be committed is the daily access token, AES-256 encrypted with a
+    key derived from the API secret, on the `kite-token` branch; recorded Kite market data leaves the runner
+    only encrypted the same way, as expiring workflow artifacts, and never unencrypted in the repository, a
+    release or a model card. This exception ends on 25 Nov 2026 or when the owner removes the secrets,
+    whichever is first, and does not cover real money.
+
+  - **Exception, data only (owner-authorised 25 Oct 2026):** the Kite Connect market-data credentials
+    held as the repository secrets `KITE_API_KEY` and `KITE_API_SECRET`, and the daily access token made
+    from them, may be used to read market data only (websocket ticks, quotes, instrument lists, historical
     candles). The engineer never calls an order, position, holding, margin or profile method; never exposes
     these credentials to a job under the names the broker adapter reads (`KITE_API_KEY`,
     `KITE_ACCESS_TOKEN` in `execution/kite.py`; the data path uses `KITE_DATA_KEY`, `KITE_DATA_SECRET`,
