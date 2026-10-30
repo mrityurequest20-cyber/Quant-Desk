@@ -8,7 +8,8 @@ copied, so the table the harness trains on is the table the locked HAR result wa
 sample would leak the test period into every feature. The builder therefore takes `profile_end`, fits the profile on sessions up to
 and including that day only (as `volstudy.fit_har` does for a training window), records it in the table's identity, and marks every
 row with `in_profile`. Score only rows with `in_profile == False`; a study that needs the profile refitted per fold rebuilds the
-table per fold, which is cheap.
+table per fold, which is cheap. A model's own frozen profile can be supplied instead (`profile={symbol: values}`): nothing is fitted on the grid then,
+`profile_end` is the last session that profile was fitted on (it still marks `in_profile`), and the profile's sha256 enters the recipe, hence the identity.
 
 **Identity.** The table's folder is `ml-build-1-<12 hex>`, the hash of the input dataset's digest **and its status and tier**, the recipe
 (symbols, profile_end, every constant and the source of the functions that make the rows) and the builder version. The same inputs give
@@ -73,11 +74,20 @@ def _code_digest() -> str:
     return hashlib.sha256(src.encode()).hexdigest()
 
 
-def recipe(symbols, profile_end) -> dict:
-    return {"table": TABLE, "symbols": sorted(symbols), "profile_end": str(profile_end), "columns": COLUMNS,
-            "constants": {"N_MIN": V.N_MIN, "DECISIONS": V.DECISIONS, "HORIZONS": V.HORIZONS, "LAM": V.LAM,
-                          "PRIOR_DAYS": V.PRIOR_DAYS, "FLOOR": V.FLOOR, "MIN_PROFILE_DAYS": MIN_PROFILE_DAYS},
-            "code_sha256": _code_digest()}
+def profile_sha256(profile: dict) -> str:
+    """The identity of a supplied seasonal profile ({symbol: the N_MIN values}): it goes into the recipe, so a table built with one is a different table."""
+    return hashlib.sha256(json.dumps({s: [float(x) for x in profile[s]] for s in sorted(profile)}, sort_keys=True, separators=(",", ":"),
+                                     allow_nan=False).encode()).hexdigest()
+
+
+def recipe(symbols, profile_end, profile: dict | None = None) -> dict:
+    rec = {"table": TABLE, "symbols": sorted(symbols), "profile_end": str(profile_end), "columns": COLUMNS,
+           "constants": {"N_MIN": V.N_MIN, "DECISIONS": V.DECISIONS, "HORIZONS": V.HORIZONS, "LAM": V.LAM,
+                         "PRIOR_DAYS": V.PRIOR_DAYS, "FLOOR": V.FLOOR, "MIN_PROFILE_DAYS": MIN_PROFILE_DAYS},
+           "code_sha256": _code_digest()}
+    if profile is not None:                                              # absent otherwise: every table built before this argument keeps its name
+        rec["profile_sha256"] = profile_sha256(profile)
+    return rec
 
 
 def refuse_tracked_tree(path: Path, what: str) -> None:
@@ -188,14 +198,17 @@ def fit_profile(grid: tuple, profile_end) -> np.ndarray:
     return V.profile((r ** 2)[train])
 
 
-def build_tables(grids: dict, profile_end, tier: str, allow_leading_gap: bool = False, allow_reserved_profile: bool = False) -> pd.DataFrame:
+def build_tables(grids: dict, profile_end, tier: str, allow_leading_gap: bool = False, allow_reserved_profile: bool = False,
+                 profile: dict | None = None) -> pd.DataFrame:
     """{symbol: (days, r, missing, opens)} (the output of `volstudy.grid`) -> the M1 table. The minute-of-day profile is fitted on the
     sessions up to and including `profile_end` only. `tier` is the data tier every row came from (ML_PHASE0.md rule 2). A session whose first
     minute is missing is refused: `volstudy.grid` back-fills its opening bars from a later close, which would put the future into the first
     features. `allow_leading_gap=True` is for reproducing a result that was computed that way (the locked HAR study's aeron7 data has such
     sessions); the caller must then report them (`leading_gap_sessions`). A `profile_end` inside the reserved window (from `RESERVED_FROM`) is
     refused: the profile would be fitted on the stretch kept for the one-shot evaluation and every row after it would be contaminated;
-    `allow_reserved_profile=True` is for that evaluation's own spec. Each row's `session` is its day's ordinal in the symbol's grid, the calendar
+    `allow_reserved_profile=True` is for that evaluation's own spec. `profile={symbol: the N_MIN values}` replaces `fit_profile` for every symbol
+    (a model's own, frozen profile; nothing is fitted on the grid, so `MIN_PROFILE_DAYS` does not apply); `in_profile` still marks the sessions up to
+    `profile_end`, the last session that profile was fitted on. Each row's `session` is its day's ordinal in the symbol's grid, the calendar
     the features' lookback is counted in. Pure: no I/O, no clock, no randomness."""
     if not isinstance(tier, str) or not tier.strip():
         raise ValueError("tier must name the data tier the rows came from (T1, T1b, ...)")
@@ -209,10 +222,13 @@ def build_tables(grids: dict, profile_end, tier: str, allow_leading_gap: bool = 
         lead = np.flatnonzero(np.asarray(miss)[:, 0])
         if len(lead) and not allow_leading_gap:
             raise ValueError(f"{sym}: {len(lead)} sessions have no bar at the open (first {days[lead[0]]}); the grid would fill them from a later close")
-        try:
-            s = fit_profile(grids[sym], pe)
-        except ValueError as exc:
-            raise ValueError(f"{sym}: {exc}") from exc
+        if profile is not None:
+            s = _supplied_profile(profile, sym)
+        else:
+            try:
+                s = fit_profile(grids[sym], pe)
+            except ValueError as exc:
+                raise ValueError(f"{sym}: {exc}") from exc
         d = V.rows(sym, days, r, miss, opens, s)
         d["lF_B"] = np.log(np.maximum(d["F_B"], V.FLOOR))
         d["in_profile"] = (pd.Index(d["day"]) <= pe)
@@ -226,6 +242,16 @@ def build_tables(grids: dict, profile_end, tier: str, allow_leading_gap: bool = 
     out = out.sort_values(["symbol", "day", "m", "_h"], kind="stable").drop(columns="_h").reset_index(drop=True)
     check_table(out)
     return out
+
+
+def _supplied_profile(profile: dict, sym: str) -> np.ndarray:
+    """A supplied profile for `sym`, or a refusal: it must be there, N_MIN finite positive numbers."""
+    if sym not in profile:
+        raise ValueError(f"{sym}: the supplied profile has no entry for it")
+    s = np.asarray(profile[sym], dtype=float)
+    if s.shape != (V.N_MIN,) or not np.isfinite(s).all() or (s <= 0).any():
+        raise ValueError(f"{sym}: the supplied profile must be {V.N_MIN} finite positive numbers")
+    return s
 
 
 def leading_gap_sessions(grids: dict) -> dict:
@@ -300,7 +326,7 @@ def tables_close(a: pd.DataFrame, b: pd.DataFrame, rtol: float = 1e-9) -> list[s
 
 
 def build(dataset: Path, symbols, profile_end, out_root: Path, loader=None, allow_unverified: bool = False,
-          expected_digest: str | None = None, say=print) -> Path:
+          expected_digest: str | None = None, say=print, profile: dict | None = None, allow_leading_gap: bool = False) -> Path:
     """Load the dataset (through its importer's loader, which refuses what it must), build the table and write it once under
     `out_root / m1 / <identity>`. An existing folder with the same identity is verified, never rewritten. `loader` is a test hook: the
     command line never passes one, and a loader of one's own is not covered by the importer's checks."""
@@ -312,8 +338,8 @@ def build(dataset: Path, symbols, profile_end, out_root: Path, loader=None, allo
     tier = attrs.get("tier")
     tier = tier if isinstance(tier, str) else "+".join(map(str, tier or ["unknown"]))
     grids = {sym: V.grid(bars[bars["symbol"] == sym]) for sym in symbols}
-    table = build_tables(grids, profile_end, tier)
-    rec = recipe(symbols, profile_end)
+    table = build_tables(grids, profile_end, tier, allow_leading_gap=allow_leading_gap, profile=profile)
+    rec = recipe(symbols, profile_end, profile)
     ident = identity(attrs["digest"], rec, attrs.get("status"), attrs.get("tier"))
     folder = Path(out_root) / "m1" / f"{BUILDER_VERSION}-{ident}"
     if folder.exists():
