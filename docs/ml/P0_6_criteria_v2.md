@@ -1,13 +1,13 @@
 # P0.6 criteria: the independent check of the Kaggle index minutes (version 2)
 
-Committed **alone, before any verifier change and before any result**. This is `P0_6_criteria_v2.md`; `P0_6_criteria.md` (version 1) is untouched and stays as merged.
+Committed **alone, before any verifier change and before any A or B result** (check C had been rehearsed on 25 Oct, see "Prior exposure"). This is `P0_6_criteria_v2.md`; `P0_6_criteria.md` (version 1) is untouched and stays as merged.
 **Version 2 is identical to version 1 in every rule, number and threshold except one reference-file rule, stated in "The one changed rule" below.** It was written after a **void**
 version 1 run, not after a failed one: that run produced no comparison of any kind, so **no result of the dataset against Yahoo or NSE (checks A and B) and no result of the
 version 1 run existed when this file was written**. That is not the same as the engineer having no earlier information; see "Prior exposure" below, which says what was known.
 Edit this file after a result and the check is void: a changed rule is a new file.
 
 **Version 2 departs from version 1.** Version 1 says a void run "may be run again with the same rules". This file does not rerun with the same rules: it changes one rule, because
-with the same rules the check can never complete (see below). That is a post hoc change of the criteria, made by the engineer and approved by the owner, and every quote of the
+with the same rules the check can never complete (see below). That is a post hoc change of the criteria, made by the engineer on the owner's instruction to go the version 2 route (30 Oct); the owner approves this file by merging it, and every quote of the
 outcome says so.
 
 ## Why version 2
@@ -29,7 +29,7 @@ outcome says so.
 
 ## Prior exposure (said plainly)
 
-- On 25 Oct 2026, before the version 1 criteria were final, the engineer rehearsed the verifier on a copy of the real dataset with **synthetic** Yahoo and NSE references. That rehearsal
+- On 25 Oct 2026, after the version 1 criteria were merged and before the counted run, the engineer rehearsed the verifier on a copy of the real dataset with **synthetic** Yahoo and NSE references. That rehearsal
   exercised **check C** (dataset against aeron7) on the real data: **NIFTY passed** (worst month 2015-08 at 81% agreeing, above the 80% floor); **BANKNIFTY failed the month rule only**
   (2020-03: 15 of 19 compared sessions agree, 16 would pass). Checks A and B had no real reference then and no result.
 - No rule or number was changed because of that rehearsal, and none is changed in version 2 other than the date rule. The verifier already says, in its `PRIOR_EXPOSURE` text,
