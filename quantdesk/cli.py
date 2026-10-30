@@ -367,7 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result, "
                                   "refit the registered models as a drill, check an imported dataset against independent references "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card", "retrain", "verify"])
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card", "retrain", "verify", "import-tape"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
@@ -416,6 +416,8 @@ def cmd_ml(cfg, a):
             return _ml_card(cfg, a)
         if a.action == "retrain":
             return _ml_retrain(cfg, a)
+        if a.action == "import-tape":
+            return _ml_import_tape(cfg, a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
         raise SystemExit(f"ml {a.action}: {exc}")
@@ -503,6 +505,23 @@ def _ml_oi(cfg, a):
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
     print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
+
+
+def _ml_import_tape(cfg, a):
+    """P0.2 for tier T2: register the desk's own chain-tape files (hashes and counts only; the data is referenced, not copied). Offline and read-only on the tape."""
+    from .ml import build as B
+    from .ml import tape as T
+    if not a.source:
+        raise SystemExit("ml import-tape: --source (a folder of <day>_<part>_chains.parquet files) is required")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_tape"
+    B.refuse_tracked_tree(out, "ml import-tape --out")
+    try:
+        man = T.import_tape(Path(a.source), out)
+    except T.TapeError as exc:
+        raise SystemExit(f"ml import-tape: {exc}")
+    print(f"dataset {man['dataset']} · {man['totals']['files']} file(s) · {man['totals']['rows']:,} rows · digest {man['digest'][:16]} · faults counted {man['totals']['faults']}")
+    for r in man["rejected"][:20]:
+        print(f"  rejected {r['file']}: {r['reasons'][0]}")
 
 
 def _ml_retrain(cfg, a):
