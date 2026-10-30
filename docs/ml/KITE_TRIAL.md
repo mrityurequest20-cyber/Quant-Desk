@@ -52,7 +52,7 @@
 > Kite minutes are not served on a minute whose first tick came more than 15 s after the minute began (a late connect or a reconnect) and only inside 09:15 to 15:29; a live price more than 0.5%
 > from the last served close is used only if the other feed's price agrees; none of these is a trial measure, they are the safeguards the review required.
 >
-> **Decision on 20 Nov (fixed now):** KEEP if E1 to E4 pass in at least 90% of counted sessions (E3 over the sessions in which it was measured, and at least 5 of those; "a session passes E1 to E4" means each of its four thresholds, E1 at 99%), E5 has no failure, and E6 holds; otherwise REMOVE the attachment (one config line,
+> **Decision on 20 Nov (fixed now):** KEEP if E1 to E4 pass in at least 90% of counted sessions (a session in which E3 was not measured is judged on E1, E2 and E4 alone, counts in the denominator of the 90%, and E3 is judged over the sessions in which it was measured, at least 5 of those; "a session passes E1 to E4" means each of its four thresholds, E1 at 99%), E5 has no failure, and E6 holds; otherwise REMOVE the attachment (one config line,
 > `intraday.kite.live: false`) and do not renew the subscription. EXTEND once, by the sessions missing from 10 counted or from 5 E3-measured sessions (whichever needs more; the subscription ends about 25 Nov, so an extension is decided by the owner), if fewer than 10 were counted or fewer than 5 had E3 measured; after the one extension, REMOVE if still short. A hand-checked candle comparison (Kite's own
 > historical minutes against the desk's bars, as B1 below) is run on the first and last counted weeks as a cross-check on E4. The separate tick recorder described further down is optional and
 > secondary: it measures latency (C3) and real order flow (C4) and is not needed for the decision.
@@ -116,6 +116,8 @@ A session **passes** if A1, A2, B1 and B2 pass for every recorded instrument (in
 sessions, or C2 passes in every counted session in which it was measured, because either would fix a weakness the desk has today.
 
 ## The decision on 20 Nov (the rule is fixed now; nobody chooses after seeing the data)
+
+> **Superseded by amendment v2.** The attached desk's KEEP / REMOVE / EXTEND rule at the top of this document ("Decision on 20 Nov" under the measures E1 to E6) is the one rule that governs the subscription on 20 Nov. The bullets below are the v1 rule for the separate shadow recorder (A to D) and decide nothing about the subscription or the attachment.
 
 - **CONTINUE as a shadow source** (still no effect on trading) if at least 90% of counted sessions pass, the trial has value, and D2 holds. A **separate, independently reviewed change**
   would then propose making Kite a primary source, with its own replay evidence; this trial cannot make that change.
