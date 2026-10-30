@@ -367,7 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result, "
                                   "refit the registered models as a drill, check an imported dataset against independent references "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card", "retrain", "verify", "import-tape"])
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card", "retrain", "verify", "import-tape", "oneshot"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
@@ -418,6 +418,8 @@ def cmd_ml(cfg, a):
             return _ml_retrain(cfg, a)
         if a.action == "import-tape":
             return _ml_import_tape(cfg, a)
+        if a.action == "oneshot":
+            return _ml_oneshot(a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
         raise SystemExit(f"ml {a.action}: {exc}")
@@ -445,6 +447,27 @@ def _ml_build(cfg, a):
     symbols = [s.strip() for s in a.symbols.split(",") if s.strip()]
     folder = B.build(Path(a.dataset), symbols, a.profile_end, out, allow_unverified=a.allow_unverified)
     print(f"table {folder}")
+
+
+_ONESHOT_DEFAULTS = {"source": None, "version": "", "reviewed": None, "symbols": "NIFTY,BANKNIFTY", "profile_end": None, "allow_unverified": False,
+                     "committed": None, "rtol": 1e-9, "through": "platform", "day": None, "readout": "interim", "aeron": None, "cache": None, "flip": False,
+                     "accept_gaps": "", "run": None}
+
+
+def _ml_oneshot(a):
+    """The one-shot HAR evaluation (docs/prereg/har_oneshot_v1.json, amendment 1). It reads every setting from the spec and takes only three paths: any
+    other option is refused, and there is no flag that accepts an unverified dataset."""
+    from .ml import oneshot as OS
+    stray = sorted(k for k, v in _ONESHOT_DEFAULTS.items() if getattr(a, k, v) != v)
+    if stray:
+        raise SystemExit(f"ml oneshot: takes --dataset, --spec and --out only (not --{', --'.join(k.replace('_', '-') for k in stray)}): the spec fixes every setting")
+    if not a.dataset or not a.out or a.spec == "docs/prereg/vol_forecast_v1.json":
+        raise SystemExit("ml oneshot: --dataset, --spec docs/prereg/har_oneshot_v1.json and --out (an empty folder outside every git working tree) are required")
+    try:
+        res = OS.run(Path(a.dataset), Path(a.spec), Path(a.out))
+    except OS.Refused as exc:
+        raise SystemExit(f"ml oneshot: refused, no look spent: {exc}")
+    print(f"{res['spec']}: {res['verdict']} ({res['evidence']}); result in {a.out}")
 
 
 def _ml_verify(a):
