@@ -1,9 +1,14 @@
 # P0.6 criteria: the independent check of the Kaggle index minutes (version 2)
 
 Committed **alone, before any verifier change and before any result**. This is `P0_6_criteria_v2.md`; `P0_6_criteria.md` (version 1) is untouched and stays as merged.
-**Version 2 is identical to version 1 in every rule, number and threshold except one reference-file rule, stated in "Why version 2" below.** It was written after a **void**
-version 1 run, not after a failed one: that run produced no comparison of any kind, so no result about the dataset existed when this file was written (see "Why version 2").
+**Version 2 is identical to version 1 in every rule, number and threshold except one reference-file rule, stated in "The one changed rule" below.** It was written after a **void**
+version 1 run, not after a failed one: that run produced no comparison of any kind, so **no result of the dataset against Yahoo or NSE (checks A and B) and no result of the
+version 1 run existed when this file was written**. That is not the same as the engineer having no earlier information; see "Prior exposure" below, which says what was known.
 Edit this file after a result and the check is void: a changed rule is a new file.
+
+**Version 2 departs from version 1.** Version 1 says a void run "may be run again with the same rules". This file does not rerun with the same rules: it changes one rule, because
+with the same rules the check can never complete (see below). That is a post hoc change of the criteria, made by the engineer and approved by the owner, and every quote of the
+outcome says so.
 
 ## Why version 2
 
@@ -13,17 +18,35 @@ Edit this file after a result and the check is void: a changed rule is a new fil
 - The cause is a defect **inside NSE's own archive**: that file's `Index Date` field reads `04-06-2023`, the file's date with day and month swapped. Version 1 says such a file
   "is an error", so version 1 can **never** complete: the file will always be mislabelled and a rerun with the same rules voids at the same file.
 - **Before writing this file, the engineer scanned the reference files only** (not the dataset): all 838 weekdays from 2023-03-01 to 2026-05-15, comparing each file's `Index Date`
-  with its name. 51 answered HTTP 404 (6.1%). Of the other 787, **exactly three files** carry a swapped label: 2023-04-06 (`04-06-2023`), 2023-04-10 (`04-10-2023`) and
-  2023-04-11 (`04-11-2023`); no file has any other date problem, a missing row or a bad format. Nothing about how the dataset compares with any reference was looked at. The
-  scan's only content is this paragraph.
+  with its name. 51 answered HTTP 404 (6.1%). Of the other 787, **exactly three files** carry a swapped label, on both index rows each: 2023-04-06 (`04-06-2023`), 2023-04-10
+  (`04-10-2023`) and 2023-04-11 (`04-11-2023`); no file has any other date problem, a missing row or a bad format. Nothing about how the dataset compares with any reference
+  was looked at. The scan's only content is this paragraph. It was run twice (30 Oct 2026) with the same counts; the second run saved the sha256 of every file that answered 200:
+  - the three files: `2023-04-06` = `5ec0d8a41e5494f414df3774648d954ca0160c799759bd538625277dc9011cda`, `2023-04-10` = `575d1b73761842e3150c3e788fef14664ad725055aa5e2fe49e1abfe78bef9f4`,
+    `2023-04-11` = `37ede13a06f935aa915f51fb3533c75c9e75dc317114e0eb14e3eacc733b1483`;
+  - the scan manifest (787 lines `YYYY-MM-DD <sha256 of that file>`, in date order, newline-terminated): sha256 `044d56ca41c889310478e26a9bc4e0a2ec1c49e4376d7947b5ba811fdbe9fa8c`.
+- **The void log** `void_run_20261030T134834279524.json` has sha256 `d7be976f412fec09fd90ccdb7a7c48e47991c4048b36eee79b079747dbef8533`. It is not committed (it names a path of the
+  engineer's cache); the counted record carries its sha256.
+
+## Prior exposure (said plainly)
+
+- On 25 Oct 2026, before the version 1 criteria were final, the engineer rehearsed the verifier on a copy of the real dataset with **synthetic** Yahoo and NSE references. That rehearsal
+  exercised **check C** (dataset against aeron7) on the real data: **NIFTY passed** (worst month 2015-08 at 81% agreeing, above the 80% floor); **BANKNIFTY failed the month rule only**
+  (2020-03: 15 of 19 compared sessions agree, 16 would pass). Checks A and B had no real reference then and no result.
+- No rule or number was changed because of that rehearsal, and none is changed in version 2 other than the date rule. The verifier already says, in its `PRIOR_EXPOSURE` text,
+  that its record is **expected to be `passed: false` with no symbol licensed**, and version 2 carries that text unchanged into its record.
+- So version 2 is **not** a blind rerun: a BANKNIFTY failure of C is expected, and a **version 3 (written after that failure) is likely**. Neither the label `external_verified` nor any
+  claim from this check can be made on the strength of version 2 alone, and any version 3 is post hoc as well.
 
 ## The one changed rule
 
 - **Version 1:** the file's `Index Date` must equal the date in its name, otherwise it is an error (the run is void).
-- **Version 2:** the file's `Index Date` must equal the date in its name, **or** equal that date **with day and month swapped** (`DD-MM-YYYY` read as `MM-DD-YYYY`), and the swapped
-  reading must itself be a valid calendar date different from the file's date. Every file accepted by the swap is **listed in the record** (`date_label_swapped`, with the date in the
-  name and the label read) and counted. **Any other mismatch is still an error and voids the run.** The closing values in such a file are used as they are: nothing is corrected,
-  re-dated or dropped. If a swapped file's values were in fact another day's, the comparison fails visibly, as it would for any wrong reference.
+- **Version 2:** the file's `Index Date` must equal the date in its name, **or** be the **swapped label of that date**, defined once here: the verifier first reads the label as
+  `DD-MM-YYYY` (NSE's format); a label is *swapped* if, read as `MM-DD-YYYY` instead, it equals the date in the file's name (name 2023-04-06, label `04-06-2023`: read as
+  `DD-MM-YYYY` it is 4 June, read as `MM-DD-YYYY` it is 6 April, the name's date). The swapped reading must be a valid calendar date different from the one read as `DD-MM-YYYY`.
+  **The exception is pinned to the three files named above (name dates 2023-04-06, 2023-04-10, 2023-04-11).** A swapped label in any other file, or a fourth file, is an error and voids
+  the run, exactly as a mismatch of any other kind does; zero swapped files among the three is acceptable (NSE may have corrected them). Every file accepted by the swap is **listed in
+  the record** (`date_label_swapped`: the date in the name and the label text) and counted. The closing values in such a file are used as they are: nothing is corrected, re-dated or
+  dropped. If a swapped file's values were in fact another day's, the comparison fails visibly, as it would for any wrong reference.
 
 ## What is checked
 
@@ -47,7 +70,7 @@ Edit this file after a result and the check is void: a changed rule is a new fil
   `Nifty Bank`, field `Closing Index Value` (the file also carries open, high and low; only the close is used). One file is fetched per weekday of the window, and also for the date of every accepted session that falls on a weekend (a Budget or Muhurat special session);
   every raw file is saved, and the sha256 of each file, of a manifest listing them and of the `date,symbol,close` CSV built from them is recorded. A weekday
   whose file answers HTTP 404 is a day NSE published no index file (a holiday or a closure) and is not an error; any other HTTP error, a timeout, or a file
-  without the two rows is an error and voids the run (see "one run"). The file's `Index Date` must equal the date in its name, or that date with day and month swapped (version 2, see "The one changed rule"), otherwise it is an error. If more than 10% of the weekdays answer 404 the run is void (the archive layout changed; holidays are about 6% of weekdays). Requests carry a browser `User-Agent`, because the archive may refuse requests without one (a 403 voids the run). Only the sha256 and aggregates are committed, never reference rows.
+  without the two rows is an error and voids the run (see "one run"). The file's `Index Date` must equal the date in its name, or be the swapped label of one of the three pinned files (version 2, see "The one changed rule"), otherwise it is an error. If more than 10% of the weekdays answer 404 the run is void (the archive layout changed; holidays are about 6% of weekdays). Requests carry a browser `User-Agent`, because the archive may refuse requests without one (a 403 voids the run). Only the sha256 and aggregates are committed, never reference rows.
 
 ## The checks (per symbol; every rule must hold)
 
@@ -103,14 +126,15 @@ changes the manifest digest and voids the record.
 ## Outcome and "one run"
 
 - **All rules hold for both symbols:** `verification.json` is written beside the manifest with `passed: true`, `check: "p06-v2"`, the dataset digest, this
-  file's sha256, `symbols_verified`, `scope`, the reference sources and dates, the sha256 of each reference file, and the numbers.
+  file's sha256, `symbols_verified`, `scope`, the reference sources and dates, the sha256 of each reference file, and the numbers. It also carries `supersedes: "p06-v1 (void)"`, the sha256 of the void log
+  (`d7be976f…`, above), `post_hoc: true`, `date_label_swapped`, and the verifier's `PRIOR_EXPOSURE` text.
 - **Anything fails:** `verification.json` is written with `passed: false` and the reasons; the status stays `external_unverified`; nothing is retried with looser
   rules.
 - **One run** means one run that produced comparisons. A run is void only on an exception or HTTP error raised by the code, logged in `void_run_<time>.json` (the reason) with nothing else written; the check may then be
-  run again with the same rules. A void is never the operator's judgment: a reference that returns incomplete data without an error is a counted run.
+  run again with the same rules. Version 2 itself is run **once**, from a fresh clone of `main` with a new empty cache folder outside any git tree. A void is never the operator's judgment: a reference that returns incomplete data without an error is a counted run.
 
 ## After a failure
 
 If a failure looks benign, the next step is a new criteria file written after it, committed before any rerun. The record of this run is kept as `verification_p06-v2.json` and never
-overwritten. Any quote of the verified label states that version 2 was written after a void version 1 run, before any comparison, for the one reason given above, and that the
-record carries `date_label_swapped`.
+overwritten. Any quote of the verified label states that version 2 was written after a void version 1 run, before any comparison of A or B, for the one reason given above, that it
+departs from version 1's rule of rerunning with the same rules, that check C had been exercised on 25 Oct ("Prior exposure"), and that the record carries `date_label_swapped` and `post_hoc: true`.
