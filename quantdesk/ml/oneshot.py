@@ -154,7 +154,8 @@ def dataset_route(ds: Path, man: dict, pins: Pins) -> tuple[str, dict]:
 def refuse_unless_ready(ds: Path, spec_path: Path, out: Path, pins: Pins, amendment: Path, criteria: Path, artifact: Path, results_dir: Path,
                         commit: dict | None) -> dict:
     """Every refusal check of command.behaviour, before anything is loaded. Returns what the header records."""
-    fsha, h = sha256_of(spec_path), spec_hash(spec_path)
+    spec_bytes = Path(spec_path).read_bytes() if Path(spec_path).is_file() else b""
+    fsha, h = sha256_bytes(spec_bytes), spec_hash(spec_path)
     if fsha != pins.spec_file_sha256 or h != pins.spec_hash:
         raise Refused(f"{Path(spec_path).name} is not the merged spec (file {fsha[:12]}, canonical {h[:12]}; pinned {pins.spec_file_sha256[:12]}, {pins.spec_hash[:12]})")
     if sha256_of(artifact) != pins.artifact_sha256:
@@ -171,7 +172,11 @@ def refuse_unless_ready(ds: Path, spec_path: Path, out: Path, pins: Pins, amendm
             raise Refused(f"--out {out} is inside a git working tree ({anc}): the result carries third-party-derived numbers and must be written outside")
     if p.exists() and (not p.is_dir() or any(p.iterdir())):
         raise Refused(f"--out {out} must be an empty folder")
-    name = json.loads(Path(spec_path).read_text())["name"]
+    try:
+        spec = json.loads(spec_bytes)                          # parsed from the bytes that were hashed above, not read a second time
+    except ValueError as exc:
+        raise Refused(f"{Path(spec_path).name} cannot be parsed: no look is spent") from exc
+    name = spec["name"]
     for suffix in (".json", ".md"):
         if (Path(results_dir) / f"{name}-{h[:12]}{suffix}").exists():
             raise Refused(f"a result for this spec already exists in {results_dir}: the look is spent (looks.rule)")
@@ -188,7 +193,7 @@ def refuse_unless_ready(ds: Path, spec_path: Path, out: Path, pins: Pins, amendm
     except (OSError, ValueError) as exc:
         raise Refused(f"{ds}: no readable manifest") from exc
     route, rec = dataset_route(Path(ds), man, pins)
-    return {"spec_sha256": h, "spec_file_sha256": fsha, "route": route, "record": rec, "manifest": man, "name": name, "dataset_marker": spent, **commits}
+    return {"spec_sha256": h, "spec_file_sha256": fsha, "route": route, "record": rec, "manifest": man, "name": name, "spec": spec, "dataset_marker": spent, **commits}
 
 
 # ---- preflight: counts, dates and masks only --------------------------------------------------------------------------------------
@@ -496,10 +501,10 @@ class CrashAfterMarker(RuntimeError):
 
 
 def code_state() -> dict:
-    """{commit, dirty}: HEAD, and whether anything under quantdesk/ or docs/ differs from it (the code, the specs and the pins it reads)."""
+    """{commit, dirty}: HEAD, and whether anything under quantdesk/, docs/, tests/ or config/ differs from it (the code, its tests, the specs and the pins it reads)."""
     try:
         head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=20, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "-C", str(REPO), "status", "--porcelain", "--", "quantdesk", "docs"], capture_output=True, text=True, timeout=20,
+        dirty = subprocess.run(["git", "-C", str(REPO), "status", "--porcelain", "--", "quantdesk", "docs", "tests", "config"], capture_output=True, text=True, timeout=20,
                                check=True).stdout.strip()
         return {"commit": head or None, "dirty": bool(dirty)}
     except (OSError, subprocess.SubprocessError):
@@ -589,7 +594,7 @@ def run(dataset: Path, spec_path: Path, out: Path, say=print, pins: Pins | None 
         sec = secondary(win, refit_f)
         gap_dates = {s: [str(grids[s][0][o]) for o in gaps[s]] for s in SYMBOLS if gaps[s]}
         result = {"caveat": sentence, "outcome_statement": f"{prim['verdict']}. {sentence}", "evidence": "external_unverified", **header,
-                  "not_for": json.loads(spec_path.read_text())["not_for"], "control": ctl, "preflight": pre,
+                  "not_for": info["spec"]["not_for"], "use_if_passed": info["spec"]["use_if_passed"], "control": ctl, "preflight": pre,
                   "leading_gap_sessions_dropped": gap_dates,
                   "primary": prim, "pooled_c_vs_b": pooled, "secondary": sec,
                   "refit": {"fits": refit_fits, "profile": refit_profile, "profile_end": REFIT_PROFILE_END},
@@ -606,7 +611,7 @@ def run(dataset: Path, spec_path: Path, out: Path, say=print, pins: Pins | None 
             log.write_text(traceback.format_exc())
         except OSError:
             pass
-        raise CrashAfterMarker(f"crashed after the marker (the look is spent; no result file was written, only the markers and this log): {exc.__class__.__name__}: {exc}. "
+        raise CrashAfterMarker(f"crashed after the marker (the look is spent; no result file was written, only the markers and this log): {exc.__class__.__name__}; the detail is in the log, which may hold values and is not printed. "
                                f"The crash log is {log}. The registered crash rule governs what may follow.") from exc
     return result
 
@@ -662,7 +667,8 @@ def rehearse_control(dataset: Path, out: Path, say=print, pins: Pins | None = No
 
 def render(r: dict) -> str:
     """The result as text. The mandatory sentence heads the report, before the heading, the label and every number; the outcome line carries it again."""
-    L = [f"> {r['caveat']}", "", f"# {r['spec']} - one-shot evaluation ({r['evidence']})", "", f"**Outcome: {r['outcome_statement']}**", ""]
+    L = [f"> {r['caveat']}", "", f"# {r['spec']} - one-shot evaluation ({r['evidence']})", "", f"**Outcome: {r['outcome_statement']}**", "",
+         f"**Not for:** {r['not_for']}.", "", f"**If passed:** {r['use_if_passed']}", ""]
     L += [f"Evidence label: **{r['evidence']}**. Opened {r['opened']}. Spec sha256 `{r['spec_sha256']}` (autolearn.prereg.spec_hash; file `{r['spec_file_sha256']}`), "
           f"code commit `{r['code_commit']}`.",
           f"Dataset `{r['dataset']}` (digest `{r['dataset_digest']}`, status {r['dataset_status']}, tier {r['dataset_tier']}); artifact sha256 `{r['artifact_sha256']}`; "

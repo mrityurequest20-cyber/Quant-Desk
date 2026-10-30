@@ -542,6 +542,15 @@ def test_the_window_gets_no_forecast_before_the_marker_and_the_control_none_afte
     assert win_call["min"] >= OS.WINDOW_START and win_call["marker"]                         # the window's rows are first touched after the marker is on disk
 
 
+def test_the_report_carries_the_registered_not_for_and_use_if_passed_above_the_numbers(ran):
+    out = ran["out"]
+    md, js = (out / f"{stem()}.md").read_text(), json.loads((out / f"{stem()}.json").read_text())
+    spec = json.loads(SPEC.read_text())
+    assert js["not_for"] == spec["not_for"] and js["use_if_passed"] == spec["use_if_passed"]
+    assert spec["not_for"] in md and spec["use_if_passed"] in md
+    assert md.index(spec["not_for"]) < md.index("| cell |") and md.index(spec["use_if_passed"]) < md.index("| cell |")
+
+
 def test_the_label_is_unverified_everywhere_and_the_sentence_heads_the_report_and_closes_it(ran):
     out, res = ran["out"], ran["res"]
     md, js = (out / f"{stem()}.md").read_text(), (out / f"{stem()}.json").read_text()
@@ -638,9 +647,10 @@ def test_a_crash_after_the_marker_keeps_both_markers_saves_a_log_and_writes_no_r
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(OS, "control", OK_CONTROL)
         mp.setattr(OS, "primary", lambda win: (_ for _ in ()).throw(RuntimeError("boom")))
-        with pytest.raises(OS.CrashAfterMarker, match="boom") as e:
+        with pytest.raises(OS.CrashAfterMarker, match="RuntimeError") as e:
             OS.run(**kw)
     assert "the look is spent" in str(e.value) and "crash log" in str(e.value)
+    assert "boom" not in str(e.value)                                                          # the detail stays in the log: a message could carry a value
     assert (out / f"{stem()}.marker.json").is_file() and (kw["dataset"] / f"{stem()}.marker.json").is_file()
     assert "boom" in (out / f"{stem()}.crash.txt").read_text() and "Traceback" in (out / f"{stem()}.crash.txt").read_text()
     assert not (out / f"{stem()}.json").exists() and not (out / f"{stem()}.md").exists()
@@ -654,7 +664,7 @@ def test_a_render_failure_happens_before_any_result_file_exists(synth):
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(OS, "control", OK_CONTROL)
         mp.setattr(OS, "render", lambda r: (_ for _ in ()).throw(ValueError("cannot render")))
-        with pytest.raises(OS.CrashAfterMarker, match="cannot render"):
+        with pytest.raises(OS.CrashAfterMarker, match="ValueError"):
             OS.run(**kw)
     assert not (out / f"{stem()}.json").exists() and not (out / f"{stem()}.md").exists() and list(out.glob("*.tmp")) == []
 
