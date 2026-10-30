@@ -365,8 +365,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_wings)
     s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result, "
-                                  "refit the registered models as a drill (never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card", "retrain"])
+                                  "refit the registered models as a drill, check an imported dataset against independent references "
+                                  "(never touches the live desk)")
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card", "retrain", "verify", "import-tape"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
@@ -388,6 +389,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
     s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
+    s.add_argument("--aeron", help="verify: the already verified aeron7 dataset folder (check C, the overlap)")
+    s.add_argument("--cache", help="verify: a folder outside any git tree where the NSE index files are saved (their sha256 go in the record)")
+    s.add_argument("--flip", action="store_true", help="verify: the status-only step after a pass: copy `passed` from verification.json into the manifest; compares nothing")
     s.add_argument("--accept-gaps", default="", help="oi-report --readout final: comma-separated weekdays (YYYY-MM-DD) that have no table because they were exchange holidays")
     s.add_argument("--run", help="card: a JSON run record (spec, code commit, data digests, training window, settings, variants, baseline, out-of-sample result, "
                                  "leakage tests, status); the card is built from it or refused, naming what is missing")
@@ -406,10 +410,14 @@ def cmd_ml(cfg, a):
             return _ml_build(cfg, a)
         if a.action in ("oi", "oi-report"):
             return _ml_oi(cfg, a)
+        if a.action == "verify":
+            return _ml_verify(a)
         if a.action == "card":
             return _ml_card(cfg, a)
         if a.action == "retrain":
             return _ml_retrain(cfg, a)
+        if a.action == "import-tape":
+            return _ml_import_tape(cfg, a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
         raise SystemExit(f"ml {a.action}: {exc}")
@@ -437,6 +445,24 @@ def _ml_build(cfg, a):
     symbols = [s.strip() for s in a.symbols.split(",") if s.strip()]
     folder = B.build(Path(a.dataset), symbols, a.profile_end, out, allow_unverified=a.allow_unverified)
     print(f"table {folder}")
+
+
+def _ml_verify(a):
+    """P0.6 (docs/ml/P0_6_criteria_v2.md): the independent check of an imported index-minute dataset, run once; `--flip` is the separate status-only step after a pass."""
+    from .ml import build as B
+    from .ml import verify as VF
+    if not a.dataset:
+        raise SystemExit("ml verify: --dataset (the imported dataset folder) is required")
+    if a.flip:
+        print(f"{Path(a.dataset).name}: the loader now gives the verified symbols {VF.flip_status(Path(a.dataset))}")
+        return
+    if not a.aeron or not a.cache:
+        raise SystemExit("ml verify: --aeron (the verified aeron7 dataset) and --cache (a folder outside any git tree for the NSE files) are required")
+    B.refuse_tracked_tree(Path(a.cache), "ml verify --cache")
+    rec = VF.run(Path(a.dataset), Path(a.aeron), Path(a.cache))
+    print(f"check {rec['check']}: {'PASSED' if rec['passed'] else 'FAILED'} · symbols verified {rec['symbols_verified']} · record {Path(a.dataset) / 'verification.json'}")
+    for r in rec["reasons"][:20]:
+        print(f"  - {r}")
 
 
 def _ml_card(cfg, a):
@@ -479,6 +505,23 @@ def _ml_oi(cfg, a):
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
     print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
+
+
+def _ml_import_tape(cfg, a):
+    """P0.2 for tier T2: register the desk's own chain-tape files (hashes and counts only; the data is referenced, not copied). Offline and read-only on the tape."""
+    from .ml import build as B
+    from .ml import tape as T
+    if not a.source:
+        raise SystemExit("ml import-tape: --source (a folder of <day>_<part>_chains.parquet files) is required")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_tape"
+    B.refuse_tracked_tree(out, "ml import-tape --out")
+    try:
+        man = T.import_tape(Path(a.source), out)
+    except T.TapeError as exc:
+        raise SystemExit(f"ml import-tape: {exc}")
+    print(f"dataset {man['dataset']} · {man['totals']['files']} file(s) · {man['totals']['rows']:,} rows · digest {man['digest'][:16]} · faults counted {man['totals']['faults']}")
+    for r in man["rejected"][:20]:
+        print(f"  rejected {r['file']}: {r['reasons'][0]}")
 
 
 def _ml_retrain(cfg, a):
