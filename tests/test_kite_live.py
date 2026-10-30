@@ -1,5 +1,6 @@
 """The Kite websocket attached to the running desk (quantdesk/intraday/kitelive.py): fakes only, no network. The websocket serves index bars and the live price when it is healthy and
 complete; every failure leaves the wrapped feed exactly as it was; and nothing in the module can place an order."""
+import datetime as dt
 import re
 import sys
 import types
@@ -12,6 +13,7 @@ from quantdesk.intraday import kitelive as KL
 
 ROOT = Path(__file__).resolve().parents[1]
 IST = "Asia/Kolkata"
+BEFORE = dt.date(2026, 10, 26)           # a fixed day before the owner's authority ends: these tests must not depend on the wall clock
 
 
 class Clock:
@@ -278,7 +280,7 @@ def test_without_credentials_or_with_a_broken_library_nothing_starts_and_nothing
     said = []
     monkeypatch.delenv("KITE_DATA_KEY", raising=False)
     monkeypatch.delenv("KITE_DATA_TOKEN", raising=False)
-    assert KL.make_live(None, ["NIFTY"], say=said.append) is None and "no KITE_DATA_KEY" in said[0]
+    assert KL.make_live(None, ["NIFTY"], say=said.append, today=BEFORE) is None and "no KITE_DATA_KEY" in said[0]
     monkeypatch.setenv("KITE_DATA_KEY", "k")
     monkeypatch.setenv("KITE_DATA_TOKEN", "t")
 
@@ -294,11 +296,11 @@ def test_without_credentials_or_with_a_broken_library_nothing_starts_and_nothing
     fake = types.SimpleNamespace(KiteConnect=Boom, KiteTicker=lambda k, t: FakeWS())
     monkeypatch.setitem(sys.modules, "kiteconnect", fake)
     said.clear()
-    assert KL.make_live(None, ["NIFTY"], say=said.append) is None
+    assert KL.make_live(None, ["NIFTY"], say=said.append, today=BEFORE) is None
     assert said and "RuntimeError" in said[0] and "SECRET-DETAIL" not in said[0]                # the library's message is not printed
     monkeypatch.delitem(sys.modules, "kiteconnect")
     monkeypatch.setitem(sys.modules, "kiteconnect", None)                                       # the library is not installed
-    assert KL.make_live(None, ["NIFTY"], say=said.append) is None
+    assert KL.make_live(None, ["NIFTY"], say=said.append, today=BEFORE) is None
 
 
 def test_with_credentials_the_websocket_starts_for_the_desks_indices(monkeypatch):
@@ -322,13 +324,12 @@ def test_with_credentials_the_websocket_starts_for_the_desks_indices(monkeypatch
         made.append(w)
         return w
     monkeypatch.setitem(sys.modules, "kiteconnect", types.SimpleNamespace(KiteConnect=Kite, KiteTicker=ticker))
-    live = KL.make_live(None, ["NIFTY", "BANKNIFTY", "INDIAVIX", "SENSEX"], say=lambda m: None)
+    live = KL.make_live(None, ["NIFTY", "BANKNIFTY", "INDIAVIX", "SENSEX"], say=lambda m: None, today=BEFORE)
     assert live is not None and live.tokens == {"NIFTY": 256265, "BANKNIFTY": 260105, "INDIAVIX": 264969}
     assert made[0].connected and made[0].subscribed == [256265, 260105, 264969]
 
 
 def test_the_feed_does_not_start_from_the_day_the_owners_authority_ends(monkeypatch):
-    import datetime as dt
     monkeypatch.setenv("KITE_DATA_KEY", "k")
     monkeypatch.setenv("KITE_DATA_TOKEN", "t")
 

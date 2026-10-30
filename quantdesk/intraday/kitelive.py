@@ -12,8 +12,11 @@ Owner decision (25 Oct 2026): the Kite websocket is attached directly to the run
 - **The settlement window is the other feeds' (15:00 to 15:29).** The expiry sleeves settle on the mean of the recorded 15:00 to 15:29 closes and on the 15:29 close (`sleeves.settlement_price`,
   `official_close`). To change nothing about what they read, no poll that reaches 15:00 is answered from Kite alone: the wrapped feed is asked, and its bars stand for every minute it has (Kite is
   compared with them, never overlaid). Not even a minute the wrapped feed lacks is supplied by Kite there (its next poll may bring it). Kite is measured there, not used (E3).
-- **Licence.** Kite's market data is the subscriber's: the minutes this module serves are not written to the recorder (`unrecorded`), so they never reach the public run artifacts or
-  the `chains-YYYY` release. The app shows only how old the last tick is, never a Kite price.
+- **Licence.** Kite's market data is the subscriber's. What this module does: the minutes it serves are not written to the recorder (`unrecorded`), so the recorder's files, and what is
+  built from them (the `chains-YYYY` release), carry no Kite-served minute. What it does NOT do: keep Kite-derived values out of the desk's own outputs. A decision, the index level
+  in the views, the journal's thoughts and the heartbeat are derived from whichever feed served the bars, exactly as with Kotak and Yahoo, and some of those are published. The Data
+  panel itself shows only how old the last tick is. If the licence is read more strictly than that, the switch is `intraday.kite.live: false`.
+- **Authority.** The owner's Kite data exception (docs/AUTONOMY.md) ends on 25 Nov 2026: from `AUTHORITY_ENDS` on, `make_live` returns None whatever is in the environment.
 - **Market data only.** No order method is used anywhere in this module (a test checks), and nothing here reaches the broker, risk or sizing code.
 """
 from __future__ import annotations
