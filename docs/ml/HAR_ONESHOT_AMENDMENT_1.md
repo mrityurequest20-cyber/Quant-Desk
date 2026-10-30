@@ -1,7 +1,7 @@
 # Amendment 1 to `docs/prereg/har_oneshot_v1.json`: the precondition on the dataset's status
 
 Committed **alone**: no code, no result, no run. The registered spec `docs/prereg/har_oneshot_v1.json` (sha256 `4b06e3b45dee0b5b58d81c53eb6ca6fb9394995c1903c39a797480def6498700`) is **not edited**; this file amends one rule of it and nothing else.
-It is **post hoc**: it is written after the P0.6 check failed (see `docs/ml/P0_6_result_v2.md`), and it loosens a precondition the owner pre-registered. It does so on the owner's explicit instruction of **30 Oct 2026** ("Go with option 2", chosen from
+It is **post hoc**: it is written after the P0.6 check failed (see `docs/ml/P0_6_result_v2.md`, which merges before this file; the record itself, `verification.json`, stays beside the dataset outside the repository and the result file gives its sha256), and it loosens a precondition the owner pre-registered. It does so on the owner's explicit instruction of **30 Oct 2026** ("Go with option 2", chosen from
 three options put to the owner: a post hoc version 3 of the P0.6 criteria to try for the label, this amendment, or dropping the evaluation). No limit, gate, loss, test, window or decision rule of the registered spec changes.
 
 ## The one rule amended
@@ -9,7 +9,7 @@ three options put to the owner: a post hoc version 3 of the P0.6 criteria to try
 - **Registered (`dataset` and `run_only_after_p06`):** the one-shot evaluation runs only when the dataset is `external_verified`, that is, only when a `verification.json` written by the P0.6 check names this digest and says it **passed**. "The command has no flag that accepts an unverified dataset."
 - **Amended:** the evaluation may also run when, and **only when**, the dataset's `verification.json` is **this exact record**: sha256 `f6288b06893d100605cdcb859e1e29e297aafff40c4efda4eaddcda25d646957`, check `p06-v2`, dataset digest `47d28d6376ca63af6f435c7a7fab16dc403cc99a7c49ab954ded2c68ed98e9b8`,
   criteria sha256 `508534f5657190f3ca57ee1cd8dd76cbc81aedabcced056a421f9ad7a019b51b`, `passed: false`, `symbols_verified: []`, and one single reason: `BANKNIFTY C: month 2020-03 has 79% agreeing, at least 80% needed`, with checks A and B passing for both symbols and D passing.
-  The command (to be built, separately reviewed) pins that record's sha256 and refuses any other record, any other reason, a record that was edited, and any dataset that is not this digest. It still has **no** flag that accepts an arbitrary unverified dataset. If a version 3 of the P0.6 criteria is ever written and passes, the registered rule applies to that record instead and this amendment is not needed.
+  The command (to be built, separately reviewed) pins that record's sha256 and refuses any other record, any other reason, a record that was edited, and any dataset that is not this digest. It still has **no** flag that accepts an arbitrary unverified dataset. A later version 3 of the P0.6 criteria does not qualify under this amendment or under the registered rule without a new amendment and its own criteria commit.
 - The dataset stays `external_unverified`. Nothing here flips a status, licenses a symbol or changes the loader.
 
 ## What does not change
@@ -19,7 +19,7 @@ the session and gap rules, the controls before the run (except that its first it
 
 ## What the result must say (mandatory, in the result's header and in every sentence that states the outcome)
 
-"The dataset was `external_unverified` when this was run: its P0.6 check (version 2, post hoc after a void version 1) failed one rule (BANKNIFTY, comparison with the aeron7 minute data, month 2020-03). Its daily high, low and close agreed with Yahoo and NSE for both symbols over the window.
+"The dataset was `external_unverified` when this was run: its P0.6 check (version 2, post hoc after a void version 1) failed one rule (BANKNIFTY, comparison with the aeron7 minute data, month 2020-03). Its P0.6 checks A and B passed for both symbols over the window, under their coverage and agreement thresholds: check A compared the daily high, low and close with Yahoo, and check B compared only the daily close with NSE's official close.
 Nothing independent checks its minute-by-minute path after Feb 2023, and this evaluation scores 1-minute returns. This evaluation was run under amendment 1 to its registration."
 
 ## Why the risk the registration named is still there, and what is and is not done about it
@@ -36,4 +36,4 @@ So a MIXED or KILL outcome may reflect a data defect, and a PASS rests on minute
 ## Order of work after this file merges (each its own reviewed change)
 
 1. Build `python -m quantdesk ml oneshot` per the registered spec with this precondition and the mandatory sentence, rehearsed on a synthetic dataset and on the spent period as the registration's controls require.
-2. Only after both reviews and a green CI: the one run. A refusal, a void or a crash before the marker is written spends no look; a run after the marker is the one look.
+2. Only after both reviews and a green CI: the one run. A refusal, a void or a crash before the marker is written spends no look; a run after the marker is the one look, except that a crash after the marker that wrote no number anywhere counts as nothing seen and may be rerun only under the registered crash rule (crash log committed, fix reviewed by the research-reviewer against the unchanged spec, both attempts stated in the result).
