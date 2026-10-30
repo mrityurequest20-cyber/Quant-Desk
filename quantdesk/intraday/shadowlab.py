@@ -1,10 +1,12 @@
 """The shadow lab: the desk's own setup logic run over history at volume, offline, with nothing near the live desk.
 
 The entry filter (ML_ROADMAP M4) needs 300 to 500 labelled setups, and the live desk produces about fourteen trades a week. This module
-replays whole past sessions through the real engine (the same analyst, playbook, gates and sizing as the live loop, on the model option
-chain) in a throwaway journal, broker and memory, and records every armed setup that reached its level, labelled on what the underlying did next.
+replays whole past sessions through the real engine (the same analyst, playbook, gates and sizing code as the live loop, on the model option chain) in a throwaway
+journal, broker and memory (the replay's runtime folder is empty, so the live desk's research priors, warehouse flows, buyer edge and learned memory are absent: the naive engine), and records every armed setup that reached its level, labelled on what the underlying did next.
 
-What it is not: it places nothing, reads no secret, opens no socket and writes only under `--out` (outside every git tree). Option prices in a
+What it is not: it places nothing, reads no secret and writes only under `--out` (outside every git tree). Its workers carry an accidental-network guard (the common
+socket, DNS, subprocess and credential-variable paths are closed; it is not a sandbox: the engine in replay mode makes no network call by design, and an audit of a
+replay saw none). Option prices in a
 replay come from the model chain, so a shadow trade's P&L is not real: the label of record is `r_underlying`, the outcome of the setup on the
 index itself (stop, target or the horizon's last close, in multiples of the planned risk). The source minutes are third-party and unverified;
 every row carries the dataset's status and tier, and nothing here is evidence for a gate, a promotion or a profitability claim (the dataset's
@@ -23,6 +25,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,7 +39,7 @@ HORIZON_MIN = 45                     # the same window the learning memory grade
 CHAIN_STALE_MIN = 5.0                # a recorded chain snapshot older than this at the fire is stale
 LOOKBACK_SESSIONS = 250              # prior sessions the replayed engine can see (it only ever reads the last few days plus its quant fit)
 ALLOWED_USE = "underlying_features"  # one of the dataset's declared uses (ml.intake.ALLOWED_USES)
-_SECRET_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+_SECRET_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "AUTH", "API", "COOKIE")
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -174,17 +177,30 @@ def replay_day(bars: dict[str, pd.DataFrame], day: dt.date, symbols: list[str], 
 
 # ---- workers -----------------------------------------------------------------------------------------------------------------------
 def lock_down() -> None:
-    """In a worker: no outbound connection can be made and no credential-like variable remains in the environment."""
+    """In a worker: an accidental-network guard. The common ways to open a connection (TCP and UDP sockets, DNS lookups, subprocess and os.system) raise, and every
+    environment variable whose name suggests a credential is dropped. It is not a sandbox: a determined path (a C extension, a raw syscall) is not covered; the engine in replay
+    mode makes no network call by design."""
     import socket
+    import subprocess
 
     def _blocked(*a, **k):
         raise OSError("the shadow lab opens no connection")
-    socket.socket.connect = _blocked
-    socket.socket.connect_ex = _blocked
-    socket.getaddrinfo = _blocked
+    for name in ("connect", "connect_ex", "sendto", "sendmsg"):
+        setattr(socket.socket, name, _blocked)
+    for name in ("getaddrinfo", "gethostbyname", "gethostbyname_ex", "getnameinfo", "gethostbyaddr", "create_connection"):
+        setattr(socket, name, _blocked)
+    subprocess.Popen.__init__ = _blocked
+    os.system = _blocked
     for k in list(os.environ):
         if any(w in k.upper() for w in _SECRET_WORDS):
             del os.environ[k]
+
+
+def _init_worker(work_root: str) -> None:
+    """Worker start-up: the guard above, and every temporary file goes under the (already checked) output folder, never a system temp location that could sit in a git tree."""
+    lock_down()
+    Path(work_root).mkdir(parents=True, exist_ok=True)
+    tempfile.tempdir = work_root
 
 
 def _prior_window(bars: dict[str, pd.DataFrame], day: dt.date, lookback: int) -> dict[str, pd.DataFrame]:
@@ -196,8 +212,10 @@ def _prior_window(bars: dict[str, pd.DataFrame], day: dt.date, lookback: int) ->
     return out
 
 
-def _write_part(rows: list, part_dir, key: str) -> None:
-    """Write one session's rows atomically: a stopped run leaves no truncated part for a resume to trust."""
+def _write_part(rows: list, part_dir, key: str, cov: dict | None = None) -> None:
+    """Write one session's rows atomically, with its per-symbol minute counts beside it (so a resumed session keeps its coverage): a stopped run leaves no truncated part."""
+    if cov is not None:
+        (Path(part_dir) / f"{key}.cov.json").write_text(json.dumps(cov))
     final = Path(part_dir) / f"{key}.parquet"
     partial = Path(part_dir) / f".{key}.parquet.tmp"
     pd.DataFrame(rows).to_parquet(partial, index=False)
@@ -217,8 +235,9 @@ def _job(args: tuple) -> tuple:
     try:
         with tempfile.TemporaryDirectory(prefix="shadowlab-") as tmp:
             rows = replay_day(_prior_window(_BARS, day, lookback), day, symbols, Path(tmp), horizon)
-        _write_part(rows, part_dir, str(day))
-        return str(day), len(rows), None, _coverage(_BARS, day, symbols)
+        cov = _coverage(_BARS, day, symbols)
+        _write_part(rows, part_dir, str(day), cov)
+        return str(day), len(rows), None, cov
     except Exception as exc:                                         # a session that cannot be replayed is reported, never silently dropped
         return str(day), 0, f"{exc.__class__.__name__}: {exc}"[:300], {}
 
@@ -226,9 +245,19 @@ def _job(args: tuple) -> tuple:
 _BARS = None
 
 
+def _dataset_has(ds, symbol: str) -> bool:
+    try:
+        man = json.loads((Path(ds) / "manifest.json").read_text())
+        return any(f"symbol={symbol}/" in k for k in man.get("partitions", {}))
+    except (OSError, ValueError):
+        return False
+
+
 def _load_bars(ds, symbols, loader_spec) -> dict[str, pd.DataFrame]:
+    """The requested symbols' minutes, plus the dataset's INDIAVIX when it holds one (the engine prices its model chain on it, as the live desk does; it is never an underlying)."""
     from ..ml import intake as I
-    df = (loader_spec or I.load)(Path(ds), list(symbols), use=ALLOWED_USE, allow_unverified=True)
+    want = list(symbols) + (["INDIAVIX"] if loader_spec is None and "INDIAVIX" not in symbols and _dataset_has(ds, "INDIAVIX") else [])
+    df = (loader_spec or I.load)(Path(ds), want, use=ALLOWED_USE, allow_unverified=True)
     out = {}
     for s, g in df.groupby("symbol"):
         g = g.set_index(pd.to_datetime(g["ts"]).dt.tz_convert("Asia/Kolkata")).sort_index()
@@ -254,8 +283,9 @@ def _job_tape(args: tuple) -> tuple:
             tape = tape.sort_values("ts")
         with tempfile.TemporaryDirectory(prefix="shadowlab-") as tmp:
             rows = replay_day(bars, day, list(symbols), Path(tmp), horizon, chains=chains, adverse_ticks=adverse_ticks, tape=tape)
-        _write_part(rows, part_dir, str(day))
-        return str(day), len(rows), None, _coverage(bars, day, list(symbols))
+        cov = _coverage(bars, day, list(symbols))
+        _write_part(rows, part_dir, str(day), cov)
+        return str(day), len(rows), None, cov
     except Exception as exc:
         return str(day), 0, f"{exc.__class__.__name__}: {exc}"[:300], {}
 
@@ -263,6 +293,7 @@ def _job_tape(args: tuple) -> tuple:
 # ---- stocks ------------------------------------------------------------------------------------------------------------------------
 _STEPS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 250.0, 500.0)
 STOCK_IV_BETA = 1.6                  # a stock's implied vol against the index's: typical, not measured
+MIN_COVERAGE = 300                   # of 375 minutes: a thinner symbol-session is listed in the manifest as incomplete
 MIN_STOCK_BARS = 300                 # of 375: a thinner session is skipped and said so
 MIN_PRIOR_SESSIONS = 3
 
@@ -309,8 +340,9 @@ def _job_stock(args: tuple) -> tuple:
         for r in rows:
             r["instrument_kind"] = "stock"
             r["spec_approx"] = True
-        _write_part(rows, part_dir, key)
-        return key, len(rows), None, _coverage(bars, day, [sym])
+        cov = _coverage(bars, day, [sym])
+        _write_part(rows, part_dir, key, cov)
+        return key, len(rows), None, cov
     except Exception as exc:
         return key, 0, f"{exc.__class__.__name__}: {exc}"[:300], {}
 
@@ -326,7 +358,7 @@ def run_stocks(stock_dir: Path, out: Path, vix_dir: Path | None = None, symbols:
     stock_dir, out = Path(stock_dir), Path(out)
     if (g := _inside_git_tree(out)) is not None:
         raise Refused(f"--out {out} is inside a git working tree ({g}): the rows are derived from broker minutes and stay outside")
-    if out.exists() and (not out.is_dir() or any(p.name not in ("parts",) for p in out.iterdir())):
+    if out.exists() and (not out.is_dir() or any(p.name not in ("parts", ".work") for p in out.iterdir())):
         raise Refused(f"--out {out} must be a new or empty folder (a resumed run may hold only its parts folder)")
     bars = load_stock_bars(stock_dir, Path(vix_dir) if vix_dir else None)
     stocks = sorted(s for s in bars if s != "INDIAVIX" and (symbols is None or s in symbols))
@@ -348,13 +380,13 @@ def run_stocks(stock_dir: Path, out: Path, vix_dir: Path | None = None, symbols:
         raise Refused("no (stock, session) with enough minutes and prior sessions")
     parts = out / "parts"
     parts.mkdir(parents=True, exist_ok=True)
-    _bind_parts(parts, {"kind": "stocks", "path": str(stock_dir), "horizon": horizon, "vix": str(vix_dir), "stocks": stocks})
+    _bind_parts(parts, {"kind": "stocks", "path": str(stock_dir), "code": code_state(), "horizon": horizon, "vix": str(vix_dir), "stocks": stocks})
     keys = [f"{d}_{s}" for d, s in jobs_list]
     todo = [(d, s) for d, s in jobs_list if not (parts / f"{d}_{s}.parquet").exists()]
     say(f"shadow lab (stocks): {len(stocks)} stocks, {len(keys)} stock-sessions ({len(keys) - len(todo)} already done), {len(todo)} to replay on {jobs} workers; {len(skipped)} skipped")
     failures = []
     if todo:
-        with executor(max_workers=jobs, initializer=lock_down) as ex:
+        with executor(max_workers=jobs, initializer=_init_worker, initargs=(str(out / ".work"),)) as ex:
             for key, n, err, cov in ex.map(_job_stock, [(d, s, str(stock_dir), str(vix_dir) if vix_dir else None, horizon, str(parts)) for d, s in todo]):
                 if err:
                     failures.append({"key": key, "error": err})
@@ -362,7 +394,7 @@ def run_stocks(stock_dir: Path, out: Path, vix_dir: Path | None = None, symbols:
     return _finish(out, parts, keys, failures, {"symbols": stocks, "horizon_min": horizon, "chain": "model", "adverse_ticks": 1, "skipped": skipped,
                    "engine_vix": "recorded INDIAVIX when the recorder folder had it, else a constant 14.0 fallback",
                    "stock_spec": "approximate (lot 1, strike step near 0.6% of price, IV beta 1.6): the desk_* columns are not real; labels are on the underlying",
-                   "source": {"path": str(stock_dir), "kind": "Kotak traded 1-minute cash bars of liquid F&O stocks (stock-minutes-2026 release)"}}, say)
+                   "source": {"path": str(stock_dir), "kind": "Kotak traded 1-minute cash bars of liquid F&O stocks (stock-minutes-2026 release)", "evidence": "broker traded minutes, a few sessions of history"}}, say)
 
 
 # ---- the command -------------------------------------------------------------------------------------------------------------------
@@ -371,11 +403,19 @@ def _inside_git_tree(path: Path) -> Path | None:
     return next((a for a in (p, *p.parents) if (a / ".git").exists()), None)
 
 
-def code_state() -> dict:
+def _digest(ds) -> str | None:
     try:
-        head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=20, check=True).stdout.strip()
+        return json.loads((Path(ds) / "manifest.json").read_text()).get("digest")
+    except (OSError, ValueError):
+        return None
+
+
+def code_state() -> dict:
+    env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}                # a read-only look: never refresh the index
+    try:
+        head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=20, check=True, env=env).stdout.strip()
         dirty = subprocess.run(["git", "-C", str(REPO), "status", "--porcelain", "--", "quantdesk", "config"], capture_output=True, text=True,
-                               timeout=20, check=True).stdout.strip()
+                               timeout=20, check=True, env=env).stdout.strip()
         return {"commit": head or None, "dirty": bool(dirty)}
     except (OSError, subprocess.SubprocessError):
         return {"commit": None, "dirty": None}
@@ -390,7 +430,7 @@ def run(dataset: Path, out: Path, symbols: list[str] | None = None, sample: int 
     symbols = list(symbols or ["NIFTY", "BANKNIFTY"])
     if (g := _inside_git_tree(out)) is not None:
         raise Refused(f"--out {out} is inside a git working tree ({g}): the rows are derived from third-party minutes and stay outside")
-    if out.exists() and (not out.is_dir() or any(p.name not in ("parts",) for p in out.iterdir())):
+    if out.exists() and (not out.is_dir() or any(p.name not in ("parts", ".work") for p in out.iterdir())):
         raise Refused(f"--out {out} must be a new or empty folder (a resumed run may hold only its parts folder)")
     if not (dataset / "manifest.json").is_file() and loader is None:
         raise Refused(f"{dataset}: not an ml-intake dataset (no manifest.json)")
@@ -405,20 +445,21 @@ def run(dataset: Path, out: Path, symbols: list[str] | None = None, sample: int 
     days = [pool[i] for i in days]
     parts = out / "parts"
     parts.mkdir(parents=True, exist_ok=True)
-    _bind_parts(parts, {"kind": "dataset", "path": str(dataset), "symbols": symbols, "lookback": lookback, "horizon": horizon, "adverse_ticks": 1})
+    _bind_parts(parts, {"kind": "dataset", "path": str(dataset), "digest": _digest(dataset), "code": code_state(), "symbols": symbols, "lookback": lookback,
+                        "horizon": horizon, "adverse_ticks": 1})
     todo = [d for d in days if not (parts / f"{d}.parquet").exists()]
     say(f"shadow lab: {len(days)} sessions drawn ({len(days) - len(todo)} already done), {len(todo)} to replay on {jobs} workers; nothing is placed, no connection is made")
     failures = []
     if todo:
         args = [(d, str(dataset), symbols, lookback, horizon, str(parts), loader) for d in todo]
-        with executor(max_workers=jobs, initializer=lock_down) as ex:
+        with executor(max_workers=jobs, initializer=_init_worker, initargs=(str(out / ".work"),)) as ex:
             for day, n, err, cov in ex.map(_job, args):
                 if err:
                     failures.append({"day": day, "error": err})
                 say(f"  {day}: {n} setups" + (f"  FAILED {err}" if err else ""))
     return _finish(out, parts, [str(d) for d in days], failures, {"symbols": symbols, "horizon_min": horizon, "lookback_sessions": lookback, "seed": seed,
                    "first": first, "last": last, "chain": "model", "adverse_ticks": 1,
-                   "engine_vix": "constant 14.0 fallback: the dataset carries no INDIAVIX series, so the model chain's IV (and view_iv / view_rv) is a constant-vol approximation",
+                   "engine_vix": "the dataset's INDIAVIX minutes when the dataset holds them (the model chain is priced on it, point in time), else the engine's constant 14.0 fallback",
                    "source": {"path": str(dataset), "use": ALLOWED_USE, "evidence": "external_unverified"}}, say)
 
 
@@ -441,15 +482,20 @@ def _finish(out: Path, parts: Path, keys: list, failures: list, extra: dict, say
     rows.to_parquet(out / "shadow_setups.parquet", index=False)
     ideas = rows[rows["idea_first"]] if len(rows) else rows
     clean = ideas[ideas["data_clean"]] if len(ideas) and "data_clean" in ideas else ideas
+    cov = {k: json.loads((parts / f"{k}.cov.json").read_text()) for k in keys if (parts / f"{k}.cov.json").exists()}
+    thin = {k: v for k, v in cov.items() if any(n < MIN_COVERAGE for n in v.values())}
     from ..ml import intake as I
     man = {"kind": "shadow_lab", "code": code_state(), "sessions_drawn": len(days), "sessions_failed": failures,
            "rows": int(len(rows)), "ideas": int(len(ideas)), "ideas_data_clean": int(len(clean)),
+           "coverage_recorded_for": len(cov), "coverage_incomplete": thin,
            "ideas_by_symbol": ideas["symbol"].value_counts().to_dict() if len(ideas) else {},
-           "label": "r_underlying: the setup's outcome on the index (stop first, target, or the horizon's last close), in multiples of planned risk",
+           "label": "r_underlying: the setup's outcome on the index (stop first, target, or the last close of the horizon or of the session if that comes first), in multiples of planned risk",
+           "replay_inputs": "the replay's runtime folder is empty: no research priors, warehouse flows, buyer edge or learned memory reach the engine (the naive engine)",
            "option_pnl": "desk_model_chain_r is the paper desk's R on the chain it was replayed on (model: not a real P&L; recorded: real bid/ask fills plus adverse ticks)",
            "allowed_uses": sorted(I.ALLOWED_USES),
            "not_for": "never evidence for a gate, a promotion, the paper gate or a profitability claim; third-party minutes stay outside the repository",
            "independence": "setups from one session share the day: count ideas, evaluate per session", **extra}
+    shutil.rmtree(out / ".work", ignore_errors=True)
     (out / "manifest.json").write_text(json.dumps(man, indent=1, default=str))
     say(f"shadow lab: {man['rows']} fires, {man['ideas']} labelled ideas ({man['ideas_data_clean']} on a clean feed) from {len(days) - len(failures)} sessions -> {out}")
     return man
@@ -464,7 +510,7 @@ def run_tape(recorder_dir: Path, out: Path, symbols: list[str] | None = None, fi
     symbols = list(symbols or ["NIFTY", "BANKNIFTY"])
     if (g := _inside_git_tree(out)) is not None:
         raise Refused(f"--out {out} is inside a git working tree ({g}): the rows are derived from recorded broker quotes and stay outside")
-    if out.exists() and (not out.is_dir() or any(p.name not in ("parts",) for p in out.iterdir())):
+    if out.exists() and (not out.is_dir() or any(p.name not in ("parts", ".work") for p in out.iterdir())):
         raise Refused(f"--out {out} must be a new or empty folder (a resumed run may hold only its parts folder)")
     if not recorder_dir.is_dir():
         raise Refused(f"{recorder_dir}: no recorder folder")
@@ -475,16 +521,16 @@ def run_tape(recorder_dir: Path, out: Path, symbols: list[str] | None = None, fi
         raise Refused("no recorded session with bars and chain snapshots in the window")
     parts = out / "parts"
     parts.mkdir(parents=True, exist_ok=True)
-    _bind_parts(parts, {"kind": "tape", "path": str(recorder_dir), "symbols": symbols, "horizon": horizon, "adverse_ticks": adverse_ticks, "vix": vix})
+    _bind_parts(parts, {"kind": "tape", "path": str(recorder_dir), "code": code_state(), "symbols": symbols, "horizon": horizon, "adverse_ticks": adverse_ticks, "vix": vix})
     todo = [d for d in days if not (parts / f"{d}.parquet").exists()]
     say(f"shadow lab (recorded quotes): {len(days)} sessions ({len(days) - len(todo)} already done), {len(todo)} to replay on {jobs} workers, adverse ticks {adverse_ticks}")
     failures = []
     if todo:
-        with executor(max_workers=jobs, initializer=lock_down) as ex:
+        with executor(max_workers=jobs, initializer=_init_worker, initargs=(str(out / ".work"),)) as ex:
             for day, n, err, cov in ex.map(_job_tape, [(d, str(recorder_dir), symbols, horizon, str(parts), adverse_ticks, vix) for d in todo]):
                 if err:
                     failures.append({"day": day, "error": err})
                 say(f"  {day}: {n} setups" + (f"  FAILED {err}" if err else ""))
     return _finish(out, parts, [str(d) for d in days], failures, {"symbols": symbols, "horizon_min": horizon, "chain": "recorded", "adverse_ticks": adverse_ticks,
-                                                "first": first, "last": last, "source": {"path": str(recorder_dir), "kind": "the desk's own recorded sessions",
+                                                "first": first, "last": last, "source": {"path": str(recorder_dir), "kind": "the desk's own recorded sessions", "evidence": "recorded broker quotes (not third-party minutes)",
                                                 "quotes": "real bid and ask per strike per minute (Kotak), recorded beside the desk"}}, say)

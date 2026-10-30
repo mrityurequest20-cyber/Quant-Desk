@@ -1,5 +1,6 @@
 """The shadow lab (quantdesk/intraday/shadowlab.py): labels, ideas, lockdown, refusals, and one real replay offline."""
 import datetime as dt
+import json
 import subprocess
 import sys
 import textwrap
@@ -78,24 +79,44 @@ def test_a_re_armed_setup_inside_its_window_is_one_idea():
     assert [r["idea_first"] for r in L.mark_ideas(rows)] == [True, False, True, True, True]
 
 
-def test_a_worker_can_open_no_connection_and_holds_no_credential():
+def test_a_worker_has_an_accidental_network_guard_and_holds_no_credential():
     code = textwrap.dedent("""
-        import os, socket
-        os.environ["KITE_DATA_SECRET"] = "x"; os.environ["ANTHROPIC_API_KEY"] = "y"; os.environ["PATH_OK"] = "z"
+        import os, socket, subprocess
+        for k in ("KITE_DATA_SECRET", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH", "CLAUDE_API", "SESSION_COOKIE"):
+            os.environ[k] = "x"
+        os.environ["PATH_OK"] = "z"
         from quantdesk.intraday import shadowlab as L
         L.lock_down()
-        assert "KITE_DATA_SECRET" not in os.environ and "ANTHROPIC_API_KEY" not in os.environ and os.environ["PATH_OK"] == "z"
-        for call in (lambda: socket.socket().connect(("127.0.0.1", 9)), lambda: socket.getaddrinfo("example.com", 80)):
+        left = [k for k in ("KITE_DATA_SECRET", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH", "CLAUDE_API", "SESSION_COOKIE") if k in os.environ]
+        assert not left and os.environ["PATH_OK"] == "z", left
+        calls = (lambda: socket.socket().connect(("127.0.0.1", 9)), lambda: socket.getaddrinfo("example.com", 80),
+                 lambda: socket.gethostbyname("example.com"), lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"x", ("127.0.0.1", 9)),
+                 lambda: subprocess.run(["true"]), lambda: os.system("true"), lambda: socket.create_connection(("127.0.0.1", 9)))
+        for call in calls:
             try:
                 call()
             except OSError as e:
                 assert "no connection" in str(e)
             else:
-                raise SystemExit("a connection was allowed")
+                raise SystemExit("a path was allowed")
         print("locked")
     """)
     res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=L.REPO, timeout=120)
     assert res.returncode == 0 and "locked" in res.stdout, res.stdout + res.stderr
+
+
+def test_a_worker_puts_its_temporary_files_under_the_checked_output_folder(tmp_path):
+    work = tmp_path / "out" / ".work"
+    code = textwrap.dedent(f"""
+        import tempfile
+        from quantdesk.intraday import shadowlab as L
+        L._init_worker({str(work)!r})
+        d = tempfile.mkdtemp(prefix="shadowlab-")
+        assert d.startswith({str(work)!r}), d
+        print("under work")
+    """)
+    res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=L.REPO, timeout=120)
+    assert res.returncode == 0 and "under work" in res.stdout and work.is_dir(), res.stdout + res.stderr
 
 
 def test_the_lab_refuses_an_output_inside_a_git_tree_or_a_used_folder(tmp_path):
@@ -117,6 +138,9 @@ def test_one_synthetic_session_is_replayed_offline_into_labelled_rows_and_leaves
     bars, _ = simulate_sessions(days, seed=11)
     day = days[-1]
     work = tmp_path / "work"
+    from quantdesk.config import DEFAULT_CONFIG, Config
+    default_rt = Config.load(DEFAULT_CONFIG).runtime_dir                           # where the live desk would write if the replay were not isolated
+    before = sorted(p.relative_to(default_rt).as_posix() for p in default_rt.rglob("*"))
     rows = L.replay_day({k: v for k, v in bars.items() if k in ("NIFTY", "BANKNIFTY", "INDIAVIX")}, day, ["NIFTY", "BANKNIFTY"], work)
     assert rows, "this seeded session arms and fires at least one setup"
     need = {"day", "ts", "symbol", "setup", "direction", "fill", "invalidation", "reward_risk", "risk_pct", "minutes_since_open", "r_underlying",
@@ -125,7 +149,7 @@ def test_one_synthetic_session_is_replayed_offline_into_labelled_rows_and_leaves
     assert all(-1.0 <= r["r_underlying"] and pd.Timestamp(r["ts"]).tz is not None for r in rows)
     assert rows[0]["idea_first"] is True and [r["ts"] for r in rows] == sorted(r["ts"] for r in rows)
     assert (work / "journal.db").is_file()                                       # the throwaway journal is under the work folder ...
-    assert not list((tmp_path / "runtime").rglob("*.db")) and not (L.REPO / "journal.db").exists()      # ... and the configured runtime is untouched
+    assert sorted(p.relative_to(default_rt).as_posix() for p in default_rt.rglob("*")) == before          # ... and the configured runtime is untouched
 
 
 # ---- stocks, resume safety, atomic parts -------------------------------------------------------------------------------------------
@@ -197,3 +221,21 @@ def test_the_stock_run_refuses_a_git_tree_an_unknown_stock_and_a_folder_with_too
         L.run_stocks(tmp_path, tmp_path / "o1", symbols=["TCS"])
     with pytest.raises(L.Refused, match="enough minutes and prior sessions"):
         L.run_stocks(tmp_path, tmp_path / "o2")
+
+
+def test_incomplete_session_coverage_reaches_the_manifest_even_for_a_resumed_session(tmp_path):
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    rows = [{"day": "x", "symbol": "NIFTY", "idea_first": True, "data_clean": True, "r_underlying": 1.0}]
+    L._write_part(rows, parts, "2026-01-05", {"NIFTY": 375, "BANKNIFTY": 375})
+    L._write_part(rows, parts, "2026-01-06", {"NIFTY": 375, "BANKNIFTY": 0})            # a symbol with no minutes that day
+    out = tmp_path / "out"
+    out.mkdir()
+    man = L._finish(out, parts, ["2026-01-05", "2026-01-06"], [], {"symbols": ["NIFTY", "BANKNIFTY"]}, lambda *_: None)
+    assert man["coverage_recorded_for"] == 2 and list(man["coverage_incomplete"]) == ["2026-01-06"]
+    assert not (out / ".work").exists()
+
+
+def test_the_dataset_vix_is_detected_from_its_manifest(tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps({"partitions": {"1m/symbol=NIFTY/year=2020.parquet": {}, "1m/symbol=INDIAVIX/year=2020.parquet": {}}}))
+    assert L._dataset_has(tmp_path, "INDIAVIX") and not L._dataset_has(tmp_path, "BANKNIFTY") and not L._dataset_has(tmp_path / "nowhere", "INDIAVIX")
