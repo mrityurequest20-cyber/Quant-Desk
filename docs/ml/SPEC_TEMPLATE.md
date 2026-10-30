@@ -34,3 +34,27 @@ first result, only superseded by a new one. Check it is new with `python -m quan
 
 ## 7. What would stop us
 - **Kill criterion:** the result that retires the idea, written as a number:
+
+## Machine-readable skeleton
+
+The registered form of a spec is a JSON file in `docs/prereg/`, which `python -m quantdesk experiments --check <file>` compares with every registered spec by *method* (wording is
+ignored; numbers, windows, rules and variants are what make two specs the same). Every `<...>` below is filled in; numbers go in the numeric fields, never only in prose. The kill
+threshold in particular is a number in `kill.threshold`.
+
+```json
+{
+  "name": "<model id>_v1",
+  "registered": "<YYYY-MM-DD>",
+  "question": "<section 1: the question>",
+  "decision": {"may_change": "<section 1: only a tightening>", "component": "<M1 to M8>"},
+  "target": {"definition": "<section 2: exact target>", "horizon_minutes": 0},
+  "baseline": {"name": "<section 2>", "metric": "<loss>", "decision_rule": "<what counts as failing>"},
+  "data": {"tiers": ["<T1, T1b, T2 or T3>"], "features": ["<feature, known at decision time>"], "excluded": ["<what would leak>"]},
+  "split": {"train": ["<start>", "<end>"], "validation": ["<start>", "<end>"], "locked_test": ["<start>", "<end>"], "purge_sessions": 0, "cutoff": "<YYYY-MM-DD>"},
+  "model": {"family": "<small, CPU>", "settings": {}},
+  "variants_tried": 0,
+  "multiple_testing": "<control>",
+  "evidence": {"power_sessions": 0, "cost_stress": 2.0, "shadow_sessions": 0},
+  "kill": {"rule": "<section 7: the result that retires the idea>", "threshold": 0.0}
+}
+```
