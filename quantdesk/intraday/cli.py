@@ -430,6 +430,14 @@ def _synthetic_bars(cfg, n: int, seed: int):
     return bars, meta, days[-n:]
 
 
+def cmd_shadow_replay(cfg, a):
+    from . import shadowlab
+    try:
+        shadowlab.run(Path(a.dataset), Path(a.out), [x.strip() for x in a.symbols.split(",") if x.strip()], a.sample, a.seed, a.first, a.last, a.jobs)
+    except shadowlab.Refused as exc:
+        sys.exit(f"shadow lab refused, nothing replayed: {exc}")
+
+
 def cmd_replay(cfg, a):
     account = a.account or ("synthetic" if a.synthetic else "replay")
     p = paths(cfg, account)
@@ -930,6 +938,16 @@ def register(sub):
     x.add_argument("--quiet", action="store_true")
     x.add_argument("--no-learn", action="store_true", help="don't grade or apply the account's track record")
     x.set_defaults(fn=cmd_replay)
+    x = ss.add_parser("shadow-replay", help="the shadow lab: replay past sessions through the real engine offline and label every armed setup (places nothing)")
+    x.add_argument("--dataset", required=True, help="an ml-intake dataset folder (index minutes)")
+    x.add_argument("--out", required=True, help="a new folder outside every git tree")
+    x.add_argument("--symbols", default="NIFTY,BANKNIFTY")
+    x.add_argument("--sample", type=int, help="replay N sessions drawn at random (default: all)")
+    x.add_argument("--seed", type=int, default=20261031)
+    x.add_argument("--from", dest="first", help="first session (YYYY-MM-DD)")
+    x.add_argument("--to", dest="last", help="last session (YYYY-MM-DD)")
+    x.add_argument("--jobs", type=int, default=3)
+    x.set_defaults(fn=cmd_shadow_replay)
     x = ss.add_parser("stocks", help="F&O stocks ranked by option liquidity, and whether this account can hold one")
     x.add_argument("--days", type=int, default=20)
     x.add_argument("--top", type=int, default=25)
