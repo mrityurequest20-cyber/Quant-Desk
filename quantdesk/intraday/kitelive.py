@@ -37,6 +37,7 @@ COLUMNS = ["open", "high", "low", "close", "volume"]
 TOKEN_RE = re.compile(r"[A-Za-z0-9]{16,64}")      # the shape of a Kite access token; anything else (a bad decrypt, a newline) is never exported
 FIRST_TICK_S = 15.0                 # a minute whose first tick came later than this after the minute began is partial (late connect, reconnect) and is not served from Kite
 FUTURE_S = 5.0                      # a tick stamped this far ahead of our clock is dropped
+REJECTED_KEEP = 60                                  # rejected minutes listed (stamps only) for the E4 hand check
 SETTLE_FROM_MIN = 15 * 60                           # minute of day: from 15:00 the wrapped feed's bars stand (settlement input of the expiry sleeves)
 SAMPLE_EVERY = 10                   # every Nth otherwise-Kite-only poll per symbol also asks the fallback, so the disagreement rule (E4) has a denominator
 
@@ -197,6 +198,7 @@ class KiteBackedFeed:
         self._inner = inner
         self.live = live
         self.served: Counter = Counter()
+        self.rejected_minutes: list = []
         self.last_error = ""
         self._last_close: dict[str, float] = {}
         self._kite_ts: dict[str, set] = {}                            # minutes whose numbers came from Kite (kept out of the recorder)
@@ -277,12 +279,15 @@ class KiteBackedFeed:
             fb = self._fallback(symbol, since)                         # the fallback fills what Kite lacks (and is asked for the whole day on the first poll)
         except _Passthrough:                                           # Yahoo returning nothing (F-19-1) or Kotak down: Kite's unbroken, unjumping minutes, if there are any, still count
             run = self._contiguous(live_df, since, last_done) if live_df is not None and since is not None and self.live.healthy(symbol) else None
+            if run is not None and len(run):
+                run = run[(run.index.hour * 60 + run.index.minute) < SETTLE_FROM_MIN]        # the settlement window is the wrapped feed's even when it is down: a later poll supplies those minutes
             if run is None or not len(run) or self._jumps(symbol, run):
                 raise
             self.served["kite"] += 1
             self.served["minutes"] += len(run)
             self._mark(symbol, run.index)
             return self._with_volume(symbol, run, now)
+        self._late_session(symbol, fb, live_df, since)
         if live_df is None or not len(live_df) or fb is None:
             return fb
         merged = fb.copy() if len(fb) else pd.DataFrame(columns=COLUMNS)
@@ -294,14 +299,8 @@ class KiteBackedFeed:
             if ts in merged.index:
                 ref = float(merged.at[ts, "close"])
                 self.served["compared"] += 1
-                if symbol in ("NIFTY", "BANKNIFTY") and 15 * 60 + 15 <= minute <= 15 * 60 + 28:      # E3: where the wrapped feed's index is flat (Kotak freezes here), does Kite move?
-                    fb_row = merged.loc[ts]
-                    if float(fb_row["open"]) == float(fb_row["high"]) == float(fb_row["low"]) == float(fb_row["close"]):
-                        self.served["late_fb_flat"] += 1
-                        if not float(row["open"]) == float(row["high"]) == float(row["low"]) == float(row["close"]):
-                            self.served["late_kite_moved"] += 1
                 if ref > 0 and abs(float(row["close"]) - ref) / ref > MAX_DISAGREE:
-                    self.served["rejected"] += 1
+                    self._note_rejected(symbol, ts)
                     continue
                 if minute >= SETTLE_FROM_MIN:
                     continue                                           # the settlement window keeps the wrapped feed's own bar; Kite was compared, not used
@@ -318,8 +317,10 @@ class KiteBackedFeed:
                     self.served["holes"] += 1
                     continue
                 self.served["compared"] += 1                           # checked against the minute before it
+                if minute >= SETTLE_FROM_MIN:
+                    continue                                           # a minute the wrapped feed lacks inside the settlement window is not Kite's to supply: its next poll may bring it
                 if prev is not None and prev > 0 and abs(float(row["close"]) - prev) / prev > MAX_DISAGREE:
-                    self.served["rejected"] += 1
+                    self._note_rejected(symbol, ts)
                     continue
                 merged = pd.concat([merged, pd.DataFrame([row[COLUMNS].to_numpy()], index=pd.DatetimeIndex([ts]), columns=COLUMNS)]).sort_index()
                 kite_only.append(ts)
@@ -335,6 +336,31 @@ class KiteBackedFeed:
             if sub is not None and len(sub) == len(kite_only) and "volume" in sub:
                 merged.loc[kite_only, "volume"] = sub["volume"].to_numpy()
         return merged
+
+    def _late_session(self, symbol, fb, live_df, since) -> None:
+        """E3: of the minutes from 15:15 to 15:28 in which the wrapped feed's NIFTY or BANKNIFTY bar is flat (Kotak freezes here), in how many does Kite's bar move? The denominator is the
+        wrapped feed's flat minutes whether or not Kite has a bar, so a Kite outage in that window counts against it instead of reading as 'not measured'."""
+        if symbol not in ("NIFTY", "BANKNIFTY") or fb is None or not len(fb):
+            return
+        try:
+            for ts, r in fb.iterrows():
+                if (since is not None and ts <= since) or not (15 * 60 + 15 <= ts.hour * 60 + ts.minute <= 15 * 60 + 28):
+                    continue
+                if not float(r["open"]) == float(r["high"]) == float(r["low"]) == float(r["close"]):
+                    continue
+                self.served["late_fb_flat"] += 1
+                if live_df is not None and ts in live_df.index:
+                    k = live_df.loc[ts]
+                    if not float(k["open"]) == float(k["high"]) == float(k["low"]) == float(k["close"]):
+                        self.served["late_kite_moved"] += 1
+        except Exception as exc:                                       # bookkeeping: never the engine's problem
+            self.last_error = type(exc).__name__
+
+    def _note_rejected(self, symbol, ts) -> None:
+        """The minute (never a price) of a rejected Kite bar, so the E4 hand check against Kite's own candle knows which minutes to look at."""
+        self.served["rejected"] += 1
+        if len(self.rejected_minutes) < REJECTED_KEEP:
+            self.rejected_minutes.append(f"{symbol} {ts:%d %H:%M}")
 
     def _jumps(self, symbol: str, sl: pd.DataFrame) -> bool:
         """A minute that closes more than MAX_DISAGREE from the one before it (or from the last close this feed served) cannot be served unchecked: the fallback is asked
@@ -379,7 +405,7 @@ class KiteBackedFeed:
             syms[sym] = {"age_s": round((now - ts).total_seconds(), 1) if ts is not None else None}
         c = self.served
         return {"attached": True, "connected": bool(self.live.connected), "live": bool(self.live.healthy()), "polls": int(c["polls"]), "kite_polls": int(c["kite"]),
-                "fallback_polls": int(c["fallback"]), "sampled_polls": int(c["sampled"]), "late_fb_flat": int(c["late_fb_flat"]), "late_kite_moved": int(c["late_kite_moved"]), "started": self.started, "minutes": int(c["minutes"]), "compared": int(c["compared"]), "rejected": int(c["rejected"]), "ltp_rejected": int(c["ltp_rejected"]), "faults": int(c["kite_faults"]),
+                "fallback_polls": int(c["fallback"]), "sampled_polls": int(c["sampled"]), "late_fb_flat": int(c["late_fb_flat"]), "late_kite_moved": int(c["late_kite_moved"]), "started": self.started, "minutes": int(c["minutes"]), "compared": int(c["compared"]), "rejected": int(c["rejected"]), "rejected_minutes": list(self.rejected_minutes), "ltp_rejected": int(c["ltp_rejected"]), "faults": int(c["kite_faults"]),
                 "dropped": dict(self.live.dropped), "symbols": syms, "last_error": self.last_error[:60]}
 
     def ltp(self, symbols):

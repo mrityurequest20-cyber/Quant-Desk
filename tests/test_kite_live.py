@@ -733,7 +733,38 @@ def test_a_poll_that_reaches_the_settlement_window_is_never_answered_from_kite_a
     assert inner.calls == before + 1                                                         # the wrapped feed was asked although Kite was complete and fresh
     t1500, t1501 = pd.Timestamp("2026-10-26 15:00:00", tz=IST), pd.Timestamp("2026-10-26 15:01:00", tz=IST)
     assert float(got.loc[t1500, "close"]) == 25004.0 and t1500 not in f.unrecorded("NIFTY")    # the wrapped feed has 15:00: its bar stands, Kite's 25005 was compared and not used
-    assert t1501 in got.index                                                                  # a minute the wrapped feed lacks may still be filled from Kite
+    assert t1501 not in got.index and t1501 not in f.unrecorded("NIFTY")                        # a minute the wrapped feed lacks is not Kite's to supply here: its next poll may bring it and the recorder gets it
+
+
+def test_a_kite_outage_in_the_late_session_counts_against_e3_instead_of_reading_as_not_measured():
+    clock = Clock("2026-10-26 15:14:00")
+    flat = bars("2026-10-26 15:15:00", [25000.0] * 3).assign(open=25000.0, high=25000.0, low=25000.0, close=25000.0)
+    f, live, ws, inner = wrapped(clock, {"NIFTY": flat})                                       # the websocket delivered nothing at all
+    clock.set("2026-10-26 15:19:10")
+    f.poll("NIFTY", pd.Timestamp("2026-10-26 15:14:00", tz=IST))
+    assert f.served["late_fb_flat"] == 3 and f.served["late_kite_moved"] == 0                  # the wrapped feed's flat minutes are the denominator whether or not Kite had a bar
+
+
+def test_when_the_wrapped_feed_is_down_kite_still_does_not_serve_the_settlement_window():
+    clock = Clock("2026-10-26 14:57:00")
+    f, live, ws, inner = wrapped(clock, boom=RuntimeError("yahoo returned no 1-minute bars for NIFTY"))
+    f._last_close["NIFTY"] = 25000.0
+    feed_minutes(live, ws, clock, 1, "2026-10-26 14:58:00", [25000.0, 25001.0, 25002.0, 25003.0])     # 14:58, 14:59, 15:00, 15:01
+    clock.set("2026-10-26 15:02:10")
+    ws.on_ticks(ws, [tick(1, 25003.5, "2026-10-26 15:02:08")])
+    got = f.poll("NIFTY", pd.Timestamp("2026-10-26 14:57:00", tz=IST))
+    assert list(got.index) == [pd.Timestamp("2026-10-26 14:58:00", tz=IST), pd.Timestamp("2026-10-26 14:59:00", tz=IST)]     # up to 15:00 and no further
+    assert not any(t.hour * 60 + t.minute >= 15 * 60 for t in f.unrecorded("NIFTY"))
+
+
+def test_rejected_minutes_are_listed_by_stamp_only_for_the_e4_hand_check():
+    clock = Clock("2026-10-26 10:00:00")
+    f, live, ws, inner = wrapped(clock, {"NIFTY": bars("2026-10-26 10:01:00", [25000.0, 25010.0])})
+    feed_minutes(live, ws, clock, 1, "2026-10-26 10:01:00", [25000.0, 25400.0])
+    clock.set("2026-10-26 10:03:10")
+    f.poll("NIFTY", pd.Timestamp("2026-10-26 10:00:00", tz=IST))
+    st = f.status()
+    assert st["rejected_minutes"] == ["NIFTY 26 10:02"] and "25400" not in str(st)               # which minute, never Kite's price
 
 
 # ---- end to end: the real wrapper through the real engine, the recorder and the sleeves' settlement -----------------------------------------------

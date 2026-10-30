@@ -338,7 +338,7 @@ def test_the_workflow_step_is_in_the_live_afternoon_job_before_the_save_and_wide
     # same set of secrets referenced as on main aad8470 (structural, so other features' steps in this file don't break it)
     assert wf["permissions"] == {"contents": "write"} and all("permissions" not in j or j["permissions"] == {"actions": "read"}
                                                              for j in wf["jobs"].values())
-    # the one reviewed exception: the Kite data feed's key and secret (market data only, AUTONOMY.md's data-only clause),
+    # the one reviewed exception: the Kite data feed's key and secret (market data only; owner instruction of 25 Oct 2026, to be written into docs/AUTONOMY.md by the owner, see PR #139),
     # named here so that anything else added to the workflow still fails this pin
     kite_env, kite_secrets = {"KITE_DATA_KEY"}, {"secrets.KITE_API_KEY", "secrets.KITE_API_SECRET"}
     assert sorted(set(wf["env"]) - kite_env) == LIVE_ENV_BEFORE
