@@ -15,7 +15,7 @@
     "dataset": {"name": "ml-intake-2-feae259bdba6", "digest": "47d28d6376ca63af6f435c7a7fab16dc403cc99a7c49ab954ded2c68ed98e9b8", "status": "external_unverified", "tier": "T1b", "use": "underlying_features"},
     "sessions": "800 drawn at random without replacement from the sessions after the first 250 (the engine's lookback), 2016-01 to 2026-05-14, seed fixed above",
     "unit": "an idea: the first fire of a setup on a symbol and direction (`idea_first`); later re-arms within 45 minutes are the same idea. The evaluation unit is the session, because ideas of one day share the market.",
-    "engine": "the desk's engine as merged, empty learning memory per session, model option chain with a constant 14.0 vol (the dataset has no INDIAVIX), adverse ticks 1",
+    "engine": "the desk's engine as merged, empty learning memory per session (no research priors, warehouse flows or buyer edge: the naive engine), model option chain priced on the dataset's own INDIAVIX minutes (point in time), adverse ticks 1",
     "expected_size": "about 3.7 ideas per session from a 100-session probe (counts only), so about 3,000 ideas, about 540 in the locked test"
   },
   "target": {
@@ -32,12 +32,12 @@
     "tiers": ["T1b"],
     "features": [
       "setup (one-hot)", "symbol", "direction", "kind (break or touch)", "reward_risk", "risk_pct (planned risk as % of the fill)",
-      "minutes_since_open", "weekday", "view_score", "view_conviction", "view_bias", "view_day_type", "view_vol_view", "view_chg (the index's change on the day so far)", "view_phase"
+      "minutes_since_open", "weekday", "view_score", "view_conviction", "view_bias", "view_day_type", "view_vol_view", "view_iv (the model chain's ATM implied vol from the minute's India VIX)", "view_rv (realised vol so far)", "view_chg (the index's change on the day so far)", "view_phase"
     ],
     "known_at": "every feature is a field of the analyst's view or the armed setup at the minute of the fire; none reads a later bar",
     "excluded": [
       "every `desk_*` column (the desk's own decision and model-chain P&L)", "r_underlying, exit_reason, exit_ts, mfe_r, mae_r, target, bars_after (the label and what follows the fire)",
-      "view_iv and view_rv (a constant-vol fallback in this corpus)", "view_vwap, fill, level, invalidation (price levels, non-stationary)", "ts, day, idea_first"
+      "view_vwap, fill, level, invalidation (price levels, non-stationary)", "ts, day, idea_first"
     ]
   },
   "split": {
