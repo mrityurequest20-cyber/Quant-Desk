@@ -185,6 +185,31 @@ async function w7Expiry(c) {
 	return out;
 }
 
+const SETUPS_MAX_BYTES = 5_000_000;
+const SETUPS_LINE = /^Labelled setups: [0-9A-Za-z ,;:().%'\/-]{1,600}$/;
+// P0.7: the labelled-setup line the site publishes in data.json (quantdesk/ml/setups.py). The digest is never held back by it: whatever goes wrong becomes a line that
+// says so, because silence would hide a broken count.
+export async function readSetupsLine(env) {
+	try {
+		const origin = String(env.ORIGIN || "").replace(/\/+$/, "");
+		if (!/^https:\/\//.test(origin)) return "Labelled setups: not available (ORIGIN is not set).";
+		const res = await fetch(`${origin}/data.json`, { cache: "no-store", signal: AbortSignal.timeout(FETCH_MS) });
+		if (!res.ok) return `Labelled setups: not available (data.json answered ${res.status}).`;
+		const size = Number(res.headers.get("content-length") || 0);
+		if (size > SETUPS_MAX_BYTES) return "Labelled setups: not available (data.json is too large to read).";
+		const text = await res.text();
+		if (text.length > SETUPS_MAX_BYTES) return "Labelled setups: not available (data.json is too large to read).";
+		const data = JSON.parse(text);
+		const line = data && data.setups && data.setups.line;
+		// the line goes into a public issue body: only a plain sentence of letters, digits and ordinary punctuation is passed on (no @, #, [, ], <, >, backtick)
+		if (typeof line === "string" && SETUPS_LINE.test(line.trim())) return line.trim();
+		if (data && data.setups && data.setups.error) return "Labelled setups: not available (the site export reported an error).";
+		return "Labelled setups: not published in data.json.";
+	} catch (e) {
+		return "Labelled setups: not available (data.json could not be read).";
+	}
+}
+
 // W8: the Saturday digest
 async function w8Digest(c) {
 	const days = [];
@@ -196,7 +221,7 @@ async function w8Digest(c) {
 	const failed = await allRuns(c.env, { status: "failure", per_page: 100, created: `>=${addDays(c.now.date, -8)}` });
 	const onMain = failed.filter((r) => r.head_branch === "main" && Date.parse(r.updated_at) >= c.nowMs - 7 * DAY_MS);
 	return [{ sev: "INFO", check: "W8", title: "Weekly digest",
-		body: `Sessions run ${got} of ${expected.length} expected in the last 7 days. Workflow runs failed on main: ${onMain.length}. Details: the learning bot's weekly and monthly reports, and docs/MASTER_PLAN.md section 8.`,
+		body: `Sessions run ${got} of ${expected.length} expected in the last 7 days. Workflow runs failed on main: ${onMain.length}. ${await readSetupsLine(c.env)} Details: the learning bot's weekly and monthly reports, and docs/MASTER_PLAN.md section 8.`,
 		link: `https://github.com/${repoOf(c.env)}/actions` }];
 }
 
