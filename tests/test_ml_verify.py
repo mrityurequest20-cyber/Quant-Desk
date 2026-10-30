@@ -1,4 +1,4 @@
-"""P0.6: the independent check (quantdesk/ml/verify.py) under docs/ml/P0_6_criteria.md. Each rule is broken on its own so it can be seen to fail, and
+"""P0.6: the independent check (quantdesk/ml/verify.py) under docs/ml/P0_6_criteria_v2.md. Each rule is broken on its own so it can be seen to fail, and
 one end-to-end run shows what a pass, a fail and a void leave behind. Real data is never needed: the references are built here."""
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def small(monkeypatch):
 
 # ---- the pinned criteria -------------------------------------------------------------------------------------------------------------
 def test_the_code_is_pinned_to_the_criteria_file_committed_before_it():
-    assert V.criteria_sha256() == V.pinned_criteria_sha256() == I.VERIFICATION_CRITERIA["p06-v1"]
+    assert V.criteria_sha256() == V.pinned_criteria_sha256() == I.VERIFICATION_CRITERIA["p06-v2"]
 
 
 # ---- the daily bar and the two close definitions --------------------------------------------------------------------------------------
@@ -255,6 +255,45 @@ def test_an_nse_file_gives_the_two_closes_and_every_malformed_one_voids_the_run(
             V.parse_nse(raw, D(2024, 1, 1))
 
 
+def test_version_2_accepts_a_swapped_index_date_label_for_the_three_named_days_only_and_lists_it():
+    assert V.SWAPPED_LABEL_DAYS == {D(2023, 4, 6), D(2023, 4, 10), D(2023, 4, 11)}                  # the three files the criteria name
+    for day in sorted(V.SWAPPED_LABEL_DAYS):
+        label = f"{day:%m-%d-%Y}"                                                                       # the name's date read as MM-DD-YYYY
+        assert label != f"{day:%d-%m-%Y}"
+        listed = []
+        assert V.parse_nse(nse_file(day, date_text=label), day, listed) == {"NIFTY": 100.0, "BANKNIFTY": 200.0}      # the closing values are used as they are
+        assert listed == [{"date": str(day), "label": label}]                                         # one entry per file, not per row
+        assert V.parse_nse(nse_file(day, date_text=label), day) == {"NIFTY": 100.0, "BANKNIFTY": 200.0}     # no collector: still accepted, only not listed
+    normal = []
+    D6 = D(2023, 4, 6)
+    assert V.parse_nse(nse_file(D6), D6, normal) and normal == []                                       # NSE correcting the file: zero swapped is fine, nothing is listed
+    for day, label, why in ((D(2023, 4, 7), "04-07-2023", "Index Date"),                                 # a swapped label on any other day is still an error
+                            (D(2023, 5, 4), "05-04-2023", "Index Date"),
+                            (D6, "07-04-2023", "Index Date"),                                           # a pinned day whose label is neither its date nor its swap
+                            (D6, "04-06-2024", "Index Date"),                                           # right day and month, wrong year
+                            (D(2023, 4, 13), "04-13-2023", "could not be read")):                       # a day above 12 has no swapped reading
+        with pytest.raises(V.VoidRun, match=why):
+            V.parse_nse(nse_file(day, date_text=label), day, [])
+
+
+def test_one_row_with_a_wrong_label_voids_even_if_the_other_row_is_a_valid_swap():
+    day = D(2023, 4, 6)
+    t = f"{day:%m-%d-%Y}"
+    raw = (HEADER + f"Nifty 50,{t},1,2,0.5,100,0,0,0,0,0,0,0\nNifty Bank,07-04-2023,1,2,0.5,200,0,0,0,0,0,0,0\n").encode()
+    with pytest.raises(V.VoidRun, match="Index Date"):
+        V.parse_nse(raw, day, [])
+
+
+def test_fetch_nse_collects_the_swapped_files_also_when_they_are_read_back_from_the_cache(tmp_path):
+    day = D(2023, 4, 6)
+    days = [D(2023, 4, 5), day, D(2023, 4, 7)]
+    fetch = lambda url: nse_file(dt.datetime.strptime(url.rsplit("_", 1)[1][:8], "%d%m%Y").date(), date_text=f"{day:%m-%d-%Y}" if f"{day:%d%m%Y}" in url else None)
+    first, second = [], []
+    V.fetch_nse(days, tmp_path / "c", fetch, lambda *_: None, first)
+    V.fetch_nse(days, tmp_path / "c", lambda u: pytest.fail("the cache must be read"), lambda *_: None, second)
+    assert first == second == [{"date": "2023-04-06", "label": "04-06-2023"}]
+
+
 def test_fetch_nse_treats_404_as_no_file_everything_else_as_void_and_saves_what_it_reads(tmp_path):
     days = weekdays("2024-01-01", 20)
     holiday = days[5]
@@ -345,9 +384,9 @@ def test_a_passing_run_writes_the_record_once_and_leaves_the_status_alone_until_
     ds, aeron, cache, fetch, yahoo, _ = world
     say = lambda *_: None
     rec = V.run(ds, aeron, cache, yahoo, fetch, say)
-    assert rec["passed"] and rec["reasons"] == [] and rec["check"] == "p06-v1" and rec["symbols_verified"] == ["NIFTY", "BANKNIFTY"]
+    assert rec["passed"] and rec["reasons"] == [] and rec["check"] == "p06-v2" and rec["symbols_verified"] == ["NIFTY", "BANKNIFTY"]
     vr = json.loads((ds / "verification.json").read_text())
-    assert vr["digest"] == json.loads((ds / "manifest.json").read_text())["digest"] and vr["criteria_sha256"] == I.VERIFICATION_CRITERIA["p06-v1"]
+    assert vr["digest"] == json.loads((ds / "manifest.json").read_text())["digest"] and vr["criteria_sha256"] == I.VERIFICATION_CRITERIA["p06-v2"]
     assert "overlap" in vr["scope"] and "DAILY ENVELOPE only" in vr["scope"]["new_window"] and "2023-03-01" in vr["scope"]["new_window"]
     assert "Nothing independent checks minute timestamps" in vr["scope"]["new_window"] and "not independent accuracy" in vr["scope"]["overlap"]
     assert "up to 5%" in vr["scope"]["not_covered"] and "INDIAVIX" in vr["scope"]["not_covered"]
@@ -403,6 +442,52 @@ def test_a_reference_that_cannot_be_fetched_voids_the_run_and_it_can_be_run_agai
     assert rec["passed"]
 
 
+def test_a_run_lists_the_swapped_files_and_the_record_says_it_supersedes_the_void_run_and_is_post_hoc(world, monkeypatch):
+    ds, aeron, cache, fetch, yahoo, closes = world
+    day = sorted(DAYS)[2]
+    label = f"{day:%m-%d-%Y}"
+    assert label != f"{day:%d-%m-%Y}"
+    monkeypatch.setattr(V, "SWAPPED_LABEL_DAYS", frozenset({day}))
+
+    def swapped_fetch(url):
+        d = dt.datetime.strptime(url.rsplit("_", 1)[1][:8], "%d%m%Y").date()
+        return nse_file(d, nifty=float(closes["NIFTY"].at[d, "close"]), bank=float(closes["BANKNIFTY"].at[d, "close"]), date_text=label) if d == day else fetch(url)
+    rec = V.run(ds, aeron, cache, yahoo, swapped_fetch, lambda *_: None)
+    assert rec["passed"] and rec["check"] == "p06-v2"
+    assert rec["date_label_swapped"] == [{"date": str(day), "label": label}]
+    assert rec["supersedes"] == "p06-v1 (void)" and rec["post_hoc"] is True
+    assert rec["void_log_sha256"] == "d7be976f412fec09fd90ccdb7a7c48e47991c4048b36eee79b079747dbef8533"
+    assert rec["prior_exposure"] == V.PRIOR_EXPOSURE and "EXPECTED TO BE passed:false" in rec["prior_exposure"]            # carried verbatim
+    assert json.loads((ds / "verification.json").read_text())["date_label_swapped"] == rec["date_label_swapped"]
+    assert V.flip_status(ds)                                                                                              # a pass with these flags is flippable
+
+
+def test_a_swapped_label_outside_the_three_named_days_voids_the_run_and_leaves_no_record(world):
+    ds, aeron, cache, fetch, yahoo, closes = world
+    day = sorted(DAYS)[2]                                                                                                 # not one of the three real days
+
+    def swapped_fetch(url):
+        d = dt.datetime.strptime(url.rsplit("_", 1)[1][:8], "%d%m%Y").date()
+        return nse_file(d, nifty=float(closes["NIFTY"].at[d, "close"]), bank=float(closes["BANKNIFTY"].at[d, "close"]), date_text=f"{day:%m-%d-%Y}") if d == day else fetch(url)
+    with pytest.raises(V.VoidRun, match="Index Date"):
+        V.run(ds, aeron, cache, yahoo, swapped_fetch, lambda *_: None)
+    assert not (ds / "verification.json").exists() and len(list(ds.glob("void_run_*.json"))) == 1
+    assert json.loads(next(ds.glob("void_run_*.json")).read_text())["check"] == "p06-v2"
+
+
+def test_the_record_is_a_normal_one_without_swapped_files_when_nse_has_corrected_them(world):
+    ds, aeron, cache, fetch, yahoo, _ = world
+    rec = V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
+    assert rec["date_label_swapped"] == [] and rec["supersedes"] == "p06-v1 (void)" and rec["post_hoc"] is True
+
+
+def test_the_void_log_hash_names_the_real_void_run_and_the_pin_is_the_merged_v2_file():
+    assert len(V.VOID_V1_LOG_SHA256) == 64 and V.SUPERSEDES == "p06-v1 (void)"
+    assert V.CRITERIA_PATH.name == "P0_6_criteria_v2.md" and V.CHECK == "p06-v2"
+    assert hashlib.sha256(V.CRITERIA_PATH.read_bytes()).hexdigest() == I.VERIFICATION_CRITERIA["p06-v2"]
+    assert I.VERIFICATION_CRITERIA["p06-v1"] != I.VERIFICATION_CRITERIA["p06-v2"]
+
+
 def test_a_reference_that_returns_less_than_asked_without_an_error_is_a_counted_run(world):
     ds, aeron, cache, fetch, yahoo, closes = world
     short = lambda sym, a, b: closes[sym][["high", "low", "close"]].iloc[:3]                                 # Yahoo answers, but with 3 of 8 days
@@ -413,7 +498,7 @@ def test_a_reference_that_returns_less_than_asked_without_an_error_is_a_counted_
 
 def test_the_run_refuses_changed_criteria_an_unverified_aeron7_and_an_existing_record(world, monkeypatch):
     ds, aeron, cache, fetch, yahoo, _ = world
-    monkeypatch.setitem(I.VERIFICATION_CRITERIA, "p06-v1", "0" * 64)
+    monkeypatch.setitem(I.VERIFICATION_CRITERIA, "p06-v2", "0" * 64)
     with pytest.raises(V.CriteriaChanged):
         V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
     monkeypatch.undo()
@@ -427,7 +512,7 @@ def test_the_flip_refuses_a_record_for_another_digest_without_scope_or_with_othe
     ds, aeron, cache, fetch, yahoo, _ = world
     V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
     good = json.loads((ds / "verification.json").read_text())
-    for over in ({"digest": "0" * 64}, {"passed": "yes"}, {"check": "p06-v2"}, {"criteria_sha256": "0" * 64}, {"symbols_verified": []},
+    for over in ({"digest": "0" * 64}, {"passed": "yes"}, {"check": "p06-v1"}, {"criteria_sha256": "0" * 64}, {"supersedes": None}, {"post_hoc": False}, {"symbols_verified": []},
                  {"symbols_verified": ["NIFTY", "BANKNIFTY", "INDIAVIX"]}, {"reasons": ["something failed"]}, {"D": {"passed": False, "reasons": []}},
                  {"symbols": {"NIFTY": good["symbols"]["NIFTY"]}}):
         (ds / "verification.json").write_text(json.dumps({**good, **over}))
@@ -468,7 +553,7 @@ def test_nothing_is_shown_before_every_reference_is_in_so_a_void_cannot_follow_a
 
 
 def test_the_thresholds_are_the_ones_the_criteria_text_states():
-    t = (REPO / "docs" / "ml" / "P0_6_criteria.md").read_text()
+    t = (REPO / "docs" / "ml" / "P0_6_criteria_v2.md").read_text()
     assert (V.TOL_A["high"], V.TOL_A["low"], V.TOL_A["close"], V.TOL_C, V.GROSS) == (0.002, 0.002, 0.003, 0.001, 0.015)
     assert (V.PASS_RATE, V.UNCOMPARED_MAX, V.ACCEPTED_FLOOR, V.MONTH_FLOOR, V.MONTH_MIN, V.MAX_RUN) == (0.95, 0.01, 0.97, 0.80, 10, 5)
     assert (V.C_COVERAGE, V.CORR_SESSION, V.CORR_SHARE, V.CORR_MEDIAN, V.MIN_COMMON_MINUTES, V.MAX_404_SHARE) == (0.95, 0.95, 0.90, 0.98, 30, 0.10)
@@ -498,7 +583,7 @@ import urllib.error
 
 def test_the_defaults_are_the_ones_the_criteria_name_and_min_sessions_is_five_hundred(monkeypatch):
     monkeypatch.undo()                                                                                     # the autouse fixture lowered it for the small fixtures
-    t = (REPO / "docs" / "ml" / "P0_6_criteria.md").read_text()
+    t = (REPO / "docs" / "ml" / "P0_6_criteria_v2.md").read_text()
     assert V.MIN_SESSIONS == 500 and "at least 500 sessions" in t
     assert V.DATASET_DIGEST in t and V.AERON_DATASET in t and V.DATASET_DIGEST[:12] == "47d28d6376ca"
 
@@ -509,7 +594,7 @@ def test_a_different_dataset_or_reference_is_refused_before_anything_is_fetched(
     spy = lambda url: calls.append(url) or fetch(url)
     man = json.loads((ds / "manifest.json").read_text())
     monkeypatch.setattr(V, "DATASET_DIGEST", "0" * 64)
-    with pytest.raises(ValueError, match="not the one docs/ml/P0_6_criteria.md names"):
+    with pytest.raises(ValueError, match="not the one docs/ml/P0_6_criteria_v2.md names"):
         V.run(ds, aeron, cache, yahoo, spy, lambda *_: None)
     monkeypatch.setattr(V, "DATASET_DIGEST", man["digest"])
     monkeypatch.setattr(V, "AERON_DATASET", "aeron7-other")
@@ -567,7 +652,7 @@ def test_the_record_is_written_exclusively_so_a_second_writer_cannot_replace_the
     assert json.loads((ds / "verification.json").read_text()) == {"passed": False, "by": "the other run"}
     assert not list(ds.glob(".verification.json.*.tmp"))
     (ds / "verification.json").unlink()
-    (ds / "verification_p06-v1.json").write_text("{}")                                                    # the superseded-record guard
+    (ds / "verification_p06-v2.json").write_text("{}")                                                    # the superseded-record guard
     with pytest.raises(V.AlreadyChecked):
         V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
 
