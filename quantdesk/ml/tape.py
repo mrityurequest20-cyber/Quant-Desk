@@ -28,7 +28,9 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import os
 import re
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -217,8 +219,20 @@ def import_tape(source: Path, out_root: Path, say=print) -> dict:
     if mp.exists():                                                  # the same files are the same dataset (the identity is a hash of them); the first registration stands
         return json.loads(mp.read_text())
     ds.mkdir(parents=True, exist_ok=True)
-    with open(mp, "x") as fh:
-        fh.write(json.dumps(man, indent=1, sort_keys=True, default=str))
+    payload = json.dumps(man, indent=1, sort_keys=True, default=str)
+    fd, tmp_name = tempfile.mkstemp(prefix=".manifest.", dir=ds)    # written whole under a private name, then published only if nobody else has: a crash leaves no truncated manifest
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, mp)
+        except FileExistsError:                                      # another importer registered the same files first: its manifest stands
+            return json.loads(mp.read_text())
+    finally:
+        tmp.unlink(missing_ok=True)
     say(f"tape {man['dataset']}: {len(files)} file(s), {man['totals']['rows']:,} rows, {len(man['days'])} day(s), {len(rejected)} rejected")
     return man
 
@@ -228,6 +242,7 @@ def load(ds: Path, source: Path, use: str, days=None, clean: bool = True, expect
     digest (or to `expected_digest`), a folder whose name is not the manifest's identity, a missing or changed file, a use outside ALLOWED_USES. With `clean` (default) the faults the
     manifest counted are dropped from the result and counted in `attrs["dropped"]`; nothing is repaired either way."""
     ds, source = Path(ds), Path(source)
+    source = source.parent if source.is_file() else source          # import_tape accepts a single file: the manifest names files relative to its folder
     if use not in ALLOWED_USES:
         raise ForbiddenUse(f"use {use!r} refused: tape data is for {ALLOWED_USES}. {NOT_FOR}")
     mp = ds / "manifest.json"
@@ -278,9 +293,20 @@ def latest(out_root: Path, source: Path | None = None) -> Path | None:
     d = Path(out_root) / "tape"
     c = sorted(p for p in d.glob(f"{IMPORTER_VERSION}-*") if (p / "manifest.json").exists()) if d.exists() else []
     mans = {p: json.loads((p / "manifest.json").read_text()) for p in c}
-    if source is not None:
-        src = Path(source)
-        mans = {p: m for p, m in mans.items() if all((src / f["file"]).is_file() and _sha(src / f["file"]) == f["sha256"] for f in m["files"])}
-    if not mans:
-        return None
-    return max(mans, key=lambda p: (mans[p]["days"][-1], mans[p]["totals"]["files"], mans[p]["totals"]["rows"], p.name))
+    rank = lambda p: (mans[p]["days"][-1], mans[p]["totals"]["files"], mans[p]["totals"]["rows"], p.name)
+    if source is None:
+        return max(mans, key=rank) if mans else None
+    src = Path(source)
+    src = src.parent if src.is_file() else src
+    seen: dict = {}
+
+    def present(f):                                                  # each (file, sha256) is checked once however many datasets list it
+        k = (f["file"], f["sha256"])
+        if k not in seen:
+            q = src / f["file"]
+            seen[k] = q.is_file() and _sha(q) == f["sha256"]
+        return seen[k]
+    for p in sorted(mans, key=rank, reverse=True):                   # best first; the first whose every file is as registered wins
+        if all(present(f) for f in mans[p]["files"]):
+            return p
+    return None

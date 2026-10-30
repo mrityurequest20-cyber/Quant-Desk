@@ -266,3 +266,15 @@ def test_latest_with_a_source_ignores_datasets_whose_files_are_no_longer_there_a
     assert new["dataset"] != old["dataset"] and new["totals"]["rows"] < old["totals"]["rows"]
     assert T.latest(out, src).name == new["dataset"]                                           # without the source the larger, older one would win and load() would refuse it
     assert T.latest(out).name == old["dataset"]
+
+
+def test_a_single_file_source_registers_and_loads_and_no_manifest_is_ever_left_truncated(tmp_path):
+    src = tmp_path / "src"
+    f = write(src, "2026-10-26_morning-111_chains.parquet", tape_df("2026-10-26"))
+    out = tmp_path / "out"
+    man = T.import_tape(f, out, say=lambda *_: None)                           # a file, not a folder
+    ds = out / "tape" / man["dataset"]
+    assert len(T.load(ds, f, "replay")) == 6 and T.latest(out, f).name == man["dataset"]
+    assert not list(ds.glob(".manifest.*")) and json.loads((ds / "manifest.json").read_text())["digest"] == man["digest"]
+    again = T.import_tape(f, out, say=lambda *_: None)                         # the first registration stands
+    assert again["digest"] == man["digest"]
