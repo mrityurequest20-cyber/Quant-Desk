@@ -18,6 +18,7 @@ Owner decision (25 Oct 2026): the Kite websocket is attached directly to the run
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import os
 import re
@@ -32,7 +33,8 @@ log = logging.getLogger(__name__)
 INDEX_KEYS = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK", "INDIAVIX": "NSE:INDIA VIX"}
 STALE_TICK_S = 30.0                # an exchange stamp older than this is not a live tick
 STALE_S = 20.0                      # a tick older than this and the socket is not trusted for the live price
-MAX_DISAGREE = 0.005                # a Kite minute close this far from the fallback's is not used
+MAX_DISAGREE = 0.005                # a Kite minute close this far from the fallback's is not used; a high or low this far from the fallback's, or from its own open/close range when no fallback is asked, is not used either
+AUTHORITY_ENDS = dt.date(2026, 11, 25)   # docs/AUTONOMY.md: the owner's Kite data exception ends on this date; from it on the feed does not start, whatever is in the environment
 COLUMNS = ["open", "high", "low", "close", "volume"]
 TOKEN_RE = re.compile(r"[A-Za-z0-9]{16,64}")      # the shape of a Kite access token; anything else (a bad decrypt, a newline) is never exported
 FIRST_TICK_S = 15.0                 # a minute whose first tick came later than this after the minute began is partial (late connect, reconnect) and is not served from Kite
@@ -164,9 +166,12 @@ class KiteLive:
         return df[(minute >= 9 * 60 + 15) & (minute < 15 * 60 + 30)]          # the cash session only, as every other feed (feeds.normalise_bars)
 
 
-def make_live(cfg, symbols: list[str], say=print) -> KiteLive | None:
+def make_live(cfg, symbols: list[str], say=print, today: dt.date | None = None) -> KiteLive | None:
     """Start the websocket if KITE_DATA_KEY and KITE_DATA_TOKEN are in the environment; None (and one line) in every other case. Never raises. These are deliberately not the names the
     broker adapter (execution/kite.py) reads, so the day's token can never switch that adapter's credentials on."""
+    if (today or pd.Timestamp.now(tz=IST).date()) >= AUTHORITY_ENDS:
+        say(f"kite live: the owner's Kite data authority ended on {AUTHORITY_ENDS:%d %b %Y}; bars and prices from the existing feeds")
+        return None
     key, token = os.environ.get("KITE_DATA_KEY"), os.environ.get("KITE_DATA_TOKEN")
     if not key or not token:
         say("kite live: no KITE_DATA_KEY / KITE_DATA_TOKEN; bars and prices from the existing feeds")
@@ -302,6 +307,9 @@ class KiteBackedFeed:
                 if ref > 0 and abs(float(row["close"]) - ref) / ref > MAX_DISAGREE:
                     self._note_rejected(symbol, ts)
                     continue
+                if any(self._far(row[c], merged.at[ts, c]) for c in ("high", "low")):      # a spiked high or low on a close that agrees: only a fallback that shows the same extreme corroborates it
+                    self._note_rejected(symbol, ts)
+                    continue
                 if minute >= SETTLE_FROM_MIN:
                     continue                                           # the settlement window keeps the wrapped feed's own bar; Kite was compared, not used
                 for c in ("open", "high", "low", "close"):
@@ -366,11 +374,24 @@ class KiteBackedFeed:
         """A minute that closes more than MAX_DISAGREE from the one before it (or from the last close this feed served) cannot be served unchecked: the fallback is asked
         and the two must agree. A real spike passes that check; a bad stream does not."""
         prev = self._last_close.get(symbol)
-        for c in sl["close"]:
-            if prev is not None and prev > 0 and abs(float(c) - prev) / prev > MAX_DISAGREE:
+        for _, r in sl.iterrows():
+            c = float(r["close"])
+            if prev is not None and prev > 0 and abs(c - prev) / prev > MAX_DISAGREE:
                 return True
-            prev = float(c)
+            prev = c
+            body_hi, body_lo = max(float(r["open"]), c), min(float(r["open"]), c)          # a wick this far outside the minute's own open/close range is a single bad tick until the fallback shows the same
+            if body_hi > 0 and (float(r["high"]) > body_hi * (1 + MAX_DISAGREE) or float(r["low"]) < body_lo * (1 - MAX_DISAGREE)):
+                return True
         return False
+
+    @staticmethod
+    def _far(kite, ref) -> bool:
+        """True when a Kite high or low is more than MAX_DISAGREE from the fallback's (an absent or non-positive reference compares as agreeing: nothing to disagree with)."""
+        try:
+            ref = float(ref)
+            return ref > 0 and abs(float(kite) - ref) / ref > MAX_DISAGREE
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def _contiguous(live_df: pd.DataFrame, since, last_done) -> pd.DataFrame:

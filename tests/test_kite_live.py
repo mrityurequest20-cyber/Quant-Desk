@@ -196,6 +196,50 @@ def test_a_kite_minute_far_from_the_fallbacks_is_not_used_and_is_counted():
     assert got.loc[pd.Timestamp("2026-10-26 10:02:00", tz=IST), "close"] == 25010.0 and f.served["rejected"] == 1 and "1 minute(s) rejected" in f.name and f.name.startswith("kite (")
 
 
+def _spiked_minute(live, ws, clock, spike):
+    """10:01: open 25000, one tick at `spike` in the middle, back to 25000 for the close (a close that agrees with every source)."""
+    t0 = pd.Timestamp("2026-10-26 10:01:00")
+    for sec, px in ((1, 25000.0), (20, spike), (40, 25000.0), (58, 25000.5)):
+        ts = t0 + pd.Timedelta(seconds=sec)
+        clock.set(ts)
+        ws.on_ticks(ws, [tick(1, px, ts)])
+
+
+def test_a_spiked_high_on_a_close_that_agrees_is_not_served_from_kite_alone():
+    clock = Clock("2026-10-26 10:00:00")
+    fb = bars("2026-10-26 10:01:00", [25000.0])                                                   # the fallback's 10:01: high 25001, low 24999
+    f, live, ws, inner = wrapped(clock, {"NIFTY": fb})
+    _spiked_minute(live, ws, clock, 25200.0)                                                      # +0.8% on one tick; the close is 25000.5
+    clock.set("2026-10-26 10:02:10")
+    ws.on_ticks(ws, [tick(1, 25000.5, "2026-10-26 10:02:08")])
+    got = f.poll("NIFTY", pd.Timestamp("2026-10-26 10:00:00", tz=IST))
+    row = got.loc[pd.Timestamp("2026-10-26 10:01:00", tz=IST)]
+    assert inner.calls == 1 and row["high"] == 25001.0 and row["close"] == 25000.0               # the fallback was asked and its bar stands, not Kite's spike
+    assert f.served["rejected"] == 1 and f.served["kite"] == 0
+
+
+def test_a_real_spike_that_the_fallback_also_shows_is_served():
+    clock = Clock("2026-10-26 10:00:00")
+    fb = bars("2026-10-26 10:01:00", [25000.0])
+    fb["high"] = 25190.0                                                                          # the fallback saw the same extreme (within 0.5%)
+    f, live, ws, inner = wrapped(clock, {"NIFTY": fb})
+    _spiked_minute(live, ws, clock, 25200.0)
+    clock.set("2026-10-26 10:02:10")
+    ws.on_ticks(ws, [tick(1, 25000.5, "2026-10-26 10:02:08")])
+    got = f.poll("NIFTY", pd.Timestamp("2026-10-26 10:00:00", tz=IST))
+    assert got.loc[pd.Timestamp("2026-10-26 10:01:00", tz=IST), "high"] == 25200.0 and f.served["rejected"] == 0
+
+
+def test_with_the_fallback_down_a_spiked_minute_is_not_served_at_all():
+    clock = Clock("2026-10-26 10:00:00")
+    f, live, ws, inner = wrapped(clock, boom=RuntimeError("yahoo returned no 1-minute bars for NIFTY"))
+    _spiked_minute(live, ws, clock, 25200.0)
+    clock.set("2026-10-26 10:02:10")
+    ws.on_ticks(ws, [tick(1, 25000.5, "2026-10-26 10:02:08")])
+    with pytest.raises(RuntimeError):                                                             # nothing to check it against: the fallback's error stands rather than a bad tick deciding
+        f.poll("NIFTY", pd.Timestamp("2026-10-26 10:00:00", tz=IST))
+
+
 def test_when_the_fallback_raises_kites_unbroken_minutes_still_serve_and_a_hole_does_not():
     clock = Clock("2026-10-26 10:00:00")
     f, live, ws, inner = wrapped(clock, boom=RuntimeError("yahoo returned no 1-minute bars for NIFTY"))
@@ -281,6 +325,28 @@ def test_with_credentials_the_websocket_starts_for_the_desks_indices(monkeypatch
     live = KL.make_live(None, ["NIFTY", "BANKNIFTY", "INDIAVIX", "SENSEX"], say=lambda m: None)
     assert live is not None and live.tokens == {"NIFTY": 256265, "BANKNIFTY": 260105, "INDIAVIX": 264969}
     assert made[0].connected and made[0].subscribed == [256265, 260105, 264969]
+
+
+def test_the_feed_does_not_start_from_the_day_the_owners_authority_ends(monkeypatch):
+    import datetime as dt
+    monkeypatch.setenv("KITE_DATA_KEY", "k")
+    monkeypatch.setenv("KITE_DATA_TOKEN", "t")
+
+    class Kite:
+        def __init__(self, api_key):
+            pass
+
+        def set_access_token(self, t):
+            pass
+
+        def ltp(self, keys):
+            return {k: {"instrument_token": 256265} for k in keys}
+    monkeypatch.setitem(sys.modules, "kiteconnect", types.SimpleNamespace(KiteConnect=Kite, KiteTicker=lambda k, t: FakeWS()))
+    said = []
+    assert KL.AUTHORITY_ENDS == dt.date(2026, 11, 25)
+    assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2026, 11, 25)) is None and "authority ended" in said[0]
+    assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2027, 1, 4)) is None
+    assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2026, 11, 24)) is not None      # the day before it still starts
 
 
 def test_the_desk_config_turns_it_on_and_the_cli_wraps_the_feed_only_when_it_starts():
