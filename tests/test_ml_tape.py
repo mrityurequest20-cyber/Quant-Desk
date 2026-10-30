@@ -113,7 +113,7 @@ def test_faults_are_counted_never_repaired(tape):
     k = f["faults"]
     assert k["implausible_oi_rows"] == 2 and k["implausible_oi_snapshot"] == 5 and k["crossed_quote_rows"] == 1 and k["nonpositive_spot_rows"] == 1
     # (5 rows: the two bad prints sit in two snapshots of two strikes each, and the duplicated row belongs to one of those snapshots)
-    assert k["duplicate"] == 1 and k["model_source"] == 6 and k["outside_session"] == 2
+    assert k["exact_duplicate"] == 1 and k["conflicting_key"] == 0 and k["model_source"] == 6 and k["outside_session"] == 2
     assert f["rows"] == len(df) and man["totals"]["faults"]["model_source"] == 6                    # the raw file is untouched: every row is still counted
 
 
@@ -168,9 +168,10 @@ def test_load_drops_the_counted_faults_by_default_and_says_how_many(tape):
     clean = T.load(ds, src, "oi_shadow", days=["2026-10-29"])
     d = clean.attrs["dropped"]
     assert len(raw) == len(df) and len(clean) == len(df) - sum(d.values())
-    assert d["model_source"] == 6 and d["implausible_oi_snapshot"] == 2 and d["duplicate"] == 1 and d["outside_session"] == 2
+    assert d["model_source"] == 6 and d["implausible_oi_snapshot"] == 2 and d["exact_duplicate"] == 1 and d["outside_session"] == 2
     assert (clean["source"] == "kotak").all() and clean["ce_oi"].max() < 1e12
-    assert clean[["ce_bid", "ce_ask"]].equals(raw.loc[clean.index, ["ce_bid", "ce_ask"]])               # nothing repaired: surviving values are the recorded ones
+    both = clean.merge(raw.drop_duplicates(T.KEY), on=T.KEY, suffixes=("", "_raw"))
+    assert len(both) == len(clean) and (both["ce_bid"] == both["ce_bid_raw"]).all() and (both["ce_ask"] == both["ce_ask_raw"]).all()   # nothing repaired: surviving values are the recorded ones
 
 
 def test_the_oi_bound_is_the_one_the_oi_shadow_uses():
@@ -188,9 +189,57 @@ def test_the_command_registers_the_tape_and_refuses_a_tracked_folder(tape, capsy
     from quantdesk.cli import main
     src, out = tape
     main(["ml", "import-tape", "--source", str(src), "--out", str(out)])
-    assert "dataset ml-tape-1-" in capsys.readouterr().out
+    assert "dataset ml-tape-2-" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="--source"):
         main(["ml", "import-tape"])
     with pytest.raises(SystemExit, match="inside a git working tree"):
         main(["ml", "import-tape", "--source", str(src), "--out", str(REPO / "docs" / "tape_probe")])
     assert not (REPO / "docs" / "tape_probe").exists()
+
+
+def test_load_returns_rows_in_time_order_whatever_the_file_names_say(tape):
+    src, out = tape
+    man = T.import_tape(src, out, say=lambda *_: None)
+    d = T.load(out / "tape" / man["dataset"], src, "feature_building", days=["2026-10-26"])
+    assert set(d["source_file"]) == {"2026-10-26_morning-111_chains.parquet", "2026-10-26_afternoon-112_chains.parquet"}   # "afternoon" sorts before "morning" by name
+    for _, g in d.groupby(["underlying", "expiry", "strike"]):
+        assert g["ts"].is_monotonic_increasing                                  # a shift or diff per strike never reads a later snapshot as the earlier one
+    assert (d["session"] == "2026-10-26").all() and (d["tier"] == "T2").all()
+
+
+def test_a_key_recorded_twice_with_different_values_is_quarantined_not_resolved_by_row_order(tape):
+    src, out = tape
+    df = tape_df("2026-10-29", n_snap=3)
+    for order in (False, True):
+        revised = df.iloc[[2]].assign(ce_ltp=99.0)
+        d = pd.concat([df, revised] if not order else [revised, df], ignore_index=True)
+        write(src, "2026-10-29_morning-7_chains.parquet", d)
+        man = T.import_tape(src, out / str(order), say=lambda *_: None)
+        f = next(x for x in man["files"] if x["day"] == "2026-10-29")
+        assert f["faults"]["conflicting_key"] == 2 and f["faults"]["exact_duplicate"] == 0      # both rows of the key are counted; neither is preferred
+        got = T.load(out / str(order) / "tape" / man["dataset"], src, "replay", days=["2026-10-29"])
+        key = df.iloc[2]
+        assert not ((got["ts"] == key["ts"]) & (got["strike"] == key["strike"])).any()
+        assert got.attrs["dropped"]["conflicting_key"] == 2
+
+
+def test_a_snapshot_present_in_both_parts_of_a_day_is_seen_across_the_files(tape):
+    src, out = tape
+    write(src, "2026-10-29_morning-1_chains.parquet", tape_df("2026-10-29", n_snap=3, start="09:20"))
+    write(src, "2026-10-29_afternoon-2_chains.parquet", tape_df("2026-10-29", n_snap=3, start="09:21"))   # overlaps the morning's 09:21 and 09:22
+    man = T.import_tape(src, out, say=lambda *_: None)
+    chk = man["day_checks"]["2026-10-29"]
+    assert chk["parts_overlap_in_time"] is True and chk["cross_file_exact_duplicate"] == 4 and chk["cross_file_conflicting_key"] == 0
+    assert man["day_checks"]["2026-10-26"]["parts_overlap_in_time"] is False
+    got = T.load(out / "tape" / man["dataset"], src, "replay", days=["2026-10-29"])
+    assert not got.duplicated(T.KEY).any() and got.attrs["dropped"]["exact_duplicate"] == 4
+
+
+def test_an_implausible_change_in_oi_quarantines_its_snapshot_like_an_implausible_oi(tape):
+    src, out = tape
+    df = tape_df("2026-10-29", n_snap=3)
+    df.loc[0, "pe_doi"] = -1.6e18
+    write(src, "2026-10-29_morning-7_chains.parquet", df)
+    man = T.import_tape(src, out, say=lambda *_: None)
+    f = next(x for x in man["files"] if x["day"] == "2026-10-29")
+    assert f["faults"]["implausible_doi_rows"] == 1 and f["faults"]["implausible_doi_snapshot"] == 2 and f["faults"]["implausible_oi_snapshot"] == 0
