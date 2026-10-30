@@ -881,6 +881,31 @@ def _run_day(cfg, tmp_path, kite: bool, name: str):
     return eng, fed, rec, j, days[-1]
 
 
+def test_the_recorder_gap_fill_runs_after_the_commands_and_the_kill_switch(cfg, tmp_path):
+    """The gap fill makes history calls with no timeout: a slow one must not delay the owner's commands or the kill switch."""
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.learning import Memory
+    from quantdesk.intraday.recorder import SessionRecorder
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
+    bars_, _ = simulate_sessions(days, seed=11)
+    feed = ReplayFeed(bars_, days[-1])
+    eng = IntradayEngine(cfg, feed, "model", Journal(), IntradayBroker(cfg, starting_cash=500000), recorder=SessionRecorder(tmp_path / "data"), say=None,
+                         memory=Memory(tmp_path / "m.json"))
+    eng.start_session(days[-1])
+    feed.clock = feed.clock + pd.Timedelta(minutes=1)
+    order = []
+    for name in ("_commands", "_kill_switch", "_fill_recorder_gaps"):
+        real = getattr(eng, name)
+        setattr(eng, name, lambda *a, _n=name, _r=real, **k: (order.append(_n), _r(*a, **k))[1])
+    eng.step()
+    assert order == ["_commands", "_kill_switch", "_fill_recorder_gaps"]
+
+
 def test_a_whole_kite_day_leaves_the_sleeves_settlement_inputs_exactly_as_a_plain_day_does_and_the_trial_measures_can_be_computed(cfg, tmp_path):
     from quantdesk.intraday.sleeves import official_close, settlement_price
     eng_k, fed, rec_k, j, day = _run_day(cfg, tmp_path, True, "kite")

@@ -343,9 +343,9 @@ class IntradayEngine:
 
     def step(self) -> bool:
         now = self.feed.now()
-        self._fill_recorder_gaps(now)
         self._commands(now)
         self._kill_switch(now)
+        self._fill_recorder_gaps(now)                      # after the commands and the kill switch: its history calls have no timeout, so a slow one must not delay them
         got = False
         for sym in self.underlyings + [self.vix]:
             new = self.feed.poll(sym, self.last_ts.get(sym))
