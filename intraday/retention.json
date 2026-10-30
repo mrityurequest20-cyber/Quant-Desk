@@ -1,0 +1,158 @@
+{
+ "runs": [
+  {
+   "archive": {
+    "bytes": 205826,
+    "name": "journal-archive-2026-09-28_2026-09-29.db.gz",
+    "sha256": "4a16f1db20e8f3325610d48d914eac20b7765e7d061164938110a72345f2a4ac"
+   },
+   "at": "2026-10-21T16:08:54+00:00",
+   "cutoff": "2026-09-30",
+   "durable": {
+    "manifest": "archive-manifest-2026-10-21.json",
+    "release": "journal-archive-2026",
+    "sha256": {
+     "archive-manifest-2026-10-21.json": "60ba9ce8580193becf7674a60815eb8a7208b664018cdeaad6031c4cad9c12a8",
+     "journal-archive-2026-09-28_2026-09-29.db.gz": "4a16f1db20e8f3325610d48d914eac20b7765e7d061164938110a72345f2a4ac",
+     "plan-studies-2026-10-21.tar.gz": "778315c69636993b3f4b2483be9a6019f7d64e47ec3641e9aba3e6c307aae04b"
+    },
+    "verified_at": "2026-10-21T16:09:08+00:00"
+   },
+   "manifest": "archive-manifest-2026-10-21.json",
+   "status": "done",
+   "studies": [
+    "2026-10-03-69395a",
+    "2026-10-04-69395a",
+    "2026-10-06-43dc76",
+    "2026-10-06-f9f71a",
+    "2026-10-07-47340d",
+    "2026-10-08-d7eb9f",
+    "2026-10-09-89b486",
+    "2026-10-13-f385c2",
+    "2026-10-13-177cc1",
+    "2026-10-14-204a5b",
+    "2026-10-15-3ee3a3",
+    "2026-10-16-ddc0c1"
+   ],
+   "studies_archive": {
+    "bytes": 93017984,
+    "name": "plan-studies-2026-10-21.tar.gz",
+    "sha256": "778315c69636993b3f4b2483be9a6019f7d64e47ec3641e9aba3e6c307aae04b"
+   },
+   "tables": {
+    "news": {
+     "max_ts": "2026-09-29 23:34:00+05:30",
+     "min_ts": "2026-09-28 09:24:00+05:30",
+     "rows": 632,
+     "sha256": "656e31996378613e91ae39656c586f58a1314743ed521c778c4fe05eea342ef9"
+    },
+    "thoughts": {
+     "max_ts": null,
+     "min_ts": null,
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   },
+   "thought_days": []
+  },
+  {
+   "archive": {
+    "bytes": 87303,
+    "name": "journal-archive-2026-09-30_2026-09-30.db.gz",
+    "sha256": "1c6357870246fb81cf48b01ec2e1232adcd43122d62d3f57a4f8500e51805c35"
+   },
+   "at": "2026-10-23T15:42:49+00:00",
+   "cutoff": "2026-10-02",
+   "durable": {
+    "manifest": "archive-manifest-2026-10-23.json",
+    "release": "journal-archive-2026",
+    "sha256": {
+     "archive-manifest-2026-10-23.json": "9f0a8041b88a6e606a6a4edd0503d2b4fa49a7146a73fe0b3cc6945daeb16cad",
+     "journal-archive-2026-09-30_2026-09-30.db.gz": "1c6357870246fb81cf48b01ec2e1232adcd43122d62d3f57a4f8500e51805c35",
+     "plan-studies-2026-10-23.tar.gz": "1928176e798d391cddf040f0e0c0ced4232878b1d3c0d16c40320e8e72cb91e1"
+    },
+    "verified_at": "2026-10-23T15:42:55+00:00"
+   },
+   "manifest": "archive-manifest-2026-10-23.json",
+   "status": "done",
+   "studies": [
+    "2026-10-19-670091",
+    "2026-10-20-670091"
+   ],
+   "studies_archive": {
+    "bytes": 18847267,
+    "name": "plan-studies-2026-10-23.tar.gz",
+    "sha256": "1928176e798d391cddf040f0e0c0ced4232878b1d3c0d16c40320e8e72cb91e1"
+   },
+   "tables": {
+    "news": {
+     "max_ts": "2026-09-30 15:26:00+05:30",
+     "min_ts": "2026-09-30 00:17:00+05:30",
+     "rows": 275,
+     "sha256": "7dcd0556905cff44589ec93a940b0f0b18c4bd736cddb1b89ce6b1a8d81089dc"
+    },
+    "thoughts": {
+     "max_ts": null,
+     "min_ts": null,
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   },
+   "thought_days": []
+  },
+  {
+   "archive": {
+    "bytes": 1588327,
+    "name": "journal-archive-2026-10-04_2026-10-08.db.gz",
+    "sha256": "f779720686a45d9a881e851c286fbdb24223a584b4010f836226d267a74b90bc"
+   },
+   "at": "2026-10-30T17:29:36+00:00",
+   "cutoff": "2026-10-09",
+   "durable": {
+    "manifest": "archive-manifest-2026-10-30.json",
+    "release": "journal-archive-2026",
+    "sha256": {
+     "archive-manifest-2026-10-30.json": "86786a894fd3d9d0cf6734a8982fa4cac450696588a60a601c209afad06a25a8",
+     "journal-archive-2026-10-04_2026-10-08.db.gz": "f779720686a45d9a881e851c286fbdb24223a584b4010f836226d267a74b90bc",
+     "plan-studies-2026-10-30.tar.gz": "9ee0876507b9c825325893056cc83022acab1ae2687dba0d26396b44bc84e501"
+    },
+    "verified_at": "2026-10-30T17:29:46+00:00"
+   },
+   "manifest": "archive-manifest-2026-10-30.json",
+   "status": "done",
+   "studies": [
+    "2026-10-21-88e9ce",
+    "2026-10-22-a42d13",
+    "2026-10-23-368ee7",
+    "2026-10-26-c539e1",
+    "2026-10-27-884b69"
+   ],
+   "studies_archive": {
+    "bytes": 51217962,
+    "name": "plan-studies-2026-10-30.tar.gz",
+    "sha256": "9ee0876507b9c825325893056cc83022acab1ae2687dba0d26396b44bc84e501"
+   },
+   "tables": {
+    "news": {
+     "max_ts": "2026-10-08 23:57:58+05:30",
+     "min_ts": "2026-10-04 09:00:05+05:30",
+     "rows": 2677,
+     "sha256": "2bbfd9e5e2fb98ffc4048e2c120f88850cd2f04a8ff4c00805b67312816bd0f8"
+    },
+    "thoughts": {
+     "max_ts": "2026-10-08 15:30:04.000379+05:30",
+     "min_ts": "2026-10-05 09:16:04.000380+05:30",
+     "rows": 602,
+     "sha256": "bab00be28dc5e421ef6d5046c3fee1eab007d1ccaf969bbad70b8a77f7d778d0"
+    }
+   },
+   "thought_days": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08"
+   ]
+  }
+ ],
+ "version": 1
+}

@@ -1,0 +1,89 @@
+{
+ "baseline": {
+  "checks": {
+   "calibration_brier_skill": false,
+   "calibration_ece": false,
+   "cost_ci_p_positive": false,
+   "cost_net_expectancy": false,
+   "cost_profit_factor": false,
+   "data_quality": true,
+   "risk_drawdown": false,
+   "risk_trade_frequency": true,
+   "sample_days": true,
+   "sample_rows": true,
+   "sample_trades": false
+  },
+  "metrics": {
+   "by": {},
+   "ci": {
+    "expectancy_bps": {
+     "hi": null,
+     "lo": null,
+     "p_positive": null,
+     "samples": 0
+    },
+    "net_bps_per_day": {
+     "hi": null,
+     "lo": null,
+     "p_positive": null,
+     "samples": 0
+    },
+    "win_rate": {
+     "hi": null,
+     "lo": null,
+     "p_positive": null,
+     "samples": 0
+    }
+   },
+   "classification": {
+    "abstention_rate": 1.0,
+    "accuracy_traded": null,
+    "auc": 0.49102096181826654,
+    "base_rate": 0.4714501510574018,
+    "brier": 0.25608886423124677,
+    "brier_skill": -0.027706164924848675,
+    "coverage": 0.0,
+    "ece": 0.06428964031482558,
+    "ece_excess": 0.05500639006881905,
+    "ece_noise": 0.009283250246006531,
+    "precision_down": null,
+    "precision_up": null,
+    "recall_down": 0.0,
+    "recall_up": 0.0,
+    "rows": 6620
+   },
+   "days": 48,
+   "first_day": "2026-08-10",
+   "last_day": "2026-10-29",
+   "trading": {
+    "cost_bps_avg": null,
+    "daily_vol_bps": 0.0,
+    "drawdown_recovery_days": null,
+    "expectancy_bps": null,
+    "gross_expectancy_bps": null,
+    "max_drawdown_bps": 0.0,
+    "mean_daily_bps": 0.0,
+    "net_bps_total": 0.0,
+    "net_inr_per_lot_total": 0.0,
+    "profit_factor": null,
+    "sharpe": null,
+    "sortino": null,
+    "trades": 0,
+    "trades_per_day": 0.0,
+    "turnover_lots_per_day": 0.0,
+    "win_rate": null
+   }
+  },
+  "passed": false,
+  "reasons": [
+   "failed sample_trades",
+   "failed calibration_ece",
+   "failed calibration_brier_skill",
+   "failed cost_net_expectancy",
+   "failed cost_ci_p_positive",
+   "failed cost_profit_factor",
+   "failed risk_drawdown"
+  ],
+  "vs_champion": null
+ }
+}

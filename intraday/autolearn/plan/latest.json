@@ -1,0 +1,24 @@
+{
+ "at": "2026-10-30 22:19:21.495458+05:30",
+ "champion": null,
+ "eod": {
+  "plan_outcomes": 1871,
+  "sessions": 264
+ },
+ "path": "/home/runner/work/Quant-Desk/Quant-Desk/runtime/intraday/autolearn/plan/studies/2026-10-30-c368af/report.json",
+ "real": {
+  "approved": false,
+  "lock": "no lock yet: 20 real sessions, 28 needed",
+  "pit_sessions": 20,
+  "plan_outcomes": 35898,
+  "selected": null,
+  "status": "insufficient real point-in-time data: 20 session(s) with complete real plans; the protocol needs 28 (15 training + 5 folds + 8 locked). Descriptive only; nothing fitted."
+ },
+ "scenario": {
+  "best_by_the_selection_rule": "120m|6+|plan_logit",
+  "label": "scenario analysis only",
+  "plan_outcomes": 136216,
+  "sessions": 72
+ },
+ "study": "2026-10-30-c368af"
+}
