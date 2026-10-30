@@ -181,6 +181,28 @@ def test_static_site_exports(site, tmp_path):
     assert ".bar{position:sticky;top:env(safe-area-inset-top,0px);" in html and "min-height:52px;\npadding:0 4px 0 16px;" in html
 
 
+def test_one_chart_that_cannot_be_built_does_not_stop_the_publish(site, tmp_path, monkeypatch, capsys):
+    """30 Oct 2026: a chart error failed the whole export five times in a row, so the site (heartbeat included) froze for
+    30 minutes and the app said the desk had stopped. The heartbeat and the other charts go out; the failure is named."""
+    from quantdesk.web.export_site import publish_site
+    _, cfg, _, _ = site
+    real = IntradayAPI.chart
+
+    def chart(self, account, symbol, *a, **k):
+        if symbol == "BANKNIFTY-FUT":
+            raise ValueError("NaTType does not support timestamp")
+        return real(self, account, symbol, *a, **k)
+    monkeypatch.setattr(IntradayAPI, "chart", chart)
+    out = publish_site(cfg, "live", tmp_path / "site", sessions=2)
+    data = json.loads((out / "data.json").read_text())
+    assert data["state"]["heartbeat"]["ts"]                                         # the heartbeat still goes out
+    assert set(data["chart"]) == {f"{s}{k}|{iv}" for s in ("NIFTY", "BANKNIFTY") for k in ("", "-FUT") for iv in ("1m", "5m", "15m")
+                                  if f"{s}{k}" != "BANKNIFTY-FUT"}
+    assert len(data["export_errors"]) == 3 and all(e.startswith("chart BANKNIFTY-FUT|") and "ValueError" in e
+                                                  for e in data["export_errors"])
+    assert "::warning::export-site: left out chart BANKNIFTY-FUT|1m" in capsys.readouterr().out
+
+
 def test_chart_library_is_served(site):
     """The phone app's chart engine (TradingView Lightweight Charts, vendored) loads from the desk itself."""
     base = site[0]
@@ -208,6 +230,33 @@ def test_a_stub_session_is_charted_with_the_day_before(tmp_path):
     assert ch["day"] == "2026-09-30" and ch["today_bars"] == 10 and len(ch["bars"]["t"]) == 75 + 2
     assert ch["profile"]["day"] == "2026-09-29"                              # the stub's ten bars don't make a profile
     assert "or_high" not in ch["levels"] and {"pdh", "pdl", "day_high"} <= set(ch["levels"])   # no fake opening range
+
+
+def test_an_open_trade_beside_a_closed_one_does_not_break_the_chart(tmp_path):
+    """30 Oct 2026: right after the hand-over the afternoon desk published nothing for 30 minutes (five failed exports in a
+    row, `NaTType does not support timestamp`) and the app said "Stale". pandas 3 returns a missing string as NaN, which is
+    truthy, so an open trade's empty `closed_at` (or `meta`) was read as a time. An open trade is marked as an entry only."""
+    import numpy as np
+    from quantdesk.web.intraday_api import IntradayAPI
+    idx = pd.date_range("2026-09-30 09:15", "2026-09-30 15:29", freq="1min", tz="Asia/Kolkata")
+    c = 22700.0 + np.sin(np.arange(len(idx)) / 20) * 30
+    rec = SessionRecorder(tmp_path / "data")
+    rec.record_bars("NIFTY", pd.DataFrame({"open": c, "high": c + 3, "low": c - 3, "close": c, "volume": 0.0}, index=idx))
+    j = Journal()
+    j._exec("INSERT INTO trades (id, symbol, direction, strategy, status, pnl, opened_at, closed_at, exit_underlying, "
+            "exit_reason, meta) VALUES ('c1', 'NIFTY', 1, 'orb', 'closed', 150.0, '2026-09-30 10:00', '2026-09-30 11:00', "
+            "22710.0, 'target', '{}')")
+    j._exec("INSERT INTO trades (id, symbol, direction, strategy, status, opened_at) "
+            "VALUES ('o1', 'NIFTY', -1, 'trend_break', 'open', '2026-09-30 12:00')")        # no closed_at, no meta
+    j._exec("INSERT INTO trades (id, symbol, direction, strategy, status, opened_at, meta) "
+            "VALUES ('o2', 'NIFTY', 1, 'orb', 'open', '2026-09-30 13:00', '{}')")           # no closed_at only
+    j.commit()
+    api = IntradayAPI.__new__(IntradayAPI)
+    api._data_dir = lambda account: tmp_path / "data"
+    api.j = lambda account: j
+    ch = api.chart(None, "NIFTY", None, "5m")
+    assert sorted(m["kind"] for m in ch["markers"]) == ["entry", "entry", "entry", "exit"]
+    assert [t["structure"] for t in api.trades(None)] == [None, None, None]         # the trade list reads the same columns
 
 
 def test_an_account_that_has_not_traded_shows_the_new_capital(cfg):
