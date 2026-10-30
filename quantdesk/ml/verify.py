@@ -1,9 +1,12 @@
-"""P0.6: the independent check of an imported index-minute dataset, under the rules fixed in docs/ml/P0_6_criteria.md (version 1).
+"""P0.6: the independent check of an imported index-minute dataset, under the rules fixed in docs/ml/P0_6_criteria_v2.md (version 2; version 1 stays on file, its one run was void).
 
 The criteria file is hashed and pinned (`intake.VERIFICATION_CRITERIA`): this code refuses to run against a criteria file that is not the one committed
 before any result. The check is run **once**: a run that produced comparisons writes `verification.json` (pass or fail) and never overwrites it; a run
 that could not fetch a reference completely is *void*: it writes `void_run_<time>.json` with the reason and nothing else, and the check may be run again
 under the same rules. A void is only ever an exception or an HTTP error raised by this code, never a judgment.
+
+Version 2 differs from version 1 in one rule: an NSE file whose `Index Date` is the swapped label of its own date is accepted for exactly three named files (`SWAPPED_LABEL_DAYS`),
+listed in the record as `date_label_swapped`; any other mismatch voids the run. The record also says it supersedes the void version 1 run and that it is post hoc.
 
 Passing writes the record only. Flipping the manifest's status to `external_verified` is a separate, status-only step (`flip_status`) that copies `passed`
 from the existing record and re-compares nothing; the loader then accepts the dataset for the symbols the record lists (`symbols_verified`) and no others.
@@ -27,9 +30,9 @@ import pandas as pd
 
 from . import intake
 
-CHECK = "p06-v1"
-CRITERIA_PATH = Path(__file__).resolve().parents[2] / "docs" / "ml" / "P0_6_criteria.md"
-DATASET_DIGEST = "47d28d6376ca63af6f435c7a7fab16dc403cc99a7c49ab954ded2c68ed98e9b8"          # the manifest digest docs/ml/P0_6_criteria.md names: any other dataset is refused
+CHECK = "p06-v2"
+CRITERIA_PATH = Path(__file__).resolve().parents[2] / "docs" / "ml" / "P0_6_criteria_v2.md"
+DATASET_DIGEST = "47d28d6376ca63af6f435c7a7fab16dc403cc99a7c49ab954ded2c68ed98e9b8"          # the manifest digest docs/ml/P0_6_criteria_v2.md names: any other dataset is refused
 AERON_DATASET = "aeron7-2-906fc2378b"                                                      # the verified reference the criteria name for C
 AERON_MANIFEST_SHA256 = "d149dc2937d9859b7d6cdb7ab26593ff3fabbb26612d926f2140b47bc60b3708"   # its manifest file, as imported and verified
 SYMBOLS = ("NIFTY", "BANKNIFTY")                                    # INDIAVIX is not covered by any claim
@@ -45,6 +48,9 @@ MIN_SESSIONS, PASS_RATE, UNCOMPARED_MAX, ACCEPTED_FLOOR = 500, 0.95, 0.01, 0.97
 MONTH_FLOOR, MONTH_MIN, MAX_RUN = 0.80, 10, 5
 C_COVERAGE, CORR_SESSION, CORR_SHARE, CORR_MEDIAN, MIN_COMMON_MINUTES = 0.95, 0.95, 0.90, 0.98, 30
 MAX_404_SHARE = 0.10
+SWAPPED_LABEL_DAYS = frozenset({dt.date(2023, 4, 6), dt.date(2023, 4, 10), dt.date(2023, 4, 11)})   # the three NSE files whose Index Date has day and month swapped (docs/ml/P0_6_criteria_v2.md)
+SUPERSEDES = "p06-v1 (void)"
+VOID_V1_LOG_SHA256 = "d7be976f412fec09fd90ccdb7a7c48e47991c4048b36eee79b079747dbef8533"        # void_run_20261030T134834279524.json of the one version 1 run
 PRIOR_EXPOSURE = ("On 2026-10-25, before the counted run, the engineer rehearsed this code on a copy of the real Kaggle dataset with SYNTHETIC Yahoo and NSE references built from the dataset's "
                   "own bars (code identical to commit a76684bf of ml-p06-verify2). Check C compares two local datasets, so it necessarily ran against the real aeron7 data (manifest sha256 "
                   "d149dc29…): NIFTY C passed (worst month 2015-08 at 81%, close to the 80% floor), BANKNIFTY C failed only the month rule (2020-03: 15 of 19 compared sessions agree, 16 "
@@ -294,8 +300,10 @@ def http_fetch(url: str, timeout: int = 30) -> bytes | None:
         raise
 
 
-def parse_nse(raw: bytes, day: dt.date) -> dict[str, float]:
-    """{symbol: closing value} from one archive file. The file's Index Date must equal `day` and both rows must be there, or the run is void."""
+def parse_nse(raw: bytes, day: dt.date, swapped: list | None = None) -> dict[str, float]:
+    """{symbol: closing value} from one archive file. The file's Index Date (read as DD-MM-YYYY) must equal `day`, and both rows must be there, or the run is void.
+    Version 2's one exception: for the three days in `SWAPPED_LABEL_DAYS` a label that, read as MM-DD-YYYY, equals `day` is accepted and appended to `swapped`
+    as {"date", "label"}; the closing values are used as they are."""
     try:
         rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
         out = {}
@@ -303,9 +311,17 @@ def parse_nse(raw: bytes, day: dt.date) -> dict[str, float]:
             hit = [r for r in rows if (r.get("Index Name") or "").strip().lower() == name.lower()]
             if len(hit) != 1:
                 raise VoidRun(f"NSE file for {day}: {len(hit)} rows named {name}")
-            d = dt.datetime.strptime(hit[0]["Index Date"].strip(), "%d-%m-%Y").date()
+            label = hit[0]["Index Date"].strip()
+            d = dt.datetime.strptime(label, "%d-%m-%Y").date()
             if d != day:
-                raise VoidRun(f"NSE file for {day} says Index Date {d}")
+                try:
+                    as_mdy = dt.datetime.strptime(label, "%m-%d-%Y").date()
+                except ValueError:
+                    as_mdy = None
+                if day not in SWAPPED_LABEL_DAYS or as_mdy != day:
+                    raise VoidRun(f"NSE file for {day} says Index Date {d}")
+                if swapped is not None and {"date": str(day), "label": label} not in swapped:
+                    swapped.append({"date": str(day), "label": label})
             v = float(hit[0]["Closing Index Value"])
             if not np.isfinite(v) or v <= 0:
                 raise VoidRun(f"NSE file for {day}: {name} close {v}")
@@ -317,9 +333,9 @@ def parse_nse(raw: bytes, day: dt.date) -> dict[str, float]:
         raise VoidRun(f"NSE file for {day} could not be read: {exc!s:.120}") from exc
 
 
-def fetch_nse(days: list, cache: Path, fetch=http_fetch, say=print) -> tuple[dict, dict, list]:
+def fetch_nse(days: list, cache: Path, fetch=http_fetch, say=print, swapped: list | None = None) -> tuple[dict, dict, list]:
     """Fetch (or read from `cache`) the index file of each day. Returns ({symbol: DataFrame(close) by day}, {file name: sha256}, days with no file). More than
-    10% of the weekdays answering 404 voids the run: the archive layout has changed, not NSE's calendar."""
+    10% of the weekdays answering 404 voids the run: the archive layout has changed, not NSE's calendar. `swapped` collects the files accepted by version 2's date-label exception."""
     cache = Path(cache)
     cache.mkdir(parents=True, exist_ok=True)
     closes: dict[str, dict] = {s: {} for s in SYMBOLS}
@@ -338,7 +354,7 @@ def fetch_nse(days: list, cache: Path, fetch=http_fetch, say=print) -> tuple[dic
                 none.append(d)
                 continue
         try:
-            parsed = parse_nse(raw, d)
+            parsed = parse_nse(raw, d, swapped)
         except VoidRun:
             if not fetched:
                 p.unlink(missing_ok=True)                           # a bad file already in the cache must not void every rerun: the next run fetches it afresh
@@ -403,7 +419,7 @@ def _yf_version() -> str:
 def check_pins(man: dict, ref_man: dict, aeron_ds: Path) -> None:
     """The run is about one named dataset and one named reference. Anything else is refused before a single fetch."""
     if man.get("digest") != DATASET_DIGEST:
-        raise ValueError(f"{man.get('dataset')}: its digest is not the one docs/ml/P0_6_criteria.md names ({DATASET_DIGEST[:12]}…): refused")
+        raise ValueError(f"{man.get('dataset')}: its digest is not the one docs/ml/P0_6_criteria_v2.md names ({DATASET_DIGEST[:12]}…): refused")
     if ref_man.get("dataset") != AERON_DATASET:
         raise ValueError(f"the C reference must be {AERON_DATASET}, not {ref_man.get('dataset')}")
     if hashlib.sha256((Path(aeron_ds) / "manifest.json").read_bytes()).hexdigest() != AERON_MANIFEST_SHA256:
@@ -455,12 +471,12 @@ def window_days(accepted: dict[str, list]) -> list:
 def run(ds: Path, aeron_ds: Path, cache: Path, yahoo=yahoo_daily, fetch=http_fetch, say=print) -> dict:
     """The one run. Returns the record; raises `VoidRun` after writing `void_run_<time>.json` if a reference could not be fetched or read."""
     if criteria_sha256() != pinned_criteria_sha256():
-        raise CriteriaChanged("docs/ml/P0_6_criteria.md is not the file committed before any result (intake.VERIFICATION_CRITERIA): refused")
+        raise CriteriaChanged("docs/ml/P0_6_criteria_v2.md is not the file committed before any result (intake.VERIFICATION_CRITERIA): refused")
     from ..data import external_aeron as ea
     ds, aeron_ds = Path(ds), Path(aeron_ds)
     vp = ds / "verification.json"
     if vp.exists() or (ds / f"verification_{CHECK}.json").exists():
-        raise AlreadyChecked(f"{vp} exists: this check is run once; a changed rule is a new criteria file, written after a failed v1")
+        raise AlreadyChecked(f"{vp} exists: this check is run once; a changed rule is a new criteria file, written after a failed v2")
     man = json.loads((ds / "manifest.json").read_text())
     ref_man = json.loads((aeron_ds / "manifest.json").read_text())
     if ref_man.get("status") != ea.VERIFIED:
@@ -487,11 +503,13 @@ def _run(ds, aeron_ds, man, ref_man, cache, yahoo, fetch, say, ea) -> dict:
         loaded[sym] = m1
         accepted[sym] = sorted(d for d in m1["ts"].dt.date.unique() if NEW_START <= d <= WINDOW_END)
     wdays = window_days(accepted)
-    nse, files, no_file = fetch_nse(wdays, cache, fetch, say)
+    swapped: list = []
+    nse, files, no_file = fetch_nse(wdays, cache, fetch, say, swapped)
     nse_days = set(wdays) - set(no_file)
     ref_hashes = reference_files(nse, files, Path(cache))
     rec = {"check": CHECK, "criteria_sha256": pinned_criteria_sha256(), "dataset": man["dataset"], "digest": man["digest"], "code": intake.code_commit(),
-           "scope": SCOPE, "prior_exposure": PRIOR_EXPOSURE, "references": {"yahoo": f"Yahoo Finance daily OHLC (^NSEI, ^NSEBANK), yfinance {_yf_version()}, auto_adjust=False, fetched {pd.Timestamp.now(tz=intake.IST).date()}",
+           "scope": SCOPE, "prior_exposure": PRIOR_EXPOSURE, "supersedes": SUPERSEDES, "void_log_sha256": VOID_V1_LOG_SHA256, "post_hoc": True,
+           "date_label_swapped": sorted(swapped, key=lambda x: x["date"]), "references": {"yahoo": f"Yahoo Finance daily OHLC (^NSEI, ^NSEBANK), yfinance {_yf_version()}, auto_adjust=False, fetched {pd.Timestamp.now(tz=intake.IST).date()}",
                                           "nse": {"source": NSE_URL, "files": len(files), "days_without_a_file": [str(d) for d in no_file],
                                                   **ref_hashes, "file_hashes": files},
                                           "aeron7": {"dataset": ref_man["dataset"], "manifest_sha256": AERON_MANIFEST_SHA256, "source_commit": ref_man.get("source_commit")}},
@@ -532,11 +550,11 @@ def flip_status(ds: Path) -> str:
     except (OSError, ValueError) as exc:
         raise ValueError(f"{ds}: no readable manifest.json and verification.json") from exc
     if not (isinstance(rec, dict) and rec.get("digest") == man.get("digest") and rec.get("passed") is True and rec.get("check") == CHECK
-            and rec.get("criteria_sha256") == pinned_criteria_sha256() and rec.get("symbols_verified")
+            and rec.get("supersedes") == SUPERSEDES and rec.get("post_hoc") is True and rec.get("criteria_sha256") == pinned_criteria_sha256() and rec.get("symbols_verified")
             and set(rec["symbols_verified"]) <= set(SYMBOLS) and not rec.get("reasons") and (rec.get("D") or {}).get("passed") is True
             and all(v.get("passed") is True for s_ in SYMBOLS for v in (rec.get("symbols") or {}).get(s_, {"x": {}}).values())
             and set(rec.get("symbols") or {}) >= set(SYMBOLS)):
-        raise ValueError(f"{ds.name}: the verification record does not name this digest, did not pass, or is not a p06-v1 record with its scope: status unchanged")
+        raise ValueError(f"{ds.name}: the verification record does not name this digest, did not pass, or is not a p06-v2 record (superseding the void p06-v1, post hoc) with its scope: status unchanged")
     if man.get("status") != intake.VERIFIED:
         man["status"] = intake.VERIFIED
         intake._write_json(ds / "manifest.json", man)

@@ -572,7 +572,8 @@ def render_quality(q: dict, man: dict) -> str:
 # ---- use-restricted, integrity-checked loading ----------------------------------------------------------------------
 # The independent checks that can verify a dataset, each tied to the sha256 of the criteria file that was committed before the check ran
 # (docs/ml/P0_6_criteria.md). A new criteria version is a new entry here, added by a reviewed change.
-VERIFICATION_CRITERIA = {"p06-v1": "0958f8b96ce36fbac44921f326c3e649663dc1607e014ed99557ed6186bcf21c"}
+VERIFICATION_CRITERIA = {"p06-v1": "0958f8b96ce36fbac44921f326c3e649663dc1607e014ed99557ed6186bcf21c",           # its one run was void: no record under it exists
+                         "p06-v2": "508534f5657190f3ca57ee1cd8dd76cbc81aedabcced056a421f9ad7a019b51b"}
 
 
 def effective_status(ds: Path, man: dict, symbols) -> str:
