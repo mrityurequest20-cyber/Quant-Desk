@@ -475,6 +475,23 @@ def test_a_swapped_label_outside_the_three_named_days_voids_the_run_and_leaves_n
     assert json.loads(next(ds.glob("void_run_*.json")).read_text())["check"] == "p06-v2"
 
 
+def test_an_existing_record_refuses_the_run_before_anything_is_fetched(world):
+    ds, aeron, cache, fetch, yahoo, _ = world
+
+    def nothing_may_be_fetched(*_a, **_k):
+        pytest.fail("a second run must be refused before any reference is fetched")
+    for name in ("verification.json", "verification_p06-v2.json"):
+        (ds / name).write_text("{}")
+        with pytest.raises(V.AlreadyChecked):
+            V.run(ds, aeron, cache, nothing_may_be_fetched, nothing_may_be_fetched, lambda *_: None)
+        assert not list(ds.glob("void_run_*.json"))                                                       # a refusal is not a void run, and writes nothing
+        (ds / name).unlink()
+
+
+def test_the_rehearsal_disclosure_is_the_text_the_criteria_name_and_cannot_be_edited_silently():
+    assert hashlib.sha256(V.PRIOR_EXPOSURE.encode()).hexdigest() == "b8bd152dc2381269fb05ae37d79ff75dcef0a78db8be58305d0c0f5f625d8ec6"
+
+
 def test_the_record_is_a_normal_one_without_swapped_files_when_nse_has_corrected_them(world):
     ds, aeron, cache, fetch, yahoo, _ = world
     rec = V.run(ds, aeron, cache, yahoo, fetch, lambda *_: None)
