@@ -1,4 +1,4 @@
-# Kite Connect market-data trial: criteria (written before any Kite data exists)
+# Kite Connect market-data trial: criteria (written before any Kite data exists: nothing has run yet, the shake-down included)
 
 > **Amendment v2, 25 Oct 2026, before any Kite data exists (owner decision).** The websocket is **attached directly to the running paper desk**, not recorded in shadow: when
 > `KITE_API_KEY` and the day's access token are present, Kite serves the index bars and the live index price, and the existing feeds (Kotak, then Yahoo) are the automatic
@@ -7,11 +7,13 @@
 > method is used. The trial now asks whether to **keep** the attachment and the subscription, on the measures below. The separate tick recorder described further down is
 > optional and secondary: it measures latency (C3) and real order flow (C4) and is not needed for the decision.
 >
+> **Amendments of 30 Oct 2026 (review fixes, still before any Kite data: the code is not on `main` and no session has run).** Each changes how a measure is read, and the ones that can only make a pass easier are listed with their reason so the owner accepts them knowingly: (1) **C3 latency is reported, no longer a pass condition**, because Kite's exchange stamps are whole seconds (about +0.5 s of rounding bias) and the recorder cannot measure the runner clock's offset; (2) **E1 is a per-session 99% and the decision judges 90% of sessions**, which replaces the contradictory "99% in every session"; (3) **a session with fewer than 20 flat late-session minutes is not measured for E3**, is judged on E1, E2 and E4 and stays in the denominator, and KEEP needs E3 measured in at least 5 sessions; (4) **EXTEND is defined** (once, then REMOVE if still short). Tightenings: time no runner covers counts as unserved; E3's denominator is the other feeds' flat minutes whether or not Kite had a bar.
+>
 > **Credentials under v2 (supersedes the "Operating notes" below).** `KITE_API_KEY` and `KITE_API_SECRET` are repository secrets (added by the owner on 25 Oct). Inside jobs they are
 > exposed only as `KITE_DATA_KEY`, `KITE_DATA_SECRET` and `KITE_DATA_TOKEN`, **never** as the names the broker adapter (`execution/kite.py`) reads, so the day's token cannot switch that
-> adapter's credentials on. The API secret is read by exactly these steps: the daily "Kite token" workflow (it exchanges the owner's single-use `request_token` for the day's access token),
-> the same workflow's encryption step, the live desk's optional "Kite token" step (it decrypts the file; the library install is a separate step with no secret), and, in each of the
-> tick recorder's two jobs, its token step (it decrypts the same file) and its tick-encryption step (the recorder workflow arrives with its own pull request). The `--feed kite` option of
+> adapter's credentials on. The API secret is read by exactly these steps: the daily "Kite token" workflow (one step: it exchanges the owner's single-use `request_token` for the day's access token and encrypts it),
+> the live desk's optional "Kite token" step (it decrypts the file; the library install is a separate step with no secret), and, in the tick recorder's two jobs, five steps: each job's
+> token step (it decrypts the same file) and tick-encryption step, and the second job's step that decrypts the first job's ticks for the session measures (the recorder workflow arrives with its own pull request). The `--feed kite` option of
 > the intraday command (`KiteIntradayFeed`, which reads the broker adapter's names) is not used by any workflow and is untouched; the attachment reads only the `KITE_DATA_*` names. The access token is stored
 > AES-256 encrypted, with a key derived from the API secret, as one file on a `kite-token` branch of this (public) repository; every day's ciphertext stays in git history, the token expires
 > within a day, and CBC carries no integrity check, so the desk accepts only a decrypted value of token shape (16 to 64 letters and digits) before exporting it. No password or TOTP is stored. No
@@ -30,8 +32,8 @@
 >
 > **The settlement window is not Kite's (15:00 to 15:29).** The expiry sleeves settle on the mean of the *recorded* 15:00 to 15:29 closes and on the 15:29 close (`sleeves.settlement_price`,
 > `official_close`). To change nothing they read, no poll that reaches 15:00 is answered from Kite alone: the other feeds are asked and their bars stand for every minute they have; Kite is
-> compared with them, never overlaid, and fills only a minute they lack. Kite's minutes are kept out of the recorder (licence), and the other feeds' own history for today fills those holes every
-> 30 minutes and at the close (`fill_bars` adds only what is missing), so the recorded file is whole. An end-to-end test runs one day plain and one day under Kite and asserts that the recorded
+> compared with them, never overlaid, and not even a minute they lack is supplied by Kite (their next poll may bring it; Kite's live price still serves exits). Kite's minutes before 15:00 are kept out of the recorder (licence), and the other feeds' own history for today fills those holes every
+> 30 minutes and at the close (`fill_bars` adds only what is missing) **only before 15:00**: the recorded 15:00 to 15:29 bars are exactly what a plain day would have recorded, holes included. An end-to-end test runs one day plain and one day under Kite and asserts that the recorded
 > 15:00 to 15:29 bars, the settlement price and the official close are identical. Kite's live price still serves exits after 15:00, and Kite remains the *measure* of whether the late index is
 > frozen (E3).
 >
@@ -110,7 +112,7 @@ For each counted session and each recorded index and future, over the minutes 09
 | C4 | **Real order flow** | descriptive only: correlation of the minute CVD built from tick-rule trades with the desk's close-location CVD; no threshold | reported |
 | D1 | **Reconnects** | websocket disconnections per session | reported; a disconnection that leaves a run of more than 3 minutes without ticks fails A2 |
 | D2 | **Manual steps** | times the owner had to act (new access token, restart) | at most one per trading day (the daily token) |
-| D3 | **Volume** | recorded size per session | reported (a release asset must stay under 2 GB) |
+| D3 | **Volume** | recorded size per session | reported (the ticks are 90-day workflow artifacts, encrypted; there is no size guard, so the figure is watched, and the in-memory buffer is capped at 1,000,000 ticks) |
 
 A session **passes** if A1, A2, B1 and B2 pass for every recorded instrument (indices and futures). C3 (latency) is reported and is not a pass condition. The trial **has value** if C1 passes in at least 90% of counted
 sessions, or C2 passes in every counted session in which it was measured, because either would fix a weakness the desk has today.
