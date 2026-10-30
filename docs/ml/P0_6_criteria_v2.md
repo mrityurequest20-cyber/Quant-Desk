@@ -106,7 +106,7 @@ changes the manifest digest and voids the record.
 - **Scope of the claim:** NIFTY and BANKNIFTY. In the **new window** only the **daily envelope** (high, low, close) is independently checked; nothing independent
   checks minute timestamps or the intraday path after Feb 2023. In the **overlap** the daily envelope and 1-minute returns agree with aeron7. Any study quoting the
   label `external_verified` states this scope. The record carries `symbols_verified` and `scope` fields saying so.
-- **The status label and the loader.** The manifest `status` is dataset-wide and sits outside the digest, so it is not evidence by itself. `intake.effective_status` (merged with the
+- **The status label and the loader.** The manifest `status` is dataset-wide and sits outside the digest, so it is not evidence by itself. `intake.effective_status` (merged before the
   version 1 verifier) already returns `external_unverified` for any symbol not in the record's `symbols_verified`, treats a record **without** `symbols_verified` or `criteria_sha256`
   as unverified for every symbol, and accepts a record only when its `check` is registered in `intake.VERIFICATION_CRITERIA` and its `criteria_sha256` equals the pinned hash. No new
   loader logic is needed. What remains for version 2 is a separate, independently reviewed, tighten-only change that registers `p06-v2` in `VERIFICATION_CRITERIA` with the sha256 of this
@@ -119,13 +119,14 @@ changes the manifest digest and voids the record.
 ## Wording corrected from version 1
 
 Three sentences of version 1 do not describe what the merged verifier (`quantdesk/ml/verify.py` at `8220039`) does, and version 2 states what it does. None changes a gate number or loosens a rule; the
-verifier is not changed by this file.
+verifier is not changed by this file. Two more passages are rewritten, and neither changes a gate: the sentence in "Why version 2" on why version 1 cannot complete (now date-qualified), and the
+paragraph on the status label and the loader in "What the pass means" (now describing the loader as merged).
 
 - **Minute-return correlation, undefined.** Version 1 says "fewer than 30 common minutes". The verifier computes the correlation only between consecutive minutes present in both series and calls it
-  undefined (a failure) when it has **fewer than 30 such return pairs** (`MIN_COMMON_MINUTES = 30`, counted in pairs). A session with exactly 30 common minutes has at most 29 pairs, so the verifier is
-  stricter than version 1's words by at most one minute.
+  undefined (a failure) when it has **fewer than 30 such return pairs** (`MIN_COMMON_MINUTES = 30`, counted in pairs). The verifier is never looser than version 1's words: it is stricter whenever the common minutes are not
+  consecutive (100 common minutes in alternating positions give no pair at all), and it treats a flat series (zero variance) as undefined, which version 1 does not mention. Both differences count as a failure.
 - **Information only.** Version 1 says the record "runs A and B on" the `review` and `rejected` sessions. The verifier **lists** them (`info_only`: counts and days, per symbol) and does not compare them:
-  the loader builds the partitions from `accepted` and `accepted_reviewed` sessions only. Nothing gated on that run, so no pass or fail changes; the information version 1 promised is simply not produced.
+  the importer builds the partitions from `accepted` and `accepted_reviewed` sessions only. Nothing gated on that run, so no pass or fail changes; the information version 1 promised is simply not produced.
 - **The record file name.** Version 1 and the verifier write `verification.json` and refuse to run while it, or `verification_<check>.json`, exists. Version 1's phrase "kept as `verification_p06-v1.json`"
   means the record is moved to that name before a later criteria file runs; version 2 says so in "After a failure".
 
