@@ -112,7 +112,7 @@ For each counted session and each recorded index and future, over the minutes 09
 | D2 | **Manual steps** | times the owner had to act (new access token, restart) | at most one per trading day (the daily token) |
 | D3 | **Volume** | recorded size per session | reported (a release asset must stay under 2 GB) |
 
-A session **passes** if A1, A2, B1 and B2 pass for every recorded instrument (indices and futures) and C3 passes. The trial **has value** if C1 passes in at least 90% of counted
+A session **passes** if A1, A2, B1 and B2 pass for every recorded instrument (indices and futures). C3 (latency) is reported and is not a pass condition. The trial **has value** if C1 passes in at least 90% of counted
 sessions, or C2 passes in every counted session in which it was measured, because either would fix a weakness the desk has today.
 
 ## The decision on 20 Nov (the rule is fixed now; nobody chooses after seeing the data)
