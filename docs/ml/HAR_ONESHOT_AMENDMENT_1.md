@@ -16,8 +16,10 @@ who chose to **amend the precondition** rather than write a post hoc version 3 o
   - `dataset`: "It is run only when the dataset is external_verified";
   - `kill_rule`: "The evaluation is run only after P0.6 has passed the data" (the rest of that sentence, "but the look is spent whatever P0.6 saw", stands);
   - `command.behaviour`: the refusal of a dataset that is "not external_verified";
+  - `run_only_after_p06.criteria_file`: it names `docs/ml/P0_6_criteria.md` (version 1, void) and says the run records that file's sha256 and commit. For the pinned record the run records the sha256 and commit of `docs/ml/P0_6_criteria_v2.md`, the file the record rests on, and refuses to start without it;
+  - `looks.no_peeking`, first clause ("before the run, the window's data are touched only by the preflight"): no longer true, because the P0.6 run loaded the window (see "Exposure" below); it stays true of everything from now on;
   - `controls_before_the_run`, first item: "P0.6 has passed this digest and the verification record is present; the loader refuses otherwise".
-- **A tightening added here (it loosens nothing):** a later version 3 of the P0.6 criteria does not qualify under this amendment. The registered rule as written does not pin a criteria version, so this closes a route the registration left open; a version 3 would need a new amendment and its own criteria commit.
+- **A tightening added here (it loosens nothing):** a later version 3 of the P0.6 criteria does not qualify under this amendment. The registered `rule` field does not pin a criteria version (`criteria_file` names the version 1 file), so this closes a route the registration left open; a version 3 would need a new amendment and its own criteria commit.
 - **The label.** The registered `label` rule allows "evidence: external_verified (underlying only)" if the verification record is present when the run happens: the test is presence, not a pass. **That rule does not apply to the pinned record.** The result must not carry `external_verified` anywhere, and must say `external_unverified` in its header and in its body.
 - The dataset stays `external_unverified`. This file flips no status, licenses no symbol and does not change the loader. The `oneshot` change will have to load the unverified dataset through `build.load_table(reserved_spec=...)` for the pinned record alone, and that change is reviewed on its own.
 
@@ -30,6 +32,7 @@ the session and gap rules, the controls before the run (except the first item, a
 
 "The dataset was `external_unverified` when this was run, and nothing here is verification. Its P0.6 check (version 2) failed one rule: BANKNIFTY, comparison with the aeron7 minute data, month 2020-03 (15 of 19 sessions agree, 80% needed); the four disagreeing sessions have not been examined. Version 2 was written after a void version 1 run, departs from version 1's rule of rerunning with the same rules, is post hoc, and its check C had been rehearsed on 25 Oct, when BANKNIFTY 2020-03 was already seen to fail; the record carries `post_hoc: true` and lists three NSE files with swapped date labels (`date_label_swapped`).
 Its P0.6 checks A and B passed for both symbols over the window, under their coverage and agreement thresholds: check A compared the daily high, low and close with Yahoo, and check B compared only the daily close with NSE's official close, which is nearly the same quantity as A's close, so A and B are not two independent confirmations.
+One NSE reference file (2023-10-23) hashes differently from the pre-run scan for an unknown cause, and the counted rerun reused the cache of a voided attempt (both are in the result file; B passes at 100% either way).
 Nothing independent checks its minute-by-minute path after Feb 2023, and this evaluation scores 1-minute returns. This evaluation was run under amendment 1 to its registration."
 
 ## The risk the registration named is not removed, and no rule is changed to cover it
