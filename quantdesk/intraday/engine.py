@@ -43,6 +43,7 @@ from .orderflow import FootprintBuilder
 from .playbook import Playbook, TradePlan
 from .quant import DirectionModel, EVEngine, VolForecaster, features_5m, load_research, session_sigma, to_5m
 from .risk import IntradayRisk
+from .sleeves import SETTLE_FROM                          # 15:00, the start of the expiry sleeves' settlement window
 from .sim import IntradayBroker, QuoteMarker
 from .volshadow import VolShadow
 
@@ -309,13 +310,16 @@ class IntradayEngine:
                                f"learning memory unreadable ({self.memory.corrupt}): the desk trades on neutral tilts and "
                                f"saves nothing over the file; restore memory.json from the journal branch's evidence")
 
-    def _backfill_recorder(self, sym: str, hist, day: dt.date) -> None:
+    def _backfill_recorder(self, sym: str, hist, day: dt.date, before_min: int | None = None) -> None:
         """P2-10: a runner that starts mid-day (the afternoon one, a restart) gets the minutes it missed in its history,
         so the recorder (which keeps only what poll() returns) had a hole there; fill today's missing minutes. Data only."""
         if self.recorder is None or hist is None or not len(hist):
             return
         try:
-            n = self.recorder.fill_bars(sym, hist[hist.index.date == day])
+            today = hist[hist.index.date == day]
+            if before_min is not None:                                # the gap fill never writes the settlement window (see _fill_recorder_gaps)
+                today = today[(today.index.hour * 60 + today.index.minute) < before_min]
+            n = self.recorder.fill_bars(sym, today)
             if n:
                 self.journal.event(pd.Timestamp.now(tz=IST), "INFO", "session", f"{sym}: {n} bar(s) from history added to today's record")
         except Exception as exc:                                  # a recorder fault must never stop the session starting
@@ -323,7 +327,8 @@ class IntradayEngine:
 
     def _fill_recorder_gaps(self, now, force: bool = False) -> None:
         """Minutes served from Kite are kept out of the recorder (its licence), so the day's 1-minute file would have holes that the chart and the learning loader read. Every 30
-        minutes, and once more at the close, the other feeds' own history for today fills exactly the minutes the file lacks (`fill_bars` adds nothing that is already there)."""
+        minutes, and once more at the close, the other feeds' own history for today fills exactly the minutes the file lacks (`fill_bars` adds nothing that is already there). It fills only minutes before 15:00: the recorded 15:00 to 15:29 bars are the expiry sleeves' settlement input, and on a plain day
+        a minute the feed missed there stays missing, so a Kite day must not fill it from another feed's history either (settlement would differ between the two kinds of day)."""
         if self.recorder is None or self.day is None or not hasattr(type(self.feed), "unrecorded"):
             return
         last = getattr(self, "_gap_fill_at", None)
@@ -332,7 +337,7 @@ class IntradayEngine:
         self._gap_fill_at = now
         for sym in self.underlyings + [self.vix]:
             try:
-                self._backfill_recorder(sym, self.feed.history(sym, 2), self.day)
+                self._backfill_recorder(sym, self.feed.history(sym, 2), self.day, before_min=SETTLE_FROM.hour * 60 + SETTLE_FROM.minute)
             except Exception as exc:                                  # a data nicety: never the session's problem
                 log.warning("recorder gap fill %s: %s", sym, exc)
 
