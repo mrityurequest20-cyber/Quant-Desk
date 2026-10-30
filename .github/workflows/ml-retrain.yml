@@ -1,0 +1,69 @@
+# P0.8 retrain drill (docs/ML_PHASE0.md): rebuild the aeron7 index-minute dataset at the commit the committed HAR coefficients were fitted on, refit the
+# registered models from it, and compare with the numbers the desk loads. Read-only by construction: no write permission, no secret, no push, no release,
+# no change to the repository. A mismatch fails the run; the report is kept as a run artifact (quantdesk/ml/retrain.py).
+name: ML retrain drill
+
+on:
+  schedule:
+    - cron: "23 4 * * 0"       # Sundays, 04:23 UTC (09:53 IST), outside market hours
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash              # bash -e -o pipefail: a failing command in front of `| tee` fails the step
+
+concurrency:
+  group: ml-retrain
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: The source commit the committed coefficients were fitted on
+        id: pin
+        run: |
+          commit=$(python -c "import json; print(json.load(open('quantdesk/intraday/vol_har_v1.json'))['provenance']['inputs']['source_commit'])")
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "no single 40-hex source commit in the committed coefficients"; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Sparse fetch of the index files at that commit (the whole repository is ~22 GB)
+        env:
+          SRC_COMMIT: ${{ steps.pin.outputs.commit }}
+        run: |
+          git init -q src
+          git -C src remote add origin https://github.com/aeron7/nifty-banknifty-intraday-data
+          git -C src sparse-checkout set --no-cone '**/NIFTY.txt' '**/BANKNIFTY.txt'
+          git -C src fetch -q --depth 1 --filter=blob:none origin "$SRC_COMMIT"
+          git -C src checkout -q FETCH_HEAD
+          test "$(git -C src rev-parse HEAD)" = "$SRC_COMMIT"
+          find src -name '*.txt' | wc -l
+      - name: Import (validated, immutable, external_unverified)
+        run: python -m quantdesk data external-import --source src --out runtime/external | tee import.txt
+      - name: Drill (refit the registered models and compare with the committed numbers)
+        run: python -m quantdesk ml retrain --out runtime/ml_retrain | tee retrain.txt
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ml-retrain-report
+          path: |
+            runtime/ml_retrain/retrain_report.json
+            import.txt
+            retrain.txt
+          if-no-files-found: warn
+          retention-days: 30

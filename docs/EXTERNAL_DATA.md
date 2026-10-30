@@ -206,7 +206,7 @@ not part of the digest. A partition is written once; the same inputs reproduce t
 folder is an `ImmutableViolation`. `load()` recomputes the manifest's digest and checks the folder name against it, refuses a
 folder without a manifest, unverified data unless the caller says so, a use outside `ALLOWED_USES`, a symbol that is not in the
 dataset or is named twice, and a partition added, missing, or no longer hashing to the manifest. `external_verified` counts only when a
-`verification.json` written by the P0.6 check names this digest and says it passed; the word in the manifest is not evidence.
+`verification.json` written by the P0.6 check names this digest, says it passed, carries the pinned hash of the criteria file it was run under and lists the symbols it covered, and then only for those symbols (the volatility index is never covered); the word in the manifest is not evidence.
 **What this protects, and what it does not:** it catches an accidental or careless change (a hand-edited partition, a hand-edited
 manifest, a different source file). It cannot stop someone who rewrites a partition, its hash in the manifest and the manifest's digest
 together (the folder name covers the source files, the rules and the reviewed list, not the partitions); for that a spec records the digest it was run on and
