@@ -622,6 +622,7 @@ def test_kite_served_minutes_are_kept_out_of_the_recorder_by_the_engine(cfg, tmp
     assert any(t.hour == 11 for t in recorded) or any(t.hour == 12 for t in recorded)           # and everything else did
     filled = [t for sym, df in rec.filled for t in df.index]
     assert any(t.hour == 10 for t in filled)                                                    # the other feeds' own history fills the holes, so the chart and the loader see a whole day
+    assert not any(t.hour * 60 + t.minute >= 15 * 60 for t in filled)                           # but never the settlement window (15:00 to 15:29): a plain day leaves a hole there, so a Kite day must too
 
 
 def test_the_token_command_exists_exchanges_with_the_data_names_and_never_prints_the_token(tmp_path, monkeypatch, capsys):
