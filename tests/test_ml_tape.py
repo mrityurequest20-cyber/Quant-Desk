@@ -243,3 +243,16 @@ def test_an_implausible_change_in_oi_quarantines_its_snapshot_like_an_implausibl
     man = T.import_tape(src, out, say=lambda *_: None)
     f = next(x for x in man["files"] if x["day"] == "2026-10-29")
     assert f["faults"]["implausible_doi_rows"] == 1 and f["faults"]["implausible_doi_snapshot"] == 2 and f["faults"]["implausible_oi_snapshot"] == 0
+
+
+def test_a_file_with_a_stored_index_is_read_by_row_and_the_latest_dataset_is_the_larger_one_on_a_tie(tape):
+    src, out = tape
+    df = tape_df("2026-10-29", n_snap=3)
+    df.index = df.index[::-1] + 100                                            # a non-default index stored in the file
+    write(src, "2026-10-29_morning-1_chains.parquet", df)
+    man = T.import_tape(src, out, say=lambda *_: None)
+    f = next(x for x in man["files"] if x["day"] == "2026-10-29")
+    assert f["faults"]["implausible_oi_rows"] == 0 and f["faults"]["nonpositive_spot_rows"] == 0 and f["rows"] == len(df)      # no value was turned into NaN by a misaligned index
+    write(src, "2026-10-29_afternoon-2_chains.parquet", tape_df("2026-10-29", n_snap=2, start="13:00"))
+    bigger = T.import_tape(src, out, say=lambda *_: None)
+    assert T.latest(out).name == bigger["dataset"]                             # same last day: the dataset with more files wins

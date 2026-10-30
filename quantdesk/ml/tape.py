@@ -152,7 +152,8 @@ def check_file(path: Path) -> tuple[dict | None, list[str]]:
     days = set(df["ts"].dt.tz_convert(I.IST).dt.date.astype(str))
     if days != {day}:
         return None, [f"{path.name}: rows from {sorted(days)[:3]}, the file's name says {day}"]
-    df = df.reset_index(drop=True).assign(**{c: pd.to_numeric(df[c]) for c in NUMERIC})
+    df = df.reset_index(drop=True)                                   # before the conversions, so the converted columns align by row, not by whatever index the file stored
+    df = df.assign(**{c: pd.to_numeric(df[c]) for c in NUMERIC})
     fl = _flags(df)
     snaps = df.groupby(["underlying", "expiry", "ts"], sort=False, dropna=False).ngroup()
     both_quotes = (df["ce_bid"] > 0) & (df["ce_ask"] > 0), (df["pe_bid"] > 0) & (df["pe_ask"] > 0)
@@ -274,4 +275,10 @@ def load(ds: Path, source: Path, use: str, days=None, clean: bool = True, expect
 def latest(out_root: Path) -> Path | None:
     d = Path(out_root) / "tape"
     c = sorted(p for p in d.glob(f"{IMPORTER_VERSION}-*") if (p / "manifest.json").exists()) if d.exists() else []
-    return max(c, key=lambda p: json.loads((p / "manifest.json").read_text())["days"][-1]) if c else None
+    if not c:
+        return None
+
+    def key(p: Path):                                                # last day, then the larger dataset (a day's afternoon file added later), then the name: never arbitrary
+        m = json.loads((p / "manifest.json").read_text())
+        return (m["days"][-1], m["totals"]["files"], m["totals"]["rows"], p.name)
+    return max(c, key=key)
