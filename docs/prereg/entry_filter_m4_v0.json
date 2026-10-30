@@ -1,0 +1,93 @@
+{
+  "name": "entry_filter_m4_v0",
+  "registered": "2026-10-31",
+  "status": "registered before any outcome of the corpus was read",
+  "question": "Using only what is known at the moment an armed setup on NIFTY or BANKNIFTY reaches its level, can a small model rank the desk's fired setups so that the setups it keeps have a higher mean outcome on the index (stop, target or 45-minute mark, in multiples of planned risk) than keeping every first-fire setup, on sessions it has never seen?",
+  "decision": {
+    "may_change": "if it ever applies: only skip a setup the desk would otherwise take. It can never add a setup, raise a size, loosen a gate, change a stop or target, or touch the paper-mode switch.",
+    "component": "M4 (entry filter), docs/ML_ROADMAP.md"
+  },
+  "relation": "First study on the shadow lab's corpus (quantdesk/intraday/shadowlab.py, PR #155). It does not repeat any registered spec: intraday_direction_v1 asked whether direction could be predicted and failed; this asks whether the desk's own armed setups can be ranked, a different target, unit and population.",
+  "not_for": "Index minutes are third-party and `external_unverified`; the replay prices options on a model chain, so the label is the index outcome and carries no cost. Nothing here is evidence for a gate, the paper gate, a promotion, a DTE change, an option strategy or a profitability claim. A pass only authorises the same study on recorded real quotes with costs (T2) and a forward shadow read; it can never change the desk.",
+  "corpus": {
+    "generator": "python -m quantdesk intraday shadow-replay --dataset <ml-intake-2-feae259bdba6> --sample 800 --seed 20261101 --from 2016-01-01 --to 2026-05-14 --symbols NIFTY,BANKNIFTY --jobs 3 --out <new folder outside every git tree>",
+    "code": "run from the merged main that contains the shadow lab; the manifest records the commit, and the run is refused if the tree is dirty or the commit is not on main",
+    "dataset": {"name": "ml-intake-2-feae259bdba6", "digest": "47d28d6376ca63af6f435c7a7fab16dc403cc99a7c49ab954ded2c68ed98e9b8", "status": "external_unverified", "tier": "T1b", "use": "underlying_features"},
+    "sessions": "800 drawn at random without replacement from the sessions after the first 250 (the engine's lookback), 2016-01 to 2026-05-14, seed fixed above",
+    "unit": "an idea: the first fire of a setup on a symbol and direction (`idea_first`); later re-arms within 45 minutes are the same idea. The evaluation unit is the session, because ideas of one day share the market.",
+    "engine": "the desk's engine as merged, empty learning memory per session, model option chain with a constant 14.0 vol (the dataset has no INDIAVIX), adverse ticks 1",
+    "expected_size": "about 3.7 ideas per session from a 100-session probe (counts only), so about 3,000 ideas, about 540 in the locked test"
+  },
+  "target": {
+    "definition": "r_underlying: after the fill, the first of: the stop (invalidation) touched = -1; the target = fill +- max(reward_risk x risk, min_move) touched = +reward/risk; otherwise the 45th minute's last close marked in multiples of planned risk. The stop wins when one bar touches both. Only bars from the minute after the firing bar are read.",
+    "horizon_minutes": 45,
+    "costs": "none: this is an index outcome, not an option P&L"
+  },
+  "baseline": {
+    "name": "keep every first-fire setup (what the desk's setup logic produces before any filter)",
+    "metric": "mean r_underlying over the locked test's ideas",
+    "decision_rule": "the model must beat it as set out under decision_rules; also reported, not decisive: the desk's own gate on the model chain (`desk_taken`), and a random keep of the same size"
+  },
+  "data": {
+    "tiers": ["T1b"],
+    "features": [
+      "setup (one-hot)", "symbol", "direction", "kind (break or touch)", "reward_risk", "risk_pct (planned risk as % of the fill)",
+      "minutes_since_open", "weekday", "view_score", "view_conviction", "view_bias", "view_day_type", "view_vol_view", "view_chg (the index's change on the day so far)", "view_phase"
+    ],
+    "known_at": "every feature is a field of the analyst's view or the armed setup at the minute of the fire; none reads a later bar",
+    "excluded": [
+      "every `desk_*` column (the desk's own decision and model-chain P&L)", "r_underlying, exit_reason, exit_ts, mfe_r, mae_r, target, bars_after (the label and what follows the fire)",
+      "view_iv and view_rv (a constant-vol fallback in this corpus)", "view_vwap, fill, level, invalidation (price levels, non-stationary)", "ts, day, idea_first"
+    ]
+  },
+  "split": {
+    "train": ["2016-01-01", "2022-12-31"],
+    "validation": ["2023-01-01", "2024-06-30"],
+    "locked_test": ["2024-07-01", "2026-05-14"],
+    "purge_sessions": 1,
+    "cutoff": "2024-06-30",
+    "rule": "by session date; one session is dropped on each side of a boundary; the model, the keep fraction and every setting are frozen at the cutoff; the locked test is read once"
+  },
+  "model": {
+    "family": "two small CPU models, both trained on the train window only",
+    "settings": {
+      "M1": "L2 logistic regression on win = (r_underlying > 0), standardised numeric features, C in {0.1, 1, 10} chosen on the validation window by log loss",
+      "M2": "gradient-boosted trees (sklearn HistGradientBoostingRegressor) on r_underlying: max_depth 3, 200 iterations, learning rate 0.05, min_samples_leaf 20, early stopping off, seed fixed",
+      "score": "M1: predicted P(win); M2: predicted r",
+      "keep_fraction": "q in {0.3, 0.5, 0.7}: keep the top q of ideas by score (the threshold is a quantile of the training scores, frozen)"
+    }
+  },
+  "variants_tried": 6,
+  "multiple_testing": "6 (model x keep fraction) pairs are scored on the validation window only; the pair with the highest validation mean R of the kept ideas is frozen; the locked test reads that one pair, so the test is a single comparison. The validation scores of all six are reported.",
+  "controls_before_the_read": [
+    "the harness's injected-leak test (ml/splits.py verifier) passes on this table",
+    "label-shuffle canary: with labels shuffled within each session, the frozen pipeline's validation difference (kept minus all) must lie within +-0.05 R, else the pipeline leaks and the study is void",
+    "feature audit: the table the models see contains none of the excluded columns (asserted in code), and no feature has a later timestamp than the fire",
+    "time order: max(train day) < min(validation day) < min(test day) with the purge, asserted",
+    "determinism: running the whole pipeline twice gives the same frozen pair and the same digest"
+  ],
+  "decision_rules": {
+    "primary": "on the locked test, delta = mean r_underlying of the kept ideas minus the mean of all ideas, for the frozen (model, q)",
+    "uncertainty": "block bootstrap over sessions, 10,000 resamples, seed fixed; and a permutation test (10,000 random keeps of the same size)",
+    "PASS": "delta >= +0.10 R, and the one-sided 95% lower bound of delta > 0, and kept ideas >= 150, and permutation p < 0.05",
+    "KILL": "delta < +0.05 R, or a control above fails after the read was made impossible to trust: the idea is retired for this corpus and this window; a new corpus needs a new spec",
+    "MIXED": "anything else: no apply, no claim; a new locked window needs a new spec (this one stays spent)"
+  },
+  "evidence": {"power_sessions": 145, "cost_stress": 2.0, "shadow_sessions": 40},
+  "power": "about 145 test sessions and 540 ideas (expected); with a standard deviation of about 1.1 R per idea, the standard error of delta at q = 0.5 is about 0.05 R, so a true delta of 0.15 R passes about eight times in ten and a true 0.10 R about half the time (the rule needs delta >= 0.10 and a positive lower bound); a smaller effect is not claimed to be detectable",
+  "kill": {"rule": "the locked-test delta (kept minus all) is below +0.05 R in multiples of planned risk", "threshold": 0.05},
+  "secondary_descriptive": [
+    "delta by year and by symbol",
+    "transfer to stocks: the frozen model applied to the stock corpus (`--stocks`, a few sessions of liquid F&O stocks, kept out of every selection), reported with its session bootstrap and its size",
+    "the recorded-quote subset (T2, real bid and ask with the desk's slippage and a 2x slippage stress) and the `data_clean` subset, where they exist; neither decides anything"
+  ],
+  "use_if_passed": "only a reason to run the same ranking on the recorded real-quote tape with the desk's costs and a 2x slippage stress, and then in forward shadow for at least 40 sessions graded against the keep-all baseline, with a demotion rule (a rolling 20-session delta below zero demotes it). Applying it to the desk is a separate, reviewed, tighten-only change that the owner switches on. A failure, a mixed result or a kill is final for this corpus and this window.",
+  "limitations": [
+    "the label is the index outcome, not option P&L after costs; a ranking that works on the index can still lose money in options",
+    "the minutes are third-party and unverified; a source defect could be scored as model error or as skill",
+    "setups of one session are not independent; the bootstrap is by session",
+    "the replay engine starts each session with an empty learning memory (the naive desk) and a constant vol; the live desk differs",
+    "random sampling of 800 of about 2,600 eligible sessions"
+  ],
+  "disclosure": "At registration, only counts of rows and ideas per session and symbol had been seen from the shadow lab's runs; no value of r_underlying, exit_reason, mfe_r or mae_r from the real data had been read. The 100-session probe (seed 20261031) is not part of this corpus and is not used."
+}
