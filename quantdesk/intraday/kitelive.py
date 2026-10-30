@@ -11,7 +11,7 @@ Owner decision (25 Oct 2026): the Kite websocket is attached directly to the run
 - **Failure is invisible to the desk:** no key, no token, a refused connection, an expired token, a silent socket: every one leaves the wrapped feed exactly as it was.
 - **The settlement window is the other feeds' (15:00 to 15:29).** The expiry sleeves settle on the mean of the recorded 15:00 to 15:29 closes and on the 15:29 close (`sleeves.settlement_price`,
   `official_close`). To change nothing about what they read, no poll that reaches 15:00 is answered from Kite alone: the wrapped feed is asked, and its bars stand for every minute it has (Kite is
-  compared with them, never overlaid). Kite fills only a minute the wrapped feed lacks. Kite is measured there, not used (E3).
+  compared with them, never overlaid). Not even a minute the wrapped feed lacks is supplied by Kite there (its next poll may bring it). Kite is measured there, not used (E3).
 - **Licence.** Kite's market data is the subscriber's: the minutes this module serves are not written to the recorder (`unrecorded`), so they never reach the public run artifacts or
   the `chains-YYYY` release. The app shows only how old the last tick is, never a Kite price.
 - **Market data only.** No order method is used anywhere in this module (a test checks), and nothing here reaches the broker, risk or sizing code.
@@ -316,9 +316,9 @@ class KiteBackedFeed:
                 if not adjacent:
                     self.served["holes"] += 1
                     continue
-                self.served["compared"] += 1                           # checked against the minute before it
                 if minute >= SETTLE_FROM_MIN:
-                    continue                                           # a minute the wrapped feed lacks inside the settlement window is not Kite's to supply: its next poll may bring it
+                    continue                                           # a minute the wrapped feed lacks inside the settlement window is not Kite's to supply (its next poll may bring it); not a comparison either
+                self.served["compared"] += 1                           # checked against the minute before it
                 if prev is not None and prev > 0 and abs(float(row["close"]) - prev) / prev > MAX_DISAGREE:
                     self._note_rejected(symbol, ts)
                     continue
