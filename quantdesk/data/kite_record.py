@@ -79,6 +79,9 @@ def _f(x):
         return None
 
 
+MAX_BUFFER = 1_000_000                                       # ticks held in memory between flushes (a minute is a few thousand)
+
+
 class Recorder:
     """Collects ticks and writes them in parts. `now` is injectable so tests control time; the websocket object is whatever `ticker_factory` returns (KiteTicker's interface)."""
 
@@ -89,6 +92,7 @@ class Recorder:
         self.now = now or (lambda: pd.Timestamp.now(tz=IST))
         self.flush_seconds = flush_seconds
         self.rows: list[dict] = []
+        self.overflow = 0
         self.lock = threading.Lock()
         self.part = 0
         self.tag = self.now().strftime("%H%M%S")                    # parts of two jobs on one day never collide
@@ -120,6 +124,9 @@ class Recorder:
                 sym = self.by_token.get(t.get("instrument_token"))
                 if sym is None:
                     continue
+                if len(self.rows) >= MAX_BUFFER:                    # writes keep failing: stop growing without bound and say so once per flush
+                    self.overflow += 1
+                    continue
                 self.rows.append(tick_row(t, sym, recv))
                 self.ticks += 1
 
@@ -127,6 +134,9 @@ class Recorder:
         with self.lock:
             rows, self.rows = self.rows, []
             events, self.events = self.events, []
+            lost, self.overflow = self.overflow, 0
+        if lost:
+            events.append({"kind": "overflow", "dropped_ticks": lost, "at": str(self.now())})
         if events:
             try:
                 with open(self.out / "events.jsonl", "a") as fh:

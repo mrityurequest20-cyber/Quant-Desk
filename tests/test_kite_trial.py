@@ -217,11 +217,12 @@ def test_no_reference_is_a_failure_not_a_pass_and_no_ticks_is_reported(tmp_path)
     assert empty["recorded"] is False and not empty["passed"] and "no ticks" in empty["reasons"][0] and "nothing recorded" in KC.render(empty)
 
 
-def test_slow_ticks_fail_the_latency_measure(tmp_path):
+def test_slow_ticks_show_in_the_latency_measure_but_do_not_fail_the_session(tmp_path):
     mins = KC.session_minutes(DAY)
     write_session(tmp_path, ticks_for("NIFTY", mins, moving, lag=2.5), reference_for("NIFTY", mins, moving))
     rep = KC.session_report(tmp_path, DAY)
-    assert not rep["passed"] and any("C3" in r for r in rep["reasons"])
+    assert rep["passed"] and not any("C3" in r for r in rep["reasons"])                          # C3 is reported, not a pass condition (docs/ml/KITE_TRIAL.md)
+    assert rep["measures"][0]["C3_median"] > KC.THRESHOLDS["C3_median"]                        # ...and it is still measured and shown
 
 
 def test_a_frozen_late_session_shows_in_c1_and_the_detector_equals_the_desks(tmp_path):
@@ -388,3 +389,15 @@ def test_the_second_job_cannot_lose_the_first_jobs_events_and_the_measures_run_w
     assert m["if"] == "always()" and "cat runtime/kite_1/events.jsonl runtime/kite/events.jsonl" in m["run"] and "cp -n" not in m["run"]
     d = next(s for n, s in steps.items() if n and n.startswith("Decrypt the first job"))
     assert d["continue-on-error"] is True and "sha256sum -c" in d["run"]
+
+
+def test_a_buffer_that_cannot_be_written_stops_growing_and_says_how_many_ticks_it_dropped(tmp_path, monkeypatch):
+    monkeypatch.setattr(K, "MAX_BUFFER", 2)
+    clock, ticker = Clock(), FakeTicker()
+    rec = K.Recorder(tmp_path, {"NIFTY": 256265}, lambda: ticker, now=clock, flush_seconds=30)
+    ticker.connect()
+    ticker.on_ticks(ticker, [kite_tick(256265, 25000.0 + i, pd.Timestamp("2026-10-26 09:15:01"), depth=False) for i in range(5)])
+    assert len(rec.rows) == 2 and rec.overflow == 3
+    p = rec.flush()
+    ev = [json.loads(x) for x in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert len(pd.read_parquet(p)) == 2 and any(e["kind"] == "overflow" and e["dropped_ticks"] == 3 for e in ev)

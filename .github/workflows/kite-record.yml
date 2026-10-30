@@ -126,7 +126,7 @@ jobs:
       - name: Measures for the session (counts and ratios only)
         if: always()
         run: |
-          if ls runtime/kite/ticks_*.parquet runtime/kite_1/ticks_*.parquet >/dev/null 2>&1; then
+          if compgen -G 'runtime/kite/ticks_*.parquet' >/dev/null || compgen -G 'runtime/kite_1/ticks_*.parquet' >/dev/null; then       # ticks from either job
             mkdir -p runtime/kite_all
             cp runtime/kite_1/ticks_* runtime/kite_all/ 2>/dev/null || true       # tick files are named by job and part: no collision
             cp runtime/kite/ticks_* runtime/kite/reference_minutes.parquet runtime/kite_all/ 2>/dev/null || true

@@ -125,7 +125,7 @@ def desk_dependence(ticks: pd.DataFrame, desk_bars: pd.DataFrame, symbol: str, d
 
 
 def evaluate(measures: list[dict]) -> dict:
-    """Session verdict: A1, A2, B1 and B2 for every recorded instrument, and C3 over all of them. Missing B (no reference) is a failure, never a pass."""
+    """Session verdict: A1, A2, B1 and B2 for every recorded instrument. C3 (latency) is reported in the measures and is not a pass condition: exchange stamps are whole seconds and the runner's clock offset is not measured (docs/ml/KITE_TRIAL.md). Missing B (no reference) is a failure, never a pass."""
     reasons = []
     for m in measures:
         s = m["symbol"]
@@ -137,8 +137,6 @@ def evaluate(measures: list[dict]) -> dict:
             reasons.append(f"{s}: B1 {m['B1']} < {THRESHOLDS['B1']}")
         if m["B2"] is None or m["B2"] < THRESHOLDS["B2"]:
             reasons.append(f"{s}: B2 {m['B2']} < {THRESHOLDS['B2']}")
-        if "C3_median" in m and (m["C3_median"] > THRESHOLDS["C3_median"] or m["C3_p99"] > THRESHOLDS["C3_p99"]):
-            reasons.append(f"{s}: C3 latency median {m['C3_median']:.2f}s / p99 {m['C3_p99']:.2f}s")
     return {"passed": not reasons, "reasons": reasons}
 
 
