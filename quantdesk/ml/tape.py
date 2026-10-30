@@ -38,7 +38,7 @@ from ..data.external_aeron import ForbiddenUse, ImmutableViolation
 from . import intake as I
 
 log = logging.getLogger(__name__)
-IMPORTER_VERSION = "ml-tape-2"
+IMPORTER_VERSION = "ml-tape-3"
 SCHEMA = 1
 TIER = "T2"
 STATUS = "internal_recording"
@@ -272,13 +272,15 @@ def load(ds: Path, source: Path, use: str, days=None, clean: bool = True, expect
     return out
 
 
-def latest(out_root: Path) -> Path | None:
+def latest(out_root: Path, source: Path | None = None) -> Path | None:
+    """The registered dataset to use next. With `source`, only datasets whose every file is there with the registered bytes are considered (a corrected file with fewer rows must
+    not lose to an older dataset that `load` would refuse); among those: last day, then the larger dataset (a day's afternoon file added later), then the name. Never arbitrary."""
     d = Path(out_root) / "tape"
     c = sorted(p for p in d.glob(f"{IMPORTER_VERSION}-*") if (p / "manifest.json").exists()) if d.exists() else []
-    if not c:
+    mans = {p: json.loads((p / "manifest.json").read_text()) for p in c}
+    if source is not None:
+        src = Path(source)
+        mans = {p: m for p, m in mans.items() if all((src / f["file"]).is_file() and _sha(src / f["file"]) == f["sha256"] for f in m["files"])}
+    if not mans:
         return None
-
-    def key(p: Path):                                                # last day, then the larger dataset (a day's afternoon file added later), then the name: never arbitrary
-        m = json.loads((p / "manifest.json").read_text())
-        return (m["days"][-1], m["totals"]["files"], m["totals"]["rows"], p.name)
-    return max(c, key=key)
+    return max(mans, key=lambda p: (mans[p]["days"][-1], mans[p]["totals"]["files"], mans[p]["totals"]["rows"], p.name))

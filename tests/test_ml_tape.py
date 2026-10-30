@@ -189,7 +189,7 @@ def test_the_command_registers_the_tape_and_refuses_a_tracked_folder(tape, capsy
     from quantdesk.cli import main
     src, out = tape
     main(["ml", "import-tape", "--source", str(src), "--out", str(out)])
-    assert "dataset ml-tape-2-" in capsys.readouterr().out
+    assert "dataset ml-tape-3-" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="--source"):
         main(["ml", "import-tape"])
     with pytest.raises(SystemExit, match="inside a git working tree"):
@@ -256,3 +256,13 @@ def test_a_file_with_a_stored_index_is_read_by_row_and_the_latest_dataset_is_the
     write(src, "2026-10-29_afternoon-2_chains.parquet", tape_df("2026-10-29", n_snap=2, start="13:00"))
     bigger = T.import_tape(src, out, say=lambda *_: None)
     assert T.latest(out).name == bigger["dataset"]                             # same last day: the dataset with more files wins
+
+
+def test_latest_with_a_source_ignores_datasets_whose_files_are_no_longer_there_as_registered(tape):
+    src, out = tape
+    old = T.import_tape(src, out, say=lambda *_: None)
+    write(src, "2026-10-27_morning-113_chains.parquet", tape_df("2026-10-27", n_snap=1))      # the file was corrected: fewer rows, other bytes
+    new = T.import_tape(src, out, say=lambda *_: None)
+    assert new["dataset"] != old["dataset"] and new["totals"]["rows"] < old["totals"]["rows"]
+    assert T.latest(out, src).name == new["dataset"]                                           # without the source the larger, older one would win and load() would refuse it
+    assert T.latest(out).name == old["dataset"]
