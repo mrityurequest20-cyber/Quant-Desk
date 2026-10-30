@@ -25,11 +25,11 @@ Nothing independent checks its minute-by-minute path after Feb 2023, and this ev
 ## Why the risk the registration named is still there, and what is and is not done about it
 
 The registration ran only after a pass because "without this a source defect in that stretch would be scored as model error". That risk is **reduced but not removed** by this amendment: the daily envelope checks (A and B) passed, but the evaluation uses minute returns and no independent check covers them after Feb 2023.
-So a MIXED or KILL outcome may reflect a data defect and a PASS may flatter the model's neighbours too; the mandatory sentence above is how the result says so. **No rule is changed to compensate, because a rule changed after seeing the data is worse than a stated caveat.** Whether to act on a KILL of the model, given the caveat, is the owner's decision then.
+So a MIXED or KILL outcome may reflect a data defect, and a PASS rests on minute data that no independent check has covered; the mandatory sentence above is how the result says so. **No rule is changed to compensate, because a rule changed after seeing the data is worse than a stated caveat.** Whether to act on a KILL of the model, given the caveat, is the owner's decision then.
 
 ## Exposure, said plainly
 
-- Nothing in the registered spec's statement that its author "loaded, read, computed on or printed no price, return, variance or loss of any session on or after 2023-03-01" is made false by this amendment's author, but **the P0.6 run did load the window's data**: it built daily high, low and close from the window's minutes and compared them with Yahoo and NSE.
+- The registered spec says its author had "loaded, read, computed on or printed no price, return, variance or loss of any session on or after 2023-03-01". That sentence was true when it was written. **Since then the P0.6 run loaded the window's data**: it built daily high, low and close from the window's minutes and compared them with Yahoo and NSE.
   What was seen: agreement rates and the sessions that disagreed with relative differences (one session in check A: BANKNIFTY 2023-05-11, high 0.23% apart), in the committed result file and the record. No variance, forward return, loss or model score of the window was computed or seen. The one-shot has not been run, the `oneshot` command does not exist yet, and no look is spent.
 - This amendment is written knowing the P0.6 outcome (checks A and B pass for both symbols; check C fails for BANKNIFTY in 2020-03, which is outside the window). It was not chosen because of anything about the model's score, which is unknown.
 
