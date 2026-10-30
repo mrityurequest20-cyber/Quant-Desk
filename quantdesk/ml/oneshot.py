@@ -6,13 +6,17 @@ Every setting comes from the spec; the command takes three paths. The order is t
   refusals (no look spent) -> preflight (counts, dates and masks only) -> tables -> the control on the spent period (no window row) ->
   THE MARKER (the look is spent here) -> the window is scored -> one atomic write of the result.
 
-Nothing computed from the window is printed or written before the final write: "any number displayed or written spends the look" (looks.crash).
-A crash after the marker leaves the marker and no result; the registered crash rule governs what may follow, not this code.
+The table (features, labels and the A_desk and B_seasonal forecasts of every row, window rows included, because the loader returns both periods in one table) is
+built and held before the control, as the spec's order has it. No C_har forecast, no loss and no statistic of a window row exists before the marker, and nothing
+about the window is printed or written before the final write: "any number displayed or written spends the look" (looks.crash). The marker is also written beside
+the dataset, where the next run looks for it. A crash after the marker leaves the marker and a crash log and no result; the registered crash rule governs what
+may follow (a person moves the marker, after the log is committed and the fix reviewed), not this code.
 
-The dataset: the registered route needs `external_verified`. Amendment 1 adds one more: the dataset's verification record must be, byte for byte,
-the one P0.6 version 2 wrote (its sha256 is pinned), with its single failed reason, and the dataset digest recomputed from the data on disk must be the
-pinned one. On that route the result says `external_unverified` throughout and carries the amendment's mandatory sentence, and never `external_verified`.
-There is no flag that accepts any other dataset.
+The dataset: amendment 1's route only. The dataset's verification record must be, byte for byte, the one P0.6 version 2 wrote (its sha256 is pinned), with
+its single failed reason, and the dataset digest recomputed from the data on disk must be the pinned one. The result says `external_unverified` throughout,
+carries the amendment's mandatory sentence in its header and in every sentence that states the outcome, and never says `external_verified`. A dataset that has
+become `external_verified` is refused here: that is a different situation, and the amendment (a later P0.6 version needs its own amendment) says it needs a new
+reviewed change. There is no flag that accepts any other dataset.
 """
 from __future__ import annotations
 
@@ -94,7 +98,10 @@ def sha256_bytes(b: bytes) -> str:
 
 
 def sha256_of(path: Path) -> str:
-    return sha256_bytes(Path(path).read_bytes())
+    try:
+        return sha256_bytes(Path(path).read_bytes())
+    except OSError as exc:
+        raise Refused(f"{Path(path).name} cannot be read ({exc.__class__.__name__}): no look is spent") from exc
 
 
 # ---- refusals ---------------------------------------------------------------------------------------------------------------------
@@ -107,13 +114,15 @@ def mandatory_sentence(amendment: Path) -> str:
     return m.group(1)
 
 
-def dataset_route(ds: Path, man: dict, pins: Pins) -> tuple[str, dict | None]:
-    """('verified', None) on the registered route; ('amendment_1', the record) when the dataset's record is exactly the pinned P0.6 v2 record.
-    Anything else is refused. The dataset digest is recomputed from the manifest and then from the partitions by `intake.load` (expected_digest)."""
+def dataset_route(ds: Path, man: dict, pins: Pins) -> tuple[str, dict]:
+    """('amendment_1', the record) when the dataset's record is exactly the pinned P0.6 v2 record; anything else is refused, a dataset that has become
+    `external_verified` included (that needs its own reviewed change). The dataset digest is recomputed from the manifest here and from the partitions by
+    `intake.load` (expected_digest)."""
     if I.dataset_digest(man) != man.get("digest") or man.get("digest") != pins.dataset_digest:
         raise Refused(f"{Path(ds).name}: its digest is not the pinned {pins.dataset_digest[:12]} (recomputed from the manifest)")
     if I.effective_status(ds, man, list(SYMBOLS)) == I.VERIFIED:
-        return "verified", None
+        raise Refused(f"{Path(ds).name} is {I.VERIFIED}: this command runs on the pinned P0.6 version 2 record (amendment 1) only; a verified dataset needs a new "
+                      "amendment and a reviewed change")
     vp = Path(ds) / "verification.json"
     try:
         raw = vp.read_bytes()
@@ -166,13 +175,20 @@ def refuse_unless_ready(ds: Path, spec_path: Path, out: Path, pins: Pins, amendm
     for suffix in (".json", ".md"):
         if (Path(results_dir) / f"{name}-{h[:12]}{suffix}").exists():
             raise Refused(f"a result for this spec already exists in {results_dir}: the look is spent (looks.rule)")
+    spent = Path(ds) / f"{name}-{h[:12]}.marker.json"
+    if spent.exists() or spent.is_symlink():
+        raise Refused(f"{spent} exists: the marker of an earlier run, so the look is spent (looks.rule). After a crash with no number written, a person moves it "
+                      "only under the registered crash rule")
+    commits = {"amendment_commit": _git_commit_of(amendment), "criteria_v2_commit": _git_commit_of(criteria)}
+    if not all(commits.values()):
+        raise Refused(f"the commit of the amendment or of the criteria file cannot be determined ({commits}): the run records both")
     man_path = Path(ds) / "manifest.json"
     try:
         man = json.loads(man_path.read_text())
     except (OSError, ValueError) as exc:
         raise Refused(f"{ds}: no readable manifest") from exc
     route, rec = dataset_route(Path(ds), man, pins)
-    return {"spec_sha256": h, "spec_file_sha256": fsha, "route": route, "record": rec, "manifest": man, "name": name}
+    return {"spec_sha256": h, "spec_file_sha256": fsha, "route": route, "record": rec, "manifest": man, "name": name, "dataset_marker": spent, **commits}
 
 
 # ---- preflight: counts, dates and masks only --------------------------------------------------------------------------------------
@@ -201,7 +217,11 @@ def preflight(grids: dict) -> dict:
             "weekdays_without_a_row": [str(d) for d in weekdays if d not in dset],
             "sessions_with_missing_minutes": [{"day": str(days[i]), "missing": int(miss[i].sum())} for i in win_idx if miss[i].any()],
             "expected_absent_but_present": [d for d in EXPECTED["hard_rejects"] + EXPECTED["review_queue"] if dt.date.fromisoformat(d) in dset],
-            "expected_present_but_absent": [d for d in EXPECTED["kept_mondays"] if dt.date.fromisoformat(d) not in dset]}
+            "expected_present_but_absent": [d for d in EXPECTED["kept_mondays"] if dt.date.fromisoformat(d) not in dset],
+            "vs_expected": {"weekdays_without_a_row": {"expected": 51, "found": len([d for d in weekdays if d not in dset]), "weekdays_in_window": len(weekdays)},
+                            "sessions_with_missing_minutes": {"expected": 6, "found": len([i for i in win_idx if miss[i].any()]),
+                                                              "expected_largest": "7 on 2023-06-14, 6 on 2024-04-23",
+                                                              "found_largest": sorted(((int(miss[i].sum()), str(days[i])) for i in win_idx if miss[i].any()), reverse=True)[:2]}}}
     return out
 
 
@@ -218,6 +238,16 @@ def drop_leading_gap(table: pd.DataFrame, gaps: dict[str, list[int]]) -> pd.Data
 
 
 # ---- scoring ----------------------------------------------------------------------------------------------------------------------
+def control_slice(t: pd.DataFrame) -> pd.DataFrame:
+    """The spent period, both ends inclusive: 2019-01-01 to 2023-02-28."""
+    return t[(t["day"] >= CONTROL_START) & (t["day"] <= CONTROL_END)].reset_index(drop=True)
+
+
+def window_slice(t: pd.DataFrame) -> pd.DataFrame:
+    """The reserved window, both ends inclusive: 2023-03-01 to 2026-05-14."""
+    return t[(t["day"] >= WINDOW_START) & (t["day"] <= WINDOW_END)].reset_index(drop=True)
+
+
 def with_frozen_forecast(table: pd.DataFrame, artifact: dict) -> pd.DataFrame:
     """The table with F_C, the frozen C_har's forecast: the artifact's per-horizon fit applied to each symbol's rows. Nothing is fitted here."""
     out = table.copy()
@@ -229,8 +259,13 @@ def with_frozen_forecast(table: pd.DataFrame, artifact: dict) -> pd.DataFrame:
     return out
 
 
+_CANDIDATE = {"F_A": "A_desk", "F_B": "B_seasonal", "F_C": "C_har"}
+
+
 def daily(g: pd.DataFrame, col: str) -> pd.Series:
-    """Daily QLIKE of forecast column `col` (volstudy.qlike averaged per day over the day's rows)."""
+    """Daily QLIKE of forecast column `col`: `volstudy.daily_loss` for the three candidates, the same computation for the refit's forecast."""
+    if col in _CANDIDATE:
+        return V.daily_loss(g, _CANDIDATE[col])
     return pd.Series(V.qlike(g["rv"].to_numpy(float), g[col].to_numpy(float))).groupby(g["day"].to_numpy()).mean()
 
 
@@ -328,7 +363,7 @@ def secondary(win: pd.DataFrame, refit_f: pd.Series | None) -> dict:
         a, b, c = daily(g, "F_A"), daily(g, "F_B"), daily(g, "F_C")
         cell = {"C_vs_B": dm(b, c), "B_vs_A": dm(a, b),
                 "C_vs_A_lags": {str(L): dm(a, c, L) for L in (10, 20)},
-                "daily_gain_autocorr": autocorr((a - c).dropna().to_numpy(float)),
+                "daily_gain_autocorr_lags_1_to_5": autocorr((a - c).dropna().to_numpy(float)),
                 "qlike": {"A_desk": float(a.mean()) if len(a) else None, "B_seasonal": float(b.mean()) if len(b) else None,
                           "C_har": float(c.mean()) if len(c) else None}}
         if refit_f is not None:
@@ -383,6 +418,76 @@ def _write_once(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def slice_accounting(grids: dict, before: pd.DataFrame, after: pd.DataFrame, lo: str, hi: str, man: dict | None = None) -> dict:
+    """What the rules left out of [lo, hi], per symbol, decided from the calendar, the missing-minute mask and row counts alone (never a return, a variance or
+    a loss): the sessions of the grid, the sessions that kept rows, every session with no row and the rule that removed it, and the rows removed by each rule.
+    `before` is the table before the leading-gap filter and `after` the table after it. The importer's own exclusions (sessions of the manifest that were
+    rejected or left for review) are listed from the manifest."""
+    per_session = sum(1 for m in V.DECISIONS for h, mins in V.HORIZONS.items() if (V.N_MIN if mins is None else m + mins) <= V.N_MIN)
+    gaps = gap_ordinals(grids)
+    out = {"rows_possible_per_session": per_session, "symbols": {}}
+    for s in SYMBOLS:
+        days, _, _, _ = grids[s]
+        dd = pd.to_datetime(pd.Series(list(days))).diff().dt.days.to_numpy()
+        valid_prior = pd.Series((dd <= 4).astype(float)).rolling(V.PRIOR_DAYS).min().fillna(0).to_numpy() > 0       # volstudy.rows: 5 prior consecutive sessions
+        gap_drop = {o for g in gaps[s] for o in range(g, g + GAP_SESSIONS + 1)}
+        idx = [i for i, d in enumerate(days) if lo <= str(d) <= hi]
+        b = before[(before["symbol"] == s) & (before["day"] >= lo) & (before["day"] <= hi)]
+        a = after[(after["symbol"] == s) & (after["day"] >= lo) & (after["day"] <= hi)]
+        n_b, n_a = b.groupby("day").size().to_dict(), a.groupby("day").size().to_dict()
+        none, lookback, miss_rule, gap_rows = [], 0, 0, 0
+        for i in idx:
+            d = str(days[i])
+            if not valid_prior[i]:
+                lookback += per_session
+            else:
+                miss_rule += per_session - n_b.get(d, 0)
+            gap_rows += n_b.get(d, 0) - n_a.get(d, 0)
+            if d not in n_a:
+                why = ("leading-gap filter" if i in gap_drop else "feature lookback (the first 5 sessions, or 5 consecutive sessions needed after a break over 4 days)"
+                       if not valid_prior[i] else "every label window over 20% missing")
+                none.append({"day": d, "why": why})
+        kept_by_year = {}
+        for d in n_a:
+            kept_by_year[d[:4]] = kept_by_year.get(d[:4], 0) + 1
+        rows_possible = per_session * len(idx)
+        out["symbols"][s] = {"sessions_in_grid": len(idx), "sessions_with_rows": len(n_a), "sessions_with_rows_by_year": dict(sorted(kept_by_year.items())),
+                             "sessions_without_rows": none, "rows_possible": rows_possible,
+                             "rows_removed": {"feature_lookback_rule": lookback, "label_window_over_20pct_missing": miss_rule, "leading_gap_filter": gap_rows},
+                             "rows_kept": int(len(a)), "reconciles": bool(rows_possible - lookback - miss_rule - gap_rows == len(a))}
+    if man is not None:
+        out["importer_exclusions"] = [{k: v for k, v in x.items() if k in ("symbol", "day", "status", "why", "reason", "reasons", "rule")}
+                                      for x in man.get("sessions", []) if x.get("symbol") in SYMBOLS and x.get("status") in ("rejected", "review") and lo <= str(x.get("day")) <= hi]
+    return out
+
+
+def _f(x, spec: str = ".4f") -> str:
+    """A number for the report; a missing or NaN one reads 'n/a' instead of breaking the render after numbers exist."""
+    try:
+        return "n/a" if x is None or x != x else format(x, spec)
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _write_pair(out: Path, stem: str, text_json: str, text_md: str) -> None:
+    """Both result files, each whole under a private name and linked into place only if absent. Both texts exist before the first link."""
+    tmps = []
+    try:
+        for suffix, text in ((".json", text_json), (".md", text_md)):
+            tmp = Path(f"{out / (stem + suffix)}.{os.getpid()}.tmp")
+            tmp.write_text(text)
+            tmps.append((tmp, out / (stem + suffix)))
+        for tmp, final in tmps:
+            os.link(tmp, final)
+    finally:
+        for tmp, _ in tmps:
+            tmp.unlink(missing_ok=True)
+
+
+class CrashAfterMarker(RuntimeError):
+    """The run failed after the marker was written: the look is spent. The crash log is beside the marker."""
+
+
 def code_state() -> dict:
     """{commit, dirty}: HEAD, and whether anything under quantdesk/ or docs/ differs from it (the code, the specs and the pins it reads)."""
     try:
@@ -412,16 +517,18 @@ def run(dataset: Path, spec_path: Path, out: Path, say=print, pins: Pins | None 
     commit = commit if commit is not None else code_state()
     ds, spec_path, out = Path(dataset), Path(spec_path), Path(out)
     info = refuse_unless_ready(ds, spec_path, out, pins, amendment, criteria, artifact, results_dir, commit)
-    route, h = info["route"], info["spec_sha256"]
-    art = json.loads(artifact.read_text())
-    locked = json.loads(lock_result.read_text())
-    sentence = mandatory_sentence(amendment) if route == "amendment_1" else None
+    h = info["spec_sha256"]
+    try:
+        art, locked = json.loads(artifact.read_text()), json.loads(lock_result.read_text())
+    except (OSError, ValueError) as exc:
+        raise Refused(f"the artifact or the lock result cannot be read ({exc.__class__.__name__}): no look is spent") from exc
+    lock_sha = sha256_of(lock_result)
+    sentence = mandatory_sentence(amendment)
     out.mkdir(parents=True, exist_ok=True)
-    say(f"oneshot: route {route}; spec {h[:12]}; dataset {info['manifest']['digest'][:12]}")
+    say(f"oneshot: route {info['route']}; spec {h[:12]}; dataset {info['manifest']['digest'][:12]}")
 
     # -- load and preflight (masks only) ------------------------------------------------------------------------------------------------
-    unverified = route == "amendment_1"
-    bars = (loader or I.load)(ds, list(SYMBOLS), use="regime_research", allow_unverified=unverified, expected_digest=pins.dataset_digest)
+    bars = (loader or I.load)(ds, list(SYMBOLS), use="regime_research", allow_unverified=True, expected_digest=pins.dataset_digest)
     attrs = dict(bars.attrs)
     grids = {s: V.grid(bars[bars["symbol"] == s]) for s in SYMBOLS}
     pre = preflight(grids)
@@ -431,57 +538,79 @@ def run(dataset: Path, spec_path: Path, out: Path, say=print, pins: Pins | None 
     # -- tables (the window rows are read only through load_table(reserved_spec=<this spec>)) --------------------------------------------
     profile = {s: art["symbols"][s]["profile"] for s in SYMBOLS}
     root = out / "tables"
-    kw = dict(loader=loader, allow_unverified=unverified, expected_digest=pins.dataset_digest, say=lambda *_: None)
+    kw = dict(loader=loader, allow_unverified=True, expected_digest=pins.dataset_digest, say=lambda *_: None)
     gap_ok = any(gaps.values())
     f1 = B.build(ds, list(SYMBOLS), PROFILE_END, root, profile=profile, allow_leading_gap=gap_ok, **kw)
     f2 = B.build(ds, list(SYMBOLS), REFIT_PROFILE_END, root, allow_leading_gap=gap_ok, **kw)
-    lt = dict(allow_unverified=unverified, reserved_spec=spec_path, dataset=None if loader else ds)
-    raw = drop_leading_gap(B.load_table(f1, scoring_only=True, **lt), gaps)
+    lt = dict(allow_unverified=True, reserved_spec=spec_path, dataset=None if loader else ds)
+    raw_all = B.load_table(f1, scoring_only=True, **lt)
     refit_all = B.load_table(f2, scoring_only=False, **lt)
+    raw = drop_leading_gap(raw_all, gaps)
 
-    # -- the control: restricted to the spent period before it scores anything; no window row gets a forecast, let alone a score -------------
-    ctrl = with_frozen_forecast(raw[(raw["day"] >= CONTROL_START) & (raw["day"] <= CONTROL_END)].reset_index(drop=True), art)
+    # -- the control: restricted to the spent period before it scores anything; no window row gets a C_har forecast, let alone a score -----
+    ctrl = with_frozen_forecast(control_slice(raw), art)
     ctl = control(ctrl, locked, pins.control_tolerance)
     if not ctl["ok"]:
-        raise ControlFailed(f"the control failed in {ctl['failed']}: the evaluation is not run and no look is spent")
+        bad = "; ".join(f"{k}: A {_f(ctl['cells'][k]['A'])} (locked {_f(ctl['cells'][k]['locked_A'])}), C {_f(ctl['cells'][k]['C'])} (locked {_f(ctl['cells'][k]['locked_C'])})"
+                        for k in ctl["failed"])
+        raise ControlFailed(f"the control failed in {ctl['failed']} ({bad}; spent-period numbers): the evaluation is not run and no look is spent")
     say("oneshot: control passed")
 
-    # -- THE MARKER: the look is spent here ---------------------------------------------------------------------------------------------
+    # -- THE MARKER: the look is spent here. Beside the dataset first (where the next run looks), then in the output folder ----------------
     opened = pd.Timestamp.now(tz=I.IST).isoformat()
-    header = {"spec": info["name"], "spec_sha256": h, "spec_file_sha256": info["spec_file_sha256"], "route": route, "code_commit": commit["commit"], "dataset": attrs.get("dataset"),
-              "dataset_digest": attrs.get("digest"), "dataset_status": attrs.get("status"), "dataset_tier": attrs.get("tier"),
+    header = {"spec": info["name"], "spec_sha256": h, "spec_file_sha256": info["spec_file_sha256"], "route": info["route"], "code_commit": commit["commit"],
+              "dataset": attrs.get("dataset"), "dataset_digest": attrs.get("digest"), "dataset_status": attrs.get("status"), "dataset_tier": attrs.get("tier"),
               "artifact_sha256": pins.artifact_sha256, "tables": {"primary": f1.name, "refit": f2.name},
-              "amendment_sha256": pins.amendment_sha256, "amendment_commit": _git_commit_of(amendment), "criteria_v2_sha256": pins.criteria_v2_sha256,
-              "record_sha256": pins.record_sha256 if route == "amendment_1" else None, "opened": opened}
+              "amendment_sha256": pins.amendment_sha256, "amendment_commit": info["amendment_commit"],
+              "criteria_v2_sha256": pins.criteria_v2_sha256, "criteria_v2_commit": info["criteria_v2_commit"],
+              "record_sha256": pins.record_sha256, "lock_result_sha256": lock_sha, "opened": opened}
     stem = f"{info['name']}-{h[:12]}"
+    try:
+        _write_once(info["dataset_marker"], json.dumps(header, indent=1))
+    except OSError as exc:
+        raise Refused(f"the marker cannot be written beside the dataset ({exc.__class__.__name__}): no look is spent") from exc
     _write_once(out / f"{stem}.marker.json", json.dumps(header, indent=1))
     say("oneshot: the marker is written; the look is spent")
 
     # -- the window ---------------------------------------------------------------------------------------------------------------------
-    win = with_frozen_forecast(raw[(raw["day"] >= WINDOW_START) & (raw["day"] <= WINDOW_END)].reset_index(drop=True), art)
-    prim = primary(win)
-    pooled = pooled_c_vs_b(win)
-    refit_f, refit_fits = refit_forecast(refit_all, win, gaps)
-    sec = secondary(win, refit_f)
-    acct = B.accounting(grids, raw)
-    result = {**header, "evidence": ("external_unverified" if route == "amendment_1" else "external_verified (underlying only)"),
-              "caveat": sentence, "not_for": json.loads(spec_path.read_text())["not_for"], "control": ctl, "preflight": pre,
-              "leading_gap_sessions_dropped": {s: gaps[s] for s in gaps if gaps[s]},
-              "primary": prim, "pooled_c_vs_b": pooled, "secondary": sec, "refit": {"fits": refit_fits, "profile_end": REFIT_PROFILE_END},
-              "frozen": {"profile": profile, "fit": {s: art["symbols"][s]["fit"] for s in SYMBOLS}},
-              "accounting": acct, "rows_by_symbol_year": {f"{s} {y}": int(n) for (s, y), n in win.groupby(["symbol", "year"]).size().items()},
-              "verdict": prim["verdict"]}
-    _write_once(out / f"{stem}.json", json.dumps(result, indent=1, default=str))
-    _write_once(out / f"{stem}.md", render(result))
+    try:
+        win = with_frozen_forecast(window_slice(raw), art)
+        prim = primary(win)
+        pooled = pooled_c_vs_b(win)
+        refit_f, refit_fits = refit_forecast(refit_all, win, gaps)
+        refit_profile = {s: B.fit_profile(grids[s], REFIT_PROFILE_END).tolist() for s in SYMBOLS}
+        sec = secondary(win, refit_f)
+        gap_dates = {s: [str(grids[s][0][o]) for o in gaps[s]] for s in SYMBOLS if gaps[s]}
+        result = {"caveat": sentence, "outcome_statement": f"{prim['verdict']}. {sentence}", "evidence": "external_unverified", **header,
+                  "not_for": json.loads(spec_path.read_text())["not_for"], "control": ctl, "preflight": pre,
+                  "leading_gap_sessions_dropped": gap_dates,
+                  "primary": prim, "pooled_c_vs_b": pooled, "secondary": sec,
+                  "refit": {"fits": refit_fits, "profile": refit_profile, "profile_end": REFIT_PROFILE_END},
+                  "frozen": {"profile": profile, "fit": {s: art["symbols"][s]["fit"] for s in SYMBOLS}},
+                  "accounting": {"window": slice_accounting(grids, raw_all, raw, WINDOW_START, WINDOW_END, info["manifest"]),
+                                 "control_period": slice_accounting(grids, raw_all, raw, CONTROL_START, CONTROL_END, info["manifest"])},
+                  "rows_by_symbol_year": {f"{s} {y}": int(n) for (s, y), n in win.groupby(["symbol", "year"]).size().items()},
+                  "verdict": prim["verdict"]}
+        _write_pair(out, stem, json.dumps(result, indent=1, default=str), render(result))
+    except Exception as exc:
+        import traceback
+        log = out / f"{stem}.crash.txt"
+        try:
+            log.write_text(traceback.format_exc())
+        except OSError:
+            pass
+        raise CrashAfterMarker(f"crashed after the marker (the look is spent; nothing was written but the marker): {exc.__class__.__name__}: {exc}. "
+                               f"The crash log is {log}. The registered crash rule governs what may follow.") from exc
     return result
 
 
 def rehearse_control(dataset: Path, out: Path, say=print, pins: Pins | None = None, loader=None, artifact: Path | None = None,
                      lock_result: Path | None = None) -> dict:
     """The spent-period rehearsal (controls_before_the_run: "rehearse the whole command on a synthetic dataset and on the spent period"). It runs the
-    command's own machinery up to and including the control, on the real dataset, and stops: no marker, no result. No window row is built, read or
-    scored: the bars are cut at CONTROL_END straight after the load (before any grid), and the table is read WITHOUT the reserved spec, so the loader
-    itself withholds the reserved window. What it returns is about the spent period only (the same control the run will make). Written under `out`
+    command's own machinery up to and including the control, on the real dataset, and stops: no marker, no result. No window row is built, held
+    or scored: `intake.load` reads (and hashes) every partition, the 2023 one included, but the bars are cut at CONTROL_END straight after the load, before any
+    grid or table exists, and the table is read WITHOUT the reserved spec, so the loader itself withholds the reserved window. (Its table folder carries the
+    primary table's recipe but fewer rows; it is a scratch folder and is discarded.) What it returns is about the spent period only (the same control the run will make). Written under `out`
     (outside every git tree) and discarded; it is not an evaluation and spends no look."""
     pins = pins or Pins()
     artifact, lock_result = Path(artifact or ARTIFACT_PATH), Path(lock_result or LOCK_RESULT_PATH)
@@ -525,22 +654,23 @@ def rehearse_control(dataset: Path, out: Path, say=print, pins: Pins | None = No
 
 
 def render(r: dict) -> str:
-    """The result as text. The header carries the label and, on the amendment route, the mandatory sentence in full."""
-    L = [f"# {r['spec']} - one-shot evaluation: {r['verdict']}", ""]
-    if r["caveat"]:
-        L += [f"> {r['caveat']}", ""]
-    L += [f"Evidence label: **{r['evidence']}**. Opened {r['opened']}. Spec sha256 `{r['spec_sha256']}` (autolearn.prereg.spec_hash; file `{r['spec_file_sha256']}`), code commit `{r['code_commit']}`.",
+    """The result as text. The mandatory sentence heads the report, before the heading, the label and every number; the outcome line carries it again."""
+    L = [f"> {r['caveat']}", "", f"# {r['spec']} - one-shot evaluation ({r['evidence']})", "", f"**Outcome: {r['outcome_statement']}**", ""]
+    L += [f"Evidence label: **{r['evidence']}**. Opened {r['opened']}. Spec sha256 `{r['spec_sha256']}` (autolearn.prereg.spec_hash; file `{r['spec_file_sha256']}`), "
+          f"code commit `{r['code_commit']}`.",
           f"Dataset `{r['dataset']}` (digest `{r['dataset_digest']}`, status {r['dataset_status']}, tier {r['dataset_tier']}); artifact sha256 `{r['artifact_sha256']}`; "
           f"tables `{r['tables']['primary']}` and `{r['tables']['refit']}`; amendment sha256 `{r['amendment_sha256']}` (commit `{r['amendment_commit']}`); "
-          f"criteria v2 sha256 `{r['criteria_v2_sha256']}`; record sha256 `{r['record_sha256']}`.", "",
+          f"criteria v2 sha256 `{r['criteria_v2_sha256']}` (commit `{r['criteria_v2_commit']}`); record sha256 `{r['record_sha256']}`; lock result sha256 `{r['lock_result_sha256']}`.", "",
           "| cell | days | mean A | mean B | mean C | gain % | DM t | p | Holm p | passes |", "|---|---|---|---|---|---|---|---|---|---|"]
     for k, c in r["primary"]["cells"].items():
-        L.append(f"| {k} | {c['days']} | {c['mean_A']:.4f} | {c['mean_B']:.4f} | {c['mean_C']:.4f} | {c['gain_pct']:+.1f} | {c['dm_t']:+.2f} | "
-                 f"{c['p_one']:.3g} | {c['p_holm']:.3g} | {'yes' if c['passes'] else 'no'} |")
+        L.append(f"| {k} | {c['days']} | {_f(c['mean_A'])} | {_f(c['mean_B'])} | {_f(c['mean_C'])} | {_f(c['gain_pct'], '+.1f')} | {_f(c['dm_t'], '+.2f')} | "
+                 f"{_f(c['p_one'], '.3g')} | {_f(c['p_holm'], '.3g')} | {'yes' if c['passes'] else 'no'} |")
     p = r["pooled_c_vs_b"]
-    L += ["", f"Pooled C versus B: {p['dates']} dates ({p['dates_dropped']} dropped), t {p['dm_t']:+.2f}, one-sided p {p['p_one']:.3g}: {p['says']}.",
+    L += ["", f"Pooled C versus B: {p['dates']} dates ({p['dates_dropped']} dropped), t {_f(p['dm_t'], '+.2f')}, one-sided p {_f(p['p_one'], '.3g')}: {p['says']}.",
           "", f"Control (spent period): {'passed' if r['control']['ok'] else 'FAILED'} within {r['control']['tolerance']} in every cell.",
-          f"Leading-gap sessions dropped from scoring: {r['leading_gap_sessions_dropped'] or 'none'}.",
-          f"Weekdays without a row are listed in the JSON preflight; the exchange-holiday check is the steward's (docs/EXTERNAL_DATA.md item 13), not repeated by this run.",
-          "", "Everything else (secondary tables, accounting, the frozen coefficients) is in the JSON file beside this one.", ""]
+          f"Leading-gap sessions dropped from scoring (with the next 5 of that symbol): {r['leading_gap_sessions_dropped'] or 'none'}.",
+          "The weekdays without a row, the sessions with missing minutes and the differences from the expected exclusions are in the JSON preflight; the exchange-holiday "
+          "check is the steward's (docs/EXTERNAL_DATA.md item 13) and is not repeated by this run.",
+          "", "Everything else (the secondary tables, the accounting of sessions and rows by rule, the refit's coefficients and profile, the frozen coefficients) is in the JSON "
+          "file beside this one.", "", f"> {r['caveat']}", ""]
     return "\n".join(L)

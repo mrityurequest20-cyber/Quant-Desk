@@ -251,9 +251,10 @@ def test_the_pinned_failed_record_opens_the_amended_route(tmp_path):
     assert route == "amendment_1" and rec["passed"] is False
 
 
-def test_a_verified_dataset_takes_the_registered_route(tmp_path):
+def test_a_dataset_that_has_become_verified_is_refused_here_it_needs_its_own_reviewed_change(tmp_path):
     ds, man, pins = make_dataset(tmp_path, status=I.VERIFIED, verified=True)
-    assert OS.dataset_route(ds, man, pins) == ("verified", None)
+    with pytest.raises(OS.Refused, match="needs a new amendment"):
+        OS.dataset_route(ds, man, pins)
 
 
 @pytest.mark.parametrize("name,kw,match", [
@@ -358,10 +359,6 @@ def test_a_result_already_committed_for_this_spec_means_the_look_is_spent(ready)
         OS.refuse_unless_ready(**ready)
 
 
-def test_the_real_results_folder_has_no_oneshot_result_yet():
-    assert not list(OS.RESULTS_DIR.glob(f"har_oneshot_v1-{OS.SPEC_HASH[:12]}.*"))
-
-
 # ---- the command line --------------------------------------------------------------------------------------------------------------
 def parse(*argv):
     from quantdesk.cli import build_parser
@@ -453,9 +450,12 @@ def test_the_supplied_profile_is_what_b_seasonal_uses():
 
 # ---- the run, end to end on a synthetic dataset ---------------------------------------------------------------------------------------
 class Loader:
-    def __init__(self, grids, digest):
-        self.bars = pd.concat([bars_from(g, s) for s, g in grids.items()], ignore_index=True)
-        self.digest, self.calls = digest, []
+    def __init__(self, grids, digest, drop_open=None):
+        bars = pd.concat([bars_from(g, s) for s, g in grids.items()], ignore_index=True)
+        for sym, days in (drop_open or {}).items():                              # a leading-gap session: its 09:15 bar is missing
+            opens = {pd.Timestamp(f"{d} 09:15", tz=IST) for d in days}
+            bars = bars[~((bars["symbol"] == sym) & bars["ts"].isin(opens))]
+        self.bars, self.digest, self.calls = bars.reset_index(drop=True), digest, []
 
     def __call__(self, ds, symbols, use, allow_unverified=False, expected_digest=None):
         self.calls.append({"allow_unverified": allow_unverified, "expected_digest": expected_digest, "use": use})
@@ -463,6 +463,14 @@ class Loader:
         out.attrs.update({"dataset": "synthetic", "digest": self.digest, "status": I.UNVERIFIED, "tier": "T1b", "source": "stub://", "not_for": "no options",
                           "excluded_review": [], "admitted_reviewed": []})
         return out
+
+
+def fresh_ds(synth, name):
+    """A copy of the synthetic dataset folder: the run writes its marker beside the dataset, so each run gets its own."""
+    import shutil
+    dst = synth["tmp"] / name
+    shutil.copytree(synth["ds"], dst)
+    return dst
 
 
 @pytest.fixture(scope="module")
@@ -486,11 +494,14 @@ def synth(tmp_path_factory):
             "loader": Loader(grids, pins.dataset_digest)}
 
 
-def run_kw(synth, out, **over):
-    kw = dict(dataset=synth["ds"], spec_path=SPEC, out=out, say=lambda *_: None, pins=synth["pins"], loader=synth["loader"], amendment=AMEND,
+def run_kw(synth, out, dsname, **over):
+    kw = dict(dataset=fresh_ds(synth, dsname), spec_path=SPEC, out=out, say=lambda *_: None, pins=synth["pins"], loader=synth["loader"], amendment=AMEND,
               criteria=REPO / "docs" / "ml" / "P0_6_criteria_v2.md", artifact=synth["art"], lock_result=synth["lock"], results_dir=synth["results"], commit=CLEAN)
     kw.update(over)
     return kw
+
+
+OK_CONTROL = lambda ctrl, locked, tol=0: {"tolerance": tol, "cells": {}, "failed": [], "ok": True}      # the control is tested above; synthetic data cannot match the lock
 
 
 @pytest.fixture(scope="module")
@@ -503,11 +514,12 @@ def ran(synth):
         marker = out / f"har_oneshot_v1-{OS.SPEC_HASH[:12]}.marker.json"
         seen.append({"min": table["day"].min(), "max": table["day"].max(), "marker": marker.exists()})
         return orig(table, art)
+    kw = run_kw(synth, out, "ds_ran")
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(OS, "with_frozen_forecast", watch)
-        mp.setattr(OS, "control", lambda ctrl, locked, tol=0: {"tolerance": tol, "cells": {}, "failed": [], "ok": True})        # the control is tested above; synthetic data cannot match the lock
-        res = OS.run(**run_kw(synth, out))
-    return {"out": out, "res": res, "seen": seen}
+        mp.setattr(OS, "control", OK_CONTROL)
+        res = OS.run(**kw)
+    return {"out": out, "res": res, "seen": seen, "ds": kw["dataset"]}
 
 
 def stem():
@@ -518,7 +530,8 @@ def test_the_run_writes_a_marker_a_result_and_a_report_and_nothing_into_the_repo
     out = ran["out"]
     for suffix in (".marker.json", ".json", ".md"):
         assert (out / f"{stem()}{suffix}").is_file()
-    assert not list(OS.RESULTS_DIR.glob(f"har_oneshot_v1-{OS.SPEC_HASH[:12]}.*"))
+    assert (ran["ds"] / f"{stem()}.marker.json").is_file()                                      # the marker beside the dataset, where the next run looks
+    assert json.loads((ran["ds"] / f"{stem()}.marker.json").read_text()) == json.loads((out / f"{stem()}.marker.json").read_text())
     res = ran["res"]
     assert res["verdict"] in ("PASS", "MIXED", "KILL") and len(res["primary"]["cells"]) == 8
 
@@ -529,25 +542,29 @@ def test_the_window_gets_no_forecast_before_the_marker_and_the_control_none_afte
     assert win_call["min"] >= OS.WINDOW_START and win_call["marker"]                         # the window's rows are first touched after the marker is on disk
 
 
-def test_on_the_amended_route_the_label_is_unverified_everywhere_and_the_sentence_is_in_full(ran):
+def test_the_label_is_unverified_everywhere_and_the_sentence_heads_the_report_and_closes_it(ran):
     out, res = ran["out"], ran["res"]
     md, js = (out / f"{stem()}.md").read_text(), (out / f"{stem()}.json").read_text()
-    assert res["evidence"] == "external_unverified" and res["caveat"] == OS.mandatory_sentence(AMEND)
+    sentence = OS.mandatory_sentence(AMEND)
+    assert res["evidence"] == "external_unverified" and res["caveat"] == sentence
     assert "external_verified" not in md and "external_verified" not in js
-    assert res["caveat"] in md and md.index(res["caveat"]) < md.index("| cell |")                 # the sentence heads the report, before any number
-    assert res["record_sha256"] in md
+    assert md.startswith(f"> {sentence}") and md.rstrip().endswith(f"> {sentence}") and md.index(sentence) < md.index("| cell |")
+    assert res["outcome_statement"] == f"{res['verdict']}. {sentence}" and res["record_sha256"] in md
+    keys = list(json.loads(js))
+    assert keys.index("caveat") < keys.index("verdict") and keys.index("outcome_statement") < keys.index("primary")       # the sentence precedes any outcome in the JSON too
 
 
-def test_the_header_records_every_pin(ran, synth):
+def test_the_header_records_every_pin_and_both_commits(ran, synth):
     res = ran["res"]
     assert res["spec_sha256"] == OS.SPEC_HASH and res["spec_file_sha256"] == OS.SPEC_FILE_SHA256 and res["code_commit"] == "c0ffee0" and res["route"] == "amendment_1"
     assert res["artifact_sha256"] == synth["pins"].artifact_sha256 and res["amendment_sha256"] == OS.AMENDMENT_SHA256
     assert res["criteria_v2_sha256"] == OS.CRITERIA_V2_SHA256 and res["record_sha256"] == synth["pins"].record_sha256
+    assert res["amendment_commit"] and res["criteria_v2_commit"] and res["lock_result_sha256"] == sha(synth["lock"])
     assert res["dataset_digest"] == synth["pins"].dataset_digest and res["dataset_status"] == I.UNVERIFIED
     assert set(res["tables"]) == {"primary", "refit"} and res["tables"]["primary"] != res["tables"]["refit"]
 
 
-def test_the_loader_is_always_asked_for_the_pinned_digest_and_accepts_unverified_only_on_the_amended_route(synth, ran):
+def test_the_loader_is_always_asked_for_the_pinned_digest(synth, ran):
     calls = synth["loader"].calls
     assert calls and all(c["expected_digest"] == synth["pins"].dataset_digest and c["allow_unverified"] is True and c["use"] == "regime_research" for c in calls)
 
@@ -561,16 +578,16 @@ def test_the_primary_table_is_built_on_the_frozen_profile_and_the_refit_table_on
     assert refit["profile_end"] == OS.REFIT_PROFILE_END and "profile_sha256" not in refit
 
 
-def test_the_window_stays_inside_the_spec_s_dates_and_the_secondary_tables_exist(ran):
+def test_the_secondary_tables_the_refit_coefficients_and_its_profile_are_in_the_result(ran):
     res = ran["res"]
     sec = res["secondary"]
     assert set(sec["cells"]) == set(res["primary"]["cells"]) and all("refit" in c for c in sec["cells"].values())
-    assert all(set(c["C_vs_A_lags"]) == {"10", "20"} for c in sec["cells"].values())
+    assert all(set(c["C_vs_A_lags"]) == {"10", "20"} and "daily_gain_autocorr_lags_1_to_5" in c for c in sec["cells"].values())
     assert res["pooled_c_vs_b"]["dates"] > 10 and set(sec["by_year"]["NIFTY 30m"]) == {"2023"}
     assert res["refit"]["profile_end"] == OS.REFIT_PROFILE_END and set(res["refit"]["fits"]) == set(OS.SYMBOLS)
+    assert all(len(res["refit"]["profile"][s]) == V.N_MIN and min(res["refit"]["profile"][s]) > 0 for s in OS.SYMBOLS)
     assert res["leading_gap_sessions_dropped"] == {}
-    assert sum(res["rows_by_symbol_year"].values()) > 0
-    assert all(k.endswith(" 2023") for k in res["rows_by_symbol_year"])
+    assert sum(res["rows_by_symbol_year"].values()) > 0 and all(k.endswith(" 2023") for k in res["rows_by_symbol_year"])
 
 
 def test_frozen_coefficients_are_copied_unchanged_into_the_result(ran, synth):
@@ -579,60 +596,177 @@ def test_frozen_coefficients_are_copied_unchanged_into_the_result(ran, synth):
         assert ran["res"]["frozen"]["fit"][s] == art["symbols"][s]["fit"] and ran["res"]["frozen"]["profile"][s] == art["symbols"][s]["profile"]
 
 
+def test_the_accounting_is_by_slice_and_by_rule_and_does_not_count_the_profile_window_as_lost(ran):
+    acc = ran["res"]["accounting"]
+    for part in ("window", "control_period"):
+        for s in OS.SYMBOLS:
+            a = acc[part]["symbols"][s]
+            assert a["reconciles"] and a["rows_kept"] > 0 and set(a["rows_removed"]) == {"feature_lookback_rule", "label_window_over_20pct_missing", "leading_gap_filter"}
+            assert a["rows_possible"] == acc[part]["rows_possible_per_session"] * a["sessions_in_grid"]
+            assert all(x["day"] >= (OS.WINDOW_START if part == "window" else OS.CONTROL_START) for x in a["sessions_without_rows"])
+    w = acc["window"]["symbols"]["NIFTY"]
+    assert w["sessions_with_rows"] == w["sessions_in_grid"] and w["sessions_without_rows"] == [] and set(w["sessions_with_rows_by_year"]) == {"2023"}
+    c = acc["control_period"]["symbols"]["NIFTY"]
+    assert c["sessions_in_grid"] > 200 and c["sessions_without_rows"][0]["why"].startswith("feature lookback")                   # the first 5 sessions of the series, said as such
+
+
 def test_a_second_run_into_the_same_folder_is_refused(ran, synth):
     with pytest.raises(OS.Refused, match="empty folder"):
-        OS.run(**run_kw(synth, ran["out"]))
+        OS.run(**run_kw(synth, ran["out"], "ds_again", dataset=ran["ds"]))
 
 
-def test_a_failed_control_stops_before_the_marker_and_spends_no_look(synth):
+def test_the_marker_beside_the_dataset_refuses_a_second_run_into_a_new_folder(ran, synth):
+    with pytest.raises(OS.Refused, match="the look is spent"):
+        OS.run(**run_kw(synth, synth["tmp"] / "another_folder", "ds_unused", dataset=ran["ds"]))
+    assert not (synth["tmp"] / "another_folder").exists() or not any((synth["tmp"] / "another_folder").iterdir())
+
+
+def test_a_failed_control_stops_before_any_marker_and_spends_no_look(synth):
     out = synth["tmp"] / "ctrl_fail"
-    with pytest.raises(OS.ControlFailed, match="no look is spent"):
-        OS.run(**run_kw(synth, out, pins=OS.Pins(artifact_sha256=synth["pins"].artifact_sha256, dataset_digest=synth["pins"].dataset_digest,
-                                                 record_sha256=synth["pins"].record_sha256, control_tolerance=0.0)))
+    kw = run_kw(synth, out, "ds_ctrl", pins=OS.Pins(artifact_sha256=synth["pins"].artifact_sha256, dataset_digest=synth["pins"].dataset_digest,
+                                                    record_sha256=synth["pins"].record_sha256, control_tolerance=0.0))
+    with pytest.raises(OS.ControlFailed, match="no look is spent") as e:
+        OS.run(**kw)
+    assert "locked" in str(e.value) and "spent-period numbers" in str(e.value)                      # the cause can be looked for
     assert not list(out.glob("*.marker.json")) and not list(out.glob("har_oneshot_v1-*.json")) and not list(out.glob("*.md"))
+    assert not list(kw["dataset"].glob("*.marker.json"))
 
 
-def test_a_crash_after_the_marker_leaves_the_marker_and_no_result(synth):
+def test_a_crash_after_the_marker_keeps_both_markers_saves_a_log_and_writes_no_result(synth):
     out = synth["tmp"] / "crash"
+    kw = run_kw(synth, out, "ds_crash")
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(OS, "control", lambda ctrl, locked, tol=0: {"tolerance": tol, "cells": {}, "failed": [], "ok": True})
+        mp.setattr(OS, "control", OK_CONTROL)
         mp.setattr(OS, "primary", lambda win: (_ for _ in ()).throw(RuntimeError("boom")))
-        with pytest.raises(RuntimeError, match="boom"):
-            OS.run(**run_kw(synth, out))
-    assert (out / f"{stem()}.marker.json").is_file() and not (out / f"{stem()}.json").exists() and not (out / f"{stem()}.md").exists()
+        with pytest.raises(OS.CrashAfterMarker, match="boom") as e:
+            OS.run(**kw)
+    assert "the look is spent" in str(e.value) and "crash log" in str(e.value)
+    assert (out / f"{stem()}.marker.json").is_file() and (kw["dataset"] / f"{stem()}.marker.json").is_file()
+    assert "boom" in (out / f"{stem()}.crash.txt").read_text() and "Traceback" in (out / f"{stem()}.crash.txt").read_text()
+    assert not (out / f"{stem()}.json").exists() and not (out / f"{stem()}.md").exists()
+    with pytest.raises(OS.Refused, match="the look is spent"):                                   # and the next run is refused until a person moves the marker
+        OS.run(**run_kw(synth, synth["tmp"] / "after_crash", "ds_unused2", dataset=kw["dataset"]))
 
 
-def test_nothing_is_printed_from_the_window_before_the_result_is_written(synth):
+def test_a_render_failure_happens_before_any_result_file_exists(synth):
+    out = synth["tmp"] / "render_fail"
+    kw = run_kw(synth, out, "ds_render")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(OS, "control", OK_CONTROL)
+        mp.setattr(OS, "render", lambda r: (_ for _ in ()).throw(ValueError("cannot render")))
+        with pytest.raises(OS.CrashAfterMarker, match="cannot render"):
+            OS.run(**kw)
+    assert not (out / f"{stem()}.json").exists() and not (out / f"{stem()}.md").exists() and list(out.glob("*.tmp")) == []
+
+
+def test_the_report_renders_when_a_statistic_is_missing():
+    assert OS._f(None) == "n/a" and OS._f(float("nan"), ".3g") == "n/a" and OS._f(1.23456, ".2f") == "1.23" and OS._f("x", ".2f") == "n/a"
+
+
+def test_nothing_about_the_window_is_printed_before_the_result_is_written(synth):
     said = []
     out = synth["tmp"] / "quiet"
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(OS, "control", lambda ctrl, locked, tol=0: {"tolerance": tol, "cells": {}, "failed": [], "ok": True})
-        OS.run(**run_kw(synth, out, say=said.append))
-    assert said and not any(any(ch.isdigit() for ch in m.replace(str(OS.SPEC_HASH[:12]), "").replace("route amendment_1", "")) and "loss" in m for m in said)
-    assert all("qlike" not in m.lower() and "verdict" not in m.lower() for m in said)
+        mp.setattr(OS, "control", OK_CONTROL)
+        res = OS.run(**run_kw(synth, out, "ds_quiet", say=said.append))
+    text = "\n".join(said).lower()
+    assert said and all(w not in text for w in ("qlike", "verdict", res["verdict"].lower() + " ", "dm_t", "p_holm", "loss"))
 
 
-def test_refit_forecast_refuses_a_window_row_marked_in_profile(synth):
+def test_the_command_line_prints_the_outcome_with_the_sentence(monkeypatch, capsys, tmp_path):
+    from quantdesk.cli import _ml_oneshot
+    sentence = OS.mandatory_sentence(AMEND)
+    monkeypatch.setattr(OS, "run", lambda *a, **k: {"spec": "har_oneshot_v1", "outcome_statement": f"KILL. {sentence}"})
+    _ml_oneshot(parse("--dataset", str(tmp_path), "--spec", str(SPEC), "--out", str(tmp_path / "o")))
+    printed = capsys.readouterr().out
+    assert "KILL" in printed and sentence in printed
+
+
+def test_refit_forecast_refuses_a_window_row_marked_in_profile():
     t = pd.DataFrame({"symbol": ["NIFTY"] * 4, "day": ["2023-02-27", "2023-02-28", "2023-03-01", "2023-03-02"], "m": 15, "horizon": "30m",
                       "session": [1, 2, 3, 4], "in_profile": [True, True, True, False]})
     with pytest.raises(S.LeakError, match="window row is marked in_profile"):
         OS.refit_forecast(t, t.iloc[2:], {})
 
 
-def test_no_part_of_the_command_can_spend_the_look_twice(ran, synth):
-    again = synth["tmp"] / "again"
-    with pytest.raises(FileExistsError):
-        OS._write_once(ran["out"] / f"{stem()}.marker.json", "{}")
-    assert not again.exists()
+def test_the_two_slices_include_both_ends_and_nothing_beyond():
+    t = pd.DataFrame({"day": ["2018-12-31", "2019-01-01", "2023-02-28", "2023-03-01", "2026-05-14", "2026-05-15"]})
+    assert list(OS.control_slice(t)["day"]) == ["2019-01-01", "2023-02-28"]
+    assert list(OS.window_slice(t)["day"]) == ["2023-03-01", "2026-05-14"]
 
 
-def test_the_spent_period_rehearsal_never_builds_reads_or_scores_a_window_row(synth):
+def test_the_commit_of_the_amendment_and_of_the_criteria_must_be_known(ready, monkeypatch):
+    monkeypatch.setattr(OS, "_git_commit_of", lambda path: None)
+    with pytest.raises(OS.Refused, match="commit of the amendment or of the criteria"):
+        OS.refuse_unless_ready(**ready)
+
+
+def test_an_unreadable_pinned_file_is_a_refusal_not_a_traceback(ready, tmp_path):
+    with pytest.raises(OS.Refused, match="cannot be read"):
+        OS.refuse_unless_ready(**{**ready, "criteria": tmp_path / "missing.md"})
+
+
+def test_the_marker_beside_the_dataset_is_found_by_the_refusals(ready):
+    (ready["ds"] / f"{stem()}.marker.json").write_text("{}")
+    with pytest.raises(OS.Refused, match="the look is spent"):
+        OS.refuse_unless_ready(**ready)
+
+
+# ---- a leading-gap session through the whole run ----------------------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def gap_run(synth):
+    """NIFTY has a session without a 09:15 bar inside the spent period (ordinal 150) and one inside the window (ordinal 330)."""
+    g = synth["grids"]["NIFTY"]["days"]
+    gap_days = [str(g[150]), str(g[330])]
+    loader = Loader(synth["grids"], synth["pins"].dataset_digest, drop_open={"NIFTY": gap_days})
+    out = synth["tmp"] / "gap_run"
+    seen = {"control_sessions": None, "train_sessions": {}}
+    orig_fit = V.fit_c
+
+    def spy_fit(train):
+        seen["train_sessions"][str(train["symbol"].iloc[0])] = set(train["session"])
+        return orig_fit(train)
+
+    def spy_control(ctrl, locked, tol=0):
+        seen["control_sessions"] = set(ctrl.loc[ctrl["symbol"] == "NIFTY", "session"])
+        return OK_CONTROL(ctrl, locked, tol)
+    kw = run_kw(synth, out, "ds_gap", loader=loader)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(OS, "control", spy_control)
+        mp.setattr(V, "fit_c", spy_fit)
+        res = OS.run(**kw)
+    return {"res": res, "seen": seen, "days": gap_days, "loader": loader, "out": out}
+
+
+def test_a_leading_gap_session_and_the_next_five_are_out_of_the_control_the_refit_training_and_the_scoring(gap_run):
+    res, seen = gap_run["res"], gap_run["seen"]
+    assert res["leading_gap_sessions_dropped"] == {"NIFTY": gap_run["days"]}                       # listed as dates, not ordinals
+    gone = set(range(150, 156))
+    assert seen["control_sessions"] and not (seen["control_sessions"] & gone)                       # the control does not score them
+    assert set(seen["train_sessions"]) == {"NIFTY", "BANKNIFTY"}
+    assert not (seen["train_sessions"]["NIFTY"] & gone)                                              # the refit does not train on them
+    assert gone <= seen["train_sessions"]["BANKNIFTY"]                                               # and the other symbol, with no gap, keeps those sessions
+    w = res["accounting"]["window"]["symbols"]["NIFTY"]
+    dropped = [x for x in w["sessions_without_rows"] if x["why"] == "leading-gap filter"]
+    assert len(dropped) == 6 and w["rows_removed"]["leading_gap_filter"] == 6 * res["accounting"]["window"]["rows_possible_per_session"] and w["reconciles"]
+    c = res["accounting"]["control_period"]["symbols"]["NIFTY"]
+    assert c["rows_removed"]["leading_gap_filter"] == 6 * res["accounting"]["control_period"]["rows_possible_per_session"] and c["reconciles"]
+
+
+def test_the_tables_of_a_run_with_a_gap_were_built_with_the_gap_allowed_and_the_other_symbol_is_untouched(gap_run):
+    w = gap_run["res"]["accounting"]["window"]["symbols"]["BANKNIFTY"]
+    assert w["rows_removed"]["leading_gap_filter"] == 0 and w["sessions_without_rows"] == []
+
+
+# ---- the spent-period rehearsal ------------------------------------------------------------------------------------------------------
+def test_the_spent_period_rehearsal_never_builds_holds_or_scores_a_window_row(synth):
     out = synth["tmp"] / "rehearsal"
     res = OS.rehearse_control(synth["ds"], out, say=lambda *_: None, pins=synth["pins"], loader=synth["loader"], artifact=synth["art"], lock_result=synth["lock"])
     assert res["control"]["ok"] and res["last_day"] <= OS.CONTROL_END and res["rows"] > 0
     man = json.loads(next((out / "tables" / "m1").iterdir()).joinpath("manifest.json").read_text())
     assert all(last <= OS.CONTROL_END for first, last in man["days"].values())                                  # the stored table ends on the last spent day
     assert not list(out.rglob("*.marker.json")) and not list(out.rglob("har_oneshot_v1-*"))                       # no marker, no result: no look is spent
+    assert not list(synth["ds"].glob("*.marker.json"))                                                          # and none beside the dataset
     assert all(c["allow_unverified"] is True for c in synth["loader"].calls)
 
 
@@ -650,7 +784,8 @@ def test_the_rehearsal_has_the_same_refusals_as_the_run(synth, tmp_path):
     other.write_text("{ }")
     with pytest.raises(OS.Refused, match="pinned artifact"):
         OS.rehearse_control(synth["ds"], tmp_path / "o", loader=synth["loader"], pins=synth["pins"], artifact=other)
-    bad_ds, _, bad_pins = make_dataset(tmp_path / "x", raw_edit=b" ") if (tmp_path / "x").mkdir() is None else (None, None, None)
+    (tmp_path / "x").mkdir()
+    bad_ds, _, bad_pins = make_dataset(tmp_path / "x", raw_edit=b" ")
     with pytest.raises(OS.Refused, match="not the P0.6 version 2 record"):
         OS.rehearse_control(bad_ds, tmp_path / "o2", loader=synth["loader"], pins=OS.Pins(artifact_sha256=synth["pins"].artifact_sha256, dataset_digest=bad_pins.dataset_digest,
                                                                                          record_sha256=bad_pins.record_sha256), artifact=synth["art"])

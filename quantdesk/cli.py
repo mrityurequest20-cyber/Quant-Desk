@@ -467,7 +467,7 @@ def _ml_oneshot(a):
         res = OS.run(Path(a.dataset), Path(a.spec), Path(a.out))
     except OS.Refused as exc:
         raise SystemExit(f"ml oneshot: refused, no look spent: {exc}")
-    print(f"{res['spec']}: {res['verdict']} ({res['evidence']}); result in {a.out}")
+    print(f"{res['spec']}: {res['outcome_statement']} (result in {a.out})")
 
 
 def _ml_verify(a):

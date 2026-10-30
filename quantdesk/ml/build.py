@@ -8,7 +8,8 @@ copied, so the table the harness trains on is the table the locked HAR result wa
 sample would leak the test period into every feature. The builder therefore takes `profile_end`, fits the profile on sessions up to
 and including that day only (as `volstudy.fit_har` does for a training window), records it in the table's identity, and marks every
 row with `in_profile`. Score only rows with `in_profile == False`; a study that needs the profile refitted per fold rebuilds the
-table per fold, which is cheap.
+table per fold, which is cheap. A model's own frozen profile can be supplied instead (`profile={symbol: values}`): nothing is fitted on the grid then,
+`profile_end` is the last session that profile was fitted on (it still marks `in_profile`), and the profile's sha256 enters the recipe, hence the identity.
 
 **Identity.** The table's folder is `ml-build-1-<12 hex>`, the hash of the input dataset's digest **and its status and tier**, the recipe
 (symbols, profile_end, every constant and the source of the functions that make the rows) and the builder version. The same inputs give
