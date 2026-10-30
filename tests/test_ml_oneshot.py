@@ -789,3 +789,49 @@ def test_the_rehearsal_has_the_same_refusals_as_the_run(synth, tmp_path):
     with pytest.raises(OS.Refused, match="not the P0.6 version 2 record"):
         OS.rehearse_control(bad_ds, tmp_path / "o2", loader=synth["loader"], pins=OS.Pins(artifact_sha256=synth["pins"].artifact_sha256, dataset_digest=bad_pins.dataset_digest,
                                                                                          record_sha256=bad_pins.record_sha256), artifact=synth["art"])
+
+
+def test_a_failed_second_link_leaves_neither_result_file(tmp_path, monkeypatch):
+    real = OS.os.link
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(dst)
+        if len(calls) == 2:
+            raise OSError("disk full")
+        return real(src, dst)
+    monkeypatch.setattr(OS.os, "link", flaky)
+    with pytest.raises(OSError, match="disk full"):
+        OS._write_pair(tmp_path, "r", "{}", "# md")
+    assert list(tmp_path.iterdir()) == []                                                    # the first file was taken back; no temp file is left either
+
+
+def test_a_failure_writing_the_out_folder_marker_is_a_crash_after_the_look_is_spent(synth):
+    out = synth["tmp"] / "out_marker_fail"
+    kw = run_kw(synth, out, "ds_outmarker")
+    real = OS._write_once
+
+    def only_dataset_marker(path, text):
+        if Path(path).parent == out:
+            raise OSError("out folder not writable")
+        return real(path, text)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(OS, "control", OK_CONTROL)
+        mp.setattr(OS, "_write_once", only_dataset_marker)
+        with pytest.raises(OS.CrashAfterMarker, match="the look is spent"):
+            OS.run(**kw)
+    assert (kw["dataset"] / f"{stem()}.marker.json").is_file()                               # the look is recorded where the next run looks
+    with pytest.raises(OS.Refused, match="the look is spent"):
+        OS.run(**run_kw(synth, synth["tmp"] / "after_out_marker_fail", "ds_unused3", dataset=kw["dataset"]))
+
+
+def test_a_session_with_no_row_that_the_lookback_rule_explains_is_labelled_so_even_inside_a_gap_range():
+    days = pd.Index([d.date() for d in pd.bdate_range("2023-02-20", periods=12)])
+    miss = np.zeros((12, V.N_MIN), dtype=bool)
+    miss[2, 0] = True                                                                         # a gap at ordinal 2, whose range 2..7 includes sessions 2 to 4 that the lookback rule already empties
+    g = {s: (days, np.zeros((12, V.N_MIN)), miss if s == "NIFTY" else np.zeros_like(miss), np.full(12, 100.0)) for s in OS.SYMBOLS}
+    empty = pd.DataFrame({"symbol": pd.Series([], dtype=object), "day": pd.Series([], dtype=object), "session": pd.Series([], dtype="int64")})
+    a = OS.slice_accounting(g, empty, empty, "2023-02-20", "2023-03-31")["symbols"]["NIFTY"]
+    whys = {x["day"]: x["why"] for x in a["sessions_without_rows"]}
+    assert whys[str(days[2])].startswith("feature lookback") and whys[str(days[3])].startswith("feature lookback")
+    assert whys[str(days[6])] == "leading-gap filter" and whys[str(days[7])] == "leading-gap filter"

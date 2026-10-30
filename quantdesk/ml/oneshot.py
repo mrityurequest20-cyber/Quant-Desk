@@ -444,8 +444,8 @@ def slice_accounting(grids: dict, before: pd.DataFrame, after: pd.DataFrame, lo:
                 miss_rule += per_session - n_b.get(d, 0)
             gap_rows += n_b.get(d, 0) - n_a.get(d, 0)
             if d not in n_a:
-                why = ("leading-gap filter" if i in gap_drop else "feature lookback (the first 5 sessions, or 5 consecutive sessions needed after a break over 4 days)"
-                       if not valid_prior[i] else "every label window over 20% missing")
+                why = ("feature lookback (the first 5 sessions, or 5 consecutive sessions needed after a break over 4 days)" if not valid_prior[i]
+                       else "leading-gap filter" if i in gap_drop else "every label window over 20% missing")
                 none.append({"day": d, "why": why})
         kept_by_year = {}
         for d in n_a:
@@ -477,8 +477,15 @@ def _write_pair(out: Path, stem: str, text_json: str, text_md: str) -> None:
             tmp = Path(f"{out / (stem + suffix)}.{os.getpid()}.tmp")
             tmp.write_text(text)
             tmps.append((tmp, out / (stem + suffix)))
-        for tmp, final in tmps:
-            os.link(tmp, final)
+        linked = []
+        try:
+            for tmp, final in tmps:
+                os.link(tmp, final)
+                linked.append(final)
+        except BaseException:
+            for final in linked:                                       # never leave one of the two files behind: the crash message says nothing was written
+                final.unlink(missing_ok=True)
+            raise
     finally:
         for tmp, _ in tmps:
             tmp.unlink(missing_ok=True)
@@ -569,11 +576,11 @@ def run(dataset: Path, spec_path: Path, out: Path, say=print, pins: Pins | None 
         _write_once(info["dataset_marker"], json.dumps(header, indent=1))
     except OSError as exc:
         raise Refused(f"the marker cannot be written beside the dataset ({exc.__class__.__name__}): no look is spent") from exc
-    _write_once(out / f"{stem}.marker.json", json.dumps(header, indent=1))
-    say("oneshot: the marker is written; the look is spent")
+    say("oneshot: the marker is written beside the dataset; the look is spent")
 
     # -- the window ---------------------------------------------------------------------------------------------------------------------
     try:
+        _write_once(out / f"{stem}.marker.json", json.dumps(header, indent=1))             # the copy beside the result; the dataset's marker already stands
         win = with_frozen_forecast(window_slice(raw), art)
         prim = primary(win)
         pooled = pooled_c_vs_b(win)
@@ -599,7 +606,7 @@ def run(dataset: Path, spec_path: Path, out: Path, say=print, pins: Pins | None 
             log.write_text(traceback.format_exc())
         except OSError:
             pass
-        raise CrashAfterMarker(f"crashed after the marker (the look is spent; nothing was written but the marker): {exc.__class__.__name__}: {exc}. "
+        raise CrashAfterMarker(f"crashed after the marker (the look is spent; no result file was written, only the markers and this log): {exc.__class__.__name__}: {exc}. "
                                f"The crash log is {log}. The registered crash rule governs what may follow.") from exc
     return result
 
