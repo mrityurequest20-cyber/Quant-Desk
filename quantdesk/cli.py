@@ -448,7 +448,7 @@ def _ml_build(cfg, a):
 
 
 def _ml_verify(a):
-    """P0.6 (docs/ml/P0_6_criteria.md): the independent check of an imported index-minute dataset, run once; `--flip` is the separate status-only step after a pass."""
+    """P0.6 (docs/ml/P0_6_criteria_v2.md): the independent check of an imported index-minute dataset, run once; `--flip` is the separate status-only step after a pass."""
     from .ml import build as B
     from .ml import verify as VF
     if not a.dataset:
