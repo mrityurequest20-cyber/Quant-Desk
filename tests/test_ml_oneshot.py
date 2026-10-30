@@ -658,6 +658,31 @@ def test_a_crash_after_the_marker_keeps_both_markers_saves_a_log_and_writes_no_r
         OS.run(**run_kw(synth, synth["tmp"] / "after_crash", "ds_unused2", dataset=kw["dataset"]))
 
 
+def test_a_crash_message_does_not_claim_a_log_that_could_not_be_written(synth):
+    out = synth["tmp"] / "crash_nolog"
+    kw = run_kw(synth, out, "ds_nolog")
+    real = Path.write_text
+
+    def no_log(self, *a, **k):
+        if self.name.endswith(".crash.txt"):
+            raise OSError("read-only")
+        return real(self, *a, **k)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(OS, "control", OK_CONTROL)
+        mp.setattr(OS, "primary", lambda win: (_ for _ in ()).throw(RuntimeError("boom")))
+        mp.setattr(Path, "write_text", no_log)
+        with pytest.raises(OS.CrashAfterMarker) as e:
+            OS.run(**kw)
+    msg = str(e.value)
+    assert "the look is spent" in msg and "could not be written" in msg and "boom" not in msg and "and this log" not in msg
+    assert not (out / f"{stem()}.crash.txt").exists() and (kw["dataset"] / f"{stem()}.marker.json").is_file()
+
+
+def test_the_report_labels_use_if_passed_as_the_registered_text_not_as_a_condition_on_this_outcome(ran):
+    md = (ran["out"] / f"{stem()}.md").read_text()
+    assert "**Registered use_if_passed (verbatim from the spec; its last sentence holds for every outcome):**" in md and "**If passed:**" not in md
+
+
 def test_a_render_failure_happens_before_any_result_file_exists(synth):
     out = synth["tmp"] / "render_fail"
     kw = run_kw(synth, out, "ds_render")

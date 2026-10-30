@@ -609,10 +609,10 @@ def run(dataset: Path, spec_path: Path, out: Path, say=print, pins: Pins | None 
         log = out / f"{stem}.crash.txt"
         try:
             log.write_text(traceback.format_exc())
+            where = f"only the markers and this log): {exc.__class__.__name__}; the detail is in the log, which may hold values and is not printed. The crash log is {log}."
         except OSError:
-            pass
-        raise CrashAfterMarker(f"crashed after the marker (the look is spent; no result file was written, only the markers and this log): {exc.__class__.__name__}; the detail is in the log, which may hold values and is not printed. "
-                               f"The crash log is {log}. The registered crash rule governs what may follow.") from exc
+            where = f"only the marker beside the dataset, and the crash log could not be written to {log}): {exc.__class__.__name__}; the detail is not printed."
+        raise CrashAfterMarker(f"crashed after the marker (the look is spent; no result file was written, {where} The registered crash rule governs what may follow.") from exc
     return result
 
 
@@ -668,7 +668,7 @@ def rehearse_control(dataset: Path, out: Path, say=print, pins: Pins | None = No
 def render(r: dict) -> str:
     """The result as text. The mandatory sentence heads the report, before the heading, the label and every number; the outcome line carries it again."""
     L = [f"> {r['caveat']}", "", f"# {r['spec']} - one-shot evaluation ({r['evidence']})", "", f"**Outcome: {r['outcome_statement']}**", "",
-         f"**Not for:** {r['not_for']}.", "", f"**If passed:** {r['use_if_passed']}", ""]
+         f"**Not for:** {r['not_for']}.", "", f"**Registered use_if_passed (verbatim from the spec; its last sentence holds for every outcome):** {r['use_if_passed']}", ""]
     L += [f"Evidence label: **{r['evidence']}**. Opened {r['opened']}. Spec sha256 `{r['spec_sha256']}` (autolearn.prereg.spec_hash; file `{r['spec_file_sha256']}`), "
           f"code commit `{r['code_commit']}`.",
           f"Dataset `{r['dataset']}` (digest `{r['dataset_digest']}`, status {r['dataset_status']}, tier {r['dataset_tier']}); artifact sha256 `{r['artifact_sha256']}`; "
