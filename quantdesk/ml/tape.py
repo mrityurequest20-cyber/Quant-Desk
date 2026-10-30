@@ -240,7 +240,8 @@ def import_tape(source: Path, out_root: Path, say=print) -> dict:
 def load(ds: Path, source: Path, use: str, days=None, clean: bool = True, expected_digest: str | None = None) -> pd.DataFrame:
     """The tape rows of a registered dataset for a declared use, read from `source` after every needed file is re-hashed. Refuses: no manifest, a manifest that does not hash to its
     digest (or to `expected_digest`), a folder whose name is not the manifest's identity, a missing or changed file, a use outside ALLOWED_USES. With `clean` (default) the faults the
-    manifest counted are dropped from the result and counted in `attrs["dropped"]`; nothing is repaired either way."""
+    manifest counted are dropped from the result and counted in `attrs["dropped"]`; nothing is repaired either way. `attrs["clean"]` says which it was: with `clean=False` the model-chain rows and
+    the other faults are still in the result and `attrs["dropped"]` is empty because nothing was looked at, not because nothing was wrong."""
     ds, source = Path(ds), Path(source)
     source = source.parent if source.is_file() else source          # import_tape accepts a single file: the manifest names files relative to its folder
     if use not in ALLOWED_USES:
@@ -283,7 +284,7 @@ def load(ds: Path, source: Path, use: str, days=None, clean: bool = True, expect
     out["tier"] = TIER
     if any(dropped.values()):
         log.warning("tape %s: load dropped %s (first-match counts; the manifest counts every fault)", man["dataset"], {k: v for k, v in dropped.items() if v})
-    out.attrs.update({"dataset": man["dataset"], "digest": man["digest"], "tier": TIER, "status": STATUS, "use": use, "not_for": NOT_FOR, "dropped": dropped})
+    out.attrs.update({"dataset": man["dataset"], "digest": man["digest"], "tier": TIER, "status": STATUS, "use": use, "not_for": NOT_FOR, "dropped": dropped, "clean": bool(clean)})
     return out
 
 
