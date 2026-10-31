@@ -424,7 +424,11 @@ def test_a_credential_in_a_journal_row_never_reaches_the_reader_and_is_journaled
 @pytest.mark.parametrize("text,secret", [("KITE_ACCESS_TOKEN=abcDEF123456789xyzABC", "abcDEF123456789xyzABC"), ("KITE_API_KEY=k123456", "k123456"), ("KOTAK_CONSUMER_KEY=3f2504e0-4f89-11d3", "3f2504e0"),
                                          ("client_secret=s3cr3t", "s3cr3t"), ("my_password=pw99", "pw99"), ("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI", "wJalrXUtnFEMI"),
                                          ("Authorization: Token abc123", "abc123"), ("authorization: Bearer abcd", "abcd"), ('password="abc def"', "def"),
-                                         ("Authorization: token key123:access456", "access456")])
+                                         ("Authorization: token key123:access456", "access456"),
+                                         ("Authorization: Bearer abc123 password: hunter2", "hunter2"), ("authorization: Basic dXNlcjpwYXNz api_key=k99887766", "k99887766"),
+                                         ("authorization: Custom abc123 note", "abc123"),
+                                         ("mobile: +91 9876543210", "9876543210"), ("phone=+91-98765-43210", "43210"), ("Mobile : 98765 43210", "43210"),
+                                         ("user_mobile: (+91) 98765 43210", "43210")])
 def test_environment_style_names_and_authorization_schemes_are_masked_whole(text, secret):
     out, n = teacher.redact(text)
     assert n >= 1 and secret not in out, out
@@ -441,4 +445,7 @@ def test_redaction_is_linear_on_an_unbroken_run():
     teacher.redact("a" * 200_000)
     teacher.redact("a.b" * 70_000)
     teacher.redact("x" * 100_000 + "@")
+    teacher.redact("x-" * 16_000)
+    teacher.redact("ab1-" * 8_000)
+    teacher.redact("a_" * 16_000 + "token=")
     assert time.time() - t0 < 3.0
