@@ -366,7 +366,8 @@ def parse(*argv):
 
 
 @pytest.mark.parametrize("extra", [["--allow-unverified"], ["--profile-end", "2020-01-01"], ["--symbols", "NIFTY"], ["--rtol", "1e-3"], ["--through", "study"],
-                                   ["--flip"], ["--readout", "final"], ["--source", "x"], ["--aeron", "x"]])
+                                   ["--flip"], ["--readout", "final"], ["--source", "x"], ["--aeron", "x"],
+                                   ["--days-only"], ["--today", "2026-10-28"], ["--journal", "j.db"], ["--sleeve", "vwap_trend"]])
 def test_the_command_takes_three_paths_and_nothing_else(extra, tmp_path):
     from quantdesk.cli import _ml_oneshot
     a = parse("--dataset", str(tmp_path), "--spec", str(SPEC), "--out", str(tmp_path / "o"), *extra)

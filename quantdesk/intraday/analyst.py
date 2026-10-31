@@ -173,6 +173,14 @@ class Analyst:
 
         # --- options positioning ---------------------------------------------------------------------
         c = chain or {}
+        if c.get("oi_quarantined"):                 # a faulty OI print withheld every OI read (chains.plausible_oi): count them as neutral evidence at their own weights, so a feed
+            #                                         fault can only dilute the score (a neutral vote adds weight and no direction), never raise conviction by dropping a disagreeing vote
+            obs = "OI feed fault: read withheld, counted as neutral"
+            add("pcr", "options", 0, obs)
+            add("oi_walls", "options", 0, obs)
+            add("oi_shift", "options", 0, obs)
+            if is_expiry_day and s["minutes"] > 180:
+                add("max_pain", "options", 0, obs)
         if c.get("pcr_oi") == c.get("pcr_oi") and c.get("pcr_oi") is not None and c.get("source") != "model":
             p = c["pcr_oi"]
             add("pcr", "options", np.clip((p - 1.0) / 0.4, -1, 1), f"PCR (OI) {p:.2f}"

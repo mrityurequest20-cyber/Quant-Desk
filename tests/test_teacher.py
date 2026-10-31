@@ -391,3 +391,102 @@ def test_the_default_reader_is_built_from_the_environment_and_the_configured_mod
     assert made["model"] == CFG.get("intraday.llm.claude.model") and len(fake.calls) == 1
     src = (ROOT / "quantdesk" / "intraday" / "teacher.py").read_text(encoding="utf-8")
     assert "claude-opus" not in src and "claude-sonnet" not in src          # the model name lives in the config only
+
+
+# ---- nothing that looks like a credential leaves the machine --------------------------------------------------------------
+@pytest.mark.parametrize("text", ["Authorization: Bearer abcDEF123456789xyz", "api_key=sk-ant-abcdef123456", "GET https://x/y?token=abc123&z=1",
+                                  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcd1234", "key AbC123dEf456GhI789jKl012MnO345pQr678StU9",
+                                  "mail me at a.b@example.com", "password: hunter2", "ucc=AB1234", "account no: 12345678", "mobile: 9876543210"])
+def test_credential_like_strings_are_masked(text):
+    out, n = teacher.redact(text)
+    assert n >= 1 and "[redacted]" in out
+    for secret in ("abcDEF123456789xyz", "sk-ant-abcdef123456", "abc123", "eyJzdWIi", "AbC123dEf456", "a.b@example.com", "hunter2", "AB1234", "12345678", "9876543210"):
+        assert secret not in out
+
+
+@pytest.mark.parametrize("text", ["+54700PE@506.30", "trade:I261012-0001-0cea", "pnl 2941.605976843998 R 0.32277810442249855", "NSE:NIFTY 25000 CE @ 120.5",
+                                  "decision:12 | 10:06 | orb NIFTY | rejected | outlay above max_total_outlay", "tokens per minute fell", "premium_target on BANKNIFTY27OCT2654700PE"])
+def test_ordinary_journal_text_is_untouched(text):
+    assert teacher.redact(text) == (text, 0)
+
+
+def test_a_credential_in_a_journal_row_never_reaches_the_reader_and_is_journaled_as_a_count(journal):
+    journal.event(f"{DAY} 12:30:00", "WARN", "broker", "login failed: Authorization: Bearer SUPERSECRETTOKEN123456 for user a.b@example.com")
+    journal.commit()
+    fake = FakeAnthropic(reply(lesson(evidence=["trade:T1"])))
+    got = teacher.teach(CFG, journal, DAY, reader=reader_for(fake), now=AFTER)
+    sent = fake.calls[0]["messages"][0]["content"]
+    assert got["status"] == "taught" and "SUPERSECRETTOKEN123456" not in sent and "a.b@example.com" not in sent and "[redacted]" in sent
+    assert any("credential-like string" in m for m in events(journal, "WARN")["message"])
+    assert not any("SUPERSECRET" in m or "a.b@example.com" in m for m in events(journal)["message"].astype(str))    # the teaching events hold a count, never the string
+
+
+def test_a_json_header_and_a_nested_token_in_a_journal_row_never_reach_the_reader(journal):
+    journal.event(f"{DAY} 12:31:00", "WARN", "broker", 'order refused: {"Authorization": "Basic dXNlcjpwYXNz"} response: {"access_token": "s3cr3tVALUE99"}')
+    journal.commit()
+    fake = FakeAnthropic(reply(lesson(evidence=["trade:T1"])))
+    got = teacher.teach(CFG, journal, DAY, reader=reader_for(fake), now=AFTER)
+    sent = fake.calls[0]["messages"][0]["content"]
+    assert got["status"] == "taught" and "dXNlcjpwYXNz" not in sent and "s3cr3tVALUE99" not in sent and "[redacted]" in sent
+
+
+@pytest.mark.parametrize("text,secret", [("KITE_ACCESS_TOKEN=abcDEF123456789xyzABC", "abcDEF123456789xyzABC"), ("KITE_API_KEY=k123456", "k123456"), ("KOTAK_CONSUMER_KEY=3f2504e0-4f89-11d3", "3f2504e0"),
+                                         ("client_secret=s3cr3t", "s3cr3t"), ("my_password=pw99", "pw99"), ("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI", "wJalrXUtnFEMI"),
+                                         ("Authorization: Token abc123", "abc123"), ("authorization: Bearer abcd", "abcd"), ('password="abc def"', "def"),
+                                         ("Authorization: token key123:access456", "access456"),
+                                         ("Authorization: Bearer abc123 password: hunter2", "hunter2"), ("authorization: Basic dXNlcjpwYXNz api_key=k99887766", "k99887766"),
+                                         ("authorization: Custom abc123 note", "abc123"),
+                                         ("mobile: +91 9876543210", "9876543210"), ("phone=+91-98765-43210", "43210"), ("Mobile : 98765 43210", "43210"),
+                                         ("user_mobile: (+91) 98765 43210", "43210"),
+                                         ('{"Authorization": "Basic dXNlcjpwYXNz"}', "dXNlcjpwYXNz"), ("{'authorization': 'Bearer abcd1234efgh'}", "abcd1234efgh"),
+                                         ('response: {"access_token": "s3cr3t"}', "s3cr3t"), ("response=[{'password': 'hunter22'}]", "hunter22"),
+                                         ("password: [abc]", "abc"), ("token: {x}", "{x}"), ("api_key=[1,2]", "1,2"), ('secret: {"k": "v"}', '"v"'), ("password: {p4ss}", "p4ss"),
+                                         ("password:{x}", "{x}"), ("secret = [ s3cr3t ]", "s3cr3t"), ("api_key= {secret}", "{secret}"),
+                                         ("Authorization: Digest username=bob, response=deadbeef0123", "deadbeef0123"),
+                                         ("Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE, Signature=abcdef0123456789", "abcdef0123456789"),
+                                         ('{"Authorization": "Basic abc", "api_key": "secret456"}', "secret456"),                 # a quoted label after the header is not swallowed
+                                         ('secret: {"parts": ["one"], "backup": "secret456"}', "secret456"),                      # a structure is masked to the end of its line
+                                         ('credential: ["s3cr3t"]', "s3cr3t"), ("signature: [abc]", "abc"), ("credential: {x}", "{x}"),
+                                         ("Bearer shortABC123", "shortABC123"), ("a.b@123broker.com", "123broker"),
+                                         ("alice@mail.123broker.com", "123broker"),                                               # a digit-leading label inside the domain
+                                         ('password: "correct horse battery staple', "battery staple"),                         # an unclosed quote masks the rest of its row
+                                         ("token: 'one two three", "two three")])
+
+def test_environment_style_names_and_authorization_schemes_are_masked_whole(text, secret):
+    out, n = teacher.redact(text)
+    assert n >= 1 and secret not in out, out
+
+@pytest.mark.parametrize("text", ["NIFTY24500CE@123.45 stop 98.25", "bearer market is thin", 'response: {"ok": true}', "response time 3 ms"])
+def test_prose_prices_and_response_bodies_stay_readable(text):
+    assert teacher.redact(text) == (text, 0)
+
+
+def test_an_unclosed_quote_does_not_eat_the_next_packet_rows():
+    out, n = teacher.redact('token: "value\n- trade:12 | exit invalidation: 98\n- trade:13 | note "x" done')
+    assert n == 1 and "value" not in out and "trade:12" in out and "trade:13" in out, out
+
+
+@pytest.mark.parametrize("text,kept", [("mobile: 9876543210 lots", "lots"), ("phone: 9876543210\n- trade:12 | x", "trade:12"), ("mobile: 9876543210\n12345 next", "12345 next")])
+def test_a_masked_phone_number_does_not_eat_the_next_field_or_line(text, kept):
+    out, n = teacher.redact(text)
+    assert n >= 1 and "9876543210" not in out and kept in out, out
+
+
+@pytest.mark.parametrize("text", ["basic structure intact", "Basic strategies worked", "basic breakouts failed", "orb rejected: premium_target not reached"])
+def test_ordinary_prose_with_basic_is_untouched(text):
+    assert teacher.redact(text) == (text, 0)
+
+
+def test_redaction_is_linear_on_an_unbroken_run():
+    import time
+    t0 = time.time()
+    teacher.redact("a" * 200_000)
+    teacher.redact("a.b" * 70_000)
+    teacher.redact("x" * 100_000 + "@")
+    teacher.redact("x-" * 16_000)
+    teacher.redact("ab1-" * 8_000)
+    teacher.redact("a_" * 16_000 + "token=")
+    teacher.redact("secret: [" * 20_000)
+    teacher.redact("@1" * 50_000)
+    teacher.redact("bearer " + "1" * 100_000)
+    assert time.time() - t0 < 3.0
