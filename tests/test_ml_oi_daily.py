@@ -165,3 +165,22 @@ def test_the_scheduled_workflow_is_read_only_and_keeps_counts_only():
     assert all("${{" not in s["run"] for s in steps if "run" in s)
     assert "gh release download" in text and "--dir tape" in text
     assert "--out runtime/ml_oi_daily" in text and "runtime/ml_oi " not in text                   # never the folder the read-out reads
+
+
+def test_a_local_run_without_out_gets_a_fresh_scratch_folder_each_time(tmp_path, monkeypatch):
+    """A morning-only run can leave tables whose input hashes the afternoon's tape then changes; a rerun into the same folder would refuse. So the default is a new
+    folder per run, under runtime/ml_oi_daily, and an explicit --out is used as given."""
+    from pathlib import Path
+
+    from quantdesk.cli import build_parser
+    seen = []
+    monkeypatch.setattr(OD, "grade_all", lambda source, out, today: seen.append(Path(out)) or {"ok": True})
+    cfg = type("Cfg", (), {"runtime_dir": tmp_path / "runtime"})()
+    tape = tmp_path / "tape"
+    tape.mkdir()
+    for argv in (["--source", str(tape), "--today", "2026-10-27"], ["--source", str(tape), "--today", "2026-10-27"],
+                 ["--source", str(tape), "--today", "2026-10-27", "--out", str(tmp_path / "given")]):
+        a = build_parser().parse_args(["ml", "oi-daily", *argv])
+        a.fn(cfg, a)
+    assert seen[0] != seen[1] and seen[0].parent == seen[1].parent == tmp_path / "runtime" / "ml_oi_daily"        # fresh each run, under the scratch parent
+    assert seen[2] == tmp_path / "given"                                                                        # an explicit --out is used as given

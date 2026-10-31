@@ -461,7 +461,7 @@ def last_completed_session_day():
 
 _ONESHOT_DEFAULTS = {"source": None, "version": "", "reviewed": None, "symbols": "NIFTY,BANKNIFTY", "profile_end": None, "allow_unverified": False,
                      "committed": None, "rtol": 1e-9, "through": "platform", "day": None, "readout": "interim", "aeron": None, "cache": None, "flip": False,
-                     "accept_gaps": "", "run": None}
+                     "accept_gaps": "", "run": None, "today": None, "days_only": False}
 
 
 def _ml_oneshot(a):
@@ -545,7 +545,14 @@ def _ml_oi(cfg, a):
             return
         if not a.source:
             raise SystemExit("ml oi-daily: --source (the tape folder) is required")
-        out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_oi_daily"          # never the folder the read-out reads
+        if a.out:
+            out = Path(a.out)
+        else:                                                                         # a fresh scratch folder per local run: a morning-only run must not leave tables whose input hashes the afternoon's tape then changes
+            import tempfile
+            base = Path(cfg.runtime_dir) / "ml_oi_daily"
+            B.refuse_tracked_tree(base, "ml oi-daily --out")
+            base.mkdir(parents=True, exist_ok=True)
+            out = Path(tempfile.mkdtemp(prefix="run_", dir=base))                      # never the folder the read-out reads
         B.refuse_tracked_tree(out, "ml oi-daily --out")
         if out.resolve() == (Path(cfg.runtime_dir) / "ml_oi").resolve():
             raise SystemExit("ml oi-daily: --out is the folder the read-out reads (runtime/ml_oi); its scratch tables must not go there")
