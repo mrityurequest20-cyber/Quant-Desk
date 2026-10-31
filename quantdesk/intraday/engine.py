@@ -345,7 +345,6 @@ class IntradayEngine:
         now = self.feed.now()
         self._commands(now)
         self._kill_switch(now)
-        self._fill_recorder_gaps(now)                      # after the commands and the kill switch: its history calls have no timeout, so a slow one must not delay them
         got = False
         for sym in self.underlyings + [self.vix]:
             new = self.feed.poll(sym, self.last_ts.get(sym))
@@ -372,6 +371,7 @@ class IntradayEngine:
         self._gov_safe(self._gov_step, now)
         if not got:
             self._wallclock_exits(now)                    # no new bar is no reason to hold a position past the square-off
+            self._fill_recorder_gaps(now)                 # last: its history calls have no timeout, so a slow one must not delay an exit, a command or the kill switch
             return False
         early, tried, fails = self._manage_first(now)          # exits before the optional network refreshes (P2-2)
         try:
@@ -387,6 +387,7 @@ class IntradayEngine:
         self._persist()
         self._heartbeat(now)
         self.journal.commit()
+        self._fill_recorder_gaps(now)                          # last (see above): after the exits, the persist and the heartbeat
         if fails:                                              # the step finished for everyone else; run_step still counts it
             raise fails[0]
         return True
@@ -489,7 +490,6 @@ class IntradayEngine:
         return self._close(t, now, *t.meta["exit_pending"])
 
     def end_session(self, reason: str = "square_off", note: str = "end of session") -> str:
-        self._fill_recorder_gaps(self.feed.now(), force=True)
         now = self.feed.now()
         for u in {t.symbol for t in self.open_trades} - set(self.chain_df):
             self._refresh_chain(u, now)                 # exits priced off a calibrated chain, never a default IV
@@ -511,6 +511,7 @@ class IntradayEngine:
         if self.review_dir:
             self.review_dir.mkdir(parents=True, exist_ok=True)
             (self.review_dir / f"{self.day}.md").write_text(review, encoding="utf-8")
+        self._fill_recorder_gaps(self.feed.now(), force=True)   # the close, last: the positions are shut and the session saved before any history call with no timeout
         return review
 
     # ---- data -------------------------------------------------------------------------------------------
