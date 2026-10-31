@@ -428,10 +428,18 @@ def test_a_credential_in_a_journal_row_never_reaches_the_reader_and_is_journaled
                                          ("Authorization: Bearer abc123 password: hunter2", "hunter2"), ("authorization: Basic dXNlcjpwYXNz api_key=k99887766", "k99887766"),
                                          ("authorization: Custom abc123 note", "abc123"),
                                          ("mobile: +91 9876543210", "9876543210"), ("phone=+91-98765-43210", "43210"), ("Mobile : 98765 43210", "43210"),
-                                         ("user_mobile: (+91) 98765 43210", "43210")])
+                                         ("user_mobile: (+91) 98765 43210", "43210"),
+                                         ("Authorization: Digest username=bob, response=deadbeef0123", "deadbeef0123"),
+                                         ("Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE, Signature=abcdef0123456789", "abcdef0123456789")])
+
 def test_environment_style_names_and_authorization_schemes_are_masked_whole(text, secret):
     out, n = teacher.redact(text)
     assert n >= 1 and secret not in out, out
+
+@pytest.mark.parametrize("text,kept", [("mobile: 9876543210 lots", "lots"), ("phone: 9876543210\n- trade:12 | x", "trade:12"), ("mobile: 9876543210\n12345 next", "12345 next")])
+def test_a_masked_phone_number_does_not_eat_the_next_field_or_line(text, kept):
+    out, n = teacher.redact(text)
+    assert n >= 1 and "9876543210" not in out and kept in out, out
 
 
 @pytest.mark.parametrize("text", ["basic structure intact", "Basic strategies worked", "basic breakouts failed", "orb rejected: premium_target not reached"])
