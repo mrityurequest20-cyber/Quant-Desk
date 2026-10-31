@@ -299,10 +299,12 @@ def run_dataset(dataset: Path, out: Path, symbols: list[str] | None = None, stop
                   {"path": str(dataset), "digest": _digest(dataset), "use": "underlying_features"})
 
 
-def run_stocks(stock_dir: Path, out: Path, symbols: list[str] | None = None, stop_atr: float = STOP_ATR, say=print) -> dict:
+def run_stocks(stock_dir: Path, out: Path, symbols: list[str] | None = None, stop_atr: float = STOP_ATR,
+               first: str | None = None, last: str | None = None, say=print) -> dict:
     out = Path(out).resolve()
     _check_out(out)
+    first, last = normalize_first(first), normalize_first(last)          # one spelling for the string comparisons in build; a bad date raises
     bars = load_stock_bars(Path(stock_dir))
     syms = [s for s in (symbols or sorted(bars)) if s in bars and not s.startswith("INDIA")]
-    df = build(bars, syms, "stock", stop_atr, seal=False, say=say)
-    return _write(out, df, {"stop_atr": stop_atr, "symbols": syms}, {"path": str(stock_dir), "use": "stock minutes (release)"})
+    df = build(bars, syms, "stock", stop_atr, first, last, seal=False, say=say)
+    return _write(out, df, {"stop_atr": stop_atr, "first": first, "last": last, "symbols": syms}, {"path": str(stock_dir), "use": "stock minutes (release)"})

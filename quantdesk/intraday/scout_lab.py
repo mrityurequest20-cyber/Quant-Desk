@@ -320,13 +320,14 @@ def run_dataset_lab(dataset, out, symbols=None, first=None, last=None, grid_dir=
                    grid, mining, say, prior_cells=prior_cells, **mine_kw)
 
 
-def run_stocks_lab(stock_dir, out, symbols=None, say=print) -> dict:
+def run_stocks_lab(stock_dir, out, symbols=None, first=None, last=None, say=print) -> dict:
     from pathlib import Path
-    from .scout import _check_out
+    from .scout import _check_out, normalize_first
     from .shadowlab import load_stock_bars
     out = Path(out).resolve()
     _check_out(out)
+    first, last = normalize_first(first), normalize_first(last)
     bars = load_stock_bars(Path(stock_dir))
     syms = [s for s in (symbols or sorted(bars)) if s in bars and not s.startswith("INDIA")]
-    trades = build_trades(bars, syms, "stock", seal=False, say=say)
-    return _finish(out, trades, {"symbols": syms}, {"path": str(stock_dir), "use": "stock minutes (release)"}, None, False, say)
+    trades = build_trades(bars, syms, "stock", first, last, seal=False, say=say)
+    return _finish(out, trades, {"first": first, "last": last, "symbols": syms}, {"path": str(stock_dir), "use": "stock minutes (release)"}, None, False, say)

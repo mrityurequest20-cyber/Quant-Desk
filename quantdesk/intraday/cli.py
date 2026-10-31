@@ -512,7 +512,7 @@ def cmd_scout(cfg, a):
     try:
         syms = [x.strip() for x in a.symbols.split(",") if x.strip()] if a.symbols else None
         if a.stocks:
-            scout.run_stocks(Path(a.stocks), Path(a.out), syms, a.stop_atr)
+            scout.run_stocks(Path(a.stocks), Path(a.out), syms, a.stop_atr, a.first, a.last)
         else:
             scout.run_dataset(Path(a.dataset), Path(a.out), syms, a.stop_atr, a.first, a.last)
         j = _scout_journal(cfg, a)
@@ -534,7 +534,7 @@ def cmd_scout_lab(cfg, a):
     try:
         syms = [x.strip() for x in a.symbols.split(",") if x.strip()] if a.symbols else None
         if a.stocks:
-            scout_lab.run_stocks_lab(Path(a.stocks), Path(a.out), syms)
+            scout_lab.run_stocks_lab(Path(a.stocks), Path(a.out), syms, a.first, a.last)
         else:
             j0 = _scout_journal(cfg, a)
             prior = 0                                                                    # the cells of every earlier recorded run: a second Bonferroni family

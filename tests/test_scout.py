@@ -267,3 +267,24 @@ def test_standard_errors_are_clustered_by_day_so_two_indices_of_one_day_are_one_
                        "reach_3": [bool(i % 3 == 0) for i in range(50)] * 2})
     r = R.rate(df, "reach_3")
     assert r["sessions"] == 50 and r["n"] == 100                # 50 clusters (days), not 100 (symbol and day)
+
+
+def _stock_dir(tmp_path, days):
+    d = tmp_path / "stocks"
+    d.mkdir()
+    frames = [day_frame(x).rename_axis("ts").reset_index().assign(symbol="ABC") for x in days]
+    df = pd.concat(frames, ignore_index=True)
+    df["ts"] = df["ts"].dt.tz_convert("UTC")
+    df.to_parquet(d / "2026_stocks_cash.parquet")
+    return d
+
+
+def test_a_stock_run_honours_the_requested_window_in_either_date_spelling(tmp_path):
+    d = _stock_dir(tmp_path, ["2026-01-01", "2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07"])
+    C.run_stocks(d, tmp_path / "out_all", None, say=lambda *_: None)
+    assert sorted(pd.read_parquet(tmp_path / "out_all" / "scout_candidates.parquet")["day"].unique()) == [dt.date(2026, 1, x) for x in (2, 5, 6, 7)]
+    m = C.run_stocks(d, tmp_path / "out_win", None, C.STOP_ATR, "20260105", "2026-01-06", say=lambda *_: None)     # compact and dashed spellings
+    assert sorted(pd.read_parquet(tmp_path / "out_win" / "scout_candidates.parquet")["day"].unique()) == [dt.date(2026, 1, 5), dt.date(2026, 1, 6)]
+    assert m is not None
+    with pytest.raises(ValueError):
+        C.run_stocks(d, tmp_path / "out_bad", None, C.STOP_ATR, "not-a-date", None, say=lambda *_: None)

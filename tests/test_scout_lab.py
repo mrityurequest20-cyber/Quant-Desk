@@ -244,3 +244,19 @@ def test_the_null_says_what_it_tests_and_how_coarse_it_is():
     df = pd.DataFrame({"day": [days[i % 1500].date() for i in range(n)], "symbol": "X", "kind": "index", "f1": rng.uniform(0, 1, n), "r": rng.normal(size=n)})
     res = D.mine(df, col="r", features=["f1"], n_trials=300, n_null=3, min_support=200, top_k=3, say=lambda *_: None)
     assert res["p_resolution"] == pytest.approx(0.25) and "within-session" in res["null_note"] and "NOT a p-value" in res["null_note"]
+
+
+def test_a_stock_lab_run_forwards_the_requested_window_in_one_spelling(tmp_path, monkeypatch):
+    from tests.test_scout import _stock_dir
+    seen = {}
+
+    def fake_build_trades(bars, syms, kind, first=None, last=None, *a, **k):
+        seen.update(first=first, last=last, kind=kind)
+        raise C.Refused("stop here")                                                       # the window is all this test needs to see
+    monkeypatch.setattr(L, "build_trades", fake_build_trades)
+    d = _stock_dir(tmp_path, ["2026-01-01", "2026-01-02", "2026-01-05"])
+    with pytest.raises(C.Refused, match="stop here"):
+        L.run_stocks_lab(d, tmp_path / "lab", None, "20260105", "2026-01-06", say=lambda *_: None)
+    assert seen == {"first": "2026-01-05", "last": "2026-01-06", "kind": "stock"}
+    with pytest.raises(ValueError):
+        L.run_stocks_lab(d, tmp_path / "lab2", None, "not-a-date", None, say=lambda *_: None)
