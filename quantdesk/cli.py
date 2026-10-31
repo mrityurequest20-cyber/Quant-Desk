@@ -465,7 +465,7 @@ def last_completed_session_day():
 
 _ONESHOT_DEFAULTS = {"source": None, "version": "", "reviewed": None, "symbols": "NIFTY,BANKNIFTY", "profile_end": None, "allow_unverified": False,
                      "committed": None, "rtol": 1e-9, "through": "platform", "day": None, "readout": "interim", "aeron": None, "cache": None, "flip": False,
-                     "accept_gaps": "", "run": None, "today": None, "days_only": False}
+                     "accept_gaps": "", "run": None, "today": None, "days_only": False, "journal": None, "sleeve": None}
 
 
 def _ml_oneshot(a):
