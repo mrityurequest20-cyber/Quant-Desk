@@ -104,9 +104,11 @@ in the market, and makes its own. So the scout has three parts (PR #159):
    each session (the null). New strategies are made this way, not written by hand.
 
 Guards against fooling ourselves: R capped at 10 before any average; the median and the share of profit from the best 1% of trades shown;
-a Bonferroni bar over strategy x policy cells; the null for the miner; the sealed sessions (2023 on) refused by the code.
+a Bonferroni bar over strategy x policy cells (given for this run's cells and, beside it, for this run plus every earlier recorded run's); the null for the miner;
+the sealed sessions (2023 on) **refused** by the code (an index run must name a last day (`--to`) before 2023-01-01; it is not silently shortened, and a grid file or a
+read-out that holds sealed days is refused too). Standard errors are clustered by **day**, because NIFTY and BANKNIFTY of one day are one market.
 
-**The journal.** Everything the scout does goes into one tamper-evident, append-only log (`scout-log`, `quantdesk/intraday/scoutlog.py`, on the
+**The journal.** Everything the scout does goes into one accident-evident, append-only log (hash-chained: an edit or deletion in the middle is found by `scout-log verify`; a cut tail or a rewrite that recomputes the hashes is not, and the time and author are self-asserted, so the head hash that every entry prints is copied outside the file before any claim rests on it) (`scout-log`, `quantdesk/intraday/scoutlog.py`, on the
 desk's own `ChainLog`): every run with its parameters, code commit and data digest; every observation with its numbers and caveats; every
 hypothesis with a status that later entries move on (never edit, always append); every decision and plan. It keeps a **running total of
 everything tried**, because a claim made in December must be judged against all of it, not the last run. Entries hold aggregates and
@@ -123,3 +125,25 @@ daily stock minutes) and the sealed sessions give the one confirmatory test, pre
 - Source minutes used offline are third party (`external_unverified`): the result is a research candidate, never evidence for a
   gate, a promotion or a profit claim. Only recorded real-quote sessions may support an option-P&L statement.
 - A failed or inconclusive scout is a result: it is reported as such and the desk stays as it is.
+
+## 5c. What the scout does not know (disclosed limits, 31 Oct 2026)
+
+- **It is the exploratory step, not S1.** Section 5's S1 (a pre-registered spec, committed alone) is still ahead of any claim. Nothing the scout prints is confirmatory: its
+  tables, cells and mined rules are hypotheses, and the confirmatory test is one pre-registered read on the sealed index sessions and forward stock days (December),
+  judged against everything the journal says was tried (cells, mined rules, null searches and read-out looks).
+- **The later-years slice is spent.** 2021-2022 is looked at by the leaderboard, the miner and the read-out tables in turn, so it stops being a holdout after the first look.
+  The sealed 2023-on sessions are the holdout, and the code refuses them.
+- **Cost.** Section 4's break-even uses c about 0.013R (the desk's measured fee per trade against the money risked on an option). The scout instead charges a flat
+  **0.05R, assumed, not measured**, on underlying R: a real option cost per R varies with the stop distance. The two are different in kind and neither is measured on this data (neither includes a measured spread or slippage), so which is larger is not known. A "net R" column
+  counts every trade that does not reach k as a full -1R, so it is a lower bound (trades that end at the close are marked above -1R in the lab's fixed-exit columns).
+- **R cap.** R is capped at 10 before any average. That clips winners only (conservative for a mean, but it works against the right tail the scout is looking for), so
+  the median and the best-1% share are shown beside it.
+- **Fills.** Stops fill at their level with no gap risk; entries are at the next minute's open with no latency. The first minute of a session is required: a session without
+  it is left out, never filled from a later close.
+- **The 20 strategies were written by hand after the first any-minute run had been read.** Their constants (stop floor and cap, cooldown, thresholds) were not chosen
+  blind, so the family they come from is larger than the 20 cells counted. The cell count understates the real number of choices.
+- **The miner's null** shifts outcomes inside each session. It therefore tests within-session information only; day-level features (gap, opening-range width, weekday)
+  stay tied to the session's outcomes in the shifted data, so for a rule built on them the null is conservative and its share is not a p-value. With n null searches the
+  smallest share is 1/(n+1).
+- **Stocks.** The stock set is the release's currently liquid F&O names over a few recent sessions: a liquidity (and so survivorship) selection, descriptive only, with the
+  same assumed cost.
