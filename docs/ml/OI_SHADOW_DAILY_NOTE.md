@@ -24,7 +24,7 @@ The owner listed "daily ml oi grading job" among the parked items on 24 Oct 2026
 with no connection, "Take any decision you want. Don't wait for me." This job is that item. The owner has not been shown the wording difference above individually: the
 risk-compliance review of the exact head found no change to anything the spec registers as the test and asked that this record exist before merge.
 
-**To undo it:** delete `.github/workflows/oi-daily.yml` (the `ml oi-daily` command can stay). Nothing else depends on it.
+**To undo it:** delete `.github/workflows/oi-daily.yml` and, in `tests/test_ml_oi_daily.py`, delete `test_the_scheduled_workflow_is_read_only_and_keeps_counts_only` (it reads that file and would fail on a missing one). The `ml oi-daily` command can stay. Nothing else depends on it.
 
 ## For the owner, later
 
