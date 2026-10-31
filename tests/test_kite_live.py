@@ -454,7 +454,7 @@ def test_the_token_workflow_writes_one_encrypted_file_to_one_branch_and_nothing_
     holders = [s["name"] for s in steps if "GH_TOKEN" in json.dumps(s.get("env", {}))]
     assert holders == ["Store it on the kite-token branch"] and text.count("github.token") == 1       # only the push step holds it: not the workflow, not the job
     assert "GH_TOKEN" not in json.dumps(wf.get("env", {})) and all("GH_TOKEN" not in json.dumps(j.get("env", {})) for j in wf["jobs"].values())
-    assert "::add-mask::$auth" in text and text.count("http.extraheader") == 2                   # the header is masked and used for the fetch and the push only
+    assert "::add-mask::$auth" in text and text.count("http.https://github.com/.extraheader") == 2 and text.count("extraheader") == 2   # the header is masked, scoped to github.com (it cannot follow a changed remote), and used for the fetch and the push only
     assert "openssl enc -aes-256-cbc" in text and "cp \"$RUNNER_TEMP/kite_token.enc\" kite_token.enc" in text and "git add kite_token.enc" in text
 
 
