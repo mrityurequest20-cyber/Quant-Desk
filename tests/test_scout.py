@@ -206,6 +206,33 @@ def test_a_compact_last_day_runs_and_the_manifest_holds_the_normal_spelling(tmp_
     assert a["rows"] == b["rows"] > 0 and a["last"] == b["last"] and a["params"]["last"] == "2022-12-31"
 
 
+def test_the_vix_line_never_carries_a_later_value_back_to_an_earlier_minute():
+    day = day_frame("2026-01-02")
+    late = pd.Series([20.0, 21.0, 22.0], index=pd.date_range("2026-01-02 09:45", periods=3, freq="1min", tz=IST))          # the first VIX bar is at minute 30
+    early = pd.Series([18.0], index=pd.DatetimeIndex(["2026-01-01 15:29"], tz=IST))
+    line, prev = C.vix_line(pd.concat([early, late]), day, PRIOR)
+    assert prev == 18.0 and (line[:30] == 18.0).all() and line[30] == 20.0 and line[33] == 22.0                           # before the first bar: the last value known before the session
+    line, prev = C.vix_line(late, day, PRIOR)
+    assert np.isnan(prev) and np.isnan(line[:30]).all() and line[30] == 20.0                                                # nothing known before: NaN, not 20.0 from the future
+
+
+def test_the_window_start_is_one_spelling_and_a_bad_one_raises():
+    assert C.normalize_first("20200315") == "2020-03-15" and C.normalize_first("2020-03-15") == "2020-03-15" and C.normalize_first(None) is None and C.normalize_first("") is None
+    with pytest.raises(ValueError):
+        C.normalize_first("2020-13-45")
+
+
+def test_a_compact_first_day_keeps_the_year_instead_of_dropping_it(tmp_path, monkeypatch):
+    from quantdesk.intraday.synthetic import simulate_sessions
+    days = [d.date() for d in pd.bdate_range("2022-11-01", "2023-02-28")]
+    bars, _ = simulate_sessions(days, seed=3)
+    monkeypatch.setattr(C, "_load_bars", lambda *a, **k: {s: bars[s] for s in bars})
+    monkeypatch.setattr(C, "_digest", lambda *a, **k: "x")
+    a = C.run_dataset(tmp_path / "ds", tmp_path / "a", ["NIFTY", "BANKNIFTY"], first="20221115", last="2022-12-31", say=lambda *_: None)
+    b = C.run_dataset(tmp_path / "ds", tmp_path / "b", ["NIFTY", "BANKNIFTY"], first="2022-11-15", last="2022-12-31", say=lambda *_: None)
+    assert a["rows"] == b["rows"] > 0 and a["first"] == b["first"] and a["params"]["first"] == "2022-11-15"
+
+
 def test_assert_open_refuses_a_table_with_sealed_index_days_but_not_a_stock_table():
     sealed = pd.DataFrame({"day": [dt.date(2022, 12, 30), dt.date(2023, 1, 2)], "kind": ["index", "index"]})
     with pytest.raises(C.Refused, match="sealed"):

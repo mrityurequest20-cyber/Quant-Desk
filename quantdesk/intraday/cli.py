@@ -463,9 +463,12 @@ def cmd_scout_log(cfg, a):
     j = _scout_journal(cfg, a)
     if a.action == "verify":
         bad = j.verify()
+        if bad:                                                       # the damage is reported first: head() reads every line and a torn one would raise before this printed
+            print("\n".join(bad))
+            sys.exit(1)
         h = j.head()
-        print("\n".join(bad) if bad else f"{j.path}: intact ({len(j.entries())} entries); head #{h['seq']} {h['hash']}")
-        sys.exit(1 if bad else 0)
+        print(f"{j.path}: intact ({len(j.entries())} entries); head #{h['seq']} {h['hash']}")
+        sys.exit(0)
     if a.action == "summary":
         text = j.summary()
         if a.out:

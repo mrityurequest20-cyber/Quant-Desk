@@ -56,6 +56,11 @@ def require_open_window(last: str | None) -> str:
     return day.isoformat()
 
 
+def normalize_first(first: str | None) -> str | None:
+    """The window start as YYYY-MM-DD (the string comparisons in build need one spelling: "2020-03-20" < "20200315" is True); an invalid date raises."""
+    return None if first in (None, "") else dt.date.fromisoformat(str(first)).isoformat()
+
+
 def assert_open(df: pd.DataFrame, what: str) -> None:
     """Refuse a table that holds index sessions from SEAL_FROM (a grid file made elsewhere, or by an older run)."""
     if df is None or not len(df) or "day" not in df.columns:
@@ -182,7 +187,10 @@ def vix_line(vix: pd.Series | None, day: pd.DataFrame, prior: pd.DataFrame):
     ok = (mod >= 0) & (mod < N_MIN)
     vx = np.full(N_MIN, np.nan)
     vx[mod[ok]] = today.to_numpy(dtype=float)[ok]
-    return pd.Series(vx).ffill().bfill().to_numpy(), float(before.iloc[-1]) if len(before) else np.nan
+    prev = float(before.iloc[-1]) if len(before) else np.nan
+    line = pd.Series(vx).ffill().to_numpy()
+    line = np.where(np.isnan(line), prev, line)          # before the first VIX minute of the session: the last value known before it, never a later one (NaN if there is none)
+    return line, prev
 
 
 def session_candidates(day: pd.DataFrame, prior: pd.DataFrame | None, symbol: str, stop_atr: float = STOP_ATR,
@@ -280,6 +288,7 @@ def run_dataset(dataset: Path, out: Path, symbols: list[str] | None = None, stop
     out = Path(out).resolve()
     _check_out(out)
     last = require_open_window(last)                # refused, not shortened: see require_open_window
+    first = normalize_first(first)
     symbols = list(symbols or INDEX_SYMBOLS)
     bars = _load_bars(dataset, symbols, None)
     for s in bars:                                  # and, as a second belt, the sealed bars are dropped before any computation

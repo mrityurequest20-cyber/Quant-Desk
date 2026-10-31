@@ -302,11 +302,12 @@ def _finish(out, trades: pd.DataFrame, params: dict, source: dict, grid: pd.Data
 def run_dataset_lab(dataset, out, symbols=None, first=None, last=None, grid_dir=None, mining: bool = True, say=print, prior_cells: int = 0, **mine_kw) -> dict:
     """The library over the index dataset's OPEN sessions (the sealed ones are dropped on load), then the leaderboard and the miner."""
     from pathlib import Path
-    from .scout import INDEX_SYMBOLS, _check_out, assert_open, require_open_window
+    from .scout import INDEX_SYMBOLS, _check_out, assert_open, normalize_first, require_open_window
     from .shadowlab import _digest, _load_bars
     out = Path(out).resolve()
     _check_out(out)
     last = require_open_window(last)                # refused, not shortened
+    first = normalize_first(first)
     symbols = list(symbols or INDEX_SYMBOLS)
     bars = _load_bars(dataset, symbols, None)
     for s in bars:

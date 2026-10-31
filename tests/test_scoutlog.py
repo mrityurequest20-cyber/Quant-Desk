@@ -217,3 +217,15 @@ def test_the_lab_counts_earlier_cells_only_from_a_verified_journal_and_says_when
     jp.write_text(lines[0].replace("140", "1", 1) + "\n" + lines[1] + "\n")                # a broken chain is refused, not trusted
     with pytest.raises(SystemExit, match="chain is broken"):
         lab("--journal", str(jp))
+
+
+def test_a_torn_line_is_reported_by_verify_and_summary_instead_of_raising(tmp_path):
+    j = J.ScoutJournal(tmp_path / "j.jsonl")
+    j.add("note", "a")
+    with open(tmp_path / "j.jsonl", "a") as f:
+        f.write('{"seq": 2, "kind": "no')                                                                                  # a write cut off half way
+    assert any("JSON" in p for p in j.verify())
+    text = j.summary()
+    assert "CHAIN BROKEN" in text.splitlines()[2] and "cannot be computed" in text
+    r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout-log", "verify", "--journal", str(tmp_path / "j.jsonl")], capture_output=True, text=True, cwd=REPO)
+    assert r.returncode == 1 and "Traceback" not in r.stderr and "JSON" in r.stdout

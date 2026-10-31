@@ -102,11 +102,15 @@ class ScoutJournal:
                 for r in self.entries("hypothesis")]
 
     def summary(self) -> str:
-        rows = self.log.read()
-        t = self.trials()
-        hy = self.hypotheses()
         problems = self.verify()
-        h = self.head()
+        try:
+            rows = self.log.read()
+            t = self.trials()
+            hy = self.hypotheses()
+            h = self.head()
+        except ValueError:                                           # a torn line: the totals cannot be computed, and the notice must still be the answer
+            return (f"# Scout journal ({self.path.name}): unreadable\n\n**CHAIN BROKEN: the totals cannot be computed.** {len(problems)} problem(s): "
+                    + "; ".join(problems[:3]) + "\n")
         L = [f"# Scout journal ({self.path.name}): {len(rows)} entries", ""]
         if problems:
             L += [f"**CHAIN BROKEN: the totals below cannot be trusted.** {len(problems)} problem(s): " + "; ".join(problems[:3]), ""]
