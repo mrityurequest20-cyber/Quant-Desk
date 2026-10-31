@@ -443,11 +443,25 @@ def test_a_json_header_and_a_nested_token_in_a_journal_row_never_reach_the_reade
                                          ("password: [abc]", "abc"), ("token: {x}", "{x}"), ("api_key=[1,2]", "1,2"), ('secret: {"k": "v"}', '"v"'), ("password: {p4ss}", "p4ss"),
                                          ("password:{x}", "{x}"), ("secret = [ s3cr3t ]", "s3cr3t"), ("api_key= {secret}", "{secret}"),
                                          ("Authorization: Digest username=bob, response=deadbeef0123", "deadbeef0123"),
-                                         ("Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE, Signature=abcdef0123456789", "abcdef0123456789")])
+                                         ("Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE, Signature=abcdef0123456789", "abcdef0123456789"),
+                                         ('{"Authorization": "Basic abc", "api_key": "secret456"}', "secret456"),                 # a quoted label after the header is not swallowed
+                                         ('secret: {"parts": ["one"], "backup": "secret456"}', "secret456"),                      # a structure is masked to the end of its line
+                                         ('credential: ["s3cr3t"]', "s3cr3t"), ("signature: [abc]", "abc"), ("credential: {x}", "{x}"),
+                                         ("Bearer shortABC123", "shortABC123"), ("a.b@123broker.com", "123broker")])
 
 def test_environment_style_names_and_authorization_schemes_are_masked_whole(text, secret):
     out, n = teacher.redact(text)
     assert n >= 1 and secret not in out, out
+
+@pytest.mark.parametrize("text", ["NIFTY24500CE@123.45 stop 98.25", "bearer market is thin", 'response: {"ok": true}', "response time 3 ms"])
+def test_prose_prices_and_response_bodies_stay_readable(text):
+    assert teacher.redact(text) == (text, 0)
+
+
+def test_an_unclosed_quote_does_not_eat_the_next_packet_rows():
+    out, n = teacher.redact('token: "value\n- trade:12 | exit invalidation: 98\n- trade:13 | note "x" done')
+    assert n == 1 and "value" not in out and "trade:12" in out and "trade:13" in out, out
+
 
 @pytest.mark.parametrize("text,kept", [("mobile: 9876543210 lots", "lots"), ("phone: 9876543210\n- trade:12 | x", "trade:12"), ("mobile: 9876543210\n12345 next", "12345 next")])
 def test_a_masked_phone_number_does_not_eat_the_next_field_or_line(text, kept):
@@ -469,4 +483,7 @@ def test_redaction_is_linear_on_an_unbroken_run():
     teacher.redact("x-" * 16_000)
     teacher.redact("ab1-" * 8_000)
     teacher.redact("a_" * 16_000 + "token=")
+    teacher.redact("secret: [" * 20_000)
+    teacher.redact("@1" * 50_000)
+    teacher.redact("bearer " + "1" * 100_000)
     assert time.time() - t0 < 3.0

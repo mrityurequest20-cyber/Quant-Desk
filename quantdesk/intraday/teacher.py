@@ -90,16 +90,16 @@ def _clip(x, n: int) -> str:
 
 
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)\bauthorization[\"']?\s*[:=]\s*[\"']?(?:(?:bearer|basic|token|digest|negotiate)\s+)?\S+(?:\s+(?![A-Za-z0-9_-]+\s*[:=])\S+)?"),     # an Authorization header, with or without a scheme word; a following "label:" is NOT swallowed (it is masked on its own)
+    re.compile(r"(?i)\bauthorization[\"']?\s*[:=]\s*[\"']?(?:(?:bearer|basic|token|digest|negotiate)\s+)?\S+(?:\s+(?![\"']?[A-Za-z0-9_-]+[\"']?\s*[:=])\S+)?"),     # an Authorization header, with or without a scheme word; a following "label:" (quoted or not) is NOT swallowed (it is masked on its own)
     re.compile(r"(?i)(?<![A-Za-z0-9])(?:[a-z0-9]+[_-]){0,8}(?:mobile|phone)\b\W{0,3}[:=][ \t]*[(+]*\d[\d \t().-]{6,}"),                  # a labelled phone number, country code and separators included
-    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"),                                                               # a bearer token on its own
+    re.compile(r"(?i)\bbearer\s+(?:[A-Za-z0-9._~+/=-]{16,}|(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{6,})"),          # a bearer token on its own; a short one needs a digit (so "bearer market" is left alone)
     re.compile(r"(?i)(?<![A-Za-z0-9])(?:[a-z0-9]+[_-]){0,8}(?:api[ _-]?key|apikey|secret(?:[ _-]?(?:key|access[ _-]?key))?|password|passwd|pwd|access[ _-]?token|refresh[ _-]?token|token|mpin|totp|otp"
-               r"|consumer[ _-]?(?:key|secret)|session[ _-]?id|ucc|pan|aadhaar|mobile|phone|user[ _-]?id|client[ _-]?id|account[ _-]?(?:no|number|id))\b(\W{0,3})([:=])\s*(?:\"[^\"]*\"|'[^']*'|[{\[][^\]}\n]*[\]}]?|\S+)"),
-    re.compile(r"(?i)(?<![A-Za-z0-9])(?:[a-z0-9]+[_-]){0,8}(?:credential|signature|response)\b(\W{0,3})([:=])\s*(?![{\[])(?:\"[^\"]*\"|'[^']*'|\S+)"),   # a value that opens a structure is not the secret: its nested labels are masked on their own
+               r"|consumer[ _-]?(?:key|secret)|session[ _-]?id|ucc|pan|aadhaar|mobile|phone|user[ _-]?id|client[ _-]?id|account[ _-]?(?:no|number|id)|credential|signature)\b(\W{0,3})([:=])\s*(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[{\[][^\n]*|\S+)"),   # a value that opens a structure is masked to the end of the line (a regex cannot match balanced nesting); an unclosed quote stops at the line end
+    re.compile(r"(?i)(?<![A-Za-z0-9])(?:[a-z0-9]+[_-]){0,8}response\b(\W{0,3})([:=])\s*(?![{\[])(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"),   # a response body that opens a structure is kept readable: the labels inside it are masked on their own
     re.compile(r"(?i)([?&](?:key|apikey|api_key|token|access_token|sig|signature|secret|password|auth|x-amz-signature|x-amz-credential)=)[^&\s]+"),     # a credential in a URL query
     re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"),                                      # a JSON web token
     re.compile(r"(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{40,}(?![A-Za-z0-9_-])"),   # a long mixed token (journal ids are shorter)
-    re.compile(r"(?<![\w.+-])[\w.+-]{1,64}@(?!\d)[A-Za-z][\w-]*\.[A-Za-z][\w.]+"),                                      # an e-mail address (not strike@price); anchored and bounded, so linear in the text
+    re.compile(r"(?<![\w.+-])[\w.+-]{1,64}@(?=[\w-]*[A-Za-z])[A-Za-z0-9][\w-]*\.[A-Za-z][\w.]+"),                       # an e-mail address (not strike@price, not CE@123.45: the first label needs a letter); anchored and bounded, so linear in the text
 )
 
 
