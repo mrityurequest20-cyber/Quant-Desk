@@ -167,20 +167,34 @@ def test_the_scheduled_workflow_is_read_only_and_keeps_counts_only():
     assert "--out runtime/ml_oi_daily" in text and "runtime/ml_oi " not in text                   # never the folder the read-out reads
 
 
-def test_a_local_run_without_out_gets_a_fresh_scratch_folder_each_time(tmp_path, monkeypatch):
-    """A morning-only run can leave tables whose input hashes the afternoon's tape then changes; a rerun into the same folder would refuse. So the default is a new
-    folder per run, under runtime/ml_oi_daily, and an explicit --out is used as given."""
+def test_a_local_run_without_out_gets_a_fresh_scratch_folder_that_is_removed_and_a_given_out_is_kept(tmp_path, monkeypatch):
+    """A morning-only run can leave tables whose input hashes the afternoon's tape then changes, so the default is a new folder per run, under runtime/ml_oi_daily;
+    the scratch tables are throwaway, so it is removed afterwards (also when the run fails). An explicit --out (what the workflow passes) is used as given and kept."""
     from pathlib import Path
 
     from quantdesk.cli import build_parser
-    seen = []
-    monkeypatch.setattr(OD, "grade_all", lambda source, out, today: seen.append(Path(out)) or {"ok": True})
+    seen, ok = [], {"v": True}
+
+    def fake(source, out, today):
+        Path(out).mkdir(parents=True, exist_ok=True)
+        (Path(out) / "table.parquet").write_text("x")
+        seen.append(Path(out))
+        return {"ok": ok["v"]}
+    monkeypatch.setattr(OD, "grade_all", fake)
     cfg = type("Cfg", (), {"runtime_dir": tmp_path / "runtime"})()
     tape = tmp_path / "tape"
     tape.mkdir()
-    for argv in (["--source", str(tape), "--today", "2026-10-27"], ["--source", str(tape), "--today", "2026-10-27"],
-                 ["--source", str(tape), "--today", "2026-10-27", "--out", str(tmp_path / "given")]):
-        a = build_parser().parse_args(["ml", "oi-daily", *argv])
+
+    def go(*extra):
+        a = build_parser().parse_args(["ml", "oi-daily", "--source", str(tape), "--today", "2026-10-27", *extra])
         a.fn(cfg, a)
-    assert seen[0] != seen[1] and seen[0].parent == seen[1].parent == tmp_path / "runtime" / "ml_oi_daily"        # fresh each run, under the scratch parent
-    assert seen[2] == tmp_path / "given"                                                                        # an explicit --out is used as given
+    go()
+    go()
+    ok["v"] = False
+    with pytest.raises(SystemExit):
+        go()                                                                                                    # a failing run is cleaned up too
+    ok["v"] = True
+    go("--out", str(tmp_path / "given"))
+    assert len({str(p) for p in seen[:3]}) == 3 and all(p.parent == tmp_path / "runtime" / "ml_oi_daily" for p in seen[:3])      # a fresh folder each run
+    assert not any(p.exists() for p in seen[:3])                                                               # and none is left behind
+    assert seen[3] == tmp_path / "given" and (seen[3] / "table.parquet").exists()                              # an explicit --out is used as given and kept

@@ -545,6 +545,7 @@ def _ml_oi(cfg, a):
             return
         if not a.source:
             raise SystemExit("ml oi-daily: --source (the tape folder) is required")
+        scratch = None
         if a.out:
             out = Path(a.out)
         else:                                                                         # a fresh scratch folder per local run: a morning-only run must not leave tables whose input hashes the afternoon's tape then changes
@@ -552,11 +553,17 @@ def _ml_oi(cfg, a):
             base = Path(cfg.runtime_dir) / "ml_oi_daily"
             B.refuse_tracked_tree(base, "ml oi-daily --out")
             base.mkdir(parents=True, exist_ok=True)
-            out = Path(tempfile.mkdtemp(prefix="run_", dir=base))                      # never the folder the read-out reads
+            out = scratch = Path(tempfile.mkdtemp(prefix="run_", dir=base))             # never the folder the read-out reads; removed after the run, an explicit --out is kept
         B.refuse_tracked_tree(out, "ml oi-daily --out")
         if out.resolve() == (Path(cfg.runtime_dir) / "ml_oi").resolve():
             raise SystemExit("ml oi-daily: --out is the folder the read-out reads (runtime/ml_oi); its scratch tables must not go there")
-        if not OD.grade_all(Path(a.source), out, today)["ok"]:
+        try:
+            ok = OD.grade_all(Path(a.source), out, today)["ok"]
+        finally:
+            if scratch is not None:                                                    # the default scratch tables are throwaway: no accumulation, on success or failure
+                import shutil
+                shutil.rmtree(scratch, ignore_errors=True)
+        if not ok:
             raise SystemExit(1)
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
