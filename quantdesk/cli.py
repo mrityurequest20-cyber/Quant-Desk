@@ -364,29 +364,37 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", default="_wings")
     s.set_defaults(fn=cmd_wings)
     s = sub.add_parser("ml", help="the offline ML platform (docs/ML_PHASE0.md): import external index minutes into a validated, "
-                                  "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result "
+                                  "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result, "
+                                  "refit the registered models as a drill, check an imported dataset against independent references "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report"])
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "card", "retrain", "verify", "import-tape", "oneshot"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
                                  "reproduce: an empty scratch folder (default: a new temporary one; never docs/prereg/results); "
-                                 "oi, oi-report: the session tables (default runtime/ml_oi)")
+                                 "oi, oi-report: the session tables (default runtime/ml_oi); "
+                                 "retrain: a new folder for the report and the refits (default runtime/ml_retrain)")
     s.add_argument("--version", default="", help="import: the source's version label (documentation only; the file hashes are the identity)")
     s.add_argument("--reviewed", help="import: a reviewed-sessions file (default quantdesk/ml/reviewed_sessions.json)")
-    s.add_argument("--dataset", help="build: an imported dataset folder; reproduce: the aeron7 dataset the locked result was computed on")
+    s.add_argument("--dataset", help="build: an imported dataset folder; reproduce: the aeron7 dataset the locked result was computed on; "
+                                      "retrain: the aeron7 dataset to refit from (default: the latest import under runtime/external)")
     s.add_argument("--symbols", default="NIFTY,BANKNIFTY", help="build: comma-separated symbols of the dataset")
     s.add_argument("--profile-end", help="build: the last session the seasonal profile may be fitted on (required; rows up to it are marked in_profile)")
     s.add_argument("--allow-unverified", action="store_true", help="build: accept a dataset that is external_unverified (the table says so)")
     s.add_argument("--spec", default="docs/prereg/vol_forecast_v1.json", help="reproduce: the pre-registered spec")
     s.add_argument("--committed", help="reproduce: the committed result (default: docs/prereg/results/<name>-<spec hash>.json)")
-    s.add_argument("--rtol", type=float, default=1e-9, help="reproduce: relative tolerance for every number (at most 1e-6)")
+    s.add_argument("--rtol", type=float, default=1e-9, help="reproduce, retrain: relative tolerance for every number (at most 1e-6)")
     s.add_argument("--through", choices=["platform", "study"], default="platform",
                    help="reproduce: 'platform' recomputes the locked study with the builder, the splits and the study's scorers and writes nothing "
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
     s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
+    s.add_argument("--aeron", help="verify: the already verified aeron7 dataset folder (check C, the overlap)")
+    s.add_argument("--cache", help="verify: a folder outside any git tree where the NSE index files are saved (their sha256 go in the record)")
+    s.add_argument("--flip", action="store_true", help="verify: the status-only step after a pass: copy `passed` from verification.json into the manifest; compares nothing")
     s.add_argument("--accept-gaps", default="", help="oi-report --readout final: comma-separated weekdays (YYYY-MM-DD) that have no table because they were exchange holidays")
+    s.add_argument("--run", help="card: a JSON run record (spec, code commit, data digests, training window, settings, variants, baseline, out-of-sample result, "
+                                 "leakage tests, status); the card is built from it or refused, naming what is missing")
     s.set_defaults(fn=cmd_ml)
     return p
 
@@ -402,6 +410,16 @@ def cmd_ml(cfg, a):
             return _ml_build(cfg, a)
         if a.action in ("oi", "oi-report"):
             return _ml_oi(cfg, a)
+        if a.action == "verify":
+            return _ml_verify(a)
+        if a.action == "card":
+            return _ml_card(cfg, a)
+        if a.action == "retrain":
+            return _ml_retrain(cfg, a)
+        if a.action == "import-tape":
+            return _ml_import_tape(cfg, a)
+        if a.action == "oneshot":
+            return _ml_oneshot(a)
         return _ml_reproduce(a)
     except (I.SourceFormatError, I.ReviewedListError, ImmutableViolation, OSError, ValueError, RuntimeError) as exc:
         raise SystemExit(f"ml {a.action}: {exc}")
@@ -431,6 +449,69 @@ def _ml_build(cfg, a):
     print(f"table {folder}")
 
 
+_ONESHOT_DEFAULTS = {"source": None, "version": "", "reviewed": None, "symbols": "NIFTY,BANKNIFTY", "profile_end": None, "allow_unverified": False,
+                     "committed": None, "rtol": 1e-9, "through": "platform", "day": None, "readout": "interim", "aeron": None, "cache": None, "flip": False,
+                     "accept_gaps": "", "run": None}
+
+
+def _ml_oneshot(a):
+    """The one-shot HAR evaluation (docs/prereg/har_oneshot_v1.json, amendment 1). It reads every setting from the spec and takes only three paths: any
+    other option is refused, and there is no flag that accepts an unverified dataset."""
+    from .ml import oneshot as OS
+    stray = sorted(k for k, v in _ONESHOT_DEFAULTS.items() if getattr(a, k, v) != v)
+    if stray:
+        raise SystemExit(f"ml oneshot: takes --dataset, --spec and --out only (not --{', --'.join(k.replace('_', '-') for k in stray)}): the spec fixes every setting")
+    if not a.dataset or not a.out or a.spec == "docs/prereg/vol_forecast_v1.json":
+        raise SystemExit("ml oneshot: --dataset, --spec docs/prereg/har_oneshot_v1.json and --out (an empty folder outside every git working tree) are required")
+    try:
+        res = OS.run(Path(a.dataset), Path(a.spec), Path(a.out))
+    except OS.Refused as exc:
+        raise SystemExit(f"ml oneshot: refused, no look spent: {exc}")
+    print(f"{res['spec']}: {res['outcome_statement']} (result in {a.out})")
+
+
+def _ml_verify(a):
+    """P0.6 (docs/ml/P0_6_criteria_v2.md): the independent check of an imported index-minute dataset, run once; `--flip` is the separate status-only step after a pass."""
+    from .ml import build as B
+    from .ml import verify as VF
+    if not a.dataset:
+        raise SystemExit("ml verify: --dataset (the imported dataset folder) is required")
+    if a.flip:
+        print(f"{Path(a.dataset).name}: the loader now gives the verified symbols {VF.flip_status(Path(a.dataset))}")
+        return
+    if not a.aeron or not a.cache:
+        raise SystemExit("ml verify: --aeron (the verified aeron7 dataset) and --cache (a folder outside any git tree for the NSE files) are required")
+    B.refuse_tracked_tree(Path(a.cache), "ml verify --cache")
+    rec = VF.run(Path(a.dataset), Path(a.aeron), Path(a.cache))
+    print(f"check {rec['check']}: {'PASSED' if rec['passed'] else 'FAILED'} · symbols verified {rec['symbols_verified']} · record {Path(a.dataset) / 'verification.json'}")
+    for r in rec["reasons"][:20]:
+        print(f"  - {r}")
+
+
+def _ml_card(cfg, a):
+    """P0.5: the model card of a run, or a refusal naming every missing piece of provenance. Offline: reads one JSON file, writes one card once."""
+    import json as _json
+    from .ml import modelcard as MC
+    if not a.run:
+        raise SystemExit("ml card: --run (a JSON run record) is required")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_cards"
+    from .ml import build as B
+    B.refuse_tracked_tree(out, "ml card --out")                  # a card names data digests and our own results; it is not written where it could be committed by accident
+    try:
+        run = _json.loads(Path(a.run).read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"ml card: cannot read --run {a.run}: {exc}")
+    try:
+        card = MC.build_card(run)
+        repo_problems = MC.check_against_repo(run, Path(__file__).resolve().parents[1])
+        if repo_problems:
+            raise MC.MissingProvenance(repo_problems)
+        jp, mp = MC.write_card(out, card)
+    except MC.MissingProvenance as exc:
+        raise SystemExit("ml card: " + "\n  - ".join(["no model card, the run lacks provenance:"] + exc.problems))
+    print(f"card {jp} · digest {card['digest'][:16]} · status {card['status']}")
+
+
 def _ml_oi(cfg, a):
     """The open-interest shadow (docs/prereg/oi_shadow_v1.json): `oi` grades one session of the desk's own chain tape and writes its tables once;
     `oi-report` prints a read-out of every session written. Offline: nothing here votes, sizes, gates, enters or exits."""
@@ -447,6 +528,38 @@ def _ml_oi(cfg, a):
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
     print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
+
+
+def _ml_import_tape(cfg, a):
+    """P0.2 for tier T2: register the desk's own chain-tape files (hashes and counts only; the data is referenced, not copied). Offline and read-only on the tape."""
+    from .ml import build as B
+    from .ml import tape as T
+    if not a.source:
+        raise SystemExit("ml import-tape: --source (a folder of <day>_<part>_chains.parquet files) is required")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_tape"
+    B.refuse_tracked_tree(out, "ml import-tape --out")
+    try:
+        man = T.import_tape(Path(a.source), out)
+    except T.TapeError as exc:
+        raise SystemExit(f"ml import-tape: {exc}")
+    print(f"dataset {man['dataset']} · {man['totals']['files']} file(s) · {man['totals']['rows']:,} rows · digest {man['digest'][:16]} · faults counted {man['totals']['faults']}")
+    for r in man["rejected"][:20]:
+        print(f"  rejected {r['file']}: {r['reasons'][0]}")
+
+
+def _ml_retrain(cfg, a):
+    """P0.8: refit every registered model from the dataset into a scratch folder and compare with the numbers the desk loads. Exit 1 unless all match."""
+    from .data import external_aeron as X
+    from .ml import retrain as RT
+    if a.dataset:
+        ds = Path(a.dataset)
+    else:
+        ds = X.latest(Path(cfg.runtime_dir) / "external")
+        if ds is None:
+            raise SystemExit("ml retrain: no imported dataset: pass --dataset or run `ml import` / `data external-import` first")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "ml_retrain"
+    if not RT.drill(ds, out, rtol=a.rtol)["ok"]:
+        raise SystemExit(1)
 
 
 def _ml_reproduce(a):
