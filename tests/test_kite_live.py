@@ -447,7 +447,14 @@ def test_the_token_workflow_writes_one_encrypted_file_to_one_branch_and_nothing_
     assert wf["defaults"]["run"]["shell"] == "bash" and sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET"]
     steps = [s for j in wf["jobs"].values() for s in j["steps"]]
     assert all("${{" not in s["run"] for s in steps if "run" in s)                              # the request_token comes in through env only
-    assert text.count("git push") == 1 and "git push -q origin kite-token" in text and not re.search(r"git push[^\n]*(--force|\s-f\b)", text)
+    pushes = re.findall(r"^\s*git [^\n]*\bpush\b[^\n]*$", text, re.M)
+    assert len(pushes) == 1 and pushes[0].rstrip().endswith("push -q origin kite-token") and not re.search(r"--force|\s-f\b", pushes[0])
+    checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+    assert set(checkout["with"]) == {"persist-credentials"} and str(checkout["with"]["persist-credentials"]).lower() == "false"   # the write token is not on disk while pip installs third-party code
+    holders = [s["name"] for s in steps if "GH_TOKEN" in json.dumps(s.get("env", {}))]
+    assert holders == ["Store it on the kite-token branch"] and text.count("github.token") == 1       # only the push step holds it: not the workflow, not the job
+    assert "GH_TOKEN" not in json.dumps(wf.get("env", {})) and all("GH_TOKEN" not in json.dumps(j.get("env", {})) for j in wf["jobs"].values())
+    assert "::add-mask::$auth" in text and text.count("http.https://github.com/.extraheader") == 2 and text.count("extraheader") == 2   # the header is masked, scoped to github.com (it cannot follow a changed remote), and used for the fetch and the push only
     assert "openssl enc -aes-256-cbc" in text and "cp \"$RUNNER_TEMP/kite_token.enc\" kite_token.enc" in text and "git add kite_token.enc" in text
 
 
