@@ -7,26 +7,32 @@
     "may_change": "if it ever applies: only skip a setup the desk would otherwise take. It can never add a setup, raise a size, loosen a gate, change a stop or target, or touch the paper-mode switch.",
     "component": "M4 (entry filter), docs/ML_ROADMAP.md"
   },
-  "relation": "First study on the shadow lab's corpus (quantdesk/intraday/shadowlab.py, PR #155). It does not repeat any registered spec: intraday_direction_v1 asked whether direction could be predicted and failed; this asks whether the desk's own armed setups can be ranked, a different target, unit and population.",
+  "relation": "First study on the shadow lab's corpus (quantdesk/intraday/shadowlab.py, PR #155, merged as 4f525e5). It does not repeat any registered spec: intraday_direction_v1 asked whether direction could be predicted and failed; this asks whether the desk's own armed setups can be ranked, a different target, unit and population. Overlap, disclosed and not a repeat: the same minute data was scored for direction (intraday_direction_v1, 2019 to Feb 2023) and for HAR volatility (har_oneshot_v1, 2023-03-01 to 2026-05-14, a volatility result that was read); the validation and locked-test windows below fall inside the second window, with a different target.",
   "not_for": "Index minutes are third-party and `external_unverified`; the replay prices options on a model chain, so the label is the index outcome and carries no cost. Nothing here is evidence for a gate, the paper gate, a promotion, a DTE change, an option strategy or a profitability claim. A pass only authorises the same study on recorded real quotes with costs (T2) and a forward shadow read; it can never change the desk.",
   "corpus": {
     "generator": "python -m quantdesk intraday shadow-replay --dataset <ml-intake-2-feae259bdba6> --sample 800 --seed 20261101 --from 2016-01-01 --to 2026-05-14 --symbols NIFTY,BANKNIFTY --jobs 3 --out <new folder outside every git tree>",
-    "code": "run from the merged main that contains the shadow lab; the manifest records the commit, and the run is refused if the tree is dirty or the commit is not on main",
+    "code": "run from main at or after 4f525e5 (the merged shadow lab). The manifest RECORDS the commit, whether the tree is dirty and the dataset digest; the code does not refuse on any of them. Before the read the analyst checks that the commit is on main, the tree is clean and the digest equals the one below, and writes the three checks into the run log; a failed check voids the run.",
     "dataset": {"name": "ml-intake-2-feae259bdba6", "digest": "47d28d6376ca63af6f435c7a7fab16dc403cc99a7c49ab954ded2c68ed98e9b8", "status": "external_unverified", "tier": "T1b", "use": "underlying_features"},
-    "sessions": "800 drawn at random without replacement from the sessions after the first 250 (the engine's lookback), 2016-01 to 2026-05-14, seed fixed above",
-    "unit": "an idea: the first fire of a setup on a symbol and direction (`idea_first`); later re-arms within 45 minutes are the same idea. The evaluation unit is the session, because ideas of one day share the market.",
-    "engine": "the desk's engine as merged, empty learning memory per session (no research priors, warehouse flows or buyer edge: the naive engine), model option chain priced on the dataset's own INDIAVIX minutes (point in time), adverse ticks 1",
-    "expected_size": "about 3.7 ideas per session from a 100-session probe (counts only), so about 3,000 ideas, about 540 in the locked test"
+    "sessions": "800 drawn at random without replacement from the sessions after the first 250 (the engine's lookback), 2016-01 to 2026-05-14, seed fixed above; about 2,530 sessions are eligible. The dataset's default set is used: its review sessions (for example 2020-03-13) and its special sessions (Muhurat, Saturday) are not in it (see limitations).",
+    "unit": "an idea: the first fire of a setup on a symbol and direction (`idea_first`); later re-arms within 45 minutes are the same idea. Training, validation and test rows are `idea_first` rows only. The evaluation unit is the session, because ideas of one day share the market.",
+    "engine": "the desk's engine as merged, empty learning memory per session (no research priors, warehouse flows or buyer edge: the naive engine), model option chain priced on the dataset's own INDIAVIX minutes where the dataset has them for the day (point in time), else the engine's constant 14.0 vol fallback; adverse ticks 1. The dataset's VIX is itself unverified. The fallback sessions are about 1 to 2% of sessions by the dataset's own coverage table; they stay in, their number is reported, and a re-score without them (identified from the dataset's VIX coverage, not from the engine's output) is reported and decides nothing.",
+    "expected_ideas_per_session": 3.7,
+    "expected_size": "about 3.7 ideas per session from a 100-session probe (counts only), so about 3,000 ideas, about 540 in the locked test. The probe ran on the engine BEFORE the VIX correction (constant 14.0), so the figure is approximate for the corrected engine; it is a planning number, not a rule input."
   },
   "target": {
-    "definition": "r_underlying: after the fill, the first of: the stop (invalidation) touched = -1; the target = fill +- max(reward_risk x risk, min_move) touched = +reward/risk; otherwise the 45th minute's last close marked in multiples of planned risk. The stop wins when one bar touches both. Only bars from the minute after the firing bar are read.",
+    "definition": "r_underlying: after the fill, the first of: the stop (invalidation) touched = -1; the target = fill +- max(reward_risk x risk, min_move) touched = +reward/risk; otherwise the 45th minute's last close marked in multiples of planned risk. The stop wins when one bar touches both. Only bars from the minute after the firing bar are read. The win side is not bounded above by construction (a small planned risk with a min_move floor gives a large multiple), so a capped version is also reported and gates PASS (see decision_rules).",
     "horizon_minutes": 45,
     "costs": "none: this is an index outcome, not an option P&L"
   },
   "baseline": {
     "name": "keep every first-fire setup (what the desk's setup logic produces before any filter)",
     "metric": "mean r_underlying over the locked test's ideas",
-    "decision_rule": "the model must beat it as set out under decision_rules; also reported, not decisive: the desk's own gate on the model chain (`desk_taken`), and a random keep of the same size"
+    "decision_rule": "the model must beat it as set out under decision_rules; also reported, not decisive: the desk's own gate on the model chain (`desk_taken`), a random keep of the same size by idea, and the setup-cell benchmark below"
+  },
+  "benchmark_cell": {
+    "name": "setup x symbol cell mean",
+    "rule": "score = the train-window mean r_underlying of the idea's (setup, symbol) cell; keep by the same frozen-threshold rule as the model (threshold from the validation scores), same q as the frozen pair",
+    "reading": "reported beside the model, decides nothing. If the model passes but does not beat this cell rule on the locked test, the pass is read as setup composition (R differs mechanically by setup and reward_risk, and the stop-wins-tie rule biases it), and the cheaper cell rule, not the model, is what the follow-up study carries."
   },
   "data": {
     "tiers": ["T1b"],
@@ -34,50 +40,69 @@
       "setup (one-hot)", "symbol", "direction", "kind (break or touch)", "reward_risk", "risk_pct (planned risk as % of the fill)",
       "minutes_since_open", "weekday", "view_score", "view_conviction", "view_bias", "view_day_type", "view_vol_view", "view_iv (the model chain's ATM implied vol from the minute's India VIX)", "view_rv (realised vol so far)", "view_chg (the index's change on the day so far)", "view_phase"
     ],
-    "known_at": "every feature is a field of the analyst's view or the armed setup at the minute of the fire; none reads a later bar",
+    "known_at": "every feature is a field of the analyst's view or the armed setup at the minute of the fire; none reads a later bar. Checked by reading the replay code (not a result): bars are masked to closed minutes at the fire and the label reads only bars from the fire on.",
+    "encoding": "categorical fields (setup, symbol, direction, kind, view_bias, view_day_type, view_phase, weekday): one-hot over the levels seen in the train window, a level unseen in train is all zeros. Numeric fields: a missing value (None) is replaced by the train-window median plus a missing-indicator column for M1; M2 takes it as NaN. The scaler and the medians are fitted on the train window only. There is no refit on train plus validation before the test: the model is frozen as fitted on train.",
     "excluded": [
       "every `desk_*` column (the desk's own decision and model-chain P&L)", "r_underlying, exit_reason, exit_ts, mfe_r, mae_r, target, bars_after (the label and what follows the fire)",
-      "view_vwap, fill, level, invalidation (price levels, non-stationary)", "ts, day, idea_first"
-    ]
+      "view_vwap, fill, level, invalidation (price levels, non-stationary)", "ts, day, idea_first",
+      "chain_source, adverse_ticks, chain_age_min, tape_ok, bar_gap (replay and data-quality bookkeeping)",
+      "index_frozen, data_clean (computed over the whole day's bars, so they use information from after the fire: descriptive subsets only, never features)",
+      "instrument_kind, spec_approx (stock-corpus markers)"
+    ],
+    "audit": "an allow-list: the table the models see has exactly the columns of `features` above (after encoding) and no other; any other column, including a new one the lab adds later, fails the audit. This replaces a list of what is absent."
   },
   "split": {
     "train": ["2016-01-01", "2022-12-31"],
     "validation": ["2023-01-01", "2024-06-30"],
     "locked_test": ["2024-07-01", "2026-05-14"],
     "purge_sessions": 1,
+    "embargo_sessions": 0,
     "cutoff": "2024-06-30",
-    "rule": "by session date; one session is dropped on each side of a boundary; the model, the keep fraction and every setting are frozen at the cutoff; the locked test is read once"
+    "rule": "by session date; one session is dropped on each side of a boundary; the model, the keep threshold and every setting are frozen at the cutoff; the locked test is read once. No embargo is added beyond the purge: a label lasts at most 45 minutes inside one session and every feature looks backward, so no label or feature crosses a session boundary.",
+    "freeze": "before any locked-test label is scored, the frozen pair (model, C where it applies, q), the model's fitted parameters, the keep threshold and the feature list are written to a freeze file and its SHA-256 is written to the run log. The code reads locked-test labels only through one function that refuses to run unless that hash exists and matches the file. This is what `read once` means: the labels exist in the corpus file from the day it is generated, so the guard is the code path and the recorded hash, not their absence."
   },
   "model": {
     "family": "two small CPU models, both trained on the train window only",
     "settings": {
-      "M1": "L2 logistic regression on win = (r_underlying > 0), standardised numeric features, C in {0.1, 1, 10} chosen on the validation window by log loss",
+      "M1": "L2 logistic regression on win = (r_underlying > 0), standardised numeric features, C in {0.1, 1, 10} chosen on the validation window by log loss (an inner choice inside M1 made before any delta is looked at; it does not add pairs)",
       "M2": "gradient-boosted trees (sklearn HistGradientBoostingRegressor) on r_underlying: max_depth 3, 200 iterations, learning rate 0.05, min_samples_leaf 20, early stopping off, seed fixed",
       "score": "M1: predicted P(win); M2: predicted r",
-      "keep_fraction": "q in {0.3, 0.5, 0.7}: keep the top q of ideas by score (the threshold is a quantile of the training scores, frozen)"
-    }
+      "keep_fraction": "q in {0.3, 0.5, 0.7}: the keep threshold is the (1 - q) quantile of the model's scores on the VALIDATION window (the model out of sample, no labels used), frozen at the cutoff; an idea is kept if its score is at or above it. The realised kept fraction on the locked test is reported and must lie within q +- 0.10, else the result is MIXED (the pair did not do what was frozen). It is not forced to q."
+    },
+    "grids": {"q": [0.3, 0.5, 0.7], "C": [0.1, 1.0, 10.0]}
   },
   "variants_tried": 6,
-  "multiple_testing": "6 (model x keep fraction) pairs are scored on the validation window only; the pair with the highest validation mean R of the kept ideas is frozen; the locked test reads that one pair, so the test is a single comparison. The validation scores of all six are reported.",
+  "multiple_testing": "6 (model x keep fraction) pairs are scored on the validation window only; the pair with the highest validation mean R of the kept ideas is frozen; the locked test reads that one pair, so the test is a single comparison. The validation scores of all six are reported. The three C values of M1 are an inner choice by log loss, disclosed here and not counted as pairs.",
   "controls_before_the_read": [
     "the harness's injected-leak test (ml/splits.py verifier) passes on this table",
-    "label-shuffle canary: with labels shuffled within each session, the frozen pipeline's validation difference (kept minus all) must lie within +-0.05 R, else the pipeline leaks and the study is void",
-    "feature audit: the table the models see contains none of the excluded columns (asserted in code), and no feature has a later timestamp than the fire",
+    "label-shuffle canary: 200 full permutations of the TRAIN-window labels (seed 20261102), the whole pipeline refitted and frozen on each, then scored on the real VALIDATION labels as in the study; a clean pipeline's delta (kept minus all) is centred on zero. The control passes if the mean of the 200 deltas is within 2 standard errors of zero and at most 5% of them reach +0.10 R (the PASS threshold). The within-session shuffle (labels permuted inside each session, same 200 draws) is also run and reported; it decides nothing, because a day-level feature can legitimately move a shuffle that preserves session means",
+    "feature audit: the allow-list above, asserted in code, and no feature has a later timestamp than the fire",
     "time order: max(train day) < min(validation day) < min(test day) with the purge, asserted",
-    "determinism: running the whole pipeline twice gives the same frozen pair and the same digest"
+    "determinism: running the whole pipeline twice gives the same frozen pair and the same digest",
+    "corpus checks: the three run-log checks under corpus.code (commit on main, tree clean, digest equal)"
   ],
   "decision_rules": {
     "primary": "on the locked test, delta = mean r_underlying of the kept ideas minus the mean of all ideas, for the frozen (model, q)",
-    "uncertainty": "block bootstrap over sessions, 10,000 resamples, seed fixed; and a permutation test (10,000 random keeps of the same size)",
-    "PASS": "delta >= +0.10 R, and the one-sided 95% lower bound of delta > 0, and kept ideas >= 150, and permutation p < 0.05",
-    "KILL": "delta < +0.05 R, or a control above fails after the read was made impossible to trust: the idea is retired for this corpus and this window; a new corpus needs a new spec",
-    "MIXED": "anything else: no apply, no claim; a new locked window needs a new spec (this one stays spent)"
+    "uncertainty": "block bootstrap over sessions (resamples below, seed fixed) for the confidence bound; and a session-block permutation test: 10,000 random keeps made of whole sessions drawn at random until the kept count reaches the model's kept count (an idea-level permutation is anti-conservative for a model whose features are day-level, so it is only reported)",
+    "PASS": "delta >= +0.10 R, and the one-sided 95% lower bound of delta > 0, and kept ideas >= 150, and session-block permutation p < 0.05, and the realised kept fraction within q +- 0.10, and the capped delta (r_underlying capped at +3 R) > 0",
+    "VOID": "any control above fails: the locked test is NOT read, nothing is scored, no result exists; the defect is fixed and recorded as an amendment of this spec before any read (the spec is not spent, because no outcome was seen)",
+    "KILL": "after the read: delta < +0.05 R. The idea is retired for this corpus and this window; a new corpus needs a new spec",
+    "MIXED": "anything else after the read (including a realised fraction out of band, or numbers that pass but fail the capped delta): no apply, no claim; a new locked window needs a new spec (this one stays spent)"
   },
-  "evidence": {"power_sessions": 145, "cost_stress": 2.0, "shadow_sessions": 40},
-  "power": "about 145 test sessions and 540 ideas (expected); with a standard deviation of about 1.1 R per idea, the standard error of delta at q = 0.5 is about 0.05 R, so a true delta of 0.15 R passes about eight times in ten and a true 0.10 R about half the time (the rule needs delta >= 0.10 and a positive lower bound); a smaller effect is not claimed to be detectable",
+  "pass": {"min_delta": 0.10, "min_kept": 150, "alpha": 0.05, "lower_bound_confidence": 0.95, "fraction_band": 0.10, "cap_r": 3.0},
+  "bootstrap": {"resamples": 10000, "seed": 20261103},
+  "permutation": {"draws": 10000, "unit": "whole sessions", "seed": 20261104},
+  "canary": {"shuffles": 200, "seed": 20261102, "max_share_at_pass_delta": 0.05, "mean_within_standard_errors": 2.0},
+  "evidence": {"power_sessions": 145, "cost_stress": 2.0, "shadow_sessions": 40, "cost_stress_note": "applies to the follow-up on recorded quotes only; this study's label carries no cost, so the number is vacuous here"},
+  "power": "about 145 test sessions and 540 ideas (expected). The standard deviation of 1.1 R per idea is an ASSUMED prior (not measured on this corpus or its probe). Ideas of one session are correlated (NIFTY and BANKNIFTY on the same day, near-duplicate setups in one direction, and day-level features that keep or drop a whole session): with an intra-session correlation of 0.3 to 0.5 the standard error of delta at q = 0.5 is about 0.065 to 0.075 R, not 0.05. The lower-bound rule then binds (delta must exceed about 0.115 R). Estimated pass probability at q = 0.5: about 7 in 10 at a true 0.15 R, about 4 in 10 at a true 0.10 R; a smaller effect is not claimed to be detectable. At q = 0.3 the standard error is about 0.07 R even with independent ideas, and the expected kept count is about 162 against the floor of 150, so size alone fails the rule in roughly a quarter of draws (kept ideas are not forced to q). These are design-effect estimates, not measurements, and the study can fail for lack of power.",
+  "power_assumptions": {"assumed_sd_per_idea": 1.1, "intra_session_correlation": [0.3, 0.5], "expected_test_ideas": 540, "se_delta_q05": [0.065, 0.075]},
   "kill": {"rule": "the locked-test delta (kept minus all) is below +0.05 R in multiples of planned risk", "threshold": 0.05},
   "secondary_descriptive": [
     "delta by year and by symbol",
+    "robustness of the primary: delta on r_underlying capped at +3 R (gates PASS), the win-rate delta, the median of the kept minus the median of all, and the share of delta that comes from the top 1% of ideas by r_underlying",
+    "the realised kept fraction, and the six validation scores",
+    "the setup-cell benchmark above, the idea-level random keep and the idea-level permutation test",
+    "the re-score without the VIX-fallback sessions",
     "transfer to stocks: the frozen model applied to the stock corpus (`--stocks`, a few sessions of liquid F&O stocks, kept out of every selection), reported with its session bootstrap and its size",
     "the recorded-quote subset (T2, real bid and ask with the desk's slippage and a 2x slippage stress) and the `data_clean` subset, where they exist; neither decides anything"
   ],
@@ -85,9 +110,15 @@
   "limitations": [
     "the label is the index outcome, not option P&L after costs; a ranking that works on the index can still lose money in options",
     "the minutes are third-party and unverified; a source defect could be scored as model error or as skill",
-    "setups of one session are not independent; the bootstrap is by session",
-    "the replay engine starts each session with an empty learning memory (the naive desk) and a constant vol; the live desk differs",
-    "random sampling of 800 of about 2,600 eligible sessions"
+    "tail censoring: the dataset's default set leaves out its review sessions (for example 2020-03-13) and its Muhurat and Saturday special sessions, which are among the most extreme days. A setup study depends on extreme days, so a result here holds for the default set only and says nothing about the excluded sessions; admitting them would need a new spec",
+    "setups of one session are not independent; the bootstrap and the permutation are by session",
+    "the replay engine starts each session with an empty learning memory (the naive desk); the live desk differs. Its option chain is priced on the dataset's VIX where present, else a constant 14.0 (the fallback sessions are reported)",
+    "R is not bounded above; heavy tails make a mean-based rule fragile, which is why the capped delta gates PASS and the robust figures are reported",
+    "random sampling of 800 of about 2,530 eligible sessions"
   ],
-  "disclosure": "At registration, only counts of rows and ideas per session and symbol had been seen from the shadow lab's runs; no value of r_underlying, exit_reason, mfe_r or mae_r from the real data had been read. The 100-session probe (seed 20261031) is not part of this corpus and is not used."
+  "amendments": [
+    "490af63 (before any outcome was read): the engine is priced on the dataset's INDIAVIX, not a constant; view_iv and view_rv moved from excluded to features",
+    "this revision (before any outcome was read, after the research review of 490af63 found the spec NOT CLEAR): corrected the statement that the run is refused when dirty; reconciled the engine and VIX statements; added the tail-censoring limitation; replaced the canary and made a control failure VOID instead of KILL; restated the power with intra-session correlation; made the keep rule use the validation scores and report the realised fraction; session-block permutation; capped-R gate and robust figures; encoding, scaler, no-refit and the freeze hash; the allow-list audit and the missing excluded columns; numeric fields for every number; the setup-cell benchmark; the probe-overlap disclosure"
+  ],
+  "disclosure": "At registration, only counts of rows and ideas per session and symbol had been seen from the shadow lab's runs; no value of r_underlying, exit_reason, mfe_r or mae_r from the real data had been read. The 100-session probe (seed 20261031) and this corpus (seed 20261101) draw from the same pool of sessions, so about 30 probe sessions may also be in the corpus; only the idea counts of those sessions (not outcomes) were seen, and the probe's rows are not used. The probe ran on the pre-correction engine (constant 14.0 vol). The HAR one-shot result (har_oneshot_v1) was read before this spec: it is a volatility result on dates that overlap the validation and test windows, and it is not used as an input here."
 }
