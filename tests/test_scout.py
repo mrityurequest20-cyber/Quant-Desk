@@ -158,3 +158,68 @@ def test_an_end_to_end_run_writes_candidates_a_manifest_and_a_report_and_places_
     assert set(br["k"]) == set(C.KS) and (br["break_even"] > br["random_walk"]).all()
     dc = json.loads((tmp_path / "run" / "desk_comparison.json").read_text())
     assert dc["candidates"] > 0 and "by_k" in dc
+
+
+# ---- the seal is REFUSED, not dropped, wherever the sealed sessions could come in ----------------------------------------------------
+def _loaded_nothing(*a, **k):
+    raise AssertionError("the dataset was read although the window was refused")
+
+
+@pytest.mark.parametrize("last", [None, "", "2023-01-01", "2025-12-31"])
+def test_an_index_run_without_a_last_day_before_the_seal_is_refused_before_anything_is_read(tmp_path, monkeypatch, last):
+    monkeypatch.setattr(C, "_load_bars", _loaded_nothing)
+    with pytest.raises(C.Refused, match="sealed"):
+        C.run_dataset(tmp_path / "ds", tmp_path / "out", last=last)
+    assert not (tmp_path / "out").exists()
+
+
+def test_the_command_refuses_an_index_run_with_no_last_day_and_says_why(tmp_path):
+    r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout", "--dataset", str(tmp_path / "ds"), "--out", str(tmp_path / "o"), "--journal", "none"],
+                       capture_output=True, text=True, cwd=Path(C.__file__).resolve().parents[2])
+    assert r.returncode != 0 and "sealed" in r.stderr + r.stdout and "--last" in r.stderr + r.stdout
+
+
+def test_a_last_day_before_the_seal_runs_and_no_sealed_session_is_computed(tmp_path, monkeypatch):
+    from quantdesk.intraday.synthetic import simulate_sessions
+    days = [d.date() for d in pd.bdate_range("2022-11-01", "2023-02-28")]
+    bars, _ = simulate_sessions(days, seed=3)
+    monkeypatch.setattr(C, "_load_bars", lambda *a, **k: {s: bars[s] for s in bars})
+    monkeypatch.setattr(C, "_digest", lambda *a, **k: "x")
+    man = C.run_dataset(tmp_path / "ds", tmp_path / "out", ["NIFTY", "BANKNIFTY"], last="2022-12-31", say=lambda *_: None)
+    assert man["last"] <= "2022-12-31" and man["rows"] > 0
+
+
+def test_assert_open_refuses_a_table_with_sealed_index_days_but_not_a_stock_table():
+    sealed = pd.DataFrame({"day": [dt.date(2022, 12, 30), dt.date(2023, 1, 2)], "kind": ["index", "index"]})
+    with pytest.raises(C.Refused, match="sealed"):
+        C.assert_open(sealed, "a grid")
+    C.assert_open(pd.DataFrame({"day": [dt.date(2025, 6, 2)], "kind": ["stock"]}), "stocks")     # stock sessions are not the sealed index data
+    C.assert_open(sealed.iloc[:1], "an open grid")
+
+
+def test_the_read_out_refuses_a_sealed_grid_file_and_a_folder_inside_a_git_tree(tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    pd.DataFrame({"symbol": ["NIFTY"], "kind": ["index"], "day": [dt.date(2023, 2, 1)], "reach_3": [True], "reach_4": [False]}).to_parquet(out / "scout_candidates.parquet")
+    (out / "manifest.json").write_text("{}")
+    with pytest.raises(C.Refused, match="sealed"):
+        R.write_report(out)
+    inside = tmp_path / "repo" / "run"
+    inside.mkdir(parents=True)
+    (tmp_path / "repo" / ".git").mkdir()
+    with pytest.raises(C.Refused, match="git tree"):
+        R.write_report(inside)
+
+
+def test_a_session_without_its_opening_minute_is_left_out_not_filled_from_a_later_close():
+    full = day_frame("2026-01-02")
+    assert C._grid(full) is not None
+    assert C._grid(full.iloc[1:]) is None                       # a back-fill would let a later close stand in for the first minute
+
+
+def test_standard_errors_are_clustered_by_day_so_two_indices_of_one_day_are_one_market():
+    days = pd.bdate_range("2019-01-01", periods=50)
+    df = pd.DataFrame({"symbol": ["NIFTY"] * 50 + ["BANKNIFTY"] * 50, "day": list(days.date) * 2, "kind": "index",
+                       "reach_3": [bool(i % 3 == 0) for i in range(50)] * 2})
+    r = R.rate(df, "reach_3")
+    assert r["sessions"] == 50 and r["n"] == 100                # 50 clusters (days), not 100 (symbol and day)

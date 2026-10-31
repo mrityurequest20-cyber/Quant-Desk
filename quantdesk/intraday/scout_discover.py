@@ -6,6 +6,10 @@ EXPLORATORY and built to resist fooling itself:
   * the leaderboard has len(strategies) x len(policies) cells: a cell must clear a Bonferroni z, be positive on both slices, and is only ever a HYPOTHESIS;
   * the miner counts every rule it tries (the trial ledger) and runs the SAME search on the same data with the outcomes circularly shifted inside each session
     (the null): a real finding has to beat what the search finds in noise, not zero.
+The null is a circular shift inside each session: it keeps each session's outcomes and breaks their link to WITHIN-session features, so it tests within-session
+information only. Day-level features (gap, opening-range width, weekday) stay tied to the session's outcomes in the shifted data, so for a rule built on them the
+null is conservative, and its share is not a p-value for that rule. With n nulls the smallest share is 1/(n+1). Sessions are clustered by DAY (NIFTY and BANKNIFTY of one
+day are near-duplicates, so clustering by symbol and day would overstate t).
 Fitted on the early years, judged on the later years of the OPEN window; the sealed sessions are untouched (scout.SEAL_FROM). Never evidence for a gate, a promotion or a profit claim."""
 from __future__ import annotations
 
@@ -15,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .scout import COST_R, EVIDENCE, FEATURES, NOT_FOR, POLICY_COLUMNS
+from .scout import COST_R, EVIDENCE, FEATURES, NOT_FOR, POLICY_COLUMNS, assert_open
 
 TRAIN_TO = pd.Timestamp("2020-12-31").date()
 CAP_R = 10.0
@@ -39,14 +43,17 @@ def cluster_mean(y: np.ndarray, gid: np.ndarray) -> dict:
 
 
 def _gid(df: pd.DataFrame) -> np.ndarray:
-    return pd.factorize(df["symbol"].astype(str) + "|" + df["day"].astype(str))[0]
+    return pd.factorize(df["day"].astype(str))[0]            # by DAY: the two indices of one day are one market, not two samples
 
 
-def leaderboard(trades: pd.DataFrame) -> pd.DataFrame:
-    """Every strategy under every exit policy: train and valid mean net R (capped), t, median, the share of the profit from the best 1%, and the Bonferroni test."""
+def leaderboard(trades: pd.DataFrame, prior_cells: int = 0) -> pd.DataFrame:
+    """Every strategy under every exit policy: train and valid mean net R (capped), t, median, the share of the profit from the best 1%, and the Bonferroni test.
+    `clears_bar` is a HYPOTHESIS flag, never a finding. It is given for two families: this run's cells, and this run's plus `prior_cells` (the cells of every earlier
+    recorded run: the later-years slice has been looked at by all of them, so it is not a holdout any more)."""
     from scipy.stats import norm
     names = sorted(trades["strategy"].unique())
     z_need = float(norm.isf(0.025 / max(1, len(names) * len(POLICY_COLUMNS))))
+    z_all = float(norm.isf(0.025 / max(1, len(names) * len(POLICY_COLUMNS) + int(prior_cells))))
     rows = []
     for name in names:
         g = trades[trades["strategy"] == name]
@@ -60,11 +67,13 @@ def leaderboard(trades: pd.DataFrame) -> pd.DataFrame:
                     r["median_valid"] = float(np.median(y)) if len(y) else np.nan
                     r["top1pct_share"] = float(pos[: max(1, int(0.01 * len(y)))].sum() / pos.sum()) if len(pos) and len(y) else np.nan
                     r["win3_valid"] = float((part[col] >= 3).mean()) if len(part) else np.nan
-            ok = (r["train"]["mean"] > 0) and (r["valid"]["mean"] > 0) and (r["valid"]["t"] >= z_need) and (r["valid"]["n"] >= MIN_VALID_N)
+            base = (r["train"]["mean"] > 0) and (r["valid"]["mean"] > 0) and (r["valid"]["n"] >= MIN_VALID_N)
+            ok, ok_all = base and (r["valid"]["t"] >= z_need), base and (r["valid"]["t"] >= z_all)
             rows.append({"strategy": name, "policy": pol, "n_train": r["train"]["n"], "mean_train": r["train"]["mean"], "t_train": r["train"]["t"],
                          "n_valid": r["valid"]["n"], "sessions_valid": r["valid"]["sessions"], "mean_valid": r["valid"]["mean"], "t_valid": r["valid"]["t"],
                          "median_valid": r["median_valid"], "win3_valid": r["win3_valid"], "top1pct_share": r["top1pct_share"],
-                         "cells": len(names) * len(POLICY_COLUMNS), "z_needed": z_need, "passes": bool(ok)})
+                         "cells": len(names) * len(POLICY_COLUMNS), "z_needed": z_need, "prior_cells": int(prior_cells), "z_needed_all_runs": z_all,
+                         "clears_bar": bool(ok), "clears_bar_all_runs": bool(ok_all)})
     return pd.DataFrame(rows).sort_values("mean_valid", ascending=False)
 
 
@@ -172,24 +181,30 @@ def mine(df: pd.DataFrame, col: str = "r_trail", features: list[str] | None = No
     return {"outcome": col, "ledger": {"trials": n_trials, "conditions": len(names), "max_depth": 3, "min_support": min_support, "top_k": top_k,
                                          "seed": seed, "rules_clearing_support": n_ok, "nulls": n_null, "cap_r": CAP_R, "cost_r": COST_R},
             "best_valid_mean": best, "null_best_valid_means": [float(x) for x in nulls],
-            "p_vs_null": float((1 + (nl >= best).sum()) / (1 + len(nl))) if len(nl) and best == best else np.nan, "rules": rules}
+            "p_vs_null": float((1 + (nl >= best).sum()) / (1 + len(nl))) if len(nl) and best == best else np.nan, "p_resolution": 1 / (1 + len(nl)),
+            "null_note": "a circular shift inside each session: it tests within-session information only; day-level features stay tied to the outcomes, so p_vs_null is "
+                         "NOT a p-value for a rule built on them, and its smallest value is p_resolution", "rules": rules}
 
 
-def write_lab_report(out: Path, trades: pd.DataFrame, grid: pd.DataFrame | None, run_mining: bool = True, say=print, **mine_kw) -> Path:
+def write_lab_report(out: Path, trades: pd.DataFrame, grid: pd.DataFrame | None, run_mining: bool = True, say=print, prior_cells: int = 0, **mine_kw) -> Path:
     out = Path(out)
+    assert_open(trades, "the trades")                         # the sealed sessions are refused wherever a table comes from
+    assert_open(grid, "the grid")
     L = [f"# Scout strategy library and rule miner (exploratory, {EVIDENCE})", "", f"**Not for:** {NOT_FOR}", "",
          f"{len(trades):,} trades from {trades['strategy'].nunique()} strategies over {trades[['symbol', 'day']].drop_duplicates().shape[0]} symbol-sessions "
          f"({trades['day'].min()} to {trades['day'].max()}). Net R is capped at {CAP_R:g} and less {COST_R} per trade (assumed). Fitted to {TRAIN_TO}, judged after it.", ""]
     idx = trades[trades["kind"] == "index"]
     if len(idx) and (idx["day"] > TRAIN_TO).any() and (idx["day"] <= TRAIN_TO).any():
-        lb = leaderboard(idx)
+        lb = leaderboard(idx, prior_cells)
         lb.to_csv(out / "leaderboard.csv", index=False)
         L += ["## 1. Strategy x exit policy (index)", "",
-              f"{lb['cells'].iloc[0]} cells, so a cell needs t >= {lb['z_needed'].iloc[0]:.2f} on the later years, a positive mean on both slices and {MIN_VALID_N}+ trades. "
-              f"Cells passing: **{int(lb['passes'].sum())}**. Best by later-years mean:", "",
-              "| strategy | policy | n valid | mean valid | t valid | median valid | R>=3 share | best 1% share of profit | mean train | passes |", "|---|---|---|---|---|---|---|---|---|---|"]
+              f"{lb['cells'].iloc[0]} cells in this run, so a cell clears the bar at t >= {lb['z_needed'].iloc[0]:.2f} on the later years (and "
+              f"t >= {lb['z_needed_all_runs'].iloc[0]:.2f} counting the {int(lb['prior_cells'].iloc[0])} cells of earlier recorded runs), a positive mean on both slices and {MIN_VALID_N}+ trades. "
+              f"Cells clearing the bar: **{int(lb['clears_bar'].sum())}** (this run's family), **{int(lb['clears_bar_all_runs'].sum())}** (all runs' family). "
+              "Each one is a HYPOTHESIS for a pre-registered test on sealed data, not a finding: the later-years slice has been looked at by every table here. Best by later-years mean:", "",
+              "| strategy | policy | n valid | mean valid | t valid | median valid | R>=3 share | best 1% share of profit | mean train | clears bar (hypothesis) |", "|---|---|---|---|---|---|---|---|---|---|"]
         for r in lb.head(12).itertuples():
-            L.append(f"| {r.strategy} | {r.policy} | {r.n_valid:,} | {r.mean_valid:+.3f} | {r.t_valid:.2f} | {r.median_valid:+.2f} | {r.win3_valid:.3f} | {r.top1pct_share:.2f} | {r.mean_train:+.3f} | {'yes' if r.passes else 'no'} |")
+            L.append(f"| {r.strategy} | {r.policy} | {r.n_valid:,} | {r.mean_valid:+.3f} | {r.t_valid:.2f} | {r.median_valid:+.2f} | {r.win3_valid:.3f} | {r.top1pct_share:.2f} | {r.mean_train:+.3f} | {'yes' if r.clears_bar else 'no'} |")
         by_pol = lb.groupby("policy")[["mean_valid"]].mean().round(3)
         L += ["", "Mean of the later-years means over all strategies, by exit policy: " + ", ".join(f"{k} {v:+.3f}" for k, v in by_pol["mean_valid"].items()) + "."]
     stk = trades[trades["kind"] == "stock"]
@@ -210,7 +225,9 @@ def write_lab_report(out: Path, trades: pd.DataFrame, grid: pd.DataFrame | None,
                   f"Outcome `{res['outcome']}`. **Trials: {lg['trials']:,}** random conjunctions of 1 to 3 of {lg['conditions']} conditions; {lg['rules_clearing_support']:,} had "
                   f"{lg['min_support']:,}+ early-years rows; the best {lg['top_k']} by early-years mean were judged on the later years. Best later-years mean: "
                   f"**{res['best_valid_mean']:+.3f}**. The same search on outcomes shifted inside each session ({lg['nulls']} times) found best means of "
-                  + ", ".join(f"{x:+.3f}" for x in res["null_best_valid_means"]) + f". Share of nulls at least as good (p): **{res['p_vs_null']:.2f}**.", "",
+                  + ", ".join(f"{x:+.3f}" for x in res["null_best_valid_means"]) + f". Share of nulls at least as good: **{res['p_vs_null']:.2f}** (smallest possible "
+                  f"{res['p_resolution']:.2f}; the shift tests within-session information only, so this is not a p-value for a rule built on day-level features). "
+                  "Every rule below is a hypothesis for a pre-registered test, not a finding.", "",
                   "| rule | n train | mean train | n valid | mean valid | t valid |", "|---|---|---|---|---|---|"]
             for r in res["rules"][:8]:
                 L.append(f"| {r['rule']} | {r['n_train']:,} | {r['mean_train']:+.3f} | {r['n_valid']:,} | {r['mean_valid']:+.3f} | {r['t_valid']:.2f} |")

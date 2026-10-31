@@ -42,6 +42,23 @@ NOT_FOR = ("never evidence for a gate, a promotion, the paper gate or a profitab
            "first passage, not option P&L; sessions and the two directions are not independent samples.")
 
 
+def require_open_window(last: str | None) -> None:
+    """The index data's sealed sessions (from SEAL_FROM) are REFUSED, not dropped: an index run must name a last day before the seal, so nobody gets
+    a quietly shortened window and the sealed sessions are never even loaded for a computation."""
+    if not last or str(last) >= str(SEAL_FROM):
+        raise Refused(f"index sessions from {SEAL_FROM} are sealed for a later pre-registered test: give --last {SEAL_FROM - dt.timedelta(days=1)} or earlier "
+                      f"(got {last!r}); nothing was made")
+
+
+def assert_open(df: pd.DataFrame, what: str) -> None:
+    """Refuse a table that holds index sessions from SEAL_FROM (a grid file made elsewhere, or by an older run)."""
+    if df is None or not len(df) or "day" not in df.columns:
+        return
+    idx = df if "kind" not in df.columns else df[df["kind"] == "index"]
+    if len(idx) and pd.to_datetime(idx["day"]).dt.date.max() >= SEAL_FROM:
+        raise Refused(f"{what} holds index sessions from {SEAL_FROM}, which are sealed for a later pre-registered test: nothing was read further")
+
+
 def _grid(day: pd.DataFrame) -> tuple[dict[str, np.ndarray], int] | None:
     """One session on the 375-minute grid (a missing minute carries the last close); None if too thin."""
     idx = day.index
@@ -53,7 +70,9 @@ def _grid(day: pd.DataFrame) -> tuple[dict[str, np.ndarray], int] | None:
     for k in arr:
         arr[k][mod[ok]] = day[k].to_numpy(dtype=float)[ok]
     missing = int(np.isnan(arr["close"]).sum())
-    c = pd.Series(arr["close"]).ffill().bfill().to_numpy()
+    if np.isnan(arr["close"][0]):                     # no opening minute: a later close must not stand in for it (that would look ahead); the session is left out
+        return None
+    c = pd.Series(arr["close"]).ffill().to_numpy()
     for k in ("open", "high", "low"):
         arr[k] = np.where(np.isnan(arr[k]), c, arr[k])
     arr["close"] = c
@@ -254,9 +273,10 @@ def run_dataset(dataset: Path, out: Path, symbols: list[str] | None = None, stop
                 last: str | None = None, say=print) -> dict:
     out = Path(out).resolve()
     _check_out(out)
+    require_open_window(last)                       # refused, not shortened: see require_open_window
     symbols = list(symbols or INDEX_SYMBOLS)
     bars = _load_bars(dataset, symbols, None)
-    for s in bars:                                  # the sealed sessions are dropped here, before any computation
+    for s in bars:                                  # and, as a second belt, the sealed bars are dropped before any computation
         bars[s] = bars[s][bars[s].index.date < SEAL_FROM]
     vix = bars["INDIAVIX"]["close"] if "INDIAVIX" in bars else None
     df = build(bars, symbols, "index", stop_atr, first, last, vix, say=say)

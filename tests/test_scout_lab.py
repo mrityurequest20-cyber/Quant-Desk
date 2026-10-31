@@ -160,7 +160,7 @@ def trades_frame(seed=1, days=800, rows=3):
 def test_the_leaderboard_sets_a_multiple_testing_bar_caps_r_and_flags_only_a_stable_edge():
     lb = D.leaderboard(trades_frame())
     assert set(lb["strategy"]) == {"good", "flat"} and lb["cells"].iloc[0] == 2 * len(C.POLICY_COLUMNS) and lb["z_needed"].iloc[0] > 2.5
-    assert lb[lb["strategy"] == "good"]["passes"].all() and not lb[lb["strategy"] == "flat"]["passes"].any()
+    assert lb[lb["strategy"] == "good"]["clears_bar"].all() and not lb[lb["strategy"] == "flat"]["clears_bar"].any()
     capped = D.net(pd.Series([50.0, -1.0]))
     assert capped.tolist() == [D.CAP_R - C.COST_R, -1.0 - C.COST_R]
 
@@ -202,4 +202,45 @@ def test_the_lab_report_states_the_bar_the_trials_and_the_not_for(tmp_path):
     tr = trades_frame(days=800)
     p = D.write_lab_report(tmp_path, tr, None, run_mining=False, say=lambda *_: None)
     text = p.read_text()
-    assert "Not for:" in text and "Cells passing" in text and "Bonferroni" not in text and "t >=" in text
+    assert "Not for:" in text and "Cells clearing the bar" in text and "HYPOTHESIS" in text and "Bonferroni" not in text and "t >=" in text
+
+
+def test_the_leaderboard_gives_a_second_bar_that_counts_the_cells_of_earlier_runs():
+    rng = np.random.default_rng(2)
+    days = pd.bdate_range("2019-01-01", periods=900)
+    recs = []
+    for d in days:
+        for _ in range(3):
+            recs.append({"strategy": "good", "symbol": "X", "kind": "index", "day": d.date(), **{c: rng.normal(0.35, 1.0) for c in C.POLICY_COLUMNS.values()}})
+    lb = D.leaderboard(pd.DataFrame(recs), prior_cells=5000)
+    assert (lb["z_needed_all_runs"] > lb["z_needed"]).all() and lb["prior_cells"].eq(5000).all()
+    assert (lb["clears_bar_all_runs"] <= lb["clears_bar"]).all()                     # the wider family can only be harder
+
+
+@pytest.mark.parametrize("last", [None, "2023-01-01", "2025-12-31"])
+def test_the_library_run_refuses_a_window_that_reaches_the_seal_before_reading_anything(tmp_path, monkeypatch, last):
+    from quantdesk.intraday import scout as S
+
+    def boom(*a, **k):
+        raise AssertionError("read although refused")
+    monkeypatch.setattr("quantdesk.intraday.shadowlab._load_bars", boom)
+    with pytest.raises(S.Refused, match="sealed"):
+        L.run_dataset_lab(tmp_path / "ds", tmp_path / "out", last=last)
+    assert not (tmp_path / "out").exists()
+
+
+def test_the_lab_report_refuses_a_sealed_grid_whatever_made_it(tmp_path):
+    from quantdesk.intraday import scout as S
+    ok = pd.DataFrame({"day": [dt.date(2020, 1, 2)], "kind": ["index"]})
+    sealed = pd.DataFrame({"day": [dt.date(2023, 3, 1)], "kind": ["index"]})
+    with pytest.raises(S.Refused, match="sealed"):
+        D.write_lab_report(tmp_path, ok, sealed)
+
+
+def test_the_null_says_what_it_tests_and_how_coarse_it_is():
+    rng = np.random.default_rng(5)
+    n = 3000
+    days = pd.bdate_range("2019-01-01", periods=1500)
+    df = pd.DataFrame({"day": [days[i % 1500].date() for i in range(n)], "symbol": "X", "kind": "index", "f1": rng.uniform(0, 1, n), "r": rng.normal(size=n)})
+    res = D.mine(df, col="r", features=["f1"], n_trials=300, n_null=3, min_support=200, top_k=3, say=lambda *_: None)
+    assert res["p_resolution"] == pytest.approx(0.25) and "within-session" in res["null_note"] and "NOT a p-value" in res["null_note"]

@@ -2,7 +2,8 @@
 
 EXPLORATORY. It is run on the open sessions only (the module that makes the candidates refuses the sealed ones). Every table is a hypothesis for a
 later pre-registered test, never a finding: ~190 feature bins are looked at, so some pass by chance. Lift is against the POOLED EMPIRICAL rate (the
-session is finite, so 1 / (k + 1) is an upper bound). Standard errors are clustered by session.
+session is finite, so 1 / (k + 1) is an upper bound). Standard errors are clustered by DAY. Every look (each feature bin of each k, each model read-out) is counted in
+looks.json, and the journal charges it to the running total of things tried.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .scout import COST_R, EVIDENCE, FEATURES, KS, NOT_FOR
+from .scout import COST_R, EVIDENCE, FEATURES, KS, NOT_FOR, Refused, _inside_git_tree, assert_open
 
 TRAIN_TO = dt.date(2020, 12, 31)        # index discovery: fit/bin edges on <= 2020, look again on 2021-2022
 CATEGORICAL = {"weekday", "n_obst_3r", "open_air", "broke_or", "broke_pd"}
@@ -29,12 +30,14 @@ def rate(df: pd.DataFrame, col: str) -> dict:
         return {"n": 0, "sessions": 0, "rate": np.nan, "se": np.nan}
     y = df[col].to_numpy(dtype=float)
     p = y.mean()
-    key = df["symbol"].astype(str) + "|" + df["day"].astype(str)
+    key = df["day"].astype(str)                       # clustered by DAY: NIFTY and BANKNIFTY of one day are one market
     resid = pd.Series(y - p).groupby(key.to_numpy()).sum()
     return {"n": n, "sessions": int(resid.size), "rate": float(p), "se": float(np.sqrt((resid ** 2).sum()) / n)}
 
 
 def base_rates(df: pd.DataFrame) -> pd.DataFrame:
+    """Reach rates per symbol and k. `net_R` = rate*k - (1-rate) - COST_R counts every trade that did not reach k as a full -1R, so it is a LOWER bound on the
+    mean R of the 'hit k or stop' bet (trades that end at the close are marked above -1R; the r_fix columns of the lab give those), at the ASSUMED flat cost."""
     rows = []
     for (sym, kind), g in df.groupby(["symbol", "kind"]):
         for k in KS:
@@ -150,8 +153,13 @@ def _fmt(x, nd=3):
 
 def write_report(out: Path, lab_rows: Path | None = None, say=print) -> Path:
     out = Path(out)
+    git = _inside_git_tree(out.resolve())
+    if git is not None:
+        raise Refused(f"{out} is inside the git tree at {git}: a read-out of third-party minutes must not land in a repository")
     df = pd.read_parquet(out / "scout_candidates.parquet")
+    assert_open(df, f"{out}/scout_candidates.parquet")          # the sealed index sessions are refused here too, whatever made the file
     man = json.loads((out / "manifest.json").read_text())
+    looks = {"feature_bin_rows": 0, "model_readouts": 0}
     idx = df[df["kind"] == "index"]
     stk = df[df["kind"] == "stock"]
     L = [f"# Asymmetry scout read-out (exploratory, {EVIDENCE})", "",
@@ -159,13 +167,14 @@ def write_report(out: Path, lab_rows: Path | None = None, say=print) -> Path:
          f"Window {man['first']} to {man['last']} ({man['sessions']} symbol-sessions, {man['rows']:,} candidates). Sessions from {man['sealed_from']} are sealed. "
          f"Cost assumed {COST_R}R per round trip (an assumption, not measured). Lift is against the pooled empirical rate.", ""]
     br = base_rates(df)
-    L += ["## 1. Base rates", "", "| symbol | k | n | sessions | rate | se | random walk | break-even | net R per trade |", "|---|---|---|---|---|---|---|---|---|"]
+    L += ["## 1. Base rates", "", "| symbol | k | n | sessions | rate | se | random walk | break-even | net R per trade (lower bound, at assumed 0.05R cost) |", "|---|---|---|---|---|---|---|---|---|"]
     for r in br.itertuples():
         L.append(f"| {r.symbol} | {r.k} | {r.n:,} | {r.sessions} | {_fmt(r.rate)} | {_fmt(r.se, 4)} | {_fmt(r.random_walk)} | {_fmt(r.break_even)} | {_fmt(r.net_R)} |")
     tabs = {}
     if len(idx) and (idx["day"] > TRAIN_TO).any() and (idx["day"] <= TRAIN_TO).any():
         for k in (3, 4):
             t = feature_tables(idx, k)
+            looks["feature_bin_rows"] += int(len(t))
             tabs[k] = t
             t.to_csv(out / f"feature_bins_reach_{k}.csv", index=False)
             top = t[t["worth_testing"]].head(12)
@@ -185,6 +194,7 @@ def write_report(out: Path, lab_rows: Path | None = None, say=print) -> Path:
             L += ["(skipped: scikit-learn is not installed; `pip install -r requirements-ml.txt`)", ""]
         for k in (3, 4) if have_sklearn else ():
             m = model_check(idx, k)
+            looks["model_readouts"] += 4                    # the AUC and the three top-fraction read-outs
             L += [f"**reach_{k}**: AUC {m['auc_valid']:.3f} on {m['n_valid']:,} rows, base rate {m['base_valid']:.3f}. "
                   + "; ".join(f"top {p}%: rate {m[f'top{p}']['rate']:.3f} (lift {m[f'top{p}']['lift']:.2f}, net R {m[f'top{p}']['net_R']:+.2f}, n {m[f'top{p}']['n']:,})" for p in (5, 10, 25)),
                   "  Largest features by permutation: " + ", ".join(f"{i['feature']} ({i['drop_in_auc']:.4f})" for i in m["importance"][:6]), ""]
@@ -205,6 +215,10 @@ def write_report(out: Path, lab_rows: Path | None = None, say=print) -> Path:
                 L.append(f"| {k} | {_fmt(v['rate_near_desk']['rate'])} (n {v['rate_near_desk']['n']:,}) | {_fmt(v['rate_no_desk']['rate'])} | {_fmt(v['share_of_reach_with_desk_setup'])} |")
         else:
             L.append(dc["note"])
+    looks["total"] = looks["feature_bin_rows"] + looks["model_readouts"]
+    (out / "looks.json").write_text(json.dumps(looks))
+    L += ["", f"Looks taken in this read-out: **{looks['total']}** ({looks['feature_bin_rows']} feature-bin rows, {looks['model_readouts']} model read-outs). Every table above is a "
+          "hypothesis for a pre-registered test on sealed data, not a finding."]
     p = out / "report.md"
     p.write_text("\n".join(L) + "\n")
     say(f"wrote {p}")

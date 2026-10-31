@@ -463,7 +463,8 @@ def cmd_scout_log(cfg, a):
     j = _scout_journal(cfg, a)
     if a.action == "verify":
         bad = j.verify()
-        print("\n".join(bad) if bad else f"{j.path}: intact ({len(j.entries())} entries)")
+        h = j.head()
+        print("\n".join(bad) if bad else f"{j.path}: intact ({len(j.entries())} entries); head #{h['seq']} {h['hash']}")
         sys.exit(1 if bad else 0)
     if a.action == "summary":
         text = j.summary()
@@ -476,17 +477,29 @@ def cmd_scout_log(cfg, a):
             body = r["payload"].get("text") or ""
             print(f"#{r['seq']} {r['recorded_at'][:16]} {r['kind']:<11} {r['title']}" + (f"  refs {r['refs']}" if r["refs"] else "") + (f"\n    {body}" if body else ""))
         return
+    if a.action == "backfill":
+        if not a.out or not a.what:
+            sys.exit("scout-log refused: backfill needs --what grid|lab|report and --out (the run folder)")
+        rec = {"grid": scoutlog.record_grid, "lab": scoutlog.record_lab, "report": scoutlog.record_report}[a.what](
+            j, Path(a.out), note=a.text or "", **({"backfill": True} if a.what != "report" else {}), ran_at=a.ran_at)
+        h = j.head()
+        print(f"scout journal #{rec['seq']} ({rec['kind']}): {rec['title']} (backfilled; ran_at {rec['payload']['ran_at']})  head #{h['seq']} {h['hash']}")
+        return
     try:
         if a.action == "status":
             rec = j.set_status(a.hypothesis, a.set, a.why, a.ref, by=a.by)
         else:
+            if (a.kind or "note") == "run":
+                sys.exit("scout-log refused: run entries are written only by the commands (scout, scout-lab, scout-report) or by `backfill`; "
+                         "a run cannot be typed in, because it carries the running total of what was tried")
             payload = {"text": a.text} if a.text else {}
             if a.json:
                 payload.update(json.loads(a.json))
             rec = j.add(a.kind or "note", a.title, payload, a.ref, a.tag, by=a.by)
     except ValueError as exc:
         sys.exit(f"scout-log refused: {exc}")
-    print(f"scout journal #{rec['seq']} ({rec['kind']}): {rec['title']}")
+    h = j.head()
+    print(f"scout journal #{rec['seq']} ({rec['kind']}): {rec['title']}  head #{h['seq']} {h['hash']}")
 
 
 def cmd_scout(cfg, a):
@@ -502,7 +515,7 @@ def cmd_scout(cfg, a):
         j = _scout_journal(cfg, a)
         if j is not None:
             from . import scoutlog
-            print(f"scout journal #{scoutlog.record_grid(j, Path(a.out))['seq']} ({j.path})")
+            print(f"scout journal #{scoutlog.record_grid(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
         if a.report:
             scout_report.write_report(Path(a.out), Path(a.lab_rows) if a.lab_rows else None)
     except scout.Refused as exc:
@@ -518,19 +531,28 @@ def cmd_scout_lab(cfg, a):
         if a.stocks:
             scout_lab.run_stocks_lab(Path(a.stocks), Path(a.out), syms)
         else:
+            j0 = _scout_journal(cfg, a)
+            prior = j0.trials()["strategy_policy_cells"] if j0 is not None else 0          # the cells of every earlier recorded run: a second Bonferroni family
             scout_lab.run_dataset_lab(Path(a.dataset), Path(a.out), syms, a.first, a.last, Path(a.grid) if a.grid else None, not a.no_mining,
-                                      n_trials=a.trials, n_null=a.nulls)
+                                      prior_cells=prior, n_trials=a.trials, n_null=a.nulls)
         j = _scout_journal(cfg, a)
         if j is not None:
             from . import scoutlog
-            print(f"scout journal #{scoutlog.record_lab(j, Path(a.out))['seq']} ({j.path})")
+            print(f"scout journal #{scoutlog.record_lab(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
     except scout.Refused as exc:
         sys.exit(f"scout-lab refused, nothing made: {exc}")
 
 
 def cmd_scout_report(cfg, a):
-    from . import scout_report
-    scout_report.write_report(Path(a.out), Path(a.lab_rows) if a.lab_rows else None)
+    from . import scout, scout_report
+    try:
+        scout_report.write_report(Path(a.out), Path(a.lab_rows) if a.lab_rows else None)
+    except scout.Refused as exc:
+        sys.exit(f"scout-report refused, nothing made: {exc}")
+    j = _scout_journal(cfg, a)
+    if j is not None:
+        from . import scoutlog
+        print(f"scout journal #{scoutlog.record_report(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
 
 
 def cmd_replay(cfg, a):
@@ -1048,7 +1070,7 @@ def register(sub):
     x.add_argument("--jobs", type=int, default=3)
     x.set_defaults(fn=cmd_shadow_replay)
     x = ss.add_parser("scout", help="the asymmetry scout (shadow, offline): where trades that can pay several times their risk start (places nothing)")
-    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and refused")
+    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and refused: --last (before 2023-01-01) is required")
     x.add_argument("--stocks", help="a folder of the stock-minutes release's *_stocks_cash.parquet files")
     x.add_argument("--out", required=True, help="a new folder outside every git tree")
     x.add_argument("--symbols", help="default: NIFTY,BANKNIFTY (dataset) or every stock (stocks)")
@@ -1060,7 +1082,7 @@ def register(sub):
     x.add_argument("--journal", help="the scout journal file (default: <runtime>/intraday/scout/journal.jsonl); 'none' to skip")
     x.set_defaults(fn=cmd_scout)
     x = ss.add_parser("scout-lab", help="the scout's strategy library (about 20 market strategies, each with its own stop, every exit policy) and a rule miner that makes new ones (shadow, offline)")
-    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and dropped")
+    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and refused: --last (before 2023-01-01) is required")
     x.add_argument("--stocks", help="a folder of the stock-minutes release's *_stocks_cash.parquet files")
     x.add_argument("--out", required=True, help="a new folder outside every git tree")
     x.add_argument("--symbols", help="default: NIFTY,BANKNIFTY (dataset) or every stock (stocks)")
@@ -1073,7 +1095,9 @@ def register(sub):
     x.add_argument("--journal", help="the scout journal file (default: <runtime>/intraday/scout/journal.jsonl); 'none' to skip")
     x.set_defaults(fn=cmd_scout_lab)
     x = ss.add_parser("scout-log", help="the scout's journal: add an observation / hypothesis / decision / plan / note, move a hypothesis on, show, verify the chain, summarise")
-    x.add_argument("action", choices=["add", "status", "show", "verify", "summary"])
+    x.add_argument("action", choices=["add", "status", "show", "verify", "summary", "backfill"])
+    x.add_argument("--what", choices=["grid", "lab", "report"], help="backfill: which kind of run folder --out is")
+    x.add_argument("--ran-at", help="backfill: when the run was really made (ISO time); default is the folder's own modification time")
     x.add_argument("--journal", help="the journal file (default: <runtime>/intraday/scout/journal.jsonl)")
     x.add_argument("--kind", help="add: observation | hypothesis | decision | plan | note (default note); show: only this kind")
     x.add_argument("--title", help="add: a one-line title")
@@ -1091,6 +1115,7 @@ def register(sub):
     x = ss.add_parser("scout-report", help="the read-out of a finished scout run (exploratory tables, a small model, the desk comparison)")
     x.add_argument("--out", required=True, help="the scout run folder")
     x.add_argument("--lab-rows", help="a shadow-replay shadow_setups.parquet, to compare the desk's own entries (times and setups only)")
+    x.add_argument("--journal", help="the scout journal file (default: <runtime>/intraday/scout/journal.jsonl); 'none' to skip; the looks taken are charged to it")
     x.set_defaults(fn=cmd_scout_report)
     x = ss.add_parser("stocks", help="F&O stocks ranked by option liquidity, and whether this account can hold one")
     x.add_argument("--days", type=int, default=20)

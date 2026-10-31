@@ -54,7 +54,7 @@ def test_the_running_trial_count_adds_up_across_runs(tmp_path):
     j.add("run", "r2", {"rows": 500, "trials": {"cells": 140, "rules_tried": 135000, "nulls": 8}})
     j.add("run", "r3", {"rows": 200, "trials": {"cells": 140, "rules_tried": 135000, "nulls": 8}})
     t = j.trials()
-    assert t == {"runs": 3, "strategy_policy_cells": 280, "rules_tried": 270000, "search_nulls": 16, "candidates": 1700}
+    assert t == {"runs": 3, "strategy_policy_cells": 280, "rules_tried": 270000, "search_nulls": 16, "candidates": 1700, "report_looks": 0}
     s = j.summary()
     assert "270,000 mined rules" in s and "judged against ALL of it" in s and "external_unverified" in s
 
@@ -94,7 +94,7 @@ def test_a_lab_run_is_recorded_with_its_cells_and_every_search_it_ran(tmp_path):
     j = J.ScoutJournal(tmp_path / "j.jsonl")
     p = J.record_lab(j, out)["payload"]
     assert p["trials"] == {"cells": 14, "rules_tried": 300, "nulls": 2}              # the real search (100) plus the two null searches (200)
-    assert p["leaderboard"]["cells"] == 14 and p["leaderboard"]["passing"] >= 2 and p["mined"]["grid"]["p_vs_null"] == 0.33
+    assert p["leaderboard"]["cells"] == 14 and p["leaderboard"]["clears_bar"] >= 2 and p["mined"]["grid"]["p_vs_null"] == 0.33
     assert j.trials()["strategy_policy_cells"] == 14 and j.trials()["rules_tried"] == 300
 
 
@@ -115,3 +115,57 @@ def test_the_command_line_adds_moves_on_shows_verifies_and_summarises(tmp_path):
     lines = Path(jp).read_text().splitlines()
     Path(jp).write_text(lines[0].replace("compression", "expansion") + "\n" + "\n".join(lines[1:]) + "\n")
     assert run("verify").returncode == 1
+
+
+def test_the_summary_prints_the_head_hash_and_calls_the_journal_accident_evident():
+    import tempfile
+    d = Path(tempfile.mkdtemp())
+    j = J.ScoutJournal(d / "j.jsonl")
+    j.add("note", "a")
+    b = j.add("note", "b")
+    assert j.head() == {"seq": 2, "hash": b["hash"]}
+    t = j.summary()
+    assert b["hash"] in t and "accident-evident" in t and "tamper-evident" not in t and "CHAIN BROKEN" not in t
+
+
+def test_a_broken_chain_is_announced_at_the_top_of_the_summary_not_hidden_behind_a_total(tmp_path):
+    j = J.ScoutJournal(tmp_path / "j.jsonl")
+    j.add("run", "r1", {"rows": 10, "trials": {"cells": 140, "rules_tried": 1000, "nulls": 2}})
+    j.add("note", "n")
+    lines = (tmp_path / "j.jsonl").read_text().splitlines()
+    edited = lines[0].replace("140", "1", 1)                                                                               # someone lowers the trial count
+    assert edited != lines[0]
+    (tmp_path / "j.jsonl").write_text(edited + "\n" + lines[1] + "\n")
+    assert j.verify() and "CHAIN BROKEN" in j.summary().splitlines()[2]
+
+
+def test_a_run_entry_cannot_be_typed_in_by_hand_but_a_backfill_records_when_the_run_really_ran(tmp_path):
+    jp = str(tmp_path / "j.jsonl")
+
+    def run(*args):
+        return subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout-log", *args, "--journal", jp], capture_output=True, text=True, cwd=REPO)
+    r = run("add", "--kind", "run", "--title", "fake", "--json", '{"trials": {"cells": 0}}')
+    assert r.returncode != 0 and "cannot be typed in" in r.stderr + r.stdout and not Path(jp).exists()
+    grid = synthetic_grid(tmp_path)
+    b = run("backfill", "--what", "grid", "--out", str(grid), "--ran-at", "2026-10-30T10:00:00+00:00")
+    assert b.returncode == 0 and "ran_at 2026-10-30T10:00:00" in b.stdout and "head #1" in b.stdout
+    e = J.ScoutJournal(jp).entries("run")[0]["payload"]
+    assert e["backfill"] is True and e["ran_at"].startswith("2026-10-30T10:00") and len(e["run_fingerprint"]) == 64
+
+
+def test_a_run_entry_carries_a_fingerprint_that_changes_when_a_result_file_does(tmp_path):
+    grid = synthetic_grid(tmp_path)
+    before = J.run_fingerprint(grid)
+    assert before == J.run_fingerprint(grid)
+    (grid / "manifest.json").write_text((grid / "manifest.json").read_text().replace('"rows"', '"rows_"', 1))
+    assert J.run_fingerprint(grid) != before
+
+
+def test_a_read_out_is_charged_for_every_look_it_took(tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "looks.json").write_text(json.dumps({"feature_bin_rows": 190, "model_readouts": 8, "total": 198}))
+    j = J.ScoutJournal(tmp_path / "j.jsonl")
+    rec = J.record_report(j, out)
+    assert rec["kind"] == "run" and rec["payload"]["trials"]["looks"] == 198 and j.trials()["report_looks"] == 198
+    assert "198 read-out looks" in j.summary()

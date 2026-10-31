@@ -271,7 +271,7 @@ def build_trades(bars: dict[str, pd.DataFrame], symbols: list[str], kind: str, f
             if k == 0 or (first and str(d) < first) or (last and str(d) > last):
                 continue
             if seal and d >= SEAL_FROM:
-                raise Refused(f"{sym} {d}: sessions from {SEAL_FROM} are sealed for a later pre-registered test; use --to {SEAL_FROM - dt.timedelta(days=1)} or earlier")
+                raise Refused(f"{sym} {d}: sessions from {SEAL_FROM} are sealed for a later pre-registered test; use --last {SEAL_FROM - dt.timedelta(days=1)} or earlier")
             rows += session_trades(sess[d], sess[days[k - 1]], sym, vix, kind, only)
         say(f"  {sym}: {len(rows) - n0} trades")
     if not rows:
@@ -282,7 +282,7 @@ def build_trades(bars: dict[str, pd.DataFrame], symbols: list[str], kind: str, f
     return df
 
 
-def _finish(out, trades: pd.DataFrame, params: dict, source: dict, grid: pd.DataFrame | None, mining: bool, say, **mine_kw) -> dict:
+def _finish(out, trades: pd.DataFrame, params: dict, source: dict, grid: pd.DataFrame | None, mining: bool, say, prior_cells: int = 0, **mine_kw) -> dict:
     import json
     import os
     from .scout import EVIDENCE, NOT_FOR, _check_out, code_state
@@ -295,17 +295,18 @@ def _finish(out, trades: pd.DataFrame, params: dict, source: dict, grid: pd.Data
            "rows": int(len(trades)), "strategies": sorted(trades["strategy"].unique()), "first": str(trades["day"].min()), "last": str(trades["day"].max()),
            "sealed_from": str(SEAL_FROM), "cooldown_bars": COOLDOWN_BARS, "max_per_day": MAX_PER_DAY, "stop_floor_atr": STOP_FLOOR_ATR, "stop_cap_atr": STOP_CAP_ATR}
     (out / "manifest.json").write_text(json.dumps(man, indent=1, default=str))
-    write_lab_report(out, trades, grid, run_mining=mining, say=say, **mine_kw)
+    write_lab_report(out, trades, grid, run_mining=mining, say=say, prior_cells=prior_cells, **mine_kw)
     return man
 
 
-def run_dataset_lab(dataset, out, symbols=None, first=None, last=None, grid_dir=None, mining: bool = True, say=print, **mine_kw) -> dict:
+def run_dataset_lab(dataset, out, symbols=None, first=None, last=None, grid_dir=None, mining: bool = True, say=print, prior_cells: int = 0, **mine_kw) -> dict:
     """The library over the index dataset's OPEN sessions (the sealed ones are dropped on load), then the leaderboard and the miner."""
     from pathlib import Path
-    from .scout import INDEX_SYMBOLS, _check_out
+    from .scout import INDEX_SYMBOLS, _check_out, assert_open, require_open_window
     from .shadowlab import _digest, _load_bars
     out = Path(out).resolve()
     _check_out(out)
+    require_open_window(last)                       # refused, not shortened
     symbols = list(symbols or INDEX_SYMBOLS)
     bars = _load_bars(dataset, symbols, None)
     for s in bars:
@@ -313,8 +314,9 @@ def run_dataset_lab(dataset, out, symbols=None, first=None, last=None, grid_dir=
     vix = bars["INDIAVIX"]["close"] if "INDIAVIX" in bars else None
     trades = build_trades(bars, symbols, "index", first, last, vix, say=say)
     grid = pd.read_parquet(Path(grid_dir) / "scout_candidates.parquet") if grid_dir else None
+    assert_open(grid, f"--grid {grid_dir}")
     return _finish(out, trades, {"first": first, "last": last, "symbols": symbols}, {"path": str(dataset), "digest": _digest(dataset), "use": "underlying_features"},
-                   grid, mining, say, **mine_kw)
+                   grid, mining, say, prior_cells=prior_cells, **mine_kw)
 
 
 def run_stocks_lab(stock_dir, out, symbols=None, say=print) -> dict:
