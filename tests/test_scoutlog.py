@@ -169,3 +169,51 @@ def test_a_read_out_is_charged_for_every_look_it_took(tmp_path):
     rec = J.record_report(j, out)
     assert rec["kind"] == "run" and rec["payload"]["trials"]["looks"] == 198 and j.trials()["report_looks"] == 198
     assert "198 read-out looks" in j.summary()
+
+
+def _args(*argv):
+    from quantdesk.cli import build_parser
+    return build_parser().parse_args(["intraday", *argv])
+
+
+def test_scout_with_report_charges_the_read_outs_looks_to_the_journal_too(tmp_path, monkeypatch):
+    jp = tmp_path / "j.jsonl"
+    cfg = type("Cfg", (), {"runtime_dir": tmp_path / "rt"})()
+
+    def fake_run(dataset, out, symbols=None, stop_atr=None, first=None, last=None, say=print):
+        from quantdesk.intraday.synthetic import simulate_sessions
+        days = [d.date() for d in pd.bdate_range("2020-10-01", "2021-04-30")]                 # straddles the train/valid split, so the read-out has tables to look at
+        bars, _ = simulate_sessions(days, seed=5)
+        df = C.build({s: bars[s] for s in ("NIFTY", "BANKNIFTY")}, ["NIFTY", "BANKNIFTY"], "index", vix=bars["INDIAVIX"]["close"], say=lambda *_: None)
+        C._write(Path(out), df, {"stop_atr": C.STOP_ATR}, {"path": "synthetic", "use": "synthetic"})
+    monkeypatch.setattr(C, "run_dataset", fake_run)
+    a = _args("scout", "--dataset", str(tmp_path / "ds"), "--out", str(tmp_path / "run"), "--to", "2022-12-31", "--report", "--journal", str(jp))
+    a.fn(cfg, a)
+    j = J.ScoutJournal(jp)
+    cmds = [e["payload"]["command"] for e in j.entries("run")]
+    assert cmds == ["scout", "scout-report"] and j.trials()["report_looks"] > 0
+
+
+def test_the_lab_counts_earlier_cells_only_from_a_verified_journal_and_says_when_it_cannot(tmp_path, monkeypatch, capsys):
+    import sys as _sys
+    from quantdesk.intraday import scout_lab as SL
+    seen = {}
+    monkeypatch.setattr(SL, "run_dataset_lab", lambda *a, **k: seen.update(prior=k.get("prior_cells")) or {})
+    cfg = type("Cfg", (), {"runtime_dir": tmp_path / "rt"})()
+
+    def lab(*extra):
+        a = _args("scout-lab", "--dataset", str(tmp_path / "ds"), "--out", str(tmp_path / "o"), "--to", "2022-12-31", *extra)
+        a.fn(cfg, a)
+    jp = tmp_path / "j.jsonl"
+    j = J.ScoutJournal(jp)
+    j.add("run", "r1", {"rows": 1, "trials": {"cells": 140, "rules_tried": 0, "nulls": 0}})
+    j.add("note", "n")
+    monkeypatch.setattr(J, "record_lab", lambda *a, **k: {"seq": 9})
+    lab("--journal", str(jp))
+    assert seen["prior"] == 140                                                            # a verified journal supplies the earlier cells
+    lab("--journal", "none")
+    assert seen["prior"] == 0 and "THIS RUN ONLY" in capsys.readouterr().out               # and when there is none, it says so
+    lines = jp.read_text().splitlines()
+    jp.write_text(lines[0].replace("140", "1", 1) + "\n" + lines[1] + "\n")                # a broken chain is refused, not trusted
+    with pytest.raises(SystemExit, match="chain is broken"):
+        lab("--journal", str(jp))

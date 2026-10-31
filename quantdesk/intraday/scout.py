@@ -45,8 +45,12 @@ NOT_FOR = ("never evidence for a gate, a promotion, the paper gate or a profitab
 def require_open_window(last: str | None) -> None:
     """The index data's sealed sessions (from SEAL_FROM) are REFUSED, not dropped: an index run must name a last day before the seal, so nobody gets
     a quietly shortened window and the sealed sessions are never even loaded for a computation."""
-    if not last or str(last) >= str(SEAL_FROM):
-        raise Refused(f"index sessions from {SEAL_FROM} are sealed for a later pre-registered test: give --last {SEAL_FROM - dt.timedelta(days=1)} or earlier "
+    try:
+        day = dt.date.fromisoformat(str(last))
+    except ValueError:
+        day = None
+    if day is None or day >= SEAL_FROM:
+        raise Refused(f"index sessions from {SEAL_FROM} are sealed for a later pre-registered test: give --to {SEAL_FROM - dt.timedelta(days=1)} or earlier, as YYYY-MM-DD "
                       f"(got {last!r}); nothing was made")
 
 
@@ -238,7 +242,7 @@ def build(bars: dict[str, pd.DataFrame], symbols: list[str], kind: str, stop_atr
             if k == 0 or (first and str(d) < first) or (last and str(d) > last):
                 continue
             if seal and d >= SEAL_FROM:
-                raise Refused(f"{sym} {d}: sessions from {SEAL_FROM} are sealed for a later pre-registered test; use --last {SEAL_FROM - dt.timedelta(days=1)} or earlier")
+                raise Refused(f"{sym} {d}: sessions from {SEAL_FROM} are sealed for a later pre-registered test; use --to {SEAL_FROM - dt.timedelta(days=1)} or earlier")
             rows += session_candidates(sess[d], sess[days[k - 1]], sym, stop_atr, vix, kind)
         say(f"  {sym}: {len(rows) - n0} candidates")
     if not rows:

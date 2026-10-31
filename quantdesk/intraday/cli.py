@@ -518,6 +518,8 @@ def cmd_scout(cfg, a):
             print(f"scout journal #{scoutlog.record_grid(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
         if a.report:
             scout_report.write_report(Path(a.out), Path(a.lab_rows) if a.lab_rows else None)
+            if j is not None:                                                    # the read-out's looks are charged to the running total here too
+                print(f"scout journal #{scoutlog.record_report(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
     except scout.Refused as exc:
         sys.exit(f"scout refused, nothing made: {exc}")
 
@@ -532,7 +534,14 @@ def cmd_scout_lab(cfg, a):
             scout_lab.run_stocks_lab(Path(a.stocks), Path(a.out), syms)
         else:
             j0 = _scout_journal(cfg, a)
-            prior = j0.trials()["strategy_policy_cells"] if j0 is not None else 0          # the cells of every earlier recorded run: a second Bonferroni family
+            prior = 0                                                                    # the cells of every earlier recorded run: a second Bonferroni family
+            if j0 is not None:
+                bad = j0.verify()
+                if bad:
+                    sys.exit(f"scout-lab refused, nothing made: the journal chain is broken ({bad[0]}); the running total cannot be trusted. Fix or move {j0.path} first")
+                prior = j0.trials()["strategy_policy_cells"]
+            else:
+                print("scout-lab: --journal none, so the all-runs Bonferroni family is THIS RUN ONLY (no earlier run is counted)")
             scout_lab.run_dataset_lab(Path(a.dataset), Path(a.out), syms, a.first, a.last, Path(a.grid) if a.grid else None, not a.no_mining,
                                       prior_cells=prior, n_trials=a.trials, n_null=a.nulls)
         j = _scout_journal(cfg, a)
@@ -1070,7 +1079,7 @@ def register(sub):
     x.add_argument("--jobs", type=int, default=3)
     x.set_defaults(fn=cmd_shadow_replay)
     x = ss.add_parser("scout", help="the asymmetry scout (shadow, offline): where trades that can pay several times their risk start (places nothing)")
-    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and refused: --last (before 2023-01-01) is required")
+    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and refused: --to (a last day before 2023-01-01) is required")
     x.add_argument("--stocks", help="a folder of the stock-minutes release's *_stocks_cash.parquet files")
     x.add_argument("--out", required=True, help="a new folder outside every git tree")
     x.add_argument("--symbols", help="default: NIFTY,BANKNIFTY (dataset) or every stock (stocks)")
@@ -1082,7 +1091,7 @@ def register(sub):
     x.add_argument("--journal", help="the scout journal file (default: <runtime>/intraday/scout/journal.jsonl); 'none' to skip")
     x.set_defaults(fn=cmd_scout)
     x = ss.add_parser("scout-lab", help="the scout's strategy library (about 20 market strategies, each with its own stop, every exit policy) and a rule miner that makes new ones (shadow, offline)")
-    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and refused: --last (before 2023-01-01) is required")
+    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and refused: --to (a last day before 2023-01-01) is required")
     x.add_argument("--stocks", help="a folder of the stock-minutes release's *_stocks_cash.parquet files")
     x.add_argument("--out", required=True, help="a new folder outside every git tree")
     x.add_argument("--symbols", help="default: NIFTY,BANKNIFTY (dataset) or every stock (stocks)")

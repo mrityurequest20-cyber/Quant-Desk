@@ -165,7 +165,7 @@ def _loaded_nothing(*a, **k):
     raise AssertionError("the dataset was read although the window was refused")
 
 
-@pytest.mark.parametrize("last", [None, "", "2023-01-01", "2025-12-31"])
+@pytest.mark.parametrize("last", [None, "", "2023-01-01", "2025-12-31", "2022-12-31x", "garbage", "2022-13-45"])
 def test_an_index_run_without_a_last_day_before_the_seal_is_refused_before_anything_is_read(tmp_path, monkeypatch, last):
     monkeypatch.setattr(C, "_load_bars", _loaded_nothing)
     with pytest.raises(C.Refused, match="sealed"):
@@ -176,7 +176,7 @@ def test_an_index_run_without_a_last_day_before_the_seal_is_refused_before_anyth
 def test_the_command_refuses_an_index_run_with_no_last_day_and_says_why(tmp_path):
     r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout", "--dataset", str(tmp_path / "ds"), "--out", str(tmp_path / "o"), "--journal", "none"],
                        capture_output=True, text=True, cwd=Path(C.__file__).resolve().parents[2])
-    assert r.returncode != 0 and "sealed" in r.stderr + r.stdout and "--last" in r.stderr + r.stdout
+    assert r.returncode != 0 and "sealed" in r.stderr + r.stdout and "--to" in r.stderr + r.stdout
 
 
 def test_a_last_day_before_the_seal_runs_and_no_sealed_session_is_computed(tmp_path, monkeypatch):

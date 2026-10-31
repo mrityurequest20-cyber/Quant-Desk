@@ -199,7 +199,8 @@ def write_lab_report(out: Path, trades: pd.DataFrame, grid: pd.DataFrame | None,
         lb.to_csv(out / "leaderboard.csv", index=False)
         L += ["## 1. Strategy x exit policy (index)", "",
               f"{lb['cells'].iloc[0]} cells in this run, so a cell clears the bar at t >= {lb['z_needed'].iloc[0]:.2f} on the later years (and "
-              f"t >= {lb['z_needed_all_runs'].iloc[0]:.2f} counting the {int(lb['prior_cells'].iloc[0])} cells of earlier recorded runs), a positive mean on both slices and {MIN_VALID_N}+ trades. "
+              + (f"t >= {lb['z_needed_all_runs'].iloc[0]:.2f} counting the {int(lb['prior_cells'].iloc[0])} cells of earlier recorded runs)" if int(lb['prior_cells'].iloc[0]) else "the all-runs family is THIS RUN ONLY: no earlier recorded run was counted)")
+              + f", a positive mean on both slices and {MIN_VALID_N}+ trades. "
               f"Cells clearing the bar: **{int(lb['clears_bar'].sum())}** (this run's family), **{int(lb['clears_bar_all_runs'].sum())}** (all runs' family). "
               "Each one is a HYPOTHESIS for a pre-registered test on sealed data, not a finding: the later-years slice has been looked at by every table here. Best by later-years mean:", "",
               "| strategy | policy | n valid | mean valid | t valid | median valid | R>=3 share | best 1% share of profit | mean train | clears bar (hypothesis) |", "|---|---|---|---|---|---|---|---|---|---|"]

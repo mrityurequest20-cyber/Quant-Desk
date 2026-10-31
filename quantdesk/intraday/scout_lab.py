@@ -271,7 +271,7 @@ def build_trades(bars: dict[str, pd.DataFrame], symbols: list[str], kind: str, f
             if k == 0 or (first and str(d) < first) or (last and str(d) > last):
                 continue
             if seal and d >= SEAL_FROM:
-                raise Refused(f"{sym} {d}: sessions from {SEAL_FROM} are sealed for a later pre-registered test; use --last {SEAL_FROM - dt.timedelta(days=1)} or earlier")
+                raise Refused(f"{sym} {d}: sessions from {SEAL_FROM} are sealed for a later pre-registered test; use --to {SEAL_FROM - dt.timedelta(days=1)} or earlier")
             rows += session_trades(sess[d], sess[days[k - 1]], sym, vix, kind, only)
         say(f"  {sym}: {len(rows) - n0} trades")
     if not rows:

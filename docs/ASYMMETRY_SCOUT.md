@@ -105,7 +105,7 @@ in the market, and makes its own. So the scout has three parts (PR #159):
 
 Guards against fooling ourselves: R capped at 10 before any average; the median and the share of profit from the best 1% of trades shown;
 a Bonferroni bar over strategy x policy cells (given for this run's cells and, beside it, for this run plus every earlier recorded run's); the null for the miner;
-the sealed sessions (2023 on) **refused** by the code (an index run must name a `--last` before 2023-01-01; it is not silently shortened, and a grid file or a
+the sealed sessions (2023 on) **refused** by the code (an index run must name a last day (`--to`) before 2023-01-01; it is not silently shortened, and a grid file or a
 read-out that holds sealed days is refused too). Standard errors are clustered by **day**, because NIFTY and BANKNIFTY of one day are one market.
 
 **The journal.** Everything the scout does goes into one accident-evident, append-only log (hash-chained: an edit or deletion in the middle is found by `scout-log verify`; a cut tail or a rewrite that recomputes the hashes is not, and the time and author are self-asserted, so the head hash that every entry prints is copied outside the file before any claim rests on it) (`scout-log`, `quantdesk/intraday/scoutlog.py`, on the
@@ -134,7 +134,7 @@ daily stock minutes) and the sealed sessions give the one confirmatory test, pre
 - **The later-years slice is spent.** 2021-2022 is looked at by the leaderboard, the miner and the read-out tables in turn, so it stops being a holdout after the first look.
   The sealed 2023-on sessions are the holdout, and the code refuses them.
 - **Cost.** Section 4's break-even uses c about 0.013R (the desk's measured fee per trade against the money risked on an option). The scout instead charges a flat
-  **0.05R, assumed, not measured**, on underlying R: a real option cost per R varies with the stop distance. The 0.05R is the more conservative of the two. A "net R" column
+  **0.05R, assumed, not measured**, on underlying R: a real option cost per R varies with the stop distance. The two are different in kind and neither is measured on this data (neither includes a measured spread or slippage), so which is larger is not known. A "net R" column
   counts every trade that does not reach k as a full -1R, so it is a lower bound (trades that end at the close are marked above -1R in the lab's fixed-exit columns).
 - **R cap.** R is capped at 10 before any average. That clips winners only (conservative for a mean, but it works against the right tail the scout is looking for), so
   the median and the best-1% share are shown beside it.
