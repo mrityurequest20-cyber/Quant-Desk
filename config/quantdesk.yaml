@@ -97,6 +97,8 @@ intraday:
   underlyings: [NIFTY, BANKNIFTY]
   feed: kotak                      # kotak | yahoo | kite (kotak without KOTAK_CONSUMER_KEY = yahoo; replay/synthetic: CLI)
   chain: kotak                     # kotak (falls back to NSE) | nse | kite | model; kotak without a key = nse
+  kite:
+    live: true                     # owner, 25 Oct 2026: the Kite websocket serves the index bars and the live price when KITE_DATA_KEY and KITE_DATA_TOKEN are set (not the broker adapter's names); the feed above is the fallback
   chain_refresh_min: 3             # NSE throttles; don't hammer it (Kotak: intraday.kotak.refresh_min)
   kotak:                           # Kotak Neo Trade API, data endpoints only (consumer key; no login, no static IP)
     refresh_min: 1                 # option chain + live bid/ask every minute (~3 calls per underlying)
