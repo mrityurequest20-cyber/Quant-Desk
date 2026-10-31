@@ -216,9 +216,9 @@ def test_the_vix_line_never_carries_a_later_value_back_to_an_earlier_minute():
     assert np.isnan(prev) and np.isnan(line[:30]).all() and line[30] == 20.0                                                # nothing known before: NaN, not 20.0 from the future
 
 
-def test_the_window_start_is_one_spelling_and_a_bad_one_raises():
+def test_the_window_start_is_one_spelling_and_a_bad_one_is_refused():
     assert C.normalize_first("20200315") == "2020-03-15" and C.normalize_first("2020-03-15") == "2020-03-15" and C.normalize_first(None) is None and C.normalize_first("") is None
-    with pytest.raises(ValueError):
+    with pytest.raises(C.Refused, match="not a date"):
         C.normalize_first("2020-13-45")
 
 
@@ -286,5 +286,5 @@ def test_a_stock_run_honours_the_requested_window_in_either_date_spelling(tmp_pa
     m = C.run_stocks(d, tmp_path / "out_win", None, C.STOP_ATR, "20260105", "2026-01-06", say=lambda *_: None)     # compact and dashed spellings
     assert sorted(pd.read_parquet(tmp_path / "out_win" / "scout_candidates.parquet")["day"].unique()) == [dt.date(2026, 1, 5), dt.date(2026, 1, 6)]
     assert m is not None
-    with pytest.raises(ValueError):
+    with pytest.raises(C.Refused, match="not a date"):
         C.run_stocks(d, tmp_path / "out_bad", None, C.STOP_ATR, "not-a-date", None, say=lambda *_: None)

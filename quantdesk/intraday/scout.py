@@ -57,8 +57,13 @@ def require_open_window(last: str | None) -> str:
 
 
 def normalize_first(first: str | None) -> str | None:
-    """The window start as YYYY-MM-DD (the string comparisons in build need one spelling: "2020-03-20" < "20200315" is True); an invalid date raises."""
-    return None if first in (None, "") else dt.date.fromisoformat(str(first)).isoformat()
+    """The window start as YYYY-MM-DD (the string comparisons in build need one spelling: "2020-03-20" < "20200315" is True); an invalid date is refused."""
+    if first in (None, ""):
+        return None
+    try:
+        return dt.date.fromisoformat(str(first)).isoformat()
+    except ValueError:
+        raise Refused(f"{first!r} is not a date: give YYYY-MM-DD") from None
 
 
 def assert_open(df: pd.DataFrame, what: str) -> None:

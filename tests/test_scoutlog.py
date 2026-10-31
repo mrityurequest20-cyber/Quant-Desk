@@ -240,3 +240,21 @@ def test_a_write_cut_off_inside_a_multibyte_character_is_reported_not_raised(tmp
     assert "CHAIN BROKEN" in j.summary()
     r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout-log", "verify", "--journal", str(tmp_path / "j.jsonl")], capture_output=True, text=True, cwd=REPO)
     assert r.returncode == 1 and "Traceback" not in r.stderr and "UTF-8" in r.stdout
+
+
+def test_a_damaged_journal_ends_show_and_add_as_a_stated_refusal_not_a_traceback(tmp_path):
+    j = J.ScoutJournal(tmp_path / "j.jsonl")
+    j.add("note", "a")
+    with open(tmp_path / "j.jsonl", "a") as f:
+        f.write('{"seq": 2, "kind": "no')
+    for extra in (["show"], ["add", "--title", "x"]):
+        r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout-log", *extra, "--journal", str(tmp_path / "j.jsonl")], capture_output=True, text=True, cwd=REPO)
+        assert r.returncode != 0 and "Traceback" not in r.stderr and "refused" in r.stdout + r.stderr, extra
+
+
+def test_a_bad_window_date_on_the_scout_command_is_a_refusal_not_a_traceback(tmp_path):
+    from tests.test_scout import _stock_dir
+    d = _stock_dir(tmp_path, ["2026-01-01", "2026-01-02"])
+    r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout", "--stocks", str(d), "--out", str(tmp_path / "o"), "--from", "not-a-date", "--journal", "none"],
+                       capture_output=True, text=True, cwd=REPO)
+    assert r.returncode != 0 and "Traceback" not in r.stderr and "not a date" in r.stdout + r.stderr

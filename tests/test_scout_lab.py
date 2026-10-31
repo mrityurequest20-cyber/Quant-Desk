@@ -258,5 +258,5 @@ def test_a_stock_lab_run_forwards_the_requested_window_in_one_spelling(tmp_path,
     with pytest.raises(C.Refused, match="stop here"):
         L.run_stocks_lab(d, tmp_path / "lab", None, "20260105", "2026-01-06", say=lambda *_: None)
     assert seen == {"first": "2026-01-05", "last": "2026-01-06", "kind": "stock"}
-    with pytest.raises(ValueError):
+    with pytest.raises(C.Refused, match="not a date"):
         L.run_stocks_lab(d, tmp_path / "lab2", None, "not-a-date", None, say=lambda *_: None)

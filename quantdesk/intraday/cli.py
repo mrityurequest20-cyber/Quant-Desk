@@ -458,6 +458,19 @@ def _scout_journal(cfg, a):
     return scoutlog.ScoutJournal(Path(a.journal) if getattr(a, "journal", None) else scoutlog.default_path(cfg))
 
 
+def _announce(j, rec) -> None:
+    h = j.head()
+    print(f"scout journal #{rec['seq']} ({j.path}); head #{h['seq']} {h['hash']}")
+
+
+def _journaled(who: str, fn):
+    """A journal read or write that fails on a damaged file ends as a stated refusal, not a traceback (the chain is not extended; `scout-log verify` names the damage)."""
+    try:
+        return fn()
+    except ValueError as exc:
+        sys.exit(f"{who} refused: the journal could not be read or extended ({exc}); run `scout-log verify`, then repair or move the file")
+
+
 def cmd_scout_log(cfg, a):
     from . import scoutlog
     j = _scout_journal(cfg, a)
@@ -476,16 +489,16 @@ def cmd_scout_log(cfg, a):
         print(text)
         return
     if a.action == "show":
-        for r in j.entries(a.kind)[-a.last:]:
+        for r in _journaled("scout-log", lambda: j.entries(a.kind))[-a.last:]:
             body = r["payload"].get("text") or ""
             print(f"#{r['seq']} {r['recorded_at'][:16]} {r['kind']:<11} {r['title']}" + (f"  refs {r['refs']}" if r["refs"] else "") + (f"\n    {body}" if body else ""))
         return
     if a.action == "backfill":
         if not a.out or not a.what:
             sys.exit("scout-log refused: backfill needs --what grid|lab|report and --out (the run folder)")
-        rec = {"grid": scoutlog.record_grid, "lab": scoutlog.record_lab, "report": scoutlog.record_report}[a.what](
-            j, Path(a.out), note=a.text or "", **({"backfill": True} if a.what != "report" else {}), ran_at=a.ran_at)
-        h = j.head()
+        rec = _journaled("scout-log", lambda: {"grid": scoutlog.record_grid, "lab": scoutlog.record_lab, "report": scoutlog.record_report}[a.what](
+            j, Path(a.out), note=a.text or "", **({"backfill": True} if a.what != "report" else {}), ran_at=a.ran_at))
+        h = _journaled("scout-log", j.head)
         print(f"scout journal #{rec['seq']} ({rec['kind']}): {rec['title']} (backfilled; ran_at {rec['payload']['ran_at']})  head #{h['seq']} {h['hash']}")
         return
     try:
@@ -518,11 +531,11 @@ def cmd_scout(cfg, a):
         j = _scout_journal(cfg, a)
         if j is not None:
             from . import scoutlog
-            print(f"scout journal #{scoutlog.record_grid(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
+            _announce(j, _journaled("scout", lambda: scoutlog.record_grid(j, Path(a.out))))
         if a.report:
             scout_report.write_report(Path(a.out), Path(a.lab_rows) if a.lab_rows else None)
             if j is not None:                                                    # the read-out's looks are charged to the running total here too
-                print(f"scout journal #{scoutlog.record_report(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
+                _announce(j, _journaled("scout", lambda: scoutlog.record_report(j, Path(a.out))))
     except scout.Refused as exc:
         sys.exit(f"scout refused, nothing made: {exc}")
 
@@ -550,7 +563,7 @@ def cmd_scout_lab(cfg, a):
         j = _scout_journal(cfg, a)
         if j is not None:
             from . import scoutlog
-            print(f"scout journal #{scoutlog.record_lab(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
+            _announce(j, _journaled("scout-lab", lambda: scoutlog.record_lab(j, Path(a.out))))
     except scout.Refused as exc:
         sys.exit(f"scout-lab refused, nothing made: {exc}")
 
@@ -564,7 +577,7 @@ def cmd_scout_report(cfg, a):
     j = _scout_journal(cfg, a)
     if j is not None:
         from . import scoutlog
-        print(f"scout journal #{scoutlog.record_report(j, Path(a.out))['seq']} ({j.path}); head #{j.head()['seq']} {j.head()['hash']}")
+        _announce(j, _journaled("scout-report", lambda: scoutlog.record_report(j, Path(a.out))))
 
 
 def cmd_replay(cfg, a):
