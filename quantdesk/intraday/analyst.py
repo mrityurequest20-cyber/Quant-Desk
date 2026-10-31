@@ -205,6 +205,8 @@ class Analyst:
                                                                                      f"({(mp / last - 1):+.2%} from spot)")
 
         # --- futures: open-interest build-up and the basis (futures.py) -----------------------------------------
+        if c.get("fut_oi_quarantined"):                 # a faulty futures OI print withheld the build-up read (engine._futures): neutral evidence at its own weight, so a feed fault
+            add("fut_oi", "flow", 0, "futures OI feed fault: read withheld, counted as neutral")   # can only dilute the score, never raise conviction by dropping a disagreeing vote
         if c.get("fut_dir"):
             add("fut_oi", "flow", c["fut_dir"],
                 f"{c.get('fut_symbol') or 'futures'} {c['fut_buildup']}: price {c['fut_px_chg30']:+.2%}, "

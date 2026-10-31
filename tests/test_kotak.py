@@ -516,6 +516,43 @@ def test_engine_reads_the_future(cfg, client, fake, monkeypatch):
     assert out["fut_calendar"] == pytest.approx(108) and out["fut_oi_vs_prev"] == pytest.approx(1 / 0.98 - 1, rel=1e-3)
 
 
+def test_a_faulty_futures_oi_print_never_enters_history_and_withholds_every_oi_read(cfg, client, fake):
+    """OI prints near +-1e18 sit in about 1% of recorded snapshots: one in today's history would be the baseline of every later 30-minute change."""
+    feed = KotakIntradayFeed(cfg, client)
+    eng = IntradayEngine(cfg, feed, "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    eng.day = dt.date(2026, 10, 5)
+    t0 = pd.Timestamp("2026-10-05 10:00", tz=IST)
+    for i in range(35):
+        fake.fut_oi = int(19_000_000 * (1 + 0.0003 * i))
+        fake.spot = 24852.35 + 2 * i
+        good = eng._futures("NIFTY", t0 + pd.Timedelta(minutes=i), fake.spot)
+    assert good["fut_buildup"] == "long build-up" and "fut_oi_quarantined" not in good
+    n = len(eng.fut_hist["NIFTY"])
+    for i in (35, 36):                                                                   # two bad prints in a row
+        fake.fut_oi, fake.spot = 10 ** 18, 24852.35 + 2 * i
+        bad = eng._futures("NIFTY", t0 + pd.Timedelta(minutes=i), fake.spot)
+    assert bad["fut_oi_quarantined"] is True and bad["fut_basis"] == pytest.approx(108) and bad["fut_symbol"] == "NIFTY26OCTFUT"
+    assert not {"fut_oi", "fut_oi_chg30", "fut_buildup", "fut_dir", "fut_oi_day", "fut_oi_vs_prev"} & set(bad)
+    assert len(eng.fut_hist["NIFTY"]) == n                                               # nothing was admitted
+    warns = eng.journal.df("SELECT * FROM events WHERE level = 'WARN' AND category = 'futures'")
+    assert len(warns) == 1 and "implausible OI" in warns["message"].iloc[0]              # once per outage
+    fake.fut_oi, fake.spot = int(19_000_000 * (1 + 0.0003 * 37)), 24852.35 + 2 * 37
+    back = eng._futures("NIFTY", t0 + pd.Timedelta(minutes=37), fake.spot)
+    assert "fut_oi_quarantined" not in back and back["fut_buildup"] == "long build-up" and abs(back["fut_oi_chg30"]) < 0.01   # no poisoned baseline
+
+
+@pytest.mark.parametrize("bad", [float("inf"), -5.0, float("nan"), 1e12 * 1.0000001])
+def test_every_kind_of_faulty_futures_oi_is_quarantined(cfg, client, fake, monkeypatch, bad):
+    feed = KotakIntradayFeed(cfg, client)
+    eng = IntradayEngine(cfg, feed, "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
+    eng.day = dt.date(2026, 10, 5)
+    monkeypatch.setattr(feed.fut, "snapshot", lambda u, day: {"ltp": 24960.0, "oi": bad, "oi_prev": 19_000_000.0, "expiry": dt.date(2026, 10, 27),
+                                                                "symbol": "NIFTY26OCTFUT", "next": None})
+    out = eng._futures("NIFTY", pd.Timestamp("2026-10-05 10:00", tz=IST), 24852.0)
+    assert out.get("fut_oi_quarantined") is True and "fut_oi" not in out and "fut_oi_vs_prev" not in out and not eng.fut_hist["NIFTY"]
+    assert out["fut_basis"] == pytest.approx(108)                                       # the price read is the current one
+
+
 class BseFake(FakeKotak):
     """The same book served as BSE's: SENSEX contracts on bse_fo and the index on bse_cm. Records the exchange each
     watchlist call asked for."""
