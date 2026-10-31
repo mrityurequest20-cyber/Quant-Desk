@@ -189,6 +189,23 @@ def test_a_last_day_before_the_seal_runs_and_no_sealed_session_is_computed(tmp_p
     assert man["last"] <= "2022-12-31" and man["rows"] > 0
 
 
+def test_the_window_end_is_one_spelling_and_a_compact_sealed_day_is_still_refused():
+    assert C.require_open_window("20221231") == "2022-12-31" and C.require_open_window("2022-12-31") == "2022-12-31"
+    with pytest.raises(C.Refused, match="sealed"):
+        C.require_open_window("20230101")
+
+
+def test_a_compact_last_day_runs_and_the_manifest_holds_the_normal_spelling(tmp_path, monkeypatch):
+    from quantdesk.intraday.synthetic import simulate_sessions
+    days = [d.date() for d in pd.bdate_range("2022-11-01", "2023-02-28")]
+    bars, _ = simulate_sessions(days, seed=3)
+    monkeypatch.setattr(C, "_load_bars", lambda *a, **k: {s: bars[s] for s in bars})
+    monkeypatch.setattr(C, "_digest", lambda *a, **k: "x")
+    a = C.run_dataset(tmp_path / "ds", tmp_path / "a", ["NIFTY", "BANKNIFTY"], last="20221231", say=lambda *_: None)
+    b = C.run_dataset(tmp_path / "ds", tmp_path / "b", ["NIFTY", "BANKNIFTY"], last="2022-12-31", say=lambda *_: None)
+    assert a["rows"] == b["rows"] > 0 and a["last"] == b["last"] and a["params"]["last"] == "2022-12-31"
+
+
 def test_assert_open_refuses_a_table_with_sealed_index_days_but_not_a_stock_table():
     sealed = pd.DataFrame({"day": [dt.date(2022, 12, 30), dt.date(2023, 1, 2)], "kind": ["index", "index"]})
     with pytest.raises(C.Refused, match="sealed"):

@@ -42,9 +42,10 @@ NOT_FOR = ("never evidence for a gate, a promotion, the paper gate or a profitab
            "first passage, not option P&L; sessions and the two directions are not independent samples.")
 
 
-def require_open_window(last: str | None) -> None:
+def require_open_window(last: str | None) -> str:
     """The index data's sealed sessions (from SEAL_FROM) are REFUSED, not dropped: an index run must name a last day before the seal, so nobody gets
-    a quietly shortened window and the sealed sessions are never even loaded for a computation."""
+    a quietly shortened window and the sealed sessions are never even loaded for a computation. Returns the day as YYYY-MM-DD (Python 3.11+ also parses
+    `20221231`; the later string comparisons need the one spelling)."""
     try:
         day = dt.date.fromisoformat(str(last))
     except ValueError:
@@ -52,6 +53,7 @@ def require_open_window(last: str | None) -> None:
     if day is None or day >= SEAL_FROM:
         raise Refused(f"index sessions from {SEAL_FROM} are sealed for a later pre-registered test: give --to {SEAL_FROM - dt.timedelta(days=1)} or earlier, as YYYY-MM-DD "
                       f"(got {last!r}); nothing was made")
+    return day.isoformat()
 
 
 def assert_open(df: pd.DataFrame, what: str) -> None:
@@ -277,7 +279,7 @@ def run_dataset(dataset: Path, out: Path, symbols: list[str] | None = None, stop
                 last: str | None = None, say=print) -> dict:
     out = Path(out).resolve()
     _check_out(out)
-    require_open_window(last)                       # refused, not shortened: see require_open_window
+    last = require_open_window(last)                # refused, not shortened: see require_open_window
     symbols = list(symbols or INDEX_SYMBOLS)
     bars = _load_bars(dataset, symbols, None)
     for s in bars:                                  # and, as a second belt, the sealed bars are dropped before any computation

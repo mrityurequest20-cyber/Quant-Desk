@@ -306,7 +306,7 @@ def run_dataset_lab(dataset, out, symbols=None, first=None, last=None, grid_dir=
     from .shadowlab import _digest, _load_bars
     out = Path(out).resolve()
     _check_out(out)
-    require_open_window(last)                       # refused, not shortened
+    last = require_open_window(last)                # refused, not shortened
     symbols = list(symbols or INDEX_SYMBOLS)
     bars = _load_bars(dataset, symbols, None)
     for s in bars:
