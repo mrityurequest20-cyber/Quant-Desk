@@ -421,6 +421,15 @@ def test_a_credential_in_a_journal_row_never_reaches_the_reader_and_is_journaled
     assert not any("SUPERSECRET" in m or "a.b@example.com" in m for m in events(journal)["message"].astype(str))    # the teaching events hold a count, never the string
 
 
+def test_a_json_header_and_a_nested_token_in_a_journal_row_never_reach_the_reader(journal):
+    journal.event(f"{DAY} 12:31:00", "WARN", "broker", 'order refused: {"Authorization": "Basic dXNlcjpwYXNz"} response: {"access_token": "s3cr3tVALUE99"}')
+    journal.commit()
+    fake = FakeAnthropic(reply(lesson(evidence=["trade:T1"])))
+    got = teacher.teach(CFG, journal, DAY, reader=reader_for(fake), now=AFTER)
+    sent = fake.calls[0]["messages"][0]["content"]
+    assert got["status"] == "taught" and "dXNlcjpwYXNz" not in sent and "s3cr3tVALUE99" not in sent and "[redacted]" in sent
+
+
 @pytest.mark.parametrize("text,secret", [("KITE_ACCESS_TOKEN=abcDEF123456789xyzABC", "abcDEF123456789xyzABC"), ("KITE_API_KEY=k123456", "k123456"), ("KOTAK_CONSUMER_KEY=3f2504e0-4f89-11d3", "3f2504e0"),
                                          ("client_secret=s3cr3t", "s3cr3t"), ("my_password=pw99", "pw99"), ("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI", "wJalrXUtnFEMI"),
                                          ("Authorization: Token abc123", "abc123"), ("authorization: Bearer abcd", "abcd"), ('password="abc def"', "def"),
@@ -429,6 +438,8 @@ def test_a_credential_in_a_journal_row_never_reaches_the_reader_and_is_journaled
                                          ("authorization: Custom abc123 note", "abc123"),
                                          ("mobile: +91 9876543210", "9876543210"), ("phone=+91-98765-43210", "43210"), ("Mobile : 98765 43210", "43210"),
                                          ("user_mobile: (+91) 98765 43210", "43210"),
+                                         ('{"Authorization": "Basic dXNlcjpwYXNz"}', "dXNlcjpwYXNz"), ("{'authorization': 'Bearer abcd1234efgh'}", "abcd1234efgh"),
+                                         ('response: {"access_token": "s3cr3t"}', "s3cr3t"), ("response=[{'password': 'hunter22'}]", "hunter22"),
                                          ("Authorization: Digest username=bob, response=deadbeef0123", "deadbeef0123"),
                                          ("Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE, Signature=abcdef0123456789", "abcdef0123456789")])
 
