@@ -881,6 +881,51 @@ def _run_day(cfg, tmp_path, kite: bool, name: str):
     return eng, fed, rec, j, days[-1]
 
 
+def _gap_fill_engine(cfg, tmp_path):
+    from quantdesk.core.calendar import TradingCalendar
+    from quantdesk.intraday.engine import IntradayEngine
+    from quantdesk.intraday.feeds import ReplayFeed
+    from quantdesk.intraday.learning import Memory
+    from quantdesk.intraday.recorder import SessionRecorder
+    from quantdesk.intraday.sim import IntradayBroker
+    from quantdesk.intraday.synthetic import simulate_sessions
+    from quantdesk.journal.journal import Journal
+    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
+    bars_, _ = simulate_sessions(days, seed=11)
+    feed = ReplayFeed(bars_, days[-1])
+    eng = IntradayEngine(cfg, feed, "model", Journal(), IntradayBroker(cfg, starting_cash=500000), recorder=SessionRecorder(tmp_path / "data"), say=None,
+                         memory=Memory(tmp_path / "m.json"))
+    eng.start_session(days[-1])
+    return eng, feed
+
+
+def _trace(eng, names):
+    order = []
+    for name in names:
+        real = getattr(eng, name)
+        setattr(eng, name, lambda *a, _n=name, _r=real, **k: (order.append(_n), _r(*a, **k))[1])
+    return order
+
+
+def test_the_recorder_gap_fill_runs_after_the_commands_the_kill_switch_and_the_exits(cfg, tmp_path):
+    """The gap fill makes history calls with no timeout: a slow one must not delay the owner's commands, the kill switch or the 15:15 exit."""
+    eng, feed = _gap_fill_engine(cfg, tmp_path)
+    feed.clock = feed.clock + pd.Timedelta(minutes=1)
+    order = _trace(eng, ("_commands", "_kill_switch", "_wallclock_exits", "_persist", "_heartbeat", "_fill_recorder_gaps"))
+    eng.step()
+    assert order[:2] == ["_commands", "_kill_switch"] and order.count("_fill_recorder_gaps") == 1
+    i = order.index("_fill_recorder_gaps")
+    assert i == len(order) - 1 and {"_wallclock_exits", "_persist", "_heartbeat"} <= set(order[:i])      # last of the step, after exits, persist and heartbeat
+
+
+def test_the_session_close_shuts_the_positions_and_saves_before_the_gap_fill(cfg, tmp_path):
+    """The kill switch's close-out runs end_session: a history call that hangs must not sit in front of the flatten."""
+    eng, feed = _gap_fill_engine(cfg, tmp_path)
+    order = _trace(eng, ("_close", "_persist", "_fill_recorder_gaps"))
+    eng.end_session()
+    assert order[-1] == "_fill_recorder_gaps" and "_persist" in order[:-1]
+
+
 def test_a_whole_kite_day_leaves_the_sleeves_settlement_inputs_exactly_as_a_plain_day_does_and_the_trial_measures_can_be_computed(cfg, tmp_path):
     from quantdesk.intraday.sleeves import official_close, settlement_price
     eng_k, fed, rec_k, j, day = _run_day(cfg, tmp_path, True, "kite")
