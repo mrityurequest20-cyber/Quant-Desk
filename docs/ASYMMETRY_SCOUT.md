@@ -1,0 +1,97 @@
+# The asymmetry scout: finding trades that can pay several times what they risk
+
+Status: **design and diagnosis only (31 Oct 2026).** No code, no config, no limit, no gate and no workflow changes. The
+scout, when built, is **shadow-only**: it places nothing, sizes nothing and changes nothing the desk reads.
+
+## 1. The question
+
+The owner's ask: the desk's costs keep eating its gross profit, so find the trades where a win is worth several times the
+risk, and say what the normal desk does not do that keeps it from taking them.
+
+## 2. What the paper journal shows (measured, descriptive, small)
+
+Source: the closed trades in the paper journal, 12 to 30 Oct 2026: **36 trades, 14 sessions**, all long index options (35
+single options, 1 spread). This is the desk's own paper record, not a clean sample; it motivates the question and is **not
+evidence for any rule**. Nothing below was tested.
+
+| Fact | Number |
+|---|---|
+| Net P&L / fees paid / gross before fees | +₹12,123 / ₹4,712 / ₹16,835, so fees are **28% of gross** |
+| Fee per round trip | ₹131 on average (₹72 to ₹267); about **1.3% of the money risked** per trade (≈₹10,000) |
+| Mean / median R per trade | **+0.03R / -0.20R** (R = the planned loss) |
+| Best / worst trade | **+2.16R** / -1.07R |
+| Planned underlying reward:risk | median, 25th and 75th percentile all **2.00**; 28 of 36 at 2 or more, **4 of 36 at 3 or more** |
+| Exits | 17 `time_exit` (-0.13R, -₹19k), 9 `invalidation` (-0.59R, -₹55k), 3 `premium_target` (+2.05R, **+₹60k**), 3 `underlying_target` (+0.84R), 3 `square_off`, 1 `premium_stop` |
+| Winners / losers | 15 at +0.77R on average / 21 at -0.50R |
+| Losers that had been 0.5R up first | 14% (median best open profit on a loser: 0.15R) |
+
+Read plainly:
+
+1. **The cost problem is a thin-edge problem.** A round trip costs about the same as it always did (~₹130). It is 28% of
+   gross because the average trade earns only ~₹470 gross. A 3R winner is ~₹30,000 gross against ₹130 of fees: cost
+   stops mattering when the winner is big, and matters a lot when the average trade makes 0.03R.
+2. **Three trades made the whole profit.** The three `premium_target` exits (+₹60k) are bigger than the net result
+   (+₹12k). Without them the desk lost about ₹48k over the period.
+3. **No trade can win much more than 2R by construction** (next section). The best of 36 was 2.16R.
+
+## 3. What the desk does not do (each point checked in the code)
+
+| # | Not done | Where | Effect |
+|---|---|---|---|
+| 1 | **Never looks for large moves; every setup gets the same target.** Armed setups use a fixed `reward_risk` (2.0 for `trend_break` and `vwap_trend`, 1.5 for `orb`, the range width as a floor); the target is `fill ± max(reward_risk × risk, min_move)` | `playbook.py` `add(...)`, `fire()` | Planned R:R is 2.0 on nearly every trade regardless of the day, the range, the volatility regime or the room to the next level |
+| 2 | **Wins are capped at about +2R in the option too.** Stop -30% of premium (1R), take-profit +60% of premium (2R), same for all four directional setups | `config/quantdesk.yaml` `playbook.*` `premium_stop`, `premium_target`; `engine.py` exit order | A trade that would have run 4R is closed at 2R |
+| 3 | **No runner, no trail, no partial exit.** Each trade is all in, all out | `engine.py` exit rules (`invalidation`, `premium_stop`, `premium_target`, `underlying_target`, `breakeven_stop`, `time_exit`) | The right tail is cut off even when the trade is working |
+| 4 | **A 45-minute "no progress" exit.** If the option has made less than 10% of its premium at minute 45 (60 for some setups) it is closed | `engine.py` `time_exit`; `time_stop_min` | 17 of 36 exits. Slow trends are stopped out before they pay; the winners that hit the target did so in a median 22 minutes |
+| 5 | **Does not rank candidates by asymmetry.** It takes armed setups that clear a very low bar: EV ≥ ₹40 after costs and ≥ 0.05R, conviction ≥ 0.45 (0.55 for `trend_break`) | `quant.min_ev_inr`, `quant.min_ev_r`, `analyst.min_conviction`, `playbook.py` | Mediocre 2R setups and potentially large ones are treated the same |
+| 6 | **Two instruments, four trades a day, two open.** No stocks, no other indices | `intraday.underlyings`, `risk.max_trades_per_day`, `risk.max_open` | The choice is among the few setups two indices arm in a day, not among every liquid F&O name; the shadow lab's stock runs show how much wider that pool is |
+| 7 | **Deliberately skips expiry day (0-DTE)** and buys 0.45 delta options | `intraday.expiry_min_days: 1`, setups' `long_delta` | No cheap convex tickets, where the biggest percentage moves happen (and the fastest decay) |
+| 8 | **No expansion score.** Nothing scores compression followed by expansion, event days, a gap-and-go open, or a volatility forecast above the implied one. The nearest things are `trend_break`'s tight-range filter (30-minute range ≤ 7.5 × ATR5), a pass/fail test, not a score; the HAR forecaster is shadow-only | `playbook.py` (no squeeze/expansion state found by search), `quant.vol_forecast.mode: shadow` | The desk cannot tell a day that can move 3 to 5 risk-units from one that cannot |
+| 9 | **No measurement of "room" for a trend trade.** The distance from entry to the next real obstacle (previous day high/low, opening range, value-area edge, round number) in units of risk is not computed. Only the value-area fade checks that its target (the POC) lies ahead with room | `playbook.py` (the one "room" test is in `va_reversion`) | A 2R target can sit right under a wall |
+
+Two things that are **not** the cause (checked, so they are not guessed at): the structure (35 of 36 were single options,
+so a spread is not capping the payoff) and the brokerage rate (about ₹130 a trade, unchanged).
+
+## 4. Break-even arithmetic (why "high reward:risk" is not free)
+
+With the stop at 1R and cost c ≈ 0.013R, a hit-or-stop trade with target k·R needs a hit rate above (1 + c) / (k + 1):
+
+| Target k | 2R | 3R | 4R | 5R | 6R |
+|---|---|---|---|---|---|
+| Hit rate needed | 33.8% | 25.3% | 20.3% | 16.9% | 14.5% |
+
+A far target is only worth taking where the chance of getting there is *higher than the market's price for it*. That is
+the whole job of the scout: **identify the situations where the distribution of favourable moves has a fat right tail**,
+and prove it on data it was not tuned on, before any desk rule changes.
+
+## 5. The design
+
+**Name:** asymmetry scout. **Job:** for every candidate setup, estimate whether it can reach k times its risk (k = 2, 3, 4,
+6) before its invalidation, rank candidates by that, and **grade itself afterwards** on what the market did.
+
+**Inputs (all point in time):** room to the next 1, 2 and 3 structural levels in units of risk; range compression and
+expansion (range width and ATR relative to recent sessions); implied against forecast and realised volatility; day type,
+gap, time of day, days to expiry; breadth and index-heavyweight state where recorded. Option side: on recorded real quotes,
+the net payoff multiple of a far-out-of-the-money or spread ticket after real bid/ask and the statutory charges.
+
+**Label (pre-registered before any result):** first passage. `reach_k` = 1 if the instrument's price reaches k × planned
+risk in the trade's direction before touching the invalidation, within the session; stop wins ties; bars from the one
+after the firing bar only. This extends the shadow lab's existing labelling; it needs no new data.
+
+**Where it runs:**
+
+| Stage | What | Gate to the next |
+|---|---|---|
+| S0 | This document (diagnosis, design). Docs only | review, CI |
+| S1 | A pre-registered spec `asymmetry_scout_v0`: the candidate screens (a short, fixed list), the label, the pass rule (hit rate above the break-even in §4 with a lower confidence bound, after costs), the power calculation with session clustering, the kill rule, the disclosure of §2 (the idea came from reading 36 paper trades). Committed **alone**, before code or results | independent research review, CI, merge |
+| S2 | Add the `reach_k` labels and the candidate features to the shadow lab (`shadow-replay`). Offline, no desk path | independent risk review, CI |
+| S3 | One locked-test read on the lab corpus (index history and stocks) | pre-registered rule only |
+| S4 | If S3 passes: the scout scores live candidates in shadow on the recorded tape and real quotes, journaled, never traded | graded on forward sessions |
+| S5 | Only after S4: a **separate, independently reviewed proposal** for any desk change (for example a runner leg or a longer time exit on the screens that earned it), paper only | owner and reviewers |
+
+## 6. Hard limits
+
+- No order, no broker, no credential, no live trading. Paper only.
+- No limit or gate is loosened. Position sizes, loss limits and the stale-feed halt stay as they are.
+- Source minutes used offline are third party (`external_unverified`): the result is a research candidate, never evidence for a
+  gate, a promotion or a profit claim. Only recorded real-quote sessions may support an option-P&L statement.
+- A failed or inconclusive scout is a result: it is reported as such and the desk stays as it is.
