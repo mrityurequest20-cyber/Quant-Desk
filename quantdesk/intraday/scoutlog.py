@@ -72,7 +72,10 @@ class ScoutJournal:
         return [r for r in rows if kind is None or r["kind"] == kind]
 
     def verify(self) -> list[str]:
-        return self.log.verify()
+        try:
+            return self.log.verify()
+        except UnicodeDecodeError:                      # a write cut off inside a multi-byte character: damage to report, not a crash (the log writes ensure_ascii=False)
+            return [f"{self.path.name}: not valid UTF-8 (torn write?)"]
 
     def head(self) -> dict:
         """The last entry's number and hash: the anchor to copy outside the file."""

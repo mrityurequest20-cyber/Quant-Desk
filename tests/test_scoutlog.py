@@ -229,3 +229,14 @@ def test_a_torn_line_is_reported_by_verify_and_summary_instead_of_raising(tmp_pa
     assert "CHAIN BROKEN" in text.splitlines()[2] and "cannot be computed" in text
     r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout-log", "verify", "--journal", str(tmp_path / "j.jsonl")], capture_output=True, text=True, cwd=REPO)
     assert r.returncode == 1 and "Traceback" not in r.stderr and "JSON" in r.stdout
+
+
+def test_a_write_cut_off_inside_a_multibyte_character_is_reported_not_raised(tmp_path):
+    j = J.ScoutJournal(tmp_path / "j.jsonl")
+    j.add("note", "a")
+    with open(tmp_path / "j.jsonl", "ab") as f:
+        f.write('{"seq": 2, "title": "é'.encode("utf-8")[:-1])                                                           # the 2-byte é cut after its first byte
+    assert any("UTF-8" in p for p in j.verify())
+    assert "CHAIN BROKEN" in j.summary()
+    r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout-log", "verify", "--journal", str(tmp_path / "j.jsonl")], capture_output=True, text=True, cwd=REPO)
+    assert r.returncode == 1 and "Traceback" not in r.stderr and "UTF-8" in r.stdout
