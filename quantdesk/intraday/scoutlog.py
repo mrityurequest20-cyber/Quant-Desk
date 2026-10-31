@@ -53,6 +53,8 @@ class ScoutJournal:
         broken = self.verify()
         if broken:                                      # every write (status, backfill, run records) passes here: a chain with an altered, removed or torn entry is not extended
             raise ValueError(f"the journal chain is broken, so nothing is added: {'; '.join(broken[:2])}")
+        if self.path.exists() and self.path.stat().st_size and not self.path.read_bytes().endswith(b"\n"):
+            raise ValueError("the journal's last record has no line end (a write was cut short), so nothing is added: it would be joined onto that line")
         have = {r["seq"] for r in self.log.read()}
         bad = [r for r in refs if r not in have]
         if bad:

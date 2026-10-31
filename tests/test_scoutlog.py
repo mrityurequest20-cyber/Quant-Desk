@@ -274,3 +274,25 @@ def test_an_entry_is_not_added_to_a_chain_with_an_altered_record(tmp_path):
     with pytest.raises(ValueError, match="chain is broken"):
         j.add("hypothesis", "h")
     assert len(path.read_text().splitlines()) == n                                                 # nothing was written
+
+
+def test_an_entry_is_not_joined_onto_a_last_record_that_lost_its_line_end(tmp_path):
+    j = J.ScoutJournal(tmp_path / "j.jsonl")
+    j.add("note", "first")
+    path = tmp_path / "j.jsonl"
+    path.write_bytes(path.read_bytes().rstrip(b"\n"))                                   # a complete record whose newline was lost
+    assert j.verify() == []                                                             # the chain itself is fine ...
+    with pytest.raises(ValueError, match="no line end"):                                # ... but a new record would be glued to it
+        j.add("note", "second")
+    assert not path.read_bytes().endswith(b"\n") and len(path.read_bytes().splitlines()) == 1
+
+
+def test_a_refused_recording_names_the_run_folder_and_the_backfill_command(tmp_path):
+    from tests.test_scout import _stock_dir
+    d = _stock_dir(tmp_path, ["2026-01-01", "2026-01-02", "2026-01-05"])
+    jp = tmp_path / "j.jsonl"
+    jp.write_text('{"seq": 1, "kind": "no')                                              # a damaged journal
+    out = tmp_path / "o"
+    r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout", "--stocks", str(d), "--out", str(out), "--journal", str(jp)], capture_output=True, text=True, cwd=REPO)
+    text = r.stdout + r.stderr
+    assert r.returncode != 0 and "Traceback" not in r.stderr and str(out) in text and "scout-log backfill" in text
