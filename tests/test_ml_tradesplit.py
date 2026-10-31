@@ -191,3 +191,30 @@ def test_a_flat_underlying_is_flat_and_a_win_is_a_win_whatever_the_spot_did():
 def test_bucket_edges_through_the_distance_function():
     f = lambda strike: T.bucket(T.long_leg_distance_pct({"entry_underlying": 1000.0, "legs": json.dumps([leg("CE", strike)])}))
     assert f(1002.5) == "0.25% to 0.75% OTM" and f(1002.4) == "up to 0.25% OTM" and f(1007.5) == "over 0.75% OTM" and f(1007.4) == "0.25% to 0.75% OTM"
+
+
+def test_an_empty_closed_set_still_rejects_a_table_without_the_columns(tmp_path):
+    p = tmp_path / "old.db"
+    with sqlite3.connect(p) as db:
+        db.execute("CREATE TABLE trades (id TEXT, status TEXT, strategy TEXT, opened_at TEXT)")           # no pnl, and nothing closed
+        db.execute("INSERT INTO trades VALUES ('T1', 'open', 'orb', '2026-10-12')")
+    with pytest.raises(T.JournalError, match="lacks"):
+        T.load_closed(p)
+    assert T.load_closed(make_db(tmp_path, [trade(1, status="open")])) == []                 # a full schema with nothing closed is a valid empty report
+
+
+@pytest.mark.parametrize("bad_leg", [{"instrument": {"kind": "option", "strike": "unknown", "right": "CE"}, "qty": 1},
+                                     {"instrument": {"kind": "option", "strike": 1010.0, "right": "CE"}, "qty": "many"},
+                                     {"instrument": {"kind": "option", "strike": float("nan"), "right": "CE"}, "qty": 1}])
+def test_one_malformed_leg_number_is_that_leg_unusable_not_the_report_stopped(bad_leg):
+    d = T.long_leg_distance_pct({"entry_underlying": 1000.0, "legs": json.dumps([bad_leg, leg("CE", 1010.0)])})
+    assert d == pytest.approx(1.0)
+    assert T.long_leg_distance_pct({"entry_underlying": "n/a", "legs": json.dumps([leg("CE", 1010.0)])}) is None
+
+
+def test_a_market_neutral_trade_is_not_called_flat(tmp_path):
+    rows = [trade(1, strategy="condor", direction=0, pnl=-50.0, exit_u=1030.0), trade(2, strategy="condor", direction=1, pnl=-50.0, exit_u=1000.0)]
+    chk = T.sleeve_check(T.load_closed(make_db(tmp_path, rows)), "condor")
+    by_id = {r["id"]: r for r in chk["trades"]}
+    assert by_id["T1"]["verdict"].startswith("no direction") and by_id["T1"]["underlying_move_in_trade_direction_pct"] != by_id["T1"]["underlying_move_in_trade_direction_pct"]
+    assert by_id["T2"]["verdict"] == "underlying flat, trade lost" and chk["underlying_against"] == 0

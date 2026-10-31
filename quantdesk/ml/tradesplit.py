@@ -44,14 +44,15 @@ def load_closed(journal: Path) -> list[dict]:
     try:
         with contextlib.closing(sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro", uri=True)) as db:       # as_uri escapes ? # % so mode=ro cannot be swallowed by the path
             db.row_factory = sqlite3.Row
-            rows = db.execute("SELECT * FROM trades WHERE status = 'closed' ORDER BY opened_at, id").fetchall()
+            cur = db.execute("SELECT * FROM trades WHERE status = 'closed' ORDER BY opened_at, id")
+            columns = {d[0] for d in cur.description}                                                  # the table's columns, whether or not any trade is closed
+            rows = cur.fetchall()
     except sqlite3.Error as exc:
         raise JournalError(f"{p}: {exc}") from exc
     need = {"id", "strategy", "symbol", "direction", "kind", "opened_at", "entry_underlying", "exit_underlying", "pnl", "fees", "exit_reason", "legs"}
-    out = [dict(r) for r in rows]
-    if out and not need <= set(out[0]):
-        raise JournalError(f"{p}: the trades table lacks {sorted(need - set(out[0]))}")
-    return out
+    if not need <= columns:
+        raise JournalError(f"{p}: the trades table lacks {sorted(need - columns)}")
+    return [dict(r) for r in rows]
 
 
 def long_leg_distance_pct(trade: dict) -> float | None:
@@ -59,19 +60,26 @@ def long_leg_distance_pct(trade: dict) -> float | None:
     spot = trade.get("entry_underlying")
     try:
         legs = json.loads(trade.get("legs") or "[]")
+        spot = float(spot) if spot else 0.0
     except (TypeError, ValueError):
         return None
-    if not spot or not math.isfinite(float(spot)) or float(spot) <= 0:
+    if not math.isfinite(spot) or spot <= 0:
         return None
     best = None
     for leg in legs if isinstance(legs, list) else []:
         if not isinstance(leg, dict) or not isinstance(leg.get("instrument") or {}, dict):
             continue
         ins = leg.get("instrument") or {}
-        if ins.get("kind") != "option" or not (leg.get("qty") or 0) > 0 or ins.get("strike") is None:
+        if ins.get("kind") != "option" or ins.get("strike") is None:
             continue
-        k, right = float(ins["strike"]), ins.get("right")
-        d = (k - float(spot)) / float(spot) * 100 if right == "CE" else (float(spot) - k) / float(spot) * 100 if right == "PE" else None
+        try:                                                      # one malformed quantity or strike is that leg unusable, not the whole report stopped
+            qty, k = float(leg.get("qty") or 0), float(ins["strike"])
+        except (TypeError, ValueError):
+            continue
+        right = ins.get("right")
+        if not qty > 0 or not math.isfinite(k):
+            continue
+        d = (k - spot) / spot * 100 if right == "CE" else (spot - k) / spot * 100 if right == "PE" else None
         if d is not None and (best is None or d < best):          # several long legs: the one nearest the money, so the trade is not counted further out than it is
             best = d
     return best
@@ -173,11 +181,12 @@ def sleeve_check(trades: list[dict], sleeve: str) -> dict:
     mine = [t for t in trades if t["strategy"] == sleeve and t.get("exit_reason") != ABORTED]
     rows = []
     for t in mine:
-        move = float(t["direction"]) * (float(t["exit_underlying"]) - float(t["entry_underlying"])) / float(t["entry_underlying"]) * 100 if t["exit_underlying"] and t["entry_underlying"] else float("nan")
+        direction = float(t["direction"] or 0)                                                     # 0: a market-neutral structure has no side, so no move "in its direction"
+        move = direction * (float(t["exit_underlying"]) - float(t["entry_underlying"])) / float(t["entry_underlying"]) * 100 if direction and t["exit_underlying"] and t["entry_underlying"] else float("nan")
         pnl, fees = float(t["pnl"]), float(t["fees"] or 0)
         rows.append({"id": t["id"], "day": day_of(t), "symbol": t["symbol"], "exit_reason": t["exit_reason"], "underlying_move_in_trade_direction_pct": move,
                      "pnl": pnl, "fees": fees, "pnl_before_fees": pnl + fees,
-                     "verdict": _verdict(move, pnl)})
+                     "verdict": "no direction (market-neutral): not applicable" if not direction else _verdict(move, pnl)})
     return {"sleeve": sleeve, "trades": rows, "n": len(rows), "wins": sum(1 for r in rows if r["pnl"] > 0),
             "underlying_against": sum(1 for r in rows if r["verdict"] == "underlying against, trade lost"),
             "underlying_with_trade_lost": sum(1 for r in rows if r["verdict"].startswith("underlying with")), "fees": sum(r["fees"] for r in rows)}
