@@ -32,6 +32,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false   # the write-capable token is not left on disk while `pip install` runs third-party code; only the push step gets it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.11"
@@ -47,10 +49,14 @@ jobs:
           openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/kite_token" -out "$RUNNER_TEMP/kite_token.enc" -pass env:KITE_DATA_SECRET
           rm -f "$RUNNER_TEMP/kite_token"
       - name: Store it on the kite-token branch
+        env:
+          GH_TOKEN: ${{ github.token }}      # only this step holds the repository token
         run: |
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git fetch -q --depth 1 origin kite-token; then
+          if git -c http.extraheader="$auth" fetch -q --depth 1 origin kite-token; then
             git checkout -q -B kite-token FETCH_HEAD
           else
             git checkout -q --orphan kite-token
@@ -59,4 +65,4 @@ jobs:
           cp "$RUNNER_TEMP/kite_token.enc" kite_token.enc
           git add kite_token.enc
           git commit -q -m "Kite token for $(date +%F)"
-          git push -q origin kite-token
+          git -c http.extraheader="$auth" push -q origin kite-token
