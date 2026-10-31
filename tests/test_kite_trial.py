@@ -308,6 +308,7 @@ def test_the_command_records_nothing_and_succeeds_on_a_day_without_a_token(tmp_p
     from quantdesk.cli import main
     monkeypatch.delenv("KITE_DATA_KEY", raising=False)
     monkeypatch.delenv("KITE_DATA_TOKEN", raising=False)
+    monkeypatch.setattr("quantdesk.data.cli._kite_authority_ended", lambda today=None: False)       # not the wall clock
     main(["data", "kite-record", "--out", str(tmp_path / "k"), "--until", "15:30"])
     assert "nothing recorded" in capsys.readouterr().out and not (tmp_path / "k").exists()
 
@@ -334,6 +335,7 @@ def test_a_token_that_decrypts_but_is_stale_ends_the_command_cleanly_not_with_a_
     from quantdesk.cli import main
     monkeypatch.setenv("KITE_DATA_KEY", "k")
     monkeypatch.setenv("KITE_DATA_TOKEN", "STALE1234567890ABCDEF")
+    monkeypatch.setattr("quantdesk.data.cli._kite_authority_ended", lambda today=None: False)       # not the wall clock
 
     def boom(*a, **k):
         raise RuntimeError("TokenException: Incorrect api_key or access_token")
@@ -401,3 +403,36 @@ def test_a_buffer_that_cannot_be_written_stops_growing_and_says_how_many_ticks_i
     p = rec.flush()
     ev = [json.loads(x) for x in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert len(pd.read_parquet(p)) == 2 and any(e["kind"] == "overflow" and e["dropped_ticks"] == 3 for e in ev)
+
+
+# ---- the owner's exception ends, and so do the Kite commands ----------------------------------------------------------------------
+def test_the_kite_commands_stop_on_the_day_the_owners_exception_ends_whatever_secrets_are_set(tmp_path, monkeypatch, capsys):
+    from quantdesk.cli import main
+    from quantdesk.data import cli as DC
+    from quantdesk.intraday import kitelive as KL
+    assert KL.AUTHORITY_ENDS == dt.date(2026, 11, 25)                                         # one source for the date (docs/AUTONOMY.md)
+    assert DC._kite_authority_ended(dt.date(2026, 11, 24)) is False and DC._kite_authority_ended(dt.date(2026, 11, 25)) is True
+    assert DC._kite_authority_ended(dt.date(2027, 3, 1)) is True
+    for k in ("KITE_DATA_KEY", "KITE_DATA_TOKEN", "KITE_DATA_SECRET", "KITE_REQUEST_TOKEN"):
+        monkeypatch.setenv(k, "A1B2C3D4E5F6G7H8I9J0")                                         # every secret IS set: only the date can stop it
+    monkeypatch.setattr(DC, "_kite_authority_ended", lambda today=None: True)
+
+    def must_not_run(*a, **k):
+        raise AssertionError("a Kite call was made after the authority ended")
+    monkeypatch.setattr(K, "run_session", must_not_run)
+    monkeypatch.setattr(KL, "exchange_token", must_not_run)
+    main(["data", "kite-record", "--out", str(tmp_path / "k"), "--until", "15:30"])
+    assert "authority has ended" in capsys.readouterr().out and not (tmp_path / "k").exists()
+    out = tmp_path / "tok"
+    with pytest.raises(SystemExit, match="authority has ended"):
+        main(["data", "kite-token", "--out", str(out)])
+    assert not out.exists()
+
+
+def test_both_encrypt_steps_fail_closed_on_an_empty_secret_before_openssl_runs():
+    text = (ROOT / ".github" / "workflows" / "kite-record.yml").read_text()
+    guard = '[ -n "$KITE_DATA_SECRET" ] || {'
+    opens = [m.start() for m in re.finditer(r"openssl enc -aes-256-cbc -pbkdf2 -salt", text)]
+    guards = [m.start() for m in re.finditer(re.escape(guard), text)]
+    assert len(opens) == 2 and len(guards) == 2 and all(g < o and o - g < 400 for g, o in zip(guards, opens))
+    assert "exit 1" in text[guards[0]:opens[0]] and "exit 1" in text[guards[1]:opens[1]]

@@ -699,6 +699,7 @@ def test_the_token_command_exists_exchanges_with_the_data_names_and_never_prints
     monkeypatch.setenv("KITE_DATA_KEY", "k")
     monkeypatch.setenv("KITE_DATA_SECRET", "s")
     monkeypatch.setenv("KITE_REQUEST_TOKEN", "req")
+    monkeypatch.setattr("quantdesk.data.cli._kite_authority_ended", lambda today=None: False)       # not the wall clock: these tests must pass after 25 Nov too
 
     class KC:
         def __init__(self, api_key):

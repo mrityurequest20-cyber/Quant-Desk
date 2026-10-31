@@ -205,8 +205,18 @@ def register(sub):
     x.set_defaults(fn=cmd_status)
 
 
+def _kite_authority_ended(today=None) -> bool:
+    """The owner's data-only Kite exception (docs/AUTONOMY.md) ends on kitelive.AUTHORITY_ENDS: from that day no Kite command does anything, whatever secrets are still set."""
+    import pandas as pd
+    from ..intraday import kitelive as KL
+    return (today or pd.Timestamp.now(tz="Asia/Kolkata").date()) >= KL.AUTHORITY_ENDS
+
+
 def cmd_kite_record(cfg, a):
     from . import kite_record as K
+    if _kite_authority_ended():
+        print("kite-record: the owner's Kite data authority has ended (docs/AUTONOMY.md); nothing recorded")
+        return
     if not (os.environ.get("KITE_DATA_KEY") and os.environ.get("KITE_DATA_TOKEN")):
         print("kite-record: no Kite key or no token for today (the 'Kite token' workflow was not run); nothing recorded")
         return
@@ -557,6 +567,8 @@ def cmd_external_verify(cfg, a):
 
 def cmd_kite_token(cfg, a):
     from ..intraday import kitelive as KL
+    if _kite_authority_ended():
+        raise SystemExit("kite-token: the owner's Kite data authority has ended (docs/AUTONOMY.md); no token is exchanged")
     key, secret, req = os.environ.get("KITE_DATA_KEY"), os.environ.get("KITE_DATA_SECRET"), os.environ.get("KITE_REQUEST_TOKEN")
     if not (key and secret and req):
         raise SystemExit("kite-token: KITE_DATA_KEY, KITE_DATA_SECRET and KITE_REQUEST_TOKEN must be set in the environment")

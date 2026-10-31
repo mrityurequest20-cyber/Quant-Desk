@@ -69,6 +69,7 @@ jobs:
           KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
         run: |
           if [ -d runtime/kite ] && [ -n "$(ls -A runtime/kite)" ]; then
+            [ -n "$KITE_DATA_SECRET" ] || { echo "::error::KITE_API_SECRET is empty: the ticks are not encrypted and not uploaded"; exit 1; }
             tar -C runtime/kite -cf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KITE_DATA_SECRET -out kite_raw_1.tar.enc
             sha="$(sha256sum kite_raw_1.tar.enc | cut -d' ' -f1)"
             echo "sha=$sha" >> "$GITHUB_OUTPUT"
@@ -151,6 +152,7 @@ jobs:
           KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
         run: |
           if [ -d runtime/kite ] && [ -n "$(ls -A runtime/kite)" ]; then
+            [ -n "$KITE_DATA_SECRET" ] || { echo "::error::KITE_API_SECRET is empty: the ticks are not encrypted and not uploaded"; exit 1; }
             tar -C runtime/kite -cf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KITE_DATA_SECRET -out kite_raw_2.tar.enc
             echo "kite_raw_2.tar.enc sha256 $(sha256sum kite_raw_2.tar.enc | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
           fi
