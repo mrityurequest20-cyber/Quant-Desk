@@ -480,9 +480,9 @@ def test_the_kite_commands_stop_on_the_day_the_owners_exception_ends_whatever_se
     from quantdesk.cli import main
     from quantdesk.data import cli as DC
     from quantdesk.intraday import kitelive as KL
-    assert KL.AUTHORITY_ENDS == dt.date(2026, 11, 25)                                         # one source for the date (docs/AUTONOMY.md)
-    assert DC._kite_authority_ended(dt.date(2026, 11, 24)) is False and DC._kite_authority_ended(dt.date(2026, 11, 25)) is True
-    assert DC._kite_authority_ended(dt.date(2027, 3, 1)) is True
+    assert KL.AUTHORITY_ENDS == dt.date(2027, 12, 31)                                         # one source for the date (docs/AUTONOMY.md)
+    assert DC._kite_authority_ended(dt.date(2027, 12, 30)) is False and DC._kite_authority_ended(dt.date(2027, 12, 31)) is True
+    assert DC._kite_authority_ended(dt.date(2028, 3, 1)) is True
     for k in ("KITE_DATA_KEY", "KITE_DATA_TOKEN", "KITE_DATA_SECRET", "KITE_REQUEST_TOKEN"):
         monkeypatch.setenv(k, "A1B2C3D4E5F6G7H8I9J0")                                         # every secret IS set: only the date can stop it
     monkeypatch.setattr(DC, "_kite_authority_ended", lambda today=None: True)
