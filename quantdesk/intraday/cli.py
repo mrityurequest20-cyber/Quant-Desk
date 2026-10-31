@@ -446,6 +446,27 @@ def cmd_shadow_replay(cfg, a):
         sys.exit(f"shadow lab refused, nothing replayed: {exc}")
 
 
+def cmd_scout(cfg, a):
+    from . import scout, scout_report
+    if bool(a.dataset) == bool(a.stocks):
+        sys.exit("scout refused, nothing made: give exactly one of --dataset and --stocks")
+    try:
+        syms = [x.strip() for x in a.symbols.split(",") if x.strip()] if a.symbols else None
+        if a.stocks:
+            scout.run_stocks(Path(a.stocks), Path(a.out), syms, a.stop_atr)
+        else:
+            scout.run_dataset(Path(a.dataset), Path(a.out), syms, a.stop_atr, a.first, a.last)
+        if a.report:
+            scout_report.write_report(Path(a.out), Path(a.lab_rows) if a.lab_rows else None)
+    except scout.Refused as exc:
+        sys.exit(f"scout refused, nothing made: {exc}")
+
+
+def cmd_scout_report(cfg, a):
+    from . import scout_report
+    scout_report.write_report(Path(a.out), Path(a.lab_rows) if a.lab_rows else None)
+
+
 def cmd_replay(cfg, a):
     account = a.account or ("synthetic" if a.synthetic else "replay")
     p = paths(cfg, account)
@@ -960,6 +981,21 @@ def register(sub):
     x.add_argument("--to", dest="last", help="last session (YYYY-MM-DD)")
     x.add_argument("--jobs", type=int, default=3)
     x.set_defaults(fn=cmd_shadow_replay)
+    x = ss.add_parser("scout", help="the asymmetry scout (shadow, offline): where trades that can pay several times their risk start (places nothing)")
+    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and refused")
+    x.add_argument("--stocks", help="a folder of the stock-minutes release's *_stocks_cash.parquet files")
+    x.add_argument("--out", required=True, help="a new folder outside every git tree")
+    x.add_argument("--symbols", help="default: NIFTY,BANKNIFTY (dataset) or every stock (stocks)")
+    x.add_argument("--stop-atr", type=float, default=1.5, help="the uniform stop, in 5-minute ATRs (never under 0.04%% of the price)")
+    x.add_argument("--from", dest="first", help="first session (YYYY-MM-DD)")
+    x.add_argument("--to", dest="last", help="last session (YYYY-MM-DD)")
+    x.add_argument("--report", action="store_true", help="write report.md beside the candidates")
+    x.add_argument("--lab-rows", help="with --report: a shadow-replay shadow_setups.parquet, to compare the desk's own entries (times and setups only)")
+    x.set_defaults(fn=cmd_scout)
+    x = ss.add_parser("scout-report", help="the read-out of a finished scout run (exploratory tables, a small model, the desk comparison)")
+    x.add_argument("--out", required=True, help="the scout run folder")
+    x.add_argument("--lab-rows", help="a shadow-replay shadow_setups.parquet, to compare the desk's own entries (times and setups only)")
+    x.set_defaults(fn=cmd_scout_report)
     x = ss.add_parser("stocks", help="F&O stocks ranked by option liquidity, and whether this account can hold one")
     x.add_argument("--days", type=int, default=20)
     x.add_argument("--top", type=int, default=25)
