@@ -16,7 +16,7 @@ Owner decision (25 Oct 2026): the Kite websocket is attached directly to the run
   built from them (the `chains-YYYY` release), carry no Kite-served minute. What it does NOT do: keep Kite-derived values out of the desk's own outputs. A decision, the index level
   in the views, the journal's thoughts and the heartbeat are derived from whichever feed served the bars, exactly as with Kotak and Yahoo, and some of those are published. The Data
   panel itself shows only how old the last tick is. If the licence is read more strictly than that, the switch is `intraday.kite.live: false`.
-- **Authority.** The owner's Kite data exception (docs/AUTONOMY.md) ends on 25 Nov 2026: from `AUTHORITY_ENDS` on, `make_live` returns None whatever is in the environment.
+- **Authority.** The owner's Kite data exception (docs/AUTONOMY.md) ends on 31 Dec 2027: from `AUTHORITY_ENDS` on, `make_live` returns None whatever is in the environment.
 - **Market data only.** No order method is used anywhere in this module (a test checks), and nothing here reaches the broker, risk or sizing code.
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ INDEX_KEYS = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK", "INDIAVIX"
 STALE_TICK_S = 30.0                # an exchange stamp older than this is not a live tick
 STALE_S = 20.0                      # a tick older than this and the socket is not trusted for the live price
 MAX_DISAGREE = 0.005                # a Kite minute close this far from the fallback's is not used; a high or low this far from the fallback's, or from its own open/close range when no fallback is asked, is not used either
-AUTHORITY_ENDS = dt.date(2026, 11, 25)   # docs/AUTONOMY.md: the owner's Kite data exception ends on this date; from it on the feed does not start, whatever is in the environment
+AUTHORITY_ENDS = dt.date(2027, 12, 31)   # docs/AUTONOMY.md: the owner's Kite data exception ends on this date; from it on the feed does not start, whatever is in the environment
 COLUMNS = ["open", "high", "low", "close", "volume"]
 TOKEN_RE = re.compile(r"[A-Za-z0-9]{16,64}")      # the shape of a Kite access token; anything else (a bad decrypt, a newline) is never exported
 FIRST_TICK_S = 15.0                 # a minute whose first tick came later than this after the minute began is partial (late connect, reconnect) and is not served from Kite

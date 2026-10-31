@@ -344,9 +344,9 @@ def test_the_feed_does_not_start_from_the_day_the_owners_authority_ends(monkeypa
             return {k: {"instrument_token": 256265} for k in keys}
     monkeypatch.setitem(sys.modules, "kiteconnect", types.SimpleNamespace(KiteConnect=Kite, KiteTicker=lambda k, t: FakeWS()))
     said = []
-    assert KL.AUTHORITY_ENDS == dt.date(2026, 11, 25)
-    assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2026, 11, 25)) is None and "authority ended" in said[0]
-    assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2027, 1, 4)) is None
+    assert KL.AUTHORITY_ENDS == dt.date(2027, 12, 31)
+    assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2027, 12, 31)) is None and "authority ended" in said[0]
+    assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2028, 1, 4)) is None
     assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2026, 11, 24)) is not None      # the day before it still starts
 
 
@@ -699,7 +699,7 @@ def test_the_token_command_exists_exchanges_with_the_data_names_and_never_prints
     monkeypatch.setenv("KITE_DATA_KEY", "k")
     monkeypatch.setenv("KITE_DATA_SECRET", "s")
     monkeypatch.setenv("KITE_REQUEST_TOKEN", "req")
-    monkeypatch.setattr("quantdesk.data.cli._kite_authority_ended", lambda today=None: False)       # not the wall clock: these tests must pass after 25 Nov too
+    monkeypatch.setattr("quantdesk.data.cli._kite_authority_ended", lambda today=None: False)       # not the wall clock: these tests must pass after the authority date too
 
     class KC:
         def __init__(self, api_key):
