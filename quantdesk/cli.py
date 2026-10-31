@@ -367,7 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result, "
                                   "refit the registered models as a drill, check an imported dataset against independent references "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "oi-daily", "card", "retrain", "verify", "import-tape", "oneshot"])
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "oi-daily", "trades", "card", "retrain", "verify", "import-tape", "oneshot"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
@@ -389,6 +389,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "(the P0.4 exit test); 'study' reruns volstudy.run into a scratch folder outside the repository")
     s.add_argument("--day", help="oi: the session to grade (YYYY-MM-DD)")
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
+    s.add_argument("--journal", help="trades: a journal database (intraday/journal.db, e.g. from the journal branch); opened read-only")
+    s.add_argument("--sleeve", help="trades: also take a close look at one sleeve's trades (the VWAP check: vwap_trend)")
     s.add_argument("--today", help="oi-daily: grade every forward weekday up to this date (default: the last session that should be complete: today from 17:00 IST, else yesterday)")
     s.add_argument("--days-only", action="store_true", help="oi-daily: print the forward weekdays to fetch and stop")
     s.add_argument("--aeron", help="verify: the already verified aeron7 dataset folder (check C, the overlap)")
@@ -412,6 +414,8 @@ def cmd_ml(cfg, a):
             return _ml_build(cfg, a)
         if a.action in ("oi", "oi-report", "oi-daily"):
             return _ml_oi(cfg, a)
+        if a.action == "trades":
+            return _ml_trades(a)
         if a.action == "verify":
             return _ml_verify(a)
         if a.action == "card":
@@ -461,7 +465,7 @@ def last_completed_session_day():
 
 _ONESHOT_DEFAULTS = {"source": None, "version": "", "reviewed": None, "symbols": "NIFTY,BANKNIFTY", "profile_end": None, "allow_unverified": False,
                      "committed": None, "rtol": 1e-9, "through": "platform", "day": None, "readout": "interim", "aeron": None, "cache": None, "flip": False,
-                     "accept_gaps": "", "run": None, "today": None, "days_only": False}
+                     "accept_gaps": "", "run": None, "today": None, "days_only": False, "journal": None, "sleeve": None}
 
 
 def _ml_oneshot(a):
@@ -568,6 +572,15 @@ def _ml_oi(cfg, a):
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
     print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
+
+
+def _ml_trades(a):
+    """The fixed read-only splits of the paper desk's closed trades (quantdesk/ml/tradesplit.py). Descriptive; writes nothing."""
+    from .ml import tradesplit as TS
+    if not a.journal:
+        raise SystemExit("ml trades: --journal is required")
+    trades = TS.load_closed(Path(a.journal))
+    print(TS.render(TS.split(trades), TS.sleeve_check(trades, a.sleeve) if a.sleeve else None))
 
 
 def _ml_import_tape(cfg, a):
