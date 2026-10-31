@@ -128,6 +128,10 @@ def register(sub):
     x.add_argument("--source", required=True, help="a local clone of the source repository")
     x.add_argument("--out", help="output root (default runtime/external)")
     x.set_defaults(fn=cmd_external_import)
+    x = ss.add_parser("kite-token", help="Kite Connect: exchange the owner's one-time request_token (env KITE_REQUEST_TOKEN) with KITE_DATA_KEY / KITE_DATA_SECRET for the day's access "
+                                         "token, written to --out (mode 0600) and never printed. Market data only (docs/ml/KITE_TRIAL.md).")
+    x.add_argument("--out", required=True)
+    x.set_defaults(fn=cmd_kite_token)
     x = ss.add_parser("external-verify", help="compare random sessions with an independent daily source (Yahoo) and set "
                                               "the dataset's status")
     x.add_argument("--out", help="output root (default runtime/external)")
@@ -511,3 +515,20 @@ def cmd_external_verify(cfg, a):
         raise SystemExit("no imported external dataset: run `data external-import` first")
     r = X.verify(ds, n=a.n)
     print(f"{ds.name}: {r['status']}")
+
+
+def cmd_kite_token(cfg, a):
+    from ..intraday import kitelive as KL
+    key, secret, req = os.environ.get("KITE_DATA_KEY"), os.environ.get("KITE_DATA_SECRET"), os.environ.get("KITE_REQUEST_TOKEN")
+    if not (key and secret and req):
+        raise SystemExit("kite-token: KITE_DATA_KEY, KITE_DATA_SECRET and KITE_REQUEST_TOKEN must be set in the environment")
+    try:
+        token = KL.exchange_token(key, secret, req.strip())
+    except Exception as exc:                                              # never echo the library's message: it can carry request details
+        raise SystemExit(f"kite-token: {type(exc).__name__}: could not exchange the request token (expired, already used, or wrong key/secret)") from None
+    if not KL.TOKEN_RE.fullmatch(token):
+        raise SystemExit("kite-token: Kite returned a token of an unexpected shape; nothing written")
+    fd = os.open(a.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(token)
+    print("kite-token: access token written (not shown)")

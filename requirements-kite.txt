@@ -1,0 +1,2 @@
+# Kite Connect websocket for the desk (intraday.kite.live) and the trial recorder: installed by the workflows that use it; if it cannot be installed the desk runs on its existing feeds.
+kiteconnect==5.0.1
