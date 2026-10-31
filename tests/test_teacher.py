@@ -447,7 +447,10 @@ def test_a_json_header_and_a_nested_token_in_a_journal_row_never_reach_the_reade
                                          ('{"Authorization": "Basic abc", "api_key": "secret456"}', "secret456"),                 # a quoted label after the header is not swallowed
                                          ('secret: {"parts": ["one"], "backup": "secret456"}', "secret456"),                      # a structure is masked to the end of its line
                                          ('credential: ["s3cr3t"]', "s3cr3t"), ("signature: [abc]", "abc"), ("credential: {x}", "{x}"),
-                                         ("Bearer shortABC123", "shortABC123"), ("a.b@123broker.com", "123broker")])
+                                         ("Bearer shortABC123", "shortABC123"), ("a.b@123broker.com", "123broker"),
+                                         ("alice@mail.123broker.com", "123broker"),                                               # a digit-leading label inside the domain
+                                         ('password: "correct horse battery staple', "battery staple"),                         # an unclosed quote masks the rest of its row
+                                         ("token: 'one two three", "two three")])
 
 def test_environment_style_names_and_authorization_schemes_are_masked_whole(text, secret):
     out, n = teacher.redact(text)
