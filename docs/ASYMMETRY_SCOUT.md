@@ -88,6 +88,34 @@ after the firing bar only. This extends the shadow lab's existing labelling; it 
 | S4 | If S3 passes: the scout scores live candidates in shadow on the recorded tape and real quotes, journaled, never traded | graded on forward sessions |
 | S5 | Only after S4: a **separate, independently reviewed proposal** for any desk change (for example a runner leg or a longer time exit on the screens that earned it), paper only | owner and reviewers |
 
+## 5b. Scope widened (31 Oct 2026): not the desk's eight strategies, and a journal for December
+
+The owner's instruction: the scout is **not limited to the desk's eight strategies**. It takes whatever trade it wants in whatever strategies exist
+in the market, and makes its own. So the scout has three parts (PR #159):
+
+1. **Any-minute baseline (`scout`)**: a candidate every 5 minutes, both directions, one uniform stop. The yardstick: what blind entries do.
+2. **A strategy library (`scout-lab`)**: about 20 market-standard intraday strategies (opening-range and prior-day breakouts, range and
+   Donchian breaks, VWAP and EMA trend plays, pullbacks, gap-and-go and gap reversal, opening-drive pullback, NR7, squeeze release, RSI and
+   Bollinger reversion, failed breakdown, momentum ignition, pivot bounce, an afternoon trend), each with **its own structural stop**, each
+   run over every index and stock and scored under **seven exit policies** (fixed 2R/3R/4R/6R, a 1R trailing exit, stop-only to the close,
+   the desk's 45-minute exit).
+3. **A rule miner**: random conjunctions of 1 to 3 conditions over 19 point-in-time features (and the strategy flags), fitted on the early
+   years and judged on the later ones, **charged for every rule tried** and compared with the identical search on outcomes shifted inside
+   each session (the null). New strategies are made this way, not written by hand.
+
+Guards against fooling ourselves: R capped at 10 before any average; the median and the share of profit from the best 1% of trades shown;
+a Bonferroni bar over strategy x policy cells; the null for the miner; the sealed sessions (2023 on) refused by the code.
+
+**The journal.** Everything the scout does goes into one tamper-evident, append-only log (`scout-log`, `quantdesk/intraday/scoutlog.py`, on the
+desk's own `ChainLog`): every run with its parameters, code commit and data digest; every observation with its numbers and caveats; every
+hypothesis with a status that later entries move on (never edit, always append); every decision and plan. It keeps a **running total of
+everything tried**, because a claim made in December must be judged against all of it, not the last run. Entries hold aggregates and
+parameters only, no raw prices. Written under `runtime/intraday/scout/`, which the desk's journal save already carries to the `journal`
+branch once the scout runs on the runner; until then a snapshot is kept on a `scout-journal` branch.
+
+**December.** The owner wants the full review then, with meaningful data. By then the forward days (index bars from the desk's tape, the
+daily stock minutes) and the sealed sessions give the one confirmatory test, pre-registered against the running trial count.
+
 ## 6. Hard limits
 
 - No order, no broker, no credential, no live trading. Paper only.
