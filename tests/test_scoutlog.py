@@ -258,3 +258,19 @@ def test_a_bad_window_date_on_the_scout_command_is_a_refusal_not_a_traceback(tmp
     r = subprocess.run([sys.executable, "-m", "quantdesk", "intraday", "scout", "--stocks", str(d), "--out", str(tmp_path / "o"), "--from", "not-a-date", "--journal", "none"],
                        capture_output=True, text=True, cwd=REPO)
     assert r.returncode != 0 and "Traceback" not in r.stderr and "not a date" in r.stdout + r.stderr
+
+
+def test_an_entry_is_not_added_to_a_chain_with_an_altered_record(tmp_path):
+    j = J.ScoutJournal(tmp_path / "j.jsonl")
+    j.add("note", "first")
+    j.add("note", "second")
+    path = tmp_path / "j.jsonl"
+    lines = path.read_text().splitlines()
+    path.write_text(lines[0].replace("first", "edited") + "\n" + lines[1] + "\n")                  # still valid JSON, but the hash no longer matches
+    assert j.verify()
+    n = len(path.read_text().splitlines())
+    with pytest.raises(ValueError, match="chain is broken"):
+        j.add("note", "third")
+    with pytest.raises(ValueError, match="chain is broken"):
+        j.add("hypothesis", "h")
+    assert len(path.read_text().splitlines()) == n                                                 # nothing was written

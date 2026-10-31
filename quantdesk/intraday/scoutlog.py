@@ -50,6 +50,9 @@ class ScoutJournal:
             by: str = "claude") -> dict:
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {KINDS}")
+        broken = self.verify()
+        if broken:                                      # every write (status, backfill, run records) passes here: a chain with an altered, removed or torn entry is not extended
+            raise ValueError(f"the journal chain is broken, so nothing is added: {'; '.join(broken[:2])}")
         have = {r["seq"] for r in self.log.read()}
         bad = [r for r in refs if r not in have]
         if bad:
