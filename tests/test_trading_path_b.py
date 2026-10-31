@@ -293,3 +293,29 @@ def test_a_stuck_exit_is_sent_once_per_step_not_twice(cfg, sessions):
     eng._close = lambda tr, now, *a: calls.append(now) or ""
     run_to(eng, feed, 1)
     assert len(calls) == 1, calls
+
+
+def test_an_oi_feed_fault_is_journaled_once_per_outage_not_every_snapshot(cfg, sessions, monkeypatch):
+    """chain_analytics withholds OI on a faulty print; a feed that is bad every snapshot must show up once, and again only after it has been clean."""
+    eng, feed = desk(cfg, sessions)
+    real = E.chain_analytics
+    state = {"bad": True}
+
+    def flaky(*a, **k):
+        out = real(*a, **k)
+        if state["bad"]:
+            out["oi_quarantined"] = True
+        return out
+    monkeypatch.setattr(E, "chain_analytics", flaky)
+    eng.refresh_min = 1
+    run_to(eng, feed, 6)
+    q = "SELECT * FROM events WHERE level='WARN' AND message LIKE '%implausible OI print%'"
+    first = len(eng.journal.df(q))
+    assert first >= 1
+    run_to(eng, feed, 4)
+    assert len(eng.journal.df(q)) == first                          # still the same outage: no new line
+    state["bad"] = False
+    run_to(eng, feed, 4)
+    state["bad"] = True
+    run_to(eng, feed, 4)
+    assert len(eng.journal.df(q)) > first                           # a new outage after a clean read is reported again
