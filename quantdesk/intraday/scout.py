@@ -36,7 +36,7 @@ COST_R = 0.05                        # ASSUMED all-in cost of a long-option roun
 INDEX_SYMBOLS = ("NIFTY", "BANKNIFTY")
 FEATURES = ("mins", "weekday", "gap_pr", "atr_ratio", "rng30_atr", "day_rng_pr", "or_w_pr", "trend30_atr", "trend60_atr", "vwap_atr",
             "room_pd_r", "room_or_r", "room_next_r", "n_obst_3r", "open_air", "broke_or", "broke_pd", "vix", "vix_chg", "risk_pct")
-LABELS = tuple(f"reach_{k}" for k in KS) + ("mfe_r", "r_end", "t_reach_3")
+LABELS = tuple(f"reach_{k}" for k in KS) + ("mfe_r", "r_end", "t_reach_3", "r_trail", "r_t45") + tuple(f"r_fix{k}" for k in KS)
 EVIDENCE = "external_unverified"
 NOT_FOR = ("never evidence for a gate, a promotion, the paper gate or a profitability claim; a research candidate only. Underlying-price "
            "first passage, not option P&L; sessions and the two directions are not independent samples.")
@@ -73,6 +73,93 @@ def _flip(a: dict[str, np.ndarray], d: int) -> dict[str, np.ndarray]:
     return {"open": -a["open"], "high": -a["low"], "low": -a["high"], "close": -a["close"], "volume": a["volume"]}
 
 
+POLICY_COLUMNS = {"fix2": "r_fix2", "fix3": "r_fix3", "fix4": "r_fix4", "fix6": "r_fix6", "trail": "r_trail", "eod": "r_end", "t45": "r_t45"}
+TRAIL_R = 1.0                        # the trailing exit gives back this many R from the peak known before each minute
+
+
+def outcomes(a: dict[str, np.ndarray], j: int, ent: float, R: float) -> dict:
+    """What a long trade entered at minute j's open (price `ent`, risk R) does under every exit policy, in R, before costs. `a` is the session as seen by
+    the trade (a short is negated first). Stop wins a tie inside a minute; a stop fills at its level (a gap through it is not modelled).
+      fix{k}  target at k x R, stop at -1R, else the 15:15 mark      trail  stop that follows the peak at TRAIL_R behind (no target)
+      eod     stop at -1R only, else the 15:15 mark                  t45    stop at -1R, else the mark 45 minutes in (the desk's no-progress exit)"""
+    fh, fl, fo = a["high"][j:END], a["low"][j:END], a["open"][j:END]
+    n = len(fl)
+    stop = np.flatnonzero(fl <= ent - R)
+    t_stop = int(stop[0]) if stop.size else n
+    mark = float(a["close"][END - 1] - ent) / R
+    res: dict = {"mfe_r": max(0.0, float(fh[:t_stop].max() - ent) / R) if t_stop > 0 else 0.0, "t_reach_3": np.nan}
+    for k in KS:
+        hit = np.flatnonzero(fh >= ent + k * R)
+        reached = bool(hit.size) and int(hit[0]) < t_stop
+        res[f"reach_{k}"] = reached
+        res[f"r_fix{k}"] = float(k) if reached else (-1.0 if t_stop < n else mark)
+        if k == 3 and reached:
+            res["t_reach_3"] = float(hit[0])
+    res["r_end"] = -1.0 if t_stop < n else mark
+    w = min(n, 45)
+    res["r_t45"] = -1.0 if (fl[:w] <= ent - R).any() else float(a["close"][j + w - 1] - ent) / R
+    peak = np.concatenate(([ent], np.maximum.accumulate(fh)[:-1]))      # the high known before each minute trades
+    trail = peak - TRAIL_R * R
+    out = np.flatnonzero(fl <= trail)
+    if out.size:
+        t = int(out[0])
+        res["r_trail"] = (min(float(trail[t]), float(fo[t])) - ent) / R
+    else:
+        res["r_trail"] = mark
+    return res
+
+
+def feature_row(a: dict[str, np.ndarray], p: dict[str, np.ndarray], vwap: np.ndarray, i: int, R: float, atr: float, atr_prior: float,
+                date: dt.date, vix_open) -> dict:
+    """The point-in-time features at minute i (bars 0..i of the session and the previous session only), for a trade in the direction `a` is flipped to."""
+    o, h, l, c = a["open"], a["high"], a["low"], a["close"]
+    PH, PC = float(p["high"].max()), float(p["close"][-1])
+    PR = float(p["high"].max() - p["low"].min())
+    gap = float(o[0] - PC)
+    lo30 = max(0, i - 29)
+    rng30 = float(h[lo30:i + 1].max() - l[lo30:i + 1].min())
+    day_hi, day_lo = float(h[:i + 1].max()), float(l[:i + 1].min())
+    orh = float(h[:15].max()) if i >= 14 else np.nan
+    ahead = [x for x in (PH, orh, day_hi) if x == x and x > c[i]]
+    near = (min(ahead) - c[i]) / R if ahead else 10.0
+    return {
+        "mins": i + 1, "weekday": date.weekday(),
+        "gap_pr": gap / PR if PR > 0 else np.nan,
+        "atr_ratio": atr / atr_prior if atr_prior > 0 else np.nan,
+        "rng30_atr": rng30 / atr,
+        "day_rng_pr": (day_hi - day_lo) / PR if PR > 0 else np.nan,
+        "or_w_pr": float(h[:15].max() - l[:15].min()) / PR if PR > 0 else np.nan,
+        "trend30_atr": float(c[i] - c[max(0, i - 30)]) / atr,
+        "trend60_atr": float(c[i] - c[max(0, i - 60)]) / atr,
+        "vwap_atr": float(c[i] - vwap[i]) / atr,
+        "room_pd_r": float(np.clip((PH - c[i]) / R, -10, 10)),
+        "room_or_r": float(np.clip((orh - c[i]) / R, -10, 10)),
+        "room_next_r": float(min(near, 10.0)),
+        "n_obst_3r": float(sum(1 for x in ahead if (x - c[i]) / R <= 3.0)),
+        "open_air": float(not ahead),
+        "broke_or": float(c[i] > orh) if orh == orh else np.nan,
+        "broke_pd": float(c[i] > PH),
+        "vix": float(vix_open[0][i]) if vix_open else np.nan,
+        "vix_chg": float(vix_open[0][i] - vix_open[1]) if vix_open else np.nan,
+    }
+
+
+def vix_line(vix: pd.Series | None, day: pd.DataFrame, prior: pd.DataFrame):
+    """(the session's VIX on the minute grid, the last value before the session) or None."""
+    if vix is None or not len(vix):
+        return None
+    start = day.index[0].normalize()
+    today = vix.loc[start:day.index[-1]]
+    before = vix.loc[prior.index[0]:start - pd.Timedelta(seconds=1)]
+    if not len(today):
+        return None
+    mod = (today.index.hour * 60 + today.index.minute - 555).to_numpy()
+    ok = (mod >= 0) & (mod < N_MIN)
+    vx = np.full(N_MIN, np.nan)
+    vx[mod[ok]] = today.to_numpy(dtype=float)[ok]
+    return pd.Series(vx).ffill().bfill().to_numpy(), float(before.iloc[-1]) if len(before) else np.nan
+
+
 def session_candidates(day: pd.DataFrame, prior: pd.DataFrame | None, symbol: str, stop_atr: float = STOP_ATR,
                        vix: pd.Series | None = None, kind: str = "index") -> list[dict]:
     """Candidates of one session, both directions. `prior` is the previous session's minutes (required: the levels and the ATR warm-up)."""
@@ -84,25 +171,11 @@ def session_candidates(day: pd.DataFrame, prior: pd.DataFrame | None, symbol: st
     B, Bp = _blocks(a0), _blocks(p0)
     atr_prior = float(Bp.mean())
     date = day.index[0].date()
-    vix_open = None
-    if vix is not None and len(vix):
-        start = day.index[0].normalize()
-        today = vix.loc[start:day.index[-1]]
-        before = vix.loc[prior.index[0]:start - pd.Timedelta(seconds=1)]
-        if len(today):
-            mod = (today.index.hour * 60 + today.index.minute - 555).to_numpy()
-            ok = (mod >= 0) & (mod < N_MIN)
-            vx = np.full(N_MIN, np.nan)
-            vx[mod[ok]] = today.to_numpy(dtype=float)[ok]
-            vx = pd.Series(vx).ffill().bfill().to_numpy()
-            vix_open = (vx, float(before.iloc[-1]) if len(before) else np.nan)
+    vix_open = vix_line(vix, day, prior)
     out: list[dict] = []
     for d in (1, -1):
         a, p = _flip(a0, d), _flip(p0, d)
         o, h, l, c, v = a["open"], a["high"], a["low"], a["close"], a["volume"]
-        PH, PC = float(p["high"].max()), float(p["close"][-1])
-        PR = float(p["high"].max() - p["low"].min())
-        gap = float(o[0] - PC)
         tp = (h + l + c) / 3
         w = v if v.sum() > 0 else np.ones(N_MIN)
         vwap = np.cumsum(tp * w) / np.cumsum(w)
@@ -113,50 +186,10 @@ def session_candidates(day: pd.DataFrame, prior: pd.DataFrame | None, symbol: st
                 continue
             price = abs(float(c[i]))
             R = max(stop_atr * atr, NOISE_FLOOR_FRAC * price)
-            ent = float(o[j])
-            fh, fl = h[j:END], l[j:END]
-            hit_stop = np.flatnonzero(fl <= ent - R)
-            t_stop = int(hit_stop[0]) if hit_stop.size else len(fl)
             row = {"symbol": symbol, "kind": kind, "day": date, "ts": day.index[0].normalize() + pd.Timedelta(minutes=555 + m),
                    "direction": d, "stop_atr": stop_atr, "risk_pts": R, "risk_pct": R / price * 100, "bar_gap": missing}
-            first3 = None
-            for k in KS:
-                hit = np.flatnonzero(fh >= ent + k * R)
-                reached = bool(hit.size) and int(hit[0]) < t_stop
-                row[f"reach_{k}"] = reached
-                if k == 3 and reached:
-                    first3 = int(hit[0])
-            row["mfe_r"] = max(0.0, float(fh[:t_stop].max() - ent) / R) if t_stop > 0 else 0.0
-            row["r_end"] = -1.0 if t_stop < len(fl) else float(c[END - 1] - ent) / R
-            row["t_reach_3"] = float(first3) if first3 is not None else np.nan
-            # ---- features: bars up to and including minute i, and earlier sessions
-            lo30 = max(0, i - 29)
-            rng30 = float(h[lo30:i + 1].max() - l[lo30:i + 1].min())
-            day_hi, day_lo = float(h[:i + 1].max()), float(l[:i + 1].min())
-            orh = float(h[:15].max()) if i >= 14 else np.nan
-            orl = float(l[:15].min()) if i >= 14 else np.nan
-            ahead = [x for x in (PH, orh, day_hi) if x == x and x > c[i]]
-            near = (min(ahead) - c[i]) / R if ahead else 10.0
-            row.update({
-                "mins": m, "weekday": date.weekday(),
-                "gap_pr": gap / PR if PR > 0 else np.nan,
-                "atr_ratio": atr / atr_prior if atr_prior > 0 else np.nan,
-                "rng30_atr": rng30 / atr,
-                "day_rng_pr": (day_hi - day_lo) / PR if PR > 0 else np.nan,
-                "or_w_pr": float(h[:15].max() - l[:15].min()) / PR if PR > 0 else np.nan,
-                "trend30_atr": float(c[i] - c[max(0, i - 30)]) / atr,
-                "trend60_atr": float(c[i] - c[max(0, i - 60)]) / atr,
-                "vwap_atr": float(c[i] - vwap[i]) / atr,
-                "room_pd_r": float(np.clip((PH - c[i]) / R, -10, 10)),
-                "room_or_r": float(np.clip((orh - c[i]) / R, -10, 10)),
-                "room_next_r": float(min(near, 10.0)),
-                "n_obst_3r": float(sum(1 for x in ahead if (x - c[i]) / R <= 3.0)),
-                "open_air": float(not ahead),
-                "broke_or": float(c[i] > orh) if orh == orh else np.nan,
-                "broke_pd": float(c[i] > PH),
-                "vix": float(vix_open[0][i]) if vix_open else np.nan,
-                "vix_chg": float(vix_open[0][i] - vix_open[1]) if vix_open else np.nan,
-            })
+            row.update(outcomes(a, j, float(o[j]), R))
+            row.update(feature_row(a, p, vwap, i, R, atr, atr_prior, date, vix_open))
             out.append(row)
     return out
 

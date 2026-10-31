@@ -446,6 +446,44 @@ def cmd_shadow_replay(cfg, a):
         sys.exit(f"shadow lab refused, nothing replayed: {exc}")
 
 
+def _scout_journal(cfg, a):
+    from . import scoutlog
+    if getattr(a, "journal", None) == "none":
+        return None
+    return scoutlog.ScoutJournal(Path(a.journal) if getattr(a, "journal", None) else scoutlog.default_path(cfg))
+
+
+def cmd_scout_log(cfg, a):
+    from . import scoutlog
+    j = _scout_journal(cfg, a)
+    if a.action == "verify":
+        bad = j.verify()
+        print("\n".join(bad) if bad else f"{j.path}: intact ({len(j.entries())} entries)")
+        sys.exit(1 if bad else 0)
+    if a.action == "summary":
+        text = j.summary()
+        if a.out:
+            Path(a.out).write_text(text)
+        print(text)
+        return
+    if a.action == "show":
+        for r in j.entries(a.kind)[-a.last:]:
+            body = r["payload"].get("text") or ""
+            print(f"#{r['seq']} {r['recorded_at'][:16]} {r['kind']:<11} {r['title']}" + (f"  refs {r['refs']}" if r["refs"] else "") + (f"\n    {body}" if body else ""))
+        return
+    try:
+        if a.action == "status":
+            rec = j.set_status(a.hypothesis, a.set, a.why, a.ref, by=a.by)
+        else:
+            payload = {"text": a.text} if a.text else {}
+            if a.json:
+                payload.update(json.loads(a.json))
+            rec = j.add(a.kind or "note", a.title, payload, a.ref, a.tag, by=a.by)
+    except ValueError as exc:
+        sys.exit(f"scout-log refused: {exc}")
+    print(f"scout journal #{rec['seq']} ({rec['kind']}): {rec['title']}")
+
+
 def cmd_scout(cfg, a):
     from . import scout, scout_report
     if bool(a.dataset) == bool(a.stocks):
@@ -456,10 +494,33 @@ def cmd_scout(cfg, a):
             scout.run_stocks(Path(a.stocks), Path(a.out), syms, a.stop_atr)
         else:
             scout.run_dataset(Path(a.dataset), Path(a.out), syms, a.stop_atr, a.first, a.last)
+        j = _scout_journal(cfg, a)
+        if j is not None:
+            from . import scoutlog
+            print(f"scout journal #{scoutlog.record_grid(j, Path(a.out))['seq']} ({j.path})")
         if a.report:
             scout_report.write_report(Path(a.out), Path(a.lab_rows) if a.lab_rows else None)
     except scout.Refused as exc:
         sys.exit(f"scout refused, nothing made: {exc}")
+
+
+def cmd_scout_lab(cfg, a):
+    from . import scout, scout_lab
+    if bool(a.dataset) == bool(a.stocks):
+        sys.exit("scout-lab refused, nothing made: give exactly one of --dataset and --stocks")
+    try:
+        syms = [x.strip() for x in a.symbols.split(",") if x.strip()] if a.symbols else None
+        if a.stocks:
+            scout_lab.run_stocks_lab(Path(a.stocks), Path(a.out), syms)
+        else:
+            scout_lab.run_dataset_lab(Path(a.dataset), Path(a.out), syms, a.first, a.last, Path(a.grid) if a.grid else None, not a.no_mining,
+                                      n_trials=a.trials, n_null=a.nulls)
+        j = _scout_journal(cfg, a)
+        if j is not None:
+            from . import scoutlog
+            print(f"scout journal #{scoutlog.record_lab(j, Path(a.out))['seq']} ({j.path})")
+    except scout.Refused as exc:
+        sys.exit(f"scout-lab refused, nothing made: {exc}")
 
 
 def cmd_scout_report(cfg, a):
@@ -991,7 +1052,37 @@ def register(sub):
     x.add_argument("--to", dest="last", help="last session (YYYY-MM-DD)")
     x.add_argument("--report", action="store_true", help="write report.md beside the candidates")
     x.add_argument("--lab-rows", help="with --report: a shadow-replay shadow_setups.parquet, to compare the desk's own entries (times and setups only)")
+    x.add_argument("--journal", help="the scout journal file (default: <runtime>/intraday/scout/journal.jsonl); 'none' to skip")
     x.set_defaults(fn=cmd_scout)
+    x = ss.add_parser("scout-lab", help="the scout's strategy library (about 20 market strategies, each with its own stop, every exit policy) and a rule miner that makes new ones (shadow, offline)")
+    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes); sessions from 2023-01-01 are sealed and dropped")
+    x.add_argument("--stocks", help="a folder of the stock-minutes release's *_stocks_cash.parquet files")
+    x.add_argument("--out", required=True, help="a new folder outside every git tree")
+    x.add_argument("--symbols", help="default: NIFTY,BANKNIFTY (dataset) or every stock (stocks)")
+    x.add_argument("--from", dest="first", help="first session (YYYY-MM-DD)")
+    x.add_argument("--to", dest="last", help="last session (YYYY-MM-DD)")
+    x.add_argument("--grid", help="a finished `scout` run folder: its any-minute candidates are mined too")
+    x.add_argument("--no-mining", action="store_true", help="the library and the leaderboard only")
+    x.add_argument("--trials", type=int, default=15000, help="random rules tried per search (all counted in the report)")
+    x.add_argument("--nulls", type=int, default=8, help="searches repeated on outcomes shifted inside each session")
+    x.add_argument("--journal", help="the scout journal file (default: <runtime>/intraday/scout/journal.jsonl); 'none' to skip")
+    x.set_defaults(fn=cmd_scout_lab)
+    x = ss.add_parser("scout-log", help="the scout's journal: add an observation / hypothesis / decision / plan / note, move a hypothesis on, show, verify the chain, summarise")
+    x.add_argument("action", choices=["add", "status", "show", "verify", "summary"])
+    x.add_argument("--journal", help="the journal file (default: <runtime>/intraday/scout/journal.jsonl)")
+    x.add_argument("--kind", help="add: observation | hypothesis | decision | plan | note (default note); show: only this kind")
+    x.add_argument("--title", help="add: a one-line title")
+    x.add_argument("--text", help="add: the body")
+    x.add_argument("--json", help="add: extra payload as a JSON object")
+    x.add_argument("--ref", type=int, action="append", default=[], help="an earlier entry this one builds on (repeatable)")
+    x.add_argument("--tag", action="append", default=[])
+    x.add_argument("--by", default="claude", help="who wrote it (use 'owner' for your own words)")
+    x.add_argument("--hypothesis", type=int, help="status: the hypothesis entry")
+    x.add_argument("--set", choices=["open", "tested", "killed", "confirmed", "parked"], help="status: the new status")
+    x.add_argument("--why", help="status: why")
+    x.add_argument("--last", type=int, default=30, help="show: how many")
+    x.add_argument("--out", help="summary: also write it to this file")
+    x.set_defaults(fn=cmd_scout_log)
     x = ss.add_parser("scout-report", help="the read-out of a finished scout run (exploratory tables, a small model, the desk comparison)")
     x.add_argument("--out", required=True, help="the scout run folder")
     x.add_argument("--lab-rows", help="a shadow-replay shadow_setups.parquet, to compare the desk's own entries (times and setups only)")
