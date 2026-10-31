@@ -113,6 +113,22 @@ def _setups_block(api, account: str) -> dict:
         return {"line": None, "error": type(exc).__name__}
 
 
+def _charts_block(api, account: str, cfg) -> tuple[dict, list[str]]:
+    """Every chart the page can ask for. A chart that cannot be built is left out (the page shows an empty chart, see
+    `/api/i/chart` below) and named in the second return value, instead of failing the publish: on 30 Oct 2026 one bad
+    marker froze the whole site, heartbeat included, for 30 minutes and the app said the desk had stopped."""
+    charts, failed = {}, []
+    for s in cfg.get("intraday.underlyings", ["NIFTY", "BANKNIFTY"]):
+        for k in ("", "-FUT"):
+            for iv in ("1m", "5m", "15m"):
+                key = f"{s}{k}|{iv}"
+                try:
+                    charts[key] = api.chart(account, s + k, None, iv)
+                except Exception as exc:
+                    failed.append(f"chart {key}: {type(exc).__name__}: {str(exc)[:120]}")
+    return charts, failed
+
+
 def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, live: bool = False,
               max_trade_details: int = 150) -> dict:
     """Everything the app reads, as one JSON-able object (the same shapes the server's API returns)."""
@@ -133,6 +149,9 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
         thoughts.append(r)
     trades = api.trades(account, 1000)
     short = "Live paper" if live else ("Demo" if account == "synthetic" else "Snapshot")
+    charts, failed = _charts_block(api, account, cfg)
+    for line in failed:
+        print(f"::warning::export-site: left out {line}", flush=True)       # in the run log; the site still publishes
     return {
         "label": label or ("Live paper desk" if live else f"{account.capitalize()} snapshot"),
         "short": short, "live": live,
@@ -144,8 +163,8 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
         "reviews": {d: api.review(account, d)["markdown"] for d in api.reviews(account)},
         "stats": api.stats(account),
         "news": api.news(account, 120),
-        "chart": {f"{s}{k}|{iv}": api.chart(account, s + k, None, iv)
-                  for s in cfg.get("intraday.underlyings", ["NIFTY", "BANKNIFTY"]) for k in ("", "-FUT") for iv in ("1m", "5m", "15m")},
+        "chart": charts,
+        "export_errors": failed,
     }
 
 
