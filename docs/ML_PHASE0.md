@@ -135,6 +135,13 @@ T2 and T3 grow by about one session a day. There is no history to buy and none i
   the registered spec's `deployment` text says "nothing is added to a workflow" and has the desk engineer run `ml oi` after each close. This is a new, separate monitoring
   workflow that text did not anticipate. It changes no definition, no rule of the test and no table the read-out uses (its scratch tables, in `runtime/ml_oi_daily`, are thrown away with the machine; the tables that count are still the ones `ml oi`
   writes, reproducible from the archive). `contents: read`, no secret, a counts-only text summary kept 30 days.
+- **Live OI-feed guard** (`chains.plausible_oi`, in `chain_analytics`): the recorded tape holds OI prints near +-1e18 in about 1% of snapshots; the offline test quarantines such
+  a snapshot, but the live desk's PCR, OI walls, max pain, OI adds and GEX read the same feed unguarded. Now one implausible print (infinite, negative open interest, a
+  day change beyond +-1e12, or an OI above 1e12; real OI is below 1e9) withholds every OI-derived read of that snapshot and sets `oi_quarantined` (shown in the chain view, and
+  journaled as one WARN per outage). **What changes in the weighing:** the analyst counts the withheld OI votes (PCR, walls, wall shift, and max pain on expiry day) as *neutral
+  evidence at their own weights*, so a fault can only dilute the score and never raises conviction by dropping a disagreeing vote (a test holds a quarantined read to be no more
+  convincing than a read with no OI at all). Nothing is clipped or repaired, no threshold, limit, gate or size changes, and the recorder still writes the raw print. The bound equals
+  `ml.oi.OI_MAX` (a test holds them equal). Known cost: one bad print in the day's first read disables that day's wall-shift comparison (chainflow keeps its first read).
 - **Kite websocket attached to the desk** (`intraday/kitelive.py`, `intraday.kite.live: true`, `deploy/kite-token.sh`, `.github/workflows/kite-token.yml`; criteria `docs/ml/KITE_TRIAL.md` v2): owner decision
   of 25 Oct, the websocket is attached directly, not in shadow. With `KITE_DATA_KEY` and the day's token present, Kite serves the index bars (and the live index price); Kotak and Yahoo
   stay behind it as the automatic fallback for any minute Kite lacks, any compared minute that differs from the fallback by more than 0.5% (the comparison runs on a symbol's first poll, on
