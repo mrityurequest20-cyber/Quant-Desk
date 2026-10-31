@@ -1,0 +1,57 @@
+# Daily check of the OI shadow (docs/prereg/oi_shadow_v1.json, `deployment`): grade every forward weekday from the chain tape on the chains-YYYY releases,
+# on a fresh machine, and fail the run if a trading day has no tape or a session does not grade. Read-only: it adds nothing to the live process, writes no
+# table anyone reads (the scratch tables die with the machine; `ml oi` writes the ones that count and they are reproducible from the archive), and keeps only
+# a text summary of counts (quantdesk/ml/oi_daily.py).
+name: OI shadow daily check
+
+on:
+  schedule:
+    - cron: "17 12 * * 1-5"    # weekdays 12:17 UTC (17:47 IST), after the afternoon session and its archive step
+  workflow_dispatch: {}
+
+permissions:
+  contents: read             # download release assets; nothing is written
+
+defaults:
+  run:
+    shell: bash              # bash -e -o pipefail: a failing command in front of `| tee` fails the step
+
+concurrency:
+  group: oi-daily
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Fetch the tape of every forward weekday so far
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p tape
+          for day in $(python -m quantdesk ml oi-daily --days-only); do
+            gh release download "chains-${day%%-*}" --repo "$GITHUB_REPOSITORY" --pattern "${day}_*_chains.parquet" --dir tape || echo "no tape assets for $day"
+          done
+          ls tape | wc -l
+      - name: Grade every forward weekday (a missing trading day or a session that does not grade fails the run)
+        run: python -m quantdesk ml oi-daily --source tape --out runtime/ml_oi_daily | tee oi_daily.txt
+      - name: Keep the summary (counts only)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: oi-daily-summary
+          path: oi_daily.txt
+          if-no-files-found: warn
+          retention-days: 30
