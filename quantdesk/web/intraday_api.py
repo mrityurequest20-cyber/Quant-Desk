@@ -18,6 +18,13 @@ from ..journal.journal import Journal
 COMMANDS = {"pause", "resume", "flatten", "close"}
 
 
+def _text(v) -> str:
+    """A text column from the journal, or "" when it is empty. pandas 3 reads a NULL string as NaN, which is truthy, so
+    `v or default` and `if v:` treat an open trade's empty `closed_at` or `meta` as a value (30 Oct 2026: five exports
+    in a row died on it and the app said "Stale")."""
+    return v if isinstance(v, str) else ""
+
+
 class IntradayAPI:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -140,7 +147,7 @@ class IntradayAPI:
                                "grade, exit_reason, status, meta FROM trades ORDER BY opened_at DESC LIMIT ?", (int(n),))
         recs = t.to_dict("records")
         for r in recs:
-            m = json.loads(r.pop("meta") or "{}")
+            m = json.loads(_text(r.pop("meta")) or "{}")
             r["structure"], r["expiry"] = m.get("structure"), m.get("expiry")
         return recs
 
@@ -213,7 +220,7 @@ class IntradayAPI:
         direction) it assumed vs how often the underlying actually moved its way by the exit."""
         rows = []
         for r in t.itertuples():
-            q = (json.loads(r.meta or "{}").get("quant") or {})
+            q = (json.loads(_text(r.meta) or "{}").get("quant") or {})
             if "p_up" not in q or not r.direction or pd.isna(r.exit_underlying) or pd.isna(r.entry_underlying):
                 continue
             p_right = q["p_up"] if r.direction > 0 else 1 - q["p_up"]
@@ -283,10 +290,10 @@ class IntradayAPI:
                   (symbol.replace("-FUT", ""), first, day + " 99"))
         markers = []
         for r in tr.itertuples():
-            m = json.loads(r.meta or "{}")
+            m = json.loads(_text(r.meta) or "{}")
             markers.append({"t": int(pd.Timestamp(r.opened_at).timestamp()), "kind": "entry", "price": r.entry_underlying,
                             "dir": r.direction, "text": f"{r.strategy} · {m.get('structure')}"})
-            if r.closed_at:
+            if _text(r.closed_at):
                 markers.append({"t": int(pd.Timestamp(r.closed_at).timestamp()), "kind": "exit", "price": r.exit_underlying,
                                 "dir": r.direction, "text": f"{r.exit_reason} ₹{r.pnl:,.0f}"})
         th = j.df("SELECT levels FROM thoughts WHERE symbol=? AND ts >= ? AND ts < ? ORDER BY id DESC LIMIT 1",

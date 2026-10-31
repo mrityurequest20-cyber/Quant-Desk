@@ -367,7 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
                                   "immutable dataset, build point-in-time tables from it, reproduce the locked HAR result, "
                                   "refit the registered models as a drill, check an imported dataset against independent references "
                                   "(never touches the live desk)")
-    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "trades", "card", "retrain", "verify", "import-tape", "oneshot"])
+    s.add_argument("action", choices=["import", "build", "reproduce", "oi", "oi-report", "oi-daily", "trades", "card", "retrain", "verify", "import-tape", "oneshot"])
     s.add_argument("--source", help="import: the folder holding the Kaggle files (NIFTY 50_minute.csv, ...); oi: the folder holding the chain "
                                     "tape (<day>_<part>_chains.parquet)")
     s.add_argument("--out", help="import: output root (default runtime/external); build: tables root (default runtime/ml_tables); "
@@ -391,6 +391,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--readout", choices=["interim", "final"], default="interim", help="oi-report: the pre-registered read-out (docs/prereg/oi_shadow_v1.json)")
     s.add_argument("--journal", help="trades: a journal database (intraday/journal.db, e.g. from the journal branch); opened read-only")
     s.add_argument("--sleeve", help="trades: also take a close look at one sleeve's trades (the VWAP check: vwap_trend)")
+    s.add_argument("--today", help="oi-daily: grade every forward weekday up to this date (default: the last session that should be complete: today from 17:00 IST, else yesterday)")
+    s.add_argument("--days-only", action="store_true", help="oi-daily: print the forward weekdays to fetch and stop")
     s.add_argument("--aeron", help="verify: the already verified aeron7 dataset folder (check C, the overlap)")
     s.add_argument("--cache", help="verify: a folder outside any git tree where the NSE index files are saved (their sha256 go in the record)")
     s.add_argument("--flip", action="store_true", help="verify: the status-only step after a pass: copy `passed` from verification.json into the manifest; compares nothing")
@@ -410,7 +412,7 @@ def cmd_ml(cfg, a):
             return _ml_import(cfg, a, I)
         if a.action == "build":
             return _ml_build(cfg, a)
-        if a.action in ("oi", "oi-report"):
+        if a.action in ("oi", "oi-report", "oi-daily"):
             return _ml_oi(cfg, a)
         if a.action == "trades":
             return _ml_trades(a)
@@ -453,9 +455,17 @@ def _ml_build(cfg, a):
     print(f"table {folder}")
 
 
+def last_completed_session_day():
+    """The IST date whose session (and its archive, about 16:15) should be complete now: today from 17:00 IST, else yesterday. A run that is hours late, or
+    started by hand before the archive lands, then neither reports tomorrow as missing nor today as missing."""
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=5, minutes=30)))
+    return (now if now.hour >= 17 else now - _dt.timedelta(days=1)).date()
+
+
 _ONESHOT_DEFAULTS = {"source": None, "version": "", "reviewed": None, "symbols": "NIFTY,BANKNIFTY", "profile_end": None, "allow_unverified": False,
                      "committed": None, "rtol": 1e-9, "through": "platform", "day": None, "readout": "interim", "aeron": None, "cache": None, "flip": False,
-                     "accept_gaps": "", "run": None}
+                     "accept_gaps": "", "run": None, "today": None, "days_only": False}
 
 
 def _ml_oneshot(a):
@@ -529,6 +539,36 @@ def _ml_oi(cfg, a):
         man = OI.run_day(Path(a.source), a.day, out)
         print(f"{man['day']}: rows {man['rows']} · usable at 60 minutes {man['usable60']} · quarantined snapshots "
               f"{ {u: q['quarantined'] for u, q in man['quarantine'].items()} } · code {man['code_sha256'][:12]}")
+        return
+    if a.action == "oi-daily":
+        from .ml import build as B
+        from .ml import oi_daily as OD
+        today = a.today or str(last_completed_session_day())
+        if a.days_only:
+            print("\n".join(OD.forward_weekdays(today)))
+            return
+        if not a.source:
+            raise SystemExit("ml oi-daily: --source (the tape folder) is required")
+        scratch = None
+        if a.out:
+            out = Path(a.out)
+        else:                                                                         # a fresh scratch folder per local run: a morning-only run must not leave tables whose input hashes the afternoon's tape then changes
+            import tempfile
+            base = Path(cfg.runtime_dir) / "ml_oi_daily"
+            B.refuse_tracked_tree(base, "ml oi-daily --out")
+            base.mkdir(parents=True, exist_ok=True)
+            out = scratch = Path(tempfile.mkdtemp(prefix="run_", dir=base))             # never the folder the read-out reads; removed after the run, an explicit --out is kept
+        B.refuse_tracked_tree(out, "ml oi-daily --out")
+        if out.resolve() == (Path(cfg.runtime_dir) / "ml_oi").resolve():
+            raise SystemExit("ml oi-daily: --out is the folder the read-out reads (runtime/ml_oi); its scratch tables must not go there")
+        try:
+            ok = OD.grade_all(Path(a.source), out, today)["ok"]
+        finally:
+            if scratch is not None:                                                    # the default scratch tables are throwaway: no accumulation, on success or failure
+                import shutil
+                shutil.rmtree(scratch, ignore_errors=True)
+        if not ok:
+            raise SystemExit(1)
         return
     gaps = [g.strip() for g in a.accept_gaps.split(",") if g.strip()]
     print(OI.render_report(OI.oi_report(OI.load_tables(out), a.readout, accept_gaps=gaps)))
