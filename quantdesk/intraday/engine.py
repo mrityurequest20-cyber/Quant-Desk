@@ -43,6 +43,7 @@ from .orderflow import FootprintBuilder
 from .playbook import Playbook, TradePlan
 from .quant import DirectionModel, EVEngine, VolForecaster, features_5m, load_research, session_sigma, to_5m
 from .risk import IntradayRisk
+from .sleeves import SETTLE_FROM                          # 15:00, the start of the expiry sleeves' settlement window
 from .sim import IntradayBroker, QuoteMarker
 from .volshadow import VolShadow
 
@@ -309,17 +310,36 @@ class IntradayEngine:
                                f"learning memory unreadable ({self.memory.corrupt}): the desk trades on neutral tilts and "
                                f"saves nothing over the file; restore memory.json from the journal branch's evidence")
 
-    def _backfill_recorder(self, sym: str, hist, day: dt.date) -> None:
+    def _backfill_recorder(self, sym: str, hist, day: dt.date, before_min: int | None = None) -> None:
         """P2-10: a runner that starts mid-day (the afternoon one, a restart) gets the minutes it missed in its history,
         so the recorder (which keeps only what poll() returns) had a hole there; fill today's missing minutes. Data only."""
         if self.recorder is None or hist is None or not len(hist):
             return
         try:
-            n = self.recorder.fill_bars(sym, hist[hist.index.date == day])
+            today = hist[hist.index.date == day]
+            if before_min is not None:                                # the gap fill never writes the settlement window (see _fill_recorder_gaps)
+                today = today[(today.index.hour * 60 + today.index.minute) < before_min]
+            n = self.recorder.fill_bars(sym, today)
             if n:
                 self.journal.event(pd.Timestamp.now(tz=IST), "INFO", "session", f"{sym}: {n} bar(s) from history added to today's record")
         except Exception as exc:                                  # a recorder fault must never stop the session starting
             log.warning("recorder backfill %s: %s", sym, exc)
+
+    def _fill_recorder_gaps(self, now, force: bool = False) -> None:
+        """Minutes served from Kite are kept out of the recorder (its licence), so the day's 1-minute file would have holes that the chart and the learning loader read. Every 30
+        minutes, and once more at the close, the other feeds' own history for today fills exactly the minutes the file lacks (`fill_bars` adds nothing that is already there). It fills only minutes before 15:00: the recorded 15:00 to 15:29 bars are the expiry sleeves' settlement input, and on a plain day
+        a minute the feed missed there stays missing, so a Kite day must not fill it from another feed's history either (settlement would differ between the two kinds of day)."""
+        if self.recorder is None or self.day is None or not hasattr(type(self.feed), "unrecorded"):
+            return
+        last = getattr(self, "_gap_fill_at", None)
+        if not force and last is not None and now - last < pd.Timedelta(minutes=30):
+            return
+        self._gap_fill_at = now
+        for sym in self.underlyings + [self.vix]:
+            try:
+                self._backfill_recorder(sym, self.feed.history(sym, 2), self.day, before_min=SETTLE_FROM.hour * 60 + SETTLE_FROM.minute)
+            except Exception as exc:                                  # a data nicety: never the session's problem
+                log.warning("recorder gap fill %s: %s", sym, exc)
 
     def step(self) -> bool:
         now = self.feed.now()
@@ -336,7 +356,10 @@ class IntradayEngine:
                 for ts, b in new.iterrows():                   # no live price: each new bar's range decides the armed orders
                     self._fire_armed(sym, now, bar=(float(b["open"]), float(b["high"]), float(b["low"])))
             if self.recorder:
-                self.recorder.record_bars(sym, new)
+                rec_new = new
+                if hasattr(type(self.feed), "unrecorded"):      # minutes served from Kite stay out of the recorder: its licence is the subscriber's, and the recording reaches public artifacts
+                    rec_new = new[~new.index.isin(list(self.feed.unrecorded(sym)))]
+                self.recorder.record_bars(sym, rec_new)
                 fb = getattr(self.feed, "fut_bars", {}).get(sym)
                 if fb is not None and len(fb):                  # the futures' own bars, for the chart and replays
                     self.recorder.record_bars(f"{sym}-FUT", fb[fb.index.date == fb.index[-1].date()])
@@ -348,6 +371,7 @@ class IntradayEngine:
         self._gov_safe(self._gov_step, now)
         if not got:
             self._wallclock_exits(now)                    # no new bar is no reason to hold a position past the square-off
+            self._fill_recorder_gaps(now)                 # last: its history calls have no timeout, so a slow one must not delay an exit, a command or the kill switch
             return False
         early, tried, fails = self._manage_first(now)          # exits before the optional network refreshes (P2-2)
         try:
@@ -363,6 +387,7 @@ class IntradayEngine:
         self._persist()
         self._heartbeat(now)
         self.journal.commit()
+        self._fill_recorder_gaps(now)                          # last (see above): after the exits, the persist and the heartbeat
         if fails:                                              # the step finished for everyone else; run_step still counts it
             raise fails[0]
         return True
@@ -486,6 +511,7 @@ class IntradayEngine:
         if self.review_dir:
             self.review_dir.mkdir(parents=True, exist_ok=True)
             (self.review_dir / f"{self.day}.md").write_text(review, encoding="utf-8")
+        self._fill_recorder_gaps(self.feed.now(), force=True)   # the close, last: the positions are shut and the session saved before any history call with no timeout
         return review
 
     # ---- data -------------------------------------------------------------------------------------------
@@ -1818,10 +1844,17 @@ class IntradayEngine:
                               "legs": [{"symbol": l.instrument.symbol, "qty": l.qty, "entry": l.entry_price,
                                         "mark": marks[l.instrument.symbol]} for l in t.legs],
                               "rationale": t.rationale[:600]})
+        data = self._data_status(now)
+        if now.minute % 5 == 0 and getattr(self, "_counter_event_at", None) != now.floor("min") and isinstance(data, dict) and isinstance(data.get("kite"), dict):
+            self._counter_event_at = now.floor("min")
+            try:                                                    # the Kite feed's counters outlive this process (the morning and the afternoon runner each start from zero): docs/ml/KITE_TRIAL.md reads them from here
+                self.journal.event(now, "INFO", "feed", "kite feed counters " + json.dumps({k: v for k, v in data["kite"].items() if k != "symbols"}, sort_keys=True))
+            except Exception:
+                pass
         self.journal.set_state("intraday_live", {
             "ts": str(now), "day": str(self.day), "equity": eq, "day_start_equity": self.day_start_equity,
             "day_pnl": eq - self.day_start_equity, "paused": self.paused, "halted": self.risk.halted,
-            "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(),
+            "trades_today": self.risk.trades_today, "feed": self.feed.name, "chain": self.chain_name(), "data": data,
             "views": views, "positions": positions,
             "armed": [a.to_record() for u in self.underlyings for a in self.armed.get(u, []) if now <= a.expires],
             "news_health": dict(self.news.health) if self.news is not None else None,
@@ -1834,6 +1867,19 @@ class IntradayEngine:
                       "reconcile": (self.health.get("reconcile") or {}).get("ok") is False,
                       **({"inherited": summary(self.halt)} if self.halt else {})},
             "health": dict(self.health)})
+
+    def _data_status(self, now) -> dict | None:
+        """Where the desk's market data comes from and how fresh it is, for the app's Data panel: the feed's name, its Kite status if the websocket is attached, and each
+        index's last bar and its age. A display: whatever is wrong with it must never cost the desk a heartbeat."""
+        try:
+            bars = {}
+            for u in self.underlyings + [self.vix]:
+                ts = self.last_ts.get(u)
+                bars[u] = {"last_bar": str(ts), "age_s": round((now - ts).total_seconds(), 1)} if ts is not None else None
+            st = getattr(self.feed, "status", None)
+            return {"feed": self.feed.name, "kite": st() if callable(st) else None, "bars": bars}
+        except Exception:
+            return None
 
     def _claude_line(self) -> str | None:
         """'Claude: $X today, $Y of $20.00 used, ~N sessions left at this pace' (None without a credit)."""

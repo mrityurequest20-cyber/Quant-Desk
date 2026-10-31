@@ -358,6 +358,7 @@ async function renderDesk() {
 	mk.textContent = "";
 	for (const s of syms) mk.appendChild(marketRow(s, vs[s]));
 	$("#d-mkt-hint").textContent = (hb.feed ? `${hb.feed} · ` : "") + "bias −1 to +1";
+	renderData(hb);
 	// open positions
 	const pos = hb.positions || [];
 	$("#d-pos-wrap").hidden = !pos.length;
@@ -402,6 +403,32 @@ async function renderDesk() {
 			window.QD_NOTE || "Paper trades only: simulated against real prices and option chains, with real costs. Nothing here can place an order.");
 	}
 	installCard();
+}
+// where the data comes from and how fresh it is: the feed, the Kite websocket if attached, and each index's last bar and live price with their ages
+function dataRow(label, value, note, tone) {
+	return h("div", { class: "row", style: "padding:9px 16px;gap:12px" }, h("div", { class: "grow" }, h("div", { style: "font-weight:500" }, label), note ? h("div", { class: "f2", style: "font-size:12px" }, note) : null),
+		h("b", { class: tone || "" }, value));
+}
+function renderData(hb) {
+	const d = hb.data, wrap = $("#d-data-wrap");
+	wrap.hidden = !d;
+	if (!d) return;
+	const age = (s) => (fin(s) ? (s < 90 ? `${Math.round(s)} s ago` : `${Math.round(s / 60)} min ago`) : "—");
+	const k = d.kite, open = inSession();
+	const rows = [dataRow("Feed", d.feed || "—", k ? "Kite websocket first; the other feeds fill any gap" : "Kite websocket not attached")];
+	if (k) {
+		const state = k.live ? ["live", "up"] : k.connected ? ["silent", "dn"] : ["not connected", "dn"];
+		rows.push(dataRow("Kite websocket", state[0], `${k.kite_polls} of ${k.polls} polls and ${k.minutes} minutes served from Kite · ${k.fallback_polls} polls asked the other feeds`
+			+ (k.compared ? ` · ${k.compared} minutes compared, ${k.rejected} rejected` : "") + (k.faults ? ` · ${k.faults} Kite fault(s) handed to the other feeds` : "")
+			+ (k.last_error ? ` · last: ${k.last_error}` : ""), open ? state[1] : ""));
+		for (const [sym, v] of Object.entries(k.symbols || {})) rows.push(dataRow(`${sym} websocket tick`, age(v.age_s), "Kite prices are not published, only how fresh they are", open && fin(v.age_s) && v.age_s > 20 ? "dn" : ""));
+	}
+	for (const [sym, b] of Object.entries(d.bars || {})) if (b) rows.push(dataRow(`${sym} last bar`, ist(b.last_bar), age(b.age_s), open && b.age_s > 150 ? "dn" : ""));
+	const hbAge = (Date.now() - tms(hb.ts)) / 1000;
+	$("#d-data-hint").textContent = `desk state ${ist(hb.ts)} · ${age(hbAge)}`;
+	const el = $("#d-data");
+	el.textContent = "";
+	put(el, rows);
 }
 function marketRow(s, v) {
 	const c = S.charts[s + "|5m"], a = stance(v);
