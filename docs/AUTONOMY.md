@@ -162,7 +162,7 @@ These are not questions. The engineer never asks about them; it simply does not 
     these credentials to a job under the names the broker adapter reads (`KITE_API_KEY`,
     `KITE_ACCESS_TOKEN` in `execution/kite.py`; the data path uses `KITE_DATA_KEY`, `KITE_DATA_SECRET`,
     `KITE_DATA_TOKEN`); and never prints, commits, logs or publishes them. This exception ends on
-    25 Nov 2026 or when the owner removes the secrets, whichever is first, and does not cover real money.
+    31 December 2027 or when the owner removes the secrets, whichever is first, and does not cover real money.
 - **No looser risk:** never loosen a risk limit (`intraday.risk`, the drawdown halts, the loss budget), and never size
   above what a registered spec allows.
 - **No rewriting the record:** never edit a registered spec, ledger or result after the fact; never delete data or
