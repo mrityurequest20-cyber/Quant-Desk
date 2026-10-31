@@ -365,6 +365,23 @@ def test_a_bug_of_ours_is_not_swallowed_as_a_quiet_day(tmp_path, monkeypatch):
         _record_with(tmp_path, monkeypatch, RuntimeError("TokenException: spoofed by name only"))
     with pytest.raises(OSError, match="No space"):                                  # our own disk is not Kite's network
         _record_with(tmp_path, monkeypatch, OSError(28, "No space left on device"))
+    with pytest.raises(TimeoutError):                                               # a built-in timeout can come from our own filesystem; Kite's timeouts carry their library's class
+        _record_with(tmp_path, monkeypatch, TimeoutError("a slow mount"))
+
+
+def test_ticks_dropped_from_a_full_buffer_fail_the_run_even_when_a_later_flush_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setenv("KITE_DATA_KEY", "k")
+    monkeypatch.setenv("KITE_DATA_TOKEN", "t")
+    monkeypatch.setattr(K, "MAX_BUFFER", 2)
+    clock, ticker = Clock("2026-10-26 15:29:58"), FakeTicker()
+
+    def sleep(s):
+        clock.advance(1)
+        ticker.on_ticks(ticker, [kite_tick(256265, 25000.0 + i, clock().tz_localize(None), depth=False) for i in range(3)])
+    out = tmp_path / "rec"
+    with pytest.raises(K.KiteRecordError, match="dropped"):                         # the final flush wrote what it held (unwritten is 0), yet ticks were lost earlier
+        K.run_session(out, "15:30", kite=FakeKite(), ticker_factory=lambda: ticker, now=clock, sleep=sleep)
+    assert any(json.loads(x)["kind"] == "overflow" for x in (out / "events.jsonl").read_text().splitlines())      # and the loss is on record
 
 
 def test_ticks_that_could_not_be_written_at_the_end_fail_the_run_and_keep_what_was_written(tmp_path, monkeypatch, capsys):

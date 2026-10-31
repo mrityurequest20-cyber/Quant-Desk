@@ -218,7 +218,7 @@ _KITE_SIDE_MODULES = ("kiteconnect", "requests", "urllib3")
 def _kite_side_failure(exc: BaseException) -> bool:
     """A refusal or an outage on Kite's side (a stale token, the API, the network), as against a bug or a fault of ours (a full disk is an OSError too, and is not Kite's).
     By the class's module, so it needs no kiteconnect import."""
-    return isinstance(exc, (ConnectionError, TimeoutError)) or any(c.__module__.split(".")[0] in _KITE_SIDE_MODULES for c in type(exc).__mro__)
+    return isinstance(exc, ConnectionError) or any(c.__module__.split(".")[0] in _KITE_SIDE_MODULES for c in type(exc).__mro__)
 
 
 def cmd_kite_record(cfg, a):

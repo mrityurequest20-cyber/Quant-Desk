@@ -92,7 +92,8 @@ class Recorder:
         self.now = now or (lambda: pd.Timestamp.now(tz=IST))
         self.flush_seconds = flush_seconds
         self.rows: list[dict] = []
-        self.overflow = 0
+        self.overflow = 0                                            # dropped since the last flush
+        self.dropped = 0                                             # dropped in the whole session: a later good flush does not make them come back
         self.lock = threading.Lock()
         self.part = 0
         self.tag = self.now().strftime("%H%M%S")                    # parts of two jobs on one day never collide
@@ -135,6 +136,7 @@ class Recorder:
             rows, self.rows = self.rows, []
             events, self.events = self.events, []
             lost, self.overflow = self.overflow, 0
+        self.dropped += lost
         if lost:
             events.append({"kind": "overflow", "dropped_ticks": lost, "at": str(self.now())})
         if events:
@@ -174,7 +176,7 @@ class Recorder:
         except Exception:
             pass
         self.flush()
-        return {"parts": self.part, "ticks": self.ticks, "unwritten": len(self.rows)}
+        return {"parts": self.part, "ticks": self.ticks, "unwritten": len(self.rows), "dropped": self.dropped}
 
 
 def fetch_reference(kite, tokens: dict[str, int], day: dt.date, out_dir: Path) -> Path:
@@ -219,6 +221,6 @@ def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite
     stats = rec.run(until, sleep=sleep)
     if with_reference:
         fetch_reference(kite, tokens, today, Path(out_dir))
-    if stats["unwritten"]:                                         # the last write failed and the process is about to end: those ticks are gone, so the run must not look clean
-        raise KiteRecordError(f"{stats['unwritten']:,} ticks could not be written to {out_dir} and are lost; the parts already written are kept")
+    if stats["unwritten"] or stats["dropped"]:                     # ticks are gone (the last write failed, or the buffer overflowed while writes were failing): the run must not look clean
+        raise KiteRecordError(f"{stats['unwritten']:,} ticks could not be written to {out_dir} and {stats['dropped']:,} were dropped from a full buffer; they are lost, the parts already written are kept")
     return {"day": str(today), "tokens": tokens, **stats}
