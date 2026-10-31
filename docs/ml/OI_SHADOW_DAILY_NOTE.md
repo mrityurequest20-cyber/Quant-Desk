@@ -29,4 +29,4 @@ risk-compliance review of the exact head found no change to anything the spec re
 ## For the owner, later
 
 From 1 Jan 2027 every tape-less weekday is `unknown` (a warning, not a failure) until the 2027 NSE holiday list is in `config/quantdesk.yaml`, so a genuinely lost day
-would only warn until then. Enter the 2027 list (the watchdog asks for it on 15 Dec).
+would only warn until then. Enter the 2027 list (the daily self-review asks for it from 1 December, and the watchdog's W9 check on 15 December).
