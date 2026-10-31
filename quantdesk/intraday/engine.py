@@ -33,7 +33,7 @@ from ..journal.journal import Journal, trade_from_dict, trade_to_dict
 from . import governor
 from .analyst import Analyst, MarketView
 from .chainflow import ChainFlow, chain_step
-from .chains import ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
+from .chains import OI_MAX, ChainSource, IntradayPricer, ModelOptionChain, chain_analytics, fill_iv, liquidity, time_to_expiry
 from .features import session_state
 from .feeds import IST, IntradayFeed, ReplayFeed, frozen_minutes, refresh_due, session_bounds
 from .halt import CLEAR_CMD, HALT_KEY, book_diff, inherited, leg_key, prune_accepted, summary
@@ -1228,12 +1228,28 @@ class IntradayEngine:
                 self.journal.event(now, "WARN", "futures", f"{u} futures snapshot failed ({exc!s:.160})")
             return {}
         h = self.fut_hist.setdefault(u, [])
-        if snap["ltp"] > 0 and snap["oi"] > 0 and spot and spot == spot and (not h or h[-1][0] < now):
-            h.append((now, snap["ltp"], snap["oi"], float(spot)))
-        from .futures import read
-        out = read(h, float(spot) if spot else float("nan"), now, snap["expiry"], snap["symbol"])
-        if snap.get("oi_prev") and snap["oi_prev"] > 0:
-            out["fut_oi_vs_prev"] = float(snap["oi"] / snap["oi_prev"] - 1)
+        fault = any(x is not None and not (math.isfinite(x) and 0 <= x <= OI_MAX) for x in (snap.get("oi"), snap.get("oi_prev")))
+        faults = self.__dict__.setdefault("_fut_oi_fault", set())
+        if fault:
+            # a faulty OI print (infinite, negative, above OI_MAX: the recorded tape holds about +-1e18) never enters today's history, where it would be the baseline of every later
+            # 30-minute change; the read keeps the current price and basis and withholds every OI-derived key (the analyst counts the vote as neutral, so a fault can only dilute)
+            if u not in faults:                                     # once per outage
+                faults.add(u)
+                self.journal.event(now, "WARN", "futures", f"{u} futures snapshot has an implausible OI print: the OI build-up read is withheld and counted as neutral")
+            view = h + [(now, snap["ltp"], h[-1][2] if h else 0.0, float(spot))] if snap["ltp"] > 0 and spot and spot == spot and (not h or h[-1][0] < now) else h
+            from .futures import read
+            out = read(view, float(spot) if spot else float("nan"), now, snap["expiry"], snap["symbol"])
+            for k in ("fut_oi", "fut_oi_chg30", "fut_buildup", "fut_dir", "fut_oi_day"):
+                out.pop(k, None)
+            out["fut_oi_quarantined"] = True
+        else:
+            faults.discard(u)
+            if snap["ltp"] > 0 and snap["oi"] > 0 and spot and spot == spot and (not h or h[-1][0] < now):
+                h.append((now, snap["ltp"], snap["oi"], float(spot)))
+            from .futures import read
+            out = read(h, float(spot) if spot else float("nan"), now, snap["expiry"], snap["symbol"])
+            if snap.get("oi_prev") and snap["oi_prev"] > 0:
+                out["fut_oi_vs_prev"] = float(snap["oi"] / snap["oi_prev"] - 1)
         nxt = snap.get("next")
         if nxt and nxt.get("ltp", 0) > 0:
             out["fut_calendar"] = float(nxt["ltp"] - snap["ltp"])
@@ -2176,7 +2192,7 @@ class IntradayEngine:
 
 CHAIN_VIEW = ("source", "atm_iv", "atm_ivp", "implied_move", "straddle", "dte_days", "pcr_oi", "pcr_doi", "max_pain",
               "call_wall", "put_wall", "top_call_adds", "top_put_adds", "skew_25d", "gex_state", "gamma_flip",
-              "fut_basis", "fut_carry", "fut_buildup", "oi_quarantined")
+              "fut_basis", "fut_carry", "fut_buildup", "oi_quarantined", "fut_oi_quarantined")
 
 
 def _chain_view(an: dict | None) -> dict | None:

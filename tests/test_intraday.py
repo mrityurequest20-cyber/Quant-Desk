@@ -163,6 +163,20 @@ def test_the_read_weighs_the_futures_build_up_and_basis(cfg, sessions):
     assert not {"fut_oi", "basis"} & {e.factor for e in quiet.evidence}
 
 
+def test_a_quarantined_futures_oi_read_is_neutral_evidence_and_can_only_dilute(cfg, sessions):
+    from quantdesk.intraday.analyst import Analyst
+    bars, _, days = sessions
+    now = ts(f"{days[-1]} 11:00")
+    s = session_state(bars["NIFTY"][bars["NIFTY"].index + pd.Timedelta(minutes=1) <= now], now)
+    base = {"spot": s["last"], "atm_iv": 12.4}
+    a = Analyst(cfg)
+    bad = a.assess("NIFTY", s, {**base, "fut_oi_quarantined": True})
+    ev = {e.factor: e for e in bad.evidence}
+    assert ev["fut_oi"].direction == 0 and "feed fault" in ev["fut_oi"].observation
+    plain = a.assess("NIFTY", s, base)
+    assert abs(bad.score) <= abs(plain.score) + 1e-12 and bad.conviction <= plain.conviction + 1e-12   # a neutral vote adds weight and no direction
+
+
 def test_time_to_expiry_is_minute_precise():
     e = dt.date(2026, 9, 29)
     assert time_to_expiry(ts("2026-09-29 15:30"), e) == 0
