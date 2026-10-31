@@ -776,12 +776,13 @@ def test_the_command_refuses_an_output_folder_inside_the_repository(tmp_path):
     assert not (REPO / "docs" / "ml_tables_probe").exists()
 
 
-def make_dataset_dir(tmp_path, digest="d" * 64, status="external_verified", verification=True, name="ds"):
+def make_dataset_dir(tmp_path, digest="d" * 64, status="external_verified", verification=True, name="ds", symbols_verified=("SYN",)):
     d = tmp_path / name
     d.mkdir()
     (d / "manifest.json").write_text(json.dumps({"digest": digest, "status": status}))
     if verification:
-        (d / "verification.json").write_text(json.dumps({"digest": digest, "passed": True, "check": "yahoo daily and the aeron7 overlap"}))
+        (d / "verification.json").write_text(json.dumps({"digest": digest, "passed": True, "check": "p06-v1", "symbols_verified": list(symbols_verified),
+                                                         "criteria_sha256": __import__("quantdesk.ml.intake", fromlist=["x"]).VERIFICATION_CRITERIA["p06-v1"]}))
     return d
 
 
@@ -796,6 +797,11 @@ def test_the_status_can_be_re_derived_from_the_dataset_itself(built_verified, bu
         B.load_table(built_verified, dataset=other)
     with pytest.raises(ImmutableViolation, match="no readable manifest"):
         B.load_table(built_verified, dataset=tmp_path / "nowhere")
+    elsewhere = make_dataset_dir(tmp_path, symbols_verified=("OTHER",), name="ds_elsewhere")                                 # a record that covers some other symbol, not the table's SYN
+    with pytest.raises(ImmutableViolation, match="says external_verified but the dataset is external_unverified now: rebuild the table"):
+        B.load_table(built_verified, dataset=elsewhere)
+    both = make_dataset_dir(tmp_path, symbols_verified=("SYN", "OTHER"), name="ds_both")                                # covering more than the table needs is fine
+    assert B.load_table(built_verified, dataset=both).attrs["input_status"] == "external_verified"
     # a table built while unverified goes stale the day the dataset is verified: it must be rebuilt (and is a different table)
     folder, _, _ = built
     unverified = make_dataset_dir(tmp_path, status="external_unverified", verification=False, name="ds4")

@@ -568,6 +568,23 @@ def test_load_refuses_without_a_manifest_unverified_data_and_forbidden_uses(impo
         I.load(empty, ["NIFTY"], use="development_folds", allow_unverified=True)
 
 
+def good_record(man, **over):
+    """The record P0.6 writes when its pinned criteria pass for NIFTY and BANKNIFTY (the volatility index is not covered)."""
+    rec = {"digest": man["digest"], "passed": True, "check": "p06-v1", "criteria_sha256": I.VERIFICATION_CRITERIA["p06-v1"],
+           "symbols_verified": ["NIFTY", "BANKNIFTY"]}
+    rec.update(over)
+    return rec
+
+
+def mark_verified(ds, rec):
+    mp = ds / "manifest.json"
+    m = json.loads(mp.read_text())
+    m["status"] = I.VERIFIED
+    mp.write_text(json.dumps(m))
+    (ds / "verification.json").write_text(json.dumps(rec) if not isinstance(rec, str) else rec)
+    return m
+
+
 def test_verified_needs_a_verification_record_that_names_this_digest(imported):
     """The word 'external_verified' in a manifest is not evidence: P0.6 writes verification.json naming the digest it checked."""
     _, out, man, _ = imported
@@ -579,23 +596,85 @@ def test_verified_needs_a_verification_record_that_names_this_digest(imported):
     with pytest.raises(legacy.ForbiddenUse, match="external_unverified"):                         # the word alone: refused
         I.load(ds, ["NIFTY"], use="regime_research")
     vp = ds / "verification.json"
-    for rec in ({"digest": "0" * 64, "passed": True, "check": "yahoo-daily"},                     # another dataset's record
-                {"digest": man["digest"], "passed": False, "check": "yahoo-daily"},               # a failed check
-                {"digest": man["digest"], "passed": "no", "check": "yahoo-daily"},                # truthy, but not a pass
-                {"digest": man["digest"], "passed": 1, "check": "yahoo-daily"},
-                {"digest": man["digest"], "passed": True},                                         # no named check
-                ["digest", man["digest"]]):                                                        # not even an object
+    for rec in ({"digest": "0" * 64, **{k: v for k, v in good_record(man).items() if k != "digest"}},   # another dataset's record
+                good_record(man, passed=False),                                                           # a failed check
+                good_record(man, passed="no"),                                                            # truthy, but not a pass
+                good_record(man, passed=1),
+                {k: v for k, v in good_record(man).items() if k != "check"},                              # no named check
+                good_record(man, check="yahoo-daily"),                                                    # a check this loader does not know
+                good_record(man, check=["p06-v1"]),                                                       # not even a string
+                ["digest", man["digest"]]):                                                               # not even an object
         vp.write_text(json.dumps(rec))
         with pytest.raises(legacy.ForbiddenUse, match="external_unverified"):
             I.load(ds, ["NIFTY"], use="regime_research")
     vp.write_text("not json")
     with pytest.raises(legacy.ForbiddenUse):
         I.load(ds, ["NIFTY"], use="regime_research")
-    vp.write_text(json.dumps({"digest": man["digest"], "passed": True, "check": "yahoo-daily"}))
+    vp.write_text(json.dumps(good_record(man)))
     df = I.load(ds, ["NIFTY"], use="regime_research")                                              # a matching record: no opt-in needed, same uses only
     assert len(df) == 5 * 375 and df.attrs["status"] == I.VERIFIED
     with pytest.raises(legacy.ForbiddenUse, match="refused"):
         I.load(ds, ["NIFTY"], use="option_pricing")
+
+
+def test_the_status_is_per_symbol_and_the_record_must_name_its_criteria(imported):
+    """P0.6 checked NIFTY and BANKNIFTY only: the status never covers the volatility index, or a record without its scope and criteria."""
+    _, out, man, _ = imported
+    ds = ds_of(out, man)
+    m = mark_verified(ds, good_record(man))
+    assert I.load(ds, ["NIFTY", "BANKNIFTY"], use="regime_research").attrs["status"] == I.VERIFIED
+    with pytest.raises(legacy.ForbiddenUse, match="external_unverified"):                          # a symbol the record does not cover
+        I.load(ds, ["INDIAVIX"], use="regime_research")
+    with pytest.raises(legacy.ForbiddenUse, match="external_unverified"):                          # one covered symbol does not carry the other
+        I.load(ds, ["NIFTY", "INDIAVIX"], use="regime_research")
+    assert I.load(ds, ["INDIAVIX"], use="regime_research", allow_unverified=True).attrs["status"] == I.UNVERIFIED     # allowed on request, and labelled
+    assert I.effective_status(ds, m, ["NIFTY", "BANKNIFTY", "INDIAVIX"]) == I.UNVERIFIED          # the dataset as a whole holds INDIAVIX
+    with pytest.raises(TypeError):                                                                 # `symbols` is required: there is no unscoped answer
+        I.effective_status(ds, m)
+    assert I.effective_status(ds, m, ["NIFTY"]) == I.VERIFIED
+    assert I.effective_status(ds, m, "NIFTY") == I.VERIFIED                                        # a bare string is one symbol, not a set of letters
+    assert I.effective_status(ds, m, ["NIFTY", "SENSEX"]) == I.UNVERIFIED
+    assert I.effective_status(ds, m, []) == I.UNVERIFIED                                           # asking about nothing is not a verification
+
+
+@pytest.mark.parametrize("override", [
+    {"symbols_verified": None}, {"symbols_verified": []}, {"symbols_verified": "NIFTY"}, {"symbols_verified": ["NIFTY", ""]}, {"symbols_verified": ["NIFTY", 5]},
+    {"criteria_sha256": None}, {"criteria_sha256": "0" * 64}, {"criteria_sha256": I.VERIFICATION_CRITERIA["p06-v1"].upper()},
+    {"check": "p06-v2"}, {"check": ""}, {"passed": None},
+])
+def test_a_record_without_its_scope_or_with_other_criteria_verifies_nothing(imported, override):
+    _, out, man, _ = imported
+    ds = ds_of(out, man)
+    rec = good_record(man)
+    for k, v in override.items():
+        if v is None and k in ("symbols_verified", "criteria_sha256"):
+            del rec[k]                                                                             # a record without the field at all
+        else:
+            rec[k] = v
+    m = mark_verified(ds, rec)
+    assert I.effective_status(ds, m, ["NIFTY"]) == I.UNVERIFIED
+    assert I.effective_status(ds, m, ["NIFTY", "BANKNIFTY", "INDIAVIX"]) == I.UNVERIFIED
+    with pytest.raises(legacy.ForbiddenUse, match="external_unverified"):
+        I.load(ds, ["NIFTY"], use="regime_research")
+
+
+def test_a_hand_edited_manifest_status_does_not_make_a_record_verify_what_it_does_not_cover(imported):
+    """The manifest status sits outside the digest, so anyone can edit it: only the record, tied to pinned criteria, counts."""
+    _, out, man, _ = imported
+    ds = ds_of(out, man)
+    m = mark_verified(ds, good_record(man, symbols_verified=["NIFTY"]))
+    assert I.effective_status(ds, m, ["NIFTY"]) == I.VERIFIED
+    assert I.effective_status(ds, m, ["BANKNIFTY"]) == I.UNVERIFIED
+    m["status"] = I.UNVERIFIED
+    assert I.effective_status(ds, m, ["NIFTY"]) == I.UNVERIFIED                                     # a record cannot verify a manifest that says it is not
+
+
+def test_the_pinned_criteria_hash_is_the_hash_of_the_criteria_file():
+    """The pin is the sha256 of docs/ml/P0_6_criteria.md as merged: a changed criteria file is a new check name, added by a reviewed change."""
+    import hashlib
+    f = REPO / "docs" / "ml" / "P0_6_criteria.md"
+    assert f.exists(), "the criteria file must be committed before the loader pins it"
+    assert hashlib.sha256(f.read_bytes()).hexdigest() == I.VERIFICATION_CRITERIA["p06-v1"]
 
 
 def test_load_refuses_a_bare_string_unknown_or_empty_symbol_lists(imported):
@@ -1013,3 +1092,10 @@ def test_the_cli_imports_and_reports_and_bad_input_exits_cleanly(tmp_path, capsy
         main(["ml", "import", "--source", str(src), "--out", str(tmp_path / "out3"), "--reviewed", str(broken)])
     with pytest.raises(SystemExit, match="ml import"):
         main(["ml", "import", "--source", str(src), "--out", str(tmp_path / "out4"), "--reviewed", str(tmp_path / "missing.json")])
+
+
+def test_a_deeply_nested_record_is_unverified_not_a_crash(imported):
+    _, out, man, _ = imported
+    ds = ds_of(out, man)
+    m = mark_verified(ds, "[" * 200000)
+    assert I.effective_status(ds, m, ["NIFTY"]) == I.UNVERIFIED

@@ -570,19 +570,35 @@ def render_quality(q: dict, man: dict) -> str:
 
 
 # ---- use-restricted, integrity-checked loading ----------------------------------------------------------------------
-def effective_status(ds: Path, man: dict) -> str:
-    """`external_verified` only if a verification record (written by the P0.6 check) names this manifest's digest and says it
-    passed. The word in the manifest alone is not evidence."""
+# The independent checks that can verify a dataset, each tied to the sha256 of the criteria file that was committed before the check ran
+# (docs/ml/P0_6_criteria.md). A new criteria version is a new entry here, added by a reviewed change.
+VERIFICATION_CRITERIA = {"p06-v1": "0958f8b96ce36fbac44921f326c3e649663dc1607e014ed99557ed6186bcf21c",           # its one run was void: no record under it exists
+                         "p06-v2": "508534f5657190f3ca57ee1cd8dd76cbc81aedabcced056a421f9ad7a019b51b"}
+
+
+def effective_status(ds: Path, man: dict, symbols) -> str:
+    """`external_verified` only if a verification record (written by the P0.6 check) names this manifest's digest, says it passed, names a check
+    whose criteria hash it carries (`VERIFICATION_CRITERIA`), and lists the symbols it covered (`symbols_verified`); and then only for those
+    symbols. Asked about `symbols` that the record does not cover (the volatility index, say), the answer is `external_unverified`; so is a
+    record without `symbols_verified` or `criteria_sha256`. `symbols` is required: a caller names what it is about to use, and a whole-dataset
+    question is asked by naming every symbol in it. The word in the manifest alone is not evidence."""
     if man.get("status") != VERIFIED:
         return UNVERIFIED
     vp = Path(ds) / "verification.json"
     try:
         rec = json.loads(vp.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):                    # unreadable, not JSON, or nested so deep that the parser gives up
         return UNVERIFIED
-    if not isinstance(rec, dict):
+    if not isinstance(rec, dict) or rec.get("digest") != man.get("digest") or rec.get("passed") is not True:
         return UNVERIFIED
-    return VERIFIED if rec.get("digest") == man.get("digest") and rec.get("passed") is True and rec.get("check") else UNVERIFIED
+    check = rec.get("check")
+    if not isinstance(check, str) or VERIFICATION_CRITERIA.get(check) is None or rec.get("criteria_sha256") != VERIFICATION_CRITERIA[check]:
+        return UNVERIFIED
+    covered = rec.get("symbols_verified")
+    if not (isinstance(covered, list) and covered and all(isinstance(c, str) and c for c in covered)):
+        return UNVERIFIED
+    asked = {symbols} if isinstance(symbols, str) else set(symbols)
+    return VERIFIED if asked and asked <= set(covered) else UNVERIFIED
 
 
 def load(ds: Path, symbols, use: str, allow_unverified: bool = False, expected_digest: str | None = None) -> pd.DataFrame:
@@ -611,7 +627,7 @@ def load(ds: Path, symbols, use: str, allow_unverified: bool = False, expected_d
         raise ImmutableViolation(f"{ds.name}: the folder name does not match what the manifest says this dataset is")
     if expected_digest is not None and man["digest"] != expected_digest:
         raise ImmutableViolation(f"{ds.name}: digest {man['digest'][:12]} is not the {expected_digest[:12]} that was asked for")
-    status = effective_status(ds, man)
+    status = effective_status(ds, man, symbols)
     if status != VERIFIED and not allow_unverified:
         raise ForbiddenUse(f"{ds.name} is {UNVERIFIED}: run the verification first, or pass allow_unverified=True "
                            "and label the results as unverified")
