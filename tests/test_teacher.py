@@ -440,6 +440,8 @@ def test_a_json_header_and_a_nested_token_in_a_journal_row_never_reach_the_reade
                                          ("user_mobile: (+91) 98765 43210", "43210"),
                                          ('{"Authorization": "Basic dXNlcjpwYXNz"}', "dXNlcjpwYXNz"), ("{'authorization': 'Bearer abcd1234efgh'}", "abcd1234efgh"),
                                          ('response: {"access_token": "s3cr3t"}', "s3cr3t"), ("response=[{'password': 'hunter22'}]", "hunter22"),
+                                         ("password: [abc]", "abc"), ("token: {x}", "{x}"), ("api_key=[1,2]", "1,2"), ('secret: {"k": "v"}', '"v"'), ("password: {p4ss}", "p4ss"),
+                                         ("password:{x}", "{x}"), ("secret = [ s3cr3t ]", "s3cr3t"), ("api_key= {secret}", "{secret}"),
                                          ("Authorization: Digest username=bob, response=deadbeef0123", "deadbeef0123"),
                                          ("Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE, Signature=abcdef0123456789", "abcdef0123456789")])
 
