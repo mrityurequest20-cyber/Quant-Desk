@@ -152,7 +152,7 @@ These are not questions. The engineer never asks about them; it simply does not 
     publishes them. The only thing that may be committed is the daily access token, AES-256 encrypted with a
     key derived from the API secret, on the `kite-token` branch; recorded Kite market data leaves the runner
     only encrypted the same way, as expiring workflow artifacts, and never unencrypted in the repository, a
-    release or a model card. This exception ends on 25 Nov 2026 or when the owner removes the secrets,
+    release or a model card. This exception ends on 31 December 2027 or when the owner removes the secrets,
     whichever is first, and does not cover real money.
 
   
