@@ -331,17 +331,70 @@ def test_the_owners_script_decrypts_what_the_workflow_encrypts_and_nothing_else_
                           capture_output=True, text=True).returncode == 2
 
 
-def test_a_token_that_decrypts_but_is_stale_ends_the_command_cleanly_not_with_a_traceback(tmp_path, monkeypatch, capsys):
+def _kite_exception(name):
+    """A stand-in for kiteconnect.exceptions.<name>, which CI does not install: the command tells Kite's failures from ours by the class's module."""
+    return type(name, (Exception,), {"__module__": "kiteconnect.exceptions"})
+
+
+def _record_with(tmp_path, monkeypatch, exc):
     from quantdesk.cli import main
     monkeypatch.setenv("KITE_DATA_KEY", "k")
     monkeypatch.setenv("KITE_DATA_TOKEN", "STALE1234567890ABCDEF")
     monkeypatch.setattr("quantdesk.data.cli._kite_authority_ended", lambda today=None: False)       # not the wall clock
 
     def boom(*a, **k):
-        raise RuntimeError("TokenException: Incorrect api_key or access_token")
+        raise exc
     monkeypatch.setattr(K, "run_session", boom)
-    main(["data", "kite-record", "--out", str(tmp_path / "k"), "--until", "15:30"])               # returns: no SystemExit, no traceback
-    assert "no usable session today (RuntimeError)" in capsys.readouterr().out
+    main(["data", "kite-record", "--out", str(tmp_path / "k"), "--until", "15:30"])
+
+
+def test_a_token_that_decrypts_but_is_stale_ends_the_command_cleanly_not_with_a_traceback(tmp_path, monkeypatch, capsys):
+    _record_with(tmp_path, monkeypatch, _kite_exception("TokenException")("Incorrect api_key or access_token"))      # returns: no SystemExit, no traceback
+    assert "no usable session today (TokenException)" in capsys.readouterr().out
+    _record_with(tmp_path, monkeypatch, ConnectionResetError("network"))                                              # the network is Kite's side too
+    assert "no usable session today (ConnectionResetError)" in capsys.readouterr().out
+    import requests
+    _record_with(tmp_path, monkeypatch, requests.exceptions.ReadTimeout("slow"))                                      # what kiteconnect's HTTP client raises
+    assert "no usable session today (ReadTimeout)" in capsys.readouterr().out
+
+
+def test_a_bug_of_ours_is_not_swallowed_as_a_quiet_day(tmp_path, monkeypatch):
+    with pytest.raises(KeyError):                                                   # a changed instruments dump, say: the run goes red
+        _record_with(tmp_path, monkeypatch, KeyError("instrument_token"))
+    with pytest.raises(RuntimeError, match="TokenException"):                       # a name alone does not make it Kite's
+        _record_with(tmp_path, monkeypatch, RuntimeError("TokenException: spoofed by name only"))
+    with pytest.raises(OSError, match="No space"):                                  # our own disk is not Kite's network
+        _record_with(tmp_path, monkeypatch, OSError(28, "No space left on device"))
+
+
+def test_ticks_that_could_not_be_written_at_the_end_fail_the_run_and_keep_what_was_written(tmp_path, monkeypatch, capsys):
+    from quantdesk.cli import main
+    monkeypatch.setenv("KITE_DATA_KEY", "k")
+    monkeypatch.setenv("KITE_DATA_TOKEN", "t")
+    monkeypatch.setattr("quantdesk.data.cli._kite_authority_ended", lambda today=None: False)
+    clock, ticker = Clock("2026-10-26 15:29:58"), FakeTicker()
+    real = pd.DataFrame.to_parquet
+    fail = {"on": False}
+
+    def to_parquet(self, path, *a, **k):
+        if fail["on"] and Path(path).name.startswith("ticks_"):
+            raise OSError("disk full")
+        return real(self, path, *a, **k)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", to_parquet)
+
+    def sleep(s):
+        clock.advance(1)
+        ticker.on_ticks(ticker, [kite_tick(256265, 25000.0, clock().tz_localize(None), depth=False)])
+        if clock() >= pd.Timestamp("2026-10-26 15:29:59", tz=K.IST):
+            fail["on"] = True                                                       # the disk goes just before the final flush
+    out = tmp_path / "rec"
+    with pytest.raises(K.KiteRecordError, match="could not be written"):
+        K.run_session(out, "15:30", kite=FakeKite(), ticker_factory=lambda: ticker, now=clock, sleep=sleep, with_reference=True)
+    assert (out / "reference_minutes.parquet").exists()                             # the reference was still fetched: the session's measures are not lost with it
+    monkeypatch.setattr(K, "run_session", lambda *a, **k: (_ for _ in ()).throw(K.KiteRecordError("12 ticks could not be written")))
+    with pytest.raises(SystemExit) as e:                                            # and the command ends non-zero, so the workflow shows red
+        main(["data", "kite-record", "--out", str(tmp_path / "k"), "--until", "15:30"])
+    assert "could not be written" in str(e.value)
 
 
 def test_one_instruments_reference_failing_costs_the_session_only_that_instrument(tmp_path):

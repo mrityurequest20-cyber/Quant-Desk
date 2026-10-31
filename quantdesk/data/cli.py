@@ -212,6 +212,15 @@ def _kite_authority_ended(today=None) -> bool:
     return (today or pd.Timestamp.now(tz="Asia/Kolkata").date()) >= KL.AUTHORITY_ENDS
 
 
+_KITE_SIDE_MODULES = ("kiteconnect", "requests", "urllib3")
+
+
+def _kite_side_failure(exc: BaseException) -> bool:
+    """A refusal or an outage on Kite's side (a stale token, the API, the network), as against a bug or a fault of ours (a full disk is an OSError too, and is not Kite's).
+    By the class's module, so it needs no kiteconnect import."""
+    return isinstance(exc, (ConnectionError, TimeoutError)) or any(c.__module__.split(".")[0] in _KITE_SIDE_MODULES for c in type(exc).__mro__)
+
+
 def cmd_kite_record(cfg, a):
     from . import kite_record as K
     if _kite_authority_ended():
@@ -226,8 +235,10 @@ def cmd_kite_record(cfg, a):
         raise SystemExit(f"kite-record: {exc}") from None
     except ImportError as exc:                                     # the library did not install: that is a broken setup, not a quiet day
         raise SystemExit(f"kite-record: {type(exc).__name__}: {exc}") from None
-    except Exception as exc:                                       # a token that decrypts but is no longer valid (the daily workflow was not run), a holiday, an API refusal: a clean exit, never a traceback
-        print(f"::warning::kite-record: no usable session today ({type(exc).__name__}); nothing recorded")
+    except Exception as exc:
+        if not _kite_side_failure(exc):                            # our own bug (a changed instruments dump, a bad path): a traceback and a red run, never a quiet pass
+            raise
+        print(f"::warning::kite-record: no usable session today ({type(exc).__name__}); nothing recorded")      # a token that decrypts but is no longer valid (the daily workflow was not run), an API refusal, the network: a clean exit
         return
     print(f"kite-record: {rep['day']}: {rep['ticks']:,} ticks in {rep['parts']} parts, instruments {sorted(rep['tokens'])}")
 

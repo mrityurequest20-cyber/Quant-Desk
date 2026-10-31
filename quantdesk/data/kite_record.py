@@ -174,7 +174,7 @@ class Recorder:
         except Exception:
             pass
         self.flush()
-        return {"parts": self.part, "ticks": self.ticks}
+        return {"parts": self.part, "ticks": self.ticks, "unwritten": len(self.rows)}
 
 
 def fetch_reference(kite, tokens: dict[str, int], day: dt.date, out_dir: Path) -> Path:
@@ -219,4 +219,6 @@ def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite
     stats = rec.run(until, sleep=sleep)
     if with_reference:
         fetch_reference(kite, tokens, today, Path(out_dir))
+    if stats["unwritten"]:                                         # the last write failed and the process is about to end: those ticks are gone, so the run must not look clean
+        raise KiteRecordError(f"{stats['unwritten']:,} ticks could not be written to {out_dir} and are lost; the parts already written are kept")
     return {"day": str(today), "tokens": tokens, **stats}
