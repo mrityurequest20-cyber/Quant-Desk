@@ -210,7 +210,7 @@ def render(rep: dict, check: dict | None = None) -> str:
                      + ("  [too few]" if c["too_few"] else ""))
         L.append("")
     if check:
-        L.append(f"Close look at {check['sleeve']}: {check['n']} trades, {check['wins']} wins; underlying against {check['underlying_against']}, underlying with but the trade lost {check['underlying_with_trade_lost']}; fees {f(check['fees'])}. "
+        L.append(f"Close look at {check['sleeve']}: {check['n']} trades, {check['wins']} wins; underlying against and the trade lost {check['underlying_against']}, underlying with but the trade lost {check['underlying_with_trade_lost']}; fees {f(check['fees'])}. "
                  f"Exit-time spot against entry spot only, {check['n']} trades: this labels, it does not separate the signal from the exit rules.")
         for r in check["trades"]:
             L.append(f"  {r['day']} {r['symbol']} {r['exit_reason']}: underlying {r['underlying_move_in_trade_direction_pct']:+.2f}% in the trade's direction, P&L {f(r['pnl'])} "
