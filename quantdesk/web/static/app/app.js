@@ -22,6 +22,7 @@ const IC = {
 	trades: "M8 20V5M4.5 8.5L8 5l3.5 3.5M16 4v15M12.5 15.5L16 19l3.5-3.5",
 	brain: "M6 4.8a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM18 4.8a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM12 15.3a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM8.2 7h7.6M7.1 8.9l3.8 6.7M16.9 8.9l-3.8 6.7",
 	feed: "M4 6h16M4 11h16M4 16h10",
+	today: "M5.5 5h13A1.5 1.5 0 0 1 20 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19V6.5A1.5 1.5 0 0 1 5.5 5zM4 10h16M8.5 3v4M15.5 3v4",
 	chev: "M9 6l6 6-6 6", x: "M6 6l12 12M18 6L6 18",
 	aside: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 9v6M14 9v6",
 	watch: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
@@ -188,7 +189,7 @@ function glossaryList() {
 }
 
 // ---- shell: tabs, routing, sheets, theme ---------------------------------------------------------------------------
-const TABS = [["desk", "Desk"], ["chart", "Chart"], ["trades", "Trades"], ["brain", "Brain"], ["feed", "Feed"]];
+const TABS = [["desk", "Desk"], ["today", "Today"], ["chart", "Chart"], ["trades", "Trades"], ["brain", "Brain"], ["feed", "Feed"]];
 const SUBS = { trades: [["positions", "Positions"], ["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]],
 	feed: [["news", "Headlines"], ["log", "Desk log"]] };
 // the app's mark: a price path that tests a level, pulls back and breaks through it
@@ -1357,6 +1358,73 @@ function drawBrainGraph(el, v, hb) {
 // ==================================================================================================================
 // FEED
 // ==================================================================================================================
+// ---- Today: the pre-market brief (quantdesk/premarket; premarket.yml every 15 minutes, 07:15-09:15 IST) -------------
+async function loadBrief(maxAge) {
+	if (S.pm && Date.now() - (S.pmAt || 0) < maxAge) return S.pm;
+	try { S.pm = await api("/api/i/premarket"); S.pmErr = null; } catch (e) { S.pmErr = e.message; }
+	S.pmAt = Date.now();
+	return S.pm;
+}
+const PM_LABEL = { cheap: "bull", rich: "bear", fair: "flat", "no history": "flat", "already out": "flat" };
+const pctU = (v, d = 1) => (fin(v) ? (v * 100).toFixed(d) + "%" : "—");
+async function renderToday(full) {
+	const body = $("#p-body");
+	const b = await loadBrief(full ? 30000 : 120000);
+	if (S.tab !== "today") return;
+	body.textContent = "";
+	if (!b) {
+		put(body, grp("Pre-market brief", "", h("div", { class: "rows" }, empty("watch",
+			"No pre-market brief yet. It is built every 15 minutes from 07:15 to 09:15 IST on weekdays" + (S.pmErr ? ` (${S.pmErr}).` : "."))))); return;
+	}
+	const sum = h("div", { class: "rows" }, (b.summary || []).map((line) => h("div", { class: "pad", style: "font-size:13.5px;line-height:1.5" }, line)));
+	put(body, grp("Pre-market brief", `built ${ago(b.generated_at)}`, sum));
+	if (b.data_stale) put(body, h("div", { class: "banner err" }, icon("alert"), h("div", {}, `The latest bhavcopy is from ${b.last_close}: the warehouse may be behind.`)));
+	const notes = (t) => h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:4px" }, t);
+	if ((b.expiring || []).length)
+		put(body, grp("Expiry today", b.expiring.map((e) => e.symbol).join(", "), h("div", { class: "rows" }, h("div", { class: "pad" }, notes(b.expiring[0].note)))));
+	if ((b.macro || []).length)
+		put(body, grp("Macro events", `${b.macro.length}`, h("div", { class: "rows" }, b.macro.map((m) => h("div", { class: "pad", style: "display:grid;gap:4px" },
+			h("div", { class: "row" }, h("b", { style: "font-weight:500" }, m.name), h("span", { class: "grow" }), h("span", { class: "tag flat" }, (m.time ? m.time + " IST · " : "") + m.when)),
+			Object.entries(m.history || {}).map(([sym, x]) => notes(`${sym}: ${x.n} past sessions, median move ${pctU(x.median_move, 2)} (all sessions ${pctU(x.median_move_all, 2)}); moved more than 1% on ${pctU(x.share_over_1pct, 0)} (all ${pctU(x.share_over_1pct_all, 0)})`)),
+			m.evidence ? notes(m.evidence) : null)))));
+	if ((b.results || []).length) {
+		const tb = h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Stock", "Priced", "Past (NSE)", "Label"].map((x) => h("th", {}, x)))),
+			h("tbody", {}, b.results.map((r) => h("tr", {}, h("td", {}, h("b", { style: "font-weight:500" }, r.symbol), h("small", { class: "sub" }, r.when.startsWith("results today") ? "today" : "reacting")),
+				h("td", {}, pctU(r.event_implied_move)), h("td", {}, r.past && r.past.n ? `${pctU(r.past.median_move)} · ${r.past.n}` : "—"),
+				h("td", {}, h("span", { class: "tag " + (PM_LABEL[r.label] || "flat") }, r.label))))));
+		const why = h("div", { class: "rows" }, b.results.map((r) => h("div", { class: "pad", style: "font-size:12.5px" }, h("b", { style: "font-weight:500" }, r.symbol + ": "), r.why)));
+		put(body, grp("Results", `${b.results.length} companies`, h("div", { class: "scroll" }, tb), why, h("div", { class: "pad" }, notes(b.results_note))));
+	}
+	if ((b.global || []).length)
+		put(body, grp("Overnight", "last daily close", h("div", { class: "chips pad" }, b.global.map((g) =>
+			h("span", { class: "tag " + (g.change > 0 ? "bull" : g.change < 0 ? "bear" : "flat") }, `${g.name} ${pct(g.change, 1)}`)))));
+	const W = b.watch || [];
+	const chips = h("div", { class: "chips pad" }), list = h("div", { class: "rows" });
+	const q = h("input", { type: "search", placeholder: `Search ${W.length} instruments`, "aria-label": "Search instruments", class: "search",
+		style: "box-sizing:border-box;width:100%;max-width:100%;height:36px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)" });
+	S.pmF = S.pmF || "";
+	const paint = (all) => {
+		chips.textContent = "";
+		for (const [val, label] of [["", "All"], ["index", "Indices"], ["results", "Results"], ["news", "In the news"], ["oi", "OI shift"]])
+			chips.appendChild(h("button", { class: "chip", "aria-pressed": String(S.pmF === val), onclick: () => { S.pmF = val; paint(); } }, label));
+		const term = q.value.trim().toUpperCase(), f = S.pmF;
+		const shown = W.filter((w) => (!term || w.symbol.includes(term)) && (!f || (f === "index" ? w.segment === "index"
+			: f === "results" ? w.why.some((x) => x.includes("results")) : f === "news" ? w.why.some((x) => x.startsWith("in the news")) : w.why.some((x) => x.startsWith("futures OI")))));
+		list.textContent = "";
+		if (!shown.length) list.appendChild(empty("watch", "Nothing matches."));
+		shown.slice(0, all || term ? 1000 : 60).forEach((w) => list.appendChild(h("div", { class: "pad", style: "display:grid;gap:3px" },
+			h("div", { class: "row" }, h("b", { style: "font-weight:500" }, w.symbol), h("span", { class: "f3", style: "font-size:11.5px" }, w.segment === "index" ? "index" : `lot ${w.lot ?? "—"} · step ${w.strike_step ?? "—"}`),
+				h("span", { class: "grow" }), h("span", { class: "f3 mono", style: "font-size:12px" }, w.price != null ? w.price.toLocaleString("en-IN") : "—"),
+				h("span", { class: "tag flat" }, w.score.toFixed(1))),
+			w.why.length ? h("div", { class: "f3", style: "font-size:12px" }, w.why.join(" · ")) : null)));
+		if (!all && !term && shown.length > 60) list.appendChild(h("div", { class: "pad" }, h("button", { class: "btn block", onclick: () => paint(true) }, `Show all ${shown.length}`)));
+	};
+	q.addEventListener("input", () => paint());
+	const rp = b.record_plan || {};
+	put(body, grp("Watch-list", `${W.length} instruments · the desk's own ranking`, h("div", { class: "pad" }, q), chips, list,
+		h("div", { class: "pad" }, notes(`Recording plan: ${rp.names || 0} of ${rp.of || 0} names fit Kite's budget of ${rp.budget || 0} instruments (advisory; the recorders do not read it yet). ${b.not_for}.`))));
+	paint();
+}
 async function renderFeed(full) {
 	seg($("#f-seg"), SUBS.feed, S.sub.feed, (v) => { S.sub.feed = v; history.replaceState(null, "", "#feed/" + v); renderFeed(true); }, "tab");
 	if (S.sub.feed === "log") { if (full) await renderLog(true); return; }
@@ -1508,6 +1576,7 @@ async function refresh(full, force) {
 		else if (t === "trades") await renderTrades(full);
 		else if (t === "brain") renderBrain();
 		else if (t === "feed") await renderFeed(full || tick % 4 === 0);
+		else if (t === "today") await renderToday(full);
 	} catch (e) {
 		console.error(e);
 	} finally {

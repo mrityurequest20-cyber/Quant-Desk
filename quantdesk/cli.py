@@ -359,6 +359,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--head", default="HEAD", help="check-diff: the commit to judge (default: HEAD)")
     s.add_argument("--branch", help="check-diff: the pull request's branch name (default: the head's branch)")
     s.set_defaults(fn=cmd_learnbot)
+    from .premarket.cli import add_parser as _premarket
+    _premarket(sub)
     s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
