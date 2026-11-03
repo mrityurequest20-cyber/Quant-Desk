@@ -290,15 +290,34 @@ def test_the_workflow_holds_no_secret_and_writes_only_the_premarket_branch():
     wf = yaml.load(text, Loader=yaml.BaseLoader)
     assert wf["permissions"] == {"contents": "write"}
     assert "secrets." not in text
-    steps = wf["jobs"]["brief"]["steps"]
+    job = wf["jobs"]["brief"]
+    steps = job["steps"]
     assert steps[0]["with"]["persist-credentials"] == "false"
-    pushes = re.findall(r"push-dir\.sh\s+\S+\s+(\S+)", text)
-    assert pushes == ["premarket"] and "git push" not in text
-    assert all("env -u GH_TOKEN python" in line for line in text.splitlines() if re.search(r"\bpython -m quantdesk\b", line))
-    data = (ROOT / "deploy" / "premarket-data.sh").read_text()
-    assert all("env -u GH_TOKEN" in line for line in data.splitlines() if re.search(r"\bpython\b", line) and "pandas" not in line)
+    # the token: in the env of exactly the two named steps, never the workflow's or the job's
+    assert "env" not in wf and "env" not in job
+    holders = [s.get("name") for s in steps if "GH_TOKEN" in (s.get("env") or {})]
+    assert holders == ["Warehouse tables and the results history (rebuilt once a day)",
+                       "Brief every 15 minutes to 09:15 IST (once, if started later)"]
+    assert text.count("github.token") == 2
     pip_step = next(i for i, s in enumerate(steps) if "pip install" in s.get("run", ""))
     assert all("GH_TOKEN" not in json.dumps(s) for s in steps[:pip_step + 1])
+    # the publish: a host-scoped, masked header, given to push-dir.sh alone, for one branch
+    run = steps[-1]["run"]
+    assert 'GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"' in run
+    assert not re.search(r"[\"' ]http\.extraheader", text)
+    assert run.index('echo "::add-mask::$auth"') < run.index('GIT_CONFIG_VALUE_0="$auth"')
+    assert run.count("$auth") == 2 + run.count("auth=") - 1                 # set once, masked once, used once
+    pushes = re.findall(r"push-dir\.sh\s+\S+\s+(\S+)", text)
+    assert pushes == ["premarket"] and "git push" not in text
+    # every token step narrows PATH before any tool runs, and starts python without the token
+    data = (ROOT / "deploy" / "premarket-data.sh").read_text()
+    for body in (run, data):
+        lines = [l.split(" # ")[0].strip() for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
+        first_tool = next(i for i, l in enumerate(lines) if re.search(r"\b(gh|git|base64|push-dir\.sh)\b", l))
+        narrow = next(i for i, l in enumerate(lines) if l.startswith("export PATH=/usr/bin:/bin"))
+        assert narrow < first_tool
+        assert all("env -u GH_TOKEN" in l for l in lines if re.search(r'"\$PY"|\bpython\b', l) and "command -v python" not in l
+                   and not l.startswith("print("))
 
 
 def test_the_app_has_a_today_tab_and_the_site_can_reach_the_brief():

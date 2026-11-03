@@ -45,14 +45,16 @@ jobs:
         run: deploy/premarket-data.sh runtime/warehouse runtime/premarket-history
       - name: Brief every 15 minutes to 09:15 IST (once, if started later)
         env:
-          GH_TOKEN: ${{ github.token }}      # used only to publish the brief; python runs without it
+          GH_TOKEN: ${{ github.token }}      # used only to publish the brief; python is started without it (env -u)
         run: |
+          PY=$(command -v python)              # setup-python's interpreter, by its full path from here on
+          export PATH=/usr/bin:/bin            # every other tool from the system, never a script pip installed
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           echo "::add-mask::$auth"
           start=$(TZ=Asia/Kolkata date -d "07:15" +%s) end=$(TZ=Asia/Kolkata date -d "09:15" +%s)
           once() {
             rm -rf _premarket
-            env -u GH_TOKEN python -m quantdesk premarket brief --warehouse runtime/warehouse \
+            env -u GH_TOKEN "$PY" -m quantdesk premarket brief --warehouse runtime/warehouse \
               --history runtime/premarket-history/results_history.parquet --out _premarket || return 0
             cp runtime/premarket-history/results_history.parquet runtime/premarket-history/history_built.txt _premarket/ 2>/dev/null || true
             GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$auth" \
