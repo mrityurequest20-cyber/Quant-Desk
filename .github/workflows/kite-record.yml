@@ -46,6 +46,7 @@ jobs:
     timeout-minutes: 358             # the hosted limit is 360; 08:55 to 14:45 is 350 minutes, so the second job's start follows within two to three minutes
     outputs:
       sha: ${{ steps.enc.outputs.sha }}
+      login: ${{ steps.login.outcome }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -126,6 +127,7 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-kite.txt
       - name: Log in to Kite by itself (data only; the password reaches this step alone)
         id: login
+        if: needs.record-1.outputs.login != 'failure'        # never a second attempt on a day the first one failed (a lockout guard)
         continue-on-error: true
         env:
           KITE_USER_ID: ${{ secrets.KITE_USER_ID }}

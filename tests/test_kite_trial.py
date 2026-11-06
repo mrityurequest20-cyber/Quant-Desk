@@ -287,6 +287,9 @@ def test_the_recorder_workflow_is_read_only_encrypts_before_it_uploads_and_holds
     for _, s_ in steps:
         if s_.get("name") == login_step:
             assert s_["run"].strip() == "deploy/kite-autologin.sh login" and "KITE_API_SECRET" not in json.dumps(s_["env"])
+    second = next(s_ for j, s_ in steps if j == "record-2" and s_.get("name") == login_step)
+    assert second["if"] == "needs.record-1.outputs.login != 'failure'"                            # one failed login a day at most: no lockout
+    assert wf["jobs"]["record-1"]["outputs"]["login"] == "${{ steps.login.outcome }}"
     for s_ in (s for _, s in steps if "KITE_API_SECRET" in json.dumps(s.get("env", {}))):
         assert "pip install" not in s_.get("run", "")                                              # the library install never holds the secret
     for forbidden in ("git push", "gh release", "gh api", "curl ", "contents: write", "id-token", "pull_request"):
