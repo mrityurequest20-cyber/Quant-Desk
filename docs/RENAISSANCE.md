@@ -24,7 +24,11 @@ The desk is rebuilt on those facts.
    new spec.
 5. **Nothing is deleted irreversibly.** Before any removal, pre-change `main` goes to an `archive/` branch. Releases,
    the journal branch and recorded data are never deleted, and history is never rewritten.
-6. **`docs/AUTONOMY.md` is the owner's.** Only the owner edits it.
+6. **`docs/AUTONOMY.md` is the owner's rulebook.** On 6 Nov 2026 the owner lifted the old "never edit it" rule ("Give
+   yourself the permission to edit the autonomy", then "no PR is required. You do it whatever you feel right."). The
+   builder may edit it on its own judgment, but every edit's commit quotes the owner's words and says what changed and
+   why, the owner is told after each edit, enabling real money still needs the owner's separate, explicit decision, and
+   if branch protection refuses a direct edit the builder asks the owner and never works around it.
 7. **No limit, gate or threshold is loosened** without the owner's written authorisation, quoted in the PR.
 8. **The recorders never stop** because of a code change. A change that touches recording proves it on real market
    data before merge.

@@ -1,14 +1,11 @@
-"""The self-learning paper loop around the DirectionModel (docs/ARCHITECTURE.md).
+"""What is left of the self-learning paper loop (the loop itself was retired with the paper desk on 6 Nov 2026).
 
-    ledger.py      every prediction recorded before its outcome is known (append-only, hash-chained), and its outcome
-    features.py    versioned causal features, the 30-minute label, bar validation, data fingerprints
-    validation.py  day-grouped walk-forward with purge and embargo, the locked final test, block bootstrap
-    models.py      candidates (the DirectionModel baseline, regularised logits, boosted stumps), calibration, abstention
-    evaluate.py    cost simulation, metrics by session / regime / symbol, confidence intervals, pass/fail gates
-    registry.py    champion / challenger registry with an audited event log and rollback
-    drift.py       feature, prediction, calibration and performance drift
-    cycle.py       the paper-learning cycle: ingest → dataset → train → validate → register → paper → promote
-    live.py        the live desk's side: shadow predictions for every registered model, the champion's signal
+    cli.py         `autolearn vol-har-fit`: the command named in the committed HAR coefficients' provenance
+                   (quantdesk/intraday/vol_har_v1.json), kept so that fit can be reproduced
+    features.py    versioned causal features, bar validation, data fingerprints
+    evaluate.py    cost simulation, metrics and confidence intervals
+    prereg.py      the pre-registered intraday direction tests (docs/prereg/intraday_direction_v1.json)
+    volstudy.py    the pre-registered move-size study (vol_forecast_v1): the HAR fit comes from it
 
 Paper only. Nothing here places orders, and no language model touches signals, sizing, limits or promotion.
 """

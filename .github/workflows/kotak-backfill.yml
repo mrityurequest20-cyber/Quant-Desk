@@ -1,5 +1,5 @@
 # Historical 1-minute option, index and futures candles from Kotak (quantdesk/data/kotak_backfill.py): run once by hand
-# for the last ~30 days; after that, live.yml's afternoon job collects each session's minutes as it closes.
+# for the last ~30 days; after that, record.yml's afternoon job collects each session's minutes as it closes.
 name: Kotak minute backfill
 
 on:

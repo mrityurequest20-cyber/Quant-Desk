@@ -17,7 +17,7 @@ one-minute NIFTY and BANKNIFTY **index** bars, 2007 → early 2023, in year / mo
 
 `load()` refuses any other declared use. The dataset's status is **`external_unverified`** until the independent check
 passes, and `load()` refuses unverified data unless the caller opts in explicitly. Even `external_verified` data keeps
-these restrictions. The plan-level research (PLAN_RESEARCH.md) never reads it.
+these restrictions.
 
 ## The source format
 

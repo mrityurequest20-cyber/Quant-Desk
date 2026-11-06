@@ -1,6 +1,6 @@
 # Once a day, by hand, before the desk starts (about 08:45 IST): log in at the Kite login URL for the API key, copy the `request_token` from the address you are sent back to, and run
 # this workflow with it. It exchanges the single-use request_token for the day's access token (the API secret is used here), encrypts the token with the API secret and stores
-# it on the `kite-token` branch; the live desk (live.yml) and the trial recorder read it from there. No other file, no other branch, and no order method anywhere in this code.
+# it on the `kite-token` branch; the Kite recorder (kite-record.yml) reads it from there. No other file, no other branch, and no order method anywhere in this code.
 # If this is not run, the desk simply uses its existing feeds. The login is not automated with a stored password or TOTP.
 name: Kite token
 
