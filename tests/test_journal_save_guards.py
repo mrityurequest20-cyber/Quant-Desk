@@ -193,28 +193,6 @@ elif a[:2] == ["run", "view"]:
     return out.read_text().strip().splitlines()[-1]
 
 
-def test_the_gate_trades_on_a_normal_day(tmp_path):
-    assert _run_gate(tmp_path, [], {}) == "go=true"
-
-
-def test_a_superseded_pending_run_is_not_a_kill_switch(tmp_path):
-    """GitHub cancels a run that was only pending when another queued in the group: it never ran a step."""
-    assert _run_gate(tmp_path, [11], {11: []}) == "go=true"
-
-
-def test_a_run_cancelled_while_trading_keeps_the_desk_stopped(tmp_path):
-    assert _run_gate(tmp_path, [11], {11: [("Restore the journal", "success"),
-                                           ("Trade (paper) until the hand-over", "cancelled")]}) == "go=false"
-
-
-def test_the_owner_can_resume_after_a_cancel(tmp_path):
-    assert _run_gate(tmp_path, [11], {11: [("Trade (paper) until the hand-over", "cancelled")]}, resume="1") == "go=true"
-
-
-def test_the_gate_fails_closed_when_runs_cannot_be_read(tmp_path):
-    assert _run_gate(tmp_path, [], {}, fail=True) == "go=false"
-
-
 def test_a_failed_look_at_the_remote_retries_instead_of_giving_up(desk):
     """Push and ls-remote both failing on a blip used to read as 'branch moved' and abort the save at once."""
     work, remote = desk

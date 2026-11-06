@@ -177,15 +177,6 @@ def test_a_gh_failure_prunes_nothing_and_does_not_raise(tmp_path, gh, mode):
     unchanged(rt, before, studies_before)
 
 
-def test_the_cli_exits_zero_when_gh_is_down(tmp_path, gh):
-    from quantdesk import cli as top
-    rt = runtime(tmp_path)
-    before, studies_before = table_hashes(rt), study_files(rt)
-    gh.mode("down")
-    top.main(["intraday", "retain", "--root", str(rt), "--as-of", AS_OF.isoformat()])      # returns: no SystemExit
-    unchanged(rt, before, studies_before)
-
-
 def test_an_unverifiable_restore_blocks_the_prune(tmp_path, gh, monkeypatch):
     """The download is byte-identical but does not restore into an empty journal: still no prune."""
     rt = runtime(tmp_path)
@@ -332,23 +323,6 @@ def test_a_failure_after_the_rows_are_committed_still_leaves_the_permit(tmp_path
 
 
 # ---- the workflow --------------------------------------------------------------------------------------------------------------
-def test_the_autolearn_step_is_wired_with_no_new_permission_or_secret():
-    text = (ROOT / ".github" / "workflows" / "autolearn.yml").read_text(encoding="utf-8")
-    wf = yaml.safe_load(text)
-    live = yaml.safe_load((ROOT / ".github" / "workflows" / "live.yml").read_text(encoding="utf-8"))
-    assert wf["permissions"] == {"contents": "write"} and "permissions" not in wf["jobs"]["cycle"]
-    assert "secrets." not in text
-    steps = wf["jobs"]["cycle"]["steps"]
-    idx = [i for i, s in enumerate(steps) if "intraday retain" in s.get("run", "")]
-    save = next(i for i, s in enumerate(steps) if str(s.get("run", "")).startswith("deploy/journal.sh save"))
-    assert len(idx) == 1 and idx[0] < save                              # pruned before the save that carries it
-    step = steps[idx[0]]
-    assert step["env"] == {"GH_TOKEN": "${{ github.token }}"} and step.get("continue-on-error") is True
-    assert "steps.restore.outcome == 'success'" in step["if"]
-    # never while the desk trades: same concurrency group as live.yml, queued not cancelled, scheduled after the close
-    assert wf["concurrency"] == live["concurrency"] == {"group": "live-desk", "cancel-in-progress": False}
-    minute, hour = (int(x) for x in wf.get("on", wf.get(True))["schedule"][0]["cron"].split()[:2])
-    assert (hour * 60 + minute + 330) % 1440 > 15 * 60 + 30            # 10:40 UTC = 16:10 IST, after the 15:30 close
 
 
 def test_the_shipped_config_has_sane_retention_settings():

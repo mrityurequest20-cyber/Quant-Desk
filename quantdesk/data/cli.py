@@ -102,6 +102,15 @@ def cmd_archive(cfg, a):
           + (f" for {day}" if day else ""))
 
 
+def cmd_record_session(cfg, a):
+    from . import session_record as SR
+    out = SR.run(cfg, until=a.until, data_dir=Path(a.data) if a.data else None)
+    if not out.get("recorded"):
+        return
+    if not out.get("bars") and not out.get("chains"):
+        raise SystemExit("record-session: nothing was recorded this session (every source failed)")
+
+
 def register(sub):
     s = sub.add_parser("data", help="the market-data warehouse: NSE bhavcopy, participant OI, FII/DII, GIFT Nifty")
     ss = s.add_subparsers(dest="dcmd", required=True)
@@ -115,7 +124,13 @@ def register(sub):
     x.add_argument("--release", help="GitHub release holding the files (e.g. warehouse): pull first, push after")
     x.add_argument("--gap", type=float, default=0.5, help="seconds between NSE requests")
     x.set_defaults(fn=cmd_update)
-    x = ss.add_parser("archive-session", help="keep the desk's recorded chains and bars as Parquet (chains-YYYY release)")
+    x = ss.add_parser("record-session", help="record the session without a desk: index and futures 1-minute bars and an "
+                                             "option-chain snapshot a minute (Kotak, else Yahoo + NSE), to --until (IST); "
+                                             "data only, no order of any kind")
+    x.add_argument("--until", help="HH:MM IST (default the close, 15:30)")
+    x.add_argument("--data", help="recorder folder (default runtime/intraday/data)")
+    x.set_defaults(fn=cmd_record_session)
+    x = ss.add_parser("archive-session", help="keep the recorded chains and bars as Parquet (chains-YYYY release)")
     x.add_argument("--part", required=True, help="which job recorded it, e.g. morning-<run id>")
     x.add_argument("--data", help="recorder folder (default runtime/intraday/data)")
     x.add_argument("--day", help="only this day (YYYY-MM-DD)")
@@ -187,17 +202,6 @@ def register(sub):
     x.add_argument("--out", help="default runtime/intraday/backfill")
     x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. stock-minutes)")
     x.set_defaults(fn=cmd_stock_minutes)
-    x = ss.add_parser("truedata-import", help="TrueData Velocity export → audited, immutable Parquet with provenance "
-                                              "(raw files untouched; external_unverified until checked)")
-    x.add_argument("--source", required=True, help="the export folder (or a clone of the repo holding it)")
-    x.add_argument("--out", help="output root (default runtime/external)")
-    x.set_defaults(fn=cmd_truedata_import)
-    x = ss.add_parser("truedata-verify", help="every TrueData bar against Yahoo's daily OHLC; sets the batch's status")
-    x.add_argument("--out", help="output root (default runtime/external)")
-    x.set_defaults(fn=cmd_truedata_verify)
-    x = ss.add_parser("truedata-research", help="daily research on the verified TrueData batch: stats, the pre-registered "
-                                                "rules, a causal prediction replay, the backtester (report in the batch folder)")
-    x.set_defaults(fn=cmd_truedata_research)
     x = ss.add_parser("status", help="coverage, gaps, and NSE's holidays vs the config")
     x.add_argument("--dir")
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")
@@ -536,34 +540,6 @@ def cmd_stock_minutes(cfg, a):
                       clobber=False)
         except Exception as exc:
             print(f"::warning::stock-minutes: files kept on disk only, release push failed ({exc!s:.120})", flush=True)
-
-
-def cmd_truedata_import(cfg, a):
-    from . import external_truedata as T
-    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
-    man = T.import_export(Path(a.source), out)
-    print(f"{man['dataset']}: status {man['status']} · {len(man['files'])} files · "
-          f"{sum(f.get('rows_accepted', 0) for f in man['files'])} rows accepted, "
-          f"{sum(f.get('rows_rejected', 0) for f in man['files'])} rejected · report {Path(man['path']) / 'quality.md'}")
-
-
-def cmd_truedata_verify(cfg, a):
-    from . import external_truedata as T
-    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
-    ds = T.latest(out)
-    if ds is None:
-        raise SystemExit("no TrueData import: run `data truedata-import` first")
-    r = T.verify(ds)
-    print(f"{ds.name}: {'external_verified' if r['passed'] else 'external_unverified'}")
-
-
-def cmd_truedata_research(cfg, a):
-    from ..research import truedata_study as S
-    rep = S.run(cfg)
-    from . import external_truedata as T
-    ds = T.latest(Path(cfg.runtime_dir) / "external")
-    (ds / "research.md").write_text(S.render(rep))
-    print(ds / "research.md")
 
 
 def cmd_external_verify(cfg, a):
