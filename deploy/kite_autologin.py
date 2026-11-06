@@ -85,7 +85,8 @@ def _open(op, url, data=None):
 def _follow(op, url, hosts, schemes=("https",)):
     """GET url and follow redirects while they stay on `hosts` over `schemes`. Returns (final_url, location_off_host or None)."""
     for _ in range(MAX_HOPS):
-        code, headers, _ = _open(op, url)
+        code, headers, body = _open(op, url)
+        op.last = (code, urllib.parse.urlsplit(url).path, b"authori" in body.lower())    # for the error message: status and path only
         if code not in (301, 302, 303, 307, 308):
             return url, None
         nxt = urllib.parse.urljoin(url, headers.get("Location", ""))
@@ -136,11 +137,23 @@ def request_token(api_key: str, user_id: str, password: str, totp_secret: str, *
                 time.sleep(1)
     else:
         raise last
-    _, loc = _follow(op, page, hosts, schemes)
-    if not loc:
-        raise LoginError("no redirect to the app after the login (is the Kite Connect app authorised for this "
-                         "user? Log in once by hand through the app's login URL to authorise it)")
-    return _token_from(loc)
+    # A browser's login page hands over to /connect/finish with JavaScript, so a plain GET of the login page after the
+    # second factor returns the page itself (HTTP 200), not a redirect. Ask for the hand-over directly, then fall back
+    # to the login page with skip_session, then to the plain page. Every route stops at the first redirect off Zerodha.
+    sess = (urllib.parse.parse_qs(urllib.parse.urlsplit(page).query).get("sess_id") or [""])[0]
+    routes = []
+    if sess:
+        routes.append(base + "/connect/finish?" + urllib.parse.urlencode({"api_key": api_key, "sess_id": sess}))
+    routes.append(page + ("&" if "?" in page else "?") + "skip_session=true")
+    routes.append(page)
+    for url in routes:
+        _, loc = _follow(op, url, hosts, schemes)
+        if loc:
+            return _token_from(loc)
+    code, path, authorise = getattr(op, "last", (0, "?", False))
+    raise LoginError(f"no redirect to the app after the login (tried {len(routes)} routes; the last answer was HTTP {code} "
+                     f"at {path}{'; the page asks to authorise the app' if authorise else ''}). Is the Kite Connect app "
+                     "authorised for this user? Log in once by hand through the app's login URL to authorise it")
 
 
 def _token_from(loc: str) -> str:

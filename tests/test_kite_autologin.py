@@ -31,6 +31,8 @@ def test_totp_matches_the_rfc_6238_vectors():
 
 class Fake(http.server.BaseHTTPRequestHandler):
     authorised = True
+    spa = False             # True: a logged-in login page answers 200 (the browser's JavaScript hands over), unless skip_session=true
+    has_finish = True       # False: /connect/finish does not exist
     log: list = []
 
     def log_message(self, *a):
@@ -54,10 +56,16 @@ class Fake(http.server.BaseHTTPRequestHandler):
         if u.path == "/connect/login":
             if "sess_id" not in q:
                 return self._send(302, headers=[("Location", f"/connect/login?api_key={q['api_key'][0]}&sess_id=S1"), ("Set-Cookie", "kf_session=K1; Path=/")])
+            if logged_in and Fake.spa and q.get("skip_session") != ["true"]:
+                return self._send(200, b"<html>one moment ... (javascript hands over)</html>")
+            if logged_in and q.get("skip_session") == ["true"] and Fake.authorised:      # the server-side hand-over: straight to the app
+                return self._send(302, headers=[("Location", f"https://myapp.example/cb?action=login&status=success&request_token={REQUEST_TOKEN}")])
             if logged_in:
                 return self._send(302, headers=[("Location", "/connect/finish?sess_id=S1")])
             return self._send(200, b"<html>login</html>")
         if u.path == "/connect/finish":
+            if not Fake.has_finish:
+                return self._send(404)
             if not Fake.authorised:
                 return self._send(302, headers=[("Location", "/connect/authorize?sess_id=S1")])
             return self._send(302, headers=[("Location", f"https://myapp.example/cb?action=login&status=success&request_token={REQUEST_TOKEN}")])
@@ -86,7 +94,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def zerodha():
-    Fake.authorised, Fake.log = True, []
+    Fake.authorised, Fake.spa, Fake.has_finish, Fake.log = True, False, True, []
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fake)
     th = threading.Thread(target=srv.serve_forever, daemon=True)
     th.start()
@@ -211,3 +219,34 @@ def test_the_gate_says_no_when_it_cannot_read_the_runs(tmp_path, monkeypatch):
     mods = {(a.name if isinstance(n, ast.Import) else n.module).split(".")[0]
             for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in (n.names if isinstance(n, ast.Import) else [n])}
     assert mods <= set(sys.stdlib_module_names) | {"__future__"}
+
+
+# ---- the hand-over after the second factor (the real run on 6 Nov 2026 stopped here: HTTP 200 instead of a redirect) -----------
+def _no_proxy(monkeypatch):
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_when_the_login_page_answers_200_the_finish_route_hands_over(zerodha, monkeypatch):
+    _no_proxy(monkeypatch)
+    Fake.spa = True
+    assert _login(zerodha) == REQUEST_TOKEN
+    assert ("GET", "/connect/finish") in Fake.log
+
+
+def test_without_a_finish_route_skip_session_still_hands_over(zerodha, monkeypatch):
+    _no_proxy(monkeypatch)
+    Fake.spa, Fake.has_finish = True, False
+    assert _login(zerodha) == REQUEST_TOKEN
+
+
+def test_when_no_route_hands_over_the_error_says_where_it_stopped_and_carries_no_secret(zerodha, monkeypatch):
+    _no_proxy(monkeypatch)
+    Fake.spa, Fake.has_finish = True, False
+    Fake.authorised = False                                  # skip_session leads to the authorise page (200, no redirect to the app)
+    with pytest.raises(KA.LoginError) as e:
+        _login(zerodha)
+    msg = str(e.value)
+    assert "tried 3 routes" in msg and "HTTP 200" in msg and "authorise" in msg
+    for secret in (PASSWORD, SECRET, REQUEST_TOKEN, "S1"):
+        assert secret not in msg, secret                     # a status and a path only: no password, key, token or session id
