@@ -24,6 +24,9 @@
 // never throws into this handler: the alarm clock always goes first.
 
 import { runWatchdog } from "./watchdog.js";
+import { handleLive } from "./live.js";
+
+export { LiveBoard } from "./live.js";      // the Durable Object behind /live/* (live.js): wrangler.jsonc binds it as LIVE
 
 const LIVE = /(^|\/)(data\.json|sw\.js)$/;         // live data and the service worker: never from an edge cache
 const PASS = ["accept", "accept-encoding", "if-none-match", "if-modified-since", "range"];
@@ -89,6 +92,8 @@ export default {
 	},
 
 	async fetch(request, env) {
+		const liveReply = await handleLive(request, env);        // /live/* is the private live-price relay, never passed to Pages
+		if (liveReply) return liveReply;
 		if (request.method !== "GET" && request.method !== "HEAD") {
 			return new Response("Read-only site.\n", { status: 405, headers: { allow: "GET, HEAD" } });
 		}
