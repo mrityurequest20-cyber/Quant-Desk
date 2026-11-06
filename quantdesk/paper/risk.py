@@ -141,6 +141,8 @@ class RiskGate:
             raise ValueError("the time must carry a timezone")
         eq = account.equity(marks)
         day = now.astimezone(IST).date().isoformat()
+        if account.day is not None and day < account.day:        # a clock that runs backwards must never reset the day's cap
+            raise ValueError(f"time went backwards: {day} is before {account.day}, which the account has already seen")
         why = []
         if is_number(eq):
             if account.day != day:                              # a new day starts from the last equity seen: an overnight gap counts
@@ -149,11 +151,16 @@ class RiskGate:
                 account.day_halted = False
             account.last_equity = eq
             account.hwm = max(account.hwm, eq)
-            if account.day_start and eq - account.day_start <= -self.limits.daily_loss_limit * account.day_start:
+            if account.day_start and not account.day_halted and eq - account.day_start <= -self.limits.daily_loss_limit * account.day_start:
                 account.day_halted = True
+                account.record_event("daily_cap_hit", now.isoformat(), day=day, equity=eq, day_start=account.day_start)
             if account.halt is None and eq <= account.hwm * (1 - self.limits.drawdown_halt):
                 account.halt = {"since": now.isoformat(), "equity": eq, "hwm": account.hwm,
                                 "reason": f"equity {eq:,.0f} is {self.limits.drawdown_halt:.0%} or more below its high-water mark {account.hwm:,.0f}"}
+                account.record_event("halt_set", now.isoformat(), equity=eq, hwm=account.hwm, reason=account.halt["reason"])
+            excess = self.trim_excess(account, marks)
+            if excess > 0:                                      # winners carried in can fall back further than the cap allows
+                why.append(f"trim: the open positions are worth more than the loss budget allows, by {excess:,.0f}: sell that much")
         else:                                                   # a position has no price: judge the caps on the worst case, do not set sticky flags
             low = account.equity_lower_bound(marks)
             day_floor, dd_floor = self.floors(account)
@@ -167,6 +174,17 @@ class RiskGate:
         if account.halt is not None:
             why.append("the drawdown halt is on: " + str(account.halt.get("reason", "")))
         return why
+
+    def trim_excess(self, account: Account, marks: dict[str, float]) -> float:
+        """How much open premium is more than the loss budget allows: if every open position fell to zero together, equity would end
+        below the day's or the drawdown floor by this much. Zero when the book fits the budget (or equity is unknown)."""
+        eq = account.equity(marks)
+        if not is_number(eq):
+            return 0.0
+        day_floor, dd_floor = self.floors(account)
+        floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
+        ov = account.open_value(marks)
+        return max(0.0, ov - max(eq - floor, 0.0))
 
     # ---- entries -------------------------------------------------------------------------------------------------------------
     def check_entry(self, account: Account, order: Order, quote: Quote | None, marks: dict[str, float], now: dt.datetime) -> Decision:
@@ -192,6 +210,8 @@ class RiskGate:
         else:
             if seg not in self.limits.cost_verified or "options" not in self.configured_costs:
                 why.append(f"the costs for {seg} are not configured and verified: they would be guessed, so nothing trades there")
+            if not str(inst.symbol or "").upper().startswith(str(inst.underlying or "").upper()):
+                why.append(f"the contract {inst.symbol!r} does not belong to its underlying {inst.underlying!r}")
             if (inst.underlying or "").upper() not in self.limits.underlyings.get(seg, frozenset()):
                 why.append(f"{inst.underlying!r} is not on the list of underlyings that trade in {seg}: a mislabelled order would be "
                            "charged the wrong costs and hours")

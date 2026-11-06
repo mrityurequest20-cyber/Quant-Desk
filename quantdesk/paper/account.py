@@ -228,10 +228,29 @@ class Account:
                 s.record_event(row["kind"], row["ts"], **{k: v for k, v in row.items() if k not in ("seq", "ts", "kind", "prev", "hash")})
         same = (s.ledger == self.ledger and math.isclose(s.cash, self.cash, abs_tol=1e-6) and math.isclose(s.realized, self.realized, abs_tol=1e-6)
                 and math.isclose(s.fees, self.fees, abs_tol=1e-6) and set(s.positions) == set(self.positions)
-                and all(s.positions[k].qty == p.qty and math.isclose(s.positions[k].avg_price, p.avg_price, abs_tol=1e-9)
-                        for k, p in self.positions.items()))
+                and all(self._same_position(s.positions[k], p) for k, p in self.positions.items()))
         if not same:
             raise ValueError("the saved cash, positions, profit or fees do not match the ledger: the saved account was changed")
+        self._check_flags_against_ledger()
+
+    @staticmethod
+    def _same_position(a: "Position", b: "Position") -> bool:
+        """Every field of the position, the contract included: a changed strike, expiry, right, lot size or segment changes what the
+        position is worth and which brakes apply to it."""
+        da, db = a.to_dict(), b.to_dict()
+        return math.isclose(da.pop("avg_price"), db.pop("avg_price"), abs_tol=1e-9) and da == db
+
+    def _check_flags_against_ledger(self) -> None:
+        """The halt and the day's cap are written to the ledger when they are set, so the saved flags must agree with it."""
+        last = next((r for r in reversed(self.ledger) if r["kind"] in ("halt_set", "halt_cleared")), None)
+        if (self.halt is not None) != (last is not None and last["kind"] == "halt_set"):
+            raise ValueError("the saved drawdown halt does not match the ledger: the saved account was changed")
+        if self.day is not None:
+            hit = any(r["kind"] == "daily_cap_hit" and r.get("day") == self.day for r in self.ledger)
+            if bool(self.day_halted) != hit:
+                raise ValueError("the saved daily loss cap flag does not match the ledger: the saved account was changed")
+        elif self.day_halted:
+            raise ValueError("a daily loss cap flag without a day: the saved account was changed")
 
     def save(self, path: Path) -> None:
         path = Path(path)

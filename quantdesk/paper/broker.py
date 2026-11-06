@@ -10,6 +10,7 @@ There is no function here that changes cash or a position except through `Accoun
 from __future__ import annotations
 
 import datetime as dt
+import math
 
 from ..core.types import OPTION
 from ..execution.costs import CostModel
@@ -42,6 +43,26 @@ class PaperBroker:
         fees, _ = self.costs.fees(pos.instrument, -qty, px)
         row = self.account.apply_fill("sell", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}")
         return d, row
+
+    def trim(self, quotes: dict[str, Quote], marks: dict[str, float], now: dt.datetime, why: str = "trim to the loss budget") -> dict[str, Decision]:
+        """Sell just enough, biggest positions first, in whole lots, to bring the open premium back inside the loss budget (the gate's
+        `trim_excess`). A position with no usable quote or a closed market stays held and is reported."""
+        out = {}
+        excess = self.gate.trim_excess(self.account, marks)
+        for sym in sorted(self.account.positions, key=lambda k: -self.account.positions[k].qty * float(marks.get(k, 0.0) or 0.0)):
+            if excess <= 0:
+                break
+            pos = self.account.positions[sym]
+            mark = marks.get(sym)
+            if not is_number(mark) or mark <= 0:
+                continue
+            lot = max(1, pos.instrument.lot_size)
+            qty = min(pos.qty, -(-int(math.ceil(excess / mark)) // lot) * lot)
+            d, row = self.sell(sym, qty, quotes.get(sym), now, why)
+            out[sym] = d
+            if row is not None:
+                excess -= qty * mark
+        return out
 
     def flatten(self, quotes: dict[str, Quote], now: dt.datetime, why: str) -> dict[str, Decision]:
         """Sell everything held, at whatever the bid is. A position with no usable quote or a closed market stays held and is reported."""

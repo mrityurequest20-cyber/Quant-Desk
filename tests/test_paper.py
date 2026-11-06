@@ -222,7 +222,8 @@ def test_the_daily_loss_cap_stops_new_entries_for_the_day_and_says_flatten(desk)
     broker, acct, gate, _ = desk
     syms = seed(acct, 3)                                                             # about 36,000 deployed
     ok = {s_: 160.0 for s_ in syms}
-    assert gate.update(acct, ok, MON) == [] and not acct.day_halted                  # no loss yet
+    why0 = gate.update(acct, ok, MON)
+    assert not acct.day_halted and all(r.startswith("trim") for r in why0)           # no loss yet (the planted book is over the budget: a trim notice only)
     worthless = {s_: 0.0 for s_ in syms}                                             # all three go to zero: -7% > the 5% cap
     why = gate.update(acct, worthless, MON)
     assert acct.day_halted and any("daily loss cap" in r for r in why)
@@ -295,7 +296,7 @@ def test_a_missing_price_does_not_blind_the_loss_caps(desk):
     assert not acct.day_halted and acct.halt is None                                 # but no sticky flag is set from a guess
     d, _ = broker.buy(order(inst=opt(strike=30000)), quote(), partial, MON)
     assert not d.allowed and any("equity is unknown" in r for r in d.reasons)
-    assert gate.update(acct, {s_: 160.0 for s_ in syms}, MON) == []                  # prices back and healthy: nothing to flatten
+    assert all(r.startswith("trim") for r in gate.update(acct, {s_: 160.0 for s_ in syms}, MON))     # prices back and healthy: no cap talk, only the planted excess
 
 
 def test_the_kill_switch_stops_entries_and_says_flatten(desk):
@@ -659,3 +660,135 @@ def test_verify_ledger_itself_notices_a_changed_link_field(desk):
     assert acct.verify_ledger()
     acct.ledger[1]["prev"] = "x" * 64                                  # the stored link, not the content
     assert not acct.verify_ledger()
+
+
+# ---- the second review (R1 to R4) ---------------------------------------------------------------------------------------------------
+def _held_and_saved(desk, tmp_path):
+    broker, acct, *_ = desk
+    buy(desk)
+    path = tmp_path / "account.json"
+    acct.save(path)
+    return acct, path
+
+
+@pytest.mark.parametrize("edit", [
+    lambda pos: pos["instrument"].__setitem__("strike", 1.0),
+    lambda pos: pos["instrument"].__setitem__("expiry", "2030-01-01"),
+    lambda pos: pos["instrument"].__setitem__("right", "PE"),
+    lambda pos: pos["instrument"].__setitem__("lot_size", 1),
+    lambda pos: pos["instrument"].__setitem__("kind", "future"),
+    lambda pos: pos["instrument"].__setitem__("underlying", "CRUDEOIL"),
+    lambda pos: pos.__setitem__("segment", "mcx"),
+    lambda pos: pos.__setitem__("thesis", "something else"),
+    lambda pos: pos.__setitem__("opened_at", "2020-01-01T00:00:00+05:30"),
+    lambda pos: pos.__setitem__("strategy", "other"),
+])
+def test_editing_any_field_of_a_saved_position_is_refused_on_load(desk, tmp_path, edit):
+    acct, path = _held_and_saved(desk, tmp_path)
+    assert Account.load(path).to_dict() == acct.to_dict()
+    data = json.loads(path.read_text())
+    edit(next(iter(data["positions"].values())))
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="do not match the ledger"):
+        Account.load(path)
+
+
+def test_a_carried_winner_that_the_loss_budget_cannot_cover_is_trimmed(desk):
+    broker, acct, gate, _ = desk
+    syms = []
+    for i in range(2):                                                            # two ordinary entries, each about 2.4% of equity
+        d, _ = broker.buy(order(inst=opt(strike=24000 + 100 * i)), quote(bid=159, ask=160), {s_: 159.0 for s_ in syms}, MON)
+        assert d.allowed, d.reasons
+        syms.append(opt(strike=24000 + 100 * i).symbol)
+    big = {s_: 400.0 for s_ in syms}                                              # both run to 2.5x: the book is now worth 60,000
+    assert any(r.startswith("trim") for r in gate.update(acct, big, MON))        # the peak is a new high-water mark: the drawdown floor already rose
+    mon_excess = gate.trim_excess(acct, big)
+    assert mon_excess > 0
+    why = gate.update(acct, big, WED)                                             # the next day starts from the higher equity: the day's floor rises too
+    assert any(r.startswith("trim") for r in why), why
+    excess = gate.trim_excess(acct, big)
+    assert excess > mon_excess
+    quotes = {s_: quote(bid=399, ask=401, now=WED) for s_ in syms}
+    res = broker.trim(quotes, big, WED)
+    assert res and all(d.allowed for d in res.values())
+    after = {s_: 400.0 for s_ in acct.positions}
+    assert gate.trim_excess(acct, after) == 0 and not any(r.startswith("trim") for r in gate.update(acct, after, WED))
+    assert acct.verify_ledger()
+
+
+def test_trim_sells_in_whole_lots_biggest_first_and_leaves_what_it_cannot_sell(desk):
+    broker, acct, gate, _ = desk
+    a, b = opt(24000), opt(24100)
+    acct.apply_fill("buy", a, "nse_fo", 150, 100.0, 20.0, MON.isoformat(), "s", "t")           # 2 lots
+    acct.apply_fill("buy", b, "nse_fo", 75, 100.0, 20.0, MON.isoformat(), "s", "t")            # 1 lot
+    marks = {a.symbol: 100.0, b.symbol: 100.0}
+    gate.update(acct, marks, MON)
+    acct.day_start = acct.last_equity = 520_000.0                                  # a higher starting equity raises the day's floor: excess appears
+    excess = gate.trim_excess(acct, marks)
+    assert excess > 0
+    res = broker.trim({a.symbol: quote(bid=99, ask=101)}, marks, MON)                  # no quote for b: it stays held and is reported as not sold
+    assert res[a.symbol].allowed and not res[b.symbol].allowed
+    assert acct.positions[b.symbol].qty == 75                                          # the unquoted one is untouched
+    assert a.symbol not in acct.positions or (acct.positions[a.symbol].qty % 75 == 0 and acct.positions[a.symbol].qty < 150)   # biggest first, whole lots
+
+
+def test_time_may_not_run_backwards_across_days_and_never_resets_the_daily_cap(desk):
+    broker, acct, gate, _ = desk
+    syms = seed(acct, 3)
+    gate.update(acct, {s_: 160.0 for s_ in syms}, WED)
+    gate.update(acct, {s_: 0.0 for s_ in syms}, WED)
+    assert acct.day_halted
+    with pytest.raises(ValueError, match="backwards"):
+        gate.update(acct, {s_: 0.0 for s_ in syms}, MON)                           # an earlier day: refused
+    assert acct.day_halted and acct.day == "2026-11-11"
+    d, _ = broker.buy(order(inst=opt(strike=31000)), quote(now=MON), {s_: 0.0 for s_ in syms}, MON)
+    assert not d.allowed and any("backwards" in r or "check itself failed" in r for r in d.reasons)
+
+
+def test_the_halt_and_the_daily_cap_are_written_to_the_ledger_and_the_saved_flags_must_agree(desk, tmp_path):
+    broker, acct, gate, _ = desk
+    syms = seed(acct, 5)
+    gate.update(acct, {s_: 160.0 for s_ in syms}, MON)
+    gate.update(acct, {s_: 0.0 for s_ in syms}, MON)
+    kinds = [r["kind"] for r in acct.ledger]
+    assert "daily_cap_hit" in kinds and "halt_set" in kinds and acct.day_halted and acct.halt is not None
+    gate.update(acct, {s_: 0.0 for s_ in syms}, MON)                                  # a second look adds nothing
+    assert [r["kind"] for r in acct.ledger].count("halt_set") == 1 and [r["kind"] for r in acct.ledger].count("daily_cap_hit") == 1
+    path = tmp_path / "halted.json"
+    acct.save(path)
+    assert Account.load(path).halt is not None
+    for edit, why in ((lambda d: d.__setitem__("halt", None), "drawdown halt"), (lambda d: d.__setitem__("day_halted", False), "daily loss cap")):
+        data = json.loads(path.read_text())
+        edit(data)
+        path.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match=why):
+            Account.load(path)
+        acct.save(path)                                                               # put the good file back
+    data = json.loads(path.read_text())
+    data["halt"] = {}                                                                 # an empty record is still a halt, and the ledger agrees there is one
+    path.write_text(json.dumps(data))
+    assert Account.load(path).halt == {}
+    acct.save(path)
+    acct.clear_halt("owner", "reviewed", 430_000, WED.isoformat())                     # a cleared halt: the ledger says so
+    acct.save(path)
+    assert Account.load(path).halt is None
+    data = json.loads(path.read_text())
+    data["halt"] = {"reason": "forged"}
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="drawdown halt"):
+        Account.load(path)
+
+
+def test_a_contract_must_belong_to_its_underlying(desk):
+    inst = opt()
+    object.__setattr__(inst, "symbol", "CRUDEOIL19NOV266000CE")                  # hand-built: a crude-oil name on a NIFTY underlying
+    d, _ = buy(desk, o=order(inst=inst))
+    assert not d.allowed and any("does not belong to its underlying" in r for r in d.reasons), d.reasons
+
+
+def test_a_missing_price_counts_as_worth_nothing_in_the_lower_bound(desk):
+    _, acct, *_ = desk
+    acct.apply_fill("buy", opt(), "nse_fo", 75, 100.0, 20.0, MON.isoformat(), "s", "t")
+    assert acct.equity_lower_bound({}) == pytest.approx(acct.cash)                    # not its cost, not its last price: nothing
+    assert acct.equity_lower_bound({opt().symbol: float("nan")}) == pytest.approx(acct.cash)
+    assert acct.equity_lower_bound({opt().symbol: 100.0}) == pytest.approx(acct.cash + 7500)
