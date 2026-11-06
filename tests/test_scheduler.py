@@ -88,3 +88,31 @@ def test_the_waiter_workflow_is_dispatchable_and_bounded():
     job = wf["jobs"]["wait"]
     assert job["timeout-minutes"] <= 360
     assert "--wake" in job["steps"][-1]["run"] and "${{" not in job["steps"][-1]["run"]   # input via env, not inlined
+
+
+def test_the_kite_recorder_is_started_once_a_day_and_never_retried():
+    """A wrong or changed Zerodha password retried every few minutes would lock the owner's account."""
+    t = at("2026-10-05 09:30")
+    assert sch.KITE_MAX_STARTS == 1
+    assert sch.decide(t, [], HOLS, sch.KITE_MAX_STARTS)[0] == "start"
+    assert sch.decide(t, [run("2026-10-05 08:55", conclusion="failure")], HOLS, sch.KITE_MAX_STARTS)[0] == "wait"
+    assert sch.decide(t, [run("2026-10-05 08:55", conclusion="failure")], HOLS)[0] == "start"   # record.yml still retries
+
+
+def test_main_starts_both_recorders_and_a_kite_failure_never_blocks_the_main_one(monkeypatch, tmp_path):
+    import subprocess as sp
+    calls = []
+    monkeypatch.setattr(sch.dt, "datetime", type("D", (sch.dt.datetime,), {"now": classmethod(lambda c, tz=None: at("2026-10-05 09:30"))}))
+
+    def runs(wf):
+        if wf == sch.KITE_WORKFLOW:
+            raise sp.CalledProcessError(1, "gh")                # the Kite listing fails
+        return []
+    monkeypatch.setattr(sch, "_runs", runs)
+    monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert sch.main([]) == 0
+    assert calls == [["gh", "workflow", "run", "record.yml", "--ref", "main"]]
+    calls.clear()
+    monkeypatch.setattr(sch, "_runs", lambda wf: [])
+    assert sch.main([]) == 0
+    assert calls == [["gh", "workflow", "run", "kite-record.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"]]

@@ -17,7 +17,10 @@ The desk is rebuilt on those facts.
 
 1. **No real money.** Real money is only ever the owner's separate, written decision, after phase 6 and outside this
    plan.
-2. **No secret** in the repository, in a log or in chat. Never ask for or accept a password or TOTP.
+2. **No secret** in the repository, in a log or in chat. The one password the desk uses is the owner's Zerodha login
+   for Kite market data, held only as the GitHub secrets `KITE_USER_ID`, `KITE_PASSWORD` and `KITE_TOTP_SECRET` that the
+   owner sets, read by one standard-library login step (owner, 6 Nov 2026: "I want the complete automated stuffs",
+   then "Completely automate, don't worry about any risk or limit"). It is never asked for or accepted in chat.
 3. **Licensed or third-party data** (Kite ticks, vendor datasets) is never committed or published. Kite data leaves a
    runner only encrypted.
 4. **Pre-registered specs and results** in `docs/prereg/` are never edited after a result exists. A new idea gets a

@@ -1,15 +1,17 @@
-# Once a day, by hand, before the desk starts (about 08:45 IST): log in at the Kite login URL for the API key, copy the `request_token` from the address you are sent back to, and run
-# this workflow with it. It exchanges the single-use request_token for the day's access token (the API secret is used here), encrypts the token with the API secret and stores
-# it on the `kite-token` branch; the live desk (live.yml) and the trial recorder read it from there. No other file, no other branch, and no order method anywhere in this code.
-# If this is not run, the desk simply uses its existing feeds. The login is not automated with a stored password or TOTP.
+# Today's Kite access token, stored encrypted on the `kite-token` branch for any job that wants it. Two ways in:
+#   * no input: it logs in to Kite by itself (deploy/kite_autologin.py) with the owner's Zerodha user ID, password and TOTP key from GitHub secrets
+#     (owner's instruction of 6 Nov 2026: "I want the complete automated stuffs"). Use this to check the login works.
+#   * a request_token: the old manual route (log in at the Kite login URL, copy `request_token` from the redirect), kept as a fallback.
+# The token is encrypted with the API secret before it is committed. No other file, no other branch, and no order method anywhere in this code.
 name: Kite token
 
 on:
   workflow_dispatch:
     inputs:
       request_token:
-        description: "Kite request_token from today's login redirect (single use, expires in minutes)"
-        required: true
+        description: "Optional: a request_token from a manual login. Leave empty to log in automatically."
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -37,13 +39,24 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt -r requirements-kite.txt
+      - name: Log in to Kite by itself (when no request_token was given; the password reaches this step alone)
+        if: inputs.request_token == ''
+        env:
+          KITE_DATA_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
+          KITE_PASSWORD: ${{ secrets.KITE_PASSWORD }}
+          KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
+        run: |
+          deploy/kite-autologin.sh login
+          [ -s "$RUNNER_TEMP/kite_request_token" ] || { echo "::error::no request_token given and the automatic login is not configured (add KITE_USER_ID, KITE_PASSWORD, KITE_TOTP_SECRET)"; exit 1; }
       - name: Exchange the request token and encrypt the day's access token
         env:
           KITE_DATA_KEY: ${{ secrets.KITE_API_KEY }}
           KITE_DATA_SECRET: ${{ secrets.KITE_API_SECRET }}
-          KITE_REQUEST_TOKEN: ${{ inputs.request_token }}
+          MANUAL_REQUEST_TOKEN: ${{ inputs.request_token }}
         run: |
-          python -m quantdesk data kite-token --out "$RUNNER_TEMP/kite_token"
+          if [ -n "$MANUAL_REQUEST_TOKEN" ]; then req="$MANUAL_REQUEST_TOKEN"; else req=$(cat "$RUNNER_TEMP/kite_request_token"); rm -f "$RUNNER_TEMP/kite_request_token"; fi
+          KITE_REQUEST_TOKEN="$req" python -m quantdesk data kite-token --out "$RUNNER_TEMP/kite_token"
           openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/kite_token" -out "$RUNNER_TEMP/kite_token.enc" -pass env:KITE_DATA_SECRET
           rm -f "$RUNNER_TEMP/kite_token"
       - name: Store it on the kite-token branch

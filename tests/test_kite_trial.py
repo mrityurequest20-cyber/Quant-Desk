@@ -270,13 +270,23 @@ def test_the_recorder_workflow_is_read_only_encrypts_before_it_uploads_and_holds
     wf = yaml.load(text, Loader=yaml.BaseLoader)
     assert wf["permissions"] == {"contents": "read"} and set(wf["on"]) == {"schedule", "workflow_dispatch"} and check_workflows.check(path) == []
     assert wf["defaults"]["run"]["shell"] == "bash" and wf["env"]["KITE_DATA_KEY"] == "${{ secrets.KITE_API_KEY }}"
-    assert sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET"]
+    assert sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET", "KITE_PASSWORD", "KITE_TOTP_SECRET", "KITE_USER_ID"]
     assert "KITE_ACCESS_TOKEN" not in text and "KITE_API_KEY:" not in text                          # the broker adapter's names are never set
     steps = [(j, s) for j, job in wf["jobs"].items() for s in job["steps"]]
     assert all("${{" not in s["run"] for _, s in steps if "run" in s)                              # times come in through env, never into a script
     holders = [(j, s.get("name")) for j, s in steps if "KITE_API_SECRET" in json.dumps(s.get("env", {}))]
-    token_step, enc_step, dec_step = "The day's Kite token (optional; without it nothing is recorded)", "Encrypt the ticks with the owner's API secret", "Decrypt the first job's ticks (for the session's measures only; a failure here never stops the recording)"
-    assert holders == [("record-1", token_step), ("record-1", enc_step), ("record-2", token_step), ("record-2", dec_step), ("record-2", enc_step)]      # exactly these five, no others
+    exch_step, token_step = "Exchange it for today's access token", "The stored Kite token (fallback when the automatic login did not run)"
+    enc_step, dec_step = "Encrypt the ticks with the owner's API secret", "Decrypt the first job's ticks (for the session's measures only; a failure here never stops the recording)"
+    assert holders == [("record-1", exch_step), ("record-1", token_step), ("record-1", enc_step),
+                       ("record-2", exch_step), ("record-2", token_step), ("record-2", dec_step), ("record-2", enc_step)]      # exactly these, no others
+    # the owner's Zerodha login (user ID, password, TOTP key) reaches one step per job, that step runs only the stdlib login, and it never
+    # shares an environment with the API secret
+    login_step = "Log in to Kite by itself (data only; the password reaches this step alone)"
+    for name in ("KITE_USER_ID", "KITE_PASSWORD", "KITE_TOTP_SECRET"):
+        assert [(j, s.get("name")) for j, s in steps if name in json.dumps(s.get("env", {}))] == [("record-1", login_step), ("record-2", login_step)], name
+    for _, s_ in steps:
+        if s_.get("name") == login_step:
+            assert s_["run"].strip() == "deploy/kite-autologin.sh login" and "KITE_API_SECRET" not in json.dumps(s_["env"])
     for s_ in (s for _, s in steps if "KITE_API_SECRET" in json.dumps(s.get("env", {}))):
         assert "pip install" not in s_.get("run", "")                                              # the library install never holds the secret
     for forbidden in ("git push", "gh release", "gh api", "curl ", "contents: write", "id-token", "pull_request"):

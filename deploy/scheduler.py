@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Start the session recorder (record.yml) when it should be running and isn't (run by scheduler.yml every few minutes).
+"""Start the session recorder (record.yml), and the Kite tick recorder (kite-record.yml, once a day, never retried), when
+they should be running and aren't (run by scheduler.yml every few minutes).
 
 Until 6 Nov 2026 this started the live paper desk (live.yml); the owner stopped paper trading and the recorder took
 its place, with the same rules.
@@ -39,6 +40,9 @@ MAX_STARTS = 3
 WAKE = dt.time(8, 30)                       # when an armed waiter starts the desk (inside WINDOW)
 WAITER_MAX = dt.timedelta(hours=5, minutes=40)   # a hosted job may run 6 h: sleep at most this long
 WORKFLOW = "record.yml"                    # the recorder; live.yml (the paper desk) was retired on 6 Nov 2026
+# The Kite tick recorder logs in to Zerodha by itself (deploy/kite_autologin.py). It is started once a day and never
+# again after a failure: a wrong or changed password retried every few minutes would lock the owner's Zerodha account.
+KITE_WORKFLOW, KITE_MAX_STARTS = "kite-record.yml", 1
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 
 
@@ -57,7 +61,7 @@ def holidays(config: Path) -> set[dt.date]:
     return out
 
 
-def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date]) -> tuple[str, str]:
+def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: int = MAX_STARTS) -> tuple[str, str]:
     """('start' | 'wait', why). `runs`: the recorder's runs as `gh run list --json status,conclusion,createdAt,event` gives them."""
     now = now.astimezone(IST)
     day = now.date()
@@ -72,7 +76,7 @@ def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date]) -> tuple[str,
         return "wait", "a run today was cancelled: the desk was stopped on purpose, so it stays stopped"
     if any(r.get("conclusion") == "success" for r in today):
         return "wait", "today's session is already covered"
-    if len(today) >= MAX_STARTS:
+    if len(today) >= max_starts:
         return "wait", f"{len(today)} runs today and none succeeded: not starting again (look at the logs)"
     return "start", "no run today yet" if not today else f"today's run failed ({len(today)} so far): starting again"
 
@@ -129,12 +133,24 @@ def main(argv: list[str] | None = None) -> int:
         if not sleep_until(dt.datetime.fromisoformat(argv[1]).astimezone(IST)):
             return 1
     now = dt.datetime.now(IST)
-    runs = _runs(WORKFLOW)
-    action, why = decide(now, runs, hols)
-    print(f"{action}: {why}")
-    if action == "start":
-        subprocess.run(["gh", "workflow", "run", WORKFLOW, "--ref", "main"], check=True)
-        print(f"dispatched {WORKFLOW}")
+    started = False
+    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
+        try:
+            wf_runs = _runs(wf)
+        except subprocess.CalledProcessError:
+            if wf == WORKFLOW:
+                raise
+            print(f"{wf}: could not list its runs; not starting it")          # the Kite recorder never holds up the main one
+            continue
+        action, why = decide(now, wf_runs, hols, limit)
+        print(f"{wf}: {action}: {why}")
+        if action == "start":
+            subprocess.run(["gh", "workflow", "run", wf, "--ref", "main"], check=(wf == WORKFLOW))
+            print(f"dispatched {wf}")
+            started = started or wf == WORKFLOW
+        if wf == WORKFLOW:
+            runs = wf_runs
+    if started:
         return 0
     if argv[:1] == ["--wake"] or WINDOW[0] <= now.time() < WINDOW[1]:
         return 0
