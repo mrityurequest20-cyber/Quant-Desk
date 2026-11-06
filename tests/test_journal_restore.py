@@ -74,5 +74,9 @@ def test_there_is_no_save_and_the_branch_is_never_written(clone):
 
 
 def test_no_workflow_saves_the_journal():
+    import re
     for wf in (ROOT / ".github" / "workflows").glob("*.yml"):
-        assert "journal.sh save" not in wf.read_text(encoding="utf-8"), wf.name
+        text = wf.read_text(encoding="utf-8")
+        assert "journal.sh save" not in text, wf.name
+        for line in re.findall(r"push-dir\.sh[^\n]*", text):               # the generic publisher is never pointed at the journal branch
+            assert not re.search(r"\bjournal\b", line.split("push-dir.sh", 1)[1].split('"')[0]), (wf.name, line)

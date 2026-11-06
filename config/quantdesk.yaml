@@ -359,6 +359,11 @@ regime:
   hmm_min_history: 500
   vol_lookback: 252
 
+# Read by the option pricers (options/chain.py, intraday/chains.py) as backtest.risk_free / backtest.dividend_yield.
+backtest:
+  risk_free: 0.065                 # annual, INR (≈ 91-day T-bill)
+  dividend_yield: 0.012
+
 calendar:
   timezone: Asia/Kolkata
   market_open: "09:15"
