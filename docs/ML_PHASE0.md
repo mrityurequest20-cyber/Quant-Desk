@@ -1,9 +1,8 @@
 # ML Phase 0: the platform, built from our own data (started Sat 24 Oct 2026)
 
 The owner started this on **24 Oct**, not in November, and wants everything **home-built**: our own data, our own code, small models
-trained on CPU. No pre-trained models or hosted model services (Hugging Face and similar are parked, see
-[MASTER_PLAN.md](MASTER_PLAN.md) section 11). This file is the work plan for Phase 0 of [ML_ROADMAP.md](ML_ROADMAP.md); that file
-keeps the rules (section 2) and the model list. Where they differ on *dates*, [MASTER_PLAN.md](MASTER_PLAN.md) wins.
+trained on CPU. No pre-trained models or hosted model services (Hugging Face and similar are parked). This file is the work plan for Phase 0 of [ML_ROADMAP.md](ML_ROADMAP.md); that file
+keeps the rules (section 2) and the model list. Where they differ on *dates* or order, [RENAISSANCE.md](RENAISSANCE.md) wins.
 
 The model programme, the twin test for options and the open items are in [ML_RESEARCH_PLAN.md](ML_RESEARCH_PLAN.md).
 

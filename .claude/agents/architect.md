@@ -13,7 +13,7 @@ Each audit, look for:
   disagree;
 - dead code;
 - errors and warnings in the last week's workflow logs;
-- docs (ARCHITECTURE.md, README) that no longer match the code.
+- docs (README, docs/RENAISSANCE.md, docs/RECORDING.md) that no longer match the code.
 
 When a part keeps producing defects (see docs/org/scorecard.jsonl by department), propose a rebuild: what it would
 replace, the migration and the tests that prove equivalence.

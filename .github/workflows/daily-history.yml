@@ -19,7 +19,7 @@ on:
         default: "nse,yahoo"
 
 permissions:
-  contents: write            # create and upload to the daily-history release (as chain-archive.yml)
+  contents: write            # create and upload to the daily-history release 
 
 concurrency:
   group: daily-history       # its own group: never queues behind, or holds up, the live desk

@@ -1,9 +1,9 @@
 # The watchdog
 
-The desk's alarm for the things that **did not happen**. A session that never started, a heartbeat that went stale, an evening
+The alarm for the things that **did not happen**. A recording session that never started, an evening
 workflow that did not run, a credential about to expire: nothing in the desk itself raises those, because the thing that would
 raise them is the thing that stopped. It lives in the Cloudflare Worker, whose cron clock does not depend on GitHub's cron
-(which has been hours late on this repository). Design and reasons: [MASTER_PLAN.md](MASTER_PLAN.md) section 3.
+(which has been hours late on this repository). The plan it serves: [RENAISSANCE.md](RENAISSANCE.md) section 4.
 
 It only **reads** (GitHub's public workflow-run list, the published `data.json`) and **sends alerts**. It never starts a trade,
 touches a journal or holds a secret other than its own. Messages carry a check name, a workflow name, a time and a link, never a
@@ -13,9 +13,8 @@ key, a journal value or a position.
 
 | Check | When | Alert |
 |---|---|---|
-| W1 desk started | 09:10 | **P1** no `Live paper desk` run exists today |
-| W2 heartbeat | 09:30, 11:00, 13:00, 15:00 | **P1** heartbeat older than 20 minutes (the site is republished every 6 minutes plus Pages lag; the drill measures the real figure), or the desk halted; **P2** the feed fell back from Kotak (no "kotak" in the label) or more than half of polls came from Yahoo (a normal day on 23 Oct was a third: `kotak+yahoo (190 of 570 polls from Yahoo)`), or the heartbeat is unreadable |
-| W3 after the close | 16:00 | **P1** `Live paper desk` did not run or failed; **P2** `Collect wide data` did not run or failed |
+| W1 recorder started | 09:10 | **P1** no `Session recorder` (record.yml) run exists today |
+| W3 after the close | 16:00 | **P1** `Session recorder` did not run or failed; **P2** `Collect wide data` did not run or failed |
 | W5 evening jobs | 18:00 self-review, 21:00 data warehouse | **P2** did not run or failed |
 | W6 failures | 16:00, 18:00, 21:00 | **P2** a workflow failed (or was cancelled, except the scheduler, site publish and CI) on `main` since the last look |
 | W7 credentials | 07:30 weekdays | **P2** 14 days, **P1** 7, 2 and 0 days before an expiry date you record; **P1** every day once expired. **Push only**: the repository is public, so these never become an issue |
@@ -23,7 +22,7 @@ key, a journal value or a position.
 | W9 calendar | 15 Dec, 15 Jun | **P2** the next (or this) year's NSE holiday list is not in `calendar.holiday_years` |
 
 A check that cannot run (GitHub or the site unreachable) is reported as a **P2 "Watchdog could not run a check"**, so blindness is
-never silent. Each check slot fires at one fixed time, so a slot alerts at most once a day (W2 has four slots, so it can alert up to four times).
+never silent. Each check slot fires at one fixed time, so a slot alerts at most once a day.
 
 ## Two alert paths, independent of each other
 
@@ -63,8 +62,7 @@ ntfy's anonymous e-mail is disabled on ntfy.sh, so e-mail goes through GitHub, n
 - **Holidays are a copy.** The Worker holds its own list of 2026 NSE holidays (a test fails if it differs from
   `config/quantdesk.yaml`). 2027 is not entered, so until it is, 2027 holidays look like trading days and W1 would raise a false
   P1 on one. W9 asks for the list on 15 Dec.
-- **W2 depends on `data.json`'s `state.heartbeat` fields** (`ts`, `halted`, `feed`), which exist in the published file (checked 23 Oct
-  2026). If the shape changes, W2 raises a P2 "Heartbeat unreadable" rather than staying quiet.
+- **W2 (the desk's heartbeat) was retired with the desk on 6 Nov 2026**: the recorder publishes no heartbeat; W1, W3 and W6 cover it.
 - **GitHub can be the thing that is down.** Push does not depend on it; e-mail does.
 - **W6 sees 08:00 to 21:00 on trading days only.** Overnight and weekend failures are caught by the Saturday digest, which counts at most the last 100 failed runs.
 - **Alerts can be forged by anyone who can dispatch `watchdog-alert.yml`** (write access, or the dispatch token): they can open a convincing issue assigned to you. That is no wider than that token's existing reach (it can already dispatch `clear-halt.yml`). Email dedupe is per check per day, and the workflow runs one at a time per check and day.
