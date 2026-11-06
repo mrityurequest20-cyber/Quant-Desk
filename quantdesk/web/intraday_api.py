@@ -133,6 +133,13 @@ class IntradayAPI:
             out.append(r)
         return out
 
+    def premarket(self) -> dict:
+        """The pre-market brief (quantdesk/premarket), as `premarket brief` last wrote it under the runtime folder."""
+        f = Path(self.cfg.get("premarket.dir", "runtime/premarket")) / "brief.json"
+        if not f.exists():
+            raise FileNotFoundError("no pre-market brief yet: python -m quantdesk premarket brief")
+        return json.loads(f.read_text(encoding="utf-8"))
+
     def news(self, account=None, n=120) -> list[dict]:
         rows = self.j(account).news(n=int(n))
         out = []

@@ -350,14 +350,6 @@ def test_the_feed_does_not_start_from_the_day_the_owners_authority_ends(monkeypa
     assert KL.make_live(None, ["NIFTY"], say=said.append, today=dt.date(2026, 11, 24)) is not None      # the day before it still starts
 
 
-def test_the_desk_config_turns_it_on_and_the_cli_wraps_the_feed_only_when_it_starts():
-    import yaml
-    cfg = yaml.safe_load((ROOT / "config" / "quantdesk.yaml").read_text())
-    assert cfg["intraday"]["kite"]["live"] is True
-    src = (ROOT / "quantdesk" / "intraday" / "cli.py").read_text()
-    assert 'cfg.get("intraday.kite.live", False)' in src and "KiteBackedFeed(feed, live)" in src and "if live is not None" in src
-
-
 def test_the_module_never_touches_orders_the_broker_risk_or_the_journal():
     src = (ROOT / "quantdesk" / "intraday" / "kitelive.py").read_text()
     for forbidden in ("place_order", "modify_order", "cancel_order", "orders(", "positions(", "holdings(", "margins(", "profile(", "KITE_API_SECRET", "KITE_ACCESS_TOKEN", "KITE_API_KEY", "KITE_DATA_SECRET"):
@@ -451,25 +443,6 @@ def test_the_token_workflow_writes_one_encrypted_file_to_one_branch_and_nothing_
     assert "openssl enc -aes-256-cbc" in text and "cp \"$RUNNER_TEMP/kite_token.enc\" kite_token.enc" in text and "git add kite_token.enc" in text
 
 
-def test_live_yml_has_the_api_key_at_workflow_level_and_the_secret_only_in_the_two_token_steps():
-    text, wf, _ = workflow("live.yml")
-    assert wf["env"]["KITE_DATA_KEY"] == "${{ secrets.KITE_API_KEY }}" and "KITE_DATA_SECRET" not in wf["env"] and "KITE_DATA_TOKEN" not in text.split("jobs:")[0]
-    assert "KITE_API_KEY:" not in text and "KITE_ACCESS_TOKEN" not in text                      # the broker adapter's names are never set by this workflow
-    holders = []
-    for jn, job in wf["jobs"].items():
-        assert "KITE_API_SECRET" not in json.dumps(job.get("env", {}))
-        for s in job["steps"]:
-            assert not ("pip install" in s.get("run", "") and "KITE_API_SECRET" in json.dumps(s.get("env", {})))      # the install step never holds the secret
-            if "KITE_API_SECRET" in json.dumps(s.get("env", {})):
-                holders.append((jn, s["name"], s.get("continue-on-error")))
-    assert [h[0] for h in holders] == ["morning", "afternoon"] and all(h[2] == "true" for h in holders)
-    for jn in ("morning", "afternoon"):                                                         # the token step comes before the session starts
-        names = [s.get("name", "") for s in wf["jobs"][jn]["steps"]]
-        tok = next(i for i, n in enumerate(names) if n.startswith("Kite token"))
-        trade = next(i for i, n in enumerate(names) if n.startswith("Trade (paper)"))
-        assert tok < trade
-
-
 # ---- the Data panel (display only) ----------------------------------------------------------------------------------------------
 def test_status_tells_the_panel_whether_the_websocket_is_delivering_and_how_old_each_price_is():
     clock = Clock("2026-10-26 10:00:00")
@@ -489,31 +462,6 @@ def test_status_tells_the_panel_whether_the_websocket_is_delivering_and_how_old_
     with pytest.raises(RuntimeError):                                                          # nothing from Kite and the fallback down: the error still surfaces
         f.poll("NIFTY", None)
     assert f.status()["last_error"] == "RuntimeError" and f.status()["fallback_polls"] >= 1
-
-
-def test_the_heartbeat_carries_the_data_block_and_a_broken_status_costs_it_nothing(cfg, tmp_path):
-    from quantdesk.core.calendar import TradingCalendar
-    from quantdesk.intraday.engine import IntradayEngine, run_replay
-    from quantdesk.intraday.feeds import ReplayFeed
-    from quantdesk.intraday.learning import Memory
-    from quantdesk.intraday.sim import IntradayBroker
-    from quantdesk.intraday.synthetic import simulate_sessions
-    from quantdesk.journal.journal import Journal
-    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
-    bars, _ = simulate_sessions(days, seed=11)
-    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
-                         say=None, memory=Memory(tmp_path / "memory.json"))
-    run_replay(eng)
-    d = eng.journal.get_state("intraday_live")["data"]
-    assert d["feed"] == eng.feed.name and d["kite"] is None                                    # a feed without a websocket has no Kite block
-    assert set(d["bars"]) == {*eng.underlyings, eng.vix} and all(b["last_bar"] and b["age_s"] >= 0 for b in d["bars"].values())
-    eng.feed.status = lambda: {"attached": True, "live": True}                                  # a feed that has one: carried through as is
-    assert eng._data_status(eng.last_ts[eng.underlyings[0]])["kite"] == {"attached": True, "live": True}
-
-    def boom():
-        raise RuntimeError("broken")
-    eng.feed.status = boom
-    assert eng._data_status(eng.last_ts[eng.underlyings[0]]) is None                           # never costs the desk its heartbeat
 
 
 def test_the_app_has_a_data_panel_that_hides_itself_without_data():
@@ -637,61 +585,6 @@ def test_every_tenth_otherwise_kite_only_poll_also_asks_the_fallback_so_disagree
     assert f.served["polls"] == 20
 
 
-def test_kite_served_minutes_are_kept_out_of_the_recorder_by_the_engine(cfg, tmp_path):
-    from quantdesk.core.calendar import TradingCalendar
-    from quantdesk.intraday.engine import IntradayEngine, run_replay
-    from quantdesk.intraday.feeds import ReplayFeed
-    from quantdesk.intraday.learning import Memory
-    from quantdesk.intraday.sim import IntradayBroker
-    from quantdesk.intraday.synthetic import simulate_sessions
-    from quantdesk.journal.journal import Journal
-    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
-    bars_, _ = simulate_sessions(days, seed=11)
-
-    class Rec:
-        def __init__(self):
-            self.rows, self.filled = [], []
-
-        def record_bars(self, sym, df):
-            self.rows.append((sym, df))
-
-        def fill_bars(self, sym, df):
-            self.filled.append((sym, df))
-            return 0
-
-        def __getattr__(self, name):
-            return lambda *a, **k: None
-
-    class Kitey(ReplayFeed):
-        def unrecorded(self, sym):                                   # stands in for KiteBackedFeed: every 10 o'clock minute was "served from Kite"
-            b = self.bars_for(sym) if hasattr(self, "bars_for") else None
-            return {t for t in self._all_index(sym) if t.hour == 10}
-
-        def _all_index(self, sym):
-            return [t for df in self._seen.get(sym, []) for t in df.index]
-
-        def history(self, symbol, days=5):                           # like the real feeds, today's bars up to now are in the history (ReplayFeed's is prior sessions only)
-            df = self.bars.get(symbol)
-            return df[df.index <= self.now()] if df is not None else pd.DataFrame(columns=KL.COLUMNS)
-
-        def poll(self, symbol, since):
-            out = super().poll(symbol, since)
-            if out is not None and len(out):
-                self._seen = getattr(self, "_seen", {})
-                self._seen.setdefault(symbol, []).append(out)
-            return out
-    feed = Kitey(bars_, days[-1])
-    rec = Rec()
-    eng = IntradayEngine(cfg, feed, "model", Journal(), IntradayBroker(cfg, starting_cash=500000), recorder=rec, say=None, memory=Memory(tmp_path / "m.json"))
-    run_replay(eng)
-    recorded = [t for sym, df in rec.rows if "-FUT" not in sym for t in df.index]
-    assert recorded and not any(t.hour == 10 for t in recorded)                                  # nothing the feed flagged reached the recorder
-    assert any(t.hour == 11 for t in recorded) or any(t.hour == 12 for t in recorded)           # and everything else did
-    filled = [t for sym, df in rec.filled for t in df.index]
-    assert any(t.hour == 10 for t in filled)                                                    # the other feeds' own history fills the holes, so the chart and the loader see a whole day
-    assert not any(t.hour * 60 + t.minute >= 15 * 60 for t in filled)                           # but never the settlement window (15:00 to 15:29): a plain day leaves a hole there, so a Kite day must too
-
-
 def test_the_token_command_exists_exchanges_with_the_data_names_and_never_prints_the_token(tmp_path, monkeypatch, capsys):
     import types as _t
     from quantdesk.cli import main
@@ -738,32 +631,6 @@ def test_a_garbage_decrypt_with_a_newline_can_never_inject_into_the_job_environm
     bad = repo_with_token(tmp_path / "bad", token="line1\nEVIL=1")                              # a "valid" file whose plaintext is not token-shaped
     r = run_script(bad, {"KITE_DATA_SECRET": "S3CRET", "GITHUB_ENV": str(genv)})
     assert r.returncode == 0 and not genv.exists() and "not token-shaped" in r.stdout
-
-
-def test_the_kite_feeds_counters_are_journaled_every_five_minutes_so_they_outlive_the_process(cfg, tmp_path):
-    from quantdesk.core.calendar import TradingCalendar
-    from quantdesk.intraday.engine import IntradayEngine, run_replay
-    from quantdesk.intraday.feeds import ReplayFeed
-    from quantdesk.intraday.learning import Memory
-    from quantdesk.intraday.sim import IntradayBroker
-    from quantdesk.intraday.synthetic import simulate_sessions
-    from quantdesk.journal.journal import Journal
-    days = [d.date() for d in TradingCalendar(cfg.holidays()).trading_days("2026-09-21", "2026-09-28")]
-    bars_, _ = simulate_sessions(days, seed=11)
-
-    class WithStatus(ReplayFeed):
-        def status(self):
-            return {"attached": True, "live": True, "polls": 7, "kite_polls": 5, "fallback_polls": 2, "minutes": 9, "compared": 3, "rejected": 1, "faults": 0,
-                    "symbols": {"NIFTY": {"age_s": 1.0}}, "last_error": ""}
-    j = Journal()
-    eng = IntradayEngine(cfg, WithStatus(bars_, days[-1]), "model", j, IntradayBroker(cfg, starting_cash=500000), say=None, memory=Memory(tmp_path / "m.json"))
-    run_replay(eng)
-    ev = j.events()
-    rows = ev[ev["message"].str.startswith("kite feed counters")]
-    assert len(rows) >= 10 and all(r.level == "INFO" and r.category == "feed" for r in rows.itertuples())
-    body = json.loads(rows.iloc[0]["message"].split("kite feed counters ", 1)[1])
-    assert body["kite_polls"] == 5 and body["fallback_polls"] == 2 and body["compared"] == 3 and "symbols" not in body
-    assert {pd.Timestamp(t).minute % 5 for t in rows["ts"]} == {0}
 
 
 def test_in_the_settlement_window_the_wrapped_feeds_bars_stand_and_kite_is_measured_not_used():
@@ -908,53 +775,3 @@ def _trace(eng, names):
     return order
 
 
-def test_the_recorder_gap_fill_runs_after_the_commands_the_kill_switch_and_the_exits(cfg, tmp_path):
-    """The gap fill makes history calls with no timeout: a slow one must not delay the owner's commands, the kill switch or the 15:15 exit."""
-    eng, feed = _gap_fill_engine(cfg, tmp_path)
-    feed.clock = feed.clock + pd.Timedelta(minutes=1)
-    order = _trace(eng, ("_commands", "_kill_switch", "_wallclock_exits", "_persist", "_heartbeat", "_fill_recorder_gaps"))
-    eng.step()
-    assert order[:2] == ["_commands", "_kill_switch"] and order.count("_fill_recorder_gaps") == 1
-    i = order.index("_fill_recorder_gaps")
-    assert i == len(order) - 1 and {"_wallclock_exits", "_persist", "_heartbeat"} <= set(order[:i])      # last of the step, after exits, persist and heartbeat
-
-
-def test_the_session_close_shuts_the_positions_and_saves_before_the_gap_fill(cfg, tmp_path):
-    """The kill switch's close-out runs end_session: a history call that hangs must not sit in front of the flatten."""
-    eng, feed = _gap_fill_engine(cfg, tmp_path)
-    order = _trace(eng, ("_close", "_persist", "_fill_recorder_gaps"))
-    eng.end_session()
-    assert order[-1] == "_fill_recorder_gaps" and "_persist" in order[:-1]
-
-
-def test_a_whole_kite_day_leaves_the_sleeves_settlement_inputs_exactly_as_a_plain_day_does_and_the_trial_measures_can_be_computed(cfg, tmp_path):
-    from quantdesk.intraday.sleeves import official_close, settlement_price
-    eng_k, fed, rec_k, j, day = _run_day(cfg, tmp_path, True, "kite")
-    eng_p, _, rec_p, _, _ = _run_day(cfg, tmp_path, False, "plain")
-    for sym in ("NIFTY", "BANKNIFTY"):
-        kite_px, why_k = settlement_price(rec_k.root, sym, day)
-        plain_px, why_p = settlement_price(rec_p.root, sym, day)
-        assert kite_px is not None and kite_px == plain_px and why_k == why_p                       # the mean of the recorded 15:00 to 15:29 closes: identical to a day without Kite
-        assert official_close(rec_k.root, sym, day) == official_close(rec_p.root, sym, day)          # and so is the 15:29 close
-        a = pd.read_csv(rec_k.day_dir(day) / f"{sym}_1m.csv", index_col=0, parse_dates=True)
-        b = pd.read_csv(rec_p.day_dir(day) / f"{sym}_1m.csv", index_col=0, parse_dates=True)
-        late = lambda d: d[(d.index.hour == 15) & (d.index.minute < 30)]
-        assert len(late(a)) == 30 and late(a).equals(late(b))                                        # all thirty settlement bars are the wrapped feed's own
-        assert len(a) == len(b)                                                                      # and after the close-time gap fill, no hole in the day
-    # the minutes served from Kite stayed out of the recorder until the gap fill brought the other feeds' own bars in
-    assert sum(len(fed.unrecorded(s)) for s in ("NIFTY", "BANKNIFTY", "INDIAVIX")) > 300
-    # E1 to E6 from the journal events, as docs/ml/KITE_TRIAL.md reads them
-    ev = j.events()
-    rows = ev[ev["message"].str.startswith("kite feed counters")]
-    cs = [(pd.Timestamp(r.ts), json.loads(r.message.split("kite feed counters ", 1)[1])) for r in rows.itertuples()]
-    assert len(cs) >= 60 and len({c["started"] for _, c in cs}) == 1                                # one runner here: one start stamp on every event
-    cs = [(t, c) for t, c in cs if t.hour < 15]                                                      # E1 is read up to 15:00: the settlement window is the other feeds'
-    (t0, c0), (t1, c1) = cs[0], cs[-1]
-    e1 = (c1["minutes"] - c0["minutes"]) / (3 * (t1 - t0).total_seconds() / 60)
-    assert 0.95 <= e1 <= 1.02
-    last = c1                                                                                        # E2 and E4 are read at the same last event before 15:00 (from then on the other feeds are asked on purpose)
-    assert (last["fallback_polls"] - last["sampled_polls"]) / last["polls"] < 0.02                  # E2: the other feeds were asked on purpose, not because Kite could not serve
-    final = json.loads(rows.iloc[-1]["message"].split("kite feed counters ", 1)[1])
-    assert final["late_fb_flat"] >= 0 and "late_kite_moved" in final                                # E3 is read at the last event of the day
-    assert last["rejected"] <= last["compared"] and last["faults"] == 0                              # E4's numerator is part of its denominator; E5: no Kite fault
-    assert all(0 <= c["minutes"] for _, c in cs) and all(b["minutes"] >= a["minutes"] for (_, a), (_, b) in zip(cs, cs[1:]))

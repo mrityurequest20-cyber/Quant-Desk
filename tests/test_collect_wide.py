@@ -135,7 +135,7 @@ def test_workflow_is_read_only_pinned_isolated_and_adds_no_secret():
     text = WF.read_text(encoding="utf-8")
     wf = yaml.safe_load(text)
     chain = yaml.safe_load((ROOT / ".github" / "workflows" / "chain-archive.yml").read_text(encoding="utf-8"))
-    live = yaml.safe_load((ROOT / ".github" / "workflows" / "live.yml").read_text(encoding="utf-8"))
+    live = yaml.safe_load((ROOT / ".github" / "workflows" / "record.yml").read_text(encoding="utf-8"))
     assert wf["permissions"]["contents"] == "write" == chain["permissions"]["contents"] and len(wf["permissions"]) == 1
     assert all("permissions" not in j for j in wf["jobs"].values())
     assert set(re.findall(r"secrets\.(\w+)", text)) == {"KOTAK_CONSUMER_KEY"}
@@ -162,6 +162,3 @@ def test_workflow_schedule_stocks_in_session_minutes_after_close():
     assert wf["jobs"]["stocks"]["if"].count(crons[0]) == 1 and wf["jobs"]["minutes"]["if"].count(crons[1]) == 1
 
 
-def test_live_workflow_is_untouched_by_this_change():
-    text = (ROOT / ".github" / "workflows" / "live.yml").read_text(encoding="utf-8")
-    assert "collect-wide" not in text and "collect_wide" not in text

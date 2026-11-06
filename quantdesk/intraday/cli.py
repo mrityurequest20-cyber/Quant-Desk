@@ -1,19 +1,15 @@
-"""`quantdesk intraday …` commands.
+"""`quantdesk intraday …` commands: what is left of the intraday desk after the owner stopped paper trading
+(6 Nov 2026). The engine, the brain, the learning loop and the sleeves were removed; the recorders stay.
 
-  live      real-time paper trading on today's session (Yahoo/Kotak/Kite bars; Kotak/NSE/Kite/model chain)
+  tape         record real option chains every minute for several expiries (record.yml runs it beside the recorder)
+  doctor       can this machine record the session (Yahoo, NSE, Kotak, the calendar)
   kotak-check  what the Kotak Neo consumer key can see (quotes, expiries, option chain, candles)
-  replay    re-run recorded sessions (--date / --last N) or synthetic ones (--synthetic N)
-  thoughts  the analyst's reads, newest last
-  trades    intraday trades with setup, structure, P&L, R, grade
-  review    the written session review(s)
-  teach     after the close: Claude reviews the session's journal and leaves advisory lessons (teaching half of its credit)
-  stats     performance across sessions: by setup, structure, day type, time of day, exit
-  clear-halt  lift the entry halt on an inherited position, on the record (--reason; --force to accept it as is)
+  vol-shadow   the desk's recorded A-vs-HAR volatility forecasts against what the index did
+  export-site  the web app as a read-only static site
 """
 from __future__ import annotations
 
 import datetime as dt
-import json
 import os
 import sys
 from pathlib import Path
@@ -22,38 +18,14 @@ import pandas as pd
 
 from ..core.calendar import TradingCalendar
 from ..journal.journal import Journal
-from .account import ensure_account, reset_account, restate_trade
-from .engine import IntradayEngine, close_out, run_live, run_replay
-from .feeds import ReplayFeed
 from .recorder import SessionRecorder
-from .sim import IntradayBroker
 
 
 def paths(cfg, account: str) -> dict:
     base = cfg.runtime_dir / "intraday"
     acct = base if account == "live" else base / account
     acct.mkdir(parents=True, exist_ok=True)
-    return {"journal": acct / "journal.db", "broker": acct / "broker.json", "reviews": acct / "reviews",
-            "memory": acct / "memory.json", "data": base / "data"}
-
-
-def _chain_source(cfg, name: str, kite=None, kotak=None):
-    if name == "kotak" and kotak is None:
-        print("kotak chain: no KOTAK_CONSUMER_KEY; using NSE's public chain", flush=True)
-        name = "nse"
-    if name == "nse":
-        from .chains import NSEOptionChain
-        return NSEOptionChain()
-    if name == "kite":
-        from .chains import KiteOptionChain
-        return KiteOptionChain(kite)
-    if name == "kotak":
-        from .chains import FallbackChain, NSEOptionChain
-        from .kotak import KotakOptionChain
-        kc = cfg.get("intraday.kotak", {}) or {}
-        return FallbackChain(KotakOptionChain(kotak, strikes=kc.get("strikes", 20), refresh_min=kc.get("refresh_min", 1)),
-                             NSEOptionChain(), secondary_min=cfg.get("intraday.chain_refresh_min", 3))
-    return "model"
+    return {"journal": acct / "journal.db", "data": base / "data"}
 
 
 def _kotak_client():
@@ -63,115 +35,6 @@ def _kotak_client():
         return KotakClient.from_env()
     except KotakError:
         return None
-
-
-def _say(quiet: bool):
-    return (lambda *a: None) if quiet else (lambda *a: print(*a, flush=True))
-
-
-def _live_engine(cfg, a) -> IntradayEngine:
-    p = paths(cfg, "live")
-    syms = a.symbols.split(",") if a.symbols else None
-    feed_name = a.feed or cfg.get("intraday.feed", "yahoo")
-    chain_name = a.chain or cfg.get("intraday.chain", "nse")
-    underlyings = syms or cfg.get("intraday.underlyings")
-    kotak = _kotak_client() if "kotak" in (feed_name, chain_name) else None
-    if feed_name == "kotak" and kotak is None:
-        print("kotak feed: no KOTAK_CONSUMER_KEY; bars from Yahoo", flush=True)
-    if feed_name == "kite":
-        from .feeds import KiteIntradayFeed
-        feed = KiteIntradayFeed(cfg, underlyings + [cfg.get("universe.volatility_index")])
-        kite = feed.kite
-    elif feed_name == "kotak" and kotak is not None:
-        from .kotak import KotakIntradayFeed
-        feed, kite = KotakIntradayFeed(cfg, kotak), None
-    else:
-        from .feeds import YahooIntradayFeed
-        feed, kite = YahooIntradayFeed(cfg), None
-    if cfg.get("intraday.kite.live", False) and feed_name != "kite":      # the Kite websocket in front of the feed above; every failure leaves that feed as it was
-        from .kitelive import KiteBackedFeed, make_live
-        live = make_live(cfg, list(underlyings) + [cfg.get("universe.volatility_index")], say=lambda m: print(m, flush=True))
-        if live is not None:
-            feed = KiteBackedFeed(feed, live)
-    chains = _chain_source(cfg, chain_name, kite, kotak)
-    j = Journal(p["journal"], autocommit_every=1)
-    capital = ensure_account(cfg, j, p["broker"], _say(a.quiet))
-    broker = IntradayBroker(cfg, starting_cash=capital, state_path=p["broker"],
-                            adverse_ticks=cfg.get("intraday.adverse_ticks", 1))
-    news = None
-    if cfg.get("intraday.news.enabled", True) and not getattr(a, "no_news", False):
-        from .llm import LLMDesk
-        from .news import NewsDesk
-        news = NewsDesk(cfg)
-        desk = LLMDesk(cfg, journal=j)                  # Claude's credit is kept in the journal
-        if desk.active:
-            news.llm = desk
-            print("news: second readers " + ", ".join(r.name for r in desk.readers), flush=True)
-    brain = None
-    if cfg.get("intraday.global.enabled", True) and not getattr(a, "no_global", False):
-        brain = make_brain(cfg)
-    from .learning import Memory
-    memory = Memory(p["memory"]) if cfg.get("intraday.learning.enabled", True) else None
-    eng = IntradayEngine(cfg, feed, chains, j, broker, SessionRecorder(p["data"]), _say(a.quiet), underlyings, p["reviews"],
-                         news=news, brain=brain, memory=memory)
-    from ..data.nse import NSE, parse_gift
-    nse = NSE(gap=0.3)
-    if not getattr(a, "no_global", False):
-        eng.gift_source = lambda: parse_gift(nse.api("/api/marketStatus")[0])
-    if cfg.get("autolearn.enabled", True) and not getattr(a, "close_out", False):
-        from ..autolearn.live import LiveLearner
-        eng.learner = LiveLearner(cfg)                    # every model's prediction on the record, the champion's gate
-    if kotak is not None and cfg.get("intraday.breadth.enabled", True) and not getattr(a, "close_out", False):
-        from .breadth import make_breadth
-        try:                                              # the index's own stocks, from Kotak's quotes (breadth.py)
-            eng.breadth = make_breadth(cfg, kotak, nse, say=lambda m: print(m, flush=True))
-        except Exception as exc:                          # the desk reads without breadth rather than not at all
-            print(f"breadth: off ({exc!s:.160})", flush=True)
-    return eng
-
-
-def make_brain(cfg, fetch=None):
-    """The brain with the latest research (runtime/research/links.json + edges.json, fetched by the workflow)."""
-    from .brain import HEAVY_UNIVERSE, Brain, GlobalFeed
-    rdir = Path(cfg.runtime_dir) / "research"
-
-    def read(name):
-        try:
-            return json.loads((rdir / name).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return []
-    heavy = GlobalFeed(cfg, universe=HEAVY_UNIVERSE) if cfg.get("intraday.brain.heavy_pulse", True) and fetch is None else None
-    return Brain(cfg, GlobalFeed(cfg, fetch=fetch), read("links.json"), read("edges.json"), hfeed=heavy)
-
-
-def cmd_live(cfg, a):
-    if a.close_out:
-        print(close_out(_live_engine(cfg, a)), flush=True)
-        return
-    stop = dt.time.fromisoformat(a.until) if a.until else None
-    if a.handover and not stop:
-        sys.exit("--handover needs --until HH:MM")
-    if not a.forever:
-        print(run_live(_live_engine(cfg, a), stop, handover=a.handover), flush=True)
-        return
-    # always-on host (Docker / systemd): one fresh engine per NSE session, asleep in between
-    import time
-    from .feeds import IST, session_bounds
-    cal = TradingCalendar(cfg.holidays())
-    while True:
-        now = pd.Timestamp.now(tz=IST)
-        if cal.is_trading_day(now.date()) and now < session_bounds(now.date())[1]:
-            try:
-                print(run_live(_live_engine(cfg, a)), flush=True)
-            except Exception as exc:                    # a bad day must not kill the service
-                print(f"session failed: {exc!r}; retrying in 5 min", flush=True)
-                time.sleep(300)
-                continue
-        nxt = cal.next_trading_day(now.date())
-        wake = session_bounds(nxt)[0] - pd.Timedelta(minutes=15)
-        print(f"next session {nxt:%a %d-%b}; sleeping until {wake:%a %H:%M} IST", flush=True)
-        while pd.Timestamp.now(tz=IST) < wake:
-            time.sleep(min(600, max(1, (wake - pd.Timestamp.now(tz=IST)).total_seconds())))
 
 
 def cmd_tape(cfg, a):
@@ -203,434 +66,6 @@ def cmd_tape(cfg, a):
     tape.run(dt.time.fromisoformat(a.until) if a.until else None)
 
 
-def make_nse_close(cfg, fetch=None):
-    """(underlying, day) -> NSE's official close (ind_close_all), or None when the file has no row for it. A day's file
-    is fetched once per run, and so is a day's failure: when NSE hangs or errors, every later trade asking for that day
-    is refused at once with the first error instead of waiting out the same timeout again before the journal is saved.
-    The two kinds of failure stay apart: a real HTTP 404 raises OfficialAbsent (confirmed absence: the sleeves may fall
-    down their chain); anything else (timeout, 5xx, connection, and an HTML page served with HTTP 200, which can be a
-    WAF or maintenance page) raises RuntimeError (they wait). A file with no row for the index returns None (absent). `fetch(day)` -> that day's index closes (default: the warehouse's
-    copy if it has the day, else NSE's archive)."""
-    closes: dict = {}
-
-    def fetch_day(day):
-        from ..data.nse import NSE, parse_index_close
-        f = Path(cfg.runtime_dir) / "warehouse" / f"nse_index_close_{day.year}.parquet"
-        df = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["date", "symbol", "close"])
-        df = df[pd.to_datetime(df["date"]).dt.date == day]
-        return df if len(df) else parse_index_close(NSE().index_close(day)[0], day)
-
-    def nse_close(underlying, day):
-        from ..data.nse import NotPublished, NotPublishedHtml
-        from .sleeves import OfficialAbsent
-        if day not in closes:
-            try:
-                closes[day] = (fetch or fetch_day)(day)
-            except NotPublishedHtml as exc:               # HTTP 200 with an HTML page: may be a WAF / maintenance page
-                closes[day] = RuntimeError(f"NSE served an HTML page for {day}, not the file ({exc!s:.60})")
-            except NotPublished as exc:                   # a real HTTP 404: NSE answered, there is no file
-                closes[day] = OfficialAbsent(f"NSE has no file for {day} ({exc!s:.60})")
-            except Exception as exc:                      # cached: one failure per day per run; it only means 'ask again'
-                closes[day] = RuntimeError(f"NSE's close for {day} unavailable this run: {exc!s:.80}")
-        if isinstance(closes[day], Exception):
-            raise closes[day]
-        hit = closes[day][closes[day]["symbol"] == underlying]
-        return float(hit["close"].iloc[0]) if len(hit) else None
-    return nse_close
-
-
-def cmd_sleeves(cfg, a):
-    """The pre-registered expiry sellers (intraday/sleeves.py): settle what expired, open on an expiry's eve, report."""
-    from .feeds import IST
-    from .sleeves import ExpirySeller, render, specs
-    base = paths(cfg, "live")
-
-    def yahoo_close(underlying, day):
-        import yfinance as yf
-        sym = cfg.instrument_spec(underlying)["yahoo"]
-        d = yf.download(sym, start=str(day), end=str(day + dt.timedelta(days=1)), interval="1d", progress=False,
-                        auto_adjust=False)
-        if isinstance(d.columns, pd.MultiIndex):
-            d.columns = d.columns.get_level_values(0)
-        d = d[pd.to_datetime(d.index).date == day]
-        if d.empty:
-            raise RuntimeError(f"no Yahoo bar for {sym} on {day}")
-        return float(d["Close"].iloc[-1])
-    nse_close = make_nse_close(cfg)
-    for spec in specs():                                  # every registered spec, each with its own ledger
-        try:
-            seller = ExpirySeller(cfg, cfg.runtime_dir / "intraday" / "sleeves", base["data"], close_fn=yahoo_close, spec=spec,
-                                  official_fn=nse_close)
-        except ValueError as exc:                         # a bad spec never stops the others' sleeves
-            print(f"WARN {spec.get('name')}: skipped: {exc}", flush=True)
-            continue
-        if not a.report:
-            day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
-            for line in seller.run(day) or [f"{spec['name']} {day}: nothing to settle or open"]:
-                print(line, flush=True)
-            print(flush=True)
-        print(render(seller.report()) + "\n", flush=True)
-
-
-def cmd_self_review(cfg, a):
-    """The desk's own engineer (ops/selfreview.py): what needs fixing or building, filed as GitHub issues with --issues."""
-    from ..ops import selfreview as SR
-    from .feeds import IST
-    now = pd.Timestamp.now(tz=IST)
-    day = dt.date.fromisoformat(a.day) if a.day else now.date()
-    gh = None
-    repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if repo and token:
-        gh = SR.GitHub(repo, token)
-    findings = SR.review(cfg, day, gh=gh, now=now)
-    print(SR.render(findings, day), flush=True)
-    if a.json:
-        Path(a.json).write_text(SR.to_json(findings))
-    if a.issues:
-        if gh is None:
-            print("self-review: --issues needs GITHUB_REPOSITORY and GH_TOKEN; nothing filed", flush=True)
-        else:
-            SR.sync(gh, findings, day)
-
-
-def cmd_progress(cfg, a):
-    """Is the desk getting smarter? Today's snapshot, compared with last week and the first one (ops/progress.py)."""
-    from ..ops import progress as P
-    from ..ops.selfreview import GitHub
-    from .feeds import IST
-    day = dt.date.fromisoformat(a.day) if a.day else pd.Timestamp.now(tz=IST).date()
-    repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    gh = GitHub(repo, token) if repo and token else None
-    hist = P.record(P.snapshot(cfg, day, gh), cfg.runtime_dir / "intraday" / "progress" / "history.jsonl")
-    md = P.render(hist)
-    print(md, flush=True)
-    if a.issue:
-        if gh is None:
-            print("progress: --issue needs GITHUB_REPOSITORY and GH_TOKEN; nothing posted", flush=True)
-            return
-        gh.ensure_label("desk-progress", "0e8a16")
-        i = gh.issue_titled("Desk progress", "desk-progress") or gh.create(
-            "Desk progress", "The desk's weekly report: is it getting smarter? One comment a week (ops/progress.py).",
-            ["desk-progress"])
-        gh.comment(i["number"], md + "\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_")
-        print(f"posted to issue #{i['number']}", flush=True)
-
-
-def cmd_reset_account(cfg, a):
-    base = paths(cfg, "live")["journal"].parent
-    if not a.yes:
-        sys.exit(f"this archives the live paper account under {base / 'archive'} and starts a fresh one at "
-                 f"₹{cfg.get('intraday.capital'):,.0f}; add --yes to do it")
-    moved = reset_account(base)
-    j = Journal(paths(cfg, "live")["journal"])
-    try:
-        ensure_account(cfg, j, paths(cfg, "live")["broker"])
-    finally:
-        j.close()
-    print(f"archived the old account to {moved}" if moved else "no account yet", "·",
-          f"new paper account: ₹{cfg.get('intraday.capital'):,.0f}")
-
-
-def cmd_clear_drawdown_halt(cfg, a):
-    """The owner lifts the cross-day drawdown halt, on the record; the high-water mark restarts at today's equity."""
-    from .engine import DD_KEY, DD_PEAK_KEY
-    j = Journal(paths(cfg, a.account or "live")["journal"])
-    try:
-        halt = j.get_state(DD_KEY)
-        if not halt:
-            print("no drawdown halt is set; nothing to clear")
-            return
-        now = pd.Timestamp.now(tz="Asia/Kolkata")
-        log_ = j.get_state("intraday_drawdown_cleared") or []
-        log_.append({"at": str(now), "by": a.by, "reason": a.reason, "halt": halt})
-        j.set_state("intraday_drawdown_cleared", log_)
-        # the mark restarts at the equity the desk next sees (not the last snapshot, which may be stale and higher)
-        j.set_state(DD_PEAK_KEY, {"peak": 0, "restart": True, "at": str(now), "by": a.by})
-        j.set_state(DD_KEY, None)
-        j.event(now, "WARN", "risk", f"drawdown halt cleared by {a.by}: {a.reason[:200]}; the high-water mark restarts at "
-                f"the desk's next equity", {"halt": halt})
-        j.commit()
-        print("drawdown halt cleared; the high-water mark restarts at the desk's next equity")
-    finally:
-        j.close()
-
-
-def cmd_restate_trade(cfg, a):
-    """Correct a closed paper trade's exit price(s), on the record (see account.restate_trade)."""
-    exits = {}
-    for x in a.exit:
-        sym, _, px = x.partition("=")
-        exits[sym.strip()] = float(px)
-    if not a.yes:
-        sys.exit(f"this rewrites trade {a.id}'s exit {exits} and moves paper cash by the difference; add --yes to do it")
-    r = restate_trade(cfg, paths(cfg, a.account or "live")["journal"].parent, a.id, exits, a.reason)
-    print(f"trade {r['trade']}: P&L ₹{r['old_pnl']:+,.2f} → ₹{r['new_pnl']:+,.2f} (cash {r['delta']:+,.2f})")
-
-
-def cmd_clear_halt(cfg, a):
-    """The owner's one explicit action that lifts an inherited-position halt (halt.py: H-02/H-03), on the record."""
-    import getpass
-
-    from .feeds import IST
-    from .halt import clear
-    p = paths(cfg, a.account or "live")
-    j = Journal(p["journal"])
-    try:
-        positions = IntradayBroker(cfg, state_path=p["broker"]).positions() if p["broker"].exists() else {}
-        by = a.by or os.environ.get("GITHUB_ACTOR") or getpass.getuser()
-        r = clear(j, positions, pd.Timestamp.now(tz=IST).date(), a.reason, by, force=a.force)
-    except ValueError as exc:
-        sys.exit(str(exc))
-    finally:
-        j.close()
-    print(r["message"], flush=True)
-
-
-def cmd_command(cfg, a):
-    """Queue pause / resume / flatten / close for the running engine (same queue the app uses)."""
-    from ..web.intraday_api import IntradayAPI
-    try:
-        r = IntradayAPI(cfg).command(a.account or "live", {"cmd": a.cmd, "arg": a.id})
-    except ValueError as exc:
-        sys.exit(str(exc))
-    print(f"queued {r['queued']['cmd']}{' ' + a.id if a.id else ''}: the engine applies it on its next minute")
-
-
-def cmd_paper_gate(cfg, a):
-    """Read-only check of one strategy's closed, cost-inclusive paper trades against the bar for real money."""
-    from ..research.protocol import evaluate_paper_candidate, real_quote_trades, risk_violation_events, without_exploration
-    j = Journal(paths(cfg, a.account or "live")["journal"])
-    try:
-        trades = j.trades()
-        trades = trades[(trades["strategy"].astype(str) == a.strategy) &
-                        (trades["opened_at"].astype(str) >= a.since)]
-        trades, n_expl = without_exploration(trades)       # unvalidated-prior exploration trades are never evidence
-        trades, not_real = real_quote_trades(trades)       # only real point-in-time fills are evidence
-        from ..journal.retention import archived_thought_days   # thoughts archived out of the journal were still sessions (C-02)
-        seen = {str(d) for d in j.df("SELECT DISTINCT substr(ts,1,10) AS d FROM thoughts WHERE ts >= ?", (a.since,))["d"]}
-        sessions = pd.DataFrame({"n": [len(seen | archived_thought_days(paths(cfg, a.account or "live")["journal"], str(a.since)[:10]))]})
-        checks = j.checks(a.since)
-        risky_checks = checks[
-            checks["name"].astype(str).str.contains(r"risk|limit|kill|reconcil", case=False, regex=True) &
-            checks["status"].astype(str).str.upper().isin(["FAIL", "ERROR"])
-        ] if not checks.empty else checks
-        risky_events = risk_violation_events(j.events(a.since))
-        gate = evaluate_paper_candidate(trades, int(sessions.iloc[0]["n"]), len(risky_checks) + len(risky_events),
-                                        float(cfg.get("intraday.capital", 20000)))
-        gate.update({"strategy": a.strategy, "since": a.since, "costs_included": True, "paper_account": a.account,
-                     "excluded_not_real_point_in_time": not_real,
-                     "excluded_exploration": n_expl,
-                     "evidence": "only trades filled at the live book on entry and exit count"})
-        print(json.dumps(gate, indent=2, ensure_ascii=False))
-    finally:
-        j.close()
-
-
-def _synthetic_bars(cfg, n: int, seed: int):
-    from .synthetic import simulate_sessions
-    cal = TradingCalendar(cfg.holidays())
-    end = pd.Timestamp.today().normalize()
-    days = [d.date() for d in cal.trading_days(end - pd.Timedelta(days=int((n + 8) * 1.6) + 10), end)]
-    bars, meta = simulate_sessions(days, seed=seed)
-    return bars, meta, days[-n:]
-
-
-def cmd_shadow_replay(cfg, a):
-    from . import shadowlab
-    syms = [x.strip() for x in a.symbols.split(",") if x.strip()]
-    if sum(map(bool, (a.dataset, a.tape, a.stocks))) != 1:
-        sys.exit("shadow lab refused, nothing replayed: give exactly one of --dataset, --tape and --stocks")
-    try:
-        if a.stocks:
-            shadowlab.run_stocks(Path(a.stocks), Path(a.out), Path(a.vix_from) if a.vix_from else None, None if a.symbols == "NIFTY,BANKNIFTY" else syms, a.first, a.last, a.jobs)
-        elif a.tape:
-            shadowlab.run_tape(Path(a.tape), Path(a.out), syms, a.first, a.last, a.adverse_ticks, a.jobs)
-        else:
-            shadowlab.run(Path(a.dataset), Path(a.out), syms, a.sample, a.seed, a.first, a.last, a.jobs)
-    except shadowlab.Refused as exc:
-        sys.exit(f"shadow lab refused, nothing replayed: {exc}")
-
-
-def cmd_replay(cfg, a):
-    account = a.account or ("synthetic" if a.synthetic else "replay")
-    p = paths(cfg, account)
-    if a.fresh:
-        for k in ("journal", "broker", "memory"):
-            if p[k].exists():
-                p[k].unlink()
-    broker = IntradayBroker(cfg, starting_cash=cfg.get("intraday.capital"), state_path=p["broker"],
-                            adverse_ticks=cfg.get("intraday.adverse_ticks", 1))
-    j = Journal(p["journal"])
-    if a.synthetic:
-        bars, meta, days = _synthetic_bars(cfg, a.synthetic, a.seed)
-        chains_for = lambda d: "model"
-        label = lambda d: f"synthetic {meta.loc[d, 'type']}"
-    else:
-        rec = SessionRecorder(p["data"])
-        avail = rec.days()
-        if not avail:
-            sys.exit(f"no recorded sessions under {p['data']} — run `quantdesk intraday live` first, or use --synthetic N")
-        days = [dt.date.fromisoformat(a.date)] if a.date else avail[-(a.last or 1):]
-        syms = cfg.get("intraday.underlyings") + [cfg.get("universe.volatility_index")]
-        bars = rec.load_bars(syms, upto=max(days))
-
-        def chains_for(d):
-            from .chains import RecordedChains
-            snaps = rec.load_chains(d)
-            return RecordedChains(snaps) if snaps and a.chain != "model" else "model"
-        label = lambda d: "recorded"
-    results = []
-    from .learning import Memory                   # the replay account learns too, in its own memory
-    memory = Memory(p["memory"]) if cfg.get("intraday.learning.enabled", True) and not getattr(a, "no_learn", False) else None
-    rec_out = SessionRecorder(p["data"] if not a.synthetic else paths(cfg, account)["journal"].parent / "data")
-    for d in days:
-        feed = ReplayFeed(bars, d)
-        if a.synthetic:
-            syms = cfg.get("intraday.underlyings") + [cfg.get("universe.volatility_index")]
-            for sym in syms:
-                rec_out.record_bars(sym, bars[sym][bars[sym].index.date == d])
-        eng = IntradayEngine(cfg, feed, chains_for(d), j, broker, None, _say(a.quiet), None, p["reviews"], memory=memory)
-        start = broker.cash()
-        review = run_replay(eng)
-        results.append((d, label(d), len(eng.closed), broker.cash() - start))
-        if a.show_review:
-            print(review, "\n")
-        print(f"{d} [{label(d)}]  trades {len(eng.closed):>2}  day P&L ₹{broker.cash() - start:>+10,.0f}  "
-              f"account ₹{broker.cash():,.0f}", flush=True)
-    j.commit()
-    tot = sum(r[3] for r in results)
-    print(f"\n{len(results)} session(s), net ₹{tot:+,.0f}; journal → {p['journal']}")
-
-
-def cmd_ai_check(cfg, a):
-    """Which language-model keys this machine has (variable names only, never values), one tiny test read each,
-    and the models each provider offers."""
-    from . import llm
-    item = [{"id": "t1", "ts": "2026-10-05 10:00", "source": "test", "title": "RBI cuts repo rate by 25 bps to 5.25%",
-             "summary": ""}]
-    ok_any = False
-    for name in ("claude", "gemini", "ollama"):
-        var, key = llm.key_for(name)
-        if not key:
-            print(f"{name}: no key (looked for {', '.join(llm.KEY_NAMES[name])})")
-            continue
-        pc = dict(cfg.get(f"intraday.llm.{name}", {}) or {})
-        if getattr(a, "model", None) and name in (a.only or name):
-            pc["model"] = a.model
-        try:
-            r = {"claude": lambda: llm.ClaudeReader(key, pc.get("model", "claude-opus-5-5"), pc.get("effort", "low")),
-                 "gemini": lambda: llm.GeminiReader(key, pc.get("model", "gemini-flash-latest")),
-                 "ollama": lambda: llm.OllamaReader(key, pc.get("model", "gpt-oss:120b"), pc.get("host", "https://ollama.com"))}[name]()
-            if hasattr(r, "models"):
-                try:
-                    ms = r.models()
-                    print(f"{name}: {len(ms)} models available, e.g. {', '.join(ms[:12])}")
-                except Exception as exc:
-                    print(f"{name}: could not list models ({type(exc).__name__}: {str(exc)[:120]})")
-            got = r.read(item).get("t1")
-            ok_any = ok_any or bool(got)
-            print(f"{name}: key in {var}; model {r.model}; test read "
-                  + (f"NIFTY {got['NIFTY']:+.2f}, BANKNIFTY {got['BANKNIFTY']:+.2f} ({got['event']}; {got['why']})" if got else "empty")
-                  + f"; usage {r.usage}")
-            if not got:                                     # the model's own reply (never the key), to see why
-                print(f"{name}: raw reply {json.dumps(getattr(r, 'last_raw', {}))[:800]}")
-        except Exception as exc:
-            tried = (getattr(locals().get("r"), "last_raw", {}) or {}).get("tried")
-            print(f"{name}: key in {var}, but the call failed: {type(exc).__name__}: {str(exc)[:200]}"
-                  + (f" (models tried: {', '.join(tried)})" if tried else ""))
-    if not ok_any:
-        sys.exit(1)
-
-
-def cmd_stocks(cfg, a):
-    """The F&O stocks with liquid options, from the warehouse's daily bhavcopy, and what one position costs here."""
-    from ..data.warehouse import Warehouse
-    from . import stocks
-    root = Path(cfg.runtime_dir) / "warehouse"
-    today = dt.date.today()
-    df = Warehouse(root).read("fo_stocks", start=today - dt.timedelta(days=int(a.days * 1.6) + 7), end=today) \
-        if root.exists() else None
-    if df is None or df.empty:
-        sys.exit(f"no fo_stocks table under {root}: run `python -m quantdesk data update --only fo_stocks --from "
-                 f"{today - dt.timedelta(days=40)}` (or the Data workflow), then try again")
-    ranked = stocks.rank(df, days=a.days, top=a.top)
-    capital = float(a.capital or cfg.get("intraday.capital"))
-    budget = float(cfg.get("intraday.risk.risk_per_trade", 0.08))
-    d = pd.to_datetime(df["date"])
-    print(f"F&O stocks by near-month option liquidity, {d.min():%d %b} → {d.max():%d %b} ({d.nunique()} sessions); "
-          f"risk budget {budget:.0%} of ₹{capital:,.0f}")
-    print("\n".join(stocks.table(ranked, capital, budget)))
-
-
-def cmd_learn(cfg, a):
-    """What the desk has learned (or, with --rebuild, grade the account's whole journal again)."""
-    from . import learning
-    p = paths(cfg, a.account or "live")
-    mem = learning.Memory(p["memory"])
-    if mem.corrupt:                                         # C-10: a blank bootstrap or rebuild must not overwrite it
-        sys.exit(f"learning: {p['memory']} failed to load ({mem.corrupt}); nothing done. Restore it, or move it aside "
-                 f"deliberately to start a new record.")
-    if a.bootstrap:
-        if a.if_empty and (mem.d["tables"].get("factor") or mem.d.get("bootstrap")):
-            print(f"learning: the record already has {mem.graded('factor'):.0f} graded factor reads; nothing to bootstrap")
-            return
-        syms = cfg.get("intraday.underlyings") + [cfg.get("universe.volatility_index")]
-        rec = SessionRecorder(p["data"])
-        bars = rec.load_bars(syms) if rec.days() else {}
-        try:                                                # Yahoo keeps a week of 1-minute bars: the sessions not recorded
-            from .feeds import YahooIntradayFeed
-            y = YahooIntradayFeed(cfg)
-            for sym in syms:
-                h = y.history(sym, 7)
-                if h is not None and len(h):
-                    bars[sym] = h if sym not in bars or bars[sym].empty else \
-                        bars[sym].combine_first(h).sort_index()
-        except Exception as exc:
-            print(f"learning: Yahoo history unavailable ({exc!s:.120}); recorded sessions only")
-        got = learning.bootstrap(cfg, mem, bars, Journal(p["journal"]))
-        mem.save()
-        print(f"bootstrapped from {got['sessions']} session(s): {got['factors']} factor reads, {got['news']} news calls graded")
-    if a.rebuild:
-        from ..journal.retention import history_archived
-        gone = history_archived(p["journal"])
-        if gone and not a.allow_partial_journal:
-            sys.exit(f"learn --rebuild refused: {len(gone)} archive run(s) hold thoughts/news no longer in the journal "
-                     f"(manifests: {', '.join(r['manifest'] for r in gone)}). Restore them first "
-                     f"(`quantdesk intraday archive --restore <manifest>`), or pass --allow-partial-journal to regrade only "
-                     f"what is left (this REPLACES the graded record with a shorter one).")
-        rec = SessionRecorder(p["data"])
-        bars = rec.load_bars(cfg.get("intraday.underlyings")) if rec.days() else {}
-        got = learning.rebuild(mem, Journal(p["journal"]), bars)
-        mem.save()
-        print("rebuilt from the journal: " + ", ".join(f"{v} {k}" for k, v in got.items()))
-    lines = learning.summary(mem, top=a.top, factor_weights_applied=learning.apply_factor_weights(cfg))
-    print(f"record over {len(mem.d['days'])} session(s) → {p['memory']}")
-    print("\n".join(lines) if lines else "nothing graded yet")
-
-
-def cmd_teach(cfg, a):
-    """After the close: Claude reviews the session's journal and leaves ADVISORY lessons (quantdesk/intraday/teacher.py),
-    paid from the teaching half of the Claude credit. Never in the minute loop; it refuses before the close. A skip, a
-    spent half or malformed output is an event and a printed line, never a failure: the exit status is 0."""
-    from . import learning, llm, teacher
-    p = paths(cfg, a.account or "live")
-    if not p["journal"].exists():
-        print(f"teach: no journal at {p['journal']}; nothing to review")
-        return
-    j = Journal(p["journal"])
-    mem = learning.Memory(p["memory"])
-    mem = None if mem.corrupt else mem                      # C-10: a memory that failed to load is left exactly as it is
-    plan = None
-    try:
-        plan = json.loads((cfg.runtime_dir / "intraday" / "autolearn" / "plan" / "latest.json").read_text())
-    except (OSError, ValueError):
-        pass
-    print(f"teach: Claude key {'set' if llm.key_for('claude')[1] else 'not set'}")
-    got = teacher.teach(cfg, j, a.date, mem, plan_latest=plan if isinstance(plan, dict) else None)
-    j.commit()
-    print("teach: " + ", ".join(f"{k} {v}" for k, v in got.items()))
-
-
 def cmd_vol_shadow(cfg, a):
     """Live A (the desk's vol forecaster) vs HAR: the journaled shadow forecasts scored against the recorded bars. The protocol's
     single read (60 counted sessions, or the 31 Mar 2027 backstop) is taken here once on the live journal and stored; after
@@ -651,115 +86,6 @@ def cmd_vol_shadow(cfg, a):
     else:
         print(f"(account {a.account}: the protocol's single read applies to the live journal only and is not taken here)")
     print(volshadow.render(rep))
-
-
-def cmd_archive(cfg, a):
-    """C-02: archive, verify, then prune old thoughts/news and plan studies (quantdesk/journal/retention.py)."""
-    import datetime as _dt
-    from ..journal import retention
-    root = Path(a.root) if a.root else Path(cfg.runtime_dir)
-    try:
-        if a.restore:
-            retention.restore(a.restore, root)
-            return
-        if not a.out:
-            sys.exit("archive: --out DIR is required (where the dated archive and its manifest are written)")
-        if a.keep_days < retention.MIN_KEEP_DAYS:
-            sys.exit(f"archive: --keep-days must be at least {retention.MIN_KEEP_DAYS} (grading looks back 7 days)")
-        retention.archive(root, a.out, keep_days=a.keep_days, keep_studies=a.keep_studies, dry_run=a.dry_run,
-                          as_of=_dt.date.fromisoformat(a.as_of) if a.as_of else None)
-    except retention.RetentionError as exc:
-        sys.exit(f"::error::journal retention aborted, nothing was deleted: {exc}")
-
-
-def cmd_retain(cfg, a):
-    """C-02: the weekly archive -> upload to the journal-archive release -> verify the download -> prune, run by the
-    post-close job (quantdesk/journal/durable.py). A failure is a warning and prunes nothing; it never fails the job."""
-    import datetime as _dt
-    from ..journal import durable
-    durable.retain(Path(a.root) if a.root else Path(cfg.runtime_dir), cfg.get("intraday.retention"),
-                   as_of=_dt.date.fromisoformat(a.as_of) if a.as_of else None, dry_run=a.dry_run, force=a.force)
-
-
-def _journal(cfg, a) -> Journal:
-    return Journal(paths(cfg, a.account or "live")["journal"])
-
-
-def cmd_thoughts(cfg, a):
-    j = _journal(cfg, a)
-    th = j.thoughts(a.date, a.symbol)
-    if th.empty:
-        print("no thoughts recorded")
-        return
-    for r in th.tail(a.n).itertuples():
-        print(f"{str(r.ts)[:16]}  {r.symbol:<9} {r.bias:<8} {r.score:+.2f} c{r.conviction:.2f} {r.day_type:<12} | {r.action}")
-        if a.verbose:
-            print("   ", r.narrative)
-            for e in json.loads(r.evidence):
-                print(f"      {e['direction']:+.2f}×{e['weight']:.1f}  {e['factor']:<11} {e['observation']}")
-
-
-def cmd_trades(cfg, a):
-    t = _journal(cfg, a).trades()
-    if a.date:
-        t = t[t["opened_at"].str.startswith(a.date)]
-    if t.empty:
-        print("no trades")
-        return
-    t["structure"] = t["meta"].map(lambda m: json.loads(m).get("structure"))
-    t["time"] = t["opened_at"].str[11:16] + "–" + t["closed_at"].fillna("").str[11:16]
-    cols = ["id", "opened_at", "time", "strategy", "symbol", "structure", "units", "pnl", "r_multiple", "exit_reason", "grade"]
-    t["opened_at"] = t["opened_at"].str[:10]
-    print(t[cols].tail(a.n).to_string(index=False, float_format=lambda v: f"{v:,.2f}"))
-    if a.id:
-        r = t[t["id"] == a.id]
-        if not r.empty:
-            full = _journal(cfg, a).df("SELECT * FROM trades WHERE id=?", (a.id,)).iloc[0]
-            print(f"\n{full['rationale']}\n\nSizing: {full['sizing']}\nReview: {full['review']}\nLessons: {full['lessons']}")
-
-
-def cmd_review(cfg, a):
-    rd = paths(cfg, a.account or "live")["reviews"]
-    files = sorted(rd.glob("*.md")) if rd.exists() else []
-    if a.date:
-        files = [f for f in files if f.stem == a.date]
-    if not files:
-        print("no session reviews yet")
-        return
-    for f in files[-(a.n if a.n else 1):]:
-        print(f.read_text(encoding="utf-8"), "\n")
-
-
-def cmd_stats(cfg, a):
-    j = _journal(cfg, a)
-    t = j.trades("closed")
-    if t.empty:
-        print("no closed trades")
-        return
-    t["day"] = t["opened_at"].str[:10]
-    t["structure"] = t["meta"].map(lambda m: json.loads(m).get("structure"))
-    t["day_type"] = t["context"].map(lambda c: json.loads(c).get("regime"))
-    t["hour"] = t["opened_at"].str[11:13] + ":00"
-
-    def table(by):
-        g = t.groupby(by)
-        out = pd.DataFrame({"trades": g.size(), "win %": g["pnl"].apply(lambda x: (x > 0).mean() * 100),
-                            "avg R": g["r_multiple"].mean(), "net ₹": g["pnl"].sum(), "fees ₹": g["fees"].sum()})
-        return out.sort_values("net ₹", ascending=False).to_string(float_format=lambda v: f"{v:,.2f}")
-
-    daily = t.groupby("day")["pnl"].sum()
-    cap = float((j.get_state("intraday_account") or {}).get("capital") or cfg.get("intraday.capital", 20000))
-    eq = cap + daily.cumsum()
-    dd = (eq / eq.cummax() - 1).min()
-    print(f"{len(t)} trades over {len(daily)} sessions · net ₹{t['pnl'].sum():,.0f} ({t['pnl'].sum() / cap:+.2%} of capital) · "
-          f"win {(t['pnl'] > 0).mean():.0%} · avg {t['r_multiple'].mean():+.2f}R · profit factor "
-          f"{t[t.pnl > 0].pnl.sum() / max(-t[t.pnl <= 0].pnl.sum(), 1):.2f} · costs ₹{t['fees'].sum():,.0f} · "
-          f"green days {(daily > 0).mean():.0%} · worst day ₹{daily.min():,.0f} · max DD {dd:.2%}")
-    for by in ("strategy", "structure", "day_type", "exit_reason", "hour", "symbol"):
-        print(f"\nBy {by}:\n{table(by)}")
-    from ..analytics.scorecard import scorecard, to_markdown
-    pnl = pd.Series(t["pnl"].to_numpy(dtype=float), index=pd.to_datetime(t["closed_at"].fillna(t["opened_at"])))
-    print("\n" + to_markdown(scorecard(pnl.sort_index(), capital=cap), "The paper account through the framework's gates"))
 
 
 def cmd_export_site(cfg, a):
@@ -784,11 +110,11 @@ def cmd_kotak_check(cfg, a):
     taped = list((cfg.get("intraday.tape", {}) or {}).get("expiries") or {})
     if not check(kotak, list(dict.fromkeys(cfg.get("intraday.underlyings") + taped))):
         sys.exit(1)
-    print("verdict: Kotak data is usable; the desk prices its option fills off Kotak's live book")
+    print("verdict: Kotak data is usable; the recorder and the chain tape read it")
 
 
 def cmd_doctor(cfg, a):
-    """Can this machine run the live desk? Market-data reachability, the calendar, expiries."""
+    """Can this machine record the session? Market-data reachability (Yahoo, NSE, Kotak), the calendar, expiries."""
     import time
     from .chains import NSEOptionChain
     from .feeds import IST, YahooIntradayFeed
@@ -825,188 +151,34 @@ def cmd_doctor(cfg, a):
     except Exception as exc:
         nse_ok = False
         print(f"  nse    NIFTY      FAIL {exc!s:.160}")
-    from ..data.nse import NSE
-    from .breadth import LISTS, index_members, nse_list_fetcher
-    fetch = nse_list_fetcher(NSE(gap=0.3))
-    for u in [x for x in cfg.get("intraday.underlyings") if x in LISTS]:      # breadth's members (breadth.py)
-        got, src = index_members(u, fetch)
-        print(f"  index  {u:<10} {len(got)} members from {src}"
-              + (f" · not in the built-in list: {', '.join(sorted(set(got) - set(LISTS[u][1])))}" if src.startswith("NSE") else ""))
     kotak = _kotak_client()
     if kotak is not None:
         from .kotak import check
         print("  kotak  (KOTAK_CONSUMER_KEY set)")
         check(kotak, cfg.get("intraday.underlyings"), say=lambda m: print("  " + m))
-    from .news import NewsDesk
-    nd = NewsDesk(cfg)
-    fresh = nd.refresh(now, force=True)
-    for name, h in nd.health.items():
-        print(f"  news   {name:<20} {h}")
-    for x in sorted(fresh, key=lambda x: -max(x.about.values() or [0]))[:6]:
-        print(f"         {x.ts:%d-%b %H:%M} {x.sentiment:+.2f} {x.impact:<6} {x.title[:100]}")
-    try:
-        brain = make_brain(cfg)
-        brain.gfeed.refresh(now, force=True)
-        snap = brain.gfeed.snapshot(now)
-        live = [k for k, m in snap.items() if m.get("live")]
-        print(f"  global {len(snap)}/{len(brain.gfeed.keys)} markets · trading now: {', '.join(live) or 'none'} · "
-              f"research links {len(brain.links)}")
-        for k in ("ES", "N225", "HSI", "USDINR", "BRENT", "USVIX"):
-            m = snap.get(k)
-            if m:
-                print(f"         {m['name']:<20} last {m.get('last', float('nan')):>10,.2f}  prior session {m.get('prior_ret', 0):+.2%}"
-                      + (f"  30m {m['r30']:+.2%}" if m.get('r30') is not None else ""))
-    except Exception as exc:
-        print(f"  global FAIL {exc!s:.160}")
-    news_ok = sum(h.startswith("ok") for h in nd.health.values())
-    print(f"  news   {news_ok}/{len(nd.health)} feeds reachable, {len(fresh)} stories in the last 24h")
     print("verdict:", "ready" if yahoo_ok and nse_ok else
-          "ready, pricing options off the model chain (NSE unreachable from here)" if yahoo_ok else
-          "NOT ready: no bars from Yahoo, so the desk has nothing to read")
+          "ready, but NSE's public chain is unreachable from here (Kotak's, when its key is set, is the recorder's source)" if yahoo_ok else
+          "NOT ready: no bars from Yahoo")
     if not yahoo_ok:
         sys.exit(1)
 
 
 def register(sub):
-    s = sub.add_parser("intraday", help="real-time intraday options desk (paper)")
+    s = sub.add_parser("intraday", help="the intraday recorders' tools (the paper desk itself was retired on 6 Nov 2026)")
     ss = s.add_subparsers(dest="icmd", required=True)
-    x = ss.add_parser("live", help="trade today's session in real time (paper)")
-    x.add_argument("--feed", choices=["yahoo", "kotak", "kite"])
-    x.add_argument("--chain", choices=["kotak", "nse", "kite", "model"])
-    x.add_argument("--symbols", help="e.g. NIFTY,BANKNIFTY")
-    x.add_argument("--until", help="HH:MM to stop early (squares off, unless --handover)")
-    x.add_argument("--handover", action="store_true",
-                   help="stop at --until WITHOUT squaring off; the next `live` run resumes the session")
-    x.add_argument("--no-news", action="store_true", help="don't read live headlines")
-    x.add_argument("--no-global", action="store_true", help="don't watch global markets")
-    x.add_argument("--forever", action="store_true", help="always-on hosts: trade every NSE session, sleep in between")
-    x.add_argument("--close-out", action="store_true",
-                   help="square off today's open positions now and close the session (the kill switch)")
-    x.add_argument("--quiet", action="store_true")
-    x.set_defaults(fn=cmd_live)
-    x = ss.add_parser("tape", help="record real option chains every minute for the nearest expiries (beside `live`)")
+    x = ss.add_parser("tape", help="record real option chains every minute for the nearest expiries")
     x.add_argument("--until", help="HH:MM to stop early")
     x.add_argument("--symbols", help="e.g. NIFTY,BANKNIFTY (default: intraday.tape.expiries)")
     x.add_argument("--report", nargs="?", const="today", help="completeness of a recorded day (YYYY-MM-DD) instead")
     x.set_defaults(fn=cmd_tape)
-    x = ss.add_parser("progress", help="is the desk getting smarter? a snapshot vs last week and the first one")
-    x.add_argument("--day", help="YYYY-MM-DD (default: today, IST)")
-    x.add_argument("--issue", action="store_true", help="post the report to the 'Desk progress' issue (Actions token)")
-    x.set_defaults(fn=cmd_progress)
-    x = ss.add_parser("self-review", help="the desk's own engineer: findings after a session, filed as GitHub issues")
-    x.add_argument("--day", help="YYYY-MM-DD (default: today, IST)")
-    x.add_argument("--issues", action="store_true", help="open / comment / close desk-request issues (Actions token)")
-    x.add_argument("--json", help="also write the findings here")
-    x.set_defaults(fn=cmd_self_review)
-    x = ss.add_parser("sleeves", help="expiry sellers: paper sleeves pre-registered in docs/prereg/expiry_seller_v*.json")
-    x.add_argument("--day", help="YYYY-MM-DD (default: today, IST)")
-    x.add_argument("--report", action="store_true", help="only print the sleeves' standing")
-    x.set_defaults(fn=cmd_sleeves)
-    x = ss.add_parser("reset-account", help="archive the live paper account and start fresh at the configured capital")
-    x.add_argument("--yes", action="store_true")
-    x.set_defaults(fn=cmd_reset_account)
-    x = ss.add_parser("restate-trade", help="correct a closed paper trade's exit price, on the record (audit note + event)")
-    x.add_argument("--id", required=True)
-    x.add_argument("--exit", action="append", required=True, metavar="SYMBOL=PRICE", help="new exit price for a leg (repeatable)")
-    x.add_argument("--reason", required=True)
-    x.add_argument("--account", default="live")
-    x.add_argument("--yes", action="store_true")
-    x.set_defaults(fn=cmd_restate_trade)
-    x = ss.add_parser("doctor", help="check this machine can run the live desk (Yahoo, NSE, Kotak, calendar)")
+    x = ss.add_parser("doctor", help="check this machine can record the session (Yahoo, NSE, Kotak, calendar)")
     x.set_defaults(fn=cmd_doctor)
     x = ss.add_parser("kotak-check", help="what the Kotak Neo consumer key can see (no login, no orders)")
     x.set_defaults(fn=cmd_kotak_check)
-    x = ss.add_parser("clear-halt", help="lift the entry halt on an inherited position (orphan, carried or expired "
-                      "leg) once it is resolved; nothing is closed or settled")
-    x.add_argument("--reason", required=True, help="why it is safe to trade again (on the record)")
-    x.add_argument("--force", action="store_true",
-                   help="clear although the mismatch still exists: it is accepted as it is now, any change halts again")
-    x.add_argument("--by", help="who clears it (default: $GITHUB_ACTOR or the login name)")
-    x.add_argument("--account", help="live (default)")
-    x.set_defaults(fn=cmd_clear_halt)
-    x = ss.add_parser("command", help="pause / resume / flatten / close a position on the running engine")
-    x.add_argument("cmd", choices=["pause", "resume", "flatten", "close"])
-    x.add_argument("id", nargs="?", help="trade id (for close)")
-    x.add_argument("--account", help="live (default)")
-    x.set_defaults(fn=cmd_command)
-    x = ss.add_parser("clear-drawdown-halt", help="the owner lifts the cross-day drawdown halt, on the record")
-    x.add_argument("--reason", required=True)
-    x.add_argument("--by", default="owner")
-    x.add_argument("--account", default="live")
-    x.set_defaults(fn=cmd_clear_drawdown_halt)
-    x = ss.add_parser("paper-gate", help="read-only check of one strategy's paper record against the bar for real money")
-    x.add_argument("--strategy", required=True)
-    x.add_argument("--since", required=True, help="paper-trial start date (YYYY-MM-DD)")
-    x.add_argument("--account", default="live", help="paper account (default: live)")
-    x.set_defaults(fn=cmd_paper_gate)
-    x = ss.add_parser("replay", help="replay recorded or synthetic sessions")
-    x.add_argument("--date")
-    x.add_argument("--last", type=int)
-    x.add_argument("--synthetic", type=int, help="N synthetic sessions (offline demo)")
-    x.add_argument("--seed", type=int, default=11)
-    x.add_argument("--chain", choices=["recorded", "model"], default="recorded")
-    x.add_argument("--account", help="journal/broker namespace (default: replay or synthetic)")
-    x.add_argument("--fresh", action="store_true", help="reset that account first")
-    x.add_argument("--show-review", action="store_true")
-    x.add_argument("--quiet", action="store_true")
-    x.add_argument("--no-learn", action="store_true", help="don't grade or apply the account's track record")
-    x.set_defaults(fn=cmd_replay)
-    x = ss.add_parser("shadow-replay", help="the shadow lab: replay past sessions through the real engine offline and label every armed setup (places nothing)")
-    x.add_argument("--dataset", help="an ml-intake dataset folder (index minutes): years of history on the model chain")
-    x.add_argument("--tape", help="the desk's own recorded sessions (the data folder the live jobs upload): real recorded option quotes")
-    x.add_argument("--stocks", help="a folder of the stock-minutes-2026 release's *_stocks_cash.parquet files: replay every liquid F&O stock")
-    x.add_argument("--vix-from", help="with --stocks: the desk's recorder folder, for the recorded INDIAVIX")
-    x.add_argument("--adverse-ticks", type=int, default=1, help="slippage on top of bid/ask fills, in ticks (the live desk uses 1; stress it)")
-    x.add_argument("--out", required=True, help="a new folder outside every git tree")
-    x.add_argument("--symbols", default="NIFTY,BANKNIFTY")
-    x.add_argument("--sample", type=int, help="replay N sessions drawn at random (default: all)")
-    x.add_argument("--seed", type=int, default=20261031)
-    x.add_argument("--from", dest="first", help="first session (YYYY-MM-DD)")
-    x.add_argument("--to", dest="last", help="last session (YYYY-MM-DD)")
-    x.add_argument("--jobs", type=int, default=3)
-    x.set_defaults(fn=cmd_shadow_replay)
-    x = ss.add_parser("stocks", help="F&O stocks ranked by option liquidity, and whether this account can hold one")
-    x.add_argument("--days", type=int, default=20)
-    x.add_argument("--top", type=int, default=25)
-    x.add_argument("--capital", type=float, help="default: intraday.capital")
-    x.set_defaults(fn=cmd_stocks)
-    x = ss.add_parser("ai-check", help="which language-model keys are set (names only) and a test read from each")
-    x.add_argument("--model", help="try this model instead of the configured one")
-    x.add_argument("--only", help="with --model: the provider it's for (claude, gemini, ollama)")
-    x.set_defaults(fn=cmd_ai_check)
-    x = ss.add_parser("learn", help="what the desk has learned from its calls (news, factors, setups)")
-    x.add_argument("--account", help="live (default), replay, synthetic")
-    x.add_argument("--rebuild", action="store_true", help="grade the whole journal again from the recorded bars")
-    x.add_argument("--allow-partial-journal", action="store_true",
-                   help="with --rebuild: go ahead although part of the journal is archived (see `intraday archive`)")
-    x.add_argument("--bootstrap", action="store_true", help="seed the record from the last week's real sessions (replayed)")
-    x.add_argument("--if-empty", action="store_true", help="with --bootstrap: only when nothing has been graded yet")
-    x.add_argument("--top", type=int, default=12)
-    x.set_defaults(fn=cmd_learn)
-    x = ss.add_parser("teach", help="after the close: Claude reviews the session's journal and leaves advisory lessons "
-                                    "(the teaching half of the Claude credit)")
-    x.add_argument("--account", help="live (default), replay, synthetic")
-    x.add_argument("--date", help="YYYY-MM-DD: the session to review (default: the newest in the journal); only once it is over")
-    x.set_defaults(fn=cmd_teach)
-    x = ss.add_parser("vol-shadow", help="live A-vs-HAR volatility forecasts against what the index did (QLIKE, move ratio)")
+    x = ss.add_parser("vol-shadow", help="the recorded A-vs-HAR volatility forecasts against what the index did (QLIKE, move ratio)")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--since", help="only forecasts from this date (YYYY-MM-DD)")
     x.set_defaults(fn=cmd_vol_shadow)
-    x = ss.add_parser("archive", help="archive, verify, then prune old thoughts/news and plan studies (keeps the journal small)")
-    x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
-    x.add_argument("--out", help="where the dated archive files and the manifest go")
-    x.add_argument("--keep-days", type=int, default=30, help="keep this many days of thoughts/news in the journal")
-    x.add_argument("--keep-studies", type=int, default=3, help="keep the newest N plan studies (never the ones a card or lock uses)")
-    x.add_argument("--dry-run", action="store_true", help="say what would be archived and the projected size; change nothing")
-    x.add_argument("--as-of", help="YYYY-MM-DD: count back from this day instead of today")
-    x.add_argument("--restore", metavar="MANIFEST", help="put an archive run back (rows and studies), verifying its hashes")
-    x.set_defaults(fn=cmd_archive)
-    x = ss.add_parser("retain", help="weekly: archive to the journal-archive release, verify the download, then prune the journal")
-    x.add_argument("--root", help="runtime folder holding intraday/ (default: the configured runtime dir)")
-    x.add_argument("--dry-run", action="store_true", help="say what would be archived, pruned and the sizes; change and upload nothing")
-    x.add_argument("--force", action="store_true", help="run even when it is not the weekly run day and the sizes are under their thresholds")
-    x.add_argument("--as-of", help="YYYY-MM-DD: count back from this day instead of today")
-    x.set_defaults(fn=cmd_retain)
     x = ss.add_parser("export-site", help="the web app + an account's data as a read-only static site")
     x.add_argument("--account", help="live (default), replay, synthetic")
     x.add_argument("--out", default="quantdesk-snapshot.html")
@@ -1015,14 +187,4 @@ def register(sub):
     x.add_argument("--label")
     x.add_argument("--note")
     x.set_defaults(fn=cmd_export_site)
-    for name, fn, help_ in (("thoughts", cmd_thoughts, "the analyst's reads"), ("trades", cmd_trades, "intraday trades"),
-                            ("review", cmd_review, "session reviews"), ("stats", cmd_stats, "performance breakdown")):
-        x = ss.add_parser(name, help=help_)
-        x.add_argument("--account", help="live (default), replay, synthetic")
-        x.add_argument("--date")
-        x.add_argument("--symbol")
-        x.add_argument("--id")
-        x.add_argument("-n", type=int, default=40)
-        x.add_argument("-v", "--verbose", action="store_true")
-        x.set_defaults(fn=fn)
     return s

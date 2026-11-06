@@ -219,91 +219,9 @@ def _shadow_events(j):
     return ev[ev["data"].str.contains("vol_shadow", na=False)] if len(ev) else ev
 
 
-def test_shadow_on_or_off_the_desk_decides_and_trades_identically(cfg, tmp_path):
-    """The proof that the shadow is only a record: the same session replayed with the shadow off and on (two seeds) gives
-    the same decisions, trades, fills, equity curve, thoughts and cash, and the same Live-screen numbers."""
-    for seed in (5, 8):
-        off, j_off, day, _ = _run(cfg, tmp_path, f"off{seed}", {"mode": "off"}, seed=seed)
-        on, j_on, _, _ = _run(cfg, tmp_path, f"on{seed}", {"mode": "shadow"}, seed=seed)
-        b_off = _books(j_off, off)
-        assert len(b_off["thoughts"]) > 100 and len(b_off["decisions"]) > 0
-        assert _books(j_on, on) == b_off
-        assert len(_shadow_events(j_off)) == 0 and len(_shadow_events(j_on)) == 2
-        for u in ("NIFTY", "BANKNIFTY"):
-            assert j_on.get_state("intraday_live")["views"][u]["quant"] == j_off.get_state("intraday_live")["views"][u]["quant"]
-
-
 class _Bomb:
     def forecast(self, bars, now):
         raise RuntimeError("synthetic failure")
-
-
-def test_the_shadow_changes_nothing_even_if_it_blows_up(cfg, tmp_path):
-    base, j_base, _, _ = _run(cfg, tmp_path, "b", {"mode": "off"})
-
-    def boom(eng):
-        real = eng.volshadow.start_session
-
-        def start(day, t0, us):
-            real(day, t0, us)
-            eng.volshadow.har = {u: _Bomb() for u in us}
-        eng.volshadow.start_session = start
-    eng, j, _, _ = _run(cfg, tmp_path, "x", {"mode": "shadow"}, hook=boom)
-    assert _books(j, eng) == _books(j_base, base)
-    w = j.events(level="WARN")
-    assert w["message"].str.contains("no HAR forecast at the opening read").sum() == 2     # one per index, then it stops trying
-    assert j.events(level="ERROR").empty and len(_shadow_events(j)) == 0
-
-
-def test_one_record_per_index_per_session_at_the_opening_read_with_both_forecasts(cfg, tmp_path):
-    eng, j, day, _ = _run(cfg, tmp_path, "sh", {"mode": "shadow"})
-    sh = _shadow_events(j)
-    assert len(sh) == 2 and j.events(level="ERROR").empty
-    for u in ("NIFTY", "BANKNIFTY"):
-        row = sh[sh["message"].str.contains(f"vol shadow {u} ")]
-        assert len(row) == 1
-        assert pd.Timestamp(row.iloc[0]["ts"]).strftime("%H:%M") == "09:30"          # the first decision point the study covered
-        d = json.loads(row.iloc[0]["data"])["vol_shadow"]
-        assert d["symbol"] == u and d["model"] == "C_har" and d["m"] == 15
-        assert d["pin"]["coef"] == hashlib.sha256((tmp_path / "sh_har.json").read_bytes()).hexdigest()   # the file this run loaded
-        assert d["pin"]["coef"] != volshadow.COEF_PIN                                    # a fixture fit is not the protocol's pinned file
-        assert re.fullmatch(r"[0-9a-f]{64}", d["pin"]["code"])
-        assert set(d["desk"]) == set(d["har"]) == {"30m", "60m", "120m", "close"} and d["minutes"]["close"] == 375 - 15
-        assert all(v > 0 for v in d["desk"].values()) and all(v > 0 for v in d["har"].values())
-        assert d["desk"]["60m"] == pytest.approx(2 * d["desk"]["30m"], rel=1e-4)       # the desk's: per-minute variance x minutes
-    ev = j.events()
-    assert ev["message"].str.contains("vol shadow: HAR").any()
-
-
-def test_missing_coefficients_are_a_warn_not_an_exception(cfg, tmp_path):
-    base, j_base, _, _ = _run(cfg, tmp_path, "b", {"mode": "off"})
-    eng, j, _, _ = _run(cfg, tmp_path, "m", {"mode": "shadow"}, coefs="missing")
-    assert _books(j, eng) == _books(j_base, base)
-    w = j.events(level="WARN")
-    msgs = w[w["message"].str.contains("vol shadow unavailable")]
-    assert len(msgs) == 1 and "vol-har-fit" in msgs.iloc[0]["message"]
-    assert len(_shadow_events(j)) == 0 and j.events(level="ERROR").empty
-
-
-def test_too_little_history_at_the_opening_read_is_a_warn_once_per_index(cfg, tmp_path):
-    off, j_off, _, _ = _run(cfg, tmp_path, "short_off", {"mode": "off"}, first="2026-09-22")     # fewer than 5 prior sessions
-    eng, j, _, _ = _run(cfg, tmp_path, "short", {"mode": "shadow"}, first="2026-09-22")
-    assert _books(j, eng) == _books(j_off, off)
-    w = j.events(level="WARN")
-    w = w[w["message"].str.contains("opening read")]
-    assert len(w) == 2 and all("prior sessions" in m for m in w["message"])
-    assert len(_shadow_events(j)) == 0 and j.events(level="ERROR").empty
-
-
-def test_a_bad_mode_is_off_with_a_warn_and_apply_does_not_exist(cfg, tmp_path):
-    base, j_base, _, _ = _run(cfg, tmp_path, "b", {"mode": "off"})
-    for i, mode in enumerate(("apply", "har", "ON")):
-        eng, j, _, _ = _run(cfg, tmp_path, f"bad{i}", {"mode": mode})
-        assert _books(j, eng) == _books(j_base, base)
-        assert j.events(level="WARN")["message"].str.contains("treated as off").sum() == 1
-        assert len(_shadow_events(j)) == 0
-    from quantdesk.intraday.volshadow import MODES
-    assert MODES == ("off", "shadow")
 
 
 def test_the_key_absent_means_off(tmp_path):
@@ -334,15 +252,6 @@ class _Jnl:
 
     def event(self, ts, level, category, message, data=None):
         self.rows.append((level, message))
-
-
-def test_a_string_block_still_constructs_the_engine_with_the_shadow_off_and_a_warn(cfg, tmp_path):
-    base, j_base, _, _ = _run(cfg, tmp_path, "b", {"mode": "off"})
-    eng, j, _, _ = _run(cfg, tmp_path, "str", "shadow", coefs="none")         # `vol_forecast: shadow` in the YAML
-    assert eng.volshadow.mode == "off" and not eng.volshadow.on
-    assert _books(j, eng) == _books(j_base, base)
-    assert j.events(level="WARN")["message"].str.contains("treated as off").sum() == 1
-    assert len(_shadow_events(j)) == 0 and j.events(level="ERROR").empty
 
 
 def test_a_string_block_never_raises_at_construction_or_session_start(tmp_path):
@@ -410,15 +319,6 @@ def test_compare_scores_qlike_and_move_ratio_against_the_recorded_bars():
     assert "1 sessions graded, 0 of 60 with both indices" in text and "withheld until 60 sessions" in text
     assert "NIFTY 30m" in text and "QLIKE" in text
     assert "Nothing to score" in volshadow.render(volshadow.compare(pd.DataFrame(columns=["ts", "category", "data"]), {}))
-
-
-def test_compare_reads_a_real_shadow_journal(cfg, tmp_path):
-    eng, j, day, bars = _run(cfg, tmp_path, "cmp")
-    rep = volshadow.compare(j.events(), {"NIFTY": bars["NIFTY"], "BANKNIFTY": bars["BANKNIFTY"]})
-    assert rep["forecasts"] == len(_shadow_events(j)) == 2 and rep["scored"] == 8      # 2 indices x 4 horizons
-    cell = rep["by"]["NIFTY close"]
-    assert cell["days"] == 1 and cell["desk"]["qlike"] > 0 and cell["har"]["qlike"] > 0
-    assert "NIFTY close" in volshadow.render(rep)
 
 
 def test_vol_har_fit_stores_the_specs_training_window_and_leaves_the_spec_alone(cfg, tmp_path, monkeypatch, capsys):
@@ -561,14 +461,6 @@ def test_a_runner_that_first_reaches_an_index_after_10_leaves_a_warn(cfg, tmp_pa
     n = len(msgs)
     vs.step("NIFTY", pd.Timestamp("2026-10-26 10:08", tz=IST), pd.DataFrame(), 15.0)
     assert len(j.events()) == n                                            # once, not every minute
-
-
-def test_a_failed_start_session_is_on_the_record_and_never_stops_the_session(cfg, tmp_path):
-    def boom(eng):
-        eng.volshadow.start_session = lambda *a, **k: (_ for _ in ()).throw(ValueError("no coefficients today"))
-    eng, j, day, bars = _run(cfg, tmp_path, "boom", hook=boom)
-    assert any("vol shadow could not start" in m for m in j.events()["message"])
-    assert len(j.trades()) >= 0 and eng.health.get("safe_mode") is None      # the session ran
 
 
 GOOD_PIN = f"{volshadow.COEF_PIN}:{'c' * 64}"           # the pinned coefficient file and one code pin

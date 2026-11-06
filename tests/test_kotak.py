@@ -13,12 +13,9 @@ import quantdesk.intraday.kotak as kotak_mod
 from quantdesk.core.calendar import TradingCalendar
 from quantdesk.core.types import Instrument
 from quantdesk.intraday.chains import FallbackChain
-from quantdesk.intraday.engine import IntradayEngine, run_replay
 from quantdesk.intraday.feeds import IST, ReplayFeed, YahooIntradayFeed
 from quantdesk.intraday.kotak import (KotakClient, KotakError, KotakIntradayFeed, KotakOptionChain, _error, best,
                                       check)
-from quantdesk.intraday.sim import IntradayBroker
-from quantdesk.intraday.synthetic import simulate_sessions
 from quantdesk.journal.journal import Journal
 
 EXP = dt.date(2026, 10, 6)
@@ -332,44 +329,7 @@ def test_zero_price_vix_candles_are_dropped(cfg, monkeypatch):
     assert "no candles yet" in feed.last_error
 
 
-def test_zero_vix_is_no_vix_move(cfg, client):
-    """I-01: zero VIX closes aren't a -100% move (a bullish vote); a zero prior day is no base, not a ZeroDivisionError."""
-    eng = IntradayEngine(cfg, KotakIntradayFeed(cfg, client), "model", Journal(), IntradayBroker(cfg, starting_cash=500000),
-                         say=None)
-    eng.day = dt.date(2026, 10, 5)
-    idx = pd.DatetimeIndex([pd.Timestamp("2026-10-03 15:29", tz=IST)]
-                           + list(pd.date_range("2026-10-05 09:15", periods=3, freq="min", tz=IST)))
-
-    def vix(prior, today):
-        px = [prior] + list(today)
-        return pd.DataFrame({"open": px, "high": px, "low": px, "close": px, "volume": 0.0}, index=idx)
-    eng.bars[eng.vix] = vix(14.0, [0.0, 0.0, 0.0])                              # today all zero: no reading
-    assert eng._vix_state() is None
-    eng.bars[eng.vix] = vix(0.0, [14.0, 14.2, 14.7])                            # zero prior day: no base
-    assert eng._vix_state() is None
-    eng.bars[eng.vix] = v = vix(14.0, [14.0, 14.2, 14.7]).iloc[1:].copy()      # no prior day, zero open: no base
-    v.iloc[0, 0] = 0.0
-    assert eng._vix_state() is None
-    eng.bars[eng.vix] = vix(14.0, [14.2, 0.0, 14.7])                            # one zero minute: skipped
-    assert eng._vix_state() == pytest.approx({"last": 14.7, "chg": 14.7 / 14.0 - 1})
-    # the model chain's IV: the last positive VIX (from any source, Yahoo history included), never 0 or NaN
-    eng.bars["NIFTY"] = pd.DataFrame({"close": [25000.0] * 4}, index=idx)
-    beta = float(cfg.instrument_spec("NIFTY").get("iv_beta", 1.0))
-    t = idx[-1]
-    eng.bars[eng.vix] = vix(14.0, [14.2, 14.5, 0.0])
-    assert eng.model_state("NIFTY", t)[1] == pytest.approx(0.145 * beta)
-    eng.bars[eng.vix] = vix(float("nan"), [0.0, float("nan"), 0.0])
-    assert eng.model_state("NIFTY", t)[1] == pytest.approx(0.14 * beta)            # no valid print: the default
-
-
 # ---- the desk on a live book --------------------------------------------------------------------------------------
-@pytest.fixture(scope="module")
-def sessions():
-    from quantdesk.config import DEFAULT_CONFIG, Config
-    cal = TradingCalendar(Config.load(DEFAULT_CONFIG).holidays())
-    days = [d.date() for d in cal.trading_days("2026-08-17", "2026-09-28")]
-    bars, _ = simulate_sessions(days, seed=5)
-    return bars, days
 
 
 class LiveBook:
@@ -398,50 +358,6 @@ class LiveBook:
         return out
 
 
-def _replay(cfg, bars, day, book):
-    eng = IntradayEngine(cfg, ReplayFeed(bars, day), book, Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
-    book.eng = eng
-    run_replay(eng)
-    return eng
-
-
-@pytest.fixture(scope="module")
-def traded(sessions):
-    """The first recent day the desk trades on a fair live book: (cfg, day, engine, book)."""
-    from quantdesk.config import DEFAULT_CONFIG, Config
-    cfg = Config.load(DEFAULT_CONFIG)
-    bars, days = sessions
-    for d in days[-8:]:
-        book = LiveBook()
-        eng = _replay(cfg, bars, d, book)
-        if eng.closed:
-            return cfg, d, eng, book
-    pytest.skip("no trade in the sample")
-
-
-def test_fills_come_from_the_live_book(traded):
-    cfg, day, eng, book = traded
-    fills = eng.journal.df("SELECT * FROM fills")
-    assert len(fills) >= 2
-    for f in fills.itertuples():
-        b, a = book.quoted[(pd.Timestamp(f.ts).tz_convert(IST), f.symbol)]
-        assert f.price == pytest.approx(a + 0.05 if f.qty > 0 else b - 0.05)    # the book, plus one adverse tick
-    assert all(t.meta["fill_quotes"] == "live kotak book" for t in eng.closed)
-    assert all(t.meta["exit_quotes"] == "live kotak book" for t in eng.closed)
-    for t in eng.closed:                                     # each leg's book at entry: '25000CE ok 1.8%'
-        assert len(t.meta["leg_liquidity"]) == len(t.legs)
-        assert all(re.fullmatch(r"\d+(\.\d+)?(CE|PE) (ok|wide) \d+\.\d%", x) for x in t.meta["leg_liquidity"])
-    assert eng.chain_name() == "kotak"
-
-
-def test_entries_dont_chase_a_book_that_ran_away(traded, sessions):
-    cfg, day, _, _ = traded
-    eng = _replay(cfg, sessions[0], day, LiveBook(away=1.5))
-    dec = eng.journal.df("SELECT * FROM decisions")
-    moved = dec[dec.astype(str).apply(lambda r: r.str.contains("moved away")).any(axis=1)]
-    assert len(moved) >= 1 and not eng.closed and not eng.open_trades
-
-
 class OneSided(LiveBook):
     """The book answers, but the first leg of every request has no two-sided quote (no bid, or no offer)."""
 
@@ -449,26 +365,6 @@ class OneSided(LiveBook):
         out = super().live_quotes(insts[1:])
         out["NIFTY-ELSEWHERE"] = (10.0, 10.5)                    # the book is up: it quotes other contracts
         return out
-
-
-def test_no_entry_when_a_leg_has_no_two_sided_quote(traded, sessions):
-    cfg, day, _, _ = traded
-    eng = _replay(cfg, sessions[0], day, OneSided())
-    dec = eng.journal.df("SELECT * FROM decisions")
-    skipped = dec[dec.astype(str).apply(lambda r: r.str.contains("no two-sided quote")).any(axis=1)]
-    assert len(skipped) >= 1 and not eng.closed and not eng.open_trades
-
-
-def test_chain_name_says_what_stands_in(cfg, sessions):
-    bars, days = sessions
-    eng = IntradayEngine(cfg, ReplayFeed(bars, days[-1]), Fixed(), Journal(), IntradayBroker(cfg, starting_cash=500000),
-                         say=None)
-    eng.chains.name = "kotak"
-    for src, want in (({"kotak"}, "kotak"), ({"nse"}, "nse (no kotak)"), ({"model"}, "model (no kotak)"),
-                      ({"kotak", "model"}, "kotak+model")):
-        eng.chain_df = {f"U{i}": pd.DataFrame().pipe(lambda d, s=s: (d.attrs.update(source=s), d)[1])
-                        for i, s in enumerate(sorted(src))}
-        assert eng.chain_name() == want
 
 
 # ---- futures (verified shape: the chain endpoint's `fut` view, candles by token) ----------------------------------
@@ -487,33 +383,6 @@ def test_futures_contracts_roll_and_volume_on_the_index_bars(cfg, client, fake, 
     assert bars["close"].iloc[0] == 24801                                               # prices stay the index's
     fb = feed.fut_bars["NIFTY"]
     assert fb["close"].iloc[0] == 24909 and fb["volume"].sum() == bars["volume"].sum()
-
-
-def test_futures_read_buildup_and_carry():
-    from quantdesk.intraday.futures import buildup, read
-    assert buildup(0.003, 0.008)[0] == "long build-up" and buildup(0.003, 0.008)[1] > 0
-    assert buildup(-0.003, 0.008)[0] == "short build-up" and buildup(-0.003, 0.008)[1] < 0
-    assert buildup(0.003, -0.008) == ("short covering", pytest.approx(0.4)) and buildup(-0.003, -0.008)[1] == pytest.approx(-0.4)
-    assert buildup(0.003, 0.0005)[1] == 0                                                # OI barely moved: nothing to say
-    t0 = pd.Timestamp("2026-10-05 10:00", tz=IST)
-    h = [(t0 + pd.Timedelta(minutes=i), 25000 + 2 * i, 19_000_000 * (1 + 0.0004 * i), 24900 + 2 * i) for i in range(40)]
-    r = read(h, 24978.0, h[-1][0], dt.date(2026, 10, 27), "NIFTY26OCTFUT")
-    assert r["fut_buildup"] == "long build-up" and r["fut_dir"] > 0 and r["fut_basis"] == pytest.approx(100)
-    assert 0.05 < r["fut_carry"] < 0.10 and "fut_carry_chg" in r
-
-
-def test_engine_reads_the_future(cfg, client, fake, monkeypatch):
-    """With a futures-capable feed, the chain read gains the future: its build-up, basis and the next contract."""
-    feed = KotakIntradayFeed(cfg, client)
-    eng = IntradayEngine(cfg, feed, "model", Journal(), IntradayBroker(cfg, starting_cash=500000), say=None)
-    eng.day = dt.date(2026, 10, 5)
-    t0 = pd.Timestamp("2026-10-05 10:00", tz=IST)
-    for i in range(35):                                                                 # OI climbs with price for 35 min
-        fake.fut_oi = int(19_000_000 * (1 + 0.0003 * i))
-        fake.spot = 24852.35 + 2 * i
-        out = eng._futures("NIFTY", t0 + pd.Timedelta(minutes=i), fake.spot)
-    assert out["fut_symbol"] == "NIFTY26OCTFUT" and out["fut_buildup"] == "long build-up" and out["fut_basis"] == pytest.approx(108)
-    assert out["fut_calendar"] == pytest.approx(108) and out["fut_oi_vs_prev"] == pytest.approx(1 / 0.98 - 1, rel=1e-3)
 
 
 class BseFake(FakeKotak):
