@@ -89,13 +89,16 @@ async function readHeartbeat(env) {
 
 const actionsUrl = (env, file) => `https://github.com/${repoOf(env)}/actions/workflows/${file}`;
 
-// W1: a Live paper desk run exists today
+// The session recorder (record.yml) replaced the live paper desk (live.yml) on 6 Nov 2026: the owner stopped paper trading.
+const RECORDER = "record.yml";
+
+// W1: a session recorder run exists today
 async function w1DeskStarted(c) {
-	const runs = await workflowRuns(c.env, "live.yml", { per_page: 10 });
+	const runs = await workflowRuns(c.env, RECORDER, { per_page: 10 });
 	if (runs.some((r) => ist(Date.parse(r.created_at)).date === c.now.date)) return [];
-	return [{ sev: "P1", check: "W1", title: "Desk not started",
-		body: `No Live paper desk run exists for ${c.now.date} at ${c.now.hhmm} IST. The scheduler should have started it by now.`,
-		link: actionsUrl(c.env, "live.yml") }];
+	return [{ sev: "P1", check: "W1", title: "Recorder not started",
+		body: `No Session recorder run exists for ${c.now.date} at ${c.now.hhmm} IST. The scheduler should have started it by now.`,
+		link: actionsUrl(c.env, RECORDER) }];
 }
 
 // W2: the published heartbeat is fresh, the desk is not halted, the feed is the real one
@@ -215,13 +218,13 @@ async function w8Digest(c) {
 	const days = [];
 	for (let i = 0; i < 7; i++) days.push(addDays(c.now.date, -i));
 	const expected = days.filter(isTradingDate);
-	const runs = await workflowRuns(c.env, "live.yml", { per_page: 30 });
+	const runs = await workflowRuns(c.env, RECORDER, { per_page: 30 });
 	const ran = new Set(runs.filter((r) => r.conclusion === "success").map((r) => ist(Date.parse(r.created_at)).date));
 	const got = expected.filter((d) => ran.has(d)).length;
 	const failed = await allRuns(c.env, { status: "failure", per_page: 100, created: `>=${addDays(c.now.date, -8)}` });
 	const onMain = failed.filter((r) => r.head_branch === "main" && Date.parse(r.updated_at) >= c.nowMs - 7 * DAY_MS);
 	return [{ sev: "INFO", check: "W8", title: "Weekly digest",
-		body: `Sessions run ${got} of ${expected.length} expected in the last 7 days. Workflow runs failed on main: ${onMain.length}. ${await readSetupsLine(c.env)} Details: the learning bot's weekly and monthly reports, and docs/MASTER_PLAN.md section 8.`,
+		body: `Sessions run ${got} of ${expected.length} expected in the last 7 days. Workflow runs failed on main: ${onMain.length}. ${await readSetupsLine(c.env)} Details: the Actions tab.`,
 		link: `https://github.com/${repoOf(c.env)}/actions` }];
 }
 
@@ -244,14 +247,10 @@ export const SLOTS = [
 	{ at: "07:30", days: "weekdays", run: w7Expiry, check: "W7" },
 	{ at: "07:30", days: "weekdays", run: w9Calendar, check: "W9" },
 	{ at: "09:10", days: "trading", run: w1DeskStarted, check: "W1" },
-	{ at: "09:30", days: "trading", run: w2Heartbeat, check: "W2" },
-	{ at: "11:00", days: "trading", run: w2Heartbeat, check: "W2" },
-	{ at: "13:00", days: "trading", run: w2Heartbeat, check: "W2" },
-	{ at: "15:00", days: "trading", run: w2Heartbeat, check: "W2" },
-	{ at: "16:00", days: "trading", run: ranToday("live.yml", "Live paper desk", "P1", "W3"), check: "W3" },
+	// W2 (the desk's published heartbeat) retired with the desk: the recorder publishes none; W1, W3 and W6 cover it.
+	{ at: "16:00", days: "trading", run: ranToday(RECORDER, "Session recorder", "P1", "W3"), check: "W3" },
 	{ at: "16:00", days: "trading", run: ranToday("collect-wide.yml", "Collect wide data", "P2", "W3"), check: "W3" },
 	{ at: "16:00", days: "trading", run: (c) => w6Failures(c, "08:00"), check: "W6" },
-	{ at: "18:00", days: "trading", run: ranToday("selfreview.yml", "Self-review", "P2", "W5"), check: "W5" },
 	{ at: "18:00", days: "trading", run: (c) => w6Failures(c, "16:00"), check: "W6" },
 	{ at: "21:00", days: "trading", run: ranToday("data.yml", "Data warehouse", "P2", "W5"), check: "W5" },
 	{ at: "21:00", days: "trading", run: (c) => w6Failures(c, "18:00"), check: "W6" },

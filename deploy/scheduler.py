@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Start the live desk when it should be running and isn't (run by scheduler.yml every few minutes).
+"""Start the session recorder (record.yml) when it should be running and isn't (run by scheduler.yml every few minutes).
+
+Until 6 Nov 2026 this started the live paper desk (live.yml); the owner stopped paper trading and the recorder took
+its place, with the same rules.
 
 Why: GitHub's scheduled events are best-effort. On 29 Sep – 1 Oct 2026 live.yml's 08:52 IST cron was
 delivered at 15:27, 15:19 and 15:46 IST: the desk traded 11 minutes in three sessions. This check is
@@ -35,6 +38,7 @@ WINDOW = (dt.time(8, 25), dt.time(14, 45))
 MAX_STARTS = 3
 WAKE = dt.time(8, 30)                       # when an armed waiter starts the desk (inside WINDOW)
 WAITER_MAX = dt.timedelta(hours=5, minutes=40)   # a hosted job may run 6 h: sleep at most this long
+WORKFLOW = "record.yml"                    # the recorder; live.yml (the paper desk) was retired on 6 Nov 2026
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 
 
@@ -54,7 +58,7 @@ def holidays(config: Path) -> set[dt.date]:
 
 
 def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date]) -> tuple[str, str]:
-    """('start' | 'wait', why). `runs`: live.yml runs as `gh run list --json status,conclusion,createdAt,event` gives them."""
+    """('start' | 'wait', why). `runs`: the recorder's runs as `gh run list --json status,conclusion,createdAt,event` gives them."""
     now = now.astimezone(IST)
     day = now.date()
     if day.weekday() >= 5 or day in hols:
@@ -83,7 +87,7 @@ def next_wake(now: dt.datetime, hols: set[dt.date]) -> dt.datetime:
 
 
 def arm(now: dt.datetime, runs: list[dict], waiters: list[dict], hols: set[dt.date]) -> tuple[str, str, dt.datetime | None]:
-    """('arm' | 'wait', why, wake time). `runs`: live.yml runs; `waiters`: wake.yml runs (same shape)."""
+    """('arm' | 'wait', why, wake time). `runs`: the recorder's runs; `waiters`: wake.yml runs (same shape)."""
     target = next_wake(now, hols)
     left = target - now.astimezone(IST)
     if left > WAITER_MAX:
@@ -125,12 +129,12 @@ def main(argv: list[str] | None = None) -> int:
         if not sleep_until(dt.datetime.fromisoformat(argv[1]).astimezone(IST)):
             return 1
     now = dt.datetime.now(IST)
-    runs = _runs("live.yml")
+    runs = _runs(WORKFLOW)
     action, why = decide(now, runs, hols)
     print(f"{action}: {why}")
     if action == "start":
-        subprocess.run(["gh", "workflow", "run", "live.yml", "--ref", "main"], check=True)
-        print("dispatched live.yml")
+        subprocess.run(["gh", "workflow", "run", WORKFLOW, "--ref", "main"], check=True)
+        print(f"dispatched {WORKFLOW}")
         return 0
     if argv[:1] == ["--wake"] or WINDOW[0] <= now.time() < WINDOW[1]:
         return 0

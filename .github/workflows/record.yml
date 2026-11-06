@@ -1,0 +1,126 @@
+# The session recorder, every NSE trading day: the live desk's data collection without the desk (the owner stopped
+# paper trading on 6 Nov 2026 until the spike detector is built and tested; docs/RECORDING.md).
+#
+# Every minute from 09:15 to 15:30 IST: the indices' and their futures' 1-minute bars, an option-chain snapshot of
+# each index's nearest expiry, and the chain tape (intraday.tape.expiries: several expiries a minute) (Kotak Neo with its consumer key, else Yahoo + NSE's public chain), kept as an artifact
+# and as Parquet on the chains-YYYY release. After the close: the session's option minutes and the liquid stocks'
+# minutes (Kotak forgets them after ~30 days). Data only: no journal, no account, no order of any kind.
+#
+# A hosted job may run 6 hours and the session is 6h15m, so the day is split in two jobs at the hand-over time.
+# GitHub's cron has been hours late on this repo, so the scheduler (deploy/scheduler.py) also dispatches this.
+name: Session recorder
+
+on:
+  schedule:
+    - cron: "22 3 * * 1-5"       # 08:52 IST; the recorder waits for 09:15
+  workflow_dispatch:
+    inputs:
+      handover:
+        description: "Morning recorder hands over to the afternoon one at (HH:MM IST)"
+        default: "12:20"
+
+permissions:
+  contents: write            # push the chains-YYYY, option-minutes and stock-minutes release assets
+
+concurrency:
+  group: session-recorder
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+  HANDOVER: ${{ inputs.handover || '12:20' }}
+  KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}    # data only: consumer key, no login, no orders
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.when.outputs.go }}
+    steps:
+      - id: when
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date +%H%M)" -ge 1500 ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::scheduled run started at $(date '+%H:%M') IST, after the session: nothing to do"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  morning:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Record to the hand-over (bars and the engine-view chain; the chain tape beside it, as the desk ran it)
+        run: |
+          python -m quantdesk intraday tape --until "$HANDOVER" > tape.log 2>&1 &
+          tape=$!
+          python -m quantdesk data record-session --until "$HANDOVER"; rc=$?
+          kill -TERM "$tape" 2>/dev/null; wait "$tape" 2>/dev/null; tail -n 12 tape.log
+          exit $rc
+      - name: Keep the morning's raw data (bars + option-chain snapshots)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: session-data-morning-${{ github.run_id }}
+          path: runtime/intraday/data
+          retention-days: 90
+          if-no-files-found: ignore
+      - name: Keep them for good too (Parquet on the chains-YYYY release; artifacts expire after 90 days)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk data archive-session --part "morning-${{ github.run_id }}" --day "$(date +%F)" || echo "::warning::session archive failed; the artifact still has the data"
+
+  afternoon:
+    needs: morning
+    if: ${{ !cancelled() && needs.morning.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Record to the close (bars and the engine-view chain; the chain tape beside it, as the desk ran it)
+        run: |
+          python -m quantdesk intraday tape > tape.log 2>&1 &
+          tape=$!
+          python -m quantdesk data record-session; rc=$?
+          kill -TERM "$tape" 2>/dev/null; wait "$tape" 2>/dev/null; tail -n 12 tape.log
+          exit $rc
+      - name: Keep the day's raw data (bars + option-chain snapshots)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: session-data-${{ github.run_id }}
+          path: runtime/intraday/data
+          retention-days: 90
+          if-no-files-found: ignore
+      - name: Keep them for good too (Parquet on the chains-YYYY release)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk data archive-session --part "afternoon-${{ github.run_id }}" --day "$(date +%F)" || echo "::warning::session archive failed; the artifact still has the data"
+      - name: Keep the session's option minutes (Kotak 1-minute candles; Kotak forgets them after ~30 days)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk data kotak-backfill --days 3 --release-prefix option-minutes || echo "::warning::option-minute backfill failed"
+      - name: Keep the session's stock minutes (cash and near-month futures of the most liquid F&O stocks)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk data stock-minutes --days 3 --release-prefix stock-minutes || echo "::warning::stock-minute backfill failed"

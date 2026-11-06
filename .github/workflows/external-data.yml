@@ -36,8 +36,6 @@ jobs:
         run: python -m quantdesk data external-import --source src --out runtime/external | tee import.txt
       - name: Independent check (random sessions vs Yahoo daily OHLC)
         run: python -m quantdesk data external-verify --out runtime/external | tee verify.txt
-      - name: Direction research, 30m / 60m / 120m / close (development folds)
-        run: python -m quantdesk autolearn direction-study --out runtime/external | tee study.txt
       - name: Keep the dataset (release external-aeron7)
         run: |
           ds=$(ls -d runtime/external/aeron7/*/ | tail -1)

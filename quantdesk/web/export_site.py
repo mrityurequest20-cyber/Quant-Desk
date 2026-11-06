@@ -23,6 +23,26 @@ from pathlib import Path
 
 from .intraday_api import IntradayAPI
 
+
+def _clean(o):
+    """JSON-safe: numpy numbers to Python, non-finite floats to null, timestamps to strings (moved from the retired
+    desk server)."""
+    import math
+
+    import numpy as np
+    import pandas as pd
+    if isinstance(o, dict):
+        return {str(k): _clean(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_clean(v) for v in o]
+    if isinstance(o, (np.integer,)):
+        return int(o)
+    if isinstance(o, (np.floating, float)):
+        return None if not math.isfinite(float(o)) else float(o)
+    if isinstance(o, (pd.Timestamp,)):
+        return str(o)
+    return o
+
 STATIC = Path(__file__).resolve().parent / "static" / "app"
 CHART_LIB = Path(__file__).resolve().parent / "static" / "vendor" / "lightweight-charts.js"
 FONTS = STATIC / "fonts"
@@ -169,7 +189,6 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
 
 
 def _json(data) -> str:
-    from .server import _clean
     return json.dumps(_clean(data), separators=(",", ":"))
 
 
