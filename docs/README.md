@@ -18,6 +18,7 @@ kept, unchanged, on the branches `archive/pre-cleanup-2026-11-06` and `archive/p
 | File | What it is |
 |---|---|
 | `quantdesk/markets` | The market map: which segment trades when, the MCX close that follows the US clock change, and the chained jobs that cover a day (`python -m quantdesk markets today\|plan`) |
+| `quantdesk/data/health.py` | Data health: did each data channel deliver today and is it sane, with the quarantine rule for corrupt chain rows (`python -m quantdesk data health`, `docs/DATA_HEALTH.md`) |
 | [RECORDING.md](RECORDING.md) | The session recorder (`record.yml`): what it records, where it goes |
 | [WATCHDOG.md](WATCHDOG.md) | The Cloudflare watchdog: which jobs it checks and when it alerts |
 | [EXTERNAL_DATA.md](EXTERNAL_DATA.md) | The imported index-minute dataset and its restrictions |
