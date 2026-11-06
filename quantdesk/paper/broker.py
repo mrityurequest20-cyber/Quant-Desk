@@ -10,11 +10,10 @@ There is no function here that changes cash or a position except through `Accoun
 from __future__ import annotations
 
 import datetime as dt
-import math
 
 from ..core.types import OPTION
 from ..execution.costs import CostModel
-from .account import Account
+from .account import Account, is_number
 from .risk import Decision, Order, Quote, RiskGate
 
 
@@ -61,8 +60,11 @@ class PaperBroker:
             inst = pos.instrument
             if inst.kind != OPTION or inst.expiry is None or inst.expiry >= day:
                 continue
+            if not (is_number(inst.strike) and inst.right in ("CE", "PE")):
+                out[sym] = "no strike or right on the contract: left held"
+                continue
             s = underlying_settle.get(inst.underlying)
-            if not (isinstance(s, (int, float)) and math.isfinite(s) and s > 0):
+            if not (is_number(s) and s > 0):
                 out[sym] = "no settlement price for the underlying: left held"
                 continue
             intrinsic = max(s - inst.strike, 0.0) if inst.right == "CE" else max(inst.strike - s, 0.0)

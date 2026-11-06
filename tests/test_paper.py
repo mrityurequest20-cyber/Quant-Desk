@@ -3,8 +3,10 @@
 Every brake has a test that fails if the brake is removed. The owner's rule is no cap on the number of trades or open positions,
 only loss caps, and that is tested too."""
 import datetime as dt
+import ast
 import json
 import math
+import re
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,8 @@ from quantdesk.markets import sessions as MK
 from quantdesk.paper.account import Account
 from quantdesk.paper.broker import PaperBroker
 from quantdesk.paper.risk import KillSwitch, Limits, Order, Quote, RiskGate
+
+np = pytest.importorskip("numpy")
 
 ROOT = Path(__file__).resolve().parents[1]
 IST = MK.IST
@@ -121,22 +125,19 @@ def test_a_segment_whose_costs_are_not_verified_never_trades_even_if_open(cfg, t
     assert not d.allowed and any("not configured and verified" in r for r in d.reasons)
 
 
-def test_a_risk_check_that_itself_fails_refuses_the_trade(desk):
-    naive = dt.datetime(2026, 11, 9, 9, 59, 58)                                # a quote time with no timezone raises on subtraction
+def test_a_time_with_no_timezone_is_refused_not_guessed(desk):
+    naive = dt.datetime(2026, 11, 9, 9, 59, 58)                                # read as host-local time it could land inside the session
     d, row = buy(desk, q=Quote(99.0, 100.0, naive))
+    assert not d.allowed and row is None and any("timezone" in r for r in d.reasons)
+    d, row = desk[0].buy(order(), quote(), {}, dt.datetime(2026, 11, 9, 10, 0))
+    assert not d.allowed and any("timezone" in r for r in d.reasons)
+    assert not desk[0].sell(opt().symbol, 75, quote(), dt.datetime(2026, 11, 9, 10, 0))[0].allowed
+
+
+def test_a_risk_check_that_itself_fails_refuses_the_trade(desk):
+    broken = Order(None, "nse_fo", 75, "s1", "a thesis")                         # no instrument: the check raises an AttributeError
+    d, row = desk[0].buy(broken, quote(), {}, MON)
     assert not d.allowed and row is None and any("check itself failed" in r for r in d.reasons)
-
-
-def test_cash_tied_up_in_positions_refuses_a_new_entry_cleanly_even_when_equity_is_large(cfg, tmp_path):
-    acct = Account(1_000_000)
-    held = opt(24000)
-    acct.apply_fill("buy", held, "nse_fo", 75, 13_200.0, 0.0, MON.isoformat(), "s", "t")          # 990,000 of the cash now sits in one position
-    broker = PaperBroker(cfg, acct, RiskGate(cfg, kill=KillSwitch(tmp_path / "K")))
-    marks = {held.symbol: 13_200.0}
-    assert acct.equity(marks) == pytest.approx(1_000_000) and acct.cash == pytest.approx(10_000)
-    d, row = broker.buy(order(inst=opt(26000)), quote(bid=265.0, ask=266.0), marks, MON)         # ~20,000: under 2.5% of equity, over the cash
-    assert not d.allowed and row is None and any("cash is" in r for r in d.reasons), d.reasons
-    assert acct.cash == pytest.approx(10_000) and len(acct.ledger) == 1                            # refused, not crashed, nothing moved
 
 
 def test_not_enough_cash_refuses(cfg, tmp_path):
@@ -145,39 +146,84 @@ def test_not_enough_cash_refuses(cfg, tmp_path):
     assert not d.allowed and any("risk" in r or "cash" in r for r in d.reasons)
 
 
-# ---- no cap on the number of trades or positions -------------------------------------------------------------------------------
-def test_there_is_no_cap_on_trades_or_open_positions(desk):
+# ---- no cap on the number of trades; the loss budget bounds what is open at once -----------------------------------------------
+def test_there_is_no_cap_on_the_number_of_trades(desk):
     broker, acct, gate, _ = desk
     assert not any("max" in f and ("trade" in f or "open" in f or "position" in f) for f in Limits.__dataclass_fields__)
     cheap = quote(bid=1.9, ask=2.0)
-    for i in range(300):                                                                 # 300 distinct entries in one session
-        d, row = broker.buy(order(inst=opt(strike=20000 + 50 * i)), cheap, {s: p.avg_price for s, p in acct.positions.items()}, MON)
+    for i in range(200):                                                                 # 200 entries and exits, one after another
+        inst = opt(strike=20000 + 50 * i)
+        d, _ = broker.buy(order(inst=inst), cheap, {}, MON)
         assert d.allowed, (i, d.reasons)
-    assert len(acct.positions) == 300 and len(acct.ledger) == 300 and acct.verify_ledger()
-    for i in range(300):                                                                 # and 300 exits
-        sym = opt(strike=20000 + 50 * i).symbol
-        assert broker.sell(sym, 75, cheap, MON)[0].allowed
-    assert not acct.positions and len(acct.ledger) == 600
+        assert broker.sell(inst.symbol, 75, cheap, MON)[0].allowed
+    assert not acct.positions and len(acct.ledger) == 400 and acct.verify_ledger()
+    assert not acct.day_halted and acct.halt is None                                     # the spread and fees of 200 round trips: under the caps
+
+
+def test_how_much_can_be_open_at_once_is_bounded_by_the_loss_budget_not_by_a_count(cfg, tmp_path):
+    acct = Account(500_000)
+    broker = PaperBroker(cfg, acct, RiskGate(cfg, kill=KillSwitch(tmp_path / "K")))
+    cheap = quote(bid=1.9, ask=2.0)
+    n = 0
+    while True:
+        marks = {s_: 1.9 for s_ in acct.positions}                                       # marked at the bid
+        d, _ = broker.buy(order(inst=opt(strike=30000 + 50 * n)), cheap, marks, MON)
+        if not d.allowed:
+            break
+        n += 1
+    assert n > 100 and len(acct.positions) == n                                          # far more than any small count cap
+    assert any("loss budget" in r for r in d.reasons), d.reasons
+    # the worst case is what is bounded: every position at zero together still leaves equity above the day's floor
+    assert acct.equity({s_: 0.0 for s_ in acct.positions}) >= 500_000 * 0.95 - 1e-6
+    # closing one frees its share of the budget
+    first = next(iter(acct.positions))
+    assert broker.sell(first, 75, cheap, MON)[0].allowed
+    marks = {s_: 1.9 for s_ in acct.positions}
+    assert broker.buy(order(inst=opt(strike=60000)), cheap, marks, MON)[0].allowed
+
+
+def test_the_open_premium_stays_inside_the_daily_floor_when_entries_are_big(desk):
+    broker, acct, gate, _ = desk
+    allowed = 0
+    for i in range(6):                                                                   # each about 2.4% of equity
+        marks = {s_: 159.0 for s_ in acct.positions}
+        d, _ = broker.buy(order(inst=opt(strike=24000 + 100 * i)), quote(bid=159, ask=160), marks, MON)
+        allowed += d.allowed
+        if not d.allowed:
+            assert any("loss budget" in r for r in d.reasons), d.reasons
+    assert allowed == 2                                                                  # two fit under the 5% day budget, the rest do not
+    assert acct.equity({s_: 0.0 for s_ in acct.positions}) > 500_000 * 0.95             # all of it worthless: still above the floor
+
+
+def test_the_drawdown_floor_also_bounds_what_can_be_opened(desk):
+    broker, acct, gate, _ = desk
+    acct.hwm = 550_000                                                                   # equity 500,000 is 9.1% below: close to the 10% halt
+    d, _ = broker.buy(order(), quote(bid=99, ask=100), {}, MON)                          # 7,500 + fees against 5,000 left before the floor
+    assert not d.allowed and any("loss budget" in r for r in d.reasons), d.reasons
+    d, _ = broker.buy(order(), quote(bid=49, ask=50), {}, MON)                           # 3,750 + fees fits
+    assert d.allowed, d.reasons
 
 
 # ---- the loss caps --------------------------------------------------------------------------------------------------------------
-def fill_n(broker, acct, n, ask=160.0, now=MON):
-    """n entries of about 12,000 each (about 2.4% of equity), all at one price, on different strikes."""
+def seed(acct, n, price=160.0, now=MON):
+    """n positions of 75 units bought directly (as a gap, a bug or an older run could leave them), about 12,000 each."""
     syms = []
     for i in range(n):
         inst = opt(strike=24000 + 100 * i)
-        d, _ = broker.buy(order(inst=inst), quote(bid=ask - 1, ask=ask, now=now), {s: p.avg_price for s, p in acct.positions.items()}, now)
-        assert d.allowed, d.reasons
+        acct.apply_fill("buy", inst, "nse_fo", 75, price, 20.0, now.isoformat(), "s", "t")
         syms.append(inst.symbol)
     return syms
 
 
+WED = dt.datetime(2026, 11, 11, 10, 0, tzinfo=IST)           # 10 Nov is an NSE holiday
+
+
 def test_the_daily_loss_cap_stops_new_entries_for_the_day_and_says_flatten(desk):
     broker, acct, gate, _ = desk
-    syms = fill_n(broker, acct, 3)                                                   # ~36,000 at risk
-    ok = {s: 160.0 for s in syms}
+    syms = seed(acct, 3)                                                             # about 36,000 deployed
+    ok = {s_: 160.0 for s_ in syms}
     assert gate.update(acct, ok, MON) == [] and not acct.day_halted                  # no loss yet
-    worthless = {s: 0.0 for s in syms}                                               # all three go to zero: about -36,000 > 5% of 500,000
+    worthless = {s_: 0.0 for s_ in syms}                                             # all three go to zero: -7% > the 5% cap
     why = gate.update(acct, worthless, MON)
     assert acct.day_halted and any("daily loss cap" in r for r in why)
     d, _ = broker.buy(order(inst=opt(strike=30000)), quote(), worthless, MON)
@@ -188,31 +234,68 @@ def test_the_daily_loss_cap_stops_new_entries_for_the_day_and_says_flatten(desk)
 
 def test_the_daily_cap_resets_the_next_day_but_the_drawdown_halt_does_not(desk):
     broker, acct, gate, _ = desk
-    syms = fill_n(broker, acct, 3)
-    gate.update(acct, {s: 0.0 for s in syms}, MON)
+    syms = seed(acct, 3)
+    gate.update(acct, {s_: 160.0 for s_ in syms}, MON)
+    gate.update(acct, {s_: 0.0 for s_ in syms}, MON)
     assert acct.day_halted
-    tue = MON + dt.timedelta(days=1)                                                 # 10 Nov is a holiday: use Wednesday 11 Nov
-    wed = dt.datetime(2026, 11, 11, 10, 0, tzinfo=IST)
-    after = {s: 0.0 for s in syms}
-    d, _ = broker.buy(order(inst=opt(strike=31000)), quote(now=wed), after, wed)
+    marks = {s_: 0.0 for s_ in syms}
+    d, _ = broker.buy(order(inst=opt(strike=31000)), quote(now=WED), marks, WED)
     assert not acct.day_halted and d.allowed, d.reasons                              # a new day, a new daily cap
 
 
 def test_the_drawdown_halt_holds_until_the_owner_clears_it(desk):
     broker, acct, gate, _ = desk
-    syms = fill_n(broker, acct, 5)                                                   # ~60,000 at risk
-    why = gate.update(acct, {s: 0.0 for s in syms}, MON)                             # -12% from the high-water mark
-    assert acct.halt and any("drawdown halt" in r for r in why)
-    wed = dt.datetime(2026, 11, 11, 10, 0, tzinfo=IST)
-    marks = {s: 0.0 for s in syms}
-    d, _ = broker.buy(order(inst=opt(strike=31000)), quote(now=wed), marks, wed)
+    syms = seed(acct, 5)                                                             # about 60,000 deployed
+    gate.update(acct, {s_: 160.0 for s_ in syms}, MON)
+    why = gate.update(acct, {s_: 0.0 for s_ in syms}, MON)                           # -12% from the high-water mark
+    assert acct.halt is not None and any("drawdown halt" in r for r in why)
+    marks = {s_: 0.0 for s_ in syms}
+    d, _ = broker.buy(order(inst=opt(strike=31000)), quote(now=WED), marks, WED)
     assert not d.allowed and any("drawdown halt" in r for r in d.reasons)           # a new day does not clear it
-    with pytest.raises(ValueError):
-        acct.clear_halt("", "looks fine", 440_000)                                   # needs who and why
-    acct.clear_halt("owner", "reviewed the losses", acct.equity(marks))
+    recovered = {s_: 160.0 for s_ in syms}
+    assert any("drawdown halt" in r for r in gate.update(acct, recovered, WED))      # nor does a recovery in the marks
+    assert acct.halt is not None
+    for who, why_, eq, ts in (("", "reviewed", 440_000, "t"), ("owner", "", 440_000, "t"), ("owner", "reviewed", 440_000, ""),
+                              ("owner", "reviewed", float("nan"), "t")):
+        with pytest.raises(ValueError):
+            acct.clear_halt(who, why_, eq, ts)                                       # needs who, why, when and a known equity
+    assert acct.halt is not None
+    acct.clear_halt("owner", "reviewed the losses", acct.equity(marks), WED.isoformat())
     assert acct.halt is None and acct.hwm == pytest.approx(acct.equity(marks))
-    d, _ = broker.buy(order(inst=opt(strike=31000)), quote(now=wed), marks, wed)
+    row = acct.ledger[-1]
+    assert row["kind"] == "halt_cleared" and row["who"] == "owner" and row["reason"] == "reviewed the losses" and row["was"]   # on the record
+    assert acct.verify_ledger()
+    d, _ = broker.buy(order(inst=opt(strike=31000)), quote(now=WED), marks, WED)
     assert d.allowed, d.reasons
+
+
+def test_an_empty_halt_record_still_halts(desk):
+    broker, acct, gate, _ = desk
+    acct.halt = {}                                                                   # a falsy record must not switch the brake off
+    d, _ = buy(desk)
+    assert not d.allowed and any("drawdown halt" in r for r in d.reasons)
+
+
+def test_an_overnight_gap_counts_against_the_new_day(desk):
+    broker, acct, gate, _ = desk
+    syms = seed(acct, 3)
+    gate.update(acct, {s_: 160.0 for s_ in syms}, MON)                               # Monday's close: about 499,940
+    why = gate.update(acct, {s_: 0.0 for s_ in syms}, WED)                           # Wednesday opens at zero: the loss is the gap
+    assert acct.day_halted and any("daily loss cap" in r for r in why)               # measured from Monday's close, not from the gap
+
+
+def test_a_missing_price_does_not_blind_the_loss_caps(desk):
+    broker, acct, gate, _ = desk
+    syms = seed(acct, 4)                                                             # about 48,000 deployed
+    gate.update(acct, {s_: 160.0 for s_ in syms}, MON)
+    partial = {syms[0]: 0.0, syms[1]: 0.0, syms[2]: 0.0}                             # three worthless, the fourth has no price at all
+    assert math.isnan(acct.equity(partial))
+    why = gate.update(acct, partial, MON)
+    assert any("flatten" in r and "unknown" in r for r in why), why                  # judged on the worst case: counted as worth nothing
+    assert not acct.day_halted and acct.halt is None                                 # but no sticky flag is set from a guess
+    d, _ = broker.buy(order(inst=opt(strike=30000)), quote(), partial, MON)
+    assert not d.allowed and any("equity is unknown" in r for r in d.reasons)
+    assert gate.update(acct, {s_: 160.0 for s_ in syms}, MON) == []                  # prices back and healthy: nothing to flatten
 
 
 def test_the_kill_switch_stops_entries_and_says_flatten(desk):
@@ -332,17 +415,247 @@ def test_the_account_refuses_to_go_wrong(desk):
 
 
 # ---- what the package must not do ---------------------------------------------------------------------------------------------
+ALLOWED_INTERNAL = ("quantdesk.core", "quantdesk.execution", "quantdesk.markets", "quantdesk.paper")
+FORBIDDEN_MODULES = {"requests", "urllib", "http", "socket", "ssl", "subprocess", "importlib", "ftplib", "smtplib", "kiteconnect", "multiprocessing"}
+
+
+def _imports(path: Path):
+    """Every module a file imports, as a dotted absolute name, relative imports resolved against quantdesk.paper."""
+    out = []
+    for n in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(n, ast.Import):
+            out += [a_.name for a_ in n.names]
+        elif isinstance(n, ast.ImportFrom):
+            base = n.module or ""
+            if n.level:
+                pkg = ["quantdesk", "paper"][: 2 - (n.level - 1)]
+                base = ".".join(pkg + ([base] if base else []))
+            out += [f"{base}.{a_.name}" if a_.name != "*" else base for a_ in n.names]
+    return out
+
+
 def test_the_paper_package_has_no_network_secret_or_real_order_path():
-    import re
-    for f in (ROOT / "quantdesk" / "paper").glob("*.py"):
+    files = list((ROOT / "quantdesk" / "paper").glob("*.py"))
+    assert files
+    for f in files:
+        for mod in _imports(f):
+            top = mod.split(".")[0]
+            assert top not in FORBIDDEN_MODULES, (f.name, mod)
+            if top == "quantdesk":
+                assert mod.startswith(ALLOWED_INTERNAL), (f.name, mod)                 # includes `from .. import intraday`
         src = f.read_text(encoding="utf-8")
-        assert not re.search(r"^\s*(from|import)\s+(\.\.?\s*)?(quantdesk\.)?(intraday|journal|web|data|learnbot)\b", src, re.M), f.name
-        for bad in ("requests", "urllib", "socket", "subprocess", "os.environ", "kiteconnect", "place_order", "KITE_", "KOTAK_", "secrets."):
+        for bad in ("os.environ", "os.getenv", "getenv(", "__import__", "eval(", "exec(", "place_order", "KITE_", "KOTAK_", "secrets."):
             assert bad not in src, (f.name, bad)
         assert not re.search(r"(?<![\w`])max_(trades|open)\w*\s*[:=(]|\.max_(trades|open)", src), f.name        # no such limit exists in code
 
 
+def test_the_scan_itself_catches_what_it_is_meant_to(tmp_path):
+    for line, bad in (("from .. import intraday", "quantdesk.intraday"), ("from quantdesk import intraday", "quantdesk.intraday"),
+                      ("import http.client", "http.client"), ("import importlib", "importlib"), ("from ..data import nse", "quantdesk.data.nse")):
+        f = tmp_path / "x.py"
+        f.write_text(line + "\n")
+        mods = _imports(f)
+        assert any(m.split(".")[0] in FORBIDDEN_MODULES or (m.startswith("quantdesk") and not m.startswith(ALLOWED_INTERNAL)) for m in mods), (line, mods)
+
+
 def test_the_config_carries_loss_caps_only(cfg):
     p = cfg.get("paper")
-    assert set(p) == {"capital", "risk_per_trade", "daily_loss_limit", "drawdown_halt", "max_quote_age_s", "cost_verified_segments", "kill_switch_file"}
+    assert set(p) == {"capital", "risk_per_trade", "daily_loss_limit", "drawdown_halt", "max_quote_age_s", "cost_verified_segments", "kill_switch_file",
+                      "underlyings"}
     assert p["risk_per_trade"] == 0.025 and p["daily_loss_limit"] == 0.05 and p["drawdown_halt"] == 0.10 and p["cost_verified_segments"] == ["nse_fo"]
+
+
+# ---- a mislabelled order cannot dodge the costs and hours checks (B3) ---------------------------------------------------------------
+@pytest.mark.parametrize("under", ["CRUDEOIL", "USDINR", "SENSEX", "GOLD", "RELIANCE"])
+def test_an_underlying_that_does_not_trade_in_the_labelled_segment_is_refused(desk, under):
+    d, row = buy(desk, o=order(inst=opt(under=under)))                             # labelled nse_fo
+    assert not d.allowed and row is None and any("not on the list of underlyings" in r for r in d.reasons), d.reasons
+
+
+@pytest.mark.parametrize("under", ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "nifty"])
+def test_the_listed_nse_indices_trade(desk, under):
+    assert buy(desk, o=order(inst=opt(under=under)))[0].allowed
+
+
+def test_the_mislabel_guard_holds_the_other_way_too(desk):
+    assert not buy(desk, o=order(inst=opt(under="NIFTY"), seg="mcx"))[0].allowed
+    assert not buy(desk, o=order(inst=opt(under="NIFTY"), seg="bse_fo"))[0].allowed
+
+
+# ---- the account keeps its promises (B4) ------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("qty", [float("nan"), float("inf"), 0.5, 75.0, True, False, 0, -75, None, "75"])
+def test_a_quantity_that_is_not_a_whole_positive_number_is_refused_and_nothing_changes(desk, qty):
+    _, acct, *_ = desk
+    with pytest.raises(ValueError):
+        acct.apply_fill("buy", opt(), "nse_fo", qty, 100.0, 20.0, "t", "s", "t")
+    assert acct.cash == 500_000 and not acct.positions and not acct.ledger
+
+
+def test_numpy_whole_numbers_are_fine_and_a_zero_priced_buy_is_not(desk):
+    _, acct, *_ = desk
+    acct.apply_fill("buy", opt(), "nse_fo", np.int64(75), 100.0, 20.0, "t", "s", "t")
+    assert acct.positions[opt().symbol].qty == 75 and type(acct.positions[opt().symbol].qty) is int
+    with pytest.raises(ValueError, match="free position"):
+        acct.apply_fill("buy", opt(25100), "nse_fo", 75, 0.0, 0.0, "t", "s", "t")
+    for bad in (float("nan"), -1.0, True):
+        with pytest.raises(ValueError):
+            acct.apply_fill("buy", opt(25200), "nse_fo", 75, bad, 20.0, "t", "s", "t")
+        with pytest.raises(ValueError):
+            acct.apply_fill("buy", opt(25200), "nse_fo", 75, 100.0, bad, "t", "s", "t")
+
+
+def test_a_fill_is_all_or_nothing_even_when_the_record_cannot_be_written(desk):
+    _, acct, *_ = desk
+    acct.apply_fill("buy", opt(), "nse_fo", 75, 100.0, 20.0, "t", "s", "t")
+    before = json.dumps(acct.to_dict(), sort_keys=True)
+    with pytest.raises(TypeError):
+        acct.apply_fill("buy", opt(25100), "nse_fo", 75, 100.0, 20.0, "t", "s", object())      # a thesis that cannot be saved
+    with pytest.raises(TypeError):
+        acct.apply_fill("sell", opt(), "nse_fo", 75, 100.0, 20.0, "t", "s", object())
+    assert json.dumps(acct.to_dict(), sort_keys=True) == before                                # cash, positions, ledger: exactly as they were
+
+
+def test_an_exit_is_never_refused_for_its_fees_and_the_next_entry_then_is(cfg, tmp_path):
+    acct = Account(100.0)
+    acct.apply_fill("buy", opt(), "nse_fo", 75, 1.0, 24.0, MON.isoformat(), "s", "t")          # 75 + 24 of the 100: cash 1
+    broker = PaperBroker(cfg, acct, RiskGate(cfg, kill=KillSwitch(tmp_path / "K")))
+    d, row = broker.sell(opt().symbol, 75, quote(bid=0.05, ask=0.10), MON)                        # proceeds 3.75, fees about 24
+    assert d.allowed and row["fees"] > row["price"] * 75 and acct.cash < 0 and not acct.positions
+    d, _ = broker.buy(order(inst=opt(25100)), quote(bid=0.05, ask=0.10), {}, MON)
+    assert not d.allowed and any("daily loss cap" in r or "drawdown halt" in r for r in d.reasons), d.reasons      # below both floors now
+
+
+def test_oversell_and_the_other_account_refusals(desk):
+    _, acct, *_ = desk
+    acct.apply_fill("buy", opt(), "nse_fo", 75, 100.0, 20.0, "t", "s", "t")
+    with pytest.raises(ValueError, match="cannot sell"):
+        acct.apply_fill("sell", opt(), "nse_fo", 76, 100.0, 20.0, "t", "s", "t")               # one more than held
+    with pytest.raises(ValueError, match="unknown kind"):
+        acct.apply_fill("short", opt(), "nse_fo", 75, 100.0, 20.0, "t", "s", "t")
+    with pytest.raises(ValueError):
+        acct.record_event("buy", "t")                                                          # a fill is not an event
+
+
+# ---- a saved account is checked against its own history (N2) ----------------------------------------------------------------
+def _saved(desk, tmp_path):
+    broker, acct, *_ = desk
+    buy(desk)
+    buy(desk, o=order(inst=opt(25100)))
+    broker.sell(opt().symbol, 75, quote(), MON)
+    path = tmp_path / "account.json"
+    acct.save(path)
+    return acct, path
+
+
+@pytest.mark.parametrize("edit", [
+    lambda d: d.__setitem__("cash", d["cash"] + 100_000),
+    lambda d: d.__setitem__("positions", {}),
+    lambda d: d["positions"][next(iter(d["positions"]))].__setitem__("qty", 750),
+    lambda d: d.__setitem__("realized", 1e6),
+    lambda d: d.__setitem__("fees", 0.0),
+    lambda d: d["ledger"].pop(),                                      # the tail cut off
+    lambda d: d.__setitem__("ledger", []),                            # the whole history gone
+    lambda d: d["ledger"][0].__setitem__("cash_after", 1.0),          # a row's content
+    lambda d: d["ledger"][1].__setitem__("prev", "x" * 64),           # the chain's link
+])
+def test_an_edited_account_file_is_refused_on_load(desk, tmp_path, edit):
+    acct, path = _saved(desk, tmp_path)
+    assert Account.load(path).to_dict() == acct.to_dict()
+    data = json.loads(path.read_text())
+    edit(data)
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        Account.load(path)
+
+
+def test_save_leaves_no_temporary_file_and_replaces_atomically(desk, tmp_path):
+    acct, path = _saved(desk, tmp_path)
+    assert [f.name for f in tmp_path.iterdir() if f.name.startswith("account")] == ["account.json"]
+
+
+# ---- the kill switch's file is found from the repository, not the working directory (N3) ----------------------------------------
+def test_a_relative_kill_switch_path_is_taken_from_the_repository_root(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    k = KillSwitch("runtime/paper/KILL")
+    assert k.path == ROOT / "runtime" / "paper" / "KILL" and tmp_path not in k.path.parents
+    assert KillSwitch(tmp_path / "KILL").path == tmp_path / "KILL"
+
+
+# ---- inputs that used to fail open (N4) ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("name,kw", [
+    ("NaN ask size", dict(q=quote(ask_qty=float("nan")))),
+    ("zero ask size", dict(q=quote(ask_qty=0))),
+    ("negative bid size", dict(q=quote(bid_qty=-5))),
+    ("bool prices", dict(q=Quote(True, True, MON - dt.timedelta(seconds=1)))),
+])
+def test_odd_quote_fields_are_refused(desk, name, kw):
+    d, _ = buy(desk, **kw)
+    assert not d.allowed and any("two-sided" in r for r in d.reasons), (name, d.reasons)
+
+
+@pytest.mark.parametrize("lot", [0, -75, 75.0, None])
+def test_a_contract_without_a_proper_lot_size_is_refused(desk, lot):
+    inst = opt()
+    object.__setattr__(inst, "lot_size", lot)
+    d, _ = buy(desk, o=order(inst=inst, qty=80))
+    assert not d.allowed and any("lots of" in r for r in d.reasons), d.reasons
+
+
+@pytest.mark.parametrize("field,value", [("risk_per_trade", float("nan")), ("risk_per_trade", 0), ("risk_per_trade", 1.5), ("daily_loss_limit", float("nan")),
+                                         ("drawdown_halt", -0.1), ("drawdown_halt", True), ("max_quote_age_s", 0), ("max_quote_age_s", float("nan"))])
+def test_a_limit_that_is_not_a_sensible_share_is_refused_at_load(cfg, field, value):
+    good = dict(risk_per_trade=0.025, daily_loss_limit=0.05, drawdown_halt=0.10, max_quote_age_s=30.0, cost_verified=frozenset({"nse_fo"}))
+    with pytest.raises(ValueError):
+        Limits(**{**good, field: value})
+    bad_cfg = Config.load(ROOT / "config" / "quantdesk.yaml", overrides={"paper": {field: value}})
+    with pytest.raises(ValueError):
+        Limits.from_config(bad_cfg)
+
+
+# ---- mutations the first review found the tests missed (N6) ---------------------------------------------------------------------------
+def test_the_risk_of_an_entry_includes_its_fees(desk):
+    d, _ = buy(desk, q=quote(bid=166.0, ask=166.5))                              # 75 x 166.5 = 12,487.5: under 12,500, over with fees
+    assert not d.allowed and any("risk" in r for r in d.reasons), d.reasons
+
+
+def test_an_option_expiring_today_is_not_settled_until_tomorrow(desk):
+    broker, acct, *_ = desk
+    acct.apply_fill("buy", opt(), "nse_fo", 75, 100.0, 20.0, MON.isoformat(), "s", "t")
+    on_expiry = dt.datetime(2026, 11, 12, 15, 0, tzinfo=IST)
+    assert broker.settle_expired(on_expiry.date(), {"NIFTY": 25200.0}, on_expiry) == {} and opt().symbol in acct.positions
+    assert broker.settle_expired(dt.date(2026, 11, 13), {"NIFTY": 25200.0}, on_expiry)       # the day after
+
+
+def test_a_contract_with_no_strike_is_left_held_not_half_settled(desk):
+    broker, acct, *_ = desk
+    acct.apply_fill("buy", opt(), "nse_fo", 75, 100.0, 20.0, MON.isoformat(), "s", "t")
+    object.__setattr__(acct.positions[opt().symbol].instrument, "strike", None)
+    out = broker.settle_expired(dt.date(2026, 11, 13), {"NIFTY": 25200.0}, MON)
+    assert "left held" in out[opt().symbol] and opt().symbol in acct.positions and len(acct.ledger) == 1
+
+
+def test_the_halt_survives_a_new_day_when_the_marks_recover(desk):
+    broker, acct, gate, _ = desk
+    syms = seed(acct, 5)
+    gate.update(acct, {s_: 160.0 for s_ in syms}, MON)
+    gate.update(acct, {s_: 0.0 for s_ in syms}, MON)
+    assert acct.halt is not None
+    gate.update(acct, {s_: 160.0 for s_ in syms}, WED)                               # a new day and the marks are back
+    assert acct.halt is not None
+
+
+def test_every_ledger_row_records_the_true_cash_after_its_fill(desk):
+    broker, acct, *_ = desk
+    for step in (lambda: buy(desk), lambda: buy(desk, o=order(inst=opt(25100))), lambda: broker.sell(opt().symbol, 75, quote(), MON)):
+        step()
+        assert acct.ledger[-1]["cash_after"] == acct.cash
+    assert [r["kind"] for r in acct.ledger] == ["buy", "buy", "sell"] and acct.ledger[0]["cash_after"] > acct.ledger[1]["cash_after"]
+
+
+def test_verify_ledger_itself_notices_a_changed_link_field(desk):
+    broker, acct, *_ = desk
+    buy(desk)
+    buy(desk, o=order(inst=opt(25100)))
+    assert acct.verify_ledger()
+    acct.ledger[1]["prev"] = "x" * 64                                  # the stored link, not the content
+    assert not acct.verify_ledger()

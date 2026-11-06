@@ -4,14 +4,23 @@ No network, no clock, no secret. Money here is paper money. M2 of the 24/7 paper
 pays the premium, a sell receives it, so the most a position can lose is what was paid. Futures and short options need a margin
 model that is not built, and the risk gate refuses them.
 
-Equity is cash plus every position at its mark. If any position has no usable mark the equity is NaN, and the risk gate
-treats unknown equity as a reason to refuse entries (a NaN passes every `x > 0` and `x <= -y` test, so it is never compared).
+Guarantees, each tested:
+  * Money moves only through `apply_fill`. It checks every input (a quantity is a positive whole number, a price and a fee are
+    finite numbers, a buy has a positive price), works out the new state and the ledger row FIRST, and only then commits both:
+    a failure leaves cash, positions and ledger exactly as they were.
+  * Cash never goes negative on a buy. An exit is never refused for its fees, so a sale of a near-worthless option can dip cash
+    below zero by the fees; the gate then refuses new entries until cash covers them.
+  * Equity is NaN when any position has no usable mark. `equity_lower_bound` counts such a position as worth nothing, which for
+    a long-only book is a true lower bound, so the loss caps can still be judged when a price is missing.
+  * A saved account is replayed through the same code on load: the ledger's hash chain, and cash, positions, realised profit and
+    fees, must all come out as saved. Editing the file, dropping or reordering rows, or truncating the tail is refused.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import math
+import numbers
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +28,7 @@ from pathlib import Path
 from ..core.types import Instrument
 
 GENESIS = "0" * 64
+FILL_KINDS = ("buy", "sell", "settle")
 
 
 @dataclass
@@ -41,13 +51,23 @@ class Position:
                    d["strategy"], d["thesis"])
 
 
+def is_whole_positive(x) -> bool:
+    """A real whole number above zero: not a bool, not a float, not NaN (numpy integers count)."""
+    return isinstance(x, numbers.Integral) and not isinstance(x, bool) and x > 0
+
+
+def is_number(x) -> bool:
+    """A finite real number that is not a bool."""
+    return isinstance(x, numbers.Real) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def _usable(x) -> bool:
-    return isinstance(x, (int, float)) and math.isfinite(x) and x >= 0
+    return is_number(x) and x >= 0
 
 
 class Account:
     def __init__(self, capital: float):
-        if not (math.isfinite(capital) and capital > 0):
+        if not (is_number(capital) and capital > 0):
             raise ValueError("the starting capital must be a positive number")
         self.capital0 = float(capital)
         self.cash = float(capital)
@@ -57,6 +77,7 @@ class Account:
         self.hwm = float(capital)    # high-water mark of equity
         self.day: str | None = None  # the IST date the day figures below belong to
         self.day_start: float | None = None
+        self.last_equity: float | None = None   # the last finite equity seen: the next day starts from it, so an overnight gap counts
         self.day_halted = False      # sticky for the day once the daily loss cap is hit
         self.halt: dict | None = None  # the multi-day drawdown halt: cleared only by the owner (clear_halt)
         self.ledger: list[dict] = []
@@ -71,46 +92,87 @@ class Account:
             total += p.qty * float(m)
         return total
 
+    def equity_lower_bound(self, marks: dict[str, float]) -> float:
+        """Equity with every position that has no usable mark counted as worth nothing. For a long-only book that is a floor under
+        the true equity, so a loss cap breached by this figure is truly breached."""
+        total = self.cash
+        for sym, p in self.positions.items():
+            m = marks.get(sym)
+            total += p.qty * float(m) if _usable(m) else 0.0
+        return total
+
+    def open_value(self, marks: dict[str, float]) -> float:
+        """What the open positions are worth at their marks (NaN if a mark is missing): the most they can still lose."""
+        total = 0.0
+        for sym, p in self.positions.items():
+            m = marks.get(sym)
+            if not _usable(m):
+                return float("nan")
+            total += p.qty * float(m)
+        return total
+
     def net_pnl(self, marks: dict[str, float]) -> float:
         return self.equity(marks) - self.capital0
 
     # ---- the one way money moves ---------------------------------------------------------------------------------------------
     def apply_fill(self, kind: str, instrument: Instrument, segment: str, qty: int, price: float, fees: float, ts: str,
                    strategy: str, thesis: str) -> dict:
-        """kind: 'buy' | 'sell' | 'settle'. qty > 0. Raises ValueError rather than ever letting cash or a position go wrong."""
-        if kind not in ("buy", "sell", "settle") or qty <= 0 or not (_usable(price) and _usable(fees)):
-            raise ValueError(f"bad fill: {kind} {qty} @ {price} fees {fees}")
+        """kind: 'buy' | 'sell' | 'settle'. Raises ValueError, changing nothing, for anything that would leave the account wrong."""
+        if kind not in FILL_KINDS:
+            raise ValueError(f"bad fill: unknown kind {kind!r}")
+        if not is_whole_positive(qty):
+            raise ValueError(f"bad fill: the quantity must be a whole number above zero, not {qty!r}")
+        if not (_usable(price) and _usable(fees)):
+            raise ValueError(f"bad fill: price {price!r} and fees {fees!r} must be finite and not negative")
+        if kind == "buy" and price <= 0:
+            raise ValueError("bad fill: a buy at a zero price would be a free position")
+        qty, price, fees = int(qty), float(price), float(fees)
         sym = instrument.symbol
         pos = self.positions.get(sym)
+        new_pos: Position | None
+        realized = self.realized
         if kind == "buy":
             cost = qty * price + fees
             if cost > self.cash + 1e-9:
                 raise ValueError("not enough cash")
-            self.cash -= cost
+            cash = self.cash - cost
             if pos is None:
-                self.positions[sym] = Position(instrument, segment, qty, price, ts, strategy, thesis)
+                new_pos = Position(instrument, segment, qty, price, ts, strategy, thesis)
             else:
-                new = pos.qty + qty
-                pos.avg_price = (pos.avg_price * pos.qty + price * qty) / new
-                pos.qty = new
+                total = pos.qty + qty
+                new_pos = Position(pos.instrument, pos.segment, total, (pos.avg_price * pos.qty + price * qty) / total, pos.opened_at,
+                                   pos.strategy, pos.thesis)
         else:
             if pos is None or qty > pos.qty:
                 raise ValueError(f"cannot {kind} {qty} of {sym}: holding {pos.qty if pos else 0}")
-            self.cash += qty * price - fees
-            self.realized += (price - pos.avg_price) * qty
-            pos.qty -= qty
-            if pos.qty == 0:
-                del self.positions[sym]
-        self.fees += fees
-        return self._record(kind, sym, segment, qty, price, fees, ts, strategy, thesis)
-
-    def _record(self, kind, sym, segment, qty, price, fees, ts, strategy, thesis) -> dict:
-        body = {"seq": len(self.ledger) + 1, "ts": ts, "kind": kind, "symbol": sym, "segment": segment, "qty": qty, "price": price,
-                "fees": fees, "strategy": strategy, "thesis": thesis, "cash_after": self.cash}
-        prev = self.ledger[-1]["hash"] if self.ledger else GENESIS
-        row = {**body, "prev": prev, "hash": self._hash(body, prev)}
+            cash = self.cash + qty * price - fees
+            realized += (price - pos.avg_price) * qty
+            new_pos = None if pos.qty == qty else Position(pos.instrument, pos.segment, pos.qty - qty, pos.avg_price, pos.opened_at,
+                                                           pos.strategy, pos.thesis)
+        body = {"seq": len(self.ledger) + 1, "ts": ts, "kind": kind, "symbol": sym, "instrument": instrument.to_dict(),
+                "segment": segment, "qty": qty, "price": price, "fees": fees, "strategy": strategy, "thesis": thesis,
+                "cash_after": cash}
+        row = self._seal(body)                                  # raises (e.g. a thesis that cannot be saved) BEFORE anything changes
+        self.cash, self.realized, self.fees = cash, realized, self.fees + fees
+        if new_pos is None:
+            del self.positions[sym]
+        else:
+            self.positions[sym] = new_pos
         self.ledger.append(row)
         return row
+
+    def record_event(self, kind: str, ts: str, **fields) -> dict:
+        """A non-money row in the same chain (the owner clearing a halt). Kinds that move money are not allowed here."""
+        if kind in FILL_KINDS:
+            raise ValueError("a fill is recorded by apply_fill")
+        row = self._seal({"seq": len(self.ledger) + 1, "ts": ts, "kind": kind, **fields})
+        self.ledger.append(row)
+        return row
+
+    def _seal(self, body: dict) -> dict:
+        prev = self.ledger[-1]["hash"] if self.ledger else GENESIS
+        json.dumps(body, sort_keys=True)                        # must be saveable
+        return {**body, "prev": prev, "hash": self._hash(body, prev)}
 
     @staticmethod
     def _hash(body: dict, prev: str) -> str:
@@ -127,11 +189,12 @@ class Account:
         return True
 
     # ---- the owner's halt ----------------------------------------------------------------------------------------------------
-    def clear_halt(self, who: str, reason: str, equity: float) -> None:
-        """The owner's act. Records who and why, and restarts the high-water mark at the current equity so the same drawdown
-        does not halt again at once."""
-        if not (who and reason and math.isfinite(equity) and equity > 0):
-            raise ValueError("clearing the halt needs who, why and a known equity")
+    def clear_halt(self, who: str, reason: str, equity: float, ts: str) -> None:
+        """The owner's act. Appends a row to the ledger (who, why, when, the equity) and restarts the high-water mark at the current
+        equity so the same drawdown does not halt again at once."""
+        if not (who and reason and ts and is_number(equity) and equity > 0):
+            raise ValueError("clearing the halt needs who, why, when and a known equity")
+        self.record_event("halt_cleared", ts, who=who, reason=reason, equity=float(equity), was=self.halt)
         self.halt = None
         self.hwm = float(equity)
 
@@ -139,24 +202,46 @@ class Account:
     def to_dict(self) -> dict:
         return {"capital0": self.capital0, "cash": self.cash, "positions": {k: p.to_dict() for k, p in self.positions.items()},
                 "realized": self.realized, "fees": self.fees, "hwm": self.hwm, "day": self.day, "day_start": self.day_start,
-                "day_halted": self.day_halted, "halt": self.halt, "ledger": self.ledger}
+                "last_equity": self.last_equity, "day_halted": self.day_halted, "halt": self.halt, "ledger": self.ledger}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Account":
         a = cls(d["capital0"])
         a.cash, a.realized, a.fees, a.hwm = float(d["cash"]), float(d["realized"]), float(d["fees"]), float(d["hwm"])
         a.positions = {k: Position.from_dict(v) for k, v in d["positions"].items()}
-        a.day, a.day_start, a.day_halted, a.halt, a.ledger = d["day"], d["day_start"], bool(d["day_halted"]), d["halt"], list(d["ledger"])
+        a.day, a.day_start, a.last_equity = d["day"], d["day_start"], d.get("last_equity")
+        a.day_halted, a.halt, a.ledger = bool(d["day_halted"]), d["halt"], list(d["ledger"])
         if not a.verify_ledger():
             raise ValueError("the ledger's hash chain does not verify: the saved account was changed")
+        a._check_against_replay()
         return a
+
+    def _check_against_replay(self) -> None:
+        """Rebuild the account from its ledger through the same code and compare: a file whose cash, positions, profit or fees were
+        edited, or whose ledger was cut short, no longer matches its own history."""
+        s = Account(self.capital0)
+        for row in self.ledger:
+            if row["kind"] in FILL_KINDS:
+                s.apply_fill(row["kind"], Instrument.from_dict(row["instrument"]), row["segment"], row["qty"], row["price"],
+                             row["fees"], row["ts"], row["strategy"], row["thesis"])
+            else:
+                s.record_event(row["kind"], row["ts"], **{k: v for k, v in row.items() if k not in ("seq", "ts", "kind", "prev", "hash")})
+        same = (s.ledger == self.ledger and math.isclose(s.cash, self.cash, abs_tol=1e-6) and math.isclose(s.realized, self.realized, abs_tol=1e-6)
+                and math.isclose(s.fees, self.fees, abs_tol=1e-6) and set(s.positions) == set(self.positions)
+                and all(s.positions[k].qty == p.qty and math.isclose(s.positions[k].avg_price, p.avg_price, abs_tol=1e-9)
+                        for k, p in self.positions.items()))
+        if not same:
+            raise ValueError("the saved cash, positions, profit or fees do not match the ledger: the saved account was changed")
 
     def save(self, path: Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(self.to_dict(), sort_keys=True), encoding="utf-8")
-        os.replace(tmp, path)                                  # atomic: a crash never leaves half an account
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(self.to_dict(), sort_keys=True))
+            fh.flush()
+            os.fsync(fh.fileno())                               # on disk before the rename: a crash never leaves half an account
+        os.replace(tmp, path)
 
     @classmethod
     def load(cls, path: Path) -> "Account":

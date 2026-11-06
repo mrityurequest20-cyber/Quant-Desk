@@ -376,6 +376,11 @@ paper:
   max_quote_age_s: 30              # a data-quality guard: a fill needs a quote this fresh
   cost_verified_segments: [nse_fo] # segments whose costs.segments rates are configured and verified; others are refused, never guessed
   kill_switch_file: runtime/paper/KILL   # while this file exists nothing new opens and the desk flattens
+  # Which underlyings trade in each verified segment: an order labelled with a segment must be for one of these, so a crude-oil or
+  # USD/INR or SENSEX option cannot be labelled nse_fo to dodge the costs and hours check. NSE's F&O stocks are added from the
+  # warehouse universe by the runner (M3); the four index families are listed here.
+  underlyings:
+    nse_fo: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY]
 
 calendar:
   timezone: Asia/Kolkata
