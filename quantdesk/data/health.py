@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
@@ -44,6 +45,7 @@ BAD_BELOW = 0.90
 FLAT_RUN = 10                               # minutes of an unchanged close that is not the closing auction
 CLOSING_WINDOW_START = dt.time(15, 10)
 OI_ABSURD = 1e12
+KITE_LOOKBACK_DAYS = 3                      # kite_artifacts lists only the newest 20 recorder runs
 TAPE_WARN, TAPE_BAD = 0.05, 0.20            # share of failed fetch attempts
 # when each channel is due, IST on the trading day (before that it is PENDING, not MISSING)
 DUE = {"gift": dt.time(9, 0), "premarket": dt.time(9, 20), "session": dt.time(16, 30), "minutes": dt.time(18, 30),
@@ -85,6 +87,21 @@ class Report:
 
 
 # ---- where the data is read from -------------------------------------------------------------------------------------------------
+def retry_delay(code: int, headers, attempt: int, cap: float = 60.0) -> float:
+    """Seconds to wait before the next try: Retry-After if GitHub sent one, else until X-RateLimit-Reset when the limit is spent (rate limits
+    answer 403 or 429), else a short doubling pause. Never more than `cap`."""
+    h = (lambda k: headers.get(k)) if headers is not None else (lambda k: None)
+    try:
+        if code in (403, 429):
+            if h("Retry-After"):
+                return min(cap, max(0.0, float(h("Retry-After"))))
+            if h("X-RateLimit-Remaining") == "0" and h("X-RateLimit-Reset"):
+                return min(cap, max(0.0, float(h("X-RateLimit-Reset")) - time.time()))
+    except (TypeError, ValueError):
+        pass
+    return min(cap, 2.0 * (2 ** attempt))
+
+
 class GitHubStore:
     """Read-only access to this repository's public releases, branches and Actions runs over HTTPS. A token, if given, only raises the rate
     limit; it is sent as a header and never printed."""
@@ -98,16 +115,19 @@ class GitHubStore:
         if self.token and "api.github.com" in url:
             headers["Authorization"] = f"Bearer {self.token}"
         last = None
-        for _ in range(3):
+        for attempt in range(3):
+            delay = 0.0
             try:
                 with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=self.timeout) as r:
                     return r.read()
             except urllib.error.HTTPError as e:
                 if e.code == 404:
                     raise FileNotFoundError(url) from None
-                last = e
+                last, delay = e, retry_delay(e.code, e.headers, attempt)
             except (urllib.error.URLError, TimeoutError, OSError) as e:
-                last = e
+                last, delay = e, retry_delay(0, None, attempt)
+            if attempt < 2:
+                time.sleep(delay)
         raise ConnectionError(f"could not read {url.split('?')[0]} ({type(last).__name__})")
 
     def _releases_list(self) -> list[dict]:
@@ -218,7 +238,7 @@ def _longest_gap(present: pd.DatetimeIndex, grid: pd.DatetimeIndex) -> int:
 def _flat_runs(d: pd.DataFrame) -> list[tuple[str, int]]:
     """Runs of an unchanged close of FLAT_RUN minutes or more that do not sit inside the closing auction window."""
     d = d.sort_values("min")
-    grp = (d["close"] != d["close"].shift()).cumsum()
+    grp = ((d["close"] != d["close"].shift()) | (d["min"].diff() != pd.Timedelta(minutes=1))).cumsum()      # a missing minute ends a run
     out = []
     for _, g in d.groupby(grp):
         if len(g) >= FLAT_RUN and g["min"].iloc[0].time() < CLOSING_WINDOW_START:
@@ -319,6 +339,8 @@ def check_tape(store, day: dt.date) -> Check:
     if not files:
         return Check("fetch tape", MISSING, "no tape file for the day")
     t = _frames(store, files)
+    if t.empty:
+        return Check("fetch tape", MISSING, "the tape file has no fetch attempts")
     ok = float(t["ok"].astype(bool).mean())
     fail = 1 - ok
     errs = t["error"].dropna().astype(str).str.slice(0, 80).value_counts().head(3).to_dict() if "error" in t else {}
@@ -348,6 +370,8 @@ def check_option_minutes(store, day: dt.date) -> Check:
     m = _manifest(store, day, "option-minutes-", f"{day}_manifest.json")
     if m is None:
         return Check("option minutes", MISSING, "no manifest for the day")
+    if not m.get("underlyings"):
+        return Check("option minutes", BAD, "the manifest lists no underlyings: nothing was backfilled")
     issues, worst, lasts = [], 1.0, []
     for u, d in (m.get("underlyings") or {}).items():
         asked, served = d.get("asked") or 0, d.get("served") or 0
@@ -438,7 +462,7 @@ def check_warehouse(store, day: dt.date, cal: MK.Calendars, now: dt.datetime) ->
 
 
 # ---- the brief and Kite ---------------------------------------------------------------------------------------------------------------
-def check_premarket(store, day: dt.date) -> Check:
+def check_premarket(store, day: dt.date, today: dt.date | None = None) -> Check:
     raw = store.branch_file("premarket", "brief.json")
     if raw is None:
         return Check("pre-market brief", MISSING, "the premarket branch or its brief.json does not exist")
@@ -447,16 +471,20 @@ def check_premarket(store, day: dt.date) -> Check:
     except ValueError:
         return Check("pre-market brief", BAD, "brief.json is not valid JSON")
     got = str(b.get("session"))[:10]
+    if got > str(day) and (today or day) > day:
+        return Check("pre-market brief", PENDING, f"a newer brief ({got}) replaced it; a past day's brief is not kept, so not judged")
     if got != str(day):
         return Check("pre-market brief", MISSING, f"the newest brief is for {got}, not {day}")
     return Check("pre-market brief", OK, f"built {str(b.get('generated_at', ''))[11:16]} IST for {got}", False, {"generated_at": b.get("generated_at")})
 
 
-def check_kite(store, day: dt.date) -> Check:
+def check_kite(store, day: dt.date, today: dt.date | None = None) -> Check:
     arts = store.kite_artifacts(day)
     if arts is None:
         return Check("Kite ticks", PENDING, "could not read the Actions API; not judged")
     real = [a for a in arts if a["name"].startswith("kite-raw") and a["size"] > 1000 and not a["expired"]]
+    if not real and today is not None and (today - day).days > KITE_LOOKBACK_DAYS:
+        return Check("Kite ticks", PENDING, f"older than the {KITE_LOOKBACK_DAYS} days of recorder runs that are listed; not judged")
     if not real:
         return Check("Kite ticks", MISSING, "no tick artifact: the recorder had no token for the day, or started after the close")
     return Check("Kite ticks", OK, f"{len(real)} encrypted tick artifact(s), {sum(a['size'] for a in real) / 1e6:.1f} MB (content is encrypted: arrival is all that can be checked)",
@@ -474,10 +502,10 @@ def build_report(store, cfg, day: dt.date, now: dt.datetime | None = None) -> Re
     gen = now.isoformat(timespec="seconds")
     if MK.session("nse_fo", day, cal) is None:
         return Report(str(day), gen, [Check("market", OK, f"{day:%a %d %b} is not an NSE trading day: nothing is due")])
-    plan = [("gift", lambda: check_gift(store, day), "GIFT Nifty pre-open", False), ("premarket", lambda: check_premarket(store, day), "pre-market brief", False),
+    plan = [("gift", lambda: check_gift(store, day), "GIFT Nifty pre-open", False), ("premarket", lambda: check_premarket(store, day, now.date()), "pre-market brief", False),
             ("session", lambda: check_bars(store, day), "session bars", True), ("session", lambda: check_chains(store, day), "option chains", True),
             ("session", lambda: check_tape(store, day), "fetch tape", False), ("minutes", lambda: check_option_minutes(store, day), "option minutes", False),
-            ("minutes", lambda: check_stock_minutes(store, day), "stock minutes", False), ("kite", lambda: check_kite(store, day), "Kite ticks", False),
+            ("minutes", lambda: check_stock_minutes(store, day), "stock minutes", False), ("kite", lambda: check_kite(store, day, now.date()), "Kite ticks", False),
             ("warehouse", lambda: check_warehouse(store, day, cal, now), "NSE warehouse", True)]
     checks = []
     for key, fn, name, critical in plan:

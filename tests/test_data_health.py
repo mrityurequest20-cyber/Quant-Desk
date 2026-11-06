@@ -324,3 +324,41 @@ def test_health_module_is_read_only_and_holds_no_secret():
     src = open(H.__file__, encoding="utf-8").read()
     for bad in (r"os\.environ", r"(?<![\w.])open\(", r"\.write\(", r"\.write_text\(", r"subprocess", r"KITE_API", r"password", r"totp", r"POST", r"method\s*="):
         assert not re.search(bad, src, re.I if bad in ("password", "totp") else 0), bad
+
+
+# ---- review follow-ups (CodeRabbit on #204) ---------------------------------------------------------------------------------------------------
+def test_a_missing_minute_ends_a_flat_run():
+    b = _bars(symbols=("NIFTY",), flat_from=100, flat_len=12)
+    b = b[b["ts"].dt.strftime("%H:%M") != "11:00"]                               # a gap in the middle of the flat stretch: two runs of 5 and 6
+    assert H._flat_runs(_as_minutes(b)) == []
+    assert H._flat_runs(_as_minutes(_bars(symbols=("NIFTY",), flat_from=100, flat_len=12)))          # the same stretch with no gap is flagged
+
+
+def _as_minutes(b: pd.DataFrame) -> pd.DataFrame:
+    b = b.copy()
+    b["min"] = b["ts"].dt.floor("min")
+    return b
+
+
+def test_empty_tape_and_empty_option_manifest_are_not_ok():
+    assert H.check_tape(_store(tape=_tape(0, 0)), DAY).status == H.MISSING
+    assert H.check_option_minutes(_store(optmin={"underlyings": {}}), DAY).status == H.BAD
+
+
+def test_past_day_brief_and_kite_are_not_judged_when_they_cannot_be():
+    today = dt.date(2026, 11, 12)
+    newer = {"premarket": {"brief.json": json.dumps({"session": "2026-11-12"}).encode()}}
+    assert H.check_premarket(_store(branches=newer), DAY, today).status == H.PENDING
+    assert H.check_premarket(_store(branches=newer), DAY).status == H.MISSING                          # no `today` given: judged as before
+    assert H.check_premarket(_store(branches=newer), dt.date(2026, 11, 12), today).status == H.OK
+    assert H.check_kite(_store(kite=[]), DAY, today).status == H.PENDING
+    assert H.check_kite(_store(kite=[]), dt.date(2026, 11, 11), today).status == H.MISSING
+
+
+def test_retry_delay_honours_retry_after_and_rate_limit_reset(monkeypatch):
+    monkeypatch.setattr(H.time, "time", lambda: 1000.0)
+    assert H.retry_delay(429, {"Retry-After": "7"}, 0) == 7.0
+    assert H.retry_delay(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1030"}, 0) == 30.0
+    assert H.retry_delay(403, {"Retry-After": "900"}, 0) == 60.0                                         # capped
+    assert H.retry_delay(500, None, 0) == 2.0 and H.retry_delay(0, None, 1) == 4.0
+    assert H.retry_delay(403, {"Retry-After": "soon"}, 0) == 2.0                                        # garbage header: the plain pause
