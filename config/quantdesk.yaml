@@ -364,6 +364,45 @@ backtest:
   risk_free: 0.065                 # annual, INR (≈ 91-day T-bill)
   dividend_yield: 0.012
 
+# Holiday lists for the segments whose calendar is not NSE's (quantdesk/markets). Source for both: Zerodha's published holiday
+# calendar, https://zerodha.com/marketintel/holiday-calendar/, read on 6 Nov 2026. Its NSE/BSE list is identical to calendar.holidays
+# below, which cross-checks that page against the NSE circular this file already cites.
+# These lists are used for RECORDING only. `holiday_years` is deliberately not set, so neither segment counts as verified for
+# trading until the exchange's own circular (MCX/TRD/636/2025; NSE/CD/71962 and its 15 Jan amendment) has been read and, for MCX,
+# the partial-day sessions (morning shut, evening open) are modelled: those are not on the page above.
+markets:
+  mcx:
+    holidays:                      # the weekday full-day closures Zerodha lists (15 Aug and 8 Nov 2026 fall on a weekend)
+      - 2026-01-26   # Republic Day
+      - 2026-04-03   # Good Friday
+      - 2026-10-02   # Mahatma Gandhi Jayanti
+      - 2026-12-25   # Christmas
+  nse_cds:
+    # NSE's 16 weekday holidays plus the four dates Zerodha lists as settlement holidays. The currency segment's own circular
+    # declares 19 weekday holidays before the 15 Jan amendment and 20 after: 15 + 4 = 19, then 16 + 4 = 20. That count is how the four
+    # extra dates are inferred; it is not read from the circular itself.
+    holidays:
+      - 2026-01-15
+      - 2026-01-26
+      - 2026-02-19   # Chhatrapati Shivaji Maharaj Jayanti (settlement holiday)
+      - 2026-03-03
+      - 2026-03-19   # Gudhi Padwa (settlement holiday)
+      - 2026-03-26
+      - 2026-03-31
+      - 2026-04-01   # annual bank closing (settlement holiday)
+      - 2026-04-03
+      - 2026-04-14
+      - 2026-05-01
+      - 2026-05-28
+      - 2026-06-26
+      - 2026-08-26   # Id-E-Milad (settlement holiday)
+      - 2026-09-14
+      - 2026-10-02
+      - 2026-10-20
+      - 2026-11-10
+      - 2026-11-24
+      - 2026-12-25
+
 calendar:
   timezone: Asia/Kolkata
   market_open: "09:15"
