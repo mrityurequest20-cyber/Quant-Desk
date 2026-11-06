@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -74,6 +75,9 @@ function qdAnswer(D, url) {
     case "/api/i/review": return D.reviews[q.date] ? reply({ date: q.date, markdown: D.reviews[q.date] }) : reply({ error: "no such review" }, 404);
     case "/api/i/stats": return reply(D.stats);
     case "/api/i/news": return reply((D.news || []).slice(0, Number(q.n || 120)));
+    // the pre-market brief lives on its own branch (premarket.yml), fetched as it is, not through data.json
+    case "/api/i/premarket": return D.premarket_url && window.qdRealFetch ? window.qdRealFetch(D.premarket_url, { cache: "no-cache" })
+      : reply({ error: "no pre-market brief on this site" }, 404);
     case "/api/i/chart": return reply(D.chart[(q.symbol || "NIFTY") + "|" + (q.interval || "1m")] || { bars: null });
     case "/api/config": return reply({ gocharting: { enabled: false } });
     default: return reply({ error: "not available on a read-only site" }, 404);
@@ -86,6 +90,7 @@ SHIM = ROUTES + r"""
 window.QD_DEMO = true;
 (function () {
   const D = JSON.parse(document.getElementById("qd-data").textContent);
+  window.qdRealFetch = window.fetch.bind(window);
   window.fetch = async (url) => qdAnswer(D, url);
 })();
 """
@@ -96,6 +101,7 @@ window.QD_DEMO = true;
 window.QD_PUBLISHED = true;
 (function () {
   const realFetch = window.fetch.bind(window);
+  window.qdRealFetch = realFetch;
   let D = null, at = 0, pending = null;
   function load() {
     if (pending) return pending;
@@ -149,6 +155,14 @@ def _charts_block(api, account: str, cfg) -> tuple[dict, list[str]]:
     return charts, failed
 
 
+def premarket_url(cfg) -> str | None:
+    """Where the published app reads the pre-market brief: config `premarket.url`, else the repository's `premarket`
+    branch on GitHub (premarket.yml publishes it there), else none (a local snapshot has no branch to read)."""
+    url = cfg.get("premarket.url")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    return url or (f"https://raw.githubusercontent.com/{repo}/premarket/brief.json" if repo else None)
+
+
 def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, live: bool = False,
               max_trade_details: int = 150) -> dict:
     """Everything the app reads, as one JSON-able object (the same shapes the server's API returns)."""
@@ -183,6 +197,7 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
         "reviews": {d: api.review(account, d)["markdown"] for d in api.reviews(account)},
         "stats": api.stats(account),
         "news": api.news(account, 120),
+        "premarket_url": premarket_url(cfg),
         "chart": charts,
         "export_errors": failed,
     }

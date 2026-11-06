@@ -18,12 +18,14 @@ through a new, separately tested system: the spike detector (docs/PREMARKET.md, 
 | `data.yml` | The NSE warehouse: bhavcopy, every F&O stock's options, participant OI, FII/DII, the event calendar. |
 | `oi-daily.yml`, `ml-retrain.yml` | The OI shadow grading and the registered models' refit drill. |
 | `research.yml`, `study.yml` | Edge research and the pre-registered studies and audits, on demand or nightly. |
+| `premarket.yml` | 07:15 to 09:15 IST: the pre-market brief (events, every F&O company's results against its own history, overnight markets, a ranked watch-list of every F&O instrument); the app's Today tab. See docs/PREMARKET.md. |
 | `site.yml` | The read-only app (GitHub Pages behind Cloudflare). |
 | `scheduler.yml`, `wake.yml` | Start the recorder on time when GitHub's cron is late. |
 
 ## Commands
 
 ```
+python -m quantdesk premarket brief                         today's brief for every F&O instrument
 python -m quantdesk data record-session [--until HH:MM]   record the session (no orders of any kind)
 python -m quantdesk data update --release warehouse        fetch missing NSE days into the warehouse
 python -m quantdesk intraday tape | doctor | kotak-check    the chain tape; can this machine record; what Kotak sees
