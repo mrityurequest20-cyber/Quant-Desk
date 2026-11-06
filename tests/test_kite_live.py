@@ -436,8 +436,12 @@ def test_the_token_workflow_writes_one_encrypted_file_to_one_branch_and_nothing_
     import check_workflows
     text, wf, path = workflow("kite-token.yml")
     assert wf["permissions"] == {"contents": "write"} and set(wf["on"]) == {"workflow_dispatch"} and check_workflows.check(path) == []
-    assert wf["defaults"]["run"]["shell"] == "bash" and sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET"]
+    assert wf["defaults"]["run"]["shell"] == "bash"
+    assert sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET", "KITE_PASSWORD", "KITE_TOTP_SECRET", "KITE_USER_ID"]
     steps = [s for j in wf["jobs"].values() for s in j["steps"]]
+    for name in ("KITE_USER_ID", "KITE_PASSWORD", "KITE_TOTP_SECRET"):                           # the Zerodha login reaches the login step only
+        holders = [s for s in steps if name in json.dumps(s.get("env", {}))]
+        assert len(holders) == 1 and holders[0]["run"].strip().startswith("deploy/kite-autologin.sh login") and "KITE_API_SECRET" not in json.dumps(holders[0]["env"])
     assert all("${{" not in s["run"] for s in steps if "run" in s)                              # the request_token comes in through env only
     assert text.count("git push") == 1 and "git push -q origin kite-token" in text and not re.search(r"git push[^\n]*(--force|\s-f\b)", text)
     assert "openssl enc -aes-256-cbc" in text and "cp \"$RUNNER_TEMP/kite_token.enc\" kite_token.enc" in text and "git add kite_token.enc" in text
