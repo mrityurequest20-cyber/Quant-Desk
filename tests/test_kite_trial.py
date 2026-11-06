@@ -289,7 +289,7 @@ def test_the_recorder_workflow_is_read_only_encrypts_before_it_uploads_and_holds
         if s_.get("name") == login_step:
             assert s_["run"].strip() == "deploy/kite-autologin.sh login" and "KITE_API_SECRET" not in json.dumps(s_["env"])
     second = next(s_ for j, s_ in steps if j == "record-2" and s_.get("name") == login_step)
-    assert second["if"] == "needs.record-1.outputs.login == 'success'"                            # only after job 1 really logged in
+    assert second["if"] == "needs.record-1.outputs.login == 'success' && github.run_attempt == '1'"   # after job 1's login, never on a re-run
     r1 = [s_.get("name") for s_ in wf["jobs"]["record-1"]["steps"]]
     gate = "May this run log in? (only the first run of the day, first attempt)"
     assert r1.index(gate) == r1.index(login_step) - 1                                             # the gate decides right before the login

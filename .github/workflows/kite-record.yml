@@ -132,7 +132,7 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-kite.txt
       - name: Log in to Kite by itself (data only; the password reaches this step alone)
         id: login
-        if: needs.record-1.outputs.login == 'success'        # only when job 1 really logged in: never after a failed or refused login (lockout guard)
+        if: needs.record-1.outputs.login == 'success' && github.run_attempt == '1'   # only after job 1 really logged in, and never on a re-run (lockout guard)
         continue-on-error: true
         env:
           KITE_USER_ID: ${{ secrets.KITE_USER_ID }}

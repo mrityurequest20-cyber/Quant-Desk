@@ -198,6 +198,7 @@ def test_only_the_first_run_of_the_day_on_its_first_attempt_may_log_in():
     assert G.may_log_in([_r(100, "2026-11-09 08:30")], 100, 2, DAY)[0] is False                                    # "Re-run failed jobs"
     assert G.may_log_in([_r(100, "2026-11-09 00:10")], 100, 1, DAY)[0] is True                                     # IST day, not UTC
     assert G.may_log_in([], 100, 1, DAY)[0] is False                                                               # can't see itself: no login
+    assert G.may_log_in([_r(100, "2026-11-08 23:50")], 100, 1, DAY)[0] is False                                    # created yesterday, gated today
 
 
 def test_the_gate_says_no_when_it_cannot_read_the_runs(tmp_path, monkeypatch):

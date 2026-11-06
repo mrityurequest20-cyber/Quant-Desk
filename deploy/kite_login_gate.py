@@ -28,6 +28,8 @@ def may_log_in(runs: list[dict], run_id: int, attempt: int, today: dt.date) -> t
         return False, "this run is not in the run list yet: not logging in (no login is better than a second one)"
     def day(r):
         return dt.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")).astimezone(IST).date()
+    if day(mine[0]) != today:                     # created yesterday, gated after midnight: it would not see today's runs
+        return False, "this run was created on another IST day: not logging in"
     todays = [int(r["databaseId"]) for r in runs if day(r) == today]
     earlier = [i for i in todays if i < run_id]
     if earlier:
