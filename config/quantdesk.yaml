@@ -364,6 +364,24 @@ backtest:
   risk_free: 0.065                 # annual, INR (≈ 91-day T-bill)
   dividend_yield: 0.012
 
+# The 24/7 paper desk (docs/RENAISSANCE.md section 7, quantdesk/paper). Paper money only; real money needs the owner's separate yes.
+# The owner's rule: no cap on the number of trades or open positions, only loss caps. So there is no max_trades and no max_open.
+# These four figures are the old desk's own (2.5% risk per trade, 5% daily loss, 10% drawdown) on its Rs 5 lakh account; a limit
+# is never loosened without the owner's written word.
+paper:
+  capital: 500000
+  risk_per_trade: 0.025            # the most one entry may lose (the whole premium plus fees), as a share of equity
+  daily_loss_limit: 0.05           # entries stop for the day, and the desk flattens, at this loss from the day's starting equity
+  drawdown_halt: 0.10              # entries stop until the OWNER clears it, at this fall from the equity high-water mark
+  max_quote_age_s: 30              # a data-quality guard: a fill needs a quote this fresh
+  cost_verified_segments: [nse_fo] # segments whose costs.segments rates are configured and verified; others are refused, never guessed
+  kill_switch_file: runtime/paper/KILL   # while this file exists nothing new opens and the desk flattens
+  # Which underlyings trade in each verified segment: an order labelled with a segment must be for one of these, so a crude-oil or
+  # USD/INR or SENSEX option cannot be labelled nse_fo to dodge the costs and hours check. NSE's F&O stocks are added from the
+  # warehouse universe by the runner (M3); the four index families are listed here.
+  underlyings:
+    nse_fo: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY]
+
 # Holiday lists for the segments whose calendar is not NSE's (quantdesk/markets). Source for both: Zerodha's published holiday
 # calendar, https://zerodha.com/marketintel/holiday-calendar/, read on 6 Nov 2026. Its NSE/BSE list is identical to calendar.holidays
 # below, which cross-checks that page against the NSE circular this file already cites.
