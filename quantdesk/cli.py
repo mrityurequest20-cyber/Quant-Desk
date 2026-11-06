@@ -1,5 +1,6 @@
 """QuantDesk command line: research, data recorders, the pre-market brief and the ML platform.
 
+  python -m quantdesk markets today|plan            which markets are open when, and the day's chained jobs
   python -m quantdesk premarket brief             today's events and every F&O instrument ranked with its reasons
   python -m quantdesk data record-session         record the session's bars and option chains (record.yml)
   python -m quantdesk data update --release warehouse   the NSE warehouse
@@ -68,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_entry_check)
     from .premarket.cli import add_parser as _premarket
     _premarket(sub)
+    from .markets.cli import add_parser as _markets
+    _markets(sub)
     s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
