@@ -3,6 +3,7 @@
   update   fetch every missing day in a range (default: the last 10 days) and today's API snapshots;
            with --release, pull the files it touches from the GitHub release first and push what changed
   status   what the warehouse holds: rows, first/last day, gaps; NSE's holiday list vs the config's
+  health   did each data channel deliver today, and is it sane? (read-only; exit 1 if a critical one is bad or missing)
 """
 from __future__ import annotations
 
@@ -84,6 +85,24 @@ def cmd_status(cfg, a):
             print(f"- config/quantdesk.yaml has {d} as a holiday; NSE doesn't")
     elif not wh.read("nse_holidays").empty:
         print(f"\nHoliday list check ({year}): config/quantdesk.yaml matches NSE's F&O holidays.")
+
+
+def cmd_health(cfg, a):
+    import datetime as _dt
+    from . import health as H
+    store = H.GitHubStore(a.repo, os.environ.get("GITHUB_TOKEN") or None)
+    now = _dt.datetime.now(H.IST)
+    day = _dt.date.fromisoformat(a.day) if a.day else now.date()
+    rep = H.build_report(store, cfg, day, now)
+    if a.json:
+        print(json.dumps(rep.to_dict(), indent=1, default=str))
+    else:
+        print(rep.markdown())
+    if a.summary and os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+            f.write(rep.markdown() + "\n")
+    if rep.failed():
+        raise SystemExit(1)
 
 
 def cmd_archive(cfg, a):
@@ -207,6 +226,12 @@ def register(sub):
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")
     x.add_argument("--all", action="store_true", help="with --release: pull every table (large)")
     x.set_defaults(fn=cmd_status)
+    x = ss.add_parser("health", help="did each data channel deliver, and is it sane? read-only; exit 1 if a critical channel is bad or missing")
+    x.add_argument("--day", help="YYYY-MM-DD (default today, IST)")
+    x.add_argument("--repo", default="mrityurequest20-cyber/Quant-Desk", help="the GitHub repository whose releases and branches are read")
+    x.add_argument("--json", action="store_true")
+    x.add_argument("--summary", action="store_true", help="also append the table to $GITHUB_STEP_SUMMARY")
+    x.set_defaults(fn=cmd_health)
 
 
 def _kite_authority_ended(today=None) -> bool:
