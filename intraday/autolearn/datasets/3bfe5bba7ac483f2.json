@@ -1,0 +1,26 @@
+{
+ "created": "2026-11-05 23:45:35.748086+05:30",
+ "days": 76,
+ "feature_version": "f1-ebbe08604e",
+ "fingerprint": "3bfe5bba7ac483f2",
+ "first_day": "2026-07-20",
+ "label_version": "y30-h6-93fa9126",
+ "labelled": 10484,
+ "last_day": "2026-11-05",
+ "lockbox_days": [
+  "2026-09-22",
+  "2026-09-23",
+  "2026-09-24",
+  "2026-09-25",
+  "2026-09-28",
+  "2026-09-29",
+  "2026-09-30",
+  "2026-10-01"
+ ],
+ "quality_ok": true,
+ "rows": 11396,
+ "symbols": [
+  "BANKNIFTY",
+  "NIFTY"
+ ]
+}

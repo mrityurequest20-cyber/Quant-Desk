@@ -1,0 +1,66 @@
+{
+ "fit": {
+  "cal_days": [
+   "2026-10-16",
+   "2026-11-05"
+  ],
+  "cal_rows": 1932,
+  "fit_days": [
+   "2026-07-20",
+   "2026-10-15"
+  ],
+  "fit_rows": 7448,
+  "platt": [
+   1.0,
+   0.0
+  ],
+  "tau": 0.5,
+  "tau_table": {
+   "0.0": {
+    "net_bps_per_opportunity": -9.5004,
+    "trades": 1932
+   },
+   "0.01": {
+    "net_bps_per_opportunity": -8.514,
+    "trades": 1708
+   },
+   "0.02": {
+    "net_bps_per_opportunity": -7.4911,
+    "trades": 1486
+   },
+   "0.03": {
+    "net_bps_per_opportunity": -6.7237,
+    "trades": 1237
+   },
+   "0.04": {
+    "net_bps_per_opportunity": -5.0347,
+    "trades": 957
+   },
+   "0.05": {
+    "net_bps_per_opportunity": -3.4826,
+    "trades": 697
+   },
+   "0.06": {
+    "net_bps_per_opportunity": -2.4318,
+    "trades": 472
+   },
+   "0.08": {
+    "net_bps_per_opportunity": -1.4272,
+    "trades": 209
+   },
+   "0.1": {
+    "net_bps_per_opportunity": null,
+    "trades": 84
+   },
+   "0.12": {
+    "net_bps_per_opportunity": null,
+    "trades": 20
+   }
+  }
+ },
+ "train_days": [
+  "2026-07-20",
+  "2026-11-05"
+ ],
+ "train_rows": 9380
+}
