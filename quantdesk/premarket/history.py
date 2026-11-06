@@ -10,15 +10,23 @@ sqrt(dte / 365); 0.8 ~ sqrt(2 / pi), the straddle-to-sigma factor).
   D+1's close (it holds the reaction either way, plus one ordinary session);
 * the data's fingerprint (`inferred_results`), for years the calendar table does not cover: on the session results
   land, implied volatility on the same expiry collapses while the stock jumps. A session counts when IV falls by
-  at least 12% and the move is at least 3x the stock's median of its previous 20 sessions. Measured against 144
-  calendar results meetings of Oct 2026, those thresholds were right 86% of the time and found about a quarter of
-  the events; the thresholds were chosen on the same season, so both numbers are optimistic. The reaction window
-  is the session before to the session after. A calendar event within 3 sessions replaces an inferred one.
+  at least 12% and the move is at least 3x the stock's median of its previous 20 sessions. Measured in-season,
+  against 144 calendar results meetings of Oct 2026 (when most F&O companies report), those thresholds were right
+  86% of the time and found about a quarter of the events; the thresholds were chosen on the same season. Outside
+  results season the same rule still fires about 10 times a month, mostly on non-results moves, so over the whole
+  history its precision is much lower (roughly 0.55 to 0.65 by the research review's estimate). Inferred events
+  are found *because* the stock jumped: they are context, never a label's input. The reaction window is the
+  session before to the session after. A calendar event within 3 sessions replaces an inferred one.
 
-**Per event** (`results_history`): the move over the window, the IV before (D-1) against the stock's normal IV (the
-median of sessions pre-30 to pre-10), the **event-implied move** (the variance above normal, over the time left:
-sqrt(max(iv_pre^2 - iv_base^2, 0) x dte / 365)) and what a straddle bought at the window's start and sold at its end
-returned at closing prices (no costs).
+**Per event** (`results_history`): the move over the window, the IV before (D-1) against the stock's normal IV, the
+**event-implied move** (the variance above normal, over the time left: sqrt(max(iv_pre^2 - iv_base^2, 0) x dte / 365))
+and what a straddle bought at the window's start and sold at its end returned at closing prices (no costs).
+
+The normal IV is the median over sessions pre-30 to pre-10, **only on expiries that end before the event** (an expiry
+that spans the event carries its premium and would shrink the event-implied move). Known biases, not corrected: a
+change in market-wide volatility between that window and D-1 enters the event-implied move (no index or peer
+adjustment); and in the last week of a monthly cycle the dte >= 7 rule reads the thinner next-month expiry, which
+dilutes the event. Only strikes whose call and put both traded that session count (a stale close is not a price).
 
 Closing prices only: the bhavcopy's open is the day's first trade, which for thin stock options is often a stale
 print, and it made blind open-to-close returns look profitable where closing prices say they are not.
@@ -59,7 +67,7 @@ def atm_implied(opts: pd.DataFrame, min_dte: int = MIN_DTE) -> pd.DataFrame:
     o["date"] = pd.to_datetime(o["date"])
     o["expiry"] = pd.to_datetime(o["expiry"])
     sp = _spot_table(o).rename("spot")
-    o = o[o["kind"].isin(["CE", "PE"]) & (o["close"] > 0)]
+    o = o[o["kind"].isin(["CE", "PE"]) & (o["close"] > 0) & (pd.to_numeric(o["contracts"], errors="coerce") > 0)]
     o = o.assign(dte=(o["expiry"] - o["date"]).dt.days)
     o = o[o["dte"] >= min_dte]
     if o.empty:
@@ -83,14 +91,28 @@ def sessions_of(df: pd.DataFrame) -> list[pd.Timestamp]:
     return sorted(pd.to_datetime(df["date"]).unique())
 
 
+RESCHEDULED_WITHIN_DAYS = 30
+
+
+def results_meetings(corp_events: pd.DataFrame | None) -> pd.DataFrame:
+    """NSE's board meetings about results, one per company per quarter: a meeting followed by another results meeting
+    of the same company within 30 days was rescheduled (NSE keeps both rows), so only the later one is kept."""
+    if corp_events is None or len(corp_events) == 0:
+        return pd.DataFrame(columns=["date", "symbol", "company", "purpose"])
+    c = corp_events.copy()
+    c["date"] = pd.to_datetime(c["date"])
+    c = c[c["purpose"].astype(str).str.contains("result", case=False)].sort_values(["symbol", "date"])
+    c = c.drop_duplicates(["symbol", "date"])
+    nxt = c.groupby("symbol")["date"].shift(-1)
+    return c[~((nxt - c["date"]).dt.days <= RESCHEDULED_WITHIN_DAYS)].reset_index(drop=True)
+
+
 def results_calendar(corp_events: pd.DataFrame | None, sessions: list[pd.Timestamp], symbols=None) -> pd.DataFrame:
     """symbol, meeting, d0 (the first session on or after the meeting), company, from NSE's event calendar."""
     cols = ["symbol", "meeting", "d0", "company", "source"]
     if corp_events is None or len(corp_events) == 0 or not sessions:
         return pd.DataFrame(columns=cols)
-    c = corp_events.copy()
-    c["date"] = pd.to_datetime(c["date"])
-    c = c[c["purpose"].astype(str).str.contains("result", case=False)]
+    c = results_meetings(corp_events)
     if symbols is not None:
         c = c[c["symbol"].isin(set(symbols))]
     s = pd.DatetimeIndex(sessions)
@@ -149,8 +171,10 @@ def _windows(calendar: pd.DataFrame, inferred: pd.DataFrame, sessions: list[pd.T
     return pd.DataFrame(rows, columns=["symbol", "source", "event", "pre", "post"])
 
 
-def base_iv(implied: pd.DataFrame, symbol: str, at: pd.Timestamp, sessions: list[pd.Timestamp]) -> float:
-    """The stock's normal IV before `at`: the median over sessions at-30 .. at-10 (before any run-up into an event)."""
+def base_iv(implied: pd.DataFrame, symbol: str, at: pd.Timestamp, sessions: list[pd.Timestamp], event=None) -> float:
+    """The stock's normal IV before `at`: the median over sessions at-30 .. at-10 (before any run-up into an event), on
+    expiries that end before `event` when it is given (an expiry spanning the event carries its premium). NaN with
+    fewer than 5 such sessions."""
     pos = {t: i for i, t in enumerate(sessions)}
     k = pos.get(pd.Timestamp(at))
     if k is None:
@@ -159,8 +183,10 @@ def base_iv(implied: pd.DataFrame, symbol: str, at: pd.Timestamp, sessions: list
     if hi <= lo:
         return float("nan")
     win = set(sessions[lo:hi])
-    x = implied[(implied["symbol"] == symbol) & implied["date"].isin(win)]["iv"]
-    return float(x.median()) if len(x) >= 5 else float("nan")
+    x = implied[(implied["symbol"] == symbol) & implied["date"].isin(win)]
+    if event is not None:
+        x = x[pd.to_datetime(x["expiry"]) < pd.Timestamp(event)]
+    return float(x["iv"].median()) if len(x) >= 5 else float("nan")
 
 
 def event_implied_move(iv_now: float, iv_normal: float, dte: float) -> float:
@@ -194,7 +220,7 @@ def results_history(opts: pd.DataFrame, implied: pd.DataFrame, calendar: pd.Data
             a, b = imp.loc[(r.symbol, r.pre)], imp.loc[(r.symbol, r.post)]
         except KeyError:
             continue
-        ivb = base_iv(implied, r.symbol, r.pre, sessions)
+        ivb = base_iv(implied, r.symbol, r.pre, sessions, event=r.event)
         sell = [px.get((r.symbol, r.post, a["expiry"], a["strike"], k)) for k in ("CE", "PE")]
         sret = (sum(sell) / a["straddle"] - 1) if all(s is not None and s == s and s > 0 for s in sell) else float("nan")
         rows.append({"symbol": r.symbol, "source": r.source, "event": r.event, "pre": r.pre, "post": r.post,
@@ -216,13 +242,40 @@ def profile(history: pd.DataFrame, symbol: str, last: int = 8, sources=None) -> 
         return {"n": 0}
     ratio = (h["move"] / h["iem"]).replace([np.inf, -np.inf], np.nan)
     return {"n": int(len(h)), "n_calendar": int((h["source"] == "calendar").sum()),
-            "median_move": float(h["move"].median()), "median_iem": float(h["iem"].median()),
+            "median_move": float(h["move"].median()), "mean_move": float(h["move"].mean()), "median_iem": float(h["iem"].median()),
             "median_move_over_iem": float(ratio.median()) if ratio.notna().any() else float("nan"),
             "median_straddle_ret": float(h["straddle_ret"].median()) if h["straddle_ret"].notna().any() else float("nan"),
             "events": [{"date": pd.Timestamp(r.event).date().isoformat(), "source": r.source, "move": round(float(r.move), 4),
                         "iem": None if r.iem != r.iem else round(float(r.iem), 4),
                         "straddle_ret": None if r.straddle_ret != r.straddle_ret else round(float(r.straddle_ret), 3)}
                        for r in h.tail(last).itertuples()]}
+
+
+# ---- how far a fairly priced company's record strays by chance ---------------------------------------------------
+TRADING_SESSIONS = 252
+_BANDS: dict = {}
+
+
+def priced_abs_move(iem: float, iv_normal: float, sessions: int = 2) -> float:
+    """The absolute move a straddle prices over a results window: the event's variance plus `sessions` ordinary
+    sessions at the normal IV, read back as an expected absolute move (x 0.7979, the straddle's own convention)."""
+    if not all(x == x for x in (iem, iv_normal)):
+        return float("nan")
+    return float(SQRT_2_PI * np.sqrt(iem ** 2 + sessions * iv_normal ** 2 / TRADING_SESSIONS))
+
+
+def chance_band(n: int, lo: float = 0.05, hi: float = 0.95, draws: int = 40000) -> tuple[float, float]:
+    """The range of (mean |move| of n events) / (the priced expected |move|) that a *fairly priced* company shows 90% of
+    the time: unit-variance Student-t(4) moves (fat tails, the conservative case), a fixed seed. A ratio outside it is
+    unlikely by chance alone; inside it, n events cannot tell cheap from rich."""
+    n = int(n)
+    if (n, lo, hi) not in _BANDS:
+        rng = np.random.default_rng(20261103 + n)
+        x = rng.standard_t(4, size=(draws, n)) / np.sqrt(2.0)
+        ref = np.abs(rng.standard_t(4, size=draws * 4) / np.sqrt(2.0)).mean()
+        r = np.abs(x).mean(axis=1) / ref
+        _BANDS[(n, lo, hi)] = (float(np.quantile(r, lo)), float(np.quantile(r, hi)))
+    return _BANDS[(n, lo, hi)]
 
 
 # ---- macro events on the indices -----------------------------------------------------------------------------

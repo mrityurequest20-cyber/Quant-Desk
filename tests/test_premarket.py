@@ -18,27 +18,35 @@ from quantdesk.premarket import universe as U
 
 ROOT = Path(__file__).resolve().parents[1]
 SESSIONS = list(pd.bdate_range("2026-05-01", periods=130))
-E1, E2 = 40, 105                                        # two results, a quarter apart
-EXPIRY = SESSIONS[-1] + pd.Timedelta(days=25)          # one expiry, always >= 7 days away
+EXPIRIES = [d for d in pd.bdate_range("2026-05-01", "2027-02-28") if (d + pd.offsets.BDay(1)).month != d.month]   # monthly
+E1 = next(i for i, d in enumerate(SESSIONS) if d >= pd.Timestamp("2026-06-15"))   # two results, a quarter apart,
+E2 = next(i for i, d in enumerate(SESSIONS) if d >= pd.Timestamp("2026-09-14"))   # mid-month (no expiry roll inside)
+EXPIRY = EXPIRIES[-1]
 
 
-def _chain(sym, day, spot, iv, step=20.0, lot=500, underlying=True, contracts=500):
-    """A small option chain: the ATM straddle is 0.8 x spot x iv x sqrt(dte/365), split evenly; others by intrinsic."""
-    dte = (EXPIRY - day).days
-    strad = H.SQRT_2_PI * spot * iv * np.sqrt(dte / 365)
-    atm = round(spot / step) * step
+def _near(day, k=2):
+    return [e for e in EXPIRIES if e >= day][:k]
+
+
+def _chain(sym, day, spot, iv, step=20.0, lot=500, underlying=True, contracts=500, expiries=None):
+    """Small option chains (the two nearest monthly expiries unless given): the ATM straddle is 0.8 x spot x iv x
+    sqrt(dte/365), split evenly; other strikes by intrinsic value."""
     rows = []
-    for k in np.arange(atm - 10 * step, atm + 10 * step + 1, step):
-        for kind in ("CE", "PE"):
-            intr = max(spot - k, 0) if kind == "CE" else max(k - spot, 0)
-            px = intr + strad / 2 * np.exp(-abs(k - spot) / (3 * step))
-            rows.append({"date": day, "symbol": sym, "kind": kind, "expiry": EXPIRY, "strike": float(k), "open": px, "high": px,
-                         "low": px, "close": round(px, 2), "last": px, "prev_close": px, "settle": px,
-                         "underlying": spot if underlying else np.nan, "oi": 1000.0, "chg_oi": 0.0, "contracts": float(contracts),
-                         "lot": float(lot), "src": "udiff"})
-    rows.append({"date": day, "symbol": sym, "kind": "FUT", "expiry": EXPIRY, "strike": 0.0, "open": spot, "high": spot, "low": spot,
-                 "close": spot * 1.002, "last": spot, "prev_close": spot, "settle": spot, "underlying": np.nan, "oi": 1.2e6,
-                 "chg_oi": 2e5, "contracts": 1000.0, "lot": float(lot), "src": "udiff"})
+    for ex in (expiries or _near(day)):
+        dte = max((ex - day).days, 0)
+        strad = H.SQRT_2_PI * spot * iv * np.sqrt(dte / 365)
+        atm = round(spot / step) * step
+        for k in np.arange(atm - 10 * step, atm + 10 * step + 1, step):
+            for kind in ("CE", "PE"):
+                intr = max(spot - k, 0) if kind == "CE" else max(k - spot, 0)
+                px = intr + strad / 2 * np.exp(-abs(k - spot) / (3 * step))
+                rows.append({"date": day, "symbol": sym, "kind": kind, "expiry": ex, "strike": float(k), "open": px, "high": px,
+                             "low": px, "close": round(px, 2), "last": px, "prev_close": px, "settle": px,
+                             "underlying": spot if underlying else np.nan, "oi": 1000.0, "chg_oi": 0.0,
+                             "contracts": float(contracts), "lot": float(lot), "src": "udiff"})
+        rows.append({"date": day, "symbol": sym, "kind": "FUT", "expiry": ex, "strike": 0.0, "open": spot, "high": spot, "low": spot,
+                     "close": spot * 1.002, "last": spot, "prev_close": spot, "settle": spot, "underlying": np.nan, "oi": 1.2e6,
+                     "chg_oi": 2e5, "contracts": 1000.0, "lot": float(lot), "src": "udiff"})
     return rows
 
 
@@ -99,7 +107,7 @@ def test_atm_implied_reads_the_straddle_as_a_volatility(opts):
 
 def test_atm_implied_skips_expiries_closer_than_the_minimum():
     day = EXPIRY - pd.Timedelta(days=3)
-    assert H.atm_implied(pd.DataFrame(_chain("ZZZ", day, 1000.0, 0.3)), min_dte=7).empty
+    assert H.atm_implied(pd.DataFrame(_chain("ZZZ", day, 1000.0, 0.3, expiries=[EXPIRY])), min_dte=7).empty
 
 
 def test_the_fingerprint_finds_results_and_not_quiet_stocks(opts):
@@ -177,7 +185,7 @@ def _opts_with_runup_at_the_end():
     return pd.DataFrame(_stock("AAA", events=(len(SESSIONS),), seed=1) + _stock("BBB", seed=2, base_iv=0.25))   # run-up on the last session
 
 
-def test_label_compares_with_calendar_events_only():
+def test_label_compares_with_calendar_events_only_and_inside_a_chance_band():
     opts = _opts_with_runup_at_the_end()
     today = (SESSIONS[-1] + pd.offsets.BDay(1)).date()
     now = dt.datetime.combine(today, dt.time(8, 0))
@@ -187,9 +195,64 @@ def test_label_compares_with_calendar_events_only():
     assert "biased toward big moves" in r["why"] and r["past_inferred"]["n"] == 3
     big = _hist_rows("AAA", [0.20, 0.25, 0.30])
     r = B.build(_inputs(opts, big, today, now))["results"][0]
-    assert r["label"] == "cheap" and r["move_over_implied"] >= B.CHEAP
+    assert r["priced_abs_move"] > 0 and r["chance_band"][0] < 1 < r["chance_band"][1]
+    assert r["label"] == "cheap" and r["move_over_priced"] > r["chance_band"][1]
     small = _hist_rows("AAA", [0.001, 0.002, 0.001])
     assert B.build(_inputs(opts, small, today, now))["results"][0]["label"] == "rich"
+    priced = r["priced_abs_move"]
+    fair = _hist_rows("AAA", [priced * 0.8, priced, priced * 1.2])       # past moves the size the options price
+    assert B.build(_inputs(opts, fair, today, now))["results"][0]["label"] == "within chance"
+
+
+def test_the_priced_move_is_like_for_like_with_the_mean_absolute_move():
+    """A company whose results moves are drawn exactly from what the options price lands inside the band ~90% of the
+    time: the label is not biased toward rich (the first version's median-vs-sigma rule called ~54% of fair ones rich)."""
+    iem, ivn = 0.05, 0.30
+    sd = H.priced_abs_move(iem, ivn) / H.SQRT_2_PI
+    rng = np.random.default_rng(7)
+    for n in (3, 5, 8):
+        lo, hi = H.chance_band(n)
+        x = np.abs(rng.normal(0, sd, size=(20000, n))).mean(axis=1) / H.priced_abs_move(iem, ivn)
+        cheap, rich = (x >= hi).mean(), (x <= lo).mean()
+        assert cheap < 0.08 and rich < 0.08, (n, cheap, rich)             # normal tails: inside the fat-tailed band
+    assert H.priced_abs_move(0.0, ivn) == pytest.approx(H.SQRT_2_PI * ivn * np.sqrt(2 / 252))
+
+
+def test_normal_iv_ignores_expiries_that_span_the_event():
+    imp = pd.DataFrame({"symbol": "X", "date": SESSIONS[:40], "iv": [0.5] * 40, "expiry": [EXPIRIES[3]] * 40})
+    imp.loc[imp.index < 15, "expiry"] = SESSIONS[25]                     # ends before the event
+    imp.loc[imp.index < 15, "iv"] = 0.3
+    event = SESSIONS[39]
+    assert H.base_iv(imp, "X", SESSIONS[38], SESSIONS[:40], event=event) == pytest.approx(0.3)
+    assert H.base_iv(imp, "X", SESSIONS[38], SESSIONS[:40]) > 0.3        # without the rule the event premium leaks in
+    imp["expiry"] = EXPIRIES[3]
+    assert np.isnan(H.base_iv(imp, "X", SESSIONS[38], SESSIONS[:40], event=event))
+
+
+def test_a_rescheduled_results_meeting_counts_once():
+    c = pd.DataFrame([{"date": "2026-10-27", "symbol": "TATASTEEL", "company": "Tata Steel Limited", "purpose": "Financial Results"},
+                      {"date": "2026-11-07", "symbol": "TATASTEEL", "company": "Tata Steel Limited", "purpose": "Financial Results"},
+                      {"date": "2026-08-01", "symbol": "TATASTEEL", "company": "Tata Steel Limited", "purpose": "Financial Results"},
+                      {"date": "2026-10-20", "symbol": "INFY", "company": "Infosys Limited", "purpose": "Dividend"}])
+    m = H.results_meetings(c)
+    assert list(zip(m["symbol"], m["date"].dt.strftime("%Y-%m-%d"))) == [("TATASTEEL", "2026-08-01"), ("TATASTEEL", "2026-11-07")]
+
+
+def test_an_untraded_leg_is_not_a_price():
+    rows = _chain("ZZZ", SESSIONS[0], 1000.0, 0.3, expiries=[EXPIRY])
+    for r in rows:
+        if r["kind"] == "CE" and r["strike"] == 1000.0:
+            r["contracts"] = 0.0
+    imp = H.atm_implied(pd.DataFrame(rows))
+    assert imp.iloc[0]["strike"] != 1000.0
+
+
+def test_no_implied_move_says_why():
+    opts = _opts_with_runup_at_the_end()
+    opts = opts[pd.to_datetime(opts["expiry"]) > SESSIONS[-1] + pd.Timedelta(days=1)]   # every expiry spans the event
+    today = (SESSIONS[-1] + pd.offsets.BDay(1)).date()
+    r = B.build(_inputs(opts, _hist_rows("AAA", [0.2, 0.25, 0.3]), today, dt.datetime.combine(today, dt.time(8, 0))))["results"][0]
+    assert r["label"] == "no implied move" and "pre-event IV window" in r["why"] and "too few" not in r["why"]
 
 
 def test_a_result_already_crushed_at_the_last_close_is_called_out(opts):
@@ -199,6 +262,23 @@ def test_a_result_already_crushed_at_the_last_close_is_called_out(opts):
     b = B.build(_inputs(o, _hist_rows("AAA", [0.05] * 3), SESSIONS[E2].date(), now))
     r = b["results"][0]
     assert r["when"].startswith("reaction day") and r["label"] == "already out"
+
+
+def test_an_iv_drop_without_a_jump_is_not_already_out(opts):
+    o = opts[pd.to_datetime(opts["date"]) <= SESSIONS[E2]].copy()
+    last = o["date"] == SESSIONS[E2]
+    o.loc[last & (o["symbol"] == "AAA") & (o["kind"] != "FUT"), ["underlying"]] = \
+        o.loc[(o["date"] == SESSIONS[E2 - 1]) & (o["symbol"] == "AAA") & (o["kind"] != "FUT"), "underlying"].iloc[0]
+    today = (SESSIONS[E2] + pd.offsets.BDay(1)).date()
+    r = B.build(_inputs(o, _hist_rows("AAA", [0.05] * 3), SESSIONS[E2].date(), dt.datetime.combine(today, dt.time(8, 0))))["results"][0]
+    assert r["label"] != "already out"
+
+
+def test_the_history_range_is_the_events_range():
+    opts = _opts_with_runup_at_the_end()
+    today = (SESSIONS[-1] + pd.offsets.BDay(1)).date()
+    b = B.build(_inputs(opts, _hist_rows("AAA", [0.2, 0.25, 0.3]), today, dt.datetime.combine(today, dt.time(8, 0))))
+    assert b["history"]["from"] == str(SESSIONS[5].date()) and b["history"]["to"] == str(SESSIONS[7].date())
 
 
 def test_the_watch_list_ranks_every_name_with_reasons():
@@ -309,6 +389,10 @@ def test_the_workflow_holds_no_secret_and_writes_only_the_premarket_branch():
     assert run.count("$auth") == 2 + run.count("auth=") - 1                 # set once, masked once, used once
     pushes = re.findall(r"push-dir\.sh\s+\S+\s+(\S+)", text)
     assert pushes == ["premarket"] and "git push" not in text
+    for st in steps:                                   # the token steps run the system's bash, and so do their scripts
+        if "GH_TOKEN" in (st.get("env") or {}):
+            assert st["shell"].startswith("/usr/bin/bash --noprofile --norc")
+    assert "/usr/bin/bash deploy/premarket-data.sh" in text and "/usr/bin/bash deploy/push-dir.sh" in text
     # every token step narrows PATH before any tool runs, and starts python without the token
     data = (ROOT / "deploy" / "premarket-data.sh").read_text()
     for body in (run, data):

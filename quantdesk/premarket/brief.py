@@ -24,18 +24,20 @@ from . import universe as U
 
 IST = "Asia/Kolkata"
 CLOSE = dt.time(15, 30)
-CHEAP, RICH, MIN_EVENTS = 1.25, 0.80, 3          # median past move over today's event-implied move
+MIN_EVENTS = 3                                   # past calendar results a company needs before any comparison
 OI_SHIFT = 0.10                                  # |futures OI change| over yesterday's OI that counts as a shift
 KITE_TOKENS_PER_CONNECTION, KITE_CONNECTIONS = 3000, 3
-EXPIRY_NOTE = ("Exploratory, NIFTY/BANKNIFTY 2019-2026 bhavcopy (3 Nov 2026): expiry days have the most option spikes "
-               "(a near-money option closed at 3x its open on 22% of expiry sessions against 13% of others), but buying "
-               "near-money options at the open on an expiry day lost 33% to 48% on average. Lottery tickets, not an edge.")
-RESULTS_NOTE = ("Exploratory, 144 F&O results meetings of Oct 2026: the stock moved about twice as far as usual (median 3.3% "
-                "over D-1 to D+1 against 1.6%), and options already price it: an ATM straddle bought at D-1's close and sold "
-                "at D+1's returned about +2.5% before costs (control +0.3%), negative after 4% costs. The cheap/rich label "
-                "compares today's event-implied move with the company's own past reactions on NSE's calendar (at least 3; "
-                "events inferred from the data are shown apart, since they are found because the stock jumped): a "
-                "hypothesis, not a tested rule.")
+EXPIRY_NOTE = ("Exploratory, NIFTY/BANKNIFTY 2019-2026 bhavcopy, options picked with what is known at the open (3 Nov "
+               "2026): a near-money option closed at 3x its open on 20% of expiry symbol-sessions against 9% of others, "
+               "but buying near-money options at the open on an expiry day lost 31% to 49% on average before costs. "
+               "Lottery tickets, not an edge.")
+RESULTS_NOTE = ("Exploratory, F&O results meetings of Oct 2026 (n = 119 to 151 by measure): the stock moved about twice as far "
+                "as usual (median 3.3% from D-1 to D+1 against 1.6%), and options priced more too. An ATM straddle bought at "
+                "D-1's close and sold at D+1's had a median of -10.8% and a mean of +2.5% before costs, against +1.3% for "
+                "the control: the difference is not significant (t 0.3), and both lose after a 4% round trip. The label "
+                "compares the move the options price today with the company's own past results moves (NSE's calendar "
+                "only), and names cheap or rich only when the gap is outside what a fairly priced company would show by "
+                "chance 90% of the time with that few events. A hypothesis, not a tested rule.")
 WORDS_NOT_NAMES = {"IDEA", "POWER", "STEEL", "BANK", "INDIA", "INDIAN", "STATE", "NATIONAL", "UNITED", "GROUP", "CAPITAL",
                    "FINANCE", "ENERGY", "MOTORS", "LIFE", "HOUSING", "GAS", "OIL", "TATA", "BAJAJ", "ADANI", "HINDUSTAN",
                    "MAHINDRA", "BHARAT", "GODREJ", "AVENUE", "TRENT", "JUBILANT", "MAX", "ABB", "PAGE"}
@@ -112,15 +114,13 @@ def match_headlines(headlines: list | None, symbols: list[str], aliases: dict[st
 
 def _results_rows(inp: Inputs, day: dt.date, last_close: pd.Timestamp, implied: pd.DataFrame, hist: pd.DataFrame,
                   sessions: list) -> list[dict]:
-    cal = inp.corp_events
-    if cal is None or len(cal) == 0:
+    c = H.results_meetings(inp.corp_events)
+    if c.empty:
         return []
-    c = cal.copy()
     c["date"] = pd.to_datetime(c["date"]).dt.date
-    c = c[c["purpose"].astype(str).str.contains("result", case=False)]
     fo = set(implied["symbol"]) if len(implied) else set()
     rows = []
-    for r in c[c["symbol"].isin(fo)].drop_duplicates(["symbol", "date"]).itertuples():
+    for r in c[c["symbol"].isin(fo)].itertuples():
         if r.date == day:
             when = "results today (board meeting; NSE does not say whether in or after market hours)"
         elif last_close.date() <= r.date < day:
@@ -133,29 +133,42 @@ def _results_rows(inp: Inputs, day: dt.date, last_close: pd.Timestamp, implied: 
         a = imp.iloc[-1]
         prev = imp.iloc[-2] if len(imp) >= 2 else None
         crushed = prev is not None and prev["expiry"] == a["expiry"] and a["iv"] / prev["iv"] - 1 <= H.CRUSH
-        ivb = H.base_iv(implied, r.symbol, a["date"], sessions)
+        typ = (imp["spot"] / imp["spot"].shift() - 1).abs().iloc[-21:-1].median()
+        jumped = prev is not None and typ == typ and typ > 0 and abs(a["spot"] / prev["spot"] - 1) >= H.JUMP * typ
+        ivb = H.base_iv(implied, r.symbol, a["date"], sessions, event=pd.Timestamp(r.date))
         iem = _f(H.event_implied_move(a["iv"], ivb, a["dte"]))
+        priced = _f(H.priced_abs_move(iem if iem is not None else float("nan"), ivb))
         prof = {k: (_f(v) if isinstance(v, float) else v) for k, v in H.profile(hist, r.symbol, sources=("calendar",)).items()}
         inferred = {k: (_f(v) if isinstance(v, float) else v) for k, v in H.profile(hist, r.symbol, sources=("inferred",)).items()}
-        med = prof.get("median_move")
-        ratio = med / iem if iem and med is not None and prof.get("n", 0) else float("nan")
-        if crushed:
-            label, why = "already out", "implied volatility collapsed at the last close: the result is probably already in the price"
-        elif prof.get("n", 0) < MIN_EVENTS or ratio != ratio:
-            label, why = "no history", (f"{prof.get('n', 0)} past results on NSE's calendar: too few to compare"
-                                        + (f" ({inferred['n']} more inferred from the data, biased toward big moves)" if inferred.get("n") else ""))
-        elif ratio >= CHEAP:
-            label, why = "cheap", f"its past results moves (median {med:.1%}) exceed what options price for this one ({iem:.1%})"
-        elif ratio <= RICH:
-            label, why = "rich", f"options price {iem:.1%} for this result, more than its past moves (median {med:.1%})"
+        n, mean = prof.get("n", 0), prof.get("mean_move")
+        ratio = mean / priced if priced and mean is not None and n else float("nan")
+        band = H.chance_band(n) if n >= MIN_EVENTS else None
+        more = f" ({inferred['n']} more inferred from the data, biased toward big moves)" if inferred.get("n") else ""
+        if crushed and jumped:
+            label, why = "already out", "implied volatility collapsed and the stock jumped at the last close: the result is probably already in the price"
+        elif priced is None:
+            label, why = "no implied move", ("no clean pre-event IV window (an expiry ending before the event, sessions 30 to 10 back) "
+                                             "or no traded at-the-money straddle")
+        elif n < MIN_EVENTS:
+            label, why = "no history", f"{n} past results on NSE's calendar: too few to compare{more}"
+        elif ratio >= band[1]:
+            label, why = "cheap", (f"options price an expected move of {priced:.1%}; its past results moves averaged {mean:.1%} ({n} events), "
+                                   f"above the {band[1]:.2f}x a fairly priced company reaches by chance")
+        elif ratio <= band[0]:
+            label, why = "rich", (f"options price an expected move of {priced:.1%}; its past results moves averaged {mean:.1%} ({n} events), "
+                                  f"below the {band[0]:.2f}x a fairly priced company falls to by chance")
         else:
-            label, why = "fair", f"options price {iem:.1%}; its past results moves had a median of {med:.1%}"
+            label, why = "within chance", (f"options price {priced:.1%}; its past results moves averaged {mean:.1%} ({n} events): "
+                                           f"{ratio:.2f}x, inside the {band[0]:.2f}x to {band[1]:.2f}x a fairly priced company shows by chance")
+        if iem == 0 and label not in ("already out",):
+            why += " (options price no event premium above the stock's normal IV)"
         rows.append({"symbol": r.symbol, "company": getattr(r, "company", None), "meeting": r.date.isoformat(), "when": when,
                      "spot": _f(a["spot"], 2), "expiry": pd.Timestamp(a["expiry"]).date().isoformat(), "dte": int(a["dte"]),
                      "implied_move_to_expiry": _f(a["move"]), "iv": _f(a["iv"]), "iv_normal": _f(ivb), "event_implied_move": iem,
-                     "past": prof, "past_inferred": inferred, "move_over_implied": _f(ratio, 2), "label": label, "why": why})
-    order = {"cheap": 0, "rich": 1, "fair": 2, "no history": 3, "already out": 4}
-    return sorted(rows, key=lambda x: (order[x["label"]], -(x["move_over_implied"] or 0)))
+                     "priced_abs_move": priced, "past": prof, "past_inferred": inferred, "move_over_priced": _f(ratio, 2),
+                     "chance_band": [round(band[0], 2), round(band[1], 2)] if band else None, "label": label, "why": why})
+    order = {"cheap": 0, "rich": 1, "within chance": 2, "no history": 3, "no implied move": 4, "already out": 5}
+    return sorted(rows, key=lambda x: (order[x["label"]], -(x["move_over_priced"] or 0)))
 
 
 def _macro(inp: Inputs, day: dt.date, last_close: dt.date) -> list[dict]:
@@ -272,7 +285,8 @@ def build(inp: Inputs) -> dict:
         "watch": watch, "record_plan": record_plan(watch) if watch else {"budget": 0, "used": 0, "names": 0, "of": 0, "plan": []},
         "history": {"events": int(len(hist)), "calendar": int((hist["source"] == "calendar").sum()) if len(hist) else 0,
                     "inferred": int((hist["source"] == "inferred").sum()) if len(hist) else 0,
-                    "from": str(pd.Timestamp(min(sessions)).date()) if sessions else None, "to": str(last_close.date())},
+                    "from": str(pd.Timestamp(hist["event"].min()).date()) if len(hist) else None,
+                    "to": str(pd.Timestamp(hist["event"].max()).date()) if len(hist) else None},
         "health": inp.health,
         "not_for": "context only: places nothing, sizes nothing; labels are untested hypotheses",
     }
@@ -319,13 +333,14 @@ def to_markdown(b: dict) -> str:
             L.append("")
     if b["results"]:
         L += ["## Results", "", RESULTS_NOTE, "",
-              "| Stock | When | Event-implied move | Past median move (calendar) | Calendar events | Inferred events (median move, biased up) | Label | Why |",
-              "|---|---|---|---|---|---|---|---|"]
+              "| Stock | When | Priced expected move | Past mean move (NSE calendar) | Events | Ratio | Chance band | Inferred (biased up) | Label |",
+              "|---|---|---|---|---|---|---|---|---|"]
         for r in b["results"]:
-            p, q = r["past"], r.get("past_inferred") or {}
-            L.append(f"| {r['symbol']} | {r['when'].split(':')[0].split(' (')[0]} | {_pct(r['event_implied_move'])} | "
-                     f"{_pct(p.get('median_move'))} | {p.get('n', 0)} | {q.get('n', 0)} ({_pct(q.get('median_move'))}) | "
-                     f"{r['label']} | {r['why']} |")
+            p, q, band = r["past"], r.get("past_inferred") or {}, r.get("chance_band")
+            L.append(f"| {r['symbol']} | {r['when'].split(':')[0].split(' (')[0]} | {_pct(r['priced_abs_move'])} | "
+                     f"{_pct(p.get('mean_move'))} | {p.get('n', 0)} | {r['move_over_priced'] if r['move_over_priced'] is not None else '-'} | "
+                     f"{f'{band[0]}-{band[1]}' if band else '-'} | {q.get('n', 0)} ({_pct(q.get('mean_move'))}) | {r['label']} |")
+        L += [""] + [f"- **{r['symbol']}**: {r['why']}" for r in b["results"]]
         L.append("")
     if b["global"]:
         L += ["## Overnight", ""] + [f"- {x['name']}: {_pct(x.get('change'), signed=True)}" for x in b["global"]] + [""]

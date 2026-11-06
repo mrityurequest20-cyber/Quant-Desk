@@ -40,10 +40,12 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Warehouse tables and the results history (rebuilt once a day)
+        shell: /usr/bin/bash --noprofile --norc -o pipefail {0}     # the system's bash, never one on pip's PATH
         env:
           GH_TOKEN: ${{ github.token }}
-        run: deploy/premarket-data.sh runtime/warehouse runtime/premarket-history
+        run: /usr/bin/bash deploy/premarket-data.sh runtime/warehouse runtime/premarket-history
       - name: Brief every 15 minutes to 09:15 IST (once, if started later)
+        shell: /usr/bin/bash --noprofile --norc -o pipefail {0}     # the system's bash, never one on pip's PATH
         env:
           GH_TOKEN: ${{ github.token }}      # used only to publish the brief; python is started without it (env -u)
         run: |
@@ -58,7 +60,7 @@ jobs:
               --history runtime/premarket-history/results_history.parquet --out _premarket || return 0
             cp runtime/premarket-history/results_history.parquet runtime/premarket-history/history_built.txt _premarket/ 2>/dev/null || true
             GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$auth" \
-              deploy/push-dir.sh _premarket premarket "pre-market brief $(TZ=Asia/Kolkata date '+%F %H:%M') IST" \
+              /usr/bin/bash deploy/push-dir.sh _premarket premarket "pre-market brief $(TZ=Asia/Kolkata date '+%F %H:%M') IST" \
               || echo "::warning::the brief was built but not published"
           }
           now=$(date +%s)

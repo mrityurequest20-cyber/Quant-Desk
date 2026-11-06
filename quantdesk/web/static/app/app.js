@@ -1365,7 +1365,7 @@ async function loadBrief(maxAge) {
 	S.pmAt = Date.now();
 	return S.pm;
 }
-const PM_LABEL = { cheap: "bull", rich: "bear", fair: "flat", "no history": "flat", "already out": "flat" };
+const PM_LABEL = { cheap: "bull", rich: "bear", "within chance": "flat", "no history": "flat", "no implied move": "flat", "already out": "flat" };
 const pctU = (v, d = 1) => (fin(v) ? (v * 100).toFixed(d) + "%" : "—");
 async function renderToday(full) {
 	const body = $("#p-body");
@@ -1390,7 +1390,7 @@ async function renderToday(full) {
 	if ((b.results || []).length) {
 		const tb = h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Stock", "Priced", "Past (NSE)", "Label"].map((x) => h("th", {}, x)))),
 			h("tbody", {}, b.results.map((r) => h("tr", {}, h("td", {}, h("b", { style: "font-weight:500" }, r.symbol), h("small", { class: "sub" }, r.when.startsWith("results today") ? "today" : "reacting")),
-				h("td", {}, pctU(r.event_implied_move)), h("td", {}, r.past && r.past.n ? `${pctU(r.past.median_move)} · ${r.past.n}` : "—"),
+				h("td", {}, pctU(r.priced_abs_move)), h("td", {}, r.past && r.past.n ? `${pctU(r.past.mean_move)} · ${r.past.n}` : "—"),
 				h("td", {}, h("span", { class: "tag " + (PM_LABEL[r.label] || "flat") }, r.label))))));
 		const why = h("div", { class: "rows" }, b.results.map((r) => h("div", { class: "pad", style: "font-size:12.5px" }, h("b", { style: "font-weight:500" }, r.symbol + ": "), r.why)));
 		put(body, grp("Results", `${b.results.length} companies`, h("div", { class: "scroll" }, tb), why, h("div", { class: "pad" }, notes(b.results_note))));

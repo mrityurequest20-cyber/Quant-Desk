@@ -28,69 +28,109 @@ recording plan it writes is advisory: no recorder reads it yet.
 
 For a company reporting today, the brief compares two numbers:
 
-* **What the options price for this event.** The at-the-money straddle at the last close (nearest expiry at least
-  7 days away), read as an annualised implied volatility. Then the variance above the stock's normal level (the median
-  IV 30 to 10 sessions before), over the time left: `sqrt(max(iv^2 - iv_normal^2, 0) x dte / 365)`.
-* **How far it moved on its past results.** The move from the close before to the close after each past results
-  session.
+* **What the options price for the results window.** The at-the-money straddle at the last close (nearest expiry at
+  least 7 days away, both legs traded that session), read as an annualised implied volatility. The **event-implied
+  move** is the variance above the stock's normal level, over the time left: `sqrt(max(iv^2 - iv_normal^2, 0) x dte
+  / 365)`. The normal level is the median IV 30 to 10 sessions back, only on expiries that end before the event. An
+  expiry that spans the event carries its premium. Two ordinary sessions at the normal IV are added (the window is D-1's
+  close to D+1's), and the result is read back as an expected absolute move (x 0.7979). That is the straddle's own
+  convention, so the comparison is like with like.
+* **How far it moved on its past results:** the mean absolute move from the close before to the close after each past
+  results session on NSE's calendar.
 
-The label is **cheap** when its past median move is at least 1.25x the price, **rich** at 0.8x or below, **fair** in
-between, **no history** with fewer than 3 past events, and **already out** when IV collapsed at the last close (the
-result already landed). Labels are hypotheses, not tested trading rules. A rule built on them needs its own
+**Few events make most gaps chance.** With 3 to 8 past events, a perfectly fairly priced company shows a ratio far from
+1 most of the time. At fixed 1.25x and 0.8x thresholds, 20% to 40% of fairly priced companies would be called cheap or
+rich (simulated, fat-tailed moves). So the label is set by a **chance band**: the range of ratios a fairly priced
+company shows 90% of the time with that many events (Student-t(4) moves, a fixed seed). The labels are:
+
+* **cheap** when above the band and **rich** when below it;
+* **within chance** inside the band;
+* **no history** with fewer than 3 calendar events;
+* **no implied move** when there is no clean pre-event window or traded straddle;
+* **already out** when IV collapsed *and* the stock jumped at the last close.
+
+Each row shows its ratio and band. Labels are hypotheses, not tested trading rules; a rule built on them needs its own
 pre-registered test.
 
-**Past events, and a bias the brief avoids.** NSE's calendar table in the warehouse only begins in October 2026. For
-earlier years, the data has a fingerprint: on the session results land, IV on the same expiry falls while the stock
-jumps. The brief finds those sessions (IV down at least 12% and a move at least 3x the stock's median) and shows them.
-**It does not label from them**, because they are found *because* the stock jumped: in the first build their median
-move was 4.7% against 3.3% for calendar events. Measured on the 144 calendar results meetings of October 2026, the
-fingerprint was right 86% of the time and found a quarter of the events; those thresholds were chosen on the same
-season, so both numbers are optimistic. The clean history is NSE's own board-meeting archive. Backfilling it is the
-next step, and it has to run from GitHub's runners because NSE refuses this sandbox.
+Known biases, not corrected:
+
+* a change in market-wide volatility between the normal window and D-1 enters the event-implied move (no index or peer
+  adjustment);
+* in the last week of a monthly cycle, the dte >= 7 rule reads the thinner next-month expiry, which dilutes the event.
+
+**Past events, and a bias the brief avoids.** NSE's calendar table in the warehouse only begins in October 2026. Older
+results leave a fingerprint in the data: IV on the same expiry falls while the stock jumps. The brief finds those
+sessions (IV down at least 12%, a move at least 3x the stock's median) and shows them, but **never labels from them**.
+They are found *because* the stock jumped: in the first build their median move was 4.7%, against 3.3% for calendar
+events.
+
+How reliable the fingerprint is depends on the season:
+
+* **In results season** (144 calendar meetings of October 2026, when most F&O companies report) it was right 86% of the
+  time and found a quarter of the events. Those thresholds were chosen on that same season.
+* **Outside results season** it still fires about 9 times a month (March, June, September, December), mostly on moves
+  that are not results. Over the whole history its precision is much lower: roughly 0.55 to 0.65, by the research
+  review's estimate.
+
+The clean history is NSE's own board-meeting archive. Backfilling it is the next step, and it has to run from GitHub's
+runners because NSE refuses this sandbox. A results meeting followed by another for the same company within 30 days
+was rescheduled; NSE keeps both rows, so only the later one counts.
 
 ## What the data says about events and option spikes (exploratory, 3 Nov 2026)
 
-This study was run before the brief existed. It was not pre-registered, so every number below is a lead, not evidence
-for a rule. Data: NSE bhavcopy 2019 to 2026 for NIFTY and BANKNIFTY (near-money, nearest weekly, liquid by the
-*previous* day's contracts), and every F&O stock's options from July to November 2026.
+This study was run before the brief existed and was not pre-registered, so every number below is a lead, not evidence
+for a rule. The first draft picked options with same-day information (look-ahead). The independent research review
+caught it, and the numbers here are from the corrected run. The run picks near-money options (within 2% of the
+futures **open**) on the nearest expiry, keeping the more liquid half by the **previous** session's contracts. The data
+is NSE bhavcopy 2019 to 2026 for NIFTY and BANKNIFTY. Counts are symbol-sessions: NIFTY and BANKNIFTY on one day are
+two.
 
-**Indices.** The outcome is a session where some near-money option closed at 3x or more of its open (a "spike").
+**Indices.** The outcome is a symbol-session where some selected option closed at 3x or more of its open (a "spike"):
 
-* **Expiry days have the most spikes**: 22% of expiry sessions against 13% of others. But buying near-money options at
-  the open on an expiry day lost 33% to 48% on average. They are lottery tickets.
-* **FOMC mornings showed twice the spike rate, entirely because they were usually Thursday expiries.** On FOMC mornings
-  that were not expiry days the rate was 3%, *below* the usual 12.5% (33 sessions).
-* **RBI policy days**: 17.5% against 12.5% on other non-expiry sessions (57 sessions). Not significant.
-* **Union Budget**: 13 sessions, too few to say anything.
-* **General elections** (the 2019 and 2024 exit polls and results): the biggest spike days in the record. Twice a
-  decade.
-* **The opening gap** (known at 09:15): the largest fifth of gaps had a spike rate of 17.7% against about 13.5%. Weak,
-  and not monotone across the fifths.
-* Blind buying at the open on ordinary days was roughly break-even before costs (+2% to +10%, depending on how the rare
-  10x outcomes are capped). The blind loss comes from expiry days.
+* **Expiry days have the most spikes**: 20% of expiry symbol-sessions against 9% of others. But buying the selected
+  options at the open on an expiry day lost 31% to 49% on average before costs, depending on how big winners are
+  capped. They are lottery tickets.
+* **On other days blind buying lost too**: -1.7% to -4.6% on average before costs.
+* **FOMC mornings** (the Indian session after a decision) were usually Thursday expiries. On those, they spiked more
+  often than other expiries on the same weekday:
+  * NIFTY: 36% vs 22% (47 vs 268 symbol-sessions, z 2.0);
+  * BANKNIFTY: 40% vs 18% (35 vs 201, z 2.9).
 
-**Stocks.** Results are where stock options spike.
+  FOMC mornings that were not expiry days had no 3x close in 44 symbol-sessions (28 days). That is too few to say more.
+* **RBI policy days** (not expiry): 9.6% against 9.0% (73 symbol-sessions, 39 days). No difference.
+* **Union Budget**: 20 symbol-sessions on 10 days. Too few.
+* **General elections** (the 2019 and 2024 exit polls and results): 2 of 6 non-expiry symbol-sessions closed at 3x.
+  4 June 2024 ranks 68th and 80th of 3,858 symbol-sessions by best close-to-open multiple. Twice a decade.
+* **The opening gap** (known at 09:15): the largest fifth of gaps showed a higher spike rate in the first,
+  same-day-selection run (17.7% against about 13.5%), but not monotonically across fifths. It has not been re-run with
+  point-in-time selection.
+
+The spike measure itself divides the close by the **open**, the day's first trade. Index option opens can be artifacts
+too: one NIFTY session shows a best close/open of 2,257x. Treat spike rates as relative, between groups, not as
+absolute odds.
+
+**Stocks.** F&O results meetings of October 2026 (n = 119 to 151, depending on the measure):
 
 * The stock moved about twice as far as usual: a median 3.3% from D-1 to D+1, against 1.6%.
-* A near-money option closed at 3x its open on 17.7% of reaction days (D+1), against 6.5% on stocks with no results
-  nearby.
-* **The options already price it.** An ATM straddle bought at D-1's close and sold at D+1's close returned about +2.5%
-  before costs (the control returned +0.3%), and lost after a 4% round trip. Implied moves were higher too: 6.2%
-  against 5.3%.
-* In that one season, options were **rich** on results on average: they priced 5.4%, the stock moved 3.3%, and the
-  median straddle return was -10%.
-* Open-to-close returns from the bhavcopy are not trustworthy for thin stock options. The open is the day's first trade,
-  often a stale print. It made even ordinary in-the-money options look profitable (t = 5 to 7). Every result above
-  uses closing prices.
+* A near-money option closed at 3x its open on 17.7% of reaction days (D+1), against 6.5% for stocks with no results
+  nearby. This uses open prints, which for thin stock options are often stale. Even ordinary in-the-money options
+  looked profitable open-to-close (t 5 to 7). Only the gap between the groups means anything here.
+* **The options price it.** Implied moves were higher before results (6.2% against 5.3%). An ATM straddle bought at
+  D-1's close and sold at D+1's close (closing prices) had:
+  * a median return of -10.8%;
+  * a mean of +2.5% before costs, against +1.3% for the control;
+  * a difference that is not significant (t 0.3).
+
+  Both lose after a 4% round trip.
 * **Breadth.** Across all F&O stocks, 150 to 300 stock-sessions a month had some option close at 3x its open, spread
   over 15 to 20 sessions a month. The indices had about 3 such days a month. The counts use open prints, so they are
   inflated, but the order of magnitude is the point.
 
-**So:** a scheduled event alone does not find spikes worth buying, because the market prices it. The brief does three
-things with that:
+**So:** a scheduled event alone does not find option spikes worth buying, because the market prices it. The brief does
+three things with that:
 
-* it tells the desk where to look today: results, expiry and the rare large macro event;
-* it compares each company's price for its event with its own history: the testable idea;
+* it shows where to look today: results, expiry and the rare large macro event;
+* it compares each company's price for its event with its own history, inside a chance band;
 * it ranks every instrument with its reasons.
 
 Catching the spikes themselves needs in-move detection on intraday data. That is the spike detector, a separate piece
@@ -103,7 +143,7 @@ of work.
   analogues.
 * `quantdesk/premarket/brief.py`: assembles the brief, the watch-list, the recording plan, JSON and Markdown.
 * `quantdesk/premarket/sources.py`: warehouse loader, Yahoo, RSS. Each fails soft and is named in `health`.
-* `quantdesk/premarket/macro_dates.json`: past RBI, FOMC, Budget and election dates. FY25 and FY26 RBI dates are
+* `quantdesk/premarket/macro_dates.json`: past RBI, FOMC, Budget and election dates. FY25 to FY27 RBI dates are
   checked; the rest are compiled from public schedules and still to be checked line by line.
 * `deploy/premarket-data.sh`, `.github/workflows/premarket.yml`: the morning job. It publishes to the `premarket`
   branch, one orphan commit per brief.
@@ -113,7 +153,7 @@ of work.
 
 1. **Backfill NSE's past board meetings** into the warehouse, so every company has a clean results history.
 2. **Pre-register the results test**: buy (or sell, defined-risk) the straddle by label, D-1 close to D+1 close, with
-   costs.
+   costs, on calendar events the label did not see.
 3. **Let the recorders read the plan**: Kite records the watch-list's instruments, so intraday spike data exists for
    every name the desk cares about that day.
 4. **The spike detector**: in-move features on that data, judged against blind entries and expiry-day lottery tickets.
