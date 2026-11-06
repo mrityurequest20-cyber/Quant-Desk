@@ -1,0 +1,76 @@
+# The pre-market brief (docs/PREMARKET.md): before the open, every 15 minutes from 07:15 to 09:15 IST, the desk reads
+# today's events, every F&O company's results against its own history, overnight markets and headlines, and ranks
+# every F&O instrument with its reasons. Public data only (NSE's warehouse tables, Yahoo, RSS); no secret.
+#
+# GitHub's cron has been hours late on this repo (S0-09), so one job does the whole morning: whichever firing starts
+# it first sleeps on its runner until 07:15 IST, then builds and publishes the brief every quarter-hour to 09:15. A
+# firing that arrives later (or a manual run) builds it once. Each brief replaces the `premarket` branch's content
+# (one orphan commit: a snapshot, not a log), which the app's Today tab reads. It places nothing and touches no other
+# branch, the desk, the journal or any limit.
+name: Pre-market brief
+
+on:
+  schedule:
+    - cron: "0 0 * * 1-5"        # 05:30 IST (any one firing before 09:15 runs the morning)
+    - cron: "40 0 * * 1-5"       # 06:10 IST
+    - cron: "20 1 * * 1-5"       # 06:50 IST
+    - cron: "50 1 * * 1-5"       # 07:20 IST
+    - cron: "25 2 * * 1-5"       # 07:55 IST
+    - cron: "5 3 * * 1-5"        # 08:35 IST
+  workflow_dispatch:
+
+permissions:
+  contents: write            # read the warehouse release; replace the premarket branch (and nothing else)
+
+concurrency:
+  group: premarket
+  cancel-in-progress: false
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 260
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false        # no token on disk while third-party packages install and run
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Warehouse tables and the results history (rebuilt once a day)
+        shell: /usr/bin/bash --noprofile --norc -o pipefail {0}     # the system's bash, never one on pip's PATH
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: /usr/bin/bash deploy/premarket-data.sh runtime/warehouse runtime/premarket-history
+      - name: Brief every 15 minutes to 09:15 IST (once, if started later)
+        shell: /usr/bin/bash --noprofile --norc -o pipefail {0}     # the system's bash, never one on pip's PATH
+        env:
+          GH_TOKEN: ${{ github.token }}      # used only to publish the brief; python is started without it (env -u)
+        run: |
+          PY=$(command -v python)              # setup-python's interpreter, by its full path from here on
+          export PATH=/usr/bin:/bin            # every other tool from the system, never a script pip installed
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          start=$(TZ=Asia/Kolkata date -d "07:15" +%s) end=$(TZ=Asia/Kolkata date -d "09:15" +%s)
+          once() {
+            rm -rf _premarket
+            env -u GH_TOKEN "$PY" -m quantdesk premarket brief --warehouse runtime/warehouse \
+              --history runtime/premarket-history/results_history.parquet --out _premarket || return 0
+            cp runtime/premarket-history/results_history.parquet runtime/premarket-history/history_built.txt _premarket/ 2>/dev/null || true
+            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$auth" \
+              /usr/bin/bash deploy/push-dir.sh _premarket premarket "pre-market brief $(TZ=Asia/Kolkata date '+%F %H:%M') IST" \
+              || echo "::warning::the brief was built but not published"
+          }
+          now=$(date +%s)
+          if [ "$now" -ge "$end" ]; then once; exit 0; fi
+          while :; do
+            now=$(date +%s)
+            if [ "$now" -lt "$start" ]; then echo "waiting for 07:15 IST"; sleep $((start - now)); continue; fi
+            once
+            now=$(date +%s)
+            [ "$now" -ge "$end" ] && break
+            next=$(( (now / 900 + 1) * 900 )); [ "$next" -gt "$end" ] && next=$end
+            sleep $((next - now))
+          done

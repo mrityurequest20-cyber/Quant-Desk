@@ -66,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--spec", default="docs/prereg/expiry_eve_entry_v1.json")
     s.add_argument("--out", default="_entry_check")
     s.set_defaults(fn=cmd_entry_check)
+    from .premarket.cli import add_parser as _premarket
+    _premarket(sub)
     s = sub.add_parser("wings", help="expiry_wings_v1: far wings on the expiry-eve premium sale, on real bhavcopy")
     s.add_argument("--warehouse", default="runtime/warehouse", help="folder with fo_bhav_*.parquet")
     s.add_argument("--out", default="_wings")
