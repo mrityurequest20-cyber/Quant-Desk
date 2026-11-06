@@ -367,7 +367,7 @@ WF = ROOT / ".github" / "workflows" / "daily-history.yml"
 def test_daily_history_workflow_is_manual_only_secretless_pinned_and_isolated():
     text = WF.read_text(encoding="utf-8")
     wf = yaml.safe_load(text)
-    live = yaml.safe_load((ROOT / ".github" / "workflows" / "live.yml").read_text(encoding="utf-8"))
+    live = yaml.safe_load((ROOT / ".github" / "workflows" / "record.yml").read_text(encoding="utf-8"))
     on = wf.get("on", wf.get(True))
     assert list(on) == ["workflow_dispatch"]                       # no schedule, no push, no PR trigger
     assert wf["permissions"] == {"contents": "write"} and all("permissions" not in j for j in wf["jobs"].values())
@@ -384,5 +384,5 @@ def test_daily_history_workflow_is_manual_only_secretless_pinned_and_isolated():
 def test_collect_wide_workflow_still_adds_no_secret_and_live_is_untouched():
     cw = (ROOT / ".github" / "workflows" / "collect-wide.yml").read_text(encoding="utf-8")
     assert set(re.findall(r"secrets\.(\w+)", cw)) == {"KOTAK_CONSUMER_KEY"}
-    live = (ROOT / ".github" / "workflows" / "live.yml").read_text(encoding="utf-8")
+    live = (ROOT / ".github" / "workflows" / "record.yml").read_text(encoding="utf-8")
     assert "daily-history" not in live and "stock_minutes" not in live and "collect-wide" not in live

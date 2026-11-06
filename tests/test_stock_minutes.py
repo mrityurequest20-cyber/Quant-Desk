@@ -231,25 +231,6 @@ def test_release_naming_and_the_two_kinds_of_files_stay_apart(tmp_path):
 
 
 # ---- live.yml ------------------------------------------------------------------------------------------------------
-def test_live_yml_stock_step_is_warn_only_skipped_after_a_cancel_and_adds_no_secret_or_permission():
-    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
-    text = (root / "live.yml").read_text(encoding="utf-8")
-    wf = yaml.safe_load(text)
-    steps = wf["jobs"]["afternoon"]["steps"]
-    i = next(i for i, s in enumerate(steps) if "stock-minutes" in s.get("run", ""))
-    j = next(i for i, s in enumerate(steps) if "option-minutes" in s.get("run", ""))
-    step = steps[i]
-    assert i == j + 1                                                       # right after the option-minutes step
-    # runs after a failed session too, never after the owner cancels it (the kill switch; audit 17 Oct L1)
-    assert step["if"].replace(" ", "") == "${{!cancelled()}}" and 0 < step["timeout-minutes"] <= 30
-    assert '|| echo "::warning::' in step["run"] and "--live" not in step["run"]
-    assert step["env"] == steps[j]["env"] == {"GH_TOKEN": "${{ github.token }}"}          # no secret, same as its neighbour
-    assert set(step) <= {"name", "if", "timeout-minutes", "env", "run"} and "secrets." not in json.dumps(step)
-    assert "permissions" not in wf["jobs"]["afternoon"] and wf["permissions"] == {"contents": "write"}
-    assert "KOTAK_CONSUMER_KEY" in wf["env"]                                # the key is the workflow's own, already there
-    manual = yaml.safe_load((root / "kotak-backfill.yml").read_text(encoding="utf-8"))
-    assert manual[True]["workflow_dispatch"]["inputs"]["stocks"]["default"] == "50"
-    assert manual["permissions"] == {"contents": "write"}
 
 
 def _run_cli(monkeypatch, tmp_path, totals, stopped=None):

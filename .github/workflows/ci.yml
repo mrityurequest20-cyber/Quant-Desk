@@ -23,7 +23,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m pytest -o addopts="" -q
       - name: JavaScript syntax
-        run: for f in quantdesk/web/static/*.js quantdesk/web/static/app/*.js; do node --check "$f"; done
+        run: for f in quantdesk/web/static/app/*.js; do node --check "$f"; done   # the old desk UI's static/*.js went with the desk
       - name: Workflow integrity
         run: python deploy/check_workflows.py
       - name: Dependency vulnerability audit

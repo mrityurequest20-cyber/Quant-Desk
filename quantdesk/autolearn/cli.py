@@ -1,45 +1,18 @@
-"""`python -m quantdesk autolearn …`: the paper-learning cycle and its controls."""
+"""`quantdesk autolearn vol-har-fit`: the one command kept from the retired learning loop (6 Nov 2026).
+
+It fits vol_forecast_v1's HAR coefficients (quantdesk/intraday/vol_har_v1.json), whose provenance names this exact
+command; ml retrain's drill refits through it. The cycle, research, prereg, status and recovery commands went with
+the loop (branch archive/pre-cleanup-2026-11-06).
+"""
 from __future__ import annotations
 
 import json
 import sys
 
-from .cycle import STAGES, Cycle, CycleBusy, default_loader, root_of
-
 
 def register(sub):
-    s = sub.add_parser("autolearn", help="the self-learning paper loop: cycle, status, verify, recover, rollback")
+    s = sub.add_parser("autolearn", help="vol-har-fit: fit vol_forecast_v1's HAR coefficients (the rest of the learning loop was retired)")
     ss = s.add_subparsers(dest="acmd", required=True)
-    x = ss.add_parser("cycle", help="run the cycle (all stages, or --stages ingest,dataset,…); idempotent and resumable")
-    x.add_argument("--stages", help=f"comma-separated subset of {','.join(STAGES)}")
-    x.add_argument("--force", action="store_true", help="rerun stages even if their inputs are unchanged")
-    x.add_argument("--offline", action="store_true", help="no Yahoo: learn from the stored and recorded bars only")
-    x.set_defaults(fn=cmd_cycle)
-    for stage, help_ in (("ingest", "validate and store bars, resolve outcomes, ingest closed paper trades"),
-                         ("dataset", "build the versioned dataset"), ("train", "train challengers (walk-forward)"),
-                         ("validate", "costs, metrics, intervals, gates, the locked final test"),
-                         ("register", "register qualified challengers"), ("paper", "shadow paper results and drift"),
-                         ("promote", "promote or reject, with the reasons on record")):
-        x = ss.add_parser(stage, help=help_)
-        x.add_argument("--force", action="store_true")
-        x.add_argument("--offline", action="store_true")
-        x.set_defaults(fn=cmd_cycle, stages=stage)
-    x = ss.add_parser("research", help="plan-level research: the real point-in-time track (the only qualifying one), "
-                                       "modelled scenarios (scenario analysis only), the EOD approximation")
-    x.add_argument("--offline", action="store_true", help="no Yahoo for India VIX (the scenario track's IV fallback)")
-    x.set_defaults(fn=cmd_research)
-    x = ss.add_parser("direction-study", help="direction research on the external index minutes over 30m / 60m / 120m "
-                                              "/ close (development folds; no option evidence)")
-    x.add_argument("--out", help="external data root (default runtime/external)")
-    x.add_argument("--min-train-days", type=int, default=250)
-    x.set_defaults(fn=cmd_direction_study)
-    x = ss.add_parser("prereg", help="pre-registered intraday direction tests on the external index minutes "
-                                     "(docs/prereg; dev always, the lock once)")
-    x.add_argument("--out", help="external data root (default runtime/external)")
-    x.add_argument("--spec", default="docs/prereg/intraday_direction_v1.json")
-    x.add_argument("--results", default="docs/prereg/results")
-    x.add_argument("--open-lock", action="store_true", help="evaluate the selected tests on the lock period: once, ever")
-    x.set_defaults(fn=cmd_prereg)
     x = ss.add_parser("vol-har-fit", help="fit vol_forecast_v1's C_har on the external minutes (the spec's training window) and "
                                           "store the coefficients the desk's HAR volatility forecast reads")
     x.add_argument("--out", help="external data root (default runtime/external)")
@@ -47,79 +20,7 @@ def register(sub):
     x.add_argument("--to", help="coefficients file (default: the committed quantdesk/intraday/vol_har_v1.json)")
     x.add_argument("--asset-sha256", help="sha256 of the dataset archive the folder came from (recorded in the provenance)")
     x.set_defaults(fn=cmd_vol_har_fit)
-    x = ss.add_parser("status", help="champion, freshness, last cycle, drift, risk, paper results, recovery point")
-    x.add_argument("--json", action="store_true")
-    x.set_defaults(fn=cmd_status)
-    x = ss.add_parser("verify", help="integrity of the ledger, the registry and the journal (exit 1 on any problem)")
-    x.set_defaults(fn=cmd_verify)
-    x = ss.add_parser("recover", help="move torn ledger lines aside, rebuild registry state, clear a stale lock, reset "
-                                      "unfinished stages")
-    x.set_defaults(fn=cmd_recover)
-    x = ss.add_parser("rollback", help="make the previous champion the champion again")
-    x.add_argument("--reason", required=True)
-    x.set_defaults(fn=cmd_rollback)
-
-
-def cmd_cycle(cfg, a):
-    stages = [s.strip() for s in (a.stages or "").split(",") if s.strip()] or None
-    bad = [s for s in stages or [] if s not in STAGES]
-    if bad:
-        sys.exit(f"unknown stage(s): {', '.join(bad)}")
-    c = Cycle(cfg, loader=default_loader(cfg, offline=getattr(a, "offline", False)))
-    try:
-        st = c.run(stages, force=getattr(a, "force", False))
-    except CycleBusy as exc:
-        sys.exit(str(exc))
-    print(f"cycle {st['cycle_id']}: {st.get('status')}")
-    if st.get("status") == "failed":
-        sys.exit(1)
-
-
-def cmd_research(cfg, a):
-    from .research import PlanStudy, load_inputs
-    root = root_of(cfg)
-    inputs = load_inputs(cfg, root, offline=getattr(a, "offline", False))
-    rep = PlanStudy(cfg, inputs, root=root).run()
-    r, sc, e = rep["real"], rep["scenario"], rep["eod"]
-    print(f"plan study {rep['study']}: index {rep['data']['first_day']} → {rep['data']['last_day']} "
-          f"({rep['data']['index_sessions']} sessions)")
-    print(f"  REAL point-in-time: {len(r['pit_sessions'])} session(s), {r['plan_outcomes']:,} plan outcomes — {r.get('status')}")
-    lb = r.get("lockbox") or {}
-    print(f"  locked final period: {'opened once: ' + ('PASS' if lb.get('passed') else 'FAIL') if lb.get('opened') else 'not opened'}"
-          f"; approved: {'yes' if r.get('approved') else 'no'}")
-    print(f"  SCENARIO ANALYSIS ONLY (modelled): {sc['sessions']} sessions, {sc['plan_outcomes']:,} plan outcomes, "
-          f"{len(sc.get('trials') or [])} configurations")
-    print(f"  EOD approximation (not point in time): {e['sessions']} sessions, {e['plan_outcomes']:,} plan outcomes")
-    print(f"  production change: none. {rep['production_change']['why']}")
-    print(f"  report: {root / 'plan' / 'studies' / rep['study'] / 'report.md'}")
-
-
-def cmd_prereg(cfg, a):
-    from pathlib import Path
-
-    from ..data import external_aeron as X
-    from .prereg import render, run
-    ds = X.latest(Path(a.out) if a.out else Path(cfg.runtime_dir) / "external")
-    if ds is None:
-        sys.exit("no imported external dataset: run `data external-import` first")
-    rep = run(cfg, ds, Path(a.spec), Path(a.results), open_lock=a.open_lock)
-    md = Path(rep["path"]).with_suffix(".md")
-    md.write_text(render(rep))
-    print(md)
-
-
-def cmd_direction_study(cfg, a):
-    from pathlib import Path
-
-    from ..data import external_aeron as X
-    from .external_study import render, study
-    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "external"
-    ds = X.latest(out)
-    if ds is None:
-        sys.exit("no imported external dataset: run `data external-import` first")
-    rep = study(cfg, ds, min_train_days=a.min_train_days)
-    (ds / "direction_study.md").write_text(render(rep))
-    print(f"{ds / 'direction_study.md'} [{rep['evidence']}]")
+    return s
 
 
 def cmd_vol_har_fit(cfg, a):
@@ -142,61 +43,3 @@ def cmd_vol_har_fit(cfg, a):
     to = Path(a.to) if a.to else DEFAULT_PATH
     save_coefs(to, coefs)
     print(f"{to}: " + ", ".join(f"{s} {e['sessions']} sessions to {e['trained_through']}" for s, e in coefs["symbols"].items()))
-
-
-def cmd_status(cfg, a):
-    from .status import render, status
-    s = status(cfg)
-    print(json.dumps(s, indent=1, default=str) if a.json else render(s))
-
-
-def cmd_verify(cfg, a):
-    from pathlib import Path
-
-    from .ledger import Ledger
-    from .registry import Registry
-    root = root_of(cfg)
-    bad = Ledger(root).verify() + Registry(root).verify()
-    j = Path(cfg.runtime_dir) / "intraday" / "journal.db"
-    if j.exists():
-        import sqlite3
-        with sqlite3.connect(f"file:{j}?mode=ro", uri=True) as db:
-            r = db.execute("PRAGMA integrity_check").fetchone()[0]
-        if r != "ok":
-            bad.append(f"journal: {r}")
-    print("\n".join(bad) if bad else "learning ledger, registry and journal: intact")
-    if bad:
-        sys.exit(1)
-
-
-def cmd_recover(cfg, a):
-    from .ledger import Ledger
-    from .registry import Registry
-    from .store import read_json, write_json
-    root = root_of(cfg)
-    n = Ledger(root).recover()
-    st = Registry(root).rebuild_state()
-    lock = root / "cycle.lock"
-    had_lock = lock.exists()
-    if had_lock:
-        lock.unlink()
-    reset = 0
-    for p in sorted((root / "cycles").glob("????-??-??.json")) if (root / "cycles").exists() else []:
-        c = read_json(p) or {}
-        for name, rec in (c.get("stages") or {}).items():
-            if rec.get("status") in ("running", "failed"):
-                rec["status"] = "reset"
-                reset += 1
-        write_json(p, c)
-    print(f"recovered: {n} torn ledger line(s) moved to .corrupt files; registry state rebuilt "
-          f"(champion {st.get('champion') or 'none'}); {'stale lock cleared; ' if had_lock else ''}{reset} unfinished stage(s) "
-          f"will rerun on the next cycle")
-
-
-def cmd_rollback(cfg, a):
-    from .registry import PromotionRefused, Registry
-    try:
-        e = Registry(root_of(cfg)).rollback(a.reason)
-    except (PromotionRefused, Exception) as exc:
-        sys.exit(f"rollback refused: {exc}")
-    print(f"rolled back: champion is now {e.get('to')} (was {e.get('model_id')})")

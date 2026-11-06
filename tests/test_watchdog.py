@@ -62,7 +62,7 @@ const alerts = (r) => r.results.flatMap((x) => x.alerts.map((a) => `${a.sev} ${a
 const pushes = (r) => r.calls.filter((c) => c.url.startsWith("https://ntfy.sh/"));
 const emails = (r) => r.calls.filter((c) => c.url.endsWith("/watchdog-alert.yml/dispatches"));
 const run = (created, conclusion = "success", status = "completed", extra = {}) =>
-  ({ created_at: new Date(IST(created)).toISOString(), updated_at: new Date(IST(created) + 600000).toISOString(), conclusion, status, html_url: "https://github.com/x/y/actions/runs/1", name: "Live paper desk", head_branch: "main", ...extra });
+  ({ created_at: new Date(IST(created)).toISOString(), updated_at: new Date(IST(created) + 600000).toISOString(), conclusion, status, html_url: "https://github.com/x/y/actions/runs/1", name: "Session recorder", head_branch: "main", ...extra });
 const out = {};
 """.replace("%TOKEN%", TOKEN).replace("%TOPIC%", TOPIC)
 
@@ -70,23 +70,23 @@ const out = {};
 @NODE
 def test_the_desk_not_started_is_a_p1_by_push_and_by_email_and_a_started_desk_is_silent(tmp_path):
     out = _node(tmp_path, HEAD + r"""
-let r = await at("2026-10-23T09:10:00", env(), { runs: { live: [] } });
+let r = await at("2026-10-23T09:10:00", env(), { runs: { record: [] } });
 out.none = { alerts: alerts(r), push: pushes(r).map((c) => ({ url: c.url, h: c.headers, b: c.body })),
              email: emails(r).map((c) => JSON.parse(c.body)) };
-r = await at("2026-10-23T09:10:00", env(), { runs: { live: [run("2026-10-23T08:52:00", "success", "in_progress")] } });
+r = await at("2026-10-23T09:10:00", env(), { runs: { record: [run("2026-10-23T08:52:00", "success", "in_progress")] } });
 out.started = { alerts: alerts(r), n: r.calls.length };
-r = await at("2026-10-20T09:10:00", env(), { runs: { live: [] } });          // Dussehra: a holiday
+r = await at("2026-10-20T09:10:00", env(), { runs: { record: [] } });          // Dussehra: a holiday
 out.holiday = { alerts: alerts(r), n: r.calls.length };
-r = await at("2026-10-24T09:10:00", env(), { runs: { live: [] } });          // Saturday
+r = await at("2026-10-24T09:10:00", env(), { runs: { record: [] } });          // Saturday
 out.saturday = { alerts: alerts(r), n: r.calls.length };
-r = await at("2026-10-23T09:11:00", env(), { runs: { live: [] } });          // not a slot
+r = await at("2026-10-23T09:11:00", env(), { runs: { record: [] } });          // not a slot
 out.offslot = { alerts: alerts(r), n: r.calls.length };
 console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 """)
-    assert out["none"]["alerts"] == ["P1 W1 Desk not started"]
+    assert out["none"]["alerts"] == ["P1 W1 Recorder not started"]
     (push,) = out["none"]["push"]
     assert push["url"] == f"https://ntfy.sh/{TOPIC}" and push["h"]["Priority"] == "high" and "rotating_light" in push["h"]["Tags"]
-    assert push["h"]["Title"].startswith("P1 W1: Desk not started") and "2026-10-23" in push["b"]
+    assert push["h"]["Title"].startswith("P1 W1: Recorder not started") and "2026-10-23" in push["b"]
     (mail,) = out["none"]["email"]
     assert mail["ref"] == "main" and mail["inputs"]["severity"] == "P1" and mail["inputs"]["check"] == "W1"
     assert mail["inputs"]["day"] == "2026-10-23" and set(mail["inputs"]) == {"severity", "check", "title", "body", "link", "day"}
@@ -95,46 +95,31 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 
 
 @NODE
-def test_the_heartbeat_check_reads_age_halt_and_feed_and_survives_a_bad_site(tmp_path):
+def test_the_retired_desk_heartbeat_is_no_longer_checked(tmp_path):
+    """The recorder replaced the paper desk (6 Nov 2026) and publishes no heartbeat: a stale or missing one is no alert."""
     out = _node(tmp_path, HEAD + r"""
-const hb = (minAgo, extra = {}) => ({ ts: new Date(IST("2026-10-23T09:30:00") - minAgo * 60000 + 19800000 - 19800000).toISOString().replace("T", " ").replace("Z", "+00:00"), halted: false, feed: "kotak", ...extra });
-const cases = { fresh: hb(3), warm: hb(15), stale: hb(25), halted: hb(2, { halted: true }), yahoo: hb(2, { feed: "yahoo" }), mixedOk: hb(2, { feed: "kotak+yahoo (190 of 570 polls from Yahoo)" }),
-  mixedBad: hb(2, { feed: "kotak+yahoo (400 of 570 polls from Yahoo)" }), missing: undefined, noTs: {} };
-out.cases = {};
-for (const [k, v] of Object.entries(cases)) {
-  const r = await at("2026-10-23T09:30:00", env(), { hb: v });
-  out.cases[k] = { alerts: alerts(r), push: pushes(r).length, email: emails(r).length };
-}
-let r = await at("2026-10-23T09:30:00", env(), { hbStatus: 502 });
-out.down = { alerts: alerts(r), email: emails(r).length };
+const stale = { ts: "2026-10-23 08:00:00+05:30", halted: true, feed: "yahoo" };
+out.stale = alerts(await at("2026-10-23T09:30:00", env(), { hb: stale }));
+out.missing = alerts(await at("2026-10-23T11:00:00", env(), { hb: undefined }));
 console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 """)
-    c = out["cases"]
-    assert c["fresh"] == {"alerts": [], "push": 0, "email": 0}
-    assert c["warm"] == {"alerts": [], "push": 0, "email": 0}                      # 15 minutes is publish cadence + Pages lag, not a fault
-    assert c["stale"]["alerts"] == ["P1 W2 Stale heartbeat"] and c["stale"]["push"] == 1 and c["stale"]["email"] == 1
-    assert c["halted"]["alerts"] == ["P1 W2 Desk halted"]
-    assert c["yahoo"] == {"alerts": ["P2 W2 Feed fell back"], "push": 1, "email": 0}          # P2: push only
-    assert c["mixedOk"]["alerts"] == []                                            # the real label on 23 Oct: a third from Yahoo is normal
-    assert c["mixedBad"]["alerts"] == ["P2 W2 Feed mostly Yahoo"]
-    assert c["missing"]["alerts"] == ["P2 W2 Heartbeat unreadable"] and c["noTs"]["alerts"] == ["P2 W2 Heartbeat unreadable"]
-    assert out["down"]["alerts"] == ["P2 W2 Watchdog could not run a check"] and out["down"]["email"] == 0   # blind is reported, not silent
+    assert out["stale"] == [] and out["missing"] == []
 
 
 @NODE
 def test_after_close_checks_flag_missing_and_failed_runs_and_ignore_other_branches(tmp_path):
     out = _node(tmp_path, HEAD + r"""
 const D = "2026-10-23";
-let r = await at(D + "T16:00:00", env(), { runs: { live: [], "collect-wide": [] }, failed: {} });
+let r = await at(D + "T16:00:00", env(), { runs: { record: [], "collect-wide": [] }, failed: {} });
 out.missing = alerts(r);
-r = await at(D + "T16:00:00", env(), { runs: { live: [run(D + "T08:52:00", "failure")], "collect-wide": [run(D + "T15:25:00")] }, failed: {} });
+r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00", "failure")], "collect-wide": [run(D + "T15:25:00")] }, failed: {} });
 out.livefailed = alerts(r);
-r = await at(D + "T16:00:00", env(), { runs: { live: [run(D + "T08:52:00", null, "in_progress")], "collect-wide": [run(D + "T15:25:00")] }, failed: {} });
+r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00", null, "in_progress")], "collect-wide": [run(D + "T15:25:00")] }, failed: {} });
 out.running = alerts(r);
 const f = (name, when, extra = {}) => run(when, "failure", "completed", { name, ...extra });
-r = await at(D + "T16:00:00", env(), { runs: { live: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")] }, failed: {
+r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")] }, failed: {
   failure: [f("Collect wide data", D + "T15:30:00"), f("CI", D + "T11:00:00", { head_branch: "some-pr" }), f("Old", D + "T07:00:00")],
-  cancelled: [f("Desk scheduler", D + "T12:00:00"), f("Live paper desk", D + "T13:00:00")] } });
+  cancelled: [f("Desk scheduler", D + "T12:00:00"), f("Session recorder", D + "T13:00:00")] } });
 out.failures = r.results.filter((x) => x.check === "W6").flatMap((x) => x.alerts.map((a) => [a.title, a.body]));
 r = await at(D + "T18:00:00", env(), { runs: { selfreview: [] }, failed: {} });
 out.eve = alerts(r);
@@ -142,12 +127,12 @@ r = await at(D + "T21:00:00", env(), { runs: { data: [run(D + "T20:15:00")] }, f
 out.late = alerts(r);
 console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 """)
-    assert out["missing"] == ["P1 W3 Live paper desk did not run", "P2 W3 Collect wide data did not run"]
-    assert out["livefailed"] == ["P1 W3 Live paper desk failed"] and out["running"] == []
+    assert out["missing"] == ["P1 W3 Session recorder did not run", "P2 W3 Collect wide data did not run"]
+    assert out["livefailed"] == ["P1 W3 Session recorder failed"] and out["running"] == []
     (title, body), = out["failures"]
     assert title == "2 workflow run(s) failed or cancelled"          # main only, since 08:00, Desk scheduler cancels ignored
-    assert "Collect wide data" in body and "Live paper desk" in body and "CI" not in body and "Old" not in body
-    assert out["eve"] == ["P2 W5 Self-review did not run"] and out["late"] == []
+    assert "Collect wide data" in body and "Session recorder" in body and "CI" not in body and "Old" not in body
+    assert out["eve"] == [] and out["late"] == []                  # the self-review workflow was retired with the desk
 
 
 @NODE
@@ -180,7 +165,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 def test_the_saturday_digest_carries_the_labelled_setup_line_and_is_never_held_back_by_it(tmp_path):
     out = _node(tmp_path, HEAD + r"""
 const D = ["2026-10-19", "2026-10-21", "2026-10-22", "2026-10-23"];
-const base = { runs: { live: D.map((d) => run(d + "T08:52:00")) }, failed: { failure: [] } };
+const base = { runs: { record: D.map((d) => run(d + "T08:52:00")) }, failed: { failure: [] } };
 const LINE = "Labelled setups: 4 this week from the Monday 2026-10-19 (paper 2, replay 2, shadow 0); 4 counted in total, from 2 sessions and 3 session-symbol pairs (setups on one day move together, so they are not independent samples); 1% of the 300 the entry filter needs at least (300 to 500).";
 const digest = async (extra, e = env()) => {
   const r = await at("2026-10-24T17:30:00", e, { ...base, ...extra });
@@ -216,7 +201,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 def test_saturday_digest_and_the_december_calendar_check(tmp_path):
     out = _node(tmp_path, HEAD + r"""
 const D = ["2026-10-19", "2026-10-21", "2026-10-22", "2026-10-23"];       // 20 Oct was a holiday
-let r = await at("2026-10-24T17:30:00", env(), { runs: { live: D.map((d) => run(d + "T08:52:00")) }, failed: { failure: [run("2026-10-21T12:00:00", "failure")] } });
+let r = await at("2026-10-24T17:30:00", env(), { runs: { record: D.map((d) => run(d + "T08:52:00")) }, failed: { failure: [run("2026-10-21T12:00:00", "failure")] } });
 out.digest = r.results.flatMap((x) => x.alerts.map((a) => [a.sev, a.body]));
 out.digestPush = pushes(r).map((c) => c.headers.Priority);
 out.digestEmail = emails(r).length;
@@ -236,13 +221,13 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 @NODE
 def test_alerts_never_carry_secrets_and_degrade_without_a_topic_or_token(tmp_path):
     out = _node(tmp_path, HEAD + r"""
-let r = await at("2026-10-23T09:10:00", env({ NTFY_TOPIC: "" }), { runs: { live: [] } });
+let r = await at("2026-10-23T09:10:00", env({ NTFY_TOPIC: "" }), { runs: { record: [] } });
 out.notopic = { pushes: pushes(r).length, emails: emails(r).length, log: r.logs.join(" | ") };
-r = await at("2026-10-23T09:10:00", env({ GH_DISPATCH_TOKEN: "" }), { runs: { live: [] } });
+r = await at("2026-10-23T09:10:00", env({ GH_DISPATCH_TOKEN: "" }), { runs: { record: [] } });
 out.notoken = { pushes: pushes(r).length, emails: emails(r).length, log: r.logs.join(" | ") };
-r = await at("2026-10-23T09:10:00", env({ NTFY_TOPIC: "a b/c" }), { runs: { live: [] } });
+r = await at("2026-10-23T09:10:00", env({ NTFY_TOPIC: "a b/c" }), { runs: { record: [] } });
 out.badtopic = pushes(r).length;
-r = await at("2026-10-23T09:10:00", env(), { runs: { live: [] } });
+r = await at("2026-10-23T09:10:00", env(), { runs: { record: [] } });
 out.logs = r.logs.join(" | ");
 out.allBodies = JSON.stringify(r.calls.map((c) => [c.url.startsWith("https://ntfy.sh/") ? "ntfy" : c.url, c.body,
   c.url.startsWith("https://ntfy.sh/") ? c.headers : null]));
@@ -262,10 +247,10 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 @NODE
 def test_the_worker_starts_the_desk_before_the_watchdog_and_the_watchdog_trigger_never_starts_it(tmp_path):
     out = _node(tmp_path, HEAD + r"""
-calls = []; state = { runs: { live: [] } };
+calls = []; state = { runs: { record: [] } };
 await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: IST("2026-10-23T09:10:00") }, env(), {});
 out.alarm = calls.map((c) => c.url.split("/").slice(-2).join("/"));
-calls = []; state = { runs: { live: [] } };
+calls = []; state = { runs: { record: [] } };
 await worker.scheduled({ cron: "*/10 2-9 * * mon-fri", scheduledTime: IST("2026-10-23T09:10:00") }, env(), {});
 out.odd = calls.map((c) => c.url.split("/").slice(-2).join("/"))[0];
 calls = []; state = {};
@@ -332,7 +317,7 @@ def test_every_watchdog_slot_coincides_with_a_cron_firing():
     crons = _config()["triggers"]["crons"]
     text = (ROOT / "deploy" / "cloudflare" / "watchdog.js").read_text(encoding="utf-8")
     slots = re.findall(r'\{ at: "(\d\d):(\d\d)", days: "(\w+)"', text)
-    assert len(slots) >= 14
+    assert len(slots) >= 10
     # one IST date per kind of day: a Friday, and a Saturday for the digest
     days = {"trading": [5], "weekdays": [1, 2, 3, 4, 5], "saturday": [6]}
     for hh, mm, kind in slots:
