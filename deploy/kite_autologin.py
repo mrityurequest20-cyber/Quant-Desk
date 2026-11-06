@@ -16,7 +16,7 @@ The request_token goes to a 0600 file. `quantdesk data kite-token` then exchange
 token is used for market data only: no order, position, holding, margin or profile method is called anywhere.
 
 Standard library only, on purpose: the process that holds the password imports no third-party code (a test checks).
-Run it with `python3 -I`. Exit codes: 0 done or not configured (no secrets: the desk carries on without Kite),
+Run it with the system `python3 -I -S` (no site-packages). Exit codes: 0 done or not configured (no secrets: the desk carries on without Kite),
 1 the login failed (the workflow surfaces it, so the watchdog can alert).
 """
 from __future__ import annotations
@@ -82,15 +82,18 @@ def _open(op, url, data=None):
         raise LoginError(f"could not reach {urllib.parse.urlsplit(url).hostname} ({type(e).__name__})") from None
 
 
-def _follow(op, url, hosts):
-    """GET url and follow redirects while they stay on `hosts`. Returns (final_url, location_off_host or None)."""
+def _follow(op, url, hosts, schemes=("https",)):
+    """GET url and follow redirects while they stay on `hosts` over `schemes`. Returns (final_url, location_off_host or None)."""
     for _ in range(MAX_HOPS):
         code, headers, _ = _open(op, url)
         if code not in (301, 302, 303, 307, 308):
             return url, None
         nxt = urllib.parse.urljoin(url, headers.get("Location", ""))
-        if urllib.parse.urlsplit(nxt).hostname not in hosts:
+        parts = urllib.parse.urlsplit(nxt)
+        if parts.hostname not in hosts:
             return url, nxt                                   # the app's redirect URL: read it, never open it
+        if parts.scheme not in schemes:                       # never send Zerodha's session cookie over plain HTTP
+            raise LoginError("Zerodha redirected to a non-HTTPS address; refusing to follow it")
         url = nxt
     raise LoginError("too many redirects from Zerodha")
 
@@ -108,11 +111,11 @@ def _post_json(op, url, data, what):
 
 
 def request_token(api_key: str, user_id: str, password: str, totp_secret: str, *, base: str = LOGIN_BASE,
-                  hosts=ZERODHA_HOSTS, clock=time.time) -> str:
+                  hosts=ZERODHA_HOSTS, schemes=("https",), clock=time.time) -> str:
     jar = http.cookiejar.CookieJar()
     op = _opener(jar)
     connect = (base + "/connect/login?v=3&api_key={key}").format(key=urllib.parse.quote(api_key))
-    page, early = _follow(op, connect, hosts)
+    page, early = _follow(op, connect, hosts, schemes)
     if early and "request_token=" in early:                  # already logged in (a reused session)
         return _token_from(early)
     d = _post_json(op, base + "/api/login", {"user_id": user_id, "password": password}, "login")
@@ -133,7 +136,7 @@ def request_token(api_key: str, user_id: str, password: str, totp_secret: str, *
                 time.sleep(1)
     else:
         raise last
-    _, loc = _follow(op, page, hosts)
+    _, loc = _follow(op, page, hosts, schemes)
     if not loc:
         raise LoginError("no redirect to the app after the login (is the Kite Connect app authorised for this "
                          "user? Log in once by hand through the app's login URL to authorise it)")

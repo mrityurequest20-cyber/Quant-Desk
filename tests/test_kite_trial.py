@@ -268,7 +268,8 @@ def test_the_recorder_workflow_is_read_only_encrypts_before_it_uploads_and_holds
     path = ROOT / ".github" / "workflows" / "kite-record.yml"
     text = path.read_text()
     wf = yaml.load(text, Loader=yaml.BaseLoader)
-    assert wf["permissions"] == {"contents": "read"} and set(wf["on"]) == {"schedule", "workflow_dispatch"} and check_workflows.check(path) == []
+    assert wf["permissions"] == {"contents": "read", "actions": "read"} and check_workflows.check(path) == []
+    assert set(wf["on"]) == {"workflow_dispatch"}                       # no cron of its own: the scheduler starts it once a day, never twice
     assert wf["defaults"]["run"]["shell"] == "bash" and wf["env"]["KITE_DATA_KEY"] == "${{ secrets.KITE_API_KEY }}"
     assert sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET", "KITE_PASSWORD", "KITE_TOTP_SECRET", "KITE_USER_ID"]
     assert "KITE_ACCESS_TOKEN" not in text and "KITE_API_KEY:" not in text                          # the broker adapter's names are never set
@@ -288,7 +289,14 @@ def test_the_recorder_workflow_is_read_only_encrypts_before_it_uploads_and_holds
         if s_.get("name") == login_step:
             assert s_["run"].strip() == "deploy/kite-autologin.sh login" and "KITE_API_SECRET" not in json.dumps(s_["env"])
     second = next(s_ for j, s_ in steps if j == "record-2" and s_.get("name") == login_step)
-    assert second["if"] == "needs.record-1.outputs.login != 'failure'"                            # one failed login a day at most: no lockout
+    assert second["if"] == "needs.record-1.outputs.login == 'success'"                            # only after job 1 really logged in
+    r1 = [s_.get("name") for s_ in wf["jobs"]["record-1"]["steps"]]
+    gate = "May this run log in? (only the first run of the day, first attempt)"
+    assert r1.index(gate) == r1.index(login_step) - 1                                             # the gate decides right before the login
+    first = next(s_ for j, s_ in steps if j == "record-1" and s_.get("name") == login_step)
+    assert first["if"] == "steps.gate.outputs.first == 'true'"
+    g = next(s_ for s_ in wf["jobs"]["record-1"]["steps"] if s_.get("name") == gate)
+    assert g["run"] == "/usr/bin/python3 -I -S deploy/kite_login_gate.py" and set(g["env"]) == {"GH_TOKEN"}
     assert wf["jobs"]["record-1"]["outputs"]["login"] == "${{ steps.login.outcome }}"
     for s_ in (s for _, s in steps if "KITE_API_SECRET" in json.dumps(s.get("env", {}))):
         assert "pip install" not in s_.get("run", "")                                              # the library install never holds the secret

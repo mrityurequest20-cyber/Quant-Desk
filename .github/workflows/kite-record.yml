@@ -1,7 +1,7 @@
 # Private Kite tick recorder (docs/ml/KITE_TRIAL.md): record the Kite websocket's ticks (index ticks, and the near-month NIFTY and BANKNIFTY futures with five levels of depth) for the
 # whole session, beside the desk and entirely apart from it. Market data only: no order method is called anywhere in this code (a test checks).
 #
-# No manual step: each job logs in to Kite by itself (deploy/kite_autologin.py, owner's instruction of 6 Nov 2026) with the owner's Zerodha user ID, password
+# No manual step: the first run of the day logs in to Kite by itself (deploy/kite_autologin.py, owner's instruction of 6 Nov 2026) with the owner's Zerodha user ID, password
 # and TOTP key from GitHub secrets; those reach the one login step only, which runs standard-library Python. Without those secrets it falls back to the token the
 # "Kite token" workflow stored; with neither it records nothing and succeeds. A configured login that fails fails the run, so the watchdog reports it.
 #
@@ -11,9 +11,7 @@
 name: Kite tick recorder
 
 on:
-  schedule:
-    - cron: "25 3 * * 1-5"       # 08:55 IST Mon-Fri (GitHub runs it a little late; the recorder starts when the job does)
-  workflow_dispatch:
+  workflow_dispatch:            # started by deploy/scheduler.py (and its waiter), once a day; no cron of its own, so it never starts twice
     inputs:
       first_until:
         description: "First job records until (HH:MM IST)"
@@ -26,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  actions: read                # the login gate lists this workflow's runs: only the first run of the day logs in
 
 defaults:
   run:
@@ -56,8 +55,14 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt -r requirements-kite.txt
+      - name: May this run log in? (only the first run of the day, first attempt)
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: /usr/bin/python3 -I -S deploy/kite_login_gate.py
       - name: Log in to Kite by itself (data only; the password reaches this step alone)
         id: login
+        if: steps.gate.outputs.first == 'true'
         continue-on-error: true
         env:
           KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
@@ -80,7 +85,7 @@ jobs:
         env:
           UNTIL: ${{ inputs.first_until || '14:45' }}
         run: |
-          cap=$(date -d '+345 minutes' +%H:%M)     # an early start (the scheduler, 08:25 on) must still stop before the job's 358-minute limit
+          cap=$(date -d '+330 minutes' +%H:%M)     # an early start (the scheduler, 08:25 on) must still stop before the job's 358-minute limit
           if [[ "$cap" < "$UNTIL" ]]; then UNTIL=$cap; fi
           python -m quantdesk data kite-record --out runtime/kite --until "$UNTIL"
       - name: Encrypt the ticks with the owner's API secret
@@ -127,7 +132,7 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-kite.txt
       - name: Log in to Kite by itself (data only; the password reaches this step alone)
         id: login
-        if: needs.record-1.outputs.login != 'failure'        # never a second attempt on a day the first one failed (a lockout guard)
+        if: needs.record-1.outputs.login == 'success'        # only when job 1 really logged in: never after a failed or refused login (lockout guard)
         continue-on-error: true
         env:
           KITE_USER_ID: ${{ secrets.KITE_USER_ID }}

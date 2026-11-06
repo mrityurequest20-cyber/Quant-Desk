@@ -19,7 +19,7 @@ and every pre-registered spec and result are untouched.
 | Workflow | When (IST) | What |
 |---|---|---|
 | `record.yml` | 09:15 to 15:30 | Index and futures 1-minute bars and an option-chain snapshot a minute (`data record-session`), plus the chain tape (several expiries a minute, `intraday tape`). Kept as an artifact and as Parquet on `chains-YYYY`. After the close: option minutes (`option-minutes-*`) and liquid stocks' minutes (`stock-minutes-*`). |
-| `kite-record.yml` | the session | Kite websocket ticks with depth, encrypted. Logs in to Kite by itself each job (`deploy/kite_autologin.py`, data only); the scheduler starts it once a day and never retries a failed login. |
+| `kite-record.yml` | the session | Kite websocket ticks with depth, encrypted. Logs in to Kite by itself (`deploy/kite_autologin.py`, data only). No cron of its own: the scheduler starts it once a day; only the day's first run may log in (`deploy/kite_login_gate.py`), so a bad password costs at most one failed login a day. |
 | `collect-wide.yml` | 15:25, 15:45 | Stock option chains, and minutes for all five indices. |
 | `data.yml` | evening | The NSE warehouse (bhavcopy, participant OI, FII/DII, the event calendar). |
 | `premarket.yml` | 07:15 to 09:15 | The pre-market brief (on its own branch until merged). |

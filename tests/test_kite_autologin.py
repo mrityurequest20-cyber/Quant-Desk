@@ -96,8 +96,9 @@ def zerodha():
 
 def _login(base, **kw):
     args = dict(api_key=KEY, user_id=USER, password=PASSWORD, totp_secret=SECRET)
-    args.update(kw)
-    return KA.request_token(args["api_key"], args["user_id"], args["password"], args["totp_secret"], base=base, hosts={"127.0.0.1"})
+    args.update({k: v for k, v in kw.items() if k != "schemes"})
+    return KA.request_token(args["api_key"], args["user_id"], args["password"], args["totp_secret"], base=base, hosts={"127.0.0.1"},
+                            schemes=kw.get("schemes", ("http",)))
 
 
 def test_the_login_returns_the_request_token_and_never_opens_the_apps_redirect_url(zerodha, monkeypatch):
@@ -150,7 +151,8 @@ def test_the_process_that_holds_the_password_imports_only_the_standard_library()
             for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in (n.names if isinstance(n, ast.Import) else [n])}
     assert mods <= set(sys.stdlib_module_names) | {"__future__"}, mods - set(sys.stdlib_module_names)
     sh = (ROOT / "deploy" / "kite-autologin.sh").read_text()
-    assert 'python3 -I "$here/kite_autologin.py"' in sh                    # isolated mode: no PYTHONPATH, no user site, no cwd on the path
+    assert '"$py" -I -S "$here/kite_autologin.py"' in sh and "py=/usr/bin/python3" in sh   # the system Python; -I: no PYTHONPATH, user site or
+                                                                            # cwd; -S: no site-packages, so no installed package's .pth runs
 
 
 def test_nothing_in_the_login_path_can_trade():
@@ -166,3 +168,45 @@ def test_exchange_without_a_login_is_a_quiet_no_op(tmp_path):
     env = {**os.environ, "RUNNER_TEMP": str(tmp_path)}
     r = subprocess.run(["bash", str(ROOT / "deploy" / "kite-autologin.sh"), "exchange"], env=env, capture_output=True, text=True)
     assert r.returncode == 0 and "nothing to exchange" in r.stdout
+
+
+def test_a_redirect_to_plain_http_is_refused_so_the_session_cookie_never_travels_unencrypted(zerodha, monkeypatch):
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(KA.LoginError, match="non-HTTPS"):
+        _login(zerodha, schemes=("https",))                               # the stand-in redirects over http: refused at the first hop
+    assert ("POST", "/api/login") not in Fake.log                          # the password was never sent
+
+
+# ---- the login gate: only the first run of the day, first attempt ----------------------------------------------------------------
+import datetime as _dt  # noqa: E402
+import kite_login_gate as G  # noqa: E402
+
+DAY = _dt.date(2026, 11, 9)
+
+
+def _r(i, ist):
+    return {"databaseId": i, "createdAt": _dt.datetime.fromisoformat(ist).replace(tzinfo=G.IST).astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def test_only_the_first_run_of_the_day_on_its_first_attempt_may_log_in():
+    yday = _r(90, "2026-11-06 08:30")
+    assert G.may_log_in([_r(100, "2026-11-09 08:30"), yday], 100, 1, DAY)[0] is True
+    assert G.may_log_in([_r(101, "2026-11-09 08:55"), _r(100, "2026-11-09 08:30")], 101, 1, DAY)[0] is False     # a late cron / second starter
+    assert G.may_log_in([_r(101, "2026-11-09 08:30"), _r(100, "2026-11-09 08:30")], 100, 1, DAY)[0] is True      # a race: the earlier id wins
+    assert G.may_log_in([_r(101, "2026-11-09 08:30"), _r(100, "2026-11-09 08:30")], 101, 1, DAY)[0] is False     # ... and the later one skips
+    assert G.may_log_in([_r(100, "2026-11-09 08:30")], 100, 2, DAY)[0] is False                                    # "Re-run failed jobs"
+    assert G.may_log_in([_r(100, "2026-11-09 00:10")], 100, 1, DAY)[0] is True                                     # IST day, not UTC
+    assert G.may_log_in([], 100, 1, DAY)[0] is False                                                               # can't see itself: no login
+
+
+def test_the_gate_says_no_when_it_cannot_read_the_runs(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_RUN_ID", "100"), monkeypatch.setenv("GITHUB_REPOSITORY", "o/r"), monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("PATH", str(tmp_path))                                 # no gh on the path
+    assert G.main() == 0 and out.read_text() == "first=false\n"
+    src = (ROOT / "deploy" / "kite_login_gate.py").read_text()
+    tree = ast.parse(src)
+    mods = {(a.name if isinstance(n, ast.Import) else n.module).split(".")[0]
+            for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in (n.names if isinstance(n, ast.Import) else [n])}
+    assert mods <= set(sys.stdlib_module_names) | {"__future__"}

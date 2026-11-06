@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The automatic Kite login, in two steps that never share an environment (deploy/kite_autologin.py has the why):
 #   kite-autologin.sh login     env KITE_DATA_KEY, KITE_USER_ID, KITE_PASSWORD, KITE_TOTP_SECRET. Standard-library Python
-#                               only (python3 -I), so no third-party code runs beside the password. Writes the request_token.
+#                               only (system python3 -I -S: no site-packages), so no third-party code runs beside the password. Writes the request_token.
 #   kite-autologin.sh exchange  env KITE_DATA_KEY, KITE_DATA_SECRET. `quantdesk data kite-token` turns the request_token into
 #                               the day's access token (the authority-date check included), which is exported masked as
 #                               KITE_DATA_TOKEN, the data path's name, never the broker adapter's.
@@ -14,7 +14,8 @@ tok="$tmp/kite_access_token"
 case "${1:-}" in
   login)
     rm -f "$req"
-    python3 -I "$here/kite_autologin.py" --out "$req"
+    py=/usr/bin/python3; [ -x "$py" ] || py=python3      # the system Python, not the job's pip-filled one
+    "$py" -I -S "$here/kite_autologin.py" --out "$req"     # -S: no site-packages, so no installed package's .pth code runs beside the password
     ;;
   exchange)
     [ -s "$req" ] || { echo "kite login: no request token (login not configured or it failed); nothing to exchange"; exit 0; }

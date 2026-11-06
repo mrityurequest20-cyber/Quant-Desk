@@ -161,10 +161,13 @@ These are not questions. The engineer never asks about them; it simply does not 
     repository), "Completely automate, don't worry about any risk or limit." So the desk may log in to Kite by
     itself every day, for the market data above only, with the owner's Zerodha user ID, password and TOTP key held
     as the repository secrets `KITE_USER_ID`, `KITE_PASSWORD` and `KITE_TOTP_SECRET`, which the owner sets. Those
-    three reach only the login step (`deploy/kite_autologin.py`, standard library only, never beside the API secret
-    or third-party code), are never asked for or accepted in chat, and are never printed, logged, committed or
-    published. A failed login is never retried automatically on the same day (a lockout guard). The token the
-    login produces is the same data-only token as above: no order, position, holding, margin or profile method.
+    three reach only the login step (`deploy/kite_autologin.py`: standard library only, run by the system Python
+    with `-I -S` so no installed package's code runs beside them, never in a step with the API secret), are never
+    asked for or accepted in chat, and are never printed, logged, committed or published. Lockout guard: the
+    recorder has no cron of its own, and only the first run of the IST day, on its first attempt, may log in
+    (`deploy/kite_login_gate.py`); its second job logs in only after the first job's login succeeded. So a wrong or
+    changed password costs at most one failed automatic login a day. The token the login produces is the same
+    data-only token as above: no order, position, holding, margin or profile method.
 
   
 - **No looser risk:** never loosen a risk limit (`intraday.risk`, the drawdown halts, the loss budget), and never size
