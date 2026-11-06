@@ -118,3 +118,30 @@ def test_the_cli_prints_the_day_and_the_plan():
     assert out.returncode == 0 and "mcx" in out.stdout and "09:00-23:30" in out.stdout and "NOT verified" in out.stdout
     plan = subprocess.run([sys.executable, "-m", "quantdesk", "markets", "plan", "--date", "2026-11-09"], cwd=ROOT, capture_output=True, text=True)
     assert plan.returncode == 0 and len(json.loads(plan.stdout)) == 3
+
+
+# ---- the MCX and currency holiday lists (recording only until the exchange circulars are read) --------------------------------
+ZERODHA_NSE_2026 = ["2026-01-15", "2026-01-26", "2026-03-03", "2026-03-26", "2026-03-31", "2026-04-03", "2026-04-14", "2026-05-01",
+                    "2026-05-28", "2026-06-26", "2026-09-14", "2026-10-02", "2026-10-20", "2026-11-10", "2026-11-24", "2026-12-25"]
+
+
+def test_the_nse_list_matches_zerodhas_published_calendar(cal):
+    assert sorted(d.isoformat() for d in cal.nse_days) == ZERODHA_NSE_2026
+
+
+def test_mcx_is_closed_on_its_full_day_holidays_for_recording_but_still_not_verified_for_trading(cal):
+    for d in ("2026-01-26", "2026-04-03", "2026-10-02", "2026-12-25"):
+        day = dt.date.fromisoformat(d)
+        assert S.session("mcx", day, cal) is None and not cal.known("mcx", day)
+    assert S.session("mcx", dt.date(2026, 3, 3), cal) is not None            # Holi: NSE shut, MCX's evening session runs (partial: not modelled)
+    assert S.session("mcx", dt.date(2026, 11, 9), cal, trading=True) is None
+
+
+def test_the_currency_segment_follows_nse_plus_the_four_settlement_dates_for_recording(cal):
+    for d in ZERODHA_NSE_2026 + ["2026-02-19", "2026-03-19", "2026-04-01", "2026-08-26"]:
+        day = dt.date.fromisoformat(d)
+        if day.weekday() < 5:
+            assert S.session("nse_cds", day, cal) is None, d
+    assert S.session("nse_cds", dt.date(2026, 11, 9), cal) is not None
+    assert not cal.known("nse_cds", dt.date(2026, 11, 9))                    # inferred, not read from the circular: not verified
+    assert S.session("nse_fo", dt.date(2026, 2, 19), cal) is not None        # a settlement holiday does not close the equity-derivative market
