@@ -621,8 +621,9 @@ def run_all(folder: Path, daily: dict, cfg=None) -> dict:
     opts = load_options(folder)
     if cfg is not None:
         from ..core.types import Instrument
-        from ..intraday.sim import IntradayBroker
-        costs = IntradayBroker(cfg).costs
+        from ..execution.costs import CostModel
+        costs = CostModel(cfg)                    # the retired desk simulator's costs (intraday/sim.py IntradayBroker):
+        costs.opt_half, costs.opt_min, costs.opt_half_ticks = 0.0, 0.0, 1     # quotes already bid/ask, 1 adverse tick
         exp = dt.date(2030, 1, 1)
 
         def fees_for(sym):

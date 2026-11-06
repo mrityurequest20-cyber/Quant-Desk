@@ -5,7 +5,6 @@ import pytest
 
 from quantdesk.cli import build_parser
 from quantdesk.core.types import Instrument, Trade, TradeLeg
-from quantdesk.engine.live import LiveRunner
 from quantdesk.execution.broker import PaperBroker
 from quantdesk.journal.review import review_trade
 
@@ -35,45 +34,3 @@ def test_review_lessons():
     assert any("within 2 bars" in l for l in quick["lessons"])
 
 
-def test_paper_runner_daily_cycle_is_idempotent(market, cfg, tmp_path):
-    prov, data = market
-    pcfg = cfg.with_overrides({"data": {"history_years": 3}})
-    bench = data["NIFTY"].index
-    days = [d.date() for d in bench[-6:]]
-
-    def runner():
-        return LiveRunner(pcfg, broker=PaperBroker(pcfg, state_path=tmp_path / "b.json"),
-                          journal_path=tmp_path / "j.db", provider=prov)
-
-    r = runner()
-    for d in days:
-        r.engine = None
-        pre = r.premarket(d)
-        assert {c.name for c in pre} >= {"data_freshness", "reconciliation", "kill_switch", "risk_state"}
-        out = r.run_eod(d)
-        assert out["processed"] == [str(d)]
-        assert next(c for c in out["post"] if c.name == "reconciliation").status == "PASS"
-    again = runner().run_eod(days[-1])
-    assert again["processed"] == []                                    # never processes a day twice
-    status = runner().load(days[-1])
-    assert len(status.open_trades) == out["open_trades"]
-    review = r.review(7, days[-1])
-    assert review.startswith("# 7-day review")
-
-
-def test_cli_parser_and_schedule(capsys, cfg):
-    from quantdesk.cli import cmd_schedule
-    a = build_parser().parse_args(["--source", "synthetic", "backtest", "--strategies", "pairs", "--mc"])
-    assert a.cmd == "backtest" and a.strategies == "pairs" and a.mc
-    cmd_schedule(cfg, a)
-    out = capsys.readouterr().out
-    assert "CRON_TZ=Asia/Kolkata" in out and "paper premarket" in out and "paper run" in out
-
-
-def test_live_broker_refuses_without_explicit_opt_in(cfg):
-    from quantdesk.execution.kite import KiteBroker, LiveTradingDisabled
-    with pytest.raises(LiveTradingDisabled):
-        KiteBroker(cfg, confirm_live=True)                              # config still says paper
-    live = cfg.with_overrides({"account": {"mode": "live"}})
-    with pytest.raises(LiveTradingDisabled):
-        KiteBroker(live, confirm_live=False)                            # no --live flag

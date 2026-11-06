@@ -55,29 +55,3 @@ def test_heavyweight_results_are_context_only():
         "since the last close: ICICIBANK results (board meeting) at 23:59"]
 
 
-def test_gift_nifty_is_read_before_the_open_and_recorded(cfg, tmp_path):
-    from quantdesk.intraday.engine import IntradayEngine
-    from quantdesk.intraday.feeds import ReplayFeed
-    from quantdesk.intraday.recorder import SessionRecorder
-    from quantdesk.intraday.sim import IntradayBroker
-    from quantdesk.intraday.synthetic import simulate_sessions
-    from quantdesk.journal.journal import Journal
-    day = dt.date(2026, 10, 5)
-    bars, _ = simulate_sessions([dt.date(2026, 10, 1), day], seed=3)
-    j = Journal()
-    eng = IntradayEngine(cfg, ReplayFeed(bars, day), "model", j, IntradayBroker(cfg, starting_cash=20000),
-                         SessionRecorder(tmp_path / "data"), say=None)
-    calls = []
-
-    def gift():
-        calls.append(1)
-        return pd.DataFrame([{"ts": ts("2026-10-05 08:50"), "last": 22624.5, "change": 133.5, "pct": 0.59,
-                              "expiry": dt.date(2026, 10, 27), "contracts": 1.0, "nifty_close": 22421.95}])
-    eng.gift_source = gift
-    eng.preopen(ts("2026-10-05 08:50"))
-    eng.preopen(ts("2026-10-05 08:52"))                                         # within 4 minutes: not asked again
-    eng.preopen(ts("2026-10-05 08:55"))
-    assert len(calls) == 2 and 0.004 < eng.gift["implied_gap"] < 0.006
-    assert len(pd.read_csv(tmp_path / "data" / str(day) / "gift.csv")) == 2
-    ev = j.events()
-    assert ev["message"].str.contains("GIFT Nifty 22,624.5").sum() == 1      # said once

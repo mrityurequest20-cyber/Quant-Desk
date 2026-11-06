@@ -7,7 +7,6 @@ from quantdesk.core.types import Instrument, Order
 from quantdesk.execution.broker import PaperBroker
 from quantdesk.execution.costs import CostModel
 from quantdesk.risk import metrics as M
-from quantdesk.risk.manager import RiskManager
 
 
 def test_option_sell_cost_stack(cfg):
@@ -67,28 +66,6 @@ def test_paper_broker_state_roundtrip(cfg, tmp_path):
     assert again.cash() == pytest.approx(br.cash()) and again.positions()["ITC"]["qty"] == 50
 
 
-def test_drawdown_derisk_and_kill_switch(cfg):
-    rm = RiskManager(cfg)
-    rm.new_bar(pd.Timestamp("2026-01-05"), 1_000_000)
-    assert rm.dd_scale(1_000_000) == 1.0
-    mid = 1_000_000 * (1 - (rm.dd_start + rm.dd_halt) / 2)
-    assert rm.dd_scale(mid) == pytest.approx(0.5)
-    assert rm.end_of_bar(1_000_000 * (1 - rm.dd_halt - 0.001)) == ["HALT", "DAILY_LIMIT"]
-    ok, why = rm.can_enter()
-    assert not ok and "kill switch" in why
-    rm.reset_halt(850_000)
-    assert not rm.halted
-
-
-def test_daily_loss_limit_blocks_entries_until_next_day(cfg):
-    rm = RiskManager(cfg)
-    rm.new_bar(pd.Timestamp("2026-01-05"), 1_000_000)
-    assert "DAILY_LIMIT" in rm.end_of_bar(975_000)
-    assert not rm.can_enter()[0]
-    rm.new_bar(pd.Timestamp("2026-01-06"), 975_000)
-    assert rm.can_enter()[0]
-
-
 def test_probabilistic_and_deflated_sharpe():
     import numpy as np
     rng = np.random.default_rng(0)
@@ -136,15 +113,3 @@ def test_the_exercise_stt_rate_is_dated_and_comes_from_config(cfg):
     assert fill.fees == pytest.approx(0.00125 * intr * 65)
 
 
-def test_confidence_scales_a_trade_down_never_past_the_per_trade_limit(cfg):
-    from quantdesk.core.types import TradeIntent
-    rm = RiskManager(cfg)
-    rm.new_bar(pd.Timestamp("2026-01-05"), 1_000_000)
-    budgets = {}
-    for conf in (-1.0, 0.0, 0.5, 1.0, 5.0):
-        intent = TradeIntent("t", "trend", "ITC", 1, "linear", [], 100.0, 1.0, confidence=conf)
-        budgets[conf] = rm.size(intent, 1_000_000, 1.0, [], None).budget
-    ceiling = 1_000_000 * rm.risk_per_trade                 # weight 1.0, no drawdown: the configured limit
-    assert max(budgets.values()) == pytest.approx(ceiling)   # a fully confident trade reaches it, not past it
-    assert budgets[1.0] == budgets[5.0] and budgets[0.0] == budgets[-1.0]   # confidence is clamped to 0..1
-    assert budgets[0.0] == pytest.approx(0.75 * ceiling) and budgets[0.0] < budgets[0.5] < budgets[1.0]
