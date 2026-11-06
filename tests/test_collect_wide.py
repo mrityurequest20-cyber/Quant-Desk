@@ -134,9 +134,8 @@ WF = ROOT / ".github" / "workflows" / "collect-wide.yml"
 def test_workflow_is_read_only_pinned_isolated_and_adds_no_secret():
     text = WF.read_text(encoding="utf-8")
     wf = yaml.safe_load(text)
-    chain = yaml.safe_load((ROOT / ".github" / "workflows" / "chain-archive.yml").read_text(encoding="utf-8"))
     live = yaml.safe_load((ROOT / ".github" / "workflows" / "record.yml").read_text(encoding="utf-8"))
-    assert wf["permissions"]["contents"] == "write" == chain["permissions"]["contents"] and len(wf["permissions"]) == 1
+    assert wf["permissions"]["contents"] == "write" and len(wf["permissions"]) == 1
     assert all("permissions" not in j for j in wf["jobs"].values())
     assert set(re.findall(r"secrets\.(\w+)", text)) == {"KOTAK_CONSUMER_KEY"}
     assert "secrets.KOTAK_CONSUMER_KEY" in live["env"]["KOTAK_CONSUMER_KEY"]

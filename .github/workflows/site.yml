@@ -1,10 +1,7 @@
 # Re-publish the read-only site (the phone app) when the app itself changes, without trading.
 #
-# While the live desk runs, its own publisher re-exports the site every few minutes with the code
-# it checked out that morning, so an app update pushed mid-session would be overwritten. This job
-# waits for the desk (and any trade restatement) to finish, then publishes the final state with the new app. On a day
-# the desk isn't running it publishes at once. It never touches the desk's concurrency group: a
-# queued run there could cancel a pending trading day.
+# The paper desk that used to republish the site mid-session was retired on 6 Nov 2026 (record.yml publishes no site),
+# so this job publishes at once. It never touches the recorder's concurrency group.
 name: Publish site
 
 on:
@@ -15,7 +12,6 @@ on:
 
 permissions:
   contents: write            # push the gh-pages branch
-  actions: read              # see whether the live desk is running
 
 concurrency:
   group: site-publish        # a newer app version supersedes a waiting one
@@ -24,23 +20,9 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Wait for a running desk (or a trade restatement) to finish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          busy() {                                   # runs of a workflow not yet completed (0 if it doesn't exist yet)
-            gh run list -R "$GITHUB_REPOSITORY" --workflow "$1" --limit 5 --json status \
-              --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0
-          }
-          for i in $(seq 320); do
-            [ "$(busy live.yml)" = "0" ] && [ "$(busy restate.yml)" = "0" ] && exit 0
-            [ "$i" = 1 ] && echo "the live desk or a restatement is running; publishing after it finishes"
-            sleep 60
-          done
-          echo "::error::still busy after 5h20m"; exit 1
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.11"

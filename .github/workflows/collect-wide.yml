@@ -2,7 +2,7 @@
 # engine or an order: it reads Kotak with the consumer key the desk already uses for data and writes Parquet to releases.
 #   15:25 IST  stocks:  one end-of-day option-chain snapshot of the liquid F&O stocks in config collect_wide.stocks
 #              (quotes are not historical, and the book is blank after the close, so this has to be in-session;
-#              it is a separate workflow rather than a step in live.yml so a failure here cannot reach the desk)
+#              it is a separate workflow rather than a step in record.yml so a failure here cannot reach the desk)
 #   15:45 IST  minutes: Kotak 1-minute option candles for NIFTY, BANKNIFTY, SENSEX (bse_fo), FINNIFTY, MIDCPNIFTY,
 #              then (collect_wide.stock_minutes) the stocks' near-the-money option minutes, grouped into a few assets/day,
 #              then the health check: per source and per stock, did today's data arrive (warning + line in the step summary)
@@ -22,7 +22,7 @@ on:
         default: "both"
 
 permissions:
-  contents: write            # create and upload to the quarterly releases (as chain-archive.yml)
+  contents: write            # create and upload to the quarterly releases (the chains-YYYY releases)
 
 concurrency:
   group: collect-wide        # its own group: it must never queue behind, or hold up, the live desk

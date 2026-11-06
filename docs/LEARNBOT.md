@@ -5,7 +5,7 @@ request, and once a month checks the desk against the roadmap. It proposes; peop
 approves, marks a draft ready or enables auto-merge.**
 
 It is the weekly and monthly routine in claude.ai (Routines), not a service. Its instructions are this file,
-[AUTONOMY.md](AUTONOMY.md), [ROADMAP_AUG_2027.md](ROADMAP_AUG_2027.md), [MASTER_PLAN_JUNE_2027.md](MASTER_PLAN_JUNE_2027.md)
+[AUTONOMY.md](AUTONOMY.md), [RENAISSANCE.md](RENAISSANCE.md) (the plan; it replaced the 2027 roadmaps on 6 Nov 2026)
 and [ML_ROADMAP.md](ML_ROADMAP.md). The code it relies on is two commands (`quantdesk/learnbot/`).
 
 | Run | When | What it does |

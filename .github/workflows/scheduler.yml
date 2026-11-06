@@ -1,8 +1,7 @@
-# Starts the live desk when it should be running and isn't. GitHub delivered live.yml's own 08:52 IST cron
-# 6½–7 hours late on 29 Sep – 1 Oct 2026 (at 15:19–15:46 IST), so the desk lost two sessions. This check
-# fires every 10 minutes around the clock (each firing can be late too, but some land in the morning) and
-# starts the desk by workflow_dispatch, which runs at once. It respects the kill switch: a run cancelled
-# today keeps the desk stopped for the day. The rules are in deploy/scheduler.py. Each check takes seconds.
+# Starts the session recorder (record.yml) when it should be running and isn't. GitHub delivered the old desk's 08:52 IST
+# cron 6½–7 hours late on 29 Sep – 1 Oct 2026 (at 15:19–15:46 IST), so two sessions were lost. This check fires every
+# 10 minutes around the clock (each firing can be late too, but some land in the morning) and starts the recorder by
+# workflow_dispatch, which runs at once. It respects the kill switch: a run cancelled today keeps it stopped for the day. The rules are in deploy/scheduler.py. Each check takes seconds.
 name: Desk scheduler
 
 on:
@@ -11,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write             # list live.yml runs and dispatch it
+  actions: write             # list record.yml runs and dispatch it
   contents: read
 
 concurrency:

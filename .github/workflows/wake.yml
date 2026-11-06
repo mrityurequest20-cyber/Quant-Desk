@@ -1,8 +1,8 @@
 # The desk's overnight waiter (deploy/scheduler.py arms it). GitHub's scheduled events reach this repository only a
 # few times a day and hours late, so no cron can be trusted to land at 08:30 IST. Instead, any scheduler firing in the
 # six hours before a session dispatches this workflow, which runs at once and sleeps on its runner until the wake-up
-# time, then runs the scheduler's check, which starts live.yml. Hosted minutes are free on a public repository.
-# Cancelling this run disarms it; cancelling a live.yml run stays the kill switch for the day.
+# time, then runs the scheduler's check, which starts record.yml. Hosted minutes are free on a public repository.
+# Cancelling this run disarms it; cancelling a record.yml run stays the kill switch for the day.
 name: Desk waiter
 
 on:
@@ -13,7 +13,7 @@ on:
         required: true
 
 permissions:
-  actions: write             # list live.yml runs and dispatch it
+  actions: write             # list record.yml runs and dispatch it
   contents: read
 
 concurrency:

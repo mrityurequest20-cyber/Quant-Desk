@@ -13,16 +13,12 @@
 //
 // Stateless on purpose (no storage to lose or corrupt): every check runs at fixed IST times, so each fires at most once a
 // day. Messages are built from check names, workflow names, times and run links only: never a key, a journal value or a
-// position. See docs/MASTER_PLAN.md section 3.
+// position. See docs/WATCHDOG.md.
 
 const IST_MS = 330 * 60 * 1000;
 const DAY_MS = 86400000;
 const DEFAULT_REPO = "mrityurequest20-cyber/Quant-Desk";
 const FETCH_MS = 8000;                       // no read or send may hold a firing open: the alarm clock shares this invocation
-// The published heartbeat is only as fresh as the publish cadence (live.yml republishes every 6 minutes) plus a Pages build and CDN
-// lag, so a healthy desk can show a heartbeat well over 10 minutes old. The limit is measured in the drill; until then it is wide.
-const HEARTBEAT_MAX_MIN = 20;
-const YAHOO_SHARE_MAX = 0.5;                 // a normal day was 190 of 570 (33%); more than half is the real feed failing
 
 // NSE trading holidays, copied from config/quantdesk.yaml `calendar.holidays` (a test fails if they differ). A year whose
 // list is not entered is not known: its weekdays are treated as trading days, as the desk does, and W9 asks for the list.
@@ -70,21 +66,6 @@ async function ghGet(env, path, params = {}) {
 const workflowRuns = async (env, file, params) => (await ghGet(env, `/actions/workflows/${file}/runs`, params)).workflow_runs || [];
 const allRuns = async (env, params) => (await ghGet(env, "/actions/runs", params)).workflow_runs || [];
 
-// pandas writes "2026-10-23 09:31:00.123456+05:30"; make it something every engine parses.
-export function parseTs(ts) {
-	if (typeof ts !== "string") return NaN;
-	return Date.parse(ts.trim().replace(" ", "T").replace(/(\.\d{3})\d+/, "$1"));
-}
-
-async function readHeartbeat(env) {
-	const origin = String(env.ORIGIN || "").replace(/\/+$/, "");
-	if (!/^https:\/\//.test(origin)) throw new Error("ORIGIN is not set");
-	const res = await fetch(`${origin}/data.json`, { cache: "no-store", signal: AbortSignal.timeout(FETCH_MS) });
-	if (!res.ok) throw new Error(`published data.json answered ${res.status}`);
-	const data = await res.json();
-	return (data && data.state && data.state.heartbeat) || null;
-}
-
 // ---- the checks. Each returns a list of alerts: { sev: "P1"|"P2"|"INFO", check, title, body, link } -------------------------
 
 const actionsUrl = (env, file) => `https://github.com/${repoOf(env)}/actions/workflows/${file}`;
@@ -99,40 +80,6 @@ async function w1DeskStarted(c) {
 	return [{ sev: "P1", check: "W1", title: "Recorder not started",
 		body: `No Session recorder run exists for ${c.now.date} at ${c.now.hhmm} IST. The scheduler should have started it by now.`,
 		link: actionsUrl(c.env, RECORDER) }];
-}
-
-// W2: the published heartbeat is fresh, the desk is not halted, the feed is the real one
-async function w2Heartbeat(c) {
-	const hb = await readHeartbeat(c.env);
-	const at = parseTs(hb && hb.ts);
-	if (!hb || Number.isNaN(at)) {
-		return [{ sev: "P2", check: "W2", title: "Heartbeat unreadable",
-			body: "The published data.json has no readable state.heartbeat.ts, so the desk's liveness cannot be checked from outside.", link: "" }];
-	}
-	const out = [];
-	const ageMin = (c.nowMs - at) / 60000;
-	if (ageMin > HEARTBEAT_MAX_MIN) {
-		out.push({ sev: "P1", check: "W2", title: "Stale heartbeat",
-			body: `The desk's last published heartbeat is ${Math.round(ageMin)} minutes old (limit ${HEARTBEAT_MAX_MIN}) at ${c.now.hhmm} IST.`, link: actionsUrl(c.env, "live.yml") });
-	}
-	if (hb.halted === true) {
-		out.push({ sev: "P1", check: "W2", title: "Desk halted",
-			body: "The desk reports halted. Clearing a halt is the owner's decision (clear-halt workflow).", link: "" });
-	}
-	// The label is "kotak" when all is well, "kotak+yahoo (190 of 570 polls from Yahoo)" when some polls fell back (VERIFIED on the
-	// published data.json, 23 Oct: about a third on a normal day), and has no "kotak" at all when the real feed is gone.
-	if (typeof hb.feed === "string" && hb.feed) {
-		const m = /\((\d+) of (\d+) polls from yahoo\)/i.exec(hb.feed);
-		const share = m && Number(m[2]) > 0 ? Number(m[1]) / Number(m[2]) : 0;
-		if (!/kotak/i.test(hb.feed)) {
-			out.push({ sev: "P2", check: "W2", title: "Feed fell back",
-				body: `The desk's live feed is "${ascii(hb.feed, 60)}", not Kotak.`, link: "" });
-		} else if (share > YAHOO_SHARE_MAX) {
-			out.push({ sev: "P2", check: "W2", title: "Feed mostly Yahoo",
-				body: `The desk's live feed is "${ascii(hb.feed, 60)}": more than ${Math.round(YAHOO_SHARE_MAX * 100)}% of polls came from Yahoo.`, link: "" });
-		}
-	}
-	return out;
 }
 
 // W3 and friends: a workflow that must run each trading day did, and did not fail

@@ -342,13 +342,3 @@ def test_the_alert_workflow_is_least_privilege_and_never_expands_inputs_into_a_s
     assert "exit 1" in script                                                      # bad severity/day/check is refused
 
 
-@NODE
-def test_the_real_heartbeat_timestamp_format_parses(tmp_path):
-    """Copied from the published data.json on 23 Oct 2026: pandas writes microseconds and an IST offset with a space, not a T."""
-    out = _node(tmp_path, HEAD + r"""
-out.real = W.parseTs("2026-10-23 15:30:04.402768+05:30");
-out.expect = Date.parse("2026-10-23T15:30:04.402+05:30");
-out.bad = [W.parseTs(null), W.parseTs("nonsense"), W.parseTs(12345)].map((x) => Number.isNaN(x));
-console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
-""")
-    assert out["real"] == out["expect"] and out["bad"] == [True, True, True]

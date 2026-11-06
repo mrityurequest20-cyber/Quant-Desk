@@ -2,7 +2,7 @@
 
 Written at the end of the 23-24 Oct session so the next session starts warm. It records decisions the owner made in that session, the
 design of the model programme, and what is still open. It changes no rule, spec, limit or result. Where it differs from
-[MASTER_PLAN.md](MASTER_PLAN.md) on dates, the master plan wins; [ML_ROADMAP.md](ML_ROADMAP.md) keeps the standing ML rules and
+[RENAISSANCE.md](RENAISSANCE.md) on dates or order, that plan wins; [ML_ROADMAP.md](ML_ROADMAP.md) keeps the standing ML rules and
 [ML_PHASE0.md](ML_PHASE0.md) the Phase 0 work items.
 
 ## 1. The owner's direction (what the plan is for)
