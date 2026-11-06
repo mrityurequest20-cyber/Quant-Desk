@@ -34,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_intraday(sub)
     from .data.cli import register as register_data
     register_data(sub)
+    from .autolearn.cli import register as register_autolearn
+    register_autolearn(sub)
     s = sub.add_parser("research", help="test pre-registered edge hypotheses on real NIFTY/BANKNIFTY data")
     s.add_argument("--out", default="research", help="folder for edge_report.md and edges.json")
     s.add_argument("--experiment-log", help="append every run to this JSONL ledger (default: runtime/research/experiment_log.jsonl)")

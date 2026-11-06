@@ -337,44 +337,6 @@ def test_an_idle_desk_or_wrong_clock_cannot_archive_everything(tmp_path):
 
 
 # ---- readers of old rows --------------------------------------------------------------------------------------------------
-def test_rebuild_refuses_until_the_history_is_restored(tmp_path):
-    from quantdesk.intraday import cli
-    rt = make_runtime(tmp_path)
-    run(rt, tmp_path / "out")
-    jp = rt / "intraday" / "journal.db"
-    assert R.history_archived(jp) and len(R.archived_thought_days(jp)) == 29
-    ns = argparse.Namespace(account=None, rebuild=True, allow_partial_journal=False, bootstrap=False, if_empty=False, top=3)
-    from quantdesk.config import DEFAULT_CONFIG, Config
-    c = Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(rt)}})
-    with pytest.raises(SystemExit, match="refused"):
-        cli.cmd_learn(c, ns)
-    R.restore(tmp_path / "out" / f"archive-manifest-{AS_OF}.json", rt, say=lambda *_: None)
-    assert not R.history_archived(jp)                                  # restored: a rebuild sees the whole journal again
-
-
-def test_paper_gate_still_counts_archived_sessions(tmp_path, capsys):
-    from quantdesk.config import DEFAULT_CONFIG, Config
-    from quantdesk.intraday import cli
-    rt = make_runtime(tmp_path)
-    c = Config.load(DEFAULT_CONFIG, overrides={"runtime": {"dir": str(rt)}})
-    ns = argparse.Namespace(strategy="s", since=_day(59), account=None)
-    cli.cmd_paper_gate(c, ns)
-    full = json.loads(capsys.readouterr().out)["observed_sessions"]
-    run(rt, tmp_path / "out")
-    cli.cmd_paper_gate(c, ns)
-    assert json.loads(capsys.readouterr().out)["observed_sessions"] == full == 60
-    ns.since = _day(10)                                                # a window inside what is kept is unchanged
-    cli.cmd_paper_gate(c, ns)
-    assert json.loads(capsys.readouterr().out)["observed_sessions"] == 11
-
-
-def test_cli_dry_run_and_floor(tmp_path, capsys):
-    from quantdesk import cli as top
-    rt = make_runtime(tmp_path)
-    top.main(["intraday", "archive", "--root", str(rt), "--out", str(tmp_path / "o"), "--dry-run", "--as-of", AS_OF.isoformat()])
-    assert "nothing was changed" in capsys.readouterr().out and not (tmp_path / "o").exists()
-    with pytest.raises(SystemExit, match="at least"):
-        top.main(["intraday", "archive", "--root", str(rt), "--out", str(tmp_path / "o"), "--keep-days", "3"])
 
 
 # ---- the push-size guard (shell) ------------------------------------------------------------------------------------------

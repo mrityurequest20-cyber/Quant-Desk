@@ -47,7 +47,12 @@ def make_sources(cfg, say=print):
         chains = FallbackChain(KotakOptionChain(kotak, strikes=kc.get("strikes", 20), refresh_min=kc.get("refresh_min", 1)),
                                NSEOptionChain(), secondary_min=cfg.get("intraday.chain_refresh_min", 3))
         return KotakIntradayFeed(cfg, kotak), chains
-    say("record: no KOTAK_CONSUMER_KEY; Yahoo bars and NSE's public chain")
+    import os
+    if os.environ.get("KOTAK_CONSUMER_KEY", "").strip():          # the key is set but Kotak refused it: say so loudly
+        say("::warning::record: KOTAK_CONSUMER_KEY is set but the Kotak client could not start; recording Yahoo bars and "
+            "NSE's public chain instead (no live bid/ask)")
+    else:
+        say("record: no KOTAK_CONSUMER_KEY; Yahoo bars and NSE's public chain")
     from ..intraday.chains import NSEOptionChain
     from ..intraday.feeds import YahooIntradayFeed
     return YahooIntradayFeed(cfg), NSEOptionChain()

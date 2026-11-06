@@ -132,3 +132,25 @@ def test_the_recorder_imports_nothing_that_trades():
     src = (ROOT / "quantdesk" / "data" / "session_record.py").read_text()
     for word in ("engine", "broker", "journal", "risk", "sleeves", "kite", "order"):
         assert not re.search(rf"^\s*(from|import)\b[^\n]*\b{word}", src, re.M | re.I), word
+
+
+def test_a_set_kotak_key_that_fails_is_a_warning_not_a_quiet_fallback(monkeypatch):
+    msgs = []
+    monkeypatch.setenv("KOTAK_CONSUMER_KEY", "set-but-refused")
+    monkeypatch.setattr(SR, "kotak_client", lambda: None)
+    feed, chains = SR.make_sources(Cfg({}), say=msgs.append)
+    assert msgs and msgs[0].startswith("::warning::") and "Kotak" in msgs[0]
+    monkeypatch.delenv("KOTAK_CONSUMER_KEY")
+    msgs.clear()
+    SR.make_sources(Cfg({}), say=msgs.append)
+    assert msgs and not msgs[0].startswith("::warning::")
+
+
+def test_the_recorder_workflow_keeps_no_git_credential_and_holds_only_the_kotak_secret():
+    import yaml
+    text = (ROOT / ".github" / "workflows" / "record.yml").read_text()
+    wf = yaml.load(text, Loader=yaml.BaseLoader)
+    assert wf["permissions"] == {"contents": "write"}
+    assert set(re.findall(r"secrets\.(\w+)", text)) == {"KOTAK_CONSUMER_KEY"} and "KITE" not in text
+    for job in ("morning", "afternoon"):
+        assert wf["jobs"][job]["steps"][0]["with"]["persist-credentials"] == "false"
