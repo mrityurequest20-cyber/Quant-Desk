@@ -163,3 +163,35 @@ its own data before it trades.
 1. Whether to buy historical minute option data, and from whom.
 2. The merge of #163 and of anything that changes authority or the plan.
 3. The start of phase 6 (paper trading) and, outside this plan, anything to do with real money.
+
+## 7. The owner's direction of 6 Nov 2026: a 24/7 paper desk across every market except crypto
+
+In the owner's words: "I want this trading desk to run 24/7 and take trades in the whole FNO universe, whether it is crude oil,
+whether it is gold, whether it is forex, whether it is of any security, so that it can trade without any issue except crypto ...
+take hundreds or whatever, the trade it want to take ... there is no cap on that. They say there is only a loss cap." On
+strategies: "do not keep ... these are the strategies which I need to work with ... you have the whole strategies universe with
+you. Use permutation, combination". And: "no money is involved in this right now. When money is involved, then I'll come into
+picture." Later the same day: "Make this app to run 24/7."
+
+What this changes in the plan: paper trading no longer waits for the spike detector (it replaces the line "the desk stays stopped
+until the spike detector passes"), and the desk covers MCX commodities and NSE currency derivatives as well as NSE/BSE F&O.
+What it does not change: paper only; real money needs the owner's separate yes; no secret in the repository; the gate in
+section 2 applies to every piece below.
+
+How "24/7" is meant. No market except crypto trades at the weekend, and none trades round the clock: NSE/BSE F&O 09:15-15:30,
+NSE currency 09:00-17:00, MCX 09:00-23:30 (23:55 while US daylight saving time is in force), IST, Monday to Friday. So the desk
+is always on and trades whenever any of them is open, about 09:00 to 23:30 on a trading day. A hosted job may run six hours, so a
+day is split into chained jobs (the owner chose chained GitHub jobs over a server).
+
+Order of work, each its own PR through the gate, safety first:
+1. **M1, the market map** (`quantdesk/markets`): hours, the MCX close, calendars, and the job plan. Pure logic. Trading counts a
+   segment as open only where its holiday calendar is verified; recording does not wait for that.
+2. **M2, risk before entries**: the only caps are loss caps (a daily loss limit, the multi-day drawdown halt) and a kill switch;
+   there is no cap on the number of trades or open positions. The paper broker and ledger, with costs for each segment from the
+   broker's published schedule. Independent risk review.
+3. **M3, the runner**: the chained jobs, saving and restoring state between them, the watchdog.
+4. **M4, data** for MCX and currency (Kite and Kotak), with real costs.
+5. **M5, the strategy factory**: strategies are built from combinations of signals, filters, entries, exits and sizes, and survive
+   only a funnel built to stop luck (costs, multiple-testing control, random-entry controls, a locked holdout, then paper). Every
+   trade carries its written thesis.
+6. **M6, live on paper**: the first full day watched end to end.
