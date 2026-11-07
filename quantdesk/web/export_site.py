@@ -180,6 +180,31 @@ def _json(data) -> str:
     return json.dumps(_clean(data), separators=(",", ":"))
 
 
+def trade_config(cfg) -> dict:
+    """What the app's strategy builder needs from the config, so it has one source of truth: the paper account's size (paper.capital), the desk's risk limits, the cost model, the slippage model, the
+    risk-free rate, and each index's lot size and strike step. Read-only data; nothing here can place an order."""
+    risk = cfg.get("intraday.risk", {}) or {}
+    keys = ("risk_per_trade", "max_premium_outlay", "max_total_outlay", "max_lots", "max_open", "max_spread_pct", "max_margin", "credit_margin_per_lot", "daily_loss_limit")
+    costs = cfg.get("costs", {}) or {}
+    opt = (costs.get("segments") or {}).get("options", {}) or {}
+    slip = cfg.get("slippage", {}) or {}
+    inst = {u: {"lot": int(v["lot_size"]), "step": float(v["strike_step"])} for u, v in (cfg.get("instruments") or {}).items()
+            if isinstance(v, dict) and v.get("kind") == "index" and "lot_size" in v and "strike_step" in v}
+    # the paper desk's own gate (quantdesk/paper/risk.py): what a manual paper entry is checked against at the ticket
+    paper = {"risk_per_trade": float(cfg.get("paper.risk_per_trade")), "max_quote_age_s": float(cfg.get("paper.max_quote_age_s")),
+             "underlyings": sorted(str(u).upper() for u in ((cfg.get("paper.underlyings") or {}).get("nse_fo") or []))}
+    return {"equity": float(cfg.get("paper.capital") or cfg.get("intraday.capital")), "r": float(cfg.get("backtest.risk_free", 0.065)),
+            "limits": {k: risk[k] for k in keys if k in risk}, "paper": paper,
+            "costs": {"brokerage_per_order": float(costs.get("brokerage_per_order", 20.0)), "gst": float(costs.get("gst", 0.18)), "sebi_per_crore": float(costs.get("sebi_per_crore", 10.0)),
+                      "options": {k: float(opt.get(k, 0.0)) for k in ("stt_buy", "stt_sell", "exchange", "stamp_buy")}},
+            "slippage": {k: float(slip[k]) for k in ("option_half_spread_pct", "option_min_half_spread", "option_tick") if k in slip},
+            "inst": inst}
+
+
+def _trade_script(cfg) -> str:
+    return "<script>window.QD_TRADE=" + json.dumps(trade_config(cfg), separators=(",", ":")).replace("</", "<\\/") + ";</script>"
+
+
 def _meta(label: str, note: str) -> str:
     """The site's label and footnote, as data the app renders with textContent (never as HTML)."""
     js = f"window.QD_LABEL={json.dumps(label)};window.QD_NOTE={json.dumps(note)};"
@@ -208,7 +233,7 @@ def export_site(cfg, account: str, out: Path, sessions: int = 3, label: str | No
     html = (f"<title>QuantDesk</title>\n<style>{style}</style>\n{body}\n"
             f'<script type="application/json" id="qd-data">{payload}</script>\n'
             f"<script>{CHART_LIB.read_text(encoding='utf-8')}</script>\n"
-            f"<script>{SHIM}</script>\n{_meta(data['label'], note)}\n<script>{app_js}</script>\n")
+            f"<script>{SHIM}</script>\n{_meta(data['label'], note)}\n{_trade_script(cfg)}\n<script>{app_js}</script>\n")
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
@@ -232,7 +257,7 @@ def publish_site(cfg, account: str, out_dir: Path, sessions: int = 3, label: str
     note = note or ("Paper trades only. The desk runs by itself on NSE trading days, 09:15–15:30 IST, and this app "
                     "refreshes every minute while it does. Read-only: nothing here can place an order.")
     html = html.replace('<script src="/static/app/app.js"></script>',
-                        f"<script>{LIVE_SHIM}</script>\n{_meta(data['label'], note)}\n<script src=\"app.js\"></script>")
+                        f"<script>{LIVE_SHIM}</script>\n{_meta(data['label'], note)}\n{_trade_script(cfg)}\n<script src=\"app.js\"></script>")
     (out / "index.html").write_text(html, encoding="utf-8")
     app_js = (STATIC / "app.js").read_text(encoding="utf-8")
     (out / "app.js").write_text(app_js, encoding="utf-8")
