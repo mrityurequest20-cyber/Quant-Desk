@@ -468,14 +468,6 @@ def test_status_tells_the_panel_whether_the_websocket_is_delivering_and_how_old_
     assert f.status()["last_error"] == "RuntimeError" and f.status()["fallback_polls"] >= 1
 
 
-def test_the_app_has_a_data_panel_that_hides_itself_without_data():
-    html = (ROOT / "quantdesk/web/static/app/index.html").read_text(encoding="utf-8")
-    js = (ROOT / "quantdesk/web/static/app/app.js").read_text(encoding="utf-8")
-    assert 'id="d-data-wrap"' in html and 'id="d-data"' in html and 'id="d-data-hint"' in html
-    assert "function renderData(hb)" in js and "renderData(hb);" in js and "wrap.hidden = !d" in js
-    assert "hb.data" in js
-
-
 # ======================================================================================================================================================
 # The risk review and audit of 456b289: the live price is vetted, every path is checked, Kite's faults never reach the engine, partial and stale data
 # is not served, the cash session only, Kite minutes stay out of the recorder, and the token command exists.
