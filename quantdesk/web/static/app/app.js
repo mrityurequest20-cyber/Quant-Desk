@@ -308,12 +308,24 @@ function tradeRow(t) {
 			h("small", {}, open ? "" : `${fin(t.r_multiple) ? signed(t.r_multiple) + "R · " : ""}${cap(words(t.exit_reason || ""))}`)),
 		h("span", { class: "grade " + (t.grade || "") }, t.grade || "–"));
 }
+// the account as it stands with no trades in the window: the starting capital, nothing made or lost
+function flatAccount(capital) {
+	const kpi = (l, v) => h("div", { class: "kpi" }, h("span", {}, l), h("b", {}, v));
+	return h("div", { class: "panel" }, h("div", { class: "kpis" }, kpi("Account", inr(capital)), kpi("Net P&L", inr(0)), kpi("Return", "0.0%"), kpi("Trades", "0")));
+}
 async function renderHistory(body) {
 	let rows;
 	try { rows = await api("/api/i/trades?n=300"); } catch (e) { body.textContent = ""; body.appendChild(h("div", { class: "panel" }, empty("alert", e.message))); return; }
 	if (S.tab !== "trades" || S.sub.trades !== "history") return;
 	body.textContent = "";
-	if (!rows.length) { body.appendChild(h("div", { class: "panel" }, empty("trades", "No trades yet. Every trade the desk takes lands here with its full reasoning."))); return; }
+	if (!rows.length) {
+		let cap = null;
+		try { cap = (await api("/api/i/stats")).capital; } catch (e) { /* the summary is skipped */ }
+		if (S.tab !== "trades" || S.sub.trades !== "history") return;
+		if (fin(cap)) body.appendChild(flatAccount(cap));
+		body.appendChild(h("div", { class: "panel" }, empty("trades", "No trades yet. A trade the desk takes will appear here with its full reasoning.")));
+		return;
+	}
 	const days = new Map();
 	for (const t of rows) { const d = String(t.opened_at).slice(0, 10); (days.get(d) || days.set(d, []).get(d)).push(t); }
 	const closed = rows.filter((t) => t.status !== "open"), net = closed.reduce((a, t) => a + t.pnl, 0), wins = closed.filter((t) => t.pnl > 0).length;
@@ -364,7 +376,11 @@ async function renderPerformance(body) {
 	try { s = await api("/api/i/stats"); } catch (e) { body.textContent = ""; body.appendChild(empty("alert", e.message)); return; }
 	if (S.tab !== "trades" || S.sub.trades !== "performance") return;
 	body.textContent = "";
-	if (!s.trades) { body.appendChild(h("div", { class: "panel" }, empty("chart", "No closed trades yet. Performance appears after the first trade closes; until then the desk's reads are under Feed › Desk log."))); return; }
+	if (!s.trades) {
+		if (fin(s.capital)) body.appendChild(flatAccount(s.capital));
+		body.appendChild(h("div", { class: "panel" }, empty("chart", "No closed trades yet. Performance appears after the first trade closes.")));
+		return;
+	}
 	const kpi = (l, v, c) => h("div", { class: "kpi" }, h("span", {}, l), h("b", { class: c || "" }, v));
 	put(body, h("div", { class: "panel" }, h("div", { class: "kpis" },
 		kpi("Net P&L", inr(s.net, true), cls(s.net)), kpi("Return", pct(s.net / s.capital, 1), cls(s.net)),

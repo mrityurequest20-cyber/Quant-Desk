@@ -159,7 +159,8 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
         api._dir(account).mkdir(parents=True, exist_ok=True)
         Journal(api._dir(account) / "journal.db").commit()
     state = api.state(account)
-    trades = api.trades(account, 1000)
+    since = cfg.get("app.history_since")                         # the History tab starts here (the journal is untouched: this only limits what is published)
+    trades = api.trades(account, 1000, since)
     short = "Live paper" if live else ("Demo" if account == "synthetic" else "Snapshot")
     return {
         "label": label or ("Live paper desk" if live else f"{account.capitalize()} snapshot"),
@@ -168,8 +169,9 @@ def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, li
         "setups": _setups_block(api, account),
         "trades": trades,
         "trade": {t["id"]: api.trade(account, t["id"]) for t in trades[:max_trade_details]},
-        "reviews": {d: api.review(account, d)["markdown"] for d in api.reviews(account)},
-        "stats": api.stats(account),
+        "reviews": {d: api.review(account, d)["markdown"] for d in api.reviews(account, since)},
+        "stats": api.stats(account, since),
+        "history_since": since,
         "premarket_url": premarket_url(cfg),
     }
 
