@@ -456,3 +456,14 @@ def test_the_workflow_pulls_the_warehouse_files_and_the_command_offers_the_sourc
     assert "nse,yahoo,warehouse" in WF.read_text(encoding="utf-8")
     cli = (ROOT / "quantdesk/data/cli.py").read_text(encoding="utf-8")
     assert '"warehouse": lambda: D.WarehouseSource(wh)' in cli and "--warehouse" in cli
+
+
+def test_the_owner_approved_genuine_moves_are_the_accepted_list_and_nothing_else():
+    cfg = Config.load(DEFAULT_CONFIG)
+    got = {(a["symbol"], str(a["date"])) for a in cfg.get("daily_history.accepted_moves")}
+    assert got == {("BANKNIFTY", "2020-03-23"), ("FINNIFTY", "2020-03-23"), ("AXISBANK", "2020-03-23"), ("BAJFINANCE", "2020-03-23"), ("INFY", "2013-04-12"),
+                   ("ADANIENT", "2019-05-20"), ("ADANIENT", "2023-02-01"), ("ADANIENT", "2023-02-02"), ("ADANIENT", "2023-02-08"), ("ADANIENT", "2024-11-21")}
+    S = D.settings(cfg)
+    assert D._accepted(S) == frozenset(got)                                                          # the importer reads them as (SYMBOL, YYYY-MM-DD)
+    for not_confirmed in (("SBIN", "2017-10-25"), ("ADANIENT", "2014-04-10"), ("ADANIENT", "2015-06-03"), ("ADANIENT", "2017-04-26"), ("ADANIENT", "2018-09-06"), ("ADANIENT", "2020-08-25")):
+        assert not_confirmed not in got                                                              # the moves that were not confirmed stay flagged
