@@ -1570,7 +1570,7 @@ const LIVE_SORTS = [["name", "Name"], ["move", "Movers"], ["fresh", "Newest"]];
 const LIVE_FIRST = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "INDIAVIX", "NIFTY-FUT", "BANKNIFTY-FUT"];
 const LIVE_PAGE = 150;
 const LIVE_VOL = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
-S.lv = { q: "", seg: "all", sort: "name", limit: LIVE_PAGE, data: null, built: false };
+S.lv = { q: "", seg: "all", sort: "name", limit: LIVE_PAGE, data: null, built: false, sel: null, series: null, exp: null, allStrikes: false };
 let liveBusy = false;
 const livePx = (v, seg) => (fin(v) ? v.toLocaleString("en-IN", seg === "cds" ? { minimumFractionDigits: 4, maximumFractionDigits: 4 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
 function liveAge(sec) {
@@ -1625,6 +1625,8 @@ function liveDraw() {
 		const ok = (n, a) => (n > 0 && fin(a) && a <= LIVE_FRESH * 2 ? "●" : "○");
 		ln.textContent = `${ok(kk.n, kk.newest_age_s)} Kite ${kk.n || 0}  ·  ${ok(kt.n, kt.newest_age_s)} Kotak ${kt.n || 0}${kt.status && kt.status !== "ok" ? " (" + kt.status + ")" : ""}  ·  ${hl.disagree ? "⚠ " + hl.disagree + " disagree" : "sources agree"}`;
 	}
+	$("#lv-list").hidden = !!L.sel; $("#lv-detail").hidden = !L.sel;
+	if (L.sel) return liveDetail();
 	document.querySelectorAll("#lv-segs .chip").forEach((c) => { c.setAttribute("aria-pressed", String(c.dataset.k === L.seg)); const n = c.dataset.k === "all" ? Object.keys(data.quotes).length : counts[c.dataset.k] || 0; c.lastChild.textContent = " " + n; });
 	document.querySelectorAll("#lv-sorts .chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.k === L.sort)));
 	const rows = liveRows(data), shown = rows.slice(0, L.limit), tb = $("#lv-table");
@@ -1636,11 +1638,122 @@ function liveDraw() {
 		const book = fin(v.bid) && fin(v.ask) ? " · " + livePx(v.bid, seg) + " / " + livePx(v.ask, seg) : "";               // bid / ask, where either feed carries a book
 		const src = v.src === "z" ? "Kite" : v.src === "k" ? "Kotak" : "";
 		const flag = fin(v.x) ? h("span", { class: "warn" }, " · ⚠ the two sources differ " + v.x.toFixed(1) + "%") : null;     // Kite and Kotak disagree by more than a spread explains
-		return h("tr", { style: old ? "opacity:.55" : null }, h("td", {}, liveLabel(n, v), h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + book, flag)), h("td", {}, livePx(v.ltp, seg)), h("td", {}, chg),
+		return h("tr", { style: (old ? "opacity:.55;" : "") + "cursor:pointer", tabindex: "0", role: "button", onclick: () => liveOpen(n), onkeydown: (e) => { if (e.key === "Enter") liveOpen(n); } }, h("td", {}, liveLabel(n, v), h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + book, flag)), h("td", {}, livePx(v.ltp, seg)), h("td", {}, chg),
 			h("td", { class: "f2" }, fin(v.vol) ? LIVE_VOL.format(v.vol) : "—"));
 	});
 	put(tb, h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Name", "Last", "Change", "Volume"].map((x) => h("th", {}, x)))), h("tbody", {}, trs))),
 		rows.length > shown.length ? h("button", { class: "btn block", style: "margin:10px 16px;width:calc(100% - 32px)", onclick: () => { L.limit += LIVE_PAGE; liveDraw(); } }, `Show ${Math.min(LIVE_PAGE, rows.length - shown.length)} more (${rows.length - shown.length} left)`) : null);
+}
+// ---- one instrument: its quote, a chart of today's closes (one a minute, from the relay's series), what it relates to, and for an underlying its option chain.
+// Everything is drawn from the snapshot the tab already holds plus one small series request; nothing here can trade.
+const LIVE_MONTHS = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split(" ");
+const LIVE_OPT = /^(.+?)(\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2})(\d+(?:\.\d+)?)(CE|PE)$/;
+function liveOpt(name) {                                                   // NIFTY12NOV2624500CE -> {u: "NIFTY", e: "12NOV26", k: 24500, t: "CE"}
+	const m = LIVE_OPT.exec(name);
+	return m ? { u: m[1], e: m[2], k: parseFloat(m[3]), t: m[4] } : null;
+}
+const liveExpiryKey = (e) => +("20" + e.slice(5, 7)) * 10000 + (LIVE_MONTHS.indexOf(e.slice(2, 5)) + 1) * 100 + +e.slice(0, 2);          // sortable yyyymmdd
+function liveChains(data) {                                                // underlying -> expiry -> strike -> {CE, PE} names, from the names on the board
+	const out = {};
+	for (const n of Object.keys(data.quotes)) {
+		const o = liveOpt(n);
+		if (!o) continue;
+		const ex = ((out[o.u] = out[o.u] || {})[o.e] = out[o.u][o.e] || {});
+		(ex[o.k] = ex[o.k] || {})[o.t] = n;
+	}
+	return out;
+}
+function liveHHMM(minute) { const d = new Date(minute * 60000 + 19800000); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); }
+function liveChart(ser, seg) {
+	const W = 320, H = 130, box = h("div", { class: "panel", style: "margin:0 16px 10px;padding:10px" });
+	const day = ser && ser.day ? ser.day : [];
+	if (day.length < 2) return put(box, h("div", { class: "f3", style: "font-size:12px;padding:30px 0;text-align:center" }, day.length ? "One price so far today." : "No prices yet today: the chart builds as the price moves."));
+	const ys = day.map((p) => p[1]), x0 = day[0][0], x1 = day[day.length - 1][0], prev = ser.prev_close;
+	let lo = Math.min(...ys), hi = Math.max(...ys);
+	if (fin(prev)) { lo = Math.min(lo, prev); hi = Math.max(hi, prev); }
+	const span = hi - lo || 1, X = (m) => 4 + ((m - x0) / (x1 - x0 || 1)) * (W - 8), Y = (v) => 13 + ((hi - v) / span) * (H - 40);
+	const up = ys[ys.length - 1] >= (fin(prev) ? prev : ys[0]);
+	const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "livechart", role: "img", "aria-label": "Today's prices, one a minute", style: "width:100%;height:auto;display:block" });
+	if (fin(prev)) svg("line", { x1: 0, x2: W, y1: Y(prev), y2: Y(prev), stroke: cssv("--line2"), "stroke-width": 1, "stroke-dasharray": "3 3" }, g);
+	let d = "";
+	day.forEach((p, i) => (d += (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)));
+	svg("path", { d, fill: "none", stroke: up ? cssv("--up") : cssv("--dn"), "stroke-width": 1.6, "stroke-linejoin": "round" }, g);
+	for (const [t, x, y, a] of [[livePx(hi, seg), 2, 9, "start"], [livePx(lo, seg), 2, H - 15, "start"], [liveHHMM(x0), 2, H - 2, "start"], [liveHHMM(x1), W - 2, H - 2, "end"]]) {
+		const el = svg("text", { x, y, "text-anchor": a, "font-size": 9, fill: cssv("--fg3") }, g); el.textContent = t;
+	}
+	return put(box, g);
+}
+function liveField(label, value) { return h("div", { style: "display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);font-size:13px" }, h("span", { class: "f3" }, label), h("span", {}, value)); }
+function liveRelated(name, v, data, chains) {
+	const o = liveOpt(name), links = [], has = (n) => data.quotes[n] != null;
+	const go = (n, t) => links.push(h("button", { class: "chip", onclick: () => liveOpen(n) }, t));
+	if (o) { if (has(o.u)) go(o.u, o.u + " spot"); if (has(o.u + "-FUT")) go(o.u + "-FUT", o.u + " fut"); }
+	else if (/-FUT$/.test(name)) { const u = name.slice(0, -4); if (has(u)) go(u, u + " spot"); }
+	else if (has(name + "-FUT")) go(name + "-FUT", name + " fut");
+	return links.length ? h("div", { class: "chips", style: "padding:0 16px 10px" }, links) : null;
+}
+function liveChainTable(u, data, chains) {
+	const L = S.lv, exps = Object.keys(chains[u] || {}).sort((a, b) => liveExpiryKey(a) - liveExpiryKey(b));
+	if (!exps.length) return null;
+	if (!exps.includes(L.exp)) L.exp = exps[0];
+	const strikes = Object.keys(chains[u][L.exp]).map(Number).sort((a, b) => a - b);
+	const spot = (data.quotes[u] || data.quotes[u + "-FUT"] || {}).ltp;
+	let atm = 0;
+	if (fin(spot)) strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
+	const from = L.allStrikes ? 0 : Math.max(0, atm - 12), to = L.allStrikes ? strikes.length : Math.min(strikes.length, atm + 13);
+	const cell = (n, f, seg) => { const q = n ? data.quotes[n] : null; return h("td", { class: q && q.age_s > LIVE_DELAYED ? "f3" : "" }, q && fin(q[f]) ? (f === "ltp" ? livePx(q[f], seg) : LIVE_VOL.format(q[f])) : "—"); };
+	const rows = strikes.slice(from, to).map((k, i) => {
+		const r = chains[u][L.exp][k];
+		return h("tr", { style: from + i === atm && fin(spot) ? "background:var(--panel2)" : null }, cell(r.CE, "oi"), cell(r.CE, "ltp", "opt"), h("td", { style: "text-align:center;font-weight:600", onclick: null }, k.toLocaleString("en-IN")), cell(r.PE, "ltp", "opt"), cell(r.PE, "oi"));
+	});
+	return h("div", {}, h("div", { class: "pad", style: "font-weight:600" }, "Option chain"),
+		h("div", { class: "chips", style: "padding:0 16px 8px" }, exps.map((e) => h("button", { class: "chip", "aria-pressed": String(e === L.exp), onclick: () => { L.exp = e; liveDraw(); } }, e))),
+		h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Call OI", "Call", "Strike", "Put", "Put OI"].map((x) => h("th", { style: "text-align:center" }, x)))), h("tbody", {}, rows))),
+		strikes.length > to - from ? h("button", { class: "btn block", style: "margin:10px 16px;width:calc(100% - 32px)", onclick: () => { L.allStrikes = !L.allStrikes; liveDraw(); } }, L.allStrikes ? "Only near the money" : `Show all ${strikes.length} strikes`) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;padding:6px 16px" }, "The strikes the feeds carry for this underlying" + (fin(spot) ? "; the shaded row is nearest the price" : "") + ". Index chains hold the nearest two expiries."));
+}
+function liveDetail() {
+	const L = S.lv, data = L.data, name = L.sel, box = $("#lv-detail"), v = data.quotes[name];
+	box.textContent = "";
+	const back = h("button", { class: "btn", style: "margin:0 16px 10px", onclick: () => liveOpen(null) }, "← All instruments");
+	if (!v) return void put(box, back, empty("live", name + " is not on the board right now (it may have expired or not ticked yet)."));
+	const seg = liveSeg(name, v), o = liveOpt(name), chains = liveChains(data);
+	const ser = L.series && L.series.name === name ? L.series : null, prev = ser ? ser.prev_close : null;
+	const chgPct = fin(v.chg) ? v.chg : fin(prev) && prev > 0 ? ((v.ltp - prev) / prev) * 100 : null;
+	const closes = ser && ser.day.length ? ser.day.map((p) => p[1]) : null;
+	const src = v.src === "z" ? "Kite" : v.src === "k" ? "Kotak" : "";
+	const alt = v.alt ? `${v.alt.src === "z" ? "Kite" : "Kotak"} ${livePx(v.alt.ltp, seg)} · ${liveAge(v.alt.age_s)} ago` : null;
+	put(box, back,
+		h("div", { style: "padding:0 16px 8px" }, h("div", { style: "font-size:13px;color:var(--fg2)" }, liveLabel(name, v)),
+			h("div", { style: "display:flex;align-items:baseline;gap:10px" }, h("span", { style: "font-size:30px;font-weight:600;font-variant-numeric:tabular-nums" }, livePx(v.ltp, seg)),
+				chgPct != null ? h("span", { class: "chg " + (chgPct > 0 ? "up" : chgPct < 0 ? "dn" : "flat"), style: "font-size:14px" }, (chgPct > 0 ? "+" : "") + chgPct.toFixed(2) + "%") : null),
+			h("div", { class: "f3", style: "font-size:11.5px" }, liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + (fin(v.x) ? " · ⚠ the two sources differ " + v.x.toFixed(1) + "%" : ""))),
+		liveChart(ser, seg), liveRelated(name, v, data, chains),
+		h("div", { class: "panel pad", style: "margin:0 16px 12px" },
+			liveField("Bid / Ask", fin(v.bid) && fin(v.ask) ? `${livePx(v.bid, seg)} / ${livePx(v.ask, seg)}` + (fin(v.bid_qty) && fin(v.ask_qty) ? ` (${LIVE_VOL.format(v.bid_qty)} / ${LIVE_VOL.format(v.ask_qty)})` : "") : "—"),
+			liveField("Volume", fin(v.vol) ? v.vol.toLocaleString("en-IN") : "—"), liveField("Open interest", fin(v.oi) ? v.oi.toLocaleString("en-IN") : "—"),
+			liveField("Previous close", fin(prev) ? livePx(prev, seg) : "—"),
+			liveField("Day high / low", closes ? `${livePx(Math.max(...closes), seg)} / ${livePx(Math.min(...closes), seg)}` : "—"),
+			o ? liveField("Contract", `${o.u} ${o.e} ${o.k.toLocaleString("en-IN")} ${o.t === "CE" ? "call" : "put"}`) : null,
+			alt ? liveField("Other source", alt) : null),
+		h("div", { class: "f3", style: "font-size:11.5px;padding:0 16px 10px" }, "Day high and low are the highest and lowest of the one-a-minute closes the relay has seen today, not the exchange's own figures."),
+		o ? null : liveChainTable(name.replace(/-FUT$/, ""), data, chains));
+}
+function liveOpen(name) {
+	const L = S.lv;
+	L.sel = name; L.series = null; L.allStrikes = false;
+	if (name) L.exp = (liveOpt(name) || {}).e || null;
+	liveDraw();
+	if (name) liveSeries();
+	window.scrollTo(0, 0);
+}
+async function liveSeries() {
+	const L = S.lv, name = L.sel, key = store("qd.livekey");
+	if (!name || !key) return;
+	try {
+		const r = await fetch("/live/series?name=" + encodeURIComponent(name), { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+		if (r.ok && L.sel === name) { L.series = await r.json(); liveDraw(); }
+	} catch (e) { /* the quote still shows */ }
 }
 function liveBuild() {
 	const L = S.lv, body = $("#lv-body");
@@ -1652,9 +1765,10 @@ function liveBuild() {
 		LIVE_SORTS.map(([k, t]) => h("button", { class: "chip", "data-k": k, "aria-pressed": "false", onclick: () => { L.sort = k; liveDraw(); } }, t)));
 	put(body, h("div", { class: "pad", style: "display:flex;justify-content:space-between;align-items:center" }, h("span", { id: "lv-pill", class: "pill paused" }, h("span", { class: "dot" }), h("b", { id: "lv-pill-t" }, "")), h("span", { id: "lv-count", class: "f3", style: "font-size:11.5px" }, "")),
 		h("div", { id: "lv-sources", class: "f3", style: "font-size:11.5px;padding:0 16px 8px" }, ""),
-		h("div", { style: "padding:0 16px 10px" }, search), seg, sort, h("div", { id: "lv-table" }),
+		h("div", { id: "lv-list" }, h("div", { style: "padding:0 16px 10px" }, search), seg, sort, h("div", { id: "lv-table" })),
+		h("div", { id: "lv-detail", hidden: true }),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:12px 16px" },
-			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. Index options are the strikes near the money; the full chains are recorded each minute elsewhere. This tab only displays: nothing here can place an order. ",
+			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. Tap any row for its chart and, for an underlying, its option chain. This tab only displays: nothing here can place an order. ",
 			h("a", { href: "#", class: "acc", onclick: (e) => { e.preventDefault(); try { localStorage.removeItem("qd.livekey"); } catch (x) { /* ignore */ } L.built = false; body.dataset.state = ""; renderLive(); } }, "Forget this key")));
 	L.built = true;
 	body.dataset.state = "data";
@@ -1676,6 +1790,12 @@ async function renderLive() {
 		else if (r.status === 503) note = "The live feed is not switched on yet: the Worker still needs its two secrets (docs/LIVE.md).";
 		else if (!r.ok || !/json/.test(r.headers.get("content-type") || "")) note = "Live prices are on the Cloudflare site only; this address cannot reach them.";
 		else j = await r.json();
+		if (j && S.lv.sel) {                                                          // an instrument is open: its chart series, with every refresh
+			try {
+				const sr = await fetch("/live/series?name=" + encodeURIComponent(S.lv.sel), { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+				if (sr.ok) { const sj = await sr.json(); if (sj.name === S.lv.sel) S.lv.series = sj; }
+			} catch (e) { /* the quote still shows */ }
+		}
 		if (j && (S.lv.tick = (S.lv.tick || 0) + 1) % 3 === 1) {                      // the sources' health, every third refresh (about 15 s)
 			try { const hr = await fetch("/live/health", { headers: { Authorization: "Bearer " + key }, cache: "no-store" }); if (hr.ok) S.lv.health = await hr.json(); } catch (e) { /* the table still shows */ }
 		}
