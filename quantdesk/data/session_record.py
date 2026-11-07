@@ -136,6 +136,10 @@ class SessionRecording:
         if now.weekday() >= 5:
             self.say("record: not a weekday; nothing to record")
             return {**self.stats, "day": str(day), "recorded": False}
+        hols = self.cfg.holidays() if hasattr(self.cfg, "holidays") else set()     # the cron starts this on every weekday, an NSE holiday included (10 Nov 2026 is one): a closed market has nothing to record
+        if day in hols:
+            self.say(f"record: {day} is an NSE holiday; nothing to record")
+            return {**self.stats, "day": str(day), "recorded": False}
         open_at = pd.Timestamp(dt.datetime.combine(day, OPEN), tz=IST)
         stop_at = pd.Timestamp(dt.datetime.combine(day, min(until, CLOSE)), tz=IST)
         if now >= stop_at:
