@@ -271,7 +271,7 @@ def test_the_recorder_workflow_is_read_only_encrypts_before_it_uploads_and_holds
     assert wf["permissions"] == {"contents": "read", "actions": "read"} and check_workflows.check(path) == []
     assert set(wf["on"]) == {"workflow_dispatch"}                       # no cron of its own: the scheduler starts it once a day, never twice
     assert wf["defaults"]["run"]["shell"] == "bash" and wf["env"]["KITE_DATA_KEY"] == "${{ secrets.KITE_API_KEY }}"
-    assert sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET", "KITE_PASSWORD", "KITE_TOTP_SECRET", "KITE_USER_ID"]
+    assert sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET", "KITE_PASSWORD", "KITE_TOTP_SECRET", "KITE_USER_ID", "LIVE_INGEST_TOKEN"]      # LIVE_INGEST_TOKEN: the display-only push, in the Record ticks steps alone (tests/test_live.py)
     assert "KITE_ACCESS_TOKEN" not in text and "KITE_API_KEY:" not in text                          # the broker adapter's names are never set
     steps = [(j, s) for j, job in wf["jobs"].items() for s in job["steps"]]
     assert all("${{" not in s["run"] for _, s in steps if "run" in s)                              # times come in through env, never into a script

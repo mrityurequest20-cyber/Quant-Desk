@@ -25,9 +25,10 @@ def test_wrangler_config_is_deployable():
 
 
 def stage_worker(tmp_path):
-    """The Worker and the watchdog it imports, in a folder Node reads as ES modules."""
+    """The Worker and the watchdog and live relay it imports, in a folder Node reads as ES modules."""
     shutil.copyfile(ROOT / _config()["main"], tmp_path / "worker.mjs")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "watchdog.js", tmp_path / "watchdog.js")
+    shutil.copyfile(ROOT / "deploy" / "cloudflare" / "live.js", tmp_path / "live.js")
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
 
 

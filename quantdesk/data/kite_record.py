@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from .live_push import LivePusher, quote_from_tick
+
 IST = "Asia/Kolkata"
 INDEX_NAMES = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK", "INDIAVIX": "NSE:INDIA VIX"}
 FUTURE_UNDERLYINGS = ("NIFTY", "BANKNIFTY")
@@ -85,12 +87,13 @@ MAX_BUFFER = 1_000_000                                       # ticks held in mem
 class Recorder:
     """Collects ticks and writes them in parts. `now` is injectable so tests control time; the websocket object is whatever `ticker_factory` returns (KiteTicker's interface)."""
 
-    def __init__(self, out_dir: Path, tokens: dict[str, int], ticker_factory, now=None, flush_seconds: float = FLUSH_SECONDS):
+    def __init__(self, out_dir: Path, tokens: dict[str, int], ticker_factory, now=None, flush_seconds: float = FLUSH_SECONDS, live=None):
         self.out = Path(out_dir)
         self.tokens = dict(tokens)
         self.by_token = {v: k for k, v in self.tokens.items()}
         self.now = now or (lambda: pd.Timestamp.now(tz=IST))
         self.flush_seconds = flush_seconds
+        self.live = live                                             # the display-only 5-second push (live_push.py), or None; it never affects the recording
         self.rows: list[dict] = []
         self.overflow = 0                                            # dropped since the last flush
         self.dropped = 0                                             # dropped in the whole session: a later good flush does not make them come back
@@ -128,8 +131,14 @@ class Recorder:
                 if len(self.rows) >= MAX_BUFFER:                    # writes keep failing: stop growing without bound and say so once per flush
                     self.overflow += 1
                     continue
-                self.rows.append(tick_row(t, sym, recv))
+                row = tick_row(t, sym, recv)
+                self.rows.append(row)
                 self.ticks += 1
+                if self.live is not None:
+                    try:
+                        self.live.update(sym, quote_from_tick(row, t.get("change")))
+                    except Exception:                               # noqa: BLE001 - the display must never cost a recorded tick
+                        pass
 
     def flush(self) -> Path | None:
         with self.lock:
@@ -164,6 +173,8 @@ class Recorder:
 
     def run(self, until: pd.Timestamp, sleep=time.sleep) -> dict:
         """Connect and record until `until` (IST), flushing every `flush_seconds`. Never raises on a dropped connection: the library reconnects and the gap is in the data."""
+        if self.live is not None:
+            self.live.start()
         self.ws.connect(threaded=True)
         last = self.now()
         while self.now() < until:
@@ -175,6 +186,12 @@ class Recorder:
             self.ws.close()
         except Exception:
             pass
+        if self.live is not None:
+            try:
+                self.live.stop()
+                self._event("live", **self.live.stats())
+            except Exception:                                       # noqa: BLE001
+                pass
         self.flush()
         return {"parts": self.part, "ticks": self.ticks, "unwritten": len(self.rows), "dropped": self.dropped}
 
@@ -217,7 +234,7 @@ def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite
     (Path(out_dir) / "tokens.json").write_text(json.dumps(tokens, indent=1))
     h, m = (int(x) for x in until_hhmm.split(":"))
     until = pd.Timestamp.combine(pd.Timestamp(today), dt.time(h, m)).tz_localize(IST)
-    rec = Recorder(Path(out_dir), tokens, ticker_factory, now=clock)
+    rec = Recorder(Path(out_dir), tokens, ticker_factory, now=clock, live=LivePusher.from_env())
     stats = rec.run(until, sleep=sleep)
     if with_reference:
         fetch_reference(kite, tokens, today, Path(out_dir))

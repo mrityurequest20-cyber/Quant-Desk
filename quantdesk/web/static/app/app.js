@@ -22,6 +22,7 @@ const IC = {
 	trades: "M8 20V5M4.5 8.5L8 5l3.5 3.5M16 4v15M12.5 15.5L16 19l3.5-3.5",
 	brain: "M6 4.8a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM18 4.8a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM12 15.3a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM8.2 7h7.6M7.1 8.9l3.8 6.7M16.9 8.9l-3.8 6.7",
 	feed: "M4 6h16M4 11h16M4 16h10",
+	live: "M3 12h3.2l2.3-6 4 12 2.5-6H21",
 	today: "M5.5 5h13A1.5 1.5 0 0 1 20 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19V6.5A1.5 1.5 0 0 1 5.5 5zM4 10h16M8.5 3v4M15.5 3v4",
 	chev: "M9 6l6 6-6 6", x: "M6 6l12 12M18 6L6 18",
 	aside: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 9v6M14 9v6",
@@ -189,7 +190,7 @@ function glossaryList() {
 }
 
 // ---- shell: tabs, routing, sheets, theme ---------------------------------------------------------------------------
-const TABS = [["desk", "Desk"], ["today", "Today"], ["chart", "Chart"], ["trades", "Trades"], ["brain", "Brain"], ["feed", "Feed"]];
+const TABS = [["desk", "Desk"], ["live", "Live"], ["today", "Today"], ["chart", "Chart"], ["trades", "Trades"], ["brain", "Brain"], ["feed", "Feed"]];
 const SUBS = { trades: [["positions", "Positions"], ["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]],
 	feed: [["news", "Headlines"], ["log", "Desk log"]] };
 // the app's mark: a price path that tests a level, pulls back and breaks through it
@@ -1559,6 +1560,69 @@ function openSettings() {
 }
 
 // ==================================================================================================================
+// ---- Live: the Kite recorder's latest prices, refreshed every 5 seconds. PRIVATE: Zerodha's data is licensed to the owner, so the relay
+// (deploy/cloudflare/live.js) answers only to a key typed once into this device. Display only: nothing on this tab can trade. -----------------
+const LIVE_ORDER = ["NIFTY", "BANKNIFTY", "INDIAVIX", "NIFTY-FUT", "BANKNIFTY-FUT"];
+const LIVE_NAMES = { NIFTY: "Nifty 50", BANKNIFTY: "Bank Nifty", INDIAVIX: "India VIX", "NIFTY-FUT": "Nifty fut", "BANKNIFTY-FUT": "Bank Nifty fut" };
+const LIVE_FRESH = 15, LIVE_DELAYED = 120;                       // seconds: green up to 15, amber up to 2 minutes, then "no feed"
+let liveBusy = false;
+const livePx = (v) => (fin(v) ? v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+function liveAge(sec) {
+	if (!fin(sec)) return "—";
+	if (sec < 90) return Math.round(sec) + "s";
+	if (sec < 5400) return Math.round(sec / 60) + " min";
+	return (sec / 3600).toFixed(1) + " h";
+}
+function liveKeyForm(note) {
+	const inp = h("input", { type: "password", class: "search", placeholder: "Live key", "aria-label": "Live key", autocomplete: "off", id: "lv-key" });
+	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); $("#lv-body").dataset.state = ""; renderLive(); } };
+	inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+	return h("div", { class: "panel pad" }, h("div", { style: "font-weight:600;margin-bottom:6px" }, "Live prices"),
+		h("div", { style: "font-size:13px;color:var(--fg2);line-height:1.55;margin-bottom:10px" },
+			"Real-time prices from the desk's Kite recorder, every 5 seconds. They are private to you: type your live key once on this device (it is the LIVE_READ_TOKEN you set on the Worker)."),
+		note ? h("div", { class: "warn", style: "font-size:12.5px;margin-bottom:8px" }, note) : null, inp,
+		h("button", { class: "btn block", style: "margin-top:10px", onclick: save }, "Save key"));
+}
+async function renderLive() {
+	const body = $("#lv-body");
+	if (S.tab !== "live" || document.hidden || liveBusy) return;
+	const key = store("qd.livekey");
+	if (!key) { if (body.dataset.state !== "key") { body.textContent = ""; put(body, liveKeyForm("")); body.dataset.state = "key"; } return; }
+	liveBusy = true;
+	let j = null, note = "";
+	try {
+		const r = await fetch("/live/snapshot", { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+		if (r.status === 401) { try { localStorage.removeItem("qd.livekey"); } catch (e) { /* private mode */ } note = "That key was not accepted. Type it again."; }
+		else if (r.status === 503) note = "The live feed is not switched on yet: the Worker still needs its two secrets (docs/LIVE.md).";
+		else if (!r.ok || !/json/.test(r.headers.get("content-type") || "")) note = "Live prices are on the Cloudflare site only; this address cannot reach them.";
+		else j = await r.json();
+	} catch (e) { note = "Offline: no live prices."; }
+	finally { liveBusy = false; }
+	if (S.tab !== "live") return;
+	body.textContent = "";
+	body.dataset.state = j ? "data" : "note";
+	if (!j) return void put(body, liveKeyForm(note));
+	const names = Object.keys(j.quotes || {});
+	const order = [...LIVE_ORDER.filter((n) => names.includes(n)), ...names.filter((n) => !LIVE_ORDER.includes(n)).sort()];
+	const newest = j.newest_age_s;
+	const kind = !fin(newest) ? "paused" : newest <= LIVE_FRESH ? "live" : newest <= LIVE_DELAYED ? "stale" : "paused";
+	const label = !fin(newest) ? "No prices yet" : newest <= LIVE_FRESH ? "Live" : newest <= LIVE_DELAYED ? "Delayed " + liveAge(newest) : "No feed: last " + liveAge(newest) + " ago";
+	const rows = order.map((n) => {
+		const q = j.quotes[n], old = q.age_s > LIVE_DELAYED;
+		const chg = fin(q.chg) ? h("span", { class: "chg " + (q.chg > 0 ? "up" : q.chg < 0 ? "dn" : "flat") }, (q.chg > 0 ? "+" : "") + q.chg.toFixed(2) + "%") : "—";
+		return h("tr", { style: old ? "opacity:.55" : null }, h("td", {}, LIVE_NAMES[n] || n, h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(q.age_s) + " ago")), h("td", {}, livePx(q.ltp)), h("td", {}, chg),
+			h("td", { class: "f2" }, livePx(q.bid)), h("td", { class: "f2" }, livePx(q.ask)));
+	});
+	put(body, h("div", { class: "pad", style: "display:flex;justify-content:space-between;align-items:center" },
+			h("span", { class: "pill " + kind }, h("span", { class: "dot" }), h("b", {}, label)), h("span", { class: "f3", style: "font-size:11.5px" }, "every 5 s")),
+		order.length ? h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Symbol", "Last", "Change", "Bid", "Ask"].map((x) => h("th", {}, x)))), h("tbody", {}, rows)))
+			: empty("live", "Nothing has arrived yet. The recorder pushes from 09:15 IST on a trading day."),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:12px 16px" },
+			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. This tab only displays: nothing here can place an order. ",
+			h("a", { href: "#", class: "acc", onclick: (e) => { e.preventDefault(); try { localStorage.removeItem("qd.livekey"); } catch (x) { /* ignore */ } body.dataset.state = ""; renderLive(); } }, "Forget this key")));
+}
+
+// ==================================================================================================================
 // refresh loop, pull to refresh, boot
 // ==================================================================================================================
 let tick = 0, busy = false, queued = null;
@@ -1577,6 +1641,7 @@ async function refresh(full, force) {
 		else if (t === "brain") renderBrain();
 		else if (t === "feed") await renderFeed(full || tick % 4 === 0);
 		else if (t === "today") await renderToday(full);
+		else if (t === "live") await renderLive();
 	} catch (e) {
 		console.error(e);
 	} finally {
@@ -1641,6 +1706,7 @@ async function boot() {
 	// the chart draws text on a canvas: repaint once the app's own fonts have loaded
 	if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => restyleCharts());
 	setInterval(() => { tick++; refresh(false); }, 15000);
+	setInterval(() => { if (S.tab === "live" && !document.hidden) renderLive(); }, 5000);          // the Live tab alone refreshes every 5 seconds
 	document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(true); });
 	if ("serviceWorker" in navigator && window.isSecureContext && window.QD_PUBLISHED)
 		navigator.serviceWorker.register("sw.js").catch(() => { /* offline support is a bonus */ });

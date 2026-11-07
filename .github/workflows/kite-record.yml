@@ -84,6 +84,8 @@ jobs:
       - name: Record ticks
         env:
           UNTIL: ${{ inputs.first_until || '14:45' }}
+          LIVE_URL: ${{ vars.LIVE_URL }}                       # the private live relay (docs/LIVE.md); both unset = no push, the recording is unchanged
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
         run: |
           cap=$(date -d '+330 minutes' +%H:%M)     # an early start (the scheduler, 08:25 on) must still stop before the job's 358-minute limit
           if [[ "$cap" < "$UNTIL" ]]; then UNTIL=$cap; fi
@@ -171,6 +173,8 @@ jobs:
       - name: Record ticks to the close and fetch Kite's own candles as the reference
         env:
           UNTIL: ${{ inputs.second_until || '15:32' }}
+          LIVE_URL: ${{ vars.LIVE_URL }}                       # the private live relay (docs/LIVE.md); both unset = no push, the recording is unchanged
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
         run: python -m quantdesk data kite-record --out runtime/kite --until "$UNTIL" --with-reference
       - name: Measures for the session (counts and ratios only)
         if: always()
