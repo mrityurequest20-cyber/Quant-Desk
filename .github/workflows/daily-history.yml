@@ -15,8 +15,8 @@ on:
         description: "optional: first day (YYYY-MM-DD), blank = config daily_history.start"
         default: ""
       sources:
-        description: "source order: nse,yahoo | yahoo | nse"
-        default: "nse,yahoo"
+        description: "source order: nse,yahoo,warehouse (the warehouse is the independent cross-check when NSE is blocked)"
+        default: "nse,yahoo,warehouse"
 
 permissions:
   contents: write            # create and upload to the daily-history release 
@@ -46,10 +46,23 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
         continue-on-error: true
+      - name: The warehouse's own NSE files (the independent cross-check when NSE's history API is blocked for this runner)
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from quantdesk.data.warehouse import ReleaseStore
+          rs = ReleaseStore("warehouse")
+          # every index close (small) and the stock options' underlying price from 2024-07, when that file began to carry it
+          names = [n for n in rs.assets() if n.startswith("nse_index_close_") or (n.startswith("fo_stock_opts_") and n[14:21] >= "2024-07")]
+          dest = Path("runtime/warehouse")
+          dest.mkdir(parents=True, exist_ok=True)
+          print(len(rs.pull(dest, names)), "of", len(names), "warehouse files pulled")
+          PY
       - name: Import daily history
         continue-on-error: true
         run: |
-          args=(--sources "${IN_SOURCES:-nse,yahoo}" --push)
+          args=(--sources "${IN_SOURCES:-nse,yahoo,warehouse}" --push)
           [ -n "$IN_SYMBOLS" ] && args+=(--symbols "$IN_SYMBOLS")
           [ -n "$IN_START" ] && args+=(--from "$IN_START")
           python -m quantdesk data daily-history "${args[@]}" | tee daily.txt \

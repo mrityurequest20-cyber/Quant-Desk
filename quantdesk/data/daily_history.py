@@ -242,6 +242,56 @@ class YahooSource:
         return s[s["ratio"] > 1.05].reset_index(drop=True)
 
 
+class WarehouseSource:
+    """NSE's own end-of-day files, as the warehouse (data.yml) holds them: an INDEPENDENT second source for the cross-check, available to a cloud runner when NSE's
+    history API is not. It only reads files already on disk (`warehouse.ReleaseStore("warehouse").pull`), so it cannot be blocked and needs no secret.
+
+    * an index: `nse_index_close` (every NSE index's official daily open, high, low and close, from 2019). SENSEX and BANKEX are BSE's and are not in it: SourceDown.
+    * a stock: `fo_stock_opts`' underlying price (the stock's own close as the F&O bhavcopy prints it) from 8 Jul 2024, when the file began to carry it. It is a
+      close only, so the bar is flat (open = high = low = close); the cross-check reads the close and nothing else. Before that date there is nothing independent.
+
+    Prices are as traded (not split adjusted), like NSE's own API, so the caller adjusts them with the same actions as the primary."""
+    name = "warehouse"
+
+    def __init__(self, root):
+        self.root = Path(root)
+        self._cache: dict[str, pd.DataFrame] = {}
+
+    def _read(self, table: str, columns: list[str]) -> pd.DataFrame:
+        if table not in self._cache:
+            parts = []
+            for p in sorted(self.root.glob(f"{table}_*.parquet")):
+                df = pd.read_parquet(p, columns=columns)
+                if "underlying" in df:
+                    df = df[df["underlying"].notna() & (df["underlying"] > 0)].drop_duplicates(["date", "symbol"])
+                parts.append(df)
+            self._cache[table] = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
+        return self._cache[table]
+
+    def daily(self, symbol: str, kind: str, start: dt.date, end: dt.date) -> pd.DataFrame:
+        if kind == "index":
+            t = self._read("nse_index_close", ["date", "symbol", "open", "high", "low", "close"])
+            t = t[t["symbol"] == symbol]
+            if not len(t):
+                raise SourceDown(f"warehouse: {symbol} is not in nse_index_close")
+            rows = t.assign(volume=np.nan)
+        else:
+            t = self._read("fo_stock_opts", ["date", "symbol", "underlying"])
+            t = t[t["symbol"] == symbol]
+            if not len(t):
+                raise SourceDown(f"warehouse: no underlying price for {symbol}")
+            rows = pd.DataFrame({"date": t["date"], "open": t["underlying"], "high": t["underlying"], "low": t["underlying"],
+                                 "close": t["underlying"], "volume": np.nan})
+        df = _frame(rows.to_dict("records"))
+        df = df[(df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))]
+        if not len(df):
+            raise SourceDown(f"warehouse: no {symbol} rows in range")
+        return df
+
+    def actions(self, symbol: str, kind: str) -> pd.DataFrame:
+        raise SourceDown("warehouse: not a corporate-action source")
+
+
 # ---- cleaning, adjustment, jumps -----------------------------------------------------------------------------------------------
 def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Drop (never repair) rows that cannot be a real daily bar; count each reason."""
@@ -318,12 +368,13 @@ def crosscheck(primary: pd.DataFrame, second: pd.DataFrame | None, symbol: str, 
     if second is None or not len(second) or not len(primary):
         return {"available": False, "sampled": 0, "compared": 0, "matched": 0, "match_rate": None, "mismatches": []}
     rng = np.random.default_rng(seed + zlib.crc32(symbol.encode()))
-    days = primary.index
+    days = primary.index.intersection(second.index)                       # the days both sources have: a second source that covers only the recent years is still compared there
+    if not len(days):
+        return {"available": True, "sampled": 0, "compared": 0, "matched": 0, "match_rate": None, "mismatches": [], "span": None}
     pick = days[np.sort(rng.choice(len(days), size=min(n, len(days)), replace=False))]
+    span = [str(days.min().date()), str(days.max().date())]                # what the independent check covers: never claimed beyond it
     rows, matched, compared = [], 0, 0
     for d in pick:
-        if d not in second.index:
-            continue
         a, b = float(primary.at[d, "adj_close"]), float(second.at[d, "adj_close"])
         compared += 1
         rel = a / b - 1 if b else float("nan")
@@ -332,7 +383,7 @@ def crosscheck(primary: pd.DataFrame, second: pd.DataFrame | None, symbol: str, 
         else:
             rows.append({"date": str(d.date()), "ours": a, "other": b, "rel_diff": rel})
     return {"available": True, "sampled": int(len(pick)), "compared": compared, "matched": matched,
-            "match_rate": (matched / compared) if compared else None, "mismatches": rows[:25]}
+            "match_rate": (matched / compared) if compared else None, "mismatches": rows[:25], "span": span}
 
 
 def market_days(dates: dict, holidays: set, official_years: set, peers: list[str]) -> tuple[pd.DatetimeIndex, dict]:
