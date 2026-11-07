@@ -243,8 +243,8 @@ def test_two_sources_show_the_fresher_flag_disagreement_and_fill_each_others_gap
     assert t["rel"]["src"] == "z" and t["rel"]["alt"]["src"] == "k" and "x" not in t["rel"]                    # 2900.15 vs 2900.10: within a spread
     assert t["nifty"]["src"] == "z" and "x" not in t["nifty"] and t["nifty"]["alt"]["ltp"] == 24500.5
     assert t["fut"]["x"] > 0.5 and t["fut"]["alt"]["ltp"] == 2905.0                                         # 2990 vs 2905: a future that two brokers disagree on by 2.9% is a fault
-    assert t["ce"]["x"] if "x" in t["ce"] else True
-    assert t["ce"]["ltp"] in (160.0, 150.5)
+    assert t["ce"]["ltp"] == 160.0 and t["ce"]["src"] == "z" and t["ce"]["alt"]["ltp"] == 150.5 and t["ce"]["x"] > 3      # 160 vs 150.5 is 5.9%: past an option's 3% tolerance, so it is flagged (and, flagged, it borrows nothing from the other source)
+
 
 
 def test_an_unchanged_kotak_price_does_not_look_fresh_and_a_moved_one_does(out):

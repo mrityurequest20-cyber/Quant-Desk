@@ -81,6 +81,8 @@ export function parseQuote(q) {
 	const pc = num(q.per_change), ch = num(q.change);
 	if (Number.isFinite(pc)) out.chg = pc;                                   // percent from the previous close, as Kite's `change`
 	else if (Number.isFinite(ch) && ltp - ch > 0) out.chg = (ch / (ltp - ch)) * 100;
+	const lst = lastUpdateMs(q.lstup_time);
+	if (Number.isFinite(lst)) out.lst = lst;
 	return out;
 }
 
@@ -122,6 +124,25 @@ export function parseChain(body) {
 	return rows;
 }
 
+// The error in a Kotak answer, whatever shape it comes in (ported from `_error` in quantdesk/intraday/kotak.py): an error key, a status of ERROR, a fault, or a bare code and message
+// with no data. null if there is none. The message is never returned: only that an error was there.
+export function hasError(body) {
+	if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+	for (const k of ["Error", "error", "Error Message", "errMsg"]) if (body[k]) return true;
+	if (String(body.status ?? "").toUpperCase() === "ERROR" || "fault" in body) return true;
+	return !("data" in body) && "code" in body && "message" in body && !["200", "0"].includes(String(body.code));
+}
+
+// Kotak's own timestamp of a quote (`lstup_time`: epoch seconds, or milliseconds) in ms, or NaN if it is not one. Used only to date a price the first time it is seen, so a
+// last-known price after a restart or on a holiday is not stamped "now".
+export function lastUpdateMs(x) {
+	const v = num(x);
+	if (!Number.isFinite(v) || v <= 0) return NaN;
+	if (v >= 1e9 && v < 1e11) return v * 1000;
+	if (v >= 1e12 && v < 1e14) return v;
+	return NaN;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class KotakPoller {
@@ -147,19 +168,17 @@ export class KotakPoller {
 		if (params) url += "?" + new URLSearchParams(params).toString();
 		let res;
 		try {
-			res = await this.fetchFn(url, { headers: { Authorization: this.key, accept: "application/json" }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+			res = await this.fetchFn(url, { headers: { Authorization: this.key, accept: "application/json" }, signal: AbortSignal.timeout(TIMEOUT_MS), redirect: "manual" });    // never follow a redirect: the key is in the header
 		} catch (e) {
 			throw new KotakError("net", `network (${e && e.name ? e.name : "error"})`);       // the class only: never a URL, never the key
 		}
 		if (res.status === 401 || res.status === 403) throw new KotakError("auth", `HTTP ${res.status}`);
 		if (res.status === 429) throw new KotakError("rate", "HTTP 429");
+		if (res.status >= 300 && res.status < 400) throw new KotakError("http", `HTTP ${res.status}`);
 		let body;
 		try { body = await res.json(); } catch (e) { throw new KotakError("shape", `HTTP ${res.status}, not JSON`); }
 		if (res.status !== 200) throw new KotakError("http", `HTTP ${res.status}`);
-		if (body && typeof body === "object" && !Array.isArray(body)) {
-			const err = body.Error || body.error || body["Error Message"] || body.errMsg;
-			if (err) throw new KotakError("http", "Kotak answered with an error");
-		}
+		if (hasError(body)) throw new KotakError("http", "Kotak answered with an error");
 		return body;
 	}
 
@@ -197,6 +216,7 @@ export async function runCycle(poller, universe, cursor) {
 	const { calls, next, total } = plan(universe, cursor);
 	const byKey = new Map();
 	for (const q of universe.quotes || []) if (!q.one) byKey.set(`${q.g}|${q.t}`, q);
+	const quoteNames = new Set((universe.quotes || []).map((q) => q.n));     // a name asked for as a quote is never ALSO taken from a chain: two endpoints disagreeing a little would alternate and look like movement
 	const updates = [];
 	const errors = {};
 	let ok = 0, failed = 0, i = 0;
@@ -207,15 +227,23 @@ export async function runCycle(poller, universe, cursor) {
 			try {
 				if (c.kind === "q") {
 					const rows = await poller.quotes(c.items);
+					let usable = 0;
 					for (const r of rows) {
 						const quote = parseQuote(r);
 						if (!quote) continue;
 						const it = c.items.length === 1 && c.items[0].one ? c.items[0] : byKey.get(`${r.exchange}|${r.exchange_token}`);
-						if (it) updates.push([it.n, { ...quote, s: it.s }]);
+						if (it) { updates.push([it.n, { ...quote, s: it.s }]); usable += 1; }
 					}
+					if (!usable) throw new KotakError("empty", "no usable rows");                // a 200 with nothing in it is not a success
 				} else {
 					const u = c.chain;
-					for (const r of parseChain(await poller.chain(u.u, u.x, u.e, count))) updates.push([optionName(u.u, u.e, r.strike, r.side), { ltp: r.ltp, ...(r.vol !== undefined ? { vol: r.vol } : {}), ...(r.oi !== undefined ? { oi: r.oi } : {}), s: "opt" }]);
+					const rows = parseChain(await poller.chain(u.u, u.x, u.e, count));
+					if (!rows.length) throw new KotakError("empty", "no usable rows");
+					for (const r of rows) {
+						const name = optionName(u.u, u.e, r.strike, r.side);
+						if (quoteNames.has(name)) continue;                                      // the quote wins: one name, one source of its numbers
+						updates.push([name, { ltp: r.ltp, ...(r.vol !== undefined ? { vol: r.vol } : {}), ...(r.oi !== undefined ? { oi: r.oi } : {}), s: "opt" }]);
+					}
 				}
 				ok += 1;
 			} catch (e) {

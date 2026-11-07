@@ -79,7 +79,9 @@ export const dispatchCollect = (env, step) => dispatchWorkflow(env, "collect-wid
 
 export default {
 	async scheduled(event, env, ctx) {
-		if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(keepLiveAlive(env).catch(() => {}));      // not awaited: the desk's alarm clock below is never held up by the live poller
+		try {
+			if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(keepLiveAlive(env).catch(() => {}));      // not awaited: the desk's alarm clock below is never held up by the live poller
+		} catch (e) { /* even a throwing waitUntil must not stop the desk's alarm clock */ }
 		const step = COLLECT_CRONS[event.cron];
 		if (step) {                                              // 15:25 / 15:45 IST: wide data collection, on time
 			const r = await dispatchCollect(env, step);
