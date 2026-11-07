@@ -78,9 +78,9 @@ def test_mobile_source_labels_network_stale_and_closed_states():
     shim = (root / "quantdesk" / "web" / "export_site.py").read_text(encoding="utf-8")
     worker = (root / "quantdesk" / "web" / "static" / "app" / "sw.js").read_text(encoding="utf-8")
     page = (root / "quantdesk" / "web" / "static" / "app" / "index.html").read_text(encoding="utf-8")
-    assert 't: "Offline"' in app and 't: inSession() ? "Offline" : "Closed"' in app
-    assert "Network unavailable." in app and "Desk connection failed." in app
-    assert "Showing the last saved state" in app and "No current session snapshot is available" in app
+    # the header pill now speaks for the live feeds (docs/LIVE.md): offline, relay off, key refused, no feed, and the market being closed each have their own label
+    for label in ('t: "Offline"', 't: "Relay off"', 't: "Key?"', 't: "No feed"', '"No answer"', 't: "Closed"'):
+        assert label in app, label
     assert 'addEventListener("offline"' in app and 'addEventListener("online"' in app
     assert 'X-QD-Offline-Cache' in shim and 'headers.set("X-QD-Offline-Cache", "1")' in worker
     assert 'name="viewport" content="width=device-width' in page
