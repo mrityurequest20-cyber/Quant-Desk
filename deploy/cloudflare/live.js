@@ -177,7 +177,7 @@ const sameQuote = (a, b) => {
 	if ("bid" in a && "bid" in b && (a.bid !== b.bid || a.ask !== b.ask || a.bid_qty !== b.bid_qty || a.ask_qty !== b.ask_qty)) return false;
 	return true;
 };
-const STALE_MS = 18 * 3600e3;               // a quote that has not been seen for 18 hours is dropped: expired contracts must not fill the board for good
+const STALE_MS = 4 * 86400e3;               // a quote not seen for 4 days is dropped (expired contracts must not fill the board for good); shorter would empty the board over a weekend, when the last prices are worth showing, aged
 const FIRST_SEEN_MS = 12 * 3600e3;          // Kotak's own timestamp dates a first-seen price only if it is within this of now
 
 // The Durable Object: per instrument, the latest quote of each source and when it arrived. MEMORY ONLY for quotes: a wide universe is too big to rewrite to storage every
@@ -205,7 +205,7 @@ export class LiveBoard {
 
 	kotakConfigured() { return String(this.env.KOTAK_CONSUMER_KEY || "").trim().length >= 10; }
 
-	// Drop what has not been seen for 18 hours (an expired weekly option, a retired symbol), so the board cannot fill for good.
+	// Drop what has not been seen for 4 days (an expired weekly option, a retired symbol), so the board cannot fill for good. A weekend's last prices stay, showing their age.
 	prune(now) {
 		this.lastPrune = now;
 		let gone = 0;

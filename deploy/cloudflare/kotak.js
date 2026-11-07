@@ -216,6 +216,7 @@ export async function runCycle(poller, universe, cursor) {
 	const { calls, next, total } = plan(universe, cursor);
 	const byKey = new Map();
 	for (const q of universe.quotes || []) if (!q.one) byKey.set(`${q.g}|${q.t}`, q);
+	const quoteNames = new Set((universe.quotes || []).map((q) => q.n));     // a name asked for as a quote is never ALSO taken from a chain: two endpoints disagreeing a little would alternate and look like movement
 	const updates = [];
 	const errors = {};
 	let ok = 0, failed = 0, i = 0;
@@ -238,7 +239,11 @@ export async function runCycle(poller, universe, cursor) {
 					const u = c.chain;
 					const rows = parseChain(await poller.chain(u.u, u.x, u.e, count));
 					if (!rows.length) throw new KotakError("empty", "no usable rows");
-					for (const r of rows) updates.push([optionName(u.u, u.e, r.strike, r.side), { ltp: r.ltp, ...(r.vol !== undefined ? { vol: r.vol } : {}), ...(r.oi !== undefined ? { oi: r.oi } : {}), s: "opt" }]);
+					for (const r of rows) {
+						const name = optionName(u.u, u.e, r.strike, r.side);
+						if (quoteNames.has(name)) continue;                                      // the quote wins: one name, one source of its numbers
+						updates.push([name, { ltp: r.ltp, ...(r.vol !== undefined ? { vol: r.vol } : {}), ...(r.oi !== undefined ? { oi: r.oi } : {}), s: "opt" }]);
+					}
 				}
 				ok += 1;
 			} catch (e) {
