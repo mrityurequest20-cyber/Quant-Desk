@@ -59,12 +59,7 @@ class GuardedSource:
 
     def expiries(self, underlying):
         self._gate()
-        try:
-            out = self.inner.expiries(underlying)
-        except Exception as exc:
-            self._failed(exc)
-            raise
-        return out
+        return self.inner.expiries(underlying)                       # a stock with no readable expiries (a new listing) is that stock's problem: it does not count towards the breaker
 
     def chain(self, underlying, expiry, spot=None, ts=None, **kw):
         self._gate()
@@ -85,6 +80,8 @@ class GuardedSource:
         return ch
 
     def __getattr__(self, name):
+        if name == "inner" or name.startswith("__"):                 # a copy or an unpickled shell has no `inner` yet: do not recurse
+            raise AttributeError(name)
         return getattr(self.inner, name)
 
 
@@ -132,7 +129,7 @@ def compact_depth(day_dir: Path) -> pd.DataFrame:
 
 
 def run_shard(client, root: Path, shard: int, shards: int, part: str, until: dt.time | None = None, strikes: int = STRIKES, expiries: int = EXPIRIES, levels: int = LEVELS,
-              min_gap: float = MIN_GAP, say=print, names: list[str] | None = None, source=None, clock=None, sleep=None, every_min: float = 1.0) -> dict:
+              say=print, names: list[str] | None = None, source=None, clock=None, sleep=None, every_min: float = 1.0) -> dict:
     """Record this shard's stocks until `until` (or the close), compact, and write the part's files and manifest. Returns the manifest. Never raises on a Kotak problem."""
     import time
     root = Path(root)

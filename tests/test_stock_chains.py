@@ -323,3 +323,34 @@ def test_a_shard_does_not_fire_at_the_open_but_waits_for_its_own_offset_in_the_m
         ch = pd.read_parquet(tmp_path / str(shard) / "_parts" / f"{DAY}_morning-{shard}_chains.parquet")
         firsts[shard] = pd.Timestamp(ch["ts"].min())
     assert firsts[0] >= pd.Timestamp("2026-11-09 09:15:05", tz=IST) and firsts[9] >= pd.Timestamp("2026-11-09 09:15:50", tz=IST) > firsts[0]     # the shards do not all hit Kotak at 09:15:00
+
+
+# ---- the second review's non-blocking notes ---------------------------------------------------------------------------------------------------------------------------------------------
+
+def test_a_stock_with_no_readable_expiries_does_not_trip_the_shards_breaker_and_a_copy_does_not_recurse():
+    import copy
+    clk = Clock()
+
+    class Inner:
+        def expiries(self, u): raise K.KotakError(f"no expiries for {u}")
+    g = SC.GuardedSource(Inner(), now=clk, say=lambda *a: None)
+    for _ in range(SC.BREAKER_AFTER * 3):
+        with pytest.raises(K.KotakError, match="no expiries"):
+            g.expiries("NEWLISTING")
+    assert g.open_until is None                                                                              # six new listings in a row do not stop the other stocks
+    assert copy.copy(g).inner is g.inner
+    with pytest.raises(AttributeError):
+        SC.GuardedSource.__new__(SC.GuardedSource).anything
+
+
+def test_a_bad_until_is_refused_up_front_and_the_publish_will_not_empty_a_folder_outside_runtime(tmp_path, monkeypatch):
+    from quantdesk.data import cli as C
+    with pytest.raises(SystemExit, match="HH:MM"):
+        C.cmd_stock_tape(type("Cfg", (), {"holidays": lambda self: []})(), type("A", (), {"shard": 0, "shards": 10, "part": "m", "until": "25:99", "every_min": 1.0, "out": str(tmp_path)})())
+    keep = tmp_path / "keep"
+    keep.mkdir()
+    (keep / "precious.txt").write_text("x")
+    with pytest.raises(SystemExit, match="refusing"):
+        C.cmd_stock_chains_publish(None, type("A", (), {"parts": str(tmp_path), "day": str(DAY), "out": str(keep), "push": False})())
+    assert (keep / "precious.txt").exists()
+    assert "min_gap" not in __import__("inspect").signature(SC.run_shard).parameters                         # no dead parameter that looks like it paces something
