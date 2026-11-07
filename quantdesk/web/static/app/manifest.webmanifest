@@ -12,14 +12,14 @@
   "theme_color": "#0A0C10",
   "categories": ["finance", "business"],
   "icons": [
-    {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-    {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-    {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+    {"src": "/icon-192.png?v=2", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/icon-512.png?v=2", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/icon-maskable-512.png?v=2", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
   ],
   "shortcuts": [
-    {"name": "Chart", "short_name": "Chart", "url": "/#chart", "icons": [{"src": "/icon-192.png", "sizes": "192x192"}]},
-    {"name": "Trades", "short_name": "Trades", "url": "/#trades", "icons": [{"src": "/icon-192.png", "sizes": "192x192"}]},
-    {"name": "Brain", "short_name": "Brain", "url": "/#brain", "icons": [{"src": "/icon-192.png", "sizes": "192x192"}]},
-    {"name": "News", "short_name": "News", "url": "/#feed", "icons": [{"src": "/icon-192.png", "sizes": "192x192"}]}
+    {"name": "Chart", "short_name": "Chart", "url": "/#chart", "icons": [{"src": "/icon-192.png?v=2", "sizes": "192x192"}]},
+    {"name": "Trades", "short_name": "Trades", "url": "/#trades", "icons": [{"src": "/icon-192.png?v=2", "sizes": "192x192"}]},
+    {"name": "Brain", "short_name": "Brain", "url": "/#brain", "icons": [{"src": "/icon-192.png?v=2", "sizes": "192x192"}]},
+    {"name": "News", "short_name": "News", "url": "/#feed", "icons": [{"src": "/icon-192.png?v=2", "sizes": "192x192"}]}
   ]
 }
