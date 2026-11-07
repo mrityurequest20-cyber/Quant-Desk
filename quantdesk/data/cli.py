@@ -711,19 +711,23 @@ def cmd_stock_tape(cfg, a):
     from ..intraday.feeds import IST as TZ
     from ..intraday.kotak import KotakClient, KotakError
     from . import stock_chains as SC
+    if not 1.0 <= a.every_min <= 5.0:
+        raise SystemExit("stock-tape: --every-min must be between 1 and 5")
+    try:
+        until = dt.time.fromisoformat(a.until) if a.until else None
+    except ValueError:
+        raise SystemExit(f"stock-tape: --until {a.until!r} is not HH:MM") from None
     now = pd.Timestamp.now(tz=TZ)
     if not TradingCalendar(cfg.holidays()).is_trading_day(now.date()):
         print(f"stock-tape: {now.date()} is not an NSE trading day; nothing to record")
         return
-    if not 1.0 <= a.every_min <= 5.0:
-        raise SystemExit("stock-tape: --every-min must be between 1 and 5")
     try:
         client = KotakClient.from_env(min_gap=SC.MIN_GAP)                     # paced: at most 2.5 calls a second a shard
     except KotakError:
         print("::warning::stock-tape: no KOTAK_CONSUMER_KEY; nothing recorded")
         return
     try:
-        man = SC.run_shard(client, Path(a.out), a.shard, a.shards, a.part, dt.time.fromisoformat(a.until) if a.until else None, every_min=a.every_min, say=lambda m: print(m, flush=True))
+        man = SC.run_shard(client, Path(a.out), a.shard, a.shards, a.part, until, every_min=a.every_min, say=lambda m: print(m, flush=True))
     except Exception as exc:                                              # noqa: BLE001 - one shard failing never fails the others
         print(f"::warning::stock-tape shard {a.shard}: {type(exc).__name__}: {exc!s:.200}")
         return
@@ -745,6 +749,8 @@ def cmd_stock_chains_publish(cfg, a):
         raise SystemExit(f"stock-chains-publish: {a.day!r} is not a date") from None
     out = Path(a.out)
     if out.exists():
+        if "runtime" not in out.resolve().parts or out.resolve() == Path.cwd().resolve() or any(out.resolve() == p for p in Path.cwd().resolve().parents):
+            raise SystemExit(f"stock-chains-publish: refusing to empty {out}: the output folder must be a sub-folder of a runtime/ directory")
         shutil.rmtree(out)
     man = SC.consolidate(Path(a.parts), out, a.day)
     print(f"{a.day}: {man['recorded']} of {man['stocks']} stocks, {man['minutes_total']:,} stock-minutes (coverage {man['coverage']}), rows {man['rows']}, {man['bad_parts']} unreadable part(s)", flush=True)
@@ -759,9 +765,9 @@ def cmd_stock_chains_publish(cfg, a):
     tag = release_tag("stock-chains", dt.date.fromisoformat(a.day), "quarter")
     store = ReleaseStore(tag, title=f"Stock option chains {tag[-6:]}", notes="Every-minute option chains and five-level order books of the F&O stocks (Kotak), one set of files per day. Not a software release.")
     try:
-        store.push(out, man["files"], clobber=False)                       # a day's data is written once: a name already there is never replaced, so a second run cannot degrade it
-        store.push(out, [f"{a.day}_stock_chains_manifest.json"], clobber=False)
-        print(f"pushed {len(man['files']) + 1} file(s) to release {tag}", flush=True)
+        names = man["files"] + [f"{a.day}_stock_chains_manifest.json"]
+        store.push(out, names, clobber=False)                              # one call, so the data and its manifest go together; a day's data is written once: a name already there is never replaced
+        print(f"pushed {len(names)} file(s) to release {tag}", flush=True)
     except Exception as exc:                                              # noqa: BLE001 - a failed push (or a day already kept) is a warning; the parts are still artifacts
         print(f"::warning::stock-chains-publish: not published ({exc!s:.150}); the parts are still artifacts", flush=True)
 
