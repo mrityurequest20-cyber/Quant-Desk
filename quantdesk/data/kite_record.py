@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .kite_universe import build_wide
 from .live_push import LivePusher, quote_from_tick
 
 IST = "Asia/Kolkata"
@@ -24,6 +25,11 @@ DEPTH_LEVELS = 5
 DEPTH_COLUMNS = [f"{side}_{field}{i}" for side in ("bid", "ask") for i in range(1, DEPTH_LEVELS + 1) for field in ("p", "q", "n")]      # price, quantity, number of orders at each of the five levels
 TICK_COLUMNS = ["symbol", "token", "ts_exchange", "ts_recv", "last_price", "last_qty", "volume", "oi", "bid", "ask", "bid_qty", "ask_qty", "buy_qty_total", "sell_qty_total"] + DEPTH_COLUMNS
 FLUSH_SECONDS = 60.0
+# The wide universe (kite_universe.py) is recorded APART from the pre-registered Kite trial's five instruments: its own slim rows, its own buffer, its own files
+# in the `wide/` subfolder. Nothing the trial measures (tokens.json, ticks_*.parquet, the folder's parquet bytes) changes with it: quote-mode ticks carry no
+# exchange timestamp, no depth and ~1,000 symbols would be judged against thresholds written for indices and futures (docs/ml/KITE_TRIAL.md).
+WIDE_COLUMNS = ["symbol", "token", "ts_exchange", "ts_recv", "last_price", "last_qty", "volume", "oi", "buy_qty_total", "sell_qty_total", "change", "open", "high", "low", "close"]
+MAX_WIDE_BUFFER = 300_000                                    # a slim row is about 1 KB in memory; a wide overflow is recorded as an event and never fails the run
 
 
 class KiteRecordError(RuntimeError):
@@ -81,20 +87,33 @@ def _f(x):
         return None
 
 
+def wide_row(tick: dict, symbol: str, recv: pd.Timestamp) -> dict:
+    """One slim row of a quote-mode tick: price, quantities, the day's open/high/low/close and Kite's percent change. No depth, no open interest (not in the packet)."""
+    ohlc = tick.get("ohlc") or {}
+    return {"symbol": symbol, "token": int(tick["instrument_token"]), "ts_exchange": _ist(tick.get("exchange_timestamp") or tick.get("last_trade_time")), "ts_recv": recv,
+            "last_price": _f(tick.get("last_price")), "last_qty": _f(tick.get("last_traded_quantity")), "volume": _f(tick.get("volume_traded")), "oi": _f(tick.get("oi")),
+            "buy_qty_total": _f(tick.get("total_buy_quantity")), "sell_qty_total": _f(tick.get("total_sell_quantity")), "change": _f(tick.get("change")),
+            "open": _f(ohlc.get("open")), "high": _f(ohlc.get("high")), "low": _f(ohlc.get("low")), "close": _f(ohlc.get("close"))}
+
+
 MAX_BUFFER = 1_000_000                                       # ticks held in memory between flushes (a minute is a few thousand)
 
 
 class Recorder:
     """Collects ticks and writes them in parts. `now` is injectable so tests control time; the websocket object is whatever `ticker_factory` returns (KiteTicker's interface)."""
 
-    def __init__(self, out_dir: Path, tokens: dict[str, int], ticker_factory, now=None, flush_seconds: float = FLUSH_SECONDS, live=None):
+    def __init__(self, out_dir: Path, tokens: dict[str, int], ticker_factory, now=None, flush_seconds: float = FLUSH_SECONDS, live=None, core=None, meta=None):
         self.out = Path(out_dir)
         self.tokens = dict(tokens)
         self.by_token = {v: k for k, v in self.tokens.items()}
         self.now = now or (lambda: pd.Timestamp.now(tz=IST))
         self.flush_seconds = flush_seconds
+        self.core = set(tokens) if core is None else set(core)       # symbols recorded in FULL mode (five levels of depth); the rest in QUOTE mode (price, volume, quantities, no depth)
+        self.meta = dict(meta or {})                                 # symbol -> {'s': segment, ...}: what each instrument is, for the live view
         self.live = live                                             # the display-only 5-second push (live_push.py), or None; it never affects the recording
         self.rows: list[dict] = []
+        self.wide_rows: list[dict] = []                              # the wide universe's slim rows (see WIDE_COLUMNS)
+        self.wide_overflow = self.wide_dropped = self.wide_ticks = self.wide_part = 0
         self.overflow = 0                                            # dropped since the last flush
         self.dropped = 0                                             # dropped in the whole session: a later good flush does not make them come back
         self.lock = threading.Lock()
@@ -116,10 +135,15 @@ class Recorder:
             self.events.append({"ts": str(self.now()), "kind": kind, **kw})
 
     def _on_connect(self, ws, response) -> None:
-        toks = list(self.tokens.values())
-        ws.subscribe(toks)
-        ws.set_mode(ws.MODE_FULL, toks)
-        self._event("connect", n=len(toks))
+        full = [t for s_, t in self.tokens.items() if s_ in self.core]
+        wide = [t for s_, t in self.tokens.items() if s_ not in self.core]
+        for i in range(0, len(full) + len(wide), 500):                 # subscribe in chunks: one oversized message is the easiest way to lose a subscription
+            ws.subscribe((full + wide)[i:i + 500])
+        if full:
+            ws.set_mode(ws.MODE_FULL, full)
+        for i in range(0, len(wide), 500):                              # QUOTE is the default mode of a subscription: this only makes it explicit, in messages of a size the socket takes
+            ws.set_mode(getattr(ws, "MODE_QUOTE", "quote"), wide[i:i + 500])
+        self._event("connect", n=len(full) + len(wide), full=len(full), quote=len(wide))
 
     def _on_ticks(self, ws, ticks) -> None:
         recv = self.now()
@@ -127,6 +151,19 @@ class Recorder:
             for t in ticks:
                 sym = self.by_token.get(t.get("instrument_token"))
                 if sym is None:
+                    continue
+                if sym not in self.core:                            # the wide universe: its own slim row and buffer, never mixed into the trial's data
+                    if len(self.wide_rows) >= MAX_WIDE_BUFFER:
+                        self.wide_overflow += 1
+                        continue
+                    row = wide_row(t, sym, recv)
+                    self.wide_rows.append(row)
+                    self.wide_ticks += 1
+                    if self.live is not None:
+                        try:
+                            self.live.update(sym, quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s")))
+                        except Exception:                           # noqa: BLE001
+                            pass
                     continue
                 if len(self.rows) >= MAX_BUFFER:                    # writes keep failing: stop growing without bound and say so once per flush
                     self.overflow += 1
@@ -136,11 +173,35 @@ class Recorder:
                 self.ticks += 1
                 if self.live is not None:
                     try:
-                        self.live.update(sym, quote_from_tick(row, t.get("change")))
+                        self.live.update(sym, quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s")))
                     except Exception:                               # noqa: BLE001 - the display must never cost a recorded tick
                         pass
 
+    def _flush_wide(self) -> None:
+        """Write the wide universe's rows to wide/wide_<tag>_<part>.parquet. Best effort: a failed write keeps the rows for the next flush; it never raises and never counts against the run."""
+        with self.lock:
+            rows, self.wide_rows = self.wide_rows, []
+            lost, self.wide_overflow = self.wide_overflow, 0
+        self.wide_dropped += lost
+        if lost:
+            self._event("wide_overflow", dropped_ticks=lost)
+        if not rows:
+            return
+        part = self.wide_part + 1
+        try:
+            d = self.out / "wide"
+            d.mkdir(exist_ok=True)
+            path = d / f"wide_{self.tag}_{part:04d}.parquet"
+            tmp = path.with_name(path.name + ".part")
+            pd.DataFrame(rows, columns=WIDE_COLUMNS).to_parquet(tmp, index=False)
+            tmp.replace(path)
+            self.wide_part = part
+        except Exception:                                          # noqa: BLE001
+            with self.lock:
+                self.wide_rows = (rows + self.wide_rows)[-MAX_WIDE_BUFFER:]
+
     def flush(self) -> Path | None:
+        self._flush_wide()
         with self.lock:
             rows, self.rows = self.rows, []
             events, self.events = self.events, []
@@ -174,7 +235,10 @@ class Recorder:
     def run(self, until: pd.Timestamp, sleep=time.sleep) -> dict:
         """Connect and record until `until` (IST), flushing every `flush_seconds`. Never raises on a dropped connection: the library reconnects and the gap is in the data."""
         if self.live is not None:
-            self.live.start()
+            try:
+                self.live.start()
+            except Exception:                                       # noqa: BLE001 - no display, same recording
+                self.live = None
         self.ws.connect(threaded=True)
         last = self.now()
         while self.now() < until:
@@ -186,6 +250,8 @@ class Recorder:
             self.ws.close()
         except Exception:
             pass
+        self.flush()                                                # the recording first: the display's last push (which can wait on the network) must never delay the last part
+        self._event("wide", ticks=self.wide_ticks, parts=self.wide_part, dropped=self.wide_dropped, unwritten=len(self.wide_rows))
         if self.live is not None:
             try:
                 self.live.stop()
@@ -230,14 +296,27 @@ def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite
     clock = now or (lambda: pd.Timestamp.now(tz=IST))
     today = day or clock().date()
     tokens = resolve_tokens(kite, today)
+    core = set(tokens)
+    meta = {k: {"s": "idx" if k in INDEX_NAMES else "fut", "kind": "index" if k in INDEX_NAMES else "future", "name": k.split("-")[0]} for k in tokens}
+    wide_errors: list[str] = []
+    if os.environ.get("KITE_WIDE", "1") != "0":                    # everything else the desk watches; fail-soft: the core five are recorded whatever happens here
+        try:
+            wide_tokens, wide_meta, wide_errors = build_wide(kite, today, tokens)
+            tokens.update(wide_tokens)
+            meta.update(wide_meta)
+        except Exception as e:                                     # noqa: BLE001
+            wide_errors = [f"wide universe: {type(e).__name__}"]
     (Path(out_dir)).mkdir(parents=True, exist_ok=True)
+    all_tokens = dict(tokens)
+    tokens = {k: v for k, v in all_tokens.items() if k in core}      # tokens.json is what the pre-registered trial measures: the five core instruments only
     (Path(out_dir) / "tokens.json").write_text(json.dumps(tokens, indent=1))
+    (Path(out_dir) / "universe.json").write_text(json.dumps({"meta": meta, "errors": wide_errors, "core": sorted(core), "wide_tokens": {k: v for k, v in all_tokens.items() if k not in core}}, indent=1))
     h, m = (int(x) for x in until_hhmm.split(":"))
     until = pd.Timestamp.combine(pd.Timestamp(today), dt.time(h, m)).tz_localize(IST)
-    rec = Recorder(Path(out_dir), tokens, ticker_factory, now=clock, live=LivePusher.from_env())
+    rec = Recorder(Path(out_dir), all_tokens, ticker_factory, now=clock, live=LivePusher.from_env(), core=core, meta=meta)
     stats = rec.run(until, sleep=sleep)
     if with_reference:
         fetch_reference(kite, tokens, today, Path(out_dir))
     if stats["unwritten"] or stats["dropped"]:                     # ticks are gone (the last write failed, or the buffer overflowed while writes were failing): the run must not look clean
         raise KiteRecordError(f"{stats['unwritten']:,} ticks could not be written to {out_dir} and {stats['dropped']:,} were dropped from a full buffer; they are lost, the parts already written are kept")
-    return {"day": str(today), "tokens": tokens, **stats}
+    return {"day": str(today), "tokens": tokens, "wide_n": len(all_tokens) - len(tokens), "wide_errors": wide_errors, **stats}

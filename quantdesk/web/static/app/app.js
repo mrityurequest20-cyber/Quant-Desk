@@ -1560,22 +1560,39 @@ function openSettings() {
 }
 
 // ==================================================================================================================
-// ---- Live: the Kite recorder's latest prices, refreshed every 5 seconds. PRIVATE: Zerodha's data is licensed to the owner, so the relay
+// ---- Live: every price the Kite recorder watches, refreshed every 5 seconds. PRIVATE: Zerodha's data is licensed to the owner, so the relay
 // (deploy/cloudflare/live.js) answers only to a key typed once into this device. Display only: nothing on this tab can trade. -----------------
-const LIVE_ORDER = ["NIFTY", "BANKNIFTY", "INDIAVIX", "NIFTY-FUT", "BANKNIFTY-FUT"];
-const LIVE_NAMES = { NIFTY: "Nifty 50", BANKNIFTY: "Bank Nifty", INDIAVIX: "India VIX", "NIFTY-FUT": "Nifty fut", "BANKNIFTY-FUT": "Bank Nifty fut" };
+// The universe is the recorder's (kite_universe.py): indices, the near-month future of every F&O underlying, MCX and currency, the F&O stocks' cash
+// prices and index options near the money: a thousand rows or more, so the tab has search, segment filters, sorting and "show more".
 const LIVE_FRESH = 15, LIVE_DELAYED = 120;                       // seconds: green up to 15, amber up to 2 minutes, then "no feed"
+const LIVE_SEGS = [["all", "All"], ["idx", "Index"], ["fut", "Futures"], ["eq", "Stocks"], ["opt", "Options"], ["mcx", "MCX"], ["cds", "Currency"]];
+const LIVE_SORTS = [["name", "Name"], ["move", "Movers"], ["fresh", "Newest"]];
+const LIVE_FIRST = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "INDIAVIX", "NIFTY-FUT", "BANKNIFTY-FUT"];
+const LIVE_PAGE = 150;
+const LIVE_VOL = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
+S.lv = { q: "", seg: "all", sort: "name", limit: LIVE_PAGE, data: null, built: false };
 let liveBusy = false;
-const livePx = (v) => (fin(v) ? v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+const livePx = (v, seg) => (fin(v) ? v.toLocaleString("en-IN", seg === "cds" ? { minimumFractionDigits: 4, maximumFractionDigits: 4 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
 function liveAge(sec) {
 	if (!fin(sec)) return "—";
 	if (sec < 90) return Math.round(sec) + "s";
 	if (sec < 5400) return Math.round(sec / 60) + " min";
 	return (sec / 3600).toFixed(1) + " h";
 }
+function liveSeg(name, q) {
+	if (q.s === "bfo") return "fut";
+	if (q.s) return q.s;
+	return /-FUT$/.test(name) ? "fut" : "idx";
+}
+function liveLabel(name, q) {
+	if (q.s === "mcx") return name.replace(/-MCX$/, "") + " · MCX";
+	if (q.s === "cds") return name.replace(/-CDS$/, "") + " · currency";
+	if (q.s === "bfo") return name.replace(/-BFO$/, "") + " fut · BSE";
+	return name.replace(/-FUT$/, " fut");
+}
 function liveKeyForm(note) {
 	const inp = h("input", { type: "password", class: "search", placeholder: "Live key", "aria-label": "Live key", autocomplete: "off", id: "lv-key" });
-	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); $("#lv-body").dataset.state = ""; renderLive(); } };
+	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); S.lv.built = false; $("#lv-body").dataset.state = ""; renderLive(); } };
 	inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
 	return h("div", { class: "panel pad" }, h("div", { style: "font-weight:600;margin-bottom:6px" }, "Live prices"),
 		h("div", { style: "font-size:13px;color:var(--fg2);line-height:1.55;margin-bottom:10px" },
@@ -1583,11 +1600,65 @@ function liveKeyForm(note) {
 		note ? h("div", { class: "warn", style: "font-size:12.5px;margin-bottom:8px" }, note) : null, inp,
 		h("button", { class: "btn block", style: "margin-top:10px", onclick: save }, "Save key"));
 }
+function liveRows(data) {
+	const L = S.lv, q = L.q.trim().toLowerCase(), names = Object.keys(data.quotes);
+	const rows = names.filter((n) => (L.seg === "all" || liveSeg(n, data.quotes[n]) === L.seg) && (!q || n.toLowerCase().includes(q) || liveLabel(n, data.quotes[n]).toLowerCase().includes(q)));
+	const rank = (n) => { const k = LIVE_FIRST.indexOf(n); return k < 0 ? 999 : k; };
+	if (L.sort === "move") rows.sort((a, b) => Math.abs(data.quotes[b].chg || 0) - Math.abs(data.quotes[a].chg || 0) || (a < b ? -1 : 1));
+	else if (L.sort === "fresh") rows.sort((a, b) => data.quotes[a].age_s - data.quotes[b].age_s || (a < b ? -1 : 1));
+	else rows.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : 1));
+	return rows;
+}
+function liveDraw() {
+	const L = S.lv, data = L.data, body = $("#lv-body");
+	if (!data || !L.built) return;
+	const newest = data.newest_age_s;
+	const kind = !fin(newest) ? "paused" : newest <= LIVE_FRESH ? "live" : newest <= LIVE_DELAYED ? "stale" : "paused";
+	const label = !fin(newest) ? "No prices yet" : newest <= LIVE_FRESH ? "Live" : newest <= LIVE_DELAYED ? "Delayed " + liveAge(newest) : "No feed: last " + liveAge(newest) + " ago";
+	const pill = $("#lv-pill"); pill.className = "pill " + kind; $("#lv-pill-t").textContent = label;
+	const counts = {};
+	for (const [n, v] of Object.entries(data.quotes)) { const k = liveSeg(n, v); counts[k] = (counts[k] || 0) + 1; }
+	$("#lv-count").textContent = Object.keys(data.quotes).length.toLocaleString("en-IN") + " instruments · every 5 s";
+	document.querySelectorAll("#lv-segs .chip").forEach((c) => { c.setAttribute("aria-pressed", String(c.dataset.k === L.seg)); const n = c.dataset.k === "all" ? Object.keys(data.quotes).length : counts[c.dataset.k] || 0; c.lastChild.textContent = " " + n; });
+	document.querySelectorAll("#lv-sorts .chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.k === L.sort)));
+	const rows = liveRows(data), shown = rows.slice(0, L.limit), tb = $("#lv-table");
+	tb.textContent = "";
+	if (!rows.length) { put(tb, empty("live", Object.keys(data.quotes).length ? "Nothing matches." : "Nothing has arrived yet. The recorder pushes from 09:15 IST on a trading day.")); return; }
+	const trs = shown.map((n) => {
+		const v = data.quotes[n], old = v.age_s > LIVE_DELAYED, seg = liveSeg(n, v);
+		const chg = fin(v.chg) ? h("span", { class: "chg " + (v.chg > 0 ? "up" : v.chg < 0 ? "dn" : "flat") }, (v.chg > 0 ? "+" : "") + v.chg.toFixed(2) + "%") : "—";
+		const book = fin(v.bid) && fin(v.ask) ? " · " + livePx(v.bid, seg) + " / " + livePx(v.ask, seg) : "";               // bid / ask, only where the feed carries depth (the core instruments)
+		return h("tr", { style: old ? "opacity:.55" : null }, h("td", {}, liveLabel(n, v), h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(v.age_s) + " ago" + book)), h("td", {}, livePx(v.ltp, seg)), h("td", {}, chg),
+			h("td", { class: "f2" }, fin(v.vol) ? LIVE_VOL.format(v.vol) : "—"));
+	});
+	put(tb, h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Name", "Last", "Change", "Volume"].map((x) => h("th", {}, x)))), h("tbody", {}, trs))),
+		rows.length > shown.length ? h("button", { class: "btn block", style: "margin:10px 16px;width:calc(100% - 32px)", onclick: () => { L.limit += LIVE_PAGE; liveDraw(); } }, `Show ${Math.min(LIVE_PAGE, rows.length - shown.length)} more (${rows.length - shown.length} left)`) : null);
+}
+function liveBuild() {
+	const L = S.lv, body = $("#lv-body");
+	body.textContent = "";
+	const search = h("input", { type: "search", class: "search", placeholder: "Search every instrument", "aria-label": "Search instruments", autocomplete: "off", value: L.q });
+	search.addEventListener("input", () => { L.q = search.value; L.limit = LIVE_PAGE; liveDraw(); });
+	const seg = h("div", { class: "chips", id: "lv-segs", style: "padding:0 16px 8px" }, LIVE_SEGS.map(([k, t]) => h("button", { class: "chip", "data-k": k, "aria-pressed": "false", onclick: () => { L.seg = k; L.limit = LIVE_PAGE; liveDraw(); } }, t, h("span", { class: "f3" }, " "))));
+	const sort = h("div", { class: "chips", id: "lv-sorts", style: "padding:0 16px 8px" }, h("span", { class: "f3", style: "font-size:11.5px;align-self:center" }, "Sort"),
+		LIVE_SORTS.map(([k, t]) => h("button", { class: "chip", "data-k": k, "aria-pressed": "false", onclick: () => { L.sort = k; liveDraw(); } }, t)));
+	put(body, h("div", { class: "pad", style: "display:flex;justify-content:space-between;align-items:center" }, h("span", { id: "lv-pill", class: "pill paused" }, h("span", { class: "dot" }), h("b", { id: "lv-pill-t" }, "")), h("span", { id: "lv-count", class: "f3", style: "font-size:11.5px" }, "")),
+		h("div", { style: "padding:0 16px 10px" }, search), seg, sort, h("div", { id: "lv-table" }),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:12px 16px" },
+			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. Index options are the strikes near the money; the full chains are recorded each minute elsewhere. This tab only displays: nothing here can place an order. ",
+			h("a", { href: "#", class: "acc", onclick: (e) => { e.preventDefault(); try { localStorage.removeItem("qd.livekey"); } catch (x) { /* ignore */ } L.built = false; body.dataset.state = ""; renderLive(); } }, "Forget this key")));
+	L.built = true;
+	body.dataset.state = "data";
+}
 async function renderLive() {
 	const body = $("#lv-body");
 	if (S.tab !== "live" || document.hidden || liveBusy) return;
+	if (/(^|\.)github\.io$/.test(location.hostname)) {                // the public Pages address: no key form at all, nothing is stored or sent from here
+		if (body.dataset.state !== "pages") { body.textContent = ""; S.lv.built = false; put(body, empty("live", "Live prices are private and only open on the Cloudflare site, not on this address.")); body.dataset.state = "pages"; }
+		return;
+	}
 	const key = store("qd.livekey");
-	if (!key) { if (body.dataset.state !== "key") { body.textContent = ""; put(body, liveKeyForm("")); body.dataset.state = "key"; } return; }
+	if (!key) { if (body.dataset.state !== "key") { body.textContent = ""; S.lv.built = false; put(body, liveKeyForm("")); body.dataset.state = "key"; } return; }
 	liveBusy = true;
 	let j = null, note = "";
 	try {
@@ -1599,27 +1670,10 @@ async function renderLive() {
 	} catch (e) { note = "Offline: no live prices."; }
 	finally { liveBusy = false; }
 	if (S.tab !== "live") return;
-	body.textContent = "";
-	body.dataset.state = j ? "data" : "note";
-	if (!j) return void put(body, liveKeyForm(note));
-	const names = Object.keys(j.quotes || {});
-	const order = [...LIVE_ORDER.filter((n) => names.includes(n)), ...names.filter((n) => !LIVE_ORDER.includes(n)).sort()];
-	const newest = j.newest_age_s;
-	const kind = !fin(newest) ? "paused" : newest <= LIVE_FRESH ? "live" : newest <= LIVE_DELAYED ? "stale" : "paused";
-	const label = !fin(newest) ? "No prices yet" : newest <= LIVE_FRESH ? "Live" : newest <= LIVE_DELAYED ? "Delayed " + liveAge(newest) : "No feed: last " + liveAge(newest) + " ago";
-	const rows = order.map((n) => {
-		const q = j.quotes[n], old = q.age_s > LIVE_DELAYED;
-		const chg = fin(q.chg) ? h("span", { class: "chg " + (q.chg > 0 ? "up" : q.chg < 0 ? "dn" : "flat") }, (q.chg > 0 ? "+" : "") + q.chg.toFixed(2) + "%") : "—";
-		return h("tr", { style: old ? "opacity:.55" : null }, h("td", {}, LIVE_NAMES[n] || n, h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(q.age_s) + " ago")), h("td", {}, livePx(q.ltp)), h("td", {}, chg),
-			h("td", { class: "f2" }, livePx(q.bid)), h("td", { class: "f2" }, livePx(q.ask)));
-	});
-	put(body, h("div", { class: "pad", style: "display:flex;justify-content:space-between;align-items:center" },
-			h("span", { class: "pill " + kind }, h("span", { class: "dot" }), h("b", {}, label)), h("span", { class: "f3", style: "font-size:11.5px" }, "every 5 s")),
-		order.length ? h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Symbol", "Last", "Change", "Bid", "Ask"].map((x) => h("th", {}, x)))), h("tbody", {}, rows)))
-			: empty("live", "Nothing has arrived yet. The recorder pushes from 09:15 IST on a trading day."),
-		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:12px 16px" },
-			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. This tab only displays: nothing here can place an order. ",
-			h("a", { href: "#", class: "acc", onclick: (e) => { e.preventDefault(); try { localStorage.removeItem("qd.livekey"); } catch (x) { /* ignore */ } body.dataset.state = ""; renderLive(); } }, "Forget this key")));
+	if (!j) { body.textContent = ""; S.lv.built = false; body.dataset.state = "note"; return void put(body, liveKeyForm(note)); }
+	S.lv.data = j;
+	if (!S.lv.built) liveBuild();
+	liveDraw();
 }
 
 // ==================================================================================================================

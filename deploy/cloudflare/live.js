@@ -8,12 +8,14 @@
 // data is never written to the repository or to Pages. Both secrets are Worker secrets (Cloudflare dashboard -> the Worker -> Settings -> Variables
 // and Secrets). If either is missing or too short, or they are equal, the endpoints answer 503 and nothing is stored: it fails closed.
 //
-// The latest snapshot is kept in one Durable Object (class LiveBoard, binding LIVE) because a Worker has no memory shared between requests.
+// The latest snapshot is kept in one Durable Object (class LiveBoard, binding LIVE) because a Worker has no memory shared between requests. It is held in memory only.
 // Ages are worked out here, from this Worker's clock when each quote arrived, so a stale feed shows as stale whatever the phone's clock says.
 
-const MAX_BODY = 65536;                 // bytes of one push
-const MAX_SYMBOLS = 100;
-const SYMBOL = /^[A-Za-z0-9&_.:-]{1,32}$/;
+const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 quotes is about 100 KB)
+const MAX_SYMBOLS = 3000;               // in one push
+const MAX_TOTAL = 4000;                 // symbols the board will ever hold: a stolen ingest key cannot grow it without bound
+const SYMBOL = /^[A-Za-z0-9&_.:-]{1,40}$/;
+const SEGMENTS = new Set(["idx", "eq", "fut", "bfo", "mcx", "cds", "opt"]);
 const NUMBERS = ["ltp", "bid", "ask", "bid_qty", "ask_qty", "vol", "oi", "chg"];
 const MIN_SECRET = 24;                  // characters
 
@@ -41,23 +43,44 @@ export function configured(env) {
 	return !!env.LIVE && i.length >= MIN_SECRET && r.length >= MIN_SECRET && i !== r;
 }
 
-// Keep only what the app shows, as numbers: anything else in a push is dropped, never stored.
+// Read a request body at most `max` bytes, stopping at the cap: a chunked body with no Content-Length is never buffered whole. null = too large.
+export async function readCapped(request, max) {
+	if (!request.body) return "";
+	const reader = request.body.getReader();
+	const chunks = [];
+	let n = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		n += value.byteLength;
+		if (n > max) { try { await reader.cancel(); } catch (e) { /* already closed */ } return null; }
+		chunks.push(value);
+	}
+	const all = new Uint8Array(n);
+	let at = 0;
+	for (const c of chunks) { all.set(c, at); at += c.byteLength; }
+	return new TextDecoder().decode(all);
+}
+
+// Keep only what the app shows, as numbers: anything else in a push is dropped, never stored. One bad quote or name is skipped and counted, it does not
+// poison the rest of the push; a push with no usable quote at all is refused. Returns {quotes, dropped} or null.
 export function clean(body) {
 	if (!body || typeof body !== "object" || !body.quotes || typeof body.quotes !== "object" || Array.isArray(body.quotes)) return null;
 	const names = Object.keys(body.quotes);
 	if (!names.length || names.length > MAX_SYMBOLS) return null;
-	const out = {};
+	const out = Object.create(null);                                                   // no prototype: a symbol named __proto__ or constructor is plain data
+	let dropped = 0;
 	for (const name of names) {
-		if (!SYMBOL.test(name)) return null;
 		const q = body.quotes[name];
-		if (!q || typeof q !== "object") return null;
+		if (!SYMBOL.test(name) || !q || typeof q !== "object") { dropped += 1; continue; }
 		const row = {};
 		for (const k of NUMBERS) if (typeof q[k] === "number" && Number.isFinite(q[k])) row[k] = q[k];
 		if (typeof q.t === "string" && q.t.length <= 40) row.t = q.t;                // the exchange's timestamp, shown as is
-		if (!("ltp" in row)) return null;                                              // a quote without a last price is not a quote
+		if (typeof q.s === "string" && SEGMENTS.has(q.s)) row.s = q.s;               // what kind of instrument: index, stock, future, option, MCX, currency
+		if (!("ltp" in row)) { dropped += 1; continue; }                               // a quote without a last price is not a quote
 		out[name] = row;
 	}
-	return out;
+	return Object.keys(out).length ? { quotes: out, dropped } : null;
 }
 
 export async function handleLive(request, env) {
@@ -68,13 +91,15 @@ export async function handleLive(request, env) {
 	if (url.pathname === "/live/ingest") {
 		if (request.method !== "POST") return reply(405, { error: "POST only" });
 		if (!(await same(bearer(request), String(env.LIVE_INGEST_TOKEN).trim()))) return reply(401, { error: "no" });
-		const raw = await request.text();
-		if (raw.length > MAX_BODY) return reply(413, { error: "too large" });
+		const declared = Number(request.headers.get("content-length"));
+		if (Number.isFinite(declared) && declared > MAX_BODY) return reply(413, { error: "too large" });     // before the body is read
+		const raw = await readCapped(request, MAX_BODY);                                                     // bytes, and the stream stops at the cap whatever the headers say
+		if (raw === null) return reply(413, { error: "too large" });
 		let body;
 		try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
-		const quotes = clean(body);
-		if (!quotes) return reply(400, { error: "not a snapshot" });
-		return stub.fetch("https://live/push", { method: "POST", body: JSON.stringify({ quotes }) });
+		const cleaned = clean(body);
+		if (!cleaned) return reply(400, { error: "not a snapshot" });
+		return stub.fetch("https://live/push", { method: "POST", body: JSON.stringify(cleaned) });
 	}
 	if (url.pathname === "/live/snapshot") {
 		if (request.method !== "GET") return reply(405, { error: "GET only" });
@@ -84,36 +109,37 @@ export async function handleLive(request, env) {
 	return reply(404, { error: "no such live path" });
 }
 
-// The Durable Object: the latest quote of each symbol and when it arrived. Replaying the same quote does not make it look fresh,
-// because the recorder only sends quotes that changed (see quantdesk/data/live_push.py) and each keeps its own arrival time.
+// The Durable Object: the latest quote of each symbol and when it arrived. MEMORY ONLY: a wide universe is too big to rewrite to storage every five seconds, and
+// the record of every tick is the recorder's Parquet, not this. After a restart the board fills again as symbols tick (seconds for a liquid one).
+// A quote keeps its own arrival time, and the recorder only sends quotes whose tick is new, so replaying an old one is never done by this code.
+// (Kite may send a last-known tick when it connects: that would show as fresh. Age is the relay's, not the exchange's; `t` is sent so it can be compared.)
 export class LiveBoard {
 	constructor(state, env) {
-		this.state = state;
-		this.snap = { quotes: {}, seq: 0 };
-		this.ready = state.blockConcurrencyWhile(async () => {
-			const saved = await state.storage.get("snap");
-			if (saved && typeof saved === "object" && saved.quotes) this.snap = saved;
-		});
+		this.quotes = new Map();
+		this.seq = 0;
 	}
 
 	async fetch(request) {
-		await this.ready;
 		const now = Date.now();
 		if (request.method === "POST") {
-			const { quotes } = await request.json();
-			for (const [name, q] of Object.entries(quotes)) this.snap.quotes[name] = { ...q, at: now };
-			this.snap.seq += 1;
-			await this.state.storage.put("snap", this.snap);
-			return reply(200, { ok: true, seq: this.snap.seq, n: Object.keys(quotes).length });
+			const { quotes, dropped } = await request.json();
+			let added = 0, refused = 0;
+			for (const [name, q] of Object.entries(quotes)) {
+				if (!this.quotes.has(name) && this.quotes.size >= MAX_TOTAL) { refused += 1; continue; }
+				this.quotes.set(name, { ...q, at: now });
+				added += 1;
+			}
+			this.seq += 1;
+			return reply(200, { ok: true, seq: this.seq, n: added, refused, dropped: dropped || 0 });
 		}
-		const quotes = {};
+		const quotes = Object.create(null);
 		let newest = null;
-		for (const [name, q] of Object.entries(this.snap.quotes)) {
+		for (const [name, q] of this.quotes) {
 			const { at, ...rest } = q;
 			const age = Math.max(0, (now - at) / 1000);
 			quotes[name] = { ...rest, age_s: Math.round(age * 10) / 10 };
 			if (newest === null || age < newest) newest = age;
 		}
-		return reply(200, { now, seq: this.snap.seq, newest_age_s: newest === null ? null : Math.round(newest * 10) / 10, quotes });
+		return reply(200, { now, seq: this.seq, count: this.quotes.size, newest_age_s: newest === null ? null : Math.round(newest * 10) / 10, quotes });
 	}
 }

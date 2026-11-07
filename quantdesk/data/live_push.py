@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -20,6 +21,9 @@ import urllib.request
 INTERVAL_S = 5.0
 TIMEOUT_S = 4.0
 FIELDS = ("ltp", "bid", "ask", "bid_qty", "ask_qty", "vol", "oi", "chg")
+BATCH = 800                                                      # quotes in one POST: a wide universe is sent in several, each far under the relay's size limit
+SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt")
+SYMBOL = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")                 # the relay's own rule for a name: one it would refuse is dropped here, so it can never hold up a batch
 
 
 def _num(x):
@@ -30,17 +34,25 @@ def _num(x):
     return v if math.isfinite(v) else None
 
 
-def quote_from_tick(row: dict, change=None) -> dict | None:
+def quote_from_tick(row: dict, change=None, seg: str | None = None) -> dict | None:
     """The display fields of one recorded tick row (`kite_record.tick_row`) plus Kite's own percent change; None if there is no last price."""
     q = {"ltp": _num(row.get("last_price")), "bid": _num(row.get("bid")), "ask": _num(row.get("ask")), "bid_qty": _num(row.get("bid_qty")),
          "ask_qty": _num(row.get("ask_qty")), "vol": _num(row.get("volume")), "oi": _num(row.get("oi")), "chg": _num(change)}
     q = {k: v for k, v in q.items() if v is not None}
     if "ltp" not in q:
         return None
+    if seg in SEGMENTS:
+        q["s"] = seg
     ts = row.get("ts_exchange")
     if ts is not None and str(ts) not in ("NaT", "None"):
         q["t"] = str(ts)[:40]
     return q
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would make urllib send the Authorization header to another host: refuse it (the relay never redirects)."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class LivePusher:
@@ -50,10 +62,10 @@ class LivePusher:
         if not token:
             raise ValueError("no token")
         self.url, self._token, self.interval, self.timeout = url, token, interval, timeout
-        self._open = opener or urllib.request.urlopen
+        self._open = opener or urllib.request.build_opener(_NoRedirect).open
         self.dirty: dict[str, dict] = {}
         self.lock = threading.Lock()
-        self.ok = self.failed = 0
+        self.ok = self.failed = self.skipped = self.refused = 0
         self.last_error: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -71,31 +83,47 @@ class LivePusher:
     def update(self, symbol: str, quote: dict | None) -> None:
         """Called from the websocket thread for each tick: remember the newest quote of the symbol until the next push."""
         if quote:
+            if not SYMBOL.match(str(symbol)):
+                self.skipped += 1
+                return
             with self.lock:
                 self.dirty[symbol] = quote
 
     def push_once(self) -> bool:
-        """Send what changed since the last push. Returns True if there was nothing to send or the relay accepted it."""
+        """Send what changed since the last push, in batches. Returns True if there was nothing to send or the relay accepted all of it."""
         with self.lock:
-            batch, self.dirty = self.dirty, {}
-        if not batch:
+            pending, self.dirty = self.dirty, {}
+        if not pending:
             return True
-        try:
-            req = urllib.request.Request(self.url, data=json.dumps({"quotes": batch}).encode(), method="POST",
-                                         headers={"Content-Type": "application/json", "Authorization": "Bearer " + self._token, "User-Agent": "quantdesk-live"})
-            with self._open(req, timeout=self.timeout) as r:
-                if not 200 <= getattr(r, "status", 200) < 300:
-                    raise urllib.error.HTTPError(self.url, r.status, "relay refused", None, None)
-            self.ok += 1
-            self.last_error = None
-            return True
-        except Exception as e:                                       # noqa: BLE001 - nothing here may reach the recorder
-            with self.lock:                                          # keep what was not sent, unless a newer tick has replaced it
-                for k, v in batch.items():
-                    self.dirty.setdefault(k, v)
-            self.failed += 1
-            self.last_error = type(e).__name__ + (f" {e.code}" if isinstance(e, urllib.error.HTTPError) else "")     # the class and status only: never the URL or token
-            return False
+        items = list(pending.items())
+        allok = True
+        for i in range(0, len(items), BATCH):
+            batch = dict(items[i:i + BATCH])
+            try:
+                req = urllib.request.Request(self.url, data=json.dumps({"quotes": batch}).encode(), method="POST",
+                                             headers={"Content-Type": "application/json", "Authorization": "Bearer " + self._token, "User-Agent": "quantdesk-live"})
+                with self._open(req, timeout=self.timeout) as r:
+                    if not 200 <= getattr(r, "status", 200) < 300:
+                        raise urllib.error.HTTPError(self.url, r.status, "relay refused", None, None)
+                    try:                                             # read INSIDE the connection: the relay says how many it could not take (its board is full), counted and never retried
+                        answer = r.read(65536)
+                    except Exception:                                # noqa: BLE001 - a body we cannot read changes nothing
+                        answer = b""
+                self.ok += 1
+                self.last_error = None
+                try:
+                    self.refused += int(json.loads(answer or b"{}").get("refused") or 0)
+                except Exception:                                    # noqa: BLE001
+                    pass
+            except Exception as e:                                   # noqa: BLE001 - nothing here may reach the recorder
+                allok = False
+                with self.lock:                                      # keep this batch and every later one, unless a newer tick has replaced it
+                    for k, v in items[i:]:
+                        self.dirty.setdefault(k, v)
+                self.failed += 1
+                self.last_error = type(e).__name__ + (f" {e.code}" if isinstance(e, urllib.error.HTTPError) else "")     # the class and status only: never the URL or token
+                break                                                # the relay or the network is down: one timeout per cycle, not one per batch
+        return allok
 
     def _loop(self) -> None:
         while not self._stop.wait(self.interval):
@@ -113,4 +141,4 @@ class LivePusher:
         self.push_once()                                             # the last quotes
 
     def stats(self) -> dict:
-        return {"pushes_ok": self.ok, "pushes_failed": self.failed, "last_error": self.last_error}
+        return {"pushes_ok": self.ok, "pushes_failed": self.failed, "skipped_names": self.skipped, "refused_by_relay": self.refused, "last_error": self.last_error}
