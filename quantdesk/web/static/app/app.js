@@ -659,7 +659,7 @@ function liveLabel(name, q) {
 }
 function liveKeyForm(note) {
 	const inp = h("input", { type: "password", class: "search", placeholder: "Live key", "aria-label": "Live key", autocomplete: "off", id: "lv-key" });
-	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); S.lv.built = false; $("#lv-body").dataset.state = ""; renderLive(); pollHealth(); } };
+	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); S.lv.built = false; $("#lv-body").dataset.state = ""; const bb = $("#bd-body"); if (bb) bb.dataset.state = ""; if (S.tab === "build") renderBuild(); renderLive(); pollHealth(); } };
 	inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
 	return h("div", { class: "panel pad" }, h("div", { style: "font-weight:600;margin-bottom:6px" }, "Live prices"),
 		h("div", { style: "font-size:13px;color:var(--fg2);line-height:1.55;margin-bottom:10px" },
@@ -884,12 +884,13 @@ const QB = (() => {
 		limits: { risk_per_trade: 0.025, max_premium_outlay: 0.20, max_total_outlay: 0.5, max_lots: 10, max_open: 2, max_spread_pct: 0.06, max_margin: 0.5, credit_margin_per_lot: 30000, daily_loss_limit: 0.05 },
 		costs: { brokerage_per_order: 20, gst: 0.18, sebi_per_crore: 10, options: { stt_buy: 0, stt_sell: 0.0015, exchange: 0.0003503, stamp_buy: 0.00003 } },
 		slippage: { option_half_spread_pct: 0.012, option_min_half_spread: 0.10, option_tick: 0.05 },
+		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"] },     // the paper desk's gate (quantdesk/paper/risk.py)
 		inst: { NIFTY: { lot: 65, step: 50 }, BANKNIFTY: { lot: 30, step: 100 }, FINNIFTY: { lot: 60, step: 50 }, MIDCPNIFTY: { lot: 120, step: 25 }, SENSEX: { lot: 20, step: 100 } },
 	};
 	const conf = () => {
 		const w = typeof window !== "undefined" && window.QD_TRADE;
-		return w ? { ...DEF, ...w, limits: { ...DEF.limits, ...(w.limits || {}) }, costs: { ...DEF.costs, ...(w.costs || {}), options: { ...DEF.costs.options, ...((w.costs || {}).options || {}) } },
-			slippage: { ...DEF.slippage, ...(w.slippage || {}) }, inst: { ...DEF.inst, ...(w.inst || {}) } } : DEF;
+		return w ? { ...DEF, ...w, fromConfig: true, paper: { ...DEF.paper, ...(w.paper || {}) }, limits: { ...DEF.limits, ...(w.limits || {}) }, costs: { ...DEF.costs, ...(w.costs || {}), options: { ...DEF.costs.options, ...((w.costs || {}).options || {}) } },
+			slippage: { ...DEF.slippage, ...(w.slippage || {}) }, inst: { ...DEF.inst, ...(w.inst || {}) } } : { ...DEF, fromConfig: false };
 	};
 	// ---- Black-Scholes (European, cash-settled index options; r flat) ---------------------------------------------------------------
 	const npdf = (x) => 0.3989422804014327 * Math.exp(-x * x / 2);
@@ -957,12 +958,17 @@ const QB = (() => {
 		}
 		return { legs, atm: strikes[atm] };
 	}
-	// the price you would deal at: buy at the offer, sell at the bid; the last price when there is no book (flagged)
+	// the price you would deal at: buy at the offer, sell at the bid. A quote is "book" only when BOTH sides are live and not crossed (0 < bid <= ask), like the paper gate;
+	// a one-sided book is priced at the side you would hit but flagged "side"; no book at all is the last trade ("last"); a crossed book is a bad quote ("crossed", no price).
+	// `age` is the quote's age in seconds from the relay (unknown if missing, which counts as stale).
 	function entry(leg, q) {
-		if (!q) return { px: NaN, src: "none" };
-		const book = leg.side > 0 ? q.ask : q.bid;
-		if (book > 0) return { px: book, src: "book", bid: q.bid, ask: q.ask };
-		return q.ltp > 0 ? { px: q.ltp, src: "last", bid: q.bid, ask: q.ask } : { px: NaN, src: "none" };
+		if (!q) return { px: NaN, src: "none", age: NaN };
+		const age = Number.isFinite(q.age_s) ? q.age_s : NaN, bid = q.bid > 0 ? q.bid : 0, ask = q.ask > 0 ? q.ask : 0;
+		if (bid > 0 && ask > 0 && ask < bid) return { px: NaN, src: "crossed", bid: q.bid, ask: q.ask, age };
+		const px = leg.side > 0 ? ask : bid;
+		if (bid > 0 && ask > 0) return { px, src: "book", bid: q.bid, ask: q.ask, age };
+		if (px > 0) return { px, src: "side", bid: q.bid, ask: q.ask, age };
+		return q.ltp > 0 ? { px: q.ltp, src: "last", bid: q.bid, ask: q.ask, age } : { px: NaN, src: "none", age };
 	}
 	const legPay = (l, S) => l.side * l.units * ((l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S)) - l.px);
 	// ---- the analysis ----------------------------------------------------------------------------------------------------------------
@@ -971,12 +977,15 @@ const QB = (() => {
 		const c = spec.c || conf(), inst = c.inst[spec.u] || { lot: 1, step: 1 }, lots = Math.max(1, Math.round(spec.lots || 1)), lot = inst.lot, r = c.r;
 		const legs = spec.legs.map((l) => {
 			const e = entry(l, spec.quotes[l.name]);
-			const mid = spec.quotes[l.name] && spec.quotes[l.name].bid > 0 && spec.quotes[l.name].ask >= spec.quotes[l.name].bid ? (spec.quotes[l.name].bid + spec.quotes[l.name].ask) / 2 : (spec.quotes[l.name] || {}).ltp;
+			const mid = e.src === "book" ? (e.bid + e.ask) / 2 : (spec.quotes[l.name] || {}).ltp;
 			const iv = impliedVol(l.type, mid, spec.spot, l.strike, spec.T, r);
-			const spread = e.bid > 0 && e.ask >= e.bid ? (e.ask - e.bid) / ((e.ask + e.bid) / 2) : NaN;
-			return { ...l, units: lots * lot, lots, px: e.px, src: e.src, bid: e.bid, ask: e.ask, iv, spread };
+			const spread = e.src === "book" ? (e.ask - e.bid) / ((e.ask + e.bid) / 2) : NaN;
+			return { ...l, units: lots * lot, lots, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age, iv, spread };
 		});
-		const out = { legs, lots, lot, errors: [], checks: [] };
+		const out = { legs, lots, lot, errors: [], checks: [], paperChecks: [], ok: false, paperOk: false };
+		if (!(spec.T >= 0)) { out.errors.push("The expiry on the board could not be read, so the time to expiry is unknown."); return out; }
+		const crossed = legs.filter((l) => l.src === "crossed");
+		if (crossed.length) { out.errors.push(`Crossed bid/ask (bid above ask) on ${crossed.map((l) => l.strike + l.type).join(", ")}: a bad quote, not a price.`); return out; }
 		if (legs.some((l) => !(l.px > 0))) { out.errors.push("A leg has no price on the board yet."); return out; }
 		const callSlope = legs.filter((l) => l.type === "CE").reduce((a, l) => a + l.side * l.units, 0);
 		out.definedRisk = callSlope >= 0;
@@ -988,6 +997,7 @@ const QB = (() => {
 		out.unlimitedProfit = tailSlope > 0;
 		out.maxProfit = out.unlimitedProfit ? Infinity : Math.max(...vals);
 		out.maxLoss = -Math.min(...vals);
+		if (out.maxLoss < 0) { out.errors.push("This would be a guaranteed profit at every price, which is a bad quote rather than a trade. Check the prices on the board."); return out; }
 		const be = [];
 		const bp = [...pts, far];
 		for (let i = 0; i + 1 < bp.length; i++) {
@@ -1002,19 +1012,34 @@ const QB = (() => {
 		out.greeks = legs.reduce((a, l) => { const g = greeks(l.type, spec.spot, l.strike, spec.T, isFinite(l.iv) ? l.iv : 0.2, r); const m = l.side * l.units; return { delta: a.delta + m * g.delta, gamma: a.gamma + m * g.gamma, theta: a.theta + m * g.theta, vega: a.vega + m * g.vega }; }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
 		out.fees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c) + fees(-l.side, l.px, l.units, c), 0);       // in and out at the entry price: the statutory part of a round trip
 		out.exitSpread = legs.reduce((a, l) => a + l.units * (isFinite(l.spread) ? (l.spread * l.px) / 2 : halfSpread(l.px, c)), 0);   // crossing the spread again on the way out
+		out.entryFees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c), 0);                       // the entry leg only: the paper gate counts "the whole premium plus fees"
 		out.cost = out.fees + out.exitSpread;
 		out.margin = out.premium < 0 ? c.limits.credit_margin_per_lot * lots : 0;                         // a credit structure ties up margin (config estimate per lot); a debit one only the premium
-		out.riskPct = out.maxLoss / c.equity;
-		const L = c.limits, chk = (id, ok, text) => out.checks.push({ id, ok, text });
-		chk("risk", out.maxLoss <= c.equity * L.risk_per_trade, `Worst loss ₹${Math.round(out.maxLoss).toLocaleString("en-IN")} is ${(out.riskPct * 100).toFixed(2)}% of ₹${c.equity.toLocaleString("en-IN")} (limit ${(L.risk_per_trade * 100).toFixed(1)}%)`);
+		out.risk = out.maxLoss + out.entryFees;                                                            // worst loss plus the fees to get in, as the paper gate counts it
+		out.riskPct = out.risk / c.equity;
+		const L = c.limits, P = c.paper, chk = (id, ok, text) => out.checks.push({ id, ok, text }), pchk = (id, ok, text) => out.paperChecks.push({ id, ok, text });
+		const inr0 = (x) => "₹" + Math.round(x).toLocaleString("en-IN");
+		chk("risk", out.risk <= c.equity * L.risk_per_trade, `Worst loss ${inr0(out.maxLoss)} + entry fees ${inr0(out.entryFees)} is ${(out.riskPct * 100).toFixed(2)}% of ₹${c.equity.toLocaleString("en-IN")} (limit ${(L.risk_per_trade * 100).toFixed(1)}%)`);
 		chk("outlay", out.premium <= c.equity * L.max_premium_outlay, `Premium paid ₹${Math.round(Math.max(out.premium, 0)).toLocaleString("en-IN")} (limit ${(L.max_premium_outlay * 100).toFixed(0)}% of equity)`);
 		chk("lots", lots <= L.max_lots, `${lots} lot${lots === 1 ? "" : "s"} (limit ${L.max_lots})`);
 		chk("margin", out.margin <= c.equity * L.max_margin, `Margin estimate ₹${Math.round(out.margin).toLocaleString("en-IN")} (limit ${(L.max_margin * 100).toFixed(0)}% of equity)`);
-		const wide = legs.filter((l) => isFinite(l.spread) && l.spread > L.max_spread_pct);
-		chk("spread", wide.length === 0, wide.length ? `Wide bid/ask on ${wide.map((l) => l.strike + l.type).join(", ")} (limit ${(L.max_spread_pct * 100).toFixed(0)}% of the price)` : "Bid/ask spreads are inside the limit");
-		const stale = legs.filter((l) => l.src !== "book");
-		chk("book", stale.length === 0, stale.length ? `No live bid/ask on ${stale.map((l) => l.strike + l.type).join(", ")}: priced at the last trade` : "Every leg has a live bid/ask");
+		const nm = (ls) => ls.map((l) => l.strike + l.type).join(", ");
+		const wide = legs.filter((l) => isFinite(l.spread) && l.spread > L.max_spread_pct), nospread = legs.filter((l) => !isFinite(l.spread));
+		chk("spread", wide.length === 0 && nospread.length === 0, wide.length ? `Wide bid/ask on ${nm(wide)} (limit ${(L.max_spread_pct * 100).toFixed(0)}% of the price)` : nospread.length ? `Spread cannot be measured on ${nm(nospread)}: no two-sided book` : "Bid/ask spreads are inside the limit");
+		const nobook = legs.filter((l) => l.src !== "book");
+		chk("book", nobook.length === 0, nobook.length ? `No two-sided bid/ask on ${nm(nobook)}: ${nobook.some((l) => l.src === "last") ? "priced at the last trade" : "priced at the one side that is quoted"}` : "Every leg has a two-sided bid/ask");
+		const maxAge = P.max_quote_age_s, spotAge = spec.spotAge;
+		const old = legs.filter((l) => !(l.age <= maxAge)), spotOld = !(spotAge <= maxAge);
+		chk("fresh", old.length === 0 && !spotOld, old.length || spotOld ? `Quotes not fresh enough (limit ${maxAge}s): ${[...(spotOld ? [spec.u + " price" + (isFinite(spotAge) ? " " + Math.round(spotAge) + "s" : " age unknown")] : []), ...old.map((l) => l.strike + l.type + (isFinite(l.age) ? " " + Math.round(l.age) + "s" : " age unknown"))].join(", ")}` : `Every quote is under ${maxAge}s old`);
 		out.ok = out.checks.every((x) => x.ok);
+		// ---- the paper desk's own gate, as far as it can be judged before the ticket (the ticket also checks the day's loss budget, the drawdown and the displayed size against the live account)
+		const shorts = legs.filter((l) => l.side < 0);
+		pchk("long", shorts.length === 0, shorts.length ? `Short legs (${nm(shorts)}): the paper desk opens long options only until a margin model is built` : "Long options only");
+		pchk("under", P.underlyings.includes(spec.u), P.underlyings.includes(spec.u) ? `${spec.u} trades on the paper desk` : `${spec.u} is not on the paper desk's list (${P.underlyings.join(", ")})`);
+		pchk("prisk", out.risk <= c.equity * P.risk_per_trade, `Premium plus entry fees ${inr0(out.risk)} against ${(P.risk_per_trade * 100).toFixed(1)}% of ₹${c.equity.toLocaleString("en-IN")} (${inr0(c.equity * P.risk_per_trade)})`);
+		pchk("pbook", nobook.length === 0, nobook.length ? `No two-sided bid/ask on ${nm(nobook)}` : "Two-sided books on every leg");
+		pchk("pfresh", old.length === 0 && !spotOld, old.length || spotOld ? `Quotes older than ${maxAge}s (or of unknown age)` : `Quotes under ${maxAge}s old`);
+		out.paperOk = out.paperChecks.every((x) => x.ok);
 		return out;
 	}
 	// the largest number of lots (1..max_lots) that passes the risk, outlay and margin limits, from the one-lot analysis; 0 if even one lot does not
@@ -1067,12 +1092,13 @@ function bdDraw() {
 	const exps = Object.keys(chains[B.u]).sort((p, q) => liveExpiryKey(p) - liveExpiryKey(q));
 	if (!exps.includes(B.exp)) B.exp = exps[0];
 	const ch = chains[B.u][B.exp], strikes = Object.keys(ch).map(Number).sort((p, q) => p - q);
-	const spot = (data.quotes[B.u] || data.quotes[B.u + "-FUT"] || {}).ltp;
+	const sq = data.quotes[B.u] || data.quotes[B.u + "-FUT"] || {}, spot = sq.ltp;
 	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = QB.TEMPLATES[B.tpl];
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
 	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono" }, String(val)), h("button", { class: "btn", "aria-label": "more " + label, onclick: up }, "+")));
 	put(body,
-		h("div", { class: "note" }, "Paper only. This works out what a structure would cost and risk from the live prices; it sends no order. Only structures with a known worst loss can be built."),
+		h("div", { class: "note" }, "Paper only. This works out what a structure would cost and risk from the live prices; it sends no order, ticket or journal entry (it only reads the live board). Only structures with a known worst loss can be built."),
+		c.fromConfig ? null : h("div", { class: "note warn" }, "This page has no limits from the desk's config (QD_TRADE is missing), so it is using built-in defaults that may be out of date. Do not rely on the checklist; re-publish the site."),
 		h("div", { class: "chips", style: "padding:8px 16px 4px" }, us.map((u) => chip(u, u === B.u, () => { B.u = u; B.exp = null; bdDraw(); }))),
 		h("div", { class: "chips", style: "padding:4px 16px" }, exps.map((e) => chip(e, e === B.exp, () => { B.exp = e; bdDraw(); }))),
 		h("div", { class: "chips", style: "padding:4px 16px" }, Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); }))),
@@ -1084,7 +1110,7 @@ function bdDraw() {
 	for (const k of strikes) names[k] = ch[k];
 	const L = QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
-	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, T, lots: B.lots };
+	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, T, lots: B.lots };
 	const a = QB.analyze(spec);
 	if (a.errors.length) return void put(body, h("div", { class: "note" }, a.errors[0]), legsTable2(a));
 	const best = QB.suggestLots(spec);
@@ -1094,20 +1120,23 @@ function bdDraw() {
 			kv(a.premium >= 0 ? "You pay" : "You receive", inr(Math.abs(a.premium))),
 			kv("Worst loss", inr(-a.maxLoss), "dn"), kv("Best profit", a.unlimitedProfit ? "No cap" : inr(a.maxProfit, true), "up"),
 			kv("Break-even" + (a.breakevens.length === 1 ? "" : "s"), a.breakevens.map((b) => num(b, 0)).join(" · ") || "—"),
-			kv("Costs to get in and out", inr(a.cost) + ` (fees ${inr(a.fees)} + spread ${inr(a.exitSpread)})`),
+			kv("Costs to get in and out (exit at today's price)", inr(a.cost) + ` (fees ${inr(a.fees)} + spread ${inr(a.exitSpread)})`),
 			kv("Net delta · gamma", `${signed(a.greeks.delta, 1)} · ${signed(a.greeks.gamma, 3)}`), kv("Theta a day · vega per vol point", `${inr(a.greeks.theta, true)} · ${inr(a.greeks.vega, true)}`)),
 		h("div", { style: "padding:8px 16px" }, bdPayoff(a, spot)),
 		legsTable2(a),
-		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Against the desk's limits"),
+		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Sizing guide (the intraday desk's limits) and data quality"),
 			a.checks.map((x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text)))),
 		h("div", { style: "padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
 			h("button", { class: "btn", onclick: () => { B.lots = Math.max(1, best); bdDraw(); }, disabled: best < 1 }, best ? `Size it to the limits: ${best} lot${best === 1 ? "" : "s"}` : "Even one lot breaks a limit"),
-			h("span", { class: "f3", style: "font-size:12px" }, a.ok ? "Fits every limit." : "Does not fit: change the structure, width or size.")),
-		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure."));
+			h("span", { class: "f3", style: "font-size:12px" }, a.ok ? "Fits the sizing guide." : "Does not fit the sizing guide: change the structure, width or size.")),
+		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600;display:flex;gap:8px;align-items:center" }, "Could the paper desk open this today?", h("b", { class: a.paperOk ? "up" : "dn" }, a.paperOk ? "Yes, so far" : "No")),
+			a.paperChecks.map((x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text))),
+			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:4px 16px 8px" }, "The paper ticket also checks the day's loss budget, the drawdown halt and the displayed size at the touch against the live account. A structure that is not open-able today is still shown here as a what-if.")),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure. Held to expiry, an in-the-money long pays the exchange's exercise STT instead, which this does not model; there is no dividend yield in the pricing. Worst loss and best profit leave out costs."));
 }
 function legsTable2(a) {
 	return h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["", "Strike", "Type", "Bid", "Ask", "Price used", "IV"].map((x) => h("th", {}, x)))),
-		h("tbody", {}, a.legs.map((l) => h("tr", {}, h("td", { class: l.side > 0 ? "up" : "dn" }, l.side > 0 ? "Buy" : "Sell"), h("td", {}, num(l.strike, 0)), h("td", {}, l.type), h("td", {}, fin(l.bid) ? num(l.bid) : "—"), h("td", {}, fin(l.ask) ? num(l.ask) : "—"), h("td", {}, num(l.px) + (l.src === "last" ? " (last)" : "")), h("td", {}, fin(l.iv) ? (l.iv * 100).toFixed(1) + "%" : "—"))))));
+		h("tbody", {}, a.legs.map((l) => h("tr", {}, h("td", { class: l.side > 0 ? "up" : "dn" }, l.side > 0 ? "Buy" : "Sell"), h("td", {}, num(l.strike, 0)), h("td", {}, l.type), h("td", {}, fin(l.bid) ? num(l.bid) : "—"), h("td", {}, fin(l.ask) ? num(l.ask) : "—"), h("td", {}, num(l.px) + (l.src === "last" ? " (last)" : l.src === "side" ? " (one side)" : "")), h("td", {}, fin(l.iv) ? (l.iv * 100).toFixed(1) + "%" : "—"))))));
 }
 async function renderBuild() {
 	const body = $("#bd-body"), B = S.bd;

@@ -40,10 +40,10 @@ const SPOT = 24500, T = 3 / 365;
 const q = {};
 STRIKES.forEach((k) => {
   const iv = 0.14, c = QB.bs("CE", SPOT, k, T, iv, 0.07), p = QB.bs("PE", SPOT, k, T, iv, 0.07), w = (x) => Math.max(0.1, x * 0.01);
-  q["C" + k] = { ltp: +c.toFixed(2), bid: +(c - w(c)).toFixed(2), ask: +(c + w(c)).toFixed(2) };
-  q["P" + k] = { ltp: +p.toFixed(2), bid: +(p - w(p)).toFixed(2), ask: +(p + w(p)).toFixed(2) };
+  q["C" + k] = { ltp: +c.toFixed(2), bid: +(c - w(c)).toFixed(2), ask: +(c + w(c)).toFixed(2), age_s: 2 };
+  q["P" + k] = { ltp: +p.toFixed(2), bid: +(p - w(p)).toFixed(2), ask: +(p + w(p)).toFixed(2), age_s: 2 };
 });
-const run = (id, width, lots) => { const L = QB.legsFor(id, STRIKES, SPOT, names, width); return L.error ? L : QB.analyze({ u: "NIFTY", legs: L.legs, quotes: q, spot: SPOT, T, lots: lots || 1 }); };
+const run = (id, width, lots) => { const L = QB.legsFor(id, STRIKES, SPOT, names, width); return L.error ? L : QB.analyze({ u: "NIFTY", legs: L.legs, quotes: q, spot: SPOT, spotAge: 2, T, lots: lots || 1 }); };
 const out = {};
 """
 
@@ -122,19 +122,19 @@ def test_the_limits_come_from_the_config_and_the_lot_sizing_obeys_them(tmp_path)
     risk = cfg.get("intraday.risk")
     o = node(tmp_path, BOARD + r"""
 const c = QB.conf(), L = QB.legsFor("bull_call_spread", STRIKES, SPOT, names, 2).legs;
-const spec = { u: "NIFTY", legs: L, quotes: q, spot: SPOT, T };
+const spec = { u: "NIFTY", legs: L, quotes: q, spot: SPOT, spotAge: 2, T };
 const best = QB.suggestLots(spec), at = QB.analyze({ ...spec, lots: best }), over = QB.analyze({ ...spec, lots: best + 1 });
-const cond = QB.legsFor("iron_condor", STRIKES, SPOT, names, 2).legs, cs = { u: "NIFTY", legs: cond, quotes: q, spot: SPOT, T };
+const cond = QB.legsFor("iron_condor", STRIKES, SPOT, names, 2).legs, cs = { u: "NIFTY", legs: cond, quotes: q, spot: SPOT, spotAge: 2, T };
 const cb = QB.suggestLots(cs);
-console.log(JSON.stringify({ lim: c.limits, eq: c.equity, best, atOk: at.checks.filter((x) => x.id !== "spread" && x.id !== "book").every((x) => x.ok), overRisk: over.checks.find((x) => x.id === "risk").ok,
+console.log(JSON.stringify({ lim: c.limits, eq: c.equity, best, atOk: at.checks.filter((x) => ["risk", "outlay", "lots", "margin"].includes(x.id)).every((x) => x.ok), atRisk: at.risk, overRisk: over.checks.find((x) => x.id === "risk").ok,
   maxLoss1: QB.analyze({ ...spec, lots: 1 }).maxLoss, cb, cMargin: QB.analyze({ ...cs, lots: Math.max(cb, 1) }).margin }));
 """)
     lim = o["lim"]
     for k in ("risk_per_trade", "max_premium_outlay", "max_total_outlay", "max_lots", "max_open", "max_spread_pct", "max_margin", "credit_margin_per_lot", "daily_loss_limit"):
         assert lim[k] == pytest.approx(risk[k] if k in risk else risk[{"daily_loss_limit": "daily_loss_limit"}.get(k, k)]), k          # the defaults equal the config the desk runs on
-    assert o["eq"] == 500000
+    assert o["eq"] == cfg.get("paper.capital")
     assert 1 <= o["best"] <= lim["max_lots"] and o["atOk"]
-    assert o["best"] * o["maxLoss1"] <= o["eq"] * lim["risk_per_trade"] + 1e-6                                                 # the suggested size never breaks the per-trade risk limit
+    assert o["atRisk"] <= o["eq"] * lim["risk_per_trade"] + 1e-6                                                                 # the suggested size never breaks the per-trade risk limit, fees included
     assert o["cMargin"] == lim["credit_margin_per_lot"] * max(o["cb"], 1)
 
 
@@ -147,9 +147,12 @@ def test_the_builder_block_places_no_order_and_touches_no_network():
 def test_the_published_page_carries_the_configs_limits_costs_and_lot_sizes_and_the_builders_defaults_equal_them(cfg, tmp_path):
     from quantdesk.web import export_site as E
     tc = E.trade_config(cfg)
-    assert tc["equity"] == cfg.get("intraday.capital") and tc["r"] == cfg.get("backtest.risk_free")
+    assert tc["equity"] == cfg.get("paper.capital") and tc["r"] == cfg.get("backtest.risk_free")
     assert tc["inst"]["NIFTY"] == {"lot": 65, "step": 50.0} and tc["inst"]["BANKNIFTY"]["lot"] == 30 and "INDIAVIX" not in tc["inst"]
     assert tc["costs"]["options"]["stt_sell"] == cfg.get("costs.segments.options.stt_sell") and tc["slippage"]["option_tick"] == 0.05
+    risk = cfg.get("intraday.risk")
+    assert tc["limits"] and tc["limits"] == {k: risk[k] for k in tc["limits"]} and set(tc["limits"]) == {"risk_per_trade", "max_premium_outlay", "max_total_outlay", "max_lots", "max_open", "max_spread_pct", "max_margin", "credit_margin_per_lot", "daily_loss_limit"}   # every limit, none dropped
+    assert tc["paper"] == {"risk_per_trade": cfg.get("paper.risk_per_trade"), "max_quote_age_s": cfg.get("paper.max_quote_age_s"), "underlyings": sorted(cfg.get("paper.underlyings")["nse_fo"])}
     script = E._trade_script(cfg)
     assert script.startswith("<script>window.QD_TRADE=") and "</" not in script[len("<script>"):-len("</script>")]
     out = tmp_path / "site"
@@ -166,6 +169,7 @@ def test_the_published_page_carries_the_configs_limits_costs_and_lot_sizes_and_t
     for k, v in tc["limits"].items():
         assert o["limits"][k] == pytest.approx(v), k
     assert o["costs"]["options"] == pytest.approx(tc["costs"]["options"]) and o["slippage"] == pytest.approx(tc["slippage"])
+    assert {**o["paper"], "underlyings": sorted(o["paper"]["underlyings"])} == tc["paper"] and o["fromConfig"] is False                                                                    # and the page knows when it is running on them
 
 
 @needs_node
@@ -176,3 +180,66 @@ console.log(JSON.stringify({ legs: a.legs.map((l) => ({ bid: l.bid, ask: l.ask, 
 """)
     for l in o["legs"]:
         assert l["bid"] > 0 and l["ask"] >= l["bid"] and l["px"] == l["ask"] and l["src"] == "book"                    # a buy is priced at the offer, and the table can show both sides
+
+
+# ---- the independent review's findings (F1 stale quotes, F2 one-sided and crossed books, F3 the paper gate) --------------------------------------------------------
+@needs_node
+def test_a_stale_or_ageless_quote_fails_the_freshness_check_and_so_does_a_stale_spot(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+const legs = QB.legsFor("long_straddle", STRIKES, SPOT, names, 1).legs;
+const go = (mut, spotAge) => { const qq = JSON.parse(JSON.stringify(q)); mut(qq); const a = QB.analyze({ u: "NIFTY", legs, quotes: qq, spot: SPOT, spotAge, T, lots: 1, c: { ...QB.conf(), equity: 5000000 } }); return { fresh: a.checks.find((x) => x.id === "fresh"), ok: a.ok, paperOk: a.paperOk, pf: a.paperChecks.find((x) => x.id === "pfresh").ok }; };
+console.log(JSON.stringify({ good: go(() => {}, 2), old: go((qq) => { qq.C24500.age_s = 10800; }, 2), edge: go((qq) => { qq.C24500.age_s = 30; }, 30), over: go((qq) => { qq.C24500.age_s = 30.5; }, 2),
+  noAge: go((qq) => { delete qq.P24500.age_s; }, 2), spotOld: go(() => {}, 600), spotNone: go(() => {}, undefined) }));
+""")
+    assert o["good"]["fresh"]["ok"] and o["good"]["ok"] and o["good"]["paperOk"] and o["good"]["pf"]
+    assert o["edge"]["fresh"]["ok"]                                                                                    # exactly at the paper gate's limit still passes (30 s), as the gate does
+    for k in ("old", "over", "noAge", "spotOld", "spotNone"):
+        assert not o[k]["fresh"]["ok"] and not o[k]["ok"] and not o[k]["paperOk"] and not o[k]["pf"], k                 # an old, ageless or spot-less quote never shows green
+
+
+@needs_node
+def test_a_one_sided_or_crossed_book_is_never_green_and_a_guaranteed_profit_is_a_data_error(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+const mk = (id, w, mut, u) => { const qq = JSON.parse(JSON.stringify(q)); mut(qq); const L = QB.legsFor(id, STRIKES, SPOT, names, w); return QB.analyze({ u: u || "NIFTY", legs: L.legs, quotes: qq, spot: SPOT, spotAge: 2, T, lots: 1 }); };
+const ch = (a, id) => a.checks.find((x) => x.id === id);
+const buyNoBid = mk("long_call", 1, (qq) => { qq.C24500.bid = 0; });
+const sellNoAsk = mk("bear_call_spread", 2, (qq) => { qq.C24500.ask = 0; });
+const crossed = mk("long_call", 1, (qq) => { qq.C24500.bid = 200; qq.C24500.ask = 100; });
+const wing = mk("bear_call_spread", 2, (qq) => { qq.C24600.bid = 0; qq.C24600.ask = 30; qq.C24500.bid = 150; qq.C24500.ask = 160; });
+console.log(JSON.stringify({ buyNoBid: { src: buyNoBid.legs[0].src, book: ch(buyNoBid, "book").ok, spread: ch(buyNoBid, "spread").ok, ok: buyNoBid.ok, paperOk: buyNoBid.paperOk },
+  sellNoAsk: { src: sellNoAsk.legs[0].src, book: ch(sellNoAsk, "book").ok, ok: sellNoAsk.ok },
+  crossed: { err: crossed.errors, ok: crossed.ok }, wing: { err: wing.errors, ok: wing.ok, maxLoss: wing.maxLoss } }));
+""")
+    b = o["buyNoBid"]
+    assert b["src"] == "side" and not b["book"] and not b["spread"] and not b["ok"] and not b["paperOk"]              # bid 0 / ask 900: priced at the ask, but flagged and refused (the gate needs 0 < bid <= ask)
+    assert o["sellNoAsk"]["src"] == "side" and not o["sellNoAsk"]["book"] and not o["sellNoAsk"]["ok"]
+    assert o["crossed"]["err"] and "Crossed" in o["crossed"]["err"][0] and not o["crossed"]["ok"]
+    assert o["wing"]["err"] and "guaranteed profit" in o["wing"]["err"][0]                                           # the credit above the width is a bad quote, not "Worst loss -0.01%"
+
+
+@needs_node
+def test_the_paper_gate_view_matches_the_paper_desk_and_risk_counts_the_entry_fees(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+const an = (id, w, u, conf) => { const L = QB.legsFor(id, STRIKES, SPOT, names, w); return QB.analyze({ u, legs: L.legs, quotes: q, spot: SPOT, spotAge: 2, T, lots: 1, c: conf }); };
+const pc = (a, id) => a.paperChecks.find((x) => x.id === id).ok;
+const call = an("long_call", 1, "NIFTY"), spread = an("bull_call_spread", 2, "NIFTY"), sensex = an("long_call", 1, "SENSEX"), strangle = an("long_strangle", 2, "NIFTY");
+// the entry fees tip a trade over the limit: set the equity so that the worst loss alone is JUST inside 2.5% and loss plus fees is just outside
+const c0 = QB.conf(), eq = (call.maxLoss + 1) / c0.limits.risk_per_trade, tight = an("long_call", 1, "NIFTY", { ...c0, equity: eq });
+console.log(JSON.stringify({ call: { paperOk: call.paperOk, long: pc(call, "long"), under: pc(call, "under") }, spread: { paperOk: spread.paperOk, long: pc(spread, "long") }, sensex: { paperOk: sensex.paperOk, under: pc(sensex, "under") }, strangle: strangle.paperOk,
+  fees: call.entryFees, risk: call.risk, maxLoss: call.maxLoss, tight: { lossAlone: tight.maxLoss <= eq * c0.limits.risk_per_trade, risk: tight.checks.find((x) => x.id === "risk").ok, prisk: pc(tight, "prisk"), paperOk: tight.paperOk } }));
+""")
+    assert o["call"] == {"paperOk": True, "long": True, "under": True} and o["strangle"] is True                         # long options on the four index families can be opened
+    assert o["spread"] == {"paperOk": False, "long": False}                                                          # a spread has a short leg: the gate opens long options only
+    assert o["sensex"] == {"paperOk": False, "under": False}                                                        # SENSEX is not on the paper desk's list
+    assert o["fees"] > 0 and o["risk"] == pytest.approx(o["maxLoss"] + o["fees"])
+    t = o["tight"]
+    assert t["lossAlone"] and not t["risk"] and not t["prisk"] and not t["paperOk"]                                  # fees counted: inside without them, outside with them
+
+
+@needs_node
+def test_a_bad_expiry_key_is_an_error_not_a_silent_intrinsic_only_curve(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+const L = QB.legsFor("long_call", STRIKES, SPOT, names, 1).legs;
+console.log(JSON.stringify({ t: QB.yearsTo("NOV-26", Date.now()), a: QB.analyze({ u: "NIFTY", legs: L, quotes: q, spot: SPOT, spotAge: 2, T: QB.yearsTo("NOV-26", Date.now()), lots: 1 }).errors }));
+""")
+    assert o["t"] is None and o["a"] and "expiry" in o["a"][0]
