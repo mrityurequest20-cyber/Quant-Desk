@@ -52,6 +52,21 @@ export function configured(env) {
 	return !!env.LIVE && i.length >= MIN_SECRET && r.length >= MIN_SECRET && i !== r;
 }
 
+// Why the view is off, for the 503 body: what is missing, never a value. The owner sets these in a dashboard and cannot run a command on the Worker, so "not switched on"
+// alone leaves a typo in a name, a Text variable that a deploy wiped, a too-short string or the same string twice to be guessed at. Only a state per piece is given (missing,
+// too short, ok, the same), plus the NAMES of the Worker's own LIVE* and KOTAK* settings so a misspelt name shows. No token, no length, no value, nothing that helps guess one.
+export function whyOff(env) {
+	const i = String(env.LIVE_INGEST_TOKEN || "").trim(), r = String(env.LIVE_READ_TOKEN || "").trim();
+	const state = (v) => (!v ? "missing" : v.length < MIN_SECRET ? `too short (at least ${MIN_SECRET} characters)` : "ok");
+	return {
+		LIVE_object: env.LIVE ? "ok" : "missing (the Durable Object binding)",
+		LIVE_INGEST_TOKEN: state(i),
+		LIVE_READ_TOKEN: state(r),
+		different: i && r && i === r ? "no: the two are the same string" : "ok",
+		seen: Object.keys(env || {}).filter((k) => /^(LIVE|KOTAK)/.test(k)).sort(),
+	};
+}
+
 // Read a request body at most `max` bytes, stopping at the cap: a chunked body with no Content-Length is never buffered whole. null = too large.
 export async function readCapped(request, max) {
 	if (!request.body) return "";
@@ -136,7 +151,7 @@ export async function needsUniverse(env) {
 export async function handleLive(request, env) {
 	const url = new URL(request.url);
 	if (!url.pathname.startsWith("/live/")) return null;
-	if (!configured(env)) return reply(503, { error: "the live view is not switched on" });
+	if (!configured(env)) return reply(503, { error: "the live view is not switched on", why: whyOff(env) });
 	const stub = env.LIVE.get(env.LIVE.idFromName("board"));
 	if (url.pathname === "/live/ingest") {
 		if (request.method !== "POST") return reply(405, { error: "POST only" });
