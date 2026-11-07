@@ -17,6 +17,7 @@ const S = {
 const IC = {
 	trades: "M8 20V5M4.5 8.5L8 5l3.5 3.5M16 4v15M12.5 15.5L16 19l3.5-3.5",
 	live: "M3 12h3.2l2.3-6 4 12 2.5-6H21",
+	build: "M4 19V9l5 4 5-8 6 6v8z",
 	data: "M4 6c0-1.1 3.6-2 8-2s8 .9 8 2-3.6 2-8 2-8-.9-8-2zM4 6v6c0 1.1 3.6 2 8 2s8-.9 8-2V6M4 12v6c0 1.1 3.6 2 8 2s8-.9 8-2v-6",
 	today: "M5.5 5h13A1.5 1.5 0 0 1 20 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19V6.5A1.5 1.5 0 0 1 5.5 5zM4 10h16M8.5 3v4M15.5 3v4",
 	chev: "M9 6l6 6-6 6", x: "M6 6l12 12M18 6L6 18",
@@ -143,7 +144,7 @@ function glossaryList() {
 }
 
 // ---- shell: tabs, routing, sheets, theme ---------------------------------------------------------------------------
-const TABS = [["live", "Live"], ["today", "Today"], ["trades", "History"], ["data", "Data"]];
+const TABS = [["live", "Live"], ["build", "Build"], ["today", "Today"], ["trades", "History"], ["data", "Data"]];
 const SUBS = { trades: [["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]] };
 // the app's mark: a price path that tests a level, pulls back and breaks through it
 function mark(size) {
@@ -872,6 +873,264 @@ async function renderLive() {
 	liveDraw();
 }
 
+/* @@builder:start */
+// ==================================================================================================================
+// Strategy builder: pure maths, no DOM. Option strategies from the live board's quotes: legs, payoff at expiry and today, break-evens, Greeks, costs, and the desk's own limits
+// (read from the config at publish time: window.QD_TRADE). DEFINED RISK ONLY: a structure with an uncovered short call is refused. Paper only: nothing here sends an order.
+// ==================================================================================================================
+const QB = (() => {
+	const DEF = {
+		equity: 500000, r: 0.065, currency: "INR",
+		limits: { risk_per_trade: 0.025, max_premium_outlay: 0.20, max_total_outlay: 0.5, max_lots: 10, max_open: 2, max_spread_pct: 0.06, max_margin: 0.5, credit_margin_per_lot: 30000, daily_loss_limit: 0.05 },
+		costs: { brokerage_per_order: 20, gst: 0.18, sebi_per_crore: 10, options: { stt_buy: 0, stt_sell: 0.0015, exchange: 0.0003503, stamp_buy: 0.00003 } },
+		slippage: { option_half_spread_pct: 0.012, option_min_half_spread: 0.10, option_tick: 0.05 },
+		inst: { NIFTY: { lot: 65, step: 50 }, BANKNIFTY: { lot: 30, step: 100 }, FINNIFTY: { lot: 60, step: 50 }, MIDCPNIFTY: { lot: 120, step: 25 }, SENSEX: { lot: 20, step: 100 } },
+	};
+	const conf = () => {
+		const w = typeof window !== "undefined" && window.QD_TRADE;
+		return w ? { ...DEF, ...w, limits: { ...DEF.limits, ...(w.limits || {}) }, costs: { ...DEF.costs, ...(w.costs || {}), options: { ...DEF.costs.options, ...((w.costs || {}).options || {}) } },
+			slippage: { ...DEF.slippage, ...(w.slippage || {}) }, inst: { ...DEF.inst, ...(w.inst || {}) } } : DEF;
+	};
+	// ---- Black-Scholes (European, cash-settled index options; r flat) ---------------------------------------------------------------
+	const npdf = (x) => 0.3989422804014327 * Math.exp(-x * x / 2);
+	function ncdf(x) {
+		const t = 1 / (1 + 0.2316419 * Math.abs(x)), p = npdf(x) * t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+		return x > 0 ? 1 - p : p;
+	}
+	function bs(type, S, K, T, sig, r) {
+		if (!(S > 0 && K > 0)) return NaN;
+		if (!(T > 0) || !(sig > 0)) return Math.max(0, type === "CE" ? S - K : K - S);
+		const sq = sig * Math.sqrt(T), d1 = (Math.log(S / K) + (r + sig * sig / 2) * T) / sq, d2 = d1 - sq, df = Math.exp(-r * T);
+		return type === "CE" ? S * ncdf(d1) - K * df * ncdf(d2) : K * df * ncdf(-d2) - S * ncdf(-d1);
+	}
+	function greeks(type, S, K, T, sig, r) {
+		if (!(S > 0 && K > 0 && T > 0 && sig > 0)) { const itm = type === "CE" ? S > K : S < K; return { delta: itm ? (type === "CE" ? 1 : -1) : 0, gamma: 0, theta: 0, vega: 0 }; }
+		const sq = sig * Math.sqrt(T), d1 = (Math.log(S / K) + (r + sig * sig / 2) * T) / sq, d2 = d1 - sq, df = Math.exp(-r * T);
+		const delta = type === "CE" ? ncdf(d1) : ncdf(d1) - 1, gamma = npdf(d1) / (S * sq), vega = S * npdf(d1) * Math.sqrt(T) / 100;
+		const th = -(S * npdf(d1) * sig) / (2 * Math.sqrt(T)) - (type === "CE" ? 1 : -1) * r * K * df * ncdf(type === "CE" ? d2 : -d2);
+		return { delta, gamma, theta: th / 365, vega };
+	}
+	function impliedVol(type, price, S, K, T, r) {
+		if (!(price > 0 && S > 0 && K > 0 && T > 0)) return NaN;
+		const lo0 = bs(type, S, K, T, 0.0001, r), hi0 = bs(type, S, K, T, 5, r);
+		if (!(price >= lo0 - 1e-9 && price <= hi0)) return NaN;
+		let lo = 0.0001, hi = 5;
+		for (let i = 0; i < 80; i++) { const m = (lo + hi) / 2; if (bs(type, S, K, T, m, r) < price) lo = m; else hi = m; }
+		return (lo + hi) / 2;
+	}
+	// ---- statutory costs: the same formulas as quantdesk/execution/costs.py CostModel.fees for options (a test compares them) -------------------------
+	function fees(side, price, units, c) {
+		const turnover = units * price, o = c.costs.options, brokerage = c.costs.brokerage_per_order, sebi = turnover * c.costs.sebi_per_crore / 1e7;
+		const stt = turnover * (side > 0 ? o.stt_buy : o.stt_sell), exchange = turnover * o.exchange, stamp = side > 0 ? turnover * o.stamp_buy : 0, gst = c.costs.gst * (brokerage + exchange + sebi);
+		return brokerage + stt + exchange + sebi + stamp + gst;
+	}
+	function halfSpread(price, c) {                                      // the model's adverse slippage per unit (CostModel.slippage for options)
+		const s = c.slippage, half = Math.max(s.option_half_spread_pct * price, s.option_min_half_spread);
+		return Math.round(half / s.option_tick) * s.option_tick;
+	}
+	// ---- templates: [side, type, offset in strike steps from the at-the-money strike] -------------------------------------------------
+	const TEMPLATES = {
+		long_call: { name: "Long call", view: "Bullish: wants a big move up", wide: false, legs: () => [[1, "CE", 0]] },
+		long_put: { name: "Long put", view: "Bearish: wants a big move down", wide: false, legs: () => [[1, "PE", 0]] },
+		long_straddle: { name: "Long straddle", view: "Big move, either way", wide: false, legs: () => [[1, "CE", 0], [1, "PE", 0]] },
+		long_strangle: { name: "Long strangle", view: "Big move, either way, cheaper", wide: true, legs: (w) => [[1, "CE", w], [1, "PE", -w]] },
+		bull_call_spread: { name: "Bull call spread", view: "Moderately bullish, capped", wide: true, legs: (w) => [[1, "CE", 0], [-1, "CE", w]] },
+		bear_put_spread: { name: "Bear put spread", view: "Moderately bearish, capped", wide: true, legs: (w) => [[1, "PE", 0], [-1, "PE", -w]] },
+		bull_put_spread: { name: "Bull put spread", view: "Not bearish: collects premium", wide: true, legs: (w) => [[-1, "PE", 0], [1, "PE", -w]] },
+		bear_call_spread: { name: "Bear call spread", view: "Not bullish: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [1, "CE", w]] },
+		iron_condor: { name: "Iron condor", view: "Stays in a range: collects premium", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 2 * w], [-1, "PE", -w], [1, "PE", -2 * w]] },
+		iron_butterfly: { name: "Iron butterfly", view: "Pins near the strike: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [-1, "PE", 0], [1, "CE", w], [1, "PE", -w]] },
+	};
+	// legs for a template: strikes = sorted strikes on the board for the expiry; names = {strike: {CE: name, PE: name}}. Returns {legs} or {error}.
+	function legsFor(id, strikes, spot, names, width) {
+		const t = TEMPLATES[id];
+		if (!t) return { error: "Unknown strategy." };
+		if (!strikes.length || !(spot > 0)) return { error: "No strikes or no price on the board for this underlying yet." };
+		let atm = 0;
+		strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
+		const w = Math.max(1, Math.round(width || 1)), legs = [];
+		for (const [side, type, off] of t.legs(w)) {
+			const k = strikes[atm + off];
+			const name = k != null && names[k] ? names[k][type] : null;
+			if (k == null || !name) return { error: `The ${type} at ${off >= 0 ? "+" : ""}${off} strikes is not on the board: pick a smaller width.` };
+			legs.push({ side, type, strike: k, name });
+		}
+		return { legs, atm: strikes[atm] };
+	}
+	// the price you would deal at: buy at the offer, sell at the bid; the last price when there is no book (flagged)
+	function entry(leg, q) {
+		if (!q) return { px: NaN, src: "none" };
+		const book = leg.side > 0 ? q.ask : q.bid;
+		if (book > 0) return { px: book, src: "book", bid: q.bid, ask: q.ask };
+		return q.ltp > 0 ? { px: q.ltp, src: "last", bid: q.bid, ask: q.ask } : { px: NaN, src: "none" };
+	}
+	const legPay = (l, S) => l.side * l.units * ((l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S)) - l.px);
+	// ---- the analysis ----------------------------------------------------------------------------------------------------------------
+	// spec: {u, legs:[{side,type,strike,name}], quotes:{name:{ltp,bid,ask,oi}}, spot, T (years), lots, c (config, optional)}
+	function analyze(spec) {
+		const c = spec.c || conf(), inst = c.inst[spec.u] || { lot: 1, step: 1 }, lots = Math.max(1, Math.round(spec.lots || 1)), lot = inst.lot, r = c.r;
+		const legs = spec.legs.map((l) => {
+			const e = entry(l, spec.quotes[l.name]);
+			const mid = spec.quotes[l.name] && spec.quotes[l.name].bid > 0 && spec.quotes[l.name].ask >= spec.quotes[l.name].bid ? (spec.quotes[l.name].bid + spec.quotes[l.name].ask) / 2 : (spec.quotes[l.name] || {}).ltp;
+			const iv = impliedVol(l.type, mid, spec.spot, l.strike, spec.T, r);
+			const spread = e.bid > 0 && e.ask >= e.bid ? (e.ask - e.bid) / ((e.ask + e.bid) / 2) : NaN;
+			return { ...l, units: lots * lot, lots, px: e.px, src: e.src, bid: e.bid, ask: e.ask, iv, spread };
+		});
+		const out = { legs, lots, lot, errors: [], checks: [] };
+		if (legs.some((l) => !(l.px > 0))) { out.errors.push("A leg has no price on the board yet."); return out; }
+		const callSlope = legs.filter((l) => l.type === "CE").reduce((a, l) => a + l.side * l.units, 0);
+		out.definedRisk = callSlope >= 0;
+		if (!out.definedRisk) { out.errors.push("This would leave a short call uncovered (unlimited loss). The builder only makes defined-risk structures."); return out; }
+		out.premium = legs.reduce((a, l) => a + l.side * l.units * l.px, 0);                               // + debit paid, - credit received
+		const ks = [...new Set(legs.map((l) => l.strike))].sort((a, b) => a - b), pts = [0, ...ks], far = (ks[ks.length - 1] || spec.spot) * 3;
+		const pay = (S) => legs.reduce((a, l) => a + legPay(l, S), 0), vals = [...pts, far].map((S) => pay(S));
+		const tailSlope = callSlope;                                                                       // beyond the highest strike the payoff slope is the net call position
+		out.unlimitedProfit = tailSlope > 0;
+		out.maxProfit = out.unlimitedProfit ? Infinity : Math.max(...vals);
+		out.maxLoss = -Math.min(...vals);
+		const be = [];
+		const bp = [...pts, far];
+		for (let i = 0; i + 1 < bp.length; i++) {
+			const a = bp[i], b = bp[i + 1], fa = pay(a), fb = pay(b);
+			if (fa === 0 && i === 0) be.push(a); else if ((fa < 0 && fb > 0) || (fa > 0 && fb < 0)) be.push(a + (b - a) * (0 - fa) / (fb - fa));
+		}
+		out.breakevens = be.filter((x) => x > 0).map((x) => Math.round(x * 100) / 100);
+		const lo = spec.spot * 0.85, hi = spec.spot * 1.15, n = 121;
+		out.grid = Array.from({ length: n }, (_, i) => lo + (hi - lo) * i / (n - 1));
+		out.expiry = out.grid.map(pay);
+		out.today = out.grid.map((S) => legs.reduce((a, l) => a + l.side * l.units * ((isFinite(l.iv) ? bs(l.type, S, l.strike, spec.T, l.iv, r) : (l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S))) - l.px), 0));
+		out.greeks = legs.reduce((a, l) => { const g = greeks(l.type, spec.spot, l.strike, spec.T, isFinite(l.iv) ? l.iv : 0.2, r); const m = l.side * l.units; return { delta: a.delta + m * g.delta, gamma: a.gamma + m * g.gamma, theta: a.theta + m * g.theta, vega: a.vega + m * g.vega }; }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
+		out.fees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c) + fees(-l.side, l.px, l.units, c), 0);       // in and out at the entry price: the statutory part of a round trip
+		out.exitSpread = legs.reduce((a, l) => a + l.units * (isFinite(l.spread) ? (l.spread * l.px) / 2 : halfSpread(l.px, c)), 0);   // crossing the spread again on the way out
+		out.cost = out.fees + out.exitSpread;
+		out.margin = out.premium < 0 ? c.limits.credit_margin_per_lot * lots : 0;                         // a credit structure ties up margin (config estimate per lot); a debit one only the premium
+		out.riskPct = out.maxLoss / c.equity;
+		const L = c.limits, chk = (id, ok, text) => out.checks.push({ id, ok, text });
+		chk("risk", out.maxLoss <= c.equity * L.risk_per_trade, `Worst loss ₹${Math.round(out.maxLoss).toLocaleString("en-IN")} is ${(out.riskPct * 100).toFixed(2)}% of ₹${c.equity.toLocaleString("en-IN")} (limit ${(L.risk_per_trade * 100).toFixed(1)}%)`);
+		chk("outlay", out.premium <= c.equity * L.max_premium_outlay, `Premium paid ₹${Math.round(Math.max(out.premium, 0)).toLocaleString("en-IN")} (limit ${(L.max_premium_outlay * 100).toFixed(0)}% of equity)`);
+		chk("lots", lots <= L.max_lots, `${lots} lot${lots === 1 ? "" : "s"} (limit ${L.max_lots})`);
+		chk("margin", out.margin <= c.equity * L.max_margin, `Margin estimate ₹${Math.round(out.margin).toLocaleString("en-IN")} (limit ${(L.max_margin * 100).toFixed(0)}% of equity)`);
+		const wide = legs.filter((l) => isFinite(l.spread) && l.spread > L.max_spread_pct);
+		chk("spread", wide.length === 0, wide.length ? `Wide bid/ask on ${wide.map((l) => l.strike + l.type).join(", ")} (limit ${(L.max_spread_pct * 100).toFixed(0)}% of the price)` : "Bid/ask spreads are inside the limit");
+		const stale = legs.filter((l) => l.src !== "book");
+		chk("book", stale.length === 0, stale.length ? `No live bid/ask on ${stale.map((l) => l.strike + l.type).join(", ")}: priced at the last trade` : "Every leg has a live bid/ask");
+		out.ok = out.checks.every((x) => x.ok);
+		return out;
+	}
+	// the largest number of lots (1..max_lots) that passes the risk, outlay and margin limits, from the one-lot analysis; 0 if even one lot does not
+	function suggestLots(spec) {
+		const c = spec.c || conf(), one = analyze({ ...spec, lots: 1 });
+		if (one.errors.length) return 0;
+		let best = 0;
+		for (let n = 1; n <= c.limits.max_lots; n++) { const a = analyze({ ...spec, lots: n }); if (a.checks.filter((x) => ["risk", "outlay", "lots", "margin"].includes(x.id)).every((x) => x.ok)) best = n; else break; }
+		return best;
+	}
+	// the days to expiry from a board expiry key like "12NOV26" (cash-settled at 15:30 IST on that day), as years
+	function yearsTo(exp, nowMs) {
+		const m = /^(\d{2})([A-Z]{3})(\d{2})$/.exec(exp), mi = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"].indexOf(m ? m[2] : "");
+		if (!m || mi < 0) return NaN;
+		const end = Date.UTC(2000 + +m[3], mi, +m[1], 10, 0);                                           // 15:30 IST = 10:00 UTC
+		return Math.max(0, (end - nowMs) / 31556952000);
+	}
+	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, legsFor, entry, analyze, suggestLots, yearsTo, ncdf };
+})();
+/* @@builder:end */
+
+// ---- the Build tab: pick an underlying, an expiry and a structure; see what it costs, where it makes and loses, and whether it fits the desk's limits. Paper only: no order is sent from here.
+S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "" };
+function bdChains(data) {                                                // the underlyings the builder can price: an index with a known lot size, and its board chains
+	const c = QB.conf(), all = liveChains(data), out = Object.create(null);
+	for (const u of Object.keys(c.inst)) if (all[u] && Object.keys(all[u]).length) out[u] = all[u];
+	return out;
+}
+function bdPayoff(a, spot) {
+	const W = 640, H = 220, P = { l: 78, r: 12, t: 12, b: 26 }, el = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "bd-chart", role: "img", "aria-label": "Profit and loss at expiry and today, by price of the underlying", style: "width:100%;height:auto;display:block" });
+	const ys = [...a.expiry, ...a.today], lo = Math.min(...ys, 0), hi = Math.max(...ys, 0), pad = (hi - lo) * 0.08 || 1;
+	const x = (S) => P.l + (S - a.grid[0]) / (a.grid[a.grid.length - 1] - a.grid[0]) * (W - P.l - P.r), y = (v) => P.t + (hi + pad - v) / (hi - lo + 2 * pad) * (H - P.t - P.b);
+	svg("line", { x1: P.l, x2: W - P.r, y1: y(0), y2: y(0), stroke: cssv("--line") || "#888", "stroke-width": 1 }, el);
+	for (const v of [lo, hi]) { const t = svg("text", { x: P.l - 6, y: y(v) + 4, "text-anchor": "end", fill: cssv("--fg3") || "#888", "font-size": 11 }, el); t.textContent = inr(v); }
+	svg("line", { x1: x(spot), x2: x(spot), y1: P.t, y2: H - P.b, stroke: cssv("--fg3") || "#888", "stroke-dasharray": "3 3" }, el);
+	const path = (arr) => arr.map((v, i) => (i ? "L" : "M") + x(a.grid[i]).toFixed(1) + " " + y(v).toFixed(1)).join("");
+	svg("path", { d: path(a.today), fill: "none", stroke: cssv("--fg2") || "#999", "stroke-width": 1.5, "stroke-dasharray": "5 4" }, el);
+	svg("path", { d: path(a.expiry), fill: "none", stroke: cssv("--acc") || "#7D95FF", "stroke-width": 2.2 }, el);
+	for (const b of a.breakevens) if (b > a.grid[0] && b < a.grid[a.grid.length - 1]) svg("circle", { cx: x(b), cy: y(0), r: 3.5, fill: cssv("--acc") || "#7D95FF" }, el);
+	const t = svg("text", { x: W / 2, y: H - 6, "text-anchor": "middle", fill: cssv("--fg3") || "#888", "font-size": 10 }, el);
+	t.textContent = `${num(a.grid[0], 0)}  ←  price of the underlying  →  ${num(a.grid[a.grid.length - 1], 0)}   (solid: at expiry, dashed: today, dot: break-even)`;
+	return el;
+}
+function bdDraw() {
+	const B = S.bd, body = $("#bd-body"), c = QB.conf(), data = B.data;
+	body.textContent = "";
+	const chains = bdChains(data), us = Object.keys(chains);
+	if (!us.length) return void put(body, empty("build", "No index option chain on the board yet. The relay fills it once the market is open and the feeds are on."));
+	if (!us.includes(B.u)) B.u = us[0];
+	const exps = Object.keys(chains[B.u]).sort((p, q) => liveExpiryKey(p) - liveExpiryKey(q));
+	if (!exps.includes(B.exp)) B.exp = exps[0];
+	const ch = chains[B.u][B.exp], strikes = Object.keys(ch).map(Number).sort((p, q) => p - q);
+	const spot = (data.quotes[B.u] || data.quotes[B.u + "-FUT"] || {}).ltp;
+	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = QB.TEMPLATES[B.tpl];
+	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
+	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono" }, String(val)), h("button", { class: "btn", "aria-label": "more " + label, onclick: up }, "+")));
+	put(body,
+		h("div", { class: "note" }, "Paper only. This works out what a structure would cost and risk from the live prices; it sends no order. Only structures with a known worst loss can be built."),
+		h("div", { class: "chips", style: "padding:8px 16px 4px" }, us.map((u) => chip(u, u === B.u, () => { B.u = u; B.exp = null; bdDraw(); }))),
+		h("div", { class: "chips", style: "padding:4px 16px" }, exps.map((e) => chip(e, e === B.exp, () => { B.exp = e; bdDraw(); }))),
+		h("div", { class: "chips", style: "padding:4px 16px" }, Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); }))),
+		h("div", { class: "f3", style: "font-size:12px;padding:2px 16px 6px" }, tpl.view),
+		tpl.wide ? step("Width (strikes)", B.width, () => { B.width = Math.max(1, B.width - 1); bdDraw(); }, () => { B.width = Math.min(10, B.width + 1); bdDraw(); }) : null,
+		step("Lots (" + inst.lot + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); }));
+	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
+	const names = {};
+	for (const k of strikes) names[k] = ch[k];
+	const L = QB.legsFor(B.tpl, strikes, spot, names, B.width);
+	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
+	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, T, lots: B.lots };
+	const a = QB.analyze(spec);
+	if (a.errors.length) return void put(body, h("div", { class: "note" }, a.errors[0]), legsTable2(a));
+	const best = QB.suggestLots(spec);
+	const kv = (k, v, cl) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line)" }, h("span", { class: "f3" }, k), h("b", { class: "mono " + (cl || "") }, v));
+	put(body,
+		h("div", { class: "panel" },
+			kv(a.premium >= 0 ? "You pay" : "You receive", inr(Math.abs(a.premium))),
+			kv("Worst loss", inr(-a.maxLoss), "dn"), kv("Best profit", a.unlimitedProfit ? "No cap" : inr(a.maxProfit, true), "up"),
+			kv("Break-even" + (a.breakevens.length === 1 ? "" : "s"), a.breakevens.map((b) => num(b, 0)).join(" · ") || "—"),
+			kv("Costs to get in and out", inr(a.cost) + ` (fees ${inr(a.fees)} + spread ${inr(a.exitSpread)})`),
+			kv("Net delta · gamma", `${signed(a.greeks.delta, 1)} · ${signed(a.greeks.gamma, 3)}`), kv("Theta a day · vega per vol point", `${inr(a.greeks.theta, true)} · ${inr(a.greeks.vega, true)}`)),
+		h("div", { style: "padding:8px 16px" }, bdPayoff(a, spot)),
+		legsTable2(a),
+		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Against the desk's limits"),
+			a.checks.map((x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text)))),
+		h("div", { style: "padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
+			h("button", { class: "btn", onclick: () => { B.lots = Math.max(1, best); bdDraw(); }, disabled: best < 1 }, best ? `Size it to the limits: ${best} lot${best === 1 ? "" : "s"}` : "Even one lot breaks a limit"),
+			h("span", { class: "f3", style: "font-size:12px" }, a.ok ? "Fits every limit." : "Does not fit: change the structure, width or size.")),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure."));
+}
+function legsTable2(a) {
+	return h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["", "Strike", "Type", "Bid", "Ask", "Price used", "IV"].map((x) => h("th", {}, x)))),
+		h("tbody", {}, a.legs.map((l) => h("tr", {}, h("td", { class: l.side > 0 ? "up" : "dn" }, l.side > 0 ? "Buy" : "Sell"), h("td", {}, num(l.strike, 0)), h("td", {}, l.type), h("td", {}, fin(l.bid) ? num(l.bid) : "—"), h("td", {}, fin(l.ask) ? num(l.ask) : "—"), h("td", {}, num(l.px) + (l.src === "last" ? " (last)" : "")), h("td", {}, fin(l.iv) ? (l.iv * 100).toFixed(1) + "%" : "—"))))));
+}
+async function renderBuild() {
+	const body = $("#bd-body"), B = S.bd;
+	if (S.tab !== "build" || document.hidden || B.busy) return;
+	if (/(^|\.)github\.io$/.test(location.hostname)) { if (body.dataset.state !== "pages") { body.textContent = ""; put(body, empty("live", "The builder uses live prices, which are private and only open on the Cloudflare site, not on this address.")); body.dataset.state = "pages"; } return; }
+	const key = store("qd.livekey");
+	if (!key) { if (body.dataset.state !== "key") { body.textContent = ""; put(body, liveKeyForm("")); body.dataset.state = "key"; } return; }
+	B.busy = true;
+	let j = null, note = "";
+	try {
+		const r = await fetch("/live/snapshot", { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+		if (r.status === 401) { try { localStorage.removeItem("qd.livekey"); } catch (e) { /* private mode */ } note = "That key was not accepted. Type it again."; }
+		else if (!r.ok) note = `The live relay did not answer as expected (HTTP ${r.status}).`;
+		else j = await r.json();
+	} catch (e) { note = "No live prices: the request failed before any answer."; }
+	finally { B.busy = false; }
+	if (S.tab !== "build") return;
+	if (!j) { body.textContent = ""; body.dataset.state = "note"; return void put(body, liveKeyForm(note)); }
+	B.data = j;
+	body.dataset.state = "data";
+	if (!B.editing) bdDraw();
+}
+
 // ==================================================================================================================
 // refresh loop, pull to refresh, boot
 // ==================================================================================================================
@@ -885,6 +1144,7 @@ async function refresh(full, force) {
 		if (force && window.QD_PUBLISHED && window.qdReload) await window.qdReload();
 		const t = S.tab;
 		if (t === "live") await renderLive();
+		else if (t === "build") await renderBuild();
 		else if (t === "today") await renderToday(full);
 		else if (t === "trades") await renderTrades(full);
 		else if (t === "data") await renderDataTab(full);
