@@ -108,6 +108,7 @@ export function cleanUniverse(b) {
 	}
 	for (const c of Array.isArray(b.chains) ? b.chains.slice(0, 400) : []) {
 		if (!c || typeof c.u !== "string" || typeof c.x !== "string" || !/^[A-Za-z0-9&_-]{1,24}$/.test(c.u) || !SEG_KOTAK.has(c.x) || !isDate(c.e)) continue;
+		if (c.n !== undefined && !(Number.isInteger(c.n) && c.n >= 1 && c.n <= 10)) continue;          // a keep-count that is not a small integer is a malformed chain, not an index chain that runs every cycle
 		const k = `${c.u}|${c.e}`;                                                          // one chain per underlying and expiry, whatever exchange it claims: two would update the same option names from two answers
 		if (!seenChain.has(k)) { seenChain.add(k); chains.push({ u: c.u, x: c.x, e: c.e, ...(Number.isInteger(c.n) && c.n >= 1 && c.n <= 10 ? { n: c.n } : {}) }); }
 	}

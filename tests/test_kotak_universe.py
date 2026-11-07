@@ -253,3 +253,22 @@ def test_a_scrip_master_name_that_is_not_a_plain_symbol_never_reaches_the_output
     text = json.dumps(u)
     assert "::ERROR::X" not in text.upper() and "BAD" not in text and "SPACED" not in text
     assert any(q["n"] == "GOOD" for q in u["quotes"])
+
+
+def test_the_stock_chain_constants_are_what_the_docs_say():
+    assert KU.STOCK_STRIKES == 3 and KU.STOCK_CHAINS_MAX == 250 and KU.STOCK_FAIL_RUN == 10
+
+
+def test_a_run_of_failed_expiry_lookups_stops_the_stock_chains_for_the_day(master, monkeypatch):
+    rows = [{"pSymbolName": f"STK{i:03d}", "pInstType": "FUTSTK", "pAssetCode": 300 + i} for i in range(40)]
+    monkeypatch.setattr(KU, "scrip_master", lambda client, name="nse_fo": pd.DataFrame(rows))
+    client = FakeClient(bad_expiries=tuple(f"STK{i:03d}" for i in range(40)))
+    u = KU.build(client, TODAY, say=lambda *a: None)
+    asked = [c for c in client.log if c[0] == "expiries" and c[1]["underlying"].startswith("STK")]
+    assert len(asked) == KU.STOCK_FAIL_RUN                                                  # it gave up after ten in a row, it did not ask forty
+    assert any("stopped after 10 failures in a row; 30 stocks have no chain today" in e for e in u["errors"])
+    assert not any("n" in c for c in u["chains"])
+    # one success resets the run: failures that are not consecutive never stop it
+    ok = FakeClient(bad_expiries=tuple(f"STK{i:03d}" for i in range(0, 40, 2)))
+    u2 = KU.build(ok, TODAY, say=lambda *a: None)
+    assert sum(1 for c in u2["chains"] if "n" in c) == 20 and not any("stopped after" in e for e in u2["errors"])

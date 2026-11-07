@@ -30,6 +30,7 @@ FUT_INDICES = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
 CHAIN_EXPIRIES = 2
 CHAIN_STRIKES = 10                                           # strikes each side of the money in one chain call
 STOCK_CHAINS_MAX = 250                                       # F&O stocks whose option chain is polled (about 200 exist); the relay rotates them in the calls left over by the prices
+STOCK_FAIL_RUN = 10                                          # consecutive failed expiry lookups after which the stock chains are given up for the day
 STOCK_STRIKES = 3                                            # strikes each side of the money kept from a stock's chain: 14 option names a stock, not 42
 MAX_QUOTES = 3000                                            # the relay's own cap
 
@@ -103,14 +104,20 @@ def build(client, today: dt.date, say=print, fut_limit: int | None = None) -> di
         except Exception as e:                                # noqa: BLE001
             errors.append(f"{u} expiries: {type(e).__name__}")
 
-    for u in names[:STOCK_CHAINS_MAX]:                         # every F&O stock's nearest expiry: its option chain, a few strikes either side of the money
+    failed_run = 0
+    for i, u in enumerate(names[:STOCK_CHAINS_MAX]):           # every F&O stock's nearest expiry: its option chain, a few strikes either side of the money
+        if failed_run >= STOCK_FAIL_RUN:                       # Kotak is refusing or not answering: do not spend minutes on 250 more calls that fail the same way
+            errors.append(f"stock expiries stopped after {STOCK_FAIL_RUN} failures in a row; {len(names[:STOCK_CHAINS_MAX]) - i} stocks have no chain today")
+            break
         try:
             exp = [d for d in client.expiries(u, exchange="nse_fo") if d >= today][:1]
             if not exp:
                 raise KotakError("no expiries")
             chains.append({"u": u, "x": "nse_fo", "e": exp[0].isoformat(), "n": STOCK_STRIKES})
+            failed_run = 0
         except Exception as e:                                # noqa: BLE001
             errors.append(f"{u} expiries: {type(e).__name__}")
+            failed_run += 1
 
     quotes = quotes[:MAX_QUOTES]
     say(f"kotak-universe: {len(quotes)} instruments ({sum(1 for q in quotes if q['s'] == 'eq')} stocks, {sum(1 for q in quotes if q['s'] == 'fut')} futures, "

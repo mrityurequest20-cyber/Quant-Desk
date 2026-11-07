@@ -93,6 +93,37 @@ const clean = (chains) => cleanUniverse({ asof: "2026-11-09", quotes: [], chains
 out.n = clean([c("A", 3), c("B", 0), c("C", 11), c("D", 2.5), c("E", "3"), c("F"), c("G", -1), c("H", null)]).map((x) => x.u + ":" + x.n);
 out.many = clean(Array.from({ length: 450 }, (_, i) => c("S" + i, 3))).length;
 """)
-    assert len(out["n"]) == 8                                                                  # all eight chains are kept; only the keep-count is judged
+    assert out["n"] == ["A:3", "F:undefined"]                                                  # a chain with a bad keep-count is dropped (it must not become an index chain that runs every cycle); one with none is an index chain
     assert [x for x in out["n"] if x.split(":")[1] != "undefined"] == ["A:3"]           # only 3 survives; 0, 11, 2.5, "3", -1 and null are not keep-counts
     assert out["many"] == 400
+
+
+@needs_node
+def test_the_plan_boundaries_exactly(tmp_path):
+    """The review's survivors: the 40-call edge of the small regime, the one-slot tier and the edge where it ends, the exact rotation, unsorted mixed-digit strikes."""
+    out = run(tmp_path, UNIVERSE + r"""
+const calls = (n) => ({ quotes: [...idx, ...quotes(25 * (n - 7))], chains: [] });          // exactly n quote calls (7 singles + n-7 batches of 25)
+const lens = (u, c = 0) => { const p = K.plan(u, c); return { n: p.calls.length, next: p.next, total: p.total }; };
+out.small40 = lens({ ...calls(36), chains: hot(4) });                                          // 36 + 4 = 40: everything, once
+out.small41 = lens({ ...calls(37), chains: hot(4) });                                          // 41: too long and no cold chain: one rotation of 40
+out.tier39 = (() => { const u = { ...calls(35), chains: [...hot(4), ...cold(5)] }; const a = ids(K.plan(u, 0)).filter((x) => x.startsWith("c:STK")), p = K.plan(u, 0), b = ids(K.plan(u, p.next)).filter((x) => x.startsWith("c:STK")); return { n: p.calls.length, first: a, second: b, total: p.total }; })();   // 35 + 4 = 39 fixed: one cold slot
+out.tier40 = lens({ ...calls(36), chains: [...hot(4), ...cold(5)] });                          // 36 + 4 = 40 fixed: no free slot, no tier
+{ const u = { ...calls(36), chains: [...hot(4), ...cold(5)] }; let c = 0; const seen = new Set(); for (let i = 0; i < 6; i++) { const p = K.plan(u, c); for (const x of p.calls) if (x.kind === "c" && x.chain.n) seen.add(x.chain.u); c = p.next; } out.tier40seen = seen.size; }          // nothing free: they must still all come round (never starve)
+const rows = [1000, 900, 950, 1050, 1100, 850, 1150, 800, 1200, 99].flatMap((k) => [{ strike: k, side: "CE", ltp: 1 }, { strike: k, side: "PE", ltp: 1 }]);
+out.unsorted = [...new Set(K.nearMoney(rows, 1).map((r) => r.strike))].sort((a, b) => a - b);          // 10 strikes sorted: 99 800 850 900 950 1000 1050 ...; the middle is index 5 = 1000
+""")
+    assert out["small40"] == {"n": 40, "next": 0, "total": 40}
+    assert out["small41"]["n"] == 40 and out["small41"]["total"] == 41 and out["small41"]["next"] == 40
+    t = out["tier39"]
+    assert t["n"] == 40 and t["first"] == ["c:STK0"] and t["second"] == ["c:STK1"] and t["total"] == 39 + 5      # one cold chain a cycle, in order
+    assert out["tier40"]["n"] == 40 and out["tier40"]["total"] == 45                                           # no free slot: one rotation of everything
+    assert out["tier40seen"] == 5                                                                               # and the stock chains still all get their turn
+    assert out["unsorted"] == [950, 1000, 1050]
+
+
+@needs_node
+def test_a_chain_with_a_bad_keep_count_is_dropped_not_promoted_to_an_index_chain(tmp_path):
+    out = run(tmp_path, r"""
+out.kept = cleanUniverse({ asof: "2026-11-09", quotes: [], chains: [{ u: "OK", x: "nse_fo", e: "2026-11-24", n: 3 }, { u: "IDX", x: "nse_fo", e: "2026-11-24" }, { u: "BAD1", x: "nse_fo", e: "2026-11-24", n: 11 }, { u: "BAD2", x: "nse_fo", e: "2026-11-24", n: "3" }, { u: "BAD3", x: "nse_fo", e: "2026-11-24", n: null }] }).chains.map((c) => c.u);
+""")
+    assert out["kept"] == ["OK", "IDX"]

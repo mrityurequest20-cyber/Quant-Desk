@@ -201,8 +201,9 @@ export class KotakPoller {
 //
 // Two tiers, so a long list of stock chains cannot slow the prices people watch. The quote calls and the chains without a keep-count (the index chains) run in EVERY cycle;
 // the chains with one (`n`: the stock chains, a couple of hundred) take the remaining slots in rotation, each refreshed within ceil(cold / slots) cycles. If the quote
-// calls and index chains alone leave fewer than MIN_COLD slots, there is no tier: everything rotates together, as before.
-export const MIN_COLD = 4;
+// calls and index chains alone leave fewer than MIN_COLD slots, there is no tier: everything rotates together, as before. One free slot is enough to keep the prices on the fast cycle: the stock chains then take
+// longer to come round, which is better than a cliff that switched the tier off at a few more stocks and slowed every price without a sign.
+export const MIN_COLD = 1;
 export function plan(universe, cursor) {
 	const calls = [];
 	const singles = (universe.quotes || []).filter((q) => q.one), many = (universe.quotes || []).filter((q) => !q.one);
