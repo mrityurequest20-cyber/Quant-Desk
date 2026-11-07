@@ -61,8 +61,17 @@ def cmd_tape(cfg, a):
     if a.symbols:
         want = {s.strip().upper(): want.get(s.strip().upper(), 2) for s in a.symbols.split(",") if s.strip()}
     kc = cfg.get("intraday.kotak", {}) or {}
-    tape = ChainTape(KotakOptionChain(client, strikes=kc.get("strikes", 20)), data, want or None,
-                     every_min=tc.get("every_min", 1), say=lambda m: print(m, flush=True))
+    levels = max(0, min(5, int(tc.get("depth_levels", 0) or 0)))
+    extra = None
+    if levels:                                                     # the five-level order book of every contract beside each snapshot (the same quotes response: no extra Kotak call)
+        try:
+            from ..data.stock_chains import depth_writer
+            extra = depth_writer(data)
+        except Exception as exc:                                   # noqa: BLE001 - without the books the chains are still recorded
+            print(f"::warning::chain tape: order books unavailable ({type(exc).__name__}); recording chains only", flush=True)
+            levels = 0
+    tape = ChainTape(KotakOptionChain(client, strikes=kc.get("strikes", 20), depth_levels=levels), data, want or None,
+                     every_min=tc.get("every_min", 1), say=lambda m: print(m, flush=True), extra=extra, monthly=bool(tc.get("monthly", False)))
     tape.run(dt.time.fromisoformat(a.until) if a.until else None)
 
 

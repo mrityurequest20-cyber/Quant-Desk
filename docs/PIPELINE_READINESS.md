@@ -17,7 +17,7 @@ The header pill shows the live feeds' state on every tab (Live, Delayed, No feed
 
 | Channel | When (IST) | Kept as | Judged by |
 |---|---|---|---|
-| Index and futures minutes, option-chain snapshot a minute, chain tape | 09:15 to 15:30 | Parquet on the `chains-YYYY` releases | Data health (19:00, 22:15) |
+| Index and futures minutes, option-chain snapshot a minute, chain tape (all five indices, the nearest monthly expiry too, **and the five-level order book of every contract**, from 7 Nov) | 09:15 to 15:30 | Parquet on the `chains-YYYY` releases | Data health (19:00, 22:15) |
 | Kite ticks with depth | to 14:45, then 14:45 to 15:32 (two chained jobs) | encrypted artifacts (never published) | arrival only: the content is encrypted |
 | Stock option chains (once, 15:25), five indices' minutes, and **stock option minutes** (±5 strikes, nearest 2 expiries, 80 stocks since 7 Nov) | 15:25, 15:45 | releases (`option-minutes-*`) | Data health (the stock option minutes since 7 Nov) |
 | Stock cash, near-month and **next-month** futures minutes (50 stocks; the next month is a separate file, `stocks_futures_next`, built 7 Nov) | after the close | `stock-minutes-*` | Data health |

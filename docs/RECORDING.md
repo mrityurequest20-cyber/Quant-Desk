@@ -36,6 +36,10 @@ it stopped for the day. The Cloudflare watchdog now checks the recorder (W1, W3)
 Sources: Kotak Neo (consumer key only: no login, no orders) when `KOTAK_CONSUMER_KEY` is set, else Yahoo bars and
 NSE's public chain. The recorder never reads the Kite feed (licensed to the subscriber).
 
+## Index chains: what the tape keeps (7 Nov 2026)
+
+For NIFTY, BANKNIFTY, SENSEX, FINNIFTY and MIDCPNIFTY the chain tape (`record.yml`, `intraday.tape` in the config) records every minute 09:15 to 15:30: the nearest expiries (NIFTY 3, BANKNIFTY 2, SENSEX 2, FINNIFTY 1, MIDCPNIFTY 1) **and always the nearest monthly expiry** (`monthly: true`), ±20 strikes, with LTP, volume, open interest, best bid/offer and sizes, implied volatility, **and the five-level order book of every contract** (`depth_levels: 5`: it comes in the same Kotak quotes response, so no extra call). The books are archived beside the chains as `<day>_<part>_depth.parquet` on `chains-YYYY`. Data health: "index order books".
+
 ## Data sources and licences (decided 7 Nov 2026)
 
 | Data | Source | Where it is kept | Why |

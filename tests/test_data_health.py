@@ -62,6 +62,8 @@ def _store(**kw) -> H.MemoryStore:
         rel["chains-2026"][f"{d}_a_chains.parquet"] = _pq(kw["chains"])
     if kw.get("tape") is not None:
         rel["chains-2026"][f"{d}_a_tape.parquet"] = _pq(kw["tape"])
+    if kw.get("depth") is not None:
+        rel["chains-2026"][f"{d}_a_depth.parquet"] = _pq(kw["depth"])
     if kw.get("gift") is not None:
         rel["chains-2026"][f"{d}_a_gift.parquet"] = _pq(kw["gift"])
     if kw.get("optmin") is not None:
@@ -273,7 +275,7 @@ def test_kite_states():
 # ---- the report ------------------------------------------------------------------------------------------------------------------------
 def _full_store() -> H.MemoryStore:
     t = {"cash": {"asked": 5, "served": 5}, "futures": {"asked": 5, "served": 5}}
-    return _store(bars=_bars(), chains=_chains(), tape=_tape(), optmin={"underlyings": {"NIFTY": {"asked": 5, "served": 5, "last": f"{DAY} 15:29"}}},
+    return _store(bars=_bars(), chains=_chains(), depth=_chains()[["ts", "underlying", "expiry", "strike"]].assign(side="ce", b1p=1.0), tape=_tape(), optmin={"underlyings": {"NIFTY": {"asked": 5, "served": 5, "last": f"{DAY} 15:29"}}},
                   stockmin={"totals": t}, stockopt=_stockopt(), evening=_evening(), history={"as_of": "2026-11-05", "series": {"NIFTY": {}}, "unverified_series": []},
                   fxmin=_fxmin(), fxdaily={"as_of": "2026-11-05", "series": {"EURUSD": {}}, "unverified_series": []},
                   stockchains={"stocks": 200, "recorded": 200, "coverage": 0.97, "attempts": 80000, "failures": 900, "rows": {"chains": 3000000}},
