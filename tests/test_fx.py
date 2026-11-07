@@ -22,11 +22,12 @@ DAYS = pd.bdate_range("2024-01-01", "2025-12-31")
 TODAY = dt.date(2026, 11, 9)
 
 
-def _ecb_zip(days=DAYS) -> bytes:
+def _ecb_zip(days=DAYS, drop=()) -> bytes:
     rng = np.random.default_rng(7)
     walk = lambda x0, s: x0 * np.exp(np.cumsum(rng.normal(0, s, len(days))))                      # noqa: E731
-    t = pd.DataFrame({"Date": days.strftime("%Y-%m-%d"), "USD": walk(1.08, 0.004), "JPY": walk(160.0, 0.004), "GBP": walk(0.85, 0.003), "INR": walk(90.0, 0.003)})
-    csv = t.to_csv(index=False).replace("\n", ",\n")                                                # the real file ends every row with a comma
+    t = pd.DataFrame({"Date": days.strftime("%Y-%m-%d"), "USD": walk(1.08, 0.004), "JPY": walk(160.0, 0.004), "GBP": walk(0.85, 0.003), "INR": walk(90.0, 0.003),
+                      "CAD": walk(1.45, 0.003), "SEK": walk(11.5, 0.003), "CHF": walk(0.95, 0.003)})
+    csv = t.drop(columns=list(drop)).to_csv(index=False).replace("\n", ",\n")                                                # the real file ends every row with a comma
     b = io.BytesIO()
     with zipfile.ZipFile(b, "w") as z:
         z.writestr("eurofxref-hist.csv", csv)
@@ -57,7 +58,7 @@ class FakeYahoo:
 def _world(**tweak):
     ecb = FX.EcbReference(fetch=_ecb_zip)
     eurusd, usdjpy = ecb.implied("EURUSD"), ecb.implied("USDJPY")
-    y = {"EURUSD": _bars(eurusd * 1.003), "USDJPY": _bars(usdjpy * 0.997), "DXY": _bars(pd.Series(104.0, index=DAYS))}
+    y = {"EURUSD": _bars(eurusd * 1.003), "USDJPY": _bars(usdjpy * 0.997), "DXY": _bars(ecb.implied("DXY") * 1.004)}
     y.update(tweak)
     return ecb, y
 
@@ -69,7 +70,12 @@ def test_the_ecb_table_implies_each_pair_from_the_euro_rates_and_has_nothing_for
     assert np.allclose(ecb.implied("EURUSD"), t["USD"])                                              # EURUSD is the dollars per euro
     assert np.allclose(ecb.implied("USDJPY"), t["JPY"] / t["USD"])                                  # dollar-yen is yen per euro over dollars per euro
     assert np.allclose(ecb.implied("GBPINR"), t["INR"] / t["GBP"]) and np.allclose(ecb.implied("EURINR"), t["INR"])
-    assert ecb.implied("DXY") is None and ecb.implied("EURXYZ") is None                              # no such currency in the table
+    assert ecb.implied("EURXYZ") is None                                                              # no such currency in the table
+    dxy = ecb.implied("DXY")                                                                          # the dollar index rebuilt with ICE's basket formula
+    manual = 50.14348112 * (t["USD"] ** -0.576) * ((t["JPY"] / t["USD"]) ** 0.136) * ((t["USD"] / t["GBP"]) ** -0.119) * ((t["CAD"] / t["USD"]) ** 0.091) \
+        * ((t["SEK"] / t["USD"]) ** 0.042) * ((t["CHF"] / t["USD"]) ** 0.036)
+    assert np.allclose(dxy, manual) and (dxy > 0).all()
+    assert FX.EcbReference(fetch=lambda: _ecb_zip(drop=("CHF",))).implied("DXY") is None  # a basket currency the table lacks: nothing is made up
     with pytest.raises(FX.SourceDown):
         FX.EcbReference(fetch=lambda: b"not a zip").table()
 
@@ -90,7 +96,7 @@ def test_a_clean_series_that_agrees_with_the_ecb_is_verified_and_the_dataset_is_
         _write_once(pd.read_parquet(p).assign(close=1.0), p)                                         # different content under the same name: refused
 
 
-def test_an_inverted_pair_a_jump_a_gap_and_a_pair_without_an_independent_source_are_each_not_verified_with_the_reason(tmp_path):
+def test_an_inverted_pair_a_jump_and_a_pair_without_an_independent_source_are_each_not_verified_with_the_reason_and_a_gap_is_coverage_not_a_fault(tmp_path):
     ecb, y = _world()
     inverted = _bars(1 / ecb.implied("EURUSD"))                                                      # the pair upside down
     jumpy = ecb.implied("USDJPY") * 1.0
@@ -101,9 +107,49 @@ def test_an_inverted_pair_a_jump_a_gap_and_a_pair_without_an_independent_source_
     S = man["series"]
     assert S["EURUSD"]["status"] == "unverified" and any("match rate" in r for r in S["EURUSD"]["reasons"]) and S["EURUSD"]["crosscheck"]["mismatches"]
     assert S["USDJPY"]["status"] == "unverified" and len(S["USDJPY"]["jumps"]) == 1 and any("one-day move" in r for r in S["USDJPY"]["reasons"])
-    assert S["GBPINR"]["status"] == "unverified" and S["GBPINR"]["gaps"]["missing"] == 50 and any("missing weekdays" in r for r in S["GBPINR"]["reasons"])
-    assert S["DXY"]["status"] == "unverified" and any("no independent source" in r for r in S["DXY"]["reasons"]) and S["DXY"]["crosscheck"]["available"] is False
-    assert set(man["unverified_series"]) == {"EURUSD", "USDJPY", "GBPINR", "DXY"} and man["status"] == "unverified"
+    assert S["GBPINR"]["gaps"]["missing"] == 50 and S["GBPINR"]["coverage"] == "gappy" and S["GBPINR"]["status"] == "verified"      # the values that exist agree with the ECB; the holes are reported
+    assert S["DXY"]["status"] == "verified" and S["DXY"]["crosscheck"]["available"] and S["DXY"]["coverage"] == "complete"            # rebuilt from the ECB's basket
+    assert set(man["unverified_series"]) == {"EURUSD", "USDJPY"} and man["gappy_series"] == ["GBPINR"] and man["status"] == "unverified"
+    ecb2 = FX.EcbReference(fetch=lambda: _ecb_zip(drop=("CHF",)))                                    # a table without a basket currency: no index cross-check
+    none = FX.run_daily(tmp_path / "n", ["DXY"], "2024-01-01", TODAY, FakeYahoo(y), ecb2, say=lambda *a: None)["series"]["DXY"]
+    assert none["status"] == "unverified" and any("no independent source" in r for r in none["reasons"])
+
+
+def test_a_one_day_bad_print_is_set_aside_and_listed_but_a_step_that_stays_and_a_flood_of_them_are_not():
+    ecb = FX.EcbReference(fetch=_ecb_zip)
+    imp = ecb.implied("EURUSD")
+    bad = imp.copy()
+    bad.iloc[200] *= 1.2                                                                             # one bad print
+    y = FakeYahoo({"EURUSD": _bars(bad)})
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        s = FX.run_daily(Path(d), ["EURUSD"], "2024-01-01", TODAY, y, ecb, say=lambda *a: None)["series"]["EURUSD"]
+        sh = pd.read_parquet(Path(d) / str(TODAY) / "fx_daily_2024.parquet")
+    day = str(imp.index[200].date())
+    assert [q["date"] for q in s["quarantined"]] == [day] and s["jumps"] == [] and s["status"] == "verified" and s["rows"] == len(imp) - 1
+    assert pd.Timestamp(day) not in set(sh["date"]) and s["quarantined"][0]["close"] == pytest.approx(bad.iloc[200])           # gone from the data, kept in the manifest with its value
+    step = imp.copy()
+    step.iloc[300:] *= 1.12
+    with tempfile.TemporaryDirectory() as d:
+        t = FX.run_daily(Path(d), ["EURUSD"], "2024-01-01", TODAY, FakeYahoo({"EURUSD": _bars(step)}), ecb, say=lambda *a: None)["series"]["EURUSD"]
+    assert "quarantined" not in t and t["status"] == "unverified"                                    # a level shift is never set aside
+    many = imp.copy()
+    many.iloc[10:200:8] *= 1.2                                                                       # a flood: more than 0.5% of the rows
+    with tempfile.TemporaryDirectory() as d:
+        m = FX.run_daily(Path(d), ["EURUSD"], "2024-01-01", TODAY, FakeYahoo({"EURUSD": _bars(many)}), ecb, say=lambda *a: None)["series"]["EURUSD"]
+    assert "quarantined" not in m and m["status"] == "unverified"                                    # too much to tidy: the series is not trusted
+
+
+def test_the_health_check_notes_gappy_series_without_failing_them():
+    import datetime as dt2
+    from quantdesk.data import health as H
+
+    class Store:
+        def tags(self, t): return ["fx-daily"]
+        def assets(self, t): return ["2026-11-09_manifest.json"]
+        def read(self, t, n): return json.dumps({"as_of": "2026-11-09", "series": {"A": {}, "B": {}}, "unverified_series": [], "gappy_series": ["B"]}).encode()
+    c = H.check_fx_daily(Store(), dt2.date(2026, 11, 10))
+    assert c.status == H.OK and "all verified" in c.detail and "B" in c.detail
 
 
 def test_a_pair_that_is_down_is_recorded_and_the_others_still_run_and_a_down_ecb_is_recorded_not_raised(tmp_path):
