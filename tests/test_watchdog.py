@@ -362,7 +362,9 @@ out.empty = alerts(await at(D + "T09:50:00", live(H({ kite: { n: 0, newest_age_s
 out.kiteDown = alerts(await at(D + "T13:00:00", live(H({ kite: { n: 700, newest_age_s: 700 } }))));
 out.kotakDown = alerts(await at(D + "T13:00:00", live(H({ kotak: { configured: true, status: "down", n: 400, newest_age_s: 500 } }))));
 out.kotakOffKiteOk = alerts(await at(D + "T13:00:00", live(H({ kotak: { configured: false, status: "off", n: 0, newest_age_s: null } }))));
-out.auth = alerts(await at(D + "T15:10:00", live(H({ kotak: { configured: true, status: "auth", n: 400, newest_age_s: 500 }, kite: { n: 700, newest_age_s: 2 } }))));
+out.auth = alerts(await at(D + "T15:10:00", live(H({ kotak: { configured: true, status: "auth", consecutive_auth: 3, n: 400, newest_age_s: 500 }, kite: { n: 700, newest_age_s: 2 } }))));
+out.authKiteDown = alerts(await at(D + "T15:10:00", live(H({ kotak: { configured: true, status: "auth", consecutive_auth: 3, n: 400, newest_age_s: 5 }, kite: { n: 700, newest_age_s: 900 } }))));          // refused, yet Kotak still delivers while Kite is down: both are said
+out.blip = alerts(await at(D + "T15:10:00", live(H({ kotak: { configured: true, status: "auth", consecutive_auth: 1, n: 400, newest_age_s: 5 }, kite: { n: 700, newest_age_s: 2 } }))));
 out.disagree = alerts(await at(D + "T11:00:00", live(H({ both: 300, disagree: 60 }))));
 out.fewBoth = alerts(await at(D + "T11:00:00", live(H({ both: 10, disagree: 9 }))));
 out.weekend = alerts(await at("2026-10-24T11:00:00", live(H({ kite: { n: 0, newest_age_s: null }, kotak: { configured: true, status: "idle", n: 0, newest_age_s: null } }))));
@@ -377,7 +379,9 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
     assert out["none"] == ["P1 W10 Live prices: no source is delivering"] and out["empty"] == ["P1 W10 Live prices: no source is delivering"]
     assert out["kiteDown"] == ["P2 W10 Live prices: only Kotak is delivering"] and out["kotakDown"] == ["P2 W10 Live prices: only Kite is delivering"]
     assert out["kotakOffKiteOk"] == []                                              # Kotak not configured: Kite alone is the normal state, not a fault
-    assert out["auth"] == ["P1 W10 Kotak refused the consumer key"] or "P1 W10 Kotak refused the consumer key" in out["auth"]
+    assert out["auth"] == ["P1 W10 Kotak refused the consumer key"]               # a persistent refusal is one alert, not also "only Kite is delivering"
+    assert sorted(out["authKiteDown"]) == ["P1 W10 Kotak refused the consumer key", "P2 W10 Live prices: only Kotak is delivering"]
+    assert out["blip"] == []                                                        # one refused cycle is a blip
     assert out["disagree"] == ["P2 W10 Live prices: Kite and Kotak disagree"]
     assert out["p1"]["push"] == 1 and out["p1"]["email"] == 1 and "Kite: 0 instruments" in out["body"]
 

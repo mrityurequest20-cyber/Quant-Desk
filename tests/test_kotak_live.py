@@ -146,7 +146,7 @@ out.restart = { universe: board.universe === null ? 0 : board.universe.quotes.le
 const idle = new LiveBoard({ ...state, storage: { ...state.storage, getAlarm: async () => null, setAlarm: async () => { throw new Error("no alarm for an unconfigured poller"); } } }, { ...env, KOTAK_CONSUMER_KEY: "" });
 await idle.arm(); calls.length = 0; await idle.alarm(); out.unconfigured = { calls: calls.length, status: idle.k.status };
 // the relay asks for a rebuild of a stale universe, at most once in 40 minutes, only on a weekday morning, only when the poller is on
-const mk = (e) => { const m2 = new Map(); const b = new LiveBoard({ storage: { get: async (k) => m2.get(k), put: async (k, v) => { m2.set(k, v); }, getAlarm: async () => null, setAlarm: async () => {} }, blockConcurrencyWhile: async (fn) => fn() }, e); return b; };
+const mk = (e, m2 = new Map()) => { const b = new LiveBoard({ storage: { get: async (k) => m2.get(k), put: async (k, v) => { m2.set(k, v); }, getAlarm: async () => null, setAlarm: async () => {} }, blockConcurrencyWhile: async (fn) => fn() }, e); return b; };
 const ask = async (b, t) => { b.now = () => t; const r = await b.fetch(new Request("https://live/needs-universe", { method: "POST" })); return (await r.json()).need; };
 const nb = mk(env), MON_0805 = Date.UTC(2026, 10, 9, 2, 35);
 out.needs = [await ask(nb, MON_0805), await ask(nb, MON_0805 + 10 * 60000), await ask(nb, MON_0805 + 41 * 60000), await ask(nb, Date.UTC(2026, 10, 9, 1, 30)), await ask(nb, Date.UTC(2026, 10, 7, 3, 0)), await ask(mk({ ...env, KOTAK_CONSUMER_KEY: "" }), MON_0805 + 3600000 * 3)];
@@ -154,6 +154,16 @@ const fresh = mk(env); await fresh.fetch(new Request("https://live/universe", { 
 out.needsFresh = await ask(fresh, MON_0805);
 const stale = mk(env); await stale.fetch(new Request("https://live/universe", { method: "POST", body: JSON.stringify({ asof: "2026-11-06", quotes: [{ n: "A", s: "eq", g: "nse_cm", t: "1" }], chains: [], count: 5 }) }));
 out.needsStale = await ask(stale, MON_0805);
+// each guard on a board of its own (a shared board would say no because of the 40-minute throttle, whatever the guard says)
+out.needsGuards = [await ask(mk(env), MON_0805), await ask(mk(env), Date.UTC(2026, 10, 9, 1, 30)), await ask(mk(env), Date.UTC(2026, 10, 7, 3, 0)), await ask(mk(env), Date.UTC(2026, 10, 9, 10, 10)), await ask(mk(env), Date.UTC(2026, 10, 9, 9, 50))];
+// the throttle survives an eviction: a new object on the same storage does not ask again within 40 minutes, and does after
+const shared = new Map(); await ask(mk(env, shared), MON_0805);
+out.needsEvicted = [await ask(mk(env, shared), MON_0805 + 10 * 60000), await ask(mk(env, shared), MON_0805 + 41 * 60000)];
+out.needsEdges = [await ask(mk(env), Date.UTC(2026, 10, 9, 2, 30)), await ask(mk(env), Date.UTC(2026, 10, 9, 10, 5)), await ask(mk(env), Date.UTC(2026, 10, 9, 10, 4))];          // 08:00 yes, 15:35 no, 15:34 yes
+out.needsCorrupt = [await ask(mk(env, new Map([["lastAsk", "x"]])), MON_0805), await ask(mk(env, new Map([["lastAsk", 9e15]])), MON_0805)];          // a bad or future stored time does not block
+class Failing extends Map { set(k, v) { if (k === "lastAsk") throw new Error("write failed"); return super.set(k, v); } }
+const fb = mk(env, new Failing()); out.needsPutFails = [await ask(fb, MON_0805), await ask(fb, MON_0805 + 10 * 60000)];          // the write fails: the in-memory throttle still holds
+{ const hb = mk(env); hb.k.consecutive_auth = 3; out.healthConsecAuth = hb.health(MON_0805).kotak.consecutive_auth; }
 out.needsViaWorker = [await needsUniverse({}), await needsUniverse(env)];
 // armLive from the cron
 out.armLive = [await armLive({}), await armLive({ ...env, KOTAK_CONSUMER_KEY: "" }), await armLive(env)];
@@ -286,4 +296,8 @@ def test_the_relay_asks_for_a_universe_rebuild_only_when_it_is_stale_and_not_too
     # 08:05 Mon: stale -> yes; 10 min later: no (asked); 41 min later: yes again; 07:00 Mon: too early; Saturday: no; poller off: no
     assert out["needs"] == [True, False, True, False, False, False]
     assert out["needsFresh"] is False and out["needsStale"] is True                      # today's universe is not rebuilt; yesterday's is
+    assert out["needsGuards"] == [True, False, False, False, True]          # 08:05 yes; 07:00, a Saturday morning and 15:40 no; 15:20 yes
+    assert out["needsEvicted"] == [False, True]
+    assert out["needsEdges"] == [True, False, True] and out["needsCorrupt"] == [True, True] and out["needsPutFails"] == [True, False]
+    assert out["healthConsecAuth"] == 3                                                       # the watchdog's refused-key rule reads this
     assert out["needsViaWorker"][0] is False
