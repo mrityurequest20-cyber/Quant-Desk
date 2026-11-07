@@ -244,6 +244,20 @@ def register(sub):
     x.add_argument("--budget-min", type=float, default=20.0, help="stop after this many minutes and record what is missing")
     x.add_argument("--out", help="default runtime/kite_evening")
     x.set_defaults(fn=cmd_kite_evening)
+    x = ss.add_parser("stock-tape", help="every-minute option chains (quotes and 5-level order book) of one shard of the F&O stocks until a time or the close (record-stocks.yml; Kotak consumer key, data only)")
+    x.add_argument("--shard", type=int, required=True)
+    x.add_argument("--shards", type=int, required=True)
+    x.add_argument("--part", required=True, help="e.g. morning-<shard>")
+    x.add_argument("--until", help="HH:MM IST (default the close)")
+    x.add_argument("--every-min", type=float, default=1.0, help="minutes between passes (1 = every minute; a rollback if Kotak's rate limit bites)")
+    x.add_argument("--out", default="runtime/stock-chains")
+    x.set_defaults(fn=cmd_stock_tape)
+    x = ss.add_parser("stock-chains-publish", help="merge a day's stock-chain parts into three Parquet files and a counts-only manifest, and keep them on the stock-chains-YYYYQn release")
+    x.add_argument("--parts", required=True, help="folder holding the parts' files")
+    x.add_argument("--day", required=True)
+    x.add_argument("--out", default="runtime/stock-chains-day")
+    x.add_argument("--push", action="store_true")
+    x.set_defaults(fn=cmd_stock_chains_publish)
     x = ss.add_parser("agreement", help="turn the relay's per-day Kite-vs-Kotak counts (a /live/health answer saved as JSON) into one small file a day: counts and percentages only (agreement.yml)")
     x.add_argument("--health", required=True)
     x.add_argument("--out", help="default runtime/agreement")
@@ -689,6 +703,67 @@ def cmd_kite_evening(cfg, a):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(f"### Kite evening candles {run.name}\n{line}\n")
+
+
+def cmd_stock_tape(cfg, a):
+    """One shard of the every-minute F&O stock chains. A Kotak problem is a ::warning:: and the exit status stays 0 (the other shards go on)."""
+    from ..core.calendar import TradingCalendar
+    from ..intraday.feeds import IST as TZ
+    from ..intraday.kotak import KotakClient, KotakError
+    from . import stock_chains as SC
+    now = pd.Timestamp.now(tz=TZ)
+    if not TradingCalendar(cfg.holidays()).is_trading_day(now.date()):
+        print(f"stock-tape: {now.date()} is not an NSE trading day; nothing to record")
+        return
+    if not 1.0 <= a.every_min <= 5.0:
+        raise SystemExit("stock-tape: --every-min must be between 1 and 5")
+    try:
+        client = KotakClient.from_env(min_gap=SC.MIN_GAP)                     # paced: at most 2.5 calls a second a shard
+    except KotakError:
+        print("::warning::stock-tape: no KOTAK_CONSUMER_KEY; nothing recorded")
+        return
+    try:
+        man = SC.run_shard(client, Path(a.out), a.shard, a.shards, a.part, dt.time.fromisoformat(a.until) if a.until else None, every_min=a.every_min, say=lambda m: print(m, flush=True))
+    except Exception as exc:                                              # noqa: BLE001 - one shard failing never fails the others
+        print(f"::warning::stock-tape shard {a.shard}: {type(exc).__name__}: {exc!s:.200}")
+        return
+    print(f"stock-tape shard {a.shard}/{a.shards} {a.part}: {man['recorded']} of {man['stocks']} stocks, {man['chain_rows']:,} chain rows, {man['depth_rows']:,} book rows, "
+          f"{man.get('failures')} failed attempts of {man.get('attempts')}", flush=True)
+    if man["stocks"] and man["recorded"] * 2 < man["stocks"]:
+        print(f"::warning::stock-tape shard {a.shard}: fewer than half the stocks recorded ({man['recorded']} of {man['stocks']})", flush=True)
+
+
+def cmd_stock_chains_publish(cfg, a):
+    import shutil
+
+    from . import stock_chains as SC
+    from .collect_wide import release_tag
+    from .warehouse import ReleaseStore
+    try:
+        dt.date.fromisoformat(a.day)
+    except ValueError:
+        raise SystemExit(f"stock-chains-publish: {a.day!r} is not a date") from None
+    out = Path(a.out)
+    if out.exists():
+        shutil.rmtree(out)
+    man = SC.consolidate(Path(a.parts), out, a.day)
+    print(f"{a.day}: {man['recorded']} of {man['stocks']} stocks, {man['minutes_total']:,} stock-minutes (coverage {man['coverage']}), rows {man['rows']}, {man['bad_parts']} unreadable part(s)", flush=True)
+    leak = SC.publishable(man)
+    if leak:
+        raise SystemExit(f"stock-chains-publish: the manifest would carry something it should not ({leak[:3]})")
+    if not a.push:
+        return
+    if not man["recorded"] or not man["files"]:                            # a late or empty run must never reach the release, let alone replace a good day
+        print("::warning::stock-chains-publish: nothing was recorded; nothing published", flush=True)
+        return
+    tag = release_tag("stock-chains", dt.date.fromisoformat(a.day), "quarter")
+    store = ReleaseStore(tag, title=f"Stock option chains {tag[-6:]}", notes="Every-minute option chains and five-level order books of the F&O stocks (Kotak), one set of files per day. Not a software release.")
+    try:
+        store.push(out, man["files"], clobber=False)                       # a day's data is written once: a name already there is never replaced, so a second run cannot degrade it
+        store.push(out, [f"{a.day}_stock_chains_manifest.json"], clobber=False)
+        print(f"pushed {len(man['files']) + 1} file(s) to release {tag}", flush=True)
+    except Exception as exc:                                              # noqa: BLE001 - a failed push (or a day already kept) is a warning; the parts are still artifacts
+        print(f"::warning::stock-chains-publish: not published ({exc!s:.150}); the parts are still artifacts", flush=True)
 
 
 def cmd_agreement(cfg, a):

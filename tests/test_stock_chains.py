@@ -101,7 +101,7 @@ def test_a_shard_records_every_minute_its_stocks_chain_and_order_book_and_writes
     assert len(bk) == len(ch) * 2                                                                         # a call and a put per strike
     m = json.loads((parts / f"{DAY}_morning-3_manifest.json").read_text())
     assert m["stocks"] == len(mine) and m["recorded"] == len(mine) and all(v >= 3 for v in m["minutes"].values()) and m["chain_rows"] == len(ch) and m["depth_rows"] == len(bk)
-    assert SC.publishable({"evidence": "x", "per_stock_minutes": m["minutes"], "stocks": 3}) == [] and not re.search(r"ltp|b1p|ce_bid|\"ask", json.dumps({k: v for k, v in m.items() if k != "note"}))
+    assert SC.publishable({"evidence": "x", "day": str(DAY), "note": "n", "per_stock_minutes": m["minutes"], "stocks": 3}) == [] and not re.search(r"ltp|b1p|ce_bid|\"ask", json.dumps({k: v for k, v in m.items() if k != "note"}))
 
 
 def test_one_stock_failing_costs_only_that_stock_and_is_in_the_manifest(tmp_path, monkeypatch):
@@ -111,7 +111,7 @@ def test_one_stock_failing_costs_only_that_stock_and_is_in_the_manifest(tmp_path
     src = K.KotakOptionChain(FakeClient(fail={mine[1]}), strikes=10, depth_levels=5)
     monkeypatch.setattr(src, "now", clk, raising=False)
     man = SC.run_shard(None, tmp_path, 0, 10, "morning-0", dt.time(9, 19), names=NAMES, source=src, clock=clk, sleep=clk.sleep, say=lambda *a: None)
-    assert man["recorded"] == len(mine) - 1 and mine[1] not in man["minutes"] and man["failures"] >= 1 and man["top_errors"]
+    assert man["recorded"] == len(mine) - 1 and mine[1] not in man["minutes"] and man["failures"] >= 1 and "top_errors" not in man
 
 
 def test_a_day_of_parts_merges_into_three_files_and_one_manifest_and_a_missing_depth_column_is_filled(tmp_path, monkeypatch):
@@ -186,3 +186,140 @@ def test_the_health_check_says_how_many_stocks_and_what_share_of_the_minutes_wer
     assert few.status == H.WARN and "150 of 200 stocks" in few.detail
     assert H.check_stock_chains(_Store(), DAY).status == H.MISSING
     assert "check_stock_chains(store, day)" in (ROOT / "quantdesk/data/health.py").read_text(encoding="utf-8")
+
+
+# ---- what the first review found: the commands exist, the rate is paced and guarded, a bad day cannot replace a good one --------------------------------------------------------------------
+
+def test_the_two_commands_the_workflow_calls_exist_and_parse():
+    import subprocess
+    import sys
+    for cmd, args in (("stock-tape", ["--shard", "0", "--shards", "10", "--part", "morning-0", "--until", "12:20", "--every-min", "1"]),
+                      ("stock-chains-publish", ["--parts", "p", "--day", "2026-11-09"])):
+        r = subprocess.run([sys.executable, "-m", "quantdesk", "data", cmd, *args, "--help"], capture_output=True, text=True, cwd=ROOT)
+        assert r.returncode == 0 and cmd in r.stdout, r.stderr[-300:]
+    text = WF.read_text(encoding="utf-8")
+    called = set(re.findall(r"quantdesk data (\S+)", text))
+    assert called == {"stock-tape", "stock-chains-publish"}                                                  # every command the workflow runs is one this test has parsed
+
+
+def test_the_first_pass_is_staggered_only_when_asked_and_the_index_tape_still_starts_at_once():
+    from quantdesk.intraday.tape import ChainTape
+    seen = []
+
+    class Src:
+        def expiries(self, u): return [DAY + dt.timedelta(days=3)]
+        def chain(self, u, e, ts=None, **kw): seen.append(ts); raise K.KotakError("x")
+
+    for stagger, first_tick_not_before in ((True, "09:15:40"), (False, "09:15:00")):
+        clk, seen[:] = Clock("2026-11-09 09:15:00"), []
+        t = ChainTape(Src(), Path("x"), {"AAA": 1}, clock=clk, sleep=clk.sleep, offset_s=40.0, stagger_first=stagger, say=lambda *a: None)
+        t.log = []
+        t._log = lambda row, day: None
+        t.run(dt.time(9, 17))
+        assert seen and seen[0] >= pd.Timestamp(f"2026-11-09 {first_tick_not_before}", tz=IST)
+
+
+def test_a_shard_stops_calling_kotak_after_a_run_of_failures_and_resumes_later():
+    clk = Clock()
+    calls = []
+
+    class Inner:
+        def expiries(self, u): return [DAY]
+        def chain(self, u, e, **kw): calls.append(clk()); raise K.KotakError("HTTP 429")
+
+    g = SC.GuardedSource(Inner(), now=clk, say=lambda *a: None)
+    for _ in range(SC.BREAKER_AFTER):
+        with pytest.raises(K.KotakError):
+            g.chain("AAA", DAY)
+    n = len(calls)
+    with pytest.raises(K.KotakError, match="breaker"):
+        g.chain("BBB", DAY)                                                                              # open: no call is made
+    with pytest.raises(K.KotakError, match="breaker"):
+        g.expiries("BBB")
+    assert len(calls) == n
+    clk.t += pd.Timedelta(seconds=SC.BREAKER_PAUSE_S + 1)
+    with pytest.raises(K.KotakError, match="429"):
+        g.chain("BBB", DAY)                                                                              # closed again: it tries
+    assert len(calls) == n + 1
+
+
+def test_a_stock_chain_gets_its_spot_and_iv_from_put_call_parity(monkeypatch):
+    _chain_parts(monkeypatch)
+    clk = Clock()
+    src = K.KotakOptionChain(FakeClient(), strikes=10, depth_levels=5)
+    monkeypatch.setattr(src, "now", clk, raising=False)
+    ch = SC.GuardedSource(src, now=clk).chain("S001", DAY + dt.timedelta(days=17), ts=clk())
+    assert ch.attrs["spot"] == ch.attrs["spot"] and ch.attrs["spot"] > 0 and ch.attrs.get("spot_from") == "put-call parity"
+
+
+def test_an_unreadable_part_costs_only_itself_and_is_counted(tmp_path, monkeypatch):
+    _chain_parts(monkeypatch)
+    clk = Clock()
+    src = K.KotakOptionChain(FakeClient(), strikes=10, depth_levels=5)
+    monkeypatch.setattr(src, "now", clk, raising=False)
+    SC.run_shard(None, tmp_path / "a", 0, 10, "morning-0", dt.time(9, 18), names=NAMES, source=src, clock=clk, sleep=clk.sleep, say=lambda *a: None)
+    parts = tmp_path / "all"
+    parts.mkdir()
+    for p in (tmp_path / "a" / "_parts").glob("*"):
+        (parts / p.name).write_bytes(p.read_bytes())
+    (parts / f"{DAY}_morning-9_chains.parquet").write_bytes(b"PAR1 truncated")                           # a job cancelled mid-write
+    (parts / f"{DAY}_morning-9_manifest.json").write_text("{not json")
+    tot = SC.consolidate(parts, tmp_path / "day", str(DAY))
+    assert tot["bad_parts"] == 2 and tot["recorded"] > 0 and tot["rows"]["chains"] > 0 and SC.publishable(tot) == []
+
+
+def test_the_published_manifest_is_counts_and_stock_names_only():
+    base = {"evidence": "stock_chain_tape", "source": "kotak", "day": str(DAY), "note": SC.NOTE, "parts": 3, "stocks": 2, "recorded": 2, "minutes_total": 5, "session_minutes": 375, "attempts": 9,
+            "failures": 0, "rows": {"chains": 10, "depth": 20, "tape": 3}, "files": [f"{DAY}_stock_chains.parquet"], "per_stock_minutes": {"AAA": 3, "BBB": 2}, "coverage": 0.1, "bad_parts": 0}
+    assert SC.publishable(base) == []
+    for bad in ({**base, "rows": {"chains": 1.5}}, {**base, "rows": {"price": 3}}, {**base, "files": ["secrets.txt"]}, {**base, "day": "x" * 20}, {**base, "note": "n" * 700}, {**base, "bad_parts": 1.5}):
+        assert SC.publishable(bad)
+
+
+def test_a_late_or_empty_run_cannot_publish_over_a_good_day(tmp_path, monkeypatch):
+    from quantdesk.data import cli as C
+    pushed = []
+
+    class Store:
+        def __init__(self, tag, **kw): self.tag = tag
+        def push(self, folder, names, clobber=True): pushed.append((self.tag, list(names), clobber))
+    import quantdesk.data.warehouse as W
+    monkeypatch.setattr(W, "ReleaseStore", Store)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    C.cmd_stock_chains_publish(None, type("A", (), {"parts": str(empty), "day": str(DAY), "out": str(tmp_path / "o1"), "push": True})())
+    assert pushed == []                                                                                  # nothing recorded: nothing published
+    _chain_parts(monkeypatch)
+    clk = Clock()
+    src = K.KotakOptionChain(FakeClient(), strikes=10, depth_levels=5)
+    monkeypatch.setattr(src, "now", clk, raising=False)
+    SC.run_shard(None, tmp_path / "a", 0, 10, "morning-0", dt.time(9, 18), names=NAMES, source=src, clock=clk, sleep=clk.sleep, say=lambda *a: None)
+    C.cmd_stock_chains_publish(None, type("A", (), {"parts": str(tmp_path / "a" / "_parts"), "day": str(DAY), "out": str(tmp_path / "o2"), "push": True})())
+    assert pushed and all(p[0] == "stock-chains-2026Q4" and p[2] is False for p in pushed)                # a day is written once: never clobbered
+    with pytest.raises(SystemExit):
+        C.cmd_stock_chains_publish(None, type("A", (), {"parts": "x", "day": "../../etc", "out": str(tmp_path / "o3"), "push": True})())
+
+
+def test_the_workflow_has_a_gate_holds_the_key_in_one_step_and_offers_a_rollback():
+    wf = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    jobs = wf["jobs"]
+    assert "gate" in jobs and jobs["morning"]["needs"] == "gate" and "gate.outputs.go" in jobs["morning"]["if"] and "skipped" in jobs["afternoon"]["if"] and "skipped" in jobs["publish"]["if"]
+    for j in ("morning", "afternoon"):
+        assert "env" not in jobs[j]                                                                      # the key is not a job-wide variable
+        keyed = [s for s in jobs[j]["steps"] if "KOTAK_CONSUMER_KEY" in yaml.safe_dump(s)]
+        assert len(keyed) == 1 and "stock-tape" in keyed[0]["run"]
+    on = wf.get("on", wf.get(True))
+    assert on["workflow_dispatch"]["inputs"]["every_min"]["default"] == "1" and wf["env"]["EVERY_MIN"] == "${{ inputs.every_min || '1' }}"
+
+
+def test_a_shard_does_not_fire_at_the_open_but_waits_for_its_own_offset_in_the_minute(tmp_path, monkeypatch):
+    _chain_parts(monkeypatch)
+    firsts = {}
+    for shard in (0, 9):
+        clk = Clock("2026-11-09 09:15:00")
+        src = K.KotakOptionChain(FakeClient(), strikes=10, depth_levels=5)
+        monkeypatch.setattr(src, "now", clk, raising=False)
+        SC.run_shard(None, tmp_path / str(shard), shard, 10, f"morning-{shard}", dt.time(9, 18), names=NAMES, source=src, clock=clk, sleep=clk.sleep, say=lambda *a: None)
+        ch = pd.read_parquet(tmp_path / str(shard) / "_parts" / f"{DAY}_morning-{shard}_chains.parquet")
+        firsts[shard] = pd.Timestamp(ch["ts"].min())
+    assert firsts[0] >= pd.Timestamp("2026-11-09 09:15:05", tz=IST) and firsts[9] >= pd.Timestamp("2026-11-09 09:15:50", tz=IST) > firsts[0]     # the shards do not all hit Kotak at 09:15:00

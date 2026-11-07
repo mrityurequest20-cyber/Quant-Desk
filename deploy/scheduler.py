@@ -113,7 +113,7 @@ def _ist(ts: str) -> dt.datetime:
 def _runs(workflow: str) -> list[dict]:
     return json.loads(subprocess.run(["gh", "run", "list", "--workflow", workflow, "--limit", "30", "--json",
                                       "status,conclusion,createdAt,event"], check=True, capture_output=True,
-                                     text=True).stdout or "[]")
+                                     text=True, timeout=120).stdout or "[]")
 
 
 def sleep_until(target: dt.datetime, say=print) -> bool:
@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
         try:
             wf_runs = _runs(wf)
-        except subprocess.CalledProcessError:
+        except (subprocess.SubprocessError, OSError, ValueError):                 # a hung or missing gh, a bad answer: for the extra recorders never fatal
             if wf == WORKFLOW:
                 raise
             print(f"{wf}: could not list its runs; not starting it")          # the Kite recorder never holds up the main one
@@ -148,8 +148,13 @@ def main(argv: list[str] | None = None) -> int:
         action, why = decide(now, wf_runs, hols, limit)
         print(f"{wf}: {action}: {why}")
         if action == "start":
-            subprocess.run(["gh", "workflow", "run", wf, "--ref", "main"], check=(wf == WORKFLOW))
-            print(f"dispatched {wf}")
+            try:
+                subprocess.run(["gh", "workflow", "run", wf, "--ref", "main"], check=(wf == WORKFLOW), timeout=120)
+                print(f"dispatched {wf}")
+            except (subprocess.SubprocessError, OSError):
+                if wf == WORKFLOW:
+                    raise
+                print(f"{wf}: could not be dispatched; the main recorder goes on")
             started = started or wf == WORKFLOW
         if wf == WORKFLOW:
             runs = wf_runs

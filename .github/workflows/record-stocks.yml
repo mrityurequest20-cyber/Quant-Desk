@@ -15,6 +15,9 @@ on:
       handover:
         description: "Morning shards hand over to the afternoon ones at (HH:MM IST)"
         default: "12:20"
+      every_min:
+        description: "Minutes between passes (1 = every minute; raise to 2 or 3 if Kotak's rate limit bites)"
+        default: "1"
 
 permissions:
   contents: read
@@ -27,17 +30,33 @@ env:
   PYTHONUNBUFFERED: "1"
   TZ: Asia/Kolkata
   HANDOVER: ${{ inputs.handover || '12:20' }}
+  EVERY_MIN: ${{ inputs.every_min || '1' }}
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.when.outputs.go }}
+    steps:
+      - id: when
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date +%H%M)" -ge 1500 ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::scheduled run started at $(date '+%H:%M') IST, after the session: nothing to do"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
   morning:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    env:
-      KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}    # data only: consumer key, no login, no orders
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -48,7 +67,9 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Record this shard's stocks to the hand-over
-        run: python -m quantdesk data stock-tape --shard ${{ matrix.shard }} --shards 10 --part "morning-${{ matrix.shard }}" --until "$HANDOVER"
+        env:
+          KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}    # data only: consumer key, no login, no orders; this step alone holds it
+        run: python -m quantdesk data stock-tape --shard ${{ matrix.shard }} --shards 10 --part "morning-${{ matrix.shard }}" --until "$HANDOVER" --every-min "$EVERY_MIN"
       - name: Keep the shard's morning (Parquet parts and a counts-only manifest)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -60,15 +81,13 @@ jobs:
 
   afternoon:
     needs: morning
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.morning.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    env:
-      KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -79,7 +98,9 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Record this shard's stocks to the close
-        run: python -m quantdesk data stock-tape --shard ${{ matrix.shard }} --shards 10 --part "afternoon-${{ matrix.shard }}"
+        env:
+          KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+        run: python -m quantdesk data stock-tape --shard ${{ matrix.shard }} --shards 10 --part "afternoon-${{ matrix.shard }}" --every-min "$EVERY_MIN"
       - name: Keep the shard's afternoon
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -91,7 +112,7 @@ jobs:
 
   publish:
     needs: afternoon
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.afternoon.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
