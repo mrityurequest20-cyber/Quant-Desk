@@ -276,7 +276,7 @@ def _full_store() -> H.MemoryStore:
     return _store(bars=_bars(), chains=_chains(), tape=_tape(), optmin={"underlyings": {"NIFTY": {"asked": 5, "served": 5, "last": f"{DAY} 15:29"}}},
                   stockmin={"totals": t}, stockopt=_stockopt(), evening=_evening(), history={"as_of": "2026-11-05", "series": {"NIFTY": {}}, "unverified_series": []},
                   fxmin=_fxmin(), fxdaily={"as_of": "2026-11-05", "series": {"EURUSD": {}}, "unverified_series": []},
-                  stockchains={"stocks": 200, "recorded": 200, "coverage": 0.97, "attempts": 80000, "failures": 900, "rows": {"chains": 3000000}}, warehouse=_wh({x: "2026-11-06" for x in H.CORE_WAREHOUSE_TABLES}),
+                  stockchains={"stocks": 200, "recorded": 200, "coverage": 0.97, "attempts": 80000, "failures": 900, "rows": {"chains": 3000000}},
                   agreement={"day": str(DAY), "cycles": 4400, "pairs": 100000, "disagree": 500, "agree_pct": 99.5, "opt_agree_pct": 99.0, "worst_cycle_pct": 2.0, "partial": False}, warehouse=_wh({x: "2026-11-06" for x in H.CORE_WAREHOUSE_TABLES}),
                   gift=pd.DataFrame({"ts": pd.date_range(dt.datetime.combine(DAY, dt.time(8, 30), tzinfo=IST), periods=5, freq="10min")}),
                   branches={"premarket": {"brief.json": json.dumps({"session": str(DAY)}).encode()}}, kite=[{"name": "kite-raw", "size": 9e6, "expired": False}])
