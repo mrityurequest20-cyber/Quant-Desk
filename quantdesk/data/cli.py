@@ -595,7 +595,7 @@ def cmd_evening_minutes(cfg, a):
         raise SystemExit("evening-minutes: no KOTAK_CONSUMER_KEY")
     out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "evening"
     segs = tuple(s.strip() for s in a.segments.split(",") if s.strip() in E.EXCHANGES)
-    today = pd.Timestamp.now(tz=TZ).date()
+    today = E.session_day(pd.Timestamp.now(tz=TZ))
     man = E.run(client, out, today, days=a.days, segments=segs, rate=a.rate, budget_s=a.budget_min * 60, say=lambda m: print(m, flush=True))
     run = Path(man["path"])
     line = ", ".join(f"{k} {t['served']}/{t['asked']}" for k, t in man["totals"].items()) or "nothing collected"

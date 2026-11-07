@@ -128,6 +128,16 @@ def test_the_time_budget_stops_cleanly_and_records_what_was_not_reached(tmp_path
     assert man["totals"]["mcx"]["not_attempted"] >= 1
 
 
+def test_a_run_after_midnight_belongs_to_the_evening_it_collects():
+    ist = lambda s: pd.Timestamp(s, tz=IST)                      # noqa: E731
+    assert E.session_day(ist("2026-11-06 23:45")) == dt.date(2026, 11, 6)                        # on time
+    assert E.session_day(ist("2026-11-07 01:10")) == dt.date(2026, 11, 6)                        # a late cron: still Friday's evening
+    assert E.session_day(ist("2026-11-07 05:59")) == dt.date(2026, 11, 6)
+    assert E.session_day(ist("2026-11-07 06:00")) == dt.date(2026, 11, 7)
+    cli = (ROOT / "quantdesk/data/cli.py").read_text(encoding="utf-8")
+    assert "E.session_day(pd.Timestamp.now(tz=TZ))" in cli                                          # the command uses it
+
+
 def test_the_collector_can_not_place_an_order_and_the_command_never_fails_a_run():
     src = (ROOT / "quantdesk/data/evening_minutes.py").read_text(encoding="utf-8")
     assert not re.search(r"place_order|\.order\(|modify_order|cancel_order|/orders|\bquick\b|trade\.", src, re.I)

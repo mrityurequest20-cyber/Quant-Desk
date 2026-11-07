@@ -27,6 +27,12 @@ NOTE = ("traded 1-minute bars (OHLC of trades, volume), not bid/ask quotes; the 
         "collected after the close; data collection only, nothing here trades")
 
 
+def session_day(now: pd.Timestamp) -> dt.date:
+    """The session a run belongs to. GitHub's cron can run hours late, and a run at 01:00 IST is still collecting the evening that ended at 23:30: before 06:00 IST it counts as the
+    previous day, so its files and manifest carry the day they hold and the health check finds them."""
+    return (now - pd.Timedelta(hours=6)).date()
+
+
 def future_underlyings(master: pd.DataFrame) -> tuple[list[str], list[str]]:
     """(names that have a future, every instrument type seen) from one scrip-master frame (pSymbolName / pInstType, as for the NSE F&O master)."""
     cols = {str(c).lower(): c for c in master.columns}
