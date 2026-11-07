@@ -237,3 +237,4 @@ def test_a_scrip_master_name_that_is_not_a_plain_symbol_never_reaches_the_output
     text = json.dumps(u)
     assert "::ERROR::X" not in text.upper() and "BAD" not in text and "SPACED" not in text
     assert any(q["n"] == "GOOD" for q in u["quotes"])
+    assert any("3 F&O stock names were not plain symbols" in e for e in u["errors"]) and not any("ERROR" in e for e in u["errors"])          # counted, never named

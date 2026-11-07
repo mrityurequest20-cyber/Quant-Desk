@@ -183,7 +183,7 @@ async function w10LiveFeed(c) {
 	if (!kite && !kotak) {
 		out.push({ sev: "P1", check: "W10", title: "Live prices: no source is delivering", link: "",
 			body: `At ${c.now.hhmm} IST no live price has arrived in the last ${LIVE_ALIVE_S / 60} minutes from either source. ${state}` });
-	} else if (kite !== kotak && h.kotak && h.kotak.configured && !refused) {          // a refused key has its own alert below: not a second one
+	} else if (kite !== kotak && h.kotak && h.kotak.configured && !(refused && kite)) {          // a refused key that leaves Kite carrying the view has its own alert below: not a second one
 		out.push({ sev: "P2", check: "W10", title: `Live prices: only ${kite ? "Kite" : "Kotak"} is delivering`, link: "",
 			body: `The other source has gone quiet; the app is running on one source. ${state}` });
 	}
