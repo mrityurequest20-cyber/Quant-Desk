@@ -63,7 +63,7 @@ export function whyOff(env) {
 		LIVE_INGEST_TOKEN: state(i),
 		LIVE_READ_TOKEN: state(r),
 		different: i && r && i === r ? "no: the two are the same string" : "ok",
-		seen: Object.keys(env || {}).filter((k) => /^(LIVE|KOTAK)/.test(k)).sort(),
+		seen: Object.keys(env || {}).filter((k) => /^(LIVE|KOTAK)/i.test(k)).map((k) => (/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(k) ? k : "(an unusual setting name)")).sort().slice(0, 20),          // a name only if it looks like one: a `NAME=value` typed into the name box is never echoed
 	};
 }
 
@@ -151,7 +151,11 @@ export async function needsUniverse(env) {
 export async function handleLive(request, env) {
 	const url = new URL(request.url);
 	if (!url.pathname.startsWith("/live/")) return null;
-	if (!configured(env)) return reply(503, { error: "the live view is not switched on", why: whyOff(env) });
+	if (!configured(env)) {
+		let why;
+		try { why = whyOff(env); } catch (e) { /* the diagnosis is a courtesy: the 503 is what matters, and it always returns */ }
+		return reply(503, { error: "the live view is not switched on", ...(why ? { why } : {}) });
+	}
 	const stub = env.LIVE.get(env.LIVE.idFromName("board"));
 	if (url.pathname === "/live/ingest") {
 		if (request.method !== "POST") return reply(405, { error: "POST only" });

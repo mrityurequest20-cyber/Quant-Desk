@@ -61,3 +61,34 @@ out.other = (await get({ LIVE }, "/data.json")).status === undefined;           
     for v in r.values():                                                                                        # no value in any body, however it is configured
         assert "secret-ingest" not in v["text"] and "secret-read" not in v["text"] and "kkkkk" not in v["text"] and "gggg" not in v["text"]
     assert out["on"] == 401 and out["other"] is None                                                           # on: the key check answers (no key sent); other paths are not the relay's
+
+
+@needs_node
+def test_a_name_that_is_not_a_plain_setting_name_is_never_echoed_a_lowercase_typo_shows_and_a_failing_diagnosis_still_gives_the_503(tmp_path):
+    out = run(tmp_path, r"""
+const SECRET = "abcdef0123456789abcdef0123456789";
+const env = { LIVE, ["LIVE_READ_TOKEN=" + SECRET]: "x", live_ingest_token: INGEST, ["LIVE" + "<script>\n"]: "y", KOTAK_CONSUMER_KEY: "k".repeat(20) };
+const r = await get(env);
+out.body = JSON.parse(r.text); out.text = r.text; out.status = r.status;
+const many = { LIVE }; for (let i = 0; i < 40; i++) many["LIVE_EXTRA_" + i] = "z";
+out.many = JSON.parse((await get(many)).text).why.seen.length;
+// a diagnosis that throws: the 503 still comes back as JSON, without a why
+const bad = { LIVE, get LIVE_INGEST_TOKEN() { throw new Error("boom"); } };
+let thrown = null, st = null, txt = null;
+try { const rr = await handleLive(new Request("https://x/live/snapshot"), { LIVE }); st = rr.status; } catch (e) { thrown = String(e); }
+out.plain = { st, thrown };
+// whyOff itself throwing (a getter that fails on the second read)
+let n = 0; const flaky = { LIVE, get LIVE_INGEST_TOKEN() { n += 1; if (n > 1) throw new Error("boom"); return ""; } };
+let r2 = null, e2 = null; try { const rr = await handleLive(new Request("https://x/live/snapshot"), flaky); r2 = { status: rr.status, body: await rr.json() }; } catch (e) { e2 = String(e); }
+out.flaky = { r2, e2 };
+""")
+    assert out["status"] == 503 and SECRET_NOT_IN(out["text"])
+    seen = out["body"]["why"]["seen"]
+    assert "live_ingest_token" in seen and "KOTAK_CONSUMER_KEY" in seen and "LIVE" in seen                          # a lowercase typo shows
+    assert out["many"] == 20                                                                                          # and the list is capped
+    assert "(an unusual setting name)" in seen and not any("=" in k or "<" in k for k in seen)                       # a NAME=value or odd name is replaced, never echoed
+    assert out["flaky"]["e2"] is None and out["flaky"]["r2"]["status"] == 503 and "why" not in out["flaky"]["r2"]["body"]      # whyOff failing: still the JSON 503
+
+
+def SECRET_NOT_IN(text: str) -> bool:
+    return "abcdef0123456789abcdef0123456789" not in text and "x".join("") == ""
