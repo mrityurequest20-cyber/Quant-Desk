@@ -34,3 +34,14 @@ it stopped for the day. The Cloudflare watchdog now checks the recorder (W1, W3)
 
 Sources: Kotak Neo (consumer key only: no login, no orders) when `KOTAK_CONSUMER_KEY` is set, else Yahoo bars and
 NSE's public chain. The recorder never reads the Kite feed (licensed to the subscriber).
+
+## Data sources and licences (decided 7 Nov 2026)
+
+| Data | Source | Where it is kept | Why |
+|---|---|---|---|
+| Kite ticks, Kite historical candles (MCX/currency evenings) | Zerodha Kite Connect, licensed to the subscriber | **encrypted artifacts only** (AES-256, the owner's API secret), never a release or the repository; releases carry counts and statuses only | the licence; this repository is public |
+| Kotak minutes, chains, bars | Kotak Neo market-data key | public releases (`chains-*`, `option-minutes-*`, `stock-minutes-*`) | existing arrangement, unchanged |
+| NSE bhavcopy and other NSE files | NSE public files | `warehouse` release | public files |
+| Daily history (indices, F&O stocks), FX daily and minutes | Yahoo Finance via `yfinance`; FX cross-checked against the ECB's public reference rates | public releases (`daily-history`, `fx-daily`, `fx-minutes-*`) | **owner's decision, 7 Nov 2026: "Yahoo redistribution. If you feel that is fine, it's fine."** Yahoo's terms are for personal use and do not grant redistribution, so this is an accepted, low, non-zero risk (at worst a takedown request), not a clearance. It is reversible: the datasets are rebuilt by one workflow run, and moving them to encrypted artifacts is a small change. Each manifest names its source. Nothing here is sold or served as a product. |
+
+Rule of thumb for any new source: if its terms forbid redistribution and it is paid for or contractual (Kite), it stays encrypted; if it is public or merely discouraged (Yahoo), it may be published with its source named, and the choice is recorded here.
