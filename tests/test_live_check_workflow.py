@@ -29,8 +29,8 @@ def test_it_holds_one_secret_reads_nothing_runs_no_third_party_code_and_follows_
     assert not re.search(r"curl[^\n]*(\s-[A-Za-z]*L[A-Za-z]*\b|\s--location)", SCRIPT)               # a redirect would forward the key (-L, -sSL, --location)
     assert not re.search(r"curl[^\n]*(\s-[A-Za-z]*v[A-Za-z]*\b|\s--verbose)", SCRIPT)               # no verbose output
     assert not re.search(r"set -x|curl[^\n]*( -v\b| --verbose)|echo[^\n]*\$\{?LIVE_READ_TOKEN", SCRIPT)      # nothing prints the key
-    assert 'https://*/live/ingest' in SCRIPT and "exit 1" in SCRIPT                          # https only (loopback aside, for the test)
-    assert re.search(r"-m 20", SCRIPT)                                                       # every call has a timeout
+    assert "^https://[A-Za-z0-9.-]+(:[0-9]+)?/live/ingest$" in SCRIPT and "exit 1" in SCRIPT      # a plain https host name only (loopback aside, for the test)
+    assert len(re.findall(r"curl ", SCRIPT)) == len(re.findall(r"curl -sS -m 20 ", SCRIPT)) == 3      # every call has a timeout
 
 
 class Relay(BaseHTTPRequestHandler):
@@ -42,6 +42,9 @@ class Relay(BaseHTTPRequestHandler):
     def do_GET(self):
         auth = self.headers.get("authorization")
         if Relay.mode == "off": return self._send(503, {"error": "the live view is not switched on"})
+        if Relay.mode == "hostile" and auth == "Bearer " + KEY:
+            if self.path == "/live/snapshot": return self._send(200, {"count": "5\n::warning::INJECTED\n::add-mask::ok", "newest_age_s": "1\n::error::x"})
+            return self._send(200, {"kite": {"n": "7\n::stop-commands::abc"}, "kotak": {"status": "ok\n::warning::HEALTH", "n": "5\n::error::y", "universe": {"asof": "2026-11-09\n::notice::z"}}})
         if auth != "Bearer " + (KEY if Relay.mode == "ok" else "something-else"): return self._send(401, {"error": "no"})
         if self.path == "/live/snapshot": return self._send(200, {"count": 12, "newest_age_s": 3.5, "quotes": {}})
         if self.path == "/live/health": return self._send(200, {"kite": {"n": 7}, "kotak": {"status": "ok", "n": 5, "universe": {"asof": "2026-11-09"}}})
@@ -63,7 +66,7 @@ def run_script(mode: str, tmp_path, token=KEY, url_tail="/live/ingest"):
 def test_the_right_key_opens_the_relay_and_the_summary_is_counts_only(tmp_path):
     code, out = run_script("ok", tmp_path)
     assert code == 0 and "Without a key: HTTP 401" in out and "With the READ key: HTTP 200" in out
-    assert "Instruments on the board: 12" in out and "Kite instruments: 7" in out and "Kotak: ok" in out
+    assert "Instruments on the board: 12" in out and "Kite instruments: 7" in out and 'Kotak: "ok"' in out
     assert KEY not in out
 
 
@@ -82,3 +85,37 @@ def test_it_refuses_a_plain_http_address_that_is_not_loopback(tmp_path):
     r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", SCRIPT], capture_output=True, text=True, timeout=30,
                        env={"PATH": "/usr/bin:/bin", "LIVE_URL": "http://example.com/live/ingest", "LIVE_READ_TOKEN": KEY}, cwd=tmp_path)
     assert r.returncode == 1 and "LIVE_URL must be https" in r.stdout and KEY not in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("url", [
+    "https://evil.com/x/live/ingest", "https://worker@evil.com/live/ingest", "https:///live/ingest", "http://127.0.0.1:1@evil.com/live/ingest",
+    "https://good.example/live/ingest/extra", "https://good.example/live/ingest?x=1", "https://good.example:99999999999/live/ingest#", "http://good.example/live/ingest",
+    "https://good example/live/ingest", "ftp://good.example/live/ingest", "https://good.example/live/ingest\n", "",
+])
+def test_an_address_that_is_not_a_plain_https_worker_address_is_refused_before_any_request(url, tmp_path):
+    r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", "curl() { echo CURL-WAS-CALLED; return 0; }; export -f curl; " + SCRIPT], capture_output=True, text=True, timeout=30,
+                       env={"PATH": "/usr/bin:/bin", "LIVE_URL": url, "LIVE_READ_TOKEN": KEY}, cwd=tmp_path)
+    assert r.returncode == 1 and "LIVE_URL must be https" in r.stdout and "CURL-WAS-CALLED" not in r.stdout + r.stderr and KEY not in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("url", ["https://quant-desk.mrityurequest2-0.workers.dev/live/ingest", "https://relay.example.com:8443/live/ingest"])
+def test_a_plain_worker_address_is_accepted(url, tmp_path):
+    r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", "curl() { echo 401; return 0; }; export -f curl; " + SCRIPT], capture_output=True, text=True, timeout=30,
+                       env={"PATH": "/usr/bin:/bin", "LIVE_URL": url, "LIVE_READ_TOKEN": KEY}, cwd=tmp_path)
+    assert "LIVE_URL must be https" not in r.stdout and "REJECTED" in r.stdout                  # it got past the guard (the stub answers 401)
+
+
+def test_a_hostile_relay_reply_cannot_put_a_workflow_command_in_the_log(tmp_path):
+    code, out = run_script("hostile", tmp_path)
+    assert code == 0 and "The READ key opens the relay" in out
+    assert not [l for l in out.splitlines() if l.lstrip().startswith("::")]                  # no line the runner would act on: values are printed as JSON, on one line
+    assert "INJECTED" in out and "stop-commands" in out                                      # the values are shown, quoted
+
+
+def test_an_unreachable_relay_reads_http_000_and_fails_cleanly(tmp_path):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Relay)
+    port = srv.server_port
+    srv.server_close()                                                                      # nothing listens on this port now
+    r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", SCRIPT], capture_output=True, text=True, timeout=60,
+                       env={"PATH": "/usr/bin:/bin:/usr/local/bin", "LIVE_URL": f"http://127.0.0.1:{port}/live/ingest", "LIVE_READ_TOKEN": KEY}, cwd=tmp_path)
+    assert r.returncode == 1 and "Without a key: HTTP 000" in r.stdout and "With the READ key: HTTP 000" in r.stdout and "000unreachable" not in r.stdout and "Unexpected answer (HTTP 000)" in r.stdout and KEY not in r.stdout + r.stderr
