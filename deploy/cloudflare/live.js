@@ -12,6 +12,7 @@
 // Ages are worked out here, from this Worker's clock when each quote arrived, so a stale feed shows as stale whatever the phone's clock says.
 
 import { KotakPoller, istParts, runCycle, inSession } from "./kotak.js";
+import { Series, shardKeys, FLUSH_MS } from "./series.js";
 
 const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 quotes is about 100 KB)
 const MAX_SYMBOLS = 3000;               // in one push
@@ -172,6 +173,13 @@ export async function handleLive(request, env) {
 		if (!(await same(bearer(request), String(env.LIVE_READ_TOKEN).trim()))) return reply(401, { error: "no" });
 		return stub.fetch("https://live/snapshot");
 	}
+	if (url.pathname === "/live/series") {
+		if (request.method !== "GET") return reply(405, { error: "GET only" });
+		if (!(await same(bearer(request), String(env.LIVE_READ_TOKEN).trim()))) return reply(401, { error: "no" });
+		const name = url.searchParams.get("name") || "";
+		if (!SYMBOL.test(name)) return reply(400, { error: "not an instrument name" });
+		return stub.fetch("https://live/series?name=" + encodeURIComponent(name));
+	}
 	return reply(404, { error: "no such live path" });
 }
 
@@ -197,6 +205,8 @@ export class LiveBoard {
 		this.state = state;
 		this.env = env || {};
 		this.quotes = new Map();                    // name -> {z?: quote, k?: quote}, each with `at`
+		this.series = new Series();                 // one close a minute per instrument, for the app's chart (series.js); stored in shards
+		this.lastFlush = 0;
 		this.seq = 0;
 		this.now = () => Date.now();
 		this.fetchFn = null;                        // test hooks for the Kotak poller
@@ -208,6 +218,7 @@ export class LiveBoard {
 		this.ready = state.blockConcurrencyWhile(async () => {
 			const u = cleanUniverse(await state.storage.get("universe"));                    // re-validated on every reload: storage is not trusted either
 			if (u) this.universe = u;
+			try { this.series.load(await state.storage.get(shardKeys())); } catch (e) { /* no chart history: the board still starts */ }
 		});
 	}
 
@@ -222,6 +233,7 @@ export class LiveBoard {
 			if (!e.z && !e.k) { this.quotes.delete(name); gone += 1; }
 		}
 		this.k.pruned += gone;
+		this.series.prune(now);
 		return gone;
 	}
 
@@ -239,6 +251,7 @@ export class LiveBoard {
 		let at = now;
 		if (!prev && Number.isFinite(lst)) at = Math.min(now, Math.max(lst, now - FIRST_SEEN_MS));      // first sight of a price Kotak itself dates: a last-known price is as old as it is
 		e[src] = { ...quote, at };
+		this.series.add(name, now, quote.ltp);
 		return true;
 	}
 
@@ -256,6 +269,7 @@ export class LiveBoard {
 		let delay = 60000, rearm = true;
 		try {
 			this.prune(t0);
+			await this.maybeFlush(t0);
 			if (!this.kotakConfigured()) { this.k.status = "off"; rearm = false; }
 			else if (!this.universe) this.k.status = "no universe";
 			else if (!inSession(t0)) this.k.status = "idle";
@@ -344,11 +358,19 @@ export class LiveBoard {
 		};
 	}
 
+	// The chart series are written to storage at most every five minutes, and only the shards that changed (series.js). Never raises: a chart is not worth the board.
+	async maybeFlush(now) {
+		if (now - this.lastFlush < FLUSH_MS) return;
+		this.lastFlush = now;
+		try { await this.series.flush(this.state.storage); } catch (e) { /* the shards stay marked and the next flush tries again */ }
+	}
+
 	async fetch(request) {
 		await this.ready;
 		const now = this.now();
-		const path = new URL(request.url).pathname;
+		const url = new URL(request.url), path = url.pathname;
 		if (now - this.lastPrune > 5 * 60000) this.prune(now);                                  // also when only Kite is pushing and no alarm runs
+		await this.maybeFlush(now);
 		await this.arm().catch(() => {});
 		if (request.method === "POST" && path === "/push") {                                    // Kite, from the recorder
 			const { quotes, dropped } = await request.json();
@@ -375,6 +397,10 @@ export class LiveBoard {
 				&& !(this.universe && this.universe.asof === t.date) && !asked;
 			if (need) this.lastAsk = now;
 			return reply(200, { need });
+		}
+		if (path === "/series") {
+			const name = url.searchParams.get("name") || "";
+			return reply(200, { name, ...(SYMBOL.test(name) ? this.series.view(name) : { day: [], prev_close: null }) });
 		}
 		if (path === "/health") return reply(200, this.health(now));
 		return reply(200, this.snapshot(now));
