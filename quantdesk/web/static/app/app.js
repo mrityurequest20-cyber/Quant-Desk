@@ -1619,6 +1619,12 @@ function liveDraw() {
 	const counts = {};
 	for (const [n, v] of Object.entries(data.quotes)) { const k = liveSeg(n, v); counts[k] = (counts[k] || 0) + 1; }
 	$("#lv-count").textContent = Object.keys(data.quotes).length.toLocaleString("en-IN") + " instruments · every 5 s";
+	const hl = L.health, ln = $("#lv-sources");
+	if (hl && ln) {                                                   // the state of each source, from /live/health
+		const kt = hl.kotak || {}, kk = hl.kite || {};
+		const ok = (n, a) => (n > 0 && fin(a) && a <= LIVE_FRESH * 2 ? "●" : "○");
+		ln.textContent = `${ok(kk.n, kk.newest_age_s)} Kite ${kk.n || 0}  ·  ${ok(kt.n, kt.newest_age_s)} Kotak ${kt.n || 0}${kt.status && kt.status !== "ok" ? " (" + kt.status + ")" : ""}  ·  ${hl.disagree ? "⚠ " + hl.disagree + " disagree" : "sources agree"}`;
+	}
 	document.querySelectorAll("#lv-segs .chip").forEach((c) => { c.setAttribute("aria-pressed", String(c.dataset.k === L.seg)); const n = c.dataset.k === "all" ? Object.keys(data.quotes).length : counts[c.dataset.k] || 0; c.lastChild.textContent = " " + n; });
 	document.querySelectorAll("#lv-sorts .chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.k === L.sort)));
 	const rows = liveRows(data), shown = rows.slice(0, L.limit), tb = $("#lv-table");
@@ -1627,8 +1633,10 @@ function liveDraw() {
 	const trs = shown.map((n) => {
 		const v = data.quotes[n], old = v.age_s > LIVE_DELAYED, seg = liveSeg(n, v);
 		const chg = fin(v.chg) ? h("span", { class: "chg " + (v.chg > 0 ? "up" : v.chg < 0 ? "dn" : "flat") }, (v.chg > 0 ? "+" : "") + v.chg.toFixed(2) + "%") : "—";
-		const book = fin(v.bid) && fin(v.ask) ? " · " + livePx(v.bid, seg) + " / " + livePx(v.ask, seg) : "";               // bid / ask, only where the feed carries depth (the core instruments)
-		return h("tr", { style: old ? "opacity:.55" : null }, h("td", {}, liveLabel(n, v), h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(v.age_s) + " ago" + book)), h("td", {}, livePx(v.ltp, seg)), h("td", {}, chg),
+		const book = fin(v.bid) && fin(v.ask) ? " · " + livePx(v.bid, seg) + " / " + livePx(v.ask, seg) : "";               // bid / ask, where either feed carries a book
+		const src = v.src === "z" ? "Kite" : v.src === "k" ? "Kotak" : "";
+		const flag = fin(v.x) ? h("span", { class: "warn" }, " · ⚠ the two sources differ " + v.x.toFixed(1) + "%") : null;     // Kite and Kotak disagree by more than a spread explains
+		return h("tr", { style: old ? "opacity:.55" : null }, h("td", {}, liveLabel(n, v), h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + book, flag)), h("td", {}, livePx(v.ltp, seg)), h("td", {}, chg),
 			h("td", { class: "f2" }, fin(v.vol) ? LIVE_VOL.format(v.vol) : "—"));
 	});
 	put(tb, h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Name", "Last", "Change", "Volume"].map((x) => h("th", {}, x)))), h("tbody", {}, trs))),
@@ -1643,6 +1651,7 @@ function liveBuild() {
 	const sort = h("div", { class: "chips", id: "lv-sorts", style: "padding:0 16px 8px" }, h("span", { class: "f3", style: "font-size:11.5px;align-self:center" }, "Sort"),
 		LIVE_SORTS.map(([k, t]) => h("button", { class: "chip", "data-k": k, "aria-pressed": "false", onclick: () => { L.sort = k; liveDraw(); } }, t)));
 	put(body, h("div", { class: "pad", style: "display:flex;justify-content:space-between;align-items:center" }, h("span", { id: "lv-pill", class: "pill paused" }, h("span", { class: "dot" }), h("b", { id: "lv-pill-t" }, "")), h("span", { id: "lv-count", class: "f3", style: "font-size:11.5px" }, "")),
+		h("div", { id: "lv-sources", class: "f3", style: "font-size:11.5px;padding:0 16px 8px" }, ""),
 		h("div", { style: "padding:0 16px 10px" }, search), seg, sort, h("div", { id: "lv-table" }),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:12px 16px" },
 			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. Index options are the strikes near the money; the full chains are recorded each minute elsewhere. This tab only displays: nothing here can place an order. ",
@@ -1667,6 +1676,9 @@ async function renderLive() {
 		else if (r.status === 503) note = "The live feed is not switched on yet: the Worker still needs its two secrets (docs/LIVE.md).";
 		else if (!r.ok || !/json/.test(r.headers.get("content-type") || "")) note = "Live prices are on the Cloudflare site only; this address cannot reach them.";
 		else j = await r.json();
+		if (j && (S.lv.tick = (S.lv.tick || 0) + 1) % 3 === 1) {                      // the sources' health, every third refresh (about 15 s)
+			try { const hr = await fetch("/live/health", { headers: { Authorization: "Bearer " + key }, cache: "no-store" }); if (hr.ok) S.lv.health = await hr.json(); } catch (e) { /* the table still shows */ }
+		}
 	} catch (e) { note = "Offline: no live prices."; }
 	finally { liveBusy = false; }
 	if (S.tab !== "live") return;

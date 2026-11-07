@@ -198,10 +198,15 @@ class Recorder:
             self.wide_part = part
         except Exception:                                          # noqa: BLE001
             with self.lock:
-                self.wide_rows = (rows + self.wide_rows)[-MAX_WIDE_BUFFER:]
+                kept = rows + self.wide_rows
+                self.wide_dropped += max(0, len(kept) - MAX_WIDE_BUFFER)      # the oldest rows are dropped to stay bounded: counted, never silent
+                self.wide_rows = kept[-MAX_WIDE_BUFFER:]
 
     def flush(self) -> Path | None:
-        self._flush_wide()
+        try:
+            self._flush_wide()
+        except Exception:                                          # noqa: BLE001 - the wide universe is best effort: a freak error there must never skip the core flush below
+            pass
         with self.lock:
             rows, self.rows = self.rows, []
             events, self.events = self.events, []

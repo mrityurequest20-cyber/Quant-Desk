@@ -29,6 +29,7 @@ def stage_worker(tmp_path):
     shutil.copyfile(ROOT / _config()["main"], tmp_path / "worker.mjs")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "watchdog.js", tmp_path / "watchdog.js")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "live.js", tmp_path / "live.js")
+    shutil.copyfile(ROOT / "deploy" / "cloudflare" / "kotak.js", tmp_path / "kotak.js")
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
 
 

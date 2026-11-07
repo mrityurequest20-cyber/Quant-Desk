@@ -32,6 +32,17 @@ SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt")
 NAME_OK = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")                # what the live relay accepts as a symbol: an instrument named otherwise is not subscribed (it could never be shown)
 
 
+_MON = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+
+
+def option_name(underlying: str, expiry, strike: float, side: str) -> str:
+    """The one name BOTH live sources use for an option (NIFTY12NOV2624500CE), so a price from Kite or from Kotak lands on the same row. Kite's own trading symbol
+    (NIFTY2611224500CE for a weekly) is not Kotak's; this is derived from the contract's facts and is identical to `optionName` in deploy/cloudflare/kotak.js."""
+    d = pd.Timestamp(expiry).date()
+    k = int(strike) if float(strike).is_integer() else strike
+    return f"{underlying}{d.day:02d}{_MON[d.month - 1]}{d.year % 100:02d}{k}{side}"
+
+
 def _frame(kite, exchange: str, errors: list[str]) -> pd.DataFrame:
     try:
         df = pd.DataFrame(kite.instruments(exchange))
@@ -124,7 +135,7 @@ def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBS
                 atm = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
                 keep = set(strikes[max(0, atm - OPT_STEPS): atm + OPT_STEPS + 1])
                 for r in oe[oe["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
-                    add(str(r.tradingsymbol), r.instrument_token, "opt", str(r.instrument_type), name=fam, expiry=str(expiry), strike=float(r.strike))
+                    add(option_name(fam, expiry, float(r.strike), str(r.instrument_type)), r.instrument_token, "opt", str(r.instrument_type), name=fam, expiry=str(expiry), strike=float(r.strike))
 
     room = max(0, int(limit) - len(core))
     if len(tokens) > room:
