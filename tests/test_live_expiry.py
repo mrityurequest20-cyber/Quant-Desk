@@ -55,26 +55,31 @@ out.notOptions = ["NIFTY", "NIFTY-FUT", "RELIANCE", "CRUDEOIL-MCX", "USDINR-CDS"
 @needs_node
 def test_a_prune_drops_expired_contracts_on_the_day_after_and_keeps_the_expiry_day(tmp_path):
     out = run(tmp_path, r"""
+const live = { NIFTY: { ltp: 24500 }, NIFTY12NOV2624500CE: { ltp: 2 }, NIFTY19NOV2624500CE: { ltp: 3 } };          // refreshed at each step, so only the expiry rule can remove them
+now = Date.UTC(2026, 10, 4, 4, 30);                                                        // 4 Nov: all three option contracts are still live
 const b = mk(); await b.ready;
-await push(b, { NIFTY: { ltp: 24500 }, "NIFTY-FUT": { ltp: 24530 }, NIFTY05NOV2624500CE: { ltp: 1 }, NIFTY12NOV2624500CE: { ltp: 2 }, NIFTY19NOV2624500CE: { ltp: 3 } });
+await push(b, { ...live, NIFTY05NOV2624500CE: { ltp: 1 } });
+out.live = await names(b);
+now = Date.UTC(2026, 10, 6, 4, 30); await push(b, live);                                   // 6 Nov: the 5 Nov contract has expired
+out.afterFirst = await names(b);
+now = Date.UTC(2026, 10, 12, 4, 30); await push(b, live);                                  // 12 Nov, its own expiry day: still shown
 out.expiryDay = await names(b);
-now += 5 * 60000 + 1; await push(b, { NIFTY: { ltp: 24501 } });                          // a prune runs (every five minutes on a request)
-out.expiryDayAfterPrune = await names(b);
-now = Date.UTC(2026, 10, 13, 4, 30);                                                       // the day after the 12 Nov expiry
-await push(b, { NIFTY: { ltp: 24502 } });
+now = Date.UTC(2026, 10, 13, 4, 30); await push(b, live);                                  // 13 Nov: gone (the push of the expired name is refused, the prune removes the old one)
 out.dayAfter = await names(b);
 out.pruned = b.health(now).kotak.pruned;
 """)
-    assert "NIFTY05NOV2624500CE" in out["expiryDay"]                                            # nothing has pruned yet in this request
-    assert out["expiryDayAfterPrune"] == ["NIFTY", "NIFTY-FUT", "NIFTY12NOV2624500CE", "NIFTY19NOV2624500CE"]      # the 5 Nov contract is gone, the expiry-day one stays
-    assert out["dayAfter"] == ["NIFTY", "NIFTY-FUT", "NIFTY19NOV2624500CE"] and out["pruned"] == 2
+    assert "NIFTY05NOV2624500CE" in out["live"] and len(out["live"]) == 4                       # live on 4 Nov
+    assert out["afterFirst"] == ["NIFTY", "NIFTY12NOV2624500CE", "NIFTY19NOV2624500CE"]         # the 5 Nov contract is gone
+    assert out["expiryDay"] == ["NIFTY", "NIFTY12NOV2624500CE", "NIFTY19NOV2624500CE"]         # the expiry day itself stays
+    assert out["dayAfter"] == ["NIFTY", "NIFTY19NOV2624500CE"] and out["pruned"] >= 2                # counted (stale removals between the steps add to it)
 
 
 @needs_node
 def test_an_expiry_roll_cannot_fill_the_board_so_new_contracts_are_still_accepted(tmp_path):
     out = run(tmp_path, r"""
+now = Date.UTC(2026, 10, 4, 4, 30);                                                        // 4 Nov: the 5 Nov contracts are live and fill the board
 const b = mk(); await b.ready;
-// the board is full: 5,900 contracts of an expiry that has passed, and 100 current names
+// the board is full: 5,900 contracts of an expiry that will pass, and 100 current names
 const old = {}; for (let i = 0; i < 5900; i++) old["S" + i + "05NOV2610" + (i % 90) + "CE"] = { ltp: 1 };
 for (let k = 0; k < 3; k++) { const part = {}; Object.entries(old).slice(k * 2000, k * 2000 + 2000).forEach(([n, q]) => { part[n] = q; }); await push(b, part); }
 const cur = {}; for (let i = 0; i < 100; i++) cur["C" + i] = { ltp: 2 };
@@ -87,3 +92,32 @@ out.after = { accepted: r.n, refused: r.refused, size: b.quotes.size, hasNew: b.
     assert out["full"] == 6000                                                                  # it really was full
     assert out["after"]["accepted"] == 2 and out["after"]["refused"] == 0 and out["after"]["hasNew"] is True      # the expired names made room
     assert out["after"]["size"] < 200
+
+
+@needs_node
+def test_an_expired_contract_cannot_be_put_back_by_an_old_universe_or_recorder(tmp_path):
+    out = run(tmp_path, r"""
+const b = mk(); await b.ready;
+const r = await push(b, { NIFTY: { ltp: 24500 }, NIFTY05NOV2624500CE: { ltp: 1 }, NIFTY12NOV2624500CE: { ltp: 2 } });          // 12 Nov: the 5 Nov contract is expired, the 12 Nov one expires today
+out.push = { n: r.n, refused: r.refused, names: await names(b) };
+out.direct = [b.put("NIFTY05NOV2624600CE", "k", { ltp: 3 }, true), b.put("NIFTY19NOV2624600CE", "k", { ltp: 3 }, true)];
+""")
+    assert out["push"]["n"] == 2 and out["push"]["refused"] == 1 and out["push"]["names"] == ["NIFTY", "NIFTY12NOV2624500CE"]
+    assert out["direct"] == [False, True]                                                       # the Kotak poller's path too
+
+
+@needs_node
+def test_the_date_is_the_ist_date_a_little_after_midnight_in_india_not_the_utc_date(tmp_path):
+    out = run(tmp_path, r"""
+const b = mk(); await b.ready;
+await push(b, { NIFTY12NOV2624500CE: { ltp: 2 }, NIFTY19NOV2624500CE: { ltp: 3 } });
+now = Date.UTC(2026, 10, 12, 19, 0);                                                        // 19:00 UTC on 12 Nov = 00:30 IST on 13 Nov: the 12 Nov contract is gone in India already
+b.prune(now);
+out.after = await names(b);
+now = Date.UTC(2026, 10, 12, 18, 0);                                                        // 23:30 IST on 12 Nov: still the expiry day
+const c = mk(); await c.ready; now = Date.UTC(2026, 10, 12, 18, 0);
+await push(c, { NIFTY12NOV2624500CE: { ltp: 2 } });
+c.prune(now);
+out.beforeMidnight = await names(c);
+""")
+    assert out["after"] == ["NIFTY19NOV2624500CE"] and out["beforeMidnight"] == ["NIFTY12NOV2624500CE"]
