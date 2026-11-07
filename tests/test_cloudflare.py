@@ -172,3 +172,50 @@ def test_the_collect_wide_crons_match_the_workflows_own_schedule():
     assert crons == {"55 9 * * MON-FRI": "stocks", "15 10 * * MON-FRI": "minutes"}
     assert {c.replace("MON-FRI", "1-5") for c in crons} == sched                    # GitHub numbers Mon-Fri 1-5, Cloudflare by name
     assert "stocks | minutes" in wf                                                  # the workflow_dispatch step input the Worker sets
+
+
+KEEPALIVE = r"""
+import worker from "./worker.mjs";
+const gh = [];
+globalThis.fetch = async (url, init) => { gh.push(String(url).split("/workflows/")[1]); return new Response(null, { status: 204 }); };
+console.log = () => {};
+const secrets = { LIVE_INGEST_TOKEN: "i".repeat(30), LIVE_READ_TOKEN: "r".repeat(30), KOTAK_CONSUMER_KEY: "k".repeat(20), GH_DISPATCH_TOKEN: "t0k" };
+const stub = (need) => ({ idFromName: () => "b", get: () => ({ fetch: async (u) => new Response(JSON.stringify(String(u).endsWith("needs-universe") ? { need } : { ok: true })) }) });
+const out = {};
+// 1. the poller is on and its universe is stale: the cron re-arms it and dispatches the universe workflow, besides the desk scheduler
+let pending = []; gh.length = 0;
+await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { ...secrets, LIVE: stub(true) }, { waitUntil: (p) => pending.push(p) });
+await Promise.all(pending);
+out.stale = [...gh];
+// 2. not stale: no universe dispatch
+pending = []; gh.length = 0;
+await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { ...secrets, LIVE: stub(false) }, { waitUntil: (p) => pending.push(p) });
+await Promise.all(pending);
+out.fresh = [...gh];
+// 3. the live object HANGS: scheduled() still returns and the desk scheduler was still dispatched (the live path is never awaited)
+gh.length = 0;
+const hang = { idFromName: () => "b", get: () => ({ fetch: () => new Promise(() => {}) }) };
+const done = await Promise.race([worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { ...secrets, LIVE: hang }, { waitUntil: () => {} }).then(() => "returned"), new Promise((r) => setTimeout(() => r("held up"), 3000))]);
+out.hang = { done, gh: [...gh] };
+// 4. no ctx, no LIVE binding, a throwing LIVE: nothing breaks
+let err = null;
+try {
+  await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, secrets, undefined);
+  await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { ...secrets, LIVE: { idFromName: () => { throw new Error("no"); }, get: () => { throw new Error("no"); } } }, { waitUntil: (p) => p });
+} catch (e) { err = String(e); }
+out.err = err;
+process.stdout.write(JSON.stringify(out) + "\n");
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_cron_keeps_the_live_poller_going_without_ever_holding_up_the_desks_alarm_clock(tmp_path):
+    stage_worker(tmp_path)
+    (tmp_path / "keep.mjs").write_text(KEEPALIVE, encoding="utf-8")
+    run = subprocess.run(["node", "keep.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+    assert sorted(out["stale"]) == ["kotak-universe.yml/dispatches", "scheduler.yml/dispatches"]
+    assert out["fresh"] == ["scheduler.yml/dispatches"]
+    assert out["hang"]["done"] == "returned" and "scheduler.yml/dispatches" in out["hang"]["gh"]
+    assert out["err"] is None

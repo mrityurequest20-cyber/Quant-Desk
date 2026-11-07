@@ -15,7 +15,7 @@ INGEST, READ, KEY = "i" * 32, "r" * 32, "kotak-consumer-key-0123456789"
 
 HARNESS = r"""
 import * as K from "./kotak.js";
-import { handleLive, LiveBoard, cleanUniverse, armLive } from "./live.mjs";
+import { handleLive, LiveBoard, cleanUniverse, armLive, needsUniverse } from "./live.mjs";
 const out = {};
 const MON_10AM = Date.UTC(2026, 10, 9, 4, 30);        // Mon 9 Nov 2026 10:00 IST
 const SAT_10AM = Date.UTC(2026, 10, 7, 4, 30);
@@ -145,6 +145,16 @@ out.restart = { universe: board.universe === null ? 0 : board.universe.quotes.le
 // not configured: no alarm, no calls
 const idle = new LiveBoard({ ...state, storage: { ...state.storage, getAlarm: async () => null, setAlarm: async () => { throw new Error("no alarm for an unconfigured poller"); } } }, { ...env, KOTAK_CONSUMER_KEY: "" });
 await idle.arm(); calls.length = 0; await idle.alarm(); out.unconfigured = { calls: calls.length, status: idle.k.status };
+// the relay asks for a rebuild of a stale universe, at most once in 40 minutes, only on a weekday morning, only when the poller is on
+const mk = (e) => { const m2 = new Map(); const b = new LiveBoard({ storage: { get: async (k) => m2.get(k), put: async (k, v) => { m2.set(k, v); }, getAlarm: async () => null, setAlarm: async () => {} }, blockConcurrencyWhile: async (fn) => fn() }, e); return b; };
+const ask = async (b, t) => { b.now = () => t; const r = await b.fetch(new Request("https://live/needs-universe", { method: "POST" })); return (await r.json()).need; };
+const nb = mk(env), MON_0805 = Date.UTC(2026, 10, 9, 2, 35);
+out.needs = [await ask(nb, MON_0805), await ask(nb, MON_0805 + 10 * 60000), await ask(nb, MON_0805 + 41 * 60000), await ask(nb, Date.UTC(2026, 10, 9, 1, 30)), await ask(nb, Date.UTC(2026, 10, 7, 3, 0)), await ask(mk({ ...env, KOTAK_CONSUMER_KEY: "" }), MON_0805 + 3600000 * 3)];
+const fresh = mk(env); await fresh.fetch(new Request("https://live/universe", { method: "POST", body: JSON.stringify({ asof: "2026-11-09", quotes: [{ n: "A", s: "eq", g: "nse_cm", t: "1" }], chains: [], count: 5 }) }));
+out.needsFresh = await ask(fresh, MON_0805);
+const stale = mk(env); await stale.fetch(new Request("https://live/universe", { method: "POST", body: JSON.stringify({ asof: "2026-11-06", quotes: [{ n: "A", s: "eq", g: "nse_cm", t: "1" }], chains: [], count: 5 }) }));
+out.needsStale = await ask(stale, MON_0805);
+out.needsViaWorker = [await needsUniverse({}), await needsUniverse(env)];
 // armLive from the cron
 out.armLive = [await armLive({}), await armLive({ ...env, KOTAK_CONSUMER_KEY: "" }), await armLive(env)];
 console.log(JSON.stringify(out));
@@ -270,3 +280,10 @@ def test_the_live_tab_shows_each_prices_source_the_disagreement_flag_and_the_sou
     app = (ROOT / "quantdesk/web/static/app/app.js").read_text()
     for needle in ('v.src === "z" ? "Kite"', '"Kotak"', "v.x.toFixed(1)", "the two sources differ", "/live/health", "lv-sources", "disagree", "sources agree"):
         assert needle in app, needle
+
+
+def test_the_relay_asks_for_a_universe_rebuild_only_when_it_is_stale_and_not_too_often(out):
+    # 08:05 Mon: stale -> yes; 10 min later: no (asked); 41 min later: yes again; 07:00 Mon: too early; Saturday: no; poller off: no
+    assert out["needs"] == [True, False, True, False, False, False]
+    assert out["needsFresh"] is False and out["needsStale"] is True                      # today's universe is not rebuilt; yesterday's is
+    assert out["needsViaWorker"][0] is False
