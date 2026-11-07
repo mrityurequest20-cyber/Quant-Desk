@@ -49,7 +49,9 @@ KITE_LOOKBACK_DAYS = 3                      # kite_artifacts lists only the newe
 TAPE_WARN, TAPE_BAD = 0.05, 0.20            # share of failed fetch attempts
 # when each channel is due, IST on the trading day (before that it is PENDING, not MISSING)
 DUE = {"gift": dt.time(9, 0), "premarket": dt.time(9, 20), "session": dt.time(16, 30), "minutes": dt.time(18, 30),
-       "kite": dt.time(16, 30), "warehouse": dt.time(21, 0)}
+       "kite": dt.time(16, 30), "warehouse": dt.time(21, 0),
+       "evening": dt.time(7, 0),                  # the PREVIOUS evening's MCX/currency minutes (collected at 23:45): judged from 07:00 the next morning
+       "history": dt.time(0, 0)}
 
 
 @dataclass
@@ -409,6 +411,82 @@ def check_stock_minutes(store, day: dt.date) -> Check:
                  False, {"worst_served_ratio": round(worst, 4)})
 
 
+def check_stock_option_minutes(store, day: dt.date) -> Check:
+    """The stocks' near-the-money option minutes (collect-wide.yml's 15:45 job): per stock, how many of the contracts asked for were served."""
+    m = _manifest(store, day, "option-minutes-", f"{day}_stock_manifest.json")
+    if m is None:
+        return Check("stock option minutes", MISSING, "no stock manifest for the day")
+    st = m.get("stocks") or {}
+    if not st:
+        return Check("stock option minutes", BAD, "the manifest lists no stocks: nothing was collected")
+    issues, worst, lasts, asked_all, served_all = [], 1.0, [], 0, 0
+    for sym, d in st.items():
+        asked, served = d.get("asked") or 0, d.get("served") or 0
+        asked_all, served_all = asked_all + asked, served_all + served
+        ratio = served / asked if asked else 0.0
+        worst = min(worst, ratio)
+        if ratio < COMPLETE:
+            issues.append(f"{sym}: {served} of {asked} contracts served" + (f" ({d['failed']} failed)" if d.get("failed") else ""))
+        if d.get("last"):
+            ts = pd.Timestamp(d["last"])
+            lasts.append(ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST))          # a manifest's times are IST; a missing offset is read as IST, never compared naive
+    if lasts and min(lasts).date() != day:
+        issues.append(f"the newest bar is from {min(lasts):%d %b}, not {day:%d %b}")
+    status = BAD if worst < BAD_BELOW else WARN if issues else OK
+    return Check("stock option minutes", status, "; ".join(issues[:4]) if issues else f"{len(st)} stocks, {served_all:,} contracts, every one served",
+                 False, {"worst_served_ratio": round(worst, 4), "stocks": len(st)})
+
+
+def check_evening_minutes(store, day: dt.date) -> Check:
+    """MCX and currency minutes collected after their sessions (evening-minutes.yml, 23:45 IST): judged for the latest weekday before `day`'s morning."""
+    d = day - dt.timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= dt.timedelta(days=1)
+    m = _manifest(store, d, "evening-minutes-", f"{d}_manifest.json")
+    if m is None:
+        return Check("MCX/currency minutes", MISSING, f"no evening manifest for {d:%a %d %b}")
+    issues, worst, got = [], 1.0, 0
+    for seg, rep in (m.get("segments") or {}).items():
+        if rep.get("error"):
+            issues.append(f"{seg}: {rep['error'][:90]}")
+            worst = 0.0
+            continue
+        t = (m.get("totals") or {}).get(seg) or {}
+        asked, served = t.get("asked") or 0, t.get("served") or 0
+        got += served
+        ratio = served / asked if asked else 0.0
+        worst = min(worst, ratio)
+        if ratio < COMPLETE:
+            issues.append(f"{seg}: {served} of {asked} futures served ({t.get('failed', 0)} failed, {t.get('empty', 0)} empty, {t.get('not_attempted', 0)} not attempted)")
+    if not m.get("segments"):
+        issues.append("the manifest lists no segments")
+        worst = 0.0
+    if m.get("stopped"):
+        issues.append(f"stopped early: {m['stopped']}")
+    status = BAD if worst < BAD_BELOW else WARN if issues else OK
+    return Check("MCX/currency minutes", status, "; ".join(issues[:4]) if issues else f"{d:%a %d %b}: {got} futures, every one served", False,
+                 {"worst_served_ratio": round(worst, 4), "futures": got})
+
+
+def check_daily_history(store, day: dt.date) -> Check:
+    """The `daily-history` release (daily-history.yml, by hand): that a dataset exists, how old it is, and how many series passed every check."""
+    files = [(t, n) for t in store.tags("daily-history") for n in store.assets(t) if n.endswith("_manifest.json")]
+    if not files:
+        return Check("daily history", MISSING, "no daily-history dataset on the release: run the Daily history workflow")
+    t, n = sorted(files, key=lambda f: f[1])[-1]
+    m = json.loads(store.read(t, n))
+    age = (day - dt.date.fromisoformat(str(m.get("as_of") or n[:10])[:10])).days
+    bad = m.get("unverified_series") or []
+    series = len(m.get("series") or {})
+    issues = []
+    if age > 45:
+        issues.append(f"the newest dataset is {age} days old")
+    if bad:
+        issues.append(f"{len(bad)} of {series} series are not verified ({', '.join(bad[:6])}{'…' if len(bad) > 6 else ''})")
+    return Check("daily history", WARN if issues else OK, "; ".join(issues) if issues else f"{series} series, all verified, {age} days old", False,
+                 {"series": series, "unverified": len(bad), "age_days": age})
+
+
 # ---- the NSE warehouse ----------------------------------------------------------------------------------------------------------------
 def prev_trading_day(cal: MK.Calendars, day: dt.date, include: bool = False) -> dt.date:
     d = day if include else day - dt.timedelta(days=1)
@@ -505,7 +583,9 @@ def build_report(store, cfg, day: dt.date, now: dt.datetime | None = None) -> Re
     plan = [("gift", lambda: check_gift(store, day), "GIFT Nifty pre-open", False), ("premarket", lambda: check_premarket(store, day, now.date()), "pre-market brief", False),
             ("session", lambda: check_bars(store, day), "session bars", True), ("session", lambda: check_chains(store, day), "option chains", True),
             ("session", lambda: check_tape(store, day), "fetch tape", False), ("minutes", lambda: check_option_minutes(store, day), "option minutes", False),
-            ("minutes", lambda: check_stock_minutes(store, day), "stock minutes", False), ("kite", lambda: check_kite(store, day, now.date()), "Kite ticks", False),
+            ("minutes", lambda: check_stock_minutes(store, day), "stock minutes", False), ("minutes", lambda: check_stock_option_minutes(store, day), "stock option minutes", False),
+            ("evening", lambda: check_evening_minutes(store, day), "MCX/currency minutes", False), ("history", lambda: check_daily_history(store, day), "daily history", False),
+            ("kite", lambda: check_kite(store, day, now.date()), "Kite ticks", False),
             ("warehouse", lambda: check_warehouse(store, day, cal, now), "NSE warehouse", True)]
     checks = []
     for key, fn, name, critical in plan:

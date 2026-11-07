@@ -19,6 +19,9 @@ python -m quantdesk data health [--day YYYY-MM-DD] [--json] [--summary]
 | Option and stock minutes | no | every contract / stock asked for was served | a failure or a stale last bar | below 90% served, or no manifest |
 | NSE warehouse (6 daily tables) | yes | newest day is the expected one (today after 21:00 IST, else the last trading day) | one trading day behind, or a file with under half its usual rows | two or more days behind, or a table with nothing |
 | Pre-market brief | no | the `premarket` branch holds today's brief | | missing, stale, or not JSON |
+| Stock option minutes | no | every stock's contracts asked for were served and the newest bar is the day's | one or more stocks below 98% | any stock below 90%, or no manifest |
+| MCX/currency minutes (the previous evening's) | no | every future asked for was served in both segments | a segment below 98%, or the run was cut short | a segment below 90% or unreadable, or no manifest |
+| Daily history | no | a dataset on the `daily-history` release, under 45 days old, every series verified | older, or some series unverified | no dataset |
 | Kite ticks | no | an encrypted tick artifact of real size exists | | none (arrival is all that can be checked: the content is encrypted) |
 
 Before a channel's due time (`DUE` in `health.py`) it is **pending**, not missing. A check that cannot run is reported as such (critical: BAD), never skipped.
@@ -34,5 +37,5 @@ On 4, 5 and 6 Nov the Kotak chain feed produced open interest of about -9.08e18 
 ## Not covered yet
 
 * The Kite tick content (it is encrypted; `kite-compare` measures it).
-* MCX and currency channels (there is no recorder for them yet).
-* Wiring `chain_fault_mask` into the loaders that read chains.
+* The Kite wide universe's MCX and currency ticks (they are encrypted with the rest); the MCX/currency minutes above are the checkable record of those two segments.
+* Wiring `chain_fault_mask` into `archive.load_archive` (the ML OI module already quarantines on its own).

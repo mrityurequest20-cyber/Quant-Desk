@@ -1,0 +1,50 @@
+# MCX and currency minutes, collected after their sessions (quantdesk/data/evening_minutes.py, docs/PIPELINE_READINESS.md).
+#
+# The Kite recorder stops at about 15:32 IST; MCX trades to 23:30 and currency to 17:00, so their evenings were never recorded. Kotak serves a traded 1-minute candle history for
+# about 30 days, so one pass at 23:45 IST reads the whole day of the near-month future of every MCX commodity and currency pair. Nothing is subscribed through the evening and no Kite
+# login is involved. GitHub's cron can run late: nothing is lost, because every run re-reads the last `days` days and a name already on the release is never replaced.
+# Run it by hand with days = 30 once, to backfill what Kotak still holds.
+#
+# Market data only, through the Kotak consumer key the other recorders use (the one secret here, in the one step that needs it). It places no order and touches no journal, no desk, no limit.
+name: Evening minutes
+
+on:
+  schedule:
+    - cron: "15 18 * * 1-5"      # 23:45 IST, Monday to Friday
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Days back (Kotak serves about 30); 30 backfills the history"
+        default: "3"
+
+permissions:
+  contents: write            # the evening-minutes-YYYY release assets (and nothing else)
+
+concurrency:
+  group: evening-minutes     # its own group: never queues behind, or holds up, the session recorder or the Kite recorder
+  cancel-in-progress: false
+
+jobs:
+  evening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Collect the day's MCX and currency minutes (Kotak candles; a problem is a warning, never a failed run)
+        env:
+          KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          DAYS: ${{ inputs.days || '3' }}
+        run: |
+          [[ "$DAYS" =~ ^[0-9]{1,2}$ ]] || { echo "::error::days must be a number"; exit 1; }
+          python -m quantdesk data evening-minutes --days "$DAYS" --release-prefix evening-minutes || echo "::warning::evening minutes failed"
