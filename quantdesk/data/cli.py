@@ -236,6 +236,18 @@ def register(sub):
     x.add_argument("--out", help="default runtime/evening")
     x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. evening-minutes)")
     x.set_defaults(fn=cmd_evening_minutes)
+    x = ss.add_parser("fx-daily", help="daily history of the FX majors and rupee crosses from 2003 (Yahoo), checked against the ECB's reference rates (fx-daily.yml; public sources, no secret, always exits 0)")
+    x.add_argument("--pairs", help="only these (comma-separated), e.g. EURUSD,USDINR")
+    x.add_argument("--from", dest="start", default="2003-01-01", help="YYYY-MM-DD")
+    x.add_argument("--out", help="default runtime/fx_daily")
+    x.add_argument("--push", action="store_true", help="push the dataset to the fx-daily release (needs GH_TOKEN; a name already there is never replaced)")
+    x.set_defaults(fn=cmd_fx_daily)
+    x = ss.add_parser("fx-minutes", help="1-minute FX bars (Yahoo keeps seven days; each run re-reads the last --days) (fx-minutes.yml; public source, no secret, always exits 0)")
+    x.add_argument("--pairs", help="only these (comma-separated)")
+    x.add_argument("--days", type=int, default=5, help="days back (Yahoo keeps 7): the overlap heals a missed night")
+    x.add_argument("--out", help="default runtime/fx_minutes")
+    x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. fx-minutes)")
+    x.set_defaults(fn=cmd_fx_minutes)
     x = ss.add_parser("status", help="coverage, gaps, and NSE's holidays vs the config")
     x.add_argument("--dir")
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")
@@ -616,6 +628,49 @@ def cmd_evening_minutes(cfg, a):
                       "their sessions; one set per run (quantdesk/data/evening_minutes.py). Not a software release.", clobber=False)
         except Exception as exc:
             print(f"::warning::evening-minutes: files kept on disk only, release push failed ({exc!s:.120})", flush=True)
+
+
+def _fx_pairs(a):
+    from . import fx as FX
+    want = [p.strip().upper() for p in (a.pairs or "").split(",") if p.strip()]
+    return [p for p in want if p in FX.PAIRS] or None
+
+
+def cmd_fx_daily(cfg, a):
+    """FX daily history; any problem is a ::warning:: and the exit status stays 0."""
+    from . import fx as FX
+    try:
+        out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "fx_daily"
+        man = FX.run_daily(out, _fx_pairs(a), a.start, say=lambda m: print(m, flush=True))
+        bad = man["unverified_series"]
+        print(f"fx-daily {man['as_of']}: {len(man['series']) - len(bad)} verified, {len(bad)} unverified of {len(man['series'])}", flush=True)
+        if bad:
+            print(f"::warning::fx-daily: {len(bad)} series not verified (see manifest.json): {', '.join(bad[:12])}", flush=True)
+        if a.push:
+            run = Path(man["path"])
+            _push_run(out, run, "fx-daily", FX.release_names(run), "FX daily history",
+                      "Daily FX closes from Yahoo checked against the ECB's reference rates, one immutable dataset per run (quantdesk/data/fx.py). Not a software release.", clobber=False)
+    except Exception as exc:
+        print(f"::warning::fx-daily failed: {exc!s:.200}", flush=True)
+
+
+def cmd_fx_minutes(cfg, a):
+    """FX 1-minute bars; any problem is a ::warning:: and the exit status stays 0."""
+    from . import fx as FX
+    from .collect_wide import release_tag
+    try:
+        out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "fx_minutes"
+        man = FX.run_minutes(out, _fx_pairs(a), a.days, say=lambda m: print(m, flush=True))
+        t = man["totals"]
+        print(f"fx-minutes {man['as_of']}: {t['served']}/{t['asked']} pairs served", flush=True)
+        if t["served"] * 2 < t["asked"]:
+            print(f"::warning::fx-minutes: incomplete run ({t['served']}/{t['asked']} pairs)", flush=True)
+        if a.release_prefix:
+            run = Path(man["path"])
+            _push_run(out, run, release_tag(a.release_prefix, dt.date.fromisoformat(run.name), "year"), FX.release_names(run), f"FX minutes {run.name[:4]}",
+                      "1-minute FX bars from Yahoo (UTC), one set per run (quantdesk/data/fx.py). Not a software release.", clobber=False)
+    except Exception as exc:
+        print(f"::warning::fx-minutes failed: {exc!s:.200}", flush=True)
 
 
 def cmd_external_verify(cfg, a):

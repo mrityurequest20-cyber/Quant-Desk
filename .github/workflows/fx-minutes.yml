@@ -1,0 +1,43 @@
+# FX 1-minute bars (quantdesk/data/fx.py): the majors and the rupee crosses from Yahoo, kept on the fx-minutes-YYYY release. FX trades around the clock on a weekday and Yahoo keeps seven
+# days of 1-minute bars, so one run each weekday at 22:30 UTC (04:00 IST, after Friday's 22:00 UTC close too) re-reads the last five days: a missed or late night heals. A name already on the
+# release is never replaced. Public source, NO secret, no account; it places nothing and touches no journal, no desk, no limit.
+name: FX minutes
+
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"      # 22:30 UTC = 04:00 IST the next morning
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Days back (Yahoo keeps 7)"
+        default: "5"
+
+permissions:
+  contents: write            # the fx-minutes-YYYY release assets (and nothing else)
+
+concurrency:
+  group: fx-minutes          # its own group: never queues behind, or holds up, any recorder
+  cancel-in-progress: false
+
+jobs:
+  fx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Collect the FX minutes (a problem is a warning, never a failed run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAYS: ${{ inputs.days || '5' }}
+        run: |
+          [[ "$DAYS" =~ ^[0-9]$ ]] || { echo "::error::days must be a single digit"; exit 1; }
+          python -m quantdesk data fx-minutes --days "$DAYS" --release-prefix fx-minutes || echo "::warning::fx minutes failed"
