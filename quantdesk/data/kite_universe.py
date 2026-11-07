@@ -17,6 +17,7 @@ and the recording never depend on this module. The result is a symbol -> token m
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import pandas as pd
 
@@ -28,6 +29,7 @@ EXTRA_INDEX = {"FINNIFTY": "NSE:NIFTY FIN SERVICE", "MIDCPNIFTY": "NSE:NIFTY MID
                "SENSEX": "BSE:SENSEX", "BANKEX": "BSE:BANKEX"}
 SPOT_FOR_OPTIONS = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK", "FINNIFTY": "NSE:NIFTY FIN SERVICE", "MIDCPNIFTY": "NSE:NIFTY MID SELECT"}
 SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt")
+NAME_OK = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")                # what the live relay accepts as a symbol: an instrument named otherwise is not subscribed (it could never be shown)
 
 
 def _frame(kite, exchange: str, errors: list[str]) -> pd.DataFrame:
@@ -66,7 +68,7 @@ def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBS
             tok = int(token)
         except (TypeError, ValueError):
             return
-        if sym in core or sym in tokens or tok in taken:
+        if sym in core or sym in tokens or tok in taken or not NAME_OK.match(sym):
             return
         taken.add(tok)
         tokens[sym] = tok

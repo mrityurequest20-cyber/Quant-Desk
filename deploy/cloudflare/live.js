@@ -43,24 +43,44 @@ export function configured(env) {
 	return !!env.LIVE && i.length >= MIN_SECRET && r.length >= MIN_SECRET && i !== r;
 }
 
-// Keep only what the app shows, as numbers: anything else in a push is dropped, never stored.
+// Read a request body at most `max` bytes, stopping at the cap: a chunked body with no Content-Length is never buffered whole. null = too large.
+export async function readCapped(request, max) {
+	if (!request.body) return "";
+	const reader = request.body.getReader();
+	const chunks = [];
+	let n = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		n += value.byteLength;
+		if (n > max) { try { await reader.cancel(); } catch (e) { /* already closed */ } return null; }
+		chunks.push(value);
+	}
+	const all = new Uint8Array(n);
+	let at = 0;
+	for (const c of chunks) { all.set(c, at); at += c.byteLength; }
+	return new TextDecoder().decode(all);
+}
+
+// Keep only what the app shows, as numbers: anything else in a push is dropped, never stored. One bad quote or name is skipped and counted, it does not
+// poison the rest of the push; a push with no usable quote at all is refused. Returns {quotes, dropped} or null.
 export function clean(body) {
 	if (!body || typeof body !== "object" || !body.quotes || typeof body.quotes !== "object" || Array.isArray(body.quotes)) return null;
 	const names = Object.keys(body.quotes);
 	if (!names.length || names.length > MAX_SYMBOLS) return null;
 	const out = Object.create(null);                                                   // no prototype: a symbol named __proto__ or constructor is plain data
+	let dropped = 0;
 	for (const name of names) {
-		if (!SYMBOL.test(name)) return null;
 		const q = body.quotes[name];
-		if (!q || typeof q !== "object") return null;
+		if (!SYMBOL.test(name) || !q || typeof q !== "object") { dropped += 1; continue; }
 		const row = {};
 		for (const k of NUMBERS) if (typeof q[k] === "number" && Number.isFinite(q[k])) row[k] = q[k];
 		if (typeof q.t === "string" && q.t.length <= 40) row.t = q.t;                // the exchange's timestamp, shown as is
 		if (typeof q.s === "string" && SEGMENTS.has(q.s)) row.s = q.s;               // what kind of instrument: index, stock, future, option, MCX, currency
-		if (!("ltp" in row)) return null;                                              // a quote without a last price is not a quote
+		if (!("ltp" in row)) { dropped += 1; continue; }                               // a quote without a last price is not a quote
 		out[name] = row;
 	}
-	return out;
+	return Object.keys(out).length ? { quotes: out, dropped } : null;
 }
 
 export async function handleLive(request, env) {
@@ -73,13 +93,13 @@ export async function handleLive(request, env) {
 		if (!(await same(bearer(request), String(env.LIVE_INGEST_TOKEN).trim()))) return reply(401, { error: "no" });
 		const declared = Number(request.headers.get("content-length"));
 		if (Number.isFinite(declared) && declared > MAX_BODY) return reply(413, { error: "too large" });     // before the body is read
-		const raw = await request.text();
-		if (new TextEncoder().encode(raw).length > MAX_BODY) return reply(413, { error: "too large" });      // bytes, not UTF-16 units
+		const raw = await readCapped(request, MAX_BODY);                                                     // bytes, and the stream stops at the cap whatever the headers say
+		if (raw === null) return reply(413, { error: "too large" });
 		let body;
 		try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
-		const quotes = clean(body);
-		if (!quotes) return reply(400, { error: "not a snapshot" });
-		return stub.fetch("https://live/push", { method: "POST", body: JSON.stringify({ quotes }) });
+		const cleaned = clean(body);
+		if (!cleaned) return reply(400, { error: "not a snapshot" });
+		return stub.fetch("https://live/push", { method: "POST", body: JSON.stringify(cleaned) });
 	}
 	if (url.pathname === "/live/snapshot") {
 		if (request.method !== "GET") return reply(405, { error: "GET only" });
@@ -102,7 +122,7 @@ export class LiveBoard {
 	async fetch(request) {
 		const now = Date.now();
 		if (request.method === "POST") {
-			const { quotes } = await request.json();
+			const { quotes, dropped } = await request.json();
 			let added = 0, refused = 0;
 			for (const [name, q] of Object.entries(quotes)) {
 				if (!this.quotes.has(name) && this.quotes.size >= MAX_TOTAL) { refused += 1; continue; }
@@ -110,7 +130,7 @@ export class LiveBoard {
 				added += 1;
 			}
 			this.seq += 1;
-			return reply(200, { ok: true, seq: this.seq, n: added, refused });
+			return reply(200, { ok: true, seq: this.seq, n: added, refused, dropped: dropped || 0 });
 		}
 		const quotes = Object.create(null);
 		let newest = null;

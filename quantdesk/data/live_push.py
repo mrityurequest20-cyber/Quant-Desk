@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -22,6 +23,7 @@ TIMEOUT_S = 4.0
 FIELDS = ("ltp", "bid", "ask", "bid_qty", "ask_qty", "vol", "oi", "chg")
 BATCH = 800                                                      # quotes in one POST: a wide universe is sent in several, each far under the relay's size limit
 SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt")
+SYMBOL = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")                 # the relay's own rule for a name: one it would refuse is dropped here, so it can never hold up a batch
 
 
 def _num(x):
@@ -63,7 +65,7 @@ class LivePusher:
         self._open = opener or urllib.request.build_opener(_NoRedirect).open
         self.dirty: dict[str, dict] = {}
         self.lock = threading.Lock()
-        self.ok = self.failed = 0
+        self.ok = self.failed = self.skipped = self.refused = 0
         self.last_error: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -81,6 +83,9 @@ class LivePusher:
     def update(self, symbol: str, quote: dict | None) -> None:
         """Called from the websocket thread for each tick: remember the newest quote of the symbol until the next push."""
         if quote:
+            if not SYMBOL.match(str(symbol)):
+                self.skipped += 1
+                return
             with self.lock:
                 self.dirty[symbol] = quote
 
@@ -100,8 +105,16 @@ class LivePusher:
                 with self._open(req, timeout=self.timeout) as r:
                     if not 200 <= getattr(r, "status", 200) < 300:
                         raise urllib.error.HTTPError(self.url, r.status, "relay refused", None, None)
+                    try:                                             # read INSIDE the connection: the relay says how many it could not take (its board is full), counted and never retried
+                        answer = r.read(65536)
+                    except Exception:                                # noqa: BLE001 - a body we cannot read changes nothing
+                        answer = b""
                 self.ok += 1
                 self.last_error = None
+                try:
+                    self.refused += int(json.loads(answer or b"{}").get("refused") or 0)
+                except Exception:                                    # noqa: BLE001
+                    pass
             except Exception as e:                                   # noqa: BLE001 - nothing here may reach the recorder
                 allok = False
                 with self.lock:                                      # keep this batch and every later one, unless a newer tick has replaced it
@@ -128,4 +141,4 @@ class LivePusher:
         self.push_once()                                             # the last quotes
 
     def stats(self) -> dict:
-        return {"pushes_ok": self.ok, "pushes_failed": self.failed, "last_error": self.last_error}
+        return {"pushes_ok": self.ok, "pushes_failed": self.failed, "skipped_names": self.skipped, "refused_by_relay": self.refused, "last_error": self.last_error}

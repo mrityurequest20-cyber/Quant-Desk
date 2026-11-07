@@ -1653,9 +1653,12 @@ function liveBuild() {
 async function renderLive() {
 	const body = $("#lv-body");
 	if (S.tab !== "live" || document.hidden || liveBusy) return;
+	if (/(^|\.)github\.io$/.test(location.hostname)) {                // the public Pages address: no key form at all, nothing is stored or sent from here
+		if (body.dataset.state !== "pages") { body.textContent = ""; S.lv.built = false; put(body, empty("live", "Live prices are private and only open on the Cloudflare site, not on this address.")); body.dataset.state = "pages"; }
+		return;
+	}
 	const key = store("qd.livekey");
 	if (!key) { if (body.dataset.state !== "key") { body.textContent = ""; S.lv.built = false; put(body, liveKeyForm("")); body.dataset.state = "key"; } return; }
-	if (/(^|\.)github\.io$/.test(location.hostname)) { body.textContent = ""; S.lv.built = false; body.dataset.state = "note"; return void put(body, liveKeyForm("Live prices are on the Cloudflare site only. Do not type your key here.")); }
 	liveBusy = true;
 	let j = null, note = "";
 	try {

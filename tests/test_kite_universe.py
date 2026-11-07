@@ -127,7 +127,7 @@ class Ws:
         self.subs, self.modes = [], {}
 
     def subscribe(self, toks): self.subs.append(list(toks))
-    def set_mode(self, mode, toks): self.modes[mode] = list(toks)
+    def set_mode(self, mode, toks): self.modes.setdefault(mode, []).extend(toks)
     def connect(self, threaded=True): self.on_connect(self, {})
     def close(self): pass
 
@@ -158,7 +158,8 @@ def test_a_quote_mode_tick_without_depth_is_recorded_and_sent_with_its_segment(t
         def update(self, sym, q): seen.append((sym, q))
     rec = K.Recorder(tmp_path, {"RELIANCE-FUT": 7}, Ws, core=set(), meta={"RELIANCE-FUT": {"s": "fut"}}, live=Live())
     rec._on_ticks(None, [{"instrument_token": 7, "last_price": 2900.5, "volume_traded": 10, "change": -0.4}])
-    assert rec.ticks == 1 and seen == [("RELIANCE-FUT", {"ltp": 2900.5, "vol": 10.0, "chg": -0.4, "s": "fut"})]
+    assert rec.ticks == 0 and rec.wide_ticks == 1 and len(rec.rows) == 0 and len(rec.wide_rows) == 1        # a wide tick never enters the trial's buffer
+    assert seen == [("RELIANCE-FUT", {"ltp": 2900.5, "vol": 10.0, "chg": -0.4, "s": "fut"})]
     assert LP.quote_from_tick({"last_price": 1.0}, None, "nonsense") == {"ltp": 1.0}                   # an unknown segment is not sent
 
 
@@ -205,13 +206,15 @@ def test_run_session_records_the_wide_universe_too_and_a_broken_one_costs_only_i
     out = tmp_path / "a"
     res = K.run_session(out, "15:30", kite=Wide(), ticker_factory=lambda: ticker, now=clock, sleep=lambda s: clock.advance(1))
     uni = json.loads((out / "universe.json").read_text())
-    assert "RELIANCE-FUT" in res["tokens"] and uni["meta"]["RELIANCE-FUT"]["s"] == "fut" and set(uni["core"]) == set(CORE)
+    assert "RELIANCE-FUT" not in res["tokens"] and res["wide_n"] >= 1                                  # tokens (and tokens.json) are the trial's five instruments only
+    assert "RELIANCE-FUT" in uni["wide_tokens"] and uni["meta"]["RELIANCE-FUT"]["s"] == "fut" and set(uni["core"]) == set(CORE)
+    assert set(json.loads((out / "tokens.json").read_text())) == set(CORE)
     assert uni["meta"]["NIFTY"]["s"] == "idx" and uni["meta"]["NIFTY-FUT"]["s"] == "fut"
 
     monkeypatch.setattr(K, "build_wide", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))        # the wide part blows up: the core five are still recorded
     clock2, ticker2 = Clock("2026-10-26 15:29:58"), FakeTicker()
     res2 = K.run_session(tmp_path / "b", "15:30", kite=CoreKite(), ticker_factory=lambda: ticker2, now=clock2, sleep=lambda s: clock2.advance(1))
-    assert set(res2["tokens"]) == set(CORE) and res2["wide_errors"] == ["wide universe: RuntimeError"]
+    assert set(res2["tokens"]) == set(CORE) and res2["wide_n"] == 0 and res2["wide_errors"] == ["wide universe: RuntimeError"]
     monkeypatch.undo()
     monkeypatch.setenv("KITE_DATA_KEY", "k")
     monkeypatch.setenv("KITE_DATA_TOKEN", "t")
@@ -274,3 +277,58 @@ def test_the_live_tab_has_search_segments_sorting_and_show_more_and_skips_github
     for needle in ("Search every instrument", "LIVE_SEGS", "LIVE_SORTS", "Show ${", "github\\.io"):
         assert needle in app, needle
     assert "innerHTML" not in app
+
+
+# ---- the Kite trial's measures must not move (independent review, B1) --------------------------------------------------------------------------
+def test_wide_files_live_in_their_own_folder_and_the_trials_measures_do_not_move(tmp_path):
+    from tests.test_kite_trial import DAY, KC, moving, reference_for, ticks_for, write_session
+    mins = KC.session_minutes(DAY)
+    write_session(tmp_path / "plain", ticks_for("NIFTY", mins, moving), reference_for("NIFTY", mins, moving))
+    base = KC.session_report(tmp_path / "plain", DAY)
+    write_session(tmp_path / "mixed", ticks_for("NIFTY", mins, moving), reference_for("NIFTY", mins, moving))
+    mixed = tmp_path / "mixed"
+    (mixed / "wide").mkdir()
+    rows = [{"symbol": f"STK{i}", "token": 5000 + i, "ts_exchange": None, "ts_recv": pd.Timestamp("2026-11-09 09:15:01", tz="Asia/Kolkata"), "last_price": 100.0 + i,
+             "last_qty": 1.0, "volume": 10.0, "oi": None, "buy_qty_total": 5.0, "sell_qty_total": 6.0, "change": 0.1, "open": 99.0, "high": 101.0, "low": 98.0, "close": 99.5}
+            for i in range(50)]
+    pd.DataFrame(rows, columns=K.WIDE_COLUMNS).to_parquet(mixed / "wide" / "wide_000000_0001.parquet", index=False)        # no exchange timestamp: the shape that crashed the measure
+    (mixed / "universe.json").write_text(json.dumps({"meta": {}, "core": ["NIFTY"], "wide_tokens": {f"STK{i}": 5000 + i for i in range(50)}}))
+    rep = KC.session_report(mixed, DAY)
+    assert rep["passed"] == base["passed"] and rep["measures"] == base["measures"] and rep["ticks"] == base["ticks"]
+    assert rep["D3_bytes"] == base["D3_bytes"]                                                         # the trial's storage measure counts its own files only
+    assert [m["symbol"] for m in rep["measures"]] == ["NIFTY"]
+
+
+def test_a_whole_wide_session_leaves_the_trials_report_computable(tmp_path, monkeypatch):
+    from tests.test_kite_trial import Clock, FakeKite as CoreKite, FakeTicker, KC, kite_tick
+    monkeypatch.setenv("KITE_DATA_KEY", "k")
+    monkeypatch.setenv("KITE_DATA_TOKEN", "t")
+    monkeypatch.delenv("LIVE_URL", raising=False)
+
+    class Wide(CoreKite):
+        def instruments(self, ex):
+            return super().instruments(ex) + [_inst(3000, "RELIANCE", "FUT", "2026-11-24", sym="RELIANCEFUT")] if ex == "NFO" else []
+    clock, ticker = Clock("2026-10-26 15:29:50"), FakeTicker()
+    out = tmp_path / "rec"
+
+    def sleep(s):
+        clock.advance(1)
+        ticker.on_ticks(ticker, [kite_tick(256265, 25000.0, clock().tz_localize(None)), {"instrument_token": 3000, "last_price": 2900.0, "volume_traded": 5, "change": 0.2}])
+    res = K.run_session(out, "15:30", kite=Wide(), ticker_factory=lambda: ticker, now=clock, sleep=sleep)
+    assert (out / "wide").is_dir() and list((out / "wide").glob("wide_*.parquet")) and not list(out.glob("wide_*"))
+    assert all(p.name.startswith("ticks_") for p in out.glob("*.parquet"))                              # nothing but the trial's own parts at the top level
+    rep = KC.session_report(out, pd.Timestamp("2026-10-26").date())                                    # used to raise on the NaT exchange timestamps
+    assert sorted(m["symbol"] for m in rep["measures"]) == sorted(CORE) and res["wide_n"] == 1                # the trial measures its five instruments, no wide symbol
+    ev = [json.loads(x) for x in (out / "events.jsonl").read_text().splitlines()]
+    assert any(e["kind"] == "wide" and e["ticks"] > 0 for e in ev)
+
+
+def test_a_failing_wide_write_never_fails_the_run_and_the_overflow_is_on_record(tmp_path, monkeypatch):
+    rec = K.Recorder(tmp_path, {"NIFTY": 1, "RELIANCE-FUT": 2}, Ws, core={"NIFTY"})
+    monkeypatch.setattr(K, "MAX_WIDE_BUFFER", 2)
+    rec._on_ticks(None, [{"instrument_token": 2, "last_price": float(i)} for i in range(5)])
+    assert rec.wide_ticks == 2 and rec.wide_overflow == 3
+    real = pd.DataFrame.to_parquet
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, *a, **k: (_ for _ in ()).throw(OSError("disk full")) if "wide_" in Path(path).name else real(self, path, *a, **k))
+    rec.flush()                                                                                        # does not raise
+    assert len(rec.wide_rows) == 2 and rec.dropped == 0 and rec.wide_dropped == 3                       # kept for the next flush; the core's drop count is untouched

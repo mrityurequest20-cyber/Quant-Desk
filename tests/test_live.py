@@ -16,7 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from quantdesk.data import kite_record as KR  # noqa: E402
+from quantdesk.data import kite_universe as U  # noqa: E402
 from quantdesk.data import live_push as LP  # noqa: E402
+
+CORE_TOKENS = {"NIFTY": 256265, "BANKNIFTY": 260105, "INDIAVIX": 264969, "NIFTY-FUT": 1000, "BANKNIFTY-FUT": 2000}
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
 GOOD_INGEST, GOOD_READ = "i" * 32, "r" * 32
@@ -30,7 +33,7 @@ def stage(tmp_path):
 
 
 HARNESS = r"""
-import { handleLive, LiveBoard, clean, same, configured } from "./live.mjs";
+import { handleLive, LiveBoard, clean, same, configured, readCapped } from "./live.mjs";
 const mem = new Map();
 const state = { storage: { get: async (k) => mem.get(k), put: async (k, v) => { mem.set(k, JSON.parse(JSON.stringify(v))); } }, blockConcurrencyWhile: async (fn) => fn() };
 let board = new LiveBoard(state, {});
@@ -60,6 +63,14 @@ out.other = await call("GET", "/live/other", { token: env.LIVE_READ_TOKEN });
 // a second push of another symbol keeps the first; a partial push does not blank it
 await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: { BANKNIFTY: { ltp: 52000 } } } });
 out.merged = Object.keys((await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body.quotes).sort();
+// a chunked body with NO Content-Length is cut off at the cap: the stream is not read to the end
+let pulled = 0;
+const stream = new ReadableStream({ pull(c) { pulled += 1; if (pulled > 40) c.close(); else c.enqueue(new Uint8Array(100000).fill(120)); } });
+const rs = await handleLive(new Request("https://qd.example/live/ingest", { method: "POST", headers: { authorization: "Bearer " + env.LIVE_INGEST_TOKEN }, body: stream, duplex: "half" }), env);
+out.streamed = { status: rs.status, pulled };
+// one bad name or quote is skipped and counted: it does not poison the rest of the push; a push with nothing usable is refused
+out.mixed = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: { GOOD1: { ltp: 1 }, "bad name": { ltp: 2 }, GOOD2: { ltp: 3 }, NOLTP: { bid: 1 } } } });
+out.mixedread = Object.keys((await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body.quotes).filter((k) => k.startsWith("GOOD")).sort();
 // a wide universe: 1200 quotes in one push keep their segment, a bad segment is dropped, odd names are harmless
 const wide = {};
 for (let i = 0; i < 1200; i++) wide["STK" + i] = { ltp: 100 + i, chg: 0.1, s: i %% 2 ? "eq" : "nonsense" };
@@ -130,6 +141,16 @@ def test_bad_pushes_are_refused_and_change_nothing(relay):
         assert relay[k]["status"] == status, k
     assert relay["merged"] == ["BANKNIFTY", "NIFTY"]                     # none of the refused pushes added a symbol (the limit is bytes, not characters)
     assert relay["getingest"]["status"] == 405 and relay["postsnap"]["status"] == 405 and relay["other"]["status"] == 404
+
+
+@needs_node
+def test_a_chunked_body_without_content_length_is_cut_off_at_the_cap(relay):
+    assert relay["streamed"]["status"] == 413 and relay["streamed"]["pulled"] < 15          # 40 chunks of 100 KB were on offer; the 512 KB cap stopped the read after about 6
+
+
+@needs_node
+def test_one_bad_name_does_not_poison_a_push(relay):
+    assert relay["mixed"]["status"] == 200 and relay["mixed"]["body"]["dropped"] == 2 and relay["mixedread"] == ["GOOD1", "GOOD2"]
 
 
 @needs_node
@@ -309,3 +330,40 @@ def test_the_recorder_workflow_gives_the_push_only_its_token_and_url():
     for step in re.split(r"\n      - name: ", text):
         if "LIVE_INGEST_TOKEN" in step:
             assert step.startswith("Record ticks") and not re.search(r"KITE_(PASSWORD|TOTP_SECRET|API_SECRET|USER_ID)", step)
+
+
+def test_names_the_relay_would_refuse_never_enter_a_batch_and_the_relays_full_board_is_counted():
+    sent = []
+
+    class R(FakeResp):
+        closed = False
+
+        def __exit__(self, *a):
+            self.closed = True
+            return False
+
+        def read(self, n=-1):
+            assert not self.closed, "the body must be read inside the connection, before it is closed"
+            return b'{"ok": true, "refused": 7}'
+    p = LP.LivePusher("https://x.example/live/ingest", "T" * 30, opener=lambda req, timeout: (sent.append(json.loads(req.data)), R())[1])
+    p.update("GOOD", {"ltp": 1.0})
+    p.update("bad name", {"ltp": 2.0})
+    p.update("x" * 41, {"ltp": 3.0})
+    assert p.push_once() and list(sent[0]["quotes"]) == ["GOOD"] and p.skipped == 2 and p.refused == 7
+    assert p.stats()["skipped_names"] == 2 and p.stats()["refused_by_relay"] == 7                   # in the run's events, not retried
+
+
+def test_the_universe_never_subscribes_a_name_the_relay_could_not_show_and_never_reuses_a_token():
+    from tests.test_kite_universe import FakeKite, TODAY, _inst, make_lists
+    lists = make_lists()
+    lists["NFO"] = lists["NFO"] + [_inst(70001, "WEIRD NAME", "FUT", "2026-11-24", sym="WEIRD NAME-FUT"), _inst(7000, "DUPE", "FUT", "2026-11-24")]
+    lists["MCX"] = lists["MCX"] + [_inst(7000, "DUPEMCX", "FUT", "2026-11-28", exch="MCX")]            # the same token again, under another name
+    toks, meta, _ = U.build_wide(FakeKite(lists=lists), TODAY, CORE_TOKENS)
+    assert "WEIRD NAME-FUT" not in toks and "DUPE-FUT" in toks and "DUPEMCX-MCX" not in toks
+    assert len(set(toks.values())) == len(toks)
+
+
+def test_the_live_tab_shows_no_key_form_on_the_public_pages_address():
+    app = (ROOT / "quantdesk/web/static/app/app.js").read_text()
+    body = app[app.index("async function renderLive()"):]
+    assert body.index("github") < body.index('store("qd.livekey")')              # checked before any key is read or asked for
