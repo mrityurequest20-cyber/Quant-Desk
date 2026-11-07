@@ -151,7 +151,7 @@ def test_the_workflow_runs_after_the_evening_close_holds_one_secret_and_is_isola
     text = WF.read_text(encoding="utf-8")
     wf = yaml.safe_load(text)
     on = wf.get("on", wf.get(True))
-    assert on["schedule"] == [{"cron": "15 18 * * 1-5"}] and "workflow_dispatch" in on                      # 23:45 IST, Monday to Friday; by hand for a 30-day backfill
+    assert list(on) == ["workflow_dispatch"]                                                                # manual only: Kotak's candle API does not serve MCX or currency (HTTP 422), so a nightly run could only fail
     assert wf["permissions"] == {"contents": "write"}
     assert sorted(set(re.findall(r"secrets\.(\w+)", text))) == ["KOTAK_CONSUMER_KEY"]                         # the one Kotak key, nothing from Zerodha
     assert not re.search(r"KITE_|LIVE_|TOTP|PASSWORD|API_SECRET|secrets\.(?!KOTAK_CONSUMER_KEY)", text)                  # no Zerodha secret, no relay token, no other secret
