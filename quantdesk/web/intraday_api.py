@@ -149,9 +149,11 @@ class IntradayAPI:
             out.append(r)
         return out
 
-    def trades(self, account=None, n=100) -> list[dict]:
+    def trades(self, account=None, n=100, since: str | None = None) -> list[dict]:
+        """`since` ("YYYY-MM-DD") shows only trades opened on or after that day: a display window, the journal is never edited."""
         t = self.j(account).df("SELECT id, strategy, symbol, direction, units, opened_at, closed_at, pnl, fees, r_multiple, "
-                               "grade, exit_reason, status, meta FROM trades ORDER BY opened_at DESC LIMIT ?", (int(n),))
+                               "grade, exit_reason, status, meta FROM trades WHERE substr(opened_at,1,10) >= ? ORDER BY opened_at DESC LIMIT ?",
+                               (since or "0000-00-00", int(n)))
         recs = t.to_dict("records")
         for r in recs:
             m = json.loads(_text(r.pop("meta")) or "{}")
@@ -169,9 +171,9 @@ class IntradayAPI:
                                         (tid,)).to_dict("records")
         return r
 
-    def reviews(self, account=None) -> list[str]:
+    def reviews(self, account=None, since: str | None = None) -> list[str]:
         d = self._dir(account) / "reviews"
-        return sorted((p.stem for p in d.glob("*.md")), reverse=True) if d.exists() else []
+        return sorted((p.stem for p in d.glob("*.md") if p.stem >= (since or "")), reverse=True) if d.exists() else []
 
     def review(self, account=None, date=None) -> dict:
         p = self._dir(account) / "reviews" / f"{date}.md"
@@ -179,9 +181,11 @@ class IntradayAPI:
             raise KeyError("no such review")
         return {"date": date, "markdown": p.read_text(encoding="utf-8")}
 
-    def stats(self, account=None) -> dict:
+    def stats(self, account=None, since: str | None = None) -> dict:
         t = self.j(account).trades("closed")
         cap = self.capital(account)
+        if since and not t.empty:                                       # a display window: trades opened before `since` are left out of every figure, never deleted
+            t = t[t["opened_at"].str[:10] >= since].copy()
         if t.empty:
             return {"trades": 0, "capital": cap}
         t["day"] = t["opened_at"].str[:10]
