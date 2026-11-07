@@ -79,10 +79,26 @@ def test_option_chains_are_the_nearest_two_unexpired_expiries_per_index_on_the_r
     u = KU.build(FakeClient(), TODAY, say=lambda *a: None)
     by_u = {}
     for c in u["chains"]:
-        by_u.setdefault(c["u"], []).append(c)
+        if "n" not in c:                                                                   # the stock chains have a keep-count: they are tested below
+            by_u.setdefault(c["u"], []).append(c)
     assert set(by_u) == set(KU.CHAIN_UNDERLYINGS)
     assert [c["e"] for c in by_u["NIFTY"]] == ["2026-11-10", "2026-11-17"] and all(c["x"] == "nse_fo" for c in by_u["NIFTY"])
     assert all(c["x"] == "bse_fo" for c in by_u["SENSEX"] + by_u["BANKEX"])
+
+
+def test_every_fno_stock_gets_its_nearest_unexpired_expiry_chain_with_a_keep_count(master):
+    u = KU.build(FakeClient(bad_expiries=("TCS",)), TODAY, say=lambda *a: None)
+    stock = {c["u"]: c for c in u["chains"] if "n" in c}
+    assert set(stock) == {"RELIANCE", "M&M", "BAJAJ-AUTO", "NOTOKENCO"}                      # TCS had no expiries: skipped and counted; every other F&O stock has one
+    assert all(c["e"] == "2026-11-10" and c["x"] == "nse_fo" and c["n"] == KU.STOCK_STRIKES for c in stock.values())      # the nearest expiry that is not past
+    assert any("TCS expiries" in e for e in u["errors"])
+    assert not any("n" in c for c in u["chains"] if c["u"] in KU.CHAIN_UNDERLYINGS)          # an index chain has no keep-count: it runs in every cycle
+
+
+def test_stock_chains_are_capped(master, monkeypatch):
+    monkeypatch.setattr(KU, "STOCK_CHAINS_MAX", 2)
+    u = KU.build(FakeClient(), TODAY, say=lambda *a: None)
+    assert sum(1 for c in u["chains"] if "n" in c) == 2
 
 
 def test_one_failure_skips_only_its_part_and_is_counted(master, monkeypatch):
@@ -238,3 +254,33 @@ def test_a_scrip_master_name_that_is_not_a_plain_symbol_never_reaches_the_output
     assert "::ERROR::X" not in text.upper() and "BAD" not in text and "SPACED" not in text
     assert any(q["n"] == "GOOD" for q in u["quotes"])
     assert any("3 F&O stock names were not plain symbols" in e for e in u["errors"]) and not any("ERROR" in e for e in u["errors"])          # counted, never named
+
+
+def test_the_stock_chain_constants_are_what_the_docs_say():
+    assert KU.STOCK_STRIKES == 3 and KU.STOCK_CHAINS_MAX == 250 and KU.STOCK_FAIL_RUN == 10
+
+
+def test_a_run_of_failed_expiry_lookups_stops_the_stock_chains_for_the_day(master, monkeypatch):
+    rows = [{"pSymbolName": f"STK{i:03d}", "pInstType": "FUTSTK", "pAssetCode": 300 + i} for i in range(40)]
+    monkeypatch.setattr(KU, "scrip_master", lambda client, name="nse_fo": pd.DataFrame(rows))
+    client = FakeClient(bad_expiries=tuple(f"STK{i:03d}" for i in range(40)))
+    u = KU.build(client, TODAY, say=lambda *a: None)
+    asked = [c for c in client.log if c[0] == "expiries" and c[1]["underlying"].startswith("STK")]
+    assert len(asked) == KU.STOCK_FAIL_RUN                                                  # it gave up after ten in a row, it did not ask forty
+    assert any("stopped after 10 failures in a row; 30 stocks have no chain today" in e for e in u["errors"])
+    assert not any("n" in c for c in u["chains"])
+    assert sum(1 for e in u["errors"] if "stopped after" in e) == 1 and sum(1 for e in u["errors"] if "expiries" in e and "stopped" not in e) == 10      # one stop line, ten failure lines, nothing per remaining stock
+    # one success resets the run: failures that are not consecutive never stop it
+    ok = FakeClient(bad_expiries=tuple(f"STK{i:03d}" for i in range(0, 40, 2)))
+    u2 = KU.build(ok, TODAY, say=lambda *a: None)
+    assert sum(1 for c in u2["chains"] if "n" in c) == 20 and not any("stopped after" in e for e in u2["errors"])
+
+
+def test_a_stock_name_the_relay_would_drop_from_a_chain_is_excluded_and_counted_here(monkeypatch):
+    names = ("GOOD", "HAS.DOT", "X" * 25, "X" * 24)
+    rows = [{"pSymbolName": n, "pInstType": "FUTSTK", "pAssetCode": 500 + i} for i, n in enumerate(names)]
+    monkeypatch.setattr(KU, "scrip_master", lambda client, name="nse_fo": pd.DataFrame(rows))
+    u = KU.build(FakeClient(), TODAY, say=lambda *a: None)
+    chained = {c["u"] for c in u["chains"] if "n" in c}
+    assert chained == {"GOOD", "X" * 24}                                                     # a dot or 25 characters would be dropped by the relay's chain rule: not sent
+    assert any("2 F&O stock names were not plain symbols" in e for e in u["errors"])        # counted, never named

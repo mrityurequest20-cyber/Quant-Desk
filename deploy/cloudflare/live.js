@@ -16,7 +16,7 @@ import { Series, shardKeys, FLUSH_MS } from "./series.js";
 
 const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 quotes is about 100 KB)
 const MAX_SYMBOLS = 3000;               // in one push
-const MAX_TOTAL = 4000;                 // symbols the board will ever hold: a stolen ingest key cannot grow it without bound
+const MAX_TOTAL = 6000;                 // symbols the board will ever hold: a stolen ingest key cannot grow it without bound
 const SYMBOL = /^[A-Za-z0-9&_.:-]{1,40}$/;
 const SEGMENTS = new Set(["idx", "eq", "fut", "bfo", "mcx", "cds", "opt"]);
 const NUMBERS = ["ltp", "bid", "ask", "bid_qty", "ask_qty", "vol", "oi", "chg"];
@@ -107,10 +107,11 @@ export function cleanUniverse(b) {
 		names.add(q.n);
 		quotes.push({ n: q.n, s: q.s, g: q.g, t: q.t, ...(q.one === true ? { one: true } : {}) });
 	}
-	for (const c of Array.isArray(b.chains) ? b.chains.slice(0, 60) : []) {
+	for (const c of Array.isArray(b.chains) ? b.chains.slice(0, 400) : []) {
 		if (!c || typeof c.u !== "string" || typeof c.x !== "string" || !/^[A-Za-z0-9&_-]{1,24}$/.test(c.u) || !SEG_KOTAK.has(c.x) || !isDate(c.e)) continue;
+		if (c.n !== undefined && !(Number.isInteger(c.n) && c.n >= 1 && c.n <= 10)) continue;          // a keep-count that is not a small integer is a malformed chain, not an index chain that runs every cycle
 		const k = `${c.u}|${c.e}`;                                                          // one chain per underlying and expiry, whatever exchange it claims: two would update the same option names from two answers
-		if (!seenChain.has(k)) { seenChain.add(k); chains.push({ u: c.u, x: c.x, e: c.e }); }
+		if (!seenChain.has(k)) { seenChain.add(k); chains.push({ u: c.u, x: c.x, e: c.e, ...(Number.isInteger(c.n) && c.n >= 1 && c.n <= 10 ? { n: c.n } : {}) }); }
 	}
 	if (!quotes.length && !chains.length) return null;
 	const count = Math.min(30, Math.max(1, Math.trunc(Number(b.count)) || 10));
@@ -193,6 +194,13 @@ const sameQuote = (a, b) => {
 	if ("bid" in a && "bid" in b && (a.bid !== b.bid || a.ask !== b.ask || a.bid_qty !== b.bid_qty || a.ask_qty !== b.ask_qty)) return false;
 	return true;
 };
+// An option's name carries its expiry (NIFTY12NOV2624500CE: 12 Nov 2026). From the day after it, the contract is gone: the expiry day itself is still traded.
+const OPT_EXPIRY = /^.+?(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})\d+(?:\.\d+)?(?:CE|PE)$/;
+const MONTH = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+export function expiredOption(name, today) {          // today: the IST date as yyyymmdd
+	const m = OPT_EXPIRY.exec(name);
+	return !!m && (2000 + Number(m[3])) * 10000 + MONTH[m[2]] * 100 + Number(m[1]) < today;
+}
 const STALE_MS = 4 * 86400e3;               // a quote not seen for 4 days is dropped (expired contracts must not fill the board for good); shorter would empty the board over a weekend, when the last prices are worth showing, aged
 const FIRST_SEEN_MS = 12 * 3600e3;          // Kotak's own timestamp dates a first-seen price only if it is within this of now
 
@@ -232,7 +240,9 @@ export class LiveBoard {
 	prune(now) {
 		this.lastPrune = now;
 		let gone = 0;
+		const today = Number(istParts(now).date.replace(/-/g, ""));
 		for (const [name, e] of this.quotes) {
+			if (expiredOption(name, today)) { this.quotes.delete(name); gone += 1; continue; }        // an expired contract has no price to show, and at a roll its names must not keep the room the next expiry needs
 			for (const s of ["z", "k"]) if (e[s] && now - e[s].at > STALE_MS) delete e[s];
 			if (!e.z && !e.k) { this.quotes.delete(name); gone += 1; }
 		}

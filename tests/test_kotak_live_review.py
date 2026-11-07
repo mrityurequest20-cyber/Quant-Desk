@@ -76,7 +76,7 @@ lst = null;
 // ---- B2: the board does not fill for good; Kite-only pushes prune too; refused Kotak writes are counted
 boot();
 const big = (p, n) => Object.fromEntries(Array.from({ length: n }, (_, i) => [p + i, { ltp: 1 + i }]));
-await push(big("A", 2500)); await push(big("B", 1500));
+await push(big("A", 2500)); await push(big("B", 2500)); await push(big("C", 1000));
 out.full = (await snap()).count;
 const refused = await push({ NEWONE: { ltp: 5 } });
 out.refusedWhileFresh = refused.body.refused;
@@ -86,7 +86,7 @@ s = await snap();
 out.afterPrune = { count: s.count, accepted: accepted.body.n, old: "A1" in s.quotes, fresh: "NEWONE" in s.quotes, pruned: (await health()).kotak.pruned };
 // a Kotak cycle into a full, fresh board: the refusals are counted
 boot(); await setUniverse({ asof: "2026-11-09", count: 5, quotes: [{ n: "KNEW", s: "eq", g: "nse_cm", t: "11" }], chains: [] });
-await push(big("A", 2500)); await push(big("B", 1500));
+await push(big("A", 2500)); await push(big("B", 2500)); await push(big("C", 1000));
 await board.alarm(); out.kotakRefused = (await health()).kotak.refused;
 // an expired contract leaves the snapshot after 18 h
 boot(); await push({ OLDOPT: { ltp: 1 }, KEEP: { ltp: 1 } }); now += 3.5 * 86400e3; await push({ KEEP: { ltp: 2 } }); s = await snap(); const at17 = Object.keys(s.quotes).sort();
@@ -158,7 +158,7 @@ boot(); await setUniverse({ asof: "2026-11-09", count: 5, quotes: [{ n: "AAA", s
 lst = String(Math.floor((now + 9e6) / 1000)); await board.alarm(); now += 10000; s = await snap(); out.lstFuture10 = s.quotes.AAA.age_s; lst = null;
 out.lastUpdate = [K.lastUpdateMs("1700000000"), K.lastUpdateMs("1700000000000"), K.lastUpdateMs("500000000000"), K.lastUpdateMs("100000000000"), K.lastUpdateMs("999999999"), K.lastUpdateMs(""), K.lastUpdateMs("abc"), K.lastUpdateMs("-5")].map((v) => (Number.isNaN(v) ? "nan" : v));
 // ---- put()'s own prune when the board is full of stale names and nothing else pruned recently (a direct call, so fetch()'s prune is not what makes room)
-boot(); for (let i = 0; i < 4000; i++) board.quotes.set("S" + i, { z: { ltp: 1, at: now - 10 * 86400e3 } }); board.lastPrune = now - 120000;
+boot(); for (let i = 0; i < 6000; i++) board.quotes.set("S" + i, { z: { ltp: 1, at: now - 10 * 86400e3 } }); board.lastPrune = now - 120000;
 out.putPrune = { ok: board.put("NEWNAME", "z", { ltp: 1 }, false), size: board.quotes.size };
 // ---- fetch()'s own prune: a Kite-only board, no alarm and no push: just a read, five days later
 boot(); await push({ OLD1: { ltp: 1 } }); board.lastPrune = now; now += 5 * 86400e3; s = await snap(); out.fetchPrune = Object.keys(s.quotes);
@@ -199,9 +199,9 @@ def test_b1_a_name_covered_twice_does_not_defeat_the_freshness_rule(out):
 
 # ---- B2 ----------------------------------------------------------------------------------------------------------------------------------------
 def test_b2_the_board_does_not_fill_for_good(out):
-    assert out["full"] == 4000 and out["refusedWhileFresh"] == 1                           # full of fresh names: a new one is refused (and counted by the push)
+    assert out["full"] == 6000 and out["refusedWhileFresh"] == 1                           # full of fresh names: a new one is refused (and counted by the push)
     a = out["afterPrune"]
-    assert a["accepted"] == 1 and a["fresh"] is True and a["old"] is False and a["count"] == 1 and a["pruned"] == 4000      # 5 days on: the stale ones made room
+    assert a["accepted"] == 1 and a["fresh"] is True and a["old"] is False and a["count"] == 1 and a["pruned"] == 6000      # 5 days on: the stale ones made room
     assert out["kotakRefused"] >= 1                                                         # a Kotak write refused by a full board is counted in /live/health, not silent
     assert out["expired"]["at17"] == ["KEEP", "OLDOPT"] and out["expired"]["at19"] == ["KEEP"] or out["expired"]["at19"] == []      # an expired contract leaves the snapshot after 4 days of silence
 

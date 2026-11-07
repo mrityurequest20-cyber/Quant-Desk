@@ -198,17 +198,38 @@ export class KotakPoller {
 // The calls one cycle makes. The universe is {quotes: [{n, s, g, t, one?}], chains: [{u, x, e}], count}. Instruments flagged `one` (indices, asked for by name) go one to a call,
 // because the answer carries the token, not the name; the rest go 25 to a call. When the plan is longer than MAX_CALLS it is rotated, so each item is refreshed within
 // ceil(plan / MAX_CALLS) cycles and no cycle exceeds the subrequest limit.
+//
+// Two tiers, so a long list of stock chains cannot slow the prices people watch. The quote calls and the chains without a keep-count (the index chains) run in EVERY cycle;
+// the chains with one (`n`: the stock chains, a couple of hundred) take the remaining slots in rotation, each refreshed within ceil(cold / slots) cycles. If the quote
+// calls and index chains alone leave fewer than MIN_COLD slots, there is no tier: everything rotates together, as before. One free slot is enough to keep the prices on the fast cycle: the stock chains then take
+// longer to come round, which is better than a cliff that switched the tier off at a few more stocks and slowed every price without a sign.
+export const MIN_COLD = 1;
 export function plan(universe, cursor) {
 	const calls = [];
 	const singles = (universe.quotes || []).filter((q) => q.one), many = (universe.quotes || []).filter((q) => !q.one);
 	for (const q of singles) calls.push({ kind: "q", items: [q] });
 	for (let i = 0; i < many.length; i += BATCH) calls.push({ kind: "q", items: many.slice(i, i + BATCH) });
-	for (const c of universe.chains || []) calls.push({ kind: "c", chain: c });
-	if (calls.length <= MAX_CALLS) return { calls, next: 0, total: calls.length };
+	const chains = universe.chains || [], hot = chains.filter((c) => !c.n), cold = chains.filter((c) => c.n);
+	if (calls.length + chains.length <= MAX_CALLS) { for (const c of chains) calls.push({ kind: "c", chain: c }); return { calls, next: 0, total: calls.length }; }
+	if (calls.length + hot.length + MIN_COLD <= MAX_CALLS && cold.length) {
+		for (const c of hot) calls.push({ kind: "c", chain: c });
+		const slots = MAX_CALLS - calls.length, total = calls.length + cold.length, start = cursor % cold.length;
+		for (let k = 0; k < Math.min(slots, cold.length); k++) calls.push({ kind: "c", chain: cold[(start + k) % cold.length] });
+		return { calls, next: (start + slots) % cold.length, total };
+	}
+	for (const c of chains) calls.push({ kind: "c", chain: c });
 	const start = cursor % calls.length;
 	const picked = [];
 	for (let k = 0; k < MAX_CALLS; k++) picked.push(calls[(start + k) % calls.length]);
 	return { calls: picked, next: (start + MAX_CALLS) % calls.length, total: calls.length };
+}
+
+// A chain call returns the strikes around the money (the API's `count` each side), so the middle of its strikes is the money: keep `n` strikes either side of it.
+export function nearMoney(rows, n) {
+	const strikes = [...new Set(rows.map((r) => r.strike))].sort((a, b) => a - b);
+	if (strikes.length <= 2 * n + 1) return rows;
+	const mid = Math.floor(strikes.length / 2), keep = new Set(strikes.slice(mid - n, mid + n + 1));
+	return rows.filter((r) => keep.has(r.strike));
 }
 
 // Run one planned cycle. Returns {updates: [[name, quote]], ok, failed, errors: {kind: count}}. Never throws: a failed call is counted and the rest go on.
@@ -239,7 +260,7 @@ export async function runCycle(poller, universe, cursor) {
 					const u = c.chain;
 					const rows = parseChain(await poller.chain(u.u, u.x, u.e, count));
 					if (!rows.length) throw new KotakError("empty", "no usable rows");
-					for (const r of rows) {
+					for (const r of u.n ? nearMoney(rows, u.n) : rows) {
 						const name = optionName(u.u, u.e, r.strike, r.side);
 						if (quoteNames.has(name)) continue;                                      // the quote wins: one name, one source of its numbers
 						updates.push([name, { ltp: r.ltp, ...(r.vol !== undefined ? { vol: r.vol } : {}), ...(r.oi !== undefined ? { oi: r.oi } : {}), s: "opt" }]);
