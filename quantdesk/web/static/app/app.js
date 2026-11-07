@@ -1789,7 +1789,7 @@ async function renderLive() {
 		const r = await fetch("/live/snapshot", { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
 		if (r.status === 401) { try { localStorage.removeItem("qd.livekey"); } catch (e) { /* private mode */ } note = "That key was not accepted. Type it again."; }
 		else if (r.status === 503) note = "The live feed is not switched on yet: the Worker still needs its two secrets (docs/LIVE.md).";
-		else if (!r.ok || !/json/.test(r.headers.get("content-type") || "")) note = "Live prices are on the Cloudflare site only; this address cannot reach them.";
+		else if (!r.ok || !/json/.test(r.headers.get("content-type") || "")) note = `The live relay did not answer as expected: HTTP ${r.status}, ${(r.headers.get("content-type") || "no content type").split(";")[0]}, from ${location.host}. If that address is not your Worker's own (…workers.dev), open the app from the Worker's address.`;          // the status, kind and host say where the request went: nothing secret
 		else j = await r.json();
 		if (j && S.lv.sel) {                                                          // an instrument is open: its chart series, with every refresh
 			try {
@@ -1800,7 +1800,7 @@ async function renderLive() {
 		if (j && (S.lv.tick = (S.lv.tick || 0) + 1) % 3 === 1) {                      // the sources' health, every third refresh (about 15 s)
 			try { const hr = await fetch("/live/health", { headers: { Authorization: "Bearer " + key }, cache: "no-store" }); if (hr.ok) S.lv.health = await hr.json(); } catch (e) { /* the table still shows */ }
 		}
-	} catch (e) { note = "Offline: no live prices."; }
+	} catch (e) { note = "No live prices: the request failed before any answer (" + String((e && e.name) || "error") + ") from " + location.host + ". Offline, or the address blocks it."; }
 	finally { liveBusy = false; }
 	if (S.tab !== "live") return;
 	if (!j) { body.textContent = ""; S.lv.built = false; body.dataset.state = "note"; return void put(body, liveKeyForm(note)); }
