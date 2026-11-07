@@ -13,9 +13,10 @@
 // All of it lives in the same Durable Object as the live board (class LiveBoard), in storage, so it survives a restart. No secret and no price is stored here.
 
 export const MAX_PENDING = 20;
-export const MAX_RESULTS = 100;
+export const MAX_RESULTS = 50;                     // kept results: with the reason caps below, the stored value stays far under a Durable Object's 128 KiB limit
+export const MAX_SEEN = 1000;                      // order ids remembered as used (about 70 KB stored)
 export const MAX_SUMMARY = 60000;                  // characters
-export const CHUNK = 100000;                       // characters per stored piece of the account (a stored value is limited to 128 KiB)
+export const CHUNK = 100000;                       // characters per stored piece of the account (a stored value is limited to 128 KiB; the account is ASCII only, so a character is a byte)
 export const MAX_CHUNKS = 12;
 const ID = /^[A-Za-z0-9_-]{6,64}$/;
 const NAME = /^[A-Z0-9][A-Z0-9&_.-]{2,39}$/;
@@ -45,7 +46,7 @@ export function cleanOrder(o) {
 export function cleanResult(r) {
 	if (!r || typeof r !== "object" || Array.isArray(r)) return null;
 	if (!(typeof r.id === "string" && ID.test(r.id)) || !STATUS.has(r.status)) return null;
-	const reasons = Array.isArray(r.reasons) ? r.reasons.filter((x) => typeof x === "string").slice(0, 10).map((x) => x.slice(0, 400)) : [];
+	const reasons = Array.isArray(r.reasons) ? r.reasons.filter((x) => typeof x === "string").slice(0, 5).map((x) => x.slice(0, 200)) : [];
 	let fill = null;
 	if (r.fill && typeof r.fill === "object" && !Array.isArray(r.fill)) {
 		fill = {};
@@ -65,7 +66,7 @@ export function cleanState(b) {
 	if (text.length > MAX_SUMMARY) return null;
 	const out = { summary: JSON.parse(text) };
 	if (b.account !== undefined && b.account !== null) {
-		if (typeof b.account !== "string" || b.account.length > CHUNK * MAX_CHUNKS) return null;
+		if (typeof b.account !== "string" || b.account.length > CHUNK * MAX_CHUNKS || /[^\x00-\x7f]/.test(b.account)) return null;      // ASCII only (the runner writes JSON with every other character escaped): a character is a byte, a chunk fits a stored value
 		let acct;
 		try { acct = JSON.parse(b.account); } catch (e) { return null; }
 		if (!acct || !Array.isArray(acct.ledger) || acct.ledger.length !== s.ledger_len) return null;
@@ -78,65 +79,69 @@ export function cleanState(b) {
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
-// The queue, results, kill flag and account, kept in the Durable Object's storage. One instance per LiveBoard.
+// The queue, results, kill flag and account, kept in the Durable Object's storage, each under its own key and each bounded, so one cannot starve another and the kill flag is
+// never held hostage by a big value. A storage READ that fails is never cached as "empty" (it would then be saved over the real state): every request fails with 503 until a read
+// succeeds. A WRITE is made before memory changes, so a failed write changes nothing and a retry is not told "already used".
 export class PaperBook {
 	constructor(state) {
 		this.state = state;
-		this.d = null;                             // {queue, results, kill}
+		this.d = null;                             // {queue, results, kill, seen}
 	}
 
 	async load() {
 		if (this.d) return;
-		let d = null;
-		try { d = await this.state.storage.get("paper"); } catch (e) { /* start empty */ }
-		const ok = d && typeof d === "object";
+		const s = this.state.storage;
+		const [queue, results, kill, seen] = [await s.get("paper:queue"), await s.get("paper:results"), await s.get("paper:kill"), await s.get("paper:seen")];     // a throw here is not caught: nothing is cached
 		this.d = {
-			queue: ok && Array.isArray(d.queue) ? d.queue.map(cleanQueued).filter(Boolean).slice(0, MAX_PENDING) : [],
-			results: ok && Array.isArray(d.results) ? d.results.map(cleanResult).filter(Boolean).slice(-MAX_RESULTS) : [],
-			kill: ok && d.kill === true,
+			queue: Array.isArray(queue) ? queue.map(cleanQueued).filter(Boolean).slice(0, MAX_PENDING) : [],
+			results: Array.isArray(results) ? results.map(cleanResult).filter(Boolean).slice(-MAX_RESULTS) : [],
+			kill: kill === true,
+			seen: Array.isArray(seen) ? seen.filter((x) => typeof x === "string" && ID.test(x)).slice(-MAX_SEEN) : [],
 		};
 	}
 
-	async save() { await this.state.storage.put("paper", this.d); }
-
 	async handle(request, url, now) {
-		await this.load();
+		try { await this.load(); } catch (e) { return json(503, { error: "paper storage is unavailable; nothing was changed" }); }
 		const p = url.pathname, m = request.method;
-		if (p === "/paper/order" && m === "POST") return this.order(await request.json(), now);
-		if (p === "/paper/kill" && m === "POST") return this.setKill(await request.json());
-		if (p === "/paper/queue" && m === "GET") return json(200, { kill: this.d.kill, orders: this.d.queue, now });
-		if (p === "/paper/result" && m === "POST") return this.result(await request.json());
-		if (p === "/paper/state" && m === "POST") return this.putState(await request.json(), now);
-		if (p === "/paper/state" && m === "GET") return this.getState(url.searchParams.get("full") === "1", now);
+		try {
+			if (p === "/paper/order" && m === "POST") return await this.order(await request.json(), now);
+			if (p === "/paper/kill" && m === "POST") return await this.setKill(await request.json());
+			if (p === "/paper/queue" && m === "GET") return json(200, { kill: this.d.kill === true, orders: this.d.queue, now });
+			if (p === "/paper/result" && m === "POST") return await this.result(await request.json());
+			if (p === "/paper/state" && m === "POST") return await this.putState(await request.json(), now);
+			if (p === "/paper/state" && m === "GET") return await this.getState(url.searchParams.get("full") === "1", now);
+		} catch (e) {
+			return json(500, { error: "the paper store could not complete that; nothing was changed" });       // storage failed: memory is untouched (see below)
+		}
 		return json(404, { error: "no such paper path" });
 	}
 
 	async order(raw, now) {
 		const o = cleanOrder(raw);
 		if (!o) return json(400, { error: "not a valid order" });
-		if (this.d.queue.some((q) => q.id === o.id) || this.d.results.some((r) => r.id === o.id)) return json(409, { error: "that order id was already used" });
+		if (this.d.seen.includes(o.id) || this.d.queue.some((q) => q.id === o.id) || this.d.results.some((r) => r.id === o.id)) return json(409, { error: "that order id was already used" });
 		if (this.d.queue.length >= MAX_PENDING) return json(429, { error: "too many orders are waiting" });
-		this.d.queue.push({ ...o, queued_at: now });
-		await this.save();
-		return json(200, { queued: true, id: o.id, pending: this.d.queue.length });
+		const queue = [...this.d.queue, { ...o, queued_at: now }], seen = [...this.d.seen, o.id].slice(-MAX_SEEN);
+		await this.state.storage.put({ "paper:queue": queue, "paper:seen": seen });                         // both or neither
+		this.d.queue = queue; this.d.seen = seen;
+		return json(200, { queued: true, id: o.id, pending: queue.length });
 	}
 
 	async setKill(b) {
 		if (!b || typeof b.on !== "boolean") return json(400, { error: "on must be true or false" });
+		await this.state.storage.put("paper:kill", b.on);
 		this.d.kill = b.on;
-		await this.save();
 		return json(200, { kill: this.d.kill });
 	}
 
 	async result(raw) {
 		const r = cleanResult(raw);
 		if (!r) return json(400, { error: "not a valid result" });
-		this.d.queue = this.d.queue.filter((q) => q.id !== r.id);
-		this.d.results = this.d.results.filter((x) => x.id !== r.id);
-		this.d.results.push(r);
-		this.d.results = this.d.results.slice(-MAX_RESULTS);
-		await this.save();
-		return json(200, { ok: true, pending: this.d.queue.length });
+		const queue = this.d.queue.filter((q) => q.id !== r.id), results = [...this.d.results.filter((x) => x.id !== r.id), r].slice(-MAX_RESULTS);
+		const seen = this.d.seen.includes(r.id) ? this.d.seen : [...this.d.seen, r.id].slice(-MAX_SEEN);
+		await this.state.storage.put({ "paper:queue": queue, "paper:results": results, "paper:seen": seen });
+		this.d.queue = queue; this.d.results = results; this.d.seen = seen;
+		return json(200, { ok: true, pending: queue.length });
 	}
 
 	async heldAccount() {
@@ -176,10 +181,10 @@ export class PaperBook {
 
 	async getState(full, now) {
 		const summary = (await this.state.storage.get("paper:summary")) || null;
-		const base = { summary, results: this.d.results.slice(-30), pending: this.d.queue.map((q) => ({ id: q.id, side: q.side, symbol: q.symbol, lots: q.lots, queued_at: q.queued_at })), kill: this.d.kill, now };
+		const base = { summary, results: this.d.results.slice(-30), pending: this.d.queue.map((q) => ({ id: q.id, side: q.side, symbol: q.symbol, lots: q.lots, queued_at: q.queued_at })), kill: this.d.kill === true, now };
 		if (!full) return json(200, base);
 		const held = await this.heldAccount();
-		return json(200, { summary, account: held.text, kill: this.d.kill, now });
+		return json(200, { summary, account: held.text, kill: this.d.kill === true, now });
 	}
 }
 

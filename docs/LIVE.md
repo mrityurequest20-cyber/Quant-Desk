@@ -110,4 +110,6 @@ The same Worker and Durable Object also hold the owner's **paper** orders until 
 | `POST /paper/state` | INGEST | `{summary, account?}`: the account is stored in pieces; **a shorter ledger, or one that does not extend the held one hash for hash, is refused (409)**, so a confused runner cannot overwrite history |
 | `GET /paper/state?full=1` | INGEST | the full saved account, for the runner to restore from |
 
+Storage: the queue, the results, the kill flag and the list of used order ids each have their own key and are bounded (20 waiting orders; the last 50 results, 5 reasons of 200 characters each; the last 1000 used ids), so none can crowd out another and the kill flag is never lost to a big value. A storage read that fails is never treated as empty: the route answers 503 and changes nothing; a write is made before memory changes, so a failed write (500) changes nothing and a retry is not told the id was used. The saved account is ASCII only (the runner escapes everything else).
+
 The READ key can queue a paper order and set the kill flag; it cannot write a result or a state. The INGEST key cannot queue an order. Nothing new is needed on the Worker: the same two secrets.

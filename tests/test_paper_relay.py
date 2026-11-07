@@ -25,9 +25,12 @@ HARNESS = r"""
 import { handleLive, LiveBoard } from "./live.mjs";
 const mem = new Map();
 const clone = (v) => JSON.parse(JSON.stringify(v));
+let failGetKey = null, failPutKey = null;                       // test hooks: a read of this key throws; a write that includes this key throws
+const LIMIT = 131072;                                           // a Durable Object value is limited to 128 KiB: an over-size write throws, as the real one does
+const big = (v) => JSON.stringify(v).length > LIMIT;
 const state = { storage: {
-  get: async (k) => Array.isArray(k) ? new Map(k.filter((x) => mem.has(x)).map((x) => [x, clone(mem.get(x))])) : (mem.has(k) ? clone(mem.get(k)) : undefined),
-  put: async (k, v) => { if (typeof k === "object") for (const [a, b] of Object.entries(k)) mem.set(a, clone(b)); else mem.set(k, clone(v)); },
+  get: async (k) => { if (failGetKey && (k === failGetKey || (Array.isArray(k) && k.includes(failGetKey)))) throw new Error("storage read failed"); return Array.isArray(k) ? new Map(k.filter((x) => mem.has(x)).map((x) => [x, clone(mem.get(x))])) : (mem.has(k) ? clone(mem.get(k)) : undefined); },
+  put: async (k, v) => { const kv = typeof k === "object" ? Object.entries(k) : [[k, v]]; for (const [a, b] of kv) { if (a === failPutKey || big(b)) throw new Error("storage write failed: " + a); } for (const [a, b] of kv) mem.set(a, clone(b)); },
   getAlarm: async () => null, setAlarm: async () => {}, deleteAlarm: async () => {} }, blockConcurrencyWhile: async (fn) => fn() };
 let board = new LiveBoard(state, {});
 let now = 1789000000000;
@@ -191,7 +194,9 @@ await call("POST", "/paper/state", { token: ING, body: { summary: { ledger_len: 
 board = new LiveBoard(state, {}); board.now = () => now;                                   // a restart: new object, same storage
 const q = (await call("GET", "/paper/queue", { token: ING })).body;
 out.after = { ids: q.orders.map((x) => x.id), kill: q.kill, results: (await call("GET", "/paper/state", { token: READ })).body.results.map((r) => r.id), full: (await call("GET", "/paper/state?full=1", { token: ING })).body.account === account(2) };
-mem.set("paper", { queue: [{ id: "ord-ok0001", side: "buy", symbol: "NIFTY12NOV2624500CE", lots: 1, strategy: "s", thesis: "t".repeat(30), queued_at: 1 }, { id: "bad" }, "junk", { id: "ord-ok0002", side: "buy", symbol: "NIFTY12NOV2624500CE", lots: 1, strategy: "s", thesis: "t".repeat(30) }], results: ["x", { id: "ord-r00001", status: "filled" }, { id: "ord-r00002", status: "hacked" }], kill: "yes" });
+mem.set("paper:queue", [{ id: "ord-ok0001", side: "buy", symbol: "NIFTY12NOV2624500CE", lots: 1, strategy: "s", thesis: "t".repeat(30), queued_at: 1 }, { id: "bad" }, "junk", { id: "ord-ok0002", side: "buy", symbol: "NIFTY12NOV2624500CE", lots: 1, strategy: "s", thesis: "t".repeat(30) }]);
+mem.set("paper:results", ["x", { id: "ord-r00001", status: "filled" }, { id: "ord-r00002", status: "hacked" }]);
+mem.set("paper:kill", "yes");
 board = new LiveBoard(state, {}); board.now = () => now;
 const c = (await call("GET", "/paper/queue", { token: ING })).body;
 out.cleaned = { ids: c.orders.map((x) => x.id), kill: c.kill, results: (await call("GET", "/paper/state", { token: READ })).body.results.map((r) => r.id) };
@@ -219,3 +224,75 @@ def test_the_relay_paper_module_has_no_broker_secret_or_network_call():
     src = (ROOT / "deploy" / "cloudflare" / "paper.js").read_text(encoding="utf-8")
     code = re.sub(r"//.*", "", src)
     assert not re.search(r"fetch\(|XMLHttpRequest|WebSocket|env\.|KOTAK|KITE|secret|password|token", code, re.I)
+
+
+@needs_node
+def test_a_failed_storage_read_is_never_cached_as_empty_and_never_saved_over_the_real_state(tmp_path):
+    o = run(tmp_path, r"""
+await call("POST", "/paper/order", { token: READ, body: order("ord-keep001") });
+await call("POST", "/paper/kill", { token: READ, body: { on: true } });
+board = new LiveBoard(state, {}); board.now = () => now;                    // a restart
+failGetKey = "paper:queue";                                                // the read of the book fails
+const down = await call("GET", "/paper/queue", { token: ING });
+const downWrite = await call("POST", "/paper/result", { token: ING, body: { id: "ord-other01", status: "done" } });
+out.down = [down.status, downWrite.status];
+failGetKey = null;
+const back = (await call("GET", "/paper/queue", { token: ING })).body;     // storage recovered
+out.back = { ids: back.orders.map((x) => x.id), kill: back.kill };
+await call("POST", "/paper/result", { token: ING, body: { id: "ord-other01", status: "done" } });
+out.after = { ids: (await call("GET", "/paper/queue", { token: ING })).body.orders.map((x) => x.id), kill: (await call("GET", "/paper/queue", { token: ING })).body.kill, stored: mem.get("paper:kill") };
+""")
+    assert o["down"] == [503, 503] and o["back"] == {"ids": ["ord-keep001"], "kill": True} and o["after"]["kill"] is True and o["after"]["stored"] is True
+
+
+@needs_node
+def test_a_failed_write_changes_nothing_and_a_retry_is_not_told_the_id_was_used(tmp_path):
+    o = run(tmp_path, r"""
+failPutKey = "paper:queue";
+out.fail = (await call("POST", "/paper/order", { token: READ, body: order("ord-retry01") })).status;
+out.queueAfterFail = (await call("GET", "/paper/queue", { token: ING })).body.orders.length;
+failPutKey = null;
+out.retry = (await call("POST", "/paper/order", { token: READ, body: order("ord-retry01") })).status;
+// the kill flag has its own key: a result store that cannot be written does not stop it
+failPutKey = "paper:results";
+out.resFail = (await call("POST", "/paper/result", { token: ING, body: { id: "ord-retry01", status: "done" } })).status;
+out.kill = (await call("POST", "/paper/kill", { token: READ, body: { on: true } })).status;
+board = new LiveBoard(state, {}); board.now = () => now; failPutKey = null;
+const q = (await call("GET", "/paper/queue", { token: ING })).body;
+out.afterRestart = { kill: q.kill, ids: q.orders.map((x) => x.id) };
+""")
+    assert o["fail"] == 500 and o["queueAfterFail"] == 0 and o["retry"] == 200 and o["resFail"] == 500 and o["kill"] == 200
+    assert o["afterRestart"] == {"kill": True, "ids": ["ord-retry01"]}
+
+
+@needs_node
+def test_a_fresh_store_answers_with_a_boolean_kill_and_every_stored_value_stays_under_the_limit(tmp_path):
+    o = run(tmp_path, r"""
+out.freshQueue = (await call("GET", "/paper/queue", { token: ING })).body;
+out.freshState = (await call("GET", "/paper/state", { token: READ })).body;
+const worst = Array.from({ length: 5 }, () => "r".repeat(400));            // more and longer than are kept
+for (let i = 0; i < 80; i++) await call("POST", "/paper/result", { token: ING, body: { id: "ord-big" + String(i).padStart(4, "0"), status: "refused", reasons: worst, fill: { symbol: "S".repeat(100), kind: "k".repeat(100), ts: "t".repeat(100) }, at: "a".repeat(100) } });
+out.sizes = Object.fromEntries([...mem.entries()].map(([k, v]) => [k, JSON.stringify(v).length]));
+out.results = (await call("GET", "/paper/state", { token: READ })).body.results.length;
+const kept = mem.get("paper:results");
+out.kept = kept.length; out.nReasons = Math.max(...kept.map((r) => r.reasons.length)); out.lenReason = Math.max(...kept.flatMap((r) => r.reasons.map((x) => x.length)));
+out.reuse = (await call("POST", "/paper/order", { token: READ, body: order("ord-big0000") })).status;      // used 80 results ago, long out of the last 50
+""")
+    assert o["freshQueue"]["kill"] is False and o["freshQueue"]["orders"] == [] and o["freshState"]["kill"] is False
+    assert max(o["sizes"].values()) < 131072 and o["results"] == 30
+    assert o["kept"] == 50 and o["nReasons"] == 5 and o["lenReason"] == 200                                              # the caps themselves, not only the sizes they give
+    assert o["reuse"] == 409                                                                                            # the used-id list outlives the results list
+
+
+@needs_node
+def test_an_id_with_trailing_junk_an_infinite_limit_and_a_non_ascii_account_are_refused(tmp_path):
+    o = run(tmp_path, r"""
+out.ids = [];
+for (const id of ["ord-ok123\n", "ord-ok123<script>", "ord ok123", "ord-o", "ord-oké123"]) out.ids.push((await call("POST", "/paper/order", { token: READ, body: order(id) })).status);
+out.limit = (await call("POST", "/paper/order", { token: READ, body: JSON.stringify(order("ord-limit01")).replace(/\}$/, ',"limit":1e400}') })).status;
+const acct = JSON.stringify({ capital0: 1, ledger: [{ hash: "a", note: "₹ rupee" }] });
+out.nonascii = (await call("POST", "/paper/state", { token: ING, body: { summary: { ledger_len: 1 }, account: acct } })).status;
+const ok = JSON.stringify({ capital0: 1, ledger: [{ hash: "a", note: "\\u20b9 rupee" }] });
+out.ascii = (await call("POST", "/paper/state", { token: ING, body: { summary: { ledger_len: 1 }, account: ok } })).status;
+""")
+    assert o["ids"] == [400] * 5 and o["limit"] == 400 and o["nonascii"] == 400 and o["ascii"] == 200
