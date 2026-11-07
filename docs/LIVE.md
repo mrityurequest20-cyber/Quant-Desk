@@ -77,6 +77,8 @@ Make two random strings of at least 24 characters, different from each other (`o
 | GitHub, same page, **Variables** | `LIVE_URL` | `https://<your worker>.workers.dev/live/ingest` |
 | Cloudflare dashboard, same Worker, Variables and Secrets | secret `KOTAK_CONSUMER_KEY` | the Kotak Neo consumer key (the one already saved as the GitHub secret of the same name) |
 
+All three Cloudflare values must be saved as **Secrets** (Type: Secret), not plain Text variables: every deploy of the Worker removes a Text variable that `wrangler.jsonc` does not list, and secrets survive. If `https://<your worker>.workers.dev/live/snapshot` answers `{"error":"the live view is not switched on"}`, the same answer has a `why` saying which piece is missing (the Durable Object, either token, a token under 24 characters, or the two being the same string) and the names of the Worker's own `LIVE*` / `KOTAK*` settings, so a misspelt name shows. It never shows a value. `{"error":"no"}` (a 401) means it is switched on and only the key is missing.
+
 Then open the app on the Cloudflare site (never the github.io address: the tab refuses to send the key there), go to **Live**, and type READ once. Until the secrets exist the relay answers 503 and the recorder pushes nothing; recording is unaffected either way.
 
 ## Honest limits
