@@ -253,6 +253,7 @@ export class LiveBoard {
 
 	put(name, src, q, onlyIfChanged) {
 		const now = this.now();
+		if (expiredOption(name, Number(istParts(now).date.replace(/-/g, "")))) return false;        // an old universe or a recorder cannot put an expired contract back (it would show until the next prune)
 		let e = this.quotes.get(name);
 		if (!e) {
 			if (this.quotes.size >= MAX_TOTAL && !(now - this.lastPrune > 60000 && this.prune(now) > 0)) return false;      // full: make room from the stale ones, once a minute at most

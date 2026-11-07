@@ -283,4 +283,8 @@ def test_a_stock_name_the_relay_would_drop_from_a_chain_is_excluded_and_counted_
     u = KU.build(FakeClient(), TODAY, say=lambda *a: None)
     chained = {c["u"] for c in u["chains"] if "n" in c}
     assert chained == {"GOOD", "X" * 24}                                                     # a dot or 25 characters would be dropped by the relay's chain rule: not sent
-    assert any("2 F&O stock names were not plain symbols" in e for e in u["errors"])        # counted, never named
+    assert any("2 F&O stocks have names the relay's chain rule does not accept" in e for e in u["errors"])        # counted, never named
+    assert not any("not plain symbols" in e for e in u["errors"])                           # they are plain symbols: the relay takes them as quotes
+    eq = {q["n"] for q in u["quotes"] if q["s"] == "eq"}
+    fut = {q["n"] for q in u["quotes"] if q["s"] == "fut"}
+    assert {"HAS.DOT", "X" * 25} <= eq and {"HAS.DOT-FUT", ("X" * 25) + "-FUT"} <= fut      # a name only the chain rule refuses keeps its spot and its future

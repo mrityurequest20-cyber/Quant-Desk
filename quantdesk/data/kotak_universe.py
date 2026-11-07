@@ -23,6 +23,7 @@ import urllib.request
 from ..intraday.kotak import INDEX, KotakFutures, KotakError, _fo, scrip_master, segments
 from .live_push import SYMBOL, _NoRedirect
 
+QUOTE_NAME = re.compile(r"^[A-Z0-9&_.-]{1,32}$")                  # an F&O stock name for its spot and future: what the relay accepts as a symbol (no colon, space or control character: it is printed in workflow log lines)
 STOCK_NAME = re.compile(r"^[A-Z0-9&_-]{1,24}$")                 # an F&O stock name by the relay's own chain rule (cleanUniverse): no dot, colon, space or control character, at most 24 characters
 
 CHAIN_UNDERLYINGS = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX")
@@ -69,7 +70,7 @@ def build(client, today: dt.date, say=print, fut_limit: int | None = None) -> di
     try:
         master = scrip_master(client, "nse_fo")
         everyone = stock_names(master)
-        names = [n for n in everyone if STOCK_NAME.fullmatch(str(n))]          # a name from a CSV is never printed or pushed unless it is a plain symbol
+        names = [n for n in everyone if QUOTE_NAME.fullmatch(str(n))]          # a name from a CSV is never printed or pushed unless it is a plain symbol
         if len(names) < len(everyone):
             errors.append(f"{len(everyone) - len(names)} F&O stock names were not plain symbols and were skipped")          # the count only, never the names
         tokens = cash_tokens(master, names)
@@ -108,9 +109,13 @@ def build(client, today: dt.date, say=print, fut_limit: int | None = None) -> di
             errors.append(f"{u} expiries: {type(e).__name__}")
 
     failed_run = 0
-    for i, u in enumerate(names[:STOCK_CHAINS_MAX]):           # every F&O stock's nearest expiry: its option chain, a few strikes either side of the money
+    chain_names = [n for n in names if STOCK_NAME.fullmatch(n)]          # the relay's chain rule is narrower than its symbol rule (no dot, at most 24 characters)
+    if len(chain_names) < len(names):
+        errors.append(f"{len(names) - len(chain_names)} F&O stocks have names the relay's chain rule does not accept: no chain for them")          # the count only
+    chain_names = chain_names[:STOCK_CHAINS_MAX]
+    for i, u in enumerate(chain_names):                        # every F&O stock's nearest expiry: its option chain, a few strikes either side of the money
         if failed_run >= STOCK_FAIL_RUN:                       # Kotak is refusing or not answering: do not spend minutes on 250 more calls that fail the same way
-            errors.append(f"stock expiries stopped after {STOCK_FAIL_RUN} failures in a row; {len(names[:STOCK_CHAINS_MAX]) - i} stocks have no chain today")
+            errors.append(f"stock expiries stopped after {STOCK_FAIL_RUN} failures in a row; {len(chain_names) - i} stocks have no chain today")
             break
         try:
             exp = [d for d in client.expiries(u, exchange="nse_fo") if d >= today][:1]
