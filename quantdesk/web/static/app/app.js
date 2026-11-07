@@ -658,7 +658,7 @@ function liveLabel(name, q) {
 }
 function liveKeyForm(note) {
 	const inp = h("input", { type: "password", class: "search", placeholder: "Live key", "aria-label": "Live key", autocomplete: "off", id: "lv-key" });
-	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); S.lv.built = false; $("#lv-body").dataset.state = ""; renderLive(); } };
+	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); S.lv.built = false; $("#lv-body").dataset.state = ""; renderLive(); pollHealth(); } };
 	inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
 	return h("div", { class: "panel pad" }, h("div", { style: "font-weight:600;margin-bottom:6px" }, "Live prices"),
 		h("div", { style: "font-size:13px;color:var(--fg2);line-height:1.55;margin-bottom:10px" },
@@ -679,8 +679,8 @@ function liveDraw() {
 	const L = S.lv, data = L.data, body = $("#lv-body");
 	if (!data || !L.built) return;
 	const newest = data.newest_age_s;
-	const kind = !fin(newest) ? "paused" : newest <= LIVE_FRESH ? "live" : newest <= LIVE_DELAYED ? "stale" : "paused";
-	const label = !fin(newest) ? "No prices yet" : newest <= LIVE_FRESH ? "Live" : newest <= LIVE_DELAYED ? "Delayed " + liveAge(newest) : "No feed: last " + liveAge(newest) + " ago";
+	const kind = !fin(newest) ? (inSession() ? "stale" : "paused") : newest <= LIVE_FRESH ? "live" : newest <= LIVE_DELAYED ? "stale" : "paused";
+	const label = !fin(newest) ? (inSession() ? "No prices yet" : "Market closed, opens " + nextOpen()) : newest <= LIVE_FRESH ? "Live" : newest <= LIVE_DELAYED ? "Delayed " + liveAge(newest) : "No feed: last " + liveAge(newest) + " ago";
 	const pill = $("#lv-pill"); pill.className = "pill " + kind; $("#lv-pill-t").textContent = label;
 	const counts = {};
 	for (const [n, v] of Object.entries(data.quotes)) { const k = liveSeg(n, v); counts[k] = (counts[k] || 0) + 1; }
@@ -836,7 +836,7 @@ function liveBuild() {
 		h("div", { id: "lv-detail", hidden: true }),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:12px 16px" },
 			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. Tap any row for its chart and, for an underlying, its option chain. This tab only displays: nothing here can place an order. ",
-			h("a", { href: "#", class: "acc", onclick: (e) => { e.preventDefault(); try { localStorage.removeItem("qd.livekey"); } catch (x) { /* ignore */ } L.built = false; body.dataset.state = ""; renderLive(); } }, "Forget this key")));
+			h("a", { href: "#", class: "acc", onclick: (e) => { e.preventDefault(); try { localStorage.removeItem("qd.livekey"); } catch (x) { /* ignore */ } L.built = false; L.health = null; L.hstate = null; body.dataset.state = ""; renderLive(); setStatus(); } }, "Forget this key")));
 	L.built = true;
 	body.dataset.state = "data";
 }
@@ -866,7 +866,7 @@ async function renderLive() {
 	} catch (e) { note = "No live prices: the request failed before any answer (" + String((e && e.name) || "error") + ") from " + location.host + ". Offline, or the address blocks it."; }
 	finally { liveBusy = false; }
 	if (S.tab !== "live") return;
-	if (!j) { body.textContent = ""; S.lv.built = false; body.dataset.state = "note"; return void put(body, liveKeyForm(note)); }
+	if (!j) { body.textContent = ""; S.lv.built = false; body.dataset.state = "note"; setStatus(); return void put(body, liveKeyForm(note)); }
 	S.lv.data = j;
 	if (!S.lv.built) liveBuild();
 	liveDraw();
