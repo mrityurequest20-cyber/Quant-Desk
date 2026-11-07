@@ -42,6 +42,7 @@ jobs:
           echo "With the READ key: HTTP $code"
           case "$code" in
             200)
+              [ "$nokey" = "401" ] || { echo "UNEXPECTED: the relay answered HTTP $nokey WITHOUT a key (it should be 401), so this run cannot show that the READ key is checked."; exit 1; }
               python3 -c 'import json; d = json.load(open("/tmp/snapshot.json")); print("The READ key opens the relay. Instruments on the board:", json.dumps(d.get("count")), "| newest price age (s):", json.dumps(d.get("newest_age_s")))'
               hc=$(curl -sS -m 20 -o /tmp/health.json -w '%{http_code}' -H "Authorization: Bearer $LIVE_READ_TOKEN" "$base/live/health" || true)
               hc=${hc:-000}

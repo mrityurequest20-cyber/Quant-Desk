@@ -42,6 +42,8 @@ class Relay(BaseHTTPRequestHandler):
     def do_GET(self):
         auth = self.headers.get("authorization")
         if Relay.mode == "off": return self._send(503, {"error": "the live view is not switched on"})
+        if Relay.mode == "open":                                                                        # a broken relay that answers without any key
+            return self._send(200, {"count": 1, "newest_age_s": 1.0, "quotes": {}} if self.path == "/live/snapshot" else {"kite": {"n": 1}, "kotak": {"status": "ok", "n": 1}})
         if Relay.mode == "hostile" and auth == "Bearer " + KEY:
             if self.path == "/live/snapshot": return self._send(200, {"count": "5\n::warning::INJECTED\n::add-mask::ok", "newest_age_s": "1\n::error::x"})
             return self._send(200, {"kite": {"n": "7\n::stop-commands::abc"}, "kotak": {"status": "ok\n::warning::HEALTH", "n": "5\n::error::y", "universe": {"asof": "2026-11-09\n::notice::z"}}})
@@ -90,7 +92,7 @@ def test_it_refuses_a_plain_http_address_that_is_not_loopback(tmp_path):
 @pytest.mark.parametrize("url", [
     "https://evil.com/x/live/ingest", "https://worker@evil.com/live/ingest", "https:///live/ingest", "http://127.0.0.1:1@evil.com/live/ingest",
     "https://good.example/live/ingest/extra", "https://good.example/live/ingest?x=1", "https://good.example:99999999999/live/ingest#", "http://good.example/live/ingest",
-    "https://good example/live/ingest", "ftp://good.example/live/ingest", "https://good.example/live/ingest\n", "",
+    "https://good example/live/ingest", "ftp://good.example/live/ingest", "https://good.example/live/ingest\n", "", "http://evil.com:80/live/ingest", "http://127a0b0c1:8080/live/ingest",
 ])
 def test_an_address_that_is_not_a_plain_https_worker_address_is_refused_before_any_request(url, tmp_path):
     r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", "curl() { echo CURL-WAS-CALLED; return 0; }; export -f curl; " + SCRIPT], capture_output=True, text=True, timeout=30,
@@ -119,3 +121,8 @@ def test_an_unreachable_relay_reads_http_000_and_fails_cleanly(tmp_path):
     r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", SCRIPT], capture_output=True, text=True, timeout=60,
                        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "LIVE_URL": f"http://127.0.0.1:{port}/live/ingest", "LIVE_READ_TOKEN": KEY}, cwd=tmp_path)
     assert r.returncode == 1 and "Without a key: HTTP 000" in r.stdout and "With the READ key: HTTP 000" in r.stdout and "000unreachable" not in r.stdout and "Unexpected answer (HTTP 000)" in r.stdout and KEY not in r.stdout + r.stderr
+
+
+def test_a_relay_that_answers_200_without_any_key_is_reported_not_passed(tmp_path):
+    code, out = run_script("open", tmp_path)
+    assert code == 1 and "WITHOUT a key" in out and "The READ key opens the relay" not in out and KEY not in out
