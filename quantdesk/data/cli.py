@@ -236,6 +236,18 @@ def register(sub):
     x.add_argument("--out", help="default runtime/evening")
     x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. evening-minutes)")
     x.set_defaults(fn=cmd_evening_minutes)
+    x = ss.add_parser("kite-evening", help="1-minute (and optionally daily) candles of the nearest two futures of every MCX commodity and currency pair from Kite's historical API, after their "
+                                           "sessions (kite-evening.yml; data only; the candles stay on disk to be encrypted, never published; never fails the run on a Kite problem)")
+    x.add_argument("--days", type=int, default=3, help="days of minutes to read (Kite keeps about 60; 55 is the backfill)")
+    x.add_argument("--daily-days", type=int, default=0, help="also the continuous daily series back this many days (up to 1900); 0 = none")
+    x.add_argument("--segments", default="mcx,cds", help="mcx, cds or both")
+    x.add_argument("--budget-min", type=float, default=20.0, help="stop after this many minutes and record what is missing")
+    x.add_argument("--out", help="default runtime/kite_evening")
+    x.set_defaults(fn=cmd_kite_evening)
+    x = ss.add_parser("evening-publish", help="push one kite-evening run's manifest (counts and statuses, never a price) to the evening-minutes-YYYY release")
+    x.add_argument("--dir", required=True, help="the run folder holding manifest.json")
+    x.add_argument("--release-prefix", default="evening-minutes")
+    x.set_defaults(fn=cmd_evening_publish)
     x = ss.add_parser("fx-daily", help="daily history of the FX majors and rupee crosses from 2003 (Yahoo), checked against the ECB's reference rates (fx-daily.yml; public sources, no secret, always exits 0)")
     x.add_argument("--pairs", help="only these (comma-separated), e.g. EURUSD,USDINR")
     x.add_argument("--from", dest="start", default="2003-01-01", help="YYYY-MM-DD")
@@ -634,6 +646,65 @@ def _fx_pairs(a):
     from . import fx as FX
     want = [p.strip().upper() for p in (a.pairs or "").split(",") if p.strip()]
     return [p for p in want if p in FX.PAIRS] or None
+
+
+def cmd_kite_evening(cfg, a):
+    """MCX and currency candles from Kite after their sessions. A Kite problem is a ::warning:: and the exit status stays 0; the candles never leave the runner unencrypted."""
+    from ..intraday.feeds import IST as TZ
+    from . import kite_evening as KE
+    if _kite_authority_ended():
+        print("kite-evening: the owner's Kite data authority has ended (docs/AUTONOMY.md); nothing collected")
+        return
+    key, token = os.environ.get("KITE_DATA_KEY"), os.environ.get("KITE_DATA_TOKEN")
+    if not (key and token):
+        print("::warning::kite-evening: no Kite key or no token for today (the login did not run or failed); nothing collected")
+        return
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "kite_evening"
+    segs = tuple(s.strip() for s in a.segments.split(",") if s.strip() in KE.EXCHANGES)
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=key)
+        kite.set_access_token(token)
+        man = KE.run(kite, out, KE.session_day(pd.Timestamp.now(tz=TZ)), days=a.days, daily_days=a.daily_days, segments=segs, budget_s=a.budget_min * 60,
+                     say=lambda m: print(m, flush=True))
+    except ImportError as exc:
+        raise SystemExit(f"kite-evening: {type(exc).__name__}: {exc}") from None
+    run = Path(man["path"])
+    line = ", ".join(f"{k} {t['served']}/{t['asked']}" for k, t in man["totals"].items()) or "nothing collected"
+    print(f"{run.name}: {line}", flush=True)
+    bad = [k for k, v in man["segments"].items() if v.get("error")] + [k for k, t in man["totals"].items() if t["served"] * 2 < t["asked"]]
+    if bad or man.get("stopped"):
+        print(f"::warning::kite-evening: incomplete run ({line}; problems: {', '.join(sorted(set(bad))) or 'none'}{'; stopped: ' + str(man['stopped'])[:70] if man.get('stopped') else ''})",
+              flush=True)
+    leak = KE.publishable(man)
+    if leak:
+        raise SystemExit(f"kite-evening: the manifest would carry price data ({leak[:3]}); not written for publishing")
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.write(f"### Kite evening candles {run.name}\n{line}\n")
+
+
+def cmd_evening_publish(cfg, a):
+    import json as _json
+
+    from . import kite_evening as KE
+    from .collect_wide import release_tag
+    run = Path(a.dir)
+    f = run / "manifest.json"
+    if not f.exists():
+        print("evening-publish: no manifest to push")
+        return
+    man = _json.loads(f.read_text(encoding="utf-8"))
+    leak = KE.publishable(man)
+    if leak:
+        raise SystemExit(f"evening-publish: refused, the manifest carries price-like data ({leak[:3]})")
+    day = dt.date.fromisoformat(str(man.get("as_of") or run.name)[:10])
+    try:
+        _push_run(run.parent, run, release_tag(a.release_prefix, day, "year"), ["manifest.json"], f"Evening minutes {day.year}",
+                  "Per-day manifests (counts and statuses) of the MCX and currency evening candles; the candles themselves are licensed and are not published. Not a software release.",
+                  clobber=True)
+    except Exception as exc:                                              # noqa: BLE001 - a failed push is a warning, the run is not red for it
+        print(f"::warning::evening-publish: manifest kept on disk only, release push failed ({exc!s:.120})", flush=True)
 
 
 def cmd_fx_daily(cfg, a):
