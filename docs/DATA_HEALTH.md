@@ -24,6 +24,7 @@ python -m quantdesk data health [--day YYYY-MM-DD] [--json] [--summary]
 | Daily history | no | a dataset on the `daily-history` release, under 45 days old, every series verified (series with missing days are named in the detail, not failed) | older, or some series unverified | no dataset |
 | FX minutes (the previous weekday's) | no | every pair served, each with real bar counts and a bar from that day | a pair missing, thin or stale | under 90% of the pairs served, or no pairs |
 | FX daily history | no | a dataset on the `fx-daily` release, under 45 days old, every series verified (series with missing days are named in the detail, not failed) | older, or some series unverified | no dataset |
+| Kite vs Kotak agreement (the day's) | no | the share of fresh Kite+Kotak price pairs within a spread of each other is 97% or more over a full session | under 97%, or a part-day (fewer than 100 relay cycles), or no instrument held both | under 90%, or no record for the day |
 | Kite ticks | no | an encrypted tick artifact of real size exists | | none (arrival is all that can be checked: the content is encrypted) |
 
 Before a channel's due time (`DUE` in `health.py`) it is **pending**, not missing. A check that cannot run is reported as such (critical: BAD), never skipped.

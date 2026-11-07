@@ -468,6 +468,27 @@ def check_evening_minutes(store, day: dt.date) -> Check:
                  {"worst_served_ratio": round(worst, 4), "futures": got})
 
 
+AGREE_WARN, AGREE_BAD = 97.0, 90.0          # percent of fresh Kite+Kotak pairs within a spread of each other
+
+
+def check_agreement(store, day: dt.date) -> Check:
+    """How often the two live sources agreed on `day` (agreement.yml reads the relay's tally after the close): the share of fresh Kite+Kotak pairs within a spread of each other."""
+    m = _manifest(store, day, "agreement-", f"{day}_agreement.json")
+    if m is None:
+        return Check("Kite vs Kotak agreement", MISSING, f"no agreement record for {day:%a %d %b}: the relay's tally (Kotak poller on?) or agreement.yml did not deliver")
+    pct, pairs, cycles = m.get("agree_pct"), int(m.get("pairs") or 0), int(m.get("cycles") or 0)
+    if pct is None or not pairs:
+        return Check("Kite vs Kotak agreement", WARN, f"{cycles:,} cycles but no instrument held a fresh price from both sources (one source is off)", False, {"cycles": cycles})
+    issues = []
+    if m.get("partial"):
+        issues.append(f"only {cycles:,} cycles (a full session is about 4,500)")
+    if pct < AGREE_WARN:
+        issues.append(f"{pct}% of {pairs:,} pairs agree (options {m.get('opt_agree_pct')}%, worst cycle {m.get('worst_cycle_pct')}% apart)")
+    status = BAD if pct < AGREE_BAD else WARN if issues else OK
+    return Check("Kite vs Kotak agreement", status, "; ".join(issues) if issues else f"{pct}% of {pairs:,} pairs agree over {cycles:,} cycles (options {m.get('opt_agree_pct')}%)", False,
+                 {"agree_pct": pct, "pairs": pairs, "cycles": cycles})
+
+
 def check_daily_history(store, day: dt.date, tag: str = "daily-history", channel: str = "daily history", workflow: str = "Daily history") -> Check:
     """A history release (daily-history.yml, fx-daily.yml; by hand): that a dataset exists, how old it is, and how many series passed every check."""
     files = [(t, n) for t in store.tags(tag) for n in store.assets(t) if n.endswith("_manifest.json")]
@@ -619,6 +640,7 @@ def build_report(store, cfg, day: dt.date, now: dt.datetime | None = None) -> Re
             ("evening", lambda: check_evening_minutes(store, day), "MCX/currency minutes", False), ("history", lambda: check_daily_history(store, day), "daily history", False),
             ("history", lambda: check_fx_daily(store, day), "FX daily history", False), ("evening", lambda: check_fx_minutes(store, day), "FX minutes", False),
             ("kite", lambda: check_kite(store, day, now.date()), "Kite ticks", False),
+            ("session", lambda: check_agreement(store, day), "Kite vs Kotak agreement", False),
             ("warehouse", lambda: check_warehouse(store, day, cal, now), "NSE warehouse", True)]
     checks = []
     for key, fn, name, critical in plan:

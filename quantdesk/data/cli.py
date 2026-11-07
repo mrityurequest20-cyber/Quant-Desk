@@ -244,6 +244,13 @@ def register(sub):
     x.add_argument("--budget-min", type=float, default=20.0, help="stop after this many minutes and record what is missing")
     x.add_argument("--out", help="default runtime/kite_evening")
     x.set_defaults(fn=cmd_kite_evening)
+    x = ss.add_parser("agreement", help="turn the relay's per-day Kite-vs-Kotak counts (a /live/health answer saved as JSON) into one small file a day: counts and percentages only (agreement.yml)")
+    x.add_argument("--health", required=True)
+    x.add_argument("--out", help="default runtime/agreement")
+    x.set_defaults(fn=cmd_agreement)
+    x = ss.add_parser("agreement-publish", help="push each day's agreement.json to the agreement-YYYY release (a later run of the same day replaces the earlier one)")
+    x.add_argument("--dir", required=True)
+    x.set_defaults(fn=cmd_agreement_publish)
     x = ss.add_parser("evening-publish", help="push one kite-evening run's manifest (counts and statuses, never a price) to the evening-minutes-YYYY release")
     x.add_argument("--dir", required=True, help="the run folder holding manifest.json")
     x.add_argument("--release-prefix", default="evening-minutes")
@@ -682,6 +689,34 @@ def cmd_kite_evening(cfg, a):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(f"### Kite evening candles {run.name}\n{line}\n")
+
+
+def cmd_agreement(cfg, a):
+    import json as _json
+
+    from . import agreement as AG
+    try:
+        health = _json.loads(Path(a.health).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        print("::warning::agreement: the relay's health answer could not be read; nothing recorded")
+        return
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "agreement"
+    made = AG.build(health, out)
+    for m in made:
+        print(f"{m['day']}: {m['agree_pct']}% of {m['pairs']:,} pairs agree over {m['cycles']:,} cycles" + (" (partial day)" if m["partial"] else ""), flush=True)
+    if not made:
+        print("::warning::agreement: the relay holds no tally yet (the poller was off, or no session has run since it was switched on)", flush=True)
+
+
+def cmd_agreement_publish(cfg, a):
+    from .collect_wide import release_tag
+    root = Path(a.dir)
+    for run in sorted(p for p in root.glob("*") if p.is_dir() and (p / "agreement.json").exists()):
+        try:
+            _push_run(root, run, release_tag("agreement", dt.date.fromisoformat(run.name), "year"), ["agreement.json"], f"Kite vs Kotak agreement {run.name[:4]}",
+                      "Per-day counts of how often the two live sources agreed (no price, no name). Not a software release.", clobber=True)
+        except Exception as exc:                                              # noqa: BLE001 - a failed push is a warning, never a red run
+            print(f"::warning::agreement-publish: {run.name} kept on disk only ({exc!s:.120})", flush=True)
 
 
 def cmd_evening_publish(cfg, a):
