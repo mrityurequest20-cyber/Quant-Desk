@@ -430,8 +430,8 @@ def _outcome(rep: dict, kind: str, df: pd.DataFrame, err: str | None, out_of_tim
     return not df.empty
 
 
-def _write_stocks(run: Path, man: dict, cash: list, fut: list) -> None:
-    for name, parts in (("stocks_cash", cash), ("stocks_futures", fut)):
+def _write_stocks(run: Path, man: dict, cash: list, fut: list, fut_next: list | None = None) -> None:
+    for name, parts in (("stocks_cash", cash), ("stocks_futures", fut), ("stocks_futures_next", fut_next or [])):
         if parts:
             pd.concat(parts, ignore_index=True).to_parquet(run / f"{name}.parquet", index=False, compression="zstd")
     (run / "stocks_manifest.json").write_text(json.dumps(man, indent=1, default=str))
@@ -451,11 +451,11 @@ def stock_minutes(client, out_root: Path, fo_stocks: pd.DataFrame | None = None,
     man = {"evidence": EVIDENCE, "as_of": str(today), "window": [str(start), str(today)], "universe": uni,
            "stocks": {}, "stopped": None, "rate_per_s": rate, "budget_s": budget_s,
            "note": "traded 1-minute bars (OHLC of trades, volume), not bid/ask quotes; cash series and near-month "
-                   "future per stock; data collection only, nothing trades stocks"}
+                   "future per stock, plus the next month's future (stocks_futures_next); data collection only, nothing trades stocks"}
     say(f"  stock universe: {len(syms)} from {uni['source']}"
         + (f" (sessions to {uni['ranked_through']})" if uni["ranked_through"] else ""))
     paced = Paced(client, rate=rate, budget_s=budget_s, sleep=sleep, clock=clock)
-    cash, fut_parts = [], []
+    cash, fut_parts, next_parts = [], [], []
     tokens: dict[str, str] = {}
     try:                                   # the F&O master's pAssetCode is the stock's cash token; the cash master fills gaps
         tokens = cash_tokens(scrip_master(paced, "nse_fo"), syms)
@@ -478,33 +478,42 @@ def stock_minutes(client, out_root: Path, fo_stocks: pd.DataFrame | None = None,
             if _outcome(rep, "cash", df, err, paced.out_of_time):
                 cash.append(_frame(df, {"symbol": sym, "token": f"nse_cm|{tok}"}, STOCK_COLS))
         try:
-            a = fut.active(sym, today, fut.contracts(sym))
+            cs = fut.contracts(sym)
+            a = fut.active(sym, today, cs)
             rep["future"] = {k: (None if a[k] != a[k] else a[k])                          # the session's OI, once a run
                              for k in ("token", "expiry", "ltp", "oi", "oi_prev")}
             df, err = candles(paced, a["token"], start, today)
             if _outcome(rep, "futures", df, err, paced.out_of_time):
                 fut_parts.append(_frame(df, {"symbol": sym, "token": a["token"], "expiry": a["expiry"]}, STOCK_COLS))
+            nxt = next((c for c in cs if c["expiry"] > a["expiry"]), None)                 # the NEXT month's future too: the term structure, and the contract the near one rolls into
+            if nxt is not None and not paced.out_of_time:
+                df2, err2 = candles(paced, nxt["token"], start, today)
+                if _outcome(rep, "futures_next", df2, err2, paced.out_of_time):
+                    rep["futures_next"]["expiry"] = str(nxt["expiry"])
+                    next_parts.append(_frame(df2, {"symbol": sym, "token": nxt["token"], "expiry": nxt["expiry"]}, STOCK_COLS))
+            elif nxt is None:
+                rep["futures_next"] = {"status": "empty", "error": "no later expiry listed"}
         except Exception as exc:
             rep["futures"] = ({"status": "not_attempted", "error": "time budget"} if paced.out_of_time
                               else {"status": "failed", "error": f"{exc!s:.120}"})
         if (i + 1) % 10 == 0:
-            _write_stocks(run, man, cash, fut_parts)
+            _write_stocks(run, man, cash, fut_parts, next_parts)
     # coverage: bars against a full session for each session any stock has (a halted or late-listed stock shows as a gap)
-    for kind in ("cash", "futures"):
+    for kind in ("cash", "futures", "futures_next"):
         ref = max((r[kind].get("sessions", 0) for r in man["stocks"].values() if kind in r), default=0)
         for r in man["stocks"].values():
             if kind in r and ref:
                 r[kind]["coverage"] = round(min(1.0, r[kind].get("bars", 0) / (ref * SESSION_BARS)), 3)
     man["totals"] = {k: {"asked": len(syms), **{s: sum(1 for r in man["stocks"].values() if r.get(k, {}).get("status") == s)
                                                  for s in ("served", "empty", "failed", "not_attempted")}}
-                     for k in ("cash", "futures")}
+                     for k in ("cash", "futures", "futures_next")}
     if paced.out_of_time:
         left = [s for s, r in man["stocks"].items()
                 if "not_attempted" in (r.get("cash", {}).get("status"), r.get("futures", {}).get("status"))]
         man["stopped"] = f"time budget ({budget_s:.0f}s) used up; not attempted: {', '.join(left) or 'none'}"
     man["requests"], man["retried"] = paced.requests, paced.retried
     man["calls"] = dict(getattr(client, "calls", {}) or {})
-    _write_stocks(run, man, cash, fut_parts)
+    _write_stocks(run, man, cash, fut_parts, next_parts)
     man["path"] = str(run)
     t = man["totals"]
     say(f"  stocks: cash {t['cash']['served']}/{len(syms)} served ({t['cash']['empty']} empty, {t['cash']['failed']} failed), "

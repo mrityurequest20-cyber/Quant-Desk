@@ -216,6 +216,22 @@ const sameQuote = (a, b) => {
 // An option's name carries its expiry (NIFTY12NOV2624500CE: 12 Nov 2026). From the day after it, the contract is gone: the expiry day itself is still traded.
 const OPT_EXPIRY = /^.+?(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})\d+(?:\.\d+)?(?:CE|PE)$/;
 const MONTH = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+const AGREE_KEYS = ["cycles", "both", "disagree", "opt_both", "opt_disagree", "worst_cycle_pct", "first_at", "last_at"];
+function cleanDay(d) {
+	if (!d || typeof d !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(String(d.day))) return null;
+	const out = { day: d.day };
+	for (const k of AGREE_KEYS) { const v = Number(d[k]); out[k] = Number.isFinite(v) && v >= 0 ? v : 0; }
+	out.peak = { z: {}, k: {} };
+	for (const src of ["z", "k"]) for (const [g, n] of Object.entries(d.peak && d.peak[src] && typeof d.peak[src] === "object" ? d.peak[src] : {})) if (/^[a-z]{1,6}$/.test(g) || g === "other") { const v = Number(n); if (Number.isFinite(v) && v >= 0) out.peak[src][g] = v; }
+	return out;
+}
+export function cleanAgree(raw) {                       // storage is not trusted: a malformed tally is dropped, not shown
+	if (!raw || typeof raw !== "object") return null;
+	const today = cleanDay(raw.today), days = {};
+	for (const [k, v] of Object.entries(raw.days && typeof raw.days === "object" ? raw.days : {})) { const c = cleanDay(v); if (c && c.day === k) days[k] = c; }
+	return today || Object.keys(days).length ? { today, days } : null;
+}
+
 export function expiredOption(name, today) {          // today: the IST date as yyyymmdd
 	const m = OPT_EXPIRY.exec(name);
 	return !!m && (2000 + Number(m[3])) * 10000 + MONTH[m[2]] * 100 + Number(m[1]) < today;
@@ -242,10 +258,16 @@ export class LiveBoard {
 		this.cursor = 0;
 		this.lastPrune = 0;
 		this.k = { status: "off", cycles: 0, calls_ok: 0, calls_failed: 0, last_ok: null, last_error: null, errors: {}, consecutive_failed: 0, consecutive_auth: 0, last_rate: 0, refused: 0, pruned: 0, total_calls: 0 };
+		this.agree = null;                          // today's Kite-vs-Kotak tally (see tally()); the finished days are kept in this.agreeDays
+		this.agreeDays = {};
 		this.ready = state.blockConcurrencyWhile(async () => {
 			const u = cleanUniverse(await state.storage.get("universe"));                    // re-validated on every reload: storage is not trusted either
 			if (u) this.universe = u;
 			try { this.series.load(await state.storage.get(shardKeys())); } catch (e) { /* no chart history: the board still starts */ }
+			try {                                                                            // the tally survives an eviction or a deploy: a restart must not cost the day its number
+				const ag = cleanAgree(await state.storage.get("agree"));
+				if (ag) { this.agree = ag.today; this.agreeDays = ag.days; }
+			} catch (e) { /* the day's tally starts again from here */ }
 			try {                                                                            // the rebuild throttle survives an eviction or a deploy; it can never cost the live view
 				const la = await state.storage.get("lastAsk");
 				if (typeof la === "number" && Number.isFinite(la)) this.lastAsk = la;
@@ -334,6 +356,32 @@ export class LiveBoard {
 		if (r.ok > 0) { k.last_ok = this.now(); k.consecutive_failed = 0; k.last_error = r.failed ? `${r.failed} of ${r.ok + r.failed} calls failed` : null; }
 		else { k.consecutive_failed += 1; k.last_error = r.errors.auth ? "Kotak refused the key" : "no call succeeded"; }
 		k.status = r.errors.auth ? "auth" : r.ok === 0 ? "down" : r.failed ? "degraded" : "ok";
+		try { this.tally(this.now()); } catch (e) { /* a tally problem never costs the live view */ }
+	}
+
+	// How often the two brokers agree, kept per IST day: every Kotak cycle in the session counts the instruments for which BOTH sources are fresh (under FRESH_S) and how many of those
+	// differ by more than a spread explains (TOL, the same rule as the "differ" flag). Counts only: no price, no name. The finished days stay for a week so a late reader still gets them.
+	tally(now) {
+		const day = istParts(now).date;
+		if (!this.agree || this.agree.day !== day) {
+			if (this.agree && this.agree.cycles > 0) this.agreeDays[this.agree.day] = this.agree;
+			const keep = Object.keys(this.agreeDays).sort().slice(-7);
+			this.agreeDays = Object.fromEntries(keep.map((d) => [d, this.agreeDays[d]]));
+			this.agree = { day, cycles: 0, both: 0, disagree: 0, opt_both: 0, opt_disagree: 0, worst_cycle_pct: 0, first_at: now, last_at: now, peak: { z: {}, k: {} } };
+		}
+		const a = this.agree;
+		let both = 0, dis = 0, ob = 0, od = 0;
+		const fresh = { z: {}, k: {} };                                                     // names each source holds fresh, by segment (the wide universe arriving)
+		for (const e of this.quotes.values()) {
+			for (const src of ["z", "k"]) if (e[src] && (now - e[src].at) / 1000 <= FRESH_S) { const g = /^[a-z]{1,6}$/.test(String(e[src].s)) ? e[src].s : "other"; fresh[src][g] = (fresh[src][g] || 0) + 1; }
+			if (!(e.z && e.k) || (now - e.z.at) / 1000 > FRESH_S || (now - e.k.at) / 1000 > FRESH_S || !(e.z.ltp > 0) || !(e.k.ltp > 0)) continue;
+			const opt = e.z.s === "opt", bad = (Math.abs(e.z.ltp - e.k.ltp) / e.z.ltp) * 100 > (opt ? TOL.opt : TOL.other);
+			both += 1; if (bad) dis += 1;
+			if (opt) { ob += 1; if (bad) od += 1; }
+		}
+		for (const src of ["z", "k"]) for (const [g, n] of Object.entries(fresh[src])) if (n > (a.peak[src][g] || 0)) a.peak[src][g] = n;      // the most names fresh in any one cycle
+		a.cycles += 1; a.both += both; a.disagree += dis; a.opt_both += ob; a.opt_disagree += od; a.last_at = now;
+		if (both >= 20) a.worst_cycle_pct = Math.max(a.worst_cycle_pct, round2((dis / both) * 100));      // a cycle with a handful of pairs says nothing about the day
 	}
 
 	snapshot(now) {
@@ -389,6 +437,7 @@ export class LiveBoard {
 				cycles: k.cycles, consecutive_auth: k.consecutive_auth, calls_ok: k.calls_ok, calls_failed: k.calls_failed, planned_calls: k.total_calls, errors: k.errors, last_error: k.last_error, refused: k.refused, pruned: k.pruned,
 				universe: this.universe ? { asof: this.universe.asof, quotes: this.universe.quotes.length, chains: this.universe.chains.length } : null },
 			both, disagree,
+			agreement: { today: this.agree, days: this.agreeDays },
 		};
 	}
 
@@ -397,6 +446,7 @@ export class LiveBoard {
 		if (now - this.lastFlush < FLUSH_MS) return;
 		this.lastFlush = now;
 		try { await this.series.flush(this.state.storage); } catch (e) { /* the shards stay marked and the next flush tries again */ }
+		try { await this.state.storage.put("agree", { today: this.agree, days: this.agreeDays }); } catch (e) { /* the in-memory tally still stands */ }
 	}
 
 	async fetch(request) {

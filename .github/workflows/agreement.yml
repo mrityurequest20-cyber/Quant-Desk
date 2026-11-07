@@ -1,0 +1,93 @@
+# How often the two live sources (Kite and Kotak) agreed, one number a day. The relay counts, in every Kotak cycle of the session, the instruments that both sources hold fresh and how many
+# of those differ by more than a spread explains (deploy/cloudflare/live.js `tally`); this reads those counts after the close with the READ-ONLY relay key and keeps one small file a day on
+# the agreement-YYYY release (counts and percentages: no price, no instrument name). The relay keeps the last week of finished days, so a late or missed run still gets the day.
+#
+# Two jobs, so the one that holds a secret cannot write and the one that can write holds no secret: `read` has the relay's READ key and `contents: read`; `publish` has `contents: write` and no secret.
+# Data only: nothing here touches an order, a broker or a journal. No redirect is followed (it would forward the key), and the address must be https.
+name: Kite vs Kotak agreement
+
+on:
+  schedule:
+    - cron: "50 10 * * 1-5"       # 16:20 IST Mon to Fri, after the close (best-effort; a late run is fine)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: agreement
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Ask the relay for its tally (status codes only; the key reaches this step alone)
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}
+          LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
+        run: |
+          set +x
+          if ! [[ "$LIVE_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/live/ingest$ || "$LIVE_URL" =~ ^http://127\.0\.0\.1:[0-9]+/live/ingest$ ]]; then
+            echo "::warning::LIVE_URL must be https://<your worker>/live/ingest (the GitHub variable); nothing recorded"; exit 0
+          fi
+          [ -n "${LIVE_READ_TOKEN:-}" ] || { echo "::warning::the GitHub secret LIVE_READ_TOKEN is not set; nothing recorded"; exit 0; }
+          base="${LIVE_URL%/live/ingest}"
+          code=$(curl -sS -m 30 -o health.json -w '%{http_code}' -H "Authorization: Bearer $LIVE_READ_TOKEN" "$base/live/health" || true)
+          echo "Relay health: HTTP ${code:-000}"
+          [ "${code:-000}" = "200" ] || { echo "::warning::the relay did not answer 200; nothing recorded"; rm -f health.json; }
+      - name: Turn the tally into one file a day (no secret in this step)
+        run: |
+          [ -f health.json ] || { echo "no health answer; nothing recorded"; exit 0; }
+          python -m quantdesk data agreement --health health.json --out runtime/agreement
+          rm -f health.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: agreement
+          path: runtime/agreement
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    needs: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write            # the agreement-YYYY release assets and nothing else; this job holds no secret
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        continue-on-error: true
+        with:
+          name: agreement
+          path: runtime/agreement
+      - name: Publish each day's file
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -d runtime/agreement ] || { echo "nothing to publish"; exit 0; }
+          python -m quantdesk data agreement-publish --dir runtime/agreement
