@@ -117,6 +117,8 @@ intraday:
   tape:                            # the chain tape (intraday/tape.py): real chains every minute, beside the engine
     every_min: 1
     expiries: {NIFTY: 3, BANKNIFTY: 2, SENSEX: 2, FINNIFTY: 1, MIDCPNIFTY: 1}   # nearest N each (NIFTY, SENSEX weekly; the rest monthly)
+    depth_levels: 5                # also keep the five-level order book of every contract beside each snapshot (no extra Kotak call: it is in the same quotes response)
+    monthly: true                  # and always the nearest monthly expiry, even when it is beyond the nearest N weeklies
   chain_stale_min: 12              # no new entries on an older real chain
   thought_every_min: 5             # journal the market read at least this often
   history_days: 6                  # prior sessions loaded for levels, value areas, relative volume

@@ -37,6 +37,15 @@ def targets(expiries: list[dt.date], n: int, today: dt.date) -> list[dt.date]:
     return sorted(e for e in expiries if e >= today)[:n]
 
 
+def monthly_expiry(expiries: list[dt.date], today: dt.date) -> dt.date | None:
+    """The nearest monthly expiry on or after today: the last listed expiry of its month (NIFTY's weeklies end with the monthly one; BANKNIFTY, FINNIFTY and MIDCPNIFTY have only monthlies)."""
+    live = sorted(e for e in expiries if e >= today)
+    for e in live:
+        if not any(x.year == e.year and x.month == e.month and x > e for x in live):
+            return e
+    return None
+
+
 def save_atomic(chain: pd.DataFrame, path: Path) -> None:
     """save_chain, through a temporary file and a rename, so a reader never sees half a snapshot (the engine's
     recorder may write the same minute's file for its own expiry)."""
@@ -47,7 +56,7 @@ def save_atomic(chain: pd.DataFrame, path: Path) -> None:
 
 class ChainTape:
     def __init__(self, source, data_dir: Path, expiries: dict[str, int] | None = None, every_min: float = 1.0,
-                 max_backoff_min: float = 5.0, say=print, clock=None, sleep=time.sleep, offset_s: float = 5.0, extra=None, stagger_first: bool = False):
+                 max_backoff_min: float = 5.0, say=print, clock=None, sleep=time.sleep, offset_s: float = 5.0, extra=None, stagger_first: bool = False, monthly: bool = False):
         self.src = source
         self.data = Path(data_dir)
         self.want = dict(expiries or DEFAULT_EXPIRIES)
@@ -57,6 +66,7 @@ class ChainTape:
         self.clock = clock or (lambda: pd.Timestamp.now(tz=IST))
         self.sleep = sleep
         self.offset_s = float(offset_s)             # seconds after the minute a pass starts: parallel recorders stagger it so they do not hit Kotak in the same second
+        self.monthly = bool(monthly)                # also record the nearest monthly expiry when it is not among the nearest N (the series most strategies roll into)
         self.stagger_first = bool(stagger_first)    # also wait for the offset before the FIRST pass (parallel recorders must not all fire at the open); the index tape keeps its immediate first pass
         self.extra = extra                          # optional callable(chain, path) for what is kept beside a snapshot (the stock recorder's order books); None = nothing
         self.fails: dict[tuple, int] = {}
@@ -74,7 +84,12 @@ class ChainTape:
         wrote = 0
         for u, n in self.want.items():
             try:
-                exps = targets(self.src.expiries(u), n, now.date())
+                listed = self.src.expiries(u)
+                exps = targets(listed, n, now.date())
+                if self.monthly:
+                    m = monthly_expiry(listed, now.date())
+                    if m is not None and m not in exps:
+                        exps = sorted(exps + [m])
             except Exception as exc:
                 self._log({"ts": now, "underlying": u, "expiry": None, "ok": False, "error": f"expiries: {exc!s:.200}"},
                           now.date())

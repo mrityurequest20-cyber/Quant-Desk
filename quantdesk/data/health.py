@@ -303,6 +303,20 @@ def chain_fault_mask(c: pd.DataFrame) -> pd.Series:
     return oi_bad | crossed | spot_bad | strike_bad
 
 
+def check_index_depth(store, day: dt.date) -> Check:
+    """The five-level order books the chain tape keeps beside the index chains (config intraday.tape.depth_levels): a file for the day, with rows for every index."""
+    files = _find(store, f"{day}_", "chains-", "_depth.parquet")
+    if not files:
+        return Check("index order books", MISSING, "no order-book files for the day (the tape keeps them beside each chain: intraday.tape.depth_levels)")
+    d = _frames(store, files)
+    seen = sorted({str(u) for u in d["underlying"].unique()}) if "underlying" in d else []
+    absent = [u for u in CHAIN_UNDERLYINGS if u not in seen]
+    rows = int(len(d))
+    if absent:
+        return Check("index order books", WARN, f"{rows:,} book rows, none for {', '.join(absent)}", False, {"rows": rows, "absent": absent})
+    return Check("index order books", OK, f"{rows:,} book rows, every index", False, {"rows": rows})
+
+
 def check_chains(store, day: dt.date) -> Check:
     files = _find(store, f"{day}_", "chains-", "_chains.parquet", exclude=("wide-eod",))
     if not files:
@@ -659,7 +673,7 @@ def build_report(store, cfg, day: dt.date, now: dt.datetime | None = None) -> Re
     if MK.session("nse_fo", day, cal) is None:
         return Report(str(day), gen, [Check("market", OK, f"{day:%a %d %b} is not an NSE trading day: nothing is due")])
     plan = [("gift", lambda: check_gift(store, day), "GIFT Nifty pre-open", False), ("premarket", lambda: check_premarket(store, day, now.date()), "pre-market brief", False),
-            ("session", lambda: check_bars(store, day), "session bars", True), ("session", lambda: check_chains(store, day), "option chains", True),
+            ("session", lambda: check_bars(store, day), "session bars", True), ("session", lambda: check_chains(store, day), "option chains", True), ("session", lambda: check_index_depth(store, day), "index order books", False),
             ("session", lambda: check_tape(store, day), "fetch tape", False), ("minutes", lambda: check_option_minutes(store, day), "option minutes", False),
             ("minutes", lambda: check_stock_minutes(store, day), "stock minutes", False), ("minutes", lambda: check_stock_option_minutes(store, day), "stock option minutes", False),
             ("evening", lambda: check_evening_minutes(store, day), "MCX/currency minutes", False), ("history", lambda: check_daily_history(store, day), "daily history", False),
