@@ -409,3 +409,46 @@ def test_an_unexpected_error_inside_one_order_is_that_orders_invalid_result_and_
     rep = run(rn, [order("ord-boom001"), order("ord-fine001")])
     st = {r["id"]: r["status"] for r in rep["results"]}
     assert st == {"ord-boom001": "invalid", "ord-fine001": "filled"} and "RuntimeError" in rep["results"][0]["reasons"][0]
+
+
+def test_the_expiry_settlement_touches_only_what_expires_today_never_an_older_contract(rn):                            # R1
+    old, today = "NIFTY06NOV2624500CE", "NIFTY09NOV2624500CE"
+    q = lambda now, **kw: snap(now, **{old: dict(bid=19.0, ask=20.0, bid_qty=5000, ask_qty=5000, ltp=19.5, age_s=1.0), today: dict(bid=19.0, ask=20.0, bid_qty=5000, ask_qty=5000, ltp=19.5, age_s=1.0), "NIFTY": dict(ltp=23000.0, age_s=2.0), **kw})      # noqa: E731
+    t0 = dt.datetime(2026, 11, 6, 10, 0, tzinfo=IST)
+    run(rn, [order("ord-old0001", symbol=old, now=t0)], s=q(t0), now=t0)                                              # bought on the 6th, expiring the 6th, never sold
+    run(rn, [order("ord-new0001", symbol=today)], s=q(MON))
+    assert old in rn.account.positions and today in rn.account.positions
+    t = MON.replace(hour=15, minute=32)
+    rep = run(rn, [], s=q(t, **{old: dict(bid=0.0, ask=0.0, ltp=0, age_s=1.0), today: dict(bid=0.0, ask=0.0, ltp=0, age_s=1.0)}), now=t)
+    assert today not in rn.account.positions and old in rn.account.positions                                          # the old one is NOT booked at today's index price
+    assert rep["forced"][-1]["decisions"].keys() == {today}
+    assert rn.summary(snap(t), R.Runner.server_now(snap(t)))["stuck"] == [old]
+
+
+def test_a_disputed_or_stale_index_price_never_settles_a_contract(rn):                                                  # R4 and the age cap
+    exp = "NIFTY09NOV2624500CE"
+    mk = lambda **nifty: lambda now: snap(now, **{exp: dict(bid=19.0, ask=20.0, bid_qty=5000, ask_qty=5000, ltp=19.5, age_s=1.0), "NIFTY": dict(ltp=24650.0, age_s=2.0, **nifty)})      # noqa: E731
+    run(rn, [order("ord-exp0099", symbol=exp)], s=mk()(MON))
+    t = MON.replace(hour=15, minute=32)
+    for nifty in ({"x": 1.7}, {"age_s": 301.0}):
+        s = mk()(t)
+        s["quotes"]["NIFTY"].update(nifty)
+        s["quotes"][exp].update(bid=0.0)
+        run(rn, [], s=s, now=t)
+        assert exp in rn.account.positions, nifty                                                                      # the brokers disagree, or the price is over 5 minutes old: no settlement
+    s = mk()(t)
+    s["quotes"][exp].update(bid=0.0)
+    s["quotes"]["NIFTY"].update(age_s=300.0)
+    run(rn, [], s=s, now=t)
+    assert exp not in rn.account.positions                                                                             # exactly at the limit still settles
+
+
+def test_new_entries_wait_while_the_relay_cannot_be_given_the_fills_but_exits_do_not(rn):                              # R2
+    run(rn, [order()])
+    rn.entries_blocked = "new orders wait: the relay could not be given the latest fills for over 30 seconds (exits still work)"
+    other = "NIFTY12NOV2624600CE"
+    s = snap(**{other: dict(bid=49.0, ask=50.0, bid_qty=5000, ask_qty=5000, ltp=49, age_s=1.0)})
+    assert run(rn, [order("ord-blk0001", symbol=other)], s=s)["results"][0]["status"] == "refused"
+    assert run(rn, [order("ord-blk0002", side="sell", lots="all", strategy=None, thesis=None)], s=s)["results"][0]["status"] == "filled"
+    rn.entries_blocked = None
+    assert run(rn, [order("ord-blk0003", symbol=other)], s=s)["results"][0]["status"] == "filled"

@@ -181,6 +181,7 @@ class Runner:
         self.kill_file = Path(kill_file) if kill_file else Path(self.gate.kill.path)      # the gate's own file: the flag and the gate can never point at two places
         self.seen: set[str] = set(done_ids(account))
         self.results: list[dict] = []
+        self.entries_blocked: str | None = None       # set by the session while the relay cannot be given the fills: new entries wait, exits and the brakes still run
 
     # ---- the board ---------------------------------------------------------------------------------------------------------
     @staticmethod
@@ -271,9 +272,9 @@ class Runner:
                 for u in {p.instrument.underlying for p in left.values()}:
                     q = (snap.get("quotes") or {}).get(u) if isinstance(snap.get("quotes"), dict) else None
                     px, age = (_num(q.get("ltp")), _num(q.get("age_s"))) if isinstance(q, dict) else (None, None)
-                    if px is not None and px > 0 and age is not None and 0 <= age <= SETTLE_SPOT_AGE_S:
+                    if px is not None and px > 0 and age is not None and 0 <= age <= SETTLE_SPOT_AGE_S and not q.get("x"):      # x: the two brokers disagree about this price: never settle on it
                         spot[u] = px
-                out = self.broker.settle_expired(ist.date() + dt.timedelta(days=1), spot, now)
+                out = self.broker.settle_expired(ist.date() + dt.timedelta(days=1), spot, now, only=set(left))     # only what expires TODAY: an older one would be booked at today's price
                 rep["forced"].append({"action": "settle expired", "why": ["expired today and could not be sold"], "decisions": out})
         for raw in orders or []:
             try:
@@ -304,6 +305,9 @@ class Runner:
             res.update(status="refused", reasons=[why])
             return res
         ist = now.astimezone(IST)
+        if o["side"] == "buy" and self.entries_blocked:
+            res.update(status="refused", reasons=[self.entries_blocked])
+            return res
         if o["side"] == "buy" and inst.expiry == ist.date() and ist.time() >= FLATTEN_AT:
             res.update(status="refused", reasons=["this contract expires today and the desk sells those from 15:20: not bought"])
             return res

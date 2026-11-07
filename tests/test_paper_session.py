@@ -453,3 +453,65 @@ def test_a_line_break_in_a_reason_from_anywhere_is_flattened_before_it_is_logged
     said = []
     go(cfg, rl, clk, tmp_path, say=said.append)
     assert any("refused" in m for m in said) and all("\n" not in m and "\r" not in m for m in said)
+
+
+def test_buying_stops_when_the_relay_has_not_been_given_the_fills_for_30_seconds_and_resumes_after(cfg, tmp_path):     # R2
+    clk = Clock()
+    rl = FakeRelay(clk)
+    A, B, C, D = "NIFTY12NOV2624600CE", "NIFTY12NOV2624700CE", "NIFTY12NOV2624800CE", "NIFTY12NOV2624900CE"
+    for sym in (A, B, C, D):
+        rl.q[sym] = dict(bid=39.0, ask=40.0, bid_qty=5000, ask_qty=5000, ltp=39, age_s=1.0)
+    rl.add("ord-uns00001")
+    n = {"c": 0}
+    orig = clk.sleep
+    mono = {"t": 1000.0}
+
+    def sleep(s):
+        n["c"] += 1
+        if n["c"] == 1:
+            rl.fail = {"state"}                                                                                        # the relay stops taking the account after the first fill
+            rl.add("ord-uns00002", symbol=A)                                                                           # this buy fills but cannot be pushed: the 30 seconds start here
+        if n["c"] == 12:                                                                                               # 55+ seconds of real time later
+            rl.add("ord-uns00003", symbol=B)                                                                           # refused: the fills could not be kept safe
+        if n["c"] == 14:
+            rl.fail = set()                                                                                            # the relay is back
+        if n["c"] == 16:
+            rl.add("ord-uns00004", symbol=C)
+        mono["t"] += 5.0                                                                                               # five seconds of real time per cycle
+        orig(s)
+    import time as _t
+    real = _t.monotonic
+    _t.monotonic = lambda: mono["t"]
+    try:
+        S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=2)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None, new_account=True)
+    finally:
+        _t.monotonic = real
+    by = {r["id"]: r for r in rl.results}
+    assert by["ord-uns00002"]["status"] == "filled"
+    assert by["ord-uns00003"]["status"] == "refused" and "relay could not be given" in " ".join(by["ord-uns00003"]["reasons"])      # not bought while the fills could not be kept safe
+    assert by["ord-uns00004"]["status"] == "filled"                                                                    # and bought again once the relay took them
+
+
+def test_the_opening_state_reaches_the_relay_even_when_no_cycle_runs(cfg, tmp_path):                                    # R3
+    clk = Clock()
+    rl = FakeRelay(clk)
+    S.run(cfg, rl, tmp_path / "l.json", clk.t.astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep, say=lambda *a: None, new_account=True)      # the stop time has already come: the loop never runs
+    assert R.load_account(rl.state["account"]).capital0 == 500_000                                                      # so the next start finds the account on the relay
+
+
+def test_an_hwm_only_change_is_on_disk_the_moment_it_happens_not_only_at_the_end(cfg, tmp_path):                       # survivor
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add("ord-hwmd0001")
+    n = {"c": 0}
+
+    def sleep(s):
+        n["c"] += 1
+        if n["c"] == 2:
+            rl.q[NAME] = dict(bid=170.0, ask=171.0, bid_qty=5000, ask_qty=5000, ltp=170, age_s=1.0)
+        if n["c"] == 4:
+            raise KeyboardInterrupt                                                                                    # killed before the end-of-session save
+        clk.sleep(s)
+    with pytest.raises(KeyboardInterrupt):
+        S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=5)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None, new_account=True)
+    assert R.load_account((tmp_path / "l.json").read_text()).hwm > 500_000

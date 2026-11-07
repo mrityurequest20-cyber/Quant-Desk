@@ -13,6 +13,7 @@ from .relay import Relay, RelayError
 
 IST = MK.IST
 EXIT_REFUSED = 3             # the saved histories disagree or do not verify: the runner will not start
+UNSAFE_AFTER_S = 30.0        # new entries wait when the relay has not been given the latest fill for this long (exits and the brakes still run)
 FULL_EVERY_S = 60.0          # the whole account goes to the relay at least this often when only the figures the brakes use (high-water mark, day start) have moved
 
 
@@ -65,6 +66,15 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     ledger_pushed, last_full, last_sum, pending, fails = -1, 0.0, 0.0, [], 0
     account.save(ledger_path)
     fp_disk = fingerprint(account)
+    try:                                                              # the account goes to the relay once before the first cycle, so even a session with no cycles (the very first, by hand, out of hours) leaves it there
+        snap0 = relay.snapshot()
+        now0 = Runner.server_now(snap0)
+        if now0 is not None:
+            relay.put_state(rn.summary(snap0, now0), account_json(account))
+            ledger_pushed, fp_pushed, last_full, last_sum = len(account.ledger), fingerprint(account), time.monotonic(), time.monotonic()
+    except (RelayError, ValueError, OverflowError) as e:
+        log(f"paper: could not send the opening state to the relay ({type(e).__name__}); will retry")
+    unsafe_since = None
     while clock().astimezone(IST).time() < until_ist:
         t0 = time.monotonic()
         try:
@@ -102,6 +112,12 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
                         ledger_pushed, fp_pushed, last_full = fp[0], fp, mono
                 except (RelayError, ValueError, OverflowError) as e:
                     log(f"paper: could not save the state to the relay ({type(e).__name__}); will retry")
+        if ledger_pushed == len(account.ledger):                       # the relay holds every fill
+            unsafe_since, rn.entries_blocked = None, None
+        else:
+            unsafe_since = unsafe_since if unsafe_since is not None else time.monotonic()
+            if time.monotonic() - unsafe_since >= UNSAFE_AFTER_S:
+                rn.entries_blocked = "new orders wait: the relay could not be given the latest fills for over 30 seconds (exits still work)"
         pending.extend(rep["results"])
         if ledger_pushed == len(account.ledger):                       # a result is posted only once the fill it reports is safe on the relay
             for res in list(pending):
