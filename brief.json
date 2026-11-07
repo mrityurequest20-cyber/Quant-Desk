@@ -1,0 +1,4956 @@
+{
+ "generated_at": "2026-11-07T18:52:10+05:30",
+ "session": "2026-11-09",
+ "last_close": "2026-11-06",
+ "data_stale": false,
+ "universe": {
+  "indices": 5,
+  "stocks": 218
+ },
+ "expiring": [
+  {
+   "symbol": "NIFTY",
+   "note": "Exploratory, NIFTY/BANKNIFTY 2019-2026 bhavcopy, options picked with what is known at the open (3 Nov 2026): a near-money option closed at 3x its open on 20% of expiry symbol-sessions against 9% of others, but buying near-money options at the open on an expiry day lost 31% to 49% on average before costs. Lottery tickets, not an edge."
+  }
+ ],
+ "macro": [],
+ "results": [
+  {
+   "symbol": "BOSCHLTD",
+   "company": "Bosch Limited",
+   "meeting": "2026-11-06",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 50700.73,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.0494,
+   "iv": 0.2869,
+   "iv_normal": 0.2231,
+   "event_implied_move": 0.0389,
+   "priced_abs_move": 0.0349,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 2,
+    "n_calendar": 0,
+    "median_move": 0.0534,
+    "mean_move": 0.0534,
+    "median_iem": 0.0429,
+    "median_move_over_iem": 1.2198,
+    "median_straddle_ret": 0.113,
+    "events": [
+     {
+      "date": "2025-04-15",
+      "source": "inferred",
+      "move": 0.0383,
+      "iem": 0.0363,
+      "straddle_ret": -0.093
+     },
+     {
+      "date": "2026-08-11",
+      "source": "inferred",
+      "move": 0.0684,
+      "iem": 0.0494,
+      "straddle_ret": 0.319
+     }
+    ]
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no history",
+   "why": "0 past results on NSE's calendar: too few to compare (2 more inferred from the data, biased toward big moves)"
+  },
+  {
+   "symbol": "DIVISLAB",
+   "company": "Divi's Laboratories Limited",
+   "meeting": "2026-11-07",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 10320.34,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.076,
+   "iv": 0.4414,
+   "iv_normal": 0.252,
+   "event_implied_move": 0.0782,
+   "priced_abs_move": 0.0649,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 5,
+    "n_calendar": 0,
+    "median_move": 0.04,
+    "mean_move": 0.0463,
+    "median_iem": 0.0576,
+    "median_move_over_iem": 0.6939,
+    "median_straddle_ret": -0.0896,
+    "events": [
+     {
+      "date": "2025-02-03",
+      "source": "inferred",
+      "move": 0.093,
+      "iem": 0.0773,
+      "straddle_ret": 0.243
+     },
+     {
+      "date": "2025-05-19",
+      "source": "inferred",
+      "move": 0.0275,
+      "iem": 0.0587,
+      "straddle_ret": -0.337
+     },
+     {
+      "date": "2025-08-06",
+      "source": "inferred",
+      "move": 0.0433,
+      "iem": 0.0522,
+      "straddle_ret": -0.09
+     },
+     {
+      "date": "2025-11-07",
+      "source": "inferred",
+      "move": 0.0279,
+      "iem": 0.046,
+      "straddle_ret": -0.234
+     },
+     {
+      "date": "2026-08-03",
+      "source": "inferred",
+      "move": 0.04,
+      "iem": 0.0576,
+      "straddle_ret": -0.082
+     }
+    ]
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no history",
+   "why": "0 past results on NSE's calendar: too few to compare (5 more inferred from the data, biased toward big moves)"
+  },
+  {
+   "symbol": "HINDALCO",
+   "company": "Hindalco Industries Limited",
+   "meeting": "2026-11-06",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 958.39,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.0478,
+   "iv": 0.2778,
+   "iv_normal": 0.2524,
+   "event_implied_move": 0.025,
+   "priced_abs_move": 0.0268,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 4,
+    "n_calendar": 0,
+    "median_move": 0.0507,
+    "mean_move": 0.0557,
+    "median_iem": 0.0464,
+    "median_move_over_iem": 1.1555,
+    "median_straddle_ret": 0.1033,
+    "events": [
+     {
+      "date": "2025-04-11",
+      "source": "inferred",
+      "move": 0.095,
+      "iem": 0.0742,
+      "straddle_ret": 0.442
+     },
+     {
+      "date": "2025-08-13",
+      "source": "inferred",
+      "move": 0.0423,
+      "iem": 0.0187,
+      "straddle_ret": 0.19
+     },
+     {
+      "date": "2026-02-13",
+      "source": "inferred",
+      "move": 0.0591,
+      "iem": 0.0573,
+      "straddle_ret": 0.017
+     },
+     {
+      "date": "2026-08-07",
+      "source": "inferred",
+      "move": 0.0263,
+      "iem": 0.0354,
+      "straddle_ret": -0.155
+     }
+    ]
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no history",
+   "why": "0 past results on NSE's calendar: too few to compare (4 more inferred from the data, biased toward big moves)"
+  },
+  {
+   "symbol": "JUBLFOOD",
+   "company": "Jubilant Foodworks Limited",
+   "meeting": "2026-11-06",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 457.41,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.0701,
+   "iv": 0.4069,
+   "iv_normal": 0.3052,
+   "event_implied_move": 0.0581,
+   "priced_abs_move": 0.0512,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 4,
+    "n_calendar": 0,
+    "median_move": 0.0494,
+    "mean_move": 0.0461,
+    "median_iem": 0.069,
+    "median_move_over_iem": 0.7171,
+    "median_straddle_ret": 0.0238,
+    "events": [
+     {
+      "date": "2025-01-23",
+      "source": "inferred",
+      "move": 0.0096,
+      "iem": 0.0306,
+      "straddle_ret": -0.186
+     },
+     {
+      "date": "2025-05-12",
+      "source": "inferred",
+      "move": 0.047,
+      "iem": 0.0829,
+      "straddle_ret": -0.089
+     },
+     {
+      "date": "2025-11-14",
+      "source": "inferred",
+      "move": 0.0518,
+      "iem": 0.0551,
+      "straddle_ret": 0.137
+     },
+     {
+      "date": "2026-05-21",
+      "source": "inferred",
+      "move": 0.076,
+      "iem": 0.0876,
+      "straddle_ret": 0.284
+     }
+    ]
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no history",
+   "why": "0 past results on NSE's calendar: too few to compare (4 more inferred from the data, biased toward big moves)"
+  },
+  {
+   "symbol": "SIEMENS",
+   "company": "Siemens Limited",
+   "meeting": "2026-11-06",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 3559.91,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.0753,
+   "iv": 0.437,
+   "iv_normal": 0.271,
+   "event_implied_move": 0.074,
+   "priced_abs_move": 0.0621,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 5,
+    "n_calendar": 0,
+    "median_move": 0.0454,
+    "mean_move": 0.1248,
+    "median_iem": 0.0346,
+    "median_move_over_iem": 1.1602,
+    "median_straddle_ret": -0.1465,
+    "events": [
+     {
+      "date": "2025-04-04",
+      "source": "inferred",
+      "move": 0.4641,
+      "iem": 0.0,
+      "straddle_ret": null
+     },
+     {
+      "date": "2025-08-11",
+      "source": "inferred",
+      "move": 0.0341,
+      "iem": 0.0346,
+      "straddle_ret": -0.108
+     },
+     {
+      "date": "2025-11-17",
+      "source": "inferred",
+      "move": 0.0536,
+      "iem": 0.0402,
+      "straddle_ret": 0.18
+     },
+     {
+      "date": "2026-05-27",
+      "source": "inferred",
+      "move": 0.0454,
+      "iem": 0.0309,
+      "straddle_ret": -0.185
+     },
+     {
+      "date": "2026-08-11",
+      "source": "inferred",
+      "move": 0.0267,
+      "iem": 0.0577,
+      "straddle_ret": -0.196
+     }
+    ]
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no history",
+   "why": "0 past results on NSE's calendar: too few to compare (5 more inferred from the data, biased toward big moves)"
+  },
+  {
+   "symbol": "TATASTEEL",
+   "company": "Tata Steel Limited",
+   "meeting": "2026-11-07",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 186.29,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.055,
+   "iv": 0.3195,
+   "iv_normal": 0.2634,
+   "event_implied_move": 0.039,
+   "priced_abs_move": 0.0363,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 2,
+    "n_calendar": 0,
+    "median_move": 0.0537,
+    "mean_move": 0.0537,
+    "median_iem": 0.0517,
+    "median_move_over_iem": 1.3814,
+    "median_straddle_ret": -0.0117,
+    "events": [
+     {
+      "date": "2025-04-11",
+      "source": "inferred",
+      "move": 0.0726,
+      "iem": 0.0853,
+      "straddle_ret": 0.0
+     },
+     {
+      "date": "2026-05-18",
+      "source": "inferred",
+      "move": 0.0348,
+      "iem": 0.0182,
+      "straddle_ret": -0.023
+     }
+    ]
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no history",
+   "why": "0 past results on NSE's calendar: too few to compare (2 more inferred from the data, biased toward big moves)"
+  },
+  {
+   "symbol": "VOLTAS",
+   "company": "Voltas Limited",
+   "meeting": "2026-11-06",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 1098.99,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.074,
+   "iv": 0.4296,
+   "iv_normal": 0.2942,
+   "event_implied_move": 0.0676,
+   "priced_abs_move": 0.0579,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 3,
+    "n_calendar": 0,
+    "median_move": 0.0513,
+    "mean_move": 0.0694,
+    "median_iem": 0.0503,
+    "median_move_over_iem": 1.0197,
+    "median_straddle_ret": -0.0154,
+    "events": [
+     {
+      "date": "2025-02-03",
+      "source": "inferred",
+      "move": 0.1108,
+      "iem": 0.0799,
+      "straddle_ret": 0.378
+     },
+     {
+      "date": "2025-08-11",
+      "source": "inferred",
+      "move": 0.0459,
+      "iem": 0.0476,
+      "straddle_ret": -0.109
+     },
+     {
+      "date": "2026-08-17",
+      "source": "inferred",
+      "move": 0.0513,
+      "iem": 0.0503,
+      "straddle_ret": -0.015
+     }
+    ]
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no history",
+   "why": "0 past results on NSE's calendar: too few to compare (3 more inferred from the data, biased toward big moves)"
+  },
+  {
+   "symbol": "COROMANDEL",
+   "company": "Coromandel International Limited",
+   "meeting": "2026-11-06",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 1824.0,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.074,
+   "iv": 0.4295,
+   "iv_normal": null,
+   "event_implied_move": null,
+   "priced_abs_move": null,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 0
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no implied move",
+   "why": "no clean pre-event IV window (an expiry ending before the event, sessions 30 to 10 back) or no traded at-the-money straddle"
+  },
+  {
+   "symbol": "DATAPATTNS",
+   "company": "Data Patterns (India) Limited",
+   "meeting": "2026-11-06",
+   "when": "reaction day: results came at or after the last close",
+   "spot": 3767.76,
+   "expiry": "2026-11-23",
+   "dte": 17,
+   "implied_move_to_expiry": 0.1068,
+   "iv": 0.6204,
+   "iv_normal": null,
+   "event_implied_move": null,
+   "priced_abs_move": null,
+   "past": {
+    "n": 0
+   },
+   "past_inferred": {
+    "n": 0
+   },
+   "move_over_priced": null,
+   "chance_band": null,
+   "label": "no implied move",
+   "why": "no clean pre-event IV window (an expiry ending before the event, sessions 30 to 10 back) or no traded at-the-money straddle"
+  }
+ ],
+ "results_note": "Exploratory, F&O results meetings of Oct 2026 (n = 119 to 151 by measure): the stock moved about twice as far as usual (median 3.3% from D-1 to D+1 against 1.6%), and options priced more too. An ATM straddle bought at D-1's close and sold at D+1's had a median of -10.8% and a mean of +2.5% before costs, against +1.3% for the control: the difference is not significant (t 0.3), and both lose after a 4% round trip. The label compares the move the options price today with the company's own past results moves (NSE's calendar only), and names cheap or rich only when the gap is outside what a fairly priced company would show by chance 90% of the time with that few events. A hypothesis, not a tested rule.",
+ "global": [
+  {
+   "key": "ES",
+   "name": "S&P 500 futures",
+   "region": "US",
+   "kind": "equity",
+   "last": 7402.0,
+   "change": 0.002573479615332497,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "NQ",
+   "name": "Nasdaq 100 futures",
+   "region": "US",
+   "kind": "equity",
+   "last": 27085.25,
+   "change": 0.012457012559808689,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "SPX",
+   "name": "S&P 500",
+   "region": "US",
+   "kind": "equity",
+   "last": 7376.85986328125,
+   "change": 0.003145326640212831,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "NASDAQ",
+   "name": "Nasdaq Composite",
+   "region": "US",
+   "kind": "equity",
+   "last": 24579.4296875,
+   "change": 0.010875167077935455,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "DJI",
+   "name": "Dow Jones",
+   "region": "US",
+   "kind": "equity",
+   "last": 51285.73046875,
+   "change": -0.0046062507055586455,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "N225",
+   "name": "Nikkei 225",
+   "region": "Asia",
+   "kind": "equity",
+   "last": 57434.76953125,
+   "change": -0.059647253743970174,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "HSI",
+   "name": "Hang Seng",
+   "region": "Asia",
+   "kind": "equity",
+   "last": 24481.859375,
+   "change": -0.01270804298721473,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "KOSPI",
+   "name": "Kospi",
+   "region": "Asia",
+   "kind": "equity",
+   "last": 5059.68994140625,
+   "change": -0.06020095007972959,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "SSE",
+   "name": "Shanghai Composite",
+   "region": "Asia",
+   "kind": "equity",
+   "last": 3649.177001953125,
+   "change": -0.011039260282356467,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "STOXX",
+   "name": "Euro Stoxx 50",
+   "region": "Europe",
+   "kind": "equity",
+   "last": 6170.490234375,
+   "change": -0.009796904826866015,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "DAX",
+   "name": "DAX",
+   "region": "Europe",
+   "kind": "equity",
+   "last": 25820.359375,
+   "change": -0.019169998230502805,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "FTSE",
+   "name": "FTSE 100",
+   "region": "Europe",
+   "kind": "equity",
+   "last": 10673.900390625,
+   "change": -0.010090218842845888,
+   "asof": "2026-11-06",
+   "india_prior": 1
+  },
+  {
+   "key": "USVIX",
+   "name": "CBOE VIX",
+   "region": "US",
+   "kind": "vol",
+   "last": 25.639999389648438,
+   "change": -0.09013487892194327,
+   "asof": "2026-11-06",
+   "india_prior": -1
+  },
+  {
+   "key": "DXY",
+   "name": "US dollar index",
+   "region": "FX",
+   "kind": "fx",
+   "last": 102.30000305175781,
+   "change": 0.007385524150282263,
+   "asof": "2026-11-06",
+   "india_prior": -1
+  },
+  {
+   "key": "USDINR",
+   "name": "USD/INR",
+   "region": "FX",
+   "kind": "fx",
+   "last": 93.91000366210938,
+   "change": -0.005810958913624931,
+   "asof": "2026-11-07",
+   "india_prior": -1
+  },
+  {
+   "key": "BRENT",
+   "name": "Brent crude",
+   "region": "Commodities",
+   "kind": "commodity",
+   "last": 98.31999969482422,
+   "change": 0.0003052068269147057,
+   "asof": "2026-11-06",
+   "india_prior": -1
+  },
+  {
+   "key": "GOLD",
+   "name": "Gold",
+   "region": "Commodities",
+   "kind": "commodity",
+   "last": 4074.89990234375,
+   "change": -0.009383760217880122,
+   "asof": "2026-11-06",
+   "india_prior": 0
+  },
+  {
+   "key": "UST10",
+   "name": "US 10-year yield",
+   "region": "Rates",
+   "kind": "rates",
+   "last": 4.859000205993652,
+   "change": 0.004548338493072235,
+   "asof": "2026-11-06",
+   "india_prior": -1
+  }
+ ],
+ "headlines": {
+  "total": 175,
+  "named": {
+   "NIFTY": [
+    {
+     "ts": "2026-11-07 18:00:24+05:30",
+     "source": "Mint Markets",
+     "title": "Diwali cheer missing? Nifty lights up, but your portfolio may be burning; what's driving the disconnect? SAMCO explains",
+     "link": "https://www.livemint.com/market/stock-market-news/diwali-cheer-missing-nifty-lights-up-but-your-portfolio-may-be-burning-whats-driving-the-disconnect-samco-explains-11794050891575.html"
+    },
+    {
+     "ts": "2026-11-07 17:50:09+05:30",
+     "source": "CNBC TV18 (via Google News)",
+     "title": "Samvat to Samvat: Nifty ends lower, while pharma and metals shine",
+     "link": "https://news.google.com/rss/articles/CBMitAFBVV95cUxQQTd6Umw3cW1ZVm50Z0VhWmdlUHBuT2Rja1FZQXg5MjVEcXZURWRybHh5RWdiWUNERTlmUjk1WjV3MFBNeThWeHNOUnExbmc0N1d1RC1zVGZ4RGpzNVVoWmgwNzl1a1VNN21XYzFWMTdVUmpNeGZTZkxzcXJRaDdCQTB6VjZaYVQ0ajdZaUk1VU5ISlFMLWhmcFhHUm5jeWk2ZWdPalZvbVo2UkJDX3dScXRURUPSAboBQVVfeXFMTUtPMjRUMXluQ0EzWWQ1bml4V2U0eGprVnROTThuOU1PM3hxNHNDR24wVzVZc0FMc2wyVXpEb3phLUhERFlQTzY2TW9ueWxCYkNZOG1oRFJ4azN0b05hZEtqRkc1andqeVNSWVJJZHphY1owOVJTenZabkNURUdTSjRMdWc4LXFNRHlJLVdGNk5aY3VHNGhMMDhwOFA2UG5lMGRtcVpoN1dYVHNrWklEM043RzNuMnRJNXR3?oc=5"
+    },
+    {
+     "ts": "2026-11-07 17:49:14+05:30",
+     "source": "Investment Guru India (via Google News)",
+     "title": "Quote on Bank Nifty 06th November 2026 by Vatsal Bhuva, Technical Analyst at LKP Securities",
+     "link": "https://news.google.com/rss/articles/CBMi2wFBVV95cUxQRTVRSzYyRTBaWEhGODBVNlBKdXFIRWRhV3lxYnZOZnowZXpHMEhrM2FQeGFONU5TZ2RjUHJ3RzdtdkR6SE5FYk5tUUN1eVlVWVdFR1E2Q2ViT2NRenkwWnhfakdQbTUtckQ0bWladUlwUUlEaDlLX1FvVlR1RTlkaEtLSkU5ckV2eG15QXc5N1JKNlRuaHdWMzVNcHZOaWtldW1Mb3lza1ZKRy0xLVpSVkhOR2lVdXd5U1p0bUh6bVpNbFFMeGZHTXZCRWNETGNlekRXYzlIRzhQeUk?oc=5"
+    }
+   ],
+   "DELHIVERY": [
+    {
+     "ts": "2026-11-07 17:39:43+05:30",
+     "source": "Mint Markets",
+     "title": "Muhurat trading, Diwali 2026: Stocks to buy in Samvat 2083 - Blue Star, CESC, Delhivery, Ingersoll - check share price",
+     "link": "https://www.livemint.com/market/stock-market-news/nse-overhauls-key-trading-rules-closing-auction-session-f-o-expiry-trading-hours-revised-what-changes-for-invest-11794044306255.html"
+    }
+   ],
+   "BLUESTARCO": [
+    {
+     "ts": "2026-11-07 17:39:43+05:30",
+     "source": "Mint Markets",
+     "title": "Muhurat trading, Diwali 2026: Stocks to buy in Samvat 2083 - Blue Star, CESC, Delhivery, Ingersoll - check share price",
+     "link": "https://www.livemint.com/market/stock-market-news/nse-overhauls-key-trading-rules-closing-auction-session-f-o-expiry-trading-hours-revised-what-changes-for-invest-11794044306255.html"
+    }
+   ],
+   "AMBER": [
+    {
+     "ts": "2026-11-07 14:27:31+05:30",
+     "source": "Business Standard",
+     "title": "Amber Enterprises arm IL JIN Electronics files DRHP for ₹2,500 crore IPO",
+     "link": "https://www.business-standard.com/markets/ipo/amber-enterprises-arm-il-jin-electronics-files-drhp-for-2-500-crore-ipo-126110700332_1.html"
+    }
+   ],
+   "DABUR": [
+    {
+     "ts": "2026-11-07 13:49:34+05:30",
+     "source": "Mint Markets",
+     "title": "Upcoming dividend, bonus, rights record date next week, 9-13 Nov: Dabur, RITES, CONCOR, HUL, ONGC, Emami among others",
+     "link": "https://www.livemint.com/market/stock-market-news/upcoming-dividend-bonus-rights-record-date-next-week-9-13-nov-dabur-rites-concor-hul-ongc-emami-among-others-11794037826095.html"
+    }
+   ],
+   "CONCOR": [
+    {
+     "ts": "2026-11-07 13:49:34+05:30",
+     "source": "Mint Markets",
+     "title": "Upcoming dividend, bonus, rights record date next week, 9-13 Nov: Dabur, RITES, CONCOR, HUL, ONGC, Emami among others",
+     "link": "https://www.livemint.com/market/stock-market-news/upcoming-dividend-bonus-rights-record-date-next-week-9-13-nov-dabur-rites-concor-hul-ongc-emami-among-others-11794037826095.html"
+    }
+   ],
+   "CDSL": [
+    {
+     "ts": "2026-11-07 12:59:41+05:30",
+     "source": "WSJ (via Google News)",
+     "title": "Central Banks Accelerated Gold Buying in Third Quarter",
+     "link": "https://news.google.com/rss/articles/CBMisAFBVV95cUxNNE5ITWFudmVrYUgyekVzeUp1YkVlYTBkY0pZbTJSUFhraGRFRXdpczRWODFrOUpRRHQwU3VlbmJnNGk1ekV3MUpfOFJoa2liOEEtNEZDSEZQZDlUWENqa1NlaHJjZ25VYTNtMGVDQ2kxa3hJV25pZkxjTUJKandqeUgyUmJCaGpJWU8yaHBMQ2l4M19qRnFPYS1SSEZTMlF6ZFBubmRPMDgxUDFzbmtiaA?oc=5"
+    }
+   ],
+   "MOTILALOFS": [
+    {
+     "ts": "2026-11-07 12:12:48+05:30",
+     "source": "Investment Guru India (via Google News)",
+     "title": "Nifty 50 gained 1.91% in October, outperforming other market-cap segments: Motilal Oswal Mutual Fund",
+     "link": "https://news.google.com/rss/articles/CBMi5gFBVV95cUxPWURyeXlXUy01X3NOU1VZUndRdk5WN0pyRU1uY1hjNG1OaEJPOGRXdzVpa1VKXzZpRjhBUWd2VDV0WlFhT3BTZUItbjJsQ3ZiejN4eWlWMHNCVFU2VjlreTE1cFNERUIwUjdLSGNUcWp1bnhKOF94cmUxY3VLNTktQ2Y5Zk9wWFdWUTFyM1dOVy0wUGpET0h4bXJ0SU1HWjZRcHFBV0pERzZMelQtMDBLVkdKSVNlR25KVWdGek04R0ZLV0N1by1tTktLenBUOF9KZU1QY01vOTNTajdBLXJCZk1nbkplZw?oc=5"
+    }
+   ],
+   "HDFCBANK": [
+    {
+     "ts": "2026-11-07 11:25:30+05:30",
+     "source": "The Economic Times (via Google News)",
+     "title": "F&O Talk: Nifty’s bullish structure intact after best week in 5 years; Sudeep Shah on HDFC Bank strategy,",
+     "link": "https://news.google.com/rss/articles/CBMiswJBVV95cUxNZ2c3NVZRaXc5cnRSWmZKckNoVWZZYkp2TG1ZV25YM2hZRUh2TzZGWGR3WVBVUjdnMGpDM0VYWElwVVRUcEV0X0hGZUYxZ1BOV1RDTWJqVVJqZVNNNXpESVNVT2lCTjZwcXdYNTJhcTZvcTJUWm16YWhQa2lMLWpOQnNxTzVfbFdIcXU4R0U2QkR5QWpYVWY2NXpRUjdON25qaUZhZVpodDBHbFRaNEd1TzcxeDBfTGJNRm5ITUo1UVc3QmpjOWxNUUZWdTRGVFdpQUgzV3J3QUhiakZ1dUR3TXhhc3JheTRoYXFnTkxKb0VLV2tRTThMYmxZWF80RlVWMTZfcUthNHp3WE11blprWk1PdW80LXdQTlFmR05YVF95Wlh4c0pLUHRlS2JuMXQxTVF30gG4AkFVX3lxTFBHbi11QXZQOW1uZF91YlZRdW8ta2hvZ0pxM1RBcG1oa0J6WGwyaGM1N2ZrSC1hOWVQV0g0N3NoRTV1NFpsanhFQWEzTmFXWDA3NjdPYk1KTG5pOWdnSEQ0ZXZnaTZhVmtSMFBzeG9CbDJGVWZhNnh4YUtJelAwN2JCUEhqbjg1V3l3d0x4T2lveGFjRmhYOFp1Z0Fmell3QjlKb1RoaU5yMnBoTUU3Y1M2NHJHcmZwVWZIS0d3akY5U2FRclJyNDRsM2pQNDdIamN2MXFIMUVmVVd6Ym9FN2hfRTk0RWFKNnFFOU5ZZTBRV3o0WVlSM1VJUUxPc2F1b1hSMG4xUjZQOG1RTkJ5Y1hJT0ZOUkJRR055bDJNUXdyZnVFNlZwZnFZTF9iYmozbXpMeGFPVU9NYw?oc=5"
+    }
+   ],
+   "HINDALCO": [
+    {
+     "ts": "2026-11-07 11:14:22+05:30",
+     "source": "Mint Markets",
+     "title": "Hindalco shares jump 22% in a year: Should you buy or sell after Q2 results 2026? What brokerages say, price targets",
+     "link": "https://www.livemint.com/market/stock-market-news/hindalco-shares-jump-22-in-a-year-should-you-buy-or-sell-after-q2-results-2026-what-brokerages-say-price-targets-11794025738874.html"
+    }
+   ],
+   "ICICIBANK": [
+    {
+     "ts": "2026-11-07 11:13:51+05:30",
+     "source": "ET Markets",
+     "title": "Patakha stock picks! ICICI Bank, BEL, 6 other stocks with 62% to buy this Samvat 2083. See full list",
+     "link": "https://economictimes.indiatimes.com/markets/stocks/news/patakha-stock-picks-icici-bank-bel-6-other-stocks-with-62-to-buy-this-samvat-2023-see-full-list/slideshow/135627923.cms"
+    }
+   ],
+   "ANGELONE": [
+    {
+     "ts": "2026-11-07 10:14:51+05:30",
+     "source": "ET Markets",
+     "title": "Diwali shagun ke shares! Angel One selects 8 stocks with up to 50% upside to Buy this Diwali. How many do you own?",
+     "link": "https://economictimes.indiatimes.com/markets/stocks/news/diwali-shagun-ke-shares-angel-one-selects-8-stocks-with-up-to-50-upside-to-buy-this-diwali-how-many-do-you-own/slideshow/135626837.cms"
+    }
+   ],
+   "TECHM": [
+    {
+     "ts": "2026-11-07 09:59:15+05:30",
+     "source": "Mint Markets",
+     "title": "Muhurat Trading 2026 Diwali stocks to buy for upto 109% upside: BSE, Adani Power, HFCL, TechM - SAMCO's 10 shares | List",
+     "link": "https://www.livemint.com/market/stock-market-news/muhurat-trading-2026-diwali-stocks-to-buy-for-upto-109-upside-bse-adani-power-hfcl-techm-samcos-10-shares-list-11794024034171.html"
+    }
+   ],
+   "ADANIPOWER": [
+    {
+     "ts": "2026-11-07 09:59:15+05:30",
+     "source": "Mint Markets",
+     "title": "Muhurat Trading 2026 Diwali stocks to buy for upto 109% upside: BSE, Adani Power, HFCL, TechM - SAMCO's 10 shares | List",
+     "link": "https://www.livemint.com/market/stock-market-news/muhurat-trading-2026-diwali-stocks-to-buy-for-upto-109-upside-bse-adani-power-hfcl-techm-samcos-10-shares-list-11794024034171.html"
+    }
+   ],
+   "ETERNAL": [
+    {
+     "ts": "2026-11-07 09:47:33+05:30",
+     "source": "Mint Markets",
+     "title": "Muhurat Trading 2026 Stocks to buy on Diwali Day Nov 8: From Eternal to MCX - Chandan Taparia of MOFSL shares 4 picks",
+     "link": "https://www.livemint.com/market/stock-market-news/muhurat-trading-2026-stocks-to-buy-on-diwali-day-nov-8-from-eternal-to-mcx-chandan-taparia-of-mofsl-shares-4-picks-11794023535359.html"
+    }
+   ]
+  }
+ },
+ "watch": [
+  {
+   "symbol": "NIFTY",
+   "segment": "index",
+   "score": 9.0,
+   "why": [
+    "index (options expire today)",
+    "in the news: Diwali cheer missing? Nifty lights up, but your portfolio may be burning; what's driving t",
+    "among the most traded options"
+   ],
+   "price": 25030.35,
+   "lot": 65.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 141553.44,
+   "active_strikes": 143,
+   "fut_oi_chg_pct": -0.044
+  },
+  {
+   "symbol": "HINDALCO",
+   "segment": "stock",
+   "score": 6.94,
+   "why": [
+    "reacts today to results after the last close",
+    "in the news: Hindalco shares jump 22% in a year: Should you buy or sell after Q2 results 2026? What bro",
+    "futures OI rose 12% yesterday",
+    "among the most traded options"
+   ],
+   "price": 958.39,
+   "lot": 700.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 451.19,
+   "active_strikes": 31,
+   "fut_oi_chg_pct": 0.116
+  },
+  {
+   "symbol": "BANKNIFTY",
+   "segment": "index",
+   "score": 6.6,
+   "why": [
+    "index"
+   ],
+   "price": 59086.0,
+   "lot": 30.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 7412.71,
+   "active_strikes": 151,
+   "fut_oi_chg_pct": -0.046
+  },
+  {
+   "symbol": "MIDCPNIFTY",
+   "segment": "index",
+   "score": 6.2,
+   "why": [
+    "index"
+   ],
+   "price": 14008.8,
+   "lot": 120.0,
+   "strike_step": 25.0,
+   "opt_premium_cr": 683.68,
+   "active_strikes": 74,
+   "fut_oi_chg_pct": 0.022
+  },
+  {
+   "symbol": "FINNIFTY",
+   "segment": "index",
+   "score": 5.8,
+   "why": [
+    "index"
+   ],
+   "price": 27283.95,
+   "lot": 60.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 76.4,
+   "active_strikes": 38,
+   "fut_oi_chg_pct": 0.013
+  },
+  {
+   "symbol": "NIFTYNXT50",
+   "segment": "index",
+   "score": 5.4,
+   "why": [
+    "index"
+   ],
+   "price": 71657.8,
+   "lot": 25.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 0.36,
+   "active_strikes": 0,
+   "fut_oi_chg_pct": -0.067
+  },
+  {
+   "symbol": "TATASTEEL",
+   "segment": "stock",
+   "score": 4.89,
+   "why": [
+    "reacts today to results after the last close",
+    "among the most traded options"
+   ],
+   "price": 186.29,
+   "lot": 2750.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 182.63,
+   "active_strikes": 26,
+   "fut_oi_chg_pct": 0.005
+  },
+  {
+   "symbol": "SIEMENS",
+   "segment": "stock",
+   "score": 4.69,
+   "why": [
+    "reacts today to results after the last close"
+   ],
+   "price": 3559.91,
+   "lot": 175.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 137.22,
+   "active_strikes": 26,
+   "fut_oi_chg_pct": 0.03
+  },
+  {
+   "symbol": "DATAPATTNS",
+   "segment": "stock",
+   "score": 4.68,
+   "why": [
+    "reacts today to results after the last close",
+    "futures OI rose 18% yesterday"
+   ],
+   "price": 3767.76,
+   "lot": 125.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 20.11,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": 0.177
+  },
+  {
+   "symbol": "BOSCHLTD",
+   "segment": "stock",
+   "score": 4.65,
+   "why": [
+    "reacts today to results after the last close"
+   ],
+   "price": 50700.73,
+   "lot": 25.0,
+   "strike_step": 500.0,
+   "opt_premium_cr": 84.74,
+   "active_strikes": 33,
+   "fut_oi_chg_pct": 0.08
+  },
+  {
+   "symbol": "DIVISLAB",
+   "segment": "stock",
+   "score": 4.54,
+   "why": [
+    "reacts today to results after the last close"
+   ],
+   "price": 10320.34,
+   "lot": 100.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 145.86,
+   "active_strikes": 28,
+   "fut_oi_chg_pct": 0.066
+  },
+  {
+   "symbol": "VOLTAS",
+   "segment": "stock",
+   "score": 4.5,
+   "why": [
+    "reacts today to results after the last close"
+   ],
+   "price": 1098.99,
+   "lot": 375.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 45.59,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": 0.02
+  },
+  {
+   "symbol": "COROMANDEL",
+   "segment": "stock",
+   "score": 4.35,
+   "why": [
+    "reacts today to results after the last close",
+    "futures OI rose 69% yesterday"
+   ],
+   "price": 1824.0,
+   "lot": 300.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 9.83,
+   "active_strikes": 11,
+   "fut_oi_chg_pct": 0.69
+  },
+  {
+   "symbol": "JUBLFOOD",
+   "segment": "stock",
+   "score": 4.31,
+   "why": [
+    "reacts today to results after the last close"
+   ],
+   "price": 457.41,
+   "lot": 1250.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 43.83,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.023
+  },
+  {
+   "symbol": "HDFCBANK",
+   "segment": "stock",
+   "score": 3.0,
+   "why": [
+    "in the news: F&O Talk: Nifty’s bullish structure intact after best week in 5 years; Sudeep Shah on HDFC",
+    "among the most traded options"
+   ],
+   "price": 788.24,
+   "lot": 650.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 818.57,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": -0.057
+  },
+  {
+   "symbol": "ICICIBANK",
+   "segment": "stock",
+   "score": 2.96,
+   "why": [
+    "in the news: Patakha stock picks! ICICI Bank, BEL, 6 other stocks with 62% to buy this Samvat 2083. See",
+    "among the most traded options"
+   ],
+   "price": 1571.19,
+   "lot": 700.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 650.56,
+   "active_strikes": 46,
+   "fut_oi_chg_pct": -0.039
+  },
+  {
+   "symbol": "BRITANNIA",
+   "segment": "stock",
+   "score": 2.73,
+   "why": [
+    "futures OI rose 12% yesterday"
+   ],
+   "price": 4785.05,
+   "lot": 125.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 69.65,
+   "active_strikes": 31,
+   "fut_oi_chg_pct": 0.122
+  },
+  {
+   "symbol": "KALYANKJIL",
+   "segment": "stock",
+   "score": 2.7,
+   "why": [
+    "futures OI fell 12% yesterday"
+   ],
+   "price": 590.71,
+   "lot": 1350.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 234.9,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": -0.121
+  },
+  {
+   "symbol": "ETERNAL",
+   "segment": "stock",
+   "score": 2.61,
+   "why": [
+    "in the news: Muhurat Trading 2026 Stocks to buy on Diwali Day Nov 8: From Eternal to MCX - Chandan Tapa"
+   ],
+   "price": 363.15,
+   "lot": 2425.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 104.05,
+   "active_strikes": 21,
+   "fut_oi_chg_pct": -0.008
+  },
+  {
+   "symbol": "ANGELONE",
+   "segment": "stock",
+   "score": 2.17,
+   "why": [
+    "in the news: Diwali shagun ke shares! Angel One selects 8 stocks with up to 50% upside to Buy this Diwa"
+   ],
+   "price": 330.99,
+   "lot": 2500.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 49.95,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.016
+  },
+  {
+   "symbol": "DABUR",
+   "segment": "stock",
+   "score": 2.14,
+   "why": [
+    "in the news: Upcoming dividend, bonus, rights record date next week, 9-13 Nov: Dabur, RITES, CONCOR, HU"
+   ],
+   "price": 380.35,
+   "lot": 1250.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 15.98,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.057
+  },
+  {
+   "symbol": "MOTILALOFS",
+   "segment": "stock",
+   "score": 2.07,
+   "why": [
+    "in the news: Nifty 50 gained 1.91% in October, outperforming other market-cap segments: Motilal Oswal M"
+   ],
+   "price": 1101.97,
+   "lot": 775.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 44.13,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.033
+  },
+  {
+   "symbol": "TECHM",
+   "segment": "stock",
+   "score": 2.04,
+   "why": [
+    "in the news: Muhurat Trading 2026 Diwali stocks to buy for upto 109% upside: BSE, Adani Power, HFCL, Te"
+   ],
+   "price": 1830.99,
+   "lot": 600.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 45.36,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.005
+  },
+  {
+   "symbol": "M&M",
+   "segment": "stock",
+   "score": 1.99,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 3287.41,
+   "lot": 200.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 461.33,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": -0.026
+  },
+  {
+   "symbol": "RELIANCE",
+   "segment": "stock",
+   "score": 1.98,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 1319.99,
+   "lot": 500.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 375.04,
+   "active_strikes": 45,
+   "fut_oi_chg_pct": 0.0
+  },
+  {
+   "symbol": "SBIN",
+   "segment": "stock",
+   "score": 1.97,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 1018.49,
+   "lot": 750.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 467.85,
+   "active_strikes": 31,
+   "fut_oi_chg_pct": 0.002
+  },
+  {
+   "symbol": "TITAN",
+   "segment": "stock",
+   "score": 1.95,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 4999.98,
+   "lot": 175.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 455.84,
+   "active_strikes": 28,
+   "fut_oi_chg_pct": -0.003
+  },
+  {
+   "symbol": "BHARTIARTL",
+   "segment": "stock",
+   "score": 1.94,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 2107.11,
+   "lot": 475.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 286.4,
+   "active_strikes": 28,
+   "fut_oi_chg_pct": 0.017
+  },
+  {
+   "symbol": "INFY",
+   "segment": "stock",
+   "score": 1.93,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 1181.38,
+   "lot": 400.0,
+   "strike_step": 6.0,
+   "opt_premium_cr": 189.62,
+   "active_strikes": 34,
+   "fut_oi_chg_pct": 0.011
+  },
+  {
+   "symbol": "TCS",
+   "segment": "stock",
+   "score": 1.92,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 2498.5,
+   "lot": 225.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 161.81,
+   "active_strikes": 38,
+   "fut_oi_chg_pct": 0.033
+  },
+  {
+   "symbol": "SYRMA",
+   "segment": "stock",
+   "score": 1.92,
+   "why": [
+    "futures OI rose 15% yesterday"
+   ],
+   "price": 1459.34,
+   "lot": 325.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 21.8,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": 0.153
+  },
+  {
+   "symbol": "MCX",
+   "segment": "stock",
+   "score": 1.91,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 3527.96,
+   "lot": 225.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 389.7,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": -0.017
+  },
+  {
+   "symbol": "AXISBANK",
+   "segment": "stock",
+   "score": 1.9,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 1322.85,
+   "lot": 625.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 224.63,
+   "active_strikes": 36,
+   "fut_oi_chg_pct": -0.013
+  },
+  {
+   "symbol": "ITC",
+   "segment": "stock",
+   "score": 1.88,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 283.15,
+   "lot": 1725.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 98.54,
+   "active_strikes": 26,
+   "fut_oi_chg_pct": 0.001
+  },
+  {
+   "symbol": "MARUTI",
+   "segment": "stock",
+   "score": 1.87,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 12749.98,
+   "lot": 50.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 130.94,
+   "active_strikes": 39,
+   "fut_oi_chg_pct": -0.017
+  },
+  {
+   "symbol": "CUMMINSIND",
+   "segment": "stock",
+   "score": 1.86,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 4048.8,
+   "lot": 100.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 108.53,
+   "active_strikes": 33,
+   "fut_oi_chg_pct": 0.062
+  },
+  {
+   "symbol": "MPHASIS",
+   "segment": "stock",
+   "score": 1.85,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 2520.06,
+   "lot": 275.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 144.28,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": 0.048
+  },
+  {
+   "symbol": "SOLARINDS",
+   "segment": "stock",
+   "score": 1.84,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 18607.32,
+   "lot": 25.0,
+   "strike_step": 250.0,
+   "opt_premium_cr": 96.44,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": 0.016
+  },
+  {
+   "symbol": "CDSL",
+   "segment": "stock",
+   "score": 1.84,
+   "why": [
+    "in the news: Central Banks Accelerated Gold Buying in Third Quarter"
+   ],
+   "price": 1331.4,
+   "lot": 475.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 17.0,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.001
+  },
+  {
+   "symbol": "GLENMARK",
+   "segment": "stock",
+   "score": 1.83,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 2590.02,
+   "lot": 375.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 246.89,
+   "active_strikes": 33,
+   "fut_oi_chg_pct": -0.05
+  },
+  {
+   "symbol": "ASTRAL",
+   "segment": "stock",
+   "score": 1.83,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 1253.63,
+   "lot": 425.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 120.3,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": 0.1
+  },
+  {
+   "symbol": "BSE",
+   "segment": "stock",
+   "score": 1.82,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 3800.0,
+   "lot": 200.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 183.31,
+   "active_strikes": 29,
+   "fut_oi_chg_pct": -0.014
+  },
+  {
+   "symbol": "CGPOWER",
+   "segment": "stock",
+   "score": 1.81,
+   "why": [
+    "among the most traded options"
+   ],
+   "price": 773.0,
+   "lot": 850.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 190.26,
+   "active_strikes": 29,
+   "fut_oi_chg_pct": 0.003
+  },
+  {
+   "symbol": "INDUSINDBK",
+   "segment": "stock",
+   "score": 1.8,
+   "why": [],
+   "price": 910.25,
+   "lot": 700.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 115.54,
+   "active_strikes": 25,
+   "fut_oi_chg_pct": 0.057
+  },
+  {
+   "symbol": "PIIND",
+   "segment": "stock",
+   "score": 1.79,
+   "why": [],
+   "price": 1735.0,
+   "lot": 175.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 60.81,
+   "active_strikes": 39,
+   "fut_oi_chg_pct": 0.008
+  },
+  {
+   "symbol": "BAJAJ-AUTO",
+   "segment": "stock",
+   "score": 1.78,
+   "why": [],
+   "price": 10900.0,
+   "lot": 75.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 109.2,
+   "active_strikes": 28,
+   "fut_oi_chg_pct": -0.067
+  },
+  {
+   "symbol": "KOTAKBANK",
+   "segment": "stock",
+   "score": 1.77,
+   "why": [],
+   "price": 480.0,
+   "lot": 2000.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 137.12,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": -0.034
+  },
+  {
+   "symbol": "TIINDIA",
+   "segment": "stock",
+   "score": 1.76,
+   "why": [],
+   "price": 2170.0,
+   "lot": 200.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 79.86,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.041
+  },
+  {
+   "symbol": "BAJFINANCE",
+   "segment": "stock",
+   "score": 1.75,
+   "why": [],
+   "price": 1087.67,
+   "lot": 750.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 132.18,
+   "active_strikes": 32,
+   "fut_oi_chg_pct": -0.015
+  },
+  {
+   "symbol": "YESBANK",
+   "segment": "stock",
+   "score": 1.74,
+   "why": [],
+   "price": 17.2,
+   "lot": 31100.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 117.78,
+   "active_strikes": 10,
+   "fut_oi_chg_pct": 0.02
+  },
+  {
+   "symbol": "ADANIPORTS",
+   "segment": "stock",
+   "score": 1.72,
+   "why": [],
+   "price": 1936.6,
+   "lot": 475.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 129.52,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": -0.017
+  },
+  {
+   "symbol": "LT",
+   "segment": "stock",
+   "score": 1.72,
+   "why": [],
+   "price": 4117.76,
+   "lot": 175.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 95.1,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": -0.027
+  },
+  {
+   "symbol": "NTPC",
+   "segment": "stock",
+   "score": 1.71,
+   "why": [],
+   "price": 323.44,
+   "lot": 1500.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 57.04,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": -0.016
+  },
+  {
+   "symbol": "DIXON",
+   "segment": "stock",
+   "score": 1.68,
+   "why": [],
+   "price": 12624.0,
+   "lot": 50.0,
+   "strike_step": 250.0,
+   "opt_premium_cr": 72.82,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": -0.002
+  },
+  {
+   "symbol": "SUNPHARMA",
+   "segment": "stock",
+   "score": 1.67,
+   "why": [],
+   "price": 1860.0,
+   "lot": 350.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 52.91,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": 0.002
+  },
+  {
+   "symbol": "HAL",
+   "segment": "stock",
+   "score": 1.66,
+   "why": [],
+   "price": 4979.97,
+   "lot": 150.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 98.48,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": 0.037
+  },
+  {
+   "symbol": "ASIANPAINT",
+   "segment": "stock",
+   "score": 1.64,
+   "why": [],
+   "price": 2545.92,
+   "lot": 250.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 51.84,
+   "active_strikes": 35,
+   "fut_oi_chg_pct": -0.011
+  },
+  {
+   "symbol": "ADANIPOWER",
+   "segment": "stock",
+   "score": 1.64,
+   "why": [
+    "in the news: Muhurat Trading 2026 Diwali stocks to buy for upto 109% upside: BSE, Adani Power, HFCL, Te"
+   ],
+   "price": 204.28,
+   "lot": 3550.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 19.31,
+   "active_strikes": 21,
+   "fut_oi_chg_pct": -0.0
+  },
+  {
+   "symbol": "MOTHERSON",
+   "segment": "stock",
+   "score": 1.63,
+   "why": [],
+   "price": 158.55,
+   "lot": 6150.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 99.9,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.007
+  },
+  {
+   "symbol": "JIOFIN",
+   "segment": "stock",
+   "score": 1.62,
+   "why": [],
+   "price": 231.18,
+   "lot": 2350.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 59.52,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": -0.005
+  },
+  {
+   "symbol": "ONGC",
+   "segment": "stock",
+   "score": 1.61,
+   "why": [],
+   "price": 231.76,
+   "lot": 2250.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 39.94,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": 0.02
+  },
+  {
+   "symbol": "INDIGO",
+   "segment": "stock",
+   "score": 1.6,
+   "why": [],
+   "price": 5475.27,
+   "lot": 150.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 75.47,
+   "active_strikes": 29,
+   "fut_oi_chg_pct": 0.0
+  },
+  {
+   "symbol": "BEL",
+   "segment": "stock",
+   "score": 1.59,
+   "why": [],
+   "price": 396.0,
+   "lot": 1425.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 51.19,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": -0.018
+  },
+  {
+   "symbol": "BHEL",
+   "segment": "stock",
+   "score": 1.58,
+   "why": [],
+   "price": 418.8,
+   "lot": 2625.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 133.82,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.006
+  },
+  {
+   "symbol": "TATAPOWER",
+   "segment": "stock",
+   "score": 1.57,
+   "why": [],
+   "price": 352.5,
+   "lot": 1450.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 46.74,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": -0.024
+  },
+  {
+   "symbol": "APOLLOHOSP",
+   "segment": "stock",
+   "score": 1.56,
+   "why": [],
+   "price": 8446.0,
+   "lot": 125.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 74.5,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": -0.053
+  },
+  {
+   "symbol": "BHARATFORG",
+   "segment": "stock",
+   "score": 1.55,
+   "why": [],
+   "price": 1740.0,
+   "lot": 500.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 73.76,
+   "active_strikes": 30,
+   "fut_oi_chg_pct": 0.052
+  },
+  {
+   "symbol": "ADANIENT",
+   "segment": "stock",
+   "score": 1.53,
+   "why": [],
+   "price": 2745.67,
+   "lot": 309.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 79.97,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": 0.014
+  },
+  {
+   "symbol": "HAVELLS",
+   "segment": "stock",
+   "score": 1.52,
+   "why": [],
+   "price": 1127.71,
+   "lot": 500.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 77.69,
+   "active_strikes": 26,
+   "fut_oi_chg_pct": -0.071
+  },
+  {
+   "symbol": "POWERINDIA",
+   "segment": "stock",
+   "score": 1.51,
+   "why": [],
+   "price": 27800.0,
+   "lot": 25.0,
+   "strike_step": 500.0,
+   "opt_premium_cr": 95.43,
+   "active_strikes": 26,
+   "fut_oi_chg_pct": 0.025
+  },
+  {
+   "symbol": "HCLTECH",
+   "segment": "stock",
+   "score": 1.5,
+   "why": [],
+   "price": 1440.0,
+   "lot": 400.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 49.97,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": 0.0
+  },
+  {
+   "symbol": "TMPV",
+   "segment": "stock",
+   "score": 1.49,
+   "why": [],
+   "price": 292.0,
+   "lot": 1600.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 51.42,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.02
+  },
+  {
+   "symbol": "HDFCLIFE",
+   "segment": "stock",
+   "score": 1.48,
+   "why": [],
+   "price": 565.29,
+   "lot": 1100.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 55.06,
+   "active_strikes": 25,
+   "fut_oi_chg_pct": 0.027
+  },
+  {
+   "symbol": "LICI",
+   "segment": "stock",
+   "score": 1.47,
+   "why": [],
+   "price": 394.0,
+   "lot": 1400.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 35.63,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": -0.043
+  },
+  {
+   "symbol": "ASHOKLEY",
+   "segment": "stock",
+   "score": 1.46,
+   "why": [],
+   "price": 172.09,
+   "lot": 5000.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 87.51,
+   "active_strikes": 25,
+   "fut_oi_chg_pct": -0.058
+  },
+  {
+   "symbol": "WIPRO",
+   "segment": "stock",
+   "score": 1.45,
+   "why": [],
+   "price": 198.0,
+   "lot": 3000.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 36.95,
+   "active_strikes": 25,
+   "fut_oi_chg_pct": -0.002
+  },
+  {
+   "symbol": "COALINDIA",
+   "segment": "stock",
+   "score": 1.44,
+   "why": [],
+   "price": 399.92,
+   "lot": 1350.0,
+   "strike_step": 4.75,
+   "opt_premium_cr": 35.97,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": 0.0
+  },
+  {
+   "symbol": "GVT&D",
+   "segment": "stock",
+   "score": 1.43,
+   "why": [],
+   "price": 4018.04,
+   "lot": 125.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 49.43,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.054
+  },
+  {
+   "symbol": "ABB",
+   "segment": "stock",
+   "score": 1.42,
+   "why": [],
+   "price": 6774.0,
+   "lot": 125.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 105.63,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": 0.062
+  },
+  {
+   "symbol": "COFORGE",
+   "segment": "stock",
+   "score": 1.41,
+   "why": [],
+   "price": 2075.74,
+   "lot": 475.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 80.63,
+   "active_strikes": 26,
+   "fut_oi_chg_pct": 0.008
+  },
+  {
+   "symbol": "NAVINFLUOR",
+   "segment": "stock",
+   "score": 1.41,
+   "why": [
+    "futures OI rose 34% yesterday"
+   ],
+   "price": 9009.94,
+   "lot": 75.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 10.59,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": 0.336
+  },
+  {
+   "symbol": "MUTHOOTFIN",
+   "segment": "stock",
+   "score": 1.4,
+   "why": [],
+   "price": 2868.5,
+   "lot": 275.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 61.43,
+   "active_strikes": 21,
+   "fut_oi_chg_pct": -0.01
+  },
+  {
+   "symbol": "AUBANK",
+   "segment": "stock",
+   "score": 1.39,
+   "why": [],
+   "price": 931.78,
+   "lot": 500.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 30.28,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": -0.038
+  },
+  {
+   "symbol": "SHRIRAMFIN",
+   "segment": "stock",
+   "score": 1.39,
+   "why": [],
+   "price": 961.13,
+   "lot": 825.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 62.13,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.02
+  },
+  {
+   "symbol": "BAJAJFINSV",
+   "segment": "stock",
+   "score": 1.38,
+   "why": [],
+   "price": 1864.63,
+   "lot": 300.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 29.28,
+   "active_strikes": 25,
+   "fut_oi_chg_pct": -0.003
+  },
+  {
+   "symbol": "PFC",
+   "segment": "stock",
+   "score": 1.37,
+   "why": [],
+   "price": 328.79,
+   "lot": 1300.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 24.87,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.004
+  },
+  {
+   "symbol": "EICHERMOT",
+   "segment": "stock",
+   "score": 1.36,
+   "why": [],
+   "price": 7669.5,
+   "lot": 100.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 43.13,
+   "active_strikes": 21,
+   "fut_oi_chg_pct": -0.03
+  },
+  {
+   "symbol": "CONCOR",
+   "segment": "stock",
+   "score": 1.36,
+   "why": [
+    "in the news: Upcoming dividend, bonus, rights record date next week, 9-13 Nov: Dabur, RITES, CONCOR, HU"
+   ],
+   "price": 439.8,
+   "lot": 1250.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 8.06,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": -0.008
+  },
+  {
+   "symbol": "TVSMOTOR",
+   "segment": "stock",
+   "score": 1.35,
+   "why": [],
+   "price": 4491.62,
+   "lot": 175.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 46.97,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": -0.004
+  },
+  {
+   "symbol": "HINDUNILVR",
+   "segment": "stock",
+   "score": 1.34,
+   "why": [],
+   "price": 1998.34,
+   "lot": 300.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 24.75,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": -0.013
+  },
+  {
+   "symbol": "SWIGGY",
+   "segment": "stock",
+   "score": 1.33,
+   "why": [],
+   "price": 191.14,
+   "lot": 1825.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 30.89,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.019
+  },
+  {
+   "symbol": "PERSISTENT",
+   "segment": "stock",
+   "score": 1.32,
+   "why": [],
+   "price": 6053.39,
+   "lot": 125.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 45.28,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.007
+  },
+  {
+   "symbol": "VEDL",
+   "segment": "stock",
+   "score": 1.3,
+   "why": [],
+   "price": 261.74,
+   "lot": 1150.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 20.87,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.017
+  },
+  {
+   "symbol": "ULTRACEMCO",
+   "segment": "stock",
+   "score": 1.29,
+   "why": [],
+   "price": 12449.95,
+   "lot": 50.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 25.17,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.001
+  },
+  {
+   "symbol": "RECLTD",
+   "segment": "stock",
+   "score": 1.28,
+   "why": [],
+   "price": 296.66,
+   "lot": 1575.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 24.38,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.0
+  },
+  {
+   "symbol": "ATHERENERG",
+   "segment": "stock",
+   "score": 1.28,
+   "why": [],
+   "price": 1821.37,
+   "lot": 375.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 57.2,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": 0.004
+  },
+  {
+   "symbol": "DELHIVERY",
+   "segment": "stock",
+   "score": 1.28,
+   "why": [
+    "in the news: Muhurat trading, Diwali 2026: Stocks to buy in Samvat 2083 - Blue Star, CESC, Delhivery, I"
+   ],
+   "price": 427.79,
+   "lot": 2075.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 10.97,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.019
+  },
+  {
+   "symbol": "POLYCAB",
+   "segment": "stock",
+   "score": 1.27,
+   "why": [],
+   "price": 7870.92,
+   "lot": 125.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 60.46,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.054
+  },
+  {
+   "symbol": "POLICYBZR",
+   "segment": "stock",
+   "score": 1.26,
+   "why": [],
+   "price": 967.0,
+   "lot": 350.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 21.61,
+   "active_strikes": 25,
+   "fut_oi_chg_pct": -0.008
+  },
+  {
+   "symbol": "AMBER",
+   "segment": "stock",
+   "score": 1.26,
+   "why": [
+    "in the news: Amber Enterprises arm IL JIN Electronics files DRHP for ₹2,500 crore IPO"
+   ],
+   "price": 6403.01,
+   "lot": 100.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 9.87,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": -0.012
+  },
+  {
+   "symbol": "HEROMOTOCO",
+   "segment": "stock",
+   "score": 1.25,
+   "why": [],
+   "price": 5513.09,
+   "lot": 150.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 41.09,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": -0.017
+  },
+  {
+   "symbol": "DLF",
+   "segment": "stock",
+   "score": 1.24,
+   "why": [],
+   "price": 752.81,
+   "lot": 950.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 41.77,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.009
+  },
+  {
+   "symbol": "BLUESTARCO",
+   "segment": "stock",
+   "score": 1.24,
+   "why": [
+    "in the news: Muhurat trading, Diwali 2026: Stocks to buy in Samvat 2083 - Blue Star, CESC, Delhivery, I"
+   ],
+   "price": 1575.0,
+   "lot": 325.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 5.44,
+   "active_strikes": 12,
+   "fut_oi_chg_pct": -0.014
+  },
+  {
+   "symbol": "FORCEMOT",
+   "segment": "stock",
+   "score": 1.23,
+   "why": [],
+   "price": 18966.13,
+   "lot": 25.0,
+   "strike_step": 250.0,
+   "opt_premium_cr": 28.57,
+   "active_strikes": 12,
+   "fut_oi_chg_pct": 0.015
+  },
+  {
+   "symbol": "PAYTM",
+   "segment": "stock",
+   "score": 1.22,
+   "why": [],
+   "price": 1794.24,
+   "lot": 725.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 102.94,
+   "active_strikes": 26,
+   "fut_oi_chg_pct": -0.01
+  },
+  {
+   "symbol": "TRENT",
+   "segment": "stock",
+   "score": 1.21,
+   "why": [],
+   "price": 3078.8,
+   "lot": 225.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 31.04,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.011
+  },
+  {
+   "symbol": "FORTIS",
+   "segment": "stock",
+   "score": 1.2,
+   "why": [],
+   "price": 766.9,
+   "lot": 775.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 33.89,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": 0.02
+  },
+  {
+   "symbol": "CANBK",
+   "segment": "stock",
+   "score": 1.19,
+   "why": [],
+   "price": 122.93,
+   "lot": 6750.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 48.85,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": 0.001
+  },
+  {
+   "symbol": "LTM",
+   "segment": "stock",
+   "score": 1.18,
+   "why": [],
+   "price": 4338.0,
+   "lot": 150.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 32.1,
+   "active_strikes": 12,
+   "fut_oi_chg_pct": 0.008
+  },
+  {
+   "symbol": "CROMPTON",
+   "segment": "stock",
+   "score": 1.17,
+   "why": [],
+   "price": 215.65,
+   "lot": 2150.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 34.16,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": -0.06
+  },
+  {
+   "symbol": "UNOMINDA",
+   "segment": "stock",
+   "score": 1.16,
+   "why": [],
+   "price": 1326.03,
+   "lot": 550.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 27.98,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": 0.063
+  },
+  {
+   "symbol": "POWERGRID",
+   "segment": "stock",
+   "score": 1.15,
+   "why": [],
+   "price": 259.9,
+   "lot": 1900.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 19.93,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.043
+  },
+  {
+   "symbol": "ZYDUSLIFE",
+   "segment": "stock",
+   "score": 1.13,
+   "why": [],
+   "price": 1197.84,
+   "lot": 450.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 24.39,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": -0.061
+  },
+  {
+   "symbol": "TORNTPHARM",
+   "segment": "stock",
+   "score": 1.12,
+   "why": [],
+   "price": 4749.99,
+   "lot": 125.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 21.28,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": -0.009
+  },
+  {
+   "symbol": "LAURUSLABS",
+   "segment": "stock",
+   "score": 1.11,
+   "why": [],
+   "price": 2339.97,
+   "lot": 425.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 43.18,
+   "active_strikes": 30,
+   "fut_oi_chg_pct": -0.002
+  },
+  {
+   "symbol": "INDHOTEL",
+   "segment": "stock",
+   "score": 1.1,
+   "why": [],
+   "price": 888.0,
+   "lot": 1000.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 35.41,
+   "active_strikes": 21,
+   "fut_oi_chg_pct": 0.013
+  },
+  {
+   "symbol": "SAIL",
+   "segment": "stock",
+   "score": 1.1,
+   "why": [
+    "futures OI fell 11% yesterday"
+   ],
+   "price": 171.59,
+   "lot": 4700.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 7.83,
+   "active_strikes": 11,
+   "fut_oi_chg_pct": -0.107
+  },
+  {
+   "symbol": "HINDZINC",
+   "segment": "stock",
+   "score": 1.09,
+   "why": [],
+   "price": 568.09,
+   "lot": 1225.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 28.51,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.004
+  },
+  {
+   "symbol": "BIOCON",
+   "segment": "stock",
+   "score": 1.08,
+   "why": [],
+   "price": 365.1,
+   "lot": 2500.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 35.56,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.035
+  },
+  {
+   "symbol": "GODREJPROP",
+   "segment": "stock",
+   "score": 1.06,
+   "why": [],
+   "price": 1809.3,
+   "lot": 325.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 27.4,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": -0.019
+  },
+  {
+   "symbol": "AUROPHARMA",
+   "segment": "stock",
+   "score": 1.06,
+   "why": [],
+   "price": 1799.99,
+   "lot": 550.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 41.78,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": 0.011
+  },
+  {
+   "symbol": "KARURVYSYA",
+   "segment": "stock",
+   "score": 1.06,
+   "why": [
+    "futures OI rose 12% yesterday"
+   ],
+   "price": 370.05,
+   "lot": 1550.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 4.87,
+   "active_strikes": 7,
+   "fut_oi_chg_pct": 0.121
+  },
+  {
+   "symbol": "SUPREMEIND",
+   "segment": "stock",
+   "score": 1.05,
+   "why": [],
+   "price": 3156.9,
+   "lot": 175.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 19.79,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.022
+  },
+  {
+   "symbol": "KEI",
+   "segment": "stock",
+   "score": 1.03,
+   "why": [],
+   "price": 3989.05,
+   "lot": 175.0,
+   "strike_step": 100.0,
+   "opt_premium_cr": 29.9,
+   "active_strikes": 14,
+   "fut_oi_chg_pct": 0.015
+  },
+  {
+   "symbol": "OFSS",
+   "segment": "stock",
+   "score": 1.02,
+   "why": [],
+   "price": 10215.03,
+   "lot": 50.0,
+   "strike_step": 250.0,
+   "opt_premium_cr": 15.05,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.021
+  },
+  {
+   "symbol": "FEDERALBNK",
+   "segment": "stock",
+   "score": 1.01,
+   "why": [],
+   "price": 340.1,
+   "lot": 2500.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 25.21,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.061
+  },
+  {
+   "symbol": "BANKBARODA",
+   "segment": "stock",
+   "score": 1.0,
+   "why": [],
+   "price": 250.31,
+   "lot": 2925.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 24.73,
+   "active_strikes": 27,
+   "fut_oi_chg_pct": 0.009
+  },
+  {
+   "symbol": "UPL",
+   "segment": "stock",
+   "score": 0.99,
+   "why": [],
+   "price": 534.92,
+   "lot": 1355.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 29.08,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": -0.002
+  },
+  {
+   "symbol": "HYUNDAI",
+   "segment": "stock",
+   "score": 0.98,
+   "why": [],
+   "price": 2130.0,
+   "lot": 275.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 19.9,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": -0.006
+  },
+  {
+   "symbol": "PNB",
+   "segment": "stock",
+   "score": 0.97,
+   "why": [],
+   "price": 126.54,
+   "lot": 8000.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 38.57,
+   "active_strikes": 23,
+   "fut_oi_chg_pct": -0.024
+  },
+  {
+   "symbol": "SUZLON",
+   "segment": "stock",
+   "score": 0.96,
+   "why": [],
+   "price": 38.8,
+   "lot": 12700.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 23.73,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": -0.005
+  },
+  {
+   "symbol": "NATIONALUM",
+   "segment": "stock",
+   "score": 0.95,
+   "why": [],
+   "price": 325.67,
+   "lot": 1875.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 30.43,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.007
+  },
+  {
+   "symbol": "MAZDOCK",
+   "segment": "stock",
+   "score": 0.94,
+   "why": [],
+   "price": 1840.0,
+   "lot": 225.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 17.88,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": -0.01
+  },
+  {
+   "symbol": "JSWSTEEL",
+   "segment": "stock",
+   "score": 0.94,
+   "why": [],
+   "price": 1357.1,
+   "lot": 675.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 27.07,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": -0.038
+  },
+  {
+   "symbol": "TATAELXSI",
+   "segment": "stock",
+   "score": 0.93,
+   "why": [],
+   "price": 3854.79,
+   "lot": 125.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 16.99,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.006
+  },
+  {
+   "symbol": "IOC",
+   "segment": "stock",
+   "score": 0.91,
+   "why": [],
+   "price": 146.25,
+   "lot": 4875.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 19.89,
+   "active_strikes": 31,
+   "fut_oi_chg_pct": -0.021
+  },
+  {
+   "symbol": "HINDPETRO",
+   "segment": "stock",
+   "score": 0.9,
+   "why": [],
+   "price": 387.15,
+   "lot": 2025.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 30.44,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": -0.018
+  },
+  {
+   "symbol": "NBCC",
+   "segment": "stock",
+   "score": 0.89,
+   "why": [],
+   "price": 78.01,
+   "lot": 6500.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 20.88,
+   "active_strikes": 21,
+   "fut_oi_chg_pct": 0.041
+  },
+  {
+   "symbol": "PATANJALI",
+   "segment": "stock",
+   "score": 0.88,
+   "why": [],
+   "price": 411.43,
+   "lot": 1075.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 22.96,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.001
+  },
+  {
+   "symbol": "CAMS",
+   "segment": "stock",
+   "score": 0.87,
+   "why": [],
+   "price": 711.92,
+   "lot": 825.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 11.62,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": -0.007
+  },
+  {
+   "symbol": "NESTLEIND",
+   "segment": "stock",
+   "score": 0.86,
+   "why": [],
+   "price": 1282.09,
+   "lot": 500.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 17.9,
+   "active_strikes": 26,
+   "fut_oi_chg_pct": -0.037
+  },
+  {
+   "symbol": "BDL",
+   "segment": "stock",
+   "score": 0.85,
+   "why": [],
+   "price": 1060.0,
+   "lot": 425.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 23.09,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": -0.015
+  },
+  {
+   "symbol": "MARICO",
+   "segment": "stock",
+   "score": 0.83,
+   "why": [],
+   "price": 897.75,
+   "lot": 1200.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 20.68,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.023
+  },
+  {
+   "symbol": "SHREECEM",
+   "segment": "stock",
+   "score": 0.83,
+   "why": [],
+   "price": 25100.0,
+   "lot": 25.0,
+   "strike_step": 250.0,
+   "opt_premium_cr": 4.38,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": 0.005
+  },
+  {
+   "symbol": "LICHSGFIN",
+   "segment": "stock",
+   "score": 0.82,
+   "why": [],
+   "price": 535.95,
+   "lot": 1000.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 16.11,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": -0.035
+  },
+  {
+   "symbol": "IDFCFIRSTB",
+   "segment": "stock",
+   "score": 0.81,
+   "why": [],
+   "price": 77.33,
+   "lot": 9275.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 21.84,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": -0.019
+  },
+  {
+   "symbol": "BANDHANBNK",
+   "segment": "stock",
+   "score": 0.8,
+   "why": [],
+   "price": 165.0,
+   "lot": 3600.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 28.54,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.0
+  },
+  {
+   "symbol": "NYKAA",
+   "segment": "stock",
+   "score": 0.79,
+   "why": [],
+   "price": 353.0,
+   "lot": 3125.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 35.36,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": -0.037
+  },
+  {
+   "symbol": "SBILIFE",
+   "segment": "stock",
+   "score": 0.78,
+   "why": [],
+   "price": 1784.1,
+   "lot": 375.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 11.69,
+   "active_strikes": 21,
+   "fut_oi_chg_pct": -0.037
+  },
+  {
+   "symbol": "ADANIGREEN",
+   "segment": "stock",
+   "score": 0.77,
+   "why": [],
+   "price": 1424.01,
+   "lot": 600.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 28.41,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": -0.021
+  },
+  {
+   "symbol": "IDEA",
+   "segment": "stock",
+   "score": 0.76,
+   "why": [],
+   "price": 12.76,
+   "lot": 71475.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 35.19,
+   "active_strikes": 6,
+   "fut_oi_chg_pct": -0.007
+  },
+  {
+   "symbol": "LUPIN",
+   "segment": "stock",
+   "score": 0.75,
+   "why": [],
+   "price": 1988.1,
+   "lot": 425.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 17.37,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": 0.01
+  },
+  {
+   "symbol": "CHOLAFIN",
+   "segment": "stock",
+   "score": 0.74,
+   "why": [],
+   "price": 1785.0,
+   "lot": 625.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 28.14,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": 0.026
+  },
+  {
+   "symbol": "ABCAPITAL",
+   "segment": "stock",
+   "score": 0.73,
+   "why": [],
+   "price": 398.74,
+   "lot": 1550.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 15.93,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.027
+  },
+  {
+   "symbol": "ADANIENSOL",
+   "segment": "stock",
+   "score": 0.72,
+   "why": [],
+   "price": 1457.37,
+   "lot": 675.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 32.28,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.015
+  },
+  {
+   "symbol": "DRREDDY",
+   "segment": "stock",
+   "score": 0.72,
+   "why": [],
+   "price": 1373.0,
+   "lot": 625.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 15.32,
+   "active_strikes": 24,
+   "fut_oi_chg_pct": -0.008
+  },
+  {
+   "symbol": "PGEL",
+   "segment": "stock",
+   "score": 0.71,
+   "why": [],
+   "price": 546.19,
+   "lot": 950.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 17.3,
+   "active_strikes": 14,
+   "fut_oi_chg_pct": 0.001
+  },
+  {
+   "symbol": "DMART",
+   "segment": "stock",
+   "score": 0.7,
+   "why": [],
+   "price": 3425.0,
+   "lot": 150.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 8.79,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.01
+  },
+  {
+   "symbol": "CIPLA",
+   "segment": "stock",
+   "score": 0.69,
+   "why": [],
+   "price": 1410.99,
+   "lot": 425.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 9.07,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.014
+  },
+  {
+   "symbol": "RBLBANK",
+   "segment": "stock",
+   "score": 0.67,
+   "why": [],
+   "price": 379.0,
+   "lot": 3175.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 29.42,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.022
+  },
+  {
+   "symbol": "LODHA",
+   "segment": "stock",
+   "score": 0.66,
+   "why": [],
+   "price": 1179.01,
+   "lot": 625.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 20.37,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.019
+  },
+  {
+   "symbol": "NHPC",
+   "segment": "stock",
+   "score": 0.65,
+   "why": [],
+   "price": 82.08,
+   "lot": 6950.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 12.07,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": -0.003
+  },
+  {
+   "symbol": "SBICARD",
+   "segment": "stock",
+   "score": 0.63,
+   "why": [],
+   "price": 584.98,
+   "lot": 800.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 8.81,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.008
+  },
+  {
+   "symbol": "BPCL",
+   "segment": "stock",
+   "score": 0.62,
+   "why": [],
+   "price": 319.89,
+   "lot": 1975.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 13.08,
+   "active_strikes": 14,
+   "fut_oi_chg_pct": -0.02
+  },
+  {
+   "symbol": "IRFC",
+   "segment": "stock",
+   "score": 0.61,
+   "why": [],
+   "price": 80.44,
+   "lot": 5425.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 7.8,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": -0.002
+  },
+  {
+   "symbol": "COLPAL",
+   "segment": "stock",
+   "score": 0.61,
+   "why": [],
+   "price": 1678.87,
+   "lot": 275.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 4.41,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": 0.001
+  },
+  {
+   "symbol": "JINDALSTEL",
+   "segment": "stock",
+   "score": 0.6,
+   "why": [],
+   "price": 1164.9,
+   "lot": 625.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 14.18,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": -0.008
+  },
+  {
+   "symbol": "AMBUJACEM",
+   "segment": "stock",
+   "score": 0.59,
+   "why": [],
+   "price": 390.6,
+   "lot": 1200.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 10.89,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.0
+  },
+  {
+   "symbol": "GRASIM",
+   "segment": "stock",
+   "score": 0.58,
+   "why": [],
+   "price": 3227.0,
+   "lot": 250.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 15.24,
+   "active_strikes": 20,
+   "fut_oi_chg_pct": 0.031
+  },
+  {
+   "symbol": "IREDA",
+   "segment": "stock",
+   "score": 0.57,
+   "why": [],
+   "price": 111.46,
+   "lot": 4525.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 13.12,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": -0.053
+  },
+  {
+   "symbol": "TATACONSUM",
+   "segment": "stock",
+   "score": 0.56,
+   "why": [],
+   "price": 1086.28,
+   "lot": 550.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 7.91,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.0
+  },
+  {
+   "symbol": "UNIONBANK",
+   "segment": "stock",
+   "score": 0.55,
+   "why": [],
+   "price": 187.0,
+   "lot": 4425.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 16.22,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.02
+  },
+  {
+   "symbol": "GAIL",
+   "segment": "stock",
+   "score": 0.54,
+   "why": [],
+   "price": 185.79,
+   "lot": 3550.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 8.24,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.023
+  },
+  {
+   "symbol": "NMDC",
+   "segment": "stock",
+   "score": 0.53,
+   "why": [],
+   "price": 70.39,
+   "lot": 6750.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 10.95,
+   "active_strikes": 19,
+   "fut_oi_chg_pct": -0.003
+  },
+  {
+   "symbol": "GODFRYPHLP",
+   "segment": "stock",
+   "score": 0.52,
+   "why": [],
+   "price": 1789.83,
+   "lot": 275.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 10.47,
+   "active_strikes": 14,
+   "fut_oi_chg_pct": 0.01
+  },
+  {
+   "symbol": "NAUKRI",
+   "segment": "stock",
+   "score": 0.51,
+   "why": [],
+   "price": 1191.9,
+   "lot": 550.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 11.33,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.029
+  },
+  {
+   "symbol": "MAXHEALTH",
+   "segment": "stock",
+   "score": 0.5,
+   "why": [],
+   "price": 934.0,
+   "lot": 525.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 6.73,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": 0.002
+  },
+  {
+   "symbol": "LTF",
+   "segment": "stock",
+   "score": 0.5,
+   "why": [],
+   "price": 277.49,
+   "lot": 2250.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 10.78,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.009
+  },
+  {
+   "symbol": "INDIANB",
+   "segment": "stock",
+   "score": 0.49,
+   "why": [],
+   "price": 902.0,
+   "lot": 1000.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 16.21,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.017
+  },
+  {
+   "symbol": "HDFCAMC",
+   "segment": "stock",
+   "score": 0.48,
+   "why": [],
+   "price": 2649.75,
+   "lot": 300.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 9.54,
+   "active_strikes": 22,
+   "fut_oi_chg_pct": -0.003
+  },
+  {
+   "symbol": "ICICILIFE",
+   "segment": "stock",
+   "score": 0.47,
+   "why": [],
+   "price": 438.9,
+   "lot": 925.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 7.51,
+   "active_strikes": 12,
+   "fut_oi_chg_pct": 0.009
+  },
+  {
+   "symbol": "KPITTECH",
+   "segment": "stock",
+   "score": 0.46,
+   "why": [],
+   "price": 540.38,
+   "lot": 775.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 8.39,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": 0.006
+  },
+  {
+   "symbol": "VBL",
+   "segment": "stock",
+   "score": 0.45,
+   "why": [],
+   "price": 437.99,
+   "lot": 1275.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 8.01,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.012
+  },
+  {
+   "symbol": "WAAREEENER",
+   "segment": "stock",
+   "score": 0.44,
+   "why": [],
+   "price": 2437.97,
+   "lot": 175.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 6.33,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.012
+  },
+  {
+   "symbol": "SONACOMS",
+   "segment": "stock",
+   "score": 0.43,
+   "why": [],
+   "price": 900.06,
+   "lot": 1225.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 17.44,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.016
+  },
+  {
+   "symbol": "MANAPPURAM",
+   "segment": "stock",
+   "score": 0.42,
+   "why": [],
+   "price": 325.41,
+   "lot": 3000.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 22.99,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": 0.01
+  },
+  {
+   "symbol": "IEX",
+   "segment": "stock",
+   "score": 0.4,
+   "why": [],
+   "price": 109.49,
+   "lot": 4350.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 8.01,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.028
+  },
+  {
+   "symbol": "SRF",
+   "segment": "stock",
+   "score": 0.39,
+   "why": [],
+   "price": 2460.46,
+   "lot": 200.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 4.08,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": -0.001
+  },
+  {
+   "symbol": "RVNL",
+   "segment": "stock",
+   "score": 0.39,
+   "why": [],
+   "price": 193.19,
+   "lot": 1925.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 7.16,
+   "active_strikes": 17,
+   "fut_oi_chg_pct": 0.013
+  },
+  {
+   "symbol": "MAHABANK",
+   "segment": "stock",
+   "score": 0.38,
+   "why": [],
+   "price": 86.91,
+   "lot": 6500.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 13.04,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": 0.052
+  },
+  {
+   "symbol": "INDUSTOWER",
+   "segment": "stock",
+   "score": 0.37,
+   "why": [],
+   "price": 383.09,
+   "lot": 1700.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 9.81,
+   "active_strikes": 14,
+   "fut_oi_chg_pct": 0.003
+  },
+  {
+   "symbol": "PREMIERENE",
+   "segment": "stock",
+   "score": 0.34,
+   "why": [],
+   "price": 890.05,
+   "lot": 650.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 7.92,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": 0.002
+  },
+  {
+   "symbol": "ICICIGI",
+   "segment": "stock",
+   "score": 0.33,
+   "why": [],
+   "price": 1648.94,
+   "lot": 325.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 5.28,
+   "active_strikes": 14,
+   "fut_oi_chg_pct": -0.018
+  },
+  {
+   "symbol": "GODREJCP",
+   "segment": "stock",
+   "score": 0.32,
+   "why": [],
+   "price": 850.91,
+   "lot": 500.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 5.08,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": 0.011
+  },
+  {
+   "symbol": "COCHINSHIP",
+   "segment": "stock",
+   "score": 0.31,
+   "why": [],
+   "price": 1220.0,
+   "lot": 400.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 8.79,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": 0.0
+  },
+  {
+   "symbol": "PRESTIGE",
+   "segment": "stock",
+   "score": 0.3,
+   "why": [],
+   "price": 1629.0,
+   "lot": 450.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 11.12,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.012
+  },
+  {
+   "symbol": "JSWENERGY",
+   "segment": "stock",
+   "score": 0.29,
+   "why": [],
+   "price": 524.95,
+   "lot": 1075.0,
+   "strike_step": 10.0,
+   "opt_premium_cr": 5.62,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": -0.004
+  },
+  {
+   "symbol": "ALKEM",
+   "segment": "stock",
+   "score": 0.28,
+   "why": [],
+   "price": 5297.0,
+   "lot": 125.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 8.3,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": 0.008
+  },
+  {
+   "symbol": "APLAPOLLO",
+   "segment": "stock",
+   "score": 0.27,
+   "why": [],
+   "price": 2185.3,
+   "lot": 350.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 7.07,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.007
+  },
+  {
+   "symbol": "ANANDRATHI",
+   "segment": "stock",
+   "score": 0.25,
+   "why": [],
+   "price": 2373.46,
+   "lot": 250.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 3.7,
+   "active_strikes": 14,
+   "fut_oi_chg_pct": -0.019
+  },
+  {
+   "symbol": "UNITDSPR",
+   "segment": "stock",
+   "score": 0.23,
+   "why": [],
+   "price": 1417.82,
+   "lot": 400.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 4.74,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": 0.01
+  },
+  {
+   "symbol": "GMRAIRPORT",
+   "segment": "stock",
+   "score": 0.22,
+   "why": [],
+   "price": 98.75,
+   "lot": 6975.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 8.28,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": -0.031
+  },
+  {
+   "symbol": "OIL",
+   "segment": "stock",
+   "score": 0.21,
+   "why": [],
+   "price": 443.85,
+   "lot": 1400.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 6.88,
+   "active_strikes": 18,
+   "fut_oi_chg_pct": 0.03
+  },
+  {
+   "symbol": "ENRIN",
+   "segment": "stock",
+   "score": 0.2,
+   "why": [],
+   "price": 2809.16,
+   "lot": 175.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 7.12,
+   "active_strikes": 10,
+   "fut_oi_chg_pct": 0.005
+  },
+  {
+   "symbol": "BANKINDIA",
+   "segment": "stock",
+   "score": 0.19,
+   "why": [],
+   "price": 138.57,
+   "lot": 5200.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 7.62,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": 0.018
+  },
+  {
+   "symbol": "MFSL",
+   "segment": "stock",
+   "score": 0.18,
+   "why": [],
+   "price": 1284.37,
+   "lot": 400.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 4.31,
+   "active_strikes": 16,
+   "fut_oi_chg_pct": -0.018
+  },
+  {
+   "symbol": "MANKIND",
+   "segment": "stock",
+   "score": 0.17,
+   "why": [],
+   "price": 2540.0,
+   "lot": 250.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 6.03,
+   "active_strikes": 10,
+   "fut_oi_chg_pct": -0.023
+  },
+  {
+   "symbol": "PIDILITIND",
+   "segment": "stock",
+   "score": 0.17,
+   "why": [],
+   "price": 1579.0,
+   "lot": 500.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 5.93,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.003
+  },
+  {
+   "symbol": "PNBHOUSING",
+   "segment": "stock",
+   "score": 0.16,
+   "why": [],
+   "price": 1100.07,
+   "lot": 650.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 5.62,
+   "active_strikes": 10,
+   "fut_oi_chg_pct": -0.014
+  },
+  {
+   "symbol": "PAGEIND",
+   "segment": "stock",
+   "score": 0.15,
+   "why": [],
+   "price": 35928.83,
+   "lot": 20.0,
+   "strike_step": 500.0,
+   "opt_premium_cr": 5.0,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": -0.016
+  },
+  {
+   "symbol": "PETRONET",
+   "segment": "stock",
+   "score": 0.14,
+   "why": [],
+   "price": 316.99,
+   "lot": 1900.0,
+   "strike_step": 2.5,
+   "opt_premium_cr": 4.8,
+   "active_strikes": 12,
+   "fut_oi_chg_pct": 0.003
+  },
+  {
+   "symbol": "OBEROIRLTY",
+   "segment": "stock",
+   "score": 0.13,
+   "why": [],
+   "price": 1738.99,
+   "lot": 350.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 3.86,
+   "active_strikes": 10,
+   "fut_oi_chg_pct": 0.001
+  },
+  {
+   "symbol": "UJJIVANSFB",
+   "segment": "stock",
+   "score": 0.12,
+   "why": [],
+   "price": 59.24,
+   "lot": 8000.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 5.59,
+   "active_strikes": 13,
+   "fut_oi_chg_pct": 0.035
+  },
+  {
+   "symbol": "NAM-INDIA",
+   "segment": "stock",
+   "score": 0.11,
+   "why": [],
+   "price": 1065.09,
+   "lot": 625.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 5.33,
+   "active_strikes": 15,
+   "fut_oi_chg_pct": -0.01
+  },
+  {
+   "symbol": "360ONE",
+   "segment": "stock",
+   "score": 0.09,
+   "why": [],
+   "price": 1144.97,
+   "lot": 500.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 4.44,
+   "active_strikes": 11,
+   "fut_oi_chg_pct": -0.031
+  },
+  {
+   "symbol": "KFINTECH",
+   "segment": "stock",
+   "score": 0.08,
+   "why": [],
+   "price": 915.81,
+   "lot": 575.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 4.02,
+   "active_strikes": 9,
+   "fut_oi_chg_pct": 0.006
+  },
+  {
+   "symbol": "SAGILITY",
+   "segment": "stock",
+   "score": 0.07,
+   "why": [],
+   "price": 43.46,
+   "lot": 12000.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 4.12,
+   "active_strikes": 9,
+   "fut_oi_chg_pct": 0.016
+  },
+  {
+   "symbol": "PHOENIXLTD",
+   "segment": "stock",
+   "score": 0.06,
+   "why": [],
+   "price": 2154.9,
+   "lot": 350.0,
+   "strike_step": 20.0,
+   "opt_premium_cr": 4.61,
+   "active_strikes": 11,
+   "fut_oi_chg_pct": 0.026
+  },
+  {
+   "symbol": "CUB",
+   "segment": "stock",
+   "score": 0.05,
+   "why": [],
+   "price": 219.5,
+   "lot": 2325.0,
+   "strike_step": 5.0,
+   "opt_premium_cr": 3.03,
+   "active_strikes": 8,
+   "fut_oi_chg_pct": -0.016
+  },
+  {
+   "symbol": "INOXWIND",
+   "segment": "stock",
+   "score": 0.04,
+   "why": [],
+   "price": 64.8,
+   "lot": 6400.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 3.56,
+   "active_strikes": 5,
+   "fut_oi_chg_pct": -0.022
+  },
+  {
+   "symbol": "RADICO",
+   "segment": "stock",
+   "score": 0.03,
+   "why": [],
+   "price": 4515.26,
+   "lot": 150.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 2.49,
+   "active_strikes": 10,
+   "fut_oi_chg_pct": -0.033
+  },
+  {
+   "symbol": "VMM",
+   "segment": "stock",
+   "score": -1.98,
+   "why": [
+    "thin options (fewer than 5 active strikes)"
+   ],
+   "price": 94.0,
+   "lot": 4850.0,
+   "strike_step": 1.0,
+   "opt_premium_cr": 1.76,
+   "active_strikes": 3,
+   "fut_oi_chg_pct": 0.011
+  },
+  {
+   "symbol": "KAYNES",
+   "segment": "stock",
+   "score": -1.99,
+   "why": [
+    "thin options (fewer than 5 active strikes)"
+   ],
+   "price": 3232.88,
+   "lot": 150.0,
+   "strike_step": 50.0,
+   "opt_premium_cr": 0.01,
+   "active_strikes": 0,
+   "fut_oi_chg_pct": -0.002
+  }
+ ],
+ "record_plan": {
+  "budget": 9000,
+  "used": 5886,
+  "names": 223,
+  "of": 223,
+  "plan": [
+   {
+    "symbol": "NIFTY",
+    "strikes_each_side": 20,
+    "expiries": 2,
+    "tokens": 166
+   },
+   {
+    "symbol": "HINDALCO",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "BANKNIFTY",
+    "strikes_each_side": 20,
+    "expiries": 2,
+    "tokens": 166
+   },
+   {
+    "symbol": "MIDCPNIFTY",
+    "strikes_each_side": 20,
+    "expiries": 2,
+    "tokens": 166
+   },
+   {
+    "symbol": "FINNIFTY",
+    "strikes_each_side": 20,
+    "expiries": 2,
+    "tokens": 166
+   },
+   {
+    "symbol": "NIFTYNXT50",
+    "strikes_each_side": 20,
+    "expiries": 2,
+    "tokens": 166
+   },
+   {
+    "symbol": "TATASTEEL",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "SIEMENS",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "DATAPATTNS",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "BOSCHLTD",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "DIVISLAB",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "VOLTAS",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "COROMANDEL",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "JUBLFOOD",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "HDFCBANK",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "ICICIBANK",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "BRITANNIA",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "KALYANKJIL",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "ETERNAL",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "ANGELONE",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "DABUR",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "MOTILALOFS",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "TECHM",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "M&M",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "RELIANCE",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "SBIN",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "TITAN",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "BHARTIARTL",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "INFY",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "TCS",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "SYRMA",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "MCX",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "AXISBANK",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "ITC",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "MARUTI",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "CUMMINSIND",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "MPHASIS",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "SOLARINDS",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "CDSL",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "GLENMARK",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "ASTRAL",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "BSE",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "CGPOWER",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "INDUSINDBK",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "PIIND",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "BAJAJ-AUTO",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "KOTAKBANK",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "TIINDIA",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "BAJFINANCE",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "YESBANK",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "ADANIPORTS",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "LT",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "NTPC",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "DIXON",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "SUNPHARMA",
+    "strikes_each_side": 10,
+    "expiries": 1,
+    "tokens": 44
+   },
+   {
+    "symbol": "HAL",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ASIANPAINT",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ADANIPOWER",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "MOTHERSON",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "JIOFIN",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ONGC",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "INDIGO",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "BEL",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "BHEL",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "TATAPOWER",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "APOLLOHOSP",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "BHARATFORG",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ADANIENT",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "HAVELLS",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "POWERINDIA",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "HCLTECH",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "TMPV",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "HDFCLIFE",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "LICI",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ASHOKLEY",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "WIPRO",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "COALINDIA",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "GVT&D",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ABB",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "COFORGE",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "NAVINFLUOR",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "MUTHOOTFIN",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "AUBANK",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "SHRIRAMFIN",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "BAJAJFINSV",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "PFC",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "EICHERMOT",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "CONCOR",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "TVSMOTOR",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "HINDUNILVR",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "SWIGGY",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "PERSISTENT",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "VEDL",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ULTRACEMCO",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "RECLTD",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ATHERENERG",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "DELHIVERY",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "POLYCAB",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "POLICYBZR",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "AMBER",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "HEROMOTOCO",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "DLF",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "BLUESTARCO",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "FORCEMOT",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "PAYTM",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "TRENT",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "FORTIS",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "CANBK",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "LTM",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "CROMPTON",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "UNOMINDA",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "POWERGRID",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "ZYDUSLIFE",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "TORNTPHARM",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "LAURUSLABS",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "INDHOTEL",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "SAIL",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "HINDZINC",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "BIOCON",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "GODREJPROP",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "AUROPHARMA",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "KARURVYSYA",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "SUPREMEIND",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "KEI",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "OFSS",
+    "strikes_each_side": 5,
+    "expiries": 1,
+    "tokens": 24
+   },
+   {
+    "symbol": "FEDERALBNK",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "BANKBARODA",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "UPL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "HYUNDAI",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PNB",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "SUZLON",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "NATIONALUM",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "MAZDOCK",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "JSWSTEEL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "TATAELXSI",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "IOC",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "HINDPETRO",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "NBCC",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PATANJALI",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "CAMS",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "NESTLEIND",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "BDL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "MARICO",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "SHREECEM",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "LICHSGFIN",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "IDFCFIRSTB",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "BANDHANBNK",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "NYKAA",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "SBILIFE",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "ADANIGREEN",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "IDEA",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "LUPIN",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "CHOLAFIN",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "ABCAPITAL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "ADANIENSOL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "DRREDDY",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PGEL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "DMART",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "CIPLA",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "RBLBANK",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "LODHA",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "NHPC",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "SBICARD",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "BPCL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "IRFC",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "COLPAL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "JINDALSTEL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "AMBUJACEM",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "GRASIM",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "IREDA",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "TATACONSUM",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "UNIONBANK",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "GAIL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "NMDC",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "GODFRYPHLP",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "NAUKRI",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "MAXHEALTH",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "LTF",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "INDIANB",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "HDFCAMC",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "ICICILIFE",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "KPITTECH",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "VBL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "WAAREEENER",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "SONACOMS",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "MANAPPURAM",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "IEX",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "SRF",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "RVNL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "MAHABANK",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "INDUSTOWER",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PREMIERENE",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "ICICIGI",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "GODREJCP",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "COCHINSHIP",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PRESTIGE",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "JSWENERGY",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "ALKEM",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "APLAPOLLO",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "ANANDRATHI",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "UNITDSPR",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "GMRAIRPORT",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "OIL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "ENRIN",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "BANKINDIA",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "MFSL",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "MANKIND",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PIDILITIND",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PNBHOUSING",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PAGEIND",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PETRONET",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "OBEROIRLTY",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "UJJIVANSFB",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "NAM-INDIA",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "360ONE",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "KFINTECH",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "SAGILITY",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "PHOENIXLTD",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "CUB",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "INOXWIND",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "RADICO",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "VMM",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   },
+   {
+    "symbol": "KAYNES",
+    "strikes_each_side": 2,
+    "expiries": 1,
+    "tokens": 12
+   }
+  ]
+ },
+ "history": {
+  "events": 712,
+  "calendar": 182,
+  "inferred": 530,
+  "from": "2024-12-19",
+  "to": "2026-11-05"
+ },
+ "health": {
+  "history": "ok 712 events",
+  "yahoo": "ok 18 of 18",
+  "rss:ET Markets": "ok 50",
+  "rss:ET Stocks": "ok 50",
+  "rss:Moneycontrol": "ok 4",
+  "rss:Moneycontrol latest": "ok 15",
+  "rss:Mint Markets": "ok 35",
+  "rss:Business Standard": "ok 35",
+  "rss:Google News India": "ok 60",
+  "rss:Google News Macro": "ok 60",
+  "rss:RBI": "ok 0",
+  "rss:Google News World": "ok 60"
+ },
+ "not_for": "context only: places nothing, sizes nothing; labels are untested hypotheses",
+ "summary": [
+  "Session Mon 09 Nov 2026; last close 2026-11-06.",
+  "Options expire today: NIFTY.",
+  "Macro: nothing scheduled.",
+  "Results: 9 F&O companies report today or react today (7 no history, 2 no implied move).",
+  "Overnight: S&P 500 futures +0.3%, Nasdaq 100 futures +1.2%, S&P 500 +0.3%, Nasdaq Composite +1.1%, Dow Jones -0.5%, Nikkei 225 -6.0%.",
+  "Watch first: HINDALCO (reacts today to results after the last close, in the news: Hindalco shares jump 22% in a year: Should you buy or sell after Q2 results 2026? What bro); TATASTEEL (reacts today to results after the last close, among the most traded options); SIEMENS (reacts today to results after the last close); DATAPATTNS (reacts today to results after the last close, futures OI rose 18% yesterday); BOSCHLTD (reacts today to results after the last close)."
+ ]
+}
