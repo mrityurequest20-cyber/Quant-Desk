@@ -115,7 +115,7 @@ def test_config_lists_the_stocks_and_the_stock_minute_window():
     cfg = Config.load(DEFAULT_CONFIG)
     S = W.settings(cfg)
     assert S["stock_minutes"] is True and S["stock_minute_strikes"] == 5 and S["stock_minute_expiries"] == 2
-    assert len(S["stocks"]) == 20
+    assert len(S["stocks"]) == 80
     assert B.asset_plan(len(S["indices"]), len(S["stocks"]), S["stock_group_size"], S["shard_trading_days"], S["asset_cap"])["fits"]
 
 

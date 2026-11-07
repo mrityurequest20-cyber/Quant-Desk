@@ -19,7 +19,7 @@ The header pill shows the live feeds' state on every tab (Live, Delayed, No feed
 |---|---|---|---|
 | Index and futures minutes, option-chain snapshot a minute, chain tape | 09:15 to 15:30 | Parquet on the `chains-YYYY` releases | Data health (19:00, 22:15) |
 | Kite ticks with depth | to 14:45, then 14:45 to 15:32 (two chained jobs) | encrypted artifacts (never published) | arrival only: the content is encrypted |
-| Stock option chains (once, 15:25), five indices' minutes, and **stock option minutes** (±5 strikes, nearest 2 expiries, 20 stocks) | 15:25, 15:45 | releases (`option-minutes-*`) | Data health (the stock option minutes since 7 Nov) |
+| Stock option chains (once, 15:25), five indices' minutes, and **stock option minutes** (±5 strikes, nearest 2 expiries, 80 stocks since 7 Nov) | 15:25, 15:45 | releases (`option-minutes-*`) | Data health (the stock option minutes since 7 Nov) |
 | Stock cash, near-month and **next-month** futures minutes (50 stocks; the next month is a separate file, `stocks_futures_next`, built 7 Nov) | after the close | `stock-minutes-*` | Data health |
 | FX majors and rupee crosses: 1-minute bars (the last 5 days re-read each night) and daily history from 2003 | `fx-minutes.yml` (22:30 UTC weekdays), `fx-daily.yml` (by hand) | `fx-minutes-YYYY`, `fx-daily` | Data health; the daily series also checked against the ECB's reference rates |
 | MCX and currency evening minutes (nearest two futures of each name, with open interest) | `kite-evening.yml`, 00:05 IST Tue to Sat, from Kite's historical API (built 7 Nov, **not yet run on a real session**); Kotak's candle API cannot do it (HTTP 422), so `evening-minutes.yml` stays a manual tool | encrypted artifact (`kite-evening-data`, licensed data) plus a counts-only manifest on `evening-minutes-YYYY` | Data health (the manifest) |
@@ -40,7 +40,7 @@ The header pill shows the live feeds' state on every tab (Live, Delayed, No feed
 4. **Kite and Kotak agreement is now stored (built 7 Nov, not yet run).** The relay tallies it every cycle of the session and `agreement.yml` keeps one file a day (counts only); Data health judges it. It starts counting once the Worker redeploys and the Kotak poller is on. What it does not do: compare the recorded minute bars of the two sources, only the live prices.
 5. **The Today tab depends on the `premarket` branch.** It had never been built (the workflow had never run); a manual run on 7 Nov created it and the brief is public. It rebuilds every weekday from 05:30 IST.
 7. **The Kite recorder has never recorded a session.** All five earlier runs started after the close; Monday 9 Nov is the first run of the automatic login, and the scheduler starts it once a day and never retries (a wrong password retried would lock the account).
-8. **Stock option breadth.** Minute candles cover 20 stocks of about 200.
+8. **Stock option breadth.** Minute candles and the 15:25 chain snapshot cover 80 stocks of about 200 (widened from 20 on 7 Nov; `collect_wide.stocks_extra`). The 60 new names have not run yet: a name Kotak does not know shows as FAILED for that stock in the manifest and Data health, and is pruned from what the first runs report.
 6. The Kite tick content cannot be checked by the health run (encrypted); `kite-compare` measures it separately.
 
 Next, in this order: record past 15:32 for MCX and currency (a separate live-only workflow with its own concurrency group, leaving the pre-registered Kite trial alone), then a stored daily agreement number between the two sources, then daily-history charts.

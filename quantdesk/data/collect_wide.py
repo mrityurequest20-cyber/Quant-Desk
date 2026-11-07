@@ -31,6 +31,7 @@ from ..intraday.feeds import IST, session_bounds
 DEFAULTS = {
     "indices": ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY"],
     "stocks": [],
+    "stocks_extra": [],           # more stocks for the chain snapshot and the option minutes only (daily history reads `stocks` alone); appended after `stocks`
     "stock_expiries": 1,          # nearest N expiries per stock (stock options are monthly)
     "stock_strikes": 20,          # strikes each side of the money
     "minute_days": 3,             # days back each evening (overlap heals a missed day; Kotak serves ~30)
@@ -54,7 +55,7 @@ def settings(cfg) -> dict:
     raw = (cfg.get("collect_wide") if cfg is not None else None) or {}
     out = {**DEFAULTS, **{k: v for k, v in raw.items() if k in DEFAULTS}}
     out["indices"] = [str(x).upper() for x in out["indices"]]
-    out["stocks"] = [str(x).upper() for x in out["stocks"]]
+    out["stocks"] = list(dict.fromkeys(str(x).upper() for x in [*out["stocks"], *out["stocks_extra"]]))      # the original list first: a day's groups never reshuffle
     return out
 
 

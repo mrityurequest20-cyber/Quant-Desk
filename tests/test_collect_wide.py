@@ -23,11 +23,17 @@ def test_release_tags_are_quarterly_and_yearly():
     assert W.release_tag("chains", dt.date(2026, 10, 19), "year") == "chains-2026"
 
 
-def test_shipped_config_lists_five_indices_and_twenty_stocks():
+def test_shipped_config_lists_five_indices_and_eighty_stocks_the_original_twenty_first():
     cfg = Config.load(DEFAULT_CONFIG)
     S = W.settings(cfg)
     assert S["indices"] == ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY"]
-    assert len(S["stocks"]) == 20 and len(set(S["stocks"])) == 20 and S["shard"] == "quarter"
+    raw = [str(x).upper() for x in cfg.get("collect_wide.stocks")]
+    assert len(raw) == 20 and S["stocks"][:20] == raw                                                  # the original twenty keep their order and their groups
+    assert len(S["stocks"]) == 80 and len(set(S["stocks"])) == 80 and S["shard"] == "quarter"
+    assert all(re.fullmatch(r"[A-Z0-9&-]{2,20}", x) for x in S["stocks"])                              # a plain Kotak underlying name each
+    plan = B.asset_plan(len(S["indices"]), len(S["stocks"]), S["stock_group_size"], S["shard_trading_days"], S["asset_cap"])
+    assert plan["fits"] and plan["per_shard"] <= S["asset_cap"]                                         # 80 stocks still fit a quarter's release under the asset cap
+    assert W.settings(type("C", (), {"get": lambda self, k: {"stocks": ["A", "B"], "stocks_extra": ["B", "c"]}})())["stocks"] == ["A", "B", "C"]
     assert S["min_gap_sec"] >= 0.06 and set(S["indices"]) <= set(cfg.get("instruments"))
 
 
