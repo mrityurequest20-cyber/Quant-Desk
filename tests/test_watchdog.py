@@ -342,3 +342,58 @@ def test_the_alert_workflow_is_least_privilege_and_never_expands_inputs_into_a_s
     assert "exit 1" in script                                                      # bad severity/day/check is refused
 
 
+
+
+LIVE_HEAD = r"""
+const secrets = { LIVE_INGEST_TOKEN: "i".repeat(30), LIVE_READ_TOKEN: "r".repeat(30), KOTAK_CONSUMER_KEY: "k".repeat(20) };
+const health = (h) => ({ idFromName: () => "b", get: () => ({ fetch: async () => new Response(JSON.stringify(h)) }) });
+const H = (o = {}) => ({ now: 1, names: 900, kite: { n: 700, newest_age_s: 3 }, kotak: { configured: true, status: "ok", n: 400, newest_age_s: 4, universe: { asof: "2026-10-23", quotes: 400, chains: 8 } }, both: 300, disagree: 2, ...o });
+const live = (h, extra = {}) => env({ ...secrets, LIVE: health(h), ...extra });
+"""
+
+
+@NODE
+def test_the_live_feed_checks_say_when_nothing_or_only_one_source_is_arriving(tmp_path):
+    out = _node(tmp_path, HEAD + LIVE_HEAD + r"""
+const D = "2026-10-23";
+out.ok = alerts(await at(D + "T11:00:00", live(H())));
+out.none = alerts(await at(D + "T11:00:00", live(H({ kite: { n: 700, newest_age_s: 900 }, kotak: { configured: true, status: "ok", n: 400, newest_age_s: 400 } }))));
+out.empty = alerts(await at(D + "T09:50:00", live(H({ kite: { n: 0, newest_age_s: null }, kotak: { configured: true, status: "idle", n: 0, newest_age_s: null } }))));
+out.kiteDown = alerts(await at(D + "T13:00:00", live(H({ kite: { n: 700, newest_age_s: 700 } }))));
+out.kotakDown = alerts(await at(D + "T13:00:00", live(H({ kotak: { configured: true, status: "down", n: 400, newest_age_s: 500 } }))));
+out.kotakOffKiteOk = alerts(await at(D + "T13:00:00", live(H({ kotak: { configured: false, status: "off", n: 0, newest_age_s: null } }))));
+out.auth = alerts(await at(D + "T15:10:00", live(H({ kotak: { configured: true, status: "auth", n: 400, newest_age_s: 500 }, kite: { n: 700, newest_age_s: 2 } }))));
+out.disagree = alerts(await at(D + "T11:00:00", live(H({ both: 300, disagree: 60 }))));
+out.fewBoth = alerts(await at(D + "T11:00:00", live(H({ both: 10, disagree: 9 }))));
+out.weekend = alerts(await at("2026-10-24T11:00:00", live(H({ kite: { n: 0, newest_age_s: null }, kotak: { configured: true, status: "idle", n: 0, newest_age_s: null } }))));
+out.holiday = alerts(await at("2026-10-20T11:00:00", live(H({ kite: { n: 0, newest_age_s: null } }))));
+out.notOn = alerts(await at(D + "T11:00:00", env({ LIVE: health(H({ kite: { n: 0, newest_age_s: null } })) })));          // the live view is not switched on: nothing to watch, no alert
+const r = await at(D + "T11:00:00", live(H({ kite: { n: 0, newest_age_s: null }, kotak: { configured: true, status: "down", n: 0, newest_age_s: null } })));
+out.p1 = { push: pushes(r).length, email: emails(r).length };
+out.body = r.results.flatMap((x) => x.alerts.map((a) => a.body)).join(" ");
+console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
+""")
+    assert out["ok"] == [] and out["fewBoth"] == [] and out["weekend"] == [] and out["holiday"] == [] and out["notOn"] == []
+    assert out["none"] == ["P1 W10 Live prices: no source is delivering"] and out["empty"] == ["P1 W10 Live prices: no source is delivering"]
+    assert out["kiteDown"] == ["P2 W10 Live prices: only Kotak is delivering"] and out["kotakDown"] == ["P2 W10 Live prices: only Kite is delivering"]
+    assert out["kotakOffKiteOk"] == []                                              # Kotak not configured: Kite alone is the normal state, not a fault
+    assert out["auth"] == ["P1 W10 Kotak refused the consumer key"] or "P1 W10 Kotak refused the consumer key" in out["auth"]
+    assert out["disagree"] == ["P2 W10 Live prices: Kite and Kotak disagree"]
+    assert out["p1"]["push"] == 1 and out["p1"]["email"] == 1 and "Kite: 0 instruments" in out["body"]
+
+
+@NODE
+def test_the_kotak_universe_check_and_that_no_secret_reaches_an_alert(tmp_path):
+    out = _node(tmp_path, HEAD + LIVE_HEAD + r"""
+const D = "2026-10-23";
+out.today = alerts(await at(D + "T09:30:00", live(H())));
+out.stale = alerts(await at(D + "T09:30:00", live(H({ kotak: { configured: true, status: "no universe", n: 0, newest_age_s: null, universe: { asof: "2026-10-22", quotes: 1, chains: 1 } } }))));
+out.missing = alerts(await at(D + "T09:30:00", live(H({ kotak: { configured: true, status: "no universe", n: 0, newest_age_s: null, universe: null } }))));
+out.off = alerts(await at(D + "T09:30:00", live(H({ kotak: { configured: false, status: "off", n: 0, newest_age_s: null, universe: null } }))));
+const r = await at(D + "T09:30:00", live(H({ kotak: { configured: true, status: "no universe", n: 0, newest_age_s: null, universe: null } })));
+out.leak = JSON.stringify(r.calls.map((c) => [c.url, c.headers, c.body])).includes("k".repeat(20)) || JSON.stringify(r.calls.map((c) => [c.url, c.headers, c.body])).includes("r".repeat(30));
+console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
+""")
+    assert out["today"] == [] and out["off"] == []
+    assert out["stale"] == ["P2 W11 Kotak universe is not today's"] and out["missing"] == ["P2 W11 Kotak universe is not today's"]
+    assert out["leak"] is False
