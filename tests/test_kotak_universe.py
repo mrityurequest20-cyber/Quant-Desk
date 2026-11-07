@@ -41,10 +41,10 @@ class FakeClient:
 
 @pytest.fixture
 def master(monkeypatch):
-    rows = [{"pSymbolName": n, "pInstType": "FUTSTK", "pAssetCode": 100 + i} for i, n in enumerate(("RELIANCE", "TCS", "M&M", "BAJAJ-AUTO", "NO TOKEN CO"))]
+    rows = [{"pSymbolName": n, "pInstType": "FUTSTK", "pAssetCode": 100 + i} for i, n in enumerate(("RELIANCE", "TCS", "M&M", "BAJAJ-AUTO", "NOTOKENCO"))]
     rows += [{"pSymbolName": "NIFTY", "pInstType": "FUTIDX", "pAssetCode": 999}, {"pSymbolName": "RELIANCE", "pInstType": "OPTSTK", "pAssetCode": 100}]
     df = pd.DataFrame(rows)
-    df.loc[df["pSymbolName"] == "NO TOKEN CO", "pAssetCode"] = 0
+    df.loc[df["pSymbolName"] == "NOTOKENCO", "pAssetCode"] = 0
     monkeypatch.setattr(KU, "scrip_master", lambda client, name="nse_fo": df)
     return df
 
@@ -60,7 +60,7 @@ def test_the_universe_lists_indices_stocks_futures_and_chains_by_the_names_the_k
     for n in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "INDIAVIX", "SENSEX", "BANKEX"):
         assert q[n]["s"] == "idx" and q[n]["one"] is True                                    # asked for by name, one to a call
     assert q["NIFTY"]["g"] == "nse_cm" and q["SENSEX"]["g"] == "bse_cm" and q["NIFTY"]["t"] == "Nifty 50"
-    assert {n for n, v in q.items() if v["s"] == "eq"} == {"RELIANCE", "TCS", "M&M", "BAJAJ-AUTO"}      # NO TOKEN CO has no cash token: skipped, counted
+    assert {n for n, v in q.items() if v["s"] == "eq"} == {"RELIANCE", "TCS", "M&M", "BAJAJ-AUTO"}      # NOTOKENCO has no cash token: skipped, counted
     assert q["RELIANCE"]["g"] == "nse_cm" and q["RELIANCE"]["t"] == "100"
     assert {"RELIANCE-FUT", "TCS-FUT", "M&M-FUT", "BAJAJ-AUTO-FUT", "NIFTY-FUT", "BANKNIFTY-FUT", "FINNIFTY-FUT", "MIDCPNIFTY-FUT"} <= set(q)
     assert q["RELIANCE-FUT"]["s"] == "fut" and q["RELIANCE-FUT"]["g"] == "nse_fo" and q["RELIANCE-FUT"]["t"].isdigit()
@@ -227,3 +227,13 @@ def test_the_workflow_is_read_only_pinned_and_holds_the_secrets_only_in_its_one_
     assert len(holders) == 1 and set(holders[0]["env"]) == {"KOTAK_CONSUMER_KEY", "LIVE_URL", "LIVE_INGEST_TOKEN"}
     assert holders[0]["run"].strip() == "python -m quantdesk data kotak-universe --push"
     assert sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KOTAK_CONSUMER_KEY", "LIVE_INGEST_TOKEN"]
+
+
+def test_a_scrip_master_name_that_is_not_a_plain_symbol_never_reaches_the_output(monkeypatch):
+    """N5 of the #210 review: names come from a CSV and the gap lines are printed as workflow lines, so a '::' or a newline in one must go nowhere."""
+    rows = [{"pSymbolName": n, "pInstType": "FUTSTK", "pAssetCode": 200 + i} for i, n in enumerate(("GOOD", "::error::x", "BAD\nNAME", "SPACED NAME"))]
+    monkeypatch.setattr(KU, "scrip_master", lambda client, name="nse_fo": pd.DataFrame(rows))
+    u = KU.build(FakeClient(), TODAY, say=lambda *a: None)
+    text = json.dumps(u)
+    assert "::ERROR::X" not in text.upper() and "BAD" not in text and "SPACED" not in text
+    assert any(q["n"] == "GOOD" for q in u["quotes"])

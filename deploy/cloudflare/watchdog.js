@@ -178,15 +178,16 @@ async function w10LiveFeed(c) {
 	const kite = h.kite && h.kite.n > 0 && h.kite.newest_age_s !== null && h.kite.newest_age_s <= LIVE_ALIVE_S;
 	const kotak = h.kotak && h.kotak.n > 0 && h.kotak.newest_age_s !== null && h.kotak.newest_age_s <= LIVE_ALIVE_S;
 	const state = `Kite: ${h.kite ? h.kite.n : 0} instruments, newest ${when(h.kite && h.kite.newest_age_s)}. Kotak: ${h.kotak && h.kotak.configured ? ascii(h.kotak.status, 20) : "not switched on"}, ${h.kotak ? h.kotak.n : 0} instruments, newest ${when(h.kotak && h.kotak.newest_age_s)}.`;
+	const refused = !!(h.kotak && h.kotak.status === "auth" && (h.kotak.consecutive_auth || 0) >= 2);          // two refused cycles in a row: one gateway blip does not page
 	const out = [];
 	if (!kite && !kotak) {
 		out.push({ sev: "P1", check: "W10", title: "Live prices: no source is delivering", link: "",
 			body: `At ${c.now.hhmm} IST no live price has arrived in the last ${LIVE_ALIVE_S / 60} minutes from either source. ${state}` });
-	} else if (kite !== kotak && h.kotak && h.kotak.configured) {
+	} else if (kite !== kotak && h.kotak && h.kotak.configured && !refused) {          // a refused key has its own alert below: not a second one
 		out.push({ sev: "P2", check: "W10", title: `Live prices: only ${kite ? "Kite" : "Kotak"} is delivering`, link: "",
 			body: `The other source has gone quiet; the app is running on one source. ${state}` });
 	}
-	if (h.kotak && h.kotak.status === "auth") {
+	if (refused) {
 		out.push({ sev: "P1", check: "W10", title: "Kotak refused the consumer key", link: "", body: `The relay's Kotak poller was refused at ${c.now.hhmm} IST: the key is wrong, revoked or expired. Kite alone is carrying the live view. ${state}` });
 	}
 	if (kite && kotak && h.both >= 20 && h.disagree / h.both > 0.05) {
@@ -203,7 +204,7 @@ async function w11KotakUniverse(c) {
 	const asof = h.kotak.universe && h.kotak.universe.asof;
 	if (asof === c.now.date) return [];
 	return [{ sev: "P2", check: "W11", title: "Kotak universe is not today's", link: actionsUrl(c.env, "kotak-universe.yml"),
-		body: `At ${c.now.hhmm} IST the Kotak poller's universe is ${asof ? `from ${asof}` : "missing"}. The relay asks GitHub to rebuild it every 40 minutes; check the Kotak universe workflow.` }];
+		body: `At ${c.now.hhmm} IST the Kotak poller's universe is ${asof ? `from ${asof}` : "missing"}. The relay asks GitHub for a rebuild (at most once in 40 minutes, and only if its dispatch token is set); check the Kotak universe workflow.` }];
 }
 
 // W8: the Saturday digest
