@@ -17,6 +17,10 @@ kept, unchanged, on the branches `archive/pre-cleanup-2026-11-06` and `archive/p
 
 | File | What it is |
 |---|---|
+| `quantdesk/paper` | The paper desk's money and brakes: the account with a hash-chained ledger, the risk gate (loss caps, kill switch, fail-closed checks) and the paper broker. Long options only; paper money only |
+| `quantdesk/markets` | The market map: which segment trades when, the MCX close that follows the US clock change, and the chained jobs that cover a day (`python -m quantdesk markets today\|plan`) |
+| `quantdesk/data/health.py` | Data health: did each data channel deliver today and is it sane, with the quarantine rule for corrupt chain rows (`python -m quantdesk data health`, `docs/DATA_HEALTH.md`) |
+| `quantdesk/data/live_push.py`, `deploy/cloudflare/live.js` | The live view: the recorder's latest prices pushed every 5 s to a private relay and shown in the app's Live tab (`docs/LIVE.md`) |
 | [RECORDING.md](RECORDING.md) | The session recorder (`record.yml`): what it records, where it goes |
 | [WATCHDOG.md](WATCHDOG.md) | The Cloudflare watchdog: which jobs it checks and when it alerts |
 | [EXTERNAL_DATA.md](EXTERNAL_DATA.md) | The imported index-minute dataset and its restrictions |

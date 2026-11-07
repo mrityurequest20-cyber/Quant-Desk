@@ -3,6 +3,7 @@
   update   fetch every missing day in a range (default: the last 10 days) and today's API snapshots;
            with --release, pull the files it touches from the GitHub release first and push what changed
   status   what the warehouse holds: rows, first/last day, gaps; NSE's holiday list vs the config's
+  health   did each data channel deliver today, and is it sane? (read-only; exit 1 if a critical one is bad or missing)
 """
 from __future__ import annotations
 
@@ -86,6 +87,24 @@ def cmd_status(cfg, a):
         print(f"\nHoliday list check ({year}): config/quantdesk.yaml matches NSE's F&O holidays.")
 
 
+def cmd_health(cfg, a):
+    import datetime as _dt
+    from . import health as H
+    store = H.GitHubStore(a.repo, os.environ.get("GITHUB_TOKEN") or None)
+    now = _dt.datetime.now(H.IST)
+    day = _dt.date.fromisoformat(a.day) if a.day else now.date()
+    rep = H.build_report(store, cfg, day, now)
+    if a.json:
+        print(json.dumps(rep.to_dict(), indent=1, default=str))
+    else:
+        print(rep.markdown())
+    if a.summary and os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+            f.write(rep.markdown() + "\n")
+    if rep.failed():
+        raise SystemExit(1)
+
+
 def cmd_archive(cfg, a):
     from .archive import archive
     from .warehouse import ReleaseStore
@@ -163,6 +182,11 @@ def register(sub):
     x.add_argument("--out", help="output root (default runtime/external)")
     x.add_argument("--n", type=int, default=80, help="sessions sampled per symbol")
     x.set_defaults(fn=cmd_external_verify)
+    x = ss.add_parser("kotak-universe", help="build the list of instruments the relay's Kotak poller fetches (F&O stocks and futures, indices, index chains) and push it to the relay (env KOTAK_CONSUMER_KEY, LIVE_URL, LIVE_INGEST_TOKEN)")
+    x.add_argument("--push", action="store_true", help="send it to the relay; without this only the counts are printed")
+    x.add_argument("--out", help="also write the universe JSON to this file (no key, no token in it)")
+    x.add_argument("--fut-limit", type=int, help="look up only this many futures (a dry run)")
+    x.set_defaults(fn=cmd_kotak_universe)
     x = ss.add_parser("kotak-backfill", help="1-minute option, index and futures candles from Kotak (~30 days back): "
                                              "the intraday option history no free source has (traded bars, not quotes)")
     x.add_argument("--days", type=int, default=30)
@@ -207,6 +231,12 @@ def register(sub):
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")
     x.add_argument("--all", action="store_true", help="with --release: pull every table (large)")
     x.set_defaults(fn=cmd_status)
+    x = ss.add_parser("health", help="did each data channel deliver, and is it sane? read-only; exit 1 if a critical channel is bad or missing")
+    x.add_argument("--day", help="YYYY-MM-DD (default today, IST)")
+    x.add_argument("--repo", default="mrityurequest20-cyber/Quant-Desk", help="the GitHub repository whose releases and branches are read")
+    x.add_argument("--json", action="store_true")
+    x.add_argument("--summary", action="store_true", help="also append the table to $GITHUB_STEP_SUMMARY")
+    x.set_defaults(fn=cmd_health)
 
 
 def _kite_authority_ended(today=None) -> bool:
@@ -550,6 +580,35 @@ def cmd_external_verify(cfg, a):
         raise SystemExit("no imported external dataset: run `data external-import` first")
     r = X.verify(ds, n=a.n)
     print(f"{ds.name}: {r['status']}")
+
+
+def cmd_kotak_universe(cfg, a):
+    import datetime as _dt
+
+    from ..intraday.kotak import KotakClient, KotakError
+    from . import kotak_universe as KU
+    key = (os.environ.get("KOTAK_CONSUMER_KEY") or "").strip()
+    if not key:
+        raise SystemExit("kotak-universe: no KOTAK_CONSUMER_KEY")
+    try:
+        u = KU.build(KotakClient(key), _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=5, minutes=30))).date(), fut_limit=a.fut_limit)
+    except KotakError as e:
+        raise SystemExit(f"kotak-universe: {type(e).__name__}: Kotak refused or could not answer") from None
+    if not u["quotes"] and not u["chains"]:
+        raise SystemExit("kotak-universe: nothing could be built (" + "; ".join(u["errors"][:5]) + ")")
+    for e in u["errors"][:20]:
+        print(f"::warning::kotak-universe: {e}")
+    if a.out:
+        Path(a.out).write_text(json.dumps(u, indent=1))
+    if a.push:
+        live_url, token = (os.environ.get("LIVE_URL") or "").strip(), (os.environ.get("LIVE_INGEST_TOKEN") or "").strip()
+        if not (live_url and token):
+            raise SystemExit("kotak-universe: --push needs LIVE_URL and LIVE_INGEST_TOKEN")
+        try:
+            ans = KU.push(u, live_url, token)
+        except (ValueError, RuntimeError) as e:
+            raise SystemExit(f"kotak-universe: {e}") from None
+        print(f"kotak-universe: pushed to the relay: {ans.get('quotes')} instruments, {ans.get('chains')} chains; poller configured on the relay: {ans.get('kotak')}")
 
 
 def cmd_kite_token(cfg, a):

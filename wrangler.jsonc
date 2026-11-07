@@ -10,6 +10,13 @@
     "ORIGIN": "https://mrityurequest20-cyber.github.io/Quant-Desk"
   },
   "observability": { "enabled": true },
+  // The live price relay (deploy/cloudflare/live.js): one Durable Object holds the latest snapshot the Kite recorder pushes every 5 seconds.
+  // It needs two Worker secrets, LIVE_INGEST_TOKEN (what the recorder sends) and LIVE_READ_TOKEN (the key typed once into the app's Live tab),
+  // each at least 24 characters and different from each other; without them /live/* answers 503 and stores nothing.
+  // A third secret, KOTAK_CONSUMER_KEY (the Kotak Neo market-data key, no orders), lets the same object poll Kotak itself on a Durable Object alarm every ~5 s
+  // (deploy/cloudflare/kotak.js, docs/LIVE.md): the second live source, with no GitHub runner in its path. Without it the poller stays off.
+  "durable_objects": { "bindings": [{ "name": "LIVE", "class_name": "LiveBoard" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveBoard"] }],
   // the desk's alarm clock (worker.js): ask GitHub to run scheduler.yml every 10 minutes, 07:30-15:20 IST, Mon-Fri, and
   // once on Sunday at 17:30 IST as a weekly check that the token still works (scheduler.py does nothing on a Sunday).
   // Cloudflare numbers weekdays 1 = Sunday … 7 = Saturday (not 0 = Sunday), so the days are written by name: "1-5" here

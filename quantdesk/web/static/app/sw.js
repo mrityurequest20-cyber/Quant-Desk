@@ -21,6 +21,7 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
 	const req = e.request;
 	if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
+	if (new URL(req.url).pathname.includes("/live/")) return;         // live prices are private and must never be cached or served stale offline
 	if (/\/fonts\/[^/]+\.woff2$/.test(new URL(req.url).pathname)) {
 		e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => keep(req, res))));
 		return;

@@ -436,8 +436,12 @@ def test_the_token_workflow_writes_one_encrypted_file_to_one_branch_and_nothing_
     import check_workflows
     text, wf, path = workflow("kite-token.yml")
     assert wf["permissions"] == {"contents": "write"} and set(wf["on"]) == {"workflow_dispatch"} and check_workflows.check(path) == []
-    assert wf["defaults"]["run"]["shell"] == "bash" and sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET"]
+    assert wf["defaults"]["run"]["shell"] == "bash"
+    assert sorted(set(re.findall(r"secrets\.([A-Z_]+)", text))) == ["KITE_API_KEY", "KITE_API_SECRET", "KITE_PASSWORD", "KITE_TOTP_SECRET", "KITE_USER_ID"]
     steps = [s for j in wf["jobs"].values() for s in j["steps"]]
+    for name in ("KITE_USER_ID", "KITE_PASSWORD", "KITE_TOTP_SECRET"):                           # the Zerodha login reaches the login step only
+        holders = [s for s in steps if name in json.dumps(s.get("env", {}))]
+        assert len(holders) == 1 and holders[0]["run"].strip().startswith("deploy/kite-autologin.sh login") and "KITE_API_SECRET" not in json.dumps(holders[0]["env"])
     assert all("${{" not in s["run"] for s in steps if "run" in s)                              # the request_token comes in through env only
     assert text.count("git push") == 1 and "git push -q origin kite-token" in text and not re.search(r"git push[^\n]*(--force|\s-f\b)", text)
     assert "openssl enc -aes-256-cbc" in text and "cp \"$RUNNER_TEMP/kite_token.enc\" kite_token.enc" in text and "git add kite_token.enc" in text
@@ -462,14 +466,6 @@ def test_status_tells_the_panel_whether_the_websocket_is_delivering_and_how_old_
     with pytest.raises(RuntimeError):                                                          # nothing from Kite and the fallback down: the error still surfaces
         f.poll("NIFTY", None)
     assert f.status()["last_error"] == "RuntimeError" and f.status()["fallback_polls"] >= 1
-
-
-def test_the_app_has_a_data_panel_that_hides_itself_without_data():
-    html = (ROOT / "quantdesk/web/static/app/index.html").read_text(encoding="utf-8")
-    js = (ROOT / "quantdesk/web/static/app/app.js").read_text(encoding="utf-8")
-    assert 'id="d-data-wrap"' in html and 'id="d-data"' in html and 'id="d-data-hint"' in html
-    assert "function renderData(hb)" in js and "renderData(hb);" in js and "wrap.hidden = !d" in js
-    assert "hb.data" in js
 
 
 # ======================================================================================================================================================

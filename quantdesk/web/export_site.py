@@ -47,7 +47,7 @@ def _clean(o):
 STATIC = Path(__file__).resolve().parent / "static" / "app"
 CHART_LIB = Path(__file__).resolve().parent / "static" / "vendor" / "lightweight-charts.js"
 FONTS = STATIC / "fonts"
-ICONS = ("icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png")
+ICONS = ("icon.svg", "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png")      # all drawn from icon.svg (deploy/make_icons.mjs)
 
 # Answers the app's /api/i/* calls from one data object D (same JSON the server would return).
 ROUTES = r"""
@@ -65,20 +65,14 @@ function qdAnswer(D, url) {
       const age = !D.live ? 0 : isFinite(t) ? Math.max(0, (Date.now() - t) / 1000) : null;
       return reply(Object.assign({}, D.state, { age_sec: age }));
     }
-    case "/api/i/thoughts": {
-      const rows = D.thoughts.filter((t) => (!q.symbol || t.symbol === q.symbol) && (!q.before || t.id < Number(q.before)));
-      return reply(rows.slice(0, Number(q.n || 40)));
-    }
     case "/api/i/trades": return reply(D.trades.slice(0, Number(q.n || 100)));
     case "/api/i/trade": return D.trade[q.id] ? reply(D.trade[q.id]) : reply({ error: "trade details not in this snapshot" }, 404);
     case "/api/i/reviews": return reply(Object.keys(D.reviews).sort().reverse());
     case "/api/i/review": return D.reviews[q.date] ? reply({ date: q.date, markdown: D.reviews[q.date] }) : reply({ error: "no such review" }, 404);
     case "/api/i/stats": return reply(D.stats);
-    case "/api/i/news": return reply((D.news || []).slice(0, Number(q.n || 120)));
     // the pre-market brief lives on its own branch (premarket.yml), fetched as it is, not through data.json
     case "/api/i/premarket": return D.premarket_url && window.qdRealFetch ? window.qdRealFetch(D.premarket_url, { cache: "no-cache" })
       : reply({ error: "no pre-market brief on this site" }, 404);
-    case "/api/i/chart": return reply(D.chart[(q.symbol || "NIFTY") + "|" + (q.interval || "1m")] || { bars: null });
     case "/api/config": return reply({ gocharting: { enabled: false } });
     default: return reply({ error: "not available on a read-only site" }, 404);
   }
@@ -114,7 +108,14 @@ window.QD_PUBLISHED = true;
       .finally(() => { pending = null; });
     return pending;
   }
-  window.fetch = async (url) => qdAnswer(await load(), url);
+  // The live relay (/live/*, the Worker's private price feed) is the one thing here that is NOT in data.json: it goes to the real network with its own headers (the key).
+  // Without this the shim answered it with "not available on a read-only site" (a 404) and the Live tab could never reach the relay.
+  window.fetch = async (url, init) => {
+    let path = "";
+    try { path = new URL(String(url), window.location.href).pathname; } catch (e) { /* not a URL: the shim answers it */ }
+    if (path.startsWith("/live/")) return realFetch(url, init);
+    return qdAnswer(await load(), url);
+  };
   window.qdReload = () => { at = 0; return load(); };        // pull-to-refresh: skip the 60 s cache
 })();
 """
@@ -139,22 +140,6 @@ def _setups_block(api, account: str) -> dict:
         return {"line": None, "error": type(exc).__name__}
 
 
-def _charts_block(api, account: str, cfg) -> tuple[dict, list[str]]:
-    """Every chart the page can ask for. A chart that cannot be built is left out (the page shows an empty chart, see
-    `/api/i/chart` below) and named in the second return value, instead of failing the publish: on 30 Oct 2026 one bad
-    marker froze the whole site, heartbeat included, for 30 minutes and the app said the desk had stopped."""
-    charts, failed = {}, []
-    for s in cfg.get("intraday.underlyings", ["NIFTY", "BANKNIFTY"]):
-        for k in ("", "-FUT"):
-            for iv in ("1m", "5m", "15m"):
-                key = f"{s}{k}|{iv}"
-                try:
-                    charts[key] = api.chart(account, s + k, None, iv)
-                except Exception as exc:
-                    failed.append(f"chart {key}: {type(exc).__name__}: {str(exc)[:120]}")
-    return charts, failed
-
-
 def premarket_url(cfg) -> str | None:
     """Where the published app reads the pre-market brief: config `premarket.url`, else the repository's `premarket`
     branch on GitHub (premarket.yml publishes it there), else none (a local snapshot has no branch to read)."""
@@ -165,41 +150,27 @@ def premarket_url(cfg) -> str | None:
 
 def site_data(cfg, account: str, sessions: int = 3, label: str | None = None, live: bool = False,
               max_trade_details: int = 150) -> dict:
-    """Everything the app reads, as one JSON-able object (the same shapes the server's API returns)."""
+    """Everything the app reads, as one JSON-able object (the same shapes the server's API returns). The retired desk's thoughts, news and charts are no longer
+    published (the app has no tab that shows them); `sessions` stays for the command line."""
     api = IntradayAPI(cfg)
     if live and not (api._dir(account) / "journal.db").exists():
         # the live site goes up before the desk's first minute: publish an empty desk, not an error
         from ..journal.journal import Journal
         api._dir(account).mkdir(parents=True, exist_ok=True)
         Journal(api._dir(account) / "journal.db").commit()
-    j = api.j(account)
     state = api.state(account)
-    days = sorted({str(t)[:10] for t in j.df("SELECT DISTINCT substr(ts,1,10) AS d FROM thoughts")["d"]})[-sessions:]
-    th = j.df("SELECT * FROM thoughts WHERE substr(ts,1,10) >= ? ORDER BY id DESC", (days[0] if days else "0",))
-    thoughts = []
-    for r in th.to_dict("records"):
-        for k in ("evidence", "vetoes", "levels", "chain"):
-            r[k] = json.loads(r[k]) if r.get(k) else None
-        thoughts.append(r)
     trades = api.trades(account, 1000)
     short = "Live paper" if live else ("Demo" if account == "synthetic" else "Snapshot")
-    charts, failed = _charts_block(api, account, cfg)
-    for line in failed:
-        print(f"::warning::export-site: left out {line}", flush=True)       # in the run log; the site still publishes
     return {
         "label": label or ("Live paper desk" if live else f"{account.capitalize()} snapshot"),
         "short": short, "live": live,
         "state": {**state, "age_sec": 0},
         "setups": _setups_block(api, account),
-        "thoughts": thoughts,
         "trades": trades,
         "trade": {t["id"]: api.trade(account, t["id"]) for t in trades[:max_trade_details]},
         "reviews": {d: api.review(account, d)["markdown"] for d in api.reviews(account)},
         "stats": api.stats(account),
-        "news": api.news(account, 120),
         "premarket_url": premarket_url(cfg),
-        "chart": charts,
-        "export_errors": failed,
     }
 
 
@@ -252,8 +223,7 @@ def publish_site(cfg, account: str, out_dir: Path, sessions: int = 3, label: str
     out.mkdir(parents=True, exist_ok=True)
     data = site_data(cfg, account, sessions, label, live=True)
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    for asset in ("manifest.webmanifest", "icon-192.png", "apple-touch-icon.png"):
-        html = html.replace(f'href="/{asset}"', f'href="{asset}"')
+    html = re.sub(r'href="/((?:manifest\.webmanifest|icon\.svg|icon-192\.png|apple-touch-icon\.png)(?:\?v=\d+)?)"', r'href="\1"', html)      # the published site lives under a sub-path: relative links (the ?v= forces a phone to refetch a changed icon)
     html = html.replace("/static/app/fonts/", "fonts/")
     html = re.sub(r'<script src="/static/datafeed.js"></script>\s*', "", html)
     html = html.replace('<script src="/static/vendor/lightweight-charts.js"></script>', '<script src="lightweight-charts.js"></script>')

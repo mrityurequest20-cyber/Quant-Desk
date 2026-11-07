@@ -10,9 +10,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="QuantDesk">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" href="/icon-192.png">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest?v=2">
+<link rel="icon" type="image/svg+xml" href="/icon.svg?v=2">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=2">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
 <title>QuantDesk</title>
 <style>
 @font-face{font-family:"Geist";font-style:normal;font-weight:100 900;font-display:swap;src:url("/static/app/fonts/geist-sans.woff2") format("woff2")}
@@ -101,7 +102,7 @@ main>section{animation:fade .16s ease-out}
 .o1{order:1}.o2{order:2}.o3{order:3}.o4{order:4}.o5{order:5}
 
 /* ---- tab bar: bottom on phones, a labelled sidebar on wide screens ---- */
-.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(6,1fr);background:var(--bg);
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(4,1fr);background:var(--bg);
 border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 .tabbar .brand{display:none}
 .tabbar button{position:relative;height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:10.5px;font-weight:500;
@@ -373,7 +374,6 @@ border:1px solid var(--line);display:grid;place-items:center;color:var(--acc);op
   .bar,main{margin-left:216px}.bar{padding-left:24px}.bar h1 .logo{display:none}
   main{max-width:none;padding:16px 24px 48px}
   main>section{max-width:880px;margin:0 auto}
-  main>section[data-view="desk"],main>section[data-view="chart"]{max-width:1320px}
   .grp,.panel{margin:0 0 16px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
   .grp>.panel{margin:0;border:0;border-top:1px solid var(--line);border-radius:0}
   .grp>.sec-h:first-child+.panel{border-top:1px solid var(--line)}
@@ -398,76 +398,28 @@ border:1px solid var(--line);display:grid;place-items:center;color:var(--acc);op
 </head>
 <body>
 <header class="bar">
-  <h1><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#0B0E13"/><path d="M12 34H31M39.5 34H52" stroke="#5A6474" stroke-width="3.5" stroke-linecap="round"/><path d="M12 48L21 40L28 45L40 27L52 15" fill="none" stroke="#7D95FF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="title">Desk</span><small id="subtitle"></small></h1>
-  <button class="pill off" id="status" aria-label="Desk status, tap to refresh"><span class="dot"></span><b id="status-t">Connecting</b><span id="status-s"></span></button>
+  <h1><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#0B0E13"/><path d="M12 34H31M39.5 34H52" stroke="#5A6474" stroke-width="3.5" stroke-linecap="round"/><path d="M12 48L21 40L28 45L40 27L52 15" fill="none" stroke="#7D95FF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="title">Live</span><small id="subtitle"></small></h1>
+  <button class="pill off" id="status" aria-label="Live feed status, tap to refresh"><span class="dot"></span><b id="status-t">Connecting</b><span id="status-s"></span></button>
   <button class="ib" id="btn-settings" aria-label="Settings"><svg class="i" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button>
 </header>
 <div id="ptr" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></div>
 <main id="main">
-  <section data-view="desk">
-    <div class="nowbar" id="d-now"></div>
-    <div class="dgrid">
-      <div class="col">
-        <div id="d-banner"></div>
-        <div class="grp"><div class="sec-h"><h2>Account</h2><span class="hint" id="d-mode"></span></div>
-          <div id="d-hero"><div class="pad"><span class="skel" style="width:40%"></span><span class="skel" style="width:60%;height:26px;margin-top:10px"></span></div></div></div>
-        <div id="d-controls"></div>
-        <div class="grp"><div class="sec-h"><h2>Markets</h2><span class="hint" id="d-mkt-hint">bias −1 to +1</span></div><div class="rows" id="d-markets"></div></div>
-        <div class="grp" id="d-data-wrap" hidden><div class="sec-h"><h2>Data</h2><span class="hint" id="d-data-hint"></span></div><div class="rows" id="d-data"></div></div>
-        <div class="grp" id="d-pos-wrap" hidden><div class="sec-h"><h2>Open position</h2><span class="hint" id="d-pos-hint"></span></div><div class="rows" id="d-positions"></div></div>
-        <div class="grp" id="d-armed-wrap" hidden><div class="sec-h"><h2>Waiting at the level</h2><span class="hint" id="d-armed-hint"></span></div><div class="rows" id="d-armed"></div></div>
-        <div class="grp" id="d-global-wrap"><div class="sec-h"><h2>Global</h2><button class="link" data-go="brain">Brain<svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div>
-          <div class="gpulse" id="d-global"></div></div>
-      </div>
-      <div class="col">
-        <div class="grp wide-only" id="d-log-wrap"><div class="sec-h"><h2>Desk log</h2><button class="link" data-go="feed/log">All<svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div><div class="rows" id="d-log"></div></div>
-        <div class="grp"><div class="sec-h"><h2>Headlines</h2><button class="link" data-go="feed">All news<svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div><div class="rows" id="d-news"></div></div>
-        <div class="grp" id="d-closed-wrap" hidden><div class="sec-h"><h2>Closed today</h2><button class="link" data-go="trades/history">History<svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div><div class="rows" id="d-closed"></div></div>
-      </div>
-    </div>
-    <div id="qd-note" class="note"></div>
-  </section>
-
-  <section data-view="chart" hidden>
-    <div class="cgrid">
-      <div class="col">
-        <div class="cpanel o1">
-          <div class="qhead" id="c-head"></div>
-          <div class="tools"><div class="seg" id="c-sym" role="group" aria-label="Index"></div><div class="seg" id="c-kind" role="group" aria-label="Index or futures"></div><div class="seg" id="c-iv" role="group" aria-label="Interval"></div>
-            <button class="ib" id="c-fs" aria-label="Full-screen chart"><svg class="i" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button></div>
-          <div class="chartbox" id="c-box">
-            <div class="fsbar"><span id="c-fs-title">Chart</span><span class="grow"></span><button class="ib" id="c-fs-x" aria-label="Exit full screen"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-            <div class="ohlc" id="c-ohlc" aria-live="off"></div><div class="lw" id="chart"></div>
-          </div>
-          <div class="chips" id="c-levels" role="group" aria-label="Levels on the chart"></div>
-        </div>
-        <div class="grp o4"><div class="sec-h"><h2>Key levels</h2><span class="hint" id="c-lev-hint">distance from spot</span></div><div id="c-levtbl"></div></div>
-      </div>
-      <div class="col">
-        <div class="grp o2"><div class="sec-h"><h2>Desk read</h2><span class="hint" id="c-read-hint"></span></div><div id="c-read"></div></div>
-        <div class="grp o3"><div class="sec-h"><h2>Evidence</h2><span class="hint">direction · weight</span></div><div id="c-evidence"></div></div>
-        <div class="grp o5"><div class="sec-h"><h2>Quant</h2><button class="info" data-info="quant" aria-label="What is this?">?</button></div><div id="c-quant"></div></div>
-      </div>
-    </div>
-  </section>
-
   <section data-view="trades" hidden>
-    <div class="subnav"><div class="seg full" id="t-seg" role="tablist" aria-label="Trades"></div></div>
+    <div class="subnav"><div class="seg full" id="t-seg" role="tablist" aria-label="History"></div></div>
+    <div class="note" id="t-note">The record of the paper desk, which stopped trading on 6 Nov 2026. It is read-only: nothing here trades.</div>
     <div id="t-body"></div>
   </section>
 
-  <section data-view="brain" hidden>
-    <div class="subnav"><div class="seg full" id="b-sym" role="group" aria-label="Index"></div></div>
-    <div id="b-body"></div>
+  <section data-view="live" hidden>
+    <div id="lv-body"></div>
   </section>
 
   <section data-view="today" hidden>
     <div id="p-body"></div>
   </section>
 
-  <section data-view="feed" hidden>
-    <div class="subnav"><div class="seg full" id="f-seg" role="tablist" aria-label="Feed"></div></div>
-    <div id="f-body"></div>
+  <section data-view="data" hidden>
+    <div id="dt-body"></div>
   </section>
 </main>
 <nav class="tabbar" id="tabs" role="tablist" aria-label="Sections"></nav>
