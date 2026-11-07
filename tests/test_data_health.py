@@ -74,6 +74,10 @@ def _store(**kw) -> H.MemoryStore:
         rel["evening-minutes-2026"] = {f"{EVE}_manifest.json": json.dumps(kw["evening"]).encode()}
     if kw.get("history") is not None:
         rel["daily-history"] = {f"{kw['history'].get('as_of', '2026-11-07')}_manifest.json": json.dumps(kw["history"]).encode()}
+    if kw.get("fxmin") is not None:
+        rel["fx-minutes-2026"] = {f"{EVE}_manifest.json": json.dumps(kw["fxmin"]).encode()}
+    if kw.get("fxdaily") is not None:
+        rel["fx-daily"] = {f"{kw['fxdaily'].get('as_of', '2026-11-07')}_manifest.json": json.dumps(kw["fxdaily"]).encode()}
     if kw.get("warehouse") is not None:
         rel["warehouse"] = {"manifest_2026.parquet": _pq(kw["warehouse"])}
     return H.MemoryStore(rel, kw.get("branches"), kw.get("kite"))
@@ -266,7 +270,8 @@ def test_kite_states():
 def _full_store() -> H.MemoryStore:
     t = {"cash": {"asked": 5, "served": 5}, "futures": {"asked": 5, "served": 5}}
     return _store(bars=_bars(), chains=_chains(), tape=_tape(), optmin={"underlyings": {"NIFTY": {"asked": 5, "served": 5, "last": f"{DAY} 15:29"}}},
-                  stockmin={"totals": t}, stockopt=_stockopt(), evening=_evening(), history={"as_of": "2026-11-05", "series": {"NIFTY": {}}, "unverified_series": []}, warehouse=_wh({x: "2026-11-06" for x in H.CORE_WAREHOUSE_TABLES}),
+                  stockmin={"totals": t}, stockopt=_stockopt(), evening=_evening(), history={"as_of": "2026-11-05", "series": {"NIFTY": {}}, "unverified_series": []},
+                  fxmin=_fxmin(), fxdaily={"as_of": "2026-11-05", "series": {"EURUSD": {}}, "unverified_series": []}, warehouse=_wh({x: "2026-11-06" for x in H.CORE_WAREHOUSE_TABLES}),
                   gift=pd.DataFrame({"ts": pd.date_range(dt.datetime.combine(DAY, dt.time(8, 30), tzinfo=IST), periods=5, freq="10min")}),
                   branches={"premarket": {"brief.json": json.dumps({"session": str(DAY)}).encode()}}, kite=[{"name": "kite-raw", "size": 9e6, "expired": False}])
 
@@ -436,3 +441,32 @@ def test_the_report_lists_the_new_channels_and_they_never_fail_the_run_alone():
     assert by["stock option minutes"] == by["MCX/currency minutes"] == by["daily history"] == H.MISSING and not r.failed()      # non-critical: shown, never red on its own
     early = H.build_report(H.MemoryStore(), None, DAY, dt.datetime(2026, 11, 6, 6, 0, tzinfo=IST))
     assert {c.channel: c.status for c in early.checks}["MCX/currency minutes"] == H.PENDING             # before 07:00 the previous evening is not yet judged
+
+
+# ---- FX ---------------------------------------------------------------------------------------------------------------------------------------
+def _fxmin(**over) -> dict:
+    pairs = {s: {"status": "served", "rows": 6000, "last": f"{EVE} 22:29:00+00:00"} for s in ("EURUSD", "USDINR")}
+    pairs.update(over)
+    return {"pairs": pairs}
+
+
+def test_fx_minutes_ok_failed_thin_stale_and_missing():
+    assert H.check_fx_minutes(_store(fxmin=_fxmin()), DAY).status == H.OK                         # Fri: judged on Thu's manifest
+    c = H.check_fx_minutes(_store(fxmin=_fxmin(USDINR={"status": "failed", "error": "yahoo down"})), DAY)
+    assert c.status == H.BAD and "USDINR: failed" in c.detail                                      # half the pairs: below 90%
+    many = {f"P{i}": {"status": "served", "rows": 6000, "last": f"{EVE} 22:29:00+00:00"} for i in range(20)}
+    c = H.check_fx_minutes(_store(fxmin={"pairs": {**many, "X": {"status": "failed"}}}), DAY)
+    assert c.status == H.WARN and "X: failed" in c.detail                                          # one of 21: noted, not red
+    assert "only 120 bars" in H.check_fx_minutes(_store(fxmin=_fxmin(EURUSD={"status": "served", "rows": 120, "last": f"{EVE} 22:29:00+00:00"})), DAY).detail
+    stale = _fxmin(EURUSD={"status": "served", "rows": 6000, "last": "2026-11-03 22:29:00+00:00"})
+    assert "newest bar is from 03 Nov" in H.check_fx_minutes(_store(fxmin=stale), DAY).detail
+    assert H.check_fx_minutes(_store(fxmin={"pairs": {}}), DAY).status == H.BAD
+    assert H.check_fx_minutes(_store(), DAY).status == H.MISSING
+
+
+def test_fx_daily_history_is_judged_like_the_equity_history_on_its_own_release():
+    assert H.check_fx_daily(_store(), DAY).status == H.MISSING and "fx-daily" in H.check_fx_daily(_store(), DAY).detail
+    ok = {"as_of": "2026-11-05", "series": {"A": {}, "B": {}}, "unverified_series": []}
+    assert H.check_fx_daily(_store(fxdaily=ok), DAY).status == H.OK and H.check_fx_daily(_store(fxdaily=ok), DAY).channel == "FX daily history"
+    assert H.check_fx_daily(_store(fxdaily={**ok, "unverified_series": ["DXY"]}), DAY).status == H.WARN
+    assert H.check_daily_history(_store(), DAY).channel == "daily history"                          # the default is unchanged

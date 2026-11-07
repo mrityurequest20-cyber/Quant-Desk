@@ -21,6 +21,7 @@ The header pill shows the live feeds' state on every tab (Live, Delayed, No feed
 | Kite ticks with depth | to 14:45, then 14:45 to 15:32 (two chained jobs) | encrypted artifacts (never published) | arrival only: the content is encrypted |
 | Stock option chains (once, 15:25), five indices' minutes, and **stock option minutes** (±5 strikes, nearest 2 expiries, 20 stocks) | 15:25, 15:45 | releases (`option-minutes-*`) | Data health (the stock option minutes since 7 Nov) |
 | Stock cash and near-month futures minutes (50 stocks) | after the close | `stock-minutes-*` | Data health |
+| FX majors and rupee crosses: 1-minute bars (the last 5 days re-read each night) and daily history from 2003 | `fx-minutes.yml` (22:30 UTC weekdays), `fx-daily.yml` (by hand) | `fx-minutes-YYYY`, `fx-daily` | Data health; the daily series also checked against the ECB's reference rates |
 | MCX and currency evening minutes | **none yet**: `evening-minutes.yml` (Kotak candles) is manual only, because Kotak answered every MCX and currency request with HTTP 422 "Historical data is not supported for this exchange" | - | Data health shows the channel as missing |
 | NSE warehouse (bhavcopy, participant OI, FII/DII, events) | evenings | warehouse tables | Data health |
 | Pre-market brief | 07:15 to 09:15 | `premarket` branch | Data health |
@@ -54,4 +55,4 @@ Next, in this order: record past 15:32 for MCX and currency (a separate live-onl
 | Option, index and stock minutes (Kotak backfill) | `option-minutes-*`, `stock-minutes-*` | about 30 days back at each run | Data health |
 | NIFTY and BANKNIFTY index minutes | `external-aeron7` | 2007 to early 2023 | research only: see docs/EXTERNAL_DATA.md |
 
-Known holes: no index minutes between early 2023 and Oct 2026; no MCX, currency or forex history; stock cross-checks cover July 2024 onward only.
+Known holes: no index minutes between early 2023 and Oct 2026; no MCX or currency-futures history (forex spot has its own record from the first run of `fx-daily.yml`); stock cross-checks cover July 2024 onward only.
