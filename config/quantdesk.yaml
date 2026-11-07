@@ -95,6 +95,10 @@ risk:
 app:
   history_since: "2026-11-07"      # History starts clean at ₹5,00,000 from this day: earlier trades stay in the journal, only the published app leaves them out (owner, 7 Nov 2026)
 
+# FX daily history (fx-daily.yml, quantdesk/data/fx.py): one-day moves beyond 5% are flagged and keep a series unverified until a person has reviewed them.
+fx:
+  accepted_moves: []               # [{symbol: USDCHF, date: 2015-01-16}] genuine large moves a person has reviewed (the SNB's end of the franc cap)
+
 intraday:
   capital: 500000                  # paper account for the intraday options desk (₹20k → ₹1L → ₹5L on 4 Oct 2026)
   underlyings: [NIFTY, BANKNIFTY]
