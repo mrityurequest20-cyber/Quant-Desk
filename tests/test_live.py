@@ -52,16 +52,33 @@ out.badjson = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN,
 out.noltp = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: { A: { bid: 1 } } } });
 out.badsym = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: { "<script>": { ltp: 1 } } } });
 out.strltp = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: { A: { ltp: "1" } } } });
-out.big = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: "x".repeat(70000) });
+out.big = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: "x".repeat(600000) });
+out.bigbytes = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: "é".repeat(300000) });          // 600 KB in bytes, 300 K characters
 out.getingest = await call("GET", "/live/ingest", { token: env.LIVE_INGEST_TOKEN });
 out.postsnap = await call("POST", "/live/snapshot", { token: env.LIVE_READ_TOKEN, body: {} });
 out.other = await call("GET", "/live/other", { token: env.LIVE_READ_TOKEN });
 // a second push of another symbol keeps the first; a partial push does not blank it
 await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: { BANKNIFTY: { ltp: 52000 } } } });
 out.merged = Object.keys((await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body.quotes).sort();
-// the Durable Object restarts: the snapshot comes back from storage
+// a wide universe: 1200 quotes in one push keep their segment, a bad segment is dropped, odd names are harmless
+const wide = {};
+for (let i = 0; i < 1200; i++) wide["STK" + i] = { ltp: 100 + i, chg: 0.1, s: i %% 2 ? "eq" : "nonsense" };
+Object.defineProperty(wide, "__proto__", { value: { ltp: 1 }, enumerable: true, configurable: true, writable: true });      // a real own key, as JSON.parse makes it
+wide["constructor"] = { ltp: 2 };
+out.widepush = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: JSON.stringify({ quotes: wide }) });
+const ws = (await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body;
+out.wide = { count: ws.count, n: Object.keys(ws.quotes).length, s1: ws.quotes.STK1.s, s0: ws.quotes.STK0.s === undefined, ctor: ws.quotes.constructor.ltp, proto: Object.keys(ws.quotes).includes("__proto__") };
+// the board never grows past its cap: 2500 + 2500 new names, the second push is partly refused
+const a = {}, b = {};
+for (let i = 0; i < 2500; i++) { a["A" + i] = { ltp: 1 }; b["B" + i] = { ltp: 1 }; }
+await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: a } });
+out.cap2 = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: b } });
+out.capcount = (await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body.count;
+// the Durable Object restarts: memory only, so the board starts empty and fills again from the next pushes
 board = new LiveBoard(state, {});
-out.restored = Object.keys((await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body.quotes).sort();
+out.restarted = (await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body.count;
+await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: { NIFTY: { ltp: 5 } } } });
+out.refilled = Object.keys((await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body.quotes);
 // off unless both secrets are set, long enough and different
 out.off_missing = await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN, e: { ...env, LIVE_READ_TOKEN: "" } });
 out.off_short = await call("GET", "/live/snapshot", { token: "short", e: { ...env, LIVE_READ_TOKEN: "short" } });
@@ -109,15 +126,30 @@ def test_each_key_opens_only_its_own_door(relay):
 
 @needs_node
 def test_bad_pushes_are_refused_and_change_nothing(relay):
-    for k, status in (("badjson", 400), ("noltp", 400), ("badsym", 400), ("strltp", 400), ("big", 413)):
+    for k, status in (("badjson", 400), ("noltp", 400), ("badsym", 400), ("strltp", 400), ("big", 413), ("bigbytes", 413)):
         assert relay[k]["status"] == status, k
-    assert relay["merged"] == ["BANKNIFTY", "NIFTY"]                     # none of the refused pushes added a symbol
+    assert relay["merged"] == ["BANKNIFTY", "NIFTY"]                     # none of the refused pushes added a symbol (the limit is bytes, not characters)
     assert relay["getingest"]["status"] == 405 and relay["postsnap"]["status"] == 405 and relay["other"]["status"] == 404
 
 
 @needs_node
-def test_pushes_merge_and_survive_a_restart(relay):
-    assert relay["merged"] == ["BANKNIFTY", "NIFTY"] and relay["restored"] == ["BANKNIFTY", "NIFTY"]
+def test_pushes_merge_and_a_restart_starts_empty_and_refills(relay):
+    assert relay["merged"] == ["BANKNIFTY", "NIFTY"]
+    assert relay["restarted"] == 0 and relay["refilled"] == ["NIFTY"]    # memory only: the record of every tick is the recorder's Parquet
+
+
+@needs_node
+def test_a_wide_universe_goes_through_with_segments_and_odd_names_are_harmless(relay):
+    assert relay["widepush"]["status"] == 200
+    w = relay["wide"]
+    assert w["n"] >= 1200 and w["s1"] == "eq" and w["s0"] is True        # a valid segment is kept, a bad one dropped
+    assert w["ctor"] == 2 and w["proto"] is True                         # names like constructor and __proto__ are data, not code
+
+
+@needs_node
+def test_the_board_never_grows_past_its_cap(relay):
+    assert relay["cap2"]["status"] == 200 and relay["cap2"]["body"]["refused"] > 0
+    assert relay["capcount"] == 4000
 
 
 @needs_node

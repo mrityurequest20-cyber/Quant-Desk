@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .kite_universe import build_wide
 from .live_push import LivePusher, quote_from_tick
 
 IST = "Asia/Kolkata"
@@ -87,12 +88,14 @@ MAX_BUFFER = 1_000_000                                       # ticks held in mem
 class Recorder:
     """Collects ticks and writes them in parts. `now` is injectable so tests control time; the websocket object is whatever `ticker_factory` returns (KiteTicker's interface)."""
 
-    def __init__(self, out_dir: Path, tokens: dict[str, int], ticker_factory, now=None, flush_seconds: float = FLUSH_SECONDS, live=None):
+    def __init__(self, out_dir: Path, tokens: dict[str, int], ticker_factory, now=None, flush_seconds: float = FLUSH_SECONDS, live=None, core=None, meta=None):
         self.out = Path(out_dir)
         self.tokens = dict(tokens)
         self.by_token = {v: k for k, v in self.tokens.items()}
         self.now = now or (lambda: pd.Timestamp.now(tz=IST))
         self.flush_seconds = flush_seconds
+        self.core = set(tokens) if core is None else set(core)       # symbols recorded in FULL mode (five levels of depth); the rest in QUOTE mode (price, volume, quantities, no depth)
+        self.meta = dict(meta or {})                                 # symbol -> {'s': segment, ...}: what each instrument is, for the live view
         self.live = live                                             # the display-only 5-second push (live_push.py), or None; it never affects the recording
         self.rows: list[dict] = []
         self.overflow = 0                                            # dropped since the last flush
@@ -116,10 +119,15 @@ class Recorder:
             self.events.append({"ts": str(self.now()), "kind": kind, **kw})
 
     def _on_connect(self, ws, response) -> None:
-        toks = list(self.tokens.values())
-        ws.subscribe(toks)
-        ws.set_mode(ws.MODE_FULL, toks)
-        self._event("connect", n=len(toks))
+        full = [t for s_, t in self.tokens.items() if s_ in self.core]
+        wide = [t for s_, t in self.tokens.items() if s_ not in self.core]
+        for i in range(0, len(full) + len(wide), 500):                 # subscribe in chunks: one oversized message is the easiest way to lose a subscription
+            ws.subscribe((full + wide)[i:i + 500])
+        if full:
+            ws.set_mode(ws.MODE_FULL, full)
+        if wide:
+            ws.set_mode(getattr(ws, "MODE_QUOTE", "quote"), wide)
+        self._event("connect", n=len(full) + len(wide), full=len(full), quote=len(wide))
 
     def _on_ticks(self, ws, ticks) -> None:
         recv = self.now()
@@ -136,7 +144,7 @@ class Recorder:
                 self.ticks += 1
                 if self.live is not None:
                     try:
-                        self.live.update(sym, quote_from_tick(row, t.get("change")))
+                        self.live.update(sym, quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s")))
                     except Exception:                               # noqa: BLE001 - the display must never cost a recorded tick
                         pass
 
@@ -174,7 +182,10 @@ class Recorder:
     def run(self, until: pd.Timestamp, sleep=time.sleep) -> dict:
         """Connect and record until `until` (IST), flushing every `flush_seconds`. Never raises on a dropped connection: the library reconnects and the gap is in the data."""
         if self.live is not None:
-            self.live.start()
+            try:
+                self.live.start()
+            except Exception:                                       # noqa: BLE001 - no display, same recording
+                self.live = None
         self.ws.connect(threaded=True)
         last = self.now()
         while self.now() < until:
@@ -186,6 +197,7 @@ class Recorder:
             self.ws.close()
         except Exception:
             pass
+        self.flush()                                                # the recording first: the display's last push (which can wait on the network) must never delay the last part
         if self.live is not None:
             try:
                 self.live.stop()
@@ -230,14 +242,25 @@ def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite
     clock = now or (lambda: pd.Timestamp.now(tz=IST))
     today = day or clock().date()
     tokens = resolve_tokens(kite, today)
+    core = set(tokens)
+    meta = {k: {"s": "idx" if k in INDEX_NAMES else "fut", "kind": "index" if k in INDEX_NAMES else "future", "name": k.split("-")[0]} for k in tokens}
+    wide_errors: list[str] = []
+    if os.environ.get("KITE_WIDE", "1") != "0":                    # everything else the desk watches; fail-soft: the core five are recorded whatever happens here
+        try:
+            wide_tokens, wide_meta, wide_errors = build_wide(kite, today, tokens)
+            tokens.update(wide_tokens)
+            meta.update(wide_meta)
+        except Exception as e:                                     # noqa: BLE001
+            wide_errors = [f"wide universe: {type(e).__name__}"]
     (Path(out_dir)).mkdir(parents=True, exist_ok=True)
     (Path(out_dir) / "tokens.json").write_text(json.dumps(tokens, indent=1))
+    (Path(out_dir) / "universe.json").write_text(json.dumps({"meta": meta, "errors": wide_errors, "core": sorted(core)}, indent=1))
     h, m = (int(x) for x in until_hhmm.split(":"))
     until = pd.Timestamp.combine(pd.Timestamp(today), dt.time(h, m)).tz_localize(IST)
-    rec = Recorder(Path(out_dir), tokens, ticker_factory, now=clock, live=LivePusher.from_env())
+    rec = Recorder(Path(out_dir), tokens, ticker_factory, now=clock, live=LivePusher.from_env(), core=core, meta=meta)
     stats = rec.run(until, sleep=sleep)
     if with_reference:
         fetch_reference(kite, tokens, today, Path(out_dir))
     if stats["unwritten"] or stats["dropped"]:                     # ticks are gone (the last write failed, or the buffer overflowed while writes were failing): the run must not look clean
         raise KiteRecordError(f"{stats['unwritten']:,} ticks could not be written to {out_dir} and {stats['dropped']:,} were dropped from a full buffer; they are lost, the parts already written are kept")
-    return {"day": str(today), "tokens": tokens, **stats}
+    return {"day": str(today), "tokens": tokens, "wide_errors": wide_errors, **stats}
