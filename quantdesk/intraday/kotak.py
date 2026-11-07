@@ -105,6 +105,19 @@ def best_qty(q: dict, side: str) -> float:
     return v if v > 0 else float("nan")
 
 
+def depth_row(q: dict, strike: float, side: str, levels: int = 5) -> dict:
+    """One contract's order book from a quote: {strike, side, b1p, b1q, ..., a1p, a1q, ...}, NaN where a level is empty. Prices and quantities as the exchange sent them."""
+    out = {"strike": float(strike), "side": side}
+    book = q.get("depth") or {}
+    for n, (key, tag) in enumerate((("buy", "b"), ("sell", "a"))):
+        rows = (book.get(key) or [])[:levels]
+        for i in range(levels):
+            lv = (rows[i] if i < len(rows) else None) or {}
+            px, qty = _f(lv.get("price")), _f(lv.get("quantity", lv.get("qty")))
+            out[f"{tag}{i + 1}p"], out[f"{tag}{i + 1}q"] = (px if px > 0 else float("nan")), (qty if qty > 0 else float("nan"))
+    return out
+
+
 class KotakClient:
     """The four consumer-key endpoints. Paces calls (well under 25/s) and retries a 429 once."""
 
@@ -216,8 +229,9 @@ class KotakOptionChain(ChainSource):
     name = "kotak"
     book = True
 
-    def __init__(self, client: KotakClient, strikes: int = 20, refresh_min: int = 1):
+    def __init__(self, client: KotakClient, strikes: int = 20, refresh_min: int = 1, depth_levels: int = 0):
         self.k = client
+        self.depth_levels = max(0, min(5, int(depth_levels)))     # 0 = best bid/offer only (the desk's chains); 1-5 also keeps that many book levels per contract in df.attrs["depth"]
         self.count = max(10, int(round(strikes / 10)) * 10)       # strikes each side; the API wants a multiple of 10
         self.refresh_min = refresh_min
         self.tokens: dict[tuple, str] = {}                        # (underlying, expiry, strike, right) → "nse_fo|71472"
@@ -273,6 +287,7 @@ class KotakOptionChain(ChainSource):
         if idx:
             want.insert(0, (cash, idx))
         S, quoted = float("nan"), 0
+        book: list[dict] = []
         for q in self.k.quotes(want):
             seg, tok = str(q.get("exchange", "")), str(q.get("exchange_token", ""))
             if seg == cash:                                        # the only cash-segment name asked for: the index
@@ -283,6 +298,8 @@ class KotakOptionChain(ChainSource):
                 continue
             K, side = hit
             row = rows[K]
+            if self.depth_levels:
+                book.append(depth_row(q, K, side, self.depth_levels))
             b, a = best(q, "buy"), best(q, "sell")
             if b > 0 and a >= b:
                 row[f"{side}_bid"], row[f"{side}_ask"] = b, a
@@ -300,6 +317,8 @@ class KotakOptionChain(ChainSource):
             S = float(spot) if spot else np.nan
         df.attrs.update({"underlying": underlying, "spot": S, "expiry": expiry, "ts": self.now(),
                          "source": "kotak", "lot": self.lot.get(underlying), "quoted": quoted})
+        if self.depth_levels:
+            df.attrs["depth"] = book
         return fill_iv(df, IntradayPricer())
 
     def live_quotes(self, instruments) -> dict[str, tuple[float, float]]:

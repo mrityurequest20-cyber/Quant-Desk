@@ -43,6 +43,9 @@ WORKFLOW = "record.yml"                    # the recorder; live.yml (the paper d
 # The Kite tick recorder logs in to Zerodha by itself (deploy/kite_autologin.py). It is started once a day and never
 # again after a failure: a wrong or changed password retried every few minutes would lock the owner's Zerodha account.
 KITE_WORKFLOW, KITE_MAX_STARTS = "kite-record.yml", 1
+# The every-minute F&O stock chain recorder (record-stocks.yml, Kotak only): started like the session recorder, retried once if a day's run failed, and a problem listing or starting it never
+# holds up the main recorder (it is a separate workflow with its own concurrency group).
+STOCK_WORKFLOW, STOCK_MAX_STARTS = "record-stocks.yml", 2
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 
 
@@ -134,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     now = dt.datetime.now(IST)
     started = False
-    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
+    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
         try:
             wf_runs = _runs(wf)
         except subprocess.CalledProcessError:

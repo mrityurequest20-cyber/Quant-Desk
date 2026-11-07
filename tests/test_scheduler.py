@@ -111,8 +111,21 @@ def test_main_starts_both_recorders_and_a_kite_failure_never_blocks_the_main_one
     monkeypatch.setattr(sch, "_runs", runs)
     monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
     assert sch.main([]) == 0
-    assert calls == [["gh", "workflow", "run", "record.yml", "--ref", "main"]]
+    assert calls == [["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
     calls.clear()
     monkeypatch.setattr(sch, "_runs", lambda wf: [])
     assert sch.main([]) == 0
-    assert calls == [["gh", "workflow", "run", "kite-record.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
+    assert calls == [["gh", "workflow", "run", "kite-record.yml", "--ref", "main"], ["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"],
+                     ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
+    calls.clear()
+    monkeypatch.setattr(sch, "_runs", lambda wf: (_ for _ in ()).throw(sp.CalledProcessError(1, "gh")) if wf == sch.STOCK_WORKFLOW else [])
+    assert sch.main([]) == 0
+    assert ["gh", "workflow", "run", "record.yml", "--ref", "main"] in calls and ["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"] not in calls       # the stock recorder failing to list never blocks the main one
+
+
+def test_the_stock_recorder_is_retried_once_but_never_twice():
+    t = at("2026-10-05 09:30")
+    assert sch.STOCK_MAX_STARTS == 2
+    assert sch.decide(t, [], HOLS, sch.STOCK_MAX_STARTS)[0] == "start"
+    assert sch.decide(t, [run("2026-10-05 08:55", conclusion="failure")], HOLS, sch.STOCK_MAX_STARTS)[0] == "start"
+    assert sch.decide(t, [run("2026-10-05 08:55", conclusion="failure"), run("2026-10-05 09:10", conclusion="failure")], HOLS, sch.STOCK_MAX_STARTS)[0] == "wait"

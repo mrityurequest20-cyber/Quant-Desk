@@ -1,0 +1,119 @@
+# Every-minute option chains of every F&O stock, with quotes and the five-level order book, from the open to the close (quantdesk/data/stock_chains.py).
+#
+# The index recorder (record.yml) keeps a chain of each index every minute. This does the same for the ~200 F&O stocks: the nearest expiry around the money, every minute 09:15 to 15:30 IST.
+# One chain is ~3 Kotak calls, so the stocks are split over SHARDS (parallel jobs, each its own Kotak client, staggered inside the minute). A hosted job may run 6 hours and the session is 6h15m, so the
+# day is two halves (hand-over at 12:20). The job that merges and publishes holds no secret; the shard jobs hold the Kotak consumer key (data only: no login, no orders) and cannot write.
+#
+# Data only: no journal, no account, no order of any kind. Separate from record.yml (its own concurrency group), so a problem here never touches the index recorder.
+name: Stock chain recorder
+
+on:
+  schedule:
+    - cron: "32 3 * * 1-5"       # 09:02 IST; the shards wait for 09:15 (GitHub's cron can be hours late: deploy/scheduler.py also dispatches this)
+  workflow_dispatch:
+    inputs:
+      handover:
+        description: "Morning shards hand over to the afternoon ones at (HH:MM IST)"
+        default: "12:20"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stock-recorder
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+  HANDOVER: ${{ inputs.handover || '12:20' }}
+
+jobs:
+  morning:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    env:
+      KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}    # data only: consumer key, no login, no orders
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Record this shard's stocks to the hand-over
+        run: python -m quantdesk data stock-tape --shard ${{ matrix.shard }} --shards 10 --part "morning-${{ matrix.shard }}" --until "$HANDOVER"
+      - name: Keep the shard's morning (Parquet parts and a counts-only manifest)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stock-chains-morning-${{ matrix.shard }}
+          path: runtime/stock-chains/_parts
+          retention-days: 90
+          if-no-files-found: ignore
+
+  afternoon:
+    needs: morning
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    env:
+      KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Record this shard's stocks to the close
+        run: python -m quantdesk data stock-tape --shard ${{ matrix.shard }} --shards 10 --part "afternoon-${{ matrix.shard }}"
+      - name: Keep the shard's afternoon
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stock-chains-afternoon-${{ matrix.shard }}
+          path: runtime/stock-chains/_parts
+          retention-days: 90
+          if-no-files-found: ignore
+
+  publish:
+    needs: afternoon
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write            # the stock-chains-YYYYQn release assets and nothing else; this job holds no secret
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        continue-on-error: true
+        with:
+          pattern: stock-chains-*
+          path: parts
+          merge-multiple: true
+      - name: Merge the day's parts and keep them (three Parquet files and a counts-only manifest a day)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -d parts ] || { echo "no parts to merge (a holiday, or no key)"; exit 0; }
+          python -m quantdesk data stock-chains-publish --parts parts --day "$(date +%F)" --push || echo "::warning::stock chain publish failed; the parts are still artifacts"
