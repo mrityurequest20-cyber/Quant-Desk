@@ -67,7 +67,7 @@ jobs:
           python -m quantdesk intraday tape --until "$HANDOVER" > tape.log 2>&1 &
           tape=$!
           python -m quantdesk data record-session --until "$HANDOVER"; rc=$?
-          kill -TERM "$tape" 2>/dev/null; wait "$tape" 2>/dev/null; tail -n 12 tape.log
+          kill -TERM "$tape" 2>/dev/null || true; wait "$tape" 2>/dev/null || true; tail -n 12 tape.log || true      # the tape often ends by itself first: a missing process is not a failed recording (bash -e would fail the step on it)
           exit $rc
       - name: Keep the morning's raw data (bars + option-chain snapshots)
         if: always()
@@ -102,7 +102,7 @@ jobs:
           python -m quantdesk intraday tape > tape.log 2>&1 &
           tape=$!
           python -m quantdesk data record-session; rc=$?
-          kill -TERM "$tape" 2>/dev/null; wait "$tape" 2>/dev/null; tail -n 12 tape.log
+          kill -TERM "$tape" 2>/dev/null || true; wait "$tape" 2>/dev/null || true; tail -n 12 tape.log || true      # the tape often ends by itself first: a missing process is not a failed recording (bash -e would fail the step on it)
           exit $rc
       - name: Keep the day's raw data (bars + option-chain snapshots)
         if: always()

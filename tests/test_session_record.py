@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from quantdesk.config import DEFAULT_CONFIG, Config
 from quantdesk.data import session_record as SR
 from quantdesk.intraday.recorder import SessionRecorder
 
@@ -154,3 +155,45 @@ def test_the_recorder_workflow_keeps_no_git_credential_and_holds_only_the_kotak_
     assert set(re.findall(r"secrets\.(\w+)", text)) == {"KOTAK_CONSUMER_KEY"} and "KITE" not in text
     for job in ("morning", "afternoon"):
         assert wf["jobs"][job]["steps"][0]["with"]["persist-credentials"] == "false"
+
+
+def test_an_nse_holiday_records_nothing_even_though_the_cron_starts_the_job(tmp_path):
+    class HolCfg(Cfg):
+        def holidays(self):
+            return {DAY}
+    clock = Clock(dt.time(9, 10))
+    cfg = HolCfg({"intraday.underlyings": ["NIFTY", "BANKNIFTY"], "universe.volatility_index": "INDIAVIX"})
+    said = []
+    s = SR.SessionRecording(cfg, Feed(clock, ()), Chains("kotak", ()), SessionRecorder(tmp_path / "data"), say=said.append, now=clock.now, sleep=clock.sleep)
+    out = s.run(dt.time(9, 25))
+    assert out["recorded"] is False and not (tmp_path / "data" / str(DAY)).exists() and any("NSE holiday" in m for m in said)
+    real = Config.load(DEFAULT_CONFIG)
+    assert dt.date(2026, 11, 10) in real.holidays() and dt.date(2026, 11, 24) in real.holidays() and dt.date(2026, 11, 9) not in real.holidays()      # the real calendar: Mon 9 Nov trades, Tue 10 Nov does not
+
+
+def _step_script(job: str, name_start: str) -> str:
+    import yaml
+    wf = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/record.yml").read_text(encoding="utf-8"))
+    return next(s["run"] for s in wf["jobs"][job]["steps"] if s.get("name", "").startswith(name_start))
+
+
+def _run_step(tmp_path, script: str, tape_exits_first: bool, rc: int) -> int:
+    """The workflow's own step script, run with `bash -e` (as Actions does) against stub processes: the chain tape either ends by itself first or is still running, and the recorder ends with `rc`."""
+    import os
+    import stat
+    import subprocess
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(parents=True)
+    stub = bin_ / "python"
+    stub.write_text("#!/bin/bash\nif [[ \"$*\" == *' tape'* ]]; then\n  " + ("exit 0" if tape_exits_first else "sleep 30") + "\nfi\nsleep 1\nexit " + str(rc) + "\n", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "HANDOVER": "12:20"}
+    return subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60).returncode
+
+
+def test_the_recorder_step_does_not_fail_just_because_the_chain_tape_ended_before_it_and_still_reports_a_real_failure(tmp_path):
+    for job, name in (("morning", "Record to the hand-over"), ("afternoon", "Record to the close")):
+        script = _step_script(job, name)
+        assert _run_step(tmp_path / f"a{job}", script, tape_exits_first=True, rc=0) == 0       # the first real run (a weekend smoke test) found this red: `kill` of a finished tape failed the step under bash -e
+        assert _run_step(tmp_path / f"b{job}", script, tape_exits_first=False, rc=0) == 0      # and the tape still running is stopped, as before
+        assert _run_step(tmp_path / f"c{job}", script, tape_exits_first=True, rc=3) == 3       # a recorder that really failed still fails the step, with its own code

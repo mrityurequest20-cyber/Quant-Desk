@@ -62,3 +62,9 @@ The app has a fifth tab, **Build**. Pick an index (NIFTY, BANKNIFTY, FINNIFTY, M
 * A crossed book, or a structure that would profit at every price (a bad quote, not a trade), is shown as a data error, never as a result.
 * Known simplifications: worst loss and best profit leave out costs; held to expiry, an in-the-money long pays exercise STT (`costs.exercise_stt`), which is not modelled; Black-Scholes uses no dividend yield. If the page is published without the config (`QD_TRADE` missing) it says so and uses built-in defaults.
 * The prices come from the private live relay, so the tab works only on the Cloudflare site with your key, like the Live tab.
+
+## Keeping the schedule honest (7 Nov 2026)
+
+- **First-run smoke tests.** A workflow that has never run is run once by hand on a weekend before its first trading day: the install, the secrets, the archive step. The 7 Nov smoke test of `record.yml` found that its recording step went red whenever the chain tape had already ended by itself (`kill` of a finished process fails under `bash -e`), which would have shown as a failed index recorder and a false P1 alarm every day; fixed, and a test now runs the workflow's own step script against stub processes.
+- **Holidays.** The cron starts the index recorder on every weekday; it now also stops on an NSE holiday (10 Nov and 24 Nov 2026 are in the calendar), as the stock recorder, the tape and the scheduler already did.
+- **Watchdog.** The Worker's watchdog now also checks that the stock chain recorder and the Kite tick recorder started (09:20) and ran (16:00) on every trading day, beside the index recorder, the wide collection and the warehouse.
