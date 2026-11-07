@@ -484,6 +484,14 @@ collect_wide:
   indices: [NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY]
   stocks: [RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN, BHARTIARTL, ITC, LT, AXISBANK,
            KOTAKBANK, BAJFINANCE, MARUTI, SUNPHARMA, TATASTEEL, NTPC, HINDUNILVR, ADANIENT, ONGC, HCLTECH]
+  # 60 more liquid F&O stocks for the 15:25 chain snapshot and the 15:45 option minutes (80 in all). The daily-history importer reads `stocks` above, not these. A name Kotak does not
+  # know shows up as FAILED for that stock in the manifest and the health check; the rest are unaffected, and the list is pruned from what the first runs report.
+  stocks_extra: [M&M, ADANIPORTS, WIPRO, TECHM, POWERGRID, COALINDIA, JSWSTEEL, HINDALCO, VEDL, INDUSINDBK,
+                 BAJAJFINSV, TITAN, ULTRACEMCO, ASIANPAINT, DLF, TRENT, BEL, HAL, ETERNAL, INDIGO,
+                 PNB, BANKBARODA, CANBK, IDFCFIRSTB, TVSMOTOR, EICHERMOT, DRREDDY, CIPLA, SBILIFE, TMPV,
+                 BAJAJ-AUTO, HEROMOTOCO, NESTLEIND, BRITANNIA, GRASIM, APOLLOHOSP, DIVISLAB, LUPIN, TATAPOWER, PFC,
+                 RECLTD, IRCTC, JINDALSTEL, SAIL, NMDC, BHEL, GAIL, IOC, BPCL, HINDPETRO,
+                 SIEMENS, HAVELLS, POLYCAB, MUTHOOTFIN, CHOLAFIN, SHRIRAMFIN, GODREJCP, TATACONSUM, HDFCLIFE, JIOFIN]
   stock_expiries: 1                # nearest N expiries per stock (monthly)
   stock_strikes: 20
   minute_days: 3                   # overlap heals a missed day; Kotak serves ~30
