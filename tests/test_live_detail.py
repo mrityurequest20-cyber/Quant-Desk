@@ -82,3 +82,10 @@ out.clean = ({})["12NOV26"] === undefined && Object.prototype["12NOV26"] === und
 out.keys = Object.keys(c).sort();
 """)
     assert out["clean"] is True and out["keys"] == ["NIFTY", "__proto__", "constructor"]
+
+
+def test_a_reply_that_is_not_the_relays_says_what_it_was_and_from_where_and_the_key_is_never_in_the_message():
+    i = APP.index("async function renderLive()")
+    code = APP[i:i + 3500]
+    assert 'HTTP ${r.status}' in code and 'location.host' in code and 'content type' in code             # the status, the kind of reply and the host
+    assert "Bearer" in code and "note = `" in code and "key}" not in code[code.index("note = `"):code.index("note = `") + 400]      # the key is sent, never put in the note
