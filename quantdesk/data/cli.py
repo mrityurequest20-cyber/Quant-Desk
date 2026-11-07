@@ -227,6 +227,15 @@ def register(sub):
     x.add_argument("--out", help="default runtime/intraday/backfill")
     x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. stock-minutes)")
     x.set_defaults(fn=cmd_stock_minutes)
+    x = ss.add_parser("evening-minutes", help="1-minute candles of the near-month future of every MCX commodity and currency pair, collected after their sessions "
+                                              "(evening-minutes.yml; Kotak consumer key, data only; never fails on a Kotak problem)")
+    x.add_argument("--days", type=int, default=3, help="days back to read (Kotak serves about 30): the overlap heals a missed run")
+    x.add_argument("--budget-min", type=float, default=25.0, help="stop after this many minutes and record what is missing")
+    x.add_argument("--segments", default="mcx,cds", help="mcx, cds or both")
+    x.add_argument("--rate", type=float, default=5.0, help="requests a second (the limit is 25 and the other recorders share the key)")
+    x.add_argument("--out", help="default runtime/evening")
+    x.add_argument("--release-prefix", help="also keep the files on release <prefix>-YYYY (e.g. evening-minutes)")
+    x.set_defaults(fn=cmd_evening_minutes)
     x = ss.add_parser("status", help="coverage, gaps, and NSE's holidays vs the config")
     x.add_argument("--dir")
     x.add_argument("--release", help="pull the manifest and the small tables from this release first")
@@ -572,6 +581,41 @@ def cmd_stock_minutes(cfg, a):
                       clobber=False)
         except Exception as exc:
             print(f"::warning::stock-minutes: files kept on disk only, release push failed ({exc!s:.120})", flush=True)
+
+
+def cmd_evening_minutes(cfg, a):
+    """MCX and currency minutes after their sessions; a Kotak problem is a ::warning:: and the exit status stays 0."""
+    from ..intraday.feeds import IST as TZ
+    from ..intraday.kotak import KotakClient, KotakError
+    from . import evening_minutes as E
+    from .collect_wide import release_tag
+    try:
+        client = KotakClient.from_env()
+    except KotakError:
+        raise SystemExit("evening-minutes: no KOTAK_CONSUMER_KEY")
+    out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "evening"
+    segs = tuple(s.strip() for s in a.segments.split(",") if s.strip() in E.EXCHANGES)
+    today = pd.Timestamp.now(tz=TZ).date()
+    man = E.run(client, out, today, days=a.days, segments=segs, rate=a.rate, budget_s=a.budget_min * 60, say=lambda m: print(m, flush=True))
+    run = Path(man["path"])
+    line = ", ".join(f"{k} {t['served']}/{t['asked']}" for k, t in man["totals"].items()) or "nothing collected"
+    print(f"{run}: {line}", flush=True)
+    bad = [k for k, v in man["segments"].items() if v.get("error")] + [k for k, t in man["totals"].items() if t["served"] * 2 < t["asked"]]
+    if bad or man.get("stopped"):
+        print(f"::warning::evening-minutes: incomplete run ({line}; problems: {', '.join(sorted(set(bad))) or 'none'}"
+              f"{'; stopped: ' + str(man['stopped'])[:60] if man.get('stopped') else ''})", flush=True)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.write(f"### Evening minutes {run.name}\n{line}\n")
+            for seg, v in man["segments"].items():
+                f.write(f"- {seg}: " + (v.get("error") or f"{len(v['names'])} names; instrument types seen: {', '.join(v.get('instrument_types_seen', [])[:10])}") + "\n")
+    if a.release_prefix:
+        try:
+            _push_run(out, run, release_tag(a.release_prefix, dt.date.fromisoformat(run.name), "year"), E.release_names(run), f"Evening minutes {run.name[:4]}",
+                      "Kotak 1-minute candles (traded bars, not quotes) of the near-month future of every MCX commodity and currency pair, collected after "
+                      "their sessions; one set per run (quantdesk/data/evening_minutes.py). Not a software release.", clobber=False)
+        except Exception as exc:
+            print(f"::warning::evening-minutes: files kept on disk only, release push failed ({exc!s:.120})", flush=True)
 
 
 def cmd_external_verify(cfg, a):

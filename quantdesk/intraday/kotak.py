@@ -327,13 +327,13 @@ class KotakFutures:
     and 1-minute candles with real volume by token (`nse_fo|<token>`; no OI in candles). The contract used is the
     near month, rolled to the next one `roll_days` before expiry, when the volume moves."""
 
-    def __init__(self, client: KotakClient, roll_days: int = 3):
-        self.k, self.roll_days = client, roll_days
+    def __init__(self, client: KotakClient, roll_days: int = 3, exchange: str = "nse_fo"):
+        self.k, self.roll_days, self.exchange = client, roll_days, exchange        # exchange: nse_fo (the default), or mcx_fo / cde_fo for the evening collector
         self._c: dict[str, tuple] = {}
 
     def contracts(self, underlying: str) -> list[dict]:
         body = self.k._get("market-data/1.0/watchlist/option-chain",
-                           {"exchange": "nse_fo", "underlying": underlying, "instrument_type": "fut", "count": 10})
+                           {"exchange": self.exchange, "underlying": underlying, "instrument_type": "fut", "count": 10})
         rows = body.get("future_contracts") or (body.get("data") or {}).get("future_contracts") or []
         out = []
         for r in rows:

@@ -12,6 +12,7 @@ import pytest
 from quantdesk.data import health as H
 
 DAY = dt.date(2026, 11, 6)          # a Friday
+EVE = "2026-11-05"                  # the evening before it: what the MCX/currency check judges
 IST = H.IST
 
 
@@ -67,6 +68,12 @@ def _store(**kw) -> H.MemoryStore:
         rel["option-minutes-2026"] = {f"{d}_manifest.json": json.dumps(kw["optmin"]).encode()}
     if kw.get("stockmin") is not None:
         rel["stock-minutes-2026"] = {f"{d}_stocks_manifest.json": json.dumps(kw["stockmin"]).encode()}
+    if kw.get("stockopt") is not None:
+        rel.setdefault("option-minutes-2026", {})[f"{d}_stock_manifest.json"] = json.dumps(kw["stockopt"]).encode()
+    if kw.get("evening") is not None:
+        rel["evening-minutes-2026"] = {f"{EVE}_manifest.json": json.dumps(kw["evening"]).encode()}
+    if kw.get("history") is not None:
+        rel["daily-history"] = {f"{kw['history'].get('as_of', '2026-11-07')}_manifest.json": json.dumps(kw["history"]).encode()}
     if kw.get("warehouse") is not None:
         rel["warehouse"] = {"manifest_2026.parquet": _pq(kw["warehouse"])}
     return H.MemoryStore(rel, kw.get("branches"), kw.get("kite"))
@@ -259,7 +266,7 @@ def test_kite_states():
 def _full_store() -> H.MemoryStore:
     t = {"cash": {"asked": 5, "served": 5}, "futures": {"asked": 5, "served": 5}}
     return _store(bars=_bars(), chains=_chains(), tape=_tape(), optmin={"underlyings": {"NIFTY": {"asked": 5, "served": 5, "last": f"{DAY} 15:29"}}},
-                  stockmin={"totals": t}, warehouse=_wh({x: "2026-11-06" for x in H.CORE_WAREHOUSE_TABLES}),
+                  stockmin={"totals": t}, stockopt=_stockopt(), evening=_evening(), history={"as_of": "2026-11-05", "series": {"NIFTY": {}}, "unverified_series": []}, warehouse=_wh({x: "2026-11-06" for x in H.CORE_WAREHOUSE_TABLES}),
                   gift=pd.DataFrame({"ts": pd.date_range(dt.datetime.combine(DAY, dt.time(8, 30), tzinfo=IST), periods=5, freq="10min")}),
                   branches={"premarket": {"brief.json": json.dumps({"session": str(DAY)}).encode()}}, kite=[{"name": "kite-raw", "size": 9e6, "expired": False}])
 
@@ -362,3 +369,70 @@ def test_retry_delay_honours_retry_after_and_rate_limit_reset(monkeypatch):
     assert H.retry_delay(403, {"Retry-After": "900"}, 0) == 60.0                                         # capped
     assert H.retry_delay(500, None, 0) == 2.0 and H.retry_delay(0, None, 1) == 4.0
     assert H.retry_delay(403, {"Retry-After": "soon"}, 0) == 2.0                                        # garbage header: the plain pause
+
+
+# ---- stock option minutes, MCX/currency minutes, daily history ---------------------------------------------------------------------------------
+def _stockopt(**over) -> dict:
+    st = {"RELIANCE": {"asked": 44, "served": 44, "failed": 0, "last": f"{DAY} 15:39:00+05:30"}, "TCS": {"asked": 44, "served": 44, "failed": 0, "last": f"{DAY} 15:39:00+05:30"}}
+    st.update(over)
+    return {"stocks": st}
+
+
+def _evening(mcx=(40, 40), cds=(6, 6), **over) -> dict:
+    m = {"segments": {"mcx": {"names": {}}, "cds": {"names": {}}}, "totals": {"mcx": {"asked": mcx[0], "served": mcx[1], "failed": mcx[0] - mcx[1]},
+                                                                                "cds": {"asked": cds[0], "served": cds[1], "failed": cds[0] - cds[1]}}, "stopped": None}
+    m.update(over)
+    return m
+
+
+def test_stock_option_minutes_ok_short_stale_and_missing():
+    assert H.check_stock_option_minutes(_store(stockopt=_stockopt()), DAY).status == H.OK
+    c = H.check_stock_option_minutes(_store(stockopt=_stockopt(TCS={"asked": 44, "served": 30, "failed": 14, "last": f"{DAY} 15:39"})), DAY)
+    assert c.status == H.BAD and "TCS: 30 of 44" in c.detail and c.metrics["worst_served_ratio"] < 0.9
+    c = H.check_stock_option_minutes(_store(stockopt=_stockopt(TCS={"asked": 44, "served": 43, "failed": 1, "last": f"{DAY} 15:39"})), DAY)
+    assert c.status == H.WARN
+    stale = _stockopt(TCS={"asked": 44, "served": 44, "failed": 0, "last": "2026-11-05 15:39"})
+    assert "newest bar is from 05 Nov" in H.check_stock_option_minutes(_store(stockopt=stale), DAY).detail
+    assert H.check_stock_option_minutes(_store(stockopt={"stocks": {}}), DAY).status == H.BAD
+    assert H.check_stock_option_minutes(_store(), DAY).status == H.MISSING
+
+
+def test_evening_minutes_are_judged_for_the_previous_weekday_and_say_which_segment_fell_short():
+    assert H.check_evening_minutes(_store(evening=_evening()), DAY).status == H.OK                      # Fri: judged on Thu's manifest
+    c = H.check_evening_minutes(_store(evening=_evening(mcx=(40, 20))), DAY)
+    assert c.status == H.BAD and "mcx: 20 of 40" in c.detail
+    assert H.check_evening_minutes(_store(evening=_evening(mcx=(40, 39))), DAY).status == H.WARN
+    err = _evening()
+    err["segments"]["cds"] = {"error": "scrip master: HTTP 404"}
+    c = H.check_evening_minutes(_store(evening=err), DAY)
+    assert c.status == H.BAD and "cds: scrip master" in c.detail
+    assert H.check_evening_minutes(_store(evening=_evening(stopped="time budget")), DAY).status == H.WARN
+    assert H.check_evening_minutes(_store(evening={"segments": {}, "totals": {}}), DAY).status == H.BAD
+    assert H.check_evening_minutes(_store(), DAY).status == H.MISSING
+    mon = dt.date(2026, 11, 9)                                                                           # a Monday looks back over the weekend to Friday's evening
+    s = _store(evening=_evening())
+    s.releases["evening-minutes-2026"] = {"2026-11-06_manifest.json": json.dumps(_evening()).encode()}
+    assert H.check_evening_minutes(s, mon).status == H.OK
+
+
+def test_daily_history_missing_old_and_partly_unverified():
+    assert H.check_daily_history(_store(), DAY).status == H.MISSING
+    ok = {"as_of": "2026-11-05", "series": {"A": {}, "B": {}}, "unverified_series": []}
+    assert H.check_daily_history(_store(history=ok), DAY).status == H.OK
+    c = H.check_daily_history(_store(history={**ok, "unverified_series": ["B", "SENSEX"]}), DAY)
+    assert c.status == H.WARN and "2 of 2 series are not verified" in c.detail and c.metrics["unverified"] == 2
+    c = H.check_daily_history(_store(history={**ok, "as_of": "2026-09-01"}), DAY)
+    assert c.status == H.WARN and "66 days old" in c.detail
+
+
+def test_the_report_lists_the_new_channels_and_they_never_fail_the_run_alone():
+    full = _full_store()
+    names = [c.channel for c in H.build_report(full, None, DAY, NOW_LATE).checks]
+    assert {"stock option minutes", "MCX/currency minutes", "daily history"} <= set(names)
+    bare = _full_store()
+    bare.releases.pop("evening-minutes-2026"); bare.releases.pop("daily-history"); bare.releases["option-minutes-2026"].pop(f"{DAY}_stock_manifest.json")
+    r = H.build_report(bare, None, DAY, NOW_LATE)
+    by = {c.channel: c.status for c in r.checks}
+    assert by["stock option minutes"] == by["MCX/currency minutes"] == by["daily history"] == H.MISSING and not r.failed()      # non-critical: shown, never red on its own
+    early = H.build_report(H.MemoryStore(), None, DAY, dt.datetime(2026, 11, 6, 6, 0, tzinfo=IST))
+    assert {c.channel: c.status for c in early.checks}["MCX/currency minutes"] == H.PENDING             # before 07:00 the previous evening is not yet judged
