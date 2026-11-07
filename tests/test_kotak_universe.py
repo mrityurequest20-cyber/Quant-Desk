@@ -79,10 +79,26 @@ def test_option_chains_are_the_nearest_two_unexpired_expiries_per_index_on_the_r
     u = KU.build(FakeClient(), TODAY, say=lambda *a: None)
     by_u = {}
     for c in u["chains"]:
-        by_u.setdefault(c["u"], []).append(c)
+        if "n" not in c:                                                                   # the stock chains have a keep-count: they are tested below
+            by_u.setdefault(c["u"], []).append(c)
     assert set(by_u) == set(KU.CHAIN_UNDERLYINGS)
     assert [c["e"] for c in by_u["NIFTY"]] == ["2026-11-10", "2026-11-17"] and all(c["x"] == "nse_fo" for c in by_u["NIFTY"])
     assert all(c["x"] == "bse_fo" for c in by_u["SENSEX"] + by_u["BANKEX"])
+
+
+def test_every_fno_stock_gets_its_nearest_unexpired_expiry_chain_with_a_keep_count(master):
+    u = KU.build(FakeClient(bad_expiries=("TCS",)), TODAY, say=lambda *a: None)
+    stock = {c["u"]: c for c in u["chains"] if "n" in c}
+    assert set(stock) == {"RELIANCE", "M&M", "BAJAJ-AUTO", "NOTOKENCO"}                      # TCS had no expiries: skipped and counted; every other F&O stock has one
+    assert all(c["e"] == "2026-11-10" and c["x"] == "nse_fo" and c["n"] == KU.STOCK_STRIKES for c in stock.values())      # the nearest expiry that is not past
+    assert any("TCS expiries" in e for e in u["errors"])
+    assert not any("n" in c for c in u["chains"] if c["u"] in KU.CHAIN_UNDERLYINGS)          # an index chain has no keep-count: it runs in every cycle
+
+
+def test_stock_chains_are_capped(master, monkeypatch):
+    monkeypatch.setattr(KU, "STOCK_CHAINS_MAX", 2)
+    u = KU.build(FakeClient(), TODAY, say=lambda *a: None)
+    assert sum(1 for c in u["chains"] if "n" in c) == 2
 
 
 def test_one_failure_skips_only_its_part_and_is_counted(master, monkeypatch):

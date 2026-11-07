@@ -29,6 +29,8 @@ CHAIN_UNDERLYINGS = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "
 FUT_INDICES = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
 CHAIN_EXPIRIES = 2
 CHAIN_STRIKES = 10                                           # strikes each side of the money in one chain call
+STOCK_CHAINS_MAX = 250                                       # F&O stocks whose option chain is polled (about 200 exist); the relay rotates them in the calls left over by the prices
+STOCK_STRIKES = 3                                            # strikes each side of the money kept from a stock's chain: 14 option names a stock, not 42
 MAX_QUOTES = 3000                                            # the relay's own cap
 
 
@@ -98,6 +100,15 @@ def build(client, today: dt.date, say=print, fut_limit: int | None = None) -> di
             if not exp:
                 raise KotakError("no expiries")
             chains += [{"u": u, "x": ex, "e": d.isoformat()} for d in exp]
+        except Exception as e:                                # noqa: BLE001
+            errors.append(f"{u} expiries: {type(e).__name__}")
+
+    for u in names[:STOCK_CHAINS_MAX]:                         # every F&O stock's nearest expiry: its option chain, a few strikes either side of the money
+        try:
+            exp = [d for d in client.expiries(u, exchange="nse_fo") if d >= today][:1]
+            if not exp:
+                raise KotakError("no expiries")
+            chains.append({"u": u, "x": "nse_fo", "e": exp[0].isoformat(), "n": STOCK_STRIKES})
         except Exception as e:                                # noqa: BLE001
             errors.append(f"{u} expiries: {type(e).__name__}")
 
