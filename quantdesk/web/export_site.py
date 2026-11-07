@@ -47,7 +47,7 @@ def _clean(o):
 STATIC = Path(__file__).resolve().parent / "static" / "app"
 CHART_LIB = Path(__file__).resolve().parent / "static" / "vendor" / "lightweight-charts.js"
 FONTS = STATIC / "fonts"
-ICONS = ("icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png")
+ICONS = ("icon.svg", "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png")      # all drawn from icon.svg (deploy/make_icons.mjs)
 
 # Answers the app's /api/i/* calls from one data object D (same JSON the server would return).
 ROUTES = r"""
@@ -252,8 +252,7 @@ def publish_site(cfg, account: str, out_dir: Path, sessions: int = 3, label: str
     out.mkdir(parents=True, exist_ok=True)
     data = site_data(cfg, account, sessions, label, live=True)
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    for asset in ("manifest.webmanifest", "icon-192.png", "apple-touch-icon.png"):
-        html = html.replace(f'href="/{asset}"', f'href="{asset}"')
+    html = re.sub(r'href="/((?:manifest\.webmanifest|icon\.svg|icon-192\.png|apple-touch-icon\.png)(?:\?v=\d+)?)"', r'href="\1"', html)      # the published site lives under a sub-path: relative links (the ?v= forces a phone to refetch a changed icon)
     html = html.replace("/static/app/fonts/", "fonts/")
     html = re.sub(r'<script src="/static/datafeed.js"></script>\s*', "", html)
     html = html.replace('<script src="/static/vendor/lightweight-charts.js"></script>', '<script src="lightweight-charts.js"></script>')
