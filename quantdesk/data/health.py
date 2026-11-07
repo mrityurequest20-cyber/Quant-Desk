@@ -483,8 +483,10 @@ def check_daily_history(store, day: dt.date, tag: str = "daily-history", channel
         issues.append(f"the newest dataset is {age} days old")
     if bad:
         issues.append(f"{len(bad)} of {series} series are not verified ({', '.join(bad[:6])}{'…' if len(bad) > 6 else ''})")
-    return Check(channel, WARN if issues else OK, "; ".join(issues) if issues else f"{series} series, all verified, {age} days old", False,
-                 {"series": series, "unverified": len(bad), "age_days": age})
+    gappy = m.get("gappy_series") or []                       # holes in the record: a coverage note, not a failure (the values that exist were checked)
+    note = f" ({len(gappy)} with missing days: {', '.join(gappy[:6])}{'…' if len(gappy) > 6 else ''})" if gappy else ""
+    return Check(channel, WARN if issues else OK, "; ".join(issues) if issues else f"{series} series, all verified, {age} days old{note}", False,
+                 {"series": series, "unverified": len(bad), "age_days": age, "gappy": len(gappy)})
 
 
 def check_fx_daily(store, day: dt.date) -> Check:
