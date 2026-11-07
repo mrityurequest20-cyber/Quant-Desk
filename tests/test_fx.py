@@ -168,3 +168,41 @@ def test_the_fx_workflows_hold_no_secret_are_pinned_and_isolated():
     assert run["env"]["DAYS"] == "${{ inputs.days || '5' }}" and '[[ "$DAYS" =~ ^[0-9]$ ]]' in run["run"] and "|| echo \"::warning::" in run["run"]
     daily = yaml.safe_load((ROOT / ".github/workflows/fx-daily.yml").read_text(encoding="utf-8"))
     assert list(daily.get("on", daily.get(True))) == ["workflow_dispatch"]                               # by hand: each run is a new immutable dataset
+
+
+def test_a_daily_bar_stamped_at_london_midnight_keeps_its_own_date_in_summer_and_winter():
+    """The first real run (7 Nov 2026): 14% of weekdays 'missing' in every series, because a summer bar stamped 00:00+01:00 became 23:00 UTC the day before and its date a Sunday."""
+    london = pd.DatetimeIndex(["2024-07-01 00:00", "2024-07-02 00:00", "2024-01-08 00:00"], tz="Europe/London")
+    assert [str(d.date()) for d in FX.local_dates(london)] == ["2024-07-01", "2024-07-02", "2024-01-08"]                  # summer Monday, summer Tuesday, winter Monday
+    assert [str(d.date()) for d in london.tz_convert("UTC").normalize()][0] == "2024-06-30"                              # what the UTC route gave: a Sunday
+    assert (FX.local_dates(london).dayofweek < 5).all()
+    assert [str(d.date()) for d in FX.local_dates(pd.DatetimeIndex(["2024-07-01 13:00"]))] == ["2024-07-01"]               # a naive index is just normalised
+    # and the gap check sees no gap in a run of weekdays stamped that way
+    days = pd.bdate_range("2024-05-01", "2024-09-30")
+    stamped = pd.DatetimeIndex([f"{d:%Y-%m-%d} 00:00" for d in days]).tz_localize("Europe/London")
+    g = FX.gap_report(FX.local_dates(stamped), days.min(), days.max())
+    assert g["missing"] == 0 and g["expected"] == len(days)
+    g_bad = FX.gap_report(stamped.tz_convert("UTC").normalize(), days.min(), days.max())
+    assert g_bad["missing"] > 50                                                                                         # the old route: dozens of "missing" summer weekdays
+
+
+def test_the_yahoo_client_returns_daily_bars_on_their_own_dates_and_minute_bars_in_utc(monkeypatch):
+    import sys
+    import types
+    days = pd.bdate_range("2024-06-24", "2024-07-05")
+    daily_raw = pd.DataFrame({"Open": 1.0, "High": 1.1, "Low": 0.9, "Close": 1.05, "Volume": 0.0}, index=pd.DatetimeIndex([f"{d:%Y-%m-%d} 00:00" for d in days]).tz_localize("Europe/London"))
+    mins_raw = pd.DataFrame({"Open": 1.0, "High": 1.1, "Low": 0.9, "Close": 1.05, "Volume": 0.0}, index=pd.date_range("2024-07-01 00:00", periods=5, freq="min", tz="Europe/London"))
+
+    class Ticker:
+        def __init__(self, t):
+            self.t = t
+
+        def history(self, **kw):
+            return daily_raw if kw.get("interval") == "1d" else mins_raw
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(Ticker=Ticker))
+    y = FX.YahooFx(tries=1, sleep=lambda s: None)
+    d = y.daily("EURUSD", dt.date(2024, 6, 24), dt.date(2024, 7, 5))
+    assert [str(x.date()) for x in d.index] == [f"{x:%Y-%m-%d}" for x in days] and d.index.tz is None and d.index.name == "date"          # Monday 1 July stays Monday
+    assert (d.index.dayofweek < 5).all() and FX.gap_report(d.index, days.min(), days.max())["missing"] == 0
+    m = y.minutes("EURUSD", 5)
+    assert str(m.index.tz) == "UTC" and m.index[0] == pd.Timestamp("2024-06-30 23:00", tz="UTC")                                           # an instant, in UTC
