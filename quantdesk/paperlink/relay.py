@@ -48,7 +48,10 @@ class Relay:
         return cls(e("LIVE_URL"), e("LIVE_READ_TOKEN"), e("LIVE_INGEST_TOKEN"))
 
     def _call(self, method: str, path: str, token: str, body=None) -> dict:
-        data = json.dumps(body, allow_nan=False).encode() if body is not None else None
+        try:
+            data = json.dumps(body, allow_nan=False).encode() if body is not None else None
+        except (ValueError, TypeError, OverflowError):
+            raise RelayError(f"{method} {path}: the body cannot be encoded") from None
         req = urllib.request.Request(self.base + path, data=data, method=method,
                                      headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", "User-Agent": "quantdesk-paper"})
         try:
@@ -66,7 +69,7 @@ class Relay:
             raise RelayError(f"{method} {path}: answer too large")
         try:
             out = json.loads(raw or b"{}")
-        except ValueError:
+        except (ValueError, RecursionError):
             raise RelayError(f"{method} {path}: not JSON") from None
         if not isinstance(out, dict):
             raise RelayError(f"{method} {path}: unexpected answer")

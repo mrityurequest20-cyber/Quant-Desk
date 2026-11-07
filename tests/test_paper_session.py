@@ -58,7 +58,7 @@ class FakeRelay:
     def post_result(self, res):
         self._f("result")
         self.results.append(res)
-        self.orders = [o for o in self.orders if o["id"] != res["id"]]
+        self.orders = [o for o in self.orders if not (isinstance(o, dict) and o.get("id") == res["id"])]
 
     def put_state(self, summary, account_text):
         self._f("state")
@@ -76,9 +76,9 @@ class FakeRelay:
         self.orders.append(o)
 
 
-def go(cfg, relay, clock, tmp_path, minutes=1, say=None):
+def go(cfg, relay, clock, tmp_path, minutes=1, say=None, new=True):
     return S.run(cfg, relay, tmp_path / "ledger" / "account.json", (clock.t + dt.timedelta(minutes=minutes)).astimezone(IST).time(), every_s=3.0,
-                 clock=clock, sleep=clock.sleep, say=say or (lambda *a: None))
+                 clock=clock, sleep=clock.sleep, say=say or (lambda *a: None), new_account=new)
 
 
 def test_an_order_is_filled_saved_to_disk_and_the_relay_and_its_result_reported(cfg, tmp_path):
@@ -159,7 +159,7 @@ def test_an_outage_mid_session_loses_nothing_results_are_retried_and_state_is_re
         if cycles["n"] == 4:
             rl.fail = set()                                                                                            # the relay recovers
         orig(s)
-    S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None)
+    S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None, new_account=True)
     assert [r["status"] for r in rl.results] == ["filled"]                                                             # reported once, after the outage
     assert len(R.load_account(rl.state["account"]).ledger) == 1                                                        # and the account reached the relay
 
@@ -271,7 +271,7 @@ def test_a_fill_is_on_disk_before_the_session_ends_so_a_crash_cannot_lose_it(cfg
             raise KeyboardInterrupt                                                                                    # the job is killed mid-session
         clk.sleep(s)
     with pytest.raises(KeyboardInterrupt):
-        S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=5)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None)
+        S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=5)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None, new_account=True)
     assert NAME in R.load_account((tmp_path / "l.json").read_text()).positions
 
 
@@ -289,7 +289,7 @@ def test_a_fill_made_while_the_state_upload_fails_reaches_the_relay_when_it_reco
         if n["c"] == 6:
             rl.fail = set()
         orig(s)
-    S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None)
+    S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None, new_account=True)
     assert NAME in R.load_account(rl.state["account"]).positions
 
 
@@ -306,3 +306,150 @@ def test_the_link_package_has_no_broker_and_no_order_path_and_the_paper_package_
         assert not re.search(r"place_order|KITE_|KOTAK_|subprocess|socket\b", src), f.name
         assert not re.search(r'_call\([^)]*"/(orders|live/ingest|live/universe)', src), f.name                         # it never writes to the board or calls an order route
     assert not list((ROOT / "quantdesk" / "paper").glob("relay.py")) and not list((ROOT / "quantdesk" / "paper").glob("session.py"))
+
+
+# ---- the independent review's findings (session level) ---------------------------------------------------------------------------------
+def test_a_missing_or_odd_kill_answer_counts_as_on_and_a_normal_off_resumes(cfg, tmp_path):                            # F7a
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add("ord-kill001")
+    orig = rl.queue
+    rl.queue = lambda: {k: v for k, v in orig().items() if k != "kill"}                                               # an answer with no kill key at all
+    go(cfg, rl, clk, tmp_path)
+    assert rl.results[-1]["status"] == "refused" and "kill" in " ".join(rl.results[-1]["reasons"])
+    rl.queue = lambda: dict(orig(), kill="false")                                                                      # a string is not the boolean false
+    rl.add("ord-kill002")
+    go(cfg, rl, clk, tmp_path)
+    assert rl.results[-1]["status"] == "refused"
+    rl.queue = orig
+    rl.add("ord-kill003")
+    go(cfg, rl, clk, tmp_path)
+    assert rl.results[-1]["status"] == "filled"
+
+
+def test_a_missing_account_everywhere_stops_the_start_unless_it_is_the_declared_first_session(cfg, tmp_path):          # F7c
+    clk = Clock()
+    with pytest.raises(SystemExit) as e:
+        go(cfg, FakeRelay(clk), clk, tmp_path, new=False)
+    assert "--new-account" in str(e.value)
+    assert go(cfg, FakeRelay(clk), clk, tmp_path, new=True) == 0
+
+
+def test_a_fill_is_not_reported_until_it_is_safe_on_the_relay(cfg, tmp_path):                                          # F7b
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add("ord-safe001")
+    rl.fail = {"state"}
+    go(cfg, rl, clk, tmp_path)
+    assert rl.results == [] and "account" not in rl.state                                                              # the fill is on disk, but nothing was reported that the relay could lose
+    assert NAME in R.load_account((tmp_path / "ledger" / "account.json").read_text()).positions
+    rl.fail = set()
+    go(cfg, rl, clk, tmp_path, new=False)                                                                              # the next session restores from the branch file and the relay catches up
+    assert NAME in R.load_account(rl.state["account"]).positions and [r["status"] for r in rl.results] == ["done"]      # (the order is now known as handled)
+
+
+def test_a_rising_high_water_mark_is_saved_and_sent_even_with_no_fill(cfg, tmp_path, monkeypatch):                    # F2
+    monkeypatch.setattr(S, "FULL_EVERY_S", 0.0)
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add("ord-hwm001")
+    n = {"c": 0}
+    orig = clk.sleep
+
+    def sleep(s):
+        n["c"] += 1
+        if n["c"] == 3:
+            rl.q[NAME] = dict(bid=160.0, ask=161.0, bid_qty=5000, ask_qty=5000, ltp=160, age_s=1.0)                    # the position is marked up: no fill, but equity (and the mark) rises
+        orig(s)
+    S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None, new_account=True)
+    on_disk, on_relay = R.load_account((tmp_path / "l.json").read_text()), R.load_account(rl.state["account"])
+    assert on_disk.hwm > 500_000 and on_relay.hwm == on_disk.hwm                                                      # both copies carry the new high-water mark
+
+
+def test_a_poison_queue_entry_or_cycle_error_cannot_kill_the_session_or_lose_a_fill(cfg, tmp_path, monkeypatch):      # F3
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add("ord-good001")
+    rl.orders.append({"id": ["not", "a", "string"], "side": "buy"})
+    rl.orders.append("junk")
+    boom = {"n": 0}
+    real = R.Runner.step
+
+    def step(self, *a, **k):
+        res = real(self, *a, **k)
+        boom["n"] += 1
+        if boom["n"] == 1:
+            raise RuntimeError("something unexpected after the first order was filled")
+        return res
+    monkeypatch.setattr(R.Runner, "step", step)
+    assert go(cfg, rl, clk, tmp_path) == 0
+    assert NAME in R.load_account((tmp_path / "ledger" / "account.json").read_text()).positions                       # the fill made before the error was saved
+    assert NAME in R.load_account(rl.state["account"]).positions
+
+
+def test_the_logs_never_carry_a_line_break_from_outside(cfg, tmp_path):                                                 # F7e
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add("ord-logsafe", symbol="NIFTYZZZZ\n::error::injected")
+    said = []
+    go(cfg, rl, clk, tmp_path, say=said.append)
+    assert said and all("\n" not in m and "\r" not in m for m in said)
+
+
+def test_a_deeply_nested_or_unencodable_body_is_a_relay_error_not_a_crash():                                           # F3, F7g
+    rl = Relay("https://x.workers.dev/live/ingest", "a", "b", opener=lambda r, timeout=None: Resp(b"[" * 200000))
+    with pytest.raises(RelayError):
+        rl.queue()
+    with pytest.raises(RelayError):
+        Relay("https://x.workers.dev/live/ingest", "a", "b", opener=lambda r, timeout=None: Resp()).put_state({"x": float("nan"), "ledger_len": 0}, None)
+
+
+def test_a_big_valid_answer_is_refused_by_size_not_by_accident():                                                       # survivor
+    big = b'{"a":"' + b"x" * 4_000_100 + b'"}'
+    with pytest.raises(RelayError) as e:
+        Relay("https://x.workers.dev/live/ingest", "a", "b", opener=lambda r, timeout=None: Resp(big)).queue()
+    assert "too large" in str(e.value)
+
+
+def test_the_real_opener_refuses_a_redirect_so_the_key_goes_nowhere_else():                                            # survivor
+    import http.server
+    import threading
+    seen = []
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(self.headers.get("Authorization"))
+            self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+    tgt = http.server.HTTPServer(("127.0.0.1", 0), Target)
+
+    class Redir(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(307); self.send_header("Location", f"http://127.0.0.1:{tgt.server_port}/stolen"); self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    red = http.server.HTTPServer(("127.0.0.1", 0), Redir)
+    for srv in (tgt, red):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        rl = Relay("https://x.workers.dev/live/ingest", "R" * 40, "I" * 40)                                             # its own opener, as built in production
+        rl.base = f"http://127.0.0.1:{red.server_port}"                                                                # only the address is swapped, to reach the local server
+        with pytest.raises(RelayError) as e:
+            rl.queue()
+        assert "307" in str(e.value) and seen == []                                                                     # the target never saw a request, let alone the key
+    finally:
+        tgt.shutdown(); red.shutdown()
+
+
+def test_a_line_break_in_a_reason_from_anywhere_is_flattened_before_it_is_logged(cfg, tmp_path, monkeypatch):           # F7e, the outer layer
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add("ord-nl000001")
+    real = R.Runner.handle
+    monkeypatch.setattr(R.Runner, "handle", lambda self, raw, snap_, now: dict(real(self, raw, snap_, now), status="refused", reasons=["line one\n::error::line two\r"]))
+    said = []
+    go(cfg, rl, clk, tmp_path, say=said.append)
+    assert any("refused" in m for m in said) and all("\n" not in m and "\r" not in m for m in said)

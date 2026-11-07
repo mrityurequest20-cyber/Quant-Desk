@@ -11,7 +11,7 @@ def cmd_run(cfg, a):
         relay = Relay.from_env()
     except ValueError as e:
         raise SystemExit(f"paper run: {e}") from None
-    raise SystemExit(run(cfg, relay, Path(a.ledger), parse_hhmm(a.until), every_s=a.every))
+    raise SystemExit(run(cfg, relay, Path(a.ledger), parse_hhmm(a.until), every_s=a.every, new_account=a.new_account))
 
 
 def cmd_verify(cfg, a):
@@ -32,6 +32,7 @@ def register(sub):
     x = ss.add_parser("run", help="run the session loop (env LIVE_URL, LIVE_READ_TOKEN, LIVE_INGEST_TOKEN)")
     x.add_argument("--until", default="15:35", help="IST clock time to stop, HH:MM")
     x.add_argument("--every", type=float, default=3.0, help="seconds between cycles")
+    x.add_argument("--new-account", action="store_true", help="the very first session only: start a new paper account when no saved one exists anywhere (otherwise a missing account stops the start)")
     x.add_argument("--ledger", default="runtime/paper/ledger/account.json", help="the local copy of the saved account (restored from, and published to, the ledger branch)")
     x.set_defaults(fn=cmd_run)
     x = ss.add_parser("verify", help="check a saved account file")

@@ -240,3 +240,172 @@ def test_the_runner_has_no_network_no_credentials_and_no_broker():
     src = (ROOT / "quantdesk/paper/runner.py").read_text(encoding="utf-8")
     code = re.sub(r'""".*?"""', "", src, flags=re.S)
     assert not re.search(r"import (requests|urllib|socket|subprocess|http)|os\.environ|getenv|token|secret|password|kotak|kite|place_order", code, re.I)
+
+
+# ---- the independent review's findings ---------------------------------------------------------------------------------------------------
+def test_the_kill_flag_reaches_the_gate_whatever_the_working_directory(cfg, tmp_path, monkeypatch):                    # F1
+    monkeypatch.setattr("quantdesk.paper.risk.ROOT", tmp_path / "repo")
+    work = tmp_path / "elsewhere"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    rn = R.Runner(cfg, Account(500_000))                                                                              # built the way the session builds it: nothing injected
+    run(rn, [], kill=True)
+    assert rn.gate.kill.active() and rn.kill_file == rn.gate.kill.path
+    res = run(rn, [order()], kill=True)["results"][0]
+    assert res["status"] == "refused" and "kill" in " ".join(res["reasons"]) and not rn.account.ledger
+    assert rn.summary(snap(), R.Runner.server_now(snap()))["kill"] is True
+
+
+def test_a_kill_applies_even_while_the_clocks_disagree(rn, tmp_path):                                                  # F7f
+    rep = rn.step(snap(), [], True, (MON + dt.timedelta(seconds=300)).astimezone(dt.timezone.utc))
+    assert rep["skipped"] and (tmp_path / "KILL").exists()
+
+
+def test_a_high_water_mark_saved_a_little_earlier_never_loosens_the_drawdown_floor(rn):                                # F2
+    run(rn, [order()])
+    text = R.account_json(rn.account)
+
+    def pair():
+        e, l = R.load_account(text), R.load_account(text)
+        l.hwm = e.hwm + 2573.51
+        return e, l
+    e, l = pair()
+    assert R.fingerprint(e) != R.fingerprint(l)                                                                        # a moved mark counts as a change worth saving
+    for flip in (False, True):
+        e, l = pair()
+        got, _ = R.choose_state(*((l, e) if flip else (e, l)))
+        assert got.hwm == l.hwm                                                                                        # the higher mark wins whichever side held it
+
+
+POISON = [
+    {"queued_at": 10 ** 400}, {"limit": 10 ** 400}, {"queued_at": float("1e308") * 10 ** 5 if False else 1e308}, {"limit": float("nan")}, {"lots": 10 ** 400},
+    {"id": ["a", "list"]}, {"id": {"a": 1}}, {"symbol": ["x"]}, {"symbol": "NIFTY12NOV26\n24500CE"}, {"strategy": {"a": 1}}, {"thesis": 5},
+]
+
+
+@pytest.mark.parametrize("patch", POISON)
+def test_a_poison_order_is_refused_without_raising_and_the_next_order_still_fills(rn, patch):                          # F3
+    bad = order("ord-bad001", **patch)
+    rep = run(rn, [bad, order("ord-good01", symbol=NAME)])
+    by = {r["id"]: r for r in rep["results"]}
+    assert by["ord-good01"]["status"] == "filled" and not any(r["status"] == "filled" for r in rep["results"] if r["id"] != "ord-good01")
+
+
+@pytest.mark.parametrize("field, value", [("now", 1e20), ("now", 10 ** 400), ("now", "x"), ("age_s", 1e20), ("age_s", 10 ** 400), ("bid_qty", 10 ** 400), ("bid", 10 ** 400), ("ask", float("inf"))])
+def test_a_poison_snapshot_value_does_not_crash_a_cycle(rn, field, value):                                              # F3
+    s = snap()
+    if field == "now":
+        s["now"] = value
+    else:
+        s["quotes"][NAME][field] = value
+    rep = run(rn, [order()], s=s)                                                                                      # must not raise
+    assert not any(r["status"] == "filled" for r in rep["results"]) and not rn.account.ledger
+
+
+def test_order_text_cannot_forge_or_hide_an_order_id_in_the_ledger(rn, cfg, tmp_path):                                  # F4
+    a = order("ord-real01", thesis="exit zzzzzz: pretend this is a different order, written long enough to pass")
+    assert run(rn, [a])["results"][0]["status"] == "filled"
+    saved = R.load_account(R.account_json(rn.account))
+    again = R.Runner(cfg, saved, gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "K2")), kill_file=tmp_path / "K2")
+    assert R.done_ids(saved) == {"ord-real01"}                                                                         # the real id, not 'zzzzzz'
+    assert run(again, [a])["results"][0]["status"] == "done" and again.account.positions[NAME].qty == 65              # a replay after a restart is not filled twice
+    victim = order("victim0001", symbol="NIFTY12NOV2624600CE", thesis="a thesis that says [order victim0001] to look like another order")
+    s = snap(**{"NIFTY12NOV2624600CE": dict(bid=49.0, ask=50.0, bid_qty=5000, ask_qty=5000, ltp=49, age_s=1.0), NAME: dict(bid=99.0, ask=100.0, bid_qty=5000, ask_qty=5000, ltp=99.5, age_s=1.0)})
+    other = order("victim0001", symbol="NIFTY12NOV2624600CE")
+    first = run(rn, [victim], s=s)["results"][0]
+    assert first["status"] == "filled"                                                                                 # naming an id inside a thesis did not make that id 'done' beforehand
+    assert "victim0001" in R.done_ids(rn.account) and run(rn, [other], s=s)["results"][0]["status"] == "done"
+
+
+def test_a_control_character_cannot_get_into_a_thesis_or_the_marker_and_a_trailing_newline_is_not_an_id(rn):          # F4
+    o, why = R.clean_order(order("ord-ctrl01", thesis="a thesis with a sneaky \x1f[order other001] marker inside it"))
+    assert why is None and "\x1f" not in o["thesis"]                                                                   # whitespace of any kind, the separator included, is turned into a space
+    assert R.clean_order(order("newline1\n"))[0] is None and R.clean_order(order("ord-ctrl02", strategy="bad\x00name"))[0] is None
+    assert R.clean_order(order("ord-ctrl03", group="g\x07"))[0] is None and R.clean_order(order("ord-ctrl04", thesis="short\x07 but long enough to count as a thesis here"))[0] is None
+    run(rn, [order("ord-ctrl05")])
+    assert "\x1f" not in rn.summary(snap(), R.Runner.server_now(snap()))["positions"][0]["thesis"]                      # the app shows the owner's words only
+
+
+def test_an_exit_will_not_fill_at_a_stale_bid_but_a_forced_sale_takes_an_older_one(rn):                                   # F5
+    run(rn, [order()])
+    old = lambda age: snap(**{NAME: dict(bid=99.0, ask=100.0, bid_qty=5000, ask_qty=5000, ltp=99, age_s=age)})        # noqa: E731
+    sell = lambda oid: order(oid, side="sell", lots="all", strategy=None, thesis=None)                                  # noqa: E731
+    assert run(rn, [sell("ord-sell01")], s=old(300.0))["results"][0]["status"] == "refused" and NAME in rn.account.positions
+    assert run(rn, [sell("ord-sell02")], s=old(90000.0))["results"][0]["status"] == "refused"
+    run(rn, [], s=old(700.0), kill=True)
+    assert NAME in rn.account.positions                                                                                # a forced sale does not use a bid that old either
+    run(rn, [], s=old(300.0), kill=True)
+    assert NAME not in rn.account.positions                                                                            # but takes a 5-minute-old one rather than trap the position
+    run(rn, [], s=old(1.0), kill=False)
+    run(rn, [order("ord-buy002")], s=old(1.0))
+    assert run(rn, [sell("ord-sell03")], s=old(100.0))["results"][0]["status"] == "filled"
+
+
+def test_what_could_not_be_sold_on_its_expiry_day_is_settled_at_the_index_price_and_nothing_is_left_unmarked(rn):       # F6
+    exp = "NIFTY09NOV2624500CE"
+    q = lambda now, bid=19.0: snap(now, **{exp: dict(bid=bid, ask=20.0, bid_qty=5000, ask_qty=5000, ltp=19.5, age_s=1.0), "NIFTY": dict(ltp=24650.0, age_s=2.0)})      # noqa: E731
+    run(rn, [order("ord-exp001", symbol=exp)], s=q(MON))
+    t = MON.replace(hour=15, minute=21)
+    run(rn, [], s=q(t, bid=0.0), now=t)                                                                                # no usable bid: the 15:20 sale cannot fill
+    assert exp in rn.account.positions
+    t = MON.replace(hour=15, minute=32)
+    rep = run(rn, [], s=q(t, bid=0.0), now=t)
+    assert exp not in rn.account.positions and rep["forced"][-1]["action"] == "settle expired"
+    last = rn.account.ledger[-1]
+    assert last["kind"] == "settle" and last["price"] == pytest.approx(150.0) and rn.account.verify_ledger()            # intrinsic value at the index price: 24650 - 24500
+
+
+def test_without_a_fresh_index_price_the_settlement_waits_and_the_summary_names_the_stuck_position(rn):                 # F6
+    exp = "NIFTY09NOV2624500CE"
+    s = lambda now: snap(now, **{exp: dict(bid=19.0, ask=20.0, bid_qty=5000, ask_qty=5000, ltp=19.5, age_s=1.0), "NIFTY": dict(ltp=24650.0, age_s=900.0)})        # noqa: E731
+    run(rn, [order("ord-exp002", symbol=exp)], s=s(MON))
+    t = MON.replace(hour=15, minute=32)
+    run(rn, [], s=dict(s(t), quotes={}), now=t)
+    assert exp in rn.account.positions                                                                                 # no price, no settlement: never a guess
+    nxt = dt.datetime(2026, 11, 11, 9, 30, tzinfo=IST)
+    sm = rn.summary(snap(nxt), R.Runner.server_now(snap(nxt)))
+    assert sm["stuck"] == [exp] and sm["equity"] is None
+
+
+def test_a_contract_that_expires_today_is_not_bought_from_1520(rn):                                                      # F6
+    exp = "NIFTY09NOV2624500CE"
+    t = MON.replace(hour=15, minute=25)
+    res = run(rn, [order("ord-late01", symbol=exp, now=t)], s=snap(t, **{exp: dict(bid=19.0, ask=20.0, bid_qty=5000, ask_qty=5000, ltp=19, age_s=1.0)}), now=t)["results"][0]
+    assert res["status"] == "refused" and "expires today" in res["reasons"][0] and not rn.account.ledger
+
+
+def test_nothing_from_outside_is_echoed_with_a_line_break_or_unprintable_characters():                                 # F7e
+    und, lots = {"NIFTY"}, {"NIFTY": 65}
+    for bad in ("NIFTY12NOV26\nXX", "ZZZZZZZZ\n::error::boom", "ÉTÉÉTÉÉTÉ"):
+        why = R.parse_contract(bad, und, lots)[1]
+        assert why and "\n" not in why and all(32 <= ord(c) < 127 for c in why)
+
+
+def test_the_contract_name_must_be_exactly_the_boards_naming_and_marks_are_bids(rn):                                    # survivors
+    assert R.parse_contract("NIFTY12NOV26024500CE", {"NIFTY"}, {"NIFTY": 65})[0] is None                              # a leading zero in the strike is not the board's name
+    run(rn, [order()])
+    s = snap(**{NAME: dict(bid=90.0, ask=130.0, bid_qty=5, ask_qty=5, ltp=110, age_s=1.0)})
+    assert rn.marks(s, R.Runner.server_now(s)) == {NAME: 90.0}                                                         # marked at the bid, never the ask or the last trade
+
+
+def test_the_trim_path_is_taken_when_the_gate_asks_for_it(rn, monkeypatch):                                            # survivor
+    run(rn, [order()])
+    calls = []
+    monkeypatch.setattr(rn.gate, "update", lambda acct, marks, now: ["trim: the open positions are worth more than the loss budget allows, by 500: sell that much"])
+    monkeypatch.setattr(rn.broker, "trim", lambda quotes, marks, now, why="": calls.append("trim") or {})
+    monkeypatch.setattr(rn.broker, "flatten", lambda *a, **k: calls.append("flatten") or {})
+    rep = run(rn, [])
+    assert calls == ["trim"] and rep["forced"][0]["action"] == "trim"
+
+
+def test_an_unexpected_error_inside_one_order_is_that_orders_invalid_result_and_the_rest_go_on(rn, monkeypatch):        # F3, the outer layer
+    real = rn.handle
+
+    def handle(raw, snap_, now):
+        if raw["id"] == "ord-boom001":
+            raise RuntimeError("unexpected")
+        return real(raw, snap_, now)
+    monkeypatch.setattr(rn, "handle", handle)
+    rep = run(rn, [order("ord-boom001"), order("ord-fine001")])
+    st = {r["id"]: r["status"] for r in rep["results"]}
+    assert st == {"ord-boom001": "invalid", "ord-fine001": "filled"} and "RuntimeError" in rep["results"][0]["reasons"][0]
