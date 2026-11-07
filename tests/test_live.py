@@ -80,6 +80,7 @@ out.widepush = await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN
 const ws = (await call("GET", "/live/snapshot", { token: env.LIVE_READ_TOKEN })).body;
 out.wide = { count: ws.count, n: Object.keys(ws.quotes).length, s1: ws.quotes.STK1.s, s0: ws.quotes.STK0.s === undefined, ctor: ws.quotes.constructor.ltp, proto: Object.keys(ws.quotes).includes("__proto__") };
 // the board never grows past its cap: 3 x 2500 new names, the last push is partly refused
+board = new LiveBoard(state, {});                                   // a fresh board: the cap scenario must not depend on what earlier checks left on it
 const a = {}, b = {}, c3 = {};
 for (let i = 0; i < 2500; i++) { a["A" + i] = { ltp: 1 }; b["B" + i] = { ltp: 1 }; c3["C" + i] = { ltp: 1 }; }
 await call("POST", "/live/ingest", { token: env.LIVE_INGEST_TOKEN, body: { quotes: a } });
@@ -170,7 +171,7 @@ def test_a_wide_universe_goes_through_with_segments_and_odd_names_are_harmless(r
 
 @needs_node
 def test_the_board_never_grows_past_its_cap(relay):
-    assert relay["cap2"]["status"] == 200 and relay["cap2"]["body"]["refused"] > 0
+    assert relay["cap2"]["status"] == 200 and relay["cap2"]["body"]["n"] == 1000 and relay["cap2"]["body"]["refused"] == 1500      # 6000 held: the third push of 2500 is partly accepted, exactly
     assert relay["capcount"] == 6000
 
 
