@@ -468,6 +468,26 @@ def check_evening_minutes(store, day: dt.date) -> Check:
                  {"worst_served_ratio": round(worst, 4), "futures": got})
 
 
+STOCK_CHAIN_OK, STOCK_CHAIN_WARN = 0.90, 0.60       # share of (stock x session minute) snapshots recorded
+
+
+def check_stock_chains(store, day: dt.date) -> Check:
+    """The every-minute F&O stock chains (record-stocks.yml, merged after the close): how many stocks were recorded and what share of their session minutes got a snapshot."""
+    m = _manifest(store, day, "stock-chains-", f"{day}_stock_chains_manifest.json")
+    if m is None:
+        return Check("stock chains (every minute)", MISSING, f"no stock-chain record for {day:%a %d %b}: record-stocks.yml did not run, had no Kotak key, or its merge failed")
+    stocks, got, cov = int(m.get("stocks") or 0), int(m.get("recorded") or 0), m.get("coverage")
+    issues = []
+    if stocks and got < 0.95 * stocks:
+        issues.append(f"{got} of {stocks} stocks recorded at all")
+    if cov is None or cov < STOCK_CHAIN_OK:
+        issues.append(f"{(cov or 0):.0%} of the session minutes covered ({int(m.get('failures') or 0):,} failed attempts of {int(m.get('attempts') or 0):,})")
+    rows = (m.get("rows") or {}).get("chains", 0)
+    status = BAD if (cov or 0) < STOCK_CHAIN_WARN or not got else WARN if issues else OK
+    return Check("stock chains (every minute)", status, "; ".join(issues) if issues else f"{got} stocks, {cov:.0%} of their session minutes, {rows:,} chain rows (plus the order books)", False,
+                 {"stocks": stocks, "recorded": got, "coverage": cov})
+
+
 AGREE_WARN, AGREE_BAD = 97.0, 90.0          # percent of fresh Kite+Kotak pairs within a spread of each other
 
 
@@ -645,6 +665,7 @@ def build_report(store, cfg, day: dt.date, now: dt.datetime | None = None) -> Re
             ("evening", lambda: check_evening_minutes(store, day), "MCX/currency minutes", False), ("history", lambda: check_daily_history(store, day), "daily history", False),
             ("history", lambda: check_fx_daily(store, day), "FX daily history", False), ("evening", lambda: check_fx_minutes(store, day), "FX minutes", False),
             ("kite", lambda: check_kite(store, day, now.date()), "Kite ticks", False),
+            ("session", lambda: check_stock_chains(store, day), "stock chains (every minute)", False),
             ("session", lambda: check_agreement(store, day), "Kite vs Kotak agreement", False),
             ("warehouse", lambda: check_warehouse(store, day, cal, now), "NSE warehouse", True)]
     checks = []

@@ -47,7 +47,7 @@ def save_atomic(chain: pd.DataFrame, path: Path) -> None:
 
 class ChainTape:
     def __init__(self, source, data_dir: Path, expiries: dict[str, int] | None = None, every_min: float = 1.0,
-                 max_backoff_min: float = 5.0, say=print, clock=None, sleep=time.sleep):
+                 max_backoff_min: float = 5.0, say=print, clock=None, sleep=time.sleep, offset_s: float = 5.0, extra=None, stagger_first: bool = False):
         self.src = source
         self.data = Path(data_dir)
         self.want = dict(expiries or DEFAULT_EXPIRIES)
@@ -56,6 +56,9 @@ class ChainTape:
         self.say = say
         self.clock = clock or (lambda: pd.Timestamp.now(tz=IST))
         self.sleep = sleep
+        self.offset_s = float(offset_s)             # seconds after the minute a pass starts: parallel recorders stagger it so they do not hit Kotak in the same second
+        self.stagger_first = bool(stagger_first)    # also wait for the offset before the FIRST pass (parallel recorders must not all fire at the open); the index tape keeps its immediate first pass
+        self.extra = extra                          # optional callable(chain, path) for what is kept beside a snapshot (the stock recorder's order books); None = nothing
         self.fails: dict[tuple, int] = {}
         self.next_try: dict[tuple, pd.Timestamp] = {}
         self.log: list[dict] = []
@@ -87,6 +90,11 @@ class ChainTape:
                     path = self.data / str(ts.date()) / "chains" / f"{u}_{e}_{ts:%H%M}.csv"
                     path.parent.mkdir(parents=True, exist_ok=True)
                     save_atomic(ch, path)
+                    if self.extra is not None:
+                        try:
+                            self.extra(ch, path)
+                        except Exception as exc:                  # noqa: BLE001 - what is kept beside a snapshot never costs the snapshot
+                            self.say(f"tape {now:%H:%M} {u} {e}: extra failed: {exc!s:.100}")
                     self.fails.pop(key, None)
                     self.next_try.pop(key, None)
                     wrote += 1
@@ -113,8 +121,14 @@ class ChainTape:
             if now < open_:
                 self.sleep(min(60.0, (open_ - now).total_seconds()))
                 continue
+            if self.stagger_first and not getattr(self, "_started", False):
+                self._started = True
+                first = now.floor("min") + pd.Timedelta(seconds=self.offset_s)
+                if first > now:
+                    self.sleep(max(1.0, (first - now).total_seconds()))
+                    continue
             self.tick(now)
-            nxt = now.floor("min") + pd.Timedelta(minutes=self.every, seconds=5)
+            nxt = now.floor("min") + pd.Timedelta(minutes=self.every, seconds=self.offset_s)
             self.sleep(max(1.0, (nxt - self.clock()).total_seconds()))
         rep = completeness(self.data / str(now.date()), open_, min(stop, close))
         self.say(render(rep))

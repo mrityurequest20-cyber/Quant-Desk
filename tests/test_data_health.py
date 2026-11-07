@@ -78,6 +78,8 @@ def _store(**kw) -> H.MemoryStore:
         rel["fx-minutes-2026"] = {f"{EVE}_manifest.json": json.dumps(kw["fxmin"]).encode()}
     if kw.get("fxdaily") is not None:
         rel["fx-daily"] = {f"{kw['fxdaily'].get('as_of', '2026-11-07')}_manifest.json": json.dumps(kw["fxdaily"]).encode()}
+    if kw.get("stockchains") is not None:
+        rel["stock-chains-2026Q4"] = {f"{d}_stock_chains_manifest.json": json.dumps(kw["stockchains"]).encode()}
     if kw.get("agreement") is not None:
         rel["agreement-2026"] = {f"{d}_agreement.json": json.dumps(kw["agreement"]).encode()}
     if kw.get("warehouse") is not None:
@@ -274,6 +276,7 @@ def _full_store() -> H.MemoryStore:
     return _store(bars=_bars(), chains=_chains(), tape=_tape(), optmin={"underlyings": {"NIFTY": {"asked": 5, "served": 5, "last": f"{DAY} 15:29"}}},
                   stockmin={"totals": t}, stockopt=_stockopt(), evening=_evening(), history={"as_of": "2026-11-05", "series": {"NIFTY": {}}, "unverified_series": []},
                   fxmin=_fxmin(), fxdaily={"as_of": "2026-11-05", "series": {"EURUSD": {}}, "unverified_series": []},
+                  stockchains={"stocks": 200, "recorded": 200, "coverage": 0.97, "attempts": 80000, "failures": 900, "rows": {"chains": 3000000}},
                   agreement={"day": str(DAY), "cycles": 4400, "pairs": 100000, "disagree": 500, "agree_pct": 99.5, "opt_agree_pct": 99.0, "worst_cycle_pct": 2.0, "partial": False}, warehouse=_wh({x: "2026-11-06" for x in H.CORE_WAREHOUSE_TABLES}),
                   gift=pd.DataFrame({"ts": pd.date_range(dt.datetime.combine(DAY, dt.time(8, 30), tzinfo=IST), periods=5, freq="10min")}),
                   branches={"premarket": {"brief.json": json.dumps({"session": str(DAY)}).encode()}}, kite=[{"name": "kite-raw", "size": 9e6, "expired": False}])
