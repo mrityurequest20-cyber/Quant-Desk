@@ -206,3 +206,66 @@ def test_the_yahoo_client_returns_daily_bars_on_their_own_dates_and_minute_bars_
     assert (d.index.dayofweek < 5).all() and FX.gap_report(d.index, days.min(), days.max())["missing"] == 0
     m = y.minutes("EURUSD", 5)
     assert str(m.index.tz) == "UTC" and m.index[0] == pd.Timestamp("2024-06-30 23:00", tz="UTC")                                           # an instant, in UTC
+
+
+# ---- calibration found by the first real run: market holidays from the peers, the ECB tolerance, spikes vs steps, reviewed moves -------------------------------------------------------------
+def _flat(days, v=1.0):
+    return pd.DataFrame({"open": v, "high": v * 1.001, "low": v * 0.999, "close": v, "volume": 0.0}, index=days)
+
+
+def test_a_weekday_missing_from_most_of_a_group_is_a_market_holiday_not_a_gap():
+    hols = pd.DatetimeIndex(["2024-12-25", "2025-01-01", "2025-04-18", "2024-08-15"])                           # 25 Dec, 1 Jan, Good Friday, and an Indian holiday
+    majors = pd.bdate_range("2024-01-01", "2025-06-30").difference(hols[:3])
+    inr = pd.bdate_range("2024-01-01", "2025-06-30").difference(hols)                                           # the rupee pairs also miss 15 Aug
+    dfs = {s: _flat(majors) for s in ("EURUSD", "GBPUSD", "USDJPY", "AUDUSD")}
+    dfs.update({s: _flat(inr) for s in ("USDINR", "EURINR", "GBPINR")})
+    dfs["USDCAD"] = _flat(majors.difference(pd.DatetimeIndex(["2024-03-12", "2024-03-13"])))                    # one pair with two real gaps of its own
+    h = FX.peer_holidays(dfs)
+    assert h["EURUSD"] == frozenset(hols[:3]) and h["USDINR"] == frozenset(hols)                                 # the groups keep their own calendars
+    g = FX.gap_report(dfs["USDCAD"].index, dfs["USDCAD"].index.min(), dfs["USDCAD"].index.max(), h["USDCAD"])
+    assert g["missing"] == 2 and g["missing_days"] == ["2024-03-12", "2024-03-13"]                              # only its own gaps count
+    assert FX.gap_report(dfs["USDCAD"].index, dfs["USDCAD"].index.min(), dfs["USDCAD"].index.max())["missing"] == 5                       # without the calendar, the holidays count too
+    assert FX.peer_holidays({"EURUSD": dfs["EURUSD"], "GBPUSD": dfs["GBPUSD"]})["EURUSD"] == frozenset()          # two pairs are not a calendar: nothing is inferred
+    late = _flat(pd.bdate_range("2024-12-02", "2025-06-30").difference(hols[:3]))                                 # a pair that only started in December does not vote on earlier days
+    assert FX.peer_holidays({**dfs, "NZDUSD": late})["NZDUSD"] == frozenset(hols[:3])
+
+
+def test_a_close_within_two_percent_of_the_ecb_fixing_matches_and_an_inverted_pair_does_not(tmp_path):
+    ecb = FX.EcbReference(fetch=_ecb_zip)
+    imp = ecb.implied("EURUSD")
+    rng = np.random.default_rng(3)
+    noisy = imp * (1 + rng.uniform(-0.015, 0.015, len(imp)))                                                      # the fixing and the close differ by up to 1.5% on a volatile day
+    assert FX.crosscheck(noisy, imp)["match_rate"] == 1.0 and FX.crosscheck(imp * 1.03, imp)["match_rate"] == 0.0
+    jpy = ecb.implied("USDJPY")                                                                                   # far from parity, so an inverse cannot match by luck
+    assert FX.crosscheck(1 / jpy, jpy)["match_rate"] == 0.0 and FX.XCHECK_TOL == 0.02
+
+
+def test_a_spike_that_reverses_is_labelled_a_likely_bad_print_and_a_step_is_not():
+    idx = pd.bdate_range("2024-01-01", periods=40)
+    c = pd.Series(1.0, index=idx)
+    spike, step = c.copy(), c.copy()
+    spike.iloc[10] = 1.12                                                                                        # one bad print
+    step.iloc[20:] = 1.12                                                                                        # a real level shift that stays
+    f_spike, _ = FX.find_jumps(spike, "EURUSD")
+    f_step, _ = FX.find_jumps(step, "EURUSD")
+    assert [j["reverted"] for j in f_spike] == [True, True] and [j["reverted"] for j in f_step] == [False]       # the spike jumps up and back down (two flagged days)
+    why = FX.decide({"rows": 40, "gaps": {"fraction": 0.0, "missing": 0}, "jumps": f_spike, "crosscheck": {"available": True, "compared": 200, "match_rate": 1.0}})[1]
+    assert any("reverse within two days (likely bad prints)" in r for r in why)
+
+
+def test_a_move_a_person_reviewed_is_listed_apart_and_lets_the_series_verify(tmp_path):
+    ecb = FX.EcbReference(fetch=_ecb_zip)
+    ecb.table().loc[ecb.table().index[300:], "JPY"] *= 1.12                                                      # the ECB's yen steps too: a genuine move both sources show
+    imp = ecb.implied("USDJPY")
+    y = FakeYahoo({"USDJPY": _bars(imp)})
+    d = str(imp.index[300].date())
+    open_ = FX.run_daily(tmp_path / "a", ["USDJPY"], "2024-01-01", TODAY, y, ecb, say=lambda *a: None)
+    assert open_["series"]["USDJPY"]["status"] == "unverified" and [j["date"] for j in open_["series"]["USDJPY"]["jumps"]] == [d]
+    rev = FX.run_daily(tmp_path / "b", ["USDJPY"], "2024-01-01", TODAY, y, ecb, say=lambda *a: None, accepted=frozenset({("USDJPY", d)}))
+    s = rev["series"]["USDJPY"]
+    assert s["jumps"] == [] and [j["date"] for j in s["accepted_moves"]] == [d] and s["status"] == "verified"
+    assert FX.find_jumps(imp, "EURUSD", frozenset({("USDJPY", d)}))[1] == []                                     # a review of another pair does not apply
+    cli = (ROOT / "quantdesk/data/cli.py").read_text(encoding="utf-8")
+    assert 'cfg.get("fx.accepted_moves")' in cli and "accepted=accepted" in cli
+    from quantdesk.config import DEFAULT_CONFIG, Config
+    assert Config.load(DEFAULT_CONFIG).get("fx.accepted_moves") == []                                           # the shipped list is empty: nothing is accepted until a person reviews it

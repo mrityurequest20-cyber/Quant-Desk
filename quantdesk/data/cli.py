@@ -641,7 +641,8 @@ def cmd_fx_daily(cfg, a):
     from . import fx as FX
     try:
         out = Path(a.out) if a.out else Path(cfg.runtime_dir) / "fx_daily"
-        man = FX.run_daily(out, _fx_pairs(a), a.start, say=lambda m: print(m, flush=True))
+        accepted = frozenset((str(m["symbol"]), str(m["date"])) for m in (cfg.get("fx.accepted_moves") or []))        # moves a person reviewed and found genuine
+        man = FX.run_daily(out, _fx_pairs(a), a.start, say=lambda m: print(m, flush=True), accepted=accepted)
         bad = man["unverified_series"]
         print(f"fx-daily {man['as_of']}: {len(man['series']) - len(bad)} verified, {len(bad)} unverified of {len(man['series'])}", flush=True)
         if bad:

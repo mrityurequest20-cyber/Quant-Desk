@@ -23,7 +23,7 @@ and every pre-registered spec and result are untouched.
 | `collect-wide.yml` | 15:25, 15:45 | Stock option chains, and minutes for all five indices. |
 | `evening-minutes.yml` | by hand only | MCX and currency futures' minutes from Kotak's candle API: **not scheduled**, because Kotak answers every MCX and currency candle request with HTTP 422 ("Historical data is not supported for this exchange", found on its first run, 7 Nov 2026). The MCX and currency evenings need Kite (historical candles, or ticks past 15:32). |
 | `fx-minutes.yml` | 22:30 UTC (04:00 IST), Mon to Fri | 1-minute bars of the FX majors and the rupee crosses (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, USDINR, EURINR, GBPINR, JPYINR, DXY) from Yahoo, UTC, re-reading the last five days (Yahoo keeps seven). `fx-minutes-YYYY` release. Public source, no secret. |
-| `fx-daily.yml` | by hand | The same pairs' daily history from 2003, checked against the rate the ECB's reference rates imply (1% tolerance: a sanity check). `fx-daily` release, one immutable dataset per run. |
+| `fx-daily.yml` | by hand | The same pairs' daily history from 2003, checked against the rate the ECB's reference rates imply (2% tolerance: a sanity check; weekdays most of a group of pairs lack are market holidays, not gaps; one-day moves beyond 5% are flagged until a person lists them under `fx.accepted_moves`). `fx-daily` release, one immutable dataset per run. |
 | `data.yml` | evening | The NSE warehouse (bhavcopy, participant OI, FII/DII, the event calendar). |
 | `premarket.yml` | 07:15 to 09:15 | The pre-market brief (on its own branch until merged). |
 

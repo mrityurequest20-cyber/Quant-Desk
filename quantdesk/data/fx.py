@@ -6,7 +6,7 @@ the ECB publishes official daily reference rates for the same currencies, an ind
 
 Daily history (since 2003): fetched from Yahoo, rows that cannot be a real bar dropped and counted (never repaired), one-day moves beyond 5% flagged (never smoothed), weekdays with no
 row counted as gaps, and the closes compared with the rate the ECB implies for the pair. The ECB fixes at about 14:15 CET and Yahoo's daily close is later, so the check is a sanity check
-(1% tolerance), not an exact match: it catches an inverted pair, a wrong decimal or a frozen series, not a basis point. A series is `verified` only if every check passes.
+(2% tolerance), not an exact match: it catches an inverted pair, a wrong decimal or a frozen series, not a basis point. A series is `verified` only if every check passes.
 
 Minutes: Yahoo keeps seven days of 1-minute bars, so each nightly run re-reads the last five and a missed night heals. Bars are UTC (FX has no exchange session).
 
@@ -33,7 +33,8 @@ ECB_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.zip"
 START = "2003-01-01"
 JUMP = 0.05                    # a one-day move beyond this is flagged (the yen's 2024 intervention days were about 4%)
 GAP_MAX = 0.01                 # missing weekdays / expected weekdays
-XCHECK_TOL, XCHECK_MIN, XCHECK_MATCH = 0.01, 30, 0.95
+XCHECK_TOL, XCHECK_MIN, XCHECK_MATCH = 0.02, 30, 0.95      # 2%: the ECB fixes at 14:15 CET and Yahoo closes hours later, so 1% tripped on volatile days; an inverted pair or a wrong decimal is far beyond 2%
+HOLIDAY_SHARE, HOLIDAY_MIN_PEERS = 0.75, 3                     # a weekday missing from this share of a group of at least this many pairs is a market holiday, not a gap
 MINUTES_MAX_DAYS = 7           # what Yahoo keeps
 MIN_ROWS_OK = 500              # a quiet FX day still has far more 1-minute bars than this
 COLS_DAILY = ["date", "symbol", "open", "high", "low", "close", "volume", "source", "series_status"]
@@ -126,11 +127,34 @@ class EcbReference:
         return s if len(s) else None
 
 
-def gap_report(have: pd.DatetimeIndex, start: pd.Timestamp, end: pd.Timestamp) -> dict:
+def peer_holidays(dfs: dict[str, pd.DataFrame]) -> dict[str, frozenset]:
+    """Weekdays on which a group of pairs did not trade: missing from at least HOLIDAY_SHARE of the pairs whose history covers the day (a group needs HOLIDAY_MIN_PEERS pairs). Yahoo has
+    no FX bar on 25 Dec, 1 Jan or Good Friday, and none for a rupee pair on an Indian holiday; hard-coding those calendars would be a guess, the peers say it. Rupee pairs are their own group."""
+    out: dict[str, frozenset] = {}
+    groups = {"inr": [s for s in dfs if s.endswith("INR")], "other": [s for s in dfs if not s.endswith("INR")]}
+    for members in groups.values():
+        if len(members) < HOLIDAY_MIN_PEERS:
+            hol = frozenset()
+        else:
+            lo, hi = min(dfs[m].index.min() for m in members), max(dfs[m].index.max() for m in members)
+            days = pd.bdate_range(lo, hi)
+            covers = pd.DataFrame({m: (days >= dfs[m].index.min()) & (days <= dfs[m].index.max()) for m in members}, index=days)
+            has = pd.DataFrame({m: days.isin(dfs[m].index) for m in members}, index=days)
+            lacking = (covers & ~has).sum(axis=1)
+            n = covers.sum(axis=1)
+            hol = frozenset(days[(n >= HOLIDAY_MIN_PEERS) & (lacking >= HOLIDAY_SHARE * n)])
+        for m in members:
+            out[m] = hol
+    return out
+
+
+def gap_report(have: pd.DatetimeIndex, start: pd.Timestamp, end: pd.Timestamp, holidays=frozenset()) -> dict:
     expected = pd.bdate_range(start, end)
+    if holidays:
+        expected = expected.difference(pd.DatetimeIndex(list(holidays)))
     missing = expected.difference(have.normalize())
     return {"expected": int(len(expected)), "missing": int(len(missing)), "fraction": float(len(missing) / len(expected)) if len(expected) else 0.0,
-            "missing_days": [str(d.date()) for d in missing[:20]]}
+            "missing_days": [str(d.date()) for d in missing[:20]], "market_holidays": int(len(holidays))}
 
 
 def crosscheck(close: pd.Series, implied: pd.Series | None, n: int = 200, tol: float = XCHECK_TOL, seed: int = 20261107) -> dict:
@@ -147,6 +171,23 @@ def crosscheck(close: pd.Series, implied: pd.Series | None, n: int = 200, tol: f
             "mismatches": [{"date": str(d.date()), "rel_diff": float(v)} for d, v in bad.head(15).items()], "span": [str(days.min().date()), str(days.max().date())]}
 
 
+def find_jumps(close: pd.Series, symbol: str, accepted=frozenset()) -> tuple[list[dict], list[dict]]:
+    """(flagged, accepted) one-day moves beyond JUMP. `reverted`: the price is back within half the move two days later, which a real step is not (a bad print is). A move a person has reviewed
+    (config fx.accepted_moves) is listed apart, never silently dropped."""
+    mv, prev2 = close.pct_change(), close.shift(1)
+    flagged, ok = [], []
+    for d in close.index[(mv.abs() > JUMP).fillna(False).to_numpy()]:
+        i = close.index.get_loc(d)
+        nxt = close.iloc[i + 1] if i + 1 < len(close) else np.nan
+        rev = bool(nxt == nxt and abs(nxt / prev2.iloc[i] - 1) < abs(mv.loc[d]) / 2)
+        row = {"date": str(d.date()), "move": float(mv.loc[d]), "reverted": rev}
+        (ok if (symbol, row["date"]) in accepted else flagged).append(row)
+    for a, b in zip(flagged, flagged[1:]):                                   # the day the price comes back is the second leg of the same bad print
+        if a["reverted"] and pd.Timestamp(b["date"]) - pd.Timestamp(a["date"]) <= pd.Timedelta(days=4) and a["move"] * b["move"] < 0:
+            b["reverted"] = True
+    return flagged, ok
+
+
 def decide(rep: dict) -> tuple[str, list[str]]:
     why = []
     if rep["rows"] == 0:
@@ -154,7 +195,9 @@ def decide(rep: dict) -> tuple[str, list[str]]:
     if rep["gaps"]["fraction"] > GAP_MAX:
         why.append(f"{rep['gaps']['missing']} missing weekdays ({rep['gaps']['fraction']:.2%}) vs limit {GAP_MAX:.0%}")
     if rep["jumps"]:
-        why.append(f"{len(rep['jumps'])} one-day move(s) beyond {JUMP:.0%}: {', '.join(j['date'] for j in rep['jumps'][:4])}")
+        spikes = [j["date"] for j in rep["jumps"] if j.get("reverted")]
+        why.append(f"{len(rep['jumps'])} one-day move(s) beyond {JUMP:.0%}: {', '.join(j['date'] for j in rep['jumps'][:4])}"
+                   + (f"; {len(spikes)} reverse within two days (likely bad prints): {', '.join(spikes[:4])}" if spikes else ""))
     x = rep["crosscheck"]
     if not x["available"]:
         why.append("no independent source for this pair (the ECB has no such currency)")
@@ -165,12 +208,12 @@ def decide(rep: dict) -> tuple[str, list[str]]:
     return ("unverified" if why else "verified"), why
 
 
-def run_daily(out_root: Path, pairs: list[str] | None = None, start: str = START, today: dt.date | None = None, yahoo=None, ecb=None, say=print) -> dict:
+def run_daily(out_root: Path, pairs: list[str] | None = None, start: str = START, today: dt.date | None = None, yahoo=None, ecb=None, say=print, accepted=frozenset()) -> dict:
     today = today or pd.Timestamp.now(tz="UTC").date()
     yahoo, ecb = yahoo or YahooFx(), ecb or EcbReference()
     run = Path(out_root) / str(today)
-    frames, series = {}, {}
-    for sym in pairs or list(PAIRS):
+    dfs, series = {}, {}
+    for sym in pairs or list(PAIRS):                                        # pass 1: fetch and clean every pair (the holiday calendar needs the peers)
         rep = series[sym] = {"symbol": sym, "ticker": PAIRS.get(sym), "rows": 0}
         try:
             raw = yahoo.daily(sym, dt.date.fromisoformat(start), today)
@@ -180,10 +223,18 @@ def run_daily(out_root: Path, pairs: list[str] | None = None, start: str = START
             continue
         df, rejected = clean(raw[OHLC + ["volume"]].copy()) if len(raw) else (raw, {})
         df.index = pd.DatetimeIndex(df.index).normalize()
-        jumps = (df["close"].pct_change().abs() > JUMP)
-        rep.update(rows=int(len(df)), first=str(df.index.min().date()), last=str(df.index.max().date()), rejected=rejected, rejected_total=int(sum(rejected.values())),
-                   jumps=[{"date": str(d.date()), "move": float(df["close"].pct_change().loc[d])} for d in df.index[jumps.fillna(False).to_numpy()]],
-                   gaps=gap_report(df.index, df.index.min(), df.index.max()), content_hash=frame_hash(df))
+        rep.update(rejected=rejected, rejected_total=int(sum(rejected.values())))
+        if len(df):
+            dfs[sym] = df
+        else:
+            rep.update(status="unverified", reasons=["no rows"])
+    holidays = peer_holidays(dfs)
+    frames = {}
+    for sym, df in dfs.items():                                             # pass 2: judge each series against its group's calendar
+        rep = series[sym]
+        flagged, reviewed = find_jumps(df["close"], sym, accepted)
+        rep.update(rows=int(len(df)), first=str(df.index.min().date()), last=str(df.index.max().date()), jumps=flagged, accepted_moves=reviewed,
+                   gaps=gap_report(df.index, df.index.min(), df.index.max(), holidays.get(sym, frozenset())), content_hash=frame_hash(df))
         try:
             rep["crosscheck"] = crosscheck(df["close"], ecb.implied(sym))
         except Exception as exc:
@@ -191,7 +242,7 @@ def run_daily(out_root: Path, pairs: list[str] | None = None, start: str = START
         rep["status"], rep["reasons"] = decide(rep)
         frames[sym] = df.assign(symbol=sym, source="yahoo", series_status=rep["status"])
         mr = rep["crosscheck"]["match_rate"]
-        say(f"  {sym}: {len(df):,} rows, {len(rep['jumps'])} jump(s), {rep['gaps']['missing']} gap(s), cross-check {'n/a' if mr is None else format(mr, '.1%')} -> {rep['status']}")
+        say(f"  {sym}: {len(df):,} rows, {len(flagged)} jump(s), {rep['gaps']['missing']} gap(s), cross-check {'n/a' if mr is None else format(mr, '.1%')} -> {rep['status']}")
     shards = []
     if frames:
         allf = pd.concat(frames.values()).reset_index().rename(columns={"index": "date"})
@@ -201,7 +252,8 @@ def run_daily(out_root: Path, pairs: list[str] | None = None, start: str = START
             shards.append({"file": name, "rows": int(len(g)), "content_hash": h})
     bad = [s for s, r in series.items() if r.get("status") != "verified"]
     man = {"version": VERSION, "as_of": str(today), "start": start, "series": series, "shards": shards, "unverified_series": bad, "status": "verified" if not bad else "unverified",
-           "note": "daily FX closes from Yahoo, checked against the ECB's reference rates (1% tolerance: a sanity check, not an exact match); public sources, no secret; nothing trades",
+           "note": "daily FX closes from Yahoo, checked against the ECB's reference rates (2% tolerance: a sanity check, not an exact match); weekdays missing from most of a group of pairs are "
+                   "market holidays, not gaps; public sources, no secret; nothing trades",
            "path": str(run)}
     run.mkdir(parents=True, exist_ok=True)
     (run / "manifest.json").write_text(json.dumps(man, indent=2, default=str), encoding="utf-8")
