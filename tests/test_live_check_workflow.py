@@ -41,7 +41,9 @@ class Relay(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_GET(self):
         auth = self.headers.get("authorization")
-        if Relay.mode == "off": return self._send(503, {"error": "the live view is not switched on"})
+        if Relay.mode == "off": return self._send(503, {"error": "the live view is not switched on", "why": {"binding": "yes", "ingest": "set, 40 characters", "read": "missing", "seen": ["LIVE_INGEST_TOKEN"]}})
+        if Relay.mode == "off-hostile": return self._send(503, {"error": "x", "why": {"read": "missing\n::error::INJECTED\n::add-mask::z"}})
+        if Relay.mode == "off-plain": return self._send(503, {"error": "the live view is not switched on"})
         if Relay.mode == "open":                                                                        # a broken relay that answers without any key
             return self._send(200, {"count": 1, "newest_age_s": 1.0, "quotes": {}} if self.path == "/live/snapshot" else {"kite": {"n": 1}, "kotak": {"status": "ok", "n": 1}})
         if Relay.mode == "hostile" and auth == "Bearer " + KEY:
@@ -126,3 +128,12 @@ def test_an_unreachable_relay_reads_http_000_and_fails_cleanly(tmp_path):
 def test_a_relay_that_answers_200_without_any_key_is_reported_not_passed(tmp_path):
     code, out = run_script("open", tmp_path)
     assert code == 1 and "WITHOUT a key" in out and "The READ key opens the relay" not in out and KEY not in out
+
+
+def test_a_switched_off_relay_says_which_piece_is_wrong_without_a_value_or_a_workflow_command(tmp_path):
+    code, out = run_script("off", tmp_path)
+    assert code == 1 and "NOT SWITCHED ON" in out and '"read": "missing"' in out and '"ingest": "set, 40 characters"' in out and KEY not in out
+    code, out = run_script("off-hostile", tmp_path)                                          # a hostile explanation is printed as one quoted line
+    assert code == 1 and "INJECTED" in out and not [l for l in out.splitlines() if l.lstrip().startswith("::")]
+    code, out = run_script("off-plain", tmp_path)                                            # an answer with no explanation still fails cleanly
+    assert code == 1 and "NOT SWITCHED ON" in out and "null" in out
