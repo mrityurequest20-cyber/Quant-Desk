@@ -194,6 +194,13 @@ const sameQuote = (a, b) => {
 	if ("bid" in a && "bid" in b && (a.bid !== b.bid || a.ask !== b.ask || a.bid_qty !== b.bid_qty || a.ask_qty !== b.ask_qty)) return false;
 	return true;
 };
+// An option's name carries its expiry (NIFTY12NOV2624500CE: 12 Nov 2026). From the day after it, the contract is gone: the expiry day itself is still traded.
+const OPT_EXPIRY = /^.+?(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})\d+(?:\.\d+)?(?:CE|PE)$/;
+const MONTH = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+export function expiredOption(name, today) {          // today: the IST date as yyyymmdd
+	const m = OPT_EXPIRY.exec(name);
+	return !!m && (2000 + Number(m[3])) * 10000 + MONTH[m[2]] * 100 + Number(m[1]) < today;
+}
 const STALE_MS = 4 * 86400e3;               // a quote not seen for 4 days is dropped (expired contracts must not fill the board for good); shorter would empty the board over a weekend, when the last prices are worth showing, aged
 const FIRST_SEEN_MS = 12 * 3600e3;          // Kotak's own timestamp dates a first-seen price only if it is within this of now
 
@@ -233,7 +240,9 @@ export class LiveBoard {
 	prune(now) {
 		this.lastPrune = now;
 		let gone = 0;
+		const today = Number(istParts(now).date.replace(/-/g, ""));
 		for (const [name, e] of this.quotes) {
+			if (expiredOption(name, today)) { this.quotes.delete(name); gone += 1; continue; }        // an expired contract has no price to show, and at a roll its names must not keep the room the next expiry needs
 			for (const s of ["z", "k"]) if (e[s] && now - e[s].at > STALE_MS) delete e[s];
 			if (!e.z && !e.k) { this.quotes.delete(name); gone += 1; }
 		}

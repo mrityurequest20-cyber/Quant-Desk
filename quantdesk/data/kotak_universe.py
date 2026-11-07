@@ -23,7 +23,7 @@ import urllib.request
 from ..intraday.kotak import INDEX, KotakFutures, KotakError, _fo, scrip_master, segments
 from .live_push import SYMBOL, _NoRedirect
 
-STOCK_NAME = re.compile(r"^[A-Z0-9&_.-]{1,32}$")                 # an F&O stock's name: no colon, space or control character (it is printed in workflow log lines)
+STOCK_NAME = re.compile(r"^[A-Z0-9&_-]{1,24}$")                 # an F&O stock name by the relay's own chain rule (cleanUniverse): no dot, colon, space or control character, at most 24 characters
 
 CHAIN_UNDERLYINGS = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX")
 FUT_INDICES = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")

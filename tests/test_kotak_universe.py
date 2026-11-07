@@ -274,3 +274,13 @@ def test_a_run_of_failed_expiry_lookups_stops_the_stock_chains_for_the_day(maste
     ok = FakeClient(bad_expiries=tuple(f"STK{i:03d}" for i in range(0, 40, 2)))
     u2 = KU.build(ok, TODAY, say=lambda *a: None)
     assert sum(1 for c in u2["chains"] if "n" in c) == 20 and not any("stopped after" in e for e in u2["errors"])
+
+
+def test_a_stock_name_the_relay_would_drop_from_a_chain_is_excluded_and_counted_here(monkeypatch):
+    names = ("GOOD", "HAS.DOT", "X" * 25, "X" * 24)
+    rows = [{"pSymbolName": n, "pInstType": "FUTSTK", "pAssetCode": 500 + i} for i, n in enumerate(names)]
+    monkeypatch.setattr(KU, "scrip_master", lambda client, name="nse_fo": pd.DataFrame(rows))
+    u = KU.build(FakeClient(), TODAY, say=lambda *a: None)
+    chained = {c["u"] for c in u["chains"] if "n" in c}
+    assert chained == {"GOOD", "X" * 24}                                                     # a dot or 25 characters would be dropped by the relay's chain rule: not sent
+    assert any("2 F&O stock names were not plain symbols" in e for e in u["errors"])        # counted, never named
