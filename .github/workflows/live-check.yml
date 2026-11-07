@@ -1,0 +1,55 @@
+# Is the live relay up, and does the owner's READ key open it? Run by hand (Actions tab, "Live relay check") when the app's Live tab says "key not accepted" or shows nothing.
+# It calls the relay from GitHub's side, so the phone, the browser, the typing and the Cloudflare dashboard are out of the picture: if the GitHub secret LIVE_READ_TOKEN is the
+# same string as the Worker's LIVE_READ_TOKEN, the relay answers 200; if not, 401. It prints status codes and counts only, never the key (and GitHub masks the secret in any log).
+# Read only: no repository content is read or written, no action is used (nothing to pin), no redirect is followed (a redirect would forward the key), and the address must be https.
+name: Live relay check
+
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: live-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask the relay (status codes and counts only)
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}
+          LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
+        run: |
+          set +x
+          # a plain host name (no user@, no path tricks), https; the loopback form exists only so the test can run this script against a local mock
+          if ! [[ "$LIVE_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/live/ingest$ || "$LIVE_URL" =~ ^http://127\.0\.0\.1:[0-9]+/live/ingest$ ]]; then
+            echo "LIVE_URL must be https://<your worker>/live/ingest (the GitHub variable)"; exit 1
+          fi
+          [ -n "${LIVE_READ_TOKEN:-}" ] || { echo "The GitHub secret LIVE_READ_TOKEN is not set: add it (the same string as the Worker's LIVE_READ_TOKEN)."; exit 1; }
+          base="${LIVE_URL%/live/ingest}"
+          nokey=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$base/live/snapshot" || true)
+          nokey=${nokey:-000}
+          echo "Without a key: HTTP $nokey   (401 = the relay is on and asks for a key; 503 = not switched on)"
+          code=$(curl -sS -m 20 -o /tmp/snapshot.json -w '%{http_code}' -H "Authorization: Bearer $LIVE_READ_TOKEN" "$base/live/snapshot" || true)
+          code=${code:-000}
+          echo "With the READ key: HTTP $code"
+          case "$code" in
+            200)
+              [ "$nokey" = "401" ] || { echo "UNEXPECTED: the relay answered HTTP $nokey WITHOUT a key (it should be 401), so this run cannot show that the READ key is checked."; exit 1; }
+              python3 -c 'import json; d = json.load(open("/tmp/snapshot.json")); print("The READ key opens the relay. Instruments on the board:", json.dumps(d.get("count")), "| newest price age (s):", json.dumps(d.get("newest_age_s")))'
+              hc=$(curl -sS -m 20 -o /tmp/health.json -w '%{http_code}' -H "Authorization: Bearer $LIVE_READ_TOKEN" "$base/live/health" || true)
+              hc=${hc:-000}
+              echo "Health: HTTP $hc"
+              [ "$hc" = "200" ] && python3 -c 'import json; h = json.load(open("/tmp/health.json")); k = h.get("kotak") or {}; print("Kite instruments:", json.dumps((h.get("kite") or {}).get("n")), "| Kotak:", json.dumps(k.get("status")), "| Kotak instruments:", json.dumps(k.get("n")), "| universe:", json.dumps(k.get("universe")))'
+              ;;
+            401) echo "REJECTED: the relay is on, but this GitHub secret is not the Worker's LIVE_READ_TOKEN. Set both to the same string (Worker: Secret, then Deploy)."; exit 1 ;;
+            503) echo "NOT SWITCHED ON: open <your worker>/live/snapshot in a browser: the answer says which piece is missing."; exit 1 ;;
+            *)   echo "Unexpected answer (HTTP $code). Is LIVE_URL the Worker's own address?"; exit 1 ;;
+          esac
