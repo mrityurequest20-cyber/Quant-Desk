@@ -126,3 +126,12 @@ def test_the_data_tab_says_what_is_recorded_and_what_is_not():
     body = APP[APP.index("async function renderDataTab"):APP.index("function openSettings")]
     assert "/live/health" not in body and "liveStatus()" in body                      # it reads the one poller's answer, it does not poll a second time
     assert "Data health workflow" in body
+
+
+def test_the_pill_follows_the_key_at_once_and_a_closed_market_says_so():
+    save = APP[APP.index("function liveKeyForm"):APP.index("function liveRows")]
+    assert "renderLive(); pollHealth(); }" in save                                  # saving a key refreshes the pill now, not at the next 10 s poll
+    forget = APP[APP.index('"Forget this key"') - 330:APP.index('"Forget this key"')]
+    assert "L.health = null" in forget and "setStatus()" in forget                  # forgetting it clears the old health and the pill
+    assert 'setStatus(); return void put(body, liveKeyForm(note))' in APP          # a refused key or a down relay updates the pill too
+    assert '"Market closed, opens " + nextOpen()' in APP and 'inSession() ? "No prices yet"' in APP
