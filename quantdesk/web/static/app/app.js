@@ -1668,7 +1668,7 @@ function liveHHMM(minute) { const d = new Date(minute * 60000 + 19800000); retur
 function liveChart(ser, seg) {
 	const W = 320, H = 130, box = h("div", { class: "panel", style: "margin:0 16px 10px;padding:10px" });
 	const day = ser && ser.day ? ser.day : [];
-	if (day.length < 2) return put(box, h("div", { class: "f3", style: "font-size:12px;padding:30px 0;text-align:center" }, day.length ? "One price so far today." : "No prices yet today: the chart builds as the price moves."));
+	if (day.length < 2) return put(box, h("div", { class: "f3", style: "font-size:12px;padding:30px 0;text-align:center" }, day.length ? "One price so far today." : "No chart for this instrument yet. It builds as the price moves; if the relay's chart store is full, a new contract waits until room is made."));
 	const ys = day.map((p) => p[1]), x0 = day[0][0], x1 = day[day.length - 1][0], prev = ser.prev_close;
 	let lo = Math.min(...ys), hi = Math.max(...ys);
 	if (fin(prev)) { lo = Math.min(lo, prev); hi = Math.max(hi, prev); }
@@ -1737,7 +1737,7 @@ function liveDetail() {
 			liveField("Day high / low", closes ? `${livePx(Math.max(...closes), seg)} / ${livePx(Math.min(...closes), seg)}` : "—"),
 			o ? liveField("Contract", `${o.u} ${o.e} ${o.k.toLocaleString("en-IN")} ${o.t === "CE" ? "call" : "put"}`) : null,
 			alt ? liveField("Other source", alt) : null),
-		h("div", { class: "f3", style: "font-size:11.5px;padding:0 16px 10px" }, "Day high and low are the highest and lowest of the one-a-minute closes the relay has seen today, not the exchange's own figures."),
+		h("div", { class: "f3", style: "font-size:11.5px;padding:0 16px 10px" }, "Day high and low are the highest and lowest of the one-a-minute closes the relay holds for today (only the most recent minutes when its store is full), not the exchange's own figures."),
 		o ? null : liveChainTable(name.replace(/-FUT$/, ""), data, chains));
 }
 function liveOpen(name) {
