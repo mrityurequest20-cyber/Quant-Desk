@@ -1,0 +1,956 @@
+/* QuantDesk: the phone app for the owner's market data.
+ * Live: every price the Kite recorder and the Kotak poller watch, refreshed every 5 seconds, with charts and option chains per instrument.
+ * Today: the pre-market brief. History: the record of the retired paper desk (it stopped on 6 Nov 2026), read-only.
+ * Data: whether each feed and recording channel is delivering, and what is recorded where.
+ * Works against the Worker (/live/*, /api/i/*) and, unchanged, as the read-only published site (a shim answers /api/i/* from
+ * data.json; /live/* goes to the network). All server text goes in with textContent. */
+"use strict";
+const VERSION = "2.0";
+const $ = (s, r) => (r || document).querySelector(s);
+const NS = "http://www.w3.org/2000/svg";
+const S = {
+	account: "live", tab: "live", sub: { trades: "history" }, eq: null,
+	accounts: [], installEvt: null,
+};
+
+// ---- icons (24px, stroked) -----------------------------------------------------------------------------------
+const IC = {
+	trades: "M8 20V5M4.5 8.5L8 5l3.5 3.5M16 4v15M12.5 15.5L16 19l3.5-3.5",
+	live: "M3 12h3.2l2.3-6 4 12 2.5-6H21",
+	data: "M4 6c0-1.1 3.6-2 8-2s8 .9 8 2-3.6 2-8 2-8-.9-8-2zM4 6v6c0 1.1 3.6 2 8 2s8-.9 8-2V6M4 12v6c0 1.1 3.6 2 8 2s8-.9 8-2v-6",
+	today: "M5.5 5h13A1.5 1.5 0 0 1 20 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19V6.5A1.5 1.5 0 0 1 5.5 5zM4 10h16M8.5 3v4M15.5 3v4",
+	chev: "M9 6l6 6-6 6", x: "M6 6l12 12M18 6L6 18",
+	aside: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 9v6M14 9v6",
+	watch: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+	target: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2z",
+	alert: "M12 4l9 16H3zM12 10v4M12 17v.01", moon: "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
+	up: "M6 15l6-6 6 6", down: "M6 9l6 6 6-6", flat: "M5 12h14",
+	ext: "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5",
+	install: "M12 4v11M8 11l4 4 4-4M5 20h14", refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6",
+	pause: "M9 5v14M15 5v14", play: "M7 5l12 7-12 7z", stop: "M6 6h12v12H6z",
+	globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18",
+	news: "M4 5h13v14H6a2 2 0 0 1-2-2zM17 9h3v8a2 2 0 0 1-2 2M8 9h5M8 13h5",
+	book: "M5 4h9a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM17 20h2V6M9 8h5M9 12h5", info: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v6M12 7.5v.01",
+	bolt: "M13 3L5 13h6l-1 8 8-10h-6z", clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2",
+};
+function svg(tag, attrs, parent) {
+	const e = document.createElementNS(NS, tag);
+	for (const k in attrs) e.setAttribute(k, attrs[k]);
+	if (parent) parent.appendChild(e);
+	return e;
+}
+function icon(name) {
+	const s = svg("svg", { viewBox: "0 0 24 24", class: "i", "aria-hidden": "true" });
+	svg("path", { d: IC[name] || IC.info }, s);
+	return s;
+}
+
+// ---- helpers ----------------------------------------------------------------------------------------------
+function h(tag, attrs, ...kids) {
+	const e = document.createElement(tag);
+	for (const [k, v] of Object.entries(attrs || {})) {
+		if (v == null || v === false) continue;
+		if (k === "class") e.className = v;
+		else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+		else e.setAttribute(k, v === true ? "" : v);
+	}
+	for (const k of kids.flat()) if (k != null && k !== false) e.appendChild(typeof k === "object" ? k : document.createTextNode(String(k)));
+	return e;
+}
+// append children, skipping null/false (Element.append would print them as text)
+function put(el, ...kids) { for (const k of kids.flat()) if (k != null && k !== false) el.append(k); return el; }
+const fin = (v) => v != null && isFinite(v);
+const inr = (v, sign) => {
+	if (!fin(v)) return "—";
+	const a = Math.abs(v), s = v < 0 ? "−" : sign && v > 0 ? "+" : "";
+	return s + (a >= 1e7 ? "₹" + (a / 1e7).toFixed(2) + " Cr" : a >= 1e5 ? "₹" + (a / 1e5).toFixed(2) + " L" : "₹" + Math.round(a).toLocaleString("en-IN"));
+};
+const num = (v, d = 2) => (fin(v) ? Number(v).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d }) : "—");
+const signed = (v, d = 2) => (fin(v) ? (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d }) : "—");
+const pct = (v, d = 2) => (fin(v) ? (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v * 100).toFixed(d) + "%" : "—");
+const cls = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
+const cap = (s) => (s ? String(s).charAt(0).toUpperCase() + String(s).slice(1) : "");
+const words = (s) => String(s || "").replace(/_/g, " ");
+// "2026-09-29 09:27:04.466562+05:30" → ms. Safari won't parse >3 fractional digits or a space separator.
+const tms = (t) => (typeof t === "number" ? t * 1000 : Date.parse(String(t).trim().replace(" ", "T").replace(/(\.\d{3})\d+/, "$1")));
+const ist = (t, withDate) => {
+	const ms = tms(t);
+	if (!isFinite(ms)) return "—";
+	return new Date(ms).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false,
+		...(withDate ? { day: "2-digit", month: "short" } : {}) });
+};
+const istDay = (t) => new Date(tms(t)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short" });
+function ago(ts) {
+	const m = Math.max(0, (Date.now() - tms(ts)) / 60000);
+	if (!isFinite(m)) return "";
+	return m < 1 ? "just now" : m < 60 ? `${Math.round(m)} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : ist(ts, true);
+}
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } return null; }
+function toast(msg) {
+	const t = $("#toast");
+	t.textContent = msg;
+	t.classList.add("show");
+	clearTimeout(toast.t);
+	toast.t = setTimeout(() => t.classList.remove("show"), 3400);
+}
+async function api(path, opt) {
+	const sep = path.includes("?") ? "&" : "?";
+	const r = await fetch(path + (path.startsWith("/api/i/") ? sep + "account=" + encodeURIComponent(S.account) : ""), opt);
+	const j = await r.json().catch(() => ({}));
+	if (r.status === 401) { location.href = "/"; throw new Error("sign in again"); }
+	if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+	return j;
+}
+const post = (p, b) => api(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+const empty = (ic, text) => h("div", { class: "empty" }, icon(ic), text);
+const SETUP = { orb: "Opening-range breakout", vwap_trend: "VWAP trend", trend_break: "Trend break", fade: "Fade", reversal: "Reversal", range: "Range" };
+const setupName = (s) => SETUP[s] || cap(words(s));
+const structName = (s) => cap(words(s || ""));
+
+// ---- IST clock: is the market open, and when does it next open ------------------------------------------------------
+function istNow() {
+	const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
+		.formatToParts(new Date()).map((x) => [x.type, x.value]));
+	return { wd: p.weekday, min: Number(p.hour) * 60 + Number(p.minute) };
+}
+const inSession = () => { const n = istNow(); return !["Sat", "Sun"].includes(n.wd) && n.min >= 555 && n.min <= 930; };
+function nextOpen() {
+	const n = istNow(), days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+	let i = days.indexOf(n.wd), k = 0;
+	if (i >= 1 && i <= 5 && n.min < 555) return "today 09:15";
+	do { i = (i + 1) % 7; k++; } while (i === 0 || i === 6);
+	return (k === 1 ? "tomorrow" : days[i]) + " 09:15";
+}
+
+// ---- glossary (the "?" buttons and Settings > How to read this app) -----------------------------------------------
+const GLOSS = {
+	r: ["R-multiple", "P&L divided by the risk planned at entry. +1R made what the trade risked; −1R lost exactly the planned amount. It makes trades of different sizes comparable."],
+	grade: ["Trade grade", "A post-trade review of decision quality (entry, sizing, management, exit), A to F. A well-run loser can grade well; a lucky winner can grade badly."],
+	paper: ["Paper trading", "Every trade here is simulated against real prices and real option chains, with real costs (brokerage, STT, exchange fees, slippage). No real money moves and nothing here can place an order."],
+};
+function info(key) {
+	return h("button", { class: "info", "aria-label": "What is " + (GLOSS[key] || [key])[0] + "?", onclick: (e) => { e.stopPropagation(); showGloss(key); } }, "?");
+}
+function showGloss(key) {
+	const g = GLOSS[key];
+	if (!g) return;
+	openSheet(g[0], h("p", { style: "margin:0;font-size:14.5px;line-height:1.6;color:var(--fg2)" }, g[1]),
+		h("button", { class: "btn block", style: "margin-top:18px", onclick: () => openSheet("How to read this app", glossaryList()) }, icon("book"), "All terms"));
+}
+function glossaryList() {
+	return h("div", { class: "panel rows" }, Object.entries(GLOSS).map(([k, [t, d]]) =>
+		h("div", { class: "pad" }, h("div", { style: "font-weight:600;margin-bottom:3px" }, t), h("div", { style: "font-size:13px;color:var(--fg2);line-height:1.55" }, d))));
+}
+
+// ---- shell: tabs, routing, sheets, theme ---------------------------------------------------------------------------
+const TABS = [["live", "Live"], ["today", "Today"], ["trades", "History"], ["data", "Data"]];
+const SUBS = { trades: [["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]] };
+// the app's mark: a price path that tests a level, pulls back and breaks through it
+function mark(size) {
+	const s = svg("svg", { viewBox: "0 0 64 64", width: size, height: size, "aria-hidden": "true" });
+	svg("rect", { width: 64, height: 64, rx: 15, fill: "#0B0E13" }, s);
+	svg("path", { d: "M12 34H31M39.5 34H52", stroke: "#5A6474", "stroke-width": 3.5, "stroke-linecap": "round" }, s);
+	svg("path", { d: "M12 48L21 40L28 45L40 27L52 15", fill: "none", stroke: "#7D95FF", "stroke-width": 5.5, "stroke-linecap": "round", "stroke-linejoin": "round" }, s);
+	return s;
+}
+function buildTabs() {
+	const nav = $("#tabs");
+	nav.appendChild(h("div", { class: "brand", "aria-hidden": "true" }, mark(26), h("div", {}, "Quant ", h("span", {}, "Desk"))));
+	for (const [id, label] of TABS)
+		nav.appendChild(h("button", { role: "tab", "aria-selected": "false", "data-tab": id, onclick: () => go(id) }, icon(id), h("span", {}, label)));
+}
+function go(route) {
+	const [tab, sub] = String(route).split("/");
+	if (location.hash !== "#" + route) history.replaceState(null, "", "#" + route);
+	show(tab, sub);
+}
+function show(tab, sub) {
+	if (!TABS.some((t) => t[0] === tab)) tab = "live";
+	const changed = tab !== S.tab;
+	S.tab = tab;
+	if (sub && SUBS[tab] && SUBS[tab].some((s) => s[0] === sub)) S.sub[tab] = sub;
+	store("qd.tab", tab);
+	document.querySelectorAll("#tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
+	document.querySelectorAll("main > section").forEach((s) => (s.hidden = s.dataset.view !== tab));
+	$("#title").textContent = (TABS.find((t) => t[0] === tab) || ["", "Live"])[1];
+	if (changed) scrollTo(0, 0);
+	if ($("#sheet").classList.contains("open")) closeSheet();          // navigating (or Back) closes a sheet
+	setStatus();
+	refresh(true);
+}
+function openSheet(title, ...content) {
+	const b = $("#sheetbody");
+	b.textContent = "";
+	put(b, h("div", { class: "grab", "aria-hidden": "true" }),
+		h("div", { class: "sh-h" }, h("h3", {}, title), h("button", { class: "ib", "aria-label": "Close", onclick: closeSheet }, icon("x"))), ...content);
+	$("#sheet").classList.add("open");
+	b.scrollTop = 0;
+	document.body.style.overflow = "hidden";
+}
+function closeSheet() { $("#sheet").classList.remove("open"); document.body.style.overflow = ""; }
+function themeMode() { return store("qd.theme") || "auto"; }
+function applyTheme(mode) {
+	const r = document.documentElement;
+	if (mode === "dark" || mode === "light") r.setAttribute("data-theme", mode); else r.removeAttribute("data-theme");
+	store("qd.theme", mode);
+	requestAnimationFrame(() => {
+		$("#meta-theme").setAttribute("content", cssv("--bg") || "#0a0c10");
+		restyleCharts();
+	});
+}
+function cssv(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function seg(el, items, current, onpick, role) {
+	el.textContent = "";
+	for (const [val, label] of items)
+		el.appendChild(h("button", { "aria-pressed": String(val === current), role: role || null, "aria-selected": role ? String(val === current) : null,
+			onclick: () => { onpick(val); seg(el, items, val, onpick, role); } }, label));
+}
+
+// ---- the header pill: the live feeds' state, the same on every tab. It reads the relay's /live/health (a small answer) every 10 seconds. -------------
+function liveStatus() {
+	const L = S.lv, hl = L.health;
+	if (/(^|\.)github\.io$/.test(location.hostname)) return { k: "off", t: "Public copy", s: "no live prices" };
+	if (!navigator.onLine) return { k: "off net", t: "Offline", s: "" };
+	if (!store("qd.livekey")) return { k: "off", t: "Live off", s: "add your key" };
+	if (L.hstate === 503) return { k: "off", t: "Relay off", s: "not switched on" };
+	if (L.hstate === 401) return { k: "off", t: "Key?", s: "not accepted" };
+	if (!hl) return { k: "off", t: L.hstate === "err" ? "No answer" : "Connecting", s: "" };
+	const src = [["Kite", hl.kite], ["Kotak", hl.kotak]].filter(([, x]) => x && fin(x.newest_age_s));
+	if (!src.length) return inSession() ? { k: "stale", t: "No prices", s: "" } : { k: "off", t: "Closed", s: "opens " + nextOpen() };
+	const newest = Math.min(...src.map(([, x]) => x.newest_age_s));
+	const fresh = src.filter(([, x]) => x.newest_age_s <= LIVE_FRESH).map(([n]) => n).join(" + ");
+	if (newest <= LIVE_FRESH) return { k: "live", t: "Live", s: fresh };
+	if (inSession()) return newest <= LIVE_DELAYED ? { k: "stale", t: "Delayed", s: liveAge(newest) } : { k: "stale", t: "No feed", s: liveAge(newest) };
+	return { k: "off", t: "Closed", s: "opens " + nextOpen() };
+}
+function setStatus() {
+	const d = liveStatus(), p = $("#status");
+	p.className = "pill " + d.k;
+	$("#status-t").textContent = d.t;
+	$("#status-s").textContent = d.s;
+	return d;
+}
+let healthBusy = false;
+async function pollHealth() {
+	const L = S.lv, key = store("qd.livekey");
+	if (healthBusy || document.hidden || /(^|\.)github\.io$/.test(location.hostname) || !key) return void setStatus();
+	healthBusy = true;
+	try {
+		const r = await fetch("/live/health", { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+		L.hstate = r.status;
+		L.health = r.ok ? await r.json() : null;
+	} catch (e) { L.hstate = "err"; L.health = null; }
+	finally { healthBusy = false; }
+	setStatus();
+}
+
+function track(stop, target, entry, spot, dir) {
+	const lo = Math.min(stop, target), hi = Math.max(stop, target), span = hi - lo || 1;
+	const X = (v) => Math.max(0, Math.min(100, (v - lo) / span * 100));
+	const targetRight = target > stop;
+	const good = fin(entry) && fin(spot) && (spot - entry) * (targetRight ? 1 : -1) >= 0, col = good ? "var(--up)" : "var(--dn)";
+	return h("div", { class: "track", role: "img", "aria-label": `index ${num(spot)} between stop ${num(stop)} and target ${num(target)}` },
+		h("div", { class: "ln" }),
+		fin(entry) && fin(spot) ? h("div", { class: "fill", style: `left:${Math.min(X(entry), X(spot))}%;width:${Math.abs(X(spot) - X(entry))}%;background:${col}` }) : null,
+		fin(entry) ? h("div", { class: "en", style: `left:${X(entry)}%`, title: "entry" }) : null,
+		fin(spot) ? h("div", { class: "sp", style: `left:${X(spot)}%;border-color:${col}` }) : null,
+		h("span", { class: "l" }, `${targetRight ? "Stop" : "Target"} ${num(lo, 0)}`), h("span", { class: "r" }, `${targetRight ? "Target" : "Stop"} ${num(hi, 0)}`));
+}
+function legsTable(legs, withExit) {
+	return h("table", { class: "legs" }, h("tr", {}, h("th", {}, "Leg"), h("th", {}, "Qty"), h("th", {}, "Entry"), h("th", {}, withExit ? "Exit" : "Mark")),
+		legs.map((l) => h("tr", {}, h("td", {}, l.symbol), h("td", { class: l.qty < 0 ? "dn" : "" }, (l.qty > 0 ? "+" : "") + l.qty), h("td", {}, num(l.entry)), h("td", {}, num(withExit ? l.exit : l.mark)))));
+}
+async function doInstall() {
+	if (!S.installEvt) return toast("Use your browser's menu: “Install app” or “Add to Home Screen”.");
+	S.installEvt.prompt();
+	const r = await S.installEvt.userChoice.catch(() => null);
+	S.installEvt = null;
+	if (r && r.outcome === "accepted") { store("qd.installed", "1"); toast("Installed. Open QuantDesk from your home screen."); }
+	document.querySelectorAll(".install").forEach((e) => e.remove());
+}
+
+// ---- the equity chart's theme (History > Performance) ---------------------------------------------------------------
+function lwTheme() {
+	return {
+		layout: { background: { type: "solid", color: cssv("--panel") }, textColor: cssv("--fg3"), fontSize: 11, fontFamily: cssv("--mono") || "monospace", attributionLogo: true },
+		grid: { vertLines: { color: cssv("--grid") }, horzLines: { color: cssv("--grid") } },
+		rightPriceScale: { borderColor: cssv("--line"), scaleMargins: { top: 0.12, bottom: 0.16 } },
+		timeScale: { borderColor: cssv("--line"), timeVisible: true, secondsVisible: false, rightOffset: 5, minBarSpacing: 2 },
+		crosshair: { mode: 0, vertLine: { color: cssv("--fg3"), width: 1, style: 3, labelBackgroundColor: cssv("--raise") },
+			horzLine: { color: cssv("--fg3"), width: 1, style: 3, labelBackgroundColor: cssv("--raise") } },
+	};
+}
+function restyleCharts() {
+	if (S.eq) { try { const t = lwTheme(); delete t.timeScale; S.eq.chart.applyOptions(t); S.eq.paint(); } catch (e) { /* gone */ } }
+}
+async function renderTrades(full) {
+	seg($("#t-seg"), SUBS.trades, S.sub.trades, (v) => { S.sub.trades = v; history.replaceState(null, "", "#trades/" + v); renderTrades(true); }, "tab");
+	const body = $("#t-body"), sub = S.sub.trades;
+	if (!full) return;
+	body.textContent = "";
+	body.appendChild(h("div", { class: "panel" }, h("div", { class: "pad" }, h("span", { class: "skel", style: "width:70%" }), h("span", { class: "skel", style: "width:40%;margin-top:10px" }))));
+	if (sub === "history") return renderHistory(body);
+	if (sub === "performance") return renderPerformance(body);
+	if (sub === "reviews") return renderReviews(body);
+}
+// a section: a header band (title, hint or a control) over its rows
+function grp(title, hint, ...content) {
+	return h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, title),
+		hint == null || hint === "" ? null : typeof hint === "object" ? hint : h("span", { class: "hint" }, hint)), ...content);
+}
+function tradeRow(t) {
+	const open = t.status === "open";
+	return h("button", { class: "trow", onclick: () => openTrade(t.id) },
+		h("span", { class: "tm" }, h("b", {}, ist(t.opened_at)), open ? h("span", { class: "acc" }, "open") : h("span", {}, t.closed_at ? ist(t.closed_at) : "")),
+		h("div", { style: "min-width:0" }, h("div", { class: "t1" }, setupName(t.strategy)),
+			h("div", { class: "t2" }, `${t.symbol}${t.structure ? " · " + structName(t.structure) : ""}${t.units ? ` · ${t.units} lot${t.units === 1 ? "" : "s"}` : ""}`)),
+		h("div", { class: "v " + (open ? "" : cls(t.pnl)) }, open ? "Open" : inr(t.pnl, true),
+			h("small", {}, open ? "" : `${fin(t.r_multiple) ? signed(t.r_multiple) + "R · " : ""}${cap(words(t.exit_reason || ""))}`)),
+		h("span", { class: "grade " + (t.grade || "") }, t.grade || "–"));
+}
+// the account as it stands with no trades in the window: the starting capital, nothing made or lost
+function flatAccount(capital) {
+	const kpi = (l, v) => h("div", { class: "kpi" }, h("span", {}, l), h("b", {}, v));
+	return h("div", { class: "panel" }, h("div", { class: "kpis" }, kpi("Account", inr(capital)), kpi("Net P&L", inr(0)), kpi("Return", "0.0%"), kpi("Trades", "0")));
+}
+async function renderHistory(body) {
+	let rows;
+	try { rows = await api("/api/i/trades?n=300"); } catch (e) { body.textContent = ""; body.appendChild(h("div", { class: "panel" }, empty("alert", e.message))); return; }
+	if (S.tab !== "trades" || S.sub.trades !== "history") return;
+	body.textContent = "";
+	if (!rows.length) {
+		let cap = null;
+		try { cap = (await api("/api/i/stats")).capital; } catch (e) { /* the summary is skipped */ }
+		if (S.tab !== "trades" || S.sub.trades !== "history") return;
+		if (fin(cap)) body.appendChild(flatAccount(cap));
+		body.appendChild(h("div", { class: "panel" }, empty("trades", "No trades yet. A trade the desk takes will appear here with its full reasoning.")));
+		return;
+	}
+	const days = new Map();
+	for (const t of rows) { const d = String(t.opened_at).slice(0, 10); (days.get(d) || days.set(d, []).get(d)).push(t); }
+	const closed = rows.filter((t) => t.status !== "open"), net = closed.reduce((a, t) => a + t.pnl, 0), wins = closed.filter((t) => t.pnl > 0).length;
+	const nOpen = rows.length - closed.length;
+	body.appendChild(h("div", { class: "panel" }, h("div", { class: "kpis" },
+		h("div", { class: "kpi" }, h("span", {}, `Net, ${days.size} session${days.size === 1 ? "" : "s"}`), h("b", { class: cls(net) }, inr(net, true))),
+		h("div", { class: "kpi" }, h("span", {}, "Trades"), h("b", {}, `${rows.length}${nOpen ? " · " + nOpen + " open" : ""}`)),
+		h("div", { class: "kpi" }, h("span", {}, "Won"), h("b", {}, closed.length ? `${wins} of ${closed.length}` : "—")),
+		h("div", { class: "kpi" }, h("span", {}, "Win rate"), h("b", {}, closed.length ? Math.round(wins / closed.length * 100) + "%" : "—")))));
+	for (const [d, ts] of days) {
+		const dn = ts.filter((t) => t.status !== "open").reduce((a, t) => a + t.pnl, 0);
+		body.appendChild(h("div", { class: "grp" }, h("div", { class: "dayh" }, h("span", {}, istDay(d + "T12:00:00+05:30")), h("span", { class: cls(dn) }, inr(dn, true))),
+			h("div", { class: "rows" }, ts.map(tradeRow))));
+	}
+}
+async function openTrade(id) {
+	let t;
+	try { t = await api("/api/i/trade?id=" + encodeURIComponent(id)); } catch (e) { return toast(e.message); }
+	const para = (label, text) => (text ? h("div", { class: "para" }, h("div", { class: "lbl" }, label), h("p", {}, text)) : null);
+	const [why, ...rest] = String(t.rationale || "").split(" Market read: ");
+	const open = t.status === "open", held = t.closed_at ? Math.round((tms(t.closed_at) - tms(t.opened_at)) / 60000) : null;
+	const legs = (t.legs || []).map((l) => ({ symbol: (l.instrument || {}).symbol || l.symbol, qty: l.qty, entry: l.entry_price, exit: l.exit_price }));
+	openSheet(`${t.symbol} · ${setupName(t.strategy)}`,
+		h("div", { class: "row", style: "align-items:flex-end;margin-bottom:12px" },
+			h("div", { class: "grow" }, h("div", { class: "lbl" }, open ? "Open P&L" : "Net P&L, after costs"),
+				h("div", { class: cls(t.pnl), style: "font-size:26px;font-weight:300;letter-spacing:-.02em" }, open ? "Open" : inr(t.pnl, true))),
+			h("div", { style: "text-align:right" }, h("span", { class: "grade " + (t.grade || "") }, t.grade || "·"), info("grade"))),
+		h("div", { class: "kpis" },
+			h("div", { class: "kpi" }, h("span", {}, "R multiple"), h("b", { class: cls(t.r_multiple) }, fin(t.r_multiple) ? signed(t.r_multiple) + "R" : "—")),
+			h("div", { class: "kpi" }, h("span", {}, "Risked"), h("b", {}, inr(t.initial_risk))),
+			h("div", { class: "kpi" }, h("span", {}, "Lots · costs"), h("b", {}, `${t.units} · ${inr(t.fees)}`)),
+			h("div", { class: "kpi" }, h("span", {}, "Held"), h("b", {}, held != null ? `${held} min` : "—"))),
+		h("div", { class: "panel", style: "margin-top:12px" }, h("div", { class: "pad" },
+			h("div", { class: "row", style: "font-size:13px" }, h("span", { class: "f3" }, "Entry"), h("b", { class: "mono" }, `${ist(t.opened_at, true)} @ ${num(t.entry_underlying)}`)),
+			h("div", { class: "row", style: "font-size:13px;margin-top:6px" }, h("span", { class: "f3" }, "Exit"),
+				h("b", { class: "mono" }, t.closed_at ? `${ist(t.closed_at)} @ ${num(t.exit_underlying)}` : "open")),
+			fin(t.stop) && fin(t.target) ? h("div", { style: "margin-top:10px" }, track(t.stop, t.target, t.entry_underlying, open ? null : t.exit_underlying, t.direction)) : null,
+			legs.length ? h("div", { style: "margin-top:12px" }, legsTable(legs, true)) : null)),
+		para("Why it was taken", why), para("What the market looked like", rest.join(" Market read: ")),
+		para("Sizing", (t.sizing || []).join(" · ")), para("Exit", t.exit_reason ? `${cap(words(t.exit_reason))}: ${t.exit_note || ""}` : "Still open"),
+		para("Review", t.review), para("Lessons", (t.lessons || []).join(" ")),
+		t.fills && t.fills.length ? h("div", { class: "para" }, h("div", { class: "lbl" }, "Fills"), h("div", { class: "panel scroll" }, h("table", { class: "tbl" },
+			h("tr", {}, h("th", {}, "Time"), h("th", {}, "Contract"), h("th", {}, "Qty"), h("th", {}, "Price"), h("th", {}, "Fees")),
+			t.fills.map((f) => h("tr", {}, h("td", {}, ist(f.ts)), h("td", {}, f.symbol), h("td", {}, f.qty), h("td", {}, num(f.price)), h("td", {}, num(f.fees))))))) : null);
+}
+async function renderPerformance(body) {
+	let s;
+	try { s = await api("/api/i/stats"); } catch (e) { body.textContent = ""; body.appendChild(empty("alert", e.message)); return; }
+	if (S.tab !== "trades" || S.sub.trades !== "performance") return;
+	body.textContent = "";
+	if (!s.trades) {
+		if (fin(s.capital)) body.appendChild(flatAccount(s.capital));
+		body.appendChild(h("div", { class: "panel" }, empty("chart", "No closed trades yet. Performance appears after the first trade closes.")));
+		return;
+	}
+	const kpi = (l, v, c) => h("div", { class: "kpi" }, h("span", {}, l), h("b", { class: c || "" }, v));
+	put(body, h("div", { class: "panel" }, h("div", { class: "kpis" },
+		kpi("Net P&L", inr(s.net, true), cls(s.net)), kpi("Return", pct(s.net / s.capital, 1), cls(s.net)),
+		kpi("Win rate", Math.round(s.win_rate * 100) + "%"), kpi("Profit factor", s.profit_factor ? num(s.profit_factor) : "—"),
+		kpi("Avg trade", signed(s.avg_r) + "R", cls(s.avg_r)), kpi("Max drawdown", pct(s.max_dd, 1), "dn"),
+		kpi("Green days", Math.round(s.green_days * 100) + "%"), kpi("Costs paid", inr(s.fees)))));
+	const eqc = h("div", { class: "eqc" });
+	body.appendChild(grp("Equity", `${s.trades} trades · ${s.sessions} sessions · dashed: start`, eqc));
+	drawEquity(eqc, s);
+	body.appendChild(grp("P&L by setup", "trades", hbars(s.by_setup, setupName)));
+	const BRK = [["by_day_type", "Day type"], ["by_structure", "Structure"], ["by_exit", "Exit"], ["by_hour", "Hour"], ["by_symbol", "Index"]];
+	const segEl = h("div", { class: "seg" }), tbl = h("div", { class: "scroll" });
+	const paint = () => {
+		tbl.textContent = "";
+		tbl.appendChild(h("table", { class: "tbl" }, h("tr", {}, h("th", {}, ""), h("th", {}, "Trades"), h("th", {}, "Win"), h("th", {}, "Avg R"), h("th", {}, "Net")),
+			(s[S.brk] || []).map((r) => h("tr", {}, h("td", {}, cap(words(r.key))), h("td", {}, r.trades), h("td", {}, Math.round(r.win * 100) + "%"),
+				h("td", { class: cls(r.avg_r) }, signed(r.avg_r)), h("td", { class: cls(r.pnl) }, inr(r.pnl, true))))));
+	};
+	seg(segEl, BRK, S.brk, (v) => { S.brk = v; paint(); });
+	paint();
+	body.appendChild(grp("Breakdown", "closed trades", h("div", { style: "padding:8px 16px 10px;border-top:1px solid var(--line)" }, segEl), tbl));
+	if ((s.calibration || []).length)
+		body.appendChild(grp("Calibration", "priced vs realised",
+			h("div", {}, h("p", { class: "narr pad", style: "font-size:12px;color:var(--fg3)" },
+				"P(right direction) the quant layer priced each trade on, against how often the index actually went that way by the exit. Until the realised column tracks the assumed one over many trades, the edge is unproven."),
+			h("div", { class: "scroll" }, h("table", { class: "tbl" }, h("tr", {}, h("th", {}, "Source"), h("th", {}, "Assumed"), h("th", {}, "Trades"), h("th", {}, "Realised"), h("th", {}, "Net")),
+				s.calibration.map((r) => h("tr", {}, h("td", {}, cap(String(r.source).split(/ from | \(/)[0])), h("td", {}, Math.round(r.assumed * 100) + "%"), h("td", {}, r.trades),
+					h("td", {}, Math.round(r.realised * 100) + "%"), h("td", { class: cls(r.pnl) }, inr(r.pnl, true)))))))));
+}
+function drawEquity(el, s) {
+	if (S.eq) { try { S.eq.chart.remove(); } catch (e) { /* gone */ } S.eq = null; }
+	const LW = window.LightweightCharts;
+	if (!LW || !s.equity || !s.equity.length) return;
+	const chart = LW.createChart(el, Object.assign(lwTheme(), { autoSize: true, handleScroll: false, handleScale: false,
+		localization: { priceFormatter: (p) => inr(p) } }));
+	chart.applyOptions({ timeScale: { timeVisible: false, borderColor: cssv("--line"), rightOffset: 0, fixLeftEdge: true, fixRightEdge: true },
+		rightPriceScale: { scaleMargins: { top: 0.15, bottom: 0.1 } } });
+	const ser = chart.addSeries(LW.BaselineSeries, { baseValue: { type: "price", price: s.capital }, lineWidth: 2, priceLineVisible: false });
+	const first = new Date(s.equity[0].day + "T00:00:00Z");
+	first.setUTCDate(first.getUTCDate() - 1);
+	const pts = [{ time: first.toISOString().slice(0, 10), value: s.capital }, ...s.equity.map((r) => ({ time: r.day, value: r.equity }))];
+	const paint = () => {
+		const up = cssv("--up"), dn = cssv("--dn");
+		ser.applyOptions({ topLineColor: up, topFillColor1: up + "40", topFillColor2: up + "05", bottomLineColor: dn, bottomFillColor1: dn + "05", bottomFillColor2: dn + "40" });
+	};
+	paint();
+	ser.setData(pts);
+	ser.createPriceLine({ price: s.capital, color: cssv("--fg3"), lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "start" });
+	chart.timeScale().fitContent();
+	S.eq = { chart, paint };
+}
+function hbars(rows, name) {
+	const box = h("div", {});
+	rows = [...rows].sort((a, b) => b.pnl - a.pnl);
+	const max = Math.max(...rows.map((r) => Math.abs(r.pnl)), 1);
+	for (const r of rows) {
+		const w = Math.abs(r.pnl) / max * 50;
+		box.appendChild(h("div", { class: "hb" }, h("span", {}, name ? name(r.key) : r.key, h("div", { class: "f3", style: "font-size:11px" }, `${r.trades} trade${r.trades === 1 ? "" : "s"} · ${Math.round(r.win * 100)}% won`)),
+			h("div", { class: "bar2" }, h("i", { style: `${r.pnl >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${r.pnl >= 0 ? "var(--up)" : "var(--dn)"}` })),
+			h("b", { class: cls(r.pnl) }, inr(r.pnl, true))));
+	}
+	return box;
+}
+async function renderReviews(body) {
+	let dates;
+	try { dates = await api("/api/i/reviews"); } catch (e) { body.textContent = ""; body.appendChild(empty("alert", e.message)); return; }
+	if (S.tab !== "trades" || S.sub.trades !== "reviews") return;
+	body.textContent = "";
+	body.appendChild(grp("Session reviews", dates.length ? `${dates.length}` : "", h("div", { class: "rows" }, dates.length ? dates.map((d) =>
+		h("button", { class: "set", onclick: async () => {
+			try { const r = await api("/api/i/review?date=" + encodeURIComponent(d)); openSheet("Session " + istDay(d + "T12:00:00+05:30"), markdown(r.markdown)); } catch (e) { toast(e.message); }
+		} }, icon("book"), h("div", { class: "grow" }, istDay(d + "T12:00:00+05:30"), h("small", {}, "The desk's own post-session review")), icon("chev")))
+		: empty("book", "Session reviews appear after each close."))));
+}
+function inline(text) {
+	const out = [];
+	String(text).split(/(\*\*[^*]+\*\*)/).forEach((p) => out.push(p.startsWith("**") && p.endsWith("**") ? h("b", {}, p.slice(2, -2)) : p));
+	return out;
+}
+function markdown(md) {
+	const root = h("div", { class: "md" }), lines = String(md || "").split("\n");
+	for (let i = 0; i < lines.length; i++) {
+		const l = lines[i];
+		if (/^#{1,3} /.test(l)) root.appendChild(h(l.startsWith("## ") ? "h2" : "h1", {}, inline(l.replace(/^#+ /, ""))));
+		else if (l.startsWith("|")) {
+			const rows = [];
+			while (i < lines.length && lines[i].startsWith("|")) { if (!/^\|[-:| ]+\|$/.test(lines[i])) rows.push(lines[i]); i++; }
+			i--;
+			const cells = (r) => r.slice(1, -1).split("|").map((c) => c.trim());
+			root.appendChild(h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, rows.map((r, k) => h("tr", {}, cells(r).map((c) => h(k ? "td" : "th", {}, inline(c))))))));
+		} else if (l.startsWith("- ")) root.appendChild(h("li", {}, inline(l.slice(2))));
+		else if (l.trim()) root.appendChild(h("p", {}, inline(l)));
+	}
+	return root;
+}
+
+// ==================================================================================================================
+// TODAY: the pre-market brief (quantdesk/premarket; premarket.yml every 15 minutes, 07:15-09:15 IST)
+// ==================================================================================================================
+async function loadBrief(maxAge) {
+	if (S.pm && Date.now() - (S.pmAt || 0) < maxAge) return S.pm;
+	try { S.pm = await api("/api/i/premarket"); S.pmErr = null; } catch (e) { S.pmErr = e.message; }
+	S.pmAt = Date.now();
+	return S.pm;
+}
+const PM_LABEL = { cheap: "bull", rich: "bear", "within chance": "flat", "no history": "flat", "no implied move": "flat", "already out": "flat" };
+const pctU = (v, d = 1) => (fin(v) ? (v * 100).toFixed(d) + "%" : "—");
+async function renderToday(full) {
+	const body = $("#p-body");
+	const b = await loadBrief(full ? 30000 : 120000);
+	if (S.tab !== "today") return;
+	body.textContent = "";
+	if (!b) {
+		put(body, grp("Pre-market brief", "", h("div", { class: "rows" }, empty("watch",
+			"No pre-market brief yet. It is built every 15 minutes from 07:15 to 09:15 IST on weekdays" + (S.pmErr ? ` (${S.pmErr}).` : "."))))); return;
+	}
+	const sum = h("div", { class: "rows" }, (b.summary || []).map((line) => h("div", { class: "pad", style: "font-size:13.5px;line-height:1.5" }, line)));
+	put(body, grp("Pre-market brief", `built ${ago(b.generated_at)}`, sum));
+	if (b.data_stale) put(body, h("div", { class: "banner err" }, icon("alert"), h("div", {}, `The latest bhavcopy is from ${b.last_close}: the warehouse may be behind.`)));
+	const notes = (t) => h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:4px" }, t);
+	if ((b.expiring || []).length)
+		put(body, grp("Expiry today", b.expiring.map((e) => e.symbol).join(", "), h("div", { class: "rows" }, h("div", { class: "pad" }, notes(b.expiring[0].note)))));
+	if ((b.macro || []).length)
+		put(body, grp("Macro events", `${b.macro.length}`, h("div", { class: "rows" }, b.macro.map((m) => h("div", { class: "pad", style: "display:grid;gap:4px" },
+			h("div", { class: "row" }, h("b", { style: "font-weight:500" }, m.name), h("span", { class: "grow" }), h("span", { class: "tag flat" }, (m.time ? m.time + " IST · " : "") + m.when)),
+			Object.entries(m.history || {}).map(([sym, x]) => notes(`${sym}: ${x.n} past sessions, median move ${pctU(x.median_move, 2)} (all sessions ${pctU(x.median_move_all, 2)}); moved more than 1% on ${pctU(x.share_over_1pct, 0)} (all ${pctU(x.share_over_1pct_all, 0)})`)),
+			m.evidence ? notes(m.evidence) : null)))));
+	if ((b.results || []).length) {
+		const tb = h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Stock", "Priced", "Past (NSE)", "Label"].map((x) => h("th", {}, x)))),
+			h("tbody", {}, b.results.map((r) => h("tr", {}, h("td", {}, h("b", { style: "font-weight:500" }, r.symbol), h("small", { class: "sub" }, r.when.startsWith("results today") ? "today" : "reacting")),
+				h("td", {}, pctU(r.priced_abs_move)), h("td", {}, r.past && r.past.n ? `${pctU(r.past.mean_move)} · ${r.past.n}` : "—"),
+				h("td", {}, h("span", { class: "tag " + (PM_LABEL[r.label] || "flat") }, r.label))))));
+		const why = h("div", { class: "rows" }, b.results.map((r) => h("div", { class: "pad", style: "font-size:12.5px" }, h("b", { style: "font-weight:500" }, r.symbol + ": "), r.why)));
+		put(body, grp("Results", `${b.results.length} companies`, h("div", { class: "scroll" }, tb), why, h("div", { class: "pad" }, notes(b.results_note))));
+	}
+	if ((b.global || []).length)
+		put(body, grp("Overnight", "last daily close", h("div", { class: "chips pad" }, b.global.map((g) =>
+			h("span", { class: "tag " + (g.change > 0 ? "bull" : g.change < 0 ? "bear" : "flat") }, `${g.name} ${pct(g.change, 1)}`)))));
+	const W = b.watch || [];
+	const chips = h("div", { class: "chips pad" }), list = h("div", { class: "rows" });
+	const q = h("input", { type: "search", placeholder: `Search ${W.length} instruments`, "aria-label": "Search instruments", class: "search",
+		style: "box-sizing:border-box;width:100%;max-width:100%;height:36px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)" });
+	S.pmF = S.pmF || "";
+	const paint = (all) => {
+		chips.textContent = "";
+		for (const [val, label] of [["", "All"], ["index", "Indices"], ["results", "Results"], ["news", "In the news"], ["oi", "OI shift"]])
+			chips.appendChild(h("button", { class: "chip", "aria-pressed": String(S.pmF === val), onclick: () => { S.pmF = val; paint(); } }, label));
+		const term = q.value.trim().toUpperCase(), f = S.pmF;
+		const shown = W.filter((w) => (!term || w.symbol.includes(term)) && (!f || (f === "index" ? w.segment === "index"
+			: f === "results" ? w.why.some((x) => x.includes("results")) : f === "news" ? w.why.some((x) => x.startsWith("in the news")) : w.why.some((x) => x.startsWith("futures OI")))));
+		list.textContent = "";
+		if (!shown.length) list.appendChild(empty("watch", "Nothing matches."));
+		shown.slice(0, all || term ? 1000 : 60).forEach((w) => list.appendChild(h("div", { class: "pad", style: "display:grid;gap:3px" },
+			h("div", { class: "row" }, h("b", { style: "font-weight:500" }, w.symbol), h("span", { class: "f3", style: "font-size:11.5px" }, w.segment === "index" ? "index" : `lot ${w.lot ?? "—"} · step ${w.strike_step ?? "—"}`),
+				h("span", { class: "grow" }), h("span", { class: "f3 mono", style: "font-size:12px" }, w.price != null ? w.price.toLocaleString("en-IN") : "—"),
+				h("span", { class: "tag flat" }, w.score.toFixed(1))),
+			w.why.length ? h("div", { class: "f3", style: "font-size:12px" }, w.why.join(" · ")) : null)));
+		if (!all && !term && shown.length > 60) list.appendChild(h("div", { class: "pad" }, h("button", { class: "btn block", onclick: () => paint(true) }, `Show all ${shown.length}`)));
+	};
+	q.addEventListener("input", () => paint());
+	const rp = b.record_plan || {};
+	put(body, grp("Watch-list", `${W.length} instruments · the desk's own ranking`, h("div", { class: "pad" }, q), chips, list,
+		h("div", { class: "pad" }, notes(`Recording plan: ${rp.names || 0} of ${rp.of || 0} names fit Kite's budget of ${rp.budget || 0} instruments (advisory; the recorders do not read it yet). ${b.not_for}.`))));
+	paint();
+}
+const DATA_RECORDED = [
+	["Index and futures minutes, option-chain snapshots", "09:15 to 15:30", "record.yml, kept as Parquet on the chains-YYYY releases"],
+	["Chain tape: several expiries a minute", "09:15 to 15:30", "record.yml, kept with the chains"],
+	["Kite ticks with market depth", "the session", "kite-record.yml, encrypted with your API secret, kept as an artifact (licensed to you: never published)"],
+	["Stock option chains, minutes for all five indices", "15:25 and 15:45", "collect-wide.yml"],
+	["NSE warehouse: bhavcopy, participant open interest, FII/DII, events", "evenings", "data.yml"],
+	["Pre-market brief", "07:15 to 09:15", "premarket.yml, on its own branch; shown on the Today tab"],
+];
+const DATA_GAPS = [
+	"Live prices (Kite and Kotak) are for display. The relay keeps the latest price of each instrument and one close a minute for the last two days, so it is not a record. The record is the Kite tick recorder and the minute and chain files above.",
+	"The recorders stop at about 15:32 IST. MCX and currency trade into the evening and are not recorded after that; there is no recorder for them yet.",
+	"The Kite tick content is encrypted, so only its arrival can be checked, not its content.",
+];
+async function renderDataTab(full) {
+	const body = $("#dt-body"), L = S.lv;
+	if (full) await pollHealth();
+	const pm = await loadBrief(full ? 30000 : 120000);
+	if (S.tab !== "data") return;
+	const hl = L.health, kk = (hl && hl.kite) || {}, kt = (hl && hl.kotak) || {}, kn = kt.universe || null;
+	const tag = (k, t) => h("span", { class: "tag " + k }, t);
+	const row = (label, value, note) => h("div", { class: "pad", style: "display:grid;gap:3px" },
+		h("div", { class: "row" }, h("b", { style: "font-weight:500" }, label), h("span", { class: "grow" }), value),
+		note ? h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, note) : null);
+	const feed = (n, a) => !n ? tag("flat", "nothing yet") : tag(fin(a) && a <= LIVE_FRESH ? "bull" : fin(a) && a <= LIVE_DELAYED ? "flat" : "bear",
+		`${n.toLocaleString("en-IN")} · ${liveAge(a)} ago`);
+	body.textContent = "";
+	const st = liveStatus();
+	let live;
+	if (!hl) live = [empty("live", st.t === "Public copy" ? "Live feeds are private and only open on the Cloudflare site, not on this address."
+		: st.t === "Live off" ? "Type your live key on the Live tab to see the feeds here."
+		: st.t === "Relay off" ? "The live relay is not switched on yet: the Worker still needs its two secrets (docs/LIVE.md)."
+		: st.t === "Key?" ? "The relay did not accept the key. Type it again on the Live tab."
+		: "Waiting for the live relay…")];
+	else live = [
+		row("Kite (the recorder pushes every 5 s)", feed(kk.n, kk.newest_age_s), "Zerodha ticks for the whole universe during the session."),
+		row("Kotak (the relay polls it)", kt.configured === false ? tag("flat", "not set up") : h("span", {}, tag(kt.status === "ok" ? "bull" : "bear", kt.status || "unknown"), " ", feed(kt.n, kt.newest_age_s)),
+			kt.configured === false ? "Add KOTAK_CONSUMER_KEY to the Worker to switch the second source on." :
+				`${kt.calls_ok || 0} calls ok, ${kt.calls_failed || 0} failed since the relay started${kt.last_error ? " · last problem: " + kt.last_error : ""}`),
+		row("Kotak universe", kn ? tag("flat", `${kn.quotes} quotes · ${kn.chains} chains`) : tag("bear", "none"), kn ? `built for ${kn.asof}` : "The universe workflow has not pushed one yet."),
+		row("Both sources on the same name", tag(hl.disagree ? "bear" : "bull", hl.both ? `${hl.both} compared · ${hl.disagree || 0} differ` : "none compared"), "A name differs when Kite and Kotak disagree by more than a spread explains."),
+		row("Board", tag("flat", `${(hl.names || 0).toLocaleString("en-IN")} instruments`)),
+	];
+	put(body, grp("Live feeds", st.t, h("div", { class: "rows" }, live)));
+	const pmRows = !pm ? [empty("watch", "No pre-market brief yet. It is built every 15 minutes from 07:15 to 09:15 IST on weekdays.")]
+		: [row("Pre-market brief", tag("flat", "built " + ago(pm.generated_at))), row("NSE warehouse", pm.data_stale ? tag("bear", "behind") : tag("bull", "up to date"), `latest bhavcopy: ${pm.last_close}`)];
+	put(body, grp("Daily data", "", h("div", { class: "rows" }, pmRows)));
+	put(body, grp("What is recorded", "every trading day", h("div", { class: "rows" }, DATA_RECORDED.map(([what, when, where]) =>
+		h("div", { class: "pad", style: "display:grid;gap:3px" }, h("div", { class: "row" }, h("b", { style: "font-weight:500" }, what), h("span", { class: "grow" }), h("span", { class: "f3 mono", style: "font-size:12px;white-space:nowrap" }, when)),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, where))))));
+	put(body, grp("Not covered", "", h("div", { class: "rows" }, DATA_GAPS.map((t) => h("div", { class: "pad f3", style: "font-size:12.5px;line-height:1.55" }, t)))));
+	put(body, h("div", { class: "note" }, "Whether each recording channel delivered on a given day is checked by the Data health workflow at 19:00 and 22:15 IST (docs/DATA_HEALTH.md); a red run there is the alarm."));
+}
+
+// ==================================================================================================================
+// settings
+// ==================================================================================================================
+function openSettings() {
+	const mode = themeMode(), themeSeg = h("div", { class: "seg full" });
+	seg(themeSeg, [["auto", "Auto"], ["dark", "Dark"], ["light", "Light"]], mode, (v) => applyTheme(v));
+	const acct = S.accounts.length > 1 ? h("select", { class: "btn block", style: "margin-top:8px", "aria-label": "Account", onchange: (e) => {
+		S.account = e.target.value; store("qd.account", S.account); closeSheet(); refresh(true); } },
+		S.accounts.map((a) => h("option", Object.assign({ value: a.id }, a.id === S.account ? { selected: true } : {}), a.label))) : null;
+	const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+	const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+	openSheet("Settings",
+		h("div", { class: "lbl", style: "margin-bottom:8px" }, "Appearance"), themeSeg,
+		acct ? h("div", { class: "lbl", style: "margin:18px 0 0" }, "Account") : null, acct,
+		h("div", { class: "lbl", style: "margin:18px 0 8px" }, "App"),
+		h("div", { class: "panel rows" },
+			standalone ? null : h("button", { class: "set", onclick: () => { closeSheet(); doInstall(); } }, icon("install"),
+				h("div", { class: "grow" }, "Install on this phone", h("small", {}, ios ? "Share → Add to Home Screen" : "Full-screen, one tap away, works offline")), icon("chev")),
+			h("button", { class: "set", onclick: () => { closeSheet(); refresh(true, true); } }, icon("refresh"),
+				h("div", { class: "grow" }, "Refresh now", h("small", {}, "Prices update every 5 s by themselves; this reloads the rest")), icon("chev")),
+			h("button", { class: "set", onclick: () => openSheet("How to read this app", glossaryList()) }, icon("book"),
+				h("div", { class: "grow" }, "How to read this app", h("small", {}, "R, grades, paper trading…")), icon("chev"))),
+		h("div", { class: "note" }, h("b", {}, `QuantDesk ${VERSION}. `),
+			"Live Indian market prices and option chains, the pre-market brief, the record of the retired paper desk, and the state of the data pipeline. It only displays: nothing here can place an order. Not investment advice."));
+}
+
+// ==================================================================================================================
+// ---- Live: every price the Kite recorder watches, refreshed every 5 seconds. PRIVATE: Zerodha's data is licensed to the owner, so the relay
+// (deploy/cloudflare/live.js) answers only to a key typed once into this device. Display only: nothing on this tab can trade. -----------------
+// The universe is the recorder's (kite_universe.py): indices, the near-month future of every F&O underlying, MCX and currency, the F&O stocks' cash
+// prices and index options near the money: a thousand rows or more, so the tab has search, segment filters, sorting and "show more".
+const LIVE_FRESH = 15, LIVE_DELAYED = 120;                       // seconds: green up to 15, amber up to 2 minutes, then "no feed"
+const LIVE_SEGS = [["all", "All"], ["idx", "Index"], ["fut", "Futures"], ["eq", "Stocks"], ["opt", "Options"], ["mcx", "MCX"], ["cds", "Currency"]];
+const LIVE_SORTS = [["name", "Name"], ["move", "Movers"], ["fresh", "Newest"]];
+const LIVE_FIRST = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "INDIAVIX", "NIFTY-FUT", "BANKNIFTY-FUT"];
+const LIVE_PAGE = 150;
+const LIVE_VOL = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
+S.lv = { q: "", seg: "all", sort: "name", limit: LIVE_PAGE, data: null, built: false, sel: null, series: null, exp: null, allStrikes: false };
+let liveBusy = false;
+const livePx = (v, seg) => (fin(v) ? v.toLocaleString("en-IN", seg === "cds" ? { minimumFractionDigits: 4, maximumFractionDigits: 4 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+function liveAge(sec) {
+	if (!fin(sec)) return "—";
+	if (sec < 90) return Math.round(sec) + "s";
+	if (sec < 5400) return Math.round(sec / 60) + " min";
+	return (sec / 3600).toFixed(1) + " h";
+}
+function liveSeg(name, q) {
+	if (q.s === "bfo") return "fut";
+	if (q.s) return q.s;
+	return /-FUT$/.test(name) ? "fut" : "idx";
+}
+function liveLabel(name, q) {
+	if (q.s === "mcx") return name.replace(/-MCX$/, "") + " · MCX";
+	if (q.s === "cds") return name.replace(/-CDS$/, "") + " · currency";
+	if (q.s === "bfo") return name.replace(/-BFO$/, "") + " fut · BSE";
+	return name.replace(/-FUT$/, " fut");
+}
+function liveKeyForm(note) {
+	const inp = h("input", { type: "password", class: "search", placeholder: "Live key", "aria-label": "Live key", autocomplete: "off", id: "lv-key" });
+	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); S.lv.built = false; $("#lv-body").dataset.state = ""; renderLive(); pollHealth(); } };
+	inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+	return h("div", { class: "panel pad" }, h("div", { style: "font-weight:600;margin-bottom:6px" }, "Live prices"),
+		h("div", { style: "font-size:13px;color:var(--fg2);line-height:1.55;margin-bottom:10px" },
+			"Real-time prices from the desk's Kite recorder, every 5 seconds. They are private to you: type your live key once on this device (it is the LIVE_READ_TOKEN you set on the Worker)."),
+		note ? h("div", { class: "warn", style: "font-size:12.5px;margin-bottom:8px" }, note) : null, inp,
+		h("button", { class: "btn block", style: "margin-top:10px", onclick: save }, "Save key"));
+}
+function liveRows(data) {
+	const L = S.lv, q = L.q.trim().toLowerCase(), names = Object.keys(data.quotes);
+	const rows = names.filter((n) => (L.seg === "all" || liveSeg(n, data.quotes[n]) === L.seg) && (!q || n.toLowerCase().includes(q) || liveLabel(n, data.quotes[n]).toLowerCase().includes(q)));
+	const rank = (n) => { const k = LIVE_FIRST.indexOf(n); return k < 0 ? 999 : k; };
+	if (L.sort === "move") rows.sort((a, b) => Math.abs(data.quotes[b].chg || 0) - Math.abs(data.quotes[a].chg || 0) || (a < b ? -1 : 1));
+	else if (L.sort === "fresh") rows.sort((a, b) => data.quotes[a].age_s - data.quotes[b].age_s || (a < b ? -1 : 1));
+	else rows.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : 1));
+	return rows;
+}
+function liveDraw() {
+	const L = S.lv, data = L.data, body = $("#lv-body");
+	if (!data || !L.built) return;
+	const newest = data.newest_age_s;
+	const kind = !fin(newest) ? (inSession() ? "stale" : "paused") : newest <= LIVE_FRESH ? "live" : newest <= LIVE_DELAYED ? "stale" : "paused";
+	const label = !fin(newest) ? (inSession() ? "No prices yet" : "Market closed, opens " + nextOpen()) : newest <= LIVE_FRESH ? "Live" : newest <= LIVE_DELAYED ? "Delayed " + liveAge(newest) : "No feed: last " + liveAge(newest) + " ago";
+	const pill = $("#lv-pill"); pill.className = "pill " + kind; $("#lv-pill-t").textContent = label;
+	const counts = {};
+	for (const [n, v] of Object.entries(data.quotes)) { const k = liveSeg(n, v); counts[k] = (counts[k] || 0) + 1; }
+	$("#lv-count").textContent = Object.keys(data.quotes).length.toLocaleString("en-IN") + " instruments · every 5 s";
+	const hl = L.health, ln = $("#lv-sources");
+	if (hl && ln) {                                                   // the state of each source, from /live/health
+		const kt = hl.kotak || {}, kk = hl.kite || {};
+		const ok = (n, a) => (n > 0 && fin(a) && a <= LIVE_FRESH * 2 ? "●" : "○");
+		ln.textContent = `${ok(kk.n, kk.newest_age_s)} Kite ${kk.n || 0}  ·  ${ok(kt.n, kt.newest_age_s)} Kotak ${kt.n || 0}${kt.status && kt.status !== "ok" ? " (" + kt.status + ")" : ""}  ·  ${hl.disagree ? "⚠ " + hl.disagree + " disagree" : "sources agree"}`;
+	}
+	$("#lv-list").hidden = !!L.sel; $("#lv-detail").hidden = !L.sel;
+	if (L.sel) return liveDetail();
+	document.querySelectorAll("#lv-segs .chip").forEach((c) => { c.setAttribute("aria-pressed", String(c.dataset.k === L.seg)); const n = c.dataset.k === "all" ? Object.keys(data.quotes).length : counts[c.dataset.k] || 0; c.lastChild.textContent = " " + n; });
+	document.querySelectorAll("#lv-sorts .chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.k === L.sort)));
+	const rows = liveRows(data), shown = rows.slice(0, L.limit), tb = $("#lv-table");
+	tb.textContent = "";
+	if (!rows.length) { put(tb, empty("live", Object.keys(data.quotes).length ? "Nothing matches." : "Nothing has arrived yet. The recorder pushes from 09:15 IST on a trading day.")); return; }
+	const trs = shown.map((n) => {
+		const v = data.quotes[n], old = v.age_s > LIVE_DELAYED, seg = liveSeg(n, v);
+		const chg = fin(v.chg) ? h("span", { class: "chg " + (v.chg > 0 ? "up" : v.chg < 0 ? "dn" : "flat") }, (v.chg > 0 ? "+" : "") + v.chg.toFixed(2) + "%") : "—";
+		const book = fin(v.bid) && fin(v.ask) ? " · " + livePx(v.bid, seg) + " / " + livePx(v.ask, seg) : "";               // bid / ask, where either feed carries a book
+		const src = v.src === "z" ? "Kite" : v.src === "k" ? "Kotak" : "";
+		const flag = fin(v.x) ? h("span", { class: "warn" }, " · ⚠ the two sources differ " + v.x.toFixed(1) + "%") : null;     // Kite and Kotak disagree by more than a spread explains
+		return h("tr", { style: (old ? "opacity:.55;" : "") + "cursor:pointer", tabindex: "0", role: "button", onclick: () => liveOpen(n), onkeydown: (e) => { if (e.key === "Enter") liveOpen(n); } }, h("td", {}, liveLabel(n, v), h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + book, flag)), h("td", {}, livePx(v.ltp, seg)), h("td", {}, chg),
+			h("td", { class: "f2" }, fin(v.vol) ? LIVE_VOL.format(v.vol) : "—"));
+	});
+	put(tb, h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Name", "Last", "Change", "Volume"].map((x) => h("th", {}, x)))), h("tbody", {}, trs))),
+		rows.length > shown.length ? h("button", { class: "btn block", style: "margin:10px 16px;width:calc(100% - 32px)", onclick: () => { L.limit += LIVE_PAGE; liveDraw(); } }, `Show ${Math.min(LIVE_PAGE, rows.length - shown.length)} more (${rows.length - shown.length} left)`) : null);
+}
+// ---- one instrument: its quote, a chart of today's closes (one a minute, from the relay's series), what it relates to, and for an underlying its option chain.
+// Everything is drawn from the snapshot the tab already holds plus one small series request; nothing here can trade.
+const LIVE_MONTHS = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split(" ");
+const LIVE_OPT = /^(.+?)(\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2})(\d+(?:\.\d+)?)(CE|PE)$/;
+function liveOpt(name) {                                                   // NIFTY12NOV2624500CE -> {u: "NIFTY", e: "12NOV26", k: 24500, t: "CE"}
+	const m = LIVE_OPT.exec(name);
+	return m ? { u: m[1], e: m[2], k: parseFloat(m[3]), t: m[4] } : null;
+}
+const liveExpiryKey = (e) => +("20" + e.slice(5, 7)) * 10000 + (LIVE_MONTHS.indexOf(e.slice(2, 5)) + 1) * 100 + +e.slice(0, 2);          // sortable yyyymmdd
+function liveChains(data) {                                                // underlying -> expiry -> strike -> {CE, PE} names, from the names on the board
+	const out = Object.create(null);                                         // no prototype: a name like __proto__12NOV26... must be data, not a way into Object.prototype
+	for (const n of Object.keys(data.quotes)) {
+		const o = liveOpt(n);
+		if (!o) continue;
+		const ux = (out[o.u] = out[o.u] || Object.create(null));
+		const ex = (ux[o.e] = ux[o.e] || Object.create(null));
+		(ex[o.k] = ex[o.k] || Object.create(null))[o.t] = n;
+	}
+	return out;
+}
+function liveHHMM(minute) { const d = new Date(minute * 60000 + 19800000); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); }
+function liveChart(ser, seg) {
+	const W = 320, H = 130, box = h("div", { class: "panel", style: "margin:0 16px 10px;padding:10px" });
+	const day = ser && ser.day ? ser.day : [];
+	if (day.length < 2) return put(box, h("div", { class: "f3", style: "font-size:12px;padding:30px 0;text-align:center" }, day.length ? "One price so far today." : "No chart for this instrument yet. It builds as the price moves; if the relay's chart store is full, a new contract waits until room is made."));
+	const ys = day.map((p) => p[1]), x0 = day[0][0], x1 = day[day.length - 1][0], prev = ser.prev_close;
+	let lo = Math.min(...ys), hi = Math.max(...ys);
+	if (fin(prev)) { lo = Math.min(lo, prev); hi = Math.max(hi, prev); }
+	const span = hi - lo || 1, X = (m) => 4 + ((m - x0) / (x1 - x0 || 1)) * (W - 8), Y = (v) => 13 + ((hi - v) / span) * (H - 40);
+	const up = ys[ys.length - 1] >= (fin(prev) ? prev : ys[0]);
+	const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "livechart", role: "img", "aria-label": "Today's prices, one a minute", style: "width:100%;height:auto;display:block" });
+	if (fin(prev)) svg("line", { x1: 0, x2: W, y1: Y(prev), y2: Y(prev), stroke: cssv("--line2"), "stroke-width": 1, "stroke-dasharray": "3 3" }, g);
+	let d = "";
+	day.forEach((p, i) => (d += (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)));
+	svg("path", { d, fill: "none", stroke: up ? cssv("--up") : cssv("--dn"), "stroke-width": 1.6, "stroke-linejoin": "round" }, g);
+	for (const [t, x, y, a] of [[livePx(hi, seg), 2, 9, "start"], [livePx(lo, seg), 2, H - 15, "start"], [liveHHMM(x0), 2, H - 2, "start"], [liveHHMM(x1), W - 2, H - 2, "end"]]) {
+		const el = svg("text", { x, y, "text-anchor": a, "font-size": 9, fill: cssv("--fg3") }, g); el.textContent = t;
+	}
+	return put(box, g);
+}
+function liveField(label, value) { return h("div", { style: "display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);font-size:13px" }, h("span", { class: "f3" }, label), h("span", {}, value)); }
+function liveRelated(name, v, data, chains) {
+	const o = liveOpt(name), links = [], has = (n) => data.quotes[n] != null;
+	const go = (n, t) => links.push(h("button", { class: "chip", onclick: () => liveOpen(n) }, t));
+	if (o) { if (has(o.u)) go(o.u, o.u + " spot"); if (has(o.u + "-FUT")) go(o.u + "-FUT", o.u + " fut"); }
+	else if (/-FUT$/.test(name)) { const u = name.slice(0, -4); if (has(u)) go(u, u + " spot"); }
+	else if (has(name + "-FUT")) go(name + "-FUT", name + " fut");
+	return links.length ? h("div", { class: "chips", style: "padding:0 16px 10px" }, links) : null;
+}
+function liveChainTable(u, data, chains) {
+	const L = S.lv, exps = Object.keys(chains[u] || {}).sort((a, b) => liveExpiryKey(a) - liveExpiryKey(b));
+	if (!exps.length) return null;
+	if (!exps.includes(L.exp)) L.exp = exps[0];
+	const strikes = Object.keys(chains[u][L.exp]).map(Number).sort((a, b) => a - b);
+	const spot = (data.quotes[u] || data.quotes[u + "-FUT"] || {}).ltp;
+	let atm = 0;
+	if (fin(spot)) strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
+	const from = L.allStrikes ? 0 : Math.max(0, atm - 12), to = L.allStrikes ? strikes.length : Math.min(strikes.length, atm + 13);
+	const cell = (n, f, seg) => { const q = n ? data.quotes[n] : null; return h("td", { class: q && q.age_s > LIVE_DELAYED ? "f3" : "" }, q && fin(q[f]) ? (f === "ltp" ? livePx(q[f], seg) : LIVE_VOL.format(q[f])) : "—"); };
+	const rows = strikes.slice(from, to).map((k, i) => {
+		const r = chains[u][L.exp][k];
+		return h("tr", { style: from + i === atm && fin(spot) ? "background:var(--panel2)" : null }, cell(r.CE, "oi"), cell(r.CE, "ltp", "opt"), h("td", { style: "text-align:center;font-weight:600", onclick: null }, k.toLocaleString("en-IN")), cell(r.PE, "ltp", "opt"), cell(r.PE, "oi"));
+	});
+	return h("div", {}, h("div", { class: "pad", style: "font-weight:600" }, "Option chain"),
+		h("div", { class: "chips", style: "padding:0 16px 8px" }, exps.map((e) => h("button", { class: "chip", "aria-pressed": String(e === L.exp), onclick: () => { L.exp = e; liveDraw(); } }, e))),
+		h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Call OI", "Call", "Strike", "Put", "Put OI"].map((x) => h("th", { style: "text-align:center" }, x)))), h("tbody", {}, rows))),
+		strikes.length > to - from ? h("button", { class: "btn block", style: "margin:10px 16px;width:calc(100% - 32px)", onclick: () => { L.allStrikes = !L.allStrikes; liveDraw(); } }, L.allStrikes ? "Only near the money" : `Show all ${strikes.length} strikes`) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;padding:6px 16px" }, "The strikes the feeds carry for this underlying" + (fin(spot) ? "; the shaded row is nearest the price" : "") + ". Index chains hold the nearest two expiries."));
+}
+function liveDetail() {
+	const L = S.lv, data = L.data, name = L.sel, box = $("#lv-detail"), v = data.quotes[name];
+	box.textContent = "";
+	const back = h("button", { class: "btn", style: "margin:0 16px 10px", onclick: () => liveOpen(null) }, "← All instruments");
+	if (!v) return void put(box, back, empty("live", name + " is not on the board right now (it may have expired or not ticked yet)."));
+	const seg = liveSeg(name, v), o = liveOpt(name), chains = liveChains(data);
+	const ser = L.series && L.series.name === name ? L.series : null, prev = ser ? ser.prev_close : null;
+	const chgPct = fin(v.chg) ? v.chg : fin(prev) && prev > 0 ? ((v.ltp - prev) / prev) * 100 : null;
+	const closes = ser && ser.day.length ? ser.day.map((p) => p[1]) : null;
+	const src = v.src === "z" ? "Kite" : v.src === "k" ? "Kotak" : "";
+	const alt = v.alt ? `${v.alt.src === "z" ? "Kite" : "Kotak"} ${livePx(v.alt.ltp, seg)} · ${liveAge(v.alt.age_s)} ago` : null;
+	put(box, back,
+		h("div", { style: "padding:0 16px 8px" }, h("div", { style: "font-size:13px;color:var(--fg2)" }, liveLabel(name, v)),
+			h("div", { style: "display:flex;align-items:baseline;gap:10px" }, h("span", { style: "font-size:30px;font-weight:600;font-variant-numeric:tabular-nums" }, livePx(v.ltp, seg)),
+				chgPct != null ? h("span", { class: "chg " + (chgPct > 0 ? "up" : chgPct < 0 ? "dn" : "flat"), style: "font-size:14px" }, (chgPct > 0 ? "+" : "") + chgPct.toFixed(2) + "%") : null),
+			h("div", { class: "f3", style: "font-size:11.5px" }, liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + (fin(v.x) ? " · ⚠ the two sources differ " + v.x.toFixed(1) + "%" : ""))),
+		liveChart(ser, seg), liveRelated(name, v, data, chains),
+		h("div", { class: "panel pad", style: "margin:0 16px 12px" },
+			liveField("Bid / Ask", fin(v.bid) && fin(v.ask) ? `${livePx(v.bid, seg)} / ${livePx(v.ask, seg)}` + (fin(v.bid_qty) && fin(v.ask_qty) ? ` (${LIVE_VOL.format(v.bid_qty)} / ${LIVE_VOL.format(v.ask_qty)})` : "") : "—"),
+			liveField("Volume", fin(v.vol) ? v.vol.toLocaleString("en-IN") : "—"), liveField("Open interest", fin(v.oi) ? v.oi.toLocaleString("en-IN") : "—"),
+			liveField("Previous close", fin(prev) ? livePx(prev, seg) : "—"),
+			liveField("Day high / low", closes ? `${livePx(Math.max(...closes), seg)} / ${livePx(Math.min(...closes), seg)}` : "—"),
+			o ? liveField("Contract", `${o.u} ${o.e} ${o.k.toLocaleString("en-IN")} ${o.t === "CE" ? "call" : "put"}`) : null,
+			alt ? liveField("Other source", alt) : null),
+		h("div", { class: "f3", style: "font-size:11.5px;padding:0 16px 10px" }, "Day high and low are the highest and lowest of the one-a-minute closes the relay holds for today (only the most recent minutes when its store is full), not the exchange's own figures."),
+		o ? null : liveChainTable(name.replace(/-FUT$/, ""), data, chains));
+}
+function liveOpen(name) {
+	const L = S.lv;
+	L.sel = name; L.series = null; L.allStrikes = false;
+	if (name) L.exp = (liveOpt(name) || {}).e || null;
+	liveDraw();
+	if (name) liveSeries();
+	window.scrollTo(0, 0);
+}
+async function liveSeries() {
+	const L = S.lv, name = L.sel, key = store("qd.livekey");
+	if (!name || !key) return;
+	try {
+		const r = await fetch("/live/series?name=" + encodeURIComponent(name), { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+		if (r.ok && L.sel === name) { L.series = await r.json(); liveDraw(); }
+	} catch (e) { /* the quote still shows */ }
+}
+function liveBuild() {
+	const L = S.lv, body = $("#lv-body");
+	body.textContent = "";
+	const search = h("input", { type: "search", class: "search", placeholder: "Search every instrument", "aria-label": "Search instruments", autocomplete: "off", value: L.q });
+	search.addEventListener("input", () => { L.q = search.value; L.limit = LIVE_PAGE; liveDraw(); });
+	const seg = h("div", { class: "chips", id: "lv-segs", style: "padding:0 16px 8px" }, LIVE_SEGS.map(([k, t]) => h("button", { class: "chip", "data-k": k, "aria-pressed": "false", onclick: () => { L.seg = k; L.limit = LIVE_PAGE; liveDraw(); } }, t, h("span", { class: "f3" }, " "))));
+	const sort = h("div", { class: "chips", id: "lv-sorts", style: "padding:0 16px 8px" }, h("span", { class: "f3", style: "font-size:11.5px;align-self:center" }, "Sort"),
+		LIVE_SORTS.map(([k, t]) => h("button", { class: "chip", "data-k": k, "aria-pressed": "false", onclick: () => { L.sort = k; liveDraw(); } }, t)));
+	put(body, h("div", { class: "pad", style: "display:flex;justify-content:space-between;align-items:center" }, h("span", { id: "lv-pill", class: "pill paused" }, h("span", { class: "dot" }), h("b", { id: "lv-pill-t" }, "")), h("span", { id: "lv-count", class: "f3", style: "font-size:11.5px" }, "")),
+		h("div", { id: "lv-sources", class: "f3", style: "font-size:11.5px;padding:0 16px 8px" }, ""),
+		h("div", { id: "lv-list" }, h("div", { style: "padding:0 16px 10px" }, search), seg, sort, h("div", { id: "lv-table" })),
+		h("div", { id: "lv-detail", hidden: true }),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:12px 16px" },
+			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. Tap any row for its chart and, for an underlying, its option chain. This tab only displays: nothing here can place an order. ",
+			h("a", { href: "#", class: "acc", onclick: (e) => { e.preventDefault(); try { localStorage.removeItem("qd.livekey"); } catch (x) { /* ignore */ } L.built = false; L.health = null; L.hstate = null; body.dataset.state = ""; renderLive(); setStatus(); } }, "Forget this key")));
+	L.built = true;
+	body.dataset.state = "data";
+}
+async function renderLive() {
+	const body = $("#lv-body");
+	if (S.tab !== "live" || document.hidden || liveBusy) return;
+	if (/(^|\.)github\.io$/.test(location.hostname)) {                // the public Pages address: no key form at all, nothing is stored or sent from here
+		if (body.dataset.state !== "pages") { body.textContent = ""; S.lv.built = false; put(body, empty("live", "Live prices are private and only open on the Cloudflare site, not on this address.")); body.dataset.state = "pages"; }
+		return;
+	}
+	const key = store("qd.livekey");
+	if (!key) { if (body.dataset.state !== "key") { body.textContent = ""; S.lv.built = false; put(body, liveKeyForm("")); body.dataset.state = "key"; } return; }
+	liveBusy = true;
+	let j = null, note = "";
+	try {
+		const r = await fetch("/live/snapshot", { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+		if (r.status === 401) { try { localStorage.removeItem("qd.livekey"); } catch (e) { /* private mode */ } note = "That key was not accepted. Type it again."; }
+		else if (r.status === 503) note = "The live feed is not switched on yet: the Worker still needs its two secrets (docs/LIVE.md).";
+		else if (!r.ok || !/json/.test(r.headers.get("content-type") || "")) note = `The live relay did not answer as expected: HTTP ${r.status}, ${(r.headers.get("content-type") || "no content type").split(";")[0]}, from ${location.host}. If that address is not your Worker's own (…workers.dev), open the app from the Worker's address.`;          // the status, kind and host say where the request went: nothing secret
+		else j = await r.json();
+		if (j && S.lv.sel) {                                                          // an instrument is open: its chart series, with every refresh
+			try {
+				const sr = await fetch("/live/series?name=" + encodeURIComponent(S.lv.sel), { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+				if (sr.ok) { const sj = await sr.json(); if (sj.name === S.lv.sel) S.lv.series = sj; }
+			} catch (e) { /* the quote still shows */ }
+		}
+	} catch (e) { note = "No live prices: the request failed before any answer (" + String((e && e.name) || "error") + ") from " + location.host + ". Offline, or the address blocks it."; }
+	finally { liveBusy = false; }
+	if (S.tab !== "live") return;
+	if (!j) { body.textContent = ""; S.lv.built = false; body.dataset.state = "note"; setStatus(); return void put(body, liveKeyForm(note)); }
+	S.lv.data = j;
+	if (!S.lv.built) liveBuild();
+	liveDraw();
+}
+
+// ==================================================================================================================
+// refresh loop, pull to refresh, boot
+// ==================================================================================================================
+let busy = false, queued = null;
+async function refresh(full, force) {
+	if (document.hidden) return;
+	// one refresh at a time; a tab switch during a slow one runs right after it instead of being dropped
+	if (busy) { queued = { full: !!(full || (queued && queued.full)), force: !!(force || (queued && queued.force)) }; return; }
+	busy = true;
+	try {
+		if (force && window.QD_PUBLISHED && window.qdReload) await window.qdReload();
+		const t = S.tab;
+		if (t === "live") await renderLive();
+		else if (t === "today") await renderToday(full);
+		else if (t === "trades") await renderTrades(full);
+		else if (t === "data") await renderDataTab(full);
+	} catch (e) {
+		console.error(e);
+	} finally {
+		busy = false;
+		if (queued) { const q = queued; queued = null; refresh(q.full, q.force); }
+	}
+}
+function pullToRefresh() {
+	const ptr = $("#ptr");
+	let y0 = null, dy = 0;
+	addEventListener("touchstart", (e) => {
+		y0 = scrollY <= 0 && !e.target.closest(".chartbox,.sheet,.ticker,.scroll") ? e.touches[0].clientY : null;
+		dy = 0;
+	}, { passive: true });
+	addEventListener("touchmove", (e) => {
+		if (y0 == null) return;
+		dy = Math.max(0, e.touches[0].clientY - y0);
+		const p = Math.min(1, dy / 80);
+		ptr.style.opacity = String(p);
+		ptr.style.transform = `translateY(${-20 + p * 34}px) rotate(${p * 270}deg)`;
+	}, { passive: true });
+	addEventListener("touchend", async () => {
+		if (y0 == null) return;
+		y0 = null;
+		if (dy > 80) {
+			ptr.classList.add("spin");
+			await refresh(true, true);
+			ptr.classList.remove("spin");
+		}
+		ptr.style.opacity = "0";
+		ptr.style.transform = "";
+	});
+}
+async function boot() {
+	applyTheme(themeMode());
+	matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(themeMode()));
+	buildTabs();
+	document.addEventListener("click", (e) => { const g = e.target.closest("[data-go]"); if (g) go(g.dataset.go); });
+	document.querySelectorAll("[data-info]").forEach((b) => b.addEventListener("click", () => showGloss(b.dataset.info)));
+	$("#btn-settings").addEventListener("click", openSettings);
+	$("#status").addEventListener("click", () => { pollHealth(); refresh(true, true); toast("Refreshed"); });
+	$("#sheet").addEventListener("click", (e) => { if (e.target.id === "sheet") closeSheet(); });
+	document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeSheet(); } });
+	addEventListener("hashchange", () => { const [t, s] = location.hash.slice(1).split("/"); show(t || "live", s); });
+	addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); S.installEvt = e; });
+	addEventListener("appinstalled", () => { store("qd.installed", "1"); document.querySelectorAll(".install").forEach((x) => x.remove()); });
+	addEventListener("offline", () => setStatus());
+	addEventListener("online", () => { window.QD_OFFLINE_CACHE = false; pollHealth(); refresh(true, true); });
+	try { S.accounts = await api("/api/i/accounts"); } catch (e) { S.accounts = []; }
+	if (!S.accounts.length) S.accounts = [{ id: "live", label: "Live paper" }];
+	const saved = store("qd.account");
+	S.account = S.accounts.some((a) => a.id === saved) ? saved : S.accounts[0].id;
+	const [t, s] = location.hash.slice(1).split("/");
+	show(t || store("qd.tab") || "live", s);
+	pullToRefresh();
+	// the chart draws text on a canvas: repaint once the app's own fonts have loaded
+	if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => restyleCharts());
+	setInterval(() => refresh(false), 15000);
+	pollHealth();
+	setInterval(pollHealth, 10000);                                                                   // the header pill, on every tab
+	setInterval(() => { if (S.tab === "live" && !document.hidden) renderLive(); }, 5000);          // the Live tab alone refreshes every 5 seconds
+	document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(true); });
+	if ("serviceWorker" in navigator && window.isSecureContext && window.QD_PUBLISHED)
+		navigator.serviceWorker.register("sw.js").catch(() => { /* offline support is a bonus */ });
+}
+boot().catch((e) => toast("Failed to start: " + e.message));
