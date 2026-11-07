@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 from pathlib import Path
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 KEYS = ("cycles", "both", "disagree", "opt_both", "opt_disagree", "worst_cycle_pct")
+SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt", "other")      # what a published `peak_fresh` may be keyed by
+MAX_DAYS = 8                          # the relay keeps a week plus today
 MIN_CYCLES = 100                      # a full session is about 4,500 five-second cycles; fewer than this is a partial day
 NOTE = ("share of fresh Kite+Kotak pairs within a spread of each other (equities, futures and indices 0.5%, options 3%), counted by the relay every cycle of the session; "
         "counts only, no price, no name; data collection only, nothing here trades")
@@ -32,13 +35,13 @@ def day_manifest(d: dict) -> dict | None:
         n = {k: float(d.get(k) or 0) for k in KEYS}
     except (KeyError, ValueError, TypeError):
         return None
-    if n["cycles"] < 1 or any(v < 0 or v != v for v in n.values()):
+    if n["cycles"] < 1 or any(v < 0 or not math.isfinite(v) for v in n.values()):                         # a hostile or broken answer (NaN, Infinity) is not a day
         return None
     both, opt = n["both"], n["opt_both"]
     peak = {}
     for src, name in (("z", "kite"), ("k", "kotak")):
         raw = (d.get("peak") or {}).get(src) if isinstance(d.get("peak"), dict) else None
-        peak[name] = {str(g)[:6]: int(v) for g, v in (raw or {}).items() if isinstance(v, (int, float)) and v >= 0 and len(str(g)) <= 6} if isinstance(raw, dict) else {}
+        peak[name] = {str(g): int(v) for g, v in (raw or {}).items() if str(g) in SEGMENTS and isinstance(v, (int, float)) and math.isfinite(v) and v >= 0} if isinstance(raw, dict) else {}
     return {"peak_fresh": peak, "day": str(day), "source": "relay tally", "cycles": int(n["cycles"]), "pairs": int(both), "disagree": int(n["disagree"]),
             "agree_pct": round(100 * (1 - n["disagree"] / both), 2) if both else None,
             "opt_pairs": int(opt), "opt_disagree": int(n["opt_disagree"]), "opt_agree_pct": round(100 * (1 - n["opt_disagree"] / opt), 2) if opt else None,
@@ -49,7 +52,7 @@ def day_manifest(d: dict) -> dict | None:
 def build(health: dict, out_root: Path) -> list[dict]:
     """Every usable day in a `/live/health` answer (today's, and the finished days the relay keeps) -> <out>/<day>/agreement.json."""
     ag = (health or {}).get("agreement") or {}
-    days = [ag.get("today")] + list((ag.get("days") or {}).values())
+    days = [ag.get("today")] + list((ag.get("days") or {}).values())[:MAX_DAYS]
     made = {}
     for d in days:
         m = day_manifest(d) if isinstance(d, dict) else None

@@ -39,7 +39,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Ask the relay for its tally (status codes and counts only)
+      - name: Ask the relay for its tally (status codes only; the key reaches this step alone)
         env:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
@@ -52,7 +52,10 @@ jobs:
           base="${LIVE_URL%/live/ingest}"
           code=$(curl -sS -m 30 -o health.json -w '%{http_code}' -H "Authorization: Bearer $LIVE_READ_TOKEN" "$base/live/health" || true)
           echo "Relay health: HTTP ${code:-000}"
-          [ "${code:-000}" = "200" ] || { echo "::warning::the relay did not answer 200; nothing recorded"; rm -f health.json; exit 0; }
+          [ "${code:-000}" = "200" ] || { echo "::warning::the relay did not answer 200; nothing recorded"; rm -f health.json; }
+      - name: Turn the tally into one file a day (no secret in this step)
+        run: |
+          [ -f health.json ] || { echo "no health answer; nothing recorded"; exit 0; }
           python -m quantdesk data agreement --health health.json --out runtime/agreement
           rm -f health.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

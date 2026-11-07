@@ -33,6 +33,16 @@ def test_a_relay_day_becomes_one_record_of_counts_and_percentages(tmp_path):
     assert AG.day_manifest(_day(cycles=0)) is None and AG.day_manifest(_day(cycles=50))["partial"] is True and AG.day_manifest(_day(both=0, dis=0, ob=0, od=0))["agree_pct"] is None
 
 
+def test_a_hostile_relay_answer_cannot_crash_the_read_or_widen_the_published_file(tmp_path):
+    bad = _day()
+    bad["peak"] = {"z": {"zz": 1e999, "eq": 5, "__proto__": 3, "mcx": float("inf")}, "k": {"eq": float("nan"), "opt": 7}}
+    m = AG.day_manifest(bad)
+    assert m["peak_fresh"] == {"kite": {"eq": 5}, "kotak": {"opt": 7}}                                   # only known segments, only finite numbers
+    assert AG.day_manifest({**_day(), "cycles": float("inf")}) is None and AG.day_manifest({**_day(), "both": float("nan")}) is None
+    many = {"agreement": {"today": _day("2026-11-30"), "days": {f"2026-11-{d:02d}": _day(f"2026-11-{d:02d}") for d in range(1, 25)}}}
+    assert len(AG.build(many, tmp_path)) <= AG.MAX_DAYS + 1
+
+
 class Store:
     def __init__(self, m=None):
         self.m = m
@@ -72,3 +82,7 @@ def test_the_workflow_reads_with_the_read_key_only_and_publishes_with_no_secret(
     assert wf["jobs"]["publish"]["permissions"] == {"contents": "write"} and "secrets." not in pub and "LIVE_" not in pub
     assert "permissions" not in wf["jobs"]["read"] and "-L" not in text.split("curl", 1)[1].split("\n", 1)[0] and "--location" not in text         # no redirect followed
     assert "^https://" in text
+    steps = wf["jobs"]["read"]["steps"]
+    keyed = [s.get("name") for s in steps if "LIVE_READ_TOKEN" in yaml.safe_dump(s)]
+    assert len(keyed) == 1 and "key reaches this step alone" in keyed[0]                                  # the python step that turns the tally into files never sees the key
+    assert "agreement --health" in next(s for s in steps if s.get("name", "").startswith("Turn the tally"))["run"]
