@@ -213,9 +213,10 @@ def register(sub):
                                             "(daily-history.yml; read-only, no secret, always exits 0)")
     x.add_argument("--out", help="default runtime/daily_history")
     x.add_argument("--symbols", help="only these (comma-separated; indices and stocks), e.g. to test")
-    x.add_argument("--sources", default="nse,yahoo", help="in order of preference (nse, yahoo)")
+    x.add_argument("--sources", default="nse,yahoo,warehouse", help="in order of preference (nse, yahoo, warehouse: the independent cross-check)")
     x.add_argument("--from", dest="start", help="YYYY-MM-DD (default: config daily_history.start)")
     x.add_argument("--push", action="store_true", help="push the shards to the daily-history release (needs GH_TOKEN)")
+    x.add_argument("--warehouse", help="folder holding the warehouse's nse_index_close_*.parquet and fo_stock_opts_*.parquet (the `warehouse` source; default runtime/warehouse)")
     x.set_defaults(fn=cmd_daily_history)
     x = ss.add_parser("stock-minutes", help="1-minute candles for the cash series and near-month futures of the most "
                                             "liquid F&O stocks (data collection only; traded bars, not quotes)")
@@ -436,7 +437,8 @@ def cmd_daily_history(cfg, a):
     try:
         if a.start:
             cfg.data.setdefault("daily_history", {})["start"] = a.start
-        by = {"nse": lambda: D.NseSource(gap=D.settings(cfg)["gap_sec"]), "yahoo": lambda: D.YahooSource(cfg)}
+        wh = Path(a.warehouse) if a.warehouse else Path(cfg.runtime_dir) / "warehouse"
+        by = {"nse": lambda: D.NseSource(gap=D.settings(cfg)["gap_sec"]), "yahoo": lambda: D.YahooSource(cfg), "warehouse": lambda: D.WarehouseSource(wh)}
         names = [n.strip() for n in a.sources.split(",") if n.strip()]
         sources = [by[n]() for n in names if n in by]
         S = D.settings(cfg)

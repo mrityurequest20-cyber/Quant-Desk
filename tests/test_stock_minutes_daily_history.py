@@ -386,3 +386,73 @@ def test_collect_wide_workflow_still_adds_no_secret_and_live_is_untouched():
     assert set(re.findall(r"secrets\.(\w+)", cw)) == {"KOTAK_CONSUMER_KEY"}
     live = (ROOT / ".github" / "workflows" / "record.yml").read_text(encoding="utf-8")
     assert "daily-history" not in live and "stock_minutes" not in live and "collect-wide" not in live
+
+
+# ---- the warehouse as the independent second source (a cloud runner NSE blocks still has NSE's own files) ---------------------------------------------------------
+def _warehouse(tmp_path, nifty, stock=None, stock_from="2025-06-02"):
+    root = tmp_path / "wh"
+    root.mkdir(parents=True)
+    ic = pd.DataFrame({"date": nifty.index, "index": "Nifty 50", "symbol": "NIFTY", "open": nifty["open"].to_numpy(), "high": nifty["high"].to_numpy(),
+                       "low": nifty["low"].to_numpy(), "close": nifty["close"].to_numpy()})
+    ic = pd.concat([ic, ic.assign(index="Nifty IT", symbol="", close=1.0)], ignore_index=True)            # another index beside it: ignored
+    ic.to_parquet(root / "nse_index_close_2025.parquet")
+    if stock is not None:
+        s = stock[stock.index >= pd.Timestamp(stock_from)]
+        rows = pd.concat([pd.DataFrame({"date": s.index, "symbol": "XYZ", "underlying": s["close"].to_numpy(), "strike": k}) for k in (100.0, 200.0, 300.0)])   # many contracts a day
+        rows = pd.concat([pd.DataFrame({"date": s.index[:8], "symbol": "XYZ", "underlying": [np.nan] * 5 + [0.0] * 3, "strike": 1.0}), rows])     # FIRST in the file: rows without a price, and a zero
+        rows.to_parquet(root / "fo_stock_opts_2025-06.parquet")
+    return root
+
+
+def test_the_warehouse_source_serves_an_index_and_a_stock_and_says_when_it_has_nothing(tmp_path):
+    nifty, _, stock = _world()
+    src = D.WarehouseSource(_warehouse(tmp_path, nifty, stock))
+    n = src.daily("NIFTY", "index", dt.date(2025, 1, 1), dt.date(2025, 12, 31))
+    assert list(n.columns) == ["open", "high", "low", "close", "volume"] and len(n) == len(nifty) and n["close"].round(6).equals(nifty["close"].round(6))
+    x = src.daily("XYZ", "equity", dt.date(2025, 1, 1), dt.date(2025, 12, 31))
+    assert x.index.is_unique and x.index.min() == pd.Timestamp("2025-06-02") and (x["open"] == x["close"]).all() and (x["close"] > 0).all()     # one flat bar a day, no price-less rows
+    for sym, kind in (("SENSEX", "index"), ("NOPE", "equity")):
+        with pytest.raises(D.SourceDown):
+            src.daily(sym, kind, dt.date(2025, 1, 1), dt.date(2025, 12, 31))
+    with pytest.raises(D.SourceDown):
+        src.daily("NIFTY", "index", dt.date(2030, 1, 1), dt.date(2030, 12, 31))                      # nothing in range
+    with pytest.raises(D.SourceDown):
+        src.actions("XYZ", "equity")                                                                  # never a corporate-action source
+
+
+def test_the_cross_check_compares_the_days_both_sources_have_and_reports_the_span(tmp_path):
+    nifty, _, _ = _world()
+    prim = D.adjust(D._prep(nifty, "NIFTY", "index", "yahoo")[0], None, "index", 0.15, 0.25, frozenset())[0]
+    recent = nifty[nifty.index >= pd.Timestamp("2025-09-01")]                                         # the second source covers only the last months
+    sec = D.adjust(D._prep(recent, "NIFTY", "index", "warehouse")[0], None, "index", 0.15, 0.25, frozenset())[0]
+    x = D.crosscheck(prim, sec, "NIFTY", n=60, tol=0.005, seed=3)
+    assert x["compared"] == x["sampled"] == min(60, len(recent)) and x["match_rate"] == 1.0
+    assert x["span"] == [str(recent.index.min().date()), str(recent.index.max().date())]             # never claimed beyond the days it actually covered
+    none = D.crosscheck(prim, sec.iloc[0:0].reindex(sec.index[:0]), "NIFTY")
+    assert none["compared"] == 0 and none["match_rate"] is None
+
+
+def test_with_nse_blocked_the_warehouse_makes_a_yahoo_series_verifiable_and_a_wrong_close_is_caught(tmp_path):
+    nifty, bank, stock = _world()
+    yh = Fake("yahoo", {"NIFTY": nifty})
+    man = D.run(_cfg(), tmp_path / "ok", [Fake("nse", {}, down=True), yh, D.WarehouseSource(_warehouse(tmp_path, nifty))], end=dt.date(2025, 12, 31),
+                say=lambda *a: None, symbols=[("NIFTY", "index")], now=pd.Timestamp("2026-10-19 12:00", tz=IST))
+    s = man["series"]["NIFTY"]
+    assert s["source"] == "yahoo" and s["crosscheck"]["second_source"] == "warehouse" and s["crosscheck"]["match_rate"] == 1.0 and s["crosscheck"]["span"]
+    assert s["status"] == "verified"
+    bad = nifty.assign(close=nifty["close"] * 1.02, high=nifty["high"] * 1.03)                       # Yahoo prints a close 2% off NSE's own
+    man2 = D.run(_cfg(), tmp_path / "bad", [Fake("nse", {}, down=True), Fake("yahoo", {"NIFTY": bad}), D.WarehouseSource(_warehouse(tmp_path / "w2", nifty))],
+                 end=dt.date(2025, 12, 31), say=lambda *a: None, symbols=[("NIFTY", "index")], now=pd.Timestamp("2026-10-19 12:00", tz=IST))
+    assert man2["series"]["NIFTY"]["status"] == "unverified" and any("match rate" in r for r in man2["series"]["NIFTY"]["reasons"])
+
+
+def test_the_workflow_pulls_the_warehouse_files_and_the_command_offers_the_source():
+    wf = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    steps = wf["jobs"]["import"]["steps"]
+    pull = next(st for st in steps if "warehouse" in st.get("name", "").lower())
+    assert "nse_index_close_" in pull["run"] and "fo_stock_opts_" in pull["run"] and pull["continue-on-error"] is True
+    assert 'n[14:21] >= "2024-07"' in pull["run"]                    # only the months that carry the underlying price (the file is large)
+    assert steps.index(pull) < next(i for i, st in enumerate(steps) if st.get("name") == "Import daily history")
+    assert "nse,yahoo,warehouse" in WF.read_text(encoding="utf-8")
+    cli = (ROOT / "quantdesk/data/cli.py").read_text(encoding="utf-8")
+    assert '"warehouse": lambda: D.WarehouseSource(wh)' in cli and "--warehouse" in cli
