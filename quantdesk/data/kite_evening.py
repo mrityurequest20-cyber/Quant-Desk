@@ -183,22 +183,51 @@ def run(kite, out_root: Path, today: dt.date | None = None, days: int = 3, daily
     return man
 
 
+# What a published manifest may contain: every key and its type. A key outside this list, a float where a count belongs, or a long string is refused, so a price cannot ride in a field
+# nobody thought to name.
+_TOP = {"evidence": str, "source": str, "as_of": str, "window": list, "daily_days": int, "note": str, "segments": dict, "stopped": (str, type(None)), "totals": dict,
+        "rate_per_s": (int, float), "budget_s": (int, float), "path": str}
+_SEG = {"exchange": str, "names": dict, "underlyings_seen": list, "error": str}
+_NAME = {"underlying": str, "rank": int, "expiry": str, "status": str, "bars": int, "sessions": int, "rejected": int, "error": str, "daily": dict}
+_DAILY = {"status": str, "bars": int, "error": str}
+_TOTAL = {"asked": int, "served": int, "failed": int, "empty": int, "not_attempted": int}
+MAX_STR = 400
+MAX_ITEMS = 400
+
+
 def publishable(manifest: dict) -> list[str]:
-    """Reasons a manifest must NOT be published (empty = it may be): Kite's data is licensed, so a published file carries counts and names, never a price."""
+    """Reasons a manifest must NOT be published (empty = it may be): Kite's data is licensed, so a published file carries counts, statuses and names, never a price."""
     bad: list[str] = []
 
-    def walk(o, path=""):
-        if isinstance(o, dict):
-            for k, v in o.items():
-                if str(k).lower() in PRICE_KEYS:
-                    bad.append(f"{path}/{k}")
-                walk(v, f"{path}/{k}")
-        elif isinstance(o, list):
-            if len(o) > 400:
-                bad.append(f"{path}: a list of {len(o)} items")
-            for i, v in enumerate(o[:400]):
-                walk(v, f"{path}[{i}]")
-    walk(manifest)
+    def shape(o, allowed: dict, path: str) -> None:
+        if not isinstance(o, dict):
+            bad.append(f"{path}: not an object")
+            return
+        for k, v in o.items():
+            want = allowed.get(k)
+            if str(k).lower() in PRICE_KEYS or want is None:
+                bad.append(f"{path}/{k}: not an allowed field")
+            elif not isinstance(v, want) or (want is int and isinstance(v, bool)):
+                bad.append(f"{path}/{k}: wrong type {type(v).__name__}")
+            elif isinstance(v, str) and len(v) > MAX_STR:
+                bad.append(f"{path}/{k}: a string of {len(v)} characters")
+            elif isinstance(v, (list, dict)) and len(v) > MAX_ITEMS:
+                bad.append(f"{path}/{k}: {len(v)} items")
+
+    shape(manifest, _TOP, "")
+    for sym, seg in (manifest.get("segments") or {}).items():
+        shape(seg, _SEG, f"/segments/{sym}")
+        for u in (seg.get("names") or {}) if isinstance(seg, dict) else {}:
+            row = seg["names"][u]
+            shape(row, _NAME, f"/segments/{sym}/names/{u}")
+            if isinstance(row, dict) and "daily" in row:
+                shape(row["daily"], _DAILY, f"/segments/{sym}/names/{u}/daily")
+        if isinstance(seg, dict) and any(not isinstance(x, str) or len(x) > 40 for x in seg.get("underlyings_seen") or []):
+            bad.append(f"/segments/{sym}/underlyings_seen: a long or non-string name")
+    for sym, t in (manifest.get("totals") or {}).items():
+        shape(t, _TOTAL, f"/totals/{sym}")
+    if any(not isinstance(x, str) or len(x) > 12 for x in manifest.get("window") or []):
+        bad.append("/window: not dates")
     return bad
 
 

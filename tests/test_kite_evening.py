@@ -142,9 +142,16 @@ def test_a_manifest_carries_no_price_and_one_that_does_is_refused(tmp_path):
     assert KE.publishable(man) == [] and not re.search(r'"(open|high|low|close|ts|volume|oi)"', json.dumps(man))
     leaky = json.loads(json.dumps(man))
     leaky["segments"]["mcx"]["names"]["GOLDM#1"]["close"] = 123.4
-    assert KE.publishable(leaky) == ["/segments/mcx/names/GOLDM#1/close"]
-    leaky = {"x": list(range(500))}
-    assert KE.publishable(leaky)                                                                      # a long list is a dump, not a count
+    assert [x.split(":")[0] for x in KE.publishable(leaky)] == ["/segments/mcx/names/GOLDM#1/close"]
+    assert KE.publishable({"x": list(range(500))})                                                    # an unknown field and a long list are a dump, not a count
+    for path, val in ((("note",), "x" * 500), (("segments", "mcx", "exchange"), 123), (("segments", "mcx", "names", "GOLDM#1", "bars"), 12.5),
+                      (("segments", "mcx", "names", "GOLDM#1", "gross"), 1), (("totals", "mcx", "served"), True), (("rate_per_s",), "fast")):
+        m = json.loads(json.dumps(man))
+        d = m
+        for k in path[:-1]:
+            d = d[k]
+        d[path[-1]] = val
+        assert KE.publishable(m), path                                                                # a long string, a wrong type, a float count, a new field are each refused
 
 
 def test_the_health_check_reads_a_kite_evening_manifest_like_any_other(tmp_path):
@@ -223,7 +230,7 @@ def test_the_workflow_isolates_the_kite_secrets_encrypts_before_it_uploads_and_p
     collect, publish = jobs["collect"], jobs["publish"]
     assert "permissions" not in collect and publish["permissions"] == {"contents": "write"}
     pub_text = yaml.safe_dump(publish)
-    assert not re.search(r"KITE|TOTP|PASSWORD|API_SECRET|secrets\.", pub_text)                         # the job that can write holds no Kite secret
+    assert not re.search(r"KITE|TOTP|PASSWORD|API_SECRET|API_KEY|secrets\.", pub_text)                  # the job that can write holds no Kite secret or key
     login = next(s for s in collect["steps"] if s.get("id") == "login")
     assert set(login["env"]) == {"KITE_USER_ID", "KITE_PASSWORD", "KITE_TOTP_SECRET"} and login["run"] == "deploy/kite-autologin.sh login"
     assert "steps.gate.outputs.first == 'true'" in login["if"] and "github.run_attempt == '1'" in login["if"]
@@ -236,6 +243,12 @@ def test_the_workflow_isolates_the_kite_secrets_encrypts_before_it_uploads_and_p
     assert {s["with"]["name"] for s in collect["steps"] if "upload-artifact" in s.get("uses", "")} == {"kite-evening-data", "kite-evening-manifest"}
     assert [s["with"]["path"] for s in collect["steps"] if s.get("with", {}).get("name") == "kite-evening-data"] == ["kite_evening_data.tar.enc"]        # only the encrypted file
     assert "${{ inputs." not in "".join(s.get("run", "") for s in collect["steps"]) and "^[0-9]{1,2}$" in text
+    assert "KITE_DATA_KEY" not in yaml.safe_dump({k: v for k, v in wf.items() if k != "jobs"}) and "KITE_DATA_KEY" in collect["env"]          # the key sits in the collecting job alone
+    ids = [s.get("id") for s in collect["steps"]]
+    assert ids.index("gate") > min(i for i, s in enumerate(collect["steps"]) if s.get("name", "").startswith("Check the inputs"))      # bad input never burns the day's login
+    assert next(s for s in collect["steps"] if s.get("id") == "find")["if"] == "always()" and collect["steps"][ids.index("find") - 1]["id"] == "run"       # what a stopped run wrote is still kept
+    check = next(s for s in publish["steps"] if s.get("name", "").startswith("The day is a plain date"))
+    assert publish["steps"].index(check) < next(i for i, s in enumerate(publish["steps"]) if "download-artifact" in s.get("uses", ""))     # validated before it is a path
 
 
 def test_the_pre_registered_kite_trial_is_untouched_by_the_evening_job():
@@ -243,3 +256,19 @@ def test_the_pre_registered_kite_trial_is_untouched_by_the_evening_job():
     assert "kite_evening" not in kite and "kite-evening" not in kite
     assert "kite_evening" not in (ROOT / "quantdesk/data/kite_record.py").read_text(encoding="utf-8")
     assert "kite-evening" not in (ROOT / "deploy/scheduler.py").read_text(encoding="utf-8")
+
+
+def test_the_publish_command_takes_its_date_from_the_folder_and_refuses_a_manifest_that_disagrees(tmp_path, monkeypatch):
+    from quantdesk.data import cli as C
+    man, _ = _run(tmp_path, days=3)
+    run = tmp_path / str(TODAY)
+    pushed = []
+    monkeypatch.setattr(C, "_push_run", lambda out, r, tag, names, *a, **k: pushed.append((tag, names, k.get("clobber"))))
+    C.cmd_evening_publish(None, type("A", (), {"dir": str(run), "release_prefix": "evening-minutes"})())
+    assert pushed == [("evening-minutes-2026", ["manifest.json"], True)]
+    m = json.loads((run / "manifest.json").read_text())
+    m["as_of"] = "2025-01-02"                                                                          # a manifest naming another year
+    (run / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(SystemExit):
+        C.cmd_evening_publish(None, type("A", (), {"dir": str(run), "release_prefix": "evening-minutes"})())
+    assert len(pushed) == 1

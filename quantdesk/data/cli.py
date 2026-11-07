@@ -698,7 +698,12 @@ def cmd_evening_publish(cfg, a):
     leak = KE.publishable(man)
     if leak:
         raise SystemExit(f"evening-publish: refused, the manifest carries price-like data ({leak[:3]})")
-    day = dt.date.fromisoformat(str(man.get("as_of") or run.name)[:10])
+    try:
+        day = dt.date.fromisoformat(run.name)
+    except ValueError:
+        raise SystemExit(f"evening-publish: the run folder {run.name!r} is not a date") from None
+    if str(man.get("as_of")) != run.name:                                                     # the manifest does not choose its own release or file name
+        raise SystemExit(f"evening-publish: refused, the manifest says {man.get('as_of')!r} but the run folder is {run.name!r}")
     try:
         _push_run(run.parent, run, release_tag(a.release_prefix, day, "year"), ["manifest.json"], f"Evening minutes {day.year}",
                   "Per-day manifests (counts and statuses) of the MCX and currency evening candles; the candles themselves are licensed and are not published. Not a software release.",
