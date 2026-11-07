@@ -50,6 +50,8 @@ jobs:
               [ "$hc" = "200" ] && python3 -c 'import json; h = json.load(open("/tmp/health.json")); k = h.get("kotak") or {}; print("Kite instruments:", json.dumps((h.get("kite") or {}).get("n")), "| Kotak:", json.dumps(k.get("status")), "| Kotak instruments:", json.dumps(k.get("n")), "| universe:", json.dumps(k.get("universe")))'
               ;;
             401) echo "REJECTED: the relay is on, but this GitHub secret is not the Worker's LIVE_READ_TOKEN. Set both to the same string (Worker: Secret, then Deploy)."; exit 1 ;;
-            503) echo "NOT SWITCHED ON: open <your worker>/live/snapshot in a browser: the answer says which piece is missing."; exit 1 ;;
+            503) echo "NOT SWITCHED ON. The relay's own explanation of which piece is wrong (setting names and states only, never a value):"
+                 python3 -c 'import json; d = json.load(open("/tmp/snapshot.json")); print(json.dumps(d.get("why"))[:1500])' 2>/dev/null || echo "(the answer had no readable explanation)"
+                 exit 1 ;;
             *)   echo "Unexpected answer (HTTP $code). Is LIVE_URL the Worker's own address?"; exit 1 ;;
           esac
