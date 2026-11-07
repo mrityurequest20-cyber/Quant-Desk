@@ -21,7 +21,7 @@ The header pill shows the live feeds' state on every tab (Live, Delayed, No feed
 | Kite ticks with depth | to 14:45, then 14:45 to 15:32 (two chained jobs) | encrypted artifacts (never published) | arrival only: the content is encrypted |
 | Stock option chains (once, 15:25), five indices' minutes, and **stock option minutes** (±5 strikes, nearest 2 expiries, 20 stocks) | 15:25, 15:45 | releases (`option-minutes-*`) | Data health (the stock option minutes since 7 Nov) |
 | Stock cash and near-month futures minutes (50 stocks) | after the close | `stock-minutes-*` | Data health |
-| **MCX and currency: the near-month future of every commodity and pair, the whole day's minutes** | 23:45 (`evening-minutes.yml`) | `evening-minutes-YYYY` | Data health (the previous evening), from the first run |
+| MCX and currency evening minutes | **none yet**: `evening-minutes.yml` (Kotak candles) is manual only, because Kotak answered every MCX and currency request with HTTP 422 "Historical data is not supported for this exchange" | - | Data health shows the channel as missing |
 | NSE warehouse (bhavcopy, participant OI, FII/DII, events) | evenings | warehouse tables | Data health |
 | Pre-market brief | 07:15 to 09:15 | `premarket` branch | Data health |
 
@@ -34,7 +34,7 @@ The header pill shows the live feeds' state on every tab (Live, Delayed, No feed
 ## Gaps, in the order they matter
 
 1. **The live prices are not a record.** The relay keeps the latest quote and two days of minute closes. If the record of a day has a hole (the recorder fell over), the live view cannot fill it afterwards. Kotak live prices are stored nowhere.
-2. **Evenings: collected after the close, not live.** MCX (to 23:30) and currency (to 17:00) futures are subscribed and recorded as ticks in the Kite wide universe while the Kite recorder runs (to 15:32); `evening-minutes.yml` adds the whole day's 1-minute candles at 23:45. It reads Kotak's candle API, which has not been called for those two segments before: its first run (by hand, days = 30, which also backfills what Kotak holds) is the discovery of what Kotak serves, and its manifest records every instrument type and name it saw. Still one source live, and no MCX or currency options.
+2. **Evenings are not recorded.** MCX (to 23:30) and currency (to 17:00) futures are subscribed and recorded as ticks in the Kite wide universe only while the Kite recorder runs (to 15:32). Kotak cannot fill the evening: its candle API answered all 38 MCX and currency requests of the 7 Nov probe with HTTP 422 (its scrip master and chain endpoints do work for both segments, so Kotak could serve them *live*). The evening needs Kite: historical candles in a late job (a third automatic login a day, to be built after Monday's first Kite session shows the login path works) or ticks past 15:32. Still one source live, and no MCX or currency options.
 3. **No daily-history charts.** A chart is today and yesterday only. Longer history exists in the warehouse and the releases but is not drawn in the app.
 4. **No cross-check of the record.** Kite and Kotak are compared live (the "differ" flag) but the comparison is not stored, so there is no daily number for how often they agreed.
 5. **The Today tab depends on the `premarket` branch.** It had never been built (the workflow had never run); a manual run on 7 Nov created it and the brief is public. It rebuilds every weekday from 05:30 IST.

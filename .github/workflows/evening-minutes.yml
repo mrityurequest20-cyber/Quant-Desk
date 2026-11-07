@@ -1,16 +1,14 @@
-# MCX and currency minutes, collected after their sessions (quantdesk/data/evening_minutes.py, docs/PIPELINE_READINESS.md).
+# MCX and currency minutes from Kotak's candle history (quantdesk/data/evening_minutes.py): MANUAL ONLY, NOT SCHEDULED.
 #
-# The Kite recorder stops at about 15:32 IST; MCX trades to 23:30 and currency to 17:00, so their evenings were never recorded. Kotak serves a traded 1-minute candle history for
-# about 30 days, so one pass at 23:45 IST reads the whole day of the near-month future of every MCX commodity and currency pair. Nothing is subscribed through the evening and no Kite
-# login is involved. GitHub's cron can run late: nothing is lost, because every run re-reads the last `days` days and a name already on the release is never replaced.
-# Run it by hand with days = 30 once, to backfill what Kotak still holds.
+# Its first run (7 Nov 2026, days = 30) asked Kotak for the near-month future of all 31 MCX commodities and 7 currency pairs the scrip master lists and got, for every one:
+# "HTTP 422: Historical data is not supported for this exchange". Kotak's candle API serves NSE and BSE only, so this route cannot record the MCX or currency evenings. It stays as a
+# manual tool (the scrip master and chain endpoints do work for both segments, which the manifest of that run records), and the nightly cron was removed so it does not fail every night.
+# The MCX and currency evenings need Kite (its historical candles, or its ticks past 15:32): see docs/PIPELINE_READINESS.md.
 #
 # Market data only, through the Kotak consumer key the other recorders use (the one secret here, in the one step that needs it). It places no order and touches no journal, no desk, no limit.
 name: Evening minutes
 
 on:
-  schedule:
-    - cron: "15 18 * * 1-5"      # 23:45 IST, Monday to Friday
   workflow_dispatch:
     inputs:
       days:
