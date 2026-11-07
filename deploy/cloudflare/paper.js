@@ -14,6 +14,7 @@
 
 export const MAX_PENDING = 20;
 export const MAX_RESULTS = 50;                     // kept results: with the reason caps below, the stored value stays far under a Durable Object's 128 KiB limit
+export const MAX_RESULTS_BYTES = 100000;           // characters of JSON in the stored results (far under a stored value's 128 KiB even with wide characters)
 export const MAX_SEEN = 1000;                      // order ids remembered as used (about 70 KB stored)
 export const MAX_SUMMARY = 60000;                  // characters
 export const CHUNK = 100000;                       // characters per stored piece of the account (a stored value is limited to 128 KiB; the account is ASCII only, so a character is a byte)
@@ -86,6 +87,13 @@ export class PaperBook {
 	constructor(state) {
 		this.state = state;
 		this.d = null;                             // {queue, results, kill, seen}
+		this.chain = Promise.resolve();            // every request runs one at a time (see serial): a write awaits storage, and a second request must not decide from the state before it
+	}
+
+	serial(fn) {
+		const run = this.chain.then(fn, fn);
+		this.chain = run.then(() => {}, () => {});
+		return run;
 	}
 
 	async load() {
@@ -100,7 +108,11 @@ export class PaperBook {
 		};
 	}
 
-	async handle(request, url, now) {
+	handle(request, url, now) {
+		return this.serial(() => this.handle1(request, url, now));
+	}
+
+	async handle1(request, url, now) {
 		try { await this.load(); } catch (e) { return json(503, { error: "paper storage is unavailable; nothing was changed" }); }
 		const p = url.pathname, m = request.method;
 		try {
@@ -137,7 +149,9 @@ export class PaperBook {
 	async result(raw) {
 		const r = cleanResult(raw);
 		if (!r) return json(400, { error: "not a valid result" });
-		const queue = this.d.queue.filter((q) => q.id !== r.id), results = [...this.d.results.filter((x) => x.id !== r.id), r].slice(-MAX_RESULTS);
+		const queue = this.d.queue.filter((q) => q.id !== r.id);
+		let results = [...this.d.results.filter((x) => x.id !== r.id), r].slice(-MAX_RESULTS);
+		while (results.length > 1 && JSON.stringify(results).length > MAX_RESULTS_BYTES) results = results.slice(1);      // by size too: the oldest go first, so the list can never grow past a stored value's limit
 		const seen = this.d.seen.includes(r.id) ? this.d.seen : [...this.d.seen, r.id].slice(-MAX_SEEN);
 		await this.state.storage.put({ "paper:queue": queue, "paper:results": results, "paper:seen": seen });
 		this.d.queue = queue; this.d.results = results; this.d.seen = seen;

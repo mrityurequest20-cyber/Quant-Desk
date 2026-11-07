@@ -25,12 +25,14 @@ HARNESS = r"""
 import { handleLive, LiveBoard } from "./live.mjs";
 const mem = new Map();
 const clone = (v) => JSON.parse(JSON.stringify(v));
+let putDelay = 0;                                               // test hook: every storage operation yields this many ms first, as a real one does
+const lag = () => (putDelay ? new Promise((r) => setTimeout(r, putDelay)) : null);
 let failGetKey = null, failPutKey = null;                       // test hooks: a read of this key throws; a write that includes this key throws
 const LIMIT = 131072;                                           // a Durable Object value is limited to 128 KiB: an over-size write throws, as the real one does
 const big = (v) => JSON.stringify(v).length > LIMIT;
 const state = { storage: {
-  get: async (k) => { if (failGetKey && (k === failGetKey || (Array.isArray(k) && k.includes(failGetKey)))) throw new Error("storage read failed"); return Array.isArray(k) ? new Map(k.filter((x) => mem.has(x)).map((x) => [x, clone(mem.get(x))])) : (mem.has(k) ? clone(mem.get(k)) : undefined); },
-  put: async (k, v) => { const kv = typeof k === "object" ? Object.entries(k) : [[k, v]]; for (const [a, b] of kv) { if (a === failPutKey || big(b)) throw new Error("storage write failed: " + a); } for (const [a, b] of kv) mem.set(a, clone(b)); },
+  get: async (k) => { await lag(); if (failGetKey && (k === failGetKey || (Array.isArray(k) && k.includes(failGetKey)))) throw new Error("storage read failed"); return Array.isArray(k) ? new Map(k.filter((x) => mem.has(x)).map((x) => [x, clone(mem.get(x))])) : (mem.has(k) ? clone(mem.get(k)) : undefined); },
+  put: async (k, v) => { await lag(); const kv = typeof k === "object" ? Object.entries(k) : [[k, v]]; for (const [a, b] of kv) { if (a === failPutKey || big(b)) throw new Error("storage write failed: " + a); } for (const [a, b] of kv) mem.set(a, clone(b)); },
   getAlarm: async () => null, setAlarm: async () => {}, deleteAlarm: async () => {} }, blockConcurrencyWhile: async (fn) => fn() };
 let board = new LiveBoard(state, {});
 let now = 1789000000000;
@@ -296,3 +298,44 @@ const ok = JSON.stringify({ capital0: 1, ledger: [{ hash: "a", note: "\\u20b9 ru
 out.ascii = (await call("POST", "/paper/state", { token: ING, body: { summary: { ledger_len: 1 }, account: ok } })).status;
 """)
     assert o["ids"] == [400] * 5 and o["limit"] == 400 and o["nonascii"] == 400 and o["ascii"] == 200
+
+
+@needs_node
+def test_requests_that_overlap_never_lose_an_acknowledged_order_or_break_the_cap(tmp_path):
+    o = run(tmp_path, r"""
+putDelay = 3;
+const post = (id) => call("POST", "/paper/order", { token: READ, body: order(id) });
+board = new LiveBoard(state, {}); board.now = () => now;                                  // cold start: the first requests all arrive before the book is loaded
+const first = await Promise.all([post("ord-lr00001"), post("ord-lr00002"), call("GET", "/paper/queue", { token: ING }), post("ord-lr00003")]);
+out.firstStatus = first.map((r) => r.status);
+out.firstStored = mem.get("paper:queue").map((x) => x.id).sort();
+out.same = (await Promise.all([post("ord-same001"), post("ord-same001")])).map((r) => r.status).sort();      // the same id twice at once: one is queued
+const many = await Promise.all(Array.from({ length: 30 }, (_, i) => post("ord-many" + String(i).padStart(3, "0"))));
+out.codes = many.map((r) => r.status);
+out.manyStored = mem.get("paper:queue").length;                                              // every 200 is really stored, and the cap held
+for (let i = 0; i < 5; i++) await call("POST", "/paper/result", { token: ING, body: { id: "ord-many" + String(i).padStart(3, "0"), status: "done" } });      // room for 5
+const mixed = await Promise.all([call("POST", "/paper/result", { token: ING, body: { id: "ord-lr00002", status: "refused", reasons: ["x"] } }), post("ord-mix0001"), call("POST", "/paper/kill", { token: READ, body: { on: true } })]);
+out.mixed = mixed.map((r) => r.status);
+out.after = { queue: mem.get("paper:queue").map((x) => x.id), results: mem.get("paper:results").map((x) => x.id), kill: mem.get("paper:kill") };
+""")
+    assert o["firstStatus"] == [200, 200, 200, 200] and o["firstStored"] == ["ord-lr00001", "ord-lr00002", "ord-lr00003"]
+    assert o["same"] == [200, 409]
+    assert o["codes"].count(200) == 16 and o["codes"].count(429) == 14 and o["manyStored"] == 20                    # 4 waiting + 16 = the cap of 20
+    assert o["mixed"] == [200, 200, 200]
+    assert "ord-lr00002" not in o["after"]["queue"] and "ord-mix0001" in o["after"]["queue"] and "ord-lr00002" in o["after"]["results"] and o["after"]["kill"] is True
+
+
+@needs_node
+def test_the_two_keys_of_an_order_move_together_or_not_at_all_and_the_caps_hold(tmp_path):
+    o = run(tmp_path, r"""
+failPutKey = "paper:seen";
+out.fail = (await call("POST", "/paper/order", { token: READ, body: order("ord-pair0001") })).status;
+out.queueWritten = mem.get("paper:queue") !== undefined;                                    // a separate put for the queue would have gone through
+failPutKey = null;
+for (let i = 0; i < 1030; i++) await call("POST", "/paper/result", { token: ING, body: { id: "ord-s" + String(i).padStart(6, "0"), status: "done" } });
+out.seen = mem.get("paper:seen").length;
+const fat = Array.from({ length: 5 }, () => "x".repeat(200));
+for (let i = 0; i < 60; i++) await call("POST", "/paper/result", { token: ING, body: { id: "ord-w" + String(i).padStart(6, "0"), status: "refused", reasons: fat, fill: { symbol: "S".repeat(60), kind: "k".repeat(60), ts: "t".repeat(60) }, at: "a".repeat(40) } });
+out.resultsBytes = JSON.stringify(mem.get("paper:results")).length;
+""")
+    assert o["fail"] == 500 and o["queueWritten"] is False and o["seen"] == 1000 and o["resultsBytes"] <= 100000
