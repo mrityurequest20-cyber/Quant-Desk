@@ -1,0 +1,186 @@
+# The manual paper runner: carries out the owner's queued PAPER orders through the paper risk gate, all through the session (09:00 to 15:35 IST). PAPER MONEY ONLY.
+#
+# The owner places a paper trade by hand in the app; it waits in the relay's queue (docs/LIVE.md, /paper/*); this job takes it through quantdesk/paper (the risk gate, the broker, the
+# hash-chained ledger) every few seconds and reports back. Nothing here can reach a broker: there is no broker credential in this workflow, and a test pins that.
+#
+# Three jobs, so that the one that holds the relay keys cannot write and the one that can write holds no secret:
+#   morning / afternoon   hold LIVE_READ_TOKEN and LIVE_INGEST_TOKEN in the one step that runs the runner; `contents: read`. A hosted job may run six hours and the session is longer,
+#                         so the day is two halves (hand-over at 12:20). The account lives on the relay (authoritative) and is restored at the start of each half.
+#   publish               `contents: write`, NO secret: verifies the saved account and ADDS it to the `paper-ledger` branch as a new commit (a backup and an audit trail). It refuses an
+#                         account that does not continue the one already on the branch, and it never force-pushes.
+# Started by deploy/scheduler.py like the other recorders (best-effort), or by hand. One run at a time: two runners on one account would be dangerous.
+name: Paper runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      handover:
+        description: "The morning half hands over to the afternoon half at (HH:MM IST)"
+        default: "12:20"
+      until:
+        description: "The afternoon half stops at (HH:MM IST)"
+        default: "15:35"
+      new_account:
+        description: "ONLY for the very first session ever: start a new paper account because none is saved anywhere. Leave off otherwise: a missing account must stop the start, not begin the history again."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-desk
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+  HANDOVER: ${{ inputs.handover || '12:20' }}
+  UNTIL: ${{ inputs.until || '15:35' }}
+  NEW_ACCOUNT: ${{ inputs.new_account && 'yes' || 'no' }}
+
+jobs:
+  morning:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        continue-on-error: true               # the branch does not exist before the first publish
+        with:
+          ref: paper-ledger
+          path: ledger
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Put the ledger branch's copy of the account in place (the relay's copy is the one used if it is the longer)
+        run: |
+          mkdir -p runtime/paper/ledger
+          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+      - name: Run the paper runner to the hand-over
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}                           # the private live relay (docs/LIVE.md)
+          LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}           # reads the live board
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}       # reads the order queue, posts results and the account
+        run: |
+          flag=""
+          if [ "$NEW_ACCOUNT" = "yes" ]; then flag="--new-account"; fi
+          python -m quantdesk paper run --until "$HANDOVER" $flag
+      - name: Keep the saved account
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-ledger-morning
+          path: runtime/paper/ledger/account.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+  afternoon:
+    needs: morning
+    if: ${{ !cancelled() && needs.morning.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        continue-on-error: true
+        with:
+          ref: paper-ledger
+          path: ledger
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Put the ledger branch's copy of the account in place
+        run: |
+          mkdir -p runtime/paper/ledger
+          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+      - name: Run the paper runner to the close
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}
+          LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
+        run: python -m quantdesk paper run --until "$UNTIL"
+      - name: Keep the saved account
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-ledger-afternoon
+          path: runtime/paper/ledger/account.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+  publish:
+    needs: afternoon
+    if: ${{ !cancelled() && needs.afternoon.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write            # the paper-ledger branch and nothing else; this job holds no secret
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        continue-on-error: true
+        with:
+          path: art
+      - name: Take the newest saved account and verify it
+        id: pick
+        run: |
+          f=""
+          for d in art/paper-ledger-afternoon art/paper-ledger-morning; do
+            if [ -f "$d/account.json" ]; then f="$d/account.json"; break; fi
+          done
+          if [ -z "$f" ]; then echo "have=false" >> "$GITHUB_OUTPUT"; echo "::notice::no saved account to publish"; exit 0; fi
+          python -m quantdesk paper verify --file "$f"                  # hash chain, replay of every fill, flags: exits 1 if the file is not intact
+          cp "$f" "$RUNNER_TEMP/account.json"
+          echo "have=true" >> "$GITHUB_OUTPUT"
+      - name: Add it to the paper-ledger branch (a new commit; never a force-push)
+        if: steps.pick.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          b64="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$b64"
+          hdr="AUTHORIZATION: basic $b64"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git -c "http.extraheader=$hdr" fetch -q --depth 1 origin paper-ledger; then
+            git checkout -q -B paper-ledger FETCH_HEAD
+            if [ -f account.json ]; then cp account.json "$RUNNER_TEMP/branch-account.json"; fi
+          elif git -c "http.extraheader=$hdr" ls-remote --exit-code origin refs/heads/paper-ledger > /dev/null 2>&1; then
+            echo "the paper-ledger branch exists but could not be fetched: not creating it again" >&2
+            exit 1
+          else
+            git checkout -q --orphan paper-ledger
+            git rm -rfq . || true
+          fi
+          # the new account must continue the one on the branch (its rows are a prefix of ours): the branch only ever gains rows
+          if [ -f "$RUNNER_TEMP/branch-account.json" ]; then
+            python -m quantdesk paper verify --file "$RUNNER_TEMP/account.json" --extends "$RUNNER_TEMP/branch-account.json"
+          fi
+          cp "$RUNNER_TEMP/account.json" account.json
+          git add account.json
+          if git diff --cached --quiet; then echo "nothing new to publish"; exit 0; fi
+          git commit -q -m "Paper ledger for $(date +%F)"
+          git -c "http.extraheader=$hdr" push -q origin paper-ledger
