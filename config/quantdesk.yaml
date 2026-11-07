@@ -520,7 +520,19 @@ daily_history:
   max_stocks: 70
   stock_jump: 0.20                 # unexplained one-day move beyond this is flagged
   index_jump: 0.15
-  accepted_moves: []               # [{symbol: X, date: YYYY-MM-DD}] genuine large moves a person has reviewed
+  # Genuine large one-day moves, reviewed and APPROVED BY THE OWNER on 7 Nov 2026 ("approve the genuine-move list"). Each is a real market event, so the series is not flagged for it; a move
+  # not listed stays flagged. NOT listed on purpose (not confirmed): SBIN 2017-10-25, ADANIENT 2014-04-10, 2015-06-03, 2017-04-26, 2018-09-06 and 2020-08-25.
+  accepted_moves:
+    - {symbol: BANKNIFTY, date: "2020-03-23"}     # the 23 Mar 2020 crash day (lower circuit): -16.7%
+    - {symbol: FINNIFTY, date: "2020-03-23"}      # -15.9%
+    - {symbol: AXISBANK, date: "2020-03-23"}      # -27.9%
+    - {symbol: BAJFINANCE, date: "2020-03-23"}    # -23.2%
+    - {symbol: INFY, date: "2013-04-12"}          # Infosys guidance shock: -21.3%
+    - {symbol: ADANIENT, date: "2019-05-20"}      # general-election result day: +27.4%
+    - {symbol: ADANIENT, date: "2023-02-01"}      # Hindenburg report: -28.2%
+    - {symbol: ADANIENT, date: "2023-02-02"}      # -26.7%
+    - {symbol: ADANIENT, date: "2023-02-08"}      # +20.0%
+    - {symbol: ADANIENT, date: "2024-11-21"}      # US indictment news: -22.6%
   corporate_actions: []            # [{symbol: X, date: YYYY-MM-DD, ratio: 5, note: ...}] when the sources miss a split/bonus
   crosscheck_sample: 60
   crosscheck_tol: 0.005
