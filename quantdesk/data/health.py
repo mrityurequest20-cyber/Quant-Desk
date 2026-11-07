@@ -477,6 +477,11 @@ def check_agreement(store, day: dt.date) -> Check:
     if m is None:
         return Check("Kite vs Kotak agreement", MISSING, f"no agreement record for {day:%a %d %b}: the relay's tally (Kotak poller on?) or agreement.yml did not deliver")
     pct, pairs, cycles = m.get("agree_pct"), int(m.get("pairs") or 0), int(m.get("cycles") or 0)
+    pk = m.get("peak_fresh") or {}
+    kn, tn = sum((pk.get("kite") or {}).values()), sum((pk.get("kotak") or {}).values())
+    seen = f" Fresh at the peak: Kite {kn:,} names, Kotak {tn:,}."
+    if pk and (kn == 0) != (tn == 0):
+        return Check("Kite vs Kotak agreement", WARN, f"one source was blind all day (Kite {kn:,} fresh names, Kotak {tn:,}), so there is nothing to compare", False, {"kite_peak": kn, "kotak_peak": tn})
     if pct is None or not pairs:
         return Check("Kite vs Kotak agreement", WARN, f"{cycles:,} cycles but no instrument held a fresh price from both sources (one source is off)", False, {"cycles": cycles})
     issues = []
@@ -485,7 +490,7 @@ def check_agreement(store, day: dt.date) -> Check:
     if pct < AGREE_WARN:
         issues.append(f"{pct}% of {pairs:,} pairs agree (options {m.get('opt_agree_pct')}%, worst cycle {m.get('worst_cycle_pct')}% apart)")
     status = BAD if pct < AGREE_BAD else WARN if issues else OK
-    return Check("Kite vs Kotak agreement", status, "; ".join(issues) if issues else f"{pct}% of {pairs:,} pairs agree over {cycles:,} cycles (options {m.get('opt_agree_pct')}%)", False,
+    return Check("Kite vs Kotak agreement", status, ("; ".join(issues) if issues else f"{pct}% of {pairs:,} pairs agree over {cycles:,} cycles (options {m.get('opt_agree_pct')}%).") + (seen if pk else ""), False,
                  {"agree_pct": pct, "pairs": pairs, "cycles": cycles})
 
 

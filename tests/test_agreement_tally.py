@@ -21,6 +21,7 @@ const state = () => ({ storage: { get: async (k) => mem.get(k), put: async (k, v
 const mk = async () => { const b = new LiveBoard(state(), { LIVE_INGEST_TOKEN: "i".repeat(32), LIVE_READ_TOKEN: "r".repeat(32), KOTAK_CONSUMER_KEY: "k".repeat(24) }); b.now = () => now; await b.ready; return b; };
 const board = await mk();
 const both = (name, z, k, s) => { board.put(name, "z", { ltp: z, s }); board.put(name, "k", { ltp: k, s }); };
+board.put("FUTONLYK", "k", { ltp: 7, s: "fut" });                                      // fresh at Kotak only
 for (let i = 0; i < 30; i++) both("S" + i, 100, i < 3 ? 103 : 100.1, "eq");        // 30 equities, 3 of them 3% apart (limit 0.5%)
 for (let i = 0; i < 10; i++) both("O" + i, 50, i < 1 ? 55 : 50.5, "opt");           // 10 options, 1 of them 10% apart (limit 3%)
 board.put("ONLYZ", "z", { ltp: 10, s: "eq" });                                       // one source only: not counted
@@ -69,6 +70,7 @@ def test_a_cycle_counts_the_instruments_both_sources_hold_fresh_and_those_that_d
     a = out["first"]
     assert a["day"] == "2026-11-09" and a["cycles"] == 1 and a["both"] == 40 and a["disagree"] == 4 and a["opt_both"] == 10 and a["opt_disagree"] == 1
     assert a["worst_cycle_pct"] == 10.0                                                                  # 4 of 40
+    assert a["peak"] == {"z": {"eq": 31, "opt": 10}, "k": {"fut": 1, "eq": 30, "opt": 10}}               # names each source holds fresh, by segment
     assert out["second"] == {"cycles": 2, "both": 80, "disagree": 8, "worst": 10.0}
 
 
@@ -79,7 +81,7 @@ def test_stale_quotes_are_not_counted_as_pairs_and_a_tiny_cycle_does_not_set_the
 
 def test_health_carries_counts_only_and_the_tally_survives_a_restart_and_rolls_over_the_day(out):
     assert out["health"]["today"] == "2026-11-09" and out["noName"] is True
-    assert out["health"]["keys"] == sorted(["day", "cycles", "both", "disagree", "opt_both", "opt_disagree", "worst_cycle_pct", "first_at", "last_at"])
+    assert out["health"]["keys"] == sorted(["day", "cycles", "both", "disagree", "opt_both", "opt_disagree", "worst_cycle_pct", "first_at", "last_at", "peak"])
     assert out["stored"] is True and out["restart"] == {"cycles": 4, "both": 81}
     assert out["nextDay"]["today"] == "2026-11-10" and out["nextDay"]["kept"] == ["2026-11-09"] and out["nextDay"]["keptCycles"] == 4
     assert out["kept"] == 7                                                                               # a week of finished days, no more
@@ -87,11 +89,12 @@ def test_health_carries_counts_only_and_the_tally_survives_a_restart_and_rolls_o
 
 def test_a_malformed_stored_tally_is_dropped_not_shown(out):
     assert out["clean"][:3] == [None, None, None]
-    assert out["clean"][3]["today"] == {"day": "2026-11-09", "cycles": 0, "both": 7, "disagree": 0, "opt_both": 0, "opt_disagree": 0, "worst_cycle_pct": 0, "first_at": 0, "last_at": 0}
+    assert out["clean"][3]["today"] == {"day": "2026-11-09", "cycles": 0, "both": 7, "disagree": 0, "opt_both": 0, "opt_disagree": 0, "worst_cycle_pct": 0, "first_at": 0, "last_at": 0, "peak": {"z": {}, "k": {}}}
     assert out["clean"][4] is None                                                                        # a day filed under another day's key is refused
 
 
-def test_the_tally_holds_no_price_and_no_name_in_the_source():
+def test_the_tally_stores_counts_never_a_price_or_an_instrument_name():
     src = (ROOT / "deploy/cloudflare/live.js").read_text(encoding="utf-8")
     body = src[src.index("	tally(now)"):src.index("	snapshot(now)")]
-    assert "this.quotes.get" not in body and "name" not in body.replace("no name", "")                    # it only counts: nothing about an instrument is stored
+    assert "this.quotes.get" not in body and ".push(" not in body and "[name]" not in body and "for (const [name" not in body       # it only counts: nothing about one instrument is kept
+    assert "ltp" in body and "a.ltp" not in body and "a.name" not in body

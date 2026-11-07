@@ -35,7 +35,11 @@ def day_manifest(d: dict) -> dict | None:
     if n["cycles"] < 1 or any(v < 0 or v != v for v in n.values()):
         return None
     both, opt = n["both"], n["opt_both"]
-    return {"day": str(day), "source": "relay tally", "cycles": int(n["cycles"]), "pairs": int(both), "disagree": int(n["disagree"]),
+    peak = {}
+    for src, name in (("z", "kite"), ("k", "kotak")):
+        raw = (d.get("peak") or {}).get(src) if isinstance(d.get("peak"), dict) else None
+        peak[name] = {str(g)[:6]: int(v) for g, v in (raw or {}).items() if isinstance(v, (int, float)) and v >= 0 and len(str(g)) <= 6} if isinstance(raw, dict) else {}
+    return {"peak_fresh": peak, "day": str(day), "source": "relay tally", "cycles": int(n["cycles"]), "pairs": int(both), "disagree": int(n["disagree"]),
             "agree_pct": round(100 * (1 - n["disagree"] / both), 2) if both else None,
             "opt_pairs": int(opt), "opt_disagree": int(n["opt_disagree"]), "opt_agree_pct": round(100 * (1 - n["opt_disagree"] / opt), 2) if opt else None,
             "worst_cycle_pct": round(n["worst_cycle_pct"], 2), "first": _ist(d.get("first_at")), "last": _ist(d.get("last_at")),

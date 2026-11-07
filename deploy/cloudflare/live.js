@@ -221,6 +221,8 @@ function cleanDay(d) {
 	if (!d || typeof d !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(String(d.day))) return null;
 	const out = { day: d.day };
 	for (const k of AGREE_KEYS) { const v = Number(d[k]); out[k] = Number.isFinite(v) && v >= 0 ? v : 0; }
+	out.peak = { z: {}, k: {} };
+	for (const src of ["z", "k"]) for (const [g, n] of Object.entries(d.peak && d.peak[src] && typeof d.peak[src] === "object" ? d.peak[src] : {})) if (/^[a-z]{1,6}$/.test(g) || g === "other") { const v = Number(n); if (Number.isFinite(v) && v >= 0) out.peak[src][g] = v; }
 	return out;
 }
 export function cleanAgree(raw) {                       // storage is not trusted: a malformed tally is dropped, not shown
@@ -365,16 +367,19 @@ export class LiveBoard {
 			if (this.agree && this.agree.cycles > 0) this.agreeDays[this.agree.day] = this.agree;
 			const keep = Object.keys(this.agreeDays).sort().slice(-7);
 			this.agreeDays = Object.fromEntries(keep.map((d) => [d, this.agreeDays[d]]));
-			this.agree = { day, cycles: 0, both: 0, disagree: 0, opt_both: 0, opt_disagree: 0, worst_cycle_pct: 0, first_at: now, last_at: now };
+			this.agree = { day, cycles: 0, both: 0, disagree: 0, opt_both: 0, opt_disagree: 0, worst_cycle_pct: 0, first_at: now, last_at: now, peak: { z: {}, k: {} } };
 		}
 		const a = this.agree;
 		let both = 0, dis = 0, ob = 0, od = 0;
+		const fresh = { z: {}, k: {} };                                                     // names each source holds fresh, by segment (the wide universe arriving)
 		for (const e of this.quotes.values()) {
+			for (const src of ["z", "k"]) if (e[src] && (now - e[src].at) / 1000 <= FRESH_S) { const g = /^[a-z]{1,6}$/.test(String(e[src].s)) ? e[src].s : "other"; fresh[src][g] = (fresh[src][g] || 0) + 1; }
 			if (!(e.z && e.k) || (now - e.z.at) / 1000 > FRESH_S || (now - e.k.at) / 1000 > FRESH_S || !(e.z.ltp > 0) || !(e.k.ltp > 0)) continue;
 			const opt = e.z.s === "opt", bad = (Math.abs(e.z.ltp - e.k.ltp) / e.z.ltp) * 100 > (opt ? TOL.opt : TOL.other);
 			both += 1; if (bad) dis += 1;
 			if (opt) { ob += 1; if (bad) od += 1; }
 		}
+		for (const src of ["z", "k"]) for (const [g, n] of Object.entries(fresh[src])) if (n > (a.peak[src][g] || 0)) a.peak[src][g] = n;      // the most names fresh in any one cycle
 		a.cycles += 1; a.both += both; a.disagree += dis; a.opt_both += ob; a.opt_disagree += od; a.last_at = now;
 		if (both >= 20) a.worst_cycle_pct = Math.max(a.worst_cycle_pct, round2((dis / both) * 100));      // a cycle with a handful of pairs says nothing about the day
 	}
