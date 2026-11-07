@@ -37,7 +37,7 @@ const mkStorage = (mem = new Map()) => ({
   delete: async (k) => { for (const x of [].concat(k)) mem.delete(x); },
   getAlarm: async () => null, setAlarm: async () => {},
 });
-const mkBoard = (storage, now) => { const b = new LiveBoard({ storage, blockConcurrencyWhile: async (fn) => fn() }, {}); b.now = () => now.t; return b; };
+const mkBoard = (storage, now, env = {}) => { const b = new LiveBoard({ storage, blockConcurrencyWhile: async (fn) => fn() }, env); b.now = () => now.t; return b; };
 const push = (b, quotes) => b.fetch(new Request("https://live/push", { method: "POST", body: JSON.stringify({ quotes }) }));
 const series = async (b, name) => (await b.fetch(new Request("https://live/series?name=" + encodeURIComponent(name)))).json();
 """
@@ -88,7 +88,7 @@ out.oldName = s.add("OLD", T0 + MIN, 6);
 out.newThere = s.m.has("NEW");
 out.oldBars = s.m.get("OLD").length / 2;
 """)
-    assert out["newName"] is False and out["newThere"] is False and out["oldName"] is True and out["oldBars"] == 2
+    assert out["newName"] is False and out["newThere"] is False and out["oldName"] is True and out["oldBars"] == 1          # the old name trades its oldest minute for its newest: the total does not grow
 
 
 @needs_node
@@ -184,3 +184,63 @@ out.spread = [hit.size, SHARDS, shardKeys().length];
 """)
     assert out["k"] == [10, 11]
     assert out["spread"] == [48, 48, 48]
+
+
+@needs_node
+def test_names_already_charted_cannot_grow_the_total_past_its_cap(tmp_path):
+    """B1 of the review: the cap was checked only for a NEW name, so 4000 early names ticking every minute for 960 minutes held 3.8 million minutes (over 128 MB)."""
+    out = run(tmp_path, r"""
+const s = new Series();
+const names = Array.from({ length: 4000 }, (_, i) => "N" + i);
+let maxSeen = 0;
+for (let m = 0; m < MAX_BARS; m++) {
+  for (const n of names) s.add(n, T0 + m * MIN, 1 + (m % 7));
+  if (s.total > maxSeen) maxSeen = s.total;
+}
+let real = 0; for (const a of s.m.values()) real += a.length / 2;
+out.r = { maxSeen, total: s.total, real, cap: MAX_BARS_TOTAL, names: s.m.size, newestKept: [...s.m.values()].every((a) => a[a.length - 2] === Math.floor(T0 / MIN) + MAX_BARS - 1) };
+""")
+    r = out["r"]
+    assert r["maxSeen"] <= r["cap"] and r["total"] == r["real"] and r["names"] == 4000      # bounded at every step, and the counter is the truth
+    assert r["newestKept"] is True                                                          # a name gives up its oldest minute, never its newest
+
+
+@needs_node
+def test_a_failed_flush_is_retried_a_pruned_name_leaves_storage_and_the_alarm_flushes(tmp_path):
+    out = run(tmp_path, r"""
+const mem = new Map(); const storage = mkStorage(mem); const now = { t: T0 };
+let fail = true; const put = storage.put; storage.put = async (k, v) => { if (fail) throw new Error("storage fault"); return put(k, v); };
+const b = mkBoard(storage, now); await b.ready;
+b.series.add("A", T0, 5);
+now.t = T0 + 6 * MIN;
+await b.maybeFlush(now.t);                                                    // fails: the shard stays marked
+out.afterFail = { dirty: b.series.dirty.size, stored: [...mem.keys()].filter((k) => k.startsWith("bars:")).length };
+fail = false; now.t = T0 + 12 * MIN;
+await b.maybeFlush(now.t);                                                    // nothing else changed: only the retained mark can make this write
+out.afterRetry = { dirty: b.series.dirty.size, stored: [...mem.keys()].filter((k) => k.startsWith("bars:")).length };
+b.series.prune(T0 + 5 * 86400e3);                                             // a name unseen for 5 days is pruned and its shard emptied
+now.t = T0 + 20 * MIN; await b.maybeFlush(now.t);
+out.afterPrune = { has: b.series.m.has("A"), stored: [...mem.keys()].filter((k) => k.startsWith("bars:")).length };
+const mem2 = new Map(); const st2 = mkStorage(mem2); const now2 = { t: T0 };   // the alarm flushes too (the Kotak poller's clock), whatever state the poller is in
+const b2 = mkBoard(st2, now2, { KOTAK_CONSUMER_KEY: "k".repeat(20) }); await b2.ready;
+b2.series.add("B", T0, 7); now2.t = T0 + 6 * MIN;
+await b2.alarm();
+out.alarm = [...mem2.keys()].filter((k) => k.startsWith("bars:")).length;
+""")
+    assert out["afterFail"] == {"dirty": 1, "stored": 0} and out["afterRetry"] == {"dirty": 0, "stored": 1}
+    assert out["afterPrune"] == {"has": False, "stored": 0} and out["alarm"] == 1
+
+
+@needs_node
+def test_one_shard_that_cannot_be_written_does_not_stop_the_others(tmp_path):
+    out = run(tmp_path, r"""
+const mem = new Map(); const storage = mkStorage(mem);
+const s = new Series();
+let a = "A", b = "B", k = 0; while (shardOf(b) === shardOf(a)) b = "B" + k++;
+s.add(a, T0, 1); s.add(b, T0, 2);
+const put = storage.put; storage.put = async (key, v) => { if (key === "bars:" + shardOf(a)) throw new Error("too big"); return put(key, v); };
+const done = await s.flush(storage);
+out.r = { done, stored: [...mem.keys()], bad: shardOf(a), good: "bars:" + shardOf(b), dirty: [...s.dirty] };
+""")
+    r = out["r"]
+    assert r["done"] == 1 and r["stored"] == [r["good"]] and r["dirty"] == [r["bad"]]

@@ -4,13 +4,14 @@
 // already holds, not a record: the record of every tick is the recorder's Parquet. A chart is a line of closes, one per minute, taken from the relay's own clock when a
 // changed price arrived, so a quiet instrument or a dead feed shows as a flat gap, never as invented points.
 //
-// Memory is bounded three ways: at most MAX_BARS minutes per instrument (16 hours: a whole MCX evening), at most MAX_BARS_TOTAL minutes in all (a name that would
-// push the total over is not charted, never an old name evicted), and only the last two trading days of an instrument. A series is stored flat, [minute, close, minute,
+// Memory is bounded three ways: at most MAX_BARS minutes per instrument (16 hours: a whole MCX evening), at most MAX_BARS_TOTAL minutes in all (about 36 bytes a minute
+// in the heap: 29 MB; once the total is reached a name that is already charted gives up its own oldest minute for each new one, and a new name is not charted), and only the
+// last two trading days of an instrument. A series is stored flat, [minute, close, minute,
 // close, ...], two numbers a minute. It survives the object being evicted: 48 shards in the object's storage, each written at most every five minutes and only if it
 // changed, and read back (and re-validated, because storage is not trusted either) when the object starts.
 
 export const MAX_BARS = 960;
-export const MAX_BARS_TOTAL = 1500000;
+export const MAX_BARS_TOTAL = 800000;
 export const SHARDS = 48;
 export const FLUSH_MS = 5 * 60000;
 const KEEP_MS = 4 * 86400e3;                                   // an instrument not seen for 4 days loses its series, with its quote
@@ -49,6 +50,7 @@ export class Series {
 			a.push(minute, px);
 			this.total += 1;
 			if (a.length > MAX_BARS * 2) { const drop = a.length - MAX_BARS * 2; a.splice(0, drop); this.total -= drop / 2; }
+			if (this.total > MAX_BARS_TOTAL && a.length > 2) { a.splice(0, 2); this.total -= 1; }               // the total is full: this name's oldest minute makes room for its newest
 		}
 		this.dirty.add(shardOf(name));
 		return true;
@@ -111,23 +113,21 @@ export class Series {
 		}
 	}
 
-	// Write the changed shards in one call. A shard with nothing left is deleted. On a failure the shards stay marked, and the next flush tries again.
+	// Write the changed shards, each on its own. A shard with nothing left is deleted. A shard that fails stays marked, and the next flush tries it again.
 	async flush(storage) {
 		if (!this.dirty.size) return 0;
 		const todo = [...this.dirty];
 		this.dirty.clear();
-		const put = {}, gone = [];
-		for (const i of todo) {
-			const o = this.shard(i);
-			if (Object.keys(o).length) put[`bars:${i}`] = o; else gone.push(`bars:${i}`);
+		let done = 0;
+		for (const i of todo) {                                                         // one shard at a time: a shard that fails (too big, a storage fault) does not take the others with it
+			try {
+				const o = this.shard(i);
+				if (Object.keys(o).length) await storage.put(`bars:${i}`, o); else await storage.delete(`bars:${i}`);
+				done += 1;
+			} catch (e) {
+				this.dirty.add(i);
+			}
 		}
-		try {
-			if (Object.keys(put).length) await storage.put(put);
-			if (gone.length) await storage.delete(gone);
-		} catch (e) {
-			for (const i of todo) this.dirty.add(i);
-			return 0;
-		}
-		return todo.length;
+		return done;
 	}
 }

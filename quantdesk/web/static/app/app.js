@@ -1654,12 +1654,13 @@ function liveOpt(name) {                                                   // NI
 }
 const liveExpiryKey = (e) => +("20" + e.slice(5, 7)) * 10000 + (LIVE_MONTHS.indexOf(e.slice(2, 5)) + 1) * 100 + +e.slice(0, 2);          // sortable yyyymmdd
 function liveChains(data) {                                                // underlying -> expiry -> strike -> {CE, PE} names, from the names on the board
-	const out = {};
+	const out = Object.create(null);                                         // no prototype: a name like __proto__12NOV26... must be data, not a way into Object.prototype
 	for (const n of Object.keys(data.quotes)) {
 		const o = liveOpt(n);
 		if (!o) continue;
-		const ex = ((out[o.u] = out[o.u] || {})[o.e] = out[o.u][o.e] || {});
-		(ex[o.k] = ex[o.k] || {})[o.t] = n;
+		const ux = (out[o.u] = out[o.u] || Object.create(null));
+		const ex = (ux[o.e] = ux[o.e] || Object.create(null));
+		(ex[o.k] = ex[o.k] || Object.create(null))[o.t] = n;
 	}
 	return out;
 }

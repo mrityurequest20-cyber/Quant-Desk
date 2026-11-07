@@ -71,3 +71,14 @@ def test_the_instrument_view_is_wired_to_the_key_the_rows_and_the_back_button_an
     assert "fetch(\"/live/series" in APP[APP.index("async function renderLive()"):]                                               # the open instrument's series is read with every refresh
     code = re.sub(r"//[^\n]*", "", view)                                                           # comments say what the view cannot do; only the code is checked
     assert "/api/" not in code and not re.search(r"\b(order|orders|place|submit|buy|sell|trade)\b|POST", code, re.I)          # whole words: "border-top" is not an order
+
+
+@needs_node
+def test_a_hostile_name_is_data_and_never_reaches_object_prototype(tmp_path):
+    out = run(tmp_path, r"""
+const data = { quotes: { "__proto__12NOV2624500CE": { ltp: 1 }, "constructor12NOV2624500PE": { ltp: 1 }, "NIFTY12NOV2624500CE": { ltp: 1 } } };
+const c = liveChains(data);
+out.clean = ({})["12NOV26"] === undefined && Object.prototype["12NOV26"] === undefined;
+out.keys = Object.keys(c).sort();
+""")
+    assert out["clean"] is True and out["keys"] == ["NIFTY", "__proto__", "constructor"]
