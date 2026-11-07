@@ -27,7 +27,7 @@ GOOD_INGEST, GOOD_READ = "i" * 32, "r" * 32
 
 # ---- the relay (Node) -----------------------------------------------------------------------------------------------------------------
 def stage(tmp_path):
-    for f in ("live.js", "kotak.js", "series.js"):
+    for f in ("live.js", "kotak.js", "series.js", "paper.js"):
         shutil.copyfile(ROOT / "deploy" / "cloudflare" / f, tmp_path / ("live.mjs" if f == "live.js" else f))
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
 

@@ -1,0 +1,189 @@
+// The relay's paper-order queue (docs/RECORDING.md, "The paper runner"). PAPER MONEY ONLY: nothing here talks to a broker; it holds the owner's orders until the runner
+// (quantdesk/paperlink, on GitHub Actions) takes them through the risk gate, and keeps the paper account and its results for the app to show.
+//
+//   POST /paper/order   the app (READ key)    queue one order            -> {queued, id, pending}
+//   POST /paper/kill    the app (READ key)    set or clear the kill flag -> {kill}
+//   GET  /paper/state   the app (READ key)    the summary, recent results, pending orders, kill
+//   GET  /paper/queue   the runner (INGEST)   {kill, orders, now}
+//   POST /paper/result  the runner (INGEST)   what happened to an order; removes it from the queue
+//   POST /paper/state   the runner (INGEST)   {summary, account?}: refuses an account whose ledger is shorter than, or does not extend, the one held
+//   GET  /paper/state?full=1  the runner (INGEST)  the summary and the full saved account (to restore from)
+//
+// The relay validates the SHAPE of everything that crosses it and stamps the queue time itself; every rule about whether a trade happens is the Python risk gate's.
+// All of it lives in the same Durable Object as the live board (class LiveBoard), in storage, so it survives a restart. No secret and no price is stored here.
+
+export const MAX_PENDING = 20;
+export const MAX_RESULTS = 100;
+export const MAX_SUMMARY = 60000;                  // characters
+export const CHUNK = 100000;                       // characters per stored piece of the account (a stored value is limited to 128 KiB)
+export const MAX_CHUNKS = 12;
+const ID = /^[A-Za-z0-9_-]{6,64}$/;
+const NAME = /^[A-Z0-9][A-Z0-9&_.-]{2,39}$/;
+const STATUS = new Set(["filled", "refused", "expired", "invalid", "done"]);
+const isStr = (x, lo, hi) => typeof x === "string" && x.trim().length >= lo && x.length <= hi;
+const isNum = (x) => typeof x === "number" && Number.isFinite(x);
+
+// The shape of one order from the app. Unknown fields are dropped; the runner checks the same things again and is the authority.
+export function cleanOrder(o) {
+	if (!o || typeof o !== "object" || Array.isArray(o)) return null;
+	if (!(typeof o.id === "string" && ID.test(o.id))) return null;
+	if (o.side !== "buy" && o.side !== "sell") return null;
+	if (!(typeof o.symbol === "string" && NAME.test(o.symbol))) return null;
+	const all = o.side === "sell" && o.lots === "all";
+	if (!all && !(Number.isInteger(o.lots) && o.lots >= 1 && o.lots <= 1000)) return null;
+	const out = { id: o.id, side: o.side, symbol: o.symbol, lots: o.lots };
+	if (o.side === "buy") {
+		if (!isStr(o.strategy, 1, 60) || !isStr(o.thesis, 20, 1000)) return null;
+		out.strategy = o.strategy.trim();
+		out.thesis = o.thesis.trim();
+	}
+	if (o.limit !== undefined && o.limit !== null) { if (!(isNum(o.limit) && o.limit > 0)) return null; out.limit = o.limit; }
+	if (o.group !== undefined && o.group !== null) { if (!isStr(o.group, 1, 40)) return null; out.group = o.group.trim(); }
+	return out;
+}
+
+export function cleanResult(r) {
+	if (!r || typeof r !== "object" || Array.isArray(r)) return null;
+	if (!(typeof r.id === "string" && ID.test(r.id)) || !STATUS.has(r.status)) return null;
+	const reasons = Array.isArray(r.reasons) ? r.reasons.filter((x) => typeof x === "string").slice(0, 10).map((x) => x.slice(0, 400)) : [];
+	let fill = null;
+	if (r.fill && typeof r.fill === "object" && !Array.isArray(r.fill)) {
+		fill = {};
+		for (const k of ["seq", "qty", "price", "fees"]) if (isNum(r.fill[k])) fill[k] = r.fill[k];
+		for (const k of ["kind", "ts", "symbol"]) if (typeof r.fill[k] === "string") fill[k] = r.fill[k].slice(0, 60);
+	}
+	return { id: r.id, status: r.status, reasons, fill, at: typeof r.at === "string" ? r.at.slice(0, 40) : null };
+}
+
+// {summary, account?}. The summary is shown to the app, so it must be a plain object of bounded size with a whole-number ledger length; the account, if sent, is a JSON text
+// whose ledger has exactly that many rows. (The chain's hashes are verified by the runner when it restores; here only the SHAPE and the prefix rule are checked.)
+export function cleanState(b) {
+	if (!b || typeof b !== "object" || Array.isArray(b)) return null;
+	const s = b.summary;
+	if (!s || typeof s !== "object" || Array.isArray(s) || !Number.isInteger(s.ledger_len) || s.ledger_len < 0) return null;
+	const text = JSON.stringify(s);
+	if (text.length > MAX_SUMMARY) return null;
+	const out = { summary: JSON.parse(text) };
+	if (b.account !== undefined && b.account !== null) {
+		if (typeof b.account !== "string" || b.account.length > CHUNK * MAX_CHUNKS) return null;
+		let acct;
+		try { acct = JSON.parse(b.account); } catch (e) { return null; }
+		if (!acct || !Array.isArray(acct.ledger) || acct.ledger.length !== s.ledger_len) return null;
+		if (!acct.ledger.every((r) => r && typeof r.hash === "string")) return null;
+		out.account = b.account;
+		out.hashes = acct.ledger.map((r) => r.hash);
+	}
+	return out;
+}
+
+const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+
+// The queue, results, kill flag and account, kept in the Durable Object's storage. One instance per LiveBoard.
+export class PaperBook {
+	constructor(state) {
+		this.state = state;
+		this.d = null;                             // {queue, results, kill}
+	}
+
+	async load() {
+		if (this.d) return;
+		let d = null;
+		try { d = await this.state.storage.get("paper"); } catch (e) { /* start empty */ }
+		const ok = d && typeof d === "object";
+		this.d = {
+			queue: ok && Array.isArray(d.queue) ? d.queue.map(cleanQueued).filter(Boolean).slice(0, MAX_PENDING) : [],
+			results: ok && Array.isArray(d.results) ? d.results.map(cleanResult).filter(Boolean).slice(-MAX_RESULTS) : [],
+			kill: ok && d.kill === true,
+		};
+	}
+
+	async save() { await this.state.storage.put("paper", this.d); }
+
+	async handle(request, url, now) {
+		await this.load();
+		const p = url.pathname, m = request.method;
+		if (p === "/paper/order" && m === "POST") return this.order(await request.json(), now);
+		if (p === "/paper/kill" && m === "POST") return this.setKill(await request.json());
+		if (p === "/paper/queue" && m === "GET") return json(200, { kill: this.d.kill, orders: this.d.queue, now });
+		if (p === "/paper/result" && m === "POST") return this.result(await request.json());
+		if (p === "/paper/state" && m === "POST") return this.putState(await request.json(), now);
+		if (p === "/paper/state" && m === "GET") return this.getState(url.searchParams.get("full") === "1", now);
+		return json(404, { error: "no such paper path" });
+	}
+
+	async order(raw, now) {
+		const o = cleanOrder(raw);
+		if (!o) return json(400, { error: "not a valid order" });
+		if (this.d.queue.some((q) => q.id === o.id) || this.d.results.some((r) => r.id === o.id)) return json(409, { error: "that order id was already used" });
+		if (this.d.queue.length >= MAX_PENDING) return json(429, { error: "too many orders are waiting" });
+		this.d.queue.push({ ...o, queued_at: now });
+		await this.save();
+		return json(200, { queued: true, id: o.id, pending: this.d.queue.length });
+	}
+
+	async setKill(b) {
+		if (!b || typeof b.on !== "boolean") return json(400, { error: "on must be true or false" });
+		this.d.kill = b.on;
+		await this.save();
+		return json(200, { kill: this.d.kill });
+	}
+
+	async result(raw) {
+		const r = cleanResult(raw);
+		if (!r) return json(400, { error: "not a valid result" });
+		this.d.queue = this.d.queue.filter((q) => q.id !== r.id);
+		this.d.results = this.d.results.filter((x) => x.id !== r.id);
+		this.d.results.push(r);
+		this.d.results = this.d.results.slice(-MAX_RESULTS);
+		await this.save();
+		return json(200, { ok: true, pending: this.d.queue.length });
+	}
+
+	async heldAccount() {
+		const meta = await this.state.storage.get("paper:meta");
+		if (!meta || !Number.isInteger(meta.n) || meta.n < 1 || meta.n > MAX_CHUNKS) return { meta: null, text: null };
+		const keys = Array.from({ length: meta.n }, (_, i) => "paper:acct:" + i);
+		const got = await this.state.storage.get(keys);
+		const parts = keys.map((k) => got.get(k));
+		return { meta, text: parts.every((x) => typeof x === "string") ? parts.join("") : null };
+	}
+
+	async putState(raw, now) {
+		const c = cleanState(raw);
+		if (!c) return json(400, { error: "not a valid state" });
+		const held = await this.heldAccount();
+		const heldLen = held.meta ? held.meta.ledger_len : 0;
+		if (c.summary.ledger_len < heldLen) return json(409, { error: "shorter ledger than the one held", held: heldLen });
+		const writes = {};
+		if (c.account !== undefined) {
+			if (c.hashes.length < heldLen) return json(409, { error: "shorter ledger than the one held", held: heldLen });
+			if (heldLen > 0) {                                                              // the new chain must extend the held one: the same hash at every held row
+				let old = null;
+				try { old = JSON.parse(held.text).ledger.map((r) => r.hash); } catch (e) { /* an unreadable held account cannot be extended safely */ }
+				if (!old || old.length !== heldLen) return json(409, { error: "the account held cannot be read: the owner must look", held: heldLen });
+				for (let i = 0; i < heldLen; i++) if (c.hashes[i] !== old[i]) return json(409, { error: "a different history from the one held", held: heldLen });
+			}
+			const n = Math.max(1, Math.ceil(c.account.length / CHUNK));
+			for (let i = 0; i < n; i++) writes["paper:acct:" + i] = c.account.slice(i * CHUNK, (i + 1) * CHUNK);
+			writes["paper:meta"] = { n, ledger_len: c.summary.ledger_len };
+		} else if (c.summary.ledger_len > heldLen) {
+			return json(409, { error: "the summary is ahead of the account held: send the account", held: heldLen });
+		}
+		writes["paper:summary"] = { ...c.summary, received_at: now };
+		await this.state.storage.put(writes);
+		return json(200, { ok: true, ledger_len: c.summary.ledger_len });
+	}
+
+	async getState(full, now) {
+		const summary = (await this.state.storage.get("paper:summary")) || null;
+		const base = { summary, results: this.d.results.slice(-30), pending: this.d.queue.map((q) => ({ id: q.id, side: q.side, symbol: q.symbol, lots: q.lots, queued_at: q.queued_at })), kill: this.d.kill, now };
+		if (!full) return json(200, base);
+		const held = await this.heldAccount();
+		return json(200, { summary, account: held.text, kill: this.d.kill, now });
+	}
+}
+
+function cleanQueued(q) {                                    // storage is not trusted either
+	const o = cleanOrder(q);
+	return o && isNum(q.queued_at) ? { ...o, queued_at: q.queued_at } : null;
+}

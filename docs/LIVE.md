@@ -95,3 +95,19 @@ Then open the app on the Cloudflare site (never the github.io address: the tab r
 * The pusher never follows a redirect (it would carry the token to another host). It sends in batches and, if the relay is down, loses nothing and spends one timeout a cycle.
 * The live path is never cached by the service worker, and `cache-control: no-store` is set on every answer.
 * The pusher can fail, hang for its 4-second timeout or throw without costing a recorded tick (tests pin this). The last Parquet part is flushed before the display's final push. Its token never appears in a log or an error.
+
+## The paper-order queue (`/paper/*`, 8 Nov 2026)
+
+The same Worker and Durable Object also hold the owner's **paper** orders until the paper runner (`quantdesk paper run`, docs/RECORDING.md "The paper runner") takes them through the risk gate. Paper money only: no broker is called from here, and no price, secret or credential is stored. The relay validates the *shape* of what crosses it and stamps the queue time with its own clock; whether a trade happens is the Python risk gate's decision alone.
+
+| Route | Key | What |
+|---|---|---|
+| `POST /paper/order` | READ | queue one order (`id`, `side`, `symbol`, `lots`, buy: `strategy` and `thesis`, optional `limit`, `group`); 409 if the id was used, 429 if 20 are waiting |
+| `POST /paper/kill` | READ | `{on: true/false}`: the kill flag; the runner mirrors it to the gate's kill file, and while it is on everything held is sold and nothing opens |
+| `GET /paper/state` | READ | the summary (equity, positions with their theses, the last ledger rows), the last 30 results, the pending orders, the kill flag. Never the full ledger |
+| `GET /paper/queue` | INGEST | `{kill, orders, now}` for the runner |
+| `POST /paper/result` | INGEST | what happened to an order (`filled`, `refused`, `expired`, `invalid`, `done`); removes it from the queue |
+| `POST /paper/state` | INGEST | `{summary, account?}`: the account is stored in pieces; **a shorter ledger, or one that does not extend the held one hash for hash, is refused (409)**, so a confused runner cannot overwrite history |
+| `GET /paper/state?full=1` | INGEST | the full saved account, for the runner to restore from |
+
+The READ key can queue a paper order and set the kill flag; it cannot write a result or a state. The INGEST key cannot queue an order. Nothing new is needed on the Worker: the same two secrets.
