@@ -24,7 +24,7 @@
 // never throws into this handler: the alarm clock always goes first.
 
 import { runWatchdog } from "./watchdog.js";
-import { handleLive } from "./live.js";
+import { armLive, handleLive } from "./live.js";
 
 export { LiveBoard } from "./live.js";      // the Durable Object behind /live/* (live.js): wrangler.jsonc binds it as LIVE
 
@@ -70,6 +70,7 @@ export const dispatchCollect = (env, step) => dispatchWorkflow(env, "collect-wid
 
 export default {
 	async scheduled(event, env, ctx) {
+		if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(armLive(env).catch(() => {}));      // not awaited: the desk's alarm clock below is never held up by the live poller
 		const step = COLLECT_CRONS[event.cron];
 		if (step) {                                              // 15:25 / 15:45 IST: wide data collection, on time
 			const r = await dispatchCollect(env, step);

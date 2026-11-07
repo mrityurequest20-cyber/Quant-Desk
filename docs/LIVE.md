@@ -3,15 +3,27 @@
 Real-time prices in the app, refreshed every 5 seconds, for **everything the Kite recorder watches**: not five symbols but the whole F&O universe. **Private and display only**: Zerodha's market data is licensed to the owner, so only the owner's key reads it, and nothing on this path can place an order or reach the paper desk.
 
 ```
-Kite websocket (every tick)
-   |  kite-record.yml job: Recorder keeps the latest tick per instrument
-   |     (1) writes every tick to Parquet, encrypted, kept as a 90-day artifact: the record
-   |     (2) every 5 s POSTs only the quotes that CHANGED, in batches, to the relay: the window
-   v
-Cloudflare Worker  /live/ingest  (needs LIVE_INGEST_TOKEN)      one Durable Object holds the latest snapshot, in memory
-   v
-App  "Live" tab  GET /live/snapshot  (needs LIVE_READ_TOKEN)   polls every 5 s; search, segment filters, sorting
+Kite websocket (every tick)                       Kotak Neo REST (consumer key: no daily login)
+   | kite-record.yml (GitHub job)                    | polled INSIDE the Worker's Durable Object, on an alarm, every ~5 s
+   |  (1) every tick -> Parquet, encrypted: the record|  quotes (price, 5-level book, volume, OI) + index option chains
+   |  (2) every 5 s POSTs changed quotes, in batches  |  what to poll: the "universe", built daily and pushed to /live/universe
+   v  source "z"                                      v  source "k"
+              Cloudflare Worker + one Durable Object: per instrument the latest quote of EACH source
+              fresher source shown, the other one kept; both fresh and apart by more than a spread = flagged
+                                          v
+              App "Live" tab   GET /live/snapshot (needs LIVE_READ_TOKEN), every 5 s;  GET /live/health: the state of each source
 ```
+
+## Two sources, so one cannot be the single point of failure
+
+* **Kite** gives real ticks and depth for the busiest instruments, and the permanent record (Parquet). It needs a fresh token every morning, and its recorder runs as chained GitHub jobs (hours and hand-over gaps below).
+* **Kotak** needs no daily login and runs inside the Cloudflare Worker, so no GitHub runner, cron or job limit stands between it and the app. It carries the whole universe (price, volume, open interest, percent change and a five-level book) with no instrument cap, at 5-second polling, and it is the fallback for everything. Limits as noted in `quantdesk/intraday/kotak.py`: 25 instruments a quotes call, 25 requests a second; the poller makes at most 40 calls an alarm (the free plan allows 50 subrequests), paced at about 22 a second, and rotates through a longer plan.
+* **Per instrument** the board keeps each source's latest quote and its own arrival time, shows the **fresher** one with its source (Kite or Kotak under the name), and fills a missing book from the other. If both are fresh (under 60 s) and their prices differ by more than 0.5% (3% for an option, whose spread is wide), the row shows **⚠ the two sources differ** and `/live/health` counts it: that is the cross-check on data correctness.
+* **Fresh means moved.** A Kotak quote's arrival time is refreshed only if its price, volume or book changed since the last cycle, so a holiday, a closed market or a frozen instrument grows an age instead of looking live. A Kite quote is refreshed when a new tick arrives.
+* **A source can die without the view dying.** If Kite has no token, or its job is between chained jobs, Kotak still fills the view; if Kotak is refused or down, Kite does. `/live/health` and the strip under the status pill say which is which. The poller's alarm always re-arms itself, whatever a cycle did; the Worker's own 10-minute cron re-arms a lost one.
+* The poller calls only Kotak's two read endpoints (quotes and option chain). It holds the consumer key as a Worker secret and never logs, returns or echoes it (a test greps for this and for every order-style endpoint).
+* Both live sources name an option the same way (`NIFTY12NOV2624500CE`, `option_name` in `kite_universe.py` and `optionName` in `kotak.js`; a test pins them equal), otherwise prices from the two could never land on one row.
+* **Until the Kotak universe is built the poller idles** (`/live/health` says "no universe"). The builder (`quantdesk/data/kotak_universe.py`) is the next change.
 
 ## What is watched (quantdesk/data/kite_universe.py)
 
@@ -31,7 +43,7 @@ App  "Live" tab  GET /live/snapshot  (needs LIVE_READ_TOKEN)   polls every 5 s; 
 * **Where the wide data is stored.** The pre-registered Kite trial (`docs/ml/KITE_TRIAL.md`) measures five instruments, and its measures and thresholds must not change mid-trial. So the wide universe is recorded **apart**: its own slim rows (price, quantities, open/high/low/close, percent change, about 1 KB each) and its own bounded buffer, written to `wide/wide_<tag>_<part>.parquet` inside the same encrypted artifact. `tokens.json`, `ticks_*.parquet` and the folder's top-level parquet bytes are the trial's five instruments only; the wide token map lives in `universe.json`. A wide write that fails or overflows is an event in `events.jsonl` (`wide`, `wide_overflow`) and never fails the run; the five core instruments' rules (a lost tick fails the run) are unchanged. A test runs the trial's own `session_report` on a session that has both.
 * If a whole segment, or the wide universe, cannot be built (a missing exchange list, an unreadable price), that part is skipped and written to `universe.json` beside the ticks; the five core instruments and the recording never depend on it. `KITE_WIDE=0` switches the wide part off.
 
-## Switch it on (once, four values)
+## Switch it on (once, five values)
 
 Make two random strings of at least 24 characters, different from each other (`openssl rand -hex 24` twice). Call them INGEST and READ.
 
@@ -41,6 +53,7 @@ Make two random strings of at least 24 characters, different from each other (`o
 | same place | secret `LIVE_READ_TOKEN` | READ |
 | GitHub, Settings, Secrets and variables, Actions, **Secrets** | `LIVE_INGEST_TOKEN` | INGEST (the same string) |
 | GitHub, same page, **Variables** | `LIVE_URL` | `https://<your worker>.workers.dev/live/ingest` |
+| Cloudflare dashboard, same Worker, Variables and Secrets | secret `KOTAK_CONSUMER_KEY` | the Kotak Neo consumer key (the one already saved as the GitHub secret of the same name) |
 
 Then open the app on the Cloudflare site (never the github.io address: the tab refuses to send the key there), go to **Live**, and type READ once. Until the secrets exist the relay answers 503 and the recorder pushes nothing; recording is unaffected either way.
 

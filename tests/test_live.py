@@ -27,7 +27,7 @@ GOOD_INGEST, GOOD_READ = "i" * 32, "r" * 32
 
 # ---- the relay (Node) -----------------------------------------------------------------------------------------------------------------
 def stage(tmp_path):
-    for f in ("live.js",):
+    for f in ("live.js", "kotak.js"):
         shutil.copyfile(ROOT / "deploy" / "cloudflare" / f, tmp_path / ("live.mjs" if f == "live.js" else f))
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
 
@@ -182,7 +182,7 @@ def test_it_is_off_unless_both_secrets_are_set_long_and_different(relay):
 
 def test_the_worker_imports_the_relay_and_exports_the_object_wrangler_binds():
     wk = (ROOT / "deploy/cloudflare/worker.js").read_text()
-    assert 'import { handleLive } from "./live.js"' in wk and 'export { LiveBoard } from "./live.js"' in wk
+    assert 'import { armLive, handleLive } from "./live.js"' in wk and 'export { LiveBoard } from "./live.js"' in wk
     assert wk.index("handleLive(request, env)") < wk.index('request.method !== "GET" && request.method !== "HEAD"')       # before the read-only 405
     cfg = json.loads(re.sub(r"^\s*//.*$", "", (ROOT / "wrangler.jsonc").read_text(), flags=re.M))
     assert cfg["durable_objects"]["bindings"] == [{"name": "LIVE", "class_name": "LiveBoard"}]
@@ -191,7 +191,8 @@ def test_the_worker_imports_the_relay_and_exports_the_object_wrangler_binds():
 
 def test_the_relay_never_touches_pages_or_logs_a_secret():
     src = (ROOT / "deploy/cloudflare/live.js").read_text()
-    assert "console." not in src and "ORIGIN" not in src and "fetch(" not in src.replace("stub.fetch(", "").replace("async fetch(", "")
+    assert "console." not in src and "ORIGIN" not in src
+    assert "fetch(" not in src.replace("stub.fetch(", "").replace("async fetch(", "").replace('.fetch("https://live/arm"', "")      # the relay's own object and nothing else: it never reaches out itself
 
 
 # ---- the recorder's push (Python) -------------------------------------------------------------------------------------------------------------

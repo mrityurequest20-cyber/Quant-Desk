@@ -332,3 +332,26 @@ def test_a_failing_wide_write_never_fails_the_run_and_the_overflow_is_on_record(
     monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, *a, **k: (_ for _ in ()).throw(OSError("disk full")) if "wide_" in Path(path).name else real(self, path, *a, **k))
     rec.flush()                                                                                        # does not raise
     assert len(rec.wide_rows) == 2 and rec.dropped == 0 and rec.wide_dropped == 3                       # kept for the next flush; the core's drop count is untouched
+
+
+def test_rows_dropped_to_stay_bounded_after_a_failed_wide_write_are_counted(tmp_path, monkeypatch):
+    rec = K.Recorder(tmp_path, {"NIFTY": 1, "RELIANCE-FUT": 2}, Ws, core={"NIFTY"})
+    monkeypatch.setattr(K, "MAX_WIDE_BUFFER", 3)
+    rec._on_ticks(None, [{"instrument_token": 2, "last_price": float(i)} for i in range(3)])
+    real = pd.DataFrame.to_parquet
+
+    def fail_once(self, path, *a, **k):
+        if "wide_" in Path(path).name:
+            rec._on_ticks(None, [{"instrument_token": 2, "last_price": 9.0 + i} for i in range(3)])      # ticks arrive while the write is failing
+            raise OSError("disk full")
+        return real(self, path, *a, **k)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_once)
+    rec.flush()
+    assert len(rec.wide_rows) == 3 and rec.wide_dropped == 3                                            # 6 held, 3 kept, the 3 oldest counted
+
+
+def test_a_freak_error_in_the_wide_flush_never_skips_the_core_flush(tmp_path):
+    rec = K.Recorder(tmp_path, {"NIFTY": 1}, Ws, core={"NIFTY"})
+    rec._on_ticks(None, [{"instrument_token": 1, "last_price": 25000.0, "exchange_timestamp": pd.Timestamp("2026-11-09 09:15:01").to_pydatetime()}])
+    rec._flush_wide = lambda: (_ for _ in ()).throw(RuntimeError("freak"))
+    assert rec.flush() is not None and list(tmp_path.glob("ticks_*.parquet"))                          # the core part was still written
