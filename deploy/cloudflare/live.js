@@ -208,6 +208,8 @@ export class LiveBoard {
 		this.ready = state.blockConcurrencyWhile(async () => {
 			const u = cleanUniverse(await state.storage.get("universe"));                    // re-validated on every reload: storage is not trusted either
 			if (u) this.universe = u;
+			const la = await state.storage.get("lastAsk");                                   // the rebuild throttle survives an eviction or a deploy
+			if (typeof la === "number" && Number.isFinite(la)) this.lastAsk = la;
 		});
 	}
 
@@ -338,7 +340,7 @@ export class LiveBoard {
 			now, names: this.quotes.size,
 			kite: { n: src.z.n, newest_age_s: src.z.newest === null ? null : round1(src.z.newest) },
 			kotak: { configured: this.kotakConfigured(), status: k.status, n: src.k.n, newest_age_s: src.k.newest === null ? null : round1(src.k.newest), last_ok_age_s: k.last_ok === null ? null : round1((now - k.last_ok) / 1000),
-				cycles: k.cycles, calls_ok: k.calls_ok, calls_failed: k.calls_failed, planned_calls: k.total_calls, errors: k.errors, last_error: k.last_error, refused: k.refused, pruned: k.pruned,
+				cycles: k.cycles, consecutive_auth: k.consecutive_auth, calls_ok: k.calls_ok, calls_failed: k.calls_failed, planned_calls: k.total_calls, errors: k.errors, last_error: k.last_error, refused: k.refused, pruned: k.pruned,
 				universe: this.universe ? { asof: this.universe.asof, quotes: this.universe.quotes.length, chains: this.universe.chains.length } : null },
 			both, disagree,
 		};
@@ -373,7 +375,10 @@ export class LiveBoard {
 			const asked = this.lastAsk !== undefined && now - this.lastAsk < 40 * 60000;
 			const need = this.kotakConfigured() && t.dow >= 1 && t.dow <= 5 && t.mins >= 8 * 60 && t.mins < 15 * 60 + 35
 				&& !(this.universe && this.universe.asof === t.date) && !asked;
-			if (need) this.lastAsk = now;
+			if (need) {
+				this.lastAsk = now;
+				try { await this.state.storage.put("lastAsk", now); } catch (e) { /* the in-memory throttle still holds */ }
+			}
 			return reply(200, { need });
 		}
 		if (path === "/health") return reply(200, this.health(now));

@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import urllib.error
 import urllib.request
 
 from ..intraday.kotak import INDEX, KotakFutures, KotakError, _fo, scrip_master, segments
 from .live_push import SYMBOL, _NoRedirect
+
+STOCK_NAME = re.compile(r"^[A-Z0-9&_.-]{1,32}$")                 # an F&O stock's name: no colon, space or control character (it is printed in workflow log lines)
 
 CHAIN_UNDERLYINGS = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX")
 FUT_INDICES = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
@@ -62,7 +65,7 @@ def build(client, today: dt.date, say=print, fut_limit: int | None = None) -> di
     names: list[str] = []
     try:
         master = scrip_master(client, "nse_fo")
-        names = stock_names(master)
+        names = [n for n in stock_names(master) if STOCK_NAME.fullmatch(str(n))]          # a name from a CSV is never printed or pushed unless it is a plain symbol
         tokens = cash_tokens(master, names)
         for n in names:
             if n in tokens:
