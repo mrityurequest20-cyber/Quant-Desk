@@ -243,3 +243,34 @@ const L = QB.legsFor("long_call", STRIKES, SPOT, names, 1).legs;
 console.log(JSON.stringify({ t: QB.yearsTo("NOV-26", Date.now()), a: QB.analyze({ u: "NIFTY", legs: L, quotes: q, spot: SPOT, spotAge: 2, T: QB.yearsTo("NOV-26", Date.now()), lots: 1 }).errors }));
 """)
     assert o["t"] is None and o["a"] and "expiry" in o["a"][0]
+
+
+@needs_node
+def test_ages_grow_while_the_board_is_not_refetched_and_the_margin_check_bites_in_the_sizing(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+const legs = QB.legsFor("long_call", STRIKES, SPOT, names, 1).legs;
+const at = (add) => QB.analyze({ u: "NIFTY", legs, quotes: q, spot: SPOT, spotAge: 2, ageAdd: add, T, lots: 1 }).paperChecks.find((x) => x.id === "pfresh").ok;
+const cond = QB.legsFor("iron_condor", STRIKES, SPOT, names, 2).legs, c0 = QB.conf();
+const cs = (m) => QB.suggestLots({ u: "NIFTY", legs: cond, quotes: q, spot: SPOT, spotAge: 2, T, c: { ...c0, equity: 50000000, limits: { ...c0.limits, risk_per_trade: 1, max_premium_outlay: 1, credit_margin_per_lot: m, max_margin: 0.5 } } });
+const qo = JSON.parse(JSON.stringify(q)); qo.C24500.age_s = 10;             // the leg is older than the spot: at +25 s the spot is 27 s (fine) and the leg 35 s (not)
+const legOnly = QB.analyze({ u: "NIFTY", legs, quotes: qo, spot: SPOT, spotAge: 2, ageAdd: 25, T, lots: 1 }).paperChecks.find((x) => x.id === "pfresh").ok;
+console.log(JSON.stringify({ fresh: at(0), after20: at(20), after40: at(40), legOnly, roomy: cs(1000), tight: cs(1e12) }));
+""")
+    assert o["fresh"] and o["after20"] and not o["after40"] and not o["legOnly"]                # 2 s + 40 s on screen is over the 30 s limit even though no new fetch happened
+    assert o["roomy"] >= 1 and o["tight"] == 0                              # a credit structure whose margin estimate breaks the limit is sized to zero lots
+
+
+def test_the_published_equity_is_the_paper_accounts_not_the_intraday_desks_and_the_missing_config_warning_exists():
+    from quantdesk.web import export_site as E
+
+    class Cfg:
+        def __init__(self, base, **over):
+            self.base, self.over = base, over
+
+        def get(self, key, default=None):
+            return self.over.get(key, self.base.get(key, default))
+
+    base = Config.load(DEFAULT_CONFIG)
+    tc = E.trade_config(Cfg(base, **{"paper.capital": 123456, "intraday.capital": 999999}))
+    assert tc["equity"] == 123456.0                                          # paper.capital wins when the two differ
+    assert "QD_TRADE is missing" in APP and "c.fromConfig" in APP[APP.index("function bdDraw"):APP.index("function legsTable2")]

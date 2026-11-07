@@ -980,7 +980,7 @@ const QB = (() => {
 			const mid = e.src === "book" ? (e.bid + e.ask) / 2 : (spec.quotes[l.name] || {}).ltp;
 			const iv = impliedVol(l.type, mid, spec.spot, l.strike, spec.T, r);
 			const spread = e.src === "book" ? (e.ask - e.bid) / ((e.ask + e.bid) / 2) : NaN;
-			return { ...l, units: lots * lot, lots, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age, iv, spread };
+			return { ...l, units: lots * lot, lots, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
 		});
 		const out = { legs, lots, lot, errors: [], checks: [], paperChecks: [], ok: false, paperOk: false };
 		if (!(spec.T >= 0)) { out.errors.push("The expiry on the board could not be read, so the time to expiry is unknown."); return out; }
@@ -1028,7 +1028,7 @@ const QB = (() => {
 		chk("spread", wide.length === 0 && nospread.length === 0, wide.length ? `Wide bid/ask on ${nm(wide)} (limit ${(L.max_spread_pct * 100).toFixed(0)}% of the price)` : nospread.length ? `Spread cannot be measured on ${nm(nospread)}: no two-sided book` : "Bid/ask spreads are inside the limit");
 		const nobook = legs.filter((l) => l.src !== "book");
 		chk("book", nobook.length === 0, nobook.length ? `No two-sided bid/ask on ${nm(nobook)}: ${nobook.some((l) => l.src === "last") ? "priced at the last trade" : "priced at the one side that is quoted"}` : "Every leg has a two-sided bid/ask");
-		const maxAge = P.max_quote_age_s, spotAge = spec.spotAge;
+		const maxAge = P.max_quote_age_s, spotAge = spec.spotAge + (spec.ageAdd || 0);        // ages are as of the fetch; ageAdd is the time since (the board is redrawn without a new fetch)
 		const old = legs.filter((l) => !(l.age <= maxAge)), spotOld = !(spotAge <= maxAge);
 		chk("fresh", old.length === 0 && !spotOld, old.length || spotOld ? `Quotes not fresh enough (limit ${maxAge}s): ${[...(spotOld ? [spec.u + " price" + (isFinite(spotAge) ? " " + Math.round(spotAge) + "s" : " age unknown")] : []), ...old.map((l) => l.strike + l.type + (isFinite(l.age) ? " " + Math.round(l.age) + "s" : " age unknown"))].join(", ")}` : `Every quote is under ${maxAge}s old`);
 		out.ok = out.checks.every((x) => x.ok);
@@ -1110,7 +1110,7 @@ function bdDraw() {
 	for (const k of strikes) names[k] = ch[k];
 	const L = QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
-	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, T, lots: B.lots };
+	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
 	const a = QB.analyze(spec);
 	if (a.errors.length) return void put(body, h("div", { class: "note" }, a.errors[0]), legsTable2(a));
 	const best = QB.suggestLots(spec);
@@ -1155,7 +1155,7 @@ async function renderBuild() {
 	finally { B.busy = false; }
 	if (S.tab !== "build") return;
 	if (!j) { body.textContent = ""; body.dataset.state = "note"; return void put(body, liveKeyForm(note)); }
-	B.data = j;
+	B.data = j; B.at = Date.now();
 	body.dataset.state = "data";
 	if (!B.editing) bdDraw();
 }
