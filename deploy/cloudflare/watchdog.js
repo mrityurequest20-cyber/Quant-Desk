@@ -15,6 +15,8 @@
 // day. Messages are built from check names, workflow names, times and run links only: never a key, a journal value or a
 // position. See docs/WATCHDOG.md.
 
+import { configured } from "./live.js";
+
 const IST_MS = 330 * 60 * 1000;
 const DAY_MS = 86400000;
 const DEFAULT_REPO = "mrityurequest20-cyber/Quant-Desk";
@@ -160,6 +162,50 @@ export async function readSetupsLine(env) {
 	}
 }
 
+// W10: the live prices are arriving. Reads the live relay's own health straight from its Durable Object (no key is involved: the watchdog and the relay are the same
+// Worker). Silent unless the live view is switched on. "Alive" = a source has delivered a price within 3 minutes. P1 when nothing is arriving in the session; P2 when
+// only one of the two sources is, or when Kotak's key is refused, or when the two disagree on many instruments.
+const LIVE_ALIVE_S = 180;
+async function liveHealth(env) {
+	if (!configured(env)) return null;
+	const r = await env.LIVE.get(env.LIVE.idFromName("board")).fetch("https://live/health");
+	return r.ok ? await r.json() : null;
+}
+const when = (a) => (a === null || a === undefined ? "never" : `${Math.round(a)} s ago`);
+async function w10LiveFeed(c) {
+	const h = await liveHealth(c.env);
+	if (!h) return [];
+	const kite = h.kite && h.kite.n > 0 && h.kite.newest_age_s !== null && h.kite.newest_age_s <= LIVE_ALIVE_S;
+	const kotak = h.kotak && h.kotak.n > 0 && h.kotak.newest_age_s !== null && h.kotak.newest_age_s <= LIVE_ALIVE_S;
+	const state = `Kite: ${h.kite ? h.kite.n : 0} instruments, newest ${when(h.kite && h.kite.newest_age_s)}. Kotak: ${h.kotak && h.kotak.configured ? ascii(h.kotak.status, 20) : "not switched on"}, ${h.kotak ? h.kotak.n : 0} instruments, newest ${when(h.kotak && h.kotak.newest_age_s)}.`;
+	const out = [];
+	if (!kite && !kotak) {
+		out.push({ sev: "P1", check: "W10", title: "Live prices: no source is delivering", link: "",
+			body: `At ${c.now.hhmm} IST no live price has arrived in the last ${LIVE_ALIVE_S / 60} minutes from either source. ${state}` });
+	} else if (kite !== kotak && h.kotak && h.kotak.configured) {
+		out.push({ sev: "P2", check: "W10", title: `Live prices: only ${kite ? "Kite" : "Kotak"} is delivering`, link: "",
+			body: `The other source has gone quiet; the app is running on one source. ${state}` });
+	}
+	if (h.kotak && h.kotak.status === "auth") {
+		out.push({ sev: "P1", check: "W10", title: "Kotak refused the consumer key", link: "", body: `The relay's Kotak poller was refused at ${c.now.hhmm} IST: the key is wrong, revoked or expired. Kite alone is carrying the live view. ${state}` });
+	}
+	if (kite && kotak && h.both >= 20 && h.disagree / h.both > 0.05) {
+		out.push({ sev: "P2", check: "W10", title: "Live prices: Kite and Kotak disagree", link: "",
+			body: `${h.disagree} of ${h.both} instruments carried by both sources differ by more than a spread at ${c.now.hhmm} IST. One of the two feeds is wrong; the app flags each row.` });
+	}
+	return out;
+}
+
+// W11: the Kotak poller has today's universe (it idles without one).
+async function w11KotakUniverse(c) {
+	const h = await liveHealth(c.env);
+	if (!h || !h.kotak || !h.kotak.configured) return [];
+	const asof = h.kotak.universe && h.kotak.universe.asof;
+	if (asof === c.now.date) return [];
+	return [{ sev: "P2", check: "W11", title: "Kotak universe is not today's", link: actionsUrl(c.env, "kotak-universe.yml"),
+		body: `At ${c.now.hhmm} IST the Kotak poller's universe is ${asof ? `from ${asof}` : "missing"}. The relay asks GitHub to rebuild it every 40 minutes; check the Kotak universe workflow.` }];
+}
+
 // W8: the Saturday digest
 async function w8Digest(c) {
 	const days = [];
@@ -194,6 +240,11 @@ export const SLOTS = [
 	{ at: "07:30", days: "weekdays", run: w7Expiry, check: "W7" },
 	{ at: "07:30", days: "weekdays", run: w9Calendar, check: "W9" },
 	{ at: "09:10", days: "trading", run: w1DeskStarted, check: "W1" },
+	{ at: "09:30", days: "trading", run: w11KotakUniverse, check: "W11" },
+	{ at: "09:50", days: "trading", run: w10LiveFeed, check: "W10" },
+	{ at: "11:00", days: "trading", run: w10LiveFeed, check: "W10" },
+	{ at: "13:00", days: "trading", run: w10LiveFeed, check: "W10" },
+	{ at: "15:10", days: "trading", run: w10LiveFeed, check: "W10" },
 	// W2 (the desk's published heartbeat) retired with the desk: the recorder publishes none; W1, W3 and W6 cover it.
 	{ at: "16:00", days: "trading", run: ranToday(RECORDER, "Session recorder", "P1", "W3"), check: "W3" },
 	{ at: "16:00", days: "trading", run: ranToday("collect-wide.yml", "Collect wide data", "P2", "W3"), check: "W3" },

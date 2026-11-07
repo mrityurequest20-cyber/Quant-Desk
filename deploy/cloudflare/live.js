@@ -11,7 +11,7 @@
 // The latest snapshot is kept in one Durable Object (class LiveBoard, binding LIVE) because a Worker has no memory shared between requests. It is held in memory only.
 // Ages are worked out here, from this Worker's clock when each quote arrived, so a stale feed shows as stale whatever the phone's clock says.
 
-import { KotakPoller, runCycle, inSession } from "./kotak.js";
+import { KotakPoller, istParts, runCycle, inSession } from "./kotak.js";
 
 const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 quotes is about 100 KB)
 const MAX_SYMBOLS = 3000;               // in one push
@@ -108,7 +108,7 @@ export function cleanUniverse(b) {
 	}
 	for (const c of Array.isArray(b.chains) ? b.chains.slice(0, 60) : []) {
 		if (!c || typeof c.u !== "string" || typeof c.x !== "string" || !/^[A-Za-z0-9&_-]{1,24}$/.test(c.u) || !SEG_KOTAK.has(c.x) || !isDate(c.e)) continue;
-		const k = `${c.u}|${c.x}|${c.e}`;
+		const k = `${c.u}|${c.e}`;                                                          // one chain per underlying and expiry, whatever exchange it claims: two would update the same option names from two answers
 		if (!seenChain.has(k)) { seenChain.add(k); chains.push({ u: c.u, x: c.x, e: c.e }); }
 	}
 	if (!quotes.length && !chains.length) return null;
@@ -121,6 +121,14 @@ export async function armLive(env) {
 	if (!configured(env) || !String(env.KOTAK_CONSUMER_KEY || "").trim()) return false;
 	await env.LIVE.get(env.LIVE.idFromName("board")).fetch("https://live/arm", { method: "POST" });
 	return true;
+}
+
+// Should the Worker's own cron ask GitHub to rebuild the universe? Yes when the poller is on, it is a weekday between 08:00 and the close, the universe is not today's,
+// and the last request was over 40 minutes ago (so a failing build is retried, not hammered).
+export async function needsUniverse(env) {
+	if (!configured(env) || !String(env.KOTAK_CONSUMER_KEY || "").trim()) return false;
+	const r = await env.LIVE.get(env.LIVE.idFromName("board")).fetch("https://live/needs-universe", { method: "POST" });
+	return !!(await r.json()).need;
 }
 
 export async function handleLive(request, env) {
@@ -360,6 +368,14 @@ export class LiveBoard {
 			return reply(200, { ok: true, quotes: u.quotes.length, chains: u.chains.length, kotak: this.kotakConfigured() });
 		}
 		if (request.method === "POST" && path === "/arm") return reply(200, { ok: true });
+		if (request.method === "POST" && path === "/needs-universe") {
+			const t = istParts(now);
+			const asked = this.lastAsk !== undefined && now - this.lastAsk < 40 * 60000;
+			const need = this.kotakConfigured() && t.dow >= 1 && t.dow <= 5 && t.mins >= 8 * 60 && t.mins < 15 * 60 + 35
+				&& !(this.universe && this.universe.asof === t.date) && !asked;
+			if (need) this.lastAsk = now;
+			return reply(200, { need });
+		}
 		if (path === "/health") return reply(200, this.health(now));
 		return reply(200, this.snapshot(now));
 	}

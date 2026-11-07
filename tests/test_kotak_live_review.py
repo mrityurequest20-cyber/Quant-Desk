@@ -169,6 +169,9 @@ for (let i = 0; i < 12; i++) { mode = "401"; await board.alarm(); now += 1000; }
 // ---- the fault shapes by themselves, and an empty chain
 for (const m of ["fault4", "fault5"]) { boot(); await setUniverse({ asof: "2026-11-09", count: 5, quotes: [{ n: "AAA", s: "eq", g: "nse_cm", t: "11" }], chains: [] }); mode = m; await board.alarm(); out["n2_" + m] = (await health()).kotak.errors; mode = "ok"; }
 boot(); await setUniverse({ asof: "2026-11-09", count: 5, quotes: [], chains: [{ u: "NIFTY", x: "nse_fo", e: "2026-11-12" }] }); mode = "emptychain"; await board.alarm(); out.emptyChain = (await health()).kotak.errors; mode = "ok";
+out.twoChains = cleanUniverse({ quotes: [], chains: [{ u: "NIFTY", x: "nse_fo", e: "2026-11-12" }, { u: "NIFTY", x: "bse_fo", e: "2026-11-12" }, { u: "NIFTY", x: "nse_cm", e: "2026-11-12" }, { u: "NIFTY", x: "nse_fo", e: "2026-11-19" }] }).chains.map((c) => c.x + c.e);
+// a weekend keeps its last prices: 30 hours of silence is not enough to drop a name (the horizon is 4 days)
+boot(); await push({ FRI: { ltp: 1 } }); now += 30 * 3600e3; out.weekend = Object.keys((await snap()).quotes);
 console.log(JSON.stringify(out));
 """.replace("__KEY__", KEY).replace("__I__", INGEST).replace("__R__", READ)
 
@@ -269,7 +272,7 @@ def test_n10_the_worker_hook_is_guarded_and_never_awaited():
     wk = (ROOT / "deploy/cloudflare/worker.js").read_text()
     i = wk.index("async scheduled(")
     head = wk[i:i + 700]
-    assert "try {" in head and "ctx.waitUntil(armLive(env)" in head and "await armLive" not in wk
+    assert "try {" in head and "ctx.waitUntil(keepLiveAlive(env)" in head and "await keepLiveAlive" not in head and "await armLive" not in head
 
 
 # ---- the re-review (d3b7525): R1 and the mutations it showed surviving -------------------------------------------------------------------------------
@@ -320,3 +323,8 @@ process.stdout.write(JSON.stringify({ err, gh }) + "\n");
     assert r.returncode == 0, r.stderr
     o = json.loads(r.stdout.strip().splitlines()[-1])
     assert o["err"] is None and "scheduler.yml/dispatches" in o["gh"]                      # the desk was still started
+
+
+def test_one_chain_per_underlying_and_expiry_and_a_weekend_keeps_its_last_prices(out):
+    assert out["twoChains"] == ["nse_fo2026-11-12", "nse_fo2026-11-19"]                    # three chains for one underlying and expiry with different exchanges: the first only
+    assert out["weekend"] == ["FRI"]                                                         # 30 hours of silence: still on the board (an 18-hour horizon would have emptied it)

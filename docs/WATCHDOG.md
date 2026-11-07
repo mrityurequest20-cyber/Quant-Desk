@@ -20,6 +20,8 @@ key, a journal value or a position.
 | W7 credentials | 07:30 weekdays | **P2** 14 days, **P1** 7, 2 and 0 days before an expiry date you record; **P1** every day once expired. **Push only**: the repository is public, so these never become an issue |
 | W8 digest | Saturday 17:30 | sessions run of expected, failed runs on `main` (low priority push, and an issue) |
 | W9 calendar | 15 Dec, 15 Jun | **P2** the next (or this) year's NSE holiday list is not in `calendar.holiday_years` |
+| W10 live feed | trading days 09:50, 11:00, 13:00, 15:10 | the live relay's own health (read straight from its Durable Object, no key involved; silent unless the live view is switched on). **P1** no source (Kite, Kotak) has delivered a price in 3 minutes; **P1** Kotak refused its key; **P2** only one source is delivering (not when Kotak is not configured); **P2** the two sources disagree on more than 5% of the instruments both carry (needs 20 or more) |
+| W11 Kotak universe | trading days 09:30 | **P2** the Kotak poller's universe is not today's (it idles without one; the relay also asks GitHub to rebuild it, see `docs/LIVE.md`) |
 
 A check that cannot run (GitHub or the site unreachable) is reported as a **P2 "Watchdog could not run a check"**, so blindness is
 never silent. Each check slot fires at one fixed time, so a slot alerts at most once a day.

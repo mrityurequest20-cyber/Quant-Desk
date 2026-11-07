@@ -24,7 +24,7 @@
 // never throws into this handler: the alarm clock always goes first.
 
 import { runWatchdog } from "./watchdog.js";
-import { armLive, handleLive } from "./live.js";
+import { armLive, handleLive, needsUniverse } from "./live.js";
 
 export { LiveBoard } from "./live.js";      // the Durable Object behind /live/* (live.js): wrangler.jsonc binds it as LIVE
 
@@ -65,13 +65,22 @@ export async function dispatchWorkflow(env, file, inputs) {
 // cron string differently the worst case is one extra, harmless dispatch, never a desk that silently is not started.
 export const WATCHDOG_ONLY_CRON = "0,30 10-16 * * *";
 
+// Keeps the Kotak live poller going: re-arms its alarm if it was lost, and asks GitHub to rebuild its universe when today's is missing (the poller idles without one).
+export async function keepLiveAlive(env) {
+	if (!(await armLive(env))) return;
+	if (await needsUniverse(env)) {
+		const r = await dispatchWorkflow(env, "kotak-universe.yml");
+		console.log(`kotak universe ${r.ok ? "dispatched" : "not dispatched"}: ${r.why}`);
+	}
+}
+
 export const dispatchScheduler = (env) => dispatchWorkflow(env, "scheduler.yml");
 export const dispatchCollect = (env, step) => dispatchWorkflow(env, "collect-wide.yml", { step });
 
 export default {
 	async scheduled(event, env, ctx) {
 		try {
-			if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(armLive(env).catch(() => {}));      // not awaited: the desk's alarm clock below is never held up by the live poller
+			if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(keepLiveAlive(env).catch(() => {}));      // not awaited: the desk's alarm clock below is never held up by the live poller
 		} catch (e) { /* even a throwing waitUntil must not stop the desk's alarm clock */ }
 		const step = COLLECT_CRONS[event.cron];
 		if (step) {                                              // 15:25 / 15:45 IST: wide data collection, on time
