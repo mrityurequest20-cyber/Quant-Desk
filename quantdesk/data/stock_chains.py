@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
 from pathlib import Path
 
@@ -107,7 +108,9 @@ def depth_writer(data_dir: Path):
         day_dir = path.parent.parent
         out = day_dir / "depth" / path.name
         out.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(book).to_csv(out, index=False)
+        tmp = out.with_name(f".{out.name}.{os.getpid()}.tmp")                 # through a temporary name and a rename, like the chain itself: a tape killed mid-write never leaves a half file
+        pd.DataFrame(book).to_csv(tmp, index=False)
+        os.replace(tmp, out)
     return write
 
 
@@ -117,10 +120,15 @@ def compact_depth(day_dir: Path) -> pd.DataFrame:
     for p in sorted((Path(day_dir) / "depth").glob("*.csv")):
         u, e, hhmm = p.stem.rsplit("_", 2)
         chain = Path(day_dir) / "chains" / p.name
-        ts = pd.Timestamp(load_chain(chain).attrs["ts"]) if chain.exists() else None
-        if ts is None:
+        try:                                                                   # one unreadable file (an empty one from a killed write) costs that minute's book, never the rest
+            ts = pd.Timestamp(load_chain(chain).attrs["ts"]) if chain.exists() else None
+            if ts is None:
+                continue
+            df = pd.read_csv(p)
+        except Exception:                                                      # noqa: BLE001
             continue
-        df = pd.read_csv(p)
+        if df.empty:
+            continue
         df.insert(0, "ts", ts)
         df.insert(1, "underlying", u)
         df.insert(2, "expiry", pd.Timestamp(e))
@@ -152,7 +160,10 @@ def run_shard(client, root: Path, shard: int, shards: int, part: str, until: dt.
             f = f"{now.date()}_{part}_{kind}.parquet"
             _write_parquet(frames[kind], parts / f)
             names_written.append(f)
-    book = compact_depth(day_dir) if day_dir.exists() else pd.DataFrame()
+    try:
+        book = compact_depth(day_dir) if day_dir.exists() else pd.DataFrame()
+    except Exception:                                                          # noqa: BLE001 - the order books are an extra: they never cost the chains
+        book = pd.DataFrame()
     if len(book):
         f = f"{now.date()}_{part}_depth.parquet"
         _write_parquet(book, parts / f)

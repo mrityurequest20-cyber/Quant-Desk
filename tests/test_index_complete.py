@@ -121,3 +121,36 @@ def test_the_session_recorder_workflow_still_starts_the_tape_exactly_as_before()
     rec = (ROOT / ".github/workflows/record.yml").read_text(encoding="utf-8")
     assert 'python -m quantdesk intraday tape --until "$HANDOVER" > tape.log 2>&1 &' in rec and "python -m quantdesk intraday tape > tape.log 2>&1 &" in rec     # the change is config and the tape's own code
     assert "depth" not in rec.replace("depth_levels", "")
+
+
+def test_a_half_written_order_book_file_never_costs_the_days_chains_and_bars(tmp_path):
+    clk = Clock()
+    src = Src(clk, NIFTY)
+    data = tmp_path / "data"
+    ChainTape(src, data, {"NIFTY": 1}, clock=clk, sleep=clk.sleep, say=lambda *a: None, extra=SC.depth_writer(data)).run(dt.time(9, 17))
+    day = data / str(DAY)
+    books = sorted((day / "depth").glob("*.csv"))
+    assert len(books) >= 2
+    books[0].write_text("")                                                                       # a tape killed mid-write: an empty file
+    books[1].write_text("strike,side\nnot,enough")                                                # and a garbled one
+    (day / "NIFTY_1m.csv").write_text("ts,open,high,low,close,volume\n2026-11-09 09:15:00+05:30,1,2,0.5,1,10\n")
+    written = A.archive(data, "morning-1", tmp_path / "out", say=lambda *a: None)
+    assert f"{DAY}_morning-1_chains.parquet" in written and f"{DAY}_morning-1_bars.parquet" in written     # the chains and bars are archived whatever happened to the books
+    assert f"{DAY}_morning-1_depth.parquet" in written                                                      # and the good books still are
+    got = pd.read_parquet(tmp_path / "out" / f"{DAY}_morning-1_depth.parquet")
+    assert len(got) > 0 and len(pd.read_parquet(tmp_path / "out" / f"{DAY}_morning-1_chains.parquet")) == sum(1 for _ in (day / "chains").glob("*.csv")) * 2
+
+
+def test_the_book_writer_goes_through_a_temporary_name(tmp_path):
+    clk = Clock()
+    src = Src(clk, NIFTY)
+    data = tmp_path / "data"
+    ChainTape(src, data, {"NIFTY": 1}, clock=clk, sleep=clk.sleep, say=lambda *a: None, extra=SC.depth_writer(data)).run(dt.time(9, 16))
+    assert not list((data / str(DAY) / "depth").glob(".*.tmp")) and list((data / str(DAY) / "depth").glob("*.csv"))
+    assert "os.replace(tmp, out)" in (ROOT / "quantdesk/data/stock_chains.py").read_text(encoding="utf-8")
+
+
+def test_the_tape_starts_without_books_if_the_book_writer_cannot_be_imported():
+    src = (ROOT / "quantdesk/intraday/cli.py").read_text(encoding="utf-8")
+    block = src[src.index("levels = max(0, min(5"):src.index("tape = ChainTape(")]
+    assert "except Exception" in block and "levels = 0" in block

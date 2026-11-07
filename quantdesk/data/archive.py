@@ -34,10 +34,14 @@ def compact_day(day_dir: Path, depth: bool = False) -> dict[str, pd.DataFrame]:
         out["chains"] = pd.concat(snaps, ignore_index=True)
         out["chains"].attrs.clear()          # one snapshot keeps its attrs (a date), which Parquet's metadata can't write
     if depth and (day_dir / "depth").is_dir():                     # the five-level order books the tape kept beside the chains (quantdesk/data/stock_chains.py has the reader)
-        from .stock_chains import compact_depth
-        book = compact_depth(day_dir)
-        if len(book):
-            out["depth"] = book
+        try:                                                         # an optional extra: whatever goes wrong here never costs the day's chains, bars and tape
+            from .stock_chains import compact_depth
+            book = compact_depth(day_dir)
+            if len(book):
+                out["depth"] = book
+        except Exception as exc:                                     # noqa: BLE001
+            import warnings
+            warnings.warn(f"order books skipped for {day_dir.name}: {type(exc).__name__}: {exc!s:.100}")
     bars = []
     for p in sorted(day_dir.glob("*_1m.csv")):
         df = pd.read_csv(p, parse_dates=["ts"])
