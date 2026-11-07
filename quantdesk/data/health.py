@@ -468,11 +468,11 @@ def check_evening_minutes(store, day: dt.date) -> Check:
                  {"worst_served_ratio": round(worst, 4), "futures": got})
 
 
-def check_daily_history(store, day: dt.date) -> Check:
-    """The `daily-history` release (daily-history.yml, by hand): that a dataset exists, how old it is, and how many series passed every check."""
-    files = [(t, n) for t in store.tags("daily-history") for n in store.assets(t) if n.endswith("_manifest.json")]
+def check_daily_history(store, day: dt.date, tag: str = "daily-history", channel: str = "daily history", workflow: str = "Daily history") -> Check:
+    """A history release (daily-history.yml, fx-daily.yml; by hand): that a dataset exists, how old it is, and how many series passed every check."""
+    files = [(t, n) for t in store.tags(tag) for n in store.assets(t) if n.endswith("_manifest.json")]
     if not files:
-        return Check("daily history", MISSING, "no daily-history dataset on the release: run the Daily history workflow")
+        return Check(channel, MISSING, f"no dataset on the {tag} release: run the {workflow} workflow")
     t, n = sorted(files, key=lambda f: f[1])[-1]
     m = json.loads(store.read(t, n))
     age = (day - dt.date.fromisoformat(str(m.get("as_of") or n[:10])[:10])).days
@@ -483,8 +483,38 @@ def check_daily_history(store, day: dt.date) -> Check:
         issues.append(f"the newest dataset is {age} days old")
     if bad:
         issues.append(f"{len(bad)} of {series} series are not verified ({', '.join(bad[:6])}{'…' if len(bad) > 6 else ''})")
-    return Check("daily history", WARN if issues else OK, "; ".join(issues) if issues else f"{series} series, all verified, {age} days old", False,
+    return Check(channel, WARN if issues else OK, "; ".join(issues) if issues else f"{series} series, all verified, {age} days old", False,
                  {"series": series, "unverified": len(bad), "age_days": age})
+
+
+def check_fx_daily(store, day: dt.date) -> Check:
+    return check_daily_history(store, day, "fx-daily", "FX daily history", "FX daily history")
+
+
+def check_fx_minutes(store, day: dt.date) -> Check:
+    """The FX 1-minute bars (fx-minutes.yml, 22:30 UTC on weekdays): judged for the latest weekday before `day`'s morning."""
+    d = day - dt.timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= dt.timedelta(days=1)
+    m = _manifest(store, d, "fx-minutes-", f"{d}_manifest.json")
+    if m is None:
+        return Check("FX minutes", MISSING, f"no FX manifest for {d:%a %d %b}")
+    pairs = m.get("pairs") or {}
+    if not pairs:
+        return Check("FX minutes", BAD, "the manifest lists no pairs: nothing was collected")
+    issues, served = [], 0
+    for sym, r in pairs.items():
+        if r.get("status") != "served":
+            issues.append(f"{sym}: {r.get('status') or 'not served'}")
+            continue
+        served += 1
+        if (r.get("rows") or 0) < 500:
+            issues.append(f"{sym}: only {r.get('rows')} bars")
+        elif r.get("last") and pd.Timestamp(r["last"]).tz_convert("UTC").date() < d:
+            issues.append(f"{sym}: the newest bar is from {pd.Timestamp(r['last']):%d %b}, not {d:%d %b}")
+    ratio = served / len(pairs)
+    status = BAD if ratio < BAD_BELOW else WARN if issues else OK
+    return Check("FX minutes", status, "; ".join(issues[:4]) if issues else f"{d:%a %d %b}: {served} pairs, every one served", False, {"served_ratio": round(ratio, 4), "pairs": len(pairs)})
 
 
 # ---- the NSE warehouse ----------------------------------------------------------------------------------------------------------------
@@ -585,6 +615,7 @@ def build_report(store, cfg, day: dt.date, now: dt.datetime | None = None) -> Re
             ("session", lambda: check_tape(store, day), "fetch tape", False), ("minutes", lambda: check_option_minutes(store, day), "option minutes", False),
             ("minutes", lambda: check_stock_minutes(store, day), "stock minutes", False), ("minutes", lambda: check_stock_option_minutes(store, day), "stock option minutes", False),
             ("evening", lambda: check_evening_minutes(store, day), "MCX/currency minutes", False), ("history", lambda: check_daily_history(store, day), "daily history", False),
+            ("history", lambda: check_fx_daily(store, day), "FX daily history", False), ("evening", lambda: check_fx_minutes(store, day), "FX minutes", False),
             ("kite", lambda: check_kite(store, day, now.date()), "Kite ticks", False),
             ("warehouse", lambda: check_warehouse(store, day, cal, now), "NSE warehouse", True)]
     checks = []

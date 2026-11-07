@@ -1,0 +1,33 @@
+# FX daily history (quantdesk/data/fx.py), run by hand: the majors and the rupee crosses from 2003 (Yahoo), each series checked against the rate the ECB's reference rates imply, one immutable
+# dataset per run on the `fx-daily` release. Public sources, NO secret; it places nothing and touches no journal, no desk, no limit.
+name: FX daily history
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write            # the fx-daily release (and nothing else)
+
+concurrency:
+  group: fx-daily
+  cancel-in-progress: false
+
+jobs:
+  fx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Import the FX daily history (a problem is a warning, never a failed run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m quantdesk data fx-daily --push || echo "::warning::fx daily history failed"

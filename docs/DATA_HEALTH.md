@@ -22,6 +22,8 @@ python -m quantdesk data health [--day YYYY-MM-DD] [--json] [--summary]
 | Stock option minutes | no | every stock's contracts asked for were served and the newest bar is the day's | one or more stocks below 98% | any stock below 90%, or no manifest |
 | MCX/currency minutes (the previous evening's) | no | every future asked for was served in both segments | a segment below 98%, or the run was cut short | a segment below 90% or unreadable, or no manifest |
 | Daily history | no | a dataset on the `daily-history` release, under 45 days old, every series verified | older, or some series unverified | no dataset |
+| FX minutes (the previous weekday's) | no | every pair served, each with real bar counts and a bar from that day | a pair missing, thin or stale | under 90% of the pairs served, or no pairs |
+| FX daily history | no | a dataset on the `fx-daily` release, under 45 days old, every series verified | older, or some series unverified | no dataset |
 | Kite ticks | no | an encrypted tick artifact of real size exists | | none (arrival is all that can be checked: the content is encrypted) |
 
 Before a channel's due time (`DUE` in `health.py`) it is **pending**, not missing. A check that cannot run is reported as such (critical: BAD), never skipped.
