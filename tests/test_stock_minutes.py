@@ -145,7 +145,19 @@ def test_files_and_manifest(tmp_path):
     a = m["stocks"]["AAA"]
     assert a["cash"]["bars"] == len(cash[cash.symbol == "AAA"]) and 0 < a["cash"]["coverage"] <= 1
     assert a["future"]["oi"] == 5000 and a["future"]["oi_prev"] == 4800 and a["future"]["expiry"] == "2026-10-27"
-    assert B.release_names(r, stocks=True) == ["stocks_cash.parquet", "stocks_futures.parquet", "stocks_manifest.json"]
+    assert B.release_names(r, stocks=True) == ["stocks_cash.parquet", "stocks_futures.parquet", "stocks_futures_next.parquet", "stocks_manifest.json"]
+
+
+def test_the_next_months_future_is_kept_beside_the_near_month_and_leaves_it_untouched(tmp_path):
+    man = run(tmp_path, FakeKotak())
+    r = Path(man["path"])
+    near, nxt = pd.read_parquet(r / "stocks_futures.parquet"), pd.read_parquet(r / "stocks_futures_next.parquet")
+    assert (near["expiry"].astype(str) == "2026-10-27").all() and (nxt["expiry"].astype(str) == "2026-11-24").all()           # the near-month file is exactly what it was
+    assert set(nxt["token"]) == {f"nse_fo|F{s}2" for s in SYMS} and list(nxt.columns) == B.STOCK_COLS
+    assert man["totals"]["futures_next"]["served"] == 4 and man["stocks"]["AAA"]["futures_next"]["expiry"] == "2026-11-24"
+    k = FakeKotak(empty={"nse_fo|FCCC2"}, dead={"nse_fo|FBBB2"})                                  # the next month failing never costs the near month
+    m2 = run(tmp_path / "b", k)
+    assert m2["totals"]["futures"]["served"] == 4 and m2["totals"]["futures_next"] == {"asked": 4, "served": 2, "empty": 1, "failed": 1, "not_attempted": 0}
 
 
 def test_partial_failures_are_in_the_manifest_and_do_not_stop_the_run(tmp_path):
