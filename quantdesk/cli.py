@@ -33,6 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
     from .intraday.cli import register as register_intraday
     register_intraday(sub)
+    from .paperlink.cli import register as register_paper
+    register_paper(sub)
     from .data.cli import register as register_data
     register_data(sub)
     from .autolearn.cli import register as register_autolearn
