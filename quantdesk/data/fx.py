@@ -44,11 +44,18 @@ class SourceDown(Exception):
     """A source that could not serve the request: recorded, never raised past the run."""
 
 
+def local_dates(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """The calendar date of each daily bar. Yahoo stamps a daily FX bar at midnight in its own zone (London): in summer that is 23:00 UTC the day before, so converting to UTC and
+    taking the date moved every summer Monday onto a Sunday (the first real run found 14% of weekdays 'missing'). The date is the wall-clock date in the stamped zone."""
+    idx = pd.DatetimeIndex(idx)
+    return (idx.tz_localize(None) if idx.tz is not None else idx).normalize()
+
+
 class YahooFx:
     def __init__(self, tries: int = 2, sleep=time.sleep):
         self.tries, self._sleep = tries, sleep
 
-    def _history(self, symbol: str, **kw) -> pd.DataFrame:
+    def _history(self, symbol: str, keep_zone: bool = False, **kw) -> pd.DataFrame:
         try:
             import yfinance as yf
         except ImportError as exc:
@@ -64,7 +71,10 @@ class YahooFx:
             if raw is not None and len(raw):
                 df = raw.rename(columns=str.lower)[[*OHLC, "volume"]].astype(float)
                 idx = pd.DatetimeIndex(raw.index)
-                df.index = idx.tz_convert("UTC") if idx.tz is not None else idx.tz_localize("UTC")
+                if keep_zone:                                              # a daily bar: its date is the wall-clock date in the zone Yahoo stamped it in
+                    df.index = idx
+                else:                                                      # a minute bar: an instant, stored in UTC
+                    df.index = idx.tz_convert("UTC") if idx.tz is not None else idx.tz_localize("UTC")
                 return df[~df.index.duplicated(keep="last")].sort_index()
         raise SourceDown(f"yahoo {PAIRS[symbol]}: {last}")
 
@@ -72,8 +82,8 @@ class YahooFx:
         return self._history(symbol, period=f"{min(max(days, 1), MINUTES_MAX_DAYS)}d", interval="1m")
 
     def daily(self, symbol: str, start: dt.date, end: dt.date) -> pd.DataFrame:
-        df = self._history(symbol, start=str(start), end=str(end + dt.timedelta(days=1)), interval="1d")
-        df.index = pd.DatetimeIndex(df.index.tz_convert("UTC").tz_localize(None)).normalize()
+        df = self._history(symbol, keep_zone=True, start=str(start), end=str(end + dt.timedelta(days=1)), interval="1d")
+        df.index = local_dates(df.index)
         df.index.name = "date"
         return df[~df.index.duplicated(keep="last")]
 
