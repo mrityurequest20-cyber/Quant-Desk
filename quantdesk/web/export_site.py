@@ -114,7 +114,14 @@ window.QD_PUBLISHED = true;
       .finally(() => { pending = null; });
     return pending;
   }
-  window.fetch = async (url) => qdAnswer(await load(), url);
+  // The live relay (/live/*, the Worker's private price feed) is the one thing here that is NOT in data.json: it goes to the real network with its own headers (the key).
+  // Without this the shim answered it with "not available on a read-only site" (a 404) and the Live tab could never reach the relay.
+  window.fetch = async (url, init) => {
+    let path = "";
+    try { path = new URL(String(url), window.location.href).pathname; } catch (e) { /* not a URL: the shim answers it */ }
+    if (path.startsWith("/live/")) return realFetch(url, init);
+    return qdAnswer(await load(), url);
+  };
   window.qdReload = () => { at = 0; return load(); };        // pull-to-refresh: skip the 60 s cache
 })();
 """
