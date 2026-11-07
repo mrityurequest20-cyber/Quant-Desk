@@ -253,6 +253,7 @@ def test_a_scrip_master_name_that_is_not_a_plain_symbol_never_reaches_the_output
     text = json.dumps(u)
     assert "::ERROR::X" not in text.upper() and "BAD" not in text and "SPACED" not in text
     assert any(q["n"] == "GOOD" for q in u["quotes"])
+    assert any("3 F&O stock names were not plain symbols" in e for e in u["errors"]) and not any("ERROR" in e for e in u["errors"])          # counted, never named
 
 
 def test_the_stock_chain_constants_are_what_the_docs_say():
@@ -268,6 +269,7 @@ def test_a_run_of_failed_expiry_lookups_stops_the_stock_chains_for_the_day(maste
     assert len(asked) == KU.STOCK_FAIL_RUN                                                  # it gave up after ten in a row, it did not ask forty
     assert any("stopped after 10 failures in a row; 30 stocks have no chain today" in e for e in u["errors"])
     assert not any("n" in c for c in u["chains"])
+    assert sum(1 for e in u["errors"] if "stopped after" in e) == 1 and sum(1 for e in u["errors"] if "expiries" in e and "stopped" not in e) == 10      # one stop line, ten failure lines, nothing per remaining stock
     # one success resets the run: failures that are not consecutive never stop it
     ok = FakeClient(bad_expiries=tuple(f"STK{i:03d}" for i in range(0, 40, 2)))
     u2 = KU.build(ok, TODAY, say=lambda *a: None)

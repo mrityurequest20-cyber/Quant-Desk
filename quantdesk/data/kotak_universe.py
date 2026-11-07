@@ -68,7 +68,10 @@ def build(client, today: dt.date, say=print, fut_limit: int | None = None) -> di
     names: list[str] = []
     try:
         master = scrip_master(client, "nse_fo")
-        names = [n for n in stock_names(master) if STOCK_NAME.fullmatch(str(n))]          # a name from a CSV is never printed or pushed unless it is a plain symbol
+        everyone = stock_names(master)
+        names = [n for n in everyone if STOCK_NAME.fullmatch(str(n))]          # a name from a CSV is never printed or pushed unless it is a plain symbol
+        if len(names) < len(everyone):
+            errors.append(f"{len(everyone) - len(names)} F&O stock names were not plain symbols and were skipped")          # the count only, never the names
         tokens = cash_tokens(master, names)
         for n in names:
             if n in tokens:

@@ -159,6 +159,11 @@ out.needsGuards = [await ask(mk(env), MON_0805), await ask(mk(env), Date.UTC(202
 // the throttle survives an eviction: a new object on the same storage does not ask again within 40 minutes, and does after
 const shared = new Map(); await ask(mk(env, shared), MON_0805);
 out.needsEvicted = [await ask(mk(env, shared), MON_0805 + 10 * 60000), await ask(mk(env, shared), MON_0805 + 41 * 60000)];
+out.needsEdges = [await ask(mk(env), Date.UTC(2026, 10, 9, 2, 30)), await ask(mk(env), Date.UTC(2026, 10, 9, 10, 5)), await ask(mk(env), Date.UTC(2026, 10, 9, 10, 4))];          // 08:00 yes, 15:35 no, 15:34 yes
+out.needsCorrupt = [await ask(mk(env, new Map([["lastAsk", "x"]])), MON_0805), await ask(mk(env, new Map([["lastAsk", 9e15]])), MON_0805)];          // a bad or future stored time does not block
+class Failing extends Map { set(k, v) { if (k === "lastAsk") throw new Error("write failed"); return super.set(k, v); } }
+const fb = mk(env, new Failing()); out.needsPutFails = [await ask(fb, MON_0805), await ask(fb, MON_0805 + 10 * 60000)];          // the write fails: the in-memory throttle still holds
+{ const hb = mk(env); hb.k.consecutive_auth = 3; out.healthConsecAuth = hb.health(MON_0805).kotak.consecutive_auth; }
 out.needsViaWorker = [await needsUniverse({}), await needsUniverse(env)];
 // armLive from the cron
 out.armLive = [await armLive({}), await armLive({ ...env, KOTAK_CONSUMER_KEY: "" }), await armLive(env)];
@@ -171,7 +176,7 @@ def out(tmp_path_factory):
     if shutil.which("node") is None:
         pytest.skip("Node is not installed")
     d = tmp_path_factory.mktemp("kl")
-    for f in ("live.js", "kotak.js"):
+    for f in ("live.js", "kotak.js", "series.js"):
         shutil.copyfile(ROOT / "deploy" / "cloudflare" / f, d / ("live.mjs" if f == "live.js" else f))
     (d / "package.json").write_text('{"type": "module"}', encoding="utf-8")
     (d / "run.mjs").write_text(HARNESS, encoding="utf-8")
@@ -293,4 +298,6 @@ def test_the_relay_asks_for_a_universe_rebuild_only_when_it_is_stale_and_not_too
     assert out["needsFresh"] is False and out["needsStale"] is True                      # today's universe is not rebuilt; yesterday's is
     assert out["needsGuards"] == [True, False, False, False, True]          # 08:05 yes; 07:00, a Saturday morning and 15:40 no; 15:20 yes
     assert out["needsEvicted"] == [False, True]
+    assert out["needsEdges"] == [True, False, True] and out["needsCorrupt"] == [True, True] and out["needsPutFails"] == [True, False]
+    assert out["healthConsecAuth"] == 3                                                       # the watchdog's refused-key rule reads this
     assert out["needsViaWorker"][0] is False
