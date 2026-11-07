@@ -74,6 +74,8 @@ const actionsUrl = (env, file) => `https://github.com/${repoOf(env)}/actions/wor
 
 // The session recorder (record.yml) replaced the live paper desk (live.yml) on 6 Nov 2026: the owner stopped paper trading.
 const RECORDER = "record.yml";
+const STOCK_RECORDER = "record-stocks.yml";      // every-minute option chains of every F&O stock (7 Nov 2026)
+const KITE_RECORDER = "kite-record.yml";          // the Kite tick recorder (started once a day by the scheduler)
 
 // W1: a session recorder run exists today
 async function w1DeskStarted(c) {
@@ -241,6 +243,8 @@ export const SLOTS = [
 	{ at: "07:30", days: "weekdays", run: w7Expiry, check: "W7" },
 	{ at: "07:30", days: "weekdays", run: w9Calendar, check: "W9" },
 	{ at: "09:10", days: "trading", run: w1DeskStarted, check: "W1" },
+	{ at: "09:20", days: "trading", run: ranToday(STOCK_RECORDER, "Stock chain recorder", "P2", "W12"), check: "W12" },
+	{ at: "09:20", days: "trading", run: ranToday(KITE_RECORDER, "Kite tick recorder", "P2", "W13"), check: "W13" },
 	{ at: "09:30", days: "trading", run: w11KotakUniverse, check: "W11" },
 	{ at: "09:50", days: "trading", run: w10LiveFeed, check: "W10" },
 	{ at: "11:00", days: "trading", run: w10LiveFeed, check: "W10" },
@@ -249,6 +253,8 @@ export const SLOTS = [
 	// W2 (the desk's published heartbeat) retired with the desk: the recorder publishes none; W1, W3 and W6 cover it.
 	{ at: "16:00", days: "trading", run: ranToday(RECORDER, "Session recorder", "P1", "W3"), check: "W3" },
 	{ at: "16:00", days: "trading", run: ranToday("collect-wide.yml", "Collect wide data", "P2", "W3"), check: "W3" },
+	{ at: "16:00", days: "trading", run: ranToday(STOCK_RECORDER, "Stock chain recorder", "P2", "W12"), check: "W12" },
+	{ at: "16:00", days: "trading", run: ranToday(KITE_RECORDER, "Kite tick recorder", "P2", "W13"), check: "W13" },
 	{ at: "16:00", days: "trading", run: (c) => w6Failures(c, "08:00"), check: "W6" },
 	{ at: "18:00", days: "trading", run: (c) => w6Failures(c, "16:00"), check: "W6" },
 	{ at: "21:00", days: "trading", run: ranToday("data.yml", "Data warehouse", "P2", "W5"), check: "W5" },
