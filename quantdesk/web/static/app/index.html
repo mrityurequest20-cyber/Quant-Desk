@@ -102,7 +102,7 @@ main>section{animation:fade .16s ease-out}
 .o1{order:1}.o2{order:2}.o3{order:3}.o4{order:4}.o5{order:5}
 
 /* ---- tab bar: bottom on phones, a labelled sidebar on wide screens ---- */
-.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(5,1fr);background:var(--bg);
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(6,1fr);background:var(--bg);
 border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 .tabbar .brand{display:none}
 .tabbar button{position:relative;height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:10.5px;font-weight:500;
@@ -416,6 +416,10 @@ border:1px solid var(--line);display:grid;place-items:center;color:var(--acc);op
 
   <section data-view="build" hidden>
     <div id="bd-body"></div>
+  </section>
+
+  <section data-view="paper" hidden>
+    <div id="pp-body"></div>
   </section>
 
   <section data-view="today" hidden>
