@@ -46,7 +46,7 @@ env:
 jobs:
   morning:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -75,8 +75,8 @@ jobs:
           flag=""
           if [ "$NEW_ACCOUNT" = "yes" ]; then flag="--new-account"; fi
           python -m quantdesk paper run --until "$HANDOVER" $flag
-      - name: Keep the saved account
-        if: always()
+      - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
+        if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: paper-ledger-morning
@@ -88,7 +88,7 @@ jobs:
     needs: morning
     if: ${{ !cancelled() && needs.morning.result != 'skipped' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -114,8 +114,8 @@ jobs:
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
         run: python -m quantdesk paper run --until "$UNTIL"
-      - name: Keep the saved account
-        if: always()
+      - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
+        if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: paper-ledger-afternoon
@@ -125,11 +125,14 @@ jobs:
 
   publish:
     needs: afternoon
-    if: ${{ !cancelled() && needs.afternoon.result != 'skipped' }}
+    # Off unless the owner sets the repository variable PAPER_LEDGER_BACKUP to yes: this repository is PUBLIC, so the branch, the artifacts and the logs would show the paper account (every thesis, position and result) to anyone.
+    if: ${{ !cancelled() && needs.afternoon.result != 'skipped' && vars.PAPER_LEDGER_BACKUP == 'yes' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write            # the paper-ledger branch and nothing else; this job holds no secret
+    env:
+      LEDGER_WORK: ${{ runner.temp }}/ledger-branch
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -143,44 +146,32 @@ jobs:
         continue-on-error: true
         with:
           path: art
-      - name: Take the newest saved account and verify it
-        id: pick
+      - name: Take the longest saved account that verifies
         run: |
-          f=""
-          for d in art/paper-ledger-afternoon art/paper-ledger-morning; do
-            if [ -f "$d/account.json" ]; then f="$d/account.json"; break; fi
+          # no token in this step: the repository code runs here (hash chain, replay of every fill, flags)
+          m=art/paper-ledger-morning/account.json; a=art/paper-ledger-afternoon/account.json; pick=""
+          for f in "$m" "$a"; do
+            [ -f "$f" ] || continue
+            python -m quantdesk paper verify --file "$f" || { echo "::error::$f does not verify"; exit 1; }
           done
-          if [ -z "$f" ]; then echo "have=false" >> "$GITHUB_OUTPUT"; echo "::notice::no saved account to publish"; exit 0; fi
-          python -m quantdesk paper verify --file "$f"                  # hash chain, replay of every fill, flags: exits 1 if the file is not intact
-          cp "$f" "$RUNNER_TEMP/account.json"
-          echo "have=true" >> "$GITHUB_OUTPUT"
-      - name: Add it to the paper-ledger branch (a new commit; never a force-push)
-        if: steps.pick.outputs.have == 'true'
+          if [ -f "$m" ] && [ -f "$a" ]; then
+            if python -m quantdesk paper verify --file "$a" --extends "$m" > /dev/null; then pick="$a"; else pick="$m"; fi     # the longer of the two (one continues the other)
+          elif [ -f "$a" ]; then pick="$a"; elif [ -f "$m" ]; then pick="$m"; fi
+          if [ -z "$pick" ]; then echo "::error::the runner saved no account to publish"; exit 1; fi
+          cp "$pick" "$RUNNER_TEMP/account.json"
+          echo "publishing $pick"
+      - name: Fetch the paper-ledger branch (into its own directory)
         env:
           GH_TOKEN: ${{ github.token }}
+        run: deploy/paper_ledger.sh fetch
+      - name: Check it continues the branch's account
         run: |
-          set -euo pipefail
-          b64="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          echo "::add-mask::$b64"
-          hdr="AUTHORIZATION: basic $b64"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git -c "http.extraheader=$hdr" fetch -q --depth 1 origin paper-ledger; then
-            git checkout -q -B paper-ledger FETCH_HEAD
-            if [ -f account.json ]; then cp account.json "$RUNNER_TEMP/branch-account.json"; fi
-          elif git -c "http.extraheader=$hdr" ls-remote --exit-code origin refs/heads/paper-ledger > /dev/null 2>&1; then
-            echo "the paper-ledger branch exists but could not be fetched: not creating it again" >&2
-            exit 1
-          else
-            git checkout -q --orphan paper-ledger
-            git rm -rfq . || true
+          # no token in this step either
+          if [ -f "$LEDGER_WORK/account.json" ]; then
+            python -m quantdesk paper verify --file "$RUNNER_TEMP/account.json" --extends "$LEDGER_WORK/account.json"
           fi
-          # the new account must continue the one on the branch (its rows are a prefix of ours): the branch only ever gains rows
-          if [ -f "$RUNNER_TEMP/branch-account.json" ]; then
-            python -m quantdesk paper verify --file "$RUNNER_TEMP/account.json" --extends "$RUNNER_TEMP/branch-account.json"
-          fi
-          cp "$RUNNER_TEMP/account.json" account.json
-          git add account.json
-          if git diff --cached --quiet; then echo "nothing new to publish"; exit 0; fi
-          git commit -q -m "Paper ledger for $(date +%F)"
-          git -c "http.extraheader=$hdr" push -q origin paper-ledger
+      - name: Add it to the branch (a new commit; never a force-push)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCOUNT: ${{ runner.temp }}/account.json
+        run: deploy/paper_ledger.sh push

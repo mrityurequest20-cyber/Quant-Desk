@@ -33,9 +33,10 @@ def test_the_relay_keys_live_in_the_one_step_that_runs_the_runner_in_each_half_a
 
 
 def test_there_is_no_broker_credential_no_order_call_and_no_force_push():
-    assert not re.search(r"KITE_|KOTAK_|ZERODHA|API_SECRET|TOTP|PASSWORD|place_order|/orders", RAW, re.I)
-    assert not re.search(r"--force|git push[^\n]*\s-f\b|\+refs|--delete|push[^\n]*:paper-ledger", RAW)       # the ledger branch only ever gains commits
-    assert RAW.count("git -c \"http.extraheader=$hdr\" push") == 1 and "::add-mask::" in RAW             # one push, with a masked header, not a persisted credential
+    script = (ROOT / "deploy" / "paper_ledger.sh").read_text(encoding="utf-8")
+    assert not re.search(r"KITE_|KOTAK_|ZERODHA|API_SECRET|TOTP|PASSWORD|place_order|/orders", RAW + script, re.I)
+    assert not re.search(r"--force|git push[^\n]*\s-f\b|\+refs|--delete|push[^\n]*:paper-ledger|push[^\n]*\+|\bg push\b[^\n]*\s(-f|--force)\b", RAW + script)       # the ledger branch only ever gains commits
+    assert len(re.findall(r"\bg push\b", script)) == 1 and "::add-mask::" in script and "http.extraheader" in script        # one push, with a masked one-off header, not a persisted credential
 
 
 def test_no_job_keeps_the_repository_credential_on_disk():
@@ -45,19 +46,34 @@ def test_no_job_keeps_the_repository_credential_on_disk():
                 assert s["with"]["persist-credentials"] is False, job
 
 
-def test_the_publish_job_verifies_the_account_and_refuses_one_that_does_not_continue_the_branchs():
-    run = "\n".join(s.get("run", "") for s in steps("publish"))
-    assert "paper verify --file \"$f\"" in run                                                           # hash chain, replay, flags
-    assert "--extends \"$RUNNER_TEMP/branch-account.json\"" in run                                       # the branch only grows
-    assert run.index("paper verify --file \"$RUNNER_TEMP/account.json\" --extends") < run.index("git commit") < run.index("push")
-    assert "exists but could not be fetched" in run                                                      # a failed fetch of an existing branch never creates it again
+def test_the_publish_job_verifies_picks_the_longest_and_only_the_two_git_steps_hold_the_token():
+    steps_ = steps("publish")
+    holders = [x["name"] for x in steps_ if "GH_TOKEN" in yaml.safe_dump(x)]
+    assert holders == ["Fetch the paper-ledger branch (into its own directory)", "Add it to the branch (a new commit; never a force-push)"]      # the repository code (verify) never runs with the token
+    pick = next(x["run"] for x in steps_ if x.get("name", "").startswith("Take the longest"))
+    assert "paper verify --file \"$f\"" in pick and "--extends \"$m\"" in pick and "the runner saved no account to publish" in pick and "exit 1" in pick      # each file verifies; the longer wins; nothing saved is an error
+    check = next(x["run"] for x in steps_ if x.get("name", "").startswith("Check it continues"))
+    assert "--extends \"$LEDGER_WORK/account.json\"" in check
+    order = [x.get("name", "") for x in steps_]
+    assert order.index("Fetch the paper-ledger branch (into its own directory)") < order.index("Check it continues the branch's account") < order.index("Add it to the branch (a new commit; never a force-push)")
+    assert next(x for x in steps_ if x.get("name", "").startswith("Fetch the"))["run"] == "deploy/paper_ledger.sh fetch" and next(x for x in steps_ if x.get("name", "").startswith("Add it"))["run"] == "deploy/paper_ledger.sh push"
+
+
+def test_the_backup_is_off_unless_the_owner_turns_it_on_because_the_repository_is_public():
+    gate = "vars.PAPER_LEDGER_BACKUP == 'yes'"
+    assert gate in JOBS["publish"]["if"]
+    for job in ("morning", "afternoon"):
+        up = [x for x in steps(job) if str(x.get("uses", "")).startswith("actions/upload-artifact")]
+        assert len(up) == 1 and gate in up[0]["if"], job                                               # nothing is uploaded to a public place by default
+    assert "PUBLIC" in RAW and "paper-ledger" in RAW
 
 
 def test_one_run_at_a_time_two_halves_inside_a_job_limit_and_the_first_account_is_a_declared_act():
     assert WF["concurrency"] == {"group": "paper-desk", "cancel-in-progress": False}                      # two runners on one account would be dangerous
     assert JOBS["afternoon"]["needs"] == "morning" and JOBS["publish"]["needs"] == "afternoon"
     for job in JOBS:
-        assert JOBS[job]["timeout-minutes"] <= 330, job                                                   # under GitHub's six hours, with room to hand over
+        assert JOBS[job]["timeout-minutes"] <= 359, job                                                   # under GitHub's six hours
+    assert JOBS["morning"]["timeout-minutes"] == 355 and JOBS["afternoon"]["timeout-minutes"] == 355     # the afternoon half must be able to run from an early morning crash to the close
     inp = WF[True]["workflow_dispatch"]["inputs"]                                                         # (YAML reads the key `on` as True)
     assert inp["new_account"]["default"] is False and inp["new_account"]["type"] == "boolean"
     assert "--new-account" in "\n".join(s.get("run", "") for s in steps("morning")) and "--new-account" not in "\n".join(s.get("run", "") for s in steps("afternoon"))

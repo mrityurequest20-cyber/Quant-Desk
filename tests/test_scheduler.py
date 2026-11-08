@@ -146,3 +146,21 @@ def test_the_paper_runner_may_be_started_again_after_a_failure_but_not_forever_a
     monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
     assert sch.main([]) == 0
     assert ["gh", "workflow", "run", "record.yml", "--ref", "main"] in calls and ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"] not in calls
+
+
+def test_the_paper_runner_may_be_restarted_until_1525_but_the_recorders_only_until_1445():
+    late = at("2026-10-05 15:10")
+    assert sch.PAPER_WINDOW == (sch.dt.time(8, 25), sch.dt.time(15, 25))
+    assert sch.decide(late, [], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW)[0] == "start"          # a runner that stopped early in the afternoon is started again
+    assert sch.decide(late, [], HOLS, sch.MAX_STARTS)[0] == "wait"                                      # a recorder is not
+    assert sch.decide(at("2026-10-05 15:30"), [], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW)[0] == "wait"
+
+
+def test_main_at_1510_starts_only_the_paper_runner(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sch.dt, "datetime", type("D", (sch.dt.datetime,), {"now": classmethod(lambda c, tz=None: at("2026-10-05 15:10"))}))
+    monkeypatch.setattr(sch, "_runs", lambda wf: [])
+    monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    sch.main([])
+    started = [c[3] for c in calls if c[:3] == ["gh", "workflow", "run"]]
+    assert "paper-desk.yml" in started and "record.yml" not in started and "record-stocks.yml" not in started        # the recorders' window closed at 14:45; the paper runner's has not
