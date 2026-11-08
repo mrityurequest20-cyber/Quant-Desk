@@ -59,12 +59,12 @@ def board(t=T0, cb=1000, ca=1000, pb=1000, pa=1000, fwd_gap=0.0, spot=SPOT, age=
     return {"now": ms(t), "quotes": q}
 
 
-def desk(cfg, tmp_path, **kw):
+def desk(cfg, tmp_path, day_stop=None, **kw):
     acct = Account(500_000)
     gate = RiskGate(cfg, kill=KillSwitch(tmp_path / "K"))
     rn = R.Runner(cfg, acct, gate=gate, kill_file=tmp_path / "K")
     lots = {"NIFTY": 65, "BANKNIFTY": 30}
-    return rn, A.AutoPilot(("NIFTY",), lots, 500_000.0), MK.Calendars(cfg)
+    return rn, A.AutoPilot(("NIFTY",), lots, 500_000.0, day_stop_frac=day_stop), MK.Calendars(cfg)
 
 
 def tick(rn, ap, cal, snap, now, kill=False):
@@ -381,7 +381,7 @@ def test_the_days_own_stop_counts_what_was_opened_today_and_not_a_position_carri
     assert ap.day_facts(other, DAY, {})["result"] == pytest.approx(-100.0 * 65 - 30.0)
     # the stop: down more than 1% of 500,000 on what it opened today -> it sells that and buys nothing
     snap = reprice(board(T0 + dt.timedelta(minutes=40), **SIG_UP), "NIFTY12NOV2624600CE", 5.0)
-    rn3, ap3, cal3 = desk(cfg, tmp_path)
+    rn3, ap3, cal3 = desk(cfg, tmp_path, day_stop=0.01)
     rn3.account.apply_fill("buy", inst2, "nse_fo", 65, 100.0, 30.0, (T0 + dt.timedelta(minutes=5)).isoformat(), "AUTO v1 NIFTY long call", "AUTO v1: today")
     snap["quotes"]["NIFTY12NOV2624600CE"] = {**snap["quotes"].get("NIFTY12NOV2624600CE", {}), "bid": 8.0, "ask": 8.4, "age_s": 1.0, "bid_qty": 1000, "ask_qty": 1000}
     out = ap3.decide(snap, rn3.account, R.Runner.server_now(snap), cal=cal3)
@@ -395,32 +395,41 @@ def _round_trip(acct, strike, when, strategy="AUTO v1 NIFTY long call"):
     acct.apply_fill("sell", inst, "nse_fo", 65, 50.5, 10.0, (when + dt.timedelta(minutes=1)).isoformat(), strategy, "exit")
 
 
-def test_the_daily_entry_cap_and_the_cooldown_come_from_the_ledger_so_a_restart_forgets_nothing(cfg, tmp_path):
+def test_there_is_no_cap_on_trades_or_open_positions_and_no_stop_of_its_own_only_a_short_guard_against_ping_pong(cfg, tmp_path):
     t = T0 + dt.timedelta(minutes=7)
-    for ago, expect_buy in ((5, False), (25, True)):
-        rn, ap, cal = desk(cfg, tmp_path)
-        _round_trip(rn.account, 24600, t - dt.timedelta(minutes=ago + 1))
-        warm(rn, ap, cal, T0)
-        buys = [o for o in tick(rn, ap, cal, board(t, **SIG_UP), t)[0] if o["side"] == "buy"]
-        assert bool(buys) is expect_buy, ago
+    # ten entries already today, three open, a loss of 1.5% of capital today: it still buys (the risk gate, not AUTO, is what bounds losses)
     rn, ap, cal = desk(cfg, tmp_path)
-    for i in range(6):
-        _round_trip(rn.account, 24000 + 50 * i, T0 - dt.timedelta(minutes=35) + dt.timedelta(seconds=10 * i))                    # earlier today, outside the cooldown
+    for i in range(10):
+        _round_trip(rn.account, 24000 + 50 * i, T0 - dt.timedelta(minutes=35) + dt.timedelta(seconds=10 * i))
+    for k in (24350, 24400, 24450):
+        held_position(rn, f"NIFTY12NOV26{k}CE", T0 - dt.timedelta(minutes=20))
+    inst, _ = R.parse_contract("NIFTY12NOV2624650CE", {"NIFTY"}, {"NIFTY": 65})
+    rn.account.apply_fill("buy", inst, "nse_fo", 65, 100.0, 10.0, (T0 - dt.timedelta(minutes=30)).isoformat(), "AUTO v1 NIFTY long call", "AUTO v1: today")
+    rn.account.apply_fill("sell", inst, "nse_fo", 65, 15.0, 10.0, (T0 - dt.timedelta(minutes=25)).isoformat(), "AUTO v1 NIFTY long call", "exit")      # a 5,500 loss: 1.1% of capital
     warm(rn, ap, cal, T0)
-    assert [o for o in tick(rn, ap, cal, board(t, **SIG_UP), t)[0] if o["side"] == "buy"] == []
-    rn, ap, cal = desk(cfg, tmp_path)
-    for i in range(6):
-        _round_trip(rn.account, 24000 + 50 * i, T0 - dt.timedelta(days=1) + dt.timedelta(seconds=10 * i))                        # yesterday's do not count
-    warm(rn, ap, cal, T0)
-    assert [o for o in tick(rn, ap, cal, board(t, **SIG_UP), t)[0] if o["side"] == "buy"]
+    mine, rep = tick(rn, ap, cal, board(t, **SIG_UP), t)
+    buys = [o for o in mine if o["side"] == "buy"]
+    assert len(buys) == 1                                                                                                       # AUTO proposes it: no count of trades, no loss stop of its own stands in the way
+    res = rep["results"][0]
+    assert res["status"] in ("filled", "refused"), res
+    if res["status"] == "refused":                                                                                              # if the answer is no, it is the RISK GATE that says so, in its own words
+        assert any(x in " ".join(res["reasons"]) for x in ("loss budget", "risk", "daily", "floor")), res["reasons"]
+    # the guard: the same contract is not re-bought within five minutes of AUTO's last fill in it; a different one is fine
+    rn2, ap2, cal2 = desk(cfg, tmp_path)
+    inst2, _ = R.parse_contract("NIFTY12NOV2624550CE", {"NIFTY"}, {"NIFTY": 65})
+    for ago, expect in ((2, False), (8, True)):
+        rn2, ap2, cal2 = desk(cfg, tmp_path)
+        rn2.account.apply_fill("buy", inst2, "nse_fo", 65, 50.0, 10.0, (t - dt.timedelta(minutes=ago + 1)).isoformat(), "AUTO v1 NIFTY long call", "AUTO v1: test")
+        rn2.account.apply_fill("sell", inst2, "nse_fo", 65, 40.0, 10.0, (t - dt.timedelta(minutes=ago)).isoformat(), "AUTO v1 NIFTY long call", "exit")
+        warm(rn2, ap2, cal2, T0)
+        got = [o for o in tick(rn2, ap2, cal2, board(t, **SIG_UP), t)[0] if o["side"] == "buy"]
+        assert bool(got) is expect, ago
 
 
-def test_at_most_two_positions_and_one_per_index_and_ids_are_unique(cfg, tmp_path):
-    rn, ap, cal, t = open_one(cfg, tmp_path)
-    t2 = t + dt.timedelta(minutes=30)
-    assert [o for o in tick(rn, ap, cal, board(t2, **SIG_UP), t2)[0] if o["side"] == "buy"] == []                                # one per index
+def test_ids_are_unique_and_an_order_in_flight_is_not_repeated(cfg, tmp_path):
     rn2, ap2, cal2 = desk(cfg, tmp_path)
     warm(rn2, ap2, cal2, T0)
+    t = T0 + dt.timedelta(minutes=7)
     snap = board(t, **SIG_UP)
     srv = R.Runner.server_now(snap)
     a = ap2.decide(snap, rn2.account, srv, cal=cal2)
@@ -437,8 +446,8 @@ def test_the_module_is_pure_no_network_no_environment_no_clock():
     assert "take profit" not in src and "TAKE_PROFIT" not in src and "HOLD_MAX_S" not in src                                    # no fixed profit target, no intraday-only time stop
 
 
-def test_the_days_stop_sells_what_was_opened_today_but_leaves_a_carried_position_to_its_own_stops(cfg, tmp_path):
-    rn, ap, cal = desk(cfg, tmp_path)
+def test_an_optional_day_stop_sells_what_was_opened_today_but_leaves_a_carried_position_to_its_own_stops(cfg, tmp_path):
+    rn, ap, cal = desk(cfg, tmp_path, day_stop=0.01)
     carried_at = dt.datetime(2026, 11, 6, 11, 0, tzinfo=IST)
     held_position(rn, "NIFTY12NOV2624550CE", carried_at)
     inst, _ = R.parse_contract("NIFTY12NOV2624600CE", {"NIFTY"}, {"NIFTY": 65})
