@@ -18,6 +18,7 @@ const IC = {
 	trades: "M8 20V5M4.5 8.5L8 5l3.5 3.5M16 4v15M12.5 15.5L16 19l3.5-3.5",
 	live: "M3 12h3.2l2.3-6 4 12 2.5-6H21",
 	build: "M4 19V9l5 4 5-8 6 6v8z",
+	paper: "M7 3h8l4 4v14H7zM15 3v4h4M10.5 14l2 2 3.5-4.5",
 	data: "M4 6c0-1.1 3.6-2 8-2s8 .9 8 2-3.6 2-8 2-8-.9-8-2zM4 6v6c0 1.1 3.6 2 8 2s8-.9 8-2V6M4 12v6c0 1.1 3.6 2 8 2s8-.9 8-2v-6",
 	today: "M5.5 5h13A1.5 1.5 0 0 1 20 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19V6.5A1.5 1.5 0 0 1 5.5 5zM4 10h16M8.5 3v4M15.5 3v4",
 	chev: "M9 6l6 6-6 6", x: "M6 6l12 12M18 6L6 18",
@@ -144,7 +145,7 @@ function glossaryList() {
 }
 
 // ---- shell: tabs, routing, sheets, theme ---------------------------------------------------------------------------
-const TABS = [["live", "Live"], ["build", "Build"], ["today", "Today"], ["trades", "History"], ["data", "Data"]];
+const TABS = [["live", "Live"], ["build", "Build"], ["paper", "Paper"], ["today", "Today"], ["trades", "History"], ["data", "Data"]];
 const SUBS = { trades: [["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]] };
 // the app's mark: a price path that tests a level, pulls back and breaks through it
 function mark(size) {
@@ -1132,6 +1133,7 @@ function bdDraw() {
 		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600;display:flex;gap:8px;align-items:center" }, "Could the paper desk open this today?", h("b", { class: a.paperOk ? "up" : "dn" }, a.paperOk ? "Yes, so far" : "No")),
 			a.paperChecks.map((x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text))),
 			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:4px 16px 8px" }, "The paper ticket also checks the day's loss budget, the drawdown halt and the displayed size at the touch against the live account. A structure that is not open-able today is still shown here as a what-if.")),
+		bdTicket(a, tpl),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure. Held to expiry, an in-the-money long pays the exchange's exercise STT instead, which this does not model; there is no dividend yield in the pricing. Worst loss and best profit leave out costs."));
 }
 function legsTable2(a) {
@@ -1160,6 +1162,154 @@ async function renderBuild() {
 	if (!B.editing) bdDraw();
 }
 
+
+// ==================================================================================================================
+// Paper tickets. PAPER MONEY ONLY. These are the only functions in the app that POST, and they POST to exactly two relay routes: /paper/order (queue an order) and /paper/kill (the
+// kill flag). The paper runner and its risk gate decide what happens; nothing here can reach a broker, and the relay key is the same one that reads the board.
+// ==================================================================================================================
+/* @@ticket:start */
+const PT = (() => {
+	const TICK = 0.05;
+	const rnd = () => { const b = new Uint8Array(16); if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(b); else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256); return b; };
+	const idNow = () => "ord-" + Array.from(rnd(), (x) => x.toString(16).padStart(2, "0")).join("");
+	const flat = (t) => String(t == null ? "" : t).split(/\s+/).filter(Boolean).join(" ");
+	const thesisOk = (t) => { const x = flat(t); return x.length >= 20 && x.length <= 1000; };
+	const stratOk = (t) => { const x = flat(t); return x.length >= 1 && x.length <= 60; };
+	// a buy may fill a little above the offer shown (two ticks or 2%, whichever is more), never further: the runner refuses it if the offer has run away
+	const limitFor = (ask) => Math.round(Math.ceil((ask + Math.max(2 * TICK, 0.02 * ask)) / TICK - 1e-9) * TICK * 100) / 100;
+	// the orders for an analysed structure: one buy per leg. {error} when it cannot be sent.
+	function ordersFor(a, strategy, thesis, group) {
+		if (!a || a.paperOk !== true || !Array.isArray(a.legs) || !a.legs.length) return { error: "The paper desk cannot open this structure today (see the list above)." };
+		if (!stratOk(strategy)) return { error: "Give the strategy a name (up to 60 characters)." };
+		if (!thesisOk(thesis)) return { error: "Write the thesis: why this trade, now (at least 20 characters)." };
+		if (a.legs.some((l) => !(l.side > 0) || typeof l.name !== "string" || !(l.ask > 0))) return { error: "Every leg must be a purchase with an offer on the board." };
+		const g = group || idNow().slice(4, 20);
+		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g })) };
+	}
+	const sellFor = (symbol) => ({ id: idNow(), side: "sell", symbol, lots: "all" });
+	return { idNow, flat, thesisOk, stratOk, limitFor, ordersFor, sellFor };
+})();
+/* @@ticket:end */
+const PAPER_PATHS = new Set(["/paper/order", "/paper/kill", "/paper/state"]);
+async function paperCall(method, path, body) {
+	const key = store("qd.livekey");
+	if (!key) return { status: 0, body: { error: "no key" } };
+	if (!PAPER_PATHS.has(path)) return { status: 0, body: { error: "not a paper route" } };
+	try {
+		const r = await fetch(path, { method, headers: { Authorization: "Bearer " + key, ...(body ? { "Content-Type": "application/json" } : {}) }, cache: "no-store", ...(body ? { body: JSON.stringify(body) } : {}) });
+		if (r.status === 401) { try { localStorage.removeItem("qd.livekey"); } catch (e) { /* private mode */ } }
+		let j = null;
+		try { j = await r.json(); } catch (e) { /* no body */ }
+		return { status: r.status, body: j && typeof j === "object" ? j : {} };
+	} catch (e) { return { status: 0, body: { error: "the request failed before any answer" } }; }
+}
+
+// ---- the ticket in the Build tab: why, review, send ---------------------------------------------------------------------
+function bdTicket(a, tpl) {
+	const B = S.bd, tk = (B.tk = B.tk || { strategy: null, thesis: "", stage: "edit", sent: [], busy: false, err: "" });
+	const strategy = tk.strategy == null ? tpl.name : tk.strategy;
+	const box = h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Send as a paper order"));
+	const redraw = () => { B.editing = false; bdDraw(); };
+	if (!a.paperOk) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Not available: the paper desk could not open this today (see the list above). It stays a what-if."));
+	if (tk.stage === "sent") {
+		return put(box, tk.sent.map((r) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: r.ok ? "up" : "dn", style: "width:14px" }, r.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, r.text))),
+			h("div", { class: "f3", style: "font-size:12px;padding:4px 16px" }, "Queued orders are carried out by the paper runner within a few seconds, and it may still refuse them. Watch the Paper tab."),
+			h("div", { style: "padding:8px 16px 14px;display:flex;gap:10px;flex-wrap:wrap" }, h("button", { class: "btn", onclick: () => show("paper") }, "Open Paper"),
+				h("button", { class: "btn", onclick: () => { tk.stage = "edit"; tk.thesis = ""; tk.sent = []; redraw(); } }, "Another")));
+	}
+	const built = PT.ordersFor(a, strategy, tk.thesis);
+	if (tk.stage === "review" && built.orders) {
+		return put(box,
+			built.orders.map((o) => h("div", { class: "row", style: "padding:5px 16px;font-size:12.5px;justify-content:space-between" }, h("span", {}, `Buy ${o.lots} lot${o.lots === 1 ? "" : "s"} ${o.symbol}`), h("span", { class: "mono f3" }, `at most ${num(o.limit)}`))),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, `Most you can lose: ${inr(a.maxLoss)} plus ${inr(a.entryFees)} of fees. Paper money. "${PT.flat(tk.thesis)}"`),
+			tk.err ? h("div", { class: "warn", style: "font-size:12.5px;padding:2px 16px" }, tk.err) : null,
+			h("div", { style: "padding:8px 16px 14px;display:flex;gap:10px;flex-wrap:wrap" },
+				h("button", { class: "btn", disabled: tk.busy, onclick: async () => {
+					tk.busy = true; tk.err = ""; tk.sent = [];
+					for (const o of built.orders) {
+						const r = await paperCall("POST", "/paper/order", o);
+						tk.sent.push({ ok: r.status === 200, text: r.status === 200 ? `${o.symbol}: queued` : `${o.symbol}: not queued (${(r.body && r.body.error) || "HTTP " + r.status})` });
+						if (r.status !== 200) break;                                                   // a refused first leg must not leave a second one going alone
+					}
+					tk.busy = false; tk.stage = "sent"; redraw();
+				} }, tk.busy ? "Sending…" : "Send paper order"),
+				h("button", { class: "btn", disabled: tk.busy, onclick: () => { tk.stage = "edit"; redraw(); } }, "Back")));
+	}
+	const inp = h("input", { type: "text", class: "search", maxlength: "60", "aria-label": "Strategy name", value: strategy, oninput: (e) => { tk.strategy = e.target.value; } });
+	const ta = h("textarea", { class: "search", rows: "3", maxlength: "1000", "aria-label": "Thesis: why this trade, now", placeholder: "Why this trade, now? What would make you wrong?", style: "width:100%;resize:vertical;font:inherit", oninput: (e) => { tk.thesis = e.target.value; const ok = PT.thesisOk(tk.thesis); cnt.textContent = ok ? "Thesis written." : `${PT.flat(tk.thesis).length} of at least 20 characters`; rv.disabled = !(PT.stratOk(tk.strategy == null ? tpl.name : tk.strategy) && ok); }, onfocus: () => { B.editing = true; }, onblur: () => { B.editing = false; } }, tk.thesis);
+	const cnt = h("div", { class: "f3", style: "font-size:11.5px;padding:2px 0" }, PT.thesisOk(tk.thesis) ? "Thesis written." : `${PT.flat(tk.thesis).length} of at least 20 characters`);
+	const rv = h("button", { class: "btn", disabled: !!built.error, onclick: () => { tk.stage = "review"; tk.err = ""; redraw(); } }, "Review order");
+	inp.addEventListener("focus", () => { B.editing = true; }); inp.addEventListener("blur", () => { B.editing = false; });
+	return put(box, h("div", { style: "padding:2px 16px 14px;display:flex;flex-direction:column;gap:8px" },
+		h("label", { class: "f3", style: "font-size:12px" }, "Strategy name"), inp, h("label", { class: "f3", style: "font-size:12px" }, "Thesis (required: it is kept with the trade)"), ta, cnt, rv));
+}
+
+// ---- the Paper tab: the account, the orders, the positions, the kill switch --------------------------------------------------------
+S.pp = { data: null, busy: false, confirm: null, kill: false, note: "" };
+function ppAge(summary) { return summary && summary.asof ? (Date.now() - Date.parse(summary.asof)) / 1000 : NaN; }
+function ppDraw() {
+	const P = S.pp, body = $("#pp-body"), d = P.data;
+	body.textContent = "";
+	const sm = d && d.summary;
+	const kv = (k, v, cl) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line)" }, h("span", { class: "f3" }, k), h("b", { class: "mono " + (cl || "") }, v));
+	const age = ppAge(sm);
+	const tagC = (k, t) => h("span", { class: "tag " + k }, t);
+	put(body, h("div", { class: "note" }, "Paper money only. Orders are carried out by the paper runner through the risk gate: the gate, not this page, decides. Nothing here can reach a broker."));
+	if (!sm) put(body, h("div", { class: "note warn" }, "The paper runner has not reported yet. Orders wait two minutes, then expire. It starts by itself on trading days from about 08:30."));
+	else if (inSession() && !(age < 45)) put(body, h("div", { class: "note warn" }, `The paper runner last reported ${liveAge(age)} ago. If it is not running, orders will expire unfilled.`));
+	if (sm && sm.stuck && sm.stuck.length) put(body, h("div", { class: "note warn" }, `Held past expiry with no price: ${sm.stuck.join(", ")}. New orders are refused until this is settled.`));
+	if (sm) put(body, h("div", { class: "panel" },
+		kv("Equity", fin(sm.equity) ? inr(sm.equity) : "unknown (a position has no price)"), kv("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""),
+		kv("Today", fin(sm.equity) && fin(sm.day_start) ? inr(sm.equity - sm.day_start, true) : "—"), kv("Cash", inr(sm.cash)), kv("Fees paid", inr(sm.fees)),
+		kv("Stops for the day below", fin(sm.day_floor) ? inr(sm.day_floor) : "—"), kv("Halts below", fin(sm.dd_floor) ? inr(sm.dd_floor) : "—"),
+		sm.day_halted ? kv("Today", "stopped: the daily loss limit was hit", "dn") : null, sm.halt ? kv("Drawdown halt", "ON: only the owner clears it", "dn") : null));
+	const killOn = d ? d.kill === true : false;
+	put(body, h("div", { class: "panel pad", style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
+		h("b", {}, "Kill switch"), killOn ? tagC("bear", "ON: nothing opens, everything is sold") : tagC("bull", "off"),
+		P.confirm === "kill" ? h("span", { style: "display:flex;gap:8px" }, h("button", { class: "btn", onclick: async () => { P.confirm = null; const r = await paperCall("POST", "/paper/kill", { on: !killOn }); P.note = r.status === 200 ? "" : "The kill switch could not be changed (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, killOn ? "Yes, resume trading" : "Yes, stop and sell everything"), h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
+			: h("button", { class: "btn", onclick: () => { P.confirm = "kill"; ppDraw(); } }, killOn ? "Resume trading" : "Stop all trading and sell everything")));
+	if (P.note) put(body, h("div", { class: "note warn" }, P.note));
+	const pos = sm && sm.positions ? sm.positions : [];
+	put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Positions (${pos.length})`),
+		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", { class: "mono", style: "font-size:13px" }, p.symbol),
+				h("span", { class: "mono " + (fin(p.pnl) ? (p.pnl >= 0 ? "up" : "dn") : "f3") }, fin(p.pnl) ? inr(p.pnl, true) : "no price")),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, `${p.lots} lot${p.lots === 1 ? "" : "s"} (${p.qty} units) · bought at ${num(p.avg)} · bid ${fin(p.mark) ? num(p.mark) : "—"} · expires ${p.expiry || "?"} · ${p.strategy || ""}`),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:2px" }, p.thesis || ""),
+			P.confirm === "sell:" + p.symbol ? h("div", { style: "display:flex;gap:8px;margin-top:6px" },
+				h("button", { class: "btn", onclick: async () => { P.confirm = null; const o = PT.sellFor(p.symbol); const r = await paperCall("POST", "/paper/order", o); P.note = r.status === 200 ? "" : "The sell was not queued (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, "Yes, sell all at the bid"),
+				h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
+				: h("button", { class: "btn", style: "margin-top:6px", onclick: () => { P.confirm = "sell:" + p.symbol; ppDraw(); } }, "Sell all")))
+			: h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Nothing held.")));
+	const pend = d && d.pending ? d.pending : [], res = d && d.results ? d.results.slice(-10).reverse() : [];
+	put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Orders"),
+		pend.map((o) => h("div", { class: "row", style: "padding:5px 16px;font-size:12.5px;justify-content:space-between" }, h("span", { class: "mono" }, `${o.side} ${o.lots} ${o.symbol}`), tagC("flat", "waiting"))),
+		res.map((r) => h("div", { style: "padding:5px 16px;border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "justify-content:space-between;font-size:12.5px" }, h("span", { class: "mono" }, r.fill && r.fill.symbol ? `${r.fill.kind || ""} ${r.fill.qty || ""} ${r.fill.symbol}` : r.id), tagC(r.status === "filled" ? "bull" : r.status === "done" ? "flat" : "bear", r.status)),
+			r.fill && fin(r.fill.price) ? h("div", { class: "f3", style: "font-size:12px" }, `at ${num(r.fill.price)} · fees ${fin(r.fill.fees) ? num(r.fill.fees) : "—"}`) : null,
+			(r.reasons || []).map((x) => h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, x)))),
+		!pend.length && !res.length ? h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "No orders yet.") : null));
+	const tail = sm && sm.ledger_tail ? sm.ledger_tail.slice(-10).reverse() : [];
+	put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Ledger (${sm ? sm.ledger_len : 0} rows, ${sm && sm.ledger_ok ? "chain verified" : "NOT verified"})`),
+		tail.map((r) => h("div", { class: "row", style: "padding:4px 16px;font-size:12px;justify-content:space-between;gap:8px" }, h("span", { class: "mono" }, `#${r.seq} ${r.kind}${r.symbol ? " " + r.symbol : ""}`), h("span", { class: "mono f3" }, fin(r.price) ? `${r.qty} @ ${num(r.price)}` : ""))),
+		!tail.length ? h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Empty.") : null));
+}
+async function renderPaper(force) {
+	const body = $("#pp-body"), P = S.pp;
+	if (S.tab !== "paper" || document.hidden || (P.busy && !force)) return;
+	if (/(^|\.)github\.io$/.test(location.hostname)) { if (body.dataset.state !== "pages") { body.textContent = ""; put(body, empty("paper", "Paper trading uses the private live relay, which is only open on the Cloudflare site, not on this address.")); body.dataset.state = "pages"; } return; }
+	if (!store("qd.livekey")) { if (body.dataset.state !== "key") { body.textContent = ""; put(body, liveKeyForm("")); body.dataset.state = "key"; } return; }
+	P.busy = true;
+	const r = await paperCall("GET", "/paper/state");
+	P.busy = false;
+	if (S.tab !== "paper") return;
+	if (r.status === 401) { body.textContent = ""; body.dataset.state = "note"; return void put(body, liveKeyForm("That key was not accepted. Type it again.")); }
+	if (r.status !== 200) { P.note = `The relay did not answer as expected (HTTP ${r.status || "no answer"}).`; if (!P.data) { body.textContent = ""; return void put(body, h("div", { class: "note warn" }, P.note)); } }
+	else { P.data = r.body; if (P.note.startsWith("The relay did not")) P.note = ""; }
+	body.dataset.state = "data";
+	ppDraw();
+}
+
 // ==================================================================================================================
 // refresh loop, pull to refresh, boot
 // ==================================================================================================================
@@ -1174,6 +1324,7 @@ async function refresh(full, force) {
 		const t = S.tab;
 		if (t === "live") await renderLive();
 		else if (t === "build") await renderBuild();
+		else if (t === "paper") await renderPaper();
 		else if (t === "today") await renderToday(full);
 		else if (t === "trades") await renderTrades(full);
 		else if (t === "data") await renderDataTab(full);
@@ -1237,7 +1388,8 @@ async function boot() {
 	setInterval(() => refresh(false), 15000);
 	pollHealth();
 	setInterval(pollHealth, 10000);                                                                   // the header pill, on every tab
-	setInterval(() => { if (S.tab === "live" && !document.hidden) renderLive(); }, 5000);          // the Live tab alone refreshes every 5 seconds
+	setInterval(() => { if (S.tab === "live" && !document.hidden) renderLive(); }, 5000);
+	setInterval(() => { if (S.tab === "paper" && !document.hidden) renderPaper(); }, 4000);          // the Paper tab alone refreshes every 4 seconds          // the Live tab alone refreshes every 5 seconds
 	document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(true); });
 	if ("serviceWorker" in navigator && window.isSecureContext && window.QD_PUBLISHED)
 		navigator.serviceWorker.register("sw.js").catch(() => { /* offline support is a bonus */ });
