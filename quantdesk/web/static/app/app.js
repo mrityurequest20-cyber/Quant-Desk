@@ -1436,17 +1436,20 @@ const PT = (() => {
 	const flat = (t) => String(t == null ? "" : t).split(/\s+/).filter(Boolean).join(" ");
 	const thesisOk = (t) => { const x = flat(t); return x.length >= 20 && x.length <= 1000; };
 	const stratOk = (t) => { const x = flat(t); return x.length >= 1 && x.length <= 60; };
-	// a buy may fill a little above the offer shown (two ticks or 2%, whichever is more), never further: the runner refuses it if the offer has run away
-	const limitFor = (ask) => Math.round(Math.ceil((ask + Math.max(2 * TICK, 0.02 * ask)) / TICK - 1e-9) * TICK * 100) / 100;
+	// a buy may fill a little above the offer shown (three ticks or 2%, whichever is more), never further: the runner refuses it if the offer has run away or the size is expected to pay more
+	// (the allowance covers the paper desk's largest modelled size impact, 3 ticks, so a limit is never tighter than what a big order is expected to pay)
+	const limitFor = (ask) => Math.round(Math.ceil((ask + Math.max(3 * TICK, 0.02 * ask)) / TICK - 1e-9) * TICK * 100) / 100;
 	// the orders for an analysed structure: one buy per leg. {error} when it cannot be sent.
-	function ordersFor(a, strategy, thesis, group) {
+	function ordersFor(a, strategy, thesis, group, nowMs) {
 		if (!a || a.paperOk !== true || !Array.isArray(a.legs) || !a.legs.length) return { error: "The paper desk cannot open this structure today (see the list above)." };
 		if (!stratOk(strategy)) return { error: "Give the strategy a name (up to 60 characters)." };
 		if (!thesisOk(thesis)) return { error: "Write the thesis: why this trade, now (at least 20 characters)." };
 		if (!Number.isInteger(a.lots) || a.lots < 1 || a.lots > 1000) return { error: "The number of lots must be a whole number from 1 to 1000." };
 		if (a.legs.some((l) => !(l.side > 0) || typeof l.name !== "string" || typeof l.ask !== "number" || !Number.isFinite(l.ask) || !(l.ask > 0))) return { error: "Every leg must be a purchase with an offer on the board." };
 		const g = group || idNow().slice(4, 20);
-		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g })) };
+		// `ref`: the prices on screen when the trader decided (and when the board last heard them). It is used only to report slippage; it never prices or allows a fill.
+		const refOf = (l) => (typeof l.bid === "number" && Number.isFinite(l.bid) && l.bid > 0 && l.bid <= l.ask ? { bid: l.bid, ask: l.ask, ...(Number.isFinite(nowMs) && Number.isFinite(l.age) && l.age >= 0 ? { at: Math.round(nowMs - l.age * 1000) } : {}) } : null);
+		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g, ...(refOf(l) ? { ref: refOf(l) } : {}) })) };
 	}
 	const sellFor = (symbol) => ({ id: idNow(), side: "sell", symbol, lots: "all" });
 	// the structure a review belongs to: if it changes, the review is void and the user must press Review again
@@ -1490,11 +1493,12 @@ function bdTicket(a, tpl) {
 			h("div", { style: "padding:8px 16px 14px;display:flex;gap:10px;flex-wrap:wrap" }, h("button", { class: "btn", onclick: () => show("paper") }, "Open Paper"),
 				h("button", { class: "btn", onclick: () => { tk.stage = "edit"; tk.thesis = ""; tk.sent = []; redraw(); } }, "Another")));
 	}
-	const built = PT.ordersFor(a, strategy, tk.thesis);
+	const built = PT.ordersFor(a, strategy, tk.thesis, undefined, B.data && typeof B.data.now === "number" ? B.data.now : NaN);
 	if (tk.stage === "review" && built.orders) {
 		return put(box,
 			h("div", { class: "f3", style: "font-size:12px;padding:6px 16px 0" }, `Strategy: ${PT.flat(strategy)}`),
 			built.orders.map((o) => h("div", { class: "row", style: "padding:5px 16px;font-size:12.5px;justify-content:space-between" }, h("span", {}, `Buy ${o.lots} lot${o.lots === 1 ? "" : "s"} ${o.symbol}`), h("span", { class: "mono f3" }, `at most ${num(o.limit)}`))),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, "A buy fills at the offer plus 0 to 3 ticks, more the bigger it is against the size shown; the Paper tab keeps the price you saw against what you paid."),
 			h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, `Most you can lose, at the offers shown: ${inr(a.maxLoss)} plus ${inr(a.entryFees)} of fees; a fill can be a little dearer, up to the limits above. Paper money. "${PT.flat(tk.thesis)}"`),
 			tk.err ? h("div", { class: "warn", style: "font-size:12.5px;padding:2px 16px" }, tk.err) : null,
 			h("div", { style: "padding:8px 16px 14px;display:flex;gap:10px;flex-wrap:wrap" },
@@ -1540,6 +1544,17 @@ function ppDraw() {
 		kv("Today", fin(sm.equity) && fin(sm.day_start) ? inr(sm.equity - sm.day_start, true) : "—"), kv("Cash", inr(sm.cash)), kv("Fees paid", inr(sm.fees)),
 		kv("Stops for the day below", fin(sm.day_floor) ? inr(sm.day_floor) : "—"), kv("Halts below", fin(sm.dd_floor) ? inr(sm.dd_floor) : "—"),
 		sm.day_halted ? kv("Today", "stopped: the daily loss limit was hit", "dn") : null, sm.halt ? kv("Drawdown halt", "ON: only the owner clears it", "dn") : null));
+	const sl = sm && sm.slippage;
+	if (sl && sl.fills > 0) {
+		const bpsTxt = fin(sl.bps) ? `${sl.bps} bps of the value traded` : "";
+		put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Slippage (${sl.fills} fill${sl.fills === 1 ? "" : "s"})`),
+			kv("Total cost vs the price you saw", inr(sl.total_inr), sl.total_inr > 0 ? "dn" : ""), kv("Spread paid (measured)", inr(sl.spread_inr)),
+			kv(`Price moved before the fill (measured, ${sl.fills_with_decision_price} of ${sl.fills})`, inr(sl.delay_inr, true)), kv("Size impact (a model, not measured)", inr(sl.impact_inr)),
+			bpsTxt ? h("div", { class: "f3", style: "font-size:12px;padding:4px 16px" }, bpsTxt) : null,
+			(d.summary.slips || []).slice().reverse().map((r) => h("div", { class: "row", style: "padding:4px 16px;font-size:12px;justify-content:space-between;gap:8px;border-top:1px solid var(--line)" },
+				h("span", { class: "mono" }, `#${r.seq} ${r.side} ${r.symbol || ""}`), h("span", { class: "mono f3" }, `${fin(r.total_inr) ? inr(r.total_inr) : "—"}${fin(r.delay_s) ? " · " + r.delay_s + "s" : ""}${r.impact_ticks ? " · +" + r.impact_ticks + " tick" + (r.impact_ticks === 1 ? "" : "s") : ""}`))),
+			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "Positive is a cost. The spread and the price move come from the live board. The size impact is a conservative model (the board shows only the best price and its size) and is shown apart so it is never mistaken for an observation.")));
+	}
 	const killOn = d ? d.kill === true : false;
 	put(body, h("div", { class: "panel pad", style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
 		h("b", {}, "Kill switch"), killOn ? tagC("bear", "ON: nothing opens, everything is sold") : tagC("bull", "off"),

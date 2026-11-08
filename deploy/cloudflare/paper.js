@@ -41,8 +41,15 @@ export function cleanOrder(o) {
 	}
 	if (o.limit !== undefined && o.limit !== null) { if (!(isNum(o.limit) && o.limit > 0)) return null; out.limit = o.limit; }
 	if (o.group !== undefined && o.group !== null) { if (!isStr(o.group, 1, 40)) return null; out.group = o.group.trim(); }
+	// what the trader saw when deciding (used only to report slippage; a bad one is dropped, the order still goes)
+	if (o.ref && typeof o.ref === "object" && !Array.isArray(o.ref) && isNum(o.ref.bid) && isNum(o.ref.ask) && o.ref.bid > 0 && o.ref.bid <= o.ref.ask) {
+		out.ref = { bid: o.ref.bid, ask: o.ref.ask };
+		if (isNum(o.ref.at) && o.ref.at > 0 && o.ref.at < 4e12) out.ref.at = o.ref.at;
+	}
 	return out;
 }
+
+export const SLIP_KEYS = ["qty", "fill", "touch", "mid", "impact_ticks", "spread", "impact", "delay_s", "delay", "shown", "total_vs_seen", "seen_bid", "seen_ask", "spread_inr", "impact_inr", "delay_inr", "shown_inr", "total_inr", "bps"];
 
 export function cleanResult(r) {
 	if (!r || typeof r !== "object" || Array.isArray(r)) return null;
@@ -53,6 +60,12 @@ export function cleanResult(r) {
 		fill = {};
 		for (const k of ["seq", "qty", "price", "fees"]) if (isNum(r.fill[k])) fill[k] = r.fill[k];
 		for (const k of ["kind", "ts", "symbol"]) if (typeof r.fill[k] === "string") fill[k] = r.fill[k].slice(0, 60);
+		const sl = r.fill.slip;
+		if (sl && typeof sl === "object" && !Array.isArray(sl)) {
+			fill.slip = {};
+			for (const k of SLIP_KEYS) if (isNum(sl[k])) fill.slip[k] = sl[k];
+			if (sl.side === "buy" || sl.side === "sell") fill.slip.side = sl.side;
+		}
 	}
 	return { id: r.id, status: r.status, reasons, fill, at: typeof r.at === "string" ? r.at.slice(0, 40) : null };
 }

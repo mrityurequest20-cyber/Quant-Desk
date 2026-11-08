@@ -1,7 +1,9 @@
 """The paper broker: fills against a real two-sided quote, through the risk gate, with costs. Paper money only.
 
-A buy fills at the ask and a sell at the bid: the spread is paid in full, there is no mid-price optimism. An order bigger than the
-size shown at the touch is refused rather than filled partly (a refusal is honest; a partial fill model is not built). Fees come
+A buy fills at the ask and a sell at the bid: the spread is paid in full, there is no mid-price optimism. On top of the touch a fill pays a
+modelled impact that grows with the share of the displayed size it takes (`slippage.IMPACT_TABLE`); the gate judges the order at that
+dearer price, so the risk caps hold on what is really paid. An order bigger than the size shown at the touch is refused rather than filled
+partly (a refusal is honest; a partial fill model is not built). Every fill carries its slippage record (spread, delay since the trader looked, impact). Fees come
 from the configured cost model, and only for segments whose costs are verified (the risk gate checks), so a segment with no
 rates can never trade for free.
 
@@ -14,6 +16,7 @@ import math
 
 from ..core.types import OPTION
 from ..execution.costs import CostModel
+from . import slippage as SL
 from .account import Account, is_number
 from .risk import Decision, Order, Quote, RiskGate
 
@@ -24,24 +27,57 @@ class PaperBroker:
         self.account = account
         self.gate = gate or RiskGate(cfg)
         self.costs = CostModel(cfg)
+        self.tick = SL.TICK
 
-    def buy(self, order: Order, quote: Quote | None, marks: dict[str, float], now: dt.datetime) -> tuple[Decision, dict | None]:
-        d = self.gate.check_entry(self.account, order, quote, marks, now)
+    @staticmethod
+    def _seen(ref: dict | None, now: dt.datetime, quote: Quote | None = None):
+        """What the trader saw (bid, ask) and the seconds since (None where the order carried nothing usable). The reference is client-supplied and only ever reported, so it must
+        look like a price of this contract now: within a factor of two of the mid at the fill, else it is ignored. A time more than an hour back (or ahead) is dropped on its own."""
+        if not isinstance(ref, dict):
+            return None, None, None
+        if quote is not None:
+            m = (quote.bid + quote.ask) / 2
+            rb, ra = ref.get("bid"), ref.get("ask")
+            if not (SL._ok(rb) and SL._ok(ra) and m > 0 and 0.5 * m <= rb and ra <= 2 * m):
+                return None, None, None
+        at = ref.get("at")
+        delay = (now.timestamp() * 1000 - at) / 1000 if SL._ok(at) else None
+        if delay is not None and not (0 <= delay <= 3600):                       # a nonsense time costs only the delay figure, never the record
+            delay = None
+        return ref.get("bid"), ref.get("ask"), delay
+
+    def buy(self, order: Order, quote: Quote | None, marks: dict[str, float], now: dt.datetime, ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
+        wide = quote
+        impact = 0.0
+        if quote is not None and is_number(quote.ask):
+            impact = SL.impact_ticks(order.qty, quote.ask_qty) * self.tick
+            wide = Quote(quote.bid, quote.ask + impact, quote.ts, quote.bid_qty, quote.ask_qty)      # the gate judges the order at the price it will really pay
+        d = self.gate.check_entry(self.account, order, wide, marks, now)
         if not d.allowed:
             return d, None
-        px = quote.ask
+        px = wide.ask
+        if limit is not None and px > limit + 1e-9:                                  # the owner's "at most" is judged on what would really be paid, impact included
+            return Decision(False, [f"the offer is {quote.ask:g} and this size is expected to pay {impact:g} more ({px:g}), above your limit {limit:g}: not bought"]), None
         fees, _ = self.costs.fees(order.instrument, order.qty, px)
-        row = self.account.apply_fill("buy", order.instrument, order.segment, order.qty, px, fees, now.isoformat(), order.strategy, order.thesis)
+        sb, sa, delay = self._seen(ref, now, quote)
+        slip = SL.clean(SL.split("buy", order.qty, px, quote.bid, quote.ask, impact, sb, sa, delay)) or SL.clean(SL.split("buy", order.qty, px, quote.bid, quote.ask, impact))
+        row = self.account.apply_fill("buy", order.instrument, order.segment, order.qty, px, fees, now.isoformat(), order.strategy, order.thesis, slip)
         return d, row
 
-    def sell(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit") -> tuple[Decision, dict | None]:
+    def sell(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
         d = self.gate.check_exit(self.account, symbol, qty, quote, now)
         if not d.allowed:
             return d, None
         pos = self.account.positions[symbol]
-        px = quote.bid
+        impact = SL.impact_ticks(qty, quote.bid_qty) * self.tick
+        px = max(quote.bid - impact, 0.0)
+        impact = quote.bid - px                                                  # what was really given up (a bid below the impact is sold at nothing, not below)
+        if limit is not None and px < limit - 1e-9:
+            return Decision(False, [f"the bid is {quote.bid:g} and this size is expected to give up {impact:g} ({px:g}), below your limit {limit:g}: not sold"]), None
         fees, _ = self.costs.fees(pos.instrument, -qty, px)
-        row = self.account.apply_fill("sell", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}")
+        sb, sa, delay = self._seen(ref, now, quote)
+        slip = SL.clean(SL.split("sell", qty, px, quote.bid, quote.ask, impact, sb, sa, delay)) or SL.clean(SL.split("sell", qty, px, quote.bid, quote.ask, impact))
+        row = self.account.apply_fill("sell", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}", slip)
         return d, row
 
     def trim(self, quotes: dict[str, Quote], marks: dict[str, float], now: dt.datetime, why: str = "trim to the loss budget") -> dict[str, Decision]:

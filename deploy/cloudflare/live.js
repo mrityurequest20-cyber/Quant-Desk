@@ -228,9 +228,13 @@ async function handlePaper(request, env, url, stub) {
 		try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
 		if (route === "POST /paper/order" && !cleanOrder(body)) return reply(400, { error: "not a valid order" });
 		if (route === "POST /paper/result" && !cleanResult(body)) return reply(400, { error: "not a valid result" });
-		if (route === "POST /paper/state" && !cleanState(body)) return reply(400, { error: "not a valid state" });
+		let okState = true;
+		if (route === "POST /paper/state") { try { okState = !!cleanState(body); } catch (e) { okState = false; } }                    // absurdly deep nesting is a refusal, not an error
+		if (!okState) return reply(400, { error: "not a valid state" });
 	}
-	return stub.fetch("https://live" + url.pathname + url.search, { method: request.method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+	let fwd;
+	try { fwd = body !== undefined ? JSON.stringify(body) : undefined; } catch (e) { return reply(400, { error: "not valid" }); }      // absurdly deep nesting parses but cannot be written back out
+	return stub.fetch("https://live" + url.pathname + url.search, { method: request.method, ...(fwd !== undefined ? { body: fwd } : {}) });
 }
 // /news and /news/ingest: the news digest (news.js). The job (INGEST key) sends it; the app (READ key) reads it. Public headlines only.
 async function handleNews(request, env, url, stub) {

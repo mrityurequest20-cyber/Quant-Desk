@@ -116,7 +116,7 @@ class Account:
 
     # ---- the one way money moves ---------------------------------------------------------------------------------------------
     def apply_fill(self, kind: str, instrument: Instrument, segment: str, qty: int, price: float, fees: float, ts: str,
-                   strategy: str, thesis: str) -> dict:
+                   strategy: str, thesis: str, slip: dict | None = None) -> dict:
         """kind: 'buy' | 'sell' | 'settle'. Raises ValueError, changing nothing, for anything that would leave the account wrong."""
         if kind not in FILL_KINDS:
             raise ValueError(f"bad fill: unknown kind {kind!r}")
@@ -126,6 +126,10 @@ class Account:
             raise ValueError(f"bad fill: price {price!r} and fees {fees!r} must be finite and not negative")
         if kind == "buy" and price <= 0:
             raise ValueError("bad fill: a buy at a zero price would be a free position")
+        if slip is not None:                                    # the slippage record is part of the sealed row: known keys, finite numbers, nothing else
+            from .slippage import clean
+            if kind == "settle" or clean(slip) != slip or slip.get("side") != kind or slip.get("qty") != qty or not math.isclose(slip.get("fill", -1), price, abs_tol=1e-4):
+                raise ValueError("bad fill: the slippage record is not well formed or does not match the fill")
         qty, price, fees = int(qty), float(price), float(fees)
         sym = instrument.symbol
         pos = self.positions.get(sym)
@@ -152,6 +156,8 @@ class Account:
         body = {"seq": len(self.ledger) + 1, "ts": ts, "kind": kind, "symbol": sym, "instrument": instrument.to_dict(),
                 "segment": segment, "qty": qty, "price": price, "fees": fees, "strategy": strategy, "thesis": thesis,
                 "cash_after": cash}
+        if slip is not None:
+            body["slip"] = slip
         row = self._seal(body)                                  # raises (e.g. a thesis that cannot be saved) BEFORE anything changes
         self.cash, self.realized, self.fees = cash, realized, self.fees + fees
         if new_pos is None:
@@ -223,7 +229,7 @@ class Account:
         for row in self.ledger:
             if row["kind"] in FILL_KINDS:
                 s.apply_fill(row["kind"], Instrument.from_dict(row["instrument"]), row["segment"], row["qty"], row["price"],
-                             row["fees"], row["ts"], row["strategy"], row["thesis"])
+                             row["fees"], row["ts"], row["strategy"], row["thesis"], row.get("slip"))
             else:
                 s.record_event(row["kind"], row["ts"], **{k: v for k, v in row.items() if k not in ("seq", "ts", "kind", "prev", "hash")})
         same = (s.ledger == self.ledger and math.isclose(s.cash, self.cash, abs_tol=1e-6) and math.isclose(s.realized, self.realized, abs_tol=1e-6)
