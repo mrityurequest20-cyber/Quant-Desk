@@ -94,6 +94,8 @@ def parse_contract(symbol, underlyings, lot_sizes: dict) -> tuple[Instrument | N
         lot = lot_sizes.get(u)
         if not (isinstance(lot, int) and lot > 0):
             return None, f"{u} has no known lot size"
+        if int(m.group(4)) <= 0:
+            return None, f"{_safe(symbol)}: the strike must be above zero"
         inst = Instrument.option(u, expiry, int(m.group(4)), m.group(5), lot)
         if inst.symbol != symbol:
             return None, f"{_safe(symbol)} is not in the board's naming"

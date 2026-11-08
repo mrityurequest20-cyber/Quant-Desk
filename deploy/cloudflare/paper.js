@@ -13,6 +13,8 @@
 // All of it lives in the same Durable Object as the live board (class LiveBoard), in storage, so it survives a restart. No secret and no price is stored here.
 
 export const MAX_PENDING = 20;
+export const MAX_QUEUE_BYTES = 90000;           // the whole queue is one stored value (limit 128 KiB): a full queue of big packages must not make the next order fail
+export const MAX_QUEUE_BYTES_EXIT = 120000;     // ...and a sale always has room above that, so an exit can be queued when the queue is full
 export const MAX_RESULTS = 50;                     // kept results: with the reason caps below, the stored value stays far under a Durable Object's 128 KiB limit
 export const MAX_RESULTS_BYTES = 100000;           // characters of JSON in the stored results (far under a stored value's 128 KiB even with wide characters)
 export const MAX_SEEN = 1000;                      // order ids remembered as used (about 70 KB stored)
@@ -175,7 +177,7 @@ export class PaperBook {
 		const o = cleanOrder(raw);
 		if (!o) return json(400, { error: "not a valid order" });
 		if (this.d.seen.includes(o.id) || this.d.queue.some((q) => q.id === o.id) || this.d.results.some((r) => r.id === o.id)) return json(409, { error: "that order id was already used" });
-		if (this.d.queue.length >= MAX_PENDING) return json(429, { error: "too many orders are waiting" });
+		if (this.d.queue.length >= MAX_PENDING || JSON.stringify(this.d.queue).length + JSON.stringify(o).length > (o.side === "sell" ? MAX_QUEUE_BYTES_EXIT : MAX_QUEUE_BYTES)) return json(429, { error: "too many orders are waiting" });
 		const queue = [...this.d.queue, { ...o, queued_at: now }], seen = [...this.d.seen, o.id].slice(-MAX_SEEN);
 		await this.state.storage.put({ "paper:queue": queue, "paper:seen": seen });                         // both or neither
 		this.d.queue = queue; this.d.seen = seen;

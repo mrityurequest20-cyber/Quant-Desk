@@ -329,3 +329,71 @@ def test_without_the_flag_the_runner_refuses_a_package_with_a_sale(cfg, tmp_path
     r = R.Runner(cfg, acct, gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "K")), kill_file=tmp_path / "K")
     res = go(r, [package()])["results"][0]
     assert res["status"] == "refused" and "switched off" in " ".join(res["reasons"]) and not acct.ledger
+
+
+# ---- the reviewer's findings (PR #253) -----------------------------------------------------------------------------------------------------------------------
+def test_an_unrelated_long_can_always_be_sold_even_when_the_worst_case_is_already_under_the_floor(cfg, tmp_path):
+    b, acct, gate = opened(cfg, tmp_path)
+    other = Instrument.option("NIFTY", dt.date(2026, 11, 19), 25000, "CE", LOT)
+    acct.apply_fill("buy", other, "nse_fo", LOT, 50.0, 10.0, MON.isoformat(), "x", "an unrelated long that covers nothing")
+    gate.update(acct, {}, MON)
+    acct.cash -= 30_000                                                 # the book's worst case is now under today's floor
+    assert acct.stress() < max(gate.floors(acct)[1], gate.floors(acct)[0] or 0)
+    later = MON + dt.timedelta(minutes=30)
+    d = gate.check_exit(acct, other.symbol, LOT, q(48, 50, later), later)
+    assert d.allowed, d.reasons                                         # selling it does not lower the worst case: never refused
+    d = gate.check_exit(acct, opt(24400).symbol, LOT, q(30, 32, later), later)
+    assert not d.allowed and any("cover" in r or "uncovered" in r for r in d.reasons)          # the real cover still cannot go first
+    out = b.flatten({other.symbol: q(48, 50, later), opt(24400).symbol: q(30, 32, later)}, later, "test")      # the short has no quote: it stays, and so does its cover, but the unrelated long goes
+    assert out[other.symbol].allowed and other.symbol not in acct.positions and opt(24400).symbol in acct.positions
+
+
+def test_a_package_of_bought_options_only_keeps_the_plain_premium_rule_even_when_the_flag_is_off(cfg, tmp_path):
+    b, acct, _ = make(cfg, tmp_path, on=False)
+    big = [leg("buy", opt(24000, "CE"), q(529, 531), 3), leg("buy", opt(25000, "PE"), q(529, 531), 3)]
+    d, rows = b.open_package(big, "long strangle", "a big move is coming after the event and the options are cheap", {}, MON)
+    assert not d.allowed and rows == [] and any("whole premium" in r for r in d.reasons), d.reasons
+    small = [leg("buy", opt(24550, "CE"), q(40, 41)), leg("buy", opt(24450, "PE"), q(40, 41))]
+    assert b.open_package(small, "long strangle", "a big move is coming after the event and the options are cheap", {}, MON)[0].allowed
+    b2, acct2, _ = make(cfg, tmp_path)                                  # with the flag on, a bought-only package is held to the same rule
+    assert not b2.open_package(big, "long strangle", "a big move is coming after the event and the options are cheap", {}, MON)[0].allowed
+
+
+def test_a_nan_or_zero_strike_or_quantity_is_unbounded_not_a_free_pass(cfg, tmp_path):
+    from quantdesk.paper.account import Position
+    inf = float("-inf")
+    for strike, qty in ((float("nan"), 65), (0, 65), (-5, 65), (24500, float("nan"))):
+        pos = {"X": Position(Instrument.option("NIFTY", EXP, 24500, "PE", LOT), "nse_fo", qty, 10.0, "t", "s", "t")}
+        pos["X"].instrument = type("I", (), dict(strike=strike, right="PE", expiry=EXP, underlying="NIFTY"))()
+        assert stress_equity(1000.0, pos) == inf, (strike, qty)
+    r = R.parse_contract("NIFTY12NOV260PE", {"NIFTY"}, {"NIFTY": 65})
+    assert r[0] is None and "strike" in r[1]
+
+
+def test_the_relay_keeps_room_for_a_sale_when_the_queue_is_full_of_big_packages(tmp_path):
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        pytest.skip("Node is not installed")
+    from tests.test_paper_relay import run as relay_run
+    o = relay_run(tmp_path, r"""
+const legs = Array.from({ length: 50 }, (_, i) => ({ symbol: "NIFTY12NOV26" + (20000 + i * 50) + "PE", side: "buy", lots: 1000, ref: { bid: 100.55, ask: 100.65, at: 1789000000000 } }));
+const bigpkg = (id) => ({ id, side: "package", legs, strategy: "x".repeat(60), thesis: "t".repeat(990), net_limit: 123456.78 });
+const codes = [];
+for (let i = 0; i < 20; i++) codes.push((await call("POST", "/paper/order", { token: READ, body: bigpkg("pkg-big" + String(i).padStart(2, "0")) })).status);
+out.codes = codes;
+out.sell = (await call("POST", "/paper/order", { token: READ, body: { id: "ord-sell01", side: "sell", symbol: "NIFTY12NOV2624500PE", lots: "all" } })).status;
+out.buy = (await call("POST", "/paper/order", { token: READ, body: { id: "ord-buy001", side: "buy", symbol: "NIFTY12NOV2624500PE", lots: 1, strategy: "s", thesis: "range break with rising volume on the thirty minute chart" } })).status;
+""")
+    assert 429 in o["codes"] and o["codes"].count(200) >= 8 and o["sell"] == 200 and o["codes"].count(200) <= 14
+
+
+def test_a_small_reserve_above_the_floor_is_kept_for_exercise_stt_and_exit_costs(cfg, tmp_path):
+    th = "support held at 24400 for an hour with falling put volume"
+    for cash, ok in ((479_900, False), (481_500, True)):                 # the package's worst case is about 4 740 below cash; the day floor is 475 000 and the reserve 0.2% of equity
+        b, acct, gate = make(cfg, tmp_path)
+        gate.update(acct, {}, MON)
+        acct.cash = cash
+        d, rows = b.open_package(bull_put_spread(), "bull put spread", th, {}, MON)
+        assert d.allowed is ok, (cash, d.reasons)
+        assert ok or any("reserve" in r for r in d.reasons)

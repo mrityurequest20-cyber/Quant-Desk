@@ -1,8 +1,8 @@
-"""The paper account: cash, long option positions, and an append-only, hash-chained ledger of every fill.
+"""The paper account: cash, option positions (bought, and sold inside bounded packages), and an append-only, hash-chained ledger of every fill.
 
-No network, no clock, no secret. Money here is paper money. M2 of the 24/7 paper desk holds LONG premium positions only: a buy
-pays the premium, a sell receives it, so the most a position can lose is what was paid. Futures and short options need a margin
-model that is not built, and the risk gate refuses them.
+No network, no clock, no secret. Money here is paper money. A bought option can lose what was paid. A SOLD option (`sto`, closed by `btc`) is allowed only as part of a package whose worst case is
+bounded (`stress_equity`: verticals, condors, butterflies), and only while `paper.allow_short_legs` is on; the risk gate refuses a naked short call whatever the flag says. Futures need a margin
+model that is not built, and the gate refuses them.
 
 Guarantees, each tested:
   * Money moves only through `apply_fill`. It checks every input (a quantity is a positive whole number, a price and a fee are
@@ -74,8 +74,8 @@ def stress_equity(cash: float, positions: dict) -> float:
     groups: dict[tuple, list] = {}
     for p in positions.values():
         i = p.instrument
-        if i.strike is None or i.right not in ("CE", "PE") or i.expiry is None or not p.qty:
-            return float("-inf")
+        if not is_number(i.strike) or i.strike <= 0 or i.right not in ("CE", "PE") or i.expiry is None or not is_number(p.qty) or not p.qty:
+            return float("-inf")                                 # anything that is not a plain option with a real strike and quantity cannot be valued: treated as unbounded (and a NaN can never slip past a comparison)
         groups.setdefault((i.underlying, i.expiry), []).append((float(i.strike), i.right, p.qty))
     total = float(cash)
     for legs in groups.values():

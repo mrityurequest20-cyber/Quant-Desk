@@ -36,6 +36,7 @@ from .account import Account, is_number, is_whole_positive, stress_equity
 
 IST = MK.IST
 ROOT = Path(__file__).resolve().parents[2]
+STRESS_MARGIN = 0.002   # equity kept in reserve above the loss floors when a package with sold options is judged on its worst case (exercise STT on a long that finishes in the money, exit costs)
 
 
 def _share(x, name: str) -> float:
@@ -210,7 +211,7 @@ class RiskGate:
             why.append("equity is unknown (a position has no usable mark)")
         inst, seg = order.instrument, order.segment
         if inst.kind != OPTION or not is_whole_positive(order.qty):
-            why.append("this version opens long options only: futures and short options need a margin model that is not built")
+            why.append("this version opens long options only (a sold option only inside a package): futures need a margin model that is not built")
         elif not (isinstance(inst.lot_size, int) and inst.lot_size > 0) or order.qty % inst.lot_size:
             why.append(f"{order.qty} is not a whole number of lots of {inst.lot_size!r}")
         if seg not in MK.SEGMENTS:
@@ -343,12 +344,23 @@ class RiskGate:
         risk = before - worst
         if not (risk <= self.limits.risk_per_trade * eq + 1e-9):
             why.append(f"it would put {risk:,.0f} at risk (its worst possible loss plus fees), over {self.limits.risk_per_trade:.1%} of equity ({self.limits.risk_per_trade * eq:,.0f})")
+        if not any(l["side"] == "sell" for l in legs):                          # bought options only: the plain rules apply as they always did (the whole premium plus fees is the risk, and it shares the loss budget with what is open), whatever the worst-case arithmetic says
+            outlay = sum(l["qty"] * l["quote"].ask + self.costs.fees(l["instrument"], l["qty"], l["quote"].ask)[0] for l in legs)
+            if outlay > self.limits.risk_per_trade * eq + 1e-9:
+                why.append(f"it would risk {outlay:,.0f} (the whole premium plus fees), over {self.limits.risk_per_trade:.1%} of equity ({self.limits.risk_per_trade * eq:,.0f})")
+            d_floor, f_floor = self.floors(account)
+            fl = max(f_floor, d_floor if d_floor is not None else f_floor)
+            longs = [(s, p) for s, p in account.positions.items() if p.qty > 0]
+            if any(not (is_number(marks.get(s)) and marks[s] >= 0) for s, _ in longs):
+                why.append("a held option has no usable price, so the loss budget cannot be checked")
+            elif sum(p.qty * marks[s] for s, p in longs) + outlay > eq - fl:
+                why.append(f"the premium at risk would exceed the loss budget ({max(eq - fl, 0):,.0f} left before the daily or drawdown floor)")
         if cash_after < -1e-9:
             why.append(f"it needs cash of {account.cash - cash_after:,.0f} but cash is {account.cash:,.0f}")
         day_floor, dd_floor = self.floors(account)
         floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
-        if worst < floor:
-            why.append(f"if everything expired now at the worst price, equity would be {worst:,.0f}, under the {floor:,.0f} floor (the day's or the drawdown limit)")
+        if worst < floor + STRESS_MARGIN * eq:                                  # a small reserve for what the arithmetic leaves out: the exercise STT on a long that finishes in the money, and exit costs
+            why.append(f"if everything expired now at the worst price, equity would be {worst:,.0f}, too near the {floor:,.0f} floor (the day's or the drawdown limit; {STRESS_MARGIN:.1%} of equity is kept in reserve)")
         return Decision(not why, why)
 
     def check_cover(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime) -> Decision:
@@ -387,12 +399,12 @@ class RiskGate:
                 rest[symbol].qty -= qty
                 if rest[symbol].qty == 0:
                     del rest[symbol]
-                worst = stress_equity(account.cash, rest)
+                worst, before = stress_equity(account.cash, rest), account.stress()
                 day_floor, dd_floor = self.floors(account)
                 floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
-                if worst == float("-inf"):
+                if worst == float("-inf") and before != float("-inf"):
                     why.append("selling this would leave a sold option uncovered (no limit on the loss): buy the sold option back first")
-                elif worst < floor:                                                      # a put spread stripped of its long put is "bounded" only by the strike: far past the loss floors
+                elif worst < before - 1e-6 and worst < floor:                                   # only a sale that LOWERS the worst case can be refused: an unrelated long is always free to go                                                      # a put spread stripped of its long put is "bounded" only by the strike: far past the loss floors
                     why.append(f"selling this would leave a sold option without its cover: the worst case would be equity of {worst:,.0f}, under the {floor:,.0f} floor: buy the sold option back first")
             if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)):
                 why.append("no usable two-sided quote")
