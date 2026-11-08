@@ -1,25 +1,28 @@
 """AUTO v1: the paper desk deciding for itself. PAPER MONEY ONLY, off unless the owner switches it on.
 
-This module is a pure decision function. It reads the live board (the relay's snapshot) and the paper account, and it returns ORDERS in the same shape the owner's hand-placed
-orders have. Nothing here trades: the orders go through `Runner.handle` and the risk gate exactly like a manual order, so every gate rule, the kill switch, the daily loss cap, the
-drawdown halt and the size and freshness checks apply to them unchanged. On top of that it keeps its own, tighter limits (below). It has no network, no environment and no clock of its own.
+This module is a pure decision function. It reads the live board (the relay's snapshot), the news digest and the paper account, and it returns ORDERS in the same shape the owner's hand-placed
+orders have. Nothing here trades: the orders go through `Runner.handle` and the risk gate exactly like a manual order, so every gate rule, the kill switch, the daily loss cap, the drawdown
+halt and the size and freshness checks apply to them unchanged. On top of that it keeps its own, tighter limits (below). It has no network, no environment and no clock of its own.
 
-What it does (v1, deliberately small and fully explained in each order's thesis):
-  * Reads three things per index: the pressure of resting bids against offers around the money in calls against puts, the forward the options imply against the futures price (put-call
-    parity), and the index's own move over the last five minutes.
-  * Enters only when at least TWO of the three agree on a direction and none points the other way: buys the at-the-money call (up) or put (down), ONE lot.
-  * Exits on a +30% gain on the premium, a -25% loss, 25 minutes, the signal turning the other way, or ten minutes before the session closes. It never holds overnight.
-  * Its own limits: at most 2 positions open, at most 6 entries a day, 20 minutes between entries on an index, and it stops for the day (and sells what it holds) once its own day's
-    result is down 1% of the starting capital.
+What it looks for: HIGH REWARD FOR LITTLE RISK. It buys one lot of a long option, so the most it can lose is the premium, and it caps that loss at 40% of the premium with a stop; it puts NO
+cap on the gain. A winner is protected by a trailing stop that arms at +80% (twice the risk) and follows 30% below the peak, so a trade that works is allowed to run for several times what it risked.
+Most trades will lose their small stop; the ones that work pay for them. That is the bet, and the record will say whether it is a good one.
 
-It is NOT proven to make money: these are the same signals the app's Flow panel logs and grades, which are "unproven" until they have a record. The point of running it is the record.
+  Entry   at least TWO of four readings agree and none points the other way: resting bid/offer pressure around the money (calls against puts), the forward the options imply against the
+          futures price (put-call parity), the index's own move over five minutes, and the tone of the recent news. Then it buys the first strike out of the money (more convexity for
+          the same stop) of an expiry at least three days away (no last-day decay).
+  Exit    stop at -40% of the premium; trailing stop (arms at +80%, 30% off the peak); the signals turning the other way; strong news against it; the day's own stop.
+  Overnight   it is NOT an intraday system. Ten minutes before the close each position gets a decision: it is HELD overnight if its expiry is still at least two days off, it is not older than
+          three sessions, it is above its stop, the signals do not point the other way and the news is not against it; otherwise it is sold. A held position keeps its stop and trailing stop
+          in the morning. (The peak the trailing stop needs is written into the ledger, so a restart or the night forgets nothing.)
+  Own limits   at most 2 positions open, 6 entries a day, 20 minutes between entries on an index, and it stops for the day (and sells what it opened today) once its own day is down 1% of the capital.
+
+It is NOT proven to make money: its signals are the ones the app's Flow panel logs and grades, which are "unproven" until they have a record. The point of running it is the record.
 """
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import math
-import re
 
 from ..markets import sessions as MK
 from .runner import MONTHS, OPT_TAIL, _num
@@ -27,11 +30,16 @@ from .runner import MONTHS, OPT_TAIL, _num
 IST = MK.IST
 TAG = "AUTO v1"
 PRESSURE_TH, PARITY_TH_PCT, MOMENTUM_TH_PCT = 0.25, 0.05, 0.10
-TAKE_PROFIT, STOP_LOSS = 1.30, 0.75
-HOLD_MAX_S, COOLDOWN_S, MAX_OPEN, MAX_ENTRIES_DAY = 25 * 60, 20 * 60, 2, 6
+NEWS_TONE_TH, NEWS_WEIGHT_TH, NEWS_MAX_AGE_S = 0.35, 3.0, 2 * 3600
+STOP_KEEP = 0.60                    # the stop sits at 60% of the entry premium: the risk is 40% of it (one R)
+TRAIL_ARM, TRAIL_KEEP = 1.80, 0.70  # the trailing stop arms at +80% (two R) and follows 30% below the peak
+PEAK_STEP = 1.05                    # a new peak is written to the ledger when it is 5% above the last written
+MAX_AGE_DAYS = 3                    # sessions a position may be held
+ENTRY_MIN_DAYS_TO_EXPIRY, HOLD_MIN_DAYS_TO_EXPIRY = 3, 2
+COOLDOWN_S, MAX_OPEN, MAX_ENTRIES_DAY = 20 * 60, 2, 6
 DAY_STOP_FRAC = 0.01
-FIRST_ENTRY_AFTER_OPEN_S, LAST_ENTRY_BEFORE_CLOSE_S, EXIT_BEFORE_CLOSE_S = 5 * 60, 20 * 60, 10 * 60
-QUOTE_MAX_AGE_S, MAX_SPREAD_PCT, RATE = 15.0, 0.06, 0.065
+FIRST_ENTRY_AFTER_OPEN_S, LAST_ENTRY_BEFORE_CLOSE_S, DECIDE_BEFORE_CLOSE_S = 5 * 60, 20 * 60, 10 * 60
+QUOTE_MAX_AGE_S, MAX_SPREAD_PCT, RATE, MIN_PREMIUM = 15.0, 0.06, 0.065, 5.0
 TICK = 0.05
 MOMENTUM_WINDOW_S = 300
 EXIT_RESEND_S, ENTRY_PENDING_S = 15.0, 45.0
@@ -75,7 +83,7 @@ def chains(snap, underlyings, lots) -> dict:
 
 
 def readings(snap, u, exp, chain, now: dt.datetime, spot: float, fut: float | None) -> dict:
-    """The three readings for one index and expiry: pressure (-1..+1), the parity gap (% of the futures price) and the quotes used. None where the board does not support a reading."""
+    """The board readings for one index and expiry: pressure (-1..+1), the parity gap (% of the futures price) and the at-the-money strike. None where the board does not support a reading."""
     quotes = snap.get("quotes") or {}
     ks = sorted(chain)
     if not ks:
@@ -111,8 +119,42 @@ def readings(snap, u, exp, chain, now: dt.datetime, spot: float, fut: float | No
     return {"pressure": pressure, "gap_pct": gap, "atm": ks[at]}
 
 
-def direction(pressure, gap_pct, momentum_pct) -> tuple[int, list[str]]:
-    """+1 / -1 / 0 and the reasons: at least two of the three point the same way and none points the other way."""
+def news_tone(digest, u: str, now: dt.datetime) -> tuple[float | None, float, int]:
+    """(weighted tone -1..+1, total weight, stories) of the recent news that bears on index `u`: stories from the last two hours, medium or high impact, not market-move recaps and not stale
+    repeats, naming `u` or naming nothing in particular (market-wide). Weight 2 for medium, 3 for high. (None, 0, 0) with nothing usable."""
+    items = digest.get("items") if isinstance(digest, dict) and isinstance(digest.get("items"), list) else []
+    t = now.timestamp()
+    num = den = 0.0
+    n = 0
+    for it in items:
+        if not isinstance(it, dict) or it.get("recap") is True or it.get("impact") not in ("medium", "high"):
+            continue
+        tone, nov = _num(it.get("tone")), _num(it.get("novelty"))
+        if tone is None or not (-1 <= tone <= 1) or (nov is not None and nov < 0.3):
+            continue
+        try:
+            ts = dt.datetime.strptime(str(it.get("ts")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+        except ValueError:
+            continue
+        if not (0 <= t - ts <= NEWS_MAX_AGE_S):
+            continue
+        syms = it.get("symbols") if isinstance(it.get("symbols"), list) else []
+        if syms and u not in syms:
+            continue
+        w = 3.0 if it["impact"] == "high" else 2.0
+        num, den, n = num + w * tone, den + w, n + 1
+    return (num / den if den > 0 else None), den, n
+
+
+def news_vote(digest, u: str, now: dt.datetime) -> tuple[int, str | None]:
+    tone, weight, n = news_tone(digest, u, now)
+    if tone is None or weight < NEWS_WEIGHT_TH or abs(tone) < NEWS_TONE_TH:
+        return 0, None
+    return (1 if tone > 0 else -1), f"news tone {tone:+.2f} over {n} stories"
+
+
+def direction(pressure, gap_pct, momentum_pct, news_v: int = 0, news_why: str | None = None) -> tuple[int, list[str]]:
+    """+1 / -1 / 0 and the reasons: at least two readings point the same way and none points the other way."""
     votes, why = [], []
     if pressure is not None and abs(pressure) >= PRESSURE_TH:
         votes.append(1 if pressure > 0 else -1)
@@ -123,6 +165,9 @@ def direction(pressure, gap_pct, momentum_pct) -> tuple[int, list[str]]:
     if momentum_pct is not None and abs(momentum_pct) >= MOMENTUM_TH_PCT:
         votes.append(1 if momentum_pct > 0 else -1)
         why.append(f"index {momentum_pct:+.2f}% in 5 min")
+    if news_v:
+        votes.append(news_v)
+        why.append(news_why or "news")
     if len(votes) >= 2 and len(set(votes)) == 1:
         return votes[0], why
     return 0, why
@@ -136,18 +181,28 @@ class AutoPilot:
         self.tape: dict[str, list[tuple[float, float]]] = {}      # u -> [(epoch s, spot)], this process only
         self.pending_entry: dict[str, float] = {}
         self.pending_exit: dict[str, float] = {}
+        self.written_peak: dict[tuple, float] = {}
+        self._events: list[dict] = []
         self.n = 0
         self.last_info: dict = {}
 
-    # ---- the account as the ledger tells it (the ledger is the memory: a restart forgets nothing that matters) ------------------------------------------------
     @staticmethod
     def _is_auto(strategy) -> bool:
         return isinstance(strategy, str) and strategy.startswith(TAG)
 
+    def drain_events(self) -> list[dict]:
+        """Ledger events to append (a new peak for a held position), once each: the session writes them with `Account.record_event`."""
+        out, self._events = self._events, []
+        return out
+
+    # ---- the account as the ledger tells it (the ledger is the memory: a restart or a night forgets nothing that matters) -----------------------------------------
     def day_facts(self, account, day: dt.date, marks: dict) -> dict:
+        """Entries today, the last buy per index, and the day's own result: the realised result of the sales made today plus the open result of what was opened today, fees included.
+        A position carried in from an earlier day is not part of today's result (it has its own stops); an unpriced one opened today counts as worth nothing."""
         entries = 0
         last_buy: dict[str, float] = {}
-        cash = 0.0
+        book: dict[str, list] = {}                                  # symbol -> [qty, avg, opened_day, fees_paid_so_far]
+        result = 0.0
         for r in account.ledger:
             if not self._is_auto(r.get("strategy")) or r.get("kind") not in ("buy", "sell"):
                 continue
@@ -155,27 +210,47 @@ class AutoPilot:
                 ts = dt.datetime.fromisoformat(r["ts"]).astimezone(IST)
             except (ValueError, KeyError, TypeError):
                 continue
-            if ts.date() != day:
-                continue
-            q, p, f = r["qty"], r["price"], r.get("fees", 0.0)
+            sym, q, p, f = r.get("symbol"), r["qty"], r["price"], r.get("fees", 0.0)
+            today = ts.date() == day
             if r["kind"] == "buy":
-                entries += 1
-                cash -= q * p + f
-                u = (r.get("instrument") or {}).get("underlying")
-                if u:
-                    last_buy[u] = max(last_buy.get(u, 0.0), ts.timestamp())
+                b = book.setdefault(sym, [0, 0.0, ts.date(), 0.0])
+                b[1] = (b[1] * b[0] + p * q) / (b[0] + q)
+                b[0] += q
+                b[3] += f
+                if today:
+                    entries += 1
+                    u = (r.get("instrument") or {}).get("underlying")
+                    if u:
+                        last_buy[u] = max(last_buy.get(u, 0.0), ts.timestamp())
             else:
-                cash += q * p - f
-        held = 0.0
-        for s, pos in account.positions.items():
-            if self._is_auto(pos.strategy):
-                m = marks.get(s)
-                held += (pos.qty * m) if m is not None else 0.0                 # an unpriced position counts as worth nothing: the stop trips rather than hides
-        return {"entries": entries, "last_buy": last_buy, "result": cash + held}
+                b = book.get(sym)
+                if not b:
+                    continue
+                if today:
+                    result += (p - b[1]) * q - f - (b[3] * q / b[0] if b[2] == day and b[0] else 0.0)
+                b[3] -= b[3] * q / b[0] if b[0] else 0.0
+                b[0] -= q
+                if b[0] <= 0:
+                    book.pop(sym, None)
+        for sym, b in book.items():
+            if b[2] != day:
+                continue
+            m = marks.get(sym)
+            result += ((m - b[1]) * b[0] if m is not None else -b[1] * b[0]) - b[3]
+        return {"entries": entries, "last_buy": last_buy, "result": result}
+
+    def _peaks(self, account) -> dict:
+        out: dict[tuple, float] = {}
+        for r in account.ledger:
+            if r.get("kind") == "auto_peak" and isinstance(r.get("peak"), (int, float)):
+                k = (r.get("symbol"), r.get("opened_at"))
+                out[k] = max(out.get(k, 0.0), float(r["peak"]))
+        return out
 
     # ---- one decision round ------------------------------------------------------------------------------------------------------------------------------------
-    def decide(self, snap, account, now: dt.datetime, *, kill: bool = False, entries_blocked: str | None = None, cal=None) -> list[dict]:
-        """Orders to hand to `Runner.step` this cycle (maybe none). `now` is the relay's time (UTC-aware); `cal` the session calendar (MK.Calendars) so a closed day proposes nothing."""
+    def decide(self, snap, account, now: dt.datetime, *, kill: bool = False, entries_blocked: str | None = None, cal=None, news=None) -> list[dict]:
+        """Orders to hand to `Runner.step` this cycle (maybe none). `now` is the relay's time (UTC-aware); `cal` the session calendar (MK.Calendars) so a closed day proposes nothing;
+        `news` the relay's news digest (or None)."""
         orders: list[dict] = []
         if now.tzinfo is None:
             return orders
@@ -202,54 +277,60 @@ class AutoPilot:
         facts = self.day_facts(account, ist.date(), marks)
         info["day"] = {"entries": facts["entries"], "result": round(facts["result"], 2)}
         stopped = facts["result"] <= -DAY_STOP_FRAC * self.capital
-        closing = sess[1] - ist <= dt.timedelta(seconds=EXIT_BEFORE_CLOSE_S)
+        deciding = sess[1] - ist <= dt.timedelta(seconds=DECIDE_BEFORE_CLOSE_S)
         ours = {s: p for s, p in account.positions.items() if self._is_auto(p.strategy)}
-        for s, pos in ours.items():                                                          # ---- exits first
+        ch = chains(snap, self.und, self.lots)
+        peaks = self._peaks(account)
+        dirs: dict[str, int] = {}
+        for u in self.und:
+            d, why, rd, mom, nv = self._dir_of(snap, u, ist, t, ch, news, now)
+            dirs[u] = d
+            info["u"][u] = {"dir": d, "pressure": rd.get("pressure") if rd else None, "gap_pct": rd.get("gap_pct") if rd else None, "mom_pct": mom, "news": nv}
+        for s, pos in ours.items():                                                          # ---- positions first
+            u, want = pos.instrument.underlying, (1 if pos.instrument.right == "CE" else -1)
             mark = marks.get(s)
+            key = (s, pos.opened_at)
+            peak = max(peaks.get(key, pos.avg_price), self.written_peak.get(key, 0.0), pos.avg_price, mark or 0.0)
+            if mark is not None and mark > pos.avg_price and mark >= max(peaks.get(key, 0.0), self.written_peak.get(key, 0.0)) * PEAK_STEP:
+                self.written_peak[key] = mark
+                self._events.append({"kind": "auto_peak", "symbol": s, "opened_at": pos.opened_at, "peak": round(mark, 2)})
+            tone, weight, _ = news_tone(news, u, now)
+            news_against = tone is not None and weight >= NEWS_WEIGHT_TH and tone * want <= -NEWS_TONE_TH
             reason = None
-            if stopped:
+            if stopped and self._opened_today(pos, ist.date()):
                 reason = "the day's own stop (down 1% of capital)"
-            elif closing:
-                reason = "ten minutes to the close: never held overnight"
-            elif mark is not None and mark >= pos.avg_price * TAKE_PROFIT:
-                reason = f"take profit (bid {mark:g} against {pos.avg_price:g})"
-            elif mark is not None and mark <= pos.avg_price * STOP_LOSS:
-                reason = f"stop loss (bid {mark:g} against {pos.avg_price:g})"
-            else:
-                try:
-                    held = t - dt.datetime.fromisoformat(pos.opened_at).timestamp()
-                except (ValueError, TypeError):
-                    held = HOLD_MAX_S + 1
-                if held >= HOLD_MAX_S:
-                    reason = "25 minutes held"
-                else:
-                    d = info["u"].get(pos.instrument.underlying, {}).get("dir")
-                    want = 1 if pos.instrument.right == "CE" else -1
-                    if d is None:
-                        d = self._dir_of(snap, pos.instrument.underlying, ist, t)[0]
-                    if d == -want:
-                        reason = "the signals turned the other way"
+            elif mark is not None and mark <= pos.avg_price * STOP_KEEP:
+                reason = f"stop loss at -40% of the premium (bid {mark:g} against {pos.avg_price:g})"
+            elif mark is not None and peak >= pos.avg_price * TRAIL_ARM and mark <= peak * TRAIL_KEEP:
+                reason = f"trailing stop (bid {mark:g}, peak {peak:g}, {(mark / pos.avg_price - 1) * 100:+.0f}% on the premium)"
+            elif dirs.get(u) == -want:
+                reason = "the signals turned the other way"
+            elif news_against:
+                reason = f"the news turned against it (tone {tone:+.2f})"
+            elif deciding:
+                reason = self._overnight_no(pos, mark, ist.date(), tone, weight, want)
             if reason and t - self.pending_exit.get(s, 0.0) >= EXIT_RESEND_S:
                 self.pending_exit[s] = t
                 orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": s, "lots": "all", "queued_at": int(t * 1000), "group": "auto", "_why": reason})
-        if stopped or closing or kill or entries_blocked:
+            elif deciding and not reason:
+                info.setdefault("held_overnight", []).append(s)
+        if stopped or deciding or kill or entries_blocked:
             return orders
         open_after = sess[0] + dt.timedelta(seconds=FIRST_ENTRY_AFTER_OPEN_S)
         last_entry = sess[1] - dt.timedelta(seconds=LAST_ENTRY_BEFORE_CLOSE_S)
         if not (open_after <= ist < last_entry):
             return orders
-        if len(ours) + len([1 for k, v in self.pending_entry.items() if t - v < ENTRY_PENDING_S]) >= MAX_OPEN or facts["entries"] >= MAX_ENTRIES_DAY:
+        if len(ours) + len([1 for v in self.pending_entry.values() if t - v < ENTRY_PENDING_S]) >= MAX_OPEN or facts["entries"] >= MAX_ENTRIES_DAY:
             return orders
-        ch = chains(snap, self.und, self.lots)
         for u in self.und:
-            d, why, rd, mom = self._dir_of(snap, u, ist, t, ch)
-            info["u"][u] = {"dir": d, "pressure": rd.get("pressure") if rd else None, "gap_pct": rd.get("gap_pct") if rd else None, "mom_pct": mom}
+            d = dirs.get(u, 0)
             if d == 0 or u not in ch:
                 continue
             if t - facts["last_buy"].get(u, 0.0) < COOLDOWN_S or t - self.pending_entry.get(u, 0.0) < ENTRY_PENDING_S:
                 continue
             if any(p.instrument.underlying == u for p in ours.values()):
                 continue
+            _, why, _, _, _ = self._dir_of(snap, u, ist, t, ch, news, now)
             o = self._entry(snap, u, d, why, ch[u], ist, t)
             if o:
                 self.pending_entry[u] = t
@@ -258,6 +339,31 @@ class AutoPilot:
         return orders
 
     # ---- pieces ---------------------------------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _opened_today(pos, day: dt.date) -> bool:
+        try:
+            return dt.datetime.fromisoformat(pos.opened_at).astimezone(IST).date() == day
+        except (ValueError, TypeError):
+            return True                                                                        # unreadable: treat it as today's (the stricter way)
+
+    @staticmethod
+    def _overnight_no(pos, mark, today: dt.date, tone, weight, want) -> str | None:
+        """Why this position should NOT be kept overnight (None = keep it). Called ten minutes before the close."""
+        exp = pos.instrument.expiry
+        if exp is None or (exp - today).days < HOLD_MIN_DAYS_TO_EXPIRY:
+            return "expiry is too close to hold overnight (decay and expiry-day risk)"
+        try:
+            age = (today - dt.datetime.fromisoformat(pos.opened_at).astimezone(IST).date()).days
+        except (ValueError, TypeError):
+            return "its opening time is unreadable: not carried"
+        if age >= MAX_AGE_DAYS:
+            return f"held {age} sessions already: time limit"
+        if mark is None:
+            return "no usable price to judge it by: not carried overnight"
+        if mark < pos.avg_price * 0.75:
+            return "well under its entry at the close: the idea is failing, not carried"
+        return None
+
     def _oid(self, t: float, kind: str) -> str:
         self.n += 1
         return f"auto-{kind}-{int(t)}-{self.n}"
@@ -269,43 +375,47 @@ class AutoPilot:
         past = [x for x in tape if x[0] <= t - MOMENTUM_WINDOW_S]
         return (tape[-1][1] / past[-1][1] - 1) * 100 if past else None
 
-    def _dir_of(self, snap, u, ist, t, ch=None):
+    @staticmethod
+    def _pick_expiry(exps, today):
+        ok = sorted(e for e in exps if (e - today).days >= ENTRY_MIN_DAYS_TO_EXPIRY)
+        return ok[0] if ok else None
+
+    def _dir_of(self, snap, u, ist, t, ch, news, now):
         sp = _spot(snap, u)
-        if not sp:
-            return 0, [], None, None
-        ch = ch if ch is not None else chains(snap, self.und, self.lots)
-        if u not in ch:
-            return 0, [], None, self._momentum(u, t)
-        today = ist.date()
-        exps = sorted(e for e in ch[u] if e > today or (e == today and ist.time() < dt.time(13, 0)))
-        if not exps:
-            return 0, [], None, self._momentum(u, t)
-        fq = (snap.get("quotes") or {}).get(u + "-FUT")
-        fut = _mid(fq) if isinstance(fq, dict) and _num(fq.get("age_s")) is not None and 0 <= _num(fq.get("age_s")) <= 60 else None
-        rd = readings(snap, u, exps[0], ch[u][exps[0]], ist, sp, fut)
         mom = self._momentum(u, t)
-        d, why = direction(rd["pressure"], rd["gap_pct"], mom)
-        return d, why, rd, mom
+        nv, nwhy = news_vote(news, u, now)
+        if not sp or u not in ch:
+            return 0, [], None, mom, nv
+        exp = self._pick_expiry(ch[u], ist.date())
+        if exp is None:
+            return 0, [], None, mom, nv
+        fq = (snap.get("quotes") or {}).get(u + "-FUT")
+        age = _num(fq.get("age_s")) if isinstance(fq, dict) else None
+        fut = _mid(fq) if isinstance(fq, dict) and age is not None and 0 <= age <= 60 else None
+        rd = readings(snap, u, exp, ch[u][exp], ist, sp, fut)
+        d, why = direction(rd["pressure"], rd["gap_pct"], mom, nv, nwhy)
+        return d, why, rd, mom, nv
 
     def _entry(self, snap, u, d, why, by_exp, ist, t):
-        today = ist.date()
-        exps = sorted(e for e in by_exp if e > today or (e == today and ist.time() < dt.time(13, 0)))
-        if not exps:
-            return None
-        chain = by_exp[exps[0]]
+        exp = self._pick_expiry(by_exp, ist.date())
+        chain = by_exp.get(exp) if exp else None
         sp = _spot(snap, u)
         if not sp or not chain:
             return None
-        k = min(chain, key=lambda x: abs(x - sp))
+        ks = sorted(chain)
+        at = min(range(len(ks)), key=lambda i: abs(ks[i] - sp))
         side = "CE" if d > 0 else "PE"
+        i = min(max(at + (1 if d > 0 else -1), 0), len(ks) - 1)                              # the first strike out of the money: more convexity for the same stop
+        k = ks[i]
         name = chain[k].get(side)
         q = (snap.get("quotes") or {}).get(name)
         if not isinstance(q, dict):
             return None
         age, bid, ask = _num(q.get("age_s")), _num(q.get("bid")), _num(q.get("ask"))
-        if None in (age, bid, ask) or not (0 <= age <= QUOTE_MAX_AGE_S) or not (0 < bid <= ask) or (ask - bid) / ((ask + bid) / 2) > MAX_SPREAD_PCT:
+        if None in (age, bid, ask) or not (0 <= age <= QUOTE_MAX_AGE_S) or not (0 < bid <= ask) or ask < MIN_PREMIUM or (ask - bid) / ((ask + bid) / 2) > MAX_SPREAD_PCT:
             return None
         limit = round(math.ceil((ask + max(3 * TICK, 0.02 * ask)) / TICK - 1e-9) * TICK, 2)
-        thesis = f"{TAG}: {u} {'up' if d > 0 else 'down'}: " + "; ".join(why) + f". Buys the {k} {side}; exits at +30% / -25% / 25 min / signals reversing / 10 min before the close."
+        thesis = (f"{TAG}: {u} {'up' if d > 0 else 'down'}: " + "; ".join(why) + f". Buys the {k} {side} ({exp:%d %b}). Risk: a stop at -40% of the premium; reward: uncapped, "
+                  "a trailing stop arms at +80% and follows 30% below the peak. Held overnight only if the idea is intact, the news is not against it and expiry is far enough.")
         return {"id": self._oid(t, "b"), "side": "buy", "symbol": name, "lots": 1, "strategy": f"{TAG} {u} {'long call' if d > 0 else 'long put'}"[:60], "thesis": thesis[:1000],
                 "limit": limit, "group": "auto", "queued_at": int(t * 1000), "ref": {"bid": bid, "ask": ask, "at": int(t * 1000 - age * 1000)}}

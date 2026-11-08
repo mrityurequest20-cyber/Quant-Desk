@@ -90,5 +90,9 @@ class Relay:
             body["account"] = account_text
         return self._call("POST", "/paper/state", self._ingest, body)
 
+    def news(self) -> dict:
+        """The news digest (the relay's /news, READ key): {"digest": {...}, "stored_at": ..., "now": ...}. The autopilot reads the tone of the recent stories; nothing here is a signal on its own."""
+        return self._call("GET", "/news", self._read)
+
     def get_state(self) -> dict:
         return self._call("GET", "/paper/state?full=1", self._ingest)

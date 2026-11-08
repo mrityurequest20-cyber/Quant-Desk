@@ -549,7 +549,11 @@ def test_verify_extends_accepts_a_continuation_and_refuses_a_shorter_or_a_differ
 class _Pilot:
     """A stand-in autopilot: proposes what it is told to, or fails."""
     def __init__(self, orders=None, boom=False):
-        self.orders, self.boom, self.calls = orders or [], boom, 0
+        self.orders, self.boom, self.calls, self.events = orders or [], boom, 0, []
+
+    def drain_events(self):
+        out, self.events = self.events, []
+        return out
 
     def decide(self, snap, account, now, **kw):
         self.calls += 1
@@ -588,3 +592,16 @@ def test_the_autopilots_orders_go_through_the_same_step_gate_and_result_path(cfg
     pilot2 = _Pilot([{**mine, "id": "auto-b-2-1", "queued_at": int(clk2().timestamp() * 1000)}])
     S.run(cfg, rl2, tmp_path / "l2" / "account.json", (clk2.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk2, sleep=clk2.sleep, say=lambda *a: None, new_account=True, auto=pilot2)
     assert {r["id"]: r["status"] for r in rl2.results}["auto-b-2-1"] == "refused"                                          # the owner's kill switch stops the pilot's order too
+
+
+def test_a_new_peak_from_the_autopilot_is_written_into_the_ledger_and_survives_the_save(cfg, tmp_path):
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add()
+    pilot = _Pilot()
+    pilot.events = [{"kind": "auto_peak", "symbol": NAME, "opened_at": "2026-11-09T10:00:00+05:30", "peak": 130.5}]
+    assert S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep, say=lambda *a: None, new_account=True, auto=pilot) == 0
+    saved = R.load_account(rl.state["account"])
+    assert any(r["kind"] == "auto_peak" and r["peak"] == 130.5 and r["symbol"] == NAME for r in saved.ledger) and saved.verify_ledger()
+    again = R.load_account((tmp_path / "ledger" / "account.json").read_text())
+    assert again.ledger == saved.ledger and [r["status"] for r in rl.results] == ["filled"]

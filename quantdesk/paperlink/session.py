@@ -14,6 +14,7 @@ from .relay import Relay, RelayError
 IST = MK.IST
 EXIT_REFUSED = 3             # the saved histories disagree or do not verify: the runner will not start
 UNSAFE_AFTER_S = 30.0        # new entries wait when the relay has not been given the latest fill for this long (exits and the brakes still run)
+NEWS_EVERY_S = 60.0          # the autopilot reads the news digest at most this often
 FULL_EVERY_S = 60.0          # the whole account goes to the relay at least this often when only the figures the brakes use (high-water mark, day start) have moved
 
 
@@ -75,6 +76,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     except (RelayError, ValueError, OverflowError) as e:
         log(f"paper: could not send the opening state to the relay ({type(e).__name__}); will retry")
     unsafe_since = None
+    news, news_at = None, -1e9
     while clock().astimezone(IST).time() < until_ist:
         t0 = time.monotonic()
         try:
@@ -91,9 +93,21 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         orders = [o for o in raw_orders if not (isinstance(o, dict) and isinstance(o.get("id"), str) and o["id"] in waiting)]
         kill = q.get("kill") is not False                              # a missing or odd answer counts as ON: the safe way round
         if auto is not None:                                           # AUTO v1: its orders join the owner's and go through the very same step, gate and brakes
+            if time.monotonic() - news_at >= NEWS_EVERY_S:             # the news digest, at most once a minute; a failure just means no news reading (it never blocks anything)
+                news_at = time.monotonic()
+                try:
+                    got = relay.news()
+                    news = got.get("digest") if isinstance(got, dict) and isinstance(got.get("digest"), dict) else None
+                except (RelayError, AttributeError):
+                    news = None
             try:
                 srv = Runner.server_now(snap)
-                mine = auto.decide(snap, rn.account, srv, kill=kill, entries_blocked=rn.entries_blocked, cal=rn.gate.cal) if srv is not None else []
+                mine = auto.decide(snap, rn.account, srv, kill=kill, entries_blocked=rn.entries_blocked, cal=rn.gate.cal, news=news) if srv is not None else []
+                for ev in auto.drain_events():                         # a held position's new peak goes into the ledger, so the trailing stop survives a restart and the night
+                    try:
+                        account.record_event(ev["kind"], srv.isoformat(), **{k: v for k, v in ev.items() if k != "kind"})
+                    except (ValueError, TypeError):
+                        pass
             except Exception as e:                                     # noqa: BLE001 - a fault in the autopilot must never stop the runner or the brakes
                 mine = []
                 log(f"paper: the autopilot failed this cycle ({type(e).__name__}); the owner's orders and the brakes go on")
