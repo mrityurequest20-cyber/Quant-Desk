@@ -100,6 +100,12 @@ def session(key: str, day: dt.date, cal: Calendars, trading: bool = False) -> tu
     return (dt.datetime.combine(day, seg.opens, tzinfo=IST), dt.datetime.combine(day, closes_at(seg, day), tzinfo=IST))
 
 
+def exit_session(key: str, day: dt.date, cal: Calendars) -> tuple[dt.datetime, dt.datetime] | None:
+    """The window in which a HELD position may be sold: the recording calendar (an exit needs only that the market is open, even where the holiday list is unverified), or an announced
+    special session. A position bought in a special session must be sellable in it."""
+    return session(key, day, cal, trading=False) or session(key, day, cal, trading=True)
+
+
 def open_segments(now: dt.datetime, cal: Calendars, trading: bool = False) -> list[str]:
     now = now.astimezone(IST)
     out = []

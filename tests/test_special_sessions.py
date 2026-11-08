@@ -88,3 +88,25 @@ def test_the_relays_poller_follows_the_same_window_and_the_two_lists_agree(cfg, 
     assert out["sp"] == want                                                                                      # the relay's copy equals the config: five minutes either side
     live = (ROOT / "deploy/cloudflare/live.js").read_text(encoding="utf-8")
     assert "SPECIAL_SESSIONS" in live[live.index("/needs-universe"):live.index("/needs-universe") + 600] or re.search(r'path === "/needs-universe"[\s\S]{0,700}SPECIAL_SESSIONS', live)
+
+
+def test_a_position_bought_in_the_special_window_can_be_sold_in_it_and_not_outside_or_on_other_sundays(cfg, tmp_path):
+    inst = Instrument.option("NIFTY", dt.date(2026, 11, 12), 24500, "CE", 65)
+    order = Order(inst, "nse_fo", 65, "muhurat", "range break with rising volume, 30m")
+
+    def held():
+        acct = Account(500_000)
+        b = PaperBroker(cfg, acct, RiskGate(cfg, kill=KillSwitch(tmp_path / "K")))
+        assert b.buy(order, Quote(99.0, 100.0, at(14, 30) - dt.timedelta(seconds=2), 5000, 5000), {}, at(14, 30))[0].allowed
+        return b
+
+    def sell(now):
+        return held().sell(inst.symbol, 65, Quote(99.0, 100.0, now - dt.timedelta(seconds=2), 5000, 5000), now)[0]
+
+    assert sell(at(14, 31)).allowed and sell(at(15, 29)).allowed
+    for closed in (at(14, 19), at(15, 30), at(14, 30, dt.date(2026, 11, 15))):
+        d = sell(closed)
+        assert not d.allowed and any("closed" in r for r in d.reasons), (closed, d.reasons)
+    cal = MK.Calendars(cfg)
+    assert MK.exit_session("nse_fo", DIWALI, cal) == (at(14, 20), at(15, 30)) and MK.exit_session("nse_fo", dt.date(2026, 11, 7), cal) is None
+    assert MK.exit_session("nse_fo", dt.date(2026, 11, 9), cal) == MK.session("nse_fo", dt.date(2026, 11, 9), cal)             # ordinary days: exactly as before
