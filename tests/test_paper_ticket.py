@@ -82,13 +82,14 @@ def test_the_tickets_orders_pass_the_runners_own_shape_check(tmp_path):
 def test_the_page_posts_to_exactly_two_relay_routes_and_only_after_a_review_step():
     posts = re.findall(r'paperCall\("POST", "([^"]+)"', APP)
     assert sorted(set(posts)) == ["/paper/kill", "/paper/order"]                                                                  # nothing else is ever sent
-    assert 'const PAPER_PATHS = new Set(["/paper/order", "/paper/kill", "/paper/state"]);' in APP and "not a paper route" in APP
+    assert 'const PAPER_ROUTES = { "/paper/order": "POST", "/paper/kill": "POST", "/paper/state": "GET" };' in APP and "not a paper route" in APP
     assert len(re.findall(r"fetch\(", APP[APP.index("async function paperCall"):APP.index("// ---- the ticket in the Build tab")])) == 1      # one fetch, in paperCall
     ticket = APP[APP.index("function bdTicket"):APP.index("// ---- the Paper tab")]
     assert ticket.count('paperCall("POST", "/paper/order", o)') == 1 and ticket.index('if (tk.stage === "review" && built.orders)') < ticket.index('paperCall("POST", "/paper/order", o)')      # the send exists only on the review step
     assert 'if (r.status !== 200) break;' in ticket                                                                              # a refused first leg stops the rest
     tab = APP[APP.index("// ---- the Paper tab"):APP.index("// refresh loop, pull to refresh, boot")]
-    assert 'P.confirm = "kill"' in tab and 'P.confirm = "sell:" + p.symbol' in tab                                                # kill and sell are two taps
+    assert 'P.confirm = killOn ? "kill:off" : "kill:on"' in tab and 'P.confirm = "sell:" + p.symbol' in tab                          # kill and sell are two taps, and the kill tap names its direction
+    assert 'P.confirm === (killOn ? "kill:off" : "kill:on")' in tab                                                              # the second tap only counts for the direction that was asked about
     assert tab.count('paperCall("POST"') == 2 and "innerHTML" not in APP
 
 
@@ -98,3 +99,68 @@ def test_the_ticket_is_not_offered_where_the_paper_desk_would_refuse_and_the_tab
     tab = APP[APP.index("function ppDraw"):APP.index("async function renderPaper")]
     assert "The paper runner has not reported yet" in tab and "last reported" in tab and "Held past expiry with no price" in tab
     assert "github\\.io" in APP[APP.index("async function renderPaper"):APP.index("// refresh loop, pull to refresh, boot")]           # not on the public copy
+
+
+@needs_node
+def test_the_page_can_call_only_its_three_routes_each_with_its_one_method_on_its_own_origin(tmp_path):
+    o = node(tmp_path, r"""
+(async () => {
+	const calls = [];
+	const fk = async (u, init) => { calls.push({ u, m: init.method, auth: init.headers.Authorization, signal: !!init.signal }); return { status: 200, json: async () => ({ ok: true }) }; };
+	const res = {};
+	for (const [m, p] of [["POST", "/paper/order"], ["POST", "/paper/kill"], ["GET", "/paper/state"], ["GET", "/paper/order"], ["POST", "/paper/state"], ["GET", "/paper/kill"], ["POST", "/live/ingest"], ["POST", "https://example.com/paper/order"], ["POST", "//example.com/paper/order"], ["POST", "/paper/order?x=1"], ["POST", "/paper/../paper/order"], ["POST", "constructor"], ["POST", "__proto__"], ["POST", "toString"]]) res[m + " " + p] = (await paperSend(fk, "k", m, p, m === "POST" ? { a: 1 } : null)).status;
+	const nokey = await paperSend(fk, "", "GET", "/paper/state");
+	console.log(JSON.stringify({ res, calls, nokey: nokey.status, n: calls.length }));
+})();
+""")
+    allowed = {"POST /paper/order", "POST /paper/kill", "GET /paper/state"}
+    assert {k for k, v in o["res"].items() if v == 200} == allowed, o["res"]                                                       # everything else is refused before any request
+    assert o["n"] == 3 and [c["u"] for c in o["calls"]] == ["/paper/order", "/paper/kill", "/paper/state"]                         # the request goes to the relative path itself
+    assert all(c["auth"] == "Bearer k" and c["signal"] for c in o["calls"]) and o["nokey"] == 0                                    # with a timeout; nothing without a key
+
+
+@needs_node
+def test_a_hung_request_gives_up_and_is_reported_not_left_sending_forever(tmp_path):
+    o = node(tmp_path, r"""
+(async () => {
+	const hang = (u, init) => new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(new Error("aborted"))));
+	const t0 = Date.now(); const r = await paperSend(hang, "k", "POST", "/paper/order", { a: 1 }, 50);
+	console.log(JSON.stringify({ status: r.status, err: r.body.error, ms: Date.now() - t0 }));
+})();
+""")
+    assert o["status"] == 0 and "timed out" in o["err"] and o["ms"] < 5000
+
+
+@needs_node
+def test_numbers_the_page_cannot_trust_never_become_an_order(tmp_path):
+    o = node(tmp_path, LEGS + r"""
+const run = (a) => { const r = PT.ordersFor(a, "S", T); return r.error ? "ERR" : r.orders.map((x) => x.limit); };
+const leg = (ask) => ({ side: 1, name: "NIFTY12NOV2624500CE", ask });
+console.log(JSON.stringify({
+  inf: run(ok({ legs: [leg(Infinity)] })), nan: run(ok({ legs: [leg(NaN)] })), str: run(ok({ legs: [leg("5")] })), neg: run(ok({ legs: [leg(-1)] })),
+  lots0: run(ok({ lots: 0 })), lotsf: run(ok({ lots: 1.5 })), lotss: run(ok({ lots: "2" })), lotsbig: run(ok({ lots: 1001 })), lotsinf: run(ok({ lots: Infinity })), lots1000: run(ok({ lots: 1000 })), fine: run(ok()),
+}));
+""")
+    for k in ("inf", "nan", "str", "neg", "lots0", "lotsf", "lotss", "lotsbig", "lotsinf"):
+        assert o[k] == "ERR", (k, o[k])
+    assert o["lots1000"] != "ERR" and o["fine"] != "ERR" and all(isinstance(x, (int, float)) for x in o["fine"])
+
+
+@needs_node
+def test_a_review_belongs_to_one_structure_and_the_page_resets_it_when_the_structure_changes(tmp_path):
+    o = node(tmp_path, LEGS + r"""
+const a = ok(), same = ok({ legs: [{ side: 1, name: "NIFTY12NOV2624500CE", ask: 90 }, { side: 1, name: "NIFTY12NOV2624400PE", ask: 70 }] });
+console.log(JSON.stringify({ same: PT.sigOf(a) === PT.sigOf(same), lots: PT.sigOf(a) !== PT.sigOf(ok({ lots: 3 })), strike: PT.sigOf(a) !== PT.sigOf(ok({ legs: [{ side: 1, name: "NIFTY12NOV2624600CE", ask: 100 }, a.legs[1]] })), none: PT.sigOf({ paperOk: false, legs: a.legs, lots: 2 }) }));
+""")
+    assert o["same"] is True and o["lots"] is True and o["strike"] is True and o["none"] == ""                                    # prices move, the structure does not
+    ticket = APP[APP.index("function bdTicket"):APP.index("// ---- the Paper tab")]
+    assert 'if (tk.sig !== sig) { if (!tk.busy) { tk.sig = sig; tk.stage = "edit";' in ticket                                       # a changed structure voids the review and the "sent" screen
+    assert "`Strategy: ${PT.flat(strategy)}`" in ticket                                                                            # the review shows what is sent
+    assert "if (tk.busy) return;" in ticket and "ev.currentTarget.disabled = true" in ticket                                        # one tap, one send
+
+
+def test_double_taps_on_sell_and_kill_do_nothing_and_a_half_made_confirm_expires():
+    tab = APP[APP.index("// ---- the Paper tab"):APP.index("// refresh loop, pull to refresh, boot")]
+    assert tab.count("if (P.acting) return; P.acting = true;") == 2 and tab.count("P.acting = false;") >= 2
+    assert "Date.now() - P.confirmAt < 30000" in tab and "S.pp.confirm = null" in APP[APP.index("function show(tab"):APP.index("function show(tab") + 600]
+    assert "it sends no order" not in APP and "sends no order" not in (ROOT / "docs/RECORDING.md").read_text(encoding="utf-8")        # the old "sends nothing" texts are gone

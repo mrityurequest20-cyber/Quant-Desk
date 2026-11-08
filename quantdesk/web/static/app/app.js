@@ -170,6 +170,7 @@ function show(tab, sub) {
 	if (!TABS.some((t) => t[0] === tab)) tab = "live";
 	const changed = tab !== S.tab;
 	S.tab = tab;
+	if (changed && S.pp) S.pp.confirm = null;                                                     // leaving a tab cancels a half-made sell or kill
 	if (sub && SUBS[tab] && SUBS[tab].some((s) => s[0] === sub)) S.sub[tab] = sub;
 	store("qd.tab", tab);
 	document.querySelectorAll("#tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
@@ -1098,7 +1099,7 @@ function bdDraw() {
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
 	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono" }, String(val)), h("button", { class: "btn", "aria-label": "more " + label, onclick: up }, "+")));
 	put(body,
-		h("div", { class: "note" }, "Paper only. This works out what a structure would cost and risk from the live prices; it sends no order, ticket or journal entry (it only reads the live board). Only structures with a known worst loss can be built."),
+		h("div", { class: "note" }, "Paper only. This works out what a structure would cost and risk from the live prices; it reads the live board. The only thing it can send is a paper order, queued on the relay below and carried out by the paper runner through the risk gate. Only structures with a known worst loss can be built."),
 		c.fromConfig ? null : h("div", { class: "note warn" }, "This page has no limits from the desk's config (QD_TRADE is missing), so it is using built-in defaults that may be out of date. Do not rely on the checklist; re-publish the site."),
 		h("div", { class: "chips", style: "padding:8px 16px 4px" }, us.map((u) => chip(u, u === B.u, () => { B.u = u; B.exp = null; bdDraw(); }))),
 		h("div", { class: "chips", style: "padding:4px 16px" }, exps.map((e) => chip(e, e === B.exp, () => { B.exp = e; bdDraw(); }))),
@@ -1182,26 +1183,36 @@ const PT = (() => {
 		if (!a || a.paperOk !== true || !Array.isArray(a.legs) || !a.legs.length) return { error: "The paper desk cannot open this structure today (see the list above)." };
 		if (!stratOk(strategy)) return { error: "Give the strategy a name (up to 60 characters)." };
 		if (!thesisOk(thesis)) return { error: "Write the thesis: why this trade, now (at least 20 characters)." };
-		if (a.legs.some((l) => !(l.side > 0) || typeof l.name !== "string" || !(l.ask > 0))) return { error: "Every leg must be a purchase with an offer on the board." };
+		if (!Number.isInteger(a.lots) || a.lots < 1 || a.lots > 1000) return { error: "The number of lots must be a whole number from 1 to 1000." };
+		if (a.legs.some((l) => !(l.side > 0) || typeof l.name !== "string" || typeof l.ask !== "number" || !Number.isFinite(l.ask) || !(l.ask > 0))) return { error: "Every leg must be a purchase with an offer on the board." };
 		const g = group || idNow().slice(4, 20);
 		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g })) };
 	}
 	const sellFor = (symbol) => ({ id: idNow(), side: "sell", symbol, lots: "all" });
-	return { idNow, flat, thesisOk, stratOk, limitFor, ordersFor, sellFor };
+	// the structure a review belongs to: if it changes, the review is void and the user must press Review again
+	const sigOf = (a) => (a && a.paperOk === true && Array.isArray(a.legs) ? a.lots + "|" + a.legs.map((l) => l.side + ":" + l.name).join(",") : "");
+	return { idNow, flat, thesisOk, stratOk, limitFor, ordersFor, sellFor, sigOf };
 })();
-/* @@ticket:end */
-const PAPER_PATHS = new Set(["/paper/order", "/paper/kill", "/paper/state"]);
-async function paperCall(method, path, body) {
-	const key = store("qd.livekey");
+// The only three routes this page may call, each with its one method; the request goes to that relative path, on this page's own origin, and nowhere else.
+const PAPER_ROUTES = { "/paper/order": "POST", "/paper/kill": "POST", "/paper/state": "GET" };
+async function paperSend(fetchFn, key, method, path, body, timeoutMs) {
 	if (!key) return { status: 0, body: { error: "no key" } };
-	if (!PAPER_PATHS.has(path)) return { status: 0, body: { error: "not a paper route" } };
+	if (!Object.prototype.hasOwnProperty.call(PAPER_ROUTES, path) || PAPER_ROUTES[path] !== method) return { status: 0, body: { error: "not a paper route" } };
+	const ac = typeof AbortController !== "undefined" ? new AbortController() : null;
+	const timer = ac ? setTimeout(() => ac.abort(), timeoutMs || 15000) : null;
 	try {
-		const r = await fetch(path, { method, headers: { Authorization: "Bearer " + key, ...(body ? { "Content-Type": "application/json" } : {}) }, cache: "no-store", ...(body ? { body: JSON.stringify(body) } : {}) });
-		if (r.status === 401) { try { localStorage.removeItem("qd.livekey"); } catch (e) { /* private mode */ } }
+		const r = await fetchFn(path, { method, headers: { Authorization: "Bearer " + key, ...(body ? { "Content-Type": "application/json" } : {}) }, cache: "no-store", ...(ac ? { signal: ac.signal } : {}), ...(body ? { body: JSON.stringify(body) } : {}) });
 		let j = null;
 		try { j = await r.json(); } catch (e) { /* no body */ }
 		return { status: r.status, body: j && typeof j === "object" ? j : {} };
-	} catch (e) { return { status: 0, body: { error: "the request failed before any answer" } }; }
+	} catch (e) { return { status: 0, body: { error: "the request failed or timed out before any answer" } }; }
+	finally { if (timer) clearTimeout(timer); }
+}
+/* @@ticket:end */
+async function paperCall(method, path, body) {
+	const res = await paperSend((u, o) => fetch(u, o), store("qd.livekey"), method, path, body);
+	if (res.status === 401) { try { localStorage.removeItem("qd.livekey"); } catch (e) { /* private mode */ } }
+	return res;
 }
 
 // ---- the ticket in the Build tab: why, review, send ---------------------------------------------------------------------
@@ -1210,6 +1221,8 @@ function bdTicket(a, tpl) {
 	const strategy = tk.strategy == null ? tpl.name : tk.strategy;
 	const box = h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Send as a paper order"));
 	const redraw = () => { B.editing = false; bdDraw(); };
+	const sig = PT.sigOf(a);
+	if (tk.sig !== sig) { if (!tk.busy) { tk.sig = sig; tk.stage = "edit"; tk.sent = []; tk.err = ""; } }       // another structure: the old review (and any "sent" screen) is void
 	if (!a.paperOk) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Not available: the paper desk could not open this today (see the list above). It stays a what-if."));
 	if (tk.stage === "sent") {
 		return put(box, tk.sent.map((r) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: r.ok ? "up" : "dn", style: "width:14px" }, r.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, r.text))),
@@ -1220,11 +1233,14 @@ function bdTicket(a, tpl) {
 	const built = PT.ordersFor(a, strategy, tk.thesis);
 	if (tk.stage === "review" && built.orders) {
 		return put(box,
+			h("div", { class: "f3", style: "font-size:12px;padding:6px 16px 0" }, `Strategy: ${PT.flat(strategy)}`),
 			built.orders.map((o) => h("div", { class: "row", style: "padding:5px 16px;font-size:12.5px;justify-content:space-between" }, h("span", {}, `Buy ${o.lots} lot${o.lots === 1 ? "" : "s"} ${o.symbol}`), h("span", { class: "mono f3" }, `at most ${num(o.limit)}`))),
-			h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, `Most you can lose: ${inr(a.maxLoss)} plus ${inr(a.entryFees)} of fees. Paper money. "${PT.flat(tk.thesis)}"`),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, `Most you can lose, at the offers shown: ${inr(a.maxLoss)} plus ${inr(a.entryFees)} of fees; a fill can be a little dearer, up to the limits above. Paper money. "${PT.flat(tk.thesis)}"`),
 			tk.err ? h("div", { class: "warn", style: "font-size:12.5px;padding:2px 16px" }, tk.err) : null,
 			h("div", { style: "padding:8px 16px 14px;display:flex;gap:10px;flex-wrap:wrap" },
-				h("button", { class: "btn", disabled: tk.busy, onclick: async () => {
+				h("button", { class: "btn", disabled: tk.busy, onclick: async (ev) => {
+					if (tk.busy) return;                                                              // a second tap while the first is still going does nothing
+					if (ev && ev.currentTarget) ev.currentTarget.disabled = true;
 					tk.busy = true; tk.err = ""; tk.sent = [];
 					for (const o of built.orders) {
 						const r = await paperCall("POST", "/paper/order", o);
@@ -1245,10 +1261,11 @@ function bdTicket(a, tpl) {
 }
 
 // ---- the Paper tab: the account, the orders, the positions, the kill switch --------------------------------------------------------
-S.pp = { data: null, busy: false, confirm: null, kill: false, note: "" };
+S.pp = { data: null, busy: false, confirm: null, confirmAt: 0, acting: false, kill: false, note: "" };
 function ppAge(summary) { return summary && summary.asof ? (Date.now() - Date.parse(summary.asof)) / 1000 : NaN; }
 function ppDraw() {
 	const P = S.pp, body = $("#pp-body"), d = P.data;
+	if (P.confirm && !(Date.now() - P.confirmAt < 30000)) P.confirm = null;                         // a half-made "are you sure" does not wait for hours
 	body.textContent = "";
 	const sm = d && d.summary;
 	const kv = (k, v, cl) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line)" }, h("span", { class: "f3" }, k), h("b", { class: "mono " + (cl || "") }, v));
@@ -1266,8 +1283,8 @@ function ppDraw() {
 	const killOn = d ? d.kill === true : false;
 	put(body, h("div", { class: "panel pad", style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
 		h("b", {}, "Kill switch"), killOn ? tagC("bear", "ON: nothing opens, everything is sold") : tagC("bull", "off"),
-		P.confirm === "kill" ? h("span", { style: "display:flex;gap:8px" }, h("button", { class: "btn", onclick: async () => { P.confirm = null; const r = await paperCall("POST", "/paper/kill", { on: !killOn }); P.note = r.status === 200 ? "" : "The kill switch could not be changed (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, killOn ? "Yes, resume trading" : "Yes, stop and sell everything"), h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
-			: h("button", { class: "btn", onclick: () => { P.confirm = "kill"; ppDraw(); } }, killOn ? "Resume trading" : "Stop all trading and sell everything")));
+		P.confirm === (killOn ? "kill:off" : "kill:on") ? h("span", { style: "display:flex;gap:8px" }, h("button", { class: "btn", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const r = await paperCall("POST", "/paper/kill", { on: !killOn }); P.acting = false; P.note = r.status === 200 ? "" : "The kill switch could not be changed (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, killOn ? "Yes, resume trading" : "Yes, stop and sell everything"), h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
+			: h("button", { class: "btn", onclick: () => { P.confirm = killOn ? "kill:off" : "kill:on"; P.confirmAt = Date.now(); ppDraw(); } }, killOn ? "Resume trading" : "Stop all trading and sell everything")));
 	if (P.note) put(body, h("div", { class: "note warn" }, P.note));
 	const pos = sm && sm.positions ? sm.positions : [];
 	put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Positions (${pos.length})`),
@@ -1277,9 +1294,9 @@ function ppDraw() {
 			h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, `${p.lots} lot${p.lots === 1 ? "" : "s"} (${p.qty} units) · bought at ${num(p.avg)} · bid ${fin(p.mark) ? num(p.mark) : "—"} · expires ${p.expiry || "?"} · ${p.strategy || ""}`),
 			h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:2px" }, p.thesis || ""),
 			P.confirm === "sell:" + p.symbol ? h("div", { style: "display:flex;gap:8px;margin-top:6px" },
-				h("button", { class: "btn", onclick: async () => { P.confirm = null; const o = PT.sellFor(p.symbol); const r = await paperCall("POST", "/paper/order", o); P.note = r.status === 200 ? "" : "The sell was not queued (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, "Yes, sell all at the bid"),
+				h("button", { class: "btn", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const o = PT.sellFor(p.symbol); const r = await paperCall("POST", "/paper/order", o); P.acting = false; P.note = r.status === 200 ? "" : "The sell was not queued (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, "Yes, sell all at the bid"),
 				h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
-				: h("button", { class: "btn", style: "margin-top:6px", onclick: () => { P.confirm = "sell:" + p.symbol; ppDraw(); } }, "Sell all")))
+				: h("button", { class: "btn", style: "margin-top:6px", onclick: () => { P.confirm = "sell:" + p.symbol; P.confirmAt = Date.now(); ppDraw(); } }, "Sell all")))
 			: h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Nothing held.")));
 	const pend = d && d.pending ? d.pending : [], res = d && d.results ? d.results.slice(-10).reverse() : [];
 	put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Orders"),
