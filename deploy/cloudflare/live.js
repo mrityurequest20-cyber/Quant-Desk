@@ -226,7 +226,9 @@ async function handlePaper(request, env, url, stub) {
 		try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
 		if (route === "POST /paper/order" && !cleanOrder(body)) return reply(400, { error: "not a valid order" });
 		if (route === "POST /paper/result" && !cleanResult(body)) return reply(400, { error: "not a valid result" });
-		if (route === "POST /paper/state" && !cleanState(body)) return reply(400, { error: "not a valid state" });
+		let okState = true;
+		if (route === "POST /paper/state") { try { okState = !!cleanState(body); } catch (e) { okState = false; } }                    // absurdly deep nesting is a refusal, not an error
+		if (!okState) return reply(400, { error: "not a valid state" });
 	}
 	let fwd;
 	try { fwd = body !== undefined ? JSON.stringify(body) : undefined; } catch (e) { return reply(400, { error: "not valid" }); }      // absurdly deep nesting parses but cannot be written back out

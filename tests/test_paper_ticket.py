@@ -44,7 +44,7 @@ console.log(JSON.stringify({ n: ids.size, sample: [...ids][0], lim }));
 """)
     assert o["n"] == 500 and re.fullmatch(r"ord-[0-9a-f]{32}", o["sample"]) and re.fullmatch(r"[A-Za-z0-9_-]{6,64}", o["sample"])        # the relay's and the runner's id rule
     for ask, lim in o["lim"]:
-        assert lim >= ask + min(0.1, 0.02 * ask) - 1e-9 and lim <= ask + max(0.1, 0.02 * ask) + 0.05 + 1e-9, (ask, lim)              # two ticks or 2%, rounded up to a tick
+        assert lim >= ask + max(0.15, 0.02 * ask) - 1e-9 and lim <= ask + max(0.15, 0.02 * ask) + 0.05 + 1e-9, (ask, lim)              # three ticks (the largest modelled impact) or 2%, rounded up to a tick
         assert abs(lim / 0.05 - round(lim / 0.05)) < 1e-6                                                                           # on the tick grid
 
 

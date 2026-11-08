@@ -68,6 +68,9 @@ def split(side: str, qty: int, fill: float, bid: float, ask: float, impact: floa
     return rec
 
 
+MAX_MAGNITUDE = 1e9                                                  # no honest figure here (a price, a rupee amount, basis points) is anywhere near this
+
+
 def clean(rec) -> dict | None:
     """A slippage record as it may be written into the ledger: only the known keys, only finite numbers (and the side). None if it is not one."""
     if not isinstance(rec, dict):
@@ -80,7 +83,7 @@ def clean(rec) -> dict | None:
         if k == "side":
             if v not in ("buy", "sell"):
                 return None
-        elif not _ok(v):
+        elif not _ok(v) or abs(v) > MAX_MAGNITUDE:
             return None
         out[k] = v
     return out if out.get("side") and _ok(out.get("qty")) else None
@@ -100,9 +103,10 @@ def totals(rows: list[dict]) -> dict:
         if "delay_inr" in s:
             seen_n += 1
         for k in sums:
-            if _ok(s.get(k)):
+            if _ok(s.get(k)) and math.isfinite(sums[k] + s[k]):             # a sum that would overflow is skipped, never allowed to poison the summary
                 sums[k] += s[k]
     out = {"fills": int(n), "fills_with_decision_price": seen_n, "notional": round(notional, 2)}
     out.update({k: round(v, 2) for k, v in sums.items()})
-    out["bps"] = round(1e4 * sums["total_inr"] / notional, 1) if notional > 0 else None
+    bps = 1e4 * sums["total_inr"] / notional if notional > 0 else None
+    out["bps"] = round(bps, 1) if bps is not None and math.isfinite(bps) else None
     return out

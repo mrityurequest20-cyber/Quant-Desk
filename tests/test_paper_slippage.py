@@ -203,3 +203,56 @@ console.log(JSON.stringify(out));
     for k in ("crossed", "neg", "str", "arr", "none"):
         assert o[k] is not None and "ref" not in o[k], k                                  # the order still goes; only the reference is dropped
     assert o["res"]["fill"]["slip"] == {"fill": 100, "spread": 0.5, "total_inr": 32.5, "side": "buy"}
+
+
+# ---- review fixes: a forged reference cannot corrupt the record, and the owner's limit is judged on what is really paid -----------------------------------------
+@pytest.mark.parametrize("bid,ask", [(1e150, 1e150), (1e306, 1e308), (1e-9, 2e-9), (0.5, 600.0), (5.0, 6.0)])
+def test_a_reference_that_is_not_a_price_of_this_contract_is_ignored_so_the_record_stays_sane(cfg, tmp_path, bid, ask):
+    r = rn(cfg, tmp_path)
+    out = r.step(snap(), [raw(ref={"bid": bid, "ask": ask, "at": int(MON.timestamp() * 1000) - 5000})], False, MON.astimezone(dt.timezone.utc))["results"][0]
+    assert out["status"] == "filled", out
+    s = out["fill"]["slip"]
+    assert "delay" not in s and "shown" not in s and s["total_inr"] == pytest.approx((s["spread"] + s["impact"]) * 65)            # as if the order had carried nothing
+    summ = r.summary(snap(), MON)
+    assert summ["slippage"]["fills"] == 1 and summ["slippage"]["total_inr"] == pytest.approx(s["total_inr"])
+    json.dumps(summ, allow_nan=False)                                                                                           # the summary can always be sent to the relay
+
+
+def test_no_figure_in_a_slippage_record_can_be_enormous_and_sums_never_overflow():
+    big = {"side": "buy", "qty": 65, "fill": 100.0, "delay_inr": 1e12}
+    assert SL.clean(big) is None and SL.clean({"side": "buy", "qty": 65, "fill": 100.0, "delay_inr": 1e8}) is not None
+    rows = [{"slip": {"side": "buy", "qty": 1, "fill": 1.0, "total_inr": 1.7e308}} for _ in range(3)]
+    t = SL.totals(rows)
+    assert all(isinstance(v, (int, float)) and abs(v) < float("inf") for v in t.values() if v is not None)
+    json.dumps(t, allow_nan=False)
+
+
+def test_a_slippage_record_must_match_the_fill_it_is_sealed_into():
+    a = Account(500_000)
+    ok = SL.split("buy", 65, 100.0, 99.0, 100.0, 0.0)
+    for bad in ({**ok, "side": "sell"}, {**ok, "qty": 66}, {**ok, "fill": 101.0}):
+        with pytest.raises(ValueError):
+            a.apply_fill("buy", opt(), "nse_fo", 65, 100.0, 20.0, MON.isoformat(), "s", "t", bad)
+    assert not a.ledger
+    a.apply_fill("buy", opt(), "nse_fo", 65, 100.0, 20.0, MON.isoformat(), "s", "t", ok)
+    assert len(a.ledger) == 1
+
+
+def test_a_limit_is_judged_on_the_price_that_would_really_be_paid_impact_included(cfg, tmp_path):
+    b, acct = broker(cfg, tmp_path)
+    d, row = b.buy(order(), q(bid=1.9, ask=2.0, aq=100), {}, MON, limit=2.0)               # 65 of 100 shown: the fill would be 2.15
+    assert not d.allowed and row is None and "2.15" in d.reasons[0] and not acct.ledger
+    d2, row2 = b.buy(order(), q(bid=1.9, ask=2.0, aq=100), {}, MON, limit=2.15)
+    assert d2.allowed and row2["price"] == pytest.approx(2.15)
+    d3, row3 = b.sell(opt().symbol, 65, q(bid=1.9, ask=2.0, bq=100), MON, limit=1.9)       # would sell at 1.75
+    assert not d3.allowed and row3 is None and opt().symbol in acct.positions
+    assert b.sell(opt().symbol, 65, q(bid=1.9, ask=2.0, bq=100), MON, limit=1.75)[0].allowed
+
+
+def test_the_runners_limit_checks_the_touch_first_and_then_the_impact(cfg, tmp_path):
+    r = rn(cfg, tmp_path)
+    out = r.step(snap(aq=100), [raw(limit=100.0)], False, MON.astimezone(dt.timezone.utc))["results"][0]
+    assert out["status"] == "refused" and "limit" in out["reasons"][0] and not r.account.ledger                                  # 100.15 against a limit of 100.0
+    r2 = rn(cfg, tmp_path)
+    ok = r2.step(snap(aq=100), [raw(id="ord-slip-2", limit=100.15)], False, MON.astimezone(dt.timezone.utc))["results"][0]
+    assert ok["status"] == "filled"

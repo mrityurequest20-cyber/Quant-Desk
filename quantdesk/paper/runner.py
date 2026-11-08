@@ -325,14 +325,14 @@ class Runner:
                 return res
             order = Order(inst, SEGMENT, o["lots"] * inst.lot_size, o["strategy"], f"{o['thesis']}{MARK}[order {o['id']}]")
             marks = self.marks(snap, now)
-            d, row = self.broker.buy(order, quote, marks, now, self._ref(o, now))
+            d, row = self.broker.buy(order, quote, marks, now, self._ref(o, now), o["limit"])
         else:
             pos = self.account.positions.get(inst.symbol)
             qty = pos.qty if (pos and o["lots"] == "all") else (o["lots"] * inst.lot_size if pos else 0)
             if quote is not None and o["limit"] is not None and quote.bid < o["limit"]:
                 res.update(status="refused", reasons=[f"the bid is {quote.bid:g}, below your limit {o['limit']:g}: not sold"])
                 return res
-            d, row = self.broker.sell(inst.symbol, qty, quote, now, f"{MARK}exit {o['id']}", self._ref(o, now))
+            d, row = self.broker.sell(inst.symbol, qty, quote, now, f"{MARK}exit {o['id']}", self._ref(o, now), o["limit"])
         if row is None:
             res.update(status="refused", reasons=d.reasons or ["refused"])
         else:
