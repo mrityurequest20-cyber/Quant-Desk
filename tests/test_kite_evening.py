@@ -272,3 +272,60 @@ def test_the_publish_command_takes_its_date_from_the_folder_and_refuses_a_manife
     with pytest.raises(SystemExit):
         C.cmd_evening_publish(None, type("A", (), {"dir": str(run), "release_prefix": "evening-minutes"})())
     assert len(pushed) == 1
+
+
+# ---- options around the money (owner, 8 Nov 2026: record MCX and currency option prices by the minute) -------------------------------------------------------------
+def _opt_instr():
+    rows = [(1, "GOLDM26DECFUT", "GOLDM", "2026-12-04", "FUT", 0.0), (2, "CRUDEOIL26NOVFUT", "CRUDEOIL", "2026-11-19", "FUT", 0.0), (3, "USDINR26NOVFUT", "USDINR", "2026-11-27", "FUT", 0.0)]
+    tok = 100
+    for name, exp, base, step in (("CRUDEOIL", "2026-11-19", 104, 5), ("CRUDEOIL", "2026-12-17", 104, 5), ("USDINR", "2026-11-27", 104, 0.25)):
+        for i in range(-10, 11):
+            for r in ("CE", "PE"):
+                tok += 1
+                rows.append((tok, f"{name}{exp}{base + i * step}{r}", name, exp, r, base + i * step))
+    rows.append((9, "CRUDEOIL26OLD104CE", "CRUDEOIL", "2026-11-05", "CE", 104))             # expired: never picked
+    return pd.DataFrame(rows, columns=["instrument_token", "tradingsymbol", "name", "expiry", "instrument_type", "strike"])
+
+
+def test_the_options_picked_are_the_nearest_expiry_and_thirteen_strikes_around_the_money_calls_and_puts():
+    inst = _opt_instr()
+    got = KE.pick_options(inst, TODAY, "CRUDEOIL", 120.0)
+    assert len(got) == 26 and {g["expiry"] for g in got} == {dt.date(2026, 11, 19)} and {g["right"] for g in got} == {"CE", "PE"}
+    ks = sorted({g["strike"] for g in got})
+    assert ks == [104 + 5 * i for i in range(-3, 10)]                                                         # 120 is nearest to 119: six strikes either side of it
+    assert KE.pick_options(inst, TODAY, "CRUDEOIL", 104.0, strikes=1, expiries=2)[0]["strike"] == 99 and len(KE.pick_options(inst, TODAY, "CRUDEOIL", 104.0, strikes=1, expiries=2)) == 12
+    assert KE.pick_options(inst, TODAY, "NOPE", 100.0) == [] and KE.pick_options(inst, TODAY, "CRUDEOIL", float("nan")) == [] and KE.pick_options(inst, TODAY, "CRUDEOIL", 0) == []
+    assert KE.pick_options(inst.drop(columns=["strike"]), TODAY, "CRUDEOIL", 104.0) == [] and KE.pick_options(pd.DataFrame(), TODAY, "CRUDEOIL", 104.0) == []
+
+
+class OptKite(FakeKite):
+    def instruments(self, exchange):
+        inst = _opt_instr()
+        return inst[inst["name"].isin(["CRUDEOIL", "GOLDM"] if exchange == "MCX" else ["USDINR"])].to_dict("records")
+
+
+def test_a_run_also_collects_option_minutes_for_each_underlying_and_the_manifest_has_counts_only(tmp_path):
+    man, kite = _run(tmp_path, kite=OptKite(), days=3)
+    run = tmp_path / str(TODAY)
+    assert man["segments"]["mcx"]["options"]["CRUDEOIL"] == {"expiry": "2026-11-19", "asked": 26, "served": 26, "failed": 0, "empty": 0}
+    assert "GOLDM" not in man["segments"]["mcx"]["options"] and man["segments"]["cds"]["options"]["USDINR"]["served"] == 26
+    assert man["totals"]["mcx"]["options_served"] == 26 and man["totals"]["cds"]["options_asked"] == 26
+    opt = pd.read_parquet(run / "data/mcx_options_minutes.parquet")
+    assert set(opt["underlying"]) == {"CRUDEOIL"} and set(opt["right"]) == {"CE", "PE"} and opt["strike"].nunique() == 13 and (opt["rank"] == 0).all() and opt["oi"].notna().all()
+    assert (run / "data/cds_options_minutes.parquet").exists() and KE.publishable(man) == []                # a manifest carries counts and names, never a price
+
+
+def test_option_failures_are_counted_and_the_futures_still_land_and_options_can_be_switched_off(tmp_path):
+    inst = _opt_instr()
+    bad = {int(t) for t in inst[(inst["name"] == "CRUDEOIL") & (inst["strike"] == 104)]["instrument_token"]}
+    man, _ = _run(tmp_path, kite=OptKite(fail=bad), days=3)
+    assert man["segments"]["mcx"]["options"]["CRUDEOIL"]["failed"] == 2 and man["segments"]["mcx"]["options"]["CRUDEOIL"]["served"] == 24 and man["totals"]["mcx"]["served"] >= 2
+    man2, k2 = _run(tmp_path / "x", kite=OptKite(), days=3, options=False)
+    assert "options" not in man2["segments"]["mcx"] and not (tmp_path / "x" / str(TODAY) / "data/mcx_options_minutes.parquet").exists()
+
+
+def test_a_manifest_with_a_price_in_the_options_block_is_refused(tmp_path):
+    man, _ = _run(tmp_path, kite=OptKite(), days=3)
+    bad = json.loads(json.dumps(man, default=str))
+    bad["segments"]["mcx"]["options"]["CRUDEOIL"]["close"] = 101.5
+    assert any("close" in x for x in KE.publishable(bad))
