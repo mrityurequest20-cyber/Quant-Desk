@@ -131,8 +131,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write            # the paper-ledger branch and nothing else; this job holds no secret
-    env:
-      LEDGER_WORK: ${{ runner.temp }}/ledger-branch
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -155,7 +153,9 @@ jobs:
             python -m quantdesk paper verify --file "$f" || { echo "::error::$f does not verify"; exit 1; }
           done
           if [ -f "$m" ] && [ -f "$a" ]; then
-            if python -m quantdesk paper verify --file "$a" --extends "$m" > /dev/null; then pick="$a"; else pick="$m"; fi     # the longer of the two (one continues the other)
+            if python -m quantdesk paper verify --file "$a" --extends "$m" > /dev/null; then pick="$a"                 # the afternoon continues the morning (the usual case)
+            elif python -m quantdesk paper verify --file "$m" --extends "$a" > /dev/null; then pick="$m"               # the morning is the longer
+            else echo "::error::the morning's and the afternoon's accounts are two different histories"; exit 1; fi
           elif [ -f "$a" ]; then pick="$a"; elif [ -f "$m" ]; then pick="$m"; fi
           if [ -z "$pick" ]; then echo "::error::the runner saved no account to publish"; exit 1; fi
           cp "$pick" "$RUNNER_TEMP/account.json"
@@ -163,15 +163,17 @@ jobs:
       - name: Fetch the paper-ledger branch (into its own directory)
         env:
           GH_TOKEN: ${{ github.token }}
+          LEDGER_WORK: ${{ runner.temp }}/ledger-branch
         run: deploy/paper_ledger.sh fetch
       - name: Check it continues the branch's account
         run: |
           # no token in this step either
-          if [ -f "$LEDGER_WORK/account.json" ]; then
-            python -m quantdesk paper verify --file "$RUNNER_TEMP/account.json" --extends "$LEDGER_WORK/account.json"
+          if [ -f "$RUNNER_TEMP/ledger-branch/account.json" ]; then
+            python -m quantdesk paper verify --file "$RUNNER_TEMP/account.json" --extends "$RUNNER_TEMP/ledger-branch/account.json"
           fi
       - name: Add it to the branch (a new commit; never a force-push)
         env:
           GH_TOKEN: ${{ github.token }}
+          LEDGER_WORK: ${{ runner.temp }}/ledger-branch
           ACCOUNT: ${{ runner.temp }}/account.json
         run: deploy/paper_ledger.sh push

@@ -53,7 +53,10 @@ def test_the_publish_job_verifies_picks_the_longest_and_only_the_two_git_steps_h
     pick = next(x["run"] for x in steps_ if x.get("name", "").startswith("Take the longest"))
     assert "paper verify --file \"$f\"" in pick and "--extends \"$m\"" in pick and "the runner saved no account to publish" in pick and "exit 1" in pick      # each file verifies; the longer wins; nothing saved is an error
     check = next(x["run"] for x in steps_ if x.get("name", "").startswith("Check it continues"))
-    assert "--extends \"$LEDGER_WORK/account.json\"" in check
+    assert "--extends \"$RUNNER_TEMP/ledger-branch/account.json\"" in check
+    chk = next(x for x in steps_ if x.get("name", "").startswith("Check it continues"))
+    assert "if" not in chk and "continue-on-error" not in chk                                          # the one step that stops a shorter account being pushed can be neither skipped nor ignored
+    assert "two different histories" in pick
     order = [x.get("name", "") for x in steps_]
     assert order.index("Fetch the paper-ledger branch (into its own directory)") < order.index("Check it continues the branch's account") < order.index("Add it to the branch (a new commit; never a force-push)")
     assert next(x for x in steps_ if x.get("name", "").startswith("Fetch the"))["run"] == "deploy/paper_ledger.sh fetch" and next(x for x in steps_ if x.get("name", "").startswith("Add it"))["run"] == "deploy/paper_ledger.sh push"
@@ -83,3 +86,19 @@ def test_one_run_at_a_time_two_halves_inside_a_job_limit_and_the_first_account_i
 def test_the_ledger_branch_is_restored_read_only_and_a_missing_branch_is_not_an_error():
     cks = [s for s in steps("morning") if str(s.get("uses", "")).startswith("actions/checkout")]
     assert len(cks) == 2 and cks[1]["with"]["ref"] == "paper-ledger" and cks[1]["continue-on-error"] is True
+
+
+def test_no_workflow_uses_a_context_where_github_does_not_allow_it():
+    """actionlint's finding on this workflow: `runner` (and `steps`, `job`) are not available in a workflow's or a job's `env`, `if` of a job, `concurrency` or `strategy`; GitHub rejects such a file at
+    dispatch, which no other check here would notice. The step-level `env` is the place for them."""
+    bad = []
+    for f in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        wf = yaml.safe_load(f.read_text(encoding="utf-8"))
+        scopes = [("workflow env", wf.get("env") or {}), ("concurrency", wf.get("concurrency") or {})]
+        for name, job in (wf.get("jobs") or {}).items():
+            scopes += [(f"{name} env", job.get("env") or {}), (f"{name} concurrency", job.get("concurrency") or {}), (f"{name} strategy", job.get("strategy") or {}), (f"{name} if", {"if": job.get("if", "")})]
+        for where, d in scopes:
+            for k, v in d.items():
+                if re.search(r"\b(runner|steps|job)\.", str(v)):
+                    bad.append((f.name, where, k))
+    assert bad == []
