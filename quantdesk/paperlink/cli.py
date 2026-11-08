@@ -19,7 +19,7 @@ def cmd_run(cfg, a):
         und = sorted(RiskGate(cfg).limits.underlyings.get("nse_fo", ()))
         lots = {str(u).upper(): int(v["lot_size"]) for u, v in (cfg.get("instruments") or {}).items() if isinstance(v, dict) and isinstance(v.get("lot_size"), int)}
         auto = AutoPilot(tuple(u for u in und if u in lots), lots, float(cfg.get("paper.capital")))
-        print(f"paper: AUTO v1 is ON for {', '.join(auto.und)} (one lot, tight limits, through the same gate)", flush=True)
+        print(f"paper: AUTO v1 is ON for {', '.join(auto.und)} (one lot a trade, no cap on how many, through the same gate and its loss caps)", flush=True)
     raise SystemExit(run(cfg, relay, Path(a.ledger), parse_hhmm(a.until), every_s=a.every, new_account=a.new_account, auto=auto))
 
 
@@ -51,7 +51,7 @@ def register(sub):
     x.add_argument("--until", default="15:35", help="IST clock time to stop, HH:MM")
     x.add_argument("--every", type=float, default=3.0, help="seconds between cycles")
     x.add_argument("--new-account", action="store_true", help="the very first session only: start a new paper account when no saved one exists anywhere (otherwise a missing account stops the start)")
-    x.add_argument("--auto", action="store_true", help="switch AUTO v1 on (the paper desk deciding for itself, one lot, tight limits, through the same gate); also on when env PAPER_AUTO is yes")
+    x.add_argument("--auto", action="store_true", help="switch AUTO v1 on (the paper desk deciding for itself, one lot a trade, no cap on how many, through the same gate and its loss caps); also on when env PAPER_AUTO is yes")
     x.add_argument("--ledger", default="runtime/paper/ledger/account.json", help="the local copy of the saved account (restored from, and published to, the ledger branch)")
     x.set_defaults(fn=cmd_run)
     x = ss.add_parser("verify", help="check a saved account file")
