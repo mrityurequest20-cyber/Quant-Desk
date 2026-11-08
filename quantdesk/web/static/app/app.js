@@ -1219,6 +1219,134 @@ const AN = (() => {
 })();
 /* @@analyse:end */
 
+// ==================================================================================================================
+// Flow and signals: what the futures, the options and the order books say beyond the level of the price, read every few seconds from the live board and kept as a tape for the session. The futures basis,
+// the forward the options themselves imply (put-call parity), the pressure of resting bids against offers around the money, a dealer-gamma proxy, and how fast the straddle and volatility are moving.
+// Every signal rule is written down below with its threshold; every firing is logged with the price at that moment and graded against what the price did next. A signal with fewer than MIN_N graded
+// firings, or that does not beat a coin by a clear margin, is shown as UNPROVEN: nothing here is a forecast until its own record says so. Pure maths, no DOM, no network. Display only.
+// ==================================================================================================================
+/* @@flow:start */
+const FL = (() => {
+	const fnum = (x) => (typeof x === "number" && isFinite(x) ? x : null);
+	const mid = (q) => (q && q.bid > 0 && q.ask >= q.bid ? (q.bid + q.ask) / 2 : q && q.ltp > 0 ? q.ltp : null);
+	// the written-down rules and thresholds (changing one starts a new record: the log keys on the rule's name and version)
+	const RULES = {
+		pressure_v1: { dir: true, text: "Resting bids beat offers in calls and offers beat bids in puts (or the reverse) around the money by 0.25 or more", th: 0.25 },
+		straddle_v1: { dir: false, text: "The at-the-money straddle gained 5% or more in 10 minutes while the price moved less than 0.1%: a bigger move is being priced", th: 5 },
+		parity_v1: { dir: true, text: "The forward implied by put-call parity sits 0.05% or more away from the futures price", th: 0.05 },
+		gamma_v1: { dir: true, text: "Dealer gamma proxy is negative and the price has fallen under (or risen over) the flip level", th: 0 },
+	};
+	const HORIZON_S = 900, MIN_N = 30, MIN_MOVE_PCT = 0.05, VOL_MOVE_PCT = 0.15, REFIRE_S = 900, MAX_LOG = 400, MAX_HIST = 360;
+	const median = (xs) => { const v = xs.filter((x) => x != null).sort((a, b) => a - b); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null; };
+	// resting-size pressure around the money: for calls and puts, (bid size - offer size) / (bid size + offer size) over `n` strikes either side, fresh quotes only. Bullish = calls bid-heavy and puts offer-heavy.
+	function pressure(chain, quotes, spot, n, maxAge) {
+		const ks = Object.keys(chain).map(Number).sort((a, b) => a - b);
+		if (!ks.length || !(spot > 0)) return null;
+		let at = 0;
+		ks.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(ks[at] - spot)) at = i; });
+		const side = (t) => {
+			let b = 0, a = 0, used = 0;
+			for (const k of ks.slice(Math.max(0, at - n), at + n + 1)) {
+				const q = quotes[chain[k][t]];
+				if (!q || !(fnum(q.age_s) != null && q.age_s <= maxAge) || fnum(q.bid_qty) == null || fnum(q.ask_qty) == null || !(q.bid > 0) || !(q.ask >= q.bid)) continue;
+				b += q.bid_qty; a += q.ask_qty; used++;
+			}
+			return a + b > 0 ? { imb: (b - a) / (b + a), used } : null;
+		};
+		const ce = side("CE"), pe = side("PE");
+		return ce && pe ? { ce: ce.imb, pe: pe.imb, score: ce.imb - pe.imb, used: ce.used + pe.used } : null;
+	}
+	// the forward the options imply: K + (C - P) e^{rT} at the strikes nearest the money (median), against the futures price
+	function parity(rows, spot, T, r, fut) {
+		if (!(spot > 0 && T > 0)) return null;
+		const near = [...rows].sort((a, b) => Math.abs(a.k - spot) - Math.abs(b.k - spot)).slice(0, 5).filter((x) => x.ce && x.pe && x.ce.px != null && x.pe.px != null);
+		const f = median(near.map((x) => x.k + (x.ce.px - x.pe.px) * Math.exp(r * T)));
+		return f == null ? null : { fwd: f, gapPts: fut > 0 ? f - fut : null, gapPct: fut > 0 ? ((f - fut) / fut) * 100 : null, n: near.length };
+	}
+	// a dealer-gamma proxy (an ASSUMPTION, not an observation): dealers are taken to be long the calls and short the puts that are open, so net gamma exposure by strike is open interest x gamma x spot^2 x 1%
+	// (calls +, puts -), and the flip is where the running total crosses zero. Positive total = price tends to be pinned; negative = moves tend to be amplified.
+	function gamma(rows, spot, T, r, lot) {
+		if (!(spot > 0 && T > 0 && lot > 0)) return null;
+		let net = 0, used = 0;
+		const by = [];
+		for (const x of rows) {
+			let g = 0;
+			for (const t of ["ce", "pe"]) {
+				const o = x[t];
+				if (!o || o.iv == null || !(o.oi > 0)) continue;
+				const gm = QB.greeks(t === "ce" ? "CE" : "PE", spot, x.k, T, o.iv, r).gamma;
+				g += (t === "ce" ? 1 : -1) * o.oi * gm * spot * spot * 0.01 * lot;
+				used++;
+			}
+			by.push({ k: x.k, g });
+			net += g;
+		}
+		if (!used) return null;
+		let run = 0, flip = null;
+		for (let i = 0; i < by.length; i++) {
+			const before = run;
+			run += by[i].g;
+			if (flip == null && i > 0 && ((before < 0 && run >= 0) || (before > 0 && run <= 0))) flip = by[i].k;
+		}
+		return { net, flip, used };
+	}
+	// one reading of the board. ctx: {t (ms), spot, fut, rows (AN.chainRows), chain, quotes, T, r, lot, atm (AN.atm result)}
+	function sample(ctx) {
+		const { t, spot, fut, rows, chain, quotes, T, r, lot, atm } = ctx;
+		if (!(spot > 0)) return null;
+		const par = parity(rows, spot, T, r, fut), pr = pressure(chain, quotes, spot, 3, 60), gx = gamma(rows, spot, T, r, lot);
+		return { t, spot, fut: fnum(fut), basis: fut > 0 ? fut - spot : null, atmIv: atm ? atm.iv : null, straddle: atm ? atm.straddle : null, fwd: par ? par.fwd : null, gapPct: par ? par.gapPct : null,
+			pressure: pr ? pr.score : null, gexNet: gx ? gx.net : null, flip: gx ? gx.flip : null };
+	}
+	// which rules fire on the latest sample, given the tape (samples oldest first)
+	function fire(hist) {
+		const last = hist[hist.length - 1];
+		if (!last) return [];
+		const out = [];
+		if (last.pressure != null && Math.abs(last.pressure) >= RULES.pressure_v1.th) out.push({ rule: "pressure_v1", dir: last.pressure > 0 ? 1 : -1, why: `pressure ${last.pressure.toFixed(2)}` });
+		if (last.gapPct != null && Math.abs(last.gapPct) >= RULES.parity_v1.th) out.push({ rule: "parity_v1", dir: last.gapPct > 0 ? 1 : -1, why: `options forward ${last.gapPct >= 0 ? "above" : "below"} futures by ${Math.abs(last.gapPct).toFixed(2)}%` });
+		if (last.gexNet != null && last.flip != null && last.gexNet < 0) {
+			if (last.spot < last.flip) out.push({ rule: "gamma_v1", dir: -1, why: `negative gamma, price under the flip ${last.flip}` });
+			else if (last.spot > last.flip) out.push({ rule: "gamma_v1", dir: 1, why: `negative gamma, price over the flip ${last.flip}` });
+		}
+		const past = [...hist].reverse().find((s) => s.t <= last.t - 600000);
+		if (past && last.straddle > 0 && past.straddle > 0 && Math.abs((last.spot / past.spot - 1) * 100) < 0.1 && (last.straddle / past.straddle - 1) * 100 >= RULES.straddle_v1.th)
+			out.push({ rule: "straddle_v1", dir: 0, why: `straddle +${((last.straddle / past.straddle - 1) * 100).toFixed(1)}% in 10 min, price flat` });
+		return out;
+	}
+	// log the firings (not the same rule again within REFIRE_S) and grade the old ones against the tape: after HORIZON_S the price either moved the called way by MIN_MOVE_PCT (a hit), or not
+	// (a miss: flat counts against it). A volatility call (dir 0) is a hit if the price moved VOL_MOVE_PCT either way. An entry the tape cannot grade (no sample near the horizon) stays open.
+	function update(log, hist, firings, now) {
+		const out = log.map((e) => ({ ...e }));
+		for (const f of firings) {
+			const recent = out.filter((e) => e.rule === f.rule).pop();
+			if (!recent || now - recent.t >= REFIRE_S * 1000) { const last = hist[hist.length - 1]; out.push({ t: now, rule: f.rule, dir: f.dir, spot: last.spot, why: f.why, res: null }); }
+		}
+		for (const e of out) {
+			if (e.res || now - e.t < HORIZON_S * 1000) continue;
+			const target = e.t + HORIZON_S * 1000, s = hist.filter((x) => x.t >= target && x.t <= target + 300000)[0];
+			if (!s) { if (now - e.t > (HORIZON_S + 1800) * 1000) e.res = "ungraded"; continue; }
+			const mv = (s.spot / e.spot - 1) * 100;
+			e.mv = Math.round(mv * 1000) / 1000;
+			e.res = e.dir === 0 ? (Math.abs(mv) >= VOL_MOVE_PCT ? "hit" : "miss") : (e.dir * mv >= MIN_MOVE_PCT ? "hit" : "miss");
+		}
+		return out.slice(-MAX_LOG);
+	}
+	// the record of each rule: graded firings, hits, the hit rate and how far it is from a coin (z); UNPROVEN until MIN_N graded and a clear margin (z >= 2)
+	function record(log) {
+		const out = {};
+		for (const id of Object.keys(RULES)) {
+			const g = log.filter((e) => e.rule === id && (e.res === "hit" || e.res === "miss")), n = g.length, hits = g.filter((e) => e.res === "hit").length;
+			const base = RULES[id].dir ? 0.5 : 0.5;                                                            // a coin is the bar: nothing here has earned more
+			const z = n > 0 ? (hits - base * n) / Math.sqrt(base * (1 - base) * n) : 0;
+			out[id] = { n, hits, rate: n ? hits / n : null, z, proven: n >= MIN_N && z >= 2, open: log.filter((e) => e.rule === id && !e.res).length };
+		}
+		return out;
+	}
+	return { RULES, HORIZON_S, MIN_N, MAX_HIST, MIN_MOVE_PCT, VOL_MOVE_PCT, pressure, parity, gamma, sample, fire, update, record, median };
+})();
+/* @@flow:end */
+
 // ---- the Build tab: pick an underlying, an expiry and a structure; see what it costs, where it makes and loses, and whether it fits the desk's limits. Paper only: no order is sent from here.
 S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr", custom: [], sc: { move: 0, dvol: 0, days: 0 } };
 function bdChains(data) {                                                // the underlyings the builder can price: an index with a known lot size, and its board chains
@@ -1314,7 +1442,8 @@ function bdDraw() {
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
-	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows: AN.chainRows(ch, data.quotes, spot, T, c.r) }));
+	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r);
+	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdFlow({ B, data, ch, spot, T, c, sq, rows, inst }), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
 	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
 	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
@@ -1342,6 +1471,48 @@ function bdDraw() {
 			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:4px 16px 8px" }, "The paper ticket also checks the day's loss budget, the drawdown halt and the displayed size at the touch against the live account. A structure that is not open-able today is still shown here as a what-if.")),
 		bdTicket(a, tpl),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure. Held to expiry, an in-the-money long pays the exchange's exercise STT instead, which this does not model; there is no dividend yield in the pricing. Worst loss and best profit leave out costs."));
+}
+// ---- flow and signals: the tape of the session, the rules that fired, and each rule's own record --------------------------------------------------------------
+function bdFlow(ctx) {
+	const { B, data, ch, spot, T, c, rows, inst } = ctx;
+	const key = B.u + "|" + B.exp, logKey = "qd.flowlog." + B.u;
+	if (B.tapeKey !== key) { B.tapeKey = key; B.tape = []; B.sampledAt = null; }
+	if (!B.flowLogs) B.flowLogs = {};
+	if (!B.flowLogs[B.u]) {
+		let raw = []; try { raw = JSON.parse(store(logKey) || "[]"); } catch (e) { raw = []; }
+		B.flowLogs[B.u] = (Array.isArray(raw) ? raw : []).filter((e) => e && typeof e.rule === "string" && FL.RULES[e.rule] && Number.isFinite(e.t) && Number.isFinite(e.spot)).slice(-400);
+	}
+	const fq = data.quotes[B.u + "-FUT"], fut = fq ? (fq.bid > 0 && fq.ask >= fq.bid ? (fq.bid + fq.ask) / 2 : fq.ltp) : NaN;
+	const nowT = typeof data.now === "number" ? data.now : Date.now();
+	if (B.sampledAt !== B.at) {                                                                    // one reading per fetch of the board, however often the page is redrawn
+		B.sampledAt = B.at;
+		const sm = FL.sample({ t: nowT, spot, fut: Number.isFinite(fut) ? fut : null, rows, chain: ch, quotes: data.quotes, T, r: c.r, lot: inst.lot, atm: AN.atm(rows, spot, T, null) });
+		if (sm && (!B.tape.length || sm.t > B.tape[B.tape.length - 1].t)) {
+			B.tape.push(sm);
+			if (B.tape.length > FL.MAX_HIST) B.tape.shift();
+			B.flowLogs[B.u] = FL.update(B.flowLogs[B.u], B.tape, FL.fire(B.tape), sm.t);
+			try { store(logKey, JSON.stringify(B.flowLogs[B.u])); } catch (e) { /* private mode */ }
+		}
+	}
+	const tape = B.tape, last = tape[tape.length - 1], past = [...tape].reverse().find((x) => last && x.t <= last.t - 600000), rec = FL.record(B.flowLogs[B.u]);
+	if (!last) return h("div", { class: "note" }, "Reading the flow: waiting for the first reading of the board.");
+	const kv = (k, v, note, cl) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line);gap:12px;align-items:flex-start" }, h("span", { class: "f3" }, k),
+		h("span", { style: "text-align:right" }, h("b", { class: "mono " + (cl || "") }, v), note ? h("div", { class: "f3", style: "font-size:11.5px" }, note) : null));
+	const pct = (x, d = 2) => (x == null || !Number.isFinite(x) ? "—" : (x >= 0 ? "+" : "") + x.toFixed(d) + "%");
+	const dIv = past && last.atmIv != null && past.atmIv != null ? (last.atmIv - past.atmIv) * 100 : null, dStr = past && last.straddle > 0 && past.straddle > 0 ? (last.straddle / past.straddle - 1) * 100 : null;
+	const ann = last.basis != null && T > 0 ? (last.basis / spot) / T * 100 : null;
+	const firing = FL.fire(tape);
+	const recText = (id) => { const r = rec[id]; return r.proven ? `track record ${r.hits}/${r.n} (${(r.rate * 100).toFixed(0)}%, z ${r.z.toFixed(1)})` : `UNPROVEN: ${r.n} graded${r.n ? `, ${r.hits} hit` : ""}${r.open ? `, ${r.open} waiting` : ""} (needs ${FL.MIN_N} and a clear edge over a coin)`; };
+	return h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Flow and signals: ${B.u} ${B.exp}`, h("span", { class: "f3", style: "font-weight:400;font-size:12px" }, `  (${tape.length} reading${tape.length === 1 ? "" : "s"} this session)`)),
+		kv("Futures minus spot", last.basis != null ? `${last.basis >= 0 ? "+" : ""}${num(last.basis, 1)} pts` : "—", ann != null ? `${ann.toFixed(1)}% a year carry` : "no futures price on the board"),
+		kv("Forward the options imply, against futures", last.gapPct != null ? pct(last.gapPct) : "—", "from put-call parity at the money; a gap means options and futures disagree about where the price is going to be"),
+		kv("Resting-size pressure around the money", last.pressure != null ? (last.pressure >= 0 ? "+" : "") + last.pressure.toFixed(2) : "—", last.pressure == null ? "needs sizes on fresh bids and offers" : last.pressure > 0.1 ? "bids lean bullish (calls bid, puts offered)" : last.pressure < -0.1 ? "bids lean bearish" : "balanced"),
+		kv("Dealer gamma proxy (an assumption)", last.gexNet != null ? (last.gexNet >= 0 ? "positive" : "negative") : "—", last.flip != null ? `flips near ${num(last.flip, 0)}; ${last.gexNet >= 0 ? "moves tend to be damped" : "moves tend to be amplified"}` : "needs open interest"),
+		kv("Straddle, last 10 minutes", dStr != null ? pct(dStr, 1) : "—", past ? `volatility ${dIv != null ? (dIv >= 0 ? "+" : "") + dIv.toFixed(2) + " points" : "—"}; price ${pct((last.spot / past.spot - 1) * 100)}` : "builds up after ten minutes of readings"),
+		h("div", { class: "pad", style: "font-weight:600;border-top:1px solid var(--line)" }, "Rules that are firing now"),
+		firing.length ? firing.map((f) => h("div", { class: "row", style: "padding:5px 16px;gap:8px;align-items:flex-start" }, h("b", { class: f.dir > 0 ? "up" : f.dir < 0 ? "dn" : "" }, f.dir > 0 ? "▲" : f.dir < 0 ? "▼" : "◆"),
+			h("span", { style: "font-size:12.5px" }, `${FL.RULES[f.rule].text}. ${f.why}.`, h("div", { class: "f3", style: "font-size:11.5px" }, recText(f.rule))))) : h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 8px" }, "None right now."),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, `These are readings, not forecasts. Each rule's firings are logged with the price at the time and graded ${FL.HORIZON_S / 60} minutes later (it must move the called way by ${FL.MIN_MOVE_PCT}%; a volatility call must move ${FL.VOL_MOVE_PCT}% either way). Until a rule has ${FL.MIN_N} graded firings and clearly beats a coin it is UNPROVEN and should not be acted on. The record is kept in this browser only.`));
 }
 // ---- custom legs: add, flip, move and size as many legs as you like ----------------------------------------------------------------------
 function bdCustom(B, strikes, spot) {
