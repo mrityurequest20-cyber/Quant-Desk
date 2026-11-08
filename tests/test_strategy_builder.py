@@ -274,3 +274,53 @@ def test_the_published_equity_is_the_paper_accounts_not_the_intraday_desks_and_t
     tc = E.trade_config(Cfg(base, **{"paper.capital": 123456, "intraday.capital": 999999}))
     assert tc["equity"] == 123456.0                                          # paper.capital wins when the two differ
     assert "QD_TRADE is missing" in APP and "c.fromConfig" in APP[APP.index("function bdDraw"):APP.index("function legsTable2")]
+
+
+# ---- custom legs and what-if scenarios ------------------------------------------------------------------------------------------
+@needs_node
+def test_custom_legs_take_any_number_of_legs_merge_the_same_contract_and_refuse_nonsense(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+const row = (side, type, strike, mult = 1) => ({ side, type, strike, mult });
+const many = []; for (let i = 0; i < 9; i++) { many.push(row(1, "CE", STRIKES[i])); many.push(row(1, "PE", STRIKES[i])); }
+const res = {
+  ok: QB.customLegs([row(1, "CE", 24500, 2), row(-1, "CE", 24600)], names), merged: QB.customLegs([row(1, "CE", 24500), row(1, "CE", 24500, 2)], names),
+  both: QB.customLegs([row(1, "CE", 24500), row(-1, "CE", 24500)], names), offBoard: QB.customLegs([row(1, "CE", 99999)], names), zero: QB.customLegs([row(1, "CE", 24500, 0)], names),
+  frac: QB.customLegs([row(1, "CE", 24500, 1.5)], names), str: QB.customLegs([row(1, "CE", 24500, "2")], names), big: QB.customLegs([row(1, "CE", 24500, 101)], names),
+  mergedBig: QB.customLegs([row(1, "CE", 24500, 60), row(1, "CE", 24500, 60)], names), empty: QB.customLegs([], names), nul: QB.customLegs(null, names), junk: QB.customLegs([null], names),
+  eighteen: QB.customLegs(many, names), fiftyOne: QB.customLegs(Array.from({ length: 51 }, (_, i) => row(1, "CE", STRIKES[i % 9], 1)).map((r, i) => ({ ...r, type: i % 2 ? "PE" : "CE" })), names),
+};
+const L = res.ok.legs, a = QB.analyze({ u: "NIFTY", legs: L, quotes: q, spot: SPOT, spotAge: 2, T, lots: 2 });
+out.shape = Object.fromEntries(Object.entries(res).map(([k, v]) => [k, v.error ? "ERR" : v.legs.length]));
+out.units = a.legs.map((l) => [l.side, l.units, l.lots, l.mult]); out.err = a.errors;
+const w = QB.analyze({ u: "NIFTY", legs: res.eighteen.legs, quotes: q, spot: SPOT, spotAge: 2, T, lots: 1 });
+out.many = { n: w.legs.length, err: w.errors, maxLoss: w.maxLoss, unlimited: w.unlimitedProfit };
+console.log(JSON.stringify(out));
+""")
+    sh = o["shape"]
+    assert sh["ok"] == 2 and sh["merged"] == 1 and sh["eighteen"] == 18                                                         # eighteen legs: no template has more than four
+    for bad in ("both", "offBoard", "zero", "frac", "str", "big", "mergedBig", "empty", "nul", "junk"):
+        assert sh[bad] == "ERR", bad
+    assert sh["fiftyOne"] == "ERR" or sh["fiftyOne"] <= 18                                                                      # (51 rows collapse onto 18 contracts here; the cap is on the rows)
+    assert o["units"] == [[1, 260, 4, 2], [-1, 130, 2, 1]] and o["err"] == []                                                   # the size multiple scales units: 2 base lots x 65, the bought leg twice that
+    assert o["many"]["n"] == 18 and o["many"]["err"] == [] and o["many"]["unlimited"] is True                                  # the maths takes them: eighteen long legs, a known worst loss, no cap on the upside
+
+
+@needs_node
+def test_the_what_if_equals_the_payoff_at_expiry_and_moves_the_right_way_before_it(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+const L = QB.legsFor("bull_call_spread", STRIKES, SPOT, names, 2);
+const spec = { u: "NIFTY", legs: L.legs, quotes: q, spot: SPOT, spotAge: 2, T, lots: 1 };
+const a = QB.analyze(spec), days = T * 365;
+const atExpiry = [-0.03, -0.01, 0, 0.01, 0.03].map((m) => [QB.scenario(a, spec, { move: m, dvol: 0, days }), a.legs.reduce((s, l) => s + QB.legPay(l, SPOT * (1 + m)), 0)]);
+const now0 = QB.scenario(a, spec, { move: 0, dvol: 0, days: 0 });
+out.atExpiry = atExpiry; out.now0 = now0; out.up = QB.scenario(a, spec, { move: 0.02, dvol: 0, days: 0 }); out.down = QB.scenario(a, spec, { move: -0.02, dvol: 0, days: 0 });
+out.volUp = QB.scenario(a, spec, { move: 0, dvol: 0.05, days: 0 }) - now0; out.decay = QB.scenario(a, spec, { move: 0, dvol: 0, days: 2 }) - now0; out.premium = a.premium;
+const one = QB.legsFor("long_call", STRIKES, SPOT, names, 1), s1 = { ...spec, legs: one.legs }, a1 = QB.analyze(s1);
+out.longVolUp = QB.scenario(a1, s1, { move: 0, dvol: 0.05, days: 0 }) - QB.scenario(a1, s1, { move: 0, dvol: 0, days: 0 }); out.longDecay = QB.scenario(a1, s1, { move: 0, dvol: 0, days: 2 }) - QB.scenario(a1, s1, { move: 0, dvol: 0, days: 0 });
+console.log(JSON.stringify(out));
+""")
+    for got, want in o["atExpiry"]:
+        assert got == pytest.approx(want, abs=1e-6)                                                                             # at expiry the what-if IS the payoff chart
+    assert o["up"] > o["now0"] > o["down"]                                                                                      # a bull call spread gains when spot rises
+    assert o["now0"] < 0 and o["now0"] > -abs(o["premium"])                                                                     # right after opening it is down by about the spread, never by the whole premium
+    assert o["longVolUp"] > 0 and o["longDecay"] < 0                                                                            # a long option gains from higher volatility and loses to time

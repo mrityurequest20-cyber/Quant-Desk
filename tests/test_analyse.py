@@ -161,7 +161,7 @@ def test_the_market_read_block_places_no_order_and_touches_no_network_or_page():
 
 def test_the_build_tab_shows_the_read_and_the_ideas_above_the_builder_and_says_what_they_are_not():
     draw = APP[APP.index("function bdDraw"):APP.index("function legsTable2")]
-    assert "bdRead({" in draw and "bdIdeas({" in draw and draw.index("bdRead({") < draw.index("QB.legsFor(B.tpl")        # the read comes before the structure being built
+    assert "bdRead({" in draw and "bdIdeas({" in draw and draw.index("bdRead({") < draw.index('const L = B.tpl === "custom"')        # the read comes before the structure being built
     read = APP[APP.index("function bdRead"):APP.index("function bdIdeas")]
     ideas = APP[APP.index("function bdIdeas"):APP.index("function bdPayoff")]
     assert "not forecasts" in read and "this read may be stale" in read and "fair bet" in ideas and "Your edge is your view" in ideas

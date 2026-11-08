@@ -944,6 +944,24 @@ const QB = (() => {
 		iron_condor: { name: "Iron condor", view: "Stays in a range: collects premium", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 2 * w], [-1, "PE", -w], [1, "PE", -2 * w]] },
 		iron_butterfly: { name: "Iron butterfly", view: "Pins near the strike: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [-1, "PE", 0], [1, "CE", w], [1, "PE", -w]] },
 	};
+	// ---- your own legs: any number (up to MAX_CUSTOM_LEGS, a bound on the arithmetic only), any strike on the board, buy or sell, call or put, each with a size multiple of the base lots ----------
+	const CUSTOM = { name: "Custom structure", view: "Your own legs: any number, any strike, any ratio", wide: false };
+	const MAX_CUSTOM_LEGS = 50, MAX_MULT = 100;
+	function customLegs(rows, names) {
+		if (!Array.isArray(rows) || !rows.length) return { error: "Add at least one leg." };
+		if (rows.length > MAX_CUSTOM_LEGS) return { error: `A custom structure can have up to ${MAX_CUSTOM_LEGS} legs.` };
+		const merged = new Map();
+		for (const r of rows) {
+			const side = r && r.side > 0 ? 1 : -1, type = r && r.type === "PE" ? "PE" : "CE", mult = r ? r.mult : NaN;
+			if (!(Number.isInteger(mult) && mult >= 1 && mult <= MAX_MULT)) return { error: `Each leg's size must be a whole number from 1 to ${MAX_MULT}.` };
+			const name = names && names[r.strike] ? names[r.strike][type] : null;
+			if (!name) return { error: `${r.strike} ${type} is not on the board for this expiry: change its strike.` };
+			const key = type + r.strike, prev = merged.get(key);
+			if (prev && prev.side !== side) return { error: `${r.strike} ${type} is both bought and sold: net it into one leg.` };
+			if (prev) { prev.mult += mult; if (prev.mult > MAX_MULT) return { error: `${r.strike} ${type} adds up to more than ${MAX_MULT} times the base size.` }; } else merged.set(key, { side, type, strike: r.strike, name, mult });
+		}
+		return { legs: [...merged.values()] };
+	}
 	// legs for a template: strikes = sorted strikes on the board for the expiry; names = {strike: {CE: name, PE: name}}. Returns {legs} or {error}.
 	function legsFor(id, strikes, spot, names, width) {
 		const t = TEMPLATES[id];
@@ -982,7 +1000,8 @@ const QB = (() => {
 			const mid = e.src === "book" ? (e.bid + e.ask) / 2 : (spec.quotes[l.name] || {}).ltp;
 			const iv = impliedVol(l.type, mid, spec.spot, l.strike, spec.T, r);
 			const spread = e.src === "book" ? (e.ask - e.bid) / ((e.ask + e.bid) / 2) : NaN;
-			return { ...l, units: lots * lot, lots, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
+			const mult = Number.isInteger(l.mult) && l.mult >= 1 ? l.mult : 1;
+			return { ...l, mult, units: lots * lot * mult, lots: lots * mult, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
 		});
 		const out = { legs, lots, lot, errors: [], checks: [], paperChecks: [], ok: false, paperOk: false };
 		if (!(spec.T >= 0)) { out.errors.push("The expiry on the board could not be read, so the time to expiry is unknown."); return out; }
@@ -1059,7 +1078,19 @@ const QB = (() => {
 		const end = Date.UTC(2000 + +m[3], mi, +m[1], 10, 0);                                           // 15:30 IST = 10:00 UTC
 		return Math.max(0, (end - nowMs) / 31556952000);
 	}
-	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, legsFor, entry, analyze, suggestLots, yearsTo, ncdf, legPay };
+	// what the structure would be worth under a what-if, against what it cost to open (theoretical value at each leg's own implied volatility shifted by `dvol` (absolute, 0.02 = two vol points), spot moved by
+	// `move` (0.01 = +1%), and `days` closer to expiry; exit spread and fees are NOT included). At expiry this is the payoff, to the paisa.
+	function scenario(a, spec, s) {
+		const c = spec.c || conf(), r = c.r, S = spec.spot * (1 + s.move), T = Math.max(0, spec.T - s.days / 365);
+		let v = 0;
+		for (const l of a.legs) {
+			const iv = Number.isFinite(l.iv) ? Math.max(0.01, l.iv + s.dvol) : NaN;
+			const val = T > 0 && Number.isFinite(iv) ? bs(l.type, S, l.strike, T, iv, r) : (l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S));
+			v += l.side * l.units * (val - l.px);
+		}
+		return v;
+	}
+	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, CUSTOM, MAX_CUSTOM_LEGS, customLegs, legsFor, entry, analyze, scenario, suggestLots, yearsTo, ncdf, legPay };
 })();
 /* @@builder:end */
 
@@ -1189,7 +1220,7 @@ const AN = (() => {
 /* @@analyse:end */
 
 // ---- the Build tab: pick an underlying, an expiry and a structure; see what it costs, where it makes and loses, and whether it fits the desk's limits. Paper only: no order is sent from here.
-S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr" };
+S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr", custom: [], sc: { move: 0, dvol: 0, days: 0 } };
 function bdChains(data) {                                                // the underlyings the builder can price: an index with a known lot size, and its board chains
 	const c = QB.conf(), all = liveChains(data), out = Object.create(null);
 	for (const u of Object.keys(c.inst)) if (all[u] && Object.keys(all[u]).length) out[u] = all[u];
@@ -1266,7 +1297,7 @@ function bdDraw() {
 	if (!exps.includes(B.exp)) B.exp = exps[0];
 	const ch = chains[B.u][B.exp], strikes = Object.keys(ch).map(Number).sort((p, q) => p - q);
 	const sq = data.quotes[B.u] || data.quotes[B.u + "-FUT"] || {}, spot = sq.ltp;
-	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = QB.TEMPLATES[B.tpl];
+	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = B.tpl === "custom" ? QB.CUSTOM : QB.TEMPLATES[B.tpl];
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
 	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono" }, String(val)), h("button", { class: "btn", "aria-label": "more " + label, onclick: up }, "+")));
 	put(body,
@@ -1274,15 +1305,17 @@ function bdDraw() {
 		c.fromConfig ? null : h("div", { class: "note warn" }, "This page has no limits from the desk's config (QD_TRADE is missing), so it is using built-in defaults that may be out of date. Do not rely on the checklist; re-publish the site."),
 		h("div", { class: "chips", style: "padding:8px 16px 4px" }, us.map((u) => chip(u, u === B.u, () => { B.u = u; B.exp = null; bdDraw(); }))),
 		h("div", { class: "chips", style: "padding:4px 16px" }, exps.map((e) => chip(e, e === B.exp, () => { B.exp = e; bdDraw(); }))),
-		h("div", { class: "chips", style: "padding:4px 16px" }, Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); }))),
+		h("div", { class: "chips", style: "padding:4px 16px" }, [...Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); })),
+			chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
 		h("div", { class: "f3", style: "font-size:12px;padding:2px 16px 6px" }, tpl.view),
+		B.tpl === "custom" ? bdCustom(B, strikes, spot) : null,
 		tpl.wide ? step("Width (strikes)", B.width, () => { B.width = Math.max(1, B.width - 1); bdDraw(); }, () => { B.width = Math.min(10, B.width + 1); bdDraw(); }) : null,
 		step("Lots (" + inst.lot + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); }));
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
 	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows: AN.chainRows(ch, data.quotes, spot, T, c.r) }));
-	const L = QB.legsFor(B.tpl, strikes, spot, names, B.width);
+	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
 	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
 	const a = QB.analyze(spec);
@@ -1297,6 +1330,7 @@ function bdDraw() {
 			kv("Costs to get in and out (exit at today's price)", inr(a.cost) + ` (fees ${inr(a.fees)} + spread ${inr(a.exitSpread)})`),
 			kv("Net delta · gamma", `${signed(a.greeks.delta, 1)} · ${signed(a.greeks.gamma, 3)}`), kv("Theta a day · vega per vol point", `${inr(a.greeks.theta, true)} · ${inr(a.greeks.vega, true)}`)),
 		h("div", { style: "padding:8px 16px" }, bdPayoff(a, spot)),
+		bdScenario(B, a, spec),
 		legsTable2(a),
 		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Sizing guide (the intraday desk's limits) and data quality"),
 			a.checks.map((x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text)))),
@@ -1308,6 +1342,47 @@ function bdDraw() {
 			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:4px 16px 8px" }, "The paper ticket also checks the day's loss budget, the drawdown halt and the displayed size at the touch against the live account. A structure that is not open-able today is still shown here as a what-if.")),
 		bdTicket(a, tpl),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure. Held to expiry, an in-the-money long pays the exchange's exercise STT instead, which this does not model; there is no dividend yield in the pricing. Worst loss and best profit leave out costs."));
+}
+// ---- custom legs: add, flip, move and size as many legs as you like ----------------------------------------------------------------------
+function bdCustom(B, strikes, spot) {
+	const rows = B.custom, redraw = () => { B.editing = false; bdDraw(); };
+	const flat = (label, on, fn, cls) => h("button", { class: "chip " + (cls || ""), "aria-pressed": String(on), onclick: fn }, label);
+	const atm = strikes.length ? strikes.reduce((b, k) => (Math.abs(k - spot) < Math.abs(b - spot) ? k : b), strikes[0]) : 0;
+	return h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Your legs (${rows.length} of up to ${QB.MAX_CUSTOM_LEGS})`),
+		rows.map((r, i) => h("div", { class: "row", style: "padding:4px 16px;gap:6px;align-items:center;flex-wrap:wrap" },
+			flat(r.side > 0 ? "Buy" : "Sell", r.side > 0, () => { r.side = -r.side; redraw(); }, r.side > 0 ? "up" : "dn"), flat(r.type, r.type === "CE", () => { r.type = r.type === "CE" ? "PE" : "CE"; redraw(); }),
+			h("select", { class: "search", style: "width:96px", "aria-label": `Strike of leg ${i + 1}`, onchange: (e) => { r.strike = Number(e.target.value); redraw(); } },
+				(strikes.includes(r.strike) ? strikes : [r.strike, ...strikes]).map((k) => h("option", { value: String(k), ...(k === r.strike ? { selected: "selected" } : {}) }, String(k)))),
+			h("button", { class: "btn", "aria-label": `smaller size of leg ${i + 1}`, onclick: () => { r.mult = Math.max(1, r.mult - 1); redraw(); } }, "−"), h("b", { class: "mono" }, "×" + r.mult),
+			h("button", { class: "btn", "aria-label": `bigger size of leg ${i + 1}`, onclick: () => { r.mult = Math.min(100, r.mult + 1); redraw(); } }, "+"),
+			h("button", { class: "btn", "aria-label": `remove leg ${i + 1}`, onclick: () => { rows.splice(i, 1); redraw(); } }, "Remove"))),
+		h("div", { style: "padding:6px 16px 12px;display:flex;gap:10px;flex-wrap:wrap" },
+			h("button", { class: "btn", disabled: rows.length >= QB.MAX_CUSTOM_LEGS, onclick: () => { rows.push({ side: 1, type: "CE", strike: atm, mult: 1 }); redraw(); } }, "Add a leg"),
+			h("button", { class: "btn", disabled: !rows.length, onclick: () => { B.custom = []; redraw(); } }, "Clear")),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:0 16px 10px" }, "Sizes multiply the Lots below. A structure with a short call that is not covered is refused (unlimited loss). The paper desk can open it only if every leg is a purchase."));
+}
+// ---- what-if sliders and a grid: the structure's value if spot moves, volatility shifts and days pass (theoretical, before exit costs) --------------------------------------
+function bdScenario(B, a, spec) {
+	const sc = B.sc, T = spec.T, maxDays = Math.floor(T * 365);
+	const cell = (v) => h("td", { class: "mono " + (v >= 0 ? "up" : "dn"), style: "text-align:right" }, inr(v, true));
+	const val = () => QB.scenario(a, spec, sc), out = h("b", { class: "mono" }, "");
+	const paint = () => { const v = val(); out.textContent = inr(v, true); out.className = "mono " + (v >= 0 ? "up" : "dn"); };
+	const slider = (label, key, min, max, step, fmt) => {
+		const shown = h("b", { class: "mono" }, fmt(sc[key]));
+		const input = h("input", { type: "range", min: String(min), max: String(max), step: String(step), value: String(sc[key]), "aria-label": label, style: "width:100%", oninput: (e) => { sc[key] = Number(e.target.value); shown.textContent = fmt(sc[key]); paint(); }, onfocus: () => { B.editing = true; }, onblur: () => { B.editing = false; } });
+		input.addEventListener("pointerdown", () => { B.editing = true; }); input.addEventListener("pointerup", () => { B.editing = false; });
+		return h("div", { style: "padding:4px 16px" }, h("div", { class: "row", style: "justify-content:space-between" }, h("span", { class: "f3", style: "font-size:12.5px" }, label), shown), input);
+	};
+	paint();
+	const moves = [-0.04, -0.02, -0.01, 0, 0.01, 0.02, 0.04], dayList = [...new Set([0, Math.round(maxDays / 2), maxDays])];
+	return h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "What if…"),
+		slider("Spot moves", "move", -0.08, 0.08, 0.0025, (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(2) + "%"),
+		slider("Volatility shifts (points)", "dvol", -0.1, 0.1, 0.005, (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(1)),
+		slider("Days pass", "days", 0, Math.max(1, maxDays), 1, (x) => x + " day" + (x === 1 ? "" : "s")),
+		h("div", { class: "row", style: "justify-content:space-between;padding:8px 16px" }, h("span", {}, "The structure is then worth, against what it cost"), out),
+		h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, [h("th", {}, "Days →"), ...moves.map((m) => h("th", { style: "text-align:right" }, (m >= 0 ? "+" : "") + (m * 100) + "%"))])),
+			h("tbody", {}, dayList.map((d) => h("tr", {}, [h("td", {}, d === maxDays ? `${d} (expiry)` : String(d)), ...moves.map((m) => cell(QB.scenario(a, spec, { move: m, dvol: sc.dvol, days: d })))]))))),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 10px" }, "Theoretical values from the model at each leg's own implied volatility (shifted by the volatility slider); exit spread and fees are not included. At expiry it equals the payoff chart."));
 }
 function legsTable2(a) {
 	return h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["", "Strike", "Type", "Bid", "Ask", "Price used", "IV"].map((x) => h("th", {}, x)))),
@@ -1360,11 +1435,11 @@ const PT = (() => {
 		const g = group || idNow().slice(4, 20);
 		// `ref`: the prices on screen when the trader decided (and when the board last heard them). It is used only to report slippage; it never prices or allows a fill.
 		const refOf = (l) => (typeof l.bid === "number" && Number.isFinite(l.bid) && l.bid > 0 && l.bid <= l.ask ? { bid: l.bid, ask: l.ask, ...(Number.isFinite(nowMs) && Number.isFinite(l.age) && l.age >= 0 ? { at: Math.round(nowMs - l.age * 1000) } : {}) } : null);
-		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g, ...(refOf(l) ? { ref: refOf(l) } : {}) })) };
+		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: Number.isInteger(l.lots) ? l.lots : a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g, ...(refOf(l) ? { ref: refOf(l) } : {}) })) };
 	}
 	const sellFor = (symbol) => ({ id: idNow(), side: "sell", symbol, lots: "all" });
 	// the structure a review belongs to: if it changes, the review is void and the user must press Review again
-	const sigOf = (a) => (a && a.paperOk === true && Array.isArray(a.legs) ? a.lots + "|" + a.legs.map((l) => l.side + ":" + l.name).join(",") : "");
+	const sigOf = (a) => (a && a.paperOk === true && Array.isArray(a.legs) ? a.lots + "|" + a.legs.map((l) => l.side + ":" + l.name + ":" + (Number.isInteger(l.lots) ? l.lots : a.lots)).join(",") : "");
 	return { idNow, flat, thesisOk, stratOk, limitFor, ordersFor, sellFor, sigOf };
 })();
 // The only three routes this page may call, each with its one method; the request goes to that relative path, on this page's own origin, and nowhere else.
