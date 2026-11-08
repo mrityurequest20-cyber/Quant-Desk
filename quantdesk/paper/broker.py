@@ -72,14 +72,14 @@ class PaperBroker:
             out[sym] = d
         return out
 
-    def settle_expired(self, day: dt.date, underlying_settle: dict[str, float], now: dt.datetime) -> dict[str, str]:
+    def settle_expired(self, day: dt.date, underlying_settle: dict[str, float], now: dt.datetime, only: set[str] | None = None) -> dict[str, str]:
         """Cash-settle every long option that expired before `day` at its intrinsic value, with the exercise STT on a profit. A
         position whose underlying has no settlement price is left held and named: until it is settled its equity is unknown, so the
-        gate refuses new entries. Returns {symbol: what happened}."""
+        gate refuses new entries. `only` limits it to those symbols (the runner settles only what expires today, at today's index price). Returns {symbol: what happened}."""
         out = {}
         for sym, pos in list(self.account.positions.items()):
             inst = pos.instrument
-            if inst.kind != OPTION or inst.expiry is None or inst.expiry >= day:
+            if inst.kind != OPTION or inst.expiry is None or inst.expiry >= day or (only is not None and sym not in only):
                 continue
             if not (is_number(inst.strike) and inst.right in ("CE", "PE")):
                 out[sym] = "no strike or right on the contract: left held"
