@@ -27,10 +27,17 @@ import datetime as dt
 import math
 
 from ..markets import sessions as MK
+from . import structures as ST
 from .runner import MONTHS, OPT_TAIL, _num
 
 IST = MK.IST
 TAG = "AUTO v1"
+TAG2 = "AUTO v2"                    # the strategy-search entries (quantdesk/paper/structures.py): one name for all the legs of a structure, so they are managed as one
+STRUCT_STOP, STRUCT_TAKE = 0.5, 0.85  # a structure is closed at a loss of half its worst case, or when it has earned 85% of its best case (a capped structure has little left to gain)
+STRUCT_TRAIL_ARM, STRUCT_TRAIL_KEEP = 1.0, 0.70   # the trailing stop arms once the structure has earned its whole worst case (one R) and follows 30% below the peak profit
+TILT_FULL_AT = 3                    # readings that agree for a full-conviction view (two agreeing is two thirds)
+VOL_RATIO_LO, VOL_RATIO_HI, MIN_RETURNS = 0.6, 1.5, 8   # how far the tape's own volatility may move the expected move away from the market's
+TRADING_MIN_PER_DAY = 375
 PRESSURE_TH, PARITY_TH_PCT, MOMENTUM_TH_PCT = 0.25, 0.05, 0.10
 NEWS_TONE_TH, NEWS_WEIGHT_TH, NEWS_MAX_AGE_S = 0.35, 3.0, 2 * 3600
 STOP_KEEP = 0.60                    # the stop sits at 60% of the entry premium: the risk is 40% of it (one R)
@@ -180,7 +187,10 @@ def direction(pressure, gap_pct, momentum_pct, news_v: int = 0, news_why: str | 
 
 
 class AutoPilot:
-    def __init__(self, underlyings=("NIFTY", "BANKNIFTY"), lots: dict | None = None, capital: float = 500_000.0, day_stop_frac: float | None = None):
+    def __init__(self, underlyings=("NIFTY", "BANKNIFTY"), lots: dict | None = None, capital: float = 500_000.0, day_stop_frac: float | None = None,
+                 structures: bool = False, allow_short: bool = False):
+        self.structures = bool(structures)                       # True: entries come from the strategy search (structures.py) instead of the fixed first-strike-out-of-the-money buy
+        self.allow_short = bool(allow_short)                     # True: the search may use sold legs, only inside a bounded package (the gate re-checks everything)
         self.day_stop_frac = day_stop_frac                       # None = no stop of its own: the risk gate's daily loss cap applies
         self.und = tuple(underlyings)
         self.lots = dict(lots or {})
@@ -337,6 +347,7 @@ class AutoPilot:
                 orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": s, "lots": lots, "queued_at": int(t * 1000), "group": "auto", "_why": reason})
             elif deciding and not reason:
                 info.setdefault("held_overnight", []).append(s)
+        orders.extend(self._manage_structures(snap, account, ist, t, dirs, news, now, deciding, info))
         if account.day_halted or account.halt:
             info["entries"] = "none: the account is stopped for the day or halted by the drawdown limit"
             return orders
@@ -354,17 +365,167 @@ class AutoPilot:
             if d == 0 or u not in ch:
                 continue
             _, why, _, _, _ = self._dir_of(snap, u, ist, t, ch, news, now)
-            o = self._entry(snap, u, d, why, ch[u], ist, t)
-            if not o or o["symbol"] in account.positions:                                      # a contract already held (by the owner or by AUTO) is never added to
+            o = self._entry2(snap, u, d, why, ch[u], ist, t, info) if self.structures else self._entry(snap, u, d, why, ch[u], ist, t)
+            if not o:
                 continue
-            if t - self.pending_entry.get(o["symbol"], 0.0) < ENTRY_PENDING_S or t - facts["last_fill"].get(o["symbol"], 0.0) < REENTRY_GUARD_S:
+            syms = [l["symbol"] for l in o["legs"]] if o.get("side") == "package" else [o["symbol"]]
+            if any(s in account.positions for s in syms):                                      # a contract already held (by the owner or by AUTO) is never added to
+                continue
+            last2 = self._last_fill_v2(account) if self.structures else {}
+            if any(t - self.pending_entry.get(s, 0.0) < ENTRY_PENDING_S or t - max(facts["last_fill"].get(s, 0.0), last2.get(s, 0.0)) < REENTRY_GUARD_S for s in syms):
                 continue                                                                       # an order still in flight, or the same contract traded a moment ago
             if t - self.pending_entry.get((u, d), 0.0) < DIRECTION_BACKOFF_S:
                 continue                                                                       # the same index and direction was just tried: no new strike every few seconds
-            self.pending_entry[o["symbol"]] = t
+            for s in syms:
+                self.pending_entry[s] = t
             self.pending_entry[(u, d)] = t
             orders.append(o)
         return orders
+
+    # ---- the strategy search (structures.py): entry and management of whole structures ---------------------------------------------------------------------------
+    @staticmethod
+    def _last_fill_v2(account) -> dict:
+        out: dict[str, float] = {}
+        for r in account.ledger:
+            if isinstance(r.get("strategy"), str) and r["strategy"].startswith(TAG2) and r.get("kind") in ("buy", "sell", "sto", "btc"):
+                try:
+                    out[r.get("symbol")] = max(out.get(r.get("symbol"), 0.0), dt.datetime.fromisoformat(r["ts"]).timestamp())
+                except (ValueError, KeyError, TypeError):
+                    continue
+        return out
+
+    def _vol_ratio(self, u: str, t: float, implied: float, days: int) -> float:
+        """How much the tape's own volatility (the last 15 minutes, one sample a minute, scaled to the time left) differs from the move the market prices in: clamped to 0.6 to 1.5, and 1.0 with too little tape."""
+        pts, last = [], None
+        for ts, px in self.tape.get(u, []):
+            if ts >= t - 900 and (last is None or ts - last >= 55):
+                pts.append(px)
+                last = ts
+        rets = [math.log(b / a) for a, b in zip(pts, pts[1:]) if a > 0 and b > 0]
+        if len(rets) < MIN_RETURNS or not implied or implied <= 0:
+            return 1.0
+        m = sum(rets) / len(rets)
+        sd = math.sqrt(sum((r - m) ** 2 for r in rets) / (len(rets) - 1))
+        realised = sd * math.sqrt(max(days * 5 / 7, 0.5) * TRADING_MIN_PER_DAY)
+        return min(max(realised / implied, VOL_RATIO_LO), VOL_RATIO_HI)
+
+    def _entry2(self, snap, u, d, why, by_exp, ist, t, info):
+        exp = self._pick_expiry(by_exp, ist.date())
+        chain = by_exp.get(exp) if exp else None
+        sp = _spot(snap, u)
+        if not sp or not chain:
+            return None
+        quotes = {}
+        for row in chain.values():
+            for name in row.values():
+                q = (snap.get("quotes") or {}).get(name)
+                if not isinstance(q, dict):
+                    continue
+                age, bid, ask = _num(q.get("age_s")), _num(q.get("bid")), _num(q.get("ask"))
+                if None in (age, bid, ask) or not (0 <= age <= QUOTE_MAX_AGE_S) or not (0 < bid <= ask) or ask < MIN_PREMIUM or (ask - bid) / ((ask + bid) / 2) > MAX_SPREAD_PCT:
+                    continue
+                quotes[name] = q
+        ks = sorted(chain)
+        at = ks[min(range(len(ks)), key=lambda i: abs(ks[i] - sp))]
+        c, p = quotes.get(chain[at].get("CE")), quotes.get(chain[at].get("PE"))
+        implied = ST.implied_move(sp, _mid(c) if c else None, _mid(p) if p else None)
+        if implied is None:
+            return None
+        days = (exp - ist.date()).days
+        ratio = self._vol_ratio(u, t, implied, days)
+        tilt = d * min(1.0, len(why) / TILT_FULL_AT) * ST.TILT_SCALE
+        cands = ST.candidates(chain, quotes, sp)
+        if not self.allow_short:
+            cands = [x for x in cands if all(l["qty"] > 0 for l in x["legs"])]
+        best, n, passed = ST.choose(cands, sp, implied * ratio, tilt)
+        info.setdefault("search", {})[u] = {"scored": n, "reward_ok": passed, "best": best["label"] if best else None, "score": round(best["score"], 3) if best else None, "vol_ratio": round(ratio, 2)}
+        if not best:
+            return None
+        lot = self.lots.get(u)
+        if not (isinstance(lot, int) and lot > 0):
+            return None
+        pid = f"{int(t) % 0xFFFFFF:06x}"
+        strategy = f"{TAG2} {u} {'up' if d > 0 else 'dn'} #{pid}"
+        thesis = (f"{TAG2}: {u} {'up' if d > 0 else 'down'}: " + "; ".join(why) + f". Searched {n} structures ({passed} offering at least 2x their worst case as their best case) and chose {best['label']}: "
+                  f"expected profit {best['ev'] * lot:+.0f} on a worst case of {best['max_loss'] * lot:.0f}, chance of profit {best['pop']:.0%}. The market prices a {implied:.2%} move to expiry, the tape says {ratio:.2f}x of that; "
+                  f"the view tilts the expected price by {tilt:+.2f} standard deviations (an assumption, not a measured edge). Risk: closed at half the worst case; reward: a trailing stop after one R. "
+                  "Sold legs, if any, are inside this bounded package only. Held overnight only if the idea is intact.")
+        slack = lambda x: max(3 * TICK, 0.02 * x)                                              # noqa: E731 - the same room the app gives a fill
+        legs, net = [], 0.0
+        for l in best["legs"]:
+            q = quotes[l["symbol"]]
+            bid, ask, age = _num(q["bid"]), _num(q["ask"]), _num(q["age_s"])
+            buy = l["qty"] > 0
+            net += (math.ceil((ask + slack(ask)) / TICK - 1e-9) * TICK if buy else -max(bid - slack(bid), 0.0)) * abs(l["qty"]) * lot
+            legs.append({"symbol": l["symbol"], "side": "buy" if buy else "sell", "lots": abs(l["qty"]), "ref": {"bid": bid, "ask": ask, "at": int(t * 1000 - age * 1000)}})
+        base = {"id": self._oid(t, "b"), "strategy": strategy[:60], "thesis": thesis[:1000], "group": "auto", "queued_at": int(t * 1000)}
+        if len(legs) == 1:                                                                     # a single bought option: an ordinary buy
+            ref, sym = legs[0]["ref"], legs[0]["symbol"]
+            return {**base, "side": "buy", "symbol": sym, "lots": legs[0]["lots"], "limit": round(math.ceil((ref["ask"] + slack(ref["ask"])) / TICK - 1e-9) * TICK, 2), "ref": ref}
+        return {**base, "side": "package", "legs": legs, "net_limit": round(net, 2)}
+
+    def _manage_structures(self, snap, account, ist, t, dirs, news, now, deciding, info) -> list[dict]:
+        """Exits for the structures AUTO opened (strategy name starts `AUTO v2`): all their legs together, the sold ones bought back FIRST. Closed at a loss of half the worst case, at 85% of the best
+        case, by a trailing stop after one R, when the signals turn against the idea or the news does, and in the overnight decision (expiry still two or more days off, not older than three sessions)."""
+        groups: dict[str, list] = {}
+        for s, pos in account.positions.items():
+            if isinstance(pos.strategy, str) and pos.strategy.startswith(TAG2):
+                groups.setdefault(pos.strategy, []).append((s, pos))
+        out: list[dict] = []
+        peaks = self._peaks(account)
+        for strat, legs in groups.items():
+            u = legs[0][1].instrument.underlying
+            want = 1 if " up #" in strat else (-1 if " dn #" in strat else 0)
+            opened = min(p.opened_at for _, p in legs)
+            pnl, priced = 0.0, True
+            for s, p in legs:
+                q = (snap.get("quotes") or {}).get(s)
+                age, bid, ask = (_num(q.get("age_s")), _num(q.get("bid")), _num(q.get("ask"))) if isinstance(q, dict) else (None, None, None)
+                m = ask if p.qty < 0 else bid
+                if m is None or m <= 0 or age is None or not (0 <= age <= 600):
+                    priced = False
+                    break
+                pnl += p.qty * (m - p.avg_price)
+            sl = [{"strike": float(p.instrument.strike), "right": p.instrument.right, "qty": p.qty} for _, p in legs]
+            ml, mg = ST._extremes(sl, sum(p.qty * p.avg_price for _, p in legs))
+            key = (strat, opened)
+            peak = max(peaks.get(key, 0.0), self.written_peak.get(key, 0.0), pnl if priced else 0.0)
+            if priced and pnl > 0 and pnl >= max(peaks.get(key, 0.0), self.written_peak.get(key, 0.0), 1.0) * PEAK_STEP:
+                self.written_peak[key] = pnl
+                self._events.append({"kind": "auto_peak", "symbol": strat, "opened_at": opened, "peak": round(pnl, 2)})
+            tone, weight, _ = news_tone(news, u, now)
+            reason = None
+            if priced and ml and pnl <= -STRUCT_STOP * ml:
+                reason = f"stop: down {-pnl:,.0f}, half of the worst case ({ml:,.0f})"
+            elif priced and mg is not None and mg != math.inf and pnl >= STRUCT_TAKE * mg:
+                reason = f"target: earned {pnl:,.0f} of a best case of {mg:,.0f}"
+            elif priced and ml and peak >= STRUCT_TRAIL_ARM * ml and pnl <= peak * STRUCT_TRAIL_KEEP:
+                reason = f"trailing stop: {pnl:,.0f} against a peak of {peak:,.0f}"
+            elif want and dirs.get(u) == -want:
+                reason = "the signals turned the other way"
+            elif want and tone is not None and weight >= NEWS_WEIGHT_TH and tone * want <= -NEWS_TONE_TH:
+                reason = f"the news turned against it (tone {tone:+.2f})"
+            elif deciding:
+                exp = min(p.instrument.expiry for _, p in legs)
+                try:
+                    age_d = (ist.date() - dt.datetime.fromisoformat(opened).astimezone(IST).date()).days
+                except (ValueError, TypeError):
+                    age_d = MAX_AGE_DAYS
+                if (exp - ist.date()).days < HOLD_MIN_DAYS_TO_EXPIRY:
+                    reason = "expiry is too close to hold overnight"
+                elif age_d >= MAX_AGE_DAYS:
+                    reason = f"held {age_d} sessions already: time limit"
+                elif not priced:
+                    reason = "no usable price to judge it by: not carried overnight"
+                elif ml and pnl <= -0.3 * ml:
+                    reason = "well under its entry at the close: not carried"
+                else:
+                    info.setdefault("held_overnight", []).extend(s for s, _ in legs)
+            if reason and t - self.pending_exit.get(strat, 0.0) >= EXIT_RESEND_S:
+                self.pending_exit[strat] = t
+                for i, (s, p) in enumerate(sorted(legs, key=lambda x: x[1].qty > 0)):               # the sold options first: buying them back never leaves anything uncovered
+                    out.append({"id": self._oid(t, f"x{i}"), "side": "sell", "symbol": s, "lots": max(1, abs(p.qty) // max(1, p.instrument.lot_size)), "queued_at": int(t * 1000), "group": "auto", "_why": reason})
+        return out
 
     # ---- pieces ---------------------------------------------------------------------------------------------------------------------------------------------
     @staticmethod
