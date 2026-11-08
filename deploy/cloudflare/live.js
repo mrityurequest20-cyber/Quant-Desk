@@ -11,7 +11,7 @@
 // The latest snapshot is kept in one Durable Object (class LiveBoard, binding LIVE) because a Worker has no memory shared between requests. It is held in memory only.
 // Ages are worked out here, from this Worker's clock when each quote arrived, so a stale feed shows as stale whatever the phone's clock says.
 
-import { KotakPoller, istParts, runCycle, inSession } from "./kotak.js";
+import { KotakPoller, istParts, runCycle, inSession, SPECIAL_SESSIONS } from "./kotak.js";
 import { Series, shardKeys, FLUSH_MS } from "./series.js";
 import { PaperBook, cleanOrder, cleanResult, cleanState } from "./paper.js";
 import { NewsBook } from "./news.js";
@@ -531,7 +531,7 @@ export class LiveBoard {
 		if (request.method === "POST" && path === "/needs-universe") {
 			const t = istParts(now);
 			const asked = this.lastAsk !== undefined && now >= this.lastAsk && now - this.lastAsk < 40 * 60000;          // a stored time from the future (a clock fault) does not block the request for good
-			const need = this.kotakConfigured() && t.dow >= 1 && t.dow <= 5 && t.mins >= 8 * 60 && t.mins < 15 * 60 + 35
+			const need = this.kotakConfigured() && ((t.dow >= 1 && t.dow <= 5) || Object.prototype.hasOwnProperty.call(SPECIAL_SESSIONS, t.date)) && t.mins >= 8 * 60 && t.mins < 15 * 60 + 35
 				&& !(this.universe && this.universe.asof === t.date) && !asked;
 			if (need) {
 				this.lastAsk = now;

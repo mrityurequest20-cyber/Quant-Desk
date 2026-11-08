@@ -102,6 +102,23 @@ class Config:
             out.add(h if isinstance(h, dt.date) else dt.date.fromisoformat(str(h)))
         return out
 
+    def special_sessions(self) -> dict[dt.date, tuple[dt.time, dt.time]]:
+        """Trading windows on days that are normally closed (`calendar.special_sessions`, date -> [open, close] IST), e.g. Muhurat trading. A malformed entry raises: the
+        paper gate fails closed rather than guess a window."""
+        raw = self.get("calendar.special_sessions") or {}
+        if not isinstance(raw, dict):
+            raise ValueError("calendar.special_sessions must be a map of date -> [open, close]")
+        out = {}
+        for k, v in raw.items():
+            day = k if isinstance(k, dt.date) else dt.date.fromisoformat(str(k))
+            if not (isinstance(v, (list, tuple)) and len(v) == 2):
+                raise ValueError(f"calendar.special_sessions {day}: expected [open, close]")
+            o, c = (dt.time.fromisoformat(str(x)) for x in v)
+            if not o < c:
+                raise ValueError(f"calendar.special_sessions {day}: the open must be before the close")
+            out[day] = (o, c)
+        return out
+
     def holiday_years(self) -> set[int]:
         """Years whose NSE holiday list is complete here (`calendar.holiday_years`; by default the years the listed
         holidays fall in). Any other year's calendar is unknown: a holiday would look like a trading day (F-07)."""
