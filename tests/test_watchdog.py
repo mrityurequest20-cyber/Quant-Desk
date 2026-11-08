@@ -439,3 +439,20 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
     assert out["today"] == [] and out["off"] == []
     assert out["stale"] == ["P2 W11 Kotak universe is not today's"] and out["missing"] == ["P2 W11 Kotak universe is not today's"]
     assert out["leak"] is False
+
+
+@NODE
+def test_the_worker_starts_the_mcx_evening_candles_once_at_0010_ist_tuesday_to_saturday_and_never_holds_up_the_desk(tmp_path):
+    out = _node(tmp_path, HEAD + r"""
+const evening = async (when, extra = {}) => { calls = []; state = {}; await worker.scheduled({ cron: "*/10 0-1,17-23 * * *", scheduledTime: IST(when) }, env(extra), {}); return calls.filter((c) => c.url.includes("kite-evening.yml")).length; };
+out.tue = await evening("2026-10-27T00:10:00"); out.sat = await evening("2026-10-31T00:10:00");
+out.mon = await evening("2026-10-26T00:10:00"); out.sun = await evening("2026-10-25T00:10:00");
+out.early = await evening("2026-10-27T00:00:00"); out.late = await evening("2026-10-27T00:20:00");
+globalThis.fetch = async (url) => { if (String(url).includes("kite-evening.yml")) throw new Error("network down"); return new Response(null, { status: 204 }); };
+calls = []; logs = [];
+await worker.scheduled({ cron: "*/10 0-1,17-23 * * *", scheduledTime: IST("2026-10-27T00:10:00") }, env(), {});
+out.logs = logs.join(" | ");
+console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
+""")
+    assert (out["tue"], out["sat"]) == (1, 1) and (out["mon"], out["sun"], out["early"], out["late"]) == (0, 0, 0, 0)
+    assert "kite evening not dispatched" in out["logs"] and "desk scheduler dispatched" in out["logs"]                  # a failure there never stops the desk's alarm clock

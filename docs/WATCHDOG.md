@@ -81,5 +81,5 @@ The Worker's cron now fires **every 10 minutes, all day, every day** (three cron
 | Check | When (IST) | What |
 |---|---|---|
 | W15 | 00:00, 04:00, 08:00, 12:00, 16:00, 20:00, every day | The news digest (`news.yml`, started every tick by the scheduler, day and night) has a successful run in the last hour. |
-| W16 | 06:00 Tue to Sat | The MCX/currency evening candles (`kite-evening.yml`, started once a night at 00:10 IST by the scheduler, never retried because it logs in to Kite) was started after midnight and did not fail. |
+| W16 | 06:00 Tue to Sat | The MCX/currency evening candles (`kite-evening.yml`, started once a night by the Worker's own clock in the 00:10 IST firing (not by the desk scheduler, which a test keeps away from the Kite jobs), never retried because it logs in to Kite) was started after midnight and did not fail. |
 | W17 | 11:10 Tue to Sat | The FX minute bars (`fx-minutes.yml`, started by the scheduler from 04:05 IST, retried up to three times) ran today and did not fail. |

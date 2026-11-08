@@ -196,30 +196,6 @@ def test_a_failing_news_job_or_listing_never_holds_up_or_fails_the_desks_schedul
     assert sch.main([]) == 0 and ["gh", "workflow", "run", "record.yml", "--ref", "main"] in calls                           # the dispatch failed, the recorder was already started
 
 
-def test_the_mcx_evening_candles_are_started_once_a_night_after_a_weekday_evening_and_never_retried():
-    run_ = lambda t, status="completed", ok="failure": {"createdAt": at(t).astimezone(sch.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "status": status, "conclusion": ok if status == "completed" else None, "event": "workflow_dispatch"}    # noqa: E731
-    assert sch.evening_due(at("2026-10-06 00:10"), [])[0] is True and sch.evening_due(at("2026-10-06 03:00"), [])[0] is True and sch.evening_due(at("2026-10-10 00:30"), [])[0] is True      # Tue, Tue, Sat
-    for when in ("2026-10-06 00:05", "2026-10-06 06:00", "2026-10-06 15:00", "2026-10-05 00:30", "2026-10-11 00:30"):                  # too early, too late, daytime, a Monday morning (Sunday evening), a Sunday morning (Saturday evening)
-        assert sch.evening_due(at(when), [])[0] is False, when
-    assert sch.evening_due(at("2026-10-06 01:00"), [run_("2026-10-06 00:12", "in_progress")])[0] is False                      # one at a time
-    assert sch.evening_due(at("2026-10-06 01:00"), [run_("2026-10-06 00:12", ok="success")])[0] is False                       # done
-    assert sch.evening_due(at("2026-10-06 01:00"), [run_("2026-10-06 00:12", ok="failure")])[0] is False                       # failed: never retried (it logs in to Kite)
-    assert sch.evening_due(at("2026-10-06 00:20"), [run_("2026-10-05 00:12", ok="failure")])[0] is True                        # yesterday's run does not count
-
-
-def test_main_dispatches_the_evening_candles_in_their_window_and_calls_github_about_them_nowhere_else(monkeypatch):
-    calls, listed = [], []
-    monkeypatch.setattr(sch.dt, "datetime", type("D", (sch.dt.datetime,), {"now": classmethod(lambda c, tz=None: at("2026-10-06 00:30"))}))
-    monkeypatch.setattr(sch, "_runs", lambda wf: listed.append(wf) or [])
-    monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
-    assert sch.main([]) == 0
-    assert ["gh", "workflow", "run", "kite-evening.yml", "--ref", "main"] in calls and ["gh", "workflow", "run", "news.yml", "--ref", "main"] in calls
-    calls.clear(); listed.clear()
-    monkeypatch.setattr(sch.dt, "datetime", type("D", (sch.dt.datetime,), {"now": classmethod(lambda c, tz=None: at("2026-10-06 14:30"))}))
-    sch.main([])
-    assert "kite-evening.yml" not in listed and ["gh", "workflow", "run", "kite-evening.yml", "--ref", "main"] not in calls
-
-
 def test_the_fx_minute_bars_are_dispatched_each_morning_until_one_run_succeeds_with_up_to_three_starts():
     run_ = lambda t, status="completed", ok="failure": {"createdAt": at(t).astimezone(sch.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "status": status, "conclusion": ok if status == "completed" else None, "event": "workflow_dispatch"}    # noqa: E731
     assert sch.fx_due(at("2026-10-06 04:05"), [])[0] is True and sch.fx_due(at("2026-10-10 10:50"), [])[0] is True

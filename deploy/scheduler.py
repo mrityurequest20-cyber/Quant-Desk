@@ -55,13 +55,8 @@ PAPER_WINDOW = (dt.time(8, 25), dt.time(15, 25))     # later than the recorders'
 # News does not keep market hours: it runs around the clock, every day (8 Nov 2026, owner: "nothing is getting missed out"), so a story at night or on a weekend is already in the digest when the market opens.
 NEWS_WORKFLOW = "news.yml"
 NEWS_EVERY = dt.timedelta(minutes=8)
-# The MCX and currency evening candles (kite-evening.yml): MCX trades to 23:30 (23:55 in some months), so the evening of Mon to Fri is over by 00:10 IST Tue to Sat. GitHub's own cron for it ("35 18 * * 1-5")
-# is best-effort and has been hours late, so this dispatches it. Once a day and never again after a failure (it logs in to Kite, and the owner's account must never be locked by a retry loop); the workflow's own
-# gate decides whether it may log in at all.
-EVENING_WORKFLOW = "kite-evening.yml"
-EVENING_WINDOW = (dt.time(0, 10), dt.time(6, 0))
 # The FX minute bars (fx-minutes.yml, public Yahoo data, no login): FX closes Friday 22:00 UTC and reopens Sunday 22:00 UTC, so the last day's bars are complete by 04:00 IST Tue to Sat. GitHub's cron for it
-# ("30 22 * * 1-5") is best-effort; this dispatches it too, and unlike the evening candles it may be started again (up to three times a day) when a run failed, since nothing logs in.
+# ("30 22 * * 1-5") is best-effort; this dispatches it too, and unlike a job that logs in it may be started again (up to three times a day) when a run failed, since nothing logs in.
 FX_WORKFLOW, FX_MAX_STARTS = "fx-minutes.yml", 3
 FX_WINDOW = (dt.time(4, 5), dt.time(11, 0))
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
@@ -100,20 +95,6 @@ def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: i
     if len(today) >= max_starts:
         return "wait", f"{len(today)} runs today and none succeeded: not starting again (look at the logs)"
     return "start", "no run today yet" if not today else f"today's run failed ({len(today)} so far): starting again"
-
-
-def evening_due(now: dt.datetime, runs: list[dict]) -> tuple[bool, str]:
-    """(start?, why) for the MCX/currency evening candles. `runs`: kite-evening.yml's runs. Tue to Sat, 00:10 to 06:00 IST, and only if no run of it was created today (whatever its outcome)."""
-    now = now.astimezone(IST)
-    if now.date().weekday() not in (1, 2, 3, 4, 5):
-        return False, f"{now.date()}: no weekday evening has just ended"
-    if not (EVENING_WINDOW[0] <= now.time() < EVENING_WINDOW[1]):
-        return False, f"{now:%H:%M} IST is outside the evening window {EVENING_WINDOW[0]:%H:%M}-{EVENING_WINDOW[1]:%H:%M}"
-    if any(r.get("status") in ACTIVE for r in runs):
-        return False, "an evening run is already queued or running"
-    if any(_ist(r["createdAt"]).date() == now.date() for r in runs):
-        return False, "an evening run was already started today: never retried (it logs in to Kite)"
-    return True, "due"
 
 
 def fx_due(now: dt.datetime, runs: list[dict]) -> tuple[bool, str]:
@@ -219,10 +200,8 @@ def main(argv: list[str] | None = None) -> int:
             started = started or wf == WORKFLOW
         if wf == WORKFLOW:
             runs = wf_runs
-    for extra, due in ((NEWS_WORKFLOW, lambda r: news_due(now, r, hols)), (EVENING_WORKFLOW, lambda r: evening_due(now, r)), (FX_WORKFLOW, lambda r: fx_due(now, r))):
-        try:                                                                 # news (every tick, around the clock) and the evening candles (once a night): nothing here can hold up or fail the desk
-            if extra == EVENING_WORKFLOW and not (EVENING_WINDOW[0] <= now.time() < EVENING_WINDOW[1] and now.weekday() in (1, 2, 3, 4, 5)):
-                continue                                                     # no GitHub call outside its window
+    for extra, due in ((NEWS_WORKFLOW, lambda r: news_due(now, r, hols)), (FX_WORKFLOW, lambda r: fx_due(now, r))):
+        try:                                                                 # news (every tick, around the clock) and the FX bars (each morning): nothing here can hold up or fail the desk
             if extra == FX_WORKFLOW and not (FX_WINDOW[0] <= now.time() < FX_WINDOW[1] and now.weekday() in (1, 2, 3, 4, 5)):
                 continue
             go, why = due(_runs(extra))
