@@ -113,7 +113,7 @@ window.QD_PUBLISHED = true;
   window.fetch = async (url, init) => {
     let path = "";
     try { path = new URL(String(url), window.location.href).pathname; } catch (e) { /* not a URL: the shim answers it */ }
-    if (path.startsWith("/live/") || path.startsWith("/paper/")) return realFetch(url, init);        // /paper/* is the same private relay (paper orders and the paper account), with the same key
+    if (path.startsWith("/live/") || path.startsWith("/paper/") || path === "/news") return realFetch(url, init);        // /paper/* and /news are the same private relay (paper orders and account, the news digest), with the same key
     return qdAnswer(await load(), url);
   };
   window.qdReload = () => { at = 0; return load(); };        // pull-to-refresh: skip the 60 s cache

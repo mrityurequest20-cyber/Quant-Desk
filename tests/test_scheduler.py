@@ -111,12 +111,12 @@ def test_main_starts_both_recorders_and_a_kite_failure_never_blocks_the_main_one
     monkeypatch.setattr(sch, "_runs", runs)
     monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
     assert sch.main([]) == 0
-    assert calls == [["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"], ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
+    assert calls == [["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"], ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"], ["gh", "workflow", "run", "news.yml", "--ref", "main"]]
     calls.clear()
     monkeypatch.setattr(sch, "_runs", lambda wf: [])
     assert sch.main([]) == 0
     assert calls == [["gh", "workflow", "run", "kite-record.yml", "--ref", "main"], ["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"],
-                     ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
+                     ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"], ["gh", "workflow", "run", "news.yml", "--ref", "main"]]
     calls.clear()
     monkeypatch.setattr(sch, "_runs", lambda wf: (_ for _ in ()).throw(sp.CalledProcessError(1, "gh")) if wf == sch.STOCK_WORKFLOW else [])
     assert sch.main([]) == 0
@@ -164,3 +164,33 @@ def test_main_at_1510_starts_only_the_paper_runner(monkeypatch):
     sch.main([])
     started = [c[3] for c in calls if c[:3] == ["gh", "workflow", "run"]]
     assert "paper-desk.yml" in started and "record.yml" not in started and "record-stocks.yml" not in started        # the recorders' window closed at 14:45; the paper runner's has not
+
+
+def test_the_news_digest_is_started_on_every_session_tick_but_only_one_at_a_time_and_not_too_often():
+    run_ = lambda t, status="completed": {"createdAt": at(t).astimezone(sch.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "status": status, "conclusion": "success" if status == "completed" else None, "event": "workflow_dispatch"}      # noqa: E731
+    assert sch.news_due(at("2026-10-05 10:00"), [], HOLS)[0] is True
+    assert sch.news_due(at("2026-10-05 10:10"), [run_("2026-10-05 10:00")], HOLS)[0] is True                              # ten minutes later: the next tick
+    assert sch.news_due(at("2026-10-05 10:05"), [run_("2026-10-05 10:00")], HOLS)[0] is False                             # a double dispatch inside eight minutes
+    assert sch.news_due(at("2026-10-05 10:30"), [run_("2026-10-05 10:00", "in_progress")], HOLS)[0] is False              # one at a time, even if it is slow
+    assert sch.news_due(at("2026-10-05 08:00"), [], HOLS)[0] is False and sch.news_due(at("2026-10-05 15:50"), [], HOLS)[0] is False
+    assert sch.news_due(at("2026-10-03 10:00"), [], HOLS)[0] is False                                                       # a Saturday
+    assert sch.news_due(at("2026-10-05 10:00"), [], {sch.dt.date(2026, 10, 5)})[0] is False                                # a holiday
+    assert sch.news_due(at("2026-10-05 10:10"), [run_("2026-10-05 10:00"), run_("2026-10-05 09:50")], HOLS)[0] is True
+
+
+def test_a_failing_news_job_or_listing_never_holds_up_or_fails_the_desks_scheduler(monkeypatch):
+    import subprocess as sp
+    calls = []
+    monkeypatch.setattr(sch.dt, "datetime", type("D", (sch.dt.datetime,), {"now": classmethod(lambda c, tz=None: at("2026-10-05 10:00"))}))
+    monkeypatch.setattr(sch, "_runs", lambda wf: (_ for _ in ()).throw(sp.CalledProcessError(1, "gh")) if wf == sch.NEWS_WORKFLOW else [])
+    monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert sch.main([]) == 0
+    assert ["gh", "workflow", "run", "record.yml", "--ref", "main"] in calls and ["gh", "workflow", "run", "news.yml", "--ref", "main"] not in calls
+    calls.clear()
+    monkeypatch.setattr(sch, "_runs", lambda wf: [])
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[3] == "news.yml":
+            raise sp.CalledProcessError(1, "gh")
+    monkeypatch.setattr(sch.subprocess, "run", run)
+    assert sch.main([]) == 0 and ["gh", "workflow", "run", "record.yml", "--ref", "main"] in calls                           # the dispatch failed, the recorder was already started
