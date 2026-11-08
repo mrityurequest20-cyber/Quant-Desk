@@ -339,3 +339,30 @@ for (let i = 0; i < 60; i++) await call("POST", "/paper/result", { token: ING, b
 out.resultsBytes = JSON.stringify(mem.get("paper:results")).length;
 """)
     assert o["fail"] == 500 and o["queueWritten"] is False and o["seen"] == 1000 and o["resultsBytes"] <= 100000
+
+
+@needs_node
+def test_a_package_order_is_checked_queued_once_and_its_per_leg_fills_come_back(tmp_path):
+    o = run(tmp_path, r"""
+const leg = (symbol, side, lots = 1, extra = {}) => ({ symbol, side, lots, ...extra });
+const pkg = (id, extra = {}) => ({ id, side: "package", legs: [leg("NIFTY12NOV2624500PE", "sell"), leg("NIFTY12NOV2624400PE", "buy", 1, { ref: { bid: 30, ask: 32, at: 5, evil: 1 } })], strategy: "bull put spread", thesis: "support held at 24400 for an hour with falling put volume", ...extra });
+out.good = await call("POST", "/paper/order", { token: READ, body: pkg("pkg-aaaa1", { net_limit: -1500, evil: "x" }) });
+const bad = {};
+for (const [k, v] of Object.entries({ none: pkg("pkg-bbbb1", { legs: [] }), many: pkg("pkg-bbbb2", { legs: Array.from({ length: 51 }, (_, i) => leg("NIFTY12NOV26" + (20000 + i * 50) + "PE", "buy")) }),
+  side: pkg("pkg-bbbb3", { legs: [leg("NIFTY12NOV2624500PE", "short")] }), lots: pkg("pkg-bbbb4", { legs: [leg("NIFTY12NOV2624500PE", "buy", 0)] }), dup: pkg("pkg-bbbb5", { legs: [leg("NIFTY12NOV2624500PE", "buy"), leg("NIFTY12NOV2624500PE", "sell")] }),
+  sym: pkg("pkg-bbbb6", { legs: [leg("<script>", "buy")] }), strat: pkg("pkg-bbbb7", { strategy: "" }), thesis: pkg("pkg-bbbb8", { thesis: "short" }), net: pkg("pkg-bbbb9", { net_limit: "x" }) })) bad[k] = (await call("POST", "/paper/order", { token: READ, body: v })).status;
+out.bad = bad;
+const q = (await call("GET", "/paper/queue", { token: ING })).body;
+out.queue = q.orders;
+out.pending = (await call("GET", "/paper/state", { token: READ })).body?.pending;
+const fill = (symbol, kind) => ({ symbol, kind, qty: 65, price: 60, fees: 20, seq: 1, ts: "t", slip: { total_inr: 5, junk: 9 } });
+out.post = await call("POST", "/paper/result", { token: ING, body: { id: "pkg-aaaa1", status: "filled", reasons: [], fill: fill("NIFTY12NOV2624500PE", "sto"), fills: [fill("NIFTY12NOV2624500PE", "sto"), fill("NIFTY12NOV2624400PE", "buy"), "junk"], at: "x" } });
+out.state = (await call("GET", "/paper/state", { token: READ })).body;
+""")
+    assert o["good"]["status"] == 200 and all(v == 400 for v in o["bad"].values()), o["bad"]
+    q = o["queue"][0]
+    assert q["side"] == "package" and set(q) == {"id", "side", "legs", "strategy", "thesis", "net_limit", "queued_at"} and q["net_limit"] == -1500        # known fields only
+    assert q["legs"][1]["ref"] == {"bid": 30, "ask": 32, "at": 5} and set(q["legs"][0]) == {"symbol", "side", "lots"}
+    assert o["post"]["status"] == 200
+    res = [r for r in o["state"]["results"] if r["id"] == "pkg-aaaa1"][0]
+    assert len(res["fills"]) == 2 and res["fills"][1]["symbol"] == "NIFTY12NOV2624400PE" and "junk" not in res["fills"][0].get("slip", {}) and res["fills"][0]["slip"] == {"total_inr": 5}

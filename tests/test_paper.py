@@ -463,7 +463,8 @@ def test_the_scan_itself_catches_what_it_is_meant_to(tmp_path):
 def test_the_config_carries_loss_caps_only(cfg):
     p = cfg.get("paper")
     assert set(p) == {"capital", "risk_per_trade", "daily_loss_limit", "drawdown_halt", "max_quote_age_s", "cost_verified_segments", "kill_switch_file",
-                      "underlyings"}
+                      "underlyings", "allow_short_legs"}
+    assert p["allow_short_legs"] is False                                       # sold options (hedged packages) ship switched OFF: they are turned on only with the reviewer's approval
     assert p["risk_per_trade"] == 0.025 and p["daily_loss_limit"] == 0.05 and p["drawdown_halt"] == 0.10 and p["cost_verified_segments"] == ["nse_fo"]
 
 

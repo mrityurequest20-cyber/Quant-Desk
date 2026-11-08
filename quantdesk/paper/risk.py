@@ -32,7 +32,7 @@ from pathlib import Path
 from ..core.types import OPTION, Instrument
 from ..execution.costs import CostModel
 from ..markets import sessions as MK
-from .account import Account, is_number, is_whole_positive
+from .account import Account, is_number, is_whole_positive, stress_equity
 
 IST = MK.IST
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +52,7 @@ class Limits:
     max_quote_age_s: float           # a data-quality guard, not a strategy knob
     cost_verified: frozenset         # segments whose costs are configured and verified
     underlyings: dict = field(default_factory=dict)   # segment -> the underlyings that trade in it (a mislabel guard)
+    allow_short_legs: bool = False   # sell options as part of a HEDGED book (verticals, condors, butterflies...): off unless the config says so; an uncovered short is refused whatever this says
 
     def __post_init__(self):
         for n in ("risk_per_trade", "daily_loss_limit", "drawdown_halt"):
@@ -66,7 +67,7 @@ class Limits:
         if any(v is None for v in vals):
             raise ValueError("paper.risk_per_trade, daily_loss_limit, drawdown_halt and max_quote_age_s must all be set in the config")
         und = {seg: frozenset(str(u).upper() for u in us) for seg, us in (g("underlyings") or {}).items()}
-        return cls(vals[0], vals[1], vals[2], vals[3], frozenset(g("cost_verified_segments") or []), und)
+        return cls(vals[0], vals[1], vals[2], vals[3], frozenset(g("cost_verified_segments") or []), und, bool(g("allow_short_legs") is True))
 
 
 @dataclass(frozen=True)
@@ -177,18 +178,25 @@ class RiskGate:
 
     def trim_excess(self, account: Account, marks: dict[str, float]) -> float:
         """How much open premium is more than the loss budget allows: if every open position fell to zero together, equity would end
-        below the day's or the drawdown floor by this much. Zero when the book fits the budget (or equity is unknown)."""
+        below the day's or the drawdown floor by this much. Zero when the book fits the budget (or equity is unknown). With a short
+        position in the book the measure is the worst-case equity (`Account.stress`): how far below the floor it falls."""
         eq = account.equity(marks)
         if not is_number(eq):
             return 0.0
         day_floor, dd_floor = self.floors(account)
         floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
+        if account.has_shorts():
+            st = account.stress()
+            return float("inf") if st == float("-inf") else max(0.0, floor - st)
         ov = account.open_value(marks)
         return max(0.0, ov - max(eq - floor, 0.0))
 
     # ---- entries -------------------------------------------------------------------------------------------------------------
     def check_entry(self, account: Account, order: Order, quote: Quote | None, marks: dict[str, float], now: dt.datetime) -> Decision:
         try:
+            if account.has_shorts():                                            # with a sold option in the book every entry is judged on the worst-case equity, one leg or many
+                return self.check_package(account, [{"side": "buy", "instrument": order.instrument, "segment": order.segment, "qty": order.qty, "quote": quote}],
+                                          order.strategy, order.thesis, marks, now)
             return self._check_entry(account, order, quote, marks, now)
         except Exception as e:                                                  # noqa: BLE001 - any failure here refuses the trade
             return Decision(False, [f"the check itself failed ({type(e).__name__}): refused"])
@@ -250,6 +258,121 @@ class RiskGate:
                                f"budget of {max(budget, 0):,.0f} left before the daily or drawdown floor")
         return Decision(not why, why)
 
+    # ---- packages: several legs at once, some of them SOLD, judged together ------------------------------------------------------------
+    def check_package(self, account: Account, legs: list[dict], strategy: str, thesis: str, marks: dict[str, float], now: dt.datetime) -> Decision:
+        """Open several option legs together, or none. Each leg: {"side": "buy"|"sell", "instrument", "segment", "qty" (units), "quote" (the price it will really get: a buy pays the ask, a sale gets the bid)}.
+        A sold leg is only ever allowed inside a book whose WORST CASE is bounded (`stress_equity`): every short call covered by a long call of the same underlying and expiry, so a naked short, a
+        ratio spread with too few longs and a calendar (whose cover expires first) are all refused. The package's risk is how much worse the worst case gets (fees included) and must fit the
+        per-trade limit; the worst-case equity after it must stay above the day's and the drawdown floor, which is the loss budget generalised to sold options."""
+        try:
+            return self._check_package(account, legs, strategy, thesis, marks, now)
+        except Exception as e:                                                  # noqa: BLE001 - any failure here refuses the trade
+            return Decision(False, [f"the check itself failed ({type(e).__name__}): refused"])
+
+    def _check_package(self, account, legs, strategy, thesis, marks, now) -> Decision:
+        if not _aware(now) or any(l.get("quote") is not None and not _aware(l["quote"].ts) for l in legs):
+            return Decision(False, ["a time with no timezone cannot be placed in the session: refused"])
+        why = list(self.update(account, marks, now))
+        eq = account.equity(marks)
+        if not is_number(eq):
+            why.append("equity is unknown (a position has no usable mark)")
+        if not legs or not all(l.get("side") in ("buy", "sell") for l in legs):
+            return Decision(False, why + ["a package needs at least one leg, each a buy or a sale"])
+        if any(l["side"] == "sell" for l in legs) and not self.limits.allow_short_legs:
+            why.append("selling options is switched off (paper.allow_short_legs): only bought options can be opened")
+        if len({l["instrument"].symbol for l in legs}) != len(legs):
+            why.append("a contract appears twice in the package")
+        if not (strategy or "").strip() or not (thesis or "").strip():
+            why.append("every entry needs a strategy name and a written thesis")
+        day = now.astimezone(IST).date()
+        for l in legs:
+            inst, seg, qty, quote, sell = l["instrument"], l["segment"], l["qty"], l.get("quote"), l["side"] == "sell"
+            tag = f"{inst.symbol}: "
+            if inst.kind != OPTION or not is_whole_positive(qty):
+                why.append(tag + "only options can be opened (futures need a margin model that is not built)")
+            elif not (isinstance(inst.lot_size, int) and inst.lot_size > 0) or qty % inst.lot_size:
+                why.append(tag + f"{qty} is not a whole number of lots of {inst.lot_size!r}")
+            if seg not in MK.SEGMENTS:
+                why.append(tag + f"unknown segment {seg!r}")
+            else:
+                if seg not in self.limits.cost_verified or "options" not in self.configured_costs:
+                    why.append(tag + f"the costs for {seg} are not configured and verified: they would be guessed, so nothing trades there")
+                if not str(inst.symbol or "").upper().startswith(str(inst.underlying or "").upper()):
+                    why.append(tag + f"the contract does not belong to its underlying {inst.underlying!r}")
+                if (inst.underlying or "").upper() not in self.limits.underlyings.get(seg, frozenset()):
+                    why.append(tag + f"{inst.underlying!r} is not on the list of underlyings that trade in {seg}")
+                sess = MK.session(seg, day, self.cal, trading=True)
+                if sess is None:
+                    why.append(tag + f"{seg} does not trade today, or its holiday calendar is not verified for {day.year}")
+                elif not (sess[0] <= now.astimezone(IST) < sess[1]):
+                    why.append(tag + f"{seg} is closed at {now.astimezone(IST):%H:%M}")
+            if inst.expiry is None or inst.expiry < day:
+                why.append(tag + "the option has expired or has no expiry date")
+            held = account.positions.get(inst.symbol)
+            if held is not None and ((held.qty > 0) == sell):
+                why.append(tag + ("it is held long: sell it to close, do not sell it to open" if sell else "it is held short: buy it to close, do not buy it to open"))
+            if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)):
+                why.append(tag + "no usable two-sided quote")
+            else:
+                age = (now - quote.ts).total_seconds()
+                if not (0 <= age <= self.limits.max_quote_age_s):
+                    why.append(tag + f"the quote is {age:.0f}s old (limit {self.limits.max_quote_age_s:.0f}s) or from the future")
+                shown = quote.bid_qty if sell else quote.ask_qty
+                if shown is not None and qty > shown:
+                    why.append(tag + f"{qty} is more than the {shown:g} {'bid' if sell else 'on offer'}")
+        if why or not is_number(eq):
+            return Decision(False, why)
+        cash_after = account.cash
+        after = {s: type(p)(p.instrument, p.segment, p.qty, p.avg_price, p.opened_at, p.strategy, p.thesis) for s, p in account.positions.items()}
+        for l in legs:
+            inst, qty, sell, q = l["instrument"], l["qty"], l["side"] == "sell", l["quote"]
+            px = q.bid if sell else q.ask
+            fees, _ = self.costs.fees(inst, -qty if sell else qty, px)
+            cash_after += (qty * px - fees) if sell else -(qty * px + fees)
+            signed = -qty if sell else qty
+            if inst.symbol in after:
+                after[inst.symbol].qty += signed
+                if after[inst.symbol].qty == 0:
+                    del after[inst.symbol]
+            else:
+                from .account import Position
+                after[inst.symbol] = Position(inst, l["segment"], signed, px, now.isoformat(), strategy, thesis)
+        before, worst = account.stress(), stress_equity(cash_after, after)
+        if worst == float("-inf"):
+            return Decision(False, ["this would leave a sold option uncovered (a short call without a long call of the same expiry behind it, or a position that cannot be valued): the loss would have no limit"])
+        risk = before - worst
+        if not (risk <= self.limits.risk_per_trade * eq + 1e-9):
+            why.append(f"it would put {risk:,.0f} at risk (its worst possible loss plus fees), over {self.limits.risk_per_trade:.1%} of equity ({self.limits.risk_per_trade * eq:,.0f})")
+        if cash_after < -1e-9:
+            why.append(f"it needs cash of {account.cash - cash_after:,.0f} but cash is {account.cash:,.0f}")
+        day_floor, dd_floor = self.floors(account)
+        floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
+        if worst < floor:
+            why.append(f"if everything expired now at the worst price, equity would be {worst:,.0f}, under the {floor:,.0f} floor (the day's or the drawdown limit)")
+        return Decision(not why, why)
+
+    def check_cover(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime) -> Decision:
+        """Buy back (close) a sold option. Like every exit it is never blocked by a brake: it only ever reduces the risk."""
+        try:
+            pos = account.positions.get(symbol)
+            why = []
+            if not _aware(now) or (quote is not None and not _aware(quote.ts)):
+                return Decision(False, ["a time with no timezone cannot be placed in the session: not covered"])
+            if pos is None or pos.qty >= 0 or not is_whole_positive(qty) or qty > -pos.qty:
+                why.append(f"cannot buy back {qty!r} of {symbol}: short {-pos.qty if pos and pos.qty < 0 else 0}")
+            if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)):
+                why.append("no usable two-sided quote")
+            elif pos and quote.ask_qty is not None and qty > quote.ask_qty:
+                why.append(f"{qty} is more than the {quote.ask_qty:g} on offer")
+            if pos:
+                day = now.astimezone(IST).date()
+                sess = MK.exit_session(pos.segment, day, self.cal)
+                if sess is None or not (sess[0] <= now.astimezone(IST) < sess[1]):
+                    why.append(f"{pos.segment} is closed")
+            return Decision(not why, why)
+        except Exception as e:                                                  # noqa: BLE001
+            return Decision(False, [f"the check itself failed ({type(e).__name__}): not covered"])
+
     # ---- exits: never blocked by a brake ---------------------------------------------------------------------------------------
     def check_exit(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime) -> Decision:
         try:
@@ -257,8 +380,20 @@ class RiskGate:
             why = []
             if not _aware(now) or (quote is not None and not _aware(quote.ts)):
                 return Decision(False, ["a time with no timezone cannot be placed in the session: not sold"])
-            if pos is None or not is_whole_positive(qty) or qty > pos.qty:
+            if pos is None or not is_whole_positive(qty) or pos.qty <= 0 or qty > pos.qty:
                 why.append(f"cannot sell {qty!r} of {symbol}: holding {pos.qty if pos else 0}")
+            elif account.has_shorts():                                                   # selling a long that is the cover of a sold option would leave that option naked: close the short first
+                rest = {s: type(p)(p.instrument, p.segment, p.qty, p.avg_price, p.opened_at, p.strategy, p.thesis) for s, p in account.positions.items()}
+                rest[symbol].qty -= qty
+                if rest[symbol].qty == 0:
+                    del rest[symbol]
+                worst = stress_equity(account.cash, rest)
+                day_floor, dd_floor = self.floors(account)
+                floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
+                if worst == float("-inf"):
+                    why.append("selling this would leave a sold option uncovered (no limit on the loss): buy the sold option back first")
+                elif worst < floor:                                                      # a put spread stripped of its long put is "bounded" only by the strike: far past the loss floors
+                    why.append(f"selling this would leave a sold option without its cover: the worst case would be equity of {worst:,.0f}, under the {floor:,.0f} floor: buy the sold option back first")
             if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)):
                 why.append("no usable two-sided quote")
             elif pos and quote.bid_qty is not None and qty > quote.bid_qty:

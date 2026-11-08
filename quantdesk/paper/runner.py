@@ -47,6 +47,7 @@ FLATTEN_AT = dt.time(15, 20)  # IST: contracts that expire today are sold at the
 SETTLE_AT = dt.time(15, 31)   # IST: whatever expires today and is still held is cash-settled at the index price now (the session has closed)
 SETTLE_SPOT_AGE_S = 300       # the index price used for it must be this fresh
 MIN_THESIS = 20
+MAX_LEGS = 50                 # a sanity bound on the shape of a package (the gate's worst-case check is what limits the risk)
 MAX_LOTS = 1000               # a sanity bound on the shape of an order; the risk gate is what limits the size
 SEGMENT = "nse_fo"            # this version trades the NSE index options only
 
@@ -107,6 +108,8 @@ def clean_order(raw) -> tuple[dict | None, str | None]:
     oid = raw.get("id")
     if not (isinstance(oid, str) and ID_RE.fullmatch(oid)):
         return None, "the order id is missing or malformed"
+    if raw.get("side") == "package":
+        return clean_package(raw)
     side = raw.get("side")
     if side not in ("buy", "sell"):
         return None, "side must be buy or sell"
@@ -141,6 +144,43 @@ def clean_order(raw) -> tuple[dict | None, str | None]:
     return {"id": oid, "side": side, "symbol": raw.get("symbol"), "lots": lots, "strategy": strategy.strip() if isinstance(strategy, str) else None,
             "thesis": thesis.strip() if isinstance(thesis, str) else None, "limit": float(limit) if limit is not None else None,
             "group": group, "queued_at": q, "ref": ref}, None
+
+
+def clean_package(raw: dict) -> tuple[dict | None, str | None]:
+    """A package: several legs, bought and sold, opened together or not at all. {id, side: "package", legs: [{symbol, side: buy|sell, lots, ref?}], strategy, thesis, net_limit?}.
+    `net_limit` is the most the owner will pay in total (a negative number insists on a credit)."""
+    legs_raw = raw.get("legs")
+    if not isinstance(legs_raw, list) or not (1 <= len(legs_raw) <= MAX_LEGS):
+        return None, f"a package needs 1 to {MAX_LEGS} legs"
+    strategy, thesis = raw.get("strategy"), raw.get("thesis")
+    strategy = " ".join(strategy.split()) if isinstance(strategy, str) else strategy
+    thesis = " ".join(thesis.split()) if isinstance(thesis, str) else thesis
+    if not _text(strategy, 1, 60) or CTRL.search(strategy):
+        return None, "a package needs a strategy name (1 to 60 characters, no control characters)"
+    if not _text(thesis, MIN_THESIS, 1000) or CTRL.search(thesis):
+        return None, f"a package needs a written thesis of at least {MIN_THESIS} characters (no control characters)"
+    legs, seen = [], set()
+    for l in legs_raw:
+        if not isinstance(l, dict) or l.get("side") not in ("buy", "sell") or not isinstance(l.get("symbol"), str):
+            return None, "every leg needs a symbol and a side (buy or sell)"
+        lots = l.get("lots")
+        if not (isinstance(lots, int) and not isinstance(lots, bool) and 1 <= lots <= MAX_LOTS):
+            return None, f"every leg's lots must be a whole number from 1 to {MAX_LOTS}"
+        if l["symbol"] in seen:
+            return None, "a contract appears twice in the package"
+        seen.add(l["symbol"])
+        ref = None
+        r = l.get("ref")
+        if isinstance(r, dict):
+            rb, ra, rt = _num(r.get("bid")), _num(r.get("ask")), _num(r.get("at"))
+            if rb is not None and ra is not None and 0 < rb <= ra:
+                ref = {"bid": rb, "ask": ra, "at": rt if rt is not None and 0 < rt < 4e12 else None}
+        legs.append({"symbol": l["symbol"], "side": l["side"], "lots": lots, "ref": ref})
+    nl = raw.get("net_limit")
+    if nl is not None and _num(nl) is None:
+        return None, "the net limit must be a number"
+    return {"id": raw["id"], "side": "package", "legs": legs, "strategy": strategy.strip(), "thesis": thesis.strip(), "net_limit": float(nl) if nl is not None else None,
+            "limit": None, "group": None, "symbol": None, "lots": None, "queued_at": _num(raw.get("queued_at")), "ref": None}, None
 
 
 def done_ids(account: Account) -> set[str]:
@@ -221,8 +261,9 @@ class Runner:
         out = {}
         for sym in self.account.positions:
             q = self.quote_from(snap, sym, now, MARK_MAX_AGE_S)
-            if q is not None and q.bid > 0:
-                out[sym] = q.bid                                              # what it could be sold for now: never the mid, never the last trade
+            short = self.account.positions[sym].qty < 0
+            if q is not None and q.bid > 0 and (not short or q.ask > 0):
+                out[sym] = q.ask if short else q.bid                          # what it could be sold for now (a sold option: what it would cost to buy back): never the mid, never the last trade
         return out
 
     # ---- the kill switch file mirrors the relay's flag ---------------------------------------------------------------------------
@@ -270,7 +311,9 @@ class Runner:
         if ist.time() >= FLATTEN_AT:
             today = [s for s, p in self.account.positions.items() if p.instrument.expiry == ist.date()]
             if today:
-                ds = {s: self.broker.sell(s, self.account.positions[s].qty, quotes.get(s), now, "flatten: expires today")[0] for s in today}
+                ds = {}
+                for s in sorted(today, key=lambda k: self.account.positions[k].qty >= 0):          # sold options first: buying them back never leaves anything uncovered
+                    ds[s] = self.broker.close(s, abs(self.account.positions[s].qty), quotes.get(s), now, "flatten: expires today")[0]
                 rep["forced"].append({"action": "sell expiring", "why": ["expires today"], "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
         if ist.time() >= SETTLE_AT:
             left = {s: p for s, p in self.account.positions.items() if p.instrument.expiry == ist.date()}
@@ -307,6 +350,8 @@ class Runner:
             res.update(status="expired", reasons=[f"the order waited {age:.0f}s (limit {MAX_ORDER_AGE_S}s): it was not executed at a price the owner did not see"
                                                   if age is not None else "the order has no queue time: not executed"])
             return res
+        if o["side"] == "package":
+            return self._package(o, snap, now, res)
         inst, why = parse_contract(o["symbol"], self.und, self.lots)
         if inst is None:
             res.update(status="refused", reasons=[why])
@@ -328,16 +373,47 @@ class Runner:
             d, row = self.broker.buy(order, quote, marks, now, self._ref(o, now), o["limit"])
         else:
             pos = self.account.positions.get(inst.symbol)
-            qty = pos.qty if (pos and o["lots"] == "all") else (o["lots"] * inst.lot_size if pos else 0)
-            if quote is not None and o["limit"] is not None and quote.bid < o["limit"]:
+            short = pos is not None and pos.qty < 0
+            qty = abs(pos.qty) if (pos and o["lots"] == "all") else (o["lots"] * inst.lot_size if pos else 0)
+            if quote is not None and o["limit"] is not None and not short and quote.bid < o["limit"]:
                 res.update(status="refused", reasons=[f"the bid is {quote.bid:g}, below your limit {o['limit']:g}: not sold"])
                 return res
-            d, row = self.broker.sell(inst.symbol, qty, quote, now, f"{MARK}exit {o['id']}", self._ref(o, now), o["limit"])
+            if quote is not None and o["limit"] is not None and short and quote.ask > o["limit"]:           # closing a SOLD option is a purchase: the limit is the most to pay
+                res.update(status="refused", reasons=[f"the offer is {quote.ask:g}, above your limit {o['limit']:g}: not bought back"])
+                return res
+            d, row = self.broker.close(inst.symbol, qty, quote, now, f"{MARK}exit {o['id']}", self._ref(o, now), o["limit"])
         if row is None:
             res.update(status="refused", reasons=d.reasons or ["refused"])
         else:
             res.update(status="filled", reasons=[], fill={k: row[k] for k in ("seq", "kind", "ts", "qty", "price", "fees") if k in row} | {"symbol": inst.symbol}
                        | ({"slip": row["slip"]} if isinstance(row.get("slip"), dict) else {}))
+        return res
+
+    def _package(self, o: dict, snap, now, res: dict) -> dict:
+        """Open several legs together (see PaperBroker.open_package). All the legs are checked first; any refusal means none is opened."""
+        ist = now.astimezone(IST)
+        if self.entries_blocked:
+            res.update(status="refused", reasons=[self.entries_blocked])
+            return res
+        legs, refs = [], {}
+        for l in o["legs"]:
+            inst, why = parse_contract(l["symbol"], self.und, self.lots)
+            if inst is None:
+                res.update(status="refused", reasons=[why])
+                return res
+            if inst.expiry == ist.date() and ist.time() >= FLATTEN_AT:
+                res.update(status="refused", reasons=[f"{inst.symbol} expires today and the desk closes those from 15:20: nothing opened"])
+                return res
+            legs.append({"side": l["side"], "instrument": inst, "segment": SEGMENT, "qty": l["lots"] * inst.lot_size, "quote": self.quote_from(snap, inst.symbol, now, None)})
+            if l["ref"]:
+                refs[inst.symbol] = {"bid": l["ref"]["bid"], "ask": l["ref"]["ask"], "at": l["ref"]["at"] if l["ref"]["at"] is not None else o.get("queued_at")}
+        marks = self.marks(snap, now)
+        d, rows = self.broker.open_package(legs, o["strategy"], f"{o['thesis']}{MARK}[order {o['id']}]", marks, now, refs, o["net_limit"])
+        if not rows:
+            res.update(status="refused", reasons=d.reasons or ["refused"])
+            return res
+        fills = [{k: r[k] for k in ("seq", "kind", "ts", "qty", "price", "fees") if k in r} | {"symbol": r.get("symbol")} | ({"slip": r["slip"]} if isinstance(r.get("slip"), dict) else {}) for r in rows]
+        res.update(status="filled", reasons=[], fill=fills[0], fills=fills)
         return res
 
     @staticmethod

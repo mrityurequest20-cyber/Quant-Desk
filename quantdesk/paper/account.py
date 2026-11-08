@@ -28,14 +28,15 @@ from pathlib import Path
 from ..core.types import Instrument
 
 GENESIS = "0" * 64
-FILL_KINDS = ("buy", "sell", "settle")
+FILL_KINDS = ("buy", "sell", "settle", "sto", "btc")      # buy = buy to open a long, sell = sell to close a long, sto = sell to open a short, btc = buy to close a short, settle = cash settlement at expiry
+SIDE_OF = {"buy": "buy", "btc": "buy", "sell": "sell", "sto": "sell"}   # the side a slippage record must carry for each kind of fill
 
 
 @dataclass
 class Position:
     instrument: Instrument
     segment: str
-    qty: int                 # units (lots x lot size), always > 0 in M2
+    qty: int                 # units (lots x lot size): > 0 for a long position, < 0 for a short one (a sold option, only ever as part of a hedged book: see stress_equity)
     avg_price: float
     opened_at: str
     strategy: str
@@ -65,6 +66,26 @@ def _usable(x) -> bool:
     return is_number(x) and x >= 0
 
 
+def stress_equity(cash: float, positions: dict) -> float:
+    """The WORST-CASE equity if every option expired now: the cash plus, for each underlying and expiry, the lowest value the group's legs can have at expiry over every spot price (each leg at its
+    intrinsic value; time value is ignored, which is conservative for the longs). It is -infinity when some group could lose without limit (a short call not covered by a long call) or when a position is
+    not a plain option. For a book of long options only it is at least the cash; for a hedged book of spreads, condors and butterflies it is exactly cash less the worst possible loss; for a naked short it
+    is -inf, which is how the risk gate refuses one. Groups settle at different times, so their worst cases are added (the safe way round)."""
+    groups: dict[tuple, list] = {}
+    for p in positions.values():
+        i = p.instrument
+        if i.strike is None or i.right not in ("CE", "PE") or i.expiry is None or not p.qty:
+            return float("-inf")
+        groups.setdefault((i.underlying, i.expiry), []).append((float(i.strike), i.right, p.qty))
+    total = float(cash)
+    for legs in groups.values():
+        if sum(q for _k, r, q in legs if r == "CE") < 0:
+            return float("-inf")                                  # more calls sold than bought: the loss grows with the price without limit
+        pts = sorted({0.0} | {k for k, _r, _q in legs})
+        total += min(sum(q * (max(s - k, 0.0) if r == "CE" else max(k - s, 0.0)) for k, r, q in legs) for s in pts)
+    return total
+
+
 class Account:
     def __init__(self, capital: float):
         if not (is_number(capital) and capital > 0):
@@ -92,9 +113,19 @@ class Account:
             total += p.qty * float(m)
         return total
 
+    def has_shorts(self) -> bool:
+        return any(p.qty < 0 for p in self.positions.values())
+
+    def stress(self) -> float:
+        """The worst-case equity if everything expired now (see `stress_equity`)."""
+        return stress_equity(self.cash, self.positions)
+
     def equity_lower_bound(self, marks: dict[str, float]) -> float:
         """Equity with every position that has no usable mark counted as worth nothing. For a long-only book that is a floor under
-        the true equity, so a loss cap breached by this figure is truly breached."""
+        the true equity, so a loss cap breached by this figure is truly breached. With a short position that has no price, the true
+        figure could be far lower, so the worst-case equity (`stress`) is used instead."""
+        if any(p.qty < 0 and not _usable(marks.get(sym)) for sym, p in self.positions.items()):
+            return self.stress()
         total = self.cash
         for sym, p in self.positions.items():
             m = marks.get(sym)
@@ -117,7 +148,8 @@ class Account:
     # ---- the one way money moves ---------------------------------------------------------------------------------------------
     def apply_fill(self, kind: str, instrument: Instrument, segment: str, qty: int, price: float, fees: float, ts: str,
                    strategy: str, thesis: str, slip: dict | None = None) -> dict:
-        """kind: 'buy' | 'sell' | 'settle'. Raises ValueError, changing nothing, for anything that would leave the account wrong."""
+        """kind: 'buy' (open a long) | 'sell' (close a long) | 'sto' (sell to open a short) | 'btc' (buy to close a short) | 'settle' (cash settlement of either). Raises ValueError, changing nothing,
+        for anything that would leave the account wrong."""
         if kind not in FILL_KINDS:
             raise ValueError(f"bad fill: unknown kind {kind!r}")
         if not is_whole_positive(qty):
@@ -126,16 +158,35 @@ class Account:
             raise ValueError(f"bad fill: price {price!r} and fees {fees!r} must be finite and not negative")
         if kind == "buy" and price <= 0:
             raise ValueError("bad fill: a buy at a zero price would be a free position")
+        if kind == "sto" and price <= 0:
+            raise ValueError("bad fill: a sale to open at a zero price is not a trade")
         if slip is not None:                                    # the slippage record is part of the sealed row: known keys, finite numbers, nothing else
             from .slippage import clean
-            if kind == "settle" or clean(slip) != slip or slip.get("side") != kind or slip.get("qty") != qty or not math.isclose(slip.get("fill", -1), price, abs_tol=1e-4):
+            if kind == "settle" or clean(slip) != slip or slip.get("side") != SIDE_OF[kind] or slip.get("qty") != qty or not math.isclose(slip.get("fill", -1), price, abs_tol=1e-4):
                 raise ValueError("bad fill: the slippage record is not well formed or does not match the fill")
         qty, price, fees = int(qty), float(price), float(fees)
         sym = instrument.symbol
         pos = self.positions.get(sym)
         new_pos: Position | None
         realized = self.realized
-        if kind == "buy":
+        if kind == "sto":
+            if pos is not None and pos.qty > 0:
+                raise ValueError(f"cannot sell to open {sym}: it is held long (sell it to close)")
+            cash = self.cash + qty * price - fees
+            if pos is None:
+                new_pos = Position(instrument, segment, -qty, price, ts, strategy, thesis)
+            else:
+                held = -pos.qty
+                new_pos = Position(pos.instrument, pos.segment, -(held + qty), (pos.avg_price * held + price * qty) / (held + qty), pos.opened_at, pos.strategy, pos.thesis)
+        elif kind == "btc" or (kind == "settle" and pos is not None and pos.qty < 0):
+            if pos is None or pos.qty >= 0 or qty > -pos.qty:
+                raise ValueError(f"cannot {kind} {qty} of {sym}: short {-pos.qty if pos and pos.qty < 0 else 0}")
+            cash = self.cash - (qty * price + fees)                 # closing a short is never refused for cash or fees: it only ever reduces the risk
+            realized += (pos.avg_price - price) * qty
+            new_pos = None if -pos.qty == qty else Position(pos.instrument, pos.segment, pos.qty + qty, pos.avg_price, pos.opened_at, pos.strategy, pos.thesis)
+        elif kind == "buy":
+            if pos is not None and pos.qty < 0:
+                raise ValueError(f"cannot buy to open {sym}: it is held short (buy it to close)")
             cost = qty * price + fees
             if cost > self.cash + 1e-9:
                 raise ValueError("not enough cash")
@@ -147,7 +198,7 @@ class Account:
                 new_pos = Position(pos.instrument, pos.segment, total, (pos.avg_price * pos.qty + price * qty) / total, pos.opened_at,
                                    pos.strategy, pos.thesis)
         else:
-            if pos is None or qty > pos.qty:
+            if pos is None or pos.qty <= 0 or qty > pos.qty:
                 raise ValueError(f"cannot {kind} {qty} of {sym}: holding {pos.qty if pos else 0}")
             cash = self.cash + qty * price - fees
             realized += (price - pos.avg_price) * qty
@@ -166,6 +217,14 @@ class Account:
             self.positions[sym] = new_pos
         self.ledger.append(row)
         return row
+
+    def snapshot(self) -> dict:
+        """Everything a package of fills may change, so a failure half way can put it all back (`restore`)."""
+        return {"cash": self.cash, "realized": self.realized, "fees": self.fees, "positions": {k: Position.from_dict(p.to_dict()) for k, p in self.positions.items()}, "n": len(self.ledger)}
+
+    def restore(self, snap: dict) -> None:
+        self.cash, self.realized, self.fees, self.positions = snap["cash"], snap["realized"], snap["fees"], snap["positions"]
+        del self.ledger[snap["n"]:]
 
     def record_event(self, kind: str, ts: str, **fields) -> dict:
         """A non-money row in the same chain (the owner clearing a halt). Kinds that move money are not allowed here."""

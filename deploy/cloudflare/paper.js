@@ -29,6 +29,7 @@ const isNum = (x) => typeof x === "number" && Number.isFinite(x);
 export function cleanOrder(o) {
 	if (!o || typeof o !== "object" || Array.isArray(o)) return null;
 	if (!(typeof o.id === "string" && ID.test(o.id))) return null;
+	if (o.side === "package") return cleanPackage(o);
 	if (o.side !== "buy" && o.side !== "sell") return null;
 	if (!(typeof o.symbol === "string" && NAME.test(o.symbol))) return null;
 	const all = o.side === "sell" && o.lots === "all";
@@ -49,25 +50,54 @@ export function cleanOrder(o) {
 	return out;
 }
 
+// A package: several legs, bought and sold, opened together or not at all. The runner checks every rule again; this is only the shape.
+function cleanPackage(o) {
+	if (!Array.isArray(o.legs) || o.legs.length < 1 || o.legs.length > 50) return null;
+	if (!isStr(o.strategy, 1, 60) || !isStr(o.thesis, 20, 1000)) return null;
+	const legs = [], seen = new Set();
+	for (const l of o.legs) {
+		if (!l || typeof l !== "object" || Array.isArray(l)) return null;
+		if (l.side !== "buy" && l.side !== "sell") return null;
+		if (!(typeof l.symbol === "string" && NAME.test(l.symbol)) || seen.has(l.symbol)) return null;
+		if (!(Number.isInteger(l.lots) && l.lots >= 1 && l.lots <= 1000)) return null;
+		seen.add(l.symbol);
+		const leg = { symbol: l.symbol, side: l.side, lots: l.lots };
+		const r = l.ref;
+		if (r && typeof r === "object" && !Array.isArray(r) && isNum(r.bid) && isNum(r.ask) && r.bid > 0 && r.bid <= r.ask) {
+			leg.ref = { bid: r.bid, ask: r.ask };
+			if (isNum(r.at) && r.at > 0 && r.at < 4e12) leg.ref.at = r.at;
+		}
+		legs.push(leg);
+	}
+	const out = { id: o.id, side: "package", legs, strategy: o.strategy.trim(), thesis: o.thesis.trim() };
+	if (o.net_limit !== undefined && o.net_limit !== null) { if (!isNum(o.net_limit)) return null; out.net_limit = o.net_limit; }
+	return out;
+}
+
+function cleanFill(f) {
+	if (!f || typeof f !== "object" || Array.isArray(f)) return null;
+	const fill = {};
+	for (const k of ["seq", "qty", "price", "fees"]) if (isNum(f[k])) fill[k] = f[k];
+	for (const k of ["kind", "ts", "symbol"]) if (typeof f[k] === "string") fill[k] = f[k].slice(0, 60);
+	const sl = f.slip;
+	if (sl && typeof sl === "object" && !Array.isArray(sl)) {
+		fill.slip = {};
+		for (const k of SLIP_KEYS) if (isNum(sl[k])) fill.slip[k] = sl[k];
+		if (sl.side === "buy" || sl.side === "sell") fill.slip.side = sl.side;
+	}
+	return fill;
+}
+
 export const SLIP_KEYS = ["qty", "fill", "touch", "mid", "impact_ticks", "spread", "impact", "delay_s", "delay", "shown", "total_vs_seen", "seen_bid", "seen_ask", "spread_inr", "impact_inr", "delay_inr", "shown_inr", "total_inr", "bps"];
 
 export function cleanResult(r) {
 	if (!r || typeof r !== "object" || Array.isArray(r)) return null;
 	if (!(typeof r.id === "string" && ID.test(r.id)) || !STATUS.has(r.status)) return null;
 	const reasons = Array.isArray(r.reasons) ? r.reasons.filter((x) => typeof x === "string").slice(0, 5).map((x) => x.slice(0, 200)) : [];
-	let fill = null;
-	if (r.fill && typeof r.fill === "object" && !Array.isArray(r.fill)) {
-		fill = {};
-		for (const k of ["seq", "qty", "price", "fees"]) if (isNum(r.fill[k])) fill[k] = r.fill[k];
-		for (const k of ["kind", "ts", "symbol"]) if (typeof r.fill[k] === "string") fill[k] = r.fill[k].slice(0, 60);
-		const sl = r.fill.slip;
-		if (sl && typeof sl === "object" && !Array.isArray(sl)) {
-			fill.slip = {};
-			for (const k of SLIP_KEYS) if (isNum(sl[k])) fill.slip[k] = sl[k];
-			if (sl.side === "buy" || sl.side === "sell") fill.slip.side = sl.side;
-		}
-	}
-	return { id: r.id, status: r.status, reasons, fill, at: typeof r.at === "string" ? r.at.slice(0, 40) : null };
+	const fill = cleanFill(r.fill);
+	const out = { id: r.id, status: r.status, reasons, fill, at: typeof r.at === "string" ? r.at.slice(0, 40) : null };
+	if (Array.isArray(r.fills)) out.fills = r.fills.slice(0, 50).map(cleanFill).filter(Boolean);        // a package reports one fill per leg
+	return out;
 }
 
 // {summary, account?}. The summary is shown to the app, so it must be a plain object of bounded size with a whole-number ledger length; the account, if sent, is a JSON text
@@ -208,7 +238,7 @@ export class PaperBook {
 
 	async getState(full, now) {
 		const summary = (await this.state.storage.get("paper:summary")) || null;
-		const base = { summary, results: this.d.results.slice(-30), pending: this.d.queue.map((q) => ({ id: q.id, side: q.side, symbol: q.symbol, lots: q.lots, queued_at: q.queued_at })), kill: this.d.kill === true, now };
+		const base = { summary, results: this.d.results.slice(-30), pending: this.d.queue.map((q) => ({ id: q.id, side: q.side, symbol: q.side === "package" ? `${q.legs.length} legs` : q.symbol, lots: q.lots, queued_at: q.queued_at })), kill: this.d.kill === true, now };
 		if (!full) return json(200, base);
 		const held = await this.heldAccount();
 		return json(200, { summary, account: held.text, kill: this.d.kill === true, now });
