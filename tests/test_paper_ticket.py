@@ -179,3 +179,42 @@ console.log(JSON.stringify({
     assert o["good"] == {"bid": 99.4, "ask": 100.2, "at": 1789000008000}                                                          # the quote's own time: the snapshot's less its age
     assert o["noNow"] == {"bid": 99.4, "ask": 100.2} and o["negAge"] == {"bid": 99.4, "ask": 100.2}                                 # no time rather than a made-up one
     assert o["crossed"] is None and o["zero"] is None and o["str"] is None and o["noBook"] is None                                  # a bad book sends no reference; the order still goes
+
+
+@needs_node
+def test_a_structure_with_a_sold_leg_becomes_one_package_order_that_the_runner_and_relay_accept(tmp_path):
+    o = node(tmp_path, r"""
+const spread = (extra = {}) => ({ paperOk: true, lots: 2, lot: 65, legs: [
+  { side: -1, name: "NIFTY12NOV2624500PE", bid: 60, ask: 62, lots: 2 }, { side: 1, name: "NIFTY12NOV2624400PE", bid: 30, ask: 32, lots: 2 }], ...extra });
+const T = "support held at 24400 for an hour with falling put volume";
+const good = PT.ordersFor(spread(), "Bull put spread", T, undefined, 1789000000000);
+const noBid = PT.ordersFor(spread({ legs: [{ side: -1, name: "NIFTY12NOV2624500PE", ask: 62, lots: 2 }, { side: 1, name: "NIFTY12NOV2624400PE", bid: 30, ask: 32, lots: 2 }] }), "s", T);
+const noLot = PT.ordersFor(spread({ lot: undefined }), "s", T);
+const zero = PT.ordersFor(spread({ legs: [{ side: 0, name: "NIFTY12NOV2624500PE", bid: 60, ask: 62 }] }), "s", T);
+console.log(JSON.stringify({ good, noBid: noBid.error || null, noLot: noLot.error || null, zero: zero.error || null }));
+""")
+    assert o["noBid"] and o["noLot"] and o["zero"]
+    assert len(o["good"]["orders"]) == 1 and o["good"]["package"] is True
+    p = o["good"]["orders"][0]
+    assert p["side"] == "package" and [(l["side"], l["lots"]) for l in p["legs"]] == [("sell", 2), ("buy", 2)] and p["legs"][0]["ref"]["bid"] == 60
+    # most to pay in total: the bought leg at its limit (32 + 3 ticks or 2%), less the sold leg at the least it may get (60 minus 3 ticks or 2%): a credit of a bit under 28 a unit
+    assert -28 * 130 < p["net_limit"] < 0 and p["net_limit"] == pytest.approx((0.05 * round((32 + max(0.15, 0.64)) / 0.05 + 0.4999) - (60 - max(0.15, 1.2))) * 130, abs=130 * 0.06)
+    R = pytest.importorskip("quantdesk.paper.runner")
+    if hasattr(R, "clean_package"):                                                                                                 # (the runner's package shape lands in its own change)
+        cleaned, why = R.clean_order({**p, "queued_at": 1})
+        assert why is None and cleaned["side"] == "package" and len(cleaned["legs"]) == 2 and cleaned["net_limit"] == p["net_limit"]
+        (tmp_path / "paper.mjs").write_text((ROOT / "deploy/cloudflare/paper.js").read_text(encoding="utf-8"), encoding="utf-8")
+        (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+        (tmp_path / "r.mjs").write_text("import { cleanOrder } from './paper.mjs';\nconst o = JSON.parse(process.argv[2]);\nconsole.log(JSON.stringify(cleanOrder(o)));\n", encoding="utf-8")
+        r = subprocess.run(["node", "r.mjs", json.dumps(p)], cwd=tmp_path, capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, r.stderr[-1500:]
+        relay = json.loads(r.stdout.strip().splitlines()[-1])
+        assert relay is not None and relay["side"] == "package" and relay["net_limit"] == p["net_limit"] and [l["symbol"] for l in relay["legs"]] == [l["symbol"] for l in p["legs"]]       # the relay keeps what the app sent
+
+
+@needs_node
+def test_the_builders_gate_view_follows_the_selling_switch_it_is_given(tmp_path):
+    src = (ROOT / "tests/test_strategy_builder.py").read_text(encoding="utf-8")
+    assert "allow_short_legs" in APP and 'P.allow_short_legs === true' in APP
+    on_off = re.search(r"pchk\(\"long\", shorts\.length === 0 \|\| P\.allow_short_legs === true", APP)
+    assert on_off, "the 'long options only' check must follow paper.allow_short_legs"

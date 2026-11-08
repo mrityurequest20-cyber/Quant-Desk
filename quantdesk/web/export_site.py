@@ -192,7 +192,8 @@ def trade_config(cfg) -> dict:
             if isinstance(v, dict) and v.get("kind") == "index" and "lot_size" in v and "strike_step" in v}
     # the paper desk's own gate (quantdesk/paper/risk.py): what a manual paper entry is checked against at the ticket
     paper = {"risk_per_trade": float(cfg.get("paper.risk_per_trade")), "max_quote_age_s": float(cfg.get("paper.max_quote_age_s")),
-             "underlyings": sorted(str(u).upper() for u in ((cfg.get("paper.underlyings") or {}).get("nse_fo") or []))}
+             "underlyings": sorted(str(u).upper() for u in ((cfg.get("paper.underlyings") or {}).get("nse_fo") or [])),
+             "allow_short_legs": cfg.get("paper.allow_short_legs") is True}
     return {"equity": float(cfg.get("paper.capital") or cfg.get("intraday.capital")), "r": float(cfg.get("backtest.risk_free", 0.065)),
             "limits": {k: risk[k] for k in keys if k in risk}, "paper": paper,
             "costs": {"brokerage_per_order": float(costs.get("brokerage_per_order", 20.0)), "gst": float(costs.get("gst", 0.18)), "sebi_per_crore": float(costs.get("sebi_per_crore", 10.0)),

@@ -152,7 +152,7 @@ def test_the_published_page_carries_the_configs_limits_costs_and_lot_sizes_and_t
     assert tc["costs"]["options"]["stt_sell"] == cfg.get("costs.segments.options.stt_sell") and tc["slippage"]["option_tick"] == 0.05
     risk = cfg.get("intraday.risk")
     assert tc["limits"] and tc["limits"] == {k: risk[k] for k in tc["limits"]} and set(tc["limits"]) == {"risk_per_trade", "max_premium_outlay", "max_total_outlay", "max_lots", "max_open", "max_spread_pct", "max_margin", "credit_margin_per_lot", "daily_loss_limit"}   # every limit, none dropped
-    assert tc["paper"] == {"risk_per_trade": cfg.get("paper.risk_per_trade"), "max_quote_age_s": cfg.get("paper.max_quote_age_s"), "underlyings": sorted(cfg.get("paper.underlyings")["nse_fo"])}
+    assert tc["paper"] == {"risk_per_trade": cfg.get("paper.risk_per_trade"), "max_quote_age_s": cfg.get("paper.max_quote_age_s"), "underlyings": sorted(cfg.get("paper.underlyings")["nse_fo"]), "allow_short_legs": cfg.get("paper.allow_short_legs") is True}
     script = E._trade_script(cfg)
     assert script.startswith("<script>window.QD_TRADE=") and "</" not in script[len("<script>"):-len("</script>")]
     out = tmp_path / "site"
