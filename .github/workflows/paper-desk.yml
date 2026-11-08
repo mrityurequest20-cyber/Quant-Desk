@@ -20,6 +20,10 @@ on:
       until:
         description: "The afternoon half stops at (HH:MM IST)"
         default: "15:35"
+      auto:
+        description: "Switch AUTO v1 on for this run: the paper desk also decides for itself (one lot, tight limits, through the same risk gate). Paper money only. Also on whenever the repository variable PAPER_AUTO is yes."
+        type: boolean
+        default: false
       new_account:
         description: "ONLY for the very first session ever: start a new paper account because none is saved anywhere. Leave off otherwise: a missing account must stop the start, not begin the history again."
         type: boolean
@@ -42,6 +46,7 @@ env:
   HANDOVER: ${{ inputs.handover || '12:20' }}
   UNTIL: ${{ inputs.until || '15:35' }}
   NEW_ACCOUNT: ${{ inputs.new_account && 'yes' || 'no' }}
+  PAPER_AUTO: ${{ (inputs.auto || vars.PAPER_AUTO == 'yes') && 'yes' || 'no' }}
 
 jobs:
   morning:
