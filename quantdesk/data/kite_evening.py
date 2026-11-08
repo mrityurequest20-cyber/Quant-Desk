@@ -33,8 +33,10 @@ MINUTE_MAX_DAYS = 55                                          # Kite serves abou
 DAILY_MAX_DAYS = 1900                                         # and 2,000 days of daily ones
 PER_NAME = 2                                                  # the nearest two unexpired futures of each underlying (rank 1 = near month)
 GIVE_UP_AFTER = 6                                             # this many refusals in a row, before anything is served: stop (no add-on, a dead token), do not hammer
-COLS = ["ts", "segment", "underlying", "symbol", "token", "expiry", "rank", "open", "high", "low", "close", "volume", "oi"]
-NOTE = ("traded 1-minute bars (and daily bars) of the nearest two futures of every MCX commodity and currency pair, from Kite's historical API, with open interest; "
+COLS = ["ts", "segment", "underlying", "symbol", "token", "expiry", "rank", "strike", "right", "open", "high", "low", "close", "volume", "oi"]
+OPT_STRIKES = 6                                               # option strikes either side of the money kept, per underlying (13 strikes, calls and puts)
+OPT_EXPIRIES = 1                                              # the nearest expiry that still lists
+NOTE = ("traded 1-minute bars (and daily bars) of the nearest two futures of every MCX commodity and currency pair, and 1-minute bars of their options around the money, from Kite's historical API, with open interest; "
         "the candles are licensed, encrypted, never published; data collection only, nothing here trades")
 PRICE_KEYS = {"open", "high", "low", "close", "ts", "volume", "oi", "ohlc", "price", "ltp", "bid", "ask"}
 
@@ -77,6 +79,33 @@ def pick_futures(instruments: pd.DataFrame, today: dt.date, per_name: int = PER_
     return out
 
 
+def pick_options(instruments: pd.DataFrame, today: dt.date, name: str, centre: float, strikes: int = OPT_STRIKES, expiries: int = OPT_EXPIRIES) -> list[dict]:
+    """The calls and puts of one underlying around `centre` (its future's last price): the nearest `expiries` unexpired expiries, the `strikes` listed strikes either side of the money.
+    [{name, token, symbol, expiry, strike, right}], sorted by expiry, strike, right. Empty when the list has no options (or no strike column) for that name."""
+    need = {"instrument_type", "name", "expiry", "instrument_token", "strike"}
+    if instruments is None or instruments.empty or not need <= set(instruments.columns) or not (isinstance(centre, (int, float)) and centre == centre and centre > 0):
+        return []
+    df = instruments[(instruments["name"] == name) & instruments["instrument_type"].isin(["CE", "PE"])].copy()
+    df["expiry"] = pd.to_datetime(df["expiry"], errors="coerce").dt.date
+    df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
+    df = df[df["expiry"].notna() & df["strike"].notna() & (df["strike"] > 0) & (df["expiry"] >= today)]
+    out = []
+    for exp in sorted(df["expiry"].unique())[:max(1, expiries)]:
+        g = df[df["expiry"] == exp]
+        ks = sorted(g["strike"].unique())
+        if not ks:
+            continue
+        at = min(range(len(ks)), key=lambda i: abs(ks[i] - centre))
+        keep = set(ks[max(0, at - strikes): at + strikes + 1])
+        for r in g[g["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
+            try:
+                tok = int(r.instrument_token)
+            except (TypeError, ValueError):
+                continue
+            out.append({"name": str(name), "token": tok, "symbol": str(getattr(r, "tradingsymbol", "") or ""), "expiry": exp, "strike": float(r.strike), "right": str(r.instrument_type)})
+    return out
+
+
 def _frame(candles: list[dict], meta: dict, daily: bool) -> tuple[pd.DataFrame, dict]:
     """Kite candles -> a cleaned frame (impossible bars dropped and counted, never repaired). Minute bars are IST instants; daily bars are the session's date."""
     if not candles:
@@ -103,7 +132,7 @@ def _frame(candles: list[dict], meta: dict, daily: bool) -> tuple[pd.DataFrame, 
 
 
 def run(kite, out_root: Path, today: dt.date | None = None, days: int = 3, daily_days: int = 0, segments: tuple[str, ...] = ("mcx", "cds"), rate: float = 3.0,
-        budget_s: float = 1200.0, say=print, sleep=None, clock=None, per_name: int = PER_NAME) -> dict:
+        budget_s: float = 1200.0, say=print, sleep=None, clock=None, per_name: int = PER_NAME, options: bool = True) -> dict:
     """Collect the last `days` days of minutes (and `daily_days` of daily bars, 0 = none) for the nearest futures of each segment. Never raises on a Kite problem."""
     today = today or session_day(pd.Timestamp.now(tz=IST))
     days, daily_days = max(1, min(int(days), MINUTE_MAX_DAYS)), max(0, min(int(daily_days), DAILY_MAX_DAYS))
@@ -130,7 +159,8 @@ def run(kite, out_root: Path, today: dt.date | None = None, days: int = 3, daily
         exchange = EXCHANGES[seg]
         rep = man["segments"][seg] = {"exchange": exchange, "names": {}}
         try:
-            futs = pick_futures(pd.DataFrame(kite.instruments(exchange)), today, per_name)
+            inst = pd.DataFrame(kite.instruments(exchange))
+            futs = pick_futures(inst, today, per_name)
         except Exception as exc:                                            # noqa: BLE001 - one segment's list failing never stops the other
             rep["error"] = f"instruments: {type(exc).__name__}: {exc!s:.110}"
             say(f"  {seg}: {rep['error']}")
@@ -140,7 +170,7 @@ def run(kite, out_root: Path, today: dt.date | None = None, days: int = 3, daily
             say(f"  {seg}: {rep['error']}")
             continue
         rep["underlyings_seen"] = sorted({f["name"] for f in futs})
-        minutes, daily = [], []
+        minutes, daily, centre = [], [], {}
         for f in futs:
             key = f"{f['name']}#{f['rank']}"
             r = rep["names"][key] = {"underlying": f["name"], "rank": f["rank"], "expiry": str(f["expiry"])}
@@ -160,6 +190,8 @@ def run(kite, out_root: Path, today: dt.date | None = None, days: int = 3, daily
             refused["served"] += 1
             r.update(status="served", bars=int(len(df)), sessions=int(pd.DatetimeIndex(df["ts"]).normalize().nunique()), rejected=int(sum(rejected.values())) if rejected else 0)
             minutes.append(df)
+            if f["rank"] == 1 and len(df):
+                centre[f["name"]] = float(df["close"].iloc[-1])                  # where the money is, for the option strikes
             if daily_days and f["rank"] == 1:                              # the continuous series is one chain: ask once per underlying
                 rows, err = call(f["token"], dt.datetime.combine(today - dt.timedelta(days=daily_days), dt.time(0, 0)), dt.datetime.combine(today, dt.time(23, 59, 59)),
                                  "day", continuous=True)
@@ -170,6 +202,33 @@ def run(kite, out_root: Path, today: dt.date | None = None, days: int = 3, daily
                     r["daily"] = {"status": "served" if len(dd) else "empty", "bars": int(len(dd))}
                     if len(dd):
                         daily.append(dd)
+        opt_frames = []
+        for name, mid in sorted(centre.items()) if options else []:               # the options of every underlying that has them, around the money: minute candles with open interest
+            try:
+                picks = pick_options(inst, today, name, mid)
+            except Exception:                                                     # noqa: BLE001 - a bad instrument list for one name never stops the rest
+                picks = []
+            if not picks:
+                continue
+            orep = rep.setdefault("options", {})[name] = {"expiry": str(picks[0]["expiry"]), "asked": len(picks), "served": 0, "failed": 0, "empty": 0}
+            for o in picks:
+                if man["stopped"] or pacer.out_of_time or (refused["n"] >= GIVE_UP_AFTER and not refused["served"]):
+                    man["stopped"] = man["stopped"] or ("time budget" if pacer.out_of_time else f"{GIVE_UP_AFTER} requests in a row refused before any was served")
+                    break
+                meta = {"segment": seg, "underlying": name, "symbol": o["symbol"], "token": o["token"], "expiry": str(o["expiry"]), "rank": 0, "strike": o["strike"], "right": o["right"]}
+                rows, err = call(o["token"], dt.datetime.combine(start, dt.time(0, 0)), dt.datetime.combine(today, dt.time(23, 59, 59)), "minute")
+                if rows is None:
+                    orep["failed"] += 1
+                    continue
+                odf, _ = _frame(rows, meta, daily=False)
+                if odf.empty:
+                    orep["empty"] += 1
+                    continue
+                refused["served"] += 1
+                orep["served"] += 1
+                opt_frames.append(odf)
+        if opt_frames:
+            pd.concat(opt_frames, ignore_index=True).to_parquet(data_dir / f"{seg}_options_minutes.parquet", index=False, compression="zstd")
         if minutes:
             pd.concat(minutes, ignore_index=True).to_parquet(data_dir / f"{seg}_minutes.parquet", index=False, compression="zstd")
         if daily:
@@ -177,7 +236,10 @@ def run(kite, out_root: Path, today: dt.date | None = None, days: int = 3, daily
         names = rep["names"].values()
         man["totals"][seg] = {"asked": len(rep["names"]), "served": sum(1 for v in names if v.get("status") == "served"), "failed": sum(1 for v in names if v.get("status") == "failed"),
                               "empty": sum(1 for v in names if v.get("status") == "empty"), "not_attempted": sum(1 for v in names if v.get("status") == "not_attempted")}
-        say(f"  {seg}: {man['totals'][seg]['served']} of {man['totals'][seg]['asked']} futures served")
+        if rep.get("options"):
+            man["totals"][seg].update(options_asked=sum(v["asked"] for v in rep["options"].values()), options_served=sum(v["served"] for v in rep["options"].values()))
+        say(f"  {seg}: {man['totals'][seg]['served']} of {man['totals'][seg]['asked']} futures served"
+            + (f", {man['totals'][seg]['options_served']} of {man['totals'][seg]['options_asked']} options" if rep.get("options") else ""))
     man["path"] = str(run_dir)
     (run_dir / "manifest.json").write_text(json.dumps(man, indent=2, default=str), encoding="utf-8")
     return man
@@ -187,10 +249,11 @@ def run(kite, out_root: Path, today: dt.date | None = None, days: int = 3, daily
 # nobody thought to name.
 _TOP = {"evidence": str, "source": str, "as_of": str, "window": list, "daily_days": int, "note": str, "segments": dict, "stopped": (str, type(None)), "totals": dict,
         "rate_per_s": (int, float), "budget_s": (int, float), "path": str}
-_SEG = {"exchange": str, "names": dict, "underlyings_seen": list, "error": str}
+_SEG = {"exchange": str, "names": dict, "underlyings_seen": list, "error": str, "options": dict}
+_OPT = {"expiry": str, "asked": int, "served": int, "failed": int, "empty": int}
 _NAME = {"underlying": str, "rank": int, "expiry": str, "status": str, "bars": int, "sessions": int, "rejected": int, "error": str, "daily": dict}
 _DAILY = {"status": str, "bars": int, "error": str}
-_TOTAL = {"asked": int, "served": int, "failed": int, "empty": int, "not_attempted": int}
+_TOTAL = {"asked": int, "served": int, "failed": int, "empty": int, "not_attempted": int, "options_asked": int, "options_served": int}
 MAX_STR = 400
 MAX_ITEMS = 400
 
@@ -222,6 +285,8 @@ def publishable(manifest: dict) -> list[str]:
             shape(row, _NAME, f"/segments/{sym}/names/{u}")
             if isinstance(row, dict) and "daily" in row:
                 shape(row["daily"], _DAILY, f"/segments/{sym}/names/{u}/daily")
+        for u, row in ((seg.get("options") or {}) if isinstance(seg, dict) else {}).items():
+            shape(row, _OPT, f"/segments/{sym}/options/{u}")
         if isinstance(seg, dict) and any(not isinstance(x, str) or len(x) > 40 for x in seg.get("underlyings_seen") or []):
             bad.append(f"/segments/{sym}/underlyings_seen: a long or non-string name")
     for sym, t in (manifest.get("totals") or {}).items():
