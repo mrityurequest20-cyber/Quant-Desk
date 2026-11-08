@@ -14,7 +14,9 @@ WF = yaml.safe_load(RAW)
 def test_it_can_only_read_the_repository_and_holds_one_secret_in_one_step():
     assert WF["permissions"] == {"contents": "read"} and "permissions" not in WF["jobs"]["digest"]
     holders = [s for s in WF["jobs"]["digest"]["steps"] if "secrets." in yaml.safe_dump(s)]
-    assert len(holders) == 1 and set(holders[0]["env"]) == {"LIVE_URL", "LIVE_INGEST_TOKEN"} and holders[0]["run"] == "python -m quantdesk news --push"
+    assert len(holders) == 1 and set(holders[0]["env"]) == {"LIVE_URL", "LIVE_INGEST_TOKEN"} and holders[0]["run"] == "python -m quantdesk news --send runtime/news/news.json"
+    reader = next(s for s in WF["jobs"]["digest"]["steps"] if s.get("run") == "python -m quantdesk news")                           # the step that parses third-party feed text holds no secret
+    assert "env" not in reader and "secrets." not in yaml.safe_dump(reader) and WF["jobs"]["digest"]["steps"].index(reader) < WF["jobs"]["digest"]["steps"].index(holders[0])
     assert RAW.count("secrets.") == 1 and "secrets.LIVE_INGEST_TOKEN" in RAW and "LIVE_READ_TOKEN" not in RAW                  # the ingest key only: it cannot read the board or the paper account
     assert not any("secrets." in str(v) for v in WF["env"].values())
     for s in WF["jobs"]["digest"]["steps"]:

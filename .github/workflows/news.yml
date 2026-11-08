@@ -36,8 +36,10 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Read the feeds and send the digest
+      - name: Read the feeds and build the digest (no secret here, this step parses third-party feed text)
+        run: python -m quantdesk news
+      - name: Send the digest
         env:
           LIVE_URL: ${{ vars.LIVE_URL }}                       # the private live relay (docs/LIVE.md)
-          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}   # the one secret, in this step only
-        run: python -m quantdesk news --push
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}   # the one secret, in this step only; it reads our own JSON file and sends it, nothing else
+        run: python -m quantdesk news --send runtime/news/news.json

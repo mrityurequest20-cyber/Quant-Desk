@@ -1,5 +1,5 @@
 """The news digest: the day's market headlines, read by the desk's own news engine (quantdesk/intraday/news.py: de-duplication across outlets, tone with the subject taken into account, surprise
-against expectations, market-move recaps told apart from news, novelty), plus which instruments each story names. Public data only (the desk's RSS sources): titles and links, never article text.
+against expectations, market-move recaps told apart from news, novelty), plus which instruments each story names. Public data only (the desk's RSS sources): titles and links, never article text. The one network write, `push`, sends only our own digest to the desk's relay with a token handed in as an argument (this module reads no environment).
 
 It is a reading aid, not a signal: it places nothing, sizes nothing and changes no desk path. The tone is a word-list reading of a headline; where the text states an expectation it is tilted by the
 surprise. The app joins the stories to the live board (did the name move, are its options trading hard?), which is the part that says whether the market cared.

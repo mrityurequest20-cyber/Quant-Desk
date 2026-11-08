@@ -145,7 +145,7 @@ def test_the_news_command_builds_saves_and_pushes_only_with_the_key(cfg, tmp_pat
     digest = {"v": 1, "asof": "x", "n": 1, "sources": {"A": "ok 1"}, "items": [{"title": "t"}]}
     monkeypatch.setattr(N, "fetch_digest", lambda cfg, now=None, **k: digest)
     monkeypatch.setattr(N, "push", lambda d, url, token, **k: sent.append((d, url, token)) or {"n": 1})
-    A = lambda **kw: type("A", (), {"push": False, "out": str(tmp_path), "now": None, **kw})      # noqa: E731
+    A = lambda **kw: type("A", (), {"push": False, "send": None, "out": str(tmp_path), "now": None, **kw})      # noqa: E731
     NC.cmd_news(cfg, A())
     assert json.loads((tmp_path / "news.json").read_text()) == digest and not sent                  # saved, not sent
     with pytest.raises(SystemExit) as e:
@@ -159,3 +159,27 @@ def test_the_news_command_builds_saves_and_pushes_only_with_the_key(cfg, tmp_pat
     with pytest.raises(SystemExit) as e:                                                              # every feed down: nothing is pushed over the last good digest
         NC.cmd_news(cfg, A(push=True))
     assert "no feed answered" in str(e.value) and len(sent) == 1
+
+
+def test_the_send_step_reads_only_our_own_file_and_needs_the_key_and_a_digest_shape(cfg, tmp_path, monkeypatch):
+    from quantdesk.newslink import cli as NC
+    sent = []
+    monkeypatch.setattr(N, "fetch_digest", lambda *a, **k: (_ for _ in ()).throw(AssertionError("the send step must not read a feed")))
+    monkeypatch.setattr(N, "push", lambda d, url, token, **k: sent.append((d, url, token)) or {"n": 2})
+    A = lambda **kw: type("A", (), {"push": False, "send": None, "out": str(tmp_path), "now": None, **kw})      # noqa: E731
+    f = tmp_path / "news.json"
+    f.write_text(json.dumps({"v": 1, "asof": "2026-11-09T05:45:00Z", "items": []}), encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        NC.cmd_news(cfg, A(send=str(f)))
+    assert "LIVE_URL" in str(e.value) and not sent                                                  # no key, nothing sent
+    monkeypatch.setenv("LIVE_URL", "https://x.workers.dev/live/ingest")
+    monkeypatch.setenv("LIVE_INGEST_TOKEN", "I" * 40)
+    NC.cmd_news(cfg, A(send=str(f)))
+    assert len(sent) == 1 and sent[0][2] == "I" * 40
+    for bad in ("not json", json.dumps([1]), json.dumps({"v": 2, "asof": "x", "items": []}), json.dumps({"v": 1, "asof": "x", "items": "no"}), json.dumps({"v": 1, "asof": "x", "items": [0] * 201})):
+        f.write_text(bad, encoding="utf-8")
+        with pytest.raises(SystemExit):
+            NC.cmd_news(cfg, A(send=str(f)))
+    with pytest.raises(SystemExit):
+        NC.cmd_news(cfg, A(send=str(tmp_path / "missing.json")))
+    assert len(sent) == 1

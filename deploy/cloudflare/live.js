@@ -246,7 +246,9 @@ async function handleNews(request, env, url, stub) {
 		if (raw === null) return reply(413, { error: "too large" });
 		try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
 	}
-	return stub.fetch("https://live" + url.pathname, { method: request.method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+	let fwd;
+	try { fwd = body !== undefined ? JSON.stringify(body) : undefined; } catch (e) { return reply(400, { error: "not a valid digest" }); }      // absurdly deep nesting parses but cannot be written back out
+	return stub.fetch("https://live" + url.pathname, { method: request.method, ...(fwd !== undefined ? { body: fwd } : {}) });
 }
 const NEWS_MAX_BODY = 200000;
 const PAPER_MAX_BODY = 1300000;           // a saved account is up to MAX_CHUNKS x CHUNK characters

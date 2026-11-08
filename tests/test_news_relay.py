@@ -163,3 +163,26 @@ def test_the_news_module_has_no_network_secret_or_broker():
     src = (ROOT / "deploy" / "cloudflare" / "news.js").read_text(encoding="utf-8")
     code = re.sub(r"//.*", "", src)
     assert not re.search(r"fetch\(|XMLHttpRequest|WebSocket|env\.|KOTAK|KITE|secret|password|token", code, re.I)
+
+
+@needs_node
+def test_values_that_only_look_like_strings_and_links_that_hide_their_host_are_not_kept(tmp_path):
+    o = run(tmp_path, r"""
+const items = [
+  item(1, { id: ["000000001001"] }), item(2, { ts: [["2026-11-09T05:10:00Z"]] }), item(3, { event: ["earnings"] }), item(4, { event: undefined }),
+  item(5, { link: "https://trusted.example@evil.example/x" }), item(6, { link: "https://ok.example/a‮b" }), item(7, { title: "pay‮ txt‏ now" }), item(8),
+];
+const deepText = '{"v":1,"asof":' + "[".repeat(6000) + "]".repeat(6000) + ',"items":[]}';
+out.arrAsof = (await call("POST", "/news/ingest", { token: ING, body: digest([item(9)], { asof: ["2026-11-09T05:45:00Z"] }) })).status;
+out.deepAsof = (await call("POST", "/news/ingest", { token: ING, body: deepText })).status;
+out.post = (await call("POST", "/news/ingest", { token: ING, body: digest(items) })).status;
+const got = (await call("GET", "/news", { token: READ })).body;
+out.byId = Object.fromEntries(got.digest.items.map((x) => [x.id, x]));
+""")
+    ids = {i: format(i + 4096, "012x") for i in range(1, 9)}
+    assert o["arrAsof"] == 400 and o["deepAsof"] == 400 and o["post"] == 200                                                        # a bad time is a refusal, never a crash
+    by = o["byId"]
+    assert set(by) == {ids[i] for i in (3, 4, 5, 6, 7, 8)}                                                                         # an array for an id or a time drops the story
+    assert by[ids[3]]["event"] == "general" and by[ids[4]]["event"] == "general"                                                   # "undefined" is not an event
+    assert by[ids[5]]["link"] == "" and by[ids[6]]["link"] == ""                                                                   # no userinfo, no direction-changing character
+    assert by[ids[7]]["title"] == "pay txt now"                                                                                    # direction controls become spaces

@@ -182,13 +182,14 @@ def main(argv: list[str] | None = None) -> int:
         if wf == WORKFLOW:
             runs = wf_runs
     try:                                                                     # the news digest: every tick of the session; nothing here can hold up or fail the desk
-        go, why = news_due(now, _runs(NEWS_WORKFLOW), hols)
-        print(f"{NEWS_WORKFLOW}: {'start' if go else 'wait'}: {why}")
-        if go:
-            subprocess.run(["gh", "workflow", "run", NEWS_WORKFLOW, "--ref", "main"], check=True, timeout=120)
-            print(f"dispatched {NEWS_WORKFLOW}")
-    except (subprocess.SubprocessError, OSError, ValueError, KeyError):
-        print(f"{NEWS_WORKFLOW}: could not be checked or started; the desk goes on")
+        if news_due(now, [], hols)[0]:                                       # only ask GitHub about it when the day and the hour allow one (no call at night)
+            go, why = news_due(now, _runs(NEWS_WORKFLOW), hols)
+            print(f"{NEWS_WORKFLOW}: {'start' if go else 'wait'}: {why}")
+            if go:
+                subprocess.run(["gh", "workflow", "run", NEWS_WORKFLOW, "--ref", "main"], check=True, timeout=120)
+                print(f"dispatched {NEWS_WORKFLOW}")
+    except Exception as e:                                                   # noqa: BLE001 - the news job must never fail the scheduler, whatever goes wrong
+        print(f"{NEWS_WORKFLOW}: could not be checked or started ({type(e).__name__}); the desk goes on")
     if started:
         return 0
     if argv[:1] == ["--wake"] or WINDOW[0] <= now.time() < WINDOW[1]:
