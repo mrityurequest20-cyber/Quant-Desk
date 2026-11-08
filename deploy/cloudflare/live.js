@@ -11,9 +11,10 @@
 // The latest snapshot is kept in one Durable Object (class LiveBoard, binding LIVE) because a Worker has no memory shared between requests. It is held in memory only.
 // Ages are worked out here, from this Worker's clock when each quote arrived, so a stale feed shows as stale whatever the phone's clock says.
 
-import { KotakPoller, istParts, runCycle, inSession } from "./kotak.js";
+import { KotakPoller, istParts, runCycle, inSession, SPECIAL_SESSIONS } from "./kotak.js";
 import { Series, shardKeys, FLUSH_MS } from "./series.js";
 import { PaperBook, cleanOrder, cleanResult, cleanState } from "./paper.js";
+import { NewsBook } from "./news.js";
 
 const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 quotes is about 100 KB)
 const MAX_SYMBOLS = 3000;               // in one push
@@ -151,8 +152,8 @@ export async function needsUniverse(env) {
 
 export async function handleLive(request, env) {
 	const url = new URL(request.url);
-	const isPaper = url.pathname.startsWith("/paper/");
-	if (!url.pathname.startsWith("/live/") && !isPaper) return null;
+	const isPaper = url.pathname.startsWith("/paper/"), isNews = url.pathname === "/news" || url.pathname === "/news/ingest";
+	if (!url.pathname.startsWith("/live/") && !isPaper && !isNews) return null;
 	if (!configured(env)) {
 		let why;
 		try { why = whyOff(env); } catch (e) { /* the diagnosis is a courtesy: the 503 is what matters, and it always returns */ }
@@ -160,6 +161,7 @@ export async function handleLive(request, env) {
 	}
 	const stub = env.LIVE.get(env.LIVE.idFromName("board"));
 	if (isPaper) return handlePaper(request, env, url, stub);
+	if (isNews) return handleNews(request, env, url, stub);
 	if (url.pathname === "/live/ingest") {
 		if (request.method !== "POST") return reply(405, { error: "POST only" });
 		if (!(await same(bearer(request), String(env.LIVE_INGEST_TOKEN).trim()))) return reply(401, { error: "no" });
@@ -234,6 +236,25 @@ async function handlePaper(request, env, url, stub) {
 	try { fwd = body !== undefined ? JSON.stringify(body) : undefined; } catch (e) { return reply(400, { error: "not valid" }); }      // absurdly deep nesting parses but cannot be written back out
 	return stub.fetch("https://live" + url.pathname + url.search, { method: request.method, ...(fwd !== undefined ? { body: fwd } : {}) });
 }
+// /news and /news/ingest: the news digest (news.js). The job (INGEST key) sends it; the app (READ key) reads it. Public headlines only.
+async function handleNews(request, env, url, stub) {
+	const route = request.method + " " + url.pathname;
+	const need = route === "POST /news/ingest" ? "ingest" : route === "GET /news" ? "read" : null;
+	if (!need) return reply(request.method === "GET" || request.method === "POST" ? 404 : 405, { error: "no such news path" });
+	if (!(await same(bearer(request), String(need === "read" ? env.LIVE_READ_TOKEN : env.LIVE_INGEST_TOKEN).trim()))) return reply(401, { error: "no" });
+	let body;
+	if (request.method === "POST") {
+		const declared = Number(request.headers.get("content-length"));
+		if (Number.isFinite(declared) && declared > NEWS_MAX_BODY) return reply(413, { error: "too large" });
+		const raw = await readCapped(request, NEWS_MAX_BODY);
+		if (raw === null) return reply(413, { error: "too large" });
+		try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
+	}
+	let fwd;
+	try { fwd = body !== undefined ? JSON.stringify(body) : undefined; } catch (e) { return reply(400, { error: "not a valid digest" }); }      // absurdly deep nesting parses but cannot be written back out
+	return stub.fetch("https://live" + url.pathname, { method: request.method, ...(fwd !== undefined ? { body: fwd } : {}) });
+}
+const NEWS_MAX_BODY = 200000;
 const PAPER_MAX_BODY = 1300000;           // a saved account is up to MAX_CHUNKS x CHUNK characters
 
 const round1 = (x) => Math.round(x * 10) / 10;
@@ -281,6 +302,7 @@ export class LiveBoard {
 		this.state = state;
 		this.env = env || {};
 		this.quotes = new Map();                    // name -> {z?: quote, k?: quote}, each with `at`
+		this.news = new NewsBook(state);            // the news digest (news.js)
 		this.book = new PaperBook(state);           // the paper-order queue and account (paper.js): same object, its own storage keys
 		this.series = new Series();                 // one close a minute per instrument, for the app's chart (series.js); stored in shards
 		this.lastFlush = 0;
@@ -490,6 +512,7 @@ export class LiveBoard {
 		if (now - this.lastPrune > 5 * 60000) this.prune(now);                                  // also when only Kite is pushing and no alarm runs
 		await this.maybeFlush(now);
 		await this.arm().catch(() => {});
+		if (path === "/news" || path === "/news/ingest") return this.news.handle(request, url, now);              // the news digest (news.js)
 		if (path.startsWith("/paper/")) return this.book.handle(request, url, now);              // the paper-order queue (paper.js)
 		if (request.method === "POST" && path === "/push") {                                    // Kite, from the recorder
 			const { quotes, dropped } = await request.json();
@@ -512,7 +535,7 @@ export class LiveBoard {
 		if (request.method === "POST" && path === "/needs-universe") {
 			const t = istParts(now);
 			const asked = this.lastAsk !== undefined && now >= this.lastAsk && now - this.lastAsk < 40 * 60000;          // a stored time from the future (a clock fault) does not block the request for good
-			const need = this.kotakConfigured() && t.dow >= 1 && t.dow <= 5 && t.mins >= 8 * 60 && t.mins < 15 * 60 + 35
+			const need = this.kotakConfigured() && ((t.dow >= 1 && t.dow <= 5) || Object.prototype.hasOwnProperty.call(SPECIAL_SESSIONS, t.date)) && t.mins >= 8 * 60 && t.mins < 15 * 60 + 35
 				&& !(this.universe && this.universe.asof === t.date) && !asked;
 			if (need) {
 				this.lastAsk = now;

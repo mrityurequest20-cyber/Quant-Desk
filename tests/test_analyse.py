@@ -163,7 +163,7 @@ def test_the_build_tab_shows_the_read_and_the_ideas_above_the_builder_and_says_w
     draw = APP[APP.index("function bdDraw"):APP.index("function legsTable2")]
     assert "bdRead({" in draw and "bdIdeas({" in draw and draw.index("bdRead({") < draw.index('const L = B.tpl === "custom"')        # the read comes before the structure being built
     read = APP[APP.index("function bdRead"):APP.index("function bdIdeas")]
-    ideas = APP[APP.index("function bdIdeas"):APP.index("function bdPayoff")]
+    ideas = APP[APP.index("function bdIdeas"):APP.index("function bdPayoff")].split("// ---- news and the board")[0]
     assert "not forecasts" in read and "this read may be stale" in read and "fair bet" in ideas and "Your edge is your view" in ideas
     assert "innerHTML" not in read + ideas and "paperCall" not in read + ideas and "fetch(" not in read + ideas              # read and ideas are display only
     assert 'onclick: () => { B.tpl = x.id; B.width = x.width; bdDraw();' in ideas                                           # 'Build this' only fills the builder; nothing is sent

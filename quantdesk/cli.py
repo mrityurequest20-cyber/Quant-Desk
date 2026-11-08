@@ -35,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_intraday(sub)
     from .paperlink.cli import register as register_paper
     register_paper(sub)
+    from .newslink.cli import register as register_news
+    register_news(sub)
     from .data.cli import register as register_data
     register_data(sub)
     from .autolearn.cli import register as register_autolearn

@@ -1347,8 +1347,56 @@ const FL = (() => {
 })();
 /* @@flow:end */
 
+// ==================================================================================================================
+// News and the board: the news digest (titles and https links from the desk's news engine, via the relay) joined to the live board. For each story: which names it mentions, how far each has moved today
+// and whether its options are trading hard, so a headline the market ignored is told apart from one it did not. Pure maths, no DOM, no network. The tone is a word-list reading (tilted by surprise where the
+// text states an expectation): a hint, not a view. Nothing here is a forecast or a signal.
+// ==================================================================================================================
+/* @@news:start */
+const NW = (() => {
+	const fnum = (x) => (typeof x === "number" && isFinite(x) ? x : null);
+	const IMPACT = { high: 3, medium: 2, low: 1 };
+	const HALF_LIFE_MIN = 120;
+	const isIndex = (sym) => ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY"].includes(sym);
+	// today's move of a name on the board (spot, else its future) and how many of its options are trading hard (volume against open interest, fresh quotes)
+	function boardOf(sym, quotes, hot) {
+		const q = quotes[sym] || quotes[sym + "-FUT"] || null;
+		return { sym, chg: q ? fnum(q.chg) : null, price: q ? fnum(q.ltp) : null, hot: (hot[sym] || []).length, hotTop: (hot[sym] || [])[0] || null };
+	}
+	// "the market cared": the name moved at least 1% (an index 0.5%) or its options are trading unusually hard
+	function cared(b) {
+		return (b.chg != null && Math.abs(b.chg) >= (isIndex(b.sym) ? 0.5 : 1)) || b.hot > 0;
+	}
+	function hotMap(quotes) {
+		const out = Object.create(null);
+		for (const x of AN.unusual(quotes, 400, 120)) (out[x.u] = out[x.u] || []).push(x);
+		return out;
+	}
+	const toneWord = (t) => (t >= 0.15 ? "leans positive" : t <= -0.15 ? "leans negative" : "neutral");
+	// every story, annotated and ranked. now: ms. A recap of the market's own move weighs little; several outlets, a high impact, a named F&O name and the market's reaction weigh more; old stories fade (half-life 2 h).
+	function rank(digest, quotes, now) {
+		if (!digest || !Array.isArray(digest.items)) return [];
+		const hot = hotMap(quotes || {});
+		return digest.items.map((it) => {
+			const ageMin = Math.max(0, (now - Date.parse(it.ts)) / 60000);
+			const names = (it.symbols || []).map((s) => boardOf(s, quotes || {}, hot));
+			const care = names.filter(cared);
+			const nov = fnum(it.novelty);
+			const score = (IMPACT[it.impact] || 1) * (it.recap ? 0.3 : 1) * (1 + 0.5 * Math.max(0, (it.sources || []).length - 1)) * (names.length ? 1.3 : 1) * (1 + care.length * 0.6) * Math.pow(0.5, ageMin / HALF_LIFE_MIN) * (0.5 + 0.5 * (nov == null ? 1 : nov));
+			return { item: it, ageMin, names, care, score, tone: toneWord(it.tone) };
+		}).sort((a, b) => b.score - a.score);
+	}
+	// the stories about one underlying, plus (for an index) the market-wide ones that matter to every index: a high impact that is not a recap
+	function forUnderlying(ranked, u, n) {
+		const wide = (r) => r.item.impact === "high" && !r.item.recap;
+		return ranked.filter((r) => r.item.symbols.includes(u) || (isIndex(u) && wide(r))).slice(0, n);
+	}
+	return { rank, forUnderlying, boardOf, cared, hotMap, toneWord, isIndex };
+})();
+/* @@news:end */
+
 // ---- the Build tab: pick an underlying, an expiry and a structure; see what it costs, where it makes and loses, and whether it fits the desk's limits. Paper only: no order is sent from here.
-S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr", custom: [], sc: { move: 0, dvol: 0, days: 0 } };
+S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr", news: null, newsAt: 0, newsErr: "", custom: [], sc: { move: 0, dvol: 0, days: 0 } };
 function bdChains(data) {                                                // the underlyings the builder can price: an index with a known lot size, and its board chains
 	const c = QB.conf(), all = liveChains(data), out = Object.create(null);
 	for (const u of Object.keys(c.inst)) if (all[u] && Object.keys(all[u]).length) out[u] = all[u];
@@ -1400,6 +1448,45 @@ function bdIdeas(ctx) {
 		h("button", { class: "btn", style: "margin-top:6px", onclick: () => { B.tpl = x.id; B.width = x.width; bdDraw(); scrollTo({ top: 0, behavior: "smooth" }); } }, "Build this")));
 	return put(box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "The chance uses the market's own volatility, so before costs every structure here is a fair bet: it tells you how a trade pays, not whether to take it. Your edge is your view."));
 }
+// ---- news and the board, in the Build tab ------------------------------------------------------------------------------------------------------
+async function newsLoad(key) {
+	const B = S.bd;
+	try {
+		const r = await fetch("/news", { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+		if (!r.ok) { B.newsErr = `The news store did not answer as expected (HTTP ${r.status}).`; return; }
+		const j = await r.json();
+		B.news = j && typeof j === "object" ? j : null;
+		B.newsErr = "";
+	} catch (e) { B.newsErr = "The news could not be fetched."; }
+}
+function bdNews(B, data) {
+	const box = h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "News and the board"));
+	const note = (t) => put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, t));
+	const n = B.news;
+	if (!n) return note(B.newsErr || "Loading the news…");
+	if (!n.digest) return note("No news digest has reached the relay yet. It is read every ten minutes while the market is open.");
+	const now = Date.now(), ranked = NW.rank(n.digest, data.quotes, now), about = NW.forUnderlying(ranked, B.u, 4), top = ranked.filter((r) => !about.includes(r)).slice(0, 5);
+	const old = (now - Date.parse(n.digest.asof)) / 60000, feeds = Object.values(n.digest.sources || {}), ok = feeds.filter((x) => String(x).startsWith("ok")).length;
+	const ageText = (m) => (m < 1 ? "just now" : m < 60 ? `${Math.round(m)} min ago` : `${(m / 60).toFixed(1)} h ago`);
+	const row = (r) => {
+		const it = r.item, safe = typeof it.link === "string" && /^https:\/\//.test(it.link);
+		const head = safe ? h("a", { href: it.link, target: "_blank", rel: "noopener noreferrer", style: "color:inherit;font-weight:600;font-size:13.5px;line-height:1.4" }, it.title) : h("span", { style: "font-weight:600;font-size:13.5px;line-height:1.4" }, it.title);
+		const names = r.names.map((b) => h("span", { class: "mono", style: "font-size:11.5px;margin-right:10px" }, b.sym + (b.chg != null ? " " + signed(b.chg) + "%" : ""), b.hot ? h("span", { class: "warn" }, " options busy") : null));
+		return h("div", { class: "pad", style: "border-top:1px solid var(--line)" }, head,
+			h("div", { class: "row", style: "gap:6px;flex-wrap:wrap;align-items:center;margin-top:3px" },
+				h("span", { class: "tag " + (r.tone === "leans positive" ? "bull" : r.tone === "leans negative" ? "bear" : "flat") }, r.tone),
+				it.impact !== "low" ? h("span", { class: "tag " + (it.impact === "high" ? "bear" : "flat") }, it.impact + " impact") : null, it.recap ? h("span", { class: "tag flat" }, "market recap") : null,
+				r.care.length ? h("span", { class: "tag bull" }, "the market reacted") : null,
+				h("span", { class: "f3", style: "font-size:11.5px" }, `${(it.sources || []).length} outlet${(it.sources || []).length === 1 ? "" : "s"} · ${ageText(r.ageMin)}`)),
+			names.length ? h("div", { style: "margin-top:3px" }, names) : null);
+	};
+	if (old > 25 && inSession()) put(box, h("div", { class: "warn", style: "font-size:12.5px;padding:2px 16px" }, `The newest digest is ${ageText(old)}: the news job may not be running.`));
+	if (about.length) put(box, h("div", { class: "f3", style: "font-size:12px;padding:2px 16px" }, `About ${B.u}`), about.map(row));
+	if (top.length) put(box, h("div", { class: "f3", style: "font-size:12px;padding:6px 16px 2px;border-top:1px solid var(--line)" }, "Top stories right now"), top.map(row));
+	if (!about.length && !top.length) note("No stories in the digest.");
+	return put(box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" },
+		`Headlines and links from ${ok} of ${feeds.length} public feeds, read ${ageText(old)}. The tone is a word-list reading of the headline, tilted by surprise where the text states an expectation: a hint, not a view. "The market reacted" means a named name moved 1% (an index 0.5%) today or its options are trading hard.`));
+}
 function bdPayoff(a, spot) {
 	const W = 640, H = 220, P = { l: 78, r: 12, t: 12, b: 26 }, el = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "bd-chart", role: "img", "aria-label": "Profit and loss at expiry and today, by price of the underlying", style: "width:100%;height:auto;display:block" });
 	const ys = [...a.expiry, ...a.today], lo = Math.min(...ys, 0), hi = Math.max(...ys, 0), pad = (hi - lo) * 0.08 || 1;
@@ -1443,7 +1530,7 @@ function bdDraw() {
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
 	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r);
-	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdFlow({ B, data, ch, spot, T, c, sq, rows, inst }), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
+	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdFlow({ B, data, ch, spot, T, c, sq, rows, inst }), bdNews(B, data), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
 	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
 	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
@@ -1577,6 +1664,7 @@ async function renderBuild() {
 	if (S.tab !== "build") return;
 	if (!j) { body.textContent = ""; body.dataset.state = "note"; return void put(body, liveKeyForm(note)); }
 	B.data = j; B.at = Date.now();
+	if (Date.now() - B.newsAt > 60000) { B.newsAt = Date.now(); newsLoad(key).then(() => { if (S.tab === "build" && !B.editing && B.data) bdDraw(); }); }       // the digest changes every ten minutes: once a minute is plenty
 	body.dataset.state = "data";
 	if (!B.editing) bdDraw();
 }

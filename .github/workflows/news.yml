@@ -1,0 +1,45 @@
+# The news digest: reads the desk's public RSS feeds with the news engine (quantdesk/intraday/news.py: de-duplication across outlets, tone with the subject taken into account, surprise against
+# expectations, market-move recaps told apart from news) and sends the digest (titles and https links only, never article text) to the private relay (docs/LIVE.md, /news) for the app's News panel.
+#
+# Public data only. One secret, the relay's INGEST key, in the one step that sends; `contents: read`, so this job cannot write to the repository. It places nothing, reads no broker and no account.
+# Started every ten minutes in the session by deploy/scheduler.py (GitHub's own cron is too late to rely on) or by hand.
+name: News digest
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: news-digest
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Read the feeds and build the digest (no secret here, this step parses third-party feed text)
+        run: python -m quantdesk news
+      - name: Send the digest
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}                       # the private live relay (docs/LIVE.md)
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}   # the one secret, in this step only; it reads our own JSON file and sends it, nothing else
+        run: python -m quantdesk news --send runtime/news/news.json
