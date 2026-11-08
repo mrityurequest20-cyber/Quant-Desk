@@ -113,3 +113,15 @@ The same Worker and Durable Object also hold the owner's **paper** orders until 
 Storage: the queue, the results, the kill flag and the list of used order ids each have their own key and are bounded (20 waiting orders; the last 50 results, 5 reasons of 200 characters each; the last 1000 used ids), so none can crowd out another and the kill flag is never lost to a big value. A storage read that fails is never treated as empty: the route answers 503 and changes nothing; a write is made before memory changes, so a failed write (500) changes nothing and a retry is not told the id was used. The saved account is ASCII only (the runner escapes everything else).
 
 The READ key can queue a paper order and set the kill flag; it cannot write a result or a state. The INGEST key cannot queue an order. Nothing new is needed on the Worker: the same two secrets.
+
+
+## The news digest (`/news`, 8 Nov 2026)
+
+The desk's own news engine (`quantdesk/intraday/news.py`: de-duplication across outlets, a finance word list that knows the subject matters, surprise against stated expectations, market-move recaps told apart from news, novelty) reads the public RSS feeds every ten minutes in the session (`news.yml`, started by the scheduler) and `quantdesk news --push` sends the **digest** to the relay: for each story its title (cut to 220 characters), an https link, the outlets that carried it, a tone from -1 to 1 (`words`, or `surprise` where the text states an expectation), an impact (low, medium, high), whether it is a recap of the market's own move, the event type, and which instruments it names (`quantdesk/premarket/newsdigest.py`: a name table for every recorded symbol; a test fails when a recorded symbol has no names). **Headlines and links only: no article text, no price, no account.**
+
+| Route | Key | What |
+|---|---|---|
+| `POST /news/ingest` | INGEST | the digest. Everything is re-cleaned to known fields (an unsafe link becomes none, a bad item is dropped, the digest is cut oldest-first to 60,000 characters); one digest is kept and the newest replaces the last |
+| `GET /news` | READ | `{digest, stored_at, now}`; `digest` is null before the first one arrives |
+
+A storage failure is a 503 (never "no news") and changes nothing. The news job holds only the INGEST key and `contents: read`. In the app, the Build tab's **News and the board** panel joins each story to the live board: how far each named instrument has moved today and whether its options are trading hard ("the market reacted"). The tone is a word-list reading, a hint and not a view.

@@ -50,6 +50,11 @@ STOCK_WORKFLOW, STOCK_MAX_STARTS = "record-stocks.yml", 2
 # It is safe to start again after a failure (it restores its account from the relay and the ledger branch, and an order is never filled twice), so it gets three starts a day.
 PAPER_WORKFLOW, PAPER_MAX_STARTS = "paper-desk.yml", 3
 PAPER_WINDOW = (dt.time(8, 25), dt.time(15, 25))     # later than the recorders': a runner that stopped early in the afternoon is started again until 15:25, so the 15:20 sale and the 15:31 settlement still happen
+# The news digest (news.yml): the desk's public RSS feeds read by its news engine and sent to the relay for the app's News panel. Unlike the recorders it is not once a day: it is started on every tick of
+# the session (the Worker's cron fires this scheduler every ten minutes) if none is queued or running and the last one is at least eight minutes old. A failure here never matters to anything else.
+NEWS_WORKFLOW = "news.yml"
+NEWS_WINDOW = (dt.time(8, 30), dt.time(15, 50))
+NEWS_EVERY = dt.timedelta(minutes=8)
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 
 
@@ -86,6 +91,20 @@ def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: i
     if len(today) >= max_starts:
         return "wait", f"{len(today)} runs today and none succeeded: not starting again (look at the logs)"
     return "start", "no run today yet" if not today else f"today's run failed ({len(today)} so far): starting again"
+
+
+def news_due(now: dt.datetime, runs: list[dict], hols: set[dt.date]) -> tuple[bool, str]:
+    """(start?, why) for the news digest job. `runs`: news.yml's runs as `gh run list --json status,conclusion,createdAt,event` gives them."""
+    now = now.astimezone(IST)
+    if now.date().weekday() >= 5 or now.date() in hols:
+        return False, f"{now.date()} is not an NSE trading day"
+    if not (NEWS_WINDOW[0] <= now.time() < NEWS_WINDOW[1]):
+        return False, f"{now:%H:%M} IST is outside the news window {NEWS_WINDOW[0]:%H:%M}-{NEWS_WINDOW[1]:%H:%M}"
+    if any(r.get("status") in ACTIVE for r in runs):
+        return False, "a digest is already queued or running"
+    if runs and now - max(_ist(r["createdAt"]) for r in runs) < NEWS_EVERY:
+        return False, "the last digest was started less than eight minutes ago"
+    return True, "due"
 
 
 def next_wake(now: dt.datetime, hols: set[dt.date]) -> dt.datetime:
@@ -162,6 +181,15 @@ def main(argv: list[str] | None = None) -> int:
             started = started or wf == WORKFLOW
         if wf == WORKFLOW:
             runs = wf_runs
+    try:                                                                     # the news digest: every tick of the session; nothing here can hold up or fail the desk
+        if news_due(now, [], hols)[0]:                                       # only ask GitHub about it when the day and the hour allow one (no call at night)
+            go, why = news_due(now, _runs(NEWS_WORKFLOW), hols)
+            print(f"{NEWS_WORKFLOW}: {'start' if go else 'wait'}: {why}")
+            if go:
+                subprocess.run(["gh", "workflow", "run", NEWS_WORKFLOW, "--ref", "main"], check=True, timeout=120)
+                print(f"dispatched {NEWS_WORKFLOW}")
+    except Exception as e:                                                   # noqa: BLE001 - the news job must never fail the scheduler, whatever goes wrong
+        print(f"{NEWS_WORKFLOW}: could not be checked or started ({type(e).__name__}); the desk goes on")
     if started:
         return 0
     if argv[:1] == ["--wake"] or WINDOW[0] <= now.time() < WINDOW[1]:

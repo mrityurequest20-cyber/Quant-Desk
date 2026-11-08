@@ -441,6 +441,10 @@ calendar:
   # and the sleeves open nothing (F-07); self-review asks for next year's list from 1 December. When NSE publishes
   # the 2027 circular (usually December), add its dates below and 2027 here.
   holiday_years: [2026]
+  # Special sessions: a trading window on a day that is normally closed. date: [open, close] IST, NSE/BSE F&O only. The paper desk may trade inside it (and the live relay's Kotak
+  # poller runs inside it); everything else about the day (recorders, health reports) is unchanged. deploy/cloudflare/kotak.js SPECIAL_SESSIONS must match (a test checks).
+  special_sessions:
+    2026-11-08: ["14:20", "15:30"]     # Diwali Muhurat trading, NSE circular NSE/CMTR/76941 of 19 Oct 2026
   holidays:
     - 2026-01-15   # Municipal Corporation elections, Maharashtra (NSE holiday master)
     - 2026-01-26   # Republic Day
