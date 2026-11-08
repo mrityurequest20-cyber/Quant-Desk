@@ -886,7 +886,7 @@ const QB = (() => {
 		limits: { risk_per_trade: 0.025, max_premium_outlay: 0.20, max_total_outlay: 0.5, max_lots: 10, max_open: 2, max_spread_pct: 0.06, max_margin: 0.5, credit_margin_per_lot: 30000, daily_loss_limit: 0.05 },
 		costs: { brokerage_per_order: 20, gst: 0.18, sebi_per_crore: 10, options: { stt_buy: 0, stt_sell: 0.0015, exchange: 0.0003503, stamp_buy: 0.00003 } },
 		slippage: { option_half_spread_pct: 0.012, option_min_half_spread: 0.10, option_tick: 0.05 },
-		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"] },     // the paper desk's gate (quantdesk/paper/risk.py)
+		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"], allow_short_legs: false },     // the paper desk's gate (quantdesk/paper/risk.py)
 		inst: { NIFTY: { lot: 65, step: 50 }, BANKNIFTY: { lot: 30, step: 100 }, FINNIFTY: { lot: 60, step: 50 }, MIDCPNIFTY: { lot: 120, step: 25 }, SENSEX: { lot: 20, step: 100 } },
 	};
 	const conf = () => {
@@ -1055,7 +1055,7 @@ const QB = (() => {
 		out.ok = out.checks.every((x) => x.ok);
 		// ---- the paper desk's own gate, as far as it can be judged before the ticket (the ticket also checks the day's loss budget, the drawdown and the displayed size against the live account)
 		const shorts = legs.filter((l) => l.side < 0);
-		pchk("long", shorts.length === 0, shorts.length ? `Short legs (${nm(shorts)}): the paper desk opens long options only until a margin model is built` : "Long options only");
+		pchk("long", shorts.length === 0 || P.allow_short_legs === true, shorts.length ? (P.allow_short_legs === true ? `Sold legs (${nm(shorts)}): opened together with the bought legs as one package; the desk checks the worst case` : `Sold legs (${nm(shorts)}): selling is switched off on the paper desk (paper.allow_short_legs)`) : "Long options only");
 		pchk("under", P.underlyings.includes(spec.u), P.underlyings.includes(spec.u) ? `${spec.u} trades on the paper desk` : `${spec.u} is not on the paper desk's list (${P.underlyings.join(", ")})`);
 		pchk("prisk", out.risk <= c.equity * P.risk_per_trade, `Premium plus entry fees ${inr0(out.risk)} against ${(P.risk_per_trade * 100).toFixed(1)}% of ₹${c.equity.toLocaleString("en-IN")} (${inr0(c.equity * P.risk_per_trade)})`);
 		pchk("pbook", nobook.length === 0, nobook.length ? `No two-sided bid/ask on ${nm(nobook)}` : "Two-sided books on every leg");
@@ -1617,7 +1617,7 @@ function bdCustom(B, strikes, spot) {
 		h("div", { style: "padding:6px 16px 12px;display:flex;gap:10px;flex-wrap:wrap" },
 			h("button", { class: "btn", disabled: rows.length >= QB.MAX_CUSTOM_LEGS, onclick: () => { rows.push({ side: 1, type: "CE", strike: atm, mult: 1 }); redraw(); } }, "Add a leg"),
 			h("button", { class: "btn", disabled: !rows.length, onclick: () => { B.custom = []; redraw(); } }, "Clear")),
-		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:0 16px 10px" }, "Sizes multiply the Lots below. A structure with a short call that is not covered is refused (unlimited loss). The paper desk can open it only if every leg is a purchase."));
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:0 16px 10px" }, "Sizes multiply the Lots below. A structure with a short call that is not covered is refused (unlimited loss). Sold legs go to the paper desk as one package (all legs or none), only if selling is switched on there."));
 }
 // ---- what-if sliders and a grid: the structure's value if spot moves, volatility shifts and days pass (theoretical, before exit costs) --------------------------------------
 function bdScenario(B, a, spec) {
@@ -1685,16 +1685,23 @@ const PT = (() => {
 	// a buy may fill a little above the offer shown (three ticks or 2%, whichever is more), never further: the runner refuses it if the offer has run away or the size is expected to pay more
 	// (the allowance covers the paper desk's largest modelled size impact, 3 ticks, so a limit is never tighter than what a big order is expected to pay)
 	const limitFor = (ask) => Math.round(Math.ceil((ask + Math.max(3 * TICK, 0.02 * ask)) / TICK - 1e-9) * TICK * 100) / 100;
-	// the orders for an analysed structure: one buy per leg. {error} when it cannot be sent.
+	// the orders for an analysed structure: one buy per leg, or, when any leg is SOLD, ONE package order (all legs together or none). {error} when it cannot be sent.
 	function ordersFor(a, strategy, thesis, group, nowMs) {
 		if (!a || a.paperOk !== true || !Array.isArray(a.legs) || !a.legs.length) return { error: "The paper desk cannot open this structure today (see the list above)." };
 		if (!stratOk(strategy)) return { error: "Give the strategy a name (up to 60 characters)." };
 		if (!thesisOk(thesis)) return { error: "Write the thesis: why this trade, now (at least 20 characters)." };
 		if (!Number.isInteger(a.lots) || a.lots < 1 || a.lots > 1000) return { error: "The number of lots must be a whole number from 1 to 1000." };
-		if (a.legs.some((l) => !(l.side > 0) || typeof l.name !== "string" || typeof l.ask !== "number" || !Number.isFinite(l.ask) || !(l.ask > 0))) return { error: "Every leg must be a purchase with an offer on the board." };
+		const pkg = a.legs.some((l) => l.side < 0);
+		if (a.legs.some((l) => (pkg ? l.side === 0 : !(l.side > 0)) || typeof l.name !== "string" || typeof l.ask !== "number" || !Number.isFinite(l.ask) || !(l.ask > 0) || (pkg && !(typeof l.bid === "number" && Number.isFinite(l.bid) && l.bid > 0 && l.bid <= l.ask)))) return { error: pkg ? "Every leg needs a two-sided bid and offer on the board." : "Every leg must be a purchase with an offer on the board." };
+		if (pkg && !(Number.isInteger(a.lot) && a.lot > 0)) return { error: "The lot size is unknown." };
 		const g = group || idNow().slice(4, 20);
 		// `ref`: the prices on screen when the trader decided (and when the board last heard them). It is used only to report slippage; it never prices or allows a fill.
 		const refOf = (l) => (typeof l.bid === "number" && Number.isFinite(l.bid) && l.bid > 0 && l.bid <= l.ask ? { bid: l.bid, ask: l.ask, ...(Number.isFinite(nowMs) && Number.isFinite(l.age) && l.age >= 0 ? { at: Math.round(nowMs - l.age * 1000) } : {}) } : null);
+		if (pkg) {                                                                       // one order: every leg is checked and filled together, or nothing is
+			const lotsOf = (l) => (Number.isInteger(l.lots) ? l.lots : a.lots);
+			const net = a.legs.reduce((s, l) => s + (l.side > 0 ? limitFor(l.ask) : -Math.max(l.bid - Math.max(3 * TICK, 0.02 * l.bid), 0)) * lotsOf(l) * a.lot, 0);       // the most to pay in total: each bought leg at its limit, each sold leg at the least it may get
+			return { orders: [{ id: idNow(), side: "package", legs: a.legs.map((l) => ({ symbol: l.name, side: l.side > 0 ? "buy" : "sell", lots: lotsOf(l), ...(refOf(l) ? { ref: refOf(l) } : {}) })), strategy: flat(strategy), thesis: flat(thesis), net_limit: Math.round(net * 100) / 100, group: g }], package: true };
+		}
 		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: Number.isInteger(l.lots) ? l.lots : a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g, ...(refOf(l) ? { ref: refOf(l) } : {}) })) };
 	}
 	const sellFor = (symbol) => ({ id: idNow(), side: "sell", symbol, lots: "all" });
@@ -1743,6 +1750,8 @@ function bdTicket(a, tpl) {
 	if (tk.stage === "review" && built.orders) {
 		return put(box,
 			h("div", { class: "f3", style: "font-size:12px;padding:6px 16px 0" }, `Strategy: ${PT.flat(strategy)}`),
+			built.package ? built.orders[0].legs.map((l) => h("div", { class: "row", style: "padding:5px 16px;font-size:12.5px;justify-content:space-between" }, h("span", {}, `${l.side === "buy" ? "Buy" : "Sell"} ${l.lots} lot${l.lots === 1 ? "" : "s"} ${l.symbol}`), h("span", { class: "mono f3" }, l.side === "buy" ? "at the offer" : "at the bid")))
+				.concat([h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, `One package: every leg is opened together or none is. The most you will pay in total is ${num(built.orders[0].net_limit)} (a negative number is a credit you insist on). A sold option can lose more than it earns: the desk refuses any package whose worst case is not bounded or does not fit the risk limits.`)]) :
 			built.orders.map((o) => h("div", { class: "row", style: "padding:5px 16px;font-size:12.5px;justify-content:space-between" }, h("span", {}, `Buy ${o.lots} lot${o.lots === 1 ? "" : "s"} ${o.symbol}`), h("span", { class: "mono f3" }, `at most ${num(o.limit)}`))),
 			h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, "A buy fills at the offer plus 0 to 3 ticks, more the bigger it is against the size shown; the Paper tab keeps the price you saw against what you paid."),
 			h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, `Most you can lose, at the offers shown: ${inr(a.maxLoss)} plus ${inr(a.entryFees)} of fees; a fill can be a little dearer, up to the limits above. Paper money. "${PT.flat(tk.thesis)}"`),
