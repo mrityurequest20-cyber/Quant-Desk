@@ -515,3 +515,32 @@ def test_an_hwm_only_change_is_on_disk_the_moment_it_happens_not_only_at_the_end
     with pytest.raises(KeyboardInterrupt):
         S.run(cfg, rl, tmp_path / "l.json", (clk.t + dt.timedelta(minutes=5)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=sleep, say=lambda *a: None, new_account=True)
     assert R.load_account((tmp_path / "l.json").read_text()).hwm > 500_000
+
+
+def test_verify_extends_accepts_a_continuation_and_refuses_a_shorter_or_a_different_history(cfg, tmp_path, capsys):
+    import datetime as _dt
+    from quantdesk.core.types import Instrument
+    from quantdesk.paperlink import cli as C
+    base = Account(500_000)
+    base.apply_fill("buy", Instrument.option("NIFTY", _dt.date(2026, 11, 12), 24500, "CE", 65), "nse_fo", 65, 100.0, 9.0, T0.isoformat(), "s", "a thesis that is long enough to count")
+    old = tmp_path / "old.json"
+    base.save(old)
+    longer = R.load_account(R.account_json(base))
+    longer.apply_fill("sell", Instrument.option("NIFTY", _dt.date(2026, 11, 12), 24500, "CE", 65), "nse_fo", 65, 99.0, 9.0, T0.isoformat(), "s", "exit")
+    new = tmp_path / "new.json"
+    longer.save(new)
+    A = lambda f, e: type("A", (), {"file": str(f), "extends": str(e) if e else None})      # noqa: E731
+    C.cmd_verify(cfg, A(new, old))
+    assert "continues the branch's account" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as e:                                                    # the branch is AHEAD of this file: a shorter ledger is refused
+        C.cmd_verify(cfg, A(old, new))
+    assert e.value.code == 1
+    other = Account(500_000)
+    other.apply_fill("buy", Instrument.option("NIFTY", _dt.date(2026, 11, 12), 24000, "CE", 65), "nse_fo", 65, 50.0, 5.0, T0.isoformat(), "s", "a different history entirely")
+    other.apply_fill("sell", Instrument.option("NIFTY", _dt.date(2026, 11, 12), 24000, "CE", 65), "nse_fo", 65, 49.0, 5.0, T0.isoformat(), "s", "exit")
+    div = tmp_path / "div.json"
+    other.save(div)
+    with pytest.raises(SystemExit) as e:                                                    # same length, different rows
+        C.cmd_verify(cfg, A(div, new))
+    assert e.value.code == 1
+    C.cmd_verify(cfg, A(new, tmp_path / "missing.json"))                                    # no file on the branch yet: nothing to continue
