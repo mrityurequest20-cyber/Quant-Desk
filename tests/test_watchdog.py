@@ -110,7 +110,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 def test_after_close_checks_flag_missing_and_failed_runs_and_ignore_other_branches(tmp_path):
     out = _node(tmp_path, HEAD + r"""
 const D = "2026-10-23";
-const okRuns = { "record-stocks": [run(D + "T08:55:00")], "kite-record": [run(D + "T08:55:00")], "paper-desk": [run(D + "T08:55:00")] };
+const okRuns = { "record-stocks": [run(D + "T08:55:00")], "kite-record": [run(D + "T08:55:00")], "paper-desk": [run(D + "T08:55:00")], news: [run(D + "T15:50:00")] };
 let r = await at(D + "T16:00:00", env(), { runs: { record: [], "collect-wide": [], ...okRuns }, failed: {} });
 out.missing = alerts(r);
 r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00", "failure")], "collect-wide": [run(D + "T15:25:00")], ...okRuns }, failed: {} });
@@ -122,9 +122,9 @@ r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "
   failure: [f("Collect wide data", D + "T15:30:00"), f("CI", D + "T11:00:00", { head_branch: "some-pr" }), f("Old", D + "T07:00:00")],
   cancelled: [f("Desk scheduler", D + "T12:00:00"), f("Session recorder", D + "T13:00:00")] } });
 out.failures = r.results.filter((x) => x.check === "W6").flatMap((x) => x.alerts.map((a) => [a.title, a.body]));
-r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")] }, failed: {} });
+r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")], news: [run(D + "T15:50:00")] }, failed: {} });
 out.stockkite = alerts(r);
-r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")], "record-stocks": [run(D + "T08:55:00", "failure")], "kite-record": [run(D + "T08:55:00")], "paper-desk": [run(D + "T08:55:00")] }, failed: {} });
+r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")], "record-stocks": [run(D + "T08:55:00", "failure")], "kite-record": [run(D + "T08:55:00")], "paper-desk": [run(D + "T08:55:00")], news: [run(D + "T15:50:00")] }, failed: {} });
 out.startedlate = alerts(r);
 out.morning = alerts(await at(D + "T09:20:00", env(), { runs: {}, failed: {} }));
 out.morningok = alerts(await at(D + "T09:20:00", env(), { runs: okRuns, failed: {} }));
@@ -142,6 +142,32 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
     assert out["eve"] == [] and out["late"] == []                  # the self-review workflow was retired with the desk
     assert out["stockkite"] == ["P2 W12 Stock chain recorder did not run", "P2 W13 Kite tick recorder did not run", "P2 W14 Paper runner did not run"]            # the new recorders and the paper runner are watched like the others
     assert out["startedlate"] == ["P2 W12 Stock chain recorder failed"] and out["morning"] == ["P2 W12 Stock chain recorder did not run", "P2 W13 Kite tick recorder did not run", "P2 W14 Paper runner did not run"] and out["morningok"] == []
+
+
+@NODE
+def test_the_news_digest_and_the_evening_candles_are_watched_around_the_clock(tmp_path):
+    out = _node(tmp_path, HEAD + r"""
+const D = "2026-10-24";                                            // a Saturday: no trading, and the news still must not be stale
+const w = (res, c) => res.results.filter((x) => x.check === c).flatMap((x) => x.alerts.map((a) => a.sev + " " + a.title));
+out.fresh = w(await at(D + "T04:00:00", env(), { runs: { news: [run(D + "T03:45:00")] }, failed: {} }), "W15");
+out.stale = w(await at(D + "T04:00:00", env(), { runs: { news: [run(D + "T01:30:00")] }, failed: {} }), "W15");
+out.none = w(await at(D + "T04:00:00", env(), { runs: { news: [] }, failed: {} }), "W15");
+out.slowButRunning = w(await at(D + "T04:00:00", env(), { runs: { news: [run(D + "T02:50:00"), run(D + "T03:58:00", null, "in_progress")] }, failed: {} }), "W15");
+out.failedOnly = w(await at(D + "T04:00:00", env(), { runs: { news: [run(D + "T03:50:00", "failure")] }, failed: {} }), "W15");
+out.evOk = w(await at("2026-10-27T06:00:00", env(), { runs: { "kite-evening": [run("2026-10-27T00:12:00")] }, failed: {} }), "W16");
+out.evMissing = w(await at("2026-10-27T06:00:00", env(), { runs: { "kite-evening": [] }, failed: {} }), "W16");
+out.evFailed = w(await at("2026-10-27T06:00:00", env(), { runs: { "kite-evening": [run("2026-10-27T00:12:00", "failure")] }, failed: {} }), "W16");
+out.evMonday = w(await at("2026-10-26T06:00:00", env(), { runs: { "kite-evening": [] }, failed: {} }), "W16");       // a Monday morning follows a Sunday evening: not checked
+out.evSunday = w(await at("2026-10-25T06:00:00", env(), { runs: { "kite-evening": [] }, failed: {} }), "W16");
+out.fxOk = w(await at("2026-10-27T11:10:00", env(), { runs: { "fx-minutes": [run("2026-10-27T04:40:00")] }, failed: {} }), "W17");
+out.fxMissing = w(await at("2026-10-27T11:10:00", env(), { runs: { "fx-minutes": [] }, failed: {} }), "W17");
+console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
+""")
+    assert out["fresh"] == [] and out["slowButRunning"] == []
+    assert out["stale"] == ["P2 News digest is stale"] and out["none"] == ["P2 News digest is stale"] and out["failedOnly"] == ["P2 News digest is stale"]
+    assert out["evOk"] == [] and out["evMissing"] == ["P2 MCX/currency evening candles did not run"] and out["evFailed"] == ["P2 MCX/currency evening candles failed"]
+    assert out["evMonday"] == [] and out["evSunday"] == []
+    assert out["fxOk"] == [] and out["fxMissing"] == ["P2 FX minute bars did not run"]
 
 
 @NODE
@@ -254,7 +280,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 
 
 @NODE
-def test_the_worker_starts_the_desk_before_the_watchdog_and_the_watchdog_trigger_never_starts_it(tmp_path):
+def test_the_worker_starts_the_desk_before_the_watchdog_on_every_cron_around_the_clock(tmp_path):
     out = _node(tmp_path, HEAD + r"""
 calls = []; state = { runs: { record: [] } };
 await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: IST("2026-10-23T09:10:00") }, env(), {});
@@ -263,8 +289,11 @@ calls = []; state = { runs: { record: [] } };
 await worker.scheduled({ cron: "*/10 2-9 * * mon-fri", scheduledTime: IST("2026-10-23T09:10:00") }, env(), {});
 out.odd = calls.map((c) => c.url.split("/").slice(-2).join("/"))[0];
 calls = []; state = {};
-await worker.scheduled({ cron: "0,30 10-16 * * *", scheduledTime: IST("2026-10-23T16:00:00") }, env(), {});
+await worker.scheduled({ cron: "*/10 10-16 * * *", scheduledTime: IST("2026-10-23T16:00:00") }, env(), {});
 out.watch = calls.some((c) => c.url.includes("scheduler.yml"));
+calls = []; state = {};
+await worker.scheduled({ cron: "*/10 0-1,17-23 * * *", scheduledTime: IST("2026-10-24T03:00:00") }, env(), {});
+out.night = calls.some((c) => c.url.includes("scheduler.yml"));
 globalThis.fetch = async (url) => { if (String(url).includes("scheduler.yml")) return new Response(null, { status: 204 }); throw new Error("network down"); };
 logs = [];
 await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: IST("2026-10-23T09:10:00") }, env(), {});
@@ -274,7 +303,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
     assert out["alarm"][0] == "scheduler.yml/dispatches"                  # the alarm clock goes first
     assert out["odd"] == "scheduler.yml/dispatches"                        # a cron string reported differently still starts the desk
     assert any(x == "watchdog-alert.yml/dispatches" for x in out["alarm"])
-    assert out["watch"] is False                                           # the fifth trigger does not start the desk
+    assert out["watch"] is True and out["night"] is True                   # the evening and night triggers start the scheduler too: it runs around the clock now (it decides what, if anything, to start)
     # the network is down for everything except the scheduler dispatch: the desk is still started, the failed check is reported
     # as an alert of its own, the unreachable ntfy and email are logged, and nothing is thrown out of the handler
     assert out["survived"] and "desk scheduler dispatched" in out["logs"] and "watchdog W1" in out["logs"]
@@ -328,7 +357,7 @@ def test_every_watchdog_slot_coincides_with_a_cron_firing():
     slots = re.findall(r'\{ at: "(\d\d):(\d\d)", days: "(\w+)"', text)
     assert len(slots) >= 10
     # one IST date per kind of day: a Friday, and a Saturday for the digest
-    days = {"trading": [5], "weekdays": [1, 2, 3, 4, 5], "saturday": [6]}
+    days = {"trading": [5], "weekdays": [1, 2, 3, 4, 5], "saturday": [6], "tuesat": [2, 3, 4, 5, 6], "all": [0, 1, 2, 3, 4, 5, 6]}
     for hh, mm, kind in slots:
         utc_min = (int(hh) * 60 + int(mm) - 330) % 1440
         for dow in days[kind]:

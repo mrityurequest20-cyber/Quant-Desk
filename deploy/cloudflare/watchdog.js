@@ -100,6 +100,28 @@ function ranToday(file, label, sev, check) {
 	};
 }
 
+// W15 (8 Nov 2026): the news digest runs around the clock, so "ran today" is not enough: its newest successful run must be recent. P2 if none succeeded within `minutes`.
+function freshWithin(file, label, check, minutes) {
+	return async (c) => {
+		const runs = await workflowRuns(c.env, file, { per_page: 20 });
+		const ok = runs.find((r) => r.conclusion === "success");
+		const active = runs.some((r) => r.status !== "completed");
+		const age = ok ? (c.nowMs - Date.parse(ok.updated_at || ok.created_at)) / 60000 : Infinity;
+		if (age <= minutes || (active && age <= minutes * 2)) return [];
+		return [{ sev: "P2", check, title: `${label} is stale`, body: ok ? `The last successful ${label} run finished ${Math.round(age)} minutes ago (limit ${minutes}).` : `No successful ${label} run was found among the last 20.`, link: actionsUrl(c.env, file) }];
+	};
+}
+
+// W16: the MCX/currency evening candles (kite-evening.yml) are due once a night, Tue to Sat after 00:10 IST; by 06:00 a run must have been created since midnight and must not have failed.
+function ranSinceMidnight(file, label, sev, check) {
+	return async (c) => {
+		const mine = (await workflowRuns(c.env, file, { per_page: 10 })).filter((r) => ist(Date.parse(r.created_at)).date === c.now.date);
+		if (!mine.length) return [{ sev, check, title: `${label} did not run`, body: `No ${label} run was created after midnight (${c.now.date}).`, link: actionsUrl(c.env, file) }];
+		if (mine.some((r) => r.conclusion === "success" || r.status !== "completed")) return [];
+		return [{ sev, check, title: `${label} failed`, body: `Every ${label} run today ended ${ascii(mine[0].conclusion, 20)}.`, link: link(mine[0].html_url) || actionsUrl(c.env, file) }];
+	};
+}
+
 // W6: any watched workflow failed or was cancelled on main since the previous slot
 const NOISE_CANCELLED = new Set(["Desk scheduler", "Publish site", "CI"]);       // cancelled by their own concurrency rules
 async function w6Failures(c, since) {
@@ -263,9 +285,15 @@ export const SLOTS = [
 	{ at: "21:00", days: "trading", run: ranToday("data.yml", "Data warehouse", "P2", "W5"), check: "W5" },
 	{ at: "21:00", days: "trading", run: (c) => w6Failures(c, "18:00"), check: "W6" },
 	{ at: "17:30", days: "saturday", run: w8Digest, check: "W8" },
+	// Around the clock (8 Nov 2026): the news digest must never go stale, on any day; the MCX/currency evening candles must have been started by 06:00 on the mornings after a weekday evening.
+	...["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"].map((at) => ({ at, days: "all", run: freshWithin("news.yml", "News digest", "W15", 60), check: "W15" })),
+	{ at: "06:00", days: "tuesat", run: ranSinceMidnight("kite-evening.yml", "MCX/currency evening candles", "P2", "W16"), check: "W16" },
+	{ at: "11:10", days: "tuesat", run: ranSinceMidnight("fx-minutes.yml", "FX minute bars", "P2", "W17"), check: "W17" },
 ];
 
 function dayMatches(kind, now) {
+	if (kind === "all") return true;
+	if (kind === "tuesat") return now.dow >= 2 && now.dow <= 6;
 	if (kind === "saturday") return now.dow === 6;
 	if (kind === "weekdays") return now.dow >= 1 && now.dow <= 5;
 	return isTradingDate(now.date);

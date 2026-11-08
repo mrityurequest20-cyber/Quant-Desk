@@ -73,3 +73,13 @@ ntfy's anonymous e-mail is disabled on ntfy.sh, so e-mail goes through GitHub, n
   the crons).
 - **Not built yet:** the optional dead-man's switch (an external service that alerts if the Worker itself dies), per-sleeve
   trade-count checks, and the HAR session count in the digest (needs the journal).
+
+## Around the clock (8 Nov 2026)
+
+The Worker's cron now fires **every 10 minutes, all day, every day** (three crons that tile the 24 UTC hours, so no minute fires twice and no alert is sent twice), and each firing asks GitHub to run `scheduler.yml`; `scheduler.py` decides what, if anything, to start. New around-the-clock jobs and their checks:
+
+| Check | When (IST) | What |
+|---|---|---|
+| W15 | 00:00, 04:00, 08:00, 12:00, 16:00, 20:00, every day | The news digest (`news.yml`, started every tick by the scheduler, day and night) has a successful run in the last hour. |
+| W16 | 06:00 Tue to Sat | The MCX/currency evening candles (`kite-evening.yml`, started once a night at 00:10 IST by the scheduler, never retried because it logs in to Kite) was started after midnight and did not fail. |
+| W17 | 11:10 Tue to Sat | The FX minute bars (`fx-minutes.yml`, started by the scheduler from 04:05 IST, retried up to three times) ran today and did not fail. |

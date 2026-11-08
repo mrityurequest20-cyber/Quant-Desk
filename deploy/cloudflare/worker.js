@@ -63,7 +63,7 @@ export async function dispatchWorkflow(env, file, inputs) {
 // The one cron (as written in wrangler.jsonc, UTC) that must NOT start the desk: the watchdog's own half-hourly trigger.
 // Every other cron asks GitHub to run scheduler.yml now, as before this file had a watchdog, so if Cloudflare ever reports a
 // cron string differently the worst case is one extra, harmless dispatch, never a desk that silently is not started.
-export const WATCHDOG_ONLY_CRON = "0,30 10-16 * * *";
+export const WATCHDOG_ONLY_CRON = null;          // (until 8 Nov 2026 the half-hourly 10-16 UTC trigger did not start the desk; every cron now does, around the clock)
 
 // Keeps the Kotak live poller going: re-arms its alarm if it was lost, and asks GitHub to rebuild its universe when today's is missing (the poller idles without one).
 export async function keepLiveAlive(env) {
