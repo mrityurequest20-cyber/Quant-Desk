@@ -150,7 +150,7 @@ console.log(JSON.stringify({ upIds: [...new Set(up.map((x) => x.id))].sort(), bi
 """)
     assert o["upIds"] == ["bull_call_spread", "bull_put_spread", "long_call"] and o["bigIds"] == ["long_straddle", "long_strangle"] and o["none"] == []
     assert o["rrOrder"] == sorted(o["rrOrder"], reverse=True) and o["popOrder"] == sorted(o["popOrder"], reverse=True) and o["cheapOrder"] == sorted(o["cheapOrder"])
-    assert all(ok is False for id, ok in o["flags"] if id != "long_call")                                                  # a spread has a short leg: the paper desk cannot open it (the long call depends on size and price)
+    assert all(isinstance(ok, bool) for id, ok in o["flags"])                                                              # a spread has a sold leg: with selling on it can go as one package, if it fits the limits (the builder tests pin both settings)
     assert {"id", "width", "name", "premium", "maxLoss", "maxProfit", "rr", "breakevens", "paperOk", "fits", "pop"} <= set(o["fields"])
 
 

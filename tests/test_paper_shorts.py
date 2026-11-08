@@ -33,8 +33,7 @@ def cfg():
 def make(cfg, tmp_path, on=True, capital=500_000):
     acct = Account(capital)
     gate = RiskGate(cfg, kill=KillSwitch(tmp_path / "KILL"))
-    if on:
-        gate.limits = dataclasses.replace(gate.limits, allow_short_legs=True)
+    gate.limits = dataclasses.replace(gate.limits, allow_short_legs=on)               # explicit either way: the config's own value is tested apart
     return PaperBroker(cfg, acct, gate), acct, gate
 
 
@@ -55,8 +54,9 @@ def bull_put_spread(lots=1, short_k=24500, long_k=24400, credit=(60, 62), debit=
 
 
 # ---- the switch ---------------------------------------------------------------------------------------------------------------------
-def test_the_config_ships_with_selling_off_and_a_package_with_a_sale_is_refused_while_it_is_off(cfg, tmp_path):
-    assert cfg.get("paper.allow_short_legs") is False
+def test_the_config_has_selling_on_as_legs_only_and_a_package_with_a_sale_is_refused_when_it_is_switched_off(cfg, tmp_path):
+    assert cfg.get("paper.allow_short_legs") is True and RiskGate(cfg, kill=KillSwitch(tmp_path / "K")).limits.allow_short_legs is True
+    assert not make(cfg, tmp_path, on=True)[0].open_package([leg("sell", opt(25000, "CE"), q(55, 57))], "naked call", "a view long enough to pass the thesis rule of the desk", {}, MON)[0].allowed       # never alone, even on
     b, acct, _ = make(cfg, tmp_path, on=False)
     d, rows = b.open_package(bull_put_spread(), "bull put spread", "support held at 24400 for an hour with falling put volume", {}, MON)
     assert not d.allowed and rows == [] and any("switched off" in r for r in d.reasons) and not acct.ledger and acct.cash == 500_000
@@ -326,7 +326,9 @@ def test_an_expiring_sold_option_is_bought_back_from_15_20_and_settled_after_the
 
 def test_without_the_flag_the_runner_refuses_a_package_with_a_sale(cfg, tmp_path):
     acct = Account(500_000)
-    r = R.Runner(cfg, acct, gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "K")), kill_file=tmp_path / "K")
+    gate = RiskGate(cfg, kill=KillSwitch(tmp_path / "K"))
+    gate.limits = dataclasses.replace(gate.limits, allow_short_legs=False)
+    r = R.Runner(cfg, acct, gate=gate, kill_file=tmp_path / "K")
     res = go(r, [package()])["results"][0]
     assert res["status"] == "refused" and "switched off" in " ".join(res["reasons"]) and not acct.ledger
 

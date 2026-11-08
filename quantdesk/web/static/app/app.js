@@ -886,7 +886,7 @@ const QB = (() => {
 		limits: { risk_per_trade: 0.025, max_premium_outlay: 0.20, max_total_outlay: 0.5, max_lots: 10, max_open: 2, max_spread_pct: 0.06, max_margin: 0.5, credit_margin_per_lot: 30000, daily_loss_limit: 0.05 },
 		costs: { brokerage_per_order: 20, gst: 0.18, sebi_per_crore: 10, options: { stt_buy: 0, stt_sell: 0.0015, exchange: 0.0003503, stamp_buy: 0.00003 } },
 		slippage: { option_half_spread_pct: 0.012, option_min_half_spread: 0.10, option_tick: 0.05 },
-		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"], allow_short_legs: false },     // the paper desk's gate (quantdesk/paper/risk.py)
+		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"], allow_short_legs: true },     // the paper desk's gate (quantdesk/paper/risk.py)
 		inst: { NIFTY: { lot: 65, step: 50 }, BANKNIFTY: { lot: 30, step: 100 }, FINNIFTY: { lot: 60, step: 50 }, MIDCPNIFTY: { lot: 120, step: 25 }, SENSEX: { lot: 20, step: 100 } },
 	};
 	const conf = () => {

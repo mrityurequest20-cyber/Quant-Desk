@@ -225,11 +225,12 @@ const pc = (a, id) => a.paperChecks.find((x) => x.id === id).ok;
 const call = an("long_call", 1, "NIFTY"), spread = an("bull_call_spread", 2, "NIFTY"), sensex = an("long_call", 1, "SENSEX"), strangle = an("long_strangle", 2, "NIFTY");
 // the entry fees tip a trade over the limit: set the equity so that the worst loss alone is JUST inside 2.5% and loss plus fees is just outside
 const c0 = QB.conf(), eq = (call.maxLoss + 1) / c0.limits.risk_per_trade, tight = an("long_call", 1, "NIFTY", { ...c0, equity: eq });
-console.log(JSON.stringify({ call: { paperOk: call.paperOk, long: pc(call, "long"), under: pc(call, "under") }, spread: { paperOk: spread.paperOk, long: pc(spread, "long") }, sensex: { paperOk: sensex.paperOk, under: pc(sensex, "under") }, strangle: strangle.paperOk,
+console.log(JSON.stringify({ call: { paperOk: call.paperOk, long: pc(call, "long"), under: pc(call, "under") }, spread: { paperOk: spread.paperOk, long: pc(spread, "long") }, spreadOff: (() => { const o = an("bull_call_spread", 2, "NIFTY", { ...c0, paper: { ...c0.paper, allow_short_legs: false } }); return { paperOk: o.paperOk, long: pc(o, "long") }; })(), sensex: { paperOk: sensex.paperOk, under: pc(sensex, "under") }, strangle: strangle.paperOk,
   fees: call.entryFees, risk: call.risk, maxLoss: call.maxLoss, tight: { lossAlone: tight.maxLoss <= eq * c0.limits.risk_per_trade, risk: tight.checks.find((x) => x.id === "risk").ok, prisk: pc(tight, "prisk"), paperOk: tight.paperOk } }));
 """)
     assert o["call"] == {"paperOk": True, "long": True, "under": True} and o["strangle"] is True                         # long options on the four index families can be opened
-    assert o["spread"] == {"paperOk": False, "long": False}                                                          # a spread has a short leg: the gate opens long options only
+    assert o["spread"] == {"paperOk": True, "long": True}                                                            # a spread has a sold leg: with selling on (owner's order) it goes as one package
+    assert o["spreadOff"] == {"paperOk": False, "long": False}                                                       # and with the switch off it is a what-if again
     assert o["sensex"] == {"paperOk": False, "under": False}                                                        # SENSEX is not on the paper desk's list
     assert o["fees"] > 0 and o["risk"] == pytest.approx(o["maxLoss"] + o["fees"])
     t = o["tight"]

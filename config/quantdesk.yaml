@@ -385,7 +385,10 @@ paper:
   max_quote_age_s: 30              # a data-quality guard: a fill needs a quote this fresh
   cost_verified_segments: [nse_fo] # segments whose costs.segments rates are configured and verified; others are refused, never guessed
   kill_switch_file: runtime/paper/KILL   # while this file exists nothing new opens and the desk flattens
-  allow_short_legs: false          # sell options as part of a HEDGED package (verticals, condors, butterflies); an uncovered short is refused whatever this says
+  # Owner's written order, 8 Nov 2026: "give yourself this freedom of selling, also selling options ... a selling option is just a hedging position" and, later the same day, "turn the sell option [on] ... it would not work
+  # in silos. It will always be working as a leg." ON means: a sold option is allowed ONLY as a leg of a package whose worst case is bounded (spreads, condors, butterflies), every leg opening together or none; a lone
+  # sold option, a naked short call and a calendar are refused whatever this says. The independent risk review of the engine is on PR #253.
+  allow_short_legs: true
   # Which underlyings trade in each verified segment: an order labelled with a segment must be for one of these, so a crude-oil or
   # USD/INR or SENSEX option cannot be labelled nse_fo to dodge the costs and hours check. NSE's F&O stocks are added from the
   # warehouse universe by the runner (M3); the four index families are listed here.
