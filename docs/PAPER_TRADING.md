@@ -20,7 +20,7 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 
 ## Placing a trade
 
-1. Build tab: pick the index, the expiry and a structure (or use *Ideas for your view*). Only structures the paper desk can open show **Send as a paper order**: today that means long options on NIFTY, BANKNIFTY, FINNIFTY or MIDCPNIFTY (a spread has a short leg: it stays a what-if until a margin model exists).
+1. Build tab: pick the index, the expiry and a structure (or use *Ideas for your view*). Only structures the paper desk can open show **Send as a paper order**: long options on NIFTY, BANKNIFTY, FINNIFTY or MIDCPNIFTY, and, once `paper.allow_short_legs` is switched on, **hedged packages with sold legs** (verticals, condors, butterflies): they go as ONE order, every leg opens together or none does, and the gate judges the worst case (a naked short call or a calendar is always refused; the long that covers a sold option cannot be sold before the sold option is bought back). Until the switch is on, a structure with a sold leg stays a what-if.
 2. Write the **strategy name** and the **thesis**: why this trade, now, and what would make you wrong (at least 20 characters; it is kept with the trade).
 3. **Review order**: each leg, its price limit (two ticks or 2% above the offer you saw), the most you can lose. **Send paper order**.
 4. Open the **Paper** tab. A fill shows under *Orders* as `filled`; a refusal shows the gate's reasons.
