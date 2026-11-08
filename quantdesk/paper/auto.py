@@ -2,7 +2,7 @@
 
 This module is a pure decision function. It reads the live board (the relay's snapshot), the news digest and the paper account, and it returns ORDERS in the same shape the owner's hand-placed
 orders have. Nothing here trades: the orders go through `Runner.handle` and the risk gate exactly like a manual order, so every gate rule, the kill switch, the daily loss cap, the drawdown
-halt and the size and freshness checks apply to them unchanged. On top of that it keeps its own, tighter limits (below). It has no network, no environment and no clock of its own.
+halt and the size and freshness checks apply to them unchanged. It adds no trade-count limits of its own (see Limits). It has no network, no environment and no clock of its own.
 
 What it looks for: HIGH REWARD FOR LITTLE RISK. It buys one lot of a long option, so the most it can lose is the premium, and it caps that loss at 40% of the premium with a stop; it puts NO
 cap on the gain. A winner is protected by a trailing stop that arms at +80% (twice the risk) and follows 30% below the peak, so a trade that works is allowed to run for several times what it risked.
@@ -11,12 +11,13 @@ Most trades will lose their small stop; the ones that work pay for them. That is
   Entry   at least TWO of four readings agree and none points the other way: resting bid/offer pressure around the money (calls against puts), the forward the options imply against the
           futures price (put-call parity), the index's own move over five minutes, and the tone of the recent news. Then it buys the first strike out of the money (more convexity for
           the same stop) of an expiry at least three days away (no last-day decay).
-  Exit    stop at -40% of the premium; trailing stop (arms at +80%, 30% off the peak); the signals turning the other way; strong news against it; the day's own stop.
+  Exit    stop at -40% of the premium; trailing stop (arms at +80%, 30% off the peak); the signals turning the other way; strong news against it (an optional day stop exists, off by default).
   Overnight   it is NOT an intraday system. Ten minutes before the close each position gets a decision: it is HELD overnight if its expiry is still at least two days off, it is not older than
           three sessions, it is above its stop, the signals do not point the other way and the news is not against it; otherwise it is sold. A held position keeps its stop and trailing stop
           in the morning. (The peak the trailing stop needs is written into the ledger, so a restart or the night forgets nothing.)
   Limits   NO cap on trades or open positions and none of its own on the day's loss: the risk gate's loss caps (2.5% a trade with fees, 5% a day, a 10% drawdown halt, the loss budget) are the bound. It only never adds to a
-          contract already held and does not re-buy the same contract within five minutes of its last fill in it.
+          contract already held, does not re-buy the same contract within five minutes of its last fill in it, waits 60 s between entries for the same index and direction, opens nothing while the account is
+          stopped or halted, and stops opening at LEDGER_SOFT_LIMIT ledger rows (a storage guard: the relay holds about 960); exits are always managed.
 
 It is NOT proven to make money: its signals are the ones the app's Flow panel logs and grades, which are "unproven" until they have a record. The point of running it is the record.
 """
@@ -40,6 +41,7 @@ ENTRY_MIN_DAYS_TO_EXPIRY, HOLD_MIN_DAYS_TO_EXPIRY = 3, 2
 # NO cap on the number of trades or open positions, and no cap of its own on the day's loss (owner, 8 Nov 2026: "do not keep any cap on the trades ... keep a cap on your losses ... if you're not making those
 # percentage losses, on a daily basis, you can trade as much as you want"). The loss caps are the risk gate's (per trade 2.5% with fees, daily 5%, drawdown halt 10%, and the loss budget that bounds what can be open
 # at once); AUTO adds none. The one guard kept is against ping-pong: the same contract is not bought again within REENTRY_GUARD_S of AUTO's last fill in it (quote noise around a stop, not a count).
+LEDGER_SOFT_LIMIT = 800          # rows: the relay holds about 960 (deploy/cloudflare/paper.js CHUNK x MAX_CHUNKS); past it every save of the account fails, so AUTO stops OPENING (it still manages exits)
 REENTRY_GUARD_S = 5 * 60
 DIRECTION_BACKOFF_S = 60.0       # after any entry order for an index and direction (filled or refused), no other entry for that index and direction for this long: a spot that moves a strike must not buy a new strike every few seconds
 FIRST_ENTRY_AFTER_OPEN_S, LAST_ENTRY_BEFORE_CLOSE_S, DECIDE_BEFORE_CLOSE_S = 5 * 60, 20 * 60, 10 * 60
@@ -184,7 +186,7 @@ class AutoPilot:
         self.lots = dict(lots or {})
         self.capital = float(capital)
         self.tape: dict[str, list[tuple[float, float]]] = {}      # u -> [(epoch s, spot)], this process only
-        self.pending_entry: dict[str, float] = {}
+        self.pending_entry: dict = {}                            # contract name -> time, and (index, direction) -> time
         self.pending_exit: dict[str, float] = {}
         self.written_peak: dict[tuple, float] = {}
         self._events: list[dict] = []
@@ -335,6 +337,12 @@ class AutoPilot:
                 orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": s, "lots": lots, "queued_at": int(t * 1000), "group": "auto", "_why": reason})
             elif deciding and not reason:
                 info.setdefault("held_overnight", []).append(s)
+        if account.day_halted or account.halt:
+            info["entries"] = "none: the account is stopped for the day or halted by the drawdown limit"
+            return orders
+        if len(account.ledger) >= LEDGER_SOFT_LIMIT:
+            info["entries"] = f"none: the ledger holds {len(account.ledger)} rows, near what the relay can store ({LEDGER_SOFT_LIMIT} is the limit for new entries)"
+            return orders
         if stopped or deciding or kill or entries_blocked:
             return orders
         open_after = sess[0] + dt.timedelta(seconds=FIRST_ENTRY_AFTER_OPEN_S)

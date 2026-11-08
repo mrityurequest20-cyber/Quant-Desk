@@ -1,5 +1,5 @@
 """AUTO v1 (quantdesk/paper/auto.py): the paper desk deciding for itself. PAPER MONEY ONLY. Everything here runs through the REAL runner, risk gate and broker; only the board and the news are made up.
-What is pinned: it enters only on agreement of the readings, one lot, one strike out of the money, within its own tight limits; it risks a small fixed share of the premium and puts NO cap on the gain
+What is pinned: it enters only on agreement of the readings, one lot, one strike out of the money, with no trade-count limits of its own (the gate's loss caps are the bound); it risks a small fixed share of the premium and puts NO cap on the gain
 (a trailing stop lets a winner run); it decides about the NIGHT before the close and carries a position overnight only when the idea is intact; it ONLY touches its own positions; the owner's
 kill switch, the brakes and the session hours apply; and it never trades by itself unless switched on."""
 from __future__ import annotations
@@ -515,3 +515,29 @@ def test_after_an_entry_order_for_an_index_and_direction_it_waits_a_minute_befor
     t3 = t + dt.timedelta(seconds=70)
     later = board(t3, **SIG_UP, spot=SPOT + 50)
     assert len([o for o in ap.decide(later, rn.account, R.Runner.server_now(later), cal=cal) if o["side"] == "buy"]) == 1       # a minute on, a new strike is fine
+
+
+# ---- a stopped account and the storage guard (reviewer, PR #252) ----------------------------------------------------------------------------------------------
+def test_it_proposes_nothing_while_the_account_is_stopped_for_the_day_or_halted_and_goes_on_when_it_is_cleared(cfg, tmp_path):
+    rn, ap, cal = desk(cfg, tmp_path)
+    warm(rn, ap, cal, T0)
+    t = T0 + dt.timedelta(minutes=7)
+    snap = board(t, **SIG_UP)
+    srv = R.Runner.server_now(snap)
+    for flag, val in (("day_halted", True), ("halt", "drawdown")):
+        setattr(rn.account, flag, val)
+        assert ap.decide(snap, rn.account, srv, cal=cal) == [] and "stopped" in ap.last_info["entries"]
+        setattr(rn.account, flag, False if flag == "day_halted" else None)
+    assert len(ap.decide(snap, rn.account, srv, cal=cal)) == 1
+
+
+def test_it_stops_opening_at_the_ledger_soft_limit_but_still_manages_what_it_holds(cfg, tmp_path):
+    rn, ap, cal = desk(cfg, tmp_path)
+    warm(rn, ap, cal, T0)
+    t = T0 + dt.timedelta(minutes=7)
+    snap = board(t, **SIG_UP)
+    srv = R.Runner.server_now(snap)
+    rn.account.ledger.extend({"kind": "event", "seq": i} for i in range(A.LEDGER_SOFT_LIMIT))
+    assert ap.decide(snap, rn.account, srv, cal=cal) == [] and "ledger holds" in ap.last_info["entries"]
+    del rn.account.ledger[:]
+    assert len(ap.decide(snap, rn.account, srv, cal=cal)) == 1
