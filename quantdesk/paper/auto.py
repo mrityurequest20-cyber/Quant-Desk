@@ -198,7 +198,8 @@ class AutoPilot:
     # ---- the account as the ledger tells it (the ledger is the memory: a restart or a night forgets nothing that matters) -----------------------------------------
     def day_facts(self, account, day: dt.date, marks: dict) -> dict:
         """Entries today, the last buy per index, and the day's own result: the realised result of the sales made today plus the open result of what was opened today, fees included.
-        A position carried in from an earlier day is not part of today's result (it has its own stops); an unpriced one opened today counts as worth nothing."""
+        A position carried in from an earlier day is not part of today's open result (it has its own stops), but a sale of it made today is realised today; an unpriced position opened today
+        counts as worth nothing. (A settlement row is not counted.)"""
         entries = 0
         last_buy: dict[str, float] = {}
         book: dict[str, list] = {}                                  # symbol -> [qty, avg, opened_day, fees_paid_so_far]
@@ -239,6 +240,15 @@ class AutoPilot:
             result += ((m - b[1]) * b[0] if m is not None else -b[1] * b[0]) - b[3]
         return {"entries": entries, "last_buy": last_buy, "result": result}
 
+    def own_qty(self, account) -> dict:
+        """symbol -> units that AUTO itself bought and has not sold, from its own ledger fills. A position can hold more than that (the owner bought the same contract): the rest is the owner's
+        and is never sold or managed here."""
+        q: dict[str, int] = {}
+        for r in account.ledger:
+            if self._is_auto(r.get("strategy")) and r.get("kind") in ("buy", "sell") and isinstance(r.get("qty"), int):
+                q[r.get("symbol")] = q.get(r.get("symbol"), 0) + (r["qty"] if r["kind"] == "buy" else -r["qty"])
+        return {k: v for k, v in q.items() if v > 0}
+
     def _peaks(self, account) -> dict:
         out: dict[tuple, float] = {}
         for r in account.ledger:
@@ -261,6 +271,8 @@ class AutoPilot:
             sp = _spot(snap, u)
             if sp:
                 tape = self.tape.setdefault(u, [])
+                if tape and abs(t - tape[-1][0]) > 900:                                          # a clock that jumped (a forged or broken snapshot time): start the tape again
+                    tape.clear()
                 if not tape or t > tape[-1][0]:
                     tape.append((t, sp))
                 del tape[:max(0, len(tape) - 400)]
@@ -278,7 +290,8 @@ class AutoPilot:
         info["day"] = {"entries": facts["entries"], "result": round(facts["result"], 2)}
         stopped = facts["result"] <= -DAY_STOP_FRAC * self.capital
         deciding = sess[1] - ist <= dt.timedelta(seconds=DECIDE_BEFORE_CLOSE_S)
-        ours = {s: p for s, p in account.positions.items() if self._is_auto(p.strategy)}
+        mine_qty = self.own_qty(account)
+        ours = {s: p for s, p in account.positions.items() if self._is_auto(p.strategy) and mine_qty.get(s, 0) > 0}
         ch = chains(snap, self.und, self.lots)
         peaks = self._peaks(account)
         dirs: dict[str, int] = {}
@@ -311,7 +324,8 @@ class AutoPilot:
                 reason = self._overnight_no(pos, mark, ist.date(), tone, weight, want)
             if reason and t - self.pending_exit.get(s, 0.0) >= EXIT_RESEND_S:
                 self.pending_exit[s] = t
-                orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": s, "lots": "all", "queued_at": int(t * 1000), "group": "auto", "_why": reason})
+                lots = max(1, min(mine_qty[s], pos.qty) // max(1, pos.instrument.lot_size))                  # only the lots AUTO itself bought, never "all"
+                orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": s, "lots": lots, "queued_at": int(t * 1000), "group": "auto", "_why": reason})
             elif deciding and not reason:
                 info.setdefault("held_overnight", []).append(s)
         if stopped or deciding or kill or entries_blocked:
@@ -332,6 +346,8 @@ class AutoPilot:
                 continue
             _, why, _, _, _ = self._dir_of(snap, u, ist, t, ch, news, now)
             o = self._entry(snap, u, d, why, ch[u], ist, t)
+            if o and o["symbol"] in account.positions:                                         # the owner holds this very contract: never merge AUTO's lots into it
+                continue
             if o:
                 self.pending_entry[u] = t
                 orders.append(o)

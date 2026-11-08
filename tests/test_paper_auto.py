@@ -457,3 +457,38 @@ def test_it_does_not_buy_a_lottery_ticket_under_five_rupees(cfg, tmp_path):
     t = T0 + dt.timedelta(minutes=7)
     snap = reprice(board(t, **SIG_UP), "NIFTY12NOV2624550CE", 2.9, 3.0)
     assert tick(rn, ap, cal, snap, t)[0] == []
+
+
+# ---- review fixes: a contract the owner also holds, and a clock that jumps ---------------------------------------------------------------------------------------
+def test_when_the_owner_holds_the_same_contract_auto_never_adds_to_it_and_when_the_owner_adds_to_autos_it_sells_only_its_own_lots(cfg, tmp_path):
+    sig = SIG_UP
+    t = T0 + dt.timedelta(minutes=7)
+    # case B: the owner already holds the very contract AUTO would pick: it picks nothing, and the owner's position is left alone
+    rn, ap, cal = desk(cfg, tmp_path)
+    inst, _ = R.parse_contract("NIFTY12NOV2624550CE", {"NIFTY"}, {"NIFTY": 65})
+    rn.account.apply_fill("buy", inst, "nse_fo", 65, 50.0, 20.0, T0.isoformat(), "owner: breakout", "my own thesis for this trade, kept by hand")
+    warm(rn, ap, cal, T0)
+    assert [o for o in tick(rn, ap, cal, board(t, **sig), t)[0] if o["side"] == "buy"] == [] and rn.account.positions["NIFTY12NOV2624550CE"].qty == 65
+    # case A: AUTO holds a lot, then the owner buys another lot of the same contract (the two merge into one position)
+    rn, ap, cal, t = open_one(cfg, tmp_path)
+    sym = next(iter(rn.account.positions))
+    inst, _ = R.parse_contract(sym, {"NIFTY"}, {"NIFTY": 65})
+    rn.account.apply_fill("buy", inst, "nse_fo", 65, rn.account.positions[sym].avg_price, 20.0, (t + dt.timedelta(minutes=1)).isoformat(), "owner: add", "my own second lot, bought by hand on purpose")
+    assert rn.account.positions[sym].qty == 130
+    assert ap.own_qty(rn.account) == {sym: 65}
+    (mine, rep), _ = moved(rn, ap, cal, t + dt.timedelta(minutes=2), 0.55)                                                         # the stop
+    assert len(mine) == 1 and mine[0]["lots"] == 1 and rep["results"][0]["status"] == "filled"                                   # one lot sold, not "all"
+    assert rn.account.positions[sym].qty == 65                                                                                    # the owner's lot is still there
+    (mine2, _), _ = moved(rn, ap, cal, t + dt.timedelta(minutes=3), 0.40)
+    assert mine2 == [] and rn.account.positions[sym].qty == 65                                                                    # and AUTO now treats it as none of its business
+
+
+def test_a_snapshot_time_that_jumps_restarts_the_momentum_tape_instead_of_freezing_it(cfg, tmp_path):
+    rn, ap, cal = desk(cfg, tmp_path)
+    warm(rn, ap, cal, T0)
+    far = T0 + dt.timedelta(days=2)
+    ap.decide(board(far), rn.account, R.Runner.server_now(board(far)), cal=cal)
+    assert len(ap.tape["NIFTY"]) == 1 and ap.tape["NIFTY"][0][0] == pytest.approx(far.timestamp())
+    back = T0 + dt.timedelta(minutes=10)
+    ap.decide(board(back), rn.account, R.Runner.server_now(board(back)), cal=cal)
+    assert len(ap.tape["NIFTY"]) == 1 and ap.tape["NIFTY"][0][0] == pytest.approx(back.timestamp())
