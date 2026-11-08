@@ -116,6 +116,8 @@ class Config:
             o, c = (dt.time.fromisoformat(str(x)) for x in v)
             if not o < c:
                 raise ValueError(f"calendar.special_sessions {day}: the open must be before the close")
+            if day.year not in self.holiday_years():
+                raise ValueError(f"calendar.special_sessions {day}: {day.year} has no verified holiday list (calendar.holiday_years), so a special session in it cannot be trusted")
             out[day] = (o, c)
         return out
 

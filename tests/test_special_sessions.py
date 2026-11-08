@@ -110,3 +110,10 @@ def test_a_position_bought_in_the_special_window_can_be_sold_in_it_and_not_outsi
     cal = MK.Calendars(cfg)
     assert MK.exit_session("nse_fo", DIWALI, cal) == (at(14, 20), at(15, 30)) and MK.exit_session("nse_fo", dt.date(2026, 11, 7), cal) is None
     assert MK.exit_session("nse_fo", dt.date(2026, 11, 9), cal) == MK.session("nse_fo", dt.date(2026, 11, 9), cal)             # ordinary days: exactly as before
+
+
+def test_a_special_session_in_a_year_without_a_verified_holiday_list_is_refused(cfg):
+    real = cfg.get
+    cfg.get = lambda key, default=None: {dt.date(2031, 11, 8): ["14:20", "15:30"]} if key == "calendar.special_sessions" else real(key, default)
+    with pytest.raises(ValueError, match="verified holiday list"):
+        cfg.special_sessions()
