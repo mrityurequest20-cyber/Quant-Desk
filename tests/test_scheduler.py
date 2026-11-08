@@ -172,9 +172,9 @@ def test_the_news_digest_is_started_on_every_session_tick_but_only_one_at_a_time
     assert sch.news_due(at("2026-10-05 10:10"), [run_("2026-10-05 10:00")], HOLS)[0] is True                              # ten minutes later: the next tick
     assert sch.news_due(at("2026-10-05 10:05"), [run_("2026-10-05 10:00")], HOLS)[0] is False                             # a double dispatch inside eight minutes
     assert sch.news_due(at("2026-10-05 10:30"), [run_("2026-10-05 10:00", "in_progress")], HOLS)[0] is False              # one at a time, even if it is slow
-    assert sch.news_due(at("2026-10-05 08:00"), [], HOLS)[0] is False and sch.news_due(at("2026-10-05 15:50"), [], HOLS)[0] is False
-    assert sch.news_due(at("2026-10-03 10:00"), [], HOLS)[0] is False                                                       # a Saturday
-    assert sch.news_due(at("2026-10-05 10:00"), [], {sch.dt.date(2026, 10, 5)})[0] is False                                # a holiday
+    for when in ("2026-10-05 02:30", "2026-10-05 08:00", "2026-10-05 15:50", "2026-10-05 23:50", "2026-10-03 10:00", "2026-10-04 03:00"):    # night, before the open, after the close, a Saturday, a Sunday: news never sleeps
+        assert sch.news_due(at(when), [], HOLS)[0] is True, when
+    assert sch.news_due(at("2026-10-05 10:00"), [], {sch.dt.date(2026, 10, 5)})[0] is True                                  # a holiday too
     assert sch.news_due(at("2026-10-05 10:10"), [run_("2026-10-05 10:00"), run_("2026-10-05 09:50")], HOLS)[0] is True
 
 
@@ -194,3 +194,15 @@ def test_a_failing_news_job_or_listing_never_holds_up_or_fails_the_desks_schedul
             raise sp.CalledProcessError(1, "gh")
     monkeypatch.setattr(sch.subprocess, "run", run)
     assert sch.main([]) == 0 and ["gh", "workflow", "run", "record.yml", "--ref", "main"] in calls                           # the dispatch failed, the recorder was already started
+
+
+def test_the_fx_minute_bars_are_dispatched_each_morning_until_one_run_succeeds_with_up_to_three_starts():
+    run_ = lambda t, status="completed", ok="failure": {"createdAt": at(t).astimezone(sch.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "status": status, "conclusion": ok if status == "completed" else None, "event": "workflow_dispatch"}    # noqa: E731
+    assert sch.fx_due(at("2026-10-06 04:05"), [])[0] is True and sch.fx_due(at("2026-10-10 10:50"), [])[0] is True
+    for when in ("2026-10-06 04:00", "2026-10-06 11:00", "2026-10-05 05:00", "2026-10-11 05:00", "2026-10-06 15:00"):
+        assert sch.fx_due(at(when), [])[0] is False, when
+    assert sch.fx_due(at("2026-10-06 05:00"), [run_("2026-10-06 04:10", ok="success")])[0] is False
+    assert sch.fx_due(at("2026-10-06 05:00"), [run_("2026-10-06 04:10", "in_progress")])[0] is False
+    assert sch.fx_due(at("2026-10-06 05:00"), [run_("2026-10-06 04:10", ok="failure")])[0] is True                                  # a failure is retried (nothing logs in)
+    assert sch.fx_due(at("2026-10-06 07:00"), [run_("2026-10-06 04:10"), run_("2026-10-06 05:10"), run_("2026-10-06 06:10")])[0] is False   # but three is the limit
+    assert sch.fx_due(at("2026-10-06 05:00"), [run_("2026-10-05 04:10")])[0] is True                                                # yesterday's does not count

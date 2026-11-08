@@ -23,7 +23,7 @@
 // alert by push (ntfy, secret NTFY_TOPIC) and by email (watchdog-alert.yml opens an issue as the Actions bot). The watchdog
 // never throws into this handler: the alarm clock always goes first.
 
-import { runWatchdog } from "./watchdog.js";
+import { runWatchdog, ist } from "./watchdog.js";
 import { armLive, handleLive, needsUniverse } from "./live.js";
 
 export { LiveBoard } from "./live.js";      // the Durable Object behind /live/* (live.js): wrangler.jsonc binds it as LIVE
@@ -63,7 +63,7 @@ export async function dispatchWorkflow(env, file, inputs) {
 // The one cron (as written in wrangler.jsonc, UTC) that must NOT start the desk: the watchdog's own half-hourly trigger.
 // Every other cron asks GitHub to run scheduler.yml now, as before this file had a watchdog, so if Cloudflare ever reports a
 // cron string differently the worst case is one extra, harmless dispatch, never a desk that silently is not started.
-export const WATCHDOG_ONLY_CRON = "0,30 10-16 * * *";
+export const WATCHDOG_ONLY_CRON = null;          // (until 8 Nov 2026 the half-hourly 10-16 UTC trigger did not start the desk; every cron now does, around the clock)
 
 // Keeps the Kotak live poller going: re-arms its alarm if it was lost, and asks GitHub to rebuild its universe when today's is missing (the poller idles without one).
 export async function keepLiveAlive(env) {
@@ -75,6 +75,11 @@ export async function keepLiveAlive(env) {
 }
 
 export const dispatchScheduler = (env) => dispatchWorkflow(env, "scheduler.yml");
+// The MCX and currency evening candles (kite-evening.yml) log in to Kite, so they are NOT started by the desk scheduler (a test pins that); GitHub's own cron for them ("35 18 * * 1-5") is best-effort and has been
+// hours late. The Worker's clock starts them once, in the firing at 00:10 IST, Tue to Sat (the evening of Mon to Fri has ended). The workflow's own gate lets only the first attempt of the day log in, so a second start
+// (this one and GitHub's cron both arriving) cannot cause a second login.
+export const EVENING_AT = "00:10";
+export const dispatchEvening = (env) => dispatchWorkflow(env, "kite-evening.yml");
 export const dispatchCollect = (env, step) => dispatchWorkflow(env, "collect-wide.yml", { step });
 
 export default {
@@ -96,6 +101,13 @@ export default {
 				console.log(`desk scheduler not dispatched (${event.cron}): ${String(e && e.message).slice(0, 200)}`);
 			}
 		}
+		try {                                                    // after the desk's alarm clock, so a slow GitHub answer here can never delay it
+			const t = ist(Math.floor((event.scheduledTime ?? Date.now()) / 60000) * 60000);
+			if (t.hhmm === EVENING_AT && t.dow >= 2 && t.dow <= 6) {          // Tue to Sat, 00:10 IST
+				const r = await dispatchEvening(env);
+				console.log(`kite evening ${r.ok ? "dispatched" : "not dispatched"}: ${r.why}`);
+			}
+		} catch (e) { console.log(`kite evening not dispatched: ${String(e && e.message).slice(0, 200)}`); }
 		try {                                                    // the alarm clock above always goes first and is never held up by this
 			await runWatchdog(event, env, { dispatchWorkflow });
 		} catch (e) {
