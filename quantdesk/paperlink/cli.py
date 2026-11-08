@@ -15,15 +15,24 @@ def cmd_run(cfg, a):
 
 
 def cmd_verify(cfg, a):
-    """Is this saved account intact (hash chain, replay, flags)? Exits 1 if not. The publish job runs this before it puts the file on the ledger branch."""
-    from ..paper.runner import load_account
+    """Is this saved account intact (hash chain, replay, flags)? With --extends OLD: and does it continue OLD (OLD's ledger is its exact prefix)? Exits 1 if not.
+    The publish job runs this before it adds the file to the ledger branch, so the branch can only ever gain rows."""
+    from ..paper.runner import choose_state, load_account
     p = Path(a.file)
     try:
         acct = load_account(p.read_text(encoding="utf-8"))
+        old = None
+        if getattr(a, "extends", None) and Path(a.extends).exists():
+            old = load_account(Path(a.extends).read_text(encoding="utf-8"))
     except (ValueError, OSError) as e:
         print(f"paper verify: {e}")
         raise SystemExit(1) from None
-    print(f"paper verify: ok; {len(acct.ledger)} ledger rows, {len(acct.positions)} open positions, cash {acct.cash:,.2f}")
+    if old is not None:
+        chosen, note = choose_state(acct, old)
+        if chosen is not acct:
+            print(f"paper verify: this does not continue the branch's account ({note})")
+            raise SystemExit(1)
+    print(f"paper verify: ok; {len(acct.ledger)} ledger rows, {len(acct.positions)} open positions, cash {acct.cash:,.2f}" + ("; continues the branch's account" if old is not None else ""))
 
 
 def register(sub):
@@ -37,4 +46,5 @@ def register(sub):
     x.set_defaults(fn=cmd_run)
     x = ss.add_parser("verify", help="check a saved account file")
     x.add_argument("--file", default="runtime/paper/ledger/account.json")
+    x.add_argument("--extends", help="a saved account that this one must continue (its ledger must be a prefix of this one's); skipped if the file does not exist")
     x.set_defaults(fn=cmd_verify)

@@ -46,6 +46,10 @@ KITE_WORKFLOW, KITE_MAX_STARTS = "kite-record.yml", 1
 # The every-minute F&O stock chain recorder (record-stocks.yml, Kotak only): started like the session recorder, retried once if a day's run failed, and a problem listing or starting it never
 # holds up the main recorder (it is a separate workflow with its own concurrency group).
 STOCK_WORKFLOW, STOCK_MAX_STARTS = "record-stocks.yml", 2
+# The manual paper runner (paper-desk.yml): carries out the owner's queued paper orders through the paper risk gate. Like the stock recorder, a problem listing or starting it never holds up the main recorder.
+# It is safe to start again after a failure (it restores its account from the relay and the ledger branch, and an order is never filled twice), so it gets three starts a day.
+PAPER_WORKFLOW, PAPER_MAX_STARTS = "paper-desk.yml", 3
+PAPER_WINDOW = (dt.time(8, 25), dt.time(15, 25))     # later than the recorders': a runner that stopped early in the afternoon is started again until 15:25, so the 15:20 sale and the 15:31 settlement still happen
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 
 
@@ -64,14 +68,14 @@ def holidays(config: Path) -> set[dt.date]:
     return out
 
 
-def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: int = MAX_STARTS) -> tuple[str, str]:
+def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: int = MAX_STARTS, window: tuple[dt.time, dt.time] = WINDOW) -> tuple[str, str]:
     """('start' | 'wait', why). `runs`: the recorder's runs as `gh run list --json status,conclusion,createdAt,event` gives them."""
     now = now.astimezone(IST)
     day = now.date()
     if day.weekday() >= 5 or day in hols:
         return "wait", f"{day} is not an NSE trading day"
-    if not (WINDOW[0] <= now.time() < WINDOW[1]):
-        return "wait", f"{now:%H:%M} IST is outside the start window {WINDOW[0]:%H:%M}–{WINDOW[1]:%H:%M}"
+    if not (window[0] <= now.time() < window[1]):
+        return "wait", f"{now:%H:%M} IST is outside the start window {window[0]:%H:%M}–{window[1]:%H:%M}"
     if any(r.get("status") in ACTIVE for r in runs):
         return "wait", "the desk is already queued or running"
     today = [r for r in runs if _ist(r["createdAt"]).date() == day]
@@ -137,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     now = dt.datetime.now(IST)
     started = False
-    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
+    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (PAPER_WORKFLOW, PAPER_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
         try:
             wf_runs = _runs(wf)
         except (subprocess.SubprocessError, OSError, ValueError):                 # a hung or missing gh, a bad answer: for the extra recorders never fatal
@@ -145,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise
             print(f"{wf}: could not list its runs; not starting it")          # the Kite recorder never holds up the main one
             continue
-        action, why = decide(now, wf_runs, hols, limit)
+        action, why = decide(now, wf_runs, hols, limit, PAPER_WINDOW if wf == PAPER_WORKFLOW else WINDOW)
         print(f"{wf}: {action}: {why}")
         if action == "start":
             try:
