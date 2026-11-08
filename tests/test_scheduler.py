@@ -111,12 +111,12 @@ def test_main_starts_both_recorders_and_a_kite_failure_never_blocks_the_main_one
     monkeypatch.setattr(sch, "_runs", runs)
     monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
     assert sch.main([]) == 0
-    assert calls == [["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
+    assert calls == [["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"], ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
     calls.clear()
     monkeypatch.setattr(sch, "_runs", lambda wf: [])
     assert sch.main([]) == 0
     assert calls == [["gh", "workflow", "run", "kite-record.yml", "--ref", "main"], ["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"],
-                     ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
+                     ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"]]
     calls.clear()
     monkeypatch.setattr(sch, "_runs", lambda wf: (_ for _ in ()).throw(sp.CalledProcessError(1, "gh")) if wf == sch.STOCK_WORKFLOW else [])
     assert sch.main([]) == 0
@@ -129,3 +129,20 @@ def test_the_stock_recorder_is_retried_once_but_never_twice():
     assert sch.decide(t, [], HOLS, sch.STOCK_MAX_STARTS)[0] == "start"
     assert sch.decide(t, [run("2026-10-05 08:55", conclusion="failure")], HOLS, sch.STOCK_MAX_STARTS)[0] == "start"
     assert sch.decide(t, [run("2026-10-05 08:55", conclusion="failure"), run("2026-10-05 09:10", conclusion="failure")], HOLS, sch.STOCK_MAX_STARTS)[0] == "wait"
+
+
+def test_the_paper_runner_may_be_started_again_after_a_failure_but_not_forever_and_never_holds_up_the_main_recorder(monkeypatch):
+    import subprocess as sp
+    t = at("2026-10-05 09:30")
+    assert sch.PAPER_WORKFLOW == "paper-desk.yml" and sch.PAPER_MAX_STARTS == 3
+    assert sch.decide(t, [], HOLS, sch.PAPER_MAX_STARTS)[0] == "start"
+    fails = [run("2026-10-05 08:55", conclusion="failure"), run("2026-10-05 09:05", conclusion="failure")]
+    assert sch.decide(t, fails, HOLS, sch.PAPER_MAX_STARTS)[0] == "start"                                              # safe to restart: it restores its account and never fills an order twice
+    assert sch.decide(t, fails + [run("2026-10-05 09:15", conclusion="failure")], HOLS, sch.PAPER_MAX_STARTS)[0] == "wait"
+    assert sch.decide(t, [run("2026-10-05 08:55", status="in_progress", conclusion=None)], HOLS, sch.PAPER_MAX_STARTS)[0] == "wait"      # one at a time
+    calls = []
+    monkeypatch.setattr(sch.dt, "datetime", type("D", (sch.dt.datetime,), {"now": classmethod(lambda c, tz=None: t)}))
+    monkeypatch.setattr(sch, "_runs", lambda wf: (_ for _ in ()).throw(sp.CalledProcessError(1, "gh")) if wf == sch.PAPER_WORKFLOW else [])
+    monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert sch.main([]) == 0
+    assert ["gh", "workflow", "run", "record.yml", "--ref", "main"] in calls and ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"] not in calls

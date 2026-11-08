@@ -46,6 +46,9 @@ KITE_WORKFLOW, KITE_MAX_STARTS = "kite-record.yml", 1
 # The every-minute F&O stock chain recorder (record-stocks.yml, Kotak only): started like the session recorder, retried once if a day's run failed, and a problem listing or starting it never
 # holds up the main recorder (it is a separate workflow with its own concurrency group).
 STOCK_WORKFLOW, STOCK_MAX_STARTS = "record-stocks.yml", 2
+# The manual paper runner (paper-desk.yml): carries out the owner's queued paper orders through the paper risk gate. Like the stock recorder, a problem listing or starting it never holds up the main recorder.
+# It is safe to start again after a failure (it restores its account from the relay and the ledger branch, and an order is never filled twice), so it gets three starts a day.
+PAPER_WORKFLOW, PAPER_MAX_STARTS = "paper-desk.yml", 3
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 
 
@@ -137,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     now = dt.datetime.now(IST)
     started = False
-    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
+    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (PAPER_WORKFLOW, PAPER_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
         try:
             wf_runs = _runs(wf)
         except (subprocess.SubprocessError, OSError, ValueError):                 # a hung or missing gh, a bad answer: for the extra recorders never fatal
