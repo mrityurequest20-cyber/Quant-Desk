@@ -110,7 +110,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 def test_after_close_checks_flag_missing_and_failed_runs_and_ignore_other_branches(tmp_path):
     out = _node(tmp_path, HEAD + r"""
 const D = "2026-10-23";
-const okRuns = { "record-stocks": [run(D + "T08:55:00")], "kite-record": [run(D + "T08:55:00")] };
+const okRuns = { "record-stocks": [run(D + "T08:55:00")], "kite-record": [run(D + "T08:55:00")], "paper-desk": [run(D + "T08:55:00")] };
 let r = await at(D + "T16:00:00", env(), { runs: { record: [], "collect-wide": [], ...okRuns }, failed: {} });
 out.missing = alerts(r);
 r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00", "failure")], "collect-wide": [run(D + "T15:25:00")], ...okRuns }, failed: {} });
@@ -124,7 +124,7 @@ r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "
 out.failures = r.results.filter((x) => x.check === "W6").flatMap((x) => x.alerts.map((a) => [a.title, a.body]));
 r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")] }, failed: {} });
 out.stockkite = alerts(r);
-r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")], "record-stocks": [run(D + "T08:55:00", "failure")], "kite-record": [run(D + "T08:55:00")] }, failed: {} });
+r = await at(D + "T16:00:00", env(), { runs: { record: [run(D + "T08:52:00")], "collect-wide": [run(D + "T15:25:00")], "record-stocks": [run(D + "T08:55:00", "failure")], "kite-record": [run(D + "T08:55:00")], "paper-desk": [run(D + "T08:55:00")] }, failed: {} });
 out.startedlate = alerts(r);
 out.morning = alerts(await at(D + "T09:20:00", env(), { runs: {}, failed: {} }));
 out.morningok = alerts(await at(D + "T09:20:00", env(), { runs: okRuns, failed: {} }));
@@ -140,8 +140,8 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
     assert title == "2 workflow run(s) failed or cancelled"          # main only, since 08:00, Desk scheduler cancels ignored
     assert "Collect wide data" in body and "Session recorder" in body and "CI" not in body and "Old" not in body
     assert out["eve"] == [] and out["late"] == []                  # the self-review workflow was retired with the desk
-    assert out["stockkite"] == ["P2 W12 Stock chain recorder did not run", "P2 W13 Kite tick recorder did not run"]            # the new recorders are watched like the others
-    assert out["startedlate"] == ["P2 W12 Stock chain recorder failed"] and out["morning"] == ["P2 W12 Stock chain recorder did not run", "P2 W13 Kite tick recorder did not run"] and out["morningok"] == []
+    assert out["stockkite"] == ["P2 W12 Stock chain recorder did not run", "P2 W13 Kite tick recorder did not run", "P2 W14 Paper runner did not run"]            # the new recorders and the paper runner are watched like the others
+    assert out["startedlate"] == ["P2 W12 Stock chain recorder failed"] and out["morning"] == ["P2 W12 Stock chain recorder did not run", "P2 W13 Kite tick recorder did not run", "P2 W14 Paper runner did not run"] and out["morningok"] == []
 
 
 @NODE
