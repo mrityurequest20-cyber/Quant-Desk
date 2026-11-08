@@ -80,10 +80,73 @@ class PaperBroker:
         row = self.account.apply_fill("sell", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}", slip)
         return d, row
 
+    # ---- sold options: packages, buying back --------------------------------------------------------------------------------------------
+    def open_package(self, legs: list[dict], strategy: str, thesis: str, marks: dict[str, float], now: dt.datetime, refs: dict | None = None,
+                     max_debit: float | None = None) -> tuple[Decision, list[dict]]:
+        """Open several legs at once, bought and sold, or none. Each leg: {"side": "buy"|"sell", "instrument", "segment", "qty", "quote"}. A buy fills at the ask plus the modelled impact and a sale at
+        the bid less it; the gate judges the package at those prices (`RiskGate.check_package`: bounded worst case, risk, loss budget); all the fills are made together and if any fails every one is
+        undone. `max_debit` is the most the owner will pay in total for the package (a negative number is a credit he insists on). Returns (decision, the ledger rows)."""
+        wide, impacts = [], []
+        for l in legs:
+            q, sell = l.get("quote"), l.get("side") == "sell"
+            if q is None or not (is_number(q.bid) and is_number(q.ask)):
+                wide.append(l)
+                impacts.append(0.0)
+                continue
+            imp = SL.impact_ticks(l["qty"], q.bid_qty if sell else q.ask_qty) * self.tick
+            impacts.append(imp)
+            wide.append({**l, "quote": Quote(max(q.bid - imp, 0.0), q.ask, q.ts, q.bid_qty, q.ask_qty) if sell else Quote(q.bid, q.ask + imp, q.ts, q.bid_qty, q.ask_qty)})
+        d = self.gate.check_package(self.account, wide, strategy, thesis, marks, now)
+        if not d.allowed:
+            return d, []
+        debit = sum(l["qty"] * (l["quote"].bid if l["side"] == "sell" else l["quote"].ask) * (-1 if l["side"] == "sell" else 1) for l in wide)
+        if max_debit is not None and debit > max_debit + 1e-9:
+            return Decision(False, [f"the package would cost {debit:,.2f} net, more than your limit of {max_debit:,.2f}: not opened"]), []
+        snap, rows = self.account.snapshot(), []
+        try:
+            for l, w, imp in sorted(zip(legs, wide, impacts), key=lambda x: x[0]["side"] != "sell"):          # the sales first: their cash pays for the purchases
+                q, sell, inst = l["quote"], l["side"] == "sell", l["instrument"]
+                px = w["quote"].bid if sell else w["quote"].ask
+                fees, _ = self.costs.fees(inst, -l["qty"] if sell else l["qty"], px)
+                ref = (refs or {}).get(inst.symbol)
+                sb, sa, delay = self._seen(ref, now, q)
+                side = "sell" if sell else "buy"
+                slip = SL.clean(SL.split(side, l["qty"], px, q.bid, q.ask, (q.bid - px) if sell else imp, sb, sa, delay)) or SL.clean(SL.split(side, l["qty"], px, q.bid, q.ask, (q.bid - px) if sell else imp))
+                rows.append(self.account.apply_fill("sto" if sell else "buy", inst, l["segment"], l["qty"], px, fees, now.isoformat(), strategy, thesis, slip))
+        except Exception as e:                                                   # noqa: BLE001 - all or nothing
+            self.account.restore(snap)
+            return Decision(False, [f"the package could not be completed ({type(e).__name__}): nothing was opened"]), []
+        return d, rows
+
+    def cover(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
+        """Buy back (close) a sold option at the offer plus the modelled impact."""
+        d = self.gate.check_cover(self.account, symbol, qty, quote, now)
+        if not d.allowed:
+            return d, None
+        pos = self.account.positions[symbol]
+        impact = SL.impact_ticks(qty, quote.ask_qty) * self.tick
+        px = quote.ask + impact
+        if limit is not None and px > limit + 1e-9:
+            return Decision(False, [f"the offer is {quote.ask:g} and this size is expected to pay {impact:g} more ({px:g}), above your limit {limit:g}: not bought back"]), None
+        fees, _ = self.costs.fees(pos.instrument, qty, px)
+        sb, sa, delay = self._seen(ref, now, quote)
+        slip = SL.clean(SL.split("buy", qty, px, quote.bid, quote.ask, impact, sb, sa, delay)) or SL.clean(SL.split("buy", qty, px, quote.bid, quote.ask, impact))
+        row = self.account.apply_fill("btc", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}", slip)
+        return d, row
+
+    def close(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
+        """Close a position whichever way it is held: sell a long, buy back a short."""
+        pos = self.account.positions.get(symbol)
+        if pos is not None and pos.qty < 0:
+            return self.cover(symbol, qty, quote, now, why, ref, limit)
+        return self.sell(symbol, qty, quote, now, why, ref, limit)
+
     def trim(self, quotes: dict[str, Quote], marks: dict[str, float], now: dt.datetime, why: str = "trim to the loss budget") -> dict[str, Decision]:
         """Sell just enough, biggest positions first, in whole lots, to bring the open premium back inside the loss budget (the gate's
         `trim_excess`). A position with no usable quote or a closed market stays held and is reported."""
         out = {}
+        if self.account.has_shorts():                                           # sold options cannot be trimmed piece by piece without risking an uncovered one: the whole book is closed
+            return self.flatten(quotes, now, why)
         excess = self.gate.trim_excess(self.account, marks)
         for sym in sorted(self.account.positions, key=lambda k: -self.account.positions[k].qty * float(marks.get(k, 0.0) or 0.0)):
             if excess <= 0:
@@ -103,8 +166,9 @@ class PaperBroker:
     def flatten(self, quotes: dict[str, Quote], now: dt.datetime, why: str) -> dict[str, Decision]:
         """Sell everything held, at whatever the bid is. A position with no usable quote or a closed market stays held and is reported."""
         out = {}
-        for sym in list(self.account.positions):
-            d, _ = self.sell(sym, self.account.positions[sym].qty, quotes.get(sym), now, why)
+        for sym in sorted(self.account.positions, key=lambda k: self.account.positions[k].qty >= 0):       # sold options first: buying them back never leaves anything uncovered
+            pos = self.account.positions[sym]
+            d, _ = self.close(sym, abs(pos.qty), quotes.get(sym), now, why)
             out[sym] = d
         return out
 
@@ -125,8 +189,8 @@ class PaperBroker:
                 out[sym] = "no settlement price for the underlying: left held"
                 continue
             intrinsic = max(s - inst.strike, 0.0) if inst.right == "CE" else max(inst.strike - s, 0.0)
-            fees = self.costs.exercise_stt(inst.expiry) * pos.qty * intrinsic       # STT on the intrinsic value of an exercised long option
-            self.account.apply_fill("settle", inst, pos.segment, pos.qty, intrinsic, fees, now.isoformat(), pos.strategy,
+            fees = self.costs.exercise_stt(inst.expiry) * pos.qty * intrinsic if pos.qty > 0 else 0.0       # STT on the intrinsic value of an exercised long option (a sold option pays the intrinsic, no STT)
+            self.account.apply_fill("settle", inst, pos.segment, abs(pos.qty), intrinsic, fees, now.isoformat(), pos.strategy,
                                     f"expired {inst.expiry:%d %b %Y}, settled at {s:g}: {pos.thesis}")
             out[sym] = f"settled at intrinsic {intrinsic:g}"
         return out
