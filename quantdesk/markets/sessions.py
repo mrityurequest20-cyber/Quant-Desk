@@ -8,7 +8,8 @@ Segments (all times IST, Monday to Friday):
   nse_cds  NSE currency derivatives     09:00 - 17:00
   mcx      MCX commodity derivatives    09:00 - 23:30, or 23:55 while US daylight saving time is in force
            (crude, natural gas, gold, silver, copper...; the later close follows the US clock change)
-Crypto is not a segment here and never will be without the owner's word. No market opens at the weekend.
+Crypto is not a segment here and never will be without the owner's word. No market opens at the weekend, except a special session the exchange announces
+(`calendar.special_sessions`, e.g. Muhurat trading), which counts only for trading questions (`trading=True`).
 
 Two ways to ask whether a segment is open, because the two mistakes cost different things:
   recording (trading=False)  an unverified holiday calendar counts as open: recording a holiday costs nothing
@@ -65,6 +66,7 @@ class Calendars:
     def __init__(self, cfg=None):
         self.nse_days = set(cfg.holidays()) if cfg is not None else set()
         self.nse_years = set(cfg.holiday_years()) if cfg is not None else set()
+        self.special = dict(cfg.special_sessions()) if cfg is not None else {}        # NSE/BSE trading windows on days that are normally closed (Muhurat)
         self.own: dict[str, tuple[set[dt.date], set[int]]] = {}
         for key, seg in SEGMENTS.items():
             if seg.calendar != "own":
@@ -88,11 +90,20 @@ def _d(x) -> dt.date:
 def session(key: str, day: dt.date, cal: Calendars, trading: bool = False) -> tuple[dt.datetime, dt.datetime] | None:
     """(open, close) of `key` on `day` in IST, or None if it does not trade that day (see the module doc for `trading`)."""
     seg = SEGMENTS[key]
+    if trading and seg.calendar == "nse" and day in cal.special:           # an exchange-announced special session: only for trading questions, never for the recording calendar
+        o, c = cal.special[day]
+        return (dt.datetime.combine(day, o, tzinfo=IST), dt.datetime.combine(day, c, tzinfo=IST))
     if day.weekday() >= 5 or cal.holiday(key, day):
         return None
     if trading and not cal.known(key, day):
         return None
     return (dt.datetime.combine(day, seg.opens, tzinfo=IST), dt.datetime.combine(day, closes_at(seg, day), tzinfo=IST))
+
+
+def exit_session(key: str, day: dt.date, cal: Calendars) -> tuple[dt.datetime, dt.datetime] | None:
+    """The window in which a HELD position may be sold: the recording calendar (an exit needs only that the market is open, even where the holiday list is unverified), or an announced
+    special session. A position bought in a special session must be sellable in it."""
+    return session(key, day, cal, trading=False) or session(key, day, cal, trading=True)
 
 
 def open_segments(now: dt.datetime, cal: Calendars, trading: bool = False) -> list[str]:

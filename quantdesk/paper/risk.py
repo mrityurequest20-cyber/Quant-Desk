@@ -265,7 +265,7 @@ class RiskGate:
                 why.append(f"{qty} is more than the {quote.bid_qty:g} bid")
             if pos:
                 day = now.astimezone(IST).date()
-                sess = MK.session(pos.segment, day, self.cal, trading=False)           # an exit needs only that the market is open
+                sess = MK.exit_session(pos.segment, day, self.cal)                       # an exit needs only that the market is open (or an announced special session)
                 if sess is None or not (sess[0] <= now.astimezone(IST) < sess[1]):
                     why.append(f"{pos.segment} is closed")
             return Decision(not why, why)

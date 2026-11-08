@@ -52,3 +52,13 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 * The ledger backup on the `paper-ledger` branch is **off** (this repository is public: it would show every thesis and position). To turn it on, set the repository variable `PAPER_LEDGER_BACKUP` to `yes`.
 
 More: docs/RECORDING.md ("The paper runner", "Running the paper runner"), docs/LIVE.md (the relay's routes).
+
+## Special sessions (Muhurat trading)
+
+On a day the exchange opens for a special window (Diwali Muhurat trading, 8 Nov 2026, 14:20 to 15:30 IST, NSE circular NSE/CMTR/76941), `config/quantdesk.yaml` `calendar.special_sessions` names it. That one entry opens the **paper gate** for NSE/BSE F&O inside the window and makes the **relay's Kotak poller** run inside it (`deploy/cloudflare/kotak.js` `SPECIAL_SESSIONS`; a test fails if the two disagree). Recorders, health reports, the scheduler and the watchdog do not know about it, so on such a day start what you need **by hand** (Actions, Run workflow):
+
+1. **Kotak universe** (the option chains for the Build tab), any time before the window.
+2. **Kite tick recorder**: `first_until` 15:35, `second_until` 15:36. It logs in to Kite by itself.
+3. **Paper runner**: `handover` 14:05, `until` 15:35, leave `new_account` off.
+
+Nothing else changes: the same risk gate, the same limits, paper money only.

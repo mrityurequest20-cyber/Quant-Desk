@@ -38,8 +38,13 @@ export function istParts(ms) {
 
 // NSE and BSE derivatives trade 09:15 to 15:30 IST; the index quotes start with the pre-open. Poll from 09:00 to 15:35, Monday to Friday. Holidays are not listed here:
 // on one nothing moves, so nothing is refreshed and every age grows (see the note at the top).
+// Special sessions: a trading window on a day that is normally closed (Muhurat trading on Diwali). Minutes of the IST day, polled from five minutes before the open to five after the close.
+// config/quantdesk.yaml `calendar.special_sessions` is the source of truth; a test fails if the two disagree.
+export const SPECIAL_SESSIONS = { "2026-11-08": [14 * 60 + 15, 15 * 60 + 35] };
 export function inSession(ms) {
 	const t = istParts(ms);
+	const sp = Object.prototype.hasOwnProperty.call(SPECIAL_SESSIONS, t.date) ? SPECIAL_SESSIONS[t.date] : null;
+	if (sp) return t.mins >= sp[0] && t.mins < sp[1];
 	return t.dow >= 1 && t.dow <= 5 && t.mins >= 9 * 60 && t.mins < 15 * 60 + 35;
 }
 
