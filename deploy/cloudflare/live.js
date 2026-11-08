@@ -13,6 +13,7 @@
 
 import { KotakPoller, istParts, runCycle, inSession } from "./kotak.js";
 import { Series, shardKeys, FLUSH_MS } from "./series.js";
+import { PaperBook, cleanOrder, cleanResult, cleanState } from "./paper.js";
 
 const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 quotes is about 100 KB)
 const MAX_SYMBOLS = 3000;               // in one push
@@ -150,13 +151,15 @@ export async function needsUniverse(env) {
 
 export async function handleLive(request, env) {
 	const url = new URL(request.url);
-	if (!url.pathname.startsWith("/live/")) return null;
+	const isPaper = url.pathname.startsWith("/paper/");
+	if (!url.pathname.startsWith("/live/") && !isPaper) return null;
 	if (!configured(env)) {
 		let why;
 		try { why = whyOff(env); } catch (e) { /* the diagnosis is a courtesy: the 503 is what matters, and it always returns */ }
 		return reply(503, { error: "the live view is not switched on", ...(why ? { why } : {}) });
 	}
 	const stub = env.LIVE.get(env.LIVE.idFromName("board"));
+	if (isPaper) return handlePaper(request, env, url, stub);
 	if (url.pathname === "/live/ingest") {
 		if (request.method !== "POST") return reply(405, { error: "POST only" });
 		if (!(await same(bearer(request), String(env.LIVE_INGEST_TOKEN).trim()))) return reply(401, { error: "no" });
@@ -203,6 +206,32 @@ export async function handleLive(request, env) {
 	return reply(404, { error: "no such live path" });
 }
 
+// /paper/*: the paper-order queue. The app (READ key) queues an order and sets the kill flag and reads the state; the runner (INGEST key) drains the queue, posts results and keeps the
+// account. Each route takes exactly one of the two keys: the key that reads the board can queue a PAPER order, and cannot write a result or a state.
+const PAPER_ROUTES = {
+	"POST /paper/order": "read", "POST /paper/kill": "read",
+	"GET /paper/queue": "ingest", "POST /paper/result": "ingest", "POST /paper/state": "ingest",
+};
+async function handlePaper(request, env, url, stub) {
+	const route = request.method + " " + url.pathname;
+	const need = PAPER_ROUTES[route] || (route === "GET /paper/state" ? (url.searchParams.get("full") === "1" ? "ingest" : "read") : null);
+	if (!need) return reply(request.method === "GET" || request.method === "POST" ? 404 : 405, { error: "no such paper path" });
+	if (!(await same(bearer(request), String(need === "read" ? env.LIVE_READ_TOKEN : env.LIVE_INGEST_TOKEN).trim()))) return reply(401, { error: "no" });
+	let body;
+	if (request.method === "POST") {
+		const declared = Number(request.headers.get("content-length"));
+		if (Number.isFinite(declared) && declared > PAPER_MAX_BODY) return reply(413, { error: "too large" });
+		const raw = await readCapped(request, PAPER_MAX_BODY);
+		if (raw === null) return reply(413, { error: "too large" });
+		try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
+		if (route === "POST /paper/order" && !cleanOrder(body)) return reply(400, { error: "not a valid order" });
+		if (route === "POST /paper/result" && !cleanResult(body)) return reply(400, { error: "not a valid result" });
+		if (route === "POST /paper/state" && !cleanState(body)) return reply(400, { error: "not a valid state" });
+	}
+	return stub.fetch("https://live" + url.pathname + url.search, { method: request.method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+}
+const PAPER_MAX_BODY = 1300000;           // a saved account is up to MAX_CHUNKS x CHUNK characters
+
 const round1 = (x) => Math.round(x * 10) / 10;
 const round2 = (x) => Math.round(x * 100) / 100;
 // Did the instrument MOVE? Compare only what both updates carry: a chain row has no book and a quote row has one, so a missing field is not a change (otherwise an option covered
@@ -248,6 +277,7 @@ export class LiveBoard {
 		this.state = state;
 		this.env = env || {};
 		this.quotes = new Map();                    // name -> {z?: quote, k?: quote}, each with `at`
+		this.book = new PaperBook(state);           // the paper-order queue and account (paper.js): same object, its own storage keys
 		this.series = new Series();                 // one close a minute per instrument, for the app's chart (series.js); stored in shards
 		this.lastFlush = 0;
 		this.seq = 0;
@@ -456,6 +486,7 @@ export class LiveBoard {
 		if (now - this.lastPrune > 5 * 60000) this.prune(now);                                  // also when only Kite is pushing and no alarm runs
 		await this.maybeFlush(now);
 		await this.arm().catch(() => {});
+		if (path.startsWith("/paper/")) return this.book.handle(request, url, now);              // the paper-order queue (paper.js)
 		if (request.method === "POST" && path === "/push") {                                    // Kite, from the recorder
 			const { quotes, dropped } = await request.json();
 			let added = 0, refused = 0;
