@@ -18,8 +18,10 @@ def cmd_run(cfg, a):
         from ..paper.risk import RiskGate
         und = sorted(RiskGate(cfg).limits.underlyings.get("nse_fo", ()))
         lots = {str(u).upper(): int(v["lot_size"]) for u, v in (cfg.get("instruments") or {}).items() if isinstance(v, dict) and isinstance(v.get("lot_size"), int)}
-        auto = AutoPilot(tuple(u for u in und if u in lots), lots, float(cfg.get("paper.capital")))
-        print(f"paper: AUTO v1 is ON for {', '.join(auto.und)} (one lot a trade, no cap on how many, through the same gate and its loss caps)", flush=True)
+        short = cfg.get("paper.allow_short_legs") is True
+        auto = AutoPilot(tuple(u for u in und if u in lots), lots, float(cfg.get("paper.capital")), structures=True, allow_short=short)
+        print(f"paper: AUTO is ON for {', '.join(auto.und)}: it searches every structure on the board ({'bought and hedged-sold legs' if short else 'bought options'}), one lot a leg, no cap on how many trades, "
+              "through the same gate and its loss caps", flush=True)
     raise SystemExit(run(cfg, relay, Path(a.ledger), parse_hhmm(a.until), every_s=a.every, new_account=a.new_account, auto=auto))
 
 
