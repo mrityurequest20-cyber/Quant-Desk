@@ -501,3 +501,17 @@ def test_a_snapshot_time_that_jumps_restarts_the_momentum_tape_instead_of_freezi
     back = T0 + dt.timedelta(minutes=10)
     ap.decide(board(back), rn.account, R.Runner.server_now(board(back)), cal=cal)
     assert len(ap.tape["NIFTY"]) == 1 and ap.tape["NIFTY"][0][0] == pytest.approx(back.timestamp())
+
+
+def test_after_an_entry_order_for_an_index_and_direction_it_waits_a_minute_before_another_strike(cfg, tmp_path):
+    rn, ap, cal = desk(cfg, tmp_path)
+    warm(rn, ap, cal, T0)
+    t = T0 + dt.timedelta(minutes=7)
+    first = ap.decide(board(t, **SIG_UP), rn.account, R.Runner.server_now(board(t, **SIG_UP)), cal=cal)
+    assert len(first) == 1
+    t2 = t + dt.timedelta(seconds=20)
+    shifted = board(t2, **SIG_UP, spot=SPOT + 50)                                                                               # spot moved a strike: ATM+1 is a different contract
+    assert [o for o in ap.decide(shifted, rn.account, R.Runner.server_now(shifted), cal=cal) if o["side"] == "buy"] == []
+    t3 = t + dt.timedelta(seconds=70)
+    later = board(t3, **SIG_UP, spot=SPOT + 50)
+    assert len([o for o in ap.decide(later, rn.account, R.Runner.server_now(later), cal=cal) if o["side"] == "buy"]) == 1       # a minute on, a new strike is fine

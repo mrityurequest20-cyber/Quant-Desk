@@ -41,6 +41,7 @@ ENTRY_MIN_DAYS_TO_EXPIRY, HOLD_MIN_DAYS_TO_EXPIRY = 3, 2
 # percentage losses, on a daily basis, you can trade as much as you want"). The loss caps are the risk gate's (per trade 2.5% with fees, daily 5%, drawdown halt 10%, and the loss budget that bounds what can be open
 # at once); AUTO adds none. The one guard kept is against ping-pong: the same contract is not bought again within REENTRY_GUARD_S of AUTO's last fill in it (quote noise around a stop, not a count).
 REENTRY_GUARD_S = 5 * 60
+DIRECTION_BACKOFF_S = 60.0       # after any entry order for an index and direction (filled or refused), no other entry for that index and direction for this long: a spot that moves a strike must not buy a new strike every few seconds
 FIRST_ENTRY_AFTER_OPEN_S, LAST_ENTRY_BEFORE_CLOSE_S, DECIDE_BEFORE_CLOSE_S = 5 * 60, 20 * 60, 10 * 60
 QUOTE_MAX_AGE_S, MAX_SPREAD_PCT, RATE, MIN_PREMIUM = 15.0, 0.06, 0.065, 5.0
 TICK = 0.05
@@ -317,7 +318,7 @@ class AutoPilot:
             news_against = tone is not None and weight >= NEWS_WEIGHT_TH and tone * want <= -NEWS_TONE_TH
             reason = None
             if stopped and self._opened_today(pos, ist.date()):
-                reason = "the day's own stop (down 1% of capital)"
+                reason = f"the day's own stop (down {self.day_stop_frac:.1%} of capital)"
             elif mark is not None and mark <= pos.avg_price * STOP_KEEP:
                 reason = f"stop loss at -40% of the premium (bid {mark:g} against {pos.avg_price:g})"
             elif mark is not None and peak >= pos.avg_price * TRAIL_ARM and mark <= peak * TRAIL_KEEP:
@@ -350,7 +351,10 @@ class AutoPilot:
                 continue
             if t - self.pending_entry.get(o["symbol"], 0.0) < ENTRY_PENDING_S or t - facts["last_fill"].get(o["symbol"], 0.0) < REENTRY_GUARD_S:
                 continue                                                                       # an order still in flight, or the same contract traded a moment ago
+            if t - self.pending_entry.get((u, d), 0.0) < DIRECTION_BACKOFF_S:
+                continue                                                                       # the same index and direction was just tried: no new strike every few seconds
             self.pending_entry[o["symbol"]] = t
+            self.pending_entry[(u, d)] = t
             orders.append(o)
         return orders
 

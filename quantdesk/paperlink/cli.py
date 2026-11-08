@@ -19,7 +19,7 @@ def cmd_run(cfg, a):
         und = sorted(RiskGate(cfg).limits.underlyings.get("nse_fo", ()))
         lots = {str(u).upper(): int(v["lot_size"]) for u, v in (cfg.get("instruments") or {}).items() if isinstance(v, dict) and isinstance(v.get("lot_size"), int)}
         auto = AutoPilot(tuple(u for u in und if u in lots), lots, float(cfg.get("paper.capital")))
-        print(f"paper: AUTO v1 is ON for {', '.join(auto.und)} (one lot, tight limits, through the same gate)", flush=True)
+        print(f"paper: AUTO v1 is ON for {', '.join(auto.und)} (one lot a trade, no cap on how many, through the same gate and its loss caps)", flush=True)
     raise SystemExit(run(cfg, relay, Path(a.ledger), parse_hhmm(a.until), every_s=a.every, new_account=a.new_account, auto=auto))
 
 
