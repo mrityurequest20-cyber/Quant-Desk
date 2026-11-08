@@ -2,7 +2,7 @@
 
 This module is a pure decision function. It reads the live board (the relay's snapshot), the news digest and the paper account, and it returns ORDERS in the same shape the owner's hand-placed
 orders have. Nothing here trades: the orders go through `Runner.handle` and the risk gate exactly like a manual order, so every gate rule, the kill switch, the daily loss cap, the drawdown
-halt and the size and freshness checks apply to them unchanged. On top of that it keeps its own, tighter limits (below). It has no network, no environment and no clock of its own.
+halt and the size and freshness checks apply to them unchanged. It adds no trade-count limits of its own (see Limits). It has no network, no environment and no clock of its own.
 
 What it looks for: HIGH REWARD FOR LITTLE RISK. It buys one lot of a long option, so the most it can lose is the premium, and it caps that loss at 40% of the premium with a stop; it puts NO
 cap on the gain. A winner is protected by a trailing stop that arms at +80% (twice the risk) and follows 30% below the peak, so a trade that works is allowed to run for several times what it risked.
@@ -11,11 +11,13 @@ Most trades will lose their small stop; the ones that work pay for them. That is
   Entry   at least TWO of four readings agree and none points the other way: resting bid/offer pressure around the money (calls against puts), the forward the options imply against the
           futures price (put-call parity), the index's own move over five minutes, and the tone of the recent news. Then it buys the first strike out of the money (more convexity for
           the same stop) of an expiry at least three days away (no last-day decay).
-  Exit    stop at -40% of the premium; trailing stop (arms at +80%, 30% off the peak); the signals turning the other way; strong news against it; the day's own stop.
+  Exit    stop at -40% of the premium; trailing stop (arms at +80%, 30% off the peak); the signals turning the other way; strong news against it (an optional day stop exists, off by default).
   Overnight   it is NOT an intraday system. Ten minutes before the close each position gets a decision: it is HELD overnight if its expiry is still at least two days off, it is not older than
           three sessions, it is above its stop, the signals do not point the other way and the news is not against it; otherwise it is sold. A held position keeps its stop and trailing stop
           in the morning. (The peak the trailing stop needs is written into the ledger, so a restart or the night forgets nothing.)
-  Own limits   at most 2 positions open, 6 entries a day, 20 minutes between entries on an index, and it stops for the day (and sells what it opened today) once its own day is down 1% of the capital.
+  Limits   NO cap on trades or open positions and none of its own on the day's loss: the risk gate's loss caps (2.5% a trade with fees, 5% a day, a 10% drawdown halt, the loss budget) are the bound. It only never adds to a
+          contract already held, does not re-buy the same contract within five minutes of its last fill in it, waits 60 s between entries for the same index and direction, opens nothing while the account is
+          stopped or halted, and stops opening at LEDGER_SOFT_LIMIT ledger rows (a storage guard: the relay holds about 960); exits are always managed.
 
 It is NOT proven to make money: its signals are the ones the app's Flow panel logs and grades, which are "unproven" until they have a record. The point of running it is the record.
 """
@@ -36,8 +38,12 @@ TRAIL_ARM, TRAIL_KEEP = 1.80, 0.70  # the trailing stop arms at +80% (two R) and
 PEAK_STEP = 1.05                    # a new peak is written to the ledger when it is 5% above the last written
 MAX_AGE_DAYS = 3                    # sessions a position may be held
 ENTRY_MIN_DAYS_TO_EXPIRY, HOLD_MIN_DAYS_TO_EXPIRY = 3, 2
-COOLDOWN_S, MAX_OPEN, MAX_ENTRIES_DAY = 20 * 60, 2, 6
-DAY_STOP_FRAC = 0.01
+# NO cap on the number of trades or open positions, and no cap of its own on the day's loss (owner, 8 Nov 2026: "do not keep any cap on the trades ... keep a cap on your losses ... if you're not making those
+# percentage losses, on a daily basis, you can trade as much as you want"). The loss caps are the risk gate's (per trade 2.5% with fees, daily 5%, drawdown halt 10%, and the loss budget that bounds what can be open
+# at once); AUTO adds none. The one guard kept is against ping-pong: the same contract is not bought again within REENTRY_GUARD_S of AUTO's last fill in it (quote noise around a stop, not a count).
+LEDGER_SOFT_LIMIT = 800          # rows: the relay holds about 960 (deploy/cloudflare/paper.js CHUNK x MAX_CHUNKS); past it every save of the account fails, so AUTO stops OPENING (it still manages exits)
+REENTRY_GUARD_S = 5 * 60
+DIRECTION_BACKOFF_S = 60.0       # after any entry order for an index and direction (filled or refused), no other entry for that index and direction for this long: a spot that moves a strike must not buy a new strike every few seconds
 FIRST_ENTRY_AFTER_OPEN_S, LAST_ENTRY_BEFORE_CLOSE_S, DECIDE_BEFORE_CLOSE_S = 5 * 60, 20 * 60, 10 * 60
 QUOTE_MAX_AGE_S, MAX_SPREAD_PCT, RATE, MIN_PREMIUM = 15.0, 0.06, 0.065, 5.0
 TICK = 0.05
@@ -174,12 +180,13 @@ def direction(pressure, gap_pct, momentum_pct, news_v: int = 0, news_why: str | 
 
 
 class AutoPilot:
-    def __init__(self, underlyings=("NIFTY", "BANKNIFTY"), lots: dict | None = None, capital: float = 500_000.0):
+    def __init__(self, underlyings=("NIFTY", "BANKNIFTY"), lots: dict | None = None, capital: float = 500_000.0, day_stop_frac: float | None = None):
+        self.day_stop_frac = day_stop_frac                       # None = no stop of its own: the risk gate's daily loss cap applies
         self.und = tuple(underlyings)
         self.lots = dict(lots or {})
         self.capital = float(capital)
         self.tape: dict[str, list[tuple[float, float]]] = {}      # u -> [(epoch s, spot)], this process only
-        self.pending_entry: dict[str, float] = {}
+        self.pending_entry: dict = {}                            # contract name -> time, and (index, direction) -> time
         self.pending_exit: dict[str, float] = {}
         self.written_peak: dict[tuple, float] = {}
         self._events: list[dict] = []
@@ -202,6 +209,7 @@ class AutoPilot:
         counts as worth nothing. (A settlement row is not counted.)"""
         entries = 0
         last_buy: dict[str, float] = {}
+        last_fill: dict[str, float] = {}
         book: dict[str, list] = {}                                  # symbol -> [qty, avg, opened_day, fees_paid_so_far]
         result = 0.0
         for r in account.ledger:
@@ -212,6 +220,7 @@ class AutoPilot:
             except (ValueError, KeyError, TypeError):
                 continue
             sym, q, p, f = r.get("symbol"), r["qty"], r["price"], r.get("fees", 0.0)
+            last_fill[sym] = max(last_fill.get(sym, 0.0), ts.timestamp())
             today = ts.date() == day
             if r["kind"] == "buy":
                 b = book.setdefault(sym, [0, 0.0, ts.date(), 0.0])
@@ -238,7 +247,7 @@ class AutoPilot:
                 continue
             m = marks.get(sym)
             result += ((m - b[1]) * b[0] if m is not None else -b[1] * b[0]) - b[3]
-        return {"entries": entries, "last_buy": last_buy, "result": result}
+        return {"entries": entries, "last_buy": last_buy, "last_fill": last_fill, "result": result}
 
     def own_qty(self, account) -> dict:
         """symbol -> units that AUTO itself bought and has not sold, from its own ledger fills. A position can hold more than that (the owner bought the same contract): the rest is the owner's
@@ -288,7 +297,7 @@ class AutoPilot:
                 marks[s] = bid
         facts = self.day_facts(account, ist.date(), marks)
         info["day"] = {"entries": facts["entries"], "result": round(facts["result"], 2)}
-        stopped = facts["result"] <= -DAY_STOP_FRAC * self.capital
+        stopped = self.day_stop_frac is not None and facts["result"] <= -self.day_stop_frac * self.capital
         deciding = sess[1] - ist <= dt.timedelta(seconds=DECIDE_BEFORE_CLOSE_S)
         mine_qty = self.own_qty(account)
         ours = {s: p for s, p in account.positions.items() if self._is_auto(p.strategy) and mine_qty.get(s, 0) > 0}
@@ -311,7 +320,7 @@ class AutoPilot:
             news_against = tone is not None and weight >= NEWS_WEIGHT_TH and tone * want <= -NEWS_TONE_TH
             reason = None
             if stopped and self._opened_today(pos, ist.date()):
-                reason = "the day's own stop (down 1% of capital)"
+                reason = f"the day's own stop (down {self.day_stop_frac:.1%} of capital)"
             elif mark is not None and mark <= pos.avg_price * STOP_KEEP:
                 reason = f"stop loss at -40% of the premium (bid {mark:g} against {pos.avg_price:g})"
             elif mark is not None and peak >= pos.avg_price * TRAIL_ARM and mark <= peak * TRAIL_KEEP:
@@ -328,30 +337,33 @@ class AutoPilot:
                 orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": s, "lots": lots, "queued_at": int(t * 1000), "group": "auto", "_why": reason})
             elif deciding and not reason:
                 info.setdefault("held_overnight", []).append(s)
+        if account.day_halted or account.halt:
+            info["entries"] = "none: the account is stopped for the day or halted by the drawdown limit"
+            return orders
+        if len(account.ledger) >= LEDGER_SOFT_LIMIT:
+            info["entries"] = f"none: the ledger holds {len(account.ledger)} rows, near what the relay can store ({LEDGER_SOFT_LIMIT} is the limit for new entries)"
+            return orders
         if stopped or deciding or kill or entries_blocked:
             return orders
         open_after = sess[0] + dt.timedelta(seconds=FIRST_ENTRY_AFTER_OPEN_S)
         last_entry = sess[1] - dt.timedelta(seconds=LAST_ENTRY_BEFORE_CLOSE_S)
         if not (open_after <= ist < last_entry):
             return orders
-        if len(ours) + len([1 for v in self.pending_entry.values() if t - v < ENTRY_PENDING_S]) >= MAX_OPEN or facts["entries"] >= MAX_ENTRIES_DAY:
-            return orders
         for u in self.und:
             d = dirs.get(u, 0)
             if d == 0 or u not in ch:
                 continue
-            if t - facts["last_buy"].get(u, 0.0) < COOLDOWN_S or t - self.pending_entry.get(u, 0.0) < ENTRY_PENDING_S:
-                continue
-            if any(p.instrument.underlying == u for p in ours.values()):
-                continue
             _, why, _, _, _ = self._dir_of(snap, u, ist, t, ch, news, now)
             o = self._entry(snap, u, d, why, ch[u], ist, t)
-            if o and o["symbol"] in account.positions:                                         # the owner holds this very contract: never merge AUTO's lots into it
+            if not o or o["symbol"] in account.positions:                                      # a contract already held (by the owner or by AUTO) is never added to
                 continue
-            if o:
-                self.pending_entry[u] = t
-                orders.append(o)
-                break                                                                          # one entry a cycle
+            if t - self.pending_entry.get(o["symbol"], 0.0) < ENTRY_PENDING_S or t - facts["last_fill"].get(o["symbol"], 0.0) < REENTRY_GUARD_S:
+                continue                                                                       # an order still in flight, or the same contract traded a moment ago
+            if t - self.pending_entry.get((u, d), 0.0) < DIRECTION_BACKOFF_S:
+                continue                                                                       # the same index and direction was just tried: no new strike every few seconds
+            self.pending_entry[o["symbol"]] = t
+            self.pending_entry[(u, d)] = t
+            orders.append(o)
         return orders
 
     # ---- pieces ---------------------------------------------------------------------------------------------------------------------------------------------

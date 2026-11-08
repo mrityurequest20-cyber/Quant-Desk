@@ -21,7 +21,7 @@ on:
         description: "The afternoon half stops at (HH:MM IST)"
         default: "15:35"
       auto:
-        description: "Switch AUTO v1 on for this run: the paper desk also decides for itself (one lot, tight limits, through the same risk gate). Paper money only. Also on whenever the repository variable PAPER_AUTO is yes."
+        description: "Switch AUTO v1 on for this run: the paper desk also decides for itself (one lot a trade, no cap on how many, through the same risk gate and its loss caps). Paper money only. Also on whenever the repository variable PAPER_AUTO is yes."
         type: boolean
         default: false
       new_account:

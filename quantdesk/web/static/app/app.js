@@ -944,6 +944,24 @@ const QB = (() => {
 		iron_condor: { name: "Iron condor", view: "Stays in a range: collects premium", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 2 * w], [-1, "PE", -w], [1, "PE", -2 * w]] },
 		iron_butterfly: { name: "Iron butterfly", view: "Pins near the strike: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [-1, "PE", 0], [1, "CE", w], [1, "PE", -w]] },
 	};
+	// ---- your own legs: any number (up to MAX_CUSTOM_LEGS, a bound on the arithmetic only), any strike on the board, buy or sell, call or put, each with a size multiple of the base lots ----------
+	const CUSTOM = { name: "Custom structure", view: "Your own legs: any number, any strike, any ratio", wide: false };
+	const MAX_CUSTOM_LEGS = 50, MAX_MULT = 100;
+	function customLegs(rows, names) {
+		if (!Array.isArray(rows) || !rows.length) return { error: "Add at least one leg." };
+		if (rows.length > MAX_CUSTOM_LEGS) return { error: `A custom structure can have up to ${MAX_CUSTOM_LEGS} legs.` };
+		const merged = new Map();
+		for (const r of rows) {
+			const side = r && r.side > 0 ? 1 : -1, type = r && r.type === "PE" ? "PE" : "CE", mult = r ? r.mult : NaN;
+			if (!(Number.isInteger(mult) && mult >= 1 && mult <= MAX_MULT)) return { error: `Each leg's size must be a whole number from 1 to ${MAX_MULT}.` };
+			const name = names && names[r.strike] ? names[r.strike][type] : null;
+			if (!name) return { error: `${r.strike} ${type} is not on the board for this expiry: change its strike.` };
+			const key = type + r.strike, prev = merged.get(key);
+			if (prev && prev.side !== side) return { error: `${r.strike} ${type} is both bought and sold: net it into one leg.` };
+			if (prev) { prev.mult += mult; if (prev.mult > MAX_MULT) return { error: `${r.strike} ${type} adds up to more than ${MAX_MULT} times the base size.` }; } else merged.set(key, { side, type, strike: r.strike, name, mult });
+		}
+		return { legs: [...merged.values()] };
+	}
 	// legs for a template: strikes = sorted strikes on the board for the expiry; names = {strike: {CE: name, PE: name}}. Returns {legs} or {error}.
 	function legsFor(id, strikes, spot, names, width) {
 		const t = TEMPLATES[id];
@@ -982,7 +1000,8 @@ const QB = (() => {
 			const mid = e.src === "book" ? (e.bid + e.ask) / 2 : (spec.quotes[l.name] || {}).ltp;
 			const iv = impliedVol(l.type, mid, spec.spot, l.strike, spec.T, r);
 			const spread = e.src === "book" ? (e.ask - e.bid) / ((e.ask + e.bid) / 2) : NaN;
-			return { ...l, units: lots * lot, lots, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
+			const mult = Number.isInteger(l.mult) && l.mult >= 1 ? l.mult : 1;
+			return { ...l, mult, units: lots * lot * mult, lots: lots * mult, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
 		});
 		const out = { legs, lots, lot, errors: [], checks: [], paperChecks: [], ok: false, paperOk: false };
 		if (!(spec.T >= 0)) { out.errors.push("The expiry on the board could not be read, so the time to expiry is unknown."); return out; }
@@ -1059,7 +1078,19 @@ const QB = (() => {
 		const end = Date.UTC(2000 + +m[3], mi, +m[1], 10, 0);                                           // 15:30 IST = 10:00 UTC
 		return Math.max(0, (end - nowMs) / 31556952000);
 	}
-	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, legsFor, entry, analyze, suggestLots, yearsTo, ncdf, legPay };
+	// what the structure would be worth under a what-if, against what it cost to open (theoretical value at each leg's own implied volatility shifted by `dvol` (absolute, 0.02 = two vol points), spot moved by
+	// `move` (0.01 = +1%), and `days` closer to expiry; exit spread and fees are NOT included). At expiry this is the payoff, to the paisa.
+	function scenario(a, spec, s) {
+		const c = spec.c || conf(), r = c.r, S = spec.spot * (1 + s.move), T = Math.max(0, spec.T - s.days / 365);
+		let v = 0;
+		for (const l of a.legs) {
+			const iv = Number.isFinite(l.iv) ? Math.max(0.01, l.iv + s.dvol) : NaN;
+			const val = T > 0 && Number.isFinite(iv) ? bs(l.type, S, l.strike, T, iv, r) : (l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S));
+			v += l.side * l.units * (val - l.px);
+		}
+		return v;
+	}
+	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, CUSTOM, MAX_CUSTOM_LEGS, customLegs, legsFor, entry, analyze, scenario, suggestLots, yearsTo, ncdf, legPay };
 })();
 /* @@builder:end */
 
@@ -1189,6 +1220,134 @@ const AN = (() => {
 /* @@analyse:end */
 
 // ==================================================================================================================
+// Flow and signals: what the futures, the options and the order books say beyond the level of the price, read every few seconds from the live board and kept as a tape for the session. The futures basis,
+// the forward the options themselves imply (put-call parity), the pressure of resting bids against offers around the money, a dealer-gamma proxy, and how fast the straddle and volatility are moving.
+// Every signal rule is written down below with its threshold; every firing is logged with the price at that moment and graded against what the price did next. A signal with fewer than MIN_N graded
+// firings, or that does not beat a coin by a clear margin, is shown as UNPROVEN: nothing here is a forecast until its own record says so. Pure maths, no DOM, no network. Display only.
+// ==================================================================================================================
+/* @@flow:start */
+const FL = (() => {
+	const fnum = (x) => (typeof x === "number" && isFinite(x) ? x : null);
+	const mid = (q) => (q && q.bid > 0 && q.ask >= q.bid ? (q.bid + q.ask) / 2 : q && q.ltp > 0 ? q.ltp : null);
+	// the written-down rules and thresholds (changing one starts a new record: the log keys on the rule's name and version)
+	const RULES = {
+		pressure_v1: { dir: true, text: "Resting bids beat offers in calls and offers beat bids in puts (or the reverse) around the money by 0.25 or more", th: 0.25 },
+		straddle_v1: { dir: false, text: "The at-the-money straddle gained 5% or more in 10 minutes while the price moved less than 0.1%: a bigger move is being priced", th: 5 },
+		parity_v1: { dir: true, text: "The forward implied by put-call parity sits 0.05% or more away from the futures price", th: 0.05 },
+		gamma_v1: { dir: true, text: "Dealer gamma proxy is negative and the price has fallen under (or risen over) the flip level", th: 0 },
+	};
+	const HORIZON_S = 900, MIN_N = 30, MIN_MOVE_PCT = 0.05, VOL_MOVE_PCT = 0.15, REFIRE_S = 900, MAX_LOG = 400, MAX_HIST = 360;
+	const median = (xs) => { const v = xs.filter((x) => x != null).sort((a, b) => a - b); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null; };
+	// resting-size pressure around the money: for calls and puts, (bid size - offer size) / (bid size + offer size) over `n` strikes either side, fresh quotes only. Bullish = calls bid-heavy and puts offer-heavy.
+	function pressure(chain, quotes, spot, n, maxAge) {
+		const ks = Object.keys(chain).map(Number).sort((a, b) => a - b);
+		if (!ks.length || !(spot > 0)) return null;
+		let at = 0;
+		ks.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(ks[at] - spot)) at = i; });
+		const side = (t) => {
+			let b = 0, a = 0, used = 0;
+			for (const k of ks.slice(Math.max(0, at - n), at + n + 1)) {
+				const q = quotes[chain[k][t]];
+				if (!q || !(fnum(q.age_s) != null && q.age_s <= maxAge) || fnum(q.bid_qty) == null || fnum(q.ask_qty) == null || !(q.bid > 0) || !(q.ask >= q.bid)) continue;
+				b += q.bid_qty; a += q.ask_qty; used++;
+			}
+			return a + b > 0 ? { imb: (b - a) / (b + a), used } : null;
+		};
+		const ce = side("CE"), pe = side("PE");
+		return ce && pe ? { ce: ce.imb, pe: pe.imb, score: ce.imb - pe.imb, used: ce.used + pe.used } : null;
+	}
+	// the forward the options imply: K + (C - P) e^{rT} at the strikes nearest the money (median), against the futures price
+	function parity(rows, spot, T, r, fut) {
+		if (!(spot > 0 && T > 0)) return null;
+		const near = [...rows].sort((a, b) => Math.abs(a.k - spot) - Math.abs(b.k - spot)).slice(0, 5).filter((x) => x.ce && x.pe && x.ce.px != null && x.pe.px != null);
+		const f = median(near.map((x) => x.k + (x.ce.px - x.pe.px) * Math.exp(r * T)));
+		return f == null ? null : { fwd: f, gapPts: fut > 0 ? f - fut : null, gapPct: fut > 0 ? ((f - fut) / fut) * 100 : null, n: near.length };
+	}
+	// a dealer-gamma proxy (an ASSUMPTION, not an observation): dealers are taken to be long the calls and short the puts that are open, so net gamma exposure by strike is open interest x gamma x spot^2 x 1%
+	// (calls +, puts -), and the flip is where the running total crosses zero. Positive total = price tends to be pinned; negative = moves tend to be amplified.
+	function gamma(rows, spot, T, r, lot) {
+		if (!(spot > 0 && T > 0 && lot > 0)) return null;
+		let net = 0, used = 0;
+		const by = [];
+		for (const x of rows) {
+			let g = 0;
+			for (const t of ["ce", "pe"]) {
+				const o = x[t];
+				if (!o || o.iv == null || !(o.oi > 0)) continue;
+				const gm = QB.greeks(t === "ce" ? "CE" : "PE", spot, x.k, T, o.iv, r).gamma;
+				g += (t === "ce" ? 1 : -1) * o.oi * gm * spot * spot * 0.01 * lot;
+				used++;
+			}
+			by.push({ k: x.k, g });
+			net += g;
+		}
+		if (!used) return null;
+		let run = 0, flip = null;
+		for (let i = 0; i < by.length; i++) {
+			const before = run;
+			run += by[i].g;
+			if (flip == null && i > 0 && ((before < 0 && run >= 0) || (before > 0 && run <= 0))) flip = by[i].k;
+		}
+		return { net, flip, used };
+	}
+	// one reading of the board. ctx: {t (ms), spot, fut, rows (AN.chainRows), chain, quotes, T, r, lot, atm (AN.atm result)}
+	function sample(ctx) {
+		const { t, spot, fut, rows, chain, quotes, T, r, lot, atm } = ctx;
+		if (!(spot > 0)) return null;
+		const par = parity(rows, spot, T, r, fut), pr = pressure(chain, quotes, spot, 3, 60), gx = gamma(rows, spot, T, r, lot);
+		return { t, spot, fut: fnum(fut), basis: fut > 0 ? fut - spot : null, atmIv: atm ? atm.iv : null, straddle: atm ? atm.straddle : null, fwd: par ? par.fwd : null, gapPct: par ? par.gapPct : null,
+			pressure: pr ? pr.score : null, gexNet: gx ? gx.net : null, flip: gx ? gx.flip : null };
+	}
+	// which rules fire on the latest sample, given the tape (samples oldest first)
+	function fire(hist) {
+		const last = hist[hist.length - 1];
+		if (!last) return [];
+		const out = [];
+		if (last.pressure != null && Math.abs(last.pressure) >= RULES.pressure_v1.th) out.push({ rule: "pressure_v1", dir: last.pressure > 0 ? 1 : -1, why: `pressure ${last.pressure.toFixed(2)}` });
+		if (last.gapPct != null && Math.abs(last.gapPct) >= RULES.parity_v1.th) out.push({ rule: "parity_v1", dir: last.gapPct > 0 ? 1 : -1, why: `options forward ${last.gapPct >= 0 ? "above" : "below"} futures by ${Math.abs(last.gapPct).toFixed(2)}%` });
+		if (last.gexNet != null && last.flip != null && last.gexNet < 0) {
+			if (last.spot < last.flip) out.push({ rule: "gamma_v1", dir: -1, why: `negative gamma, price under the flip ${last.flip}` });
+			else if (last.spot > last.flip) out.push({ rule: "gamma_v1", dir: 1, why: `negative gamma, price over the flip ${last.flip}` });
+		}
+		const past = [...hist].reverse().find((s) => s.t <= last.t - 600000);
+		if (past && last.straddle > 0 && past.straddle > 0 && Math.abs((last.spot / past.spot - 1) * 100) < 0.1 && (last.straddle / past.straddle - 1) * 100 >= RULES.straddle_v1.th)
+			out.push({ rule: "straddle_v1", dir: 0, why: `straddle +${((last.straddle / past.straddle - 1) * 100).toFixed(1)}% in 10 min, price flat` });
+		return out;
+	}
+	// log the firings (not the same rule again within REFIRE_S) and grade the old ones against the tape: after HORIZON_S the price either moved the called way by MIN_MOVE_PCT (a hit), or not
+	// (a miss: flat counts against it). A volatility call (dir 0) is a hit if the price moved VOL_MOVE_PCT either way. An entry the tape cannot grade (no sample near the horizon) stays open.
+	function update(log, hist, firings, now) {
+		const out = log.map((e) => ({ ...e }));
+		for (const f of firings) {
+			const recent = out.filter((e) => e.rule === f.rule).pop();
+			if (!recent || now - recent.t >= REFIRE_S * 1000) { const last = hist[hist.length - 1]; out.push({ t: now, rule: f.rule, dir: f.dir, spot: last.spot, why: f.why, res: null }); }
+		}
+		for (const e of out) {
+			if (e.res || now - e.t < HORIZON_S * 1000) continue;
+			const target = e.t + HORIZON_S * 1000, s = hist.filter((x) => x.t >= target && x.t <= target + 300000)[0];
+			if (!s) { if (now - e.t > (HORIZON_S + 1800) * 1000) e.res = "ungraded"; continue; }
+			const mv = (s.spot / e.spot - 1) * 100;
+			e.mv = Math.round(mv * 1000) / 1000;
+			e.res = e.dir === 0 ? (Math.abs(mv) >= VOL_MOVE_PCT ? "hit" : "miss") : (e.dir * mv >= MIN_MOVE_PCT ? "hit" : "miss");
+		}
+		return out.slice(-MAX_LOG);
+	}
+	// the record of each rule: graded firings, hits, the hit rate and how far it is from a coin (z); UNPROVEN until MIN_N graded and a clear margin (z >= 2)
+	function record(log) {
+		const out = {};
+		for (const id of Object.keys(RULES)) {
+			const g = log.filter((e) => e.rule === id && (e.res === "hit" || e.res === "miss")), n = g.length, hits = g.filter((e) => e.res === "hit").length;
+			const base = RULES[id].dir ? 0.5 : 0.5;                                                            // a coin is the bar: nothing here has earned more
+			const z = n > 0 ? (hits - base * n) / Math.sqrt(base * (1 - base) * n) : 0;
+			out[id] = { n, hits, rate: n ? hits / n : null, z, proven: n >= MIN_N && z >= 2, open: log.filter((e) => e.rule === id && !e.res).length };
+		}
+		return out;
+	}
+	return { RULES, HORIZON_S, MIN_N, MAX_HIST, MIN_MOVE_PCT, VOL_MOVE_PCT, pressure, parity, gamma, sample, fire, update, record, median };
+})();
+/* @@flow:end */
+
+// ==================================================================================================================
 // News and the board: the news digest (titles and https links from the desk's news engine, via the relay) joined to the live board. For each story: which names it mentions, how far each has moved today
 // and whether its options are trading hard, so a headline the market ignored is told apart from one it did not. Pure maths, no DOM, no network. The tone is a word-list reading (tilted by surprise where the
 // text states an expectation): a hint, not a view. Nothing here is a forecast or a signal.
@@ -1237,7 +1396,7 @@ const NW = (() => {
 /* @@news:end */
 
 // ---- the Build tab: pick an underlying, an expiry and a structure; see what it costs, where it makes and loses, and whether it fits the desk's limits. Paper only: no order is sent from here.
-S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr", news: null, newsAt: 0, newsErr: "" };
+S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr", news: null, newsAt: 0, newsErr: "", custom: [], sc: { move: 0, dvol: 0, days: 0 } };
 function bdChains(data) {                                                // the underlyings the builder can price: an index with a known lot size, and its board chains
 	const c = QB.conf(), all = liveChains(data), out = Object.create(null);
 	for (const u of Object.keys(c.inst)) if (all[u] && Object.keys(all[u]).length) out[u] = all[u];
@@ -1353,7 +1512,7 @@ function bdDraw() {
 	if (!exps.includes(B.exp)) B.exp = exps[0];
 	const ch = chains[B.u][B.exp], strikes = Object.keys(ch).map(Number).sort((p, q) => p - q);
 	const sq = data.quotes[B.u] || data.quotes[B.u + "-FUT"] || {}, spot = sq.ltp;
-	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = QB.TEMPLATES[B.tpl];
+	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = B.tpl === "custom" ? QB.CUSTOM : QB.TEMPLATES[B.tpl];
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
 	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono" }, String(val)), h("button", { class: "btn", "aria-label": "more " + label, onclick: up }, "+")));
 	put(body,
@@ -1361,15 +1520,18 @@ function bdDraw() {
 		c.fromConfig ? null : h("div", { class: "note warn" }, "This page has no limits from the desk's config (QD_TRADE is missing), so it is using built-in defaults that may be out of date. Do not rely on the checklist; re-publish the site."),
 		h("div", { class: "chips", style: "padding:8px 16px 4px" }, us.map((u) => chip(u, u === B.u, () => { B.u = u; B.exp = null; bdDraw(); }))),
 		h("div", { class: "chips", style: "padding:4px 16px" }, exps.map((e) => chip(e, e === B.exp, () => { B.exp = e; bdDraw(); }))),
-		h("div", { class: "chips", style: "padding:4px 16px" }, Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); }))),
+		h("div", { class: "chips", style: "padding:4px 16px" }, [...Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); })),
+			chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
 		h("div", { class: "f3", style: "font-size:12px;padding:2px 16px 6px" }, tpl.view),
+		B.tpl === "custom" ? bdCustom(B, strikes, spot) : null,
 		tpl.wide ? step("Width (strikes)", B.width, () => { B.width = Math.max(1, B.width - 1); bdDraw(); }, () => { B.width = Math.min(10, B.width + 1); bdDraw(); }) : null,
 		step("Lots (" + inst.lot + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); }));
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
-	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdNews(B, data), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows: AN.chainRows(ch, data.quotes, spot, T, c.r) }));
-	const L = QB.legsFor(B.tpl, strikes, spot, names, B.width);
+	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r);
+	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdFlow({ B, data, ch, spot, T, c, sq, rows, inst }), bdNews(B, data), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
+	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
 	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
 	const a = QB.analyze(spec);
@@ -1384,6 +1546,7 @@ function bdDraw() {
 			kv("Costs to get in and out (exit at today's price)", inr(a.cost) + ` (fees ${inr(a.fees)} + spread ${inr(a.exitSpread)})`),
 			kv("Net delta · gamma", `${signed(a.greeks.delta, 1)} · ${signed(a.greeks.gamma, 3)}`), kv("Theta a day · vega per vol point", `${inr(a.greeks.theta, true)} · ${inr(a.greeks.vega, true)}`)),
 		h("div", { style: "padding:8px 16px" }, bdPayoff(a, spot)),
+		bdScenario(B, a, spec),
 		legsTable2(a),
 		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Sizing guide (the intraday desk's limits) and data quality"),
 			a.checks.map((x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text)))),
@@ -1395,6 +1558,89 @@ function bdDraw() {
 			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:4px 16px 8px" }, "The paper ticket also checks the day's loss budget, the drawdown halt and the displayed size at the touch against the live account. A structure that is not open-able today is still shown here as a what-if.")),
 		bdTicket(a, tpl),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure. Held to expiry, an in-the-money long pays the exchange's exercise STT instead, which this does not model; there is no dividend yield in the pricing. Worst loss and best profit leave out costs."));
+}
+// ---- flow and signals: the tape of the session, the rules that fired, and each rule's own record --------------------------------------------------------------
+function bdFlow(ctx) {
+	const { B, data, ch, spot, T, c, rows, inst } = ctx;
+	const key = B.u + "|" + B.exp, logKey = "qd.flowlog." + B.u;
+	if (B.tapeKey !== key) { B.tapeKey = key; B.tape = []; B.sampledAt = null; }
+	if (!B.flowLogs) B.flowLogs = {};
+	if (!B.flowLogs[B.u]) {
+		let raw = []; try { raw = JSON.parse(store(logKey) || "[]"); } catch (e) { raw = []; }
+		B.flowLogs[B.u] = (Array.isArray(raw) ? raw : []).filter((e) => e && typeof e.rule === "string" && FL.RULES[e.rule] && Number.isFinite(e.t) && Number.isFinite(e.spot)).slice(-400);
+	}
+	const fq = data.quotes[B.u + "-FUT"], fut = fq ? (fq.bid > 0 && fq.ask >= fq.bid ? (fq.bid + fq.ask) / 2 : fq.ltp) : NaN;
+	const nowT = typeof data.now === "number" ? data.now : Date.now();
+	if (B.sampledAt !== B.at) {                                                                    // one reading per fetch of the board, however often the page is redrawn
+		B.sampledAt = B.at;
+		const sm = FL.sample({ t: nowT, spot, fut: Number.isFinite(fut) ? fut : null, rows, chain: ch, quotes: data.quotes, T, r: c.r, lot: inst.lot, atm: AN.atm(rows, spot, T, null) });
+		if (sm && (!B.tape.length || sm.t > B.tape[B.tape.length - 1].t)) {
+			B.tape.push(sm);
+			if (B.tape.length > FL.MAX_HIST) B.tape.shift();
+			B.flowLogs[B.u] = FL.update(B.flowLogs[B.u], B.tape, FL.fire(B.tape), sm.t);
+			try { store(logKey, JSON.stringify(B.flowLogs[B.u])); } catch (e) { /* private mode */ }
+		}
+	}
+	const tape = B.tape, last = tape[tape.length - 1], past = [...tape].reverse().find((x) => last && x.t <= last.t - 600000), rec = FL.record(B.flowLogs[B.u]);
+	if (!last) return h("div", { class: "note" }, "Reading the flow: waiting for the first reading of the board.");
+	const kv = (k, v, note, cl) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line);gap:12px;align-items:flex-start" }, h("span", { class: "f3" }, k),
+		h("span", { style: "text-align:right" }, h("b", { class: "mono " + (cl || "") }, v), note ? h("div", { class: "f3", style: "font-size:11.5px" }, note) : null));
+	const pct = (x, d = 2) => (x == null || !Number.isFinite(x) ? "—" : (x >= 0 ? "+" : "") + x.toFixed(d) + "%");
+	const dIv = past && last.atmIv != null && past.atmIv != null ? (last.atmIv - past.atmIv) * 100 : null, dStr = past && last.straddle > 0 && past.straddle > 0 ? (last.straddle / past.straddle - 1) * 100 : null;
+	const ann = last.basis != null && T > 0 ? (last.basis / spot) / T * 100 : null;
+	const firing = FL.fire(tape);
+	const recText = (id) => { const r = rec[id]; return r.proven ? `track record ${r.hits}/${r.n} (${(r.rate * 100).toFixed(0)}%, z ${r.z.toFixed(1)})` : `UNPROVEN: ${r.n} graded${r.n ? `, ${r.hits} hit` : ""}${r.open ? `, ${r.open} waiting` : ""} (needs ${FL.MIN_N} and a clear edge over a coin)`; };
+	return h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Flow and signals: ${B.u} ${B.exp}`, h("span", { class: "f3", style: "font-weight:400;font-size:12px" }, `  (${tape.length} reading${tape.length === 1 ? "" : "s"} this session)`)),
+		kv("Futures minus spot", last.basis != null ? `${last.basis >= 0 ? "+" : ""}${num(last.basis, 1)} pts` : "—", ann != null ? `${ann.toFixed(1)}% a year carry` : "no futures price on the board"),
+		kv("Forward the options imply, against futures", last.gapPct != null ? pct(last.gapPct) : "—", "from put-call parity at the money; a gap means options and futures disagree about where the price is going to be"),
+		kv("Resting-size pressure around the money", last.pressure != null ? (last.pressure >= 0 ? "+" : "") + last.pressure.toFixed(2) : "—", last.pressure == null ? "needs sizes on fresh bids and offers" : last.pressure > 0.1 ? "bids lean bullish (calls bid, puts offered)" : last.pressure < -0.1 ? "bids lean bearish" : "balanced"),
+		kv("Dealer gamma proxy (an assumption)", last.gexNet != null ? (last.gexNet >= 0 ? "positive" : "negative") : "—", last.flip != null ? `flips near ${num(last.flip, 0)}; ${last.gexNet >= 0 ? "moves tend to be damped" : "moves tend to be amplified"}` : "needs open interest"),
+		kv("Straddle, last 10 minutes", dStr != null ? pct(dStr, 1) : "—", past ? `volatility ${dIv != null ? (dIv >= 0 ? "+" : "") + dIv.toFixed(2) + " points" : "—"}; price ${pct((last.spot / past.spot - 1) * 100)}` : "builds up after ten minutes of readings"),
+		h("div", { class: "pad", style: "font-weight:600;border-top:1px solid var(--line)" }, "Rules that are firing now"),
+		firing.length ? firing.map((f) => h("div", { class: "row", style: "padding:5px 16px;gap:8px;align-items:flex-start" }, h("b", { class: f.dir > 0 ? "up" : f.dir < 0 ? "dn" : "" }, f.dir > 0 ? "▲" : f.dir < 0 ? "▼" : "◆"),
+			h("span", { style: "font-size:12.5px" }, `${FL.RULES[f.rule].text}. ${f.why}.`, h("div", { class: "f3", style: "font-size:11.5px" }, recText(f.rule))))) : h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 8px" }, "None right now."),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, `These are readings, not forecasts. Each rule's firings are logged with the price at the time and graded ${FL.HORIZON_S / 60} minutes later (it must move the called way by ${FL.MIN_MOVE_PCT}%; a volatility call must move ${FL.VOL_MOVE_PCT}% either way). Until a rule has ${FL.MIN_N} graded firings and clearly beats a coin it is UNPROVEN and should not be acted on. The record is kept in this browser only.`));
+}
+// ---- custom legs: add, flip, move and size as many legs as you like ----------------------------------------------------------------------
+function bdCustom(B, strikes, spot) {
+	const rows = B.custom, redraw = () => { B.editing = false; bdDraw(); };
+	const flat = (label, on, fn, cls) => h("button", { class: "chip " + (cls || ""), "aria-pressed": String(on), onclick: fn }, label);
+	const atm = strikes.length ? strikes.reduce((b, k) => (Math.abs(k - spot) < Math.abs(b - spot) ? k : b), strikes[0]) : 0;
+	return h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Your legs (${rows.length} of up to ${QB.MAX_CUSTOM_LEGS})`),
+		rows.map((r, i) => h("div", { class: "row", style: "padding:4px 16px;gap:6px;align-items:center;flex-wrap:wrap" },
+			flat(r.side > 0 ? "Buy" : "Sell", r.side > 0, () => { r.side = -r.side; redraw(); }, r.side > 0 ? "up" : "dn"), flat(r.type, r.type === "CE", () => { r.type = r.type === "CE" ? "PE" : "CE"; redraw(); }),
+			h("select", { class: "search", style: "width:96px", "aria-label": `Strike of leg ${i + 1}`, onchange: (e) => { r.strike = Number(e.target.value); redraw(); } },
+				(strikes.includes(r.strike) ? strikes : [r.strike, ...strikes]).map((k) => h("option", { value: String(k), ...(k === r.strike ? { selected: "selected" } : {}) }, String(k)))),
+			h("button", { class: "btn", "aria-label": `smaller size of leg ${i + 1}`, onclick: () => { r.mult = Math.max(1, r.mult - 1); redraw(); } }, "−"), h("b", { class: "mono" }, "×" + r.mult),
+			h("button", { class: "btn", "aria-label": `bigger size of leg ${i + 1}`, onclick: () => { r.mult = Math.min(100, r.mult + 1); redraw(); } }, "+"),
+			h("button", { class: "btn", "aria-label": `remove leg ${i + 1}`, onclick: () => { rows.splice(i, 1); redraw(); } }, "Remove"))),
+		h("div", { style: "padding:6px 16px 12px;display:flex;gap:10px;flex-wrap:wrap" },
+			h("button", { class: "btn", disabled: rows.length >= QB.MAX_CUSTOM_LEGS, onclick: () => { rows.push({ side: 1, type: "CE", strike: atm, mult: 1 }); redraw(); } }, "Add a leg"),
+			h("button", { class: "btn", disabled: !rows.length, onclick: () => { B.custom = []; redraw(); } }, "Clear")),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:0 16px 10px" }, "Sizes multiply the Lots below. A structure with a short call that is not covered is refused (unlimited loss). The paper desk can open it only if every leg is a purchase."));
+}
+// ---- what-if sliders and a grid: the structure's value if spot moves, volatility shifts and days pass (theoretical, before exit costs) --------------------------------------
+function bdScenario(B, a, spec) {
+	const sc = B.sc, T = spec.T, maxDays = Math.floor(T * 365);
+	const cell = (v) => h("td", { class: "mono " + (v >= 0 ? "up" : "dn"), style: "text-align:right" }, inr(v, true));
+	const val = () => QB.scenario(a, spec, sc), out = h("b", { class: "mono" }, "");
+	const paint = () => { const v = val(); out.textContent = inr(v, true); out.className = "mono " + (v >= 0 ? "up" : "dn"); };
+	const slider = (label, key, min, max, step, fmt) => {
+		const shown = h("b", { class: "mono" }, fmt(sc[key]));
+		const input = h("input", { type: "range", min: String(min), max: String(max), step: String(step), value: String(sc[key]), "aria-label": label, style: "width:100%", oninput: (e) => { sc[key] = Number(e.target.value); shown.textContent = fmt(sc[key]); paint(); }, onfocus: () => { B.editing = true; }, onblur: () => { B.editing = false; } });
+		input.addEventListener("pointerdown", () => { B.editing = true; }); input.addEventListener("pointerup", () => { B.editing = false; });
+		return h("div", { style: "padding:4px 16px" }, h("div", { class: "row", style: "justify-content:space-between" }, h("span", { class: "f3", style: "font-size:12.5px" }, label), shown), input);
+	};
+	paint();
+	const moves = [-0.04, -0.02, -0.01, 0, 0.01, 0.02, 0.04], dayList = [...new Set([0, Math.round(maxDays / 2), maxDays])];
+	return h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "What if…"),
+		slider("Spot moves", "move", -0.08, 0.08, 0.0025, (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(2) + "%"),
+		slider("Volatility shifts (points)", "dvol", -0.1, 0.1, 0.005, (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(1)),
+		slider("Days pass", "days", 0, Math.max(1, maxDays), 1, (x) => x + " day" + (x === 1 ? "" : "s")),
+		h("div", { class: "row", style: "justify-content:space-between;padding:8px 16px" }, h("span", {}, "The structure is then worth, against what it cost"), out),
+		h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, [h("th", {}, "Days →"), ...moves.map((m) => h("th", { style: "text-align:right" }, (m >= 0 ? "+" : "") + (m * 100) + "%"))])),
+			h("tbody", {}, dayList.map((d) => h("tr", {}, [h("td", {}, d === maxDays ? `${d} (expiry)` : String(d)), ...moves.map((m) => cell(QB.scenario(a, spec, { move: m, dvol: sc.dvol, days: d })))]))))),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 10px" }, "Theoretical values from the model at each leg's own implied volatility (shifted by the volatility slider); exit spread and fees are not included. At expiry it equals the payoff chart."));
 }
 function legsTable2(a) {
 	return h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["", "Strike", "Type", "Bid", "Ask", "Price used", "IV"].map((x) => h("th", {}, x)))),
@@ -1449,11 +1695,11 @@ const PT = (() => {
 		const g = group || idNow().slice(4, 20);
 		// `ref`: the prices on screen when the trader decided (and when the board last heard them). It is used only to report slippage; it never prices or allows a fill.
 		const refOf = (l) => (typeof l.bid === "number" && Number.isFinite(l.bid) && l.bid > 0 && l.bid <= l.ask ? { bid: l.bid, ask: l.ask, ...(Number.isFinite(nowMs) && Number.isFinite(l.age) && l.age >= 0 ? { at: Math.round(nowMs - l.age * 1000) } : {}) } : null);
-		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g, ...(refOf(l) ? { ref: refOf(l) } : {}) })) };
+		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: Number.isInteger(l.lots) ? l.lots : a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g, ...(refOf(l) ? { ref: refOf(l) } : {}) })) };
 	}
 	const sellFor = (symbol) => ({ id: idNow(), side: "sell", symbol, lots: "all" });
 	// the structure a review belongs to: if it changes, the review is void and the user must press Review again
-	const sigOf = (a) => (a && a.paperOk === true && Array.isArray(a.legs) ? a.lots + "|" + a.legs.map((l) => l.side + ":" + l.name).join(",") : "");
+	const sigOf = (a) => (a && a.paperOk === true && Array.isArray(a.legs) ? a.lots + "|" + a.legs.map((l) => l.side + ":" + l.name + ":" + (Number.isInteger(l.lots) ? l.lots : a.lots)).join(",") : "");
 	return { idNow, flat, thesisOk, stratOk, limitFor, ordersFor, sellFor, sigOf };
 })();
 // The only three routes this page may call, each with its one method; the request goes to that relative path, on this page's own origin, and nowhere else.
