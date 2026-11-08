@@ -256,3 +256,21 @@ def test_the_runners_limit_checks_the_touch_first_and_then_the_impact(cfg, tmp_p
     r2 = rn(cfg, tmp_path)
     ok = r2.step(snap(aq=100), [raw(id="ord-slip-2", limit=100.15)], False, MON.astimezone(dt.timezone.utc))["results"][0]
     assert ok["status"] == "filled"
+
+
+def test_a_nonsense_time_on_the_reference_costs_only_the_delay_figure_never_the_record(cfg, tmp_path):
+    for at in (1, 10**12, int(MON.timestamp() * 1000) + 50_000):
+        r = rn(cfg, tmp_path)
+        out = r.step(snap(), [raw(id=f"ord-at-{abs(at) % 1000}", ref={"bid": 98.0, "ask": 99.0, "at": at})], False, MON.astimezone(dt.timezone.utc))["results"][0]
+        assert out["status"] == "filled" and "slip" in out["fill"], (at, out)
+        assert "delay_s" not in out["fill"]["slip"] and out["fill"]["slip"]["total_inr"] > 0
+        assert r.summary(snap(), MON)["slippage"]["fills"] == 1
+
+
+def test_a_reference_must_sit_within_a_factor_of_two_of_the_mid_and_an_odd_price_still_fills(cfg, tmp_path):
+    r = rn(cfg, tmp_path)
+    far = r.step(snap(), [raw(ref={"bid": 490.0, "ask": 495.0})], False, MON.astimezone(dt.timezone.utc))["results"][0]
+    assert far["status"] == "filled" and "delay" not in far["fill"]["slip"]
+    s = {"now": int(MON.timestamp() * 1000), "quotes": {NAME: dict(bid=99.12345, ask=100.12345, bid_qty=5000, ask_qty=5000, ltp=99.5, age_s=2.0)}}
+    odd = rn(cfg, tmp_path).step(s, [raw(id="ord-odd-1")], False, MON.astimezone(dt.timezone.utc))["results"][0]
+    assert odd["status"] == "filled", odd

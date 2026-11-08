@@ -32,16 +32,18 @@ class PaperBroker:
     @staticmethod
     def _seen(ref: dict | None, now: dt.datetime, quote: Quote | None = None):
         """What the trader saw (bid, ask) and the seconds since (None where the order carried nothing usable). The reference is client-supplied and only ever reported, so it must
-        look like a price of this contract now: within a factor of five of the mid at the fill, else it is ignored."""
+        look like a price of this contract now: within a factor of two of the mid at the fill, else it is ignored. A time more than an hour back (or ahead) is dropped on its own."""
         if not isinstance(ref, dict):
             return None, None, None
         if quote is not None:
             m = (quote.bid + quote.ask) / 2
             rb, ra = ref.get("bid"), ref.get("ask")
-            if not (SL._ok(rb) and SL._ok(ra) and m > 0 and 0.2 * m <= rb and ra <= 5 * m):
+            if not (SL._ok(rb) and SL._ok(ra) and m > 0 and 0.5 * m <= rb and ra <= 2 * m):
                 return None, None, None
         at = ref.get("at")
         delay = (now.timestamp() * 1000 - at) / 1000 if SL._ok(at) else None
+        if delay is not None and not (0 <= delay <= 3600):                       # a nonsense time costs only the delay figure, never the record
+            delay = None
         return ref.get("bid"), ref.get("ask"), delay
 
     def buy(self, order: Order, quote: Quote | None, marks: dict[str, float], now: dt.datetime, ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
@@ -58,7 +60,7 @@ class PaperBroker:
             return Decision(False, [f"the offer is {quote.ask:g} and this size is expected to pay {impact:g} more ({px:g}), above your limit {limit:g}: not bought"]), None
         fees, _ = self.costs.fees(order.instrument, order.qty, px)
         sb, sa, delay = self._seen(ref, now, quote)
-        slip = SL.clean(SL.split("buy", order.qty, px, quote.bid, quote.ask, impact, sb, sa, delay))
+        slip = SL.clean(SL.split("buy", order.qty, px, quote.bid, quote.ask, impact, sb, sa, delay)) or SL.clean(SL.split("buy", order.qty, px, quote.bid, quote.ask, impact))
         row = self.account.apply_fill("buy", order.instrument, order.segment, order.qty, px, fees, now.isoformat(), order.strategy, order.thesis, slip)
         return d, row
 
@@ -74,7 +76,7 @@ class PaperBroker:
             return Decision(False, [f"the bid is {quote.bid:g} and this size is expected to give up {impact:g} ({px:g}), below your limit {limit:g}: not sold"]), None
         fees, _ = self.costs.fees(pos.instrument, -qty, px)
         sb, sa, delay = self._seen(ref, now, quote)
-        slip = SL.clean(SL.split("sell", qty, px, quote.bid, quote.ask, impact, sb, sa, delay))
+        slip = SL.clean(SL.split("sell", qty, px, quote.bid, quote.ask, impact, sb, sa, delay)) or SL.clean(SL.split("sell", qty, px, quote.bid, quote.ask, impact))
         row = self.account.apply_fill("sell", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}", slip)
         return d, row
 

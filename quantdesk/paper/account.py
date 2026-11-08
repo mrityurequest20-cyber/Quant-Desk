@@ -128,7 +128,7 @@ class Account:
             raise ValueError("bad fill: a buy at a zero price would be a free position")
         if slip is not None:                                    # the slippage record is part of the sealed row: known keys, finite numbers, nothing else
             from .slippage import clean
-            if kind == "settle" or clean(slip) != slip or slip.get("side") != kind or slip.get("qty") != qty or not math.isclose(slip.get("fill", -1), price, abs_tol=1e-9):
+            if kind == "settle" or clean(slip) != slip or slip.get("side") != kind or slip.get("qty") != qty or not math.isclose(slip.get("fill", -1), price, abs_tol=1e-4):
                 raise ValueError("bad fill: the slippage record is not well formed or does not match the fill")
         qty, price, fees = int(qty), float(price), float(fees)
         sym = instrument.symbol
