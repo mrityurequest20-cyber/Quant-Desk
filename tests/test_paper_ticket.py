@@ -44,7 +44,7 @@ console.log(JSON.stringify({ n: ids.size, sample: [...ids][0], lim }));
 """)
     assert o["n"] == 500 and re.fullmatch(r"ord-[0-9a-f]{32}", o["sample"]) and re.fullmatch(r"[A-Za-z0-9_-]{6,64}", o["sample"])        # the relay's and the runner's id rule
     for ask, lim in o["lim"]:
-        assert lim >= ask + min(0.1, 0.02 * ask) - 1e-9 and lim <= ask + max(0.1, 0.02 * ask) + 0.05 + 1e-9, (ask, lim)              # two ticks or 2%, rounded up to a tick
+        assert lim >= ask + max(0.15, 0.02 * ask) - 1e-9 and lim <= ask + max(0.15, 0.02 * ask) + 0.05 + 1e-9, (ask, lim)              # three ticks (the largest modelled impact) or 2%, rounded up to a tick
         assert abs(lim / 0.05 - round(lim / 0.05)) < 1e-6                                                                           # on the tick grid
 
 
@@ -164,3 +164,18 @@ def test_double_taps_on_sell_and_kill_do_nothing_and_a_half_made_confirm_expires
     assert tab.count("if (P.acting) return; P.acting = true;") == 2 and tab.count("P.acting = false;") >= 2
     assert "Date.now() - P.confirmAt < 30000" in tab and "S.pp.confirm = null" in APP[APP.index("function show(tab"):APP.index("function show(tab") + 600]
     assert "it sends no order" not in APP and "sends no order" not in (ROOT / "docs/RECORDING.md").read_text(encoding="utf-8")        # the old "sends nothing" texts are gone
+
+
+@needs_node
+def test_each_order_carries_the_prices_the_trader_saw_only_when_they_are_sane(tmp_path):
+    o = node(tmp_path, LEGS + r"""
+const withBook = (extra) => ok({ legs: [{ side: 1, name: "NIFTY12NOV2624500CE", ask: 100.2, bid: 99.4, age: 2, ...extra }] });
+const ref = (a, now) => PT.ordersFor(a, "S", T, undefined, now).orders[0].ref;
+console.log(JSON.stringify({
+  good: ref(withBook({}), 1789000010000), noNow: ref(withBook({}), NaN), crossed: ref(withBook({ bid: 101 }), 1789000010000) || null, zero: ref(withBook({ bid: 0 }), 1789000010000) || null,
+  str: ref(withBook({ bid: "99" }), 1789000010000) || null, noBook: ref(ok(), 1789000010000) || null, negAge: ref(withBook({ age: -5 }), 1789000010000),
+}));
+""")
+    assert o["good"] == {"bid": 99.4, "ask": 100.2, "at": 1789000008000}                                                          # the quote's own time: the snapshot's less its age
+    assert o["noNow"] == {"bid": 99.4, "ask": 100.2} and o["negAge"] == {"bid": 99.4, "ask": 100.2}                                 # no time rather than a made-up one
+    assert o["crossed"] is None and o["zero"] is None and o["str"] is None and o["noBook"] is None                                  # a bad book sends no reference; the order still goes
