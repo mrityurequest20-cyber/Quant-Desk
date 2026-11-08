@@ -16,11 +16,11 @@ HTML = (ROOT / "quantdesk/web/static/app/index.html").read_text()
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
 
 
-def test_the_app_has_exactly_five_tabs_and_a_section_for_each():
+def test_the_app_has_exactly_six_tabs_and_a_section_for_each():
     tabs = re.search(r"const TABS = (\[.*?\]\]);", APP).group(1)
-    assert re.findall(r'\["(\w+)", "(\w+)"\]', tabs) == [("live", "Live"), ("build", "Build"), ("today", "Today"), ("trades", "History"), ("data", "Data")]
-    assert re.findall(r'<section data-view="(\w+)"', HTML) == ["trades", "live", "build", "today", "data"]
-    assert "repeat(5,1fr)" in HTML and "repeat(7" not in HTML
+    assert re.findall(r'\["(\w+)", "(\w+)"\]', tabs) == [("live", "Live"), ("build", "Build"), ("paper", "Paper"), ("today", "Today"), ("trades", "History"), ("data", "Data")]
+    assert re.findall(r'<section data-view="(\w+)"', HTML) == ["trades", "live", "build", "paper", "today", "data"]
+    assert "repeat(6,1fr)" in HTML and "repeat(7" not in HTML
     assert 'SUBS = { trades: [["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]] }' in APP     # no open-positions screen: nothing trades
 
 

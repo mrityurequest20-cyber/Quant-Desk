@@ -61,12 +61,18 @@ const news = await window.fetch("/news", KEY);                              // t
 out.news = news.status;
 const newsLookalike = await window.fetch("/newsletter");                    // /newsletter and /news/x are not the digest
 out.newsLookalike = newsLookalike.status;
+const orderPost = await window.fetch("/paper/order", { method: "POST", headers: { Authorization: "Bearer test-key" }, body: "{}" });      // the paper queue is the same private relay
+out.paper = orderPost.status;
+const paperLookalike = await window.fetch("/papers/order");                // /papers/ is not /paper/
+out.paperLookalike = paperLookalike.status;
 out.calls = calls.map((c) => [c.url, c.init && c.init.headers && c.init.headers.Authorization || null]);
 """)
     assert out["live"]["status"] == 200 and out["live"]["body"]["real"] is True               # it reached the network (the real fetch), not the shim's 404
     assert out["series"] == "/live/series?name=NIFTY" and out["health"] == 200
     assert out["api"]["status"] == 200 and out["unknown"] == 404 and out["lookalike"] == 404   # everything else behaves as before
     assert out["news"] == 200 and out["newsLookalike"] == 404                                   # /news goes to the real network with its key; a lookalike does not
+    assert out["paper"] == 200 and out["paperLookalike"] == 404                                # /paper/* goes to the real network with its key; a lookalike does not
+    assert out["calls"][-1][0] == "/papers/order" or any(c[0] == "/paper/order" and c[1] == "Bearer test-key" for c in out["calls"])
     sent = {c[0]: c[1] for c in out["calls"]}
     assert sent["/live/snapshot"] == "Bearer test-key" and sent["/live/series?name=NIFTY"] == "Bearer test-key"      # the key travels with the request
     assert "data.json" in sent and "/api/i/stats" not in sent                                  # app calls never hit the network
@@ -74,7 +80,7 @@ out.calls = calls.map((c) => [c.url, c.init && c.init.headers && c.init.headers.
 
 @needs_node
 def test_the_old_shim_would_have_failed_this_the_regression_that_hid_the_live_tab(tmp_path):
-    old = ES.LIVE_SHIM.replace('if (path.startsWith("/live/") || path === "/news") return realFetch(url, init);', "")
+    old = ES.LIVE_SHIM.replace('if (path.startsWith("/live/") || path.startsWith("/paper/") || path === "/news") return realFetch(url, init);', "")
     assert old != ES.LIVE_SHIM
     out = run(tmp_path, r"""
 const r = await window.fetch("/live/snapshot", { headers: { Authorization: "Bearer k" } });
