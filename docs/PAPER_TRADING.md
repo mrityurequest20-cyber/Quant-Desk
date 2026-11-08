@@ -52,3 +52,12 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 * The ledger backup on the `paper-ledger` branch is **off** (this repository is public: it would show every thesis and position). To turn it on, set the repository variable `PAPER_LEDGER_BACKUP` to `yes`.
 
 More: docs/RECORDING.md ("The paper runner", "Running the paper runner"), docs/LIVE.md (the relay's routes).
+
+## AUTO v1: the paper desk deciding for itself (paper money only)
+
+You said go on 8 Nov 2026: the desk may take trades by itself beside yours. It is **off unless switched on**: tick `auto` when you run the **Paper runner** by hand, or set the repository variable `PAPER_AUTO` to `yes` so every scheduled run has it. Your hand-placed orders are unchanged and work at the same time.
+
+* **How it decides** (`quantdesk/paper/auto.py`, pure rules, every order's thesis spells out why): it buys the at-the-money call (or put) of the nearest expiry, **one lot**, only when at least two of three readings agree and none points the other way: resting bid/offer pressure around the money (calls against puts), the forward the options imply against the futures price (put-call parity), and the index's own move over five minutes.
+* **How it leaves:** +30% on the premium, -25%, 25 minutes, the signals turning the other way, or ten minutes before the close. It never holds overnight and it **only ever sells its own positions** (strategy name starts `AUTO v1`); yours are never touched.
+* **Its own limits, on top of the risk gate:** at most 2 positions open, 6 entries a day, 20 minutes between entries on an index, and it stops for the day (and sells) once its own day is down 1% of the capital. The gate still applies to every one of its orders: the kill switch, the daily loss cap, the drawdown halt, quote freshness and size. A fault in the autopilot cannot stop the runner or the brakes.
+* **It is not proven.** These are the readings the app's Flow panel logs and grades; until they have a record they are a hypothesis. Its trades, with the price it saw and what it paid (slippage), are the evidence. Judge it on the Paper tab by the `AUTO v1` strategy name.

@@ -544,3 +544,47 @@ def test_verify_extends_accepts_a_continuation_and_refuses_a_shorter_or_a_differ
         C.cmd_verify(cfg, A(div, new))
     assert e.value.code == 1
     C.cmd_verify(cfg, A(new, tmp_path / "missing.json"))                                    # no file on the branch yet: nothing to continue
+
+
+class _Pilot:
+    """A stand-in autopilot: proposes what it is told to, or fails."""
+    def __init__(self, orders=None, boom=False):
+        self.orders, self.boom, self.calls = orders or [], boom, 0
+
+    def decide(self, snap, account, now, **kw):
+        self.calls += 1
+        if self.boom:
+            raise RuntimeError("the pilot broke")
+        out, self.orders = self.orders, []
+        return out
+
+
+def test_a_failing_autopilot_cannot_stop_the_runner_the_brakes_or_the_owners_orders(cfg, tmp_path):
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add()
+    lines = []
+    pilot = _Pilot(boom=True)
+    assert S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep, say=lines.append, new_account=True, auto=pilot) == 0
+    assert pilot.calls > 5 and [r["status"] for r in rl.results] == ["filled"]                                         # the owner's order was filled all the same
+    assert any("autopilot failed" in m for m in lines)
+
+
+def test_the_autopilots_orders_go_through_the_same_step_gate_and_result_path(cfg, tmp_path):
+    clk = Clock()
+    rl = FakeRelay(clk)
+    mine = {"id": "auto-b-1-1", "side": "buy", "symbol": NAME, "lots": 1, "strategy": "AUTO v1 NIFTY long call", "thesis": "AUTO v1: pressure +0.40; test of the wiring", "limit": 100.5,
+            "queued_at": int(clk().timestamp() * 1000), "group": "auto"}
+    bad = {**mine, "id": "auto-b-1-2", "lots": 10_000}                                                                     # an absurd size from the pilot is refused like anyone's
+    pilot = _Pilot([mine, bad])
+    assert S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep, say=lambda *a: None, new_account=True, auto=pilot) == 0
+    status = {r["id"]: r["status"] for r in rl.results}
+    assert status["auto-b-1-1"] == "filled" and status["auto-b-1-2"] == "invalid"
+    saved = R.load_account(rl.state["account"])
+    assert saved.positions[NAME].strategy.startswith("AUTO v1") and saved.verify_ledger()
+    rl2 = FakeRelay(Clock())
+    rl2.kill = True
+    clk2 = rl2.clock
+    pilot2 = _Pilot([{**mine, "id": "auto-b-2-1", "queued_at": int(clk2().timestamp() * 1000)}])
+    S.run(cfg, rl2, tmp_path / "l2" / "account.json", (clk2.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk2, sleep=clk2.sleep, say=lambda *a: None, new_account=True, auto=pilot2)
+    assert {r["id"]: r["status"] for r in rl2.results}["auto-b-2-1"] == "refused"                                          # the owner's kill switch stops the pilot's order too

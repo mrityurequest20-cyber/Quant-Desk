@@ -55,7 +55,7 @@ def _clean(x) -> str:
 
 
 def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float = 3.0, *, clock=None, sleep=time.sleep, say=print, runner: Runner | None = None,
-        new_account: bool = False) -> int:
+        new_account: bool = False, auto=None) -> int:
     """Run until `until_ist` (IST clock time today). Returns a process exit code."""
     clock = clock or (lambda: dt.datetime.now(dt.timezone.utc))
     log = lambda m: say(_clean(m))                                      # noqa: E731
@@ -90,6 +90,16 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         raw_orders = q.get("orders") if isinstance(q.get("orders"), list) else []
         orders = [o for o in raw_orders if not (isinstance(o, dict) and isinstance(o.get("id"), str) and o["id"] in waiting)]
         kill = q.get("kill") is not False                              # a missing or odd answer counts as ON: the safe way round
+        if auto is not None:                                           # AUTO v1: its orders join the owner's and go through the very same step, gate and brakes
+            try:
+                srv = Runner.server_now(snap)
+                mine = auto.decide(snap, rn.account, srv, kill=kill, entries_blocked=rn.entries_blocked, cal=rn.gate.cal) if srv is not None else []
+            except Exception as e:                                     # noqa: BLE001 - a fault in the autopilot must never stop the runner or the brakes
+                mine = []
+                log(f"paper: the autopilot failed this cycle ({type(e).__name__}); the owner's orders and the brakes go on")
+            for o in mine:
+                log(f"paper: auto proposes {o['side']} {o['symbol']}" + (f" ({o['_why']})" if o.get('_why') else ""))
+            orders = orders + mine
         try:
             rep = rn.step(snap, orders, kill, clock())
         except Exception as e:                                         # noqa: BLE001 - whatever went wrong, what was filled before it is still saved below
