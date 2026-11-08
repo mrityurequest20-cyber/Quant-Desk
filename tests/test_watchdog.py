@@ -267,7 +267,8 @@ out.logs = r.logs.join(" | ");
 out.allBodies = JSON.stringify(r.calls.map((c) => [c.url.startsWith("https://ntfy.sh/") ? "ntfy" : c.url, c.body,
   c.url.startsWith("https://ntfy.sh/") ? c.headers : null]));
 out.ascii = W.ascii("Désk — halted\n\t  now", 40);
-out.test = (await at("2026-10-23T12:34:00", env({ WATCHDOG_TEST: "1" }), {})).results.map((x) => [x.check, x.alerts[0].sev]);
+out.test = (await at("2026-10-23T12:30:00", env({ WATCHDOG_TEST: "1" }), {})).results.map((x) => [x.check, x.alerts[0].sev]);
+out.testOff = (await at("2026-10-23T12:40:00", env({ WATCHDOG_TEST: "1" }), {})).results.filter((x) => x.check === "TEST").length;
 console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 """)
     assert out["notopic"]["pushes"] == 0 and out["notopic"]["emails"] == 1 and "NTFY_TOPIC is not set" in out["notopic"]["log"]
@@ -276,6 +277,7 @@ console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
     assert TOPIC not in out["logs"] and TOKEN not in out["logs"]                    # logs name outcomes, never the topic or the token
     assert TOKEN not in out["allBodies"] and TOPIC not in out["allBodies"]       # no body, URL or ntfy header carries either
     assert out["ascii"] == "D sk halted now"
+    assert out["testOff"] == 0                                                      # the drill does not fire at the ten-minute firings in between
     assert out["test"] == [["TEST", "INFO"]]                                        # the drill sends one INFO alert at any time
 
 

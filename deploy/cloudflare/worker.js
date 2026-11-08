@@ -87,13 +87,6 @@ export default {
 		try {
 			if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(keepLiveAlive(env).catch(() => {}));      // not awaited: the desk's alarm clock below is never held up by the live poller
 		} catch (e) { /* even a throwing waitUntil must not stop the desk's alarm clock */ }
-		try {
-			const t = ist(Math.floor((event.scheduledTime ?? Date.now()) / 60000) * 60000);
-			if (t.hhmm === EVENING_AT && t.dow >= 2 && t.dow <= 6) {          // Tue to Sat, 00:10 IST
-				const r = await dispatchEvening(env);
-				console.log(`kite evening ${r.ok ? "dispatched" : "not dispatched"}: ${r.why}`);
-			}
-		} catch (e) { console.log(`kite evening not dispatched: ${String(e && e.message).slice(0, 200)}`); }      // never holds up the desk's alarm clock below
 		const step = COLLECT_CRONS[event.cron];
 		if (step) {                                              // 15:25 / 15:45 IST: wide data collection, on time
 			const r = await dispatchCollect(env, step);
@@ -108,6 +101,13 @@ export default {
 				console.log(`desk scheduler not dispatched (${event.cron}): ${String(e && e.message).slice(0, 200)}`);
 			}
 		}
+		try {                                                    // after the desk's alarm clock, so a slow GitHub answer here can never delay it
+			const t = ist(Math.floor((event.scheduledTime ?? Date.now()) / 60000) * 60000);
+			if (t.hhmm === EVENING_AT && t.dow >= 2 && t.dow <= 6) {          // Tue to Sat, 00:10 IST
+				const r = await dispatchEvening(env);
+				console.log(`kite evening ${r.ok ? "dispatched" : "not dispatched"}: ${r.why}`);
+			}
+		} catch (e) { console.log(`kite evening not dispatched: ${String(e && e.message).slice(0, 200)}`); }
 		try {                                                    // the alarm clock above always goes first and is never held up by this
 			await runWatchdog(event, env, { dispatchWorkflow });
 		} catch (e) {

@@ -346,7 +346,7 @@ export async function runWatchdog(event, env, deps = {}, log = console.log) {
 	const now = ist(nowMs);
 	const dispatch = deps.dispatchWorkflow;
 	const results = [];
-	if (String(env.WATCHDOG_TEST || "") === "1") {                       // the drill: remove the variable after one alert arrives
+	if (String(env.WATCHDOG_TEST || "") === "1" && (now.hhmm.endsWith(":00") || now.hhmm.endsWith(":30"))) {      // (the drill: only at the half-hour firings, though the Worker now fires every ten minutes)                       // the drill: remove the variable after one alert arrives
 		const a = { sev: "INFO", check: "TEST", title: "Watchdog test", body: `Test alert from the watchdog at ${now.date} ${now.hhmm} IST.`, link: "" };
 		results.push({ check: "TEST", alerts: [a], sent: [await sendAlert(env, a, now.date, dispatch)] });
 	}
