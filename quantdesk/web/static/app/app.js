@@ -1057,16 +1057,187 @@ const QB = (() => {
 		const end = Date.UTC(2000 + +m[3], mi, +m[1], 10, 0);                                           // 15:30 IST = 10:00 UTC
 		return Math.max(0, (end - nowMs) / 31556952000);
 	}
-	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, legsFor, entry, analyze, suggestLots, yearsTo, ncdf };
+	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, legsFor, entry, analyze, suggestLots, yearsTo, ncdf, legPay };
 })();
 /* @@builder:end */
 
+// ==================================================================================================================
+// Market read: what the live option chain says about an index (implied volatility, the move the options price, skew, term structure, put/call balance, where the open interest sits, max pain),
+// and ideas for a view ranked by what the structure risks and pays and the chance the MODEL gives it. Pure maths on the live board: no DOM, no network. NOT a forecast: every figure is
+// what the market itself implies, or a count of what is open; the model chance uses the market's own volatility, so before costs every structure is a fair bet and the edge is your view.
+// ==================================================================================================================
+/* @@analyse:start */
+const AN = (() => {
+	const fnum = (x) => (typeof x === "number" && isFinite(x) ? x : null);
+	const midOf = (q) => (q && q.bid > 0 && q.ask >= q.bid ? (q.bid + q.ask) / 2 : q && q.ltp > 0 ? q.ltp : null);
+	const OPT = /^(.+?)(\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2})(\d+(?:\.\d+)?)(CE|PE)$/;
+	// one expiry's chain as rows by strike: chain = {strike: {CE: name, PE: name}} (the board's names), quotes = the board
+	function chainRows(chain, quotes, spot, T, r) {
+		const out = [];
+		for (const k of Object.keys(chain).map(Number).sort((a, b) => a - b)) {
+			const row = { k };
+			for (const t of ["CE", "PE"]) {
+				const q = quotes[chain[k][t]];
+				if (!q) continue;
+				const px = midOf(q), iv = px != null && spot > 0 && T > 0 ? QB.impliedVol(t, px, spot, k, T, r) : NaN;
+				row[t === "CE" ? "ce" : "pe"] = { px, iv: isFinite(iv) ? iv : null, oi: fnum(q.oi), vol: fnum(q.vol), age: fnum(q.age_s) };
+			}
+			out.push(row);
+		}
+		return out;
+	}
+	const nearest = (rows, spot) => rows.reduce((b, r, i) => (b < 0 || Math.abs(r.k - spot) < Math.abs(rows[b].k - spot) ? i : b), -1);
+	const avg = (xs) => { const v = xs.filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+	// the at-the-money volatility and the move the straddle prices (to expiry, and one trading day), against the move so far today
+	function atm(rows, spot, T, chgPct) {
+		const i = nearest(rows, spot);
+		if (i < 0) return null;
+		const r = rows[i], iv = avg([r.ce && r.ce.iv, r.pe && r.pe.iv]);
+		const straddle = r.ce && r.pe && r.ce.px != null && r.pe.px != null ? r.ce.px + r.pe.px : null;
+		const dayMovePct = iv != null ? (iv / Math.sqrt(252)) * 100 : null;
+		return { k: r.k, iv, straddle, expiryMovePct: straddle != null && spot > 0 ? (straddle / spot) * 100 : null, dayMovePct,
+			todayPct: fnum(chgPct), todayVsImplied: dayMovePct && fnum(chgPct) != null ? Math.abs(chgPct) / dayMovePct : null };
+	}
+	// skew: the put wing's volatility minus the call wing's, `steps` strikes out; positive = puts dearer (the market pays more for downside)
+	function skew(rows, spot, steps) {
+		const i = nearest(rows, spot);
+		if (i < 0 || i - steps < 0 || i + steps >= rows.length) return null;
+		const p = rows[i - steps].pe && rows[i - steps].pe.iv, c = rows[i + steps].ce && rows[i + steps].ce.iv;
+		return p != null && c != null ? { steps, putK: rows[i - steps].k, callK: rows[i + steps].k, putIv: p, callIv: c, points: (p - c) * 100 } : null;
+	}
+	function pcr(rows) {
+		const sum = (side, f) => rows.reduce((a, r) => a + ((r[side] && r[side][f]) || 0), 0);
+		const co = sum("ce", "oi"), po = sum("pe", "oi"), cv = sum("ce", "vol"), pv = sum("pe", "vol");
+		return { oi: co > 0 ? po / co : null, vol: cv > 0 ? pv / cv : null, callOi: co, putOi: po };
+	}
+	// max pain: the strike where option BUYERS would collect least at expiry, from open interest (a count, not a prediction)
+	function maxPain(rows) {
+		let best = null;
+		for (const c of rows) {
+			let pay = 0;
+			for (const r of rows) pay += ((r.ce && r.ce.oi) || 0) * Math.max(0, c.k - r.k) + ((r.pe && r.pe.oi) || 0) * Math.max(0, r.k - c.k);
+			if (best == null || pay < best.pay) best = { k: c.k, pay };
+		}
+		return best && rows.some((r) => (r.ce && r.ce.oi) || (r.pe && r.pe.oi)) ? best.k : null;
+	}
+	// where the open interest sits: the biggest call open interest above the price and the biggest put open interest below it
+	function walls(rows, spot, n) {
+		const top = (side, keep) => rows.filter((r) => r[side] && r[side].oi > 0 && keep(r.k)).sort((a, b) => b[side].oi - a[side].oi).slice(0, n).map((r) => ({ k: r.k, oi: r[side].oi })).sort((a, b) => a.k - b.k);
+		return { resistance: top("ce", (k) => k >= spot), support: top("pe", (k) => k <= spot) };
+	}
+	// term structure: the front expiry's at-the-money volatility against the next one's (front above next = the market is pricing something near)
+	function term(frontRows, backRows, spot, Tf, Tb) {
+		const f = atm(frontRows, spot, Tf, null), b = atm(backRows, spot, Tb, null);
+		return f && b && f.iv != null && b.iv != null ? { front: f.iv, back: b.iv, points: (f.iv - b.iv) * 100 } : null;
+	}
+	// options trading unusually hard: today's volume against open interest, fresh quotes only; across everything on the board
+	function unusual(quotes, n, maxAge) {
+		const out = [];
+		for (const [name, q] of Object.entries(quotes)) {
+			const m = OPT.exec(name);
+			if (!m || !(q.vol > 0) || !(q.oi > 0) || !(q.ltp > 0) || !(fnum(q.age_s) != null && q.age_s <= maxAge)) continue;
+			out.push({ name, u: m[1], e: m[2], k: parseFloat(m[3]), t: m[4], ltp: q.ltp, chg: fnum(q.chg), vol: q.vol, oi: q.oi, ratio: q.vol / q.oi });
+		}
+		return out.filter((x) => x.ratio >= 0.5 && x.vol >= 1000).sort((a, b) => b.ratio * Math.log(b.vol) - a.ratio * Math.log(a.vol)).slice(0, n);
+	}
+	// the model chance that a structure ends in profit: the market's own lognormal (volatility = the at-the-money volatility, rate r), integrated over the payoff at expiry
+	function pop(legs, spot, T, sig, r) {
+		if (!(spot > 0 && T > 0 && sig > 0) || !legs.length) return null;
+		const sd = sig * Math.sqrt(T), n = 800, lo = -5 * sd, hi = 5 * sd;
+		let prob = 0, tot = 0;
+		for (let i = 0; i < n; i++) {
+			const z = lo + ((i + 0.5) / n) * (hi - lo), w = Math.exp(-z * z / (2 * sd * sd)), S = spot * Math.exp((r - sig * sig / 2) * T + z);
+			const payoff = legs.reduce((a, l) => a + QB.legPay(l, S), 0);
+			tot += w;
+			if (payoff > 0) prob += w;
+		}
+		return tot > 0 ? prob / tot : null;
+	}
+	const VIEWS = {
+		up: { name: "Up", ids: ["long_call", "bull_call_spread", "bull_put_spread"] },
+		down: { name: "Down", ids: ["long_put", "bear_put_spread", "bear_call_spread"] },
+		range: { name: "Stays in a range", ids: ["iron_condor", "iron_butterfly", "bull_put_spread", "bear_call_spread"] },
+		big: { name: "Big move, either way", ids: ["long_straddle", "long_strangle"] },
+	};
+	// ideas for a view: every structure that fits it, at widths 1 to 4 strikes, each analysed on the live prices and ranked. analyzeFn(id, width) -> the builder's analysis (or {errors}).
+	function ideas(view, analyzeFn, ctx) {
+		const v = VIEWS[view];
+		if (!v) return [];
+		const out = [];
+		for (const id of v.ids) {
+			const wide = QB.TEMPLATES[id].wide;
+			for (const width of wide ? [1, 2, 3, 4] : [1]) {
+				const a = analyzeFn(id, width);
+				if (!a || (a.errors && a.errors.length) || !isFinite(a.maxLoss) || !(a.maxLoss > 0)) continue;
+				const rr = a.unlimitedProfit ? Infinity : a.maxProfit / a.maxLoss;
+				out.push({ id, width, name: QB.TEMPLATES[id].name, premium: a.premium, maxLoss: a.maxLoss, maxProfit: a.unlimitedProfit ? Infinity : a.maxProfit, rr, breakevens: a.breakevens, paperOk: a.paperOk === true, fits: a.ok === true,
+					pop: pop(a.legs, ctx.spot, ctx.T, ctx.sigma, ctx.r) });
+			}
+		}
+		return out;
+	}
+	const SORTS = {
+		rr: (a, b) => (b.rr === a.rr ? 0 : b.rr === Infinity ? 1 : a.rr === Infinity ? -1 : b.rr - a.rr),
+		pop: (a, b) => (b.pop || 0) - (a.pop || 0),
+		cheap: (a, b) => Math.abs(a.premium) - Math.abs(b.premium),
+	};
+	const rank = (list, by) => list.slice().sort(SORTS[by] || SORTS.rr);
+	return { chainRows, atm, skew, pcr, maxPain, walls, term, unusual, pop, ideas, rank, VIEWS, midOf };
+})();
+/* @@analyse:end */
+
 // ---- the Build tab: pick an underlying, an expiry and a structure; see what it costs, where it makes and loses, and whether it fits the desk's limits. Paper only: no order is sent from here.
-S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "" };
+S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr" };
 function bdChains(data) {                                                // the underlyings the builder can price: an index with a known lot size, and its board chains
 	const c = QB.conf(), all = liveChains(data), out = Object.create(null);
 	for (const u of Object.keys(c.inst)) if (all[u] && Object.keys(all[u]).length) out[u] = all[u];
 	return out;
+}
+// ---- the market read and the ideas for a view, above the builder ----------------------------------------------------------------------------
+function bdRead(ctx) {
+	const { B, data, chains, ch, exps, spot, T, sq, c } = ctx;
+	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r), a = AN.atm(rows, spot, T, sq.chg);
+	if (!a || a.iv == null) return h("div", { class: "note" }, "Not enough two-sided prices around the money yet to read the market.");
+	const sk = AN.skew(rows, spot, 3), pc = AN.pcr(rows), mp = AN.maxPain(rows), w = AN.walls(rows, spot, 2);
+	const next = exps[exps.indexOf(B.exp) + 1], tm = next ? AN.term(rows, AN.chainRows(chains[B.u][next], data.quotes, spot, QB.yearsTo(next, Date.now()), c.r), spot, T, QB.yearsTo(next, Date.now())) : null;
+	const ages = rows.filter((r) => r.k === a.k).flatMap((r) => [r.ce && r.ce.age, r.pe && r.pe.age]).filter((x) => x != null), oldest = ages.length ? Math.max(...ages) + Math.max(0, (Date.now() - (B.at || Date.now())) / 1000) : null;
+	const kv = (k, v, note) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line);gap:12px;align-items:flex-start" }, h("span", { class: "f3" }, k), h("span", { style: "text-align:right" }, h("b", { class: "mono" }, v), note ? h("div", { class: "f3", style: "font-size:11.5px" }, note) : null));
+	const pct = (x, d = 2) => (x == null ? "—" : x.toFixed(d) + "%"), lv = (list) => (list.length ? list.map((x) => num(x.k, 0)).join(", ") : "—");
+	const un = AN.unusual(data.quotes, 5, 120);
+	return h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Market read: ${B.u} ${B.exp}`),
+		oldest != null && oldest > 60 ? h("div", { class: "warn", style: "font-size:12.5px;padding:2px 16px" }, `The prices at the money are ${Math.round(oldest)} s old: this read may be stale.`) : null,
+		kv("Volatility at the money", pct(a.iv * 100, 1), `strike ${num(a.k, 0)}`),
+		kv("The straddle prices a move of", a.expiryMovePct != null ? `±${pct(a.expiryMovePct)} (±${inr(a.straddle)} a unit)` : "—", `by ${B.exp}`),
+		kv("A normal day, on that volatility", `±${pct(a.dayMovePct)}`, a.todayPct != null ? `today so far ${signed(a.todayPct)}% (${a.todayVsImplied != null ? a.todayVsImplied.toFixed(1) + "x a normal day" : "—"})` : null),
+		sk ? kv("Skew (puts minus calls, 3 strikes out)", `${signed(sk.points, 1)} vol points`, sk.points > 1 ? "puts cost more: the market pays up for downside" : sk.points < -1 ? "calls cost more: the market pays up for upside" : "balanced") : null,
+		tm ? kv("This expiry against the next", `${signed(tm.points, 1)} vol points`, tm.points > 1 ? "near-term volatility is dearer: the market prices something soon" : tm.points < -1 ? "later volatility is dearer" : "flat") : null,
+		kv("Puts per call (open interest)", pc.oi != null ? pc.oi.toFixed(2) : "—", pc.vol != null ? `traded today ${pc.vol.toFixed(2)}` : null),
+		kv("Max pain", mp != null ? num(mp, 0) : "—", mp != null ? `${signed(((mp - spot) / spot) * 100)}% from the price: where option buyers would collect least at expiry` : "no open interest on the board"),
+		kv("Most open interest above / below", `${lv(w.resistance)} / ${lv(w.support)}`, "calls above the price, puts below it"),
+		un.length ? h("div", { class: "pad", style: "border-top:1px solid var(--line)" }, h("div", { class: "f3", style: "font-size:12px;margin-bottom:4px" }, "Options trading unusually hard today (volume against open interest, across the board)"),
+			un.map((x) => h("div", { class: "row", style: "justify-content:space-between;font-size:12.5px;padding:2px 0" }, h("span", { class: "mono" }, `${x.u} ${x.e} ${num(x.k, 0)} ${x.t}`), h("span", { class: "mono f3" }, `${x.ratio.toFixed(1)}x · ${signed(x.chg || 0)}%`)))) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 10px" }, "What the options imply and what is open: counts and prices, not forecasts. Volatility is the market's own, from the mid of the bid and the offer."));
+}
+function bdIdeas(ctx) {
+	const { B, strikes, names, spot, T, c, data, sq, rows } = ctx;
+	const sigma = AN.atm(rows, spot, T, null);
+	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
+	const box = h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Ideas for your view"),
+		h("div", { class: "chips", style: "padding:4px 16px" }, Object.entries(AN.VIEWS).map(([id, v]) => chip(v.name, B.view === id, () => { B.view = B.view === id ? null : id; bdDraw(); }))));
+	if (!B.view) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Pick what you expect and every structure that fits it is priced on the live board and ranked."));
+	if (!sigma || sigma.iv == null) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "No volatility to price the chances with yet."));
+	const analyzeFn = (id, width) => {
+		const L = QB.legsFor(id, strikes, spot, names, width);
+		return L.error ? null : QB.analyze({ u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: 1 });
+	};
+	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: c.r }), B.sort).slice(0, 6);
+	put(box, h("div", { class: "chips", style: "padding:0 16px 4px" }, [["rr", "Best reward for the risk"], ["pop", "Most likely to profit"], ["cheap", "Cheapest"]].map(([id, t]) => chip(t, B.sort === id, () => { B.sort = id; bdDraw(); }))));
+	if (!list.length) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "None of these structures can be priced on the board right now."));
+	for (const x of list) put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+		h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", {}, x.name + (QB.TEMPLATES[x.id].wide ? ` (${x.width} strike${x.width === 1 ? "" : "s"} wide)` : "")), h("span", { class: "tag " + (x.paperOk ? "bull" : "flat") }, x.paperOk ? "paper desk can open" : "what-if only")),
+		h("div", { class: "f3", style: "font-size:12px;line-height:1.55" }, `${x.premium >= 0 ? "Pay" : "Receive"} ${inr(Math.abs(x.premium))} · worst loss ${inr(x.maxLoss)} · best profit ${x.maxProfit === Infinity ? "no cap" : inr(x.maxProfit)} · chance on the model ${x.pop != null ? Math.round(x.pop * 100) + "%" : "—"}`),
+		h("button", { class: "btn", style: "margin-top:6px", onclick: () => { B.tpl = x.id; B.width = x.width; bdDraw(); scrollTo({ top: 0, behavior: "smooth" }); } }, "Build this")));
+	return put(box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "The chance uses the market's own volatility, so before costs every structure here is a fair bet: it tells you how a trade pays, not whether to take it. Your edge is your view."));
 }
 function bdPayoff(a, spot) {
 	const W = 640, H = 220, P = { l: 78, r: 12, t: 12, b: 26 }, el = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "bd-chart", role: "img", "aria-label": "Profit and loss at expiry and today, by price of the underlying", style: "width:100%;height:auto;display:block" });
@@ -1108,6 +1279,7 @@ function bdDraw() {
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
+	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows: AN.chainRows(ch, data.quotes, spot, T, c.r) }));
 	const L = QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
 	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
