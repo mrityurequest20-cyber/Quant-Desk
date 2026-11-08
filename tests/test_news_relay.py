@@ -111,7 +111,7 @@ out.bad = bad;
 out.notjson = (await call("POST", "/news/ingest", { token: ING, body: "{nope" })).status;
 out.huge = (await call("POST", "/news/ingest", { token: ING, body: "x".repeat(250000) })).status;
 // 300 stories with wide characters: cut to 80 by count and then by size, and stored under the limit
-const wide = Array.from({ length: 110 }, (_, i) => item(i, { title: "₹".repeat(200), sources: Array.from({ length: 6 }, () => "₹".repeat(40)), source: "₹".repeat(40) }));
+const wide = Array.from({ length: 80 }, (_, i) => item(i, { title: "₹".repeat(200), link: "https://example.com/" + "p".repeat(470), sources: Array.from({ length: 6 }, () => "₹".repeat(40)), source: "₹".repeat(40) }));
 out.big = (await call("POST", "/news/ingest", { token: ING, body: digest(wide) })).status;
 const g = (await call("GET", "/news", { token: READ })).body.digest;
 out.n = g.n; out.chars = JSON.stringify(g).length; out.stored = JSON.stringify(mem.get("news")).length; out.newestFirst = g.items.every((x, i) => i === 0 || g.items[i - 1].ts >= x.ts);
@@ -120,7 +120,7 @@ const h = (await call("GET", "/news", { token: READ })).body.digest;
 out.after = { n: h.n, titles: h.items.map((x) => x.title) };
 """)
     assert all(v == 400 for v in o["bad"].values()), o["bad"] and o["notjson"] == 400 and o["huge"] == 413
-    assert o["big"] == 200 and o["n"] <= 80 and o["chars"] <= 60000 and o["stored"] < 131072 and o["newestFirst"]
+    assert o["big"] == 200 and 1 < o["n"] < 80 and o["chars"] <= 60000 and o["stored"] < 131072 and o["newestFirst"]
     assert o["after"] == {"n": 1, "titles": ["Story 900 about Nifty and HDFC Bank"]}                                      # one digest: the newest replaces the last
 
 

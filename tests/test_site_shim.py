@@ -57,11 +57,16 @@ const unknown = await window.fetch("/api/i/nothing-here");                 // no
 out.unknown = unknown.status;
 const lookalike = await window.fetch("/liveness");                         // starts with /live but not /live/: not the relay's
 out.lookalike = lookalike.status;
+const news = await window.fetch("/news", KEY);                              // the news digest is the same private relay
+out.news = news.status;
+const newsLookalike = await window.fetch("/newsletter");                    // /newsletter and /news/x are not the digest
+out.newsLookalike = newsLookalike.status;
 out.calls = calls.map((c) => [c.url, c.init && c.init.headers && c.init.headers.Authorization || null]);
 """)
     assert out["live"]["status"] == 200 and out["live"]["body"]["real"] is True               # it reached the network (the real fetch), not the shim's 404
     assert out["series"] == "/live/series?name=NIFTY" and out["health"] == 200
     assert out["api"]["status"] == 200 and out["unknown"] == 404 and out["lookalike"] == 404   # everything else behaves as before
+    assert out["news"] == 200 and out["newsLookalike"] == 404                                   # /news goes to the real network with its key; a lookalike does not
     sent = {c[0]: c[1] for c in out["calls"]}
     assert sent["/live/snapshot"] == "Bearer test-key" and sent["/live/series?name=NIFTY"] == "Bearer test-key"      # the key travels with the request
     assert "data.json" in sent and "/api/i/stats" not in sent                                  # app calls never hit the network
@@ -69,7 +74,7 @@ out.calls = calls.map((c) => [c.url, c.init && c.init.headers && c.init.headers.
 
 @needs_node
 def test_the_old_shim_would_have_failed_this_the_regression_that_hid_the_live_tab(tmp_path):
-    old = ES.LIVE_SHIM.replace('if (path.startsWith("/live/")) return realFetch(url, init);', "")
+    old = ES.LIVE_SHIM.replace('if (path.startsWith("/live/") || path === "/news") return realFetch(url, init);', "")
     assert old != ES.LIVE_SHIM
     out = run(tmp_path, r"""
 const r = await window.fetch("/live/snapshot", { headers: { Authorization: "Bearer k" } });
