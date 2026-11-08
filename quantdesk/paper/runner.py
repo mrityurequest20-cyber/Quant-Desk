@@ -26,6 +26,7 @@ from pathlib import Path
 from ..core.types import OPTION, Instrument
 from ..markets import sessions as MK
 from .account import Account, is_number
+from . import slippage as SL
 from .broker import PaperBroker
 from .risk import Order, Quote, RiskGate
 
@@ -131,9 +132,15 @@ def clean_order(raw) -> tuple[dict | None, str | None]:
     if group is not None and not (_text(group, 1, 40) and not CTRL.search(group)):
         return None, "the group label is malformed"
     q = _num(raw.get("queued_at"))
+    ref = None                                                              # what the trader saw when deciding: used ONLY to report slippage, never to price or allow a fill
+    r = raw.get("ref")
+    if isinstance(r, dict):
+        rb, ra, rt = _num(r.get("bid")), _num(r.get("ask")), _num(r.get("at"))
+        if rb is not None and ra is not None and 0 < rb <= ra:
+            ref = {"bid": rb, "ask": ra, "at": rt if rt is not None and 0 < rt < 4e12 else None}
     return {"id": oid, "side": side, "symbol": raw.get("symbol"), "lots": lots, "strategy": strategy.strip() if isinstance(strategy, str) else None,
             "thesis": thesis.strip() if isinstance(thesis, str) else None, "limit": float(limit) if limit is not None else None,
-            "group": group, "queued_at": q}, None
+            "group": group, "queued_at": q, "ref": ref}, None
 
 
 def done_ids(account: Account) -> set[str]:
@@ -318,19 +325,29 @@ class Runner:
                 return res
             order = Order(inst, SEGMENT, o["lots"] * inst.lot_size, o["strategy"], f"{o['thesis']}{MARK}[order {o['id']}]")
             marks = self.marks(snap, now)
-            d, row = self.broker.buy(order, quote, marks, now)
+            d, row = self.broker.buy(order, quote, marks, now, self._ref(o, now))
         else:
             pos = self.account.positions.get(inst.symbol)
             qty = pos.qty if (pos and o["lots"] == "all") else (o["lots"] * inst.lot_size if pos else 0)
             if quote is not None and o["limit"] is not None and quote.bid < o["limit"]:
                 res.update(status="refused", reasons=[f"the bid is {quote.bid:g}, below your limit {o['limit']:g}: not sold"])
                 return res
-            d, row = self.broker.sell(inst.symbol, qty, quote, now, f"{MARK}exit {o['id']}")
+            d, row = self.broker.sell(inst.symbol, qty, quote, now, f"{MARK}exit {o['id']}", self._ref(o, now))
         if row is None:
             res.update(status="refused", reasons=d.reasons or ["refused"])
         else:
-            res.update(status="filled", reasons=[], fill={k: row[k] for k in ("seq", "kind", "ts", "qty", "price", "fees") if k in row} | {"symbol": inst.symbol})
+            res.update(status="filled", reasons=[], fill={k: row[k] for k in ("seq", "kind", "ts", "qty", "price", "fees") if k in row} | {"symbol": inst.symbol}
+                       | ({"slip": row["slip"]} if isinstance(row.get("slip"), dict) else {}))
         return res
+
+    @staticmethod
+    def _ref(o: dict, now: dt.datetime) -> dict | None:
+        """What the trader saw, with the time it was seen (the board's own time if the app sent it, else when the order was queued)."""
+        r = o.get("ref")
+        if not r:
+            return None
+        at = r.get("at") if r.get("at") is not None else o.get("queued_at")
+        return {"bid": r["bid"], "ask": r["ask"], "at": at}
 
     # ---- what the app shows ------------------------------------------------------------------------------------------------------
     def summary(self, snap, now) -> dict:
@@ -346,6 +363,7 @@ class Runner:
         return {"v": 1, "asof": now.isoformat(), "equity": fin(eq), "cash": a.cash, "capital0": a.capital0, "net_pnl": fin(eq - a.capital0) if is_number(eq) else None,
                 "realized": a.realized, "fees": a.fees, "hwm": a.hwm, "day": a.day, "day_start": a.day_start, "day_halted": a.day_halted, "halt": a.halt,
                 "kill": self.kill_file.exists(), "stuck": [s for s, p in a.positions.items() if p.instrument.expiry and p.instrument.expiry < now.astimezone(IST).date()], "day_floor": fin(day_floor), "dd_floor": fin(dd_floor), "positions": pos,
+                "slippage": SL.totals(a.ledger), "slips": [{"seq": r["seq"], "symbol": r.get("symbol"), **r["slip"]} for r in [x for x in a.ledger if isinstance(x.get("slip"), dict)][-8:]],
                 "ledger_tail": [_tail(r) for r in a.ledger[-40:]],
                 "ledger_len": len(a.ledger), "ledger_ok": a.verify_ledger()}
 

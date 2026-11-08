@@ -57,7 +57,7 @@ def buy(desk, o=None, q=None, marks=None, now=MON):
 
 # ---- a normal trade ----------------------------------------------------------------------------------------------------------
 def test_an_allowed_entry_fills_at_the_ask_pays_fees_and_is_recorded_with_its_thesis(desk):
-    d, row = buy(desk)
+    d, row = buy(desk, q=quote(ask_qty=5000, bid_qty=5000))          # 75 of 5000 shown: no modelled impact
     _, acct, *_ = desk
     assert d.allowed and row["kind"] == "buy" and row["price"] == 100.0 and row["fees"] > 0
     assert acct.cash == pytest.approx(500_000 - 75 * 100.0 - row["fees"])
@@ -68,8 +68,9 @@ def test_an_allowed_entry_fills_at_the_ask_pays_fees_and_is_recorded_with_its_th
 
 def test_a_sell_fills_at_the_bid_and_the_round_trip_pays_the_spread_and_fees(desk):
     broker, acct, *_ = desk
-    buy(desk)
-    d, row = broker.sell(opt().symbol, 75, quote(), MON)
+    sized = quote(ask_qty=5000, bid_qty=5000)
+    buy(desk, q=sized)
+    d, row = broker.sell(opt().symbol, 75, sized, MON)
     assert d.allowed and row["price"] == 99.0 and opt().symbol not in acct.positions
     assert acct.cash < 500_000 and acct.realized == pytest.approx(-75.0) and acct.fees > 0          # -1 point x 75, before fees
 
@@ -150,7 +151,7 @@ def test_not_enough_cash_refuses(cfg, tmp_path):
 def test_there_is_no_cap_on_the_number_of_trades(desk):
     broker, acct, gate, _ = desk
     assert not any("max" in f and ("trade" in f or "open" in f or "position" in f) for f in Limits.__dataclass_fields__)
-    cheap = quote(bid=1.9, ask=2.0)
+    cheap = quote(bid=1.9, ask=2.0, ask_qty=100_000, bid_qty=100_000)
     for i in range(200):                                                                 # 200 entries and exits, one after another
         inst = opt(strike=20000 + 50 * i)
         d, _ = broker.buy(order(inst=inst), cheap, {}, MON)
@@ -163,7 +164,7 @@ def test_there_is_no_cap_on_the_number_of_trades(desk):
 def test_how_much_can_be_open_at_once_is_bounded_by_the_loss_budget_not_by_a_count(cfg, tmp_path):
     acct = Account(500_000)
     broker = PaperBroker(cfg, acct, RiskGate(cfg, kill=KillSwitch(tmp_path / "K")))
-    cheap = quote(bid=1.9, ask=2.0)
+    cheap = quote(bid=1.9, ask=2.0, ask_qty=100_000, bid_qty=100_000)
     n = 0
     while True:
         marks = {s_: 1.9 for s_ in acct.positions}                                       # marked at the bid

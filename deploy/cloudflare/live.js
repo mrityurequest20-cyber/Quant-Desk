@@ -228,7 +228,9 @@ async function handlePaper(request, env, url, stub) {
 		if (route === "POST /paper/result" && !cleanResult(body)) return reply(400, { error: "not a valid result" });
 		if (route === "POST /paper/state" && !cleanState(body)) return reply(400, { error: "not a valid state" });
 	}
-	return stub.fetch("https://live" + url.pathname + url.search, { method: request.method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+	let fwd;
+	try { fwd = body !== undefined ? JSON.stringify(body) : undefined; } catch (e) { return reply(400, { error: "not valid" }); }      // absurdly deep nesting parses but cannot be written back out
+	return stub.fetch("https://live" + url.pathname + url.search, { method: request.method, ...(fwd !== undefined ? { body: fwd } : {}) });
 }
 const PAPER_MAX_BODY = 1300000;           // a saved account is up to MAX_CHUNKS x CHUNK characters
 
