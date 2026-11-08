@@ -1348,8 +1348,9 @@ const PT = (() => {
 	const flat = (t) => String(t == null ? "" : t).split(/\s+/).filter(Boolean).join(" ");
 	const thesisOk = (t) => { const x = flat(t); return x.length >= 20 && x.length <= 1000; };
 	const stratOk = (t) => { const x = flat(t); return x.length >= 1 && x.length <= 60; };
-	// a buy may fill a little above the offer shown (two ticks or 2%, whichever is more), never further: the runner refuses it if the offer has run away
-	const limitFor = (ask) => Math.round(Math.ceil((ask + Math.max(2 * TICK, 0.02 * ask)) / TICK - 1e-9) * TICK * 100) / 100;
+	// a buy may fill a little above the offer shown (three ticks or 2%, whichever is more), never further: the runner refuses it if the offer has run away or the size is expected to pay more
+	// (the allowance covers the paper desk's largest modelled size impact, 3 ticks, so a limit is never tighter than what a big order is expected to pay)
+	const limitFor = (ask) => Math.round(Math.ceil((ask + Math.max(3 * TICK, 0.02 * ask)) / TICK - 1e-9) * TICK * 100) / 100;
 	// the orders for an analysed structure: one buy per leg. {error} when it cannot be sent.
 	function ordersFor(a, strategy, thesis, group, nowMs) {
 		if (!a || a.paperOk !== true || !Array.isArray(a.legs) || !a.legs.length) return { error: "The paper desk cannot open this structure today (see the list above)." };
