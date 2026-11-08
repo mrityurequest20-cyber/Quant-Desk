@@ -31,6 +31,7 @@ def stage_worker(tmp_path):
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "live.js", tmp_path / "live.js")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "kotak.js", tmp_path / "kotak.js")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "series.js", tmp_path / "series.js")
+    shutil.copyfile(ROOT / "deploy" / "cloudflare" / "paper.js", tmp_path / "paper.js")
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
 
 
