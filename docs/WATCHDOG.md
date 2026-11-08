@@ -43,17 +43,17 @@ ntfy's anonymous e-mail is disabled on ntfy.sh, so e-mail goes through GitHub, n
    In the ntfy app subscribe to the same topic.
 3. Optional **secret** `CRED_EXPIRY`, a JSON object of label to expiry date, for example
    `{"cred-1": "2027-01-15", "cred-2": "2026-12-01"}`. Use neutral labels you will recognise, not the real secret names: the label appears in the push (never in an issue).
-4. Check the Worker shows **five** cron triggers after the next deploy from `main` (the fifth is `0,30 10-16 * * *`, the
-   watchdog's own; it does not start the desk).
+4. Check the Worker shows **five** cron triggers after the next deploy from `main`: `*/10 2-9 * * *`, `*/10 10-16 * * *`, `*/10 0-1,17-23 * * *` (together: every ten minutes, around the clock, every day;
+   each starts the desk scheduler and runs the watchdog) and the two collect-wide ones, `55 9 * * MON-FRI` and `15 10 * * MON-FRI`.
 5. In GitHub, Settings, Notifications: make sure you receive email for issues assigned to you (the default).
 
 `GH_DISPATCH_TOKEN` (already there) needs **Actions: read and write**. It also lifts GitHub's rate limit on the read-only calls.
 
 ## The drill (do it once, then after any change to the Worker)
 
-1. Add the plain variable `WATCHDOG_TEST` = `1` to the Worker. At the next half-hour firing (15:30 to 22:00 IST, any day) you get a
+1. Add the plain variable `WATCHDOG_TEST` = `1` to the Worker. At the next half-hour firing (:00 or :30, any hour, any day) you get a
    push **and** an issue titled `[watchdog] INFO TEST: Watchdog test`. Remove the variable straight away: it fires at every
-   firing while set.
+   half-hour firing while set.
 2. To prove a real failure alerts: with the desk stopped on a trading morning (or a Saturday's digest), expect the P1 push at the
    times in the table and the issue within a minute or two.
 3. Plan exit test for P0: a deliberately stopped workflow produces a push **and** an e-mail within 15 minutes.
@@ -68,8 +68,19 @@ ntfy's anonymous e-mail is disabled on ntfy.sh, so e-mail goes through GitHub, n
 - **GitHub can be the thing that is down.** Push does not depend on it; e-mail does.
 - **W6 sees 08:00 to 21:00 on trading days only.** Overnight and weekend failures are caught by the Saturday digest, which counts at most the last 100 failed runs.
 - **Alerts can be forged by anyone who can dispatch `watchdog-alert.yml`** (write access, or the dispatch token): they can open a convincing issue assigned to you. That is no wider than that token's existing reach (it can already dispatch `clear-halt.yml`). Email dedupe is per check per day, and the workflow runs one at a time per check and day.
-- **`WATCHDOG_TEST=1` alerts at every half-hour firing** (a push and an INFO issue) until the variable is removed.
+- **`WATCHDOG_TEST=1` alerts at every half-hour firing** (a push and an INFO issue; 48 a day) until the variable is removed.
+- **W16 and W17 prove a run happened, not that data arrived.** `kite-evening.yml` is deliberately green when its login gate refuses (a Kite problem is a warning), so W16 can pass with no candles collected; the data-health report (`data health`) is what says whether the evening's candles are there.
 - **Five cron triggers is the free plan's limit.** Any new check must reuse these firing times (a test checks every slot against
   the crons).
 - **Not built yet:** the optional dead-man's switch (an external service that alerts if the Worker itself dies), per-sleeve
   trade-count checks, and the HAR session count in the digest (needs the journal).
+
+## Around the clock (8 Nov 2026)
+
+The Worker's cron now fires **every 10 minutes, all day, every day** (three crons that tile the 24 UTC hours, so no minute fires twice and no alert is sent twice), and each firing asks GitHub to run `scheduler.yml`; `scheduler.py` decides what, if anything, to start. New around-the-clock jobs and their checks:
+
+| Check | When (IST) | What |
+|---|---|---|
+| W15 | 00:00, 04:00, 08:00, 12:00, 16:00, 20:00, every day | The news digest (`news.yml`, started every tick by the scheduler, day and night) has a successful run in the last hour. |
+| W16 | 06:00 Tue to Sat | The MCX/currency evening candles (`kite-evening.yml`, started once a night by the Worker's own clock in the 00:10 IST firing (not by the desk scheduler, which a test keeps away from the Kite jobs), never retried because it logs in to Kite) was started after midnight and did not fail. |
+| W17 | 11:10 Tue to Sat | The FX minute bars (`fx-minutes.yml`, started by the scheduler from 04:05 IST, retried up to three times) ran today and did not fail. |

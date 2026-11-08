@@ -102,11 +102,13 @@ process.stdout.write(JSON.stringify({ ...out, log: logs[0] }) + "\n");
 
 def test_cron_triggers_start_the_desk_scheduler():
     c = _config()
-    # 07:30-15:20 IST Mon-Fri, plus a Sunday 17:30 IST token check (Cloudflare cron is UTC, and its weekday 1 is SUNDAY:
-    # numeric days are refused here so "1-5" can't silently mean Sunday-Thursday again)
-    # plus 15:25 / 15:45 IST (09:55 / 10:15 UTC) Mon-Fri, which start collect-wide.yml on time (F-19-2)
-    # plus the watchdog's own half-hourly trigger 15:30-22:00 IST (10:00-16:30 UTC), which must not start the desk: five, the free limit
-    assert c["triggers"]["crons"] == ["*/10 2-9 * * MON-FRI", "55 9 * * MON-FRI", "15 10 * * MON-FRI", "0 12 * * SUN", "0,30 10-16 * * *"]
+    # every 10 minutes AROUND THE CLOCK, every day (three crons that tile the 24 UTC hours, so no minute fires twice and the watchdog's alerts are never doubled)
+    # (Cloudflare cron is UTC, and its weekday 1 is SUNDAY: numeric days are refused here so "1-5" can't silently mean Sunday-Thursday again)
+    # plus 15:25 / 15:45 IST (09:55 / 10:15 UTC) Mon-Fri, which start collect-wide.yml on time (F-19-2): five, the free limit
+    assert c["triggers"]["crons"] == ["*/10 2-9 * * *", "*/10 10-16 * * *", "*/10 0-1,17-23 * * *", "55 9 * * MON-FRI", "15 10 * * MON-FRI"]
+    ten = [x for x in c["triggers"]["crons"] if x.startswith("*/10 ")]
+    hours = sorted(h for x in ten for part in x.split()[1].split(",") for h in range(int(part.split("-")[0]), int(part.split("-")[-1]) + 1))
+    assert hours == list(range(24))                                                                  # every hour covered once: no gap at night, no double firing
     for cron in c["triggers"]["crons"]:
         dow = cron.split()[4]
         assert dow == "*" or dow.replace("-", "").replace(",", "").isalpha(), cron

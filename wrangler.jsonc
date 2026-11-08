@@ -17,15 +17,15 @@
   // (deploy/cloudflare/kotak.js, docs/LIVE.md): the second live source, with no GitHub runner in its path. Without it the poller stays off.
   "durable_objects": { "bindings": [{ "name": "LIVE", "class_name": "LiveBoard" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveBoard"] }],
-  // the desk's alarm clock (worker.js): ask GitHub to run scheduler.yml every 10 minutes, 07:30-15:20 IST, Mon-Fri, and
-  // once on Sunday at 17:30 IST as a weekly check that the token still works (scheduler.py does nothing on a Sunday).
-  // Cloudflare numbers weekdays 1 = Sunday … 7 = Saturday (not 0 = Sunday), so the days are written by name: "1-5" here
+  // the desk's alarm clock (worker.js): ask GitHub to run scheduler.yml every 10 minutes, AROUND THE CLOCK, every day (8 Nov 2026, owner: nothing may be missed; news, the MCX evening and the
+  // weekend checks all need it). Written as three crons that tile the 24 hours (UTC 02-09, 10-16, 17-23 and 00-01) so that no minute is fired twice: the watchdog runs inside each firing and its
+  // slots are minute-exact, so two crons on one minute would send every alert twice. scheduler.py decides what, if anything, to start (nothing outside its windows).
+  // Cloudflare numbers weekdays 1 = Sunday … 7 = Saturday (not 0 = Sunday), so any weekday in a cron is written by name: "1-5" here
   // meant Sunday-Thursday and skipped every Friday until 4 Oct 2026.
   // Also 15:25 and 15:45 IST Mon-Fri (09:55 and 10:15 UTC): start collect-wide.yml's stocks and minutes steps on time instead
   // of waiting for GitHub's cron, which has been hours late (F-19-2; the stock snapshot only exists while the book is live).
-  // The watchdog (deploy/cloudflare/watchdog.js) runs inside these same firings; its after-close checks and the Saturday digest
-  // need a fifth trigger, every half hour from 15:30 to 22:00 IST (10:00-16:30 UTC), every day. That one does NOT start the desk.
+  // The watchdog (deploy/cloudflare/watchdog.js) runs inside these same firings (its slots are at times that are multiples of ten minutes).
   // Five cron triggers in all: the limit of Cloudflare's free plan, so any further check must reuse these patterns.
   // Needs the Worker secret GH_DISPATCH_TOKEN; without it the trigger logs why and does nothing.
-  "triggers": { "crons": ["*/10 2-9 * * MON-FRI", "55 9 * * MON-FRI", "15 10 * * MON-FRI", "0 12 * * SUN", "0,30 10-16 * * *"] }
+  "triggers": { "crons": ["*/10 2-9 * * *", "*/10 10-16 * * *", "*/10 0-1,17-23 * * *", "55 9 * * MON-FRI", "15 10 * * MON-FRI"] }
 }
