@@ -395,6 +395,20 @@ paper:
   underlyings:
     nse_fo: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY]
 
+# What the desk SHOWS: the app's Markets tab and the instruments subscribed with their order book (quantdesk/data/kite_universe.py deep_symbols). It is NOT what the desk
+# records: every F&O underlying, every MCX commodity and every currency pair is still recorded and can be found with the app's search. Names are the board's own (an index or
+# stock symbol; an MCX or currency contract by its name, without the -MCX / -CDS suffix). A name that is not on the board is shown as such, never invented.
+# stocks: the 20 NSE stocks with the highest F&O traded value (futures plus options, the exchange's own TtlTrfVal in its daily F&O bhavcopy), averaged over the 31 sessions
+# from 28 Sep to 12 Nov 2026, in that order. The first eight hold their place from week to week; the rest change with the results calendar, so re-rank it each quarter.
+# This list widens what is DISPLAYED. What the paper desk may trade is paper.underlyings, and only that.
+desk:
+  watchlist:
+    indices: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50, SENSEX, BANKEX, INDIAVIX]
+    stocks: [RELIANCE, HDFCBANK, SBIN, ICICIBANK, TCS, BHARTIARTL, BSE, INFY, AXISBANK, MARUTI, DIXON, PAYTM, BAJAJ-AUTO, KOTAKBANK, BHEL, LAURUSLABS, DIVISLAB, ITC, BAJFINANCE, "M&M"]
+    commodities: [CRUDEOIL, CRUDEOILM, NATURALGAS, NATGASMINI, GOLD, GOLDM, SILVER, SILVERM, COPPER]
+    currencies: [USDINR, EURINR, GBPINR, JPYINR]
+  stock_option_steps: 8            # strikes each side of the money subscribed for each watchlist stock's nearest expiry (calls and puts), for its option chain in the app
+
 # Holiday lists for the segments whose calendar is not NSE's (quantdesk/markets). Source for both: Zerodha's published holiday
 # calendar, https://zerodha.com/marketintel/holiday-calendar/, read on 6 Nov 2026. Its NSE/BSE list is identical to calendar.holidays
 # below, which cross-checks that page against the NSE circular this file already cites.

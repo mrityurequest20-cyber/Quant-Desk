@@ -145,7 +145,7 @@ function glossaryList() {
 }
 
 // ---- shell: tabs, routing, sheets, theme ---------------------------------------------------------------------------
-const TABS = [["live", "Live"], ["build", "Build"], ["paper", "Paper"], ["today", "Today"], ["trades", "History"], ["data", "Data"]];
+const TABS = [["live", "Markets"], ["paper", "Positions"], ["today", "Today"], ["trades", "History"], ["data", "Data"]];
 const SUBS = { trades: [["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]] };
 // the app's mark: a price path that tests a level, pulls back and breaks through it
 function mark(size) {
@@ -190,7 +190,7 @@ function openSheet(title, ...content) {
 	b.scrollTop = 0;
 	document.body.style.overflow = "hidden";
 }
-function closeSheet() { $("#sheet").classList.remove("open"); document.body.style.overflow = ""; }
+function closeSheet() { $("#sheet").classList.remove("open"); document.body.style.overflow = ""; S.tk = null; }
 function themeMode() { return store("qd.theme") || "auto"; }
 function applyTheme(mode) {
 	const r = document.documentElement;
@@ -285,6 +285,7 @@ function lwTheme() {
 }
 function restyleCharts() {
 	if (S.eq) { try { const t = lwTheme(); delete t.timeScale; S.eq.chart.applyOptions(t); S.eq.paint(); } catch (e) { /* gone */ } }
+	if (S.lv && S.lv.chart) { liveChartDrop(); if (S.tab === "live") liveDraw(); }                  // the instrument chart is made again in the new colours
 }
 async function renderTrades(full) {
 	seg($("#t-seg"), SUBS.trades, S.sub.trades, (v) => { S.sub.trades = v; history.replaceState(null, "", "#trades/" + v); renderTrades(true); }, "tab");
@@ -629,17 +630,23 @@ function openSettings() {
 }
 
 // ==================================================================================================================
-// ---- Live: every price the Kite recorder watches, refreshed every 5 seconds. PRIVATE: Zerodha's data is licensed to the owner, so the relay
-// (deploy/cloudflare/live.js) answers only to a key typed once into this device. Display only: nothing on this tab can trade. -----------------
-// The universe is the recorder's (kite_universe.py): indices, the near-month future of every F&O underlying, MCX and currency, the F&O stocks' cash
-// prices and index options near the money: a thousand rows or more, so the tab has search, segment filters, sorting and "show more".
+// ---- Markets: the desk's watchlist, refreshed every 5 seconds. PRIVATE: the prices are licensed to the owner, so the relay (deploy/cloudflare/live.js) answers only to a key
+// typed once into this device. The watchlist is the config's (desk.watchlist, published as QD_TRADE.watch): the indices, the most traded F&O stocks, the main commodities and
+// currencies. Everything else the recorders watch is still on the board and is found with the search box. One tap on a row opens that instrument's page.
 const LIVE_FRESH = 15, LIVE_DELAYED = 120;                       // seconds: green up to 15, amber up to 2 minutes, then "no feed"
-const LIVE_SEGS = [["all", "All"], ["idx", "Index"], ["fut", "Futures"], ["eq", "Stocks"], ["opt", "Options"], ["mcx", "MCX"], ["cds", "Currency"]];
-const LIVE_SORTS = [["name", "Name"], ["move", "Movers"], ["fresh", "Newest"]];
-const LIVE_FIRST = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "INDIAVIX", "NIFTY-FUT", "BANKNIFTY-FUT"];
-const LIVE_PAGE = 150;
+const WATCH_GROUPS = [["indices", "Indices"], ["stocks", "Stocks"], ["commodities", "Commodities"], ["currencies", "Currency"]];
+const WATCH_DEF = {                                              // used only when the page was published without a config (QD_TRADE): the config's list is the one that counts
+	indices: ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX", "INDIAVIX"],
+	stocks: ["RELIANCE", "HDFCBANK", "SBIN", "ICICIBANK", "TCS", "BHARTIARTL", "BSE", "INFY", "AXISBANK", "MARUTI", "DIXON", "PAYTM", "BAJAJ-AUTO", "KOTAKBANK", "BHEL", "LAURUSLABS", "DIVISLAB", "ITC", "BAJFINANCE", "M&M"],
+	commodities: ["CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI", "GOLD", "GOLDM", "SILVER", "SILVERM", "COPPER"],
+	currencies: ["USDINR", "EURINR", "GBPINR", "JPYINR"],
+};
+const LIVE_FOUND = 60;                                           // rows a search shows
+const LIVE_TF = [[1, "1m"], [5, "5m"], [15, "15m"]];
 const LIVE_VOL = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
-S.lv = { q: "", seg: "all", sort: "name", limit: LIVE_PAGE, data: null, built: false, sel: null, series: null, exp: null, allStrikes: false };
+const SRC_NAME = { z: "Kite", k: "Kotak", u: "Upstox", d: "Dhan", a: "Angel One", f: "Fyers" };          // the feeds, by the relay's code (deploy/cloudflare/routes.js)
+S.lv = { q: "", grp: "all", data: null, built: false, sel: null, view: "spot", series: null, cand: null, tf: 1, exp: null, allStrikes: false, last: {}, chart: null, at: 0, heavyAt: 0 };
+S.open = {};                                                     // which folded sections are open, by id: a redraw keeps them as the reader left them
 let liveBusy = false;
 const livePx = (v, seg) => (fin(v) ? v.toLocaleString("en-IN", seg === "cds" ? { minimumFractionDigits: 4, maximumFractionDigits: 4 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
 function liveAge(sec) {
@@ -661,60 +668,31 @@ function liveLabel(name, q) {
 }
 function liveKeyForm(note) {
 	const inp = h("input", { type: "password", class: "search", placeholder: "Live key", "aria-label": "Live key", autocomplete: "off", id: "lv-key" });
-	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); S.lv.built = false; $("#lv-body").dataset.state = ""; const bb = $("#bd-body"); if (bb) bb.dataset.state = ""; if (S.tab === "build") renderBuild(); renderLive(); pollHealth(); } };
+	const save = () => { if (inp.value.trim()) { store("qd.livekey", inp.value.trim()); S.lv.built = false; $("#lv-body").dataset.state = ""; const pb = $("#pp-body"); if (pb) pb.dataset.state = ""; if (S.tab === "paper") renderPaper(true); renderLive(); pollHealth(); } };
 	inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
 	return h("div", { class: "panel pad" }, h("div", { style: "font-weight:600;margin-bottom:6px" }, "Live prices"),
 		h("div", { style: "font-size:13px;color:var(--fg2);line-height:1.55;margin-bottom:10px" },
-			"Real-time prices from the desk's Kite recorder, every 5 seconds. They are private to you: type your live key once on this device (it is the LIVE_READ_TOKEN you set on the Worker)."),
+			"Real-time prices from the desk's feeds, every 5 seconds. They are private to you: type your live key once on this device (it is the LIVE_READ_TOKEN you set on the Worker)."),
 		note ? h("div", { class: "warn", style: "font-size:12.5px;margin-bottom:8px" }, note) : null, inp,
-		h("button", { class: "btn block", style: "margin-top:10px", onclick: save }, "Save key"));
+		h("button", { class: "btn primary block", style: "margin-top:10px", onclick: save }, "Save key"));
 }
-function liveRows(data) {
-	const L = S.lv, q = L.q.trim().toLowerCase(), names = Object.keys(data.quotes);
-	const rows = names.filter((n) => (L.seg === "all" || liveSeg(n, data.quotes[n]) === L.seg) && (!q || n.toLowerCase().includes(q) || liveLabel(n, data.quotes[n]).toLowerCase().includes(q)));
-	const rank = (n) => { const k = LIVE_FIRST.indexOf(n); return k < 0 ? 999 : k; };
-	if (L.sort === "move") rows.sort((a, b) => Math.abs(data.quotes[b].chg || 0) - Math.abs(data.quotes[a].chg || 0) || (a < b ? -1 : 1));
-	else if (L.sort === "fresh") rows.sort((a, b) => data.quotes[a].age_s - data.quotes[b].age_s || (a < b ? -1 : 1));
-	else rows.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : 1));
-	return rows;
+// The watchlist: {group: [name, ...]} from the published config; without one, the built-in list. Only plain symbols are taken.
+function watchlist() {
+	const w = typeof window !== "undefined" && window.QD_TRADE && window.QD_TRADE.watch, out = {};
+	for (const [g] of WATCH_GROUPS) out[g] = w && typeof w === "object" ? (Array.isArray(w[g]) ? w[g].filter((n) => typeof n === "string" && /^[A-Z0-9&_.-]{1,32}$/.test(n)) : []) : WATCH_DEF[g];
+	return out;
 }
-function liveDraw() {
-	const L = S.lv, data = L.data, body = $("#lv-body");
-	if (!data || !L.built) return;
-	const newest = data.newest_age_s;
-	const kind = !fin(newest) ? (inSession() ? "stale" : "paused") : newest <= LIVE_FRESH ? "live" : newest <= LIVE_DELAYED ? "stale" : "paused";
-	const label = !fin(newest) ? (inSession() ? "No prices yet" : "Market closed, opens " + nextOpen()) : newest <= LIVE_FRESH ? "Live" : newest <= LIVE_DELAYED ? "Delayed " + liveAge(newest) : "No feed: last " + liveAge(newest) + " ago";
-	const pill = $("#lv-pill"); pill.className = "pill " + kind; $("#lv-pill-t").textContent = label;
-	const counts = {};
-	for (const [n, v] of Object.entries(data.quotes)) { const k = liveSeg(n, v); counts[k] = (counts[k] || 0) + 1; }
-	$("#lv-count").textContent = Object.keys(data.quotes).length.toLocaleString("en-IN") + " instruments · every 5 s";
-	const hl = L.health, ln = $("#lv-sources");
-	if (hl && ln) {                                                   // the state of each source, from /live/health
-		const kt = hl.kotak || {}, kk = hl.kite || {};
-		const ok = (n, a) => (n > 0 && fin(a) && a <= LIVE_FRESH * 2 ? "●" : "○");
-		ln.textContent = `${ok(kk.n, kk.newest_age_s)} Kite ${kk.n || 0}  ·  ${ok(kt.n, kt.newest_age_s)} Kotak ${kt.n || 0}${kt.status && kt.status !== "ok" ? " (" + kt.status + ")" : ""}  ·  ${hl.disagree ? "⚠ " + hl.disagree + " disagree" : "sources agree"}`;
-	}
-	$("#lv-list").hidden = !!L.sel; $("#lv-detail").hidden = !L.sel;
-	if (L.sel) return liveDetail();
-	document.querySelectorAll("#lv-segs .chip").forEach((c) => { c.setAttribute("aria-pressed", String(c.dataset.k === L.seg)); const n = c.dataset.k === "all" ? Object.keys(data.quotes).length : counts[c.dataset.k] || 0; c.lastChild.textContent = " " + n; });
-	document.querySelectorAll("#lv-sorts .chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.k === L.sort)));
-	const rows = liveRows(data), shown = rows.slice(0, L.limit), tb = $("#lv-table");
-	tb.textContent = "";
-	if (!rows.length) { put(tb, empty("live", Object.keys(data.quotes).length ? "Nothing matches." : "Nothing has arrived yet. The recorder pushes from 09:15 IST on a trading day.")); return; }
-	const trs = shown.map((n) => {
-		const v = data.quotes[n], old = v.age_s > LIVE_DELAYED, seg = liveSeg(n, v);
-		const chg = fin(v.chg) ? h("span", { class: "chg " + (v.chg > 0 ? "up" : v.chg < 0 ? "dn" : "flat") }, (v.chg > 0 ? "+" : "") + v.chg.toFixed(2) + "%") : "—";
-		const book = fin(v.bid) && fin(v.ask) ? " · " + livePx(v.bid, seg) + " / " + livePx(v.ask, seg) : "";               // bid / ask, where either feed carries a book
-		const src = v.src === "z" ? "Kite" : v.src === "k" ? "Kotak" : "";
-		const flag = fin(v.x) ? h("span", { class: "warn" }, " · ⚠ the two sources differ " + v.x.toFixed(1) + "%") : null;     // Kite and Kotak disagree by more than a spread explains
-		return h("tr", { style: (old ? "opacity:.55;" : "") + "cursor:pointer", tabindex: "0", role: "button", onclick: () => liveOpen(n), onkeydown: (e) => { if (e.key === "Enter") liveOpen(n); } }, h("td", {}, liveLabel(n, v), h("div", { class: "f3", style: "font-size:10.5px" }, liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + book, flag)), h("td", {}, livePx(v.ltp, seg)), h("td", {}, chg),
-			h("td", { class: "f2" }, fin(v.vol) ? LIVE_VOL.format(v.vol) : "—"));
-	});
-	put(tb, h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Name", "Last", "Change", "Volume"].map((x) => h("th", {}, x)))), h("tbody", {}, trs))),
-		rows.length > shown.length ? h("button", { class: "btn block", style: "margin:10px 16px;width:calc(100% - 32px)", onclick: () => { L.limit += LIVE_PAGE; liveDraw(); } }, `Show ${Math.min(LIVE_PAGE, rows.length - shown.length)} more (${rows.length - shown.length} left)`) : null);
+const pctTag = (chg) => (fin(chg) ? h("span", { class: "pct " + (chg > 0 ? "up" : chg < 0 ? "dn" : "flat") }, (chg > 0 ? "+" : chg < 0 ? "−" : "") + Math.abs(chg).toFixed(2) + "%") : h("span", { class: "pct flat" }, "—"));
+// a section that folds: closed until the reader opens it, and it stays as they left it across redraws
+function fold(id, title, hint, ...content) {
+	const d = h("details", { class: "fold", open: S.open[id] ? true : null }, h("summary", {}, h("span", {}, title), hint ? h("span", { class: "hint" }, hint) : null), ...content);
+	d.addEventListener("toggle", () => { S.open[id] = d.open; });
+	return d;
 }
-// ---- one instrument: its quote, a chart of today's closes (one a minute, from the relay's series), what it relates to, and for an underlying its option chain.
-// Everything is drawn from the snapshot the tab already holds plus one small series request; nothing here can trade.
+
+// ---- one instrument: its page. Spot (the cash or index price), Futures and Options are views of one underlying, each with the live quote; Spot and Futures add a candlestick
+// chart with volume, the order book and the day's figures, Options the whole chain. Drawn from the snapshot the tab already holds plus one small request for the open view;
+// the views in this part only display.
 const LIVE_MONTHS = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split(" ");
 const LIVE_OPT = /^(.+?)(\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2})(\d+(?:\.\d+)?)(CE|PE)$/;
 function liveOpt(name) {                                                   // NIFTY12NOV2624500CE -> {u: "NIFTY", e: "12NOV26", k: 24500, t: "CE"}
@@ -733,11 +711,37 @@ function liveChains(data) {                                                // un
 	}
 	return out;
 }
+const LIVE_SUFFIX = ["-FUT", "-MCX", "-CDS", "-BFO"];           // how the board names a near-month future: NSE, MCX, currency, BSE
+// the underlying a board name belongs to: NIFTY12NOV2624500CE, NIFTY-FUT and NIFTY are all NIFTY; CRUDEOIL-MCX is CRUDEOIL
+function liveUnder(name) {
+	const o = liveOpt(name);
+	if (o) return o.u;
+	for (const x of LIVE_SUFFIX) if (name.endsWith(x) && name.length > x.length) return name.slice(0, -x.length);
+	return name;
+}
+// the board names of one underlying: its cash or index price and its near-month future, whichever the board holds; `main` is the one a watchlist row shows
+function liveNames(u, quotes) {
+	const has = (n) => quotes[n] != null;
+	const spot = has(u) ? u : null, fut = LIVE_SUFFIX.map((x) => u + x).find(has) || null;
+	return { spot, fut, main: spot || fut };
+}
+// one-minute candles [minute, o, h, l, c, v] gathered into bars of `n` minutes (a bar starts on a multiple of n minutes of the IST clock: 09:15, 09:20, ...)
+function liveAgg(rows, n) {
+	if (!(n > 1)) return rows;
+	const out = [];
+	for (const r of rows) {
+		const t = Math.floor((r[0] + 330) / n) * n - 330, b = out[out.length - 1];
+		if (b && b[0] === t) { if (r[2] > b[2]) b[2] = r[2]; if (r[3] < b[3]) b[3] = r[3]; b[4] = r[4]; b[5] += r[5]; }
+		else out.push([t, r[1], r[2], r[3], r[4], r[5]]);
+	}
+	return out;
+}
 function liveHHMM(minute) { const d = new Date(minute * 60000 + 19800000); return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); }
+// the line of closes: what the chart falls back to when the relay holds no candles for the instrument (an option contract, or a relay not yet carrying candles)
 function liveChart(ser, seg) {
-	const W = 320, H = 130, box = h("div", { class: "panel", style: "margin:0 16px 10px;padding:10px" });
+	const W = 320, H = 130, box = h("div", { style: "padding:10px" });
 	const day = ser && ser.day ? ser.day : [];
-	if (day.length < 2) return put(box, h("div", { class: "f3", style: "font-size:12px;padding:30px 0;text-align:center" }, day.length ? "One price so far today." : "No chart for this instrument yet. It builds as the price moves; if the relay's chart store is full, a new contract waits until room is made."));
+	if (day.length < 2) return put(box, h("div", { class: "f3", style: "font-size:12px;padding:30px 0;text-align:center" }, day.length ? "One price so far today." : "No chart for this instrument yet. It builds as the price moves."));
 	const ys = day.map((p) => p[1]), x0 = day[0][0], x1 = day[day.length - 1][0], prev = ser.prev_close;
 	let lo = Math.min(...ys), hi = Math.max(...ys);
 	if (fin(prev)) { lo = Math.min(lo, prev); hi = Math.max(hi, prev); }
@@ -753,95 +757,283 @@ function liveChart(ser, seg) {
 	}
 	return put(box, g);
 }
-function liveField(label, value) { return h("div", { style: "display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);font-size:13px" }, h("span", { class: "f3" }, label), h("span", {}, value)); }
-function liveRelated(name, v, data, chains) {
-	const o = liveOpt(name), links = [], has = (n) => data.quotes[n] != null;
-	const go = (n, t) => links.push(h("button", { class: "chip", onclick: () => liveOpen(n) }, t));
-	if (o) { if (has(o.u)) go(o.u, o.u + " spot"); if (has(o.u + "-FUT")) go(o.u + "-FUT", o.u + " fut"); }
-	else if (/-FUT$/.test(name)) { const u = name.slice(0, -4); if (has(u)) go(u, u + " spot"); }
-	else if (has(name + "-FUT")) go(name + "-FUT", name + " fut");
-	return links.length ? h("div", { class: "chips", style: "padding:0 16px 10px" }, links) : null;
+function liveChartDrop() {
+	const C = S.lv.chart;
+	if (C) { try { C.chart.remove(); } catch (e) { /* already gone */ } S.lv.chart = null; }
 }
-function liveChainTable(u, data, chains) {
-	const L = S.lv, exps = Object.keys(chains[u] || {}).sort((a, b) => liveExpiryKey(a) - liveExpiryKey(b));
-	if (!exps.length) return null;
+// The candlestick chart of the open view, with volume under it. It is made once per instrument and then only fed, so a refresh never resets what the reader zoomed to.
+function liveChartPaint(name, seg) {
+	const L = S.lv, el = $("#lv-chart"), note = $("#lv-chart-note");
+	if (!el) return;
+	const got = L.cand && L.cand.name === name ? L.cand : null, cand = got ? got.candles : [], LW = window.LightweightCharts;
+	if (!cand.length || !LW) {                                             // no candles: the line of closes
+		liveChartDrop();
+		el.textContent = "";
+		put(el, liveChart(L.series && L.series.name === name ? L.series : null, seg));
+		if (note) note.textContent = "";
+		return;
+	}
+	if (!L.chart || L.chart.name !== name) {
+		liveChartDrop();
+		el.textContent = "";
+		const cup = cssv("--cup"), cdn = cssv("--cdn"), fx = seg === "cds";
+		const chart = LW.createChart(el, Object.assign(lwTheme(), { autoSize: true, localization: { priceFormatter: (p) => livePx(p, seg) } }));
+		const cs = chart.addSeries(LW.CandlestickSeries, { upColor: cup, downColor: cdn, borderVisible: false, wickUpColor: cup, wickDownColor: cdn, priceFormat: { type: "price", precision: fx ? 4 : 2, minMove: fx ? 0.0025 : 0.05 } });
+		let vs = null;
+		if (cand.some((r) => r[5] > 0)) {                                    // an index has no volume of its own: no empty pane under its chart
+			vs = chart.addSeries(LW.HistogramSeries, { priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false }, 1);
+			try { chart.panes()[1].setHeight(84); } catch (e) { /* the library sizes it */ }
+		}
+		L.chart = { chart, cs, vs, name, tf: 0, line: null, prev: null };
+	}
+	const C = L.chart, rows = liveAgg(cand, L.tf), t = (m) => m * 60 + 19800;            // the chart's clock is UTC: shifted so the axis reads IST
+	C.cs.setData(rows.map((r) => ({ time: t(r[0]), open: r[1], high: r[2], low: r[3], close: r[4] })));
+	if (C.vs) C.vs.setData(rows.map((r) => ({ time: t(r[0]), value: r[5], color: (r[4] >= r[1] ? cssv("--cup") : cssv("--cdn")) + "66" })));
+	if (fin(got.prev_close) && C.prev !== got.prev_close) {
+		if (C.line) { try { C.cs.removePriceLine(C.line); } catch (e) { /* gone */ } }
+		C.line = C.cs.createPriceLine({ price: got.prev_close, color: cssv("--fg3"), lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: "prev close" });
+		C.prev = got.prev_close;
+	}
+	if (C.tf !== L.tf) { C.chart.timeScale().fitContent(); C.tf = L.tf; }
+	if (note) note.textContent = got.exact ? "" : "Wicks show the range of the prices this feed reported, not of every deal.";
+}
+function liveField(label, value, cl) { return h("div", {}, h("span", {}, label), h("b", { class: "mono " + (cl || "") }, value)); }
+// the views an underlying has on the board right now
+function liveViews(u, n, chains) {
+	const v = [];
+	if (n.spot) v.push(["spot", "Spot"]);
+	if (n.fut) v.push(["fut", "Futures"]);
+	if (chains[u] && Object.keys(chains[u]).length) { v.push(["opt", "Options"]); if (QB.conf().inst[u]) v.push(["strat", "Strategy"]); }
+	return v;
+}
+// the board name the open view charts: the cash or index price on Spot, the near future on Futures; the chain views chart nothing
+function liveShown() {
+	const L = S.lv;
+	if (!L.sel || !L.data) return null;
+	const n = liveNames(L.sel, L.data.quotes);
+	return L.view === "fut" ? n.fut : L.view === "spot" ? n.spot || n.fut : null;
+}
+function liveHead(u, name, v) {
+	const seg = liveSeg(name, v), src = SRC_NAME[v.src] || "";
+	const kind = seg === "idx" ? "Index" : seg === "eq" ? "NSE cash" : seg === "mcx" ? "MCX near-month future" : seg === "cds" ? "Currency near-month future" : "Near-month future";
+	return h("div", { class: "ihead" },
+		h("div", { class: "grow" }, h("div", { class: "nm" }, u), h("div", { class: "sub" }, kind + " · " + liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + (fin(v.x) ? " · ⚠ feeds differ " + v.x.toFixed(1) + "%" : ""))),
+		h("div", { class: "pxb" }, h("div", { class: "px mono" }, livePx(v.ltp, seg)), pctTag(v.chg)));
+}
+// Spot and Futures: the chart, the book, the day's figures
+function liveQuoteView(u, name, v) {
+	const L = S.lv, seg = liveSeg(name, v), got = L.cand && L.cand.name === name ? L.cand : null, cand = got ? got.candles : [];
+	liveChartPaint(name, seg);
+	const book = $("#lv-book"), stats = $("#lv-stats");
+	book.textContent = "";
+	put(book, liveDepth(name, v, seg, got ? got.depth : null));
+	const prev = got && fin(got.prev_close) ? got.prev_close : L.series && L.series.name === name ? L.series.prev_close : null;
+	const o = cand.length ? cand[0][1] : null, hi = cand.length ? Math.max(...cand.map((r) => r[2])) : null, lo = cand.length ? Math.min(...cand.map((r) => r[3])) : null;
+	const inst = QB.conf().inst[u];
+	stats.textContent = "";
+	put(stats, h("div", { class: "facts" }, liveField("Open", livePx(o, seg)), liveField("Previous close", livePx(prev, seg)), liveField("High", livePx(hi, seg)), liveField("Low", livePx(lo, seg)),
+		liveField("Volume", fin(v.vol) ? v.vol.toLocaleString("en-IN") : "—"), liveField("Open interest", fin(v.oi) ? v.oi.toLocaleString("en-IN") : "—"),
+		inst ? liveField("Lot size", String(inst.lot)) : null, inst ? liveField("Strike step", String(inst.step)) : null),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:8px 16px 10px" }, "Open, high and low are of the minutes the relay holds for today, not the exchange's own figures."));
+}
+// Options: the whole chain of one expiry, live. A tap on a price opens the ticket for that contract (the ticket itself is further down, with the other paper tickets).
+function liveChainView(u, data, chains, n) {
+	const L = S.lv, box = $("#lv-chain"), exps = Object.keys(chains[u] || {}).sort((a, b) => liveExpiryKey(a) - liveExpiryKey(b));
+	box.textContent = "";
+	if (!exps.length) return void put(box, empty("live", "No option chain for " + u + " on the board right now."));
 	if (!exps.includes(L.exp)) L.exp = exps[0];
-	const strikes = Object.keys(chains[u][L.exp]).map(Number).sort((a, b) => a - b);
-	const spot = (data.quotes[u] || data.quotes[u + "-FUT"] || {}).ltp;
+	const ch = chains[u][L.exp], strikes = Object.keys(ch).map(Number).sort((a, b) => a - b);
+	const sq = data.quotes[n.spot] || data.quotes[n.fut] || {}, spot = sq.ltp, c = QB.conf(), T = QB.yearsTo(L.exp, Date.now());
+	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r), a = AN.atm(rows, spot, T, sq.chg), pc = AN.pcr(rows), mp = AN.maxPain(rows);
 	let atm = 0;
 	if (fin(spot)) strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
 	const from = L.allStrikes ? 0 : Math.max(0, atm - 12), to = L.allStrikes ? strikes.length : Math.min(strikes.length, atm + 13);
-	const cell = (n, f, seg) => { const q = n ? data.quotes[n] : null; return h("td", { class: q && q.age_s > LIVE_DELAYED ? "f3" : "" }, q && fin(q[f]) ? (f === "ltp" ? livePx(q[f], seg) : LIVE_VOL.format(q[f])) : "—"); };
-	const rows = strikes.slice(from, to).map((k, i) => {
-		const r = chains[u][L.exp][k];
-		return h("tr", { style: from + i === atm && fin(spot) ? "background:var(--panel2)" : null }, cell(r.CE, "oi"), cell(r.CE, "ltp", "opt"), h("td", { style: "text-align:center;font-weight:600", onclick: null }, k.toLocaleString("en-IN")), cell(r.PE, "ltp", "opt"), cell(r.PE, "oi"));
-	});
-	return h("div", {}, h("div", { class: "pad", style: "font-weight:600" }, "Option chain"),
-		h("div", { class: "chips", style: "padding:0 16px 8px" }, exps.map((e) => h("button", { class: "chip", "aria-pressed": String(e === L.exp), onclick: () => { L.exp = e; liveDraw(); } }, e))),
-		h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Call OI", "Call", "Strike", "Put", "Put OI"].map((x) => h("th", { style: "text-align:center" }, x)))), h("tbody", {}, rows))),
+	const maxOi = Math.max(1, ...rows.flatMap((r) => [r.ce && r.ce.oi, r.pe && r.pe.oi]).filter(fin));
+	const oiCell = (x, side) => { const w = x && fin(x.oi) ? Math.round((x.oi / maxOi) * 100) : 0; return h("td", { class: "oi", style: `background:linear-gradient(to ${side === "ce" ? "left" : "right"},var(--${side === "ce" ? "dn" : "up"}-bg) ${w}%,transparent ${w}%)` }, x && fin(x.oi) ? LIVE_VOL.format(x.oi) : "—"); };
+	const pxCell = (name, itm) => {
+		const q = name ? data.quotes[name] : null;
+		if (!q) return h("td", { class: itm ? "itm" : "" }, "—");
+		const was = L.last[name], fl = fin(was) && was !== q.ltp ? (q.ltp > was ? " flash-up" : " flash-dn") : "";
+		L.last[name] = q.ltp;
+		return h("td", { class: "pxc" + (itm ? " itm" : "") + (q.age_s > LIVE_DELAYED ? " f3" : "") + fl }, h("button", { "aria-label": "Ticket for " + name, onclick: () => tkOpen(name) },
+			h("b", { class: "mono" }, livePx(q.ltp, "opt")), h("small", { class: "chg " + (q.chg > 0 ? "up" : q.chg < 0 ? "dn" : "flat") }, fin(q.chg) ? (q.chg > 0 ? "+" : "") + q.chg.toFixed(1) + "%" : fin(q.bid) && fin(q.ask) ? livePx(q.bid, "opt") + " / " + livePx(q.ask, "opt") : "")));
+	};
+	const ivCell = (x) => h("td", { class: "x f2" }, x && x.iv != null ? (x.iv * 100).toFixed(1) : "—"), volCell = (x) => h("td", { class: "x f2" }, x && fin(x.vol) ? LIVE_VOL.format(x.vol) : "—");
+	const trs = rows.slice(from, to).map((r, i) => h("tr", { class: from + i === atm && fin(spot) ? "atm" : "" },
+		oiCell(r.ce, "ce"), volCell(r.ce), ivCell(r.ce), pxCell(ch[r.k].CE, fin(spot) && r.k < spot), h("td", { class: "k mono" }, r.k.toLocaleString("en-IN")), pxCell(ch[r.k].PE, fin(spot) && r.k > spot), ivCell(r.pe), volCell(r.pe), oiCell(r.pe, "pe")));
+	const stat = (k, v2, s) => h("div", {}, h("span", {}, k), h("b", { class: "mono" }, v2), s ? h("small", {}, s) : null);
+	bdSync(u);
+	const ctx = { B: S.bd, data, chains, ch, exps, spot, T, sq, c, rows, inst: c.inst[u] || { lot: 1, step: 1 } };
+	const flow = fin(spot) ? bdFlow(ctx) : null;                             // read on every refresh, open or folded: the session's tape must not have holes
+	put(box,
+		h("div", { class: "chips", style: "padding:10px 16px 8px" }, exps.map((e) => h("button", { class: "chip", "aria-pressed": String(e === L.exp), onclick: () => { L.exp = e; L.allStrikes = false; liveDraw(); } }, e.slice(0, 2) + " " + cap(e.slice(2, 5).toLowerCase())))),
+		h("div", { class: "kstrip" },
+			stat("Volatility at the money", a && a.iv != null ? (a.iv * 100).toFixed(1) + "%" : "—"), stat("Move priced to expiry", a && a.expiryMovePct != null ? "±" + a.expiryMovePct.toFixed(2) + "%" : "—"),
+			stat("Puts per call (OI)", pc.oi != null ? pc.oi.toFixed(2) : "—"), stat("Max pain", mp != null ? num(mp, 0) : "—")),
+		h("div", { class: "panel scroll", style: "margin-top:0" }, h("table", { class: "tbl chain" },
+			h("thead", {}, h("tr", {}, h("th", { colspan: "4", class: "side" }, "Calls"), h("th", {}, ""), h("th", { colspan: "4", class: "side" }, "Puts")),
+				h("tr", {}, ["OI", "Vol", "IV", "Price", "Strike", "Price", "IV", "Vol", "OI"].map((x, i) => h("th", { class: [1, 2, 6, 7].includes(i) ? "x" : "" }, x)))),
+			h("tbody", {}, trs))),
 		strikes.length > to - from ? h("button", { class: "btn block", style: "margin:10px 16px;width:calc(100% - 32px)", onclick: () => { L.allStrikes = !L.allStrikes; liveDraw(); } }, L.allStrikes ? "Only near the money" : `Show all ${strikes.length} strikes`) : null,
-		h("div", { class: "f3", style: "font-size:11.5px;padding:6px 16px" }, "The strikes the feeds carry for this underlying" + (fin(spot) ? "; the shaded row is nearest the price" : "") + ". Index chains hold the nearest two expiries."));
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:8px 16px 4px" }, "Tap a price for that contract's ticket. Shaded cells are in the money; the bars show where the open interest sits. IV is from the mid of the bid and the offer, or the last price where the feed gives no book."),
+		fin(spot) ? fold("read", "Market read", "what the chain implies", bdRead(ctx)) : null,
+		flow ? fold("flow", "Flow and signals", "readings, each graded later", flow) : null,
+		fold("news", "News", "headlines, joined to the board", bdNews(S.bd, data)));
+}
+// the chain views and the builder work on the open underlying and share its expiry
+function bdSync(u) {
+	const B = S.bd;
+	if (B.u !== u) { B.custom = []; B.tk = null; B.view = null; }
+	B.u = u;
+	if (S.lv.exp) B.exp = S.lv.exp;
 }
 function liveDetail() {
-	const L = S.lv, data = L.data, name = L.sel, box = $("#lv-detail"), v = data.quotes[name];
-	box.textContent = "";
-	const back = h("button", { class: "btn", style: "margin:0 16px 10px", onclick: () => liveOpen(null) }, "← All instruments");
-	if (!v) return void put(box, back, empty("live", name + " is not on the board right now (it may have expired or not ticked yet)."));
-	const seg = liveSeg(name, v), o = liveOpt(name), chains = liveChains(data);
-	const ser = L.series && L.series.name === name ? L.series : null, prev = ser ? ser.prev_close : null;
-	const chgPct = fin(v.chg) ? v.chg : fin(prev) && prev > 0 ? ((v.ltp - prev) / prev) * 100 : null;
-	const closes = ser && ser.day.length ? ser.day.map((p) => p[1]) : null;
-	const src = v.src === "z" ? "Kite" : v.src === "k" ? "Kotak" : "";
-	const alt = v.alt ? `${v.alt.src === "z" ? "Kite" : "Kotak"} ${livePx(v.alt.ltp, seg)} · ${liveAge(v.alt.age_s)} ago` : null;
-	put(box, back,
-		h("div", { style: "padding:0 16px 8px" }, h("div", { style: "font-size:13px;color:var(--fg2)" }, liveLabel(name, v)),
-			h("div", { style: "display:flex;align-items:baseline;gap:10px" }, h("span", { style: "font-size:30px;font-weight:600;font-variant-numeric:tabular-nums" }, livePx(v.ltp, seg)),
-				chgPct != null ? h("span", { class: "chg " + (chgPct > 0 ? "up" : chgPct < 0 ? "dn" : "flat"), style: "font-size:14px" }, (chgPct > 0 ? "+" : "") + chgPct.toFixed(2) + "%") : null),
-			h("div", { class: "f3", style: "font-size:11.5px" }, liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + (fin(v.x) ? " · ⚠ the two sources differ " + v.x.toFixed(1) + "%" : ""))),
-		liveChart(ser, seg), liveRelated(name, v, data, chains),
-		h("div", { class: "panel pad", style: "margin:0 16px 12px" },
-			liveField("Bid / Ask", fin(v.bid) && fin(v.ask) ? `${livePx(v.bid, seg)} / ${livePx(v.ask, seg)}` + (fin(v.bid_qty) && fin(v.ask_qty) ? ` (${LIVE_VOL.format(v.bid_qty)} / ${LIVE_VOL.format(v.ask_qty)})` : "") : "—"),
-			liveField("Volume", fin(v.vol) ? v.vol.toLocaleString("en-IN") : "—"), liveField("Open interest", fin(v.oi) ? v.oi.toLocaleString("en-IN") : "—"),
-			liveField("Previous close", fin(prev) ? livePx(prev, seg) : "—"),
-			liveField("Day high / low", closes ? `${livePx(Math.max(...closes), seg)} / ${livePx(Math.min(...closes), seg)}` : "—"),
-			o ? liveField("Contract", `${o.u} ${o.e} ${o.k.toLocaleString("en-IN")} ${o.t === "CE" ? "call" : "put"}`) : null,
-			alt ? liveField("Other source", alt) : null),
-		h("div", { class: "f3", style: "font-size:11.5px;padding:0 16px 10px" }, "Day high and low are the highest and lowest of the one-a-minute closes the relay holds for today (only the most recent minutes when its store is full), not the exchange's own figures."),
-		o ? null : liveChainTable(name.replace(/-FUT$/, ""), data, chains));
+	const L = S.lv, data = L.data, u = L.sel, box = $("#lv-detail");
+	const n = liveNames(u, data.quotes), chains = liveChains(data), views = liveViews(u, n, chains);
+	const back = () => h("button", { class: "btn", onclick: () => liveOpen(null) }, "← Markets");
+	if (!views.length) {
+		liveChartDrop(); box.textContent = ""; box.dataset.key = "";
+		return void put(box, h("div", { class: "ibar" }, back()), empty("live", u + " is not on the board right now (it may have expired or not ticked yet)."));
+	}
+	if (!views.some((x) => x[0] === L.view)) L.view = views[0][0];
+	const key = u + "|" + L.view + "|" + views.map((x) => x[0]).join(",");
+	if (box.dataset.key !== key) {                                           // another instrument or view: lay the page out once; refreshes then only fill it
+		liveChartDrop(); box.textContent = ""; box.dataset.key = key;
+		const tabs = h("div", { class: "seg", role: "tablist", "aria-label": u });
+		seg(tabs, views, L.view, (x) => { L.view = x; L.cand = null; L.series = null; L.heavyAt = 0; liveDraw(); liveSeries(); }, "tab");
+		const tf = h("div", { class: "seg", "aria-label": "Candle size" });
+		seg(tf, LIVE_TF, L.tf, (x) => { L.tf = x; liveDraw(); });
+		put(box, h("div", { class: "ibar" }, back(), views.length > 1 ? tabs : null), h("div", { id: "lv-head" }),
+			L.view === "opt" ? h("div", { id: "lv-chain", class: "grp" }) : L.view === "strat" ? h("div", { id: "bd-body" })
+				: h("div", { class: "cgrid" }, h("div", { class: "col" }, h("div", { class: "cpanel" }, h("div", { class: "tools", style: "padding-top:10px" }, tf, h("span", { id: "lv-chart-note", class: "f3", style: "font-size:11px" }, "")), h("div", { class: "chartbox", id: "lv-chart" }))),
+					h("div", { class: "col" }, h("div", { id: "lv-book", class: "grp" }), h("div", { id: "lv-stats", class: "grp" }))));
+	}
+	const shown = L.view === "opt" || L.view === "strat" ? n.main : liveShown(), v = data.quotes[shown], head = $("#lv-head");
+	head.textContent = "";
+	if (v) put(head, liveHead(u, shown, v));
+	if (L.view === "opt") return liveChainView(u, data, chains, n);
+	if (L.view === "strat") {                                                // the builder is redrawn at most every 15 seconds, and never under the reader's fingers
+		bdSync(u);
+		if (!S.bd.editing && Date.now() - L.heavyAt > 14000) { L.heavyAt = Date.now(); bdDraw(); }
+		return;
+	}
+	if (v) liveQuoteView(u, shown, v);
 }
-function liveOpen(name) {
-	const L = S.lv;
-	L.sel = name; L.series = null; L.allStrikes = false;
-	if (name) L.exp = (liveOpt(name) || {}).e || null;
+function liveOpen(name, view) {
+	const L = S.lv, o = name ? liveOpt(name) : null;
+	liveChartDrop();
+	const box = $("#lv-detail");
+	if (box) { box.textContent = ""; box.dataset.key = ""; }
+	L.sel = name ? liveUnder(name) : null;
+	if (name) L.view = view || (o ? "opt" : LIVE_SUFFIX.some((x) => name.endsWith(x)) ? "fut" : "spot");
+	L.series = null; L.cand = null; L.allStrikes = false; L.heavyAt = 0;
+	L.exp = o ? o.e : null;
 	liveDraw();
 	if (name) liveSeries();
 	window.scrollTo(0, 0);
 }
+// The open view's candles and order book (one small request); where the relay holds no candles for it, the line of closes instead.
 async function liveSeries() {
-	const L = S.lv, name = L.sel, key = store("qd.livekey");
+	const L = S.lv, name = liveShown(), key = store("qd.livekey");
 	if (!name || !key) return;
 	try {
-		const r = await fetch("/live/series?name=" + encodeURIComponent(name), { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
-		if (r.ok && L.sel === name) { L.series = await r.json(); liveDraw(); }
+		const r = await fetch("/live/candles?name=" + encodeURIComponent(name), { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+		if (r.ok) { const j = await r.json(); if (j && j.name === liveShown() && Array.isArray(j.candles)) L.cand = j; }
 	} catch (e) { /* the quote still shows */ }
+	if (!(L.cand && L.cand.name === name && L.cand.candles.length)) {
+		try {
+			const r = await fetch("/live/series?name=" + encodeURIComponent(name), { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+			if (r.ok && liveShown() === name) L.series = await r.json();
+		} catch (e) { /* the quote still shows */ }
+	}
+	if (liveShown() === name) liveDraw();
 }
 function liveBuild() {
 	const L = S.lv, body = $("#lv-body");
 	body.textContent = "";
-	const search = h("input", { type: "search", class: "search", placeholder: "Search every instrument", "aria-label": "Search instruments", autocomplete: "off", value: L.q });
-	search.addEventListener("input", () => { L.q = search.value; L.limit = LIVE_PAGE; liveDraw(); });
-	const seg = h("div", { class: "chips", id: "lv-segs", style: "padding:0 16px 8px" }, LIVE_SEGS.map(([k, t]) => h("button", { class: "chip", "data-k": k, "aria-pressed": "false", onclick: () => { L.seg = k; L.limit = LIVE_PAGE; liveDraw(); } }, t, h("span", { class: "f3" }, " "))));
-	const sort = h("div", { class: "chips", id: "lv-sorts", style: "padding:0 16px 8px" }, h("span", { class: "f3", style: "font-size:11.5px;align-self:center" }, "Sort"),
-		LIVE_SORTS.map(([k, t]) => h("button", { class: "chip", "data-k": k, "aria-pressed": "false", onclick: () => { L.sort = k; liveDraw(); } }, t)));
-	put(body, h("div", { class: "pad", style: "display:flex;justify-content:space-between;align-items:center" }, h("span", { id: "lv-pill", class: "pill paused" }, h("span", { class: "dot" }), h("b", { id: "lv-pill-t" }, "")), h("span", { id: "lv-count", class: "f3", style: "font-size:11.5px" }, "")),
-		h("div", { id: "lv-sources", class: "f3", style: "font-size:11.5px;padding:0 16px 8px" }, ""),
-		h("div", { id: "lv-list" }, h("div", { style: "padding:0 16px 10px" }, search), seg, sort, h("div", { id: "lv-table" })),
+	const search = h("input", { type: "search", class: "search", placeholder: "Search every instrument on the board", "aria-label": "Search instruments", autocomplete: "off", value: L.q });
+	search.addEventListener("input", () => { L.q = search.value; liveDraw(); });
+	const grp = h("div", { class: "seg", id: "lv-grps", "aria-label": "Watchlist group" });
+	put(body, h("div", { class: "mtop" }, h("span", { id: "lv-pill", class: "pill paused" }, h("span", { class: "dot" }), h("b", { id: "lv-pill-t" }, "")), h("span", { id: "lv-sources", class: "f3 grow", style: "font-size:11.5px" }, ""), h("span", { id: "lv-count", class: "f3", style: "font-size:11.5px" }, "")),
+		h("div", { id: "lv-list" }, h("div", { class: "subnav" }, search, h("div", { style: "margin-top:8px" }, grp)), h("div", { id: "lv-table" })),
 		h("div", { id: "lv-detail", hidden: true }),
-		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:12px 16px" },
-			"Prices come from Zerodha's Kite feed and are shown only to you. Under each name is how long ago the relay last got that price. Tap any row for its chart and, for an underlying, its option chain. This tab only displays: nothing here can place an order. ",
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:14px 0" },
+			"Prices are the desk's licensed feeds and are shown only to you; under each name is how long ago the relay last heard that price. ",
 			h("a", { href: "#", class: "acc", onclick: (e) => { e.preventDefault(); try { localStorage.removeItem("qd.livekey"); } catch (x) { /* ignore */ } L.built = false; L.health = null; L.hstate = null; body.dataset.state = ""; renderLive(); setStatus(); } }, "Forget this key")));
 	L.built = true;
 	body.dataset.state = "data";
+}
+// the order book of one instrument: five levels a side where the feed sends them, the best bid and offer where it sends only those
+function liveDepth(name, v, seg, d) {
+	const head = (hint) => h("div", { class: "sec-h" }, h("h2", {}, "Market depth"), h("span", { class: "hint" }, hint));
+	if (d && (d.b.length || d.a.length)) {
+		const max = Math.max(1, ...d.b.map((r) => r[1]), ...d.a.map((r) => r[1])), tb = d.b.reduce((s, r) => s + r[1], 0), ta = d.a.reduce((s, r) => s + r[1], 0);
+		const lv = (r, bid) => {
+			if (!r) return h("div", { class: "lv" });
+			const w = Math.round((r[1] / max) * 100), cells = [h("span", { class: "f3" }, r[2] ? String(r[2]) : ""), h("span", {}, r[1].toLocaleString("en-IN")), h("b", { class: bid ? "up" : "dn" }, livePx(r[0], seg))];
+			return h("div", { class: "lv", style: `background:linear-gradient(to ${bid ? "left" : "right"},var(--${bid ? "up" : "dn"}-bg) ${w}%,transparent ${w}%)` }, bid ? cells : cells.reverse());
+		};
+		const rows = Array.from({ length: Math.max(d.b.length, d.a.length) }, (_, i) => [lv(d.b[i], true), lv(d.a[i], false)]).flat();
+		return h("div", { class: d.age_s > LIVE_DELAYED ? "stale" : "" }, head(`${SRC_NAME[d.src] || "feed"} · ${liveAge(d.age_s)} ago`),
+			h("div", { class: "dom" }, h("div", { class: "lv hd" }, h("span", {}, "Orders"), h("span", {}, "Qty"), h("span", {}, "Bid")), h("div", { class: "lv hd" }, h("span", {}, "Offer"), h("span", {}, "Qty"), h("span", {}, "Orders")), rows,
+				h("div", { class: "lv tot" }, h("span", {}, ""), h("span", {}, tb.toLocaleString("en-IN")), h("span", { class: "f3" }, "total")), h("div", { class: "lv tot" }, h("span", { class: "f3" }, "total"), h("span", {}, ta.toLocaleString("en-IN")), h("span", {}, ""))),
+			tb + ta > 0 ? h("div", { class: "bm big", style: "margin:10px 16px 12px", role: "img", "aria-label": `Bids are ${Math.round((tb / (tb + ta)) * 100)}% of the size shown` }, h("i", { style: `left:0;width:${(tb / (tb + ta)) * 100}%;background:var(--up)` }), h("i", { style: `right:0;width:${(ta / (tb + ta)) * 100}%;background:var(--dn)` })) : null);
+	}
+	if (fin(v.bid) && fin(v.ask)) return h("div", {}, head("best bid and offer only"),
+		h("div", { class: "dom" }, h("div", { class: "lv hd" }, h("span", {}, ""), h("span", {}, "Qty"), h("span", {}, "Bid")), h("div", { class: "lv hd" }, h("span", {}, "Offer"), h("span", {}, "Qty"), h("span", {}, "")),
+			h("div", { class: "lv" }, h("span", {}, ""), h("span", {}, fin(v.bid_qty) ? v.bid_qty.toLocaleString("en-IN") : "—"), h("b", { class: "up" }, livePx(v.bid, seg))), h("div", { class: "lv" }, h("b", { class: "dn" }, livePx(v.ask, seg)), h("span", {}, fin(v.ask_qty) ? v.ask_qty.toLocaleString("en-IN") : "—"), h("span", {}, ""))));
+	return h("div", {}, head(""), h("div", { class: "f3", style: "font-size:12.5px;line-height:1.5;padding:4px 16px 14px" }, seg === "idx" ? "An index is a number, not something that changes hands: its order book is on its future and its options." : "No order book from the feeds for this instrument yet."));
+}
+// one row of the watchlist: the name, what the price is, the price itself and the day's change; on a wide screen the book, the volume and the open interest too
+function liveRow(u, data) {
+	const L = S.lv, n = liveNames(u, data.quotes), v = n.main ? data.quotes[n.main] : null;
+	if (!v) return h("div", { class: "wrow off" }, h("div", {}, h("div", { class: "nm" }, u), h("div", { class: "sub" }, "not on the board yet")), h("span", { class: "x" }, ""), h("span", { class: "x" }, ""), h("span", { class: "x" }, ""), h("div", { class: "px mono" }, "—"), pctTag(null));
+	const seg = liveSeg(n.main, v), f = n.spot && n.fut ? data.quotes[n.fut] : null, book = fin(v.bid) ? v : f && fin(f.bid) ? f : null, bseg = book === f && f ? liveSeg(n.fut, f) : seg;
+	const was = L.last[n.main], fl = fin(was) && was !== v.ltp ? (v.ltp > was ? " flash-up" : " flash-dn") : "";
+	L.last[n.main] = v.ltp;
+	const sub = (n.spot ? (f ? "fut " + livePx(f.ltp, liveSeg(n.fut, f)) : seg === "idx" ? "index" : "cash") : seg === "mcx" ? "MCX near month" : seg === "cds" ? "currency near month" : "near month") + " · " + liveAge(v.age_s);
+	const vol = fin(v.vol) ? v.vol : f && fin(f.vol) ? f.vol : null, oi = fin(v.oi) ? v.oi : f && fin(f.oi) ? f.oi : null;
+	return h("button", { class: "wrow" + (v.age_s > LIVE_DELAYED ? " off" : ""), onclick: () => liveOpen(n.main) },
+		h("div", {}, h("div", { class: "nm" }, u), h("div", { class: "sub" }, sub)),
+		h("span", { class: "x" }, book ? livePx(book.bid, bseg) + " / " + livePx(book.ask, bseg) : "—"), h("span", { class: "x" }, fin(vol) ? LIVE_VOL.format(vol) : "—"), h("span", { class: "x" }, fin(oi) ? LIVE_VOL.format(oi) : "—"),
+		h("div", { class: "px mono" + fl }, livePx(v.ltp, seg)), pctTag(v.chg));
+}
+function liveDraw() {
+	const L = S.lv, data = L.data;
+	if (!data || !L.built) return;
+	const newest = data.newest_age_s;
+	const kind = !fin(newest) ? (inSession() ? "stale" : "paused") : newest <= LIVE_FRESH ? "live" : newest <= LIVE_DELAYED ? "stale" : "paused";
+	const label = !fin(newest) ? (inSession() ? "No prices yet" : "Market closed, opens " + nextOpen()) : newest <= LIVE_FRESH ? "Live" : newest <= LIVE_DELAYED ? "Delayed " + liveAge(newest) : "No feed: last " + liveAge(newest) + " ago";
+	const pill = $("#lv-pill"); pill.className = "pill " + kind; $("#lv-pill-t").textContent = label;
+	const total = Object.keys(data.quotes).length;
+	$("#lv-count").textContent = total.toLocaleString("en-IN") + " on the board";
+	const hl = L.health, ln = $("#lv-sources");
+	if (hl && ln) {                                                   // the state of each feed, from /live/health
+		const feeds = hl.sources ? Object.entries(hl.sources).map(([c, x]) => [SRC_NAME[c] || c, x, c === "k" && hl.kotak && hl.kotak.status && hl.kotak.status !== "ok" ? hl.kotak.status : ""]) : [["Kite", hl.kite || {}, ""], ["Kotak", hl.kotak || {}, hl.kotak && hl.kotak.status && hl.kotak.status !== "ok" ? hl.kotak.status : ""]];
+		ln.textContent = feeds.map(([nm, x, st]) => `${x.n > 0 && fin(x.newest_age_s) && x.newest_age_s <= LIVE_FRESH * 2 ? "●" : "○"} ${nm}${st ? " (" + st + ")" : ""}`).join("   ") + (hl.disagree ? `   ⚠ ${hl.disagree} differ` : "");
+	}
+	$("#lv-list").hidden = !!L.sel; $("#lv-detail").hidden = !L.sel;
+	if (L.sel) return liveDetail();
+	const tb = $("#lv-table"), q = L.q.trim().toLowerCase(), w = watchlist(), gs = $("#lv-grps");
+	if (gs.dataset.g !== L.grp) { gs.dataset.g = L.grp; seg(gs, [["all", "All"], ...WATCH_GROUPS], L.grp, (g) => { L.grp = g; gs.dataset.g = g; liveDraw(); }); }
+	tb.textContent = "";
+	const heading = () => h("div", { class: "whead" }, h("span", {}, "Instrument"), h("span", { class: "x" }, "Bid / Offer"), h("span", { class: "x" }, "Volume"), h("span", { class: "x" }, "Open int."), h("span", {}, "Last"), h("span", {}, "Change"));
+	if (q) {                                                          // a search looks at everything the board holds, not only the watchlist
+		const found = Object.keys(data.quotes).filter((n) => n.toLowerCase().includes(q) || liveLabel(n, data.quotes[n]).toLowerCase().includes(q))
+			.sort((a, b) => (liveOpt(a) ? 1 : 0) - (liveOpt(b) ? 1 : 0) || (a < b ? -1 : 1));
+		if (!found.length) return void put(tb, empty("live", "Nothing on the board matches."));
+		return void put(tb, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Search"), h("span", { class: "hint" }, found.length > LIVE_FOUND ? `first ${LIVE_FOUND} of ${found.length}` : `${found.length} found`)),
+			found.slice(0, LIVE_FOUND).map((n) => { const v = data.quotes[n], sg = liveSeg(n, v); return h("button", { class: "wrow" + (v.age_s > LIVE_DELAYED ? " off" : ""), onclick: () => liveOpen(n) },
+				h("div", {}, h("div", { class: "nm" }, liveLabel(n, v)), h("div", { class: "sub" }, liveAge(v.age_s) + " ago" + (SRC_NAME[v.src] ? " · " + SRC_NAME[v.src] : ""))), h("span", { class: "x" }, fin(v.bid) && fin(v.ask) ? livePx(v.bid, sg) + " / " + livePx(v.ask, sg) : "—"), h("span", { class: "x" }, fin(v.vol) ? LIVE_VOL.format(v.vol) : "—"), h("span", { class: "x" }, fin(v.oi) ? LIVE_VOL.format(v.oi) : "—"),
+				h("div", { class: "px mono" }, livePx(v.ltp, sg)), pctTag(v.chg)); })));
+	}
+	const groups = WATCH_GROUPS.filter(([g]) => (L.grp === "all" || L.grp === g) && w[g].length);
+	if (!groups.length) return void put(tb, empty("live", "The watchlist is empty: add names to desk.watchlist in the config."));
+	for (const [g, title] of groups) {
+		const up = w[g].filter((u) => { const n = liveNames(u, data.quotes).main; return n && data.quotes[n].chg > 0; }).length, dn = w[g].filter((u) => { const n = liveNames(u, data.quotes).main; return n && data.quotes[n].chg < 0; }).length;
+		put(tb, h("div", { class: "grp wl" }, h("div", { class: "sec-h" }, h("h2", {}, title), h("span", { class: "hint" }, h("span", { class: "up" }, up + " up"), " · ", h("span", { class: "dn" }, dn + " down"))), heading(), w[g].map((u) => liveRow(u, data))));
+	}
+	if (!total) put(tb, h("div", { class: "note" }, "Nothing has arrived yet. The recorder pushes from 09:15 IST on a trading day."));
 }
 async function renderLive() {
 	const body = $("#lv-body");
@@ -860,19 +1052,18 @@ async function renderLive() {
 		else if (r.status === 503) note = "The live feed is not switched on yet: the Worker still needs its two secrets (docs/LIVE.md).";
 		else if (!r.ok || !/json/.test(r.headers.get("content-type") || "")) note = `The live relay did not answer as expected: HTTP ${r.status}, ${(r.headers.get("content-type") || "no content type").split(";")[0]}, from ${location.host}. If that address is not your Worker's own (…workers.dev), open the app from the Worker's address.`;          // the status, kind and host say where the request went: nothing secret
 		else j = await r.json();
-		if (j && S.lv.sel) {                                                          // an instrument is open: its chart series, with every refresh
-			try {
-				const sr = await fetch("/live/series?name=" + encodeURIComponent(S.lv.sel), { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
-				if (sr.ok) { const sj = await sr.json(); if (sj.name === S.lv.sel) S.lv.series = sj; }
-			} catch (e) { /* the quote still shows */ }
-		}
 	} catch (e) { note = "No live prices: the request failed before any answer (" + String((e && e.name) || "error") + ") from " + location.host + ". Offline, or the address blocks it."; }
 	finally { liveBusy = false; }
 	if (S.tab !== "live") return;
-	if (!j) { body.textContent = ""; S.lv.built = false; body.dataset.state = "note"; setStatus(); return void put(body, liveKeyForm(note)); }
-	S.lv.data = j;
+	if (!j) { liveChartDrop(); body.textContent = ""; S.lv.built = false; body.dataset.state = "note"; setStatus(); return void put(body, liveKeyForm(note)); }
+	const B = S.bd;
+	S.lv.data = j; S.lv.at = Date.now();
+	B.data = j; B.at = S.lv.at;                                              // the chain views and the tickets price from this same snapshot
+	if (S.lv.sel && (S.lv.view === "opt" || S.lv.view === "strat") && Date.now() - B.newsAt > 60000) { B.newsAt = Date.now(); newsLoad(key).then(() => { if (S.tab === "live" && S.lv.view === "opt") liveDraw(); }); }       // the digest changes every ten minutes: once a minute is plenty
 	if (!S.lv.built) liveBuild();
 	liveDraw();
+	if (S.tk) tkDraw();                                                      // an open ticket follows the price
+	if (S.lv.sel) liveSeries();                                              // the open view's candles and book, with every refresh
 }
 
 /* @@builder:start */
@@ -1395,7 +1586,7 @@ const NW = (() => {
 })();
 /* @@news:end */
 
-// ---- the Build tab: pick an underlying, an expiry and a structure; see what it costs, where it makes and loses, and whether it fits the desk's limits. Paper only: no order is sent from here.
+// ---- the builder (an instrument's Strategy view): pick an expiry and a structure; see what it costs, where it makes and loses, and whether it fits the desk's limits. Paper only.
 S.bd = { u: null, exp: null, tpl: "bull_call_spread", width: 2, lots: 1, data: null, busy: false, note: "", view: null, sort: "rr", news: null, newsAt: 0, newsErr: "", custom: [], sc: { move: 0, dvol: 0, days: 0 } };
 function bdChains(data) {                                                // the underlyings the builder can price: an index with a known lot size, and its board chains
 	const c = QB.conf(), all = liveChains(data), out = Object.create(null);
@@ -1504,60 +1695,65 @@ function bdPayoff(a, spot) {
 }
 function bdDraw() {
 	const B = S.bd, body = $("#bd-body"), c = QB.conf(), data = B.data;
+	if (!body || !data) return;                                               // the builder lives on an instrument's Strategy view: nothing to draw when that is not open
 	body.textContent = "";
 	const chains = bdChains(data), us = Object.keys(chains);
-	if (!us.length) return void put(body, empty("build", "No index option chain on the board yet. The relay fills it once the market is open and the feeds are on."));
-	if (!us.includes(B.u)) B.u = us[0];
+	if (!us.includes(B.u)) return void put(body, empty("build", `No option chain for ${B.u || "this instrument"} on the board yet. The relay fills it once the market is open and the feeds are on.`));
 	const exps = Object.keys(chains[B.u]).sort((p, q) => liveExpiryKey(p) - liveExpiryKey(q));
 	if (!exps.includes(B.exp)) B.exp = exps[0];
 	const ch = chains[B.u][B.exp], strikes = Object.keys(ch).map(Number).sort((p, q) => p - q);
 	const sq = data.quotes[B.u] || data.quotes[B.u + "-FUT"] || {}, spot = sq.ltp;
 	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = B.tpl === "custom" ? QB.CUSTOM : QB.TEMPLATES[B.tpl];
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
-	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono" }, String(val)), h("button", { class: "btn", "aria-label": "more " + label, onclick: up }, "+")));
+	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px;border-top:1px solid var(--line)" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn sq", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono", style: "min-width:28px;text-align:center" }, String(val)), h("button", { class: "btn sq", "aria-label": "more " + label, onclick: up }, "+")));
 	put(body,
-		h("div", { class: "note" }, "Paper only. This works out what a structure would cost and risk from the live prices; it reads the live board. The only thing it can send is a paper order, queued on the relay below and carried out by the paper runner through the risk gate. Only structures with a known worst loss can be built."),
 		c.fromConfig ? null : h("div", { class: "note warn" }, "This page has no limits from the desk's config (QD_TRADE is missing), so it is using built-in defaults that may be out of date. Do not rely on the checklist; re-publish the site."),
-		h("div", { class: "chips", style: "padding:8px 16px 4px" }, us.map((u) => chip(u, u === B.u, () => { B.u = u; B.exp = null; bdDraw(); }))),
-		h("div", { class: "chips", style: "padding:4px 16px" }, exps.map((e) => chip(e, e === B.exp, () => { B.exp = e; bdDraw(); }))),
-		h("div", { class: "chips", style: "padding:4px 16px" }, [...Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); })),
-			chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
-		h("div", { class: "f3", style: "font-size:12px;padding:2px 16px 6px" }, tpl.view),
-		B.tpl === "custom" ? bdCustom(B, strikes, spot) : null,
-		tpl.wide ? step("Width (strikes)", B.width, () => { B.width = Math.max(1, B.width - 1); bdDraw(); }, () => { B.width = Math.min(10, B.width + 1); bdDraw(); }) : null,
-		step("Lots (" + inst.lot + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); }));
+		h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Structure"), h("span", { class: "hint" }, tpl.view)),
+			h("div", { class: "chips", style: "padding:4px 16px 8px" }, exps.map((e) => chip(e.slice(0, 2) + " " + cap(e.slice(2, 5).toLowerCase()), e === B.exp, () => { B.exp = e; S.lv.exp = e; bdDraw(); }))),
+			h("div", { class: "chips", style: "padding:0 16px 10px" }, [...Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); })),
+				chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
+			B.tpl === "custom" ? bdCustom(B, strikes, spot) : null,
+			tpl.wide ? step("Width (strikes)", B.width, () => { B.width = Math.max(1, B.width - 1); bdDraw(); }, () => { B.width = Math.min(10, B.width + 1); bdDraw(); }) : null,
+			step("Lots (" + inst.lot + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); })));
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
 	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r);
-	put(body, bdRead({ B, data, chains, ch, exps, spot, T, sq, c }), bdFlow({ B, data, ch, spot, T, c, sq, rows, inst }), bdNews(B, data), bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
+	const ideas = () => fold("ideas", "Ideas for your view", "structures that fit what you expect", bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
 	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
-	if (L.error) return void put(body, h("div", { class: "note" }, L.error));
+	if (L.error) return void put(body, h("div", { class: "note" }, L.error), ideas());
 	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
 	const a = QB.analyze(spec);
-	if (a.errors.length) return void put(body, h("div", { class: "note" }, a.errors[0]), legsTable2(a));
+	if (a.errors.length) return void put(body, h("div", { class: "note" }, a.errors[0]), legsTable2(a), ideas());
 	const best = QB.suggestLots(spec);
 	const kv = (k, v, cl) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line)" }, h("span", { class: "f3" }, k), h("b", { class: "mono " + (cl || "") }, v));
+	const tick = (x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text));
 	put(body,
-		h("div", { class: "panel" },
-			kv(a.premium >= 0 ? "You pay" : "You receive", inr(Math.abs(a.premium))),
-			kv("Worst loss", inr(-a.maxLoss), "dn"), kv("Best profit", a.unlimitedProfit ? "No cap" : inr(a.maxProfit, true), "up"),
-			kv("Break-even" + (a.breakevens.length === 1 ? "" : "s"), a.breakevens.map((b) => num(b, 0)).join(" · ") || "—"),
-			kv("Costs to get in and out (exit at today's price)", inr(a.cost) + ` (fees ${inr(a.fees)} + spread ${inr(a.exitSpread)})`),
-			kv("Net delta · gamma", `${signed(a.greeks.delta, 1)} · ${signed(a.greeks.gamma, 3)}`), kv("Theta a day · vega per vol point", `${inr(a.greeks.theta, true)} · ${inr(a.greeks.vega, true)}`)),
-		h("div", { style: "padding:8px 16px" }, bdPayoff(a, spot)),
-		bdScenario(B, a, spec),
-		legsTable2(a),
-		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Sizing guide (the intraday desk's limits) and data quality"),
-			a.checks.map((x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text)))),
-		h("div", { style: "padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
-			h("button", { class: "btn", onclick: () => { B.lots = Math.max(1, best); bdDraw(); }, disabled: best < 1 }, best ? `Size it to the limits: ${best} lot${best === 1 ? "" : "s"}` : "Even one lot breaks a limit"),
-			h("span", { class: "f3", style: "font-size:12px" }, a.ok ? "Fits the sizing guide." : "Does not fit the sizing guide: change the structure, width or size.")),
+		h("div", { class: "grp" },
+			h("div", { class: "kstrip" },
+				h("div", {}, h("span", {}, a.premium >= 0 ? "You pay" : "You receive"), h("b", { class: "mono" }, inr(Math.abs(a.premium)))),
+				h("div", {}, h("span", {}, "Worst loss"), h("b", { class: "mono dn" }, inr(-a.maxLoss))),
+				h("div", {}, h("span", {}, "Best profit"), h("b", { class: "mono up" }, a.unlimitedProfit ? "No cap" : inr(a.maxProfit, true))),
+				h("div", {}, h("span", {}, "Break-even" + (a.breakevens.length === 1 ? "" : "s")), h("b", { class: "mono" }, a.breakevens.map((b) => num(b, 0)).join(" · ") || "—"))),
+			h("div", { style: "padding:10px 16px 6px" }, bdPayoff(a, spot))),
 		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600;display:flex;gap:8px;align-items:center" }, "Could the paper desk open this today?", h("b", { class: a.paperOk ? "up" : "dn" }, a.paperOk ? "Yes, so far" : "No")),
-			a.paperChecks.map((x) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: x.ok ? "up" : "dn", style: "width:14px" }, x.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, x.text))),
-			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:4px 16px 8px" }, "The paper ticket also checks the day's loss budget, the drawdown halt and the displayed size at the touch against the live account. A structure that is not open-able today is still shown here as a what-if.")),
+			(a.paperOk ? [] : a.paperChecks.filter((x) => !x.ok)).map(tick)),
 		bdTicket(a, tpl),
-		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure. Held to expiry, an in-the-money long pays the exchange's exercise STT instead, which this does not model; there is no dividend yield in the pricing. Worst loss and best profit leave out costs."));
+		fold("legs", "Legs and prices", `${a.legs.length} leg${a.legs.length === 1 ? "" : "s"}`, legsTable2(a)),
+		fold("costs", "Costs and Greeks", "", h("div", { class: "panel", style: "margin:0;border:0" },
+			kv("Costs to get in and out (exit at today's price)", inr(a.cost) + ` (fees ${inr(a.fees)} + spread ${inr(a.exitSpread)})`),
+			kv("Net delta · gamma", `${signed(a.greeks.delta, 1)} · ${signed(a.greeks.gamma, 3)}`), kv("Theta a day · vega per vol point", `${inr(a.greeks.theta, true)} · ${inr(a.greeks.vega, true)}`))),
+		fold("whatif", "What if…", "the price moves, volatility shifts, days pass", bdScenario(B, a, spec)),
+		fold("checks", "Sizing guide and the desk's checks", a.ok ? "fits" : "does not fit", h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Sizing guide (the intraday desk's limits) and data quality"),
+			a.checks.map(tick),
+			h("div", { style: "padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
+				h("button", { class: "btn", onclick: () => { B.lots = Math.max(1, best); bdDraw(); }, disabled: best < 1 }, best ? `Size it to the limits: ${best} lot${best === 1 ? "" : "s"}` : "Even one lot breaks a limit"),
+				h("span", { class: "f3", style: "font-size:12px" }, a.ok ? "Fits the sizing guide." : "Does not fit the sizing guide: change the structure, width or size.")),
+			h("div", { class: "pad", style: "font-weight:600;border-top:1px solid var(--line)" }, "The paper desk's own checks"),
+			a.paperChecks.map(tick),
+			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:4px 16px 8px" }, "The paper ticket also checks the day's loss budget, the drawdown halt and the displayed size at the touch against the live account. A structure that is not open-able today is still shown here as a what-if."))),
+		ideas(),
+		fold("model", "How this is worked out", "", h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 14px" }, "Paper only. This works out what a structure would cost and risk from the live prices; it reads the live board. The only thing it can send is a paper order, queued on the relay and carried out by the paper runner through the risk gate. Only structures with a known worst loss can be built. Model: Black-Scholes at each leg's own implied volatility, flat rate " + (c.r * 100).toFixed(1) + "%. Buys are priced at the offer and sells at the bid; a leg with no live book is priced at its last trade and flagged. Fees use the desk's cost model. Margin for credit structures is the config estimate per lot, not the broker's figure. Held to expiry, an in-the-money long pays the exchange's exercise STT instead, which this does not model; there is no dividend yield in the pricing. Worst loss and best profit leave out costs.")));
 }
 // ---- flow and signals: the tape of the session, the rules that fired, and each rule's own record --------------------------------------------------------------
 function bdFlow(ctx) {
@@ -1646,29 +1842,6 @@ function legsTable2(a) {
 	return h("div", { class: "panel scroll" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["", "Strike", "Type", "Bid", "Ask", "Price used", "IV"].map((x) => h("th", {}, x)))),
 		h("tbody", {}, a.legs.map((l) => h("tr", {}, h("td", { class: l.side > 0 ? "up" : "dn" }, l.side > 0 ? "Buy" : "Sell"), h("td", {}, num(l.strike, 0)), h("td", {}, l.type), h("td", {}, fin(l.bid) ? num(l.bid) : "—"), h("td", {}, fin(l.ask) ? num(l.ask) : "—"), h("td", {}, num(l.px) + (l.src === "last" ? " (last)" : l.src === "side" ? " (one side)" : "")), h("td", {}, fin(l.iv) ? (l.iv * 100).toFixed(1) + "%" : "—"))))));
 }
-async function renderBuild() {
-	const body = $("#bd-body"), B = S.bd;
-	if (S.tab !== "build" || document.hidden || B.busy) return;
-	if (/(^|\.)github\.io$/.test(location.hostname)) { if (body.dataset.state !== "pages") { body.textContent = ""; put(body, empty("live", "The builder uses live prices, which are private and only open on the Cloudflare site, not on this address.")); body.dataset.state = "pages"; } return; }
-	const key = store("qd.livekey");
-	if (!key) { if (body.dataset.state !== "key") { body.textContent = ""; put(body, liveKeyForm("")); body.dataset.state = "key"; } return; }
-	B.busy = true;
-	let j = null, note = "";
-	try {
-		const r = await fetch("/live/snapshot", { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
-		if (r.status === 401) { try { localStorage.removeItem("qd.livekey"); } catch (e) { /* private mode */ } note = "That key was not accepted. Type it again."; }
-		else if (!r.ok) note = `The live relay did not answer as expected (HTTP ${r.status}).`;
-		else j = await r.json();
-	} catch (e) { note = "No live prices: the request failed before any answer."; }
-	finally { B.busy = false; }
-	if (S.tab !== "build") return;
-	if (!j) { body.textContent = ""; body.dataset.state = "note"; return void put(body, liveKeyForm(note)); }
-	B.data = j; B.at = Date.now();
-	if (Date.now() - B.newsAt > 60000) { B.newsAt = Date.now(); newsLoad(key).then(() => { if (S.tab === "build" && !B.editing && B.data) bdDraw(); }); }       // the digest changes every ten minutes: once a minute is plenty
-	body.dataset.state = "data";
-	if (!B.editing) bdDraw();
-}
-
 
 // ==================================================================================================================
 // Paper tickets. PAPER MONEY ONLY. These are the only functions in the app that POST, and they POST to exactly two relay routes: /paper/order (queue an order) and /paper/kill (the
@@ -1732,18 +1905,20 @@ async function paperCall(method, path, body) {
 }
 
 // ---- the ticket in the Build tab: why, review, send ---------------------------------------------------------------------
-function bdTicket(a, tpl) {
-	const B = S.bd, tk = (B.tk = B.tk || { strategy: null, thesis: "", stage: "edit", sent: [], busy: false, err: "" });
+// `st` and `rd`: the ticket's own state and redraw when it is not the builder's (the one-contract ticket opened from an option chain).
+function bdTicket(a, tpl, st, rd) {
+	const B = S.bd, tk = st || (B.tk = B.tk || { strategy: null, thesis: "", stage: "edit", sent: [], busy: false, err: "" });
 	const strategy = tk.strategy == null ? tpl.name : tk.strategy;
 	const box = h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Send as a paper order"));
-	const redraw = () => { B.editing = false; bdDraw(); };
+	const ed = (v) => { if (st) st.editing = v; else B.editing = v; };          // while the reader is typing, a refresh must not rebuild the form under them
+	const redraw = rd || (() => { B.editing = false; bdDraw(); });
 	const sig = PT.sigOf(a);
 	if (tk.sig !== sig) { if (!tk.busy) { tk.sig = sig; tk.stage = "edit"; tk.sent = []; tk.err = ""; } }       // another structure: the old review (and any "sent" screen) is void
 	if (!a.paperOk) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Not available: the paper desk could not open this today (see the list above). It stays a what-if."));
 	if (tk.stage === "sent") {
 		return put(box, tk.sent.map((r) => h("div", { class: "row", style: "padding:6px 16px;gap:8px;align-items:flex-start" }, h("b", { class: r.ok ? "up" : "dn", style: "width:14px" }, r.ok ? "✓" : "✗"), h("span", { style: "font-size:12.5px" }, r.text))),
-			h("div", { class: "f3", style: "font-size:12px;padding:4px 16px" }, "Queued orders are carried out by the paper runner within a few seconds, and it may still refuse them. Watch the Paper tab."),
-			h("div", { style: "padding:8px 16px 14px;display:flex;gap:10px;flex-wrap:wrap" }, h("button", { class: "btn", onclick: () => show("paper") }, "Open Paper"),
+			h("div", { class: "f3", style: "font-size:12px;padding:4px 16px" }, "Queued orders are carried out by the paper runner within a few seconds, and it may still refuse them. Watch the Positions tab."),
+			h("div", { style: "padding:8px 16px 14px;display:flex;gap:10px;flex-wrap:wrap" }, h("button", { class: "btn primary", onclick: () => show("paper") }, "Open Positions"),
 				h("button", { class: "btn", onclick: () => { tk.stage = "edit"; tk.thesis = ""; tk.sent = []; redraw(); } }, "Another")));
 	}
 	const built = PT.ordersFor(a, strategy, tk.thesis, undefined, B.data && typeof B.data.now === "number" ? B.data.now : NaN);
@@ -1757,7 +1932,7 @@ function bdTicket(a, tpl) {
 			h("div", { class: "f3", style: "font-size:12px;line-height:1.55;padding:6px 16px" }, `Most you can lose, at the offers shown: ${inr(a.maxLoss)} plus ${inr(a.entryFees)} of fees; a fill can be a little dearer, up to the limits above. Paper money. "${PT.flat(tk.thesis)}"`),
 			tk.err ? h("div", { class: "warn", style: "font-size:12.5px;padding:2px 16px" }, tk.err) : null,
 			h("div", { style: "padding:8px 16px 14px;display:flex;gap:10px;flex-wrap:wrap" },
-				h("button", { class: "btn", disabled: tk.busy, onclick: async (ev) => {
+				h("button", { class: "btn primary", disabled: tk.busy, onclick: async (ev) => {
 					if (tk.busy) return;                                                              // a second tap while the first is still going does nothing
 					if (ev && ev.currentTarget) ev.currentTarget.disabled = true;
 					tk.busy = true; tk.err = ""; tk.sent = [];
@@ -1771,12 +1946,48 @@ function bdTicket(a, tpl) {
 				h("button", { class: "btn", disabled: tk.busy, onclick: () => { tk.stage = "edit"; redraw(); } }, "Back")));
 	}
 	const inp = h("input", { type: "text", class: "search", maxlength: "60", "aria-label": "Strategy name", value: strategy, oninput: (e) => { tk.strategy = e.target.value; } });
-	const ta = h("textarea", { class: "search", rows: "3", maxlength: "1000", "aria-label": "Thesis: why this trade, now", placeholder: "Why this trade, now? What would make you wrong?", style: "width:100%;resize:vertical;font:inherit", oninput: (e) => { tk.thesis = e.target.value; const ok = PT.thesisOk(tk.thesis); cnt.textContent = ok ? "Thesis written." : `${PT.flat(tk.thesis).length} of at least 20 characters`; rv.disabled = !(PT.stratOk(tk.strategy == null ? tpl.name : tk.strategy) && ok); }, onfocus: () => { B.editing = true; }, onblur: () => { B.editing = false; } }, tk.thesis);
+	const ta = h("textarea", { class: "search", rows: "3", maxlength: "1000", "aria-label": "Thesis: why this trade, now", placeholder: "Why this trade, now? What would make you wrong?", style: "width:100%;resize:vertical;font:inherit", oninput: (e) => { tk.thesis = e.target.value; const ok = PT.thesisOk(tk.thesis); cnt.textContent = ok ? "Thesis written." : `${PT.flat(tk.thesis).length} of at least 20 characters`; rv.disabled = !(PT.stratOk(tk.strategy == null ? tpl.name : tk.strategy) && ok); }, onfocus: () => { ed(true); }, onblur: () => { ed(false); } }, tk.thesis);
 	const cnt = h("div", { class: "f3", style: "font-size:11.5px;padding:2px 0" }, PT.thesisOk(tk.thesis) ? "Thesis written." : `${PT.flat(tk.thesis).length} of at least 20 characters`);
-	const rv = h("button", { class: "btn", disabled: !!built.error, onclick: () => { tk.stage = "review"; tk.err = ""; redraw(); } }, "Review order");
-	inp.addEventListener("focus", () => { B.editing = true; }); inp.addEventListener("blur", () => { B.editing = false; });
+	const rv = h("button", { class: "btn primary", disabled: !!built.error, onclick: () => { tk.stage = "review"; tk.err = ""; redraw(); } }, "Review order");
+	inp.addEventListener("focus", () => { ed(true); }); inp.addEventListener("blur", () => { ed(false); });
 	return put(box, h("div", { style: "padding:2px 16px 14px;display:flex;flex-direction:column;gap:8px" },
 		h("label", { class: "f3", style: "font-size:12px" }, "Strategy name"), inp, h("label", { class: "f3", style: "font-size:12px" }, "Thesis (required: it is kept with the trade)"), ta, cnt, rv));
+}
+
+// ---- the ticket for one contract, opened by a tap on its price in an option chain: what it is quoted at, what one or more lots would cost and could lose, whether the paper
+// desk can open it, and then the same why / review / send as the builder's ticket. It follows the live price while it is open, except under the reader's fingers.
+S.tk = null;
+function tkOpen(name) {
+	const o = liveOpt(name);
+	if (!o) return;
+	const box = h("div", {});
+	openSheet(`${o.u} ${num(o.k, 0)} ${o.t === "CE" ? "call" : "put"} · ${o.e.slice(0, 2)} ${cap(o.e.slice(2, 5).toLowerCase())}`, box);
+	S.tk = { name, o, lots: 1, box, strategy: null, thesis: "", stage: "edit", sent: [], busy: false, err: "", editing: false };
+	tkDraw();
+}
+function tkDraw() {
+	const K = S.tk, B = S.bd, data = B.data;
+	if (!K || K.editing || K.busy || !data) return;
+	const o = K.o, c = QB.conf(), q = data.quotes[K.name], n = liveNames(o.u, data.quotes), sq = data.quotes[n.spot] || data.quotes[n.fut] || {}, inst = c.inst[o.u];
+	K.box.textContent = "";
+	if (!q) return void put(K.box, h("div", { class: "note" }, K.name + " is no longer on the board."));
+	const T = QB.yearsTo(o.e, Date.now()), redraw = () => { K.editing = false; tkDraw(); };
+	const a = QB.analyze({ u: o.u, legs: [{ side: 1, type: o.t, strike: o.k, name: K.name }], quotes: data.quotes, spot: sq.ltp, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: K.lots });
+	const leg = a.legs[0], cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
+	put(K.box,
+		h("div", { class: "kstrip", style: "margin:0 -16px;border-top:1px solid var(--line)" }, cell("Last", livePx(q.ltp, "opt")), cell("Bid", fin(q.bid) ? livePx(q.bid, "opt") : "—", "up"), cell("Offer", fin(q.ask) ? livePx(q.ask, "opt") : "—", "dn"), cell("Change", fin(q.chg) ? signed(q.chg) + "%" : "—", cls(q.chg))),
+		h("div", { class: "kstrip", style: "margin:0 -16px" }, cell("Open interest", fin(q.oi) ? LIVE_VOL.format(q.oi) : "—"), cell("Volume", fin(q.vol) ? LIVE_VOL.format(q.vol) : "—"), cell("Implied volatility", fin(leg.iv) ? (leg.iv * 100).toFixed(1) + "%" : "—"), cell(o.u, fin(sq.ltp) ? livePx(sq.ltp, "idx") : "—")),
+		h("div", { class: "f3", style: "font-size:11.5px;padding:8px 0 0" }, `Heard ${liveAge(q.age_s)} ago${SRC_NAME[q.src] ? " from " + SRC_NAME[q.src] : ""}.`));
+	if (!inst) return void put(K.box, h("div", { class: "note" }, `${o.u} options are shown for reading only: the paper desk trades ${c.paper.underlyings.join(", ")} for now, and it has no verified lot size or costs for ${o.u}.`));
+	put(K.box, h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:14px 0 10px" }, h("span", {}, `Lots (${inst.lot} units each)`),
+		h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn sq", "aria-label": "fewer lots", onclick: () => { K.lots = Math.max(1, K.lots - 1); redraw(); } }, "−"), h("b", { class: "mono", style: "min-width:28px;text-align:center" }, String(K.lots)),
+			h("button", { class: "btn sq", "aria-label": "more lots", onclick: () => { K.lots = Math.min(c.limits.max_lots, K.lots + 1); redraw(); } }, "+"))));
+	if (a.errors.length) return void put(K.box, h("div", { class: "note warn" }, a.errors[0]));
+	put(K.box,
+		h("div", { class: "kstrip", style: "margin:0 -16px;border-top:1px solid var(--line)" }, cell("You pay", inr(Math.abs(a.premium))), cell("Most you can lose", inr(a.maxLoss + a.entryFees), "dn"), cell("Break-even", a.breakevens.map((b) => num(b, 0)).join(" · ") || "—"), cell("Fees in and out", inr(a.fees))),
+		a.paperOk ? null : h("div", { style: "padding:10px 0 0" }, h("div", { class: "lbl", style: "margin-bottom:4px" }, "Why the paper desk would not open this now"),
+			a.paperChecks.filter((x) => !x.ok).map((x) => h("div", { class: "row", style: "padding:4px 0;gap:8px;align-items:flex-start" }, h("b", { class: "dn", style: "width:14px" }, "✗"), h("span", { style: "font-size:12.5px" }, x.text)))),
+		h("div", { style: "margin:12px -16px 0" }, bdTicket(a, { name: o.t === "CE" ? "Long call" : "Long put" }, K, redraw)));
 }
 
 // ---- the Paper tab: the account, the orders, the positions, the kill switch --------------------------------------------------------
@@ -1788,58 +1999,65 @@ function ppDraw() {
 	body.textContent = "";
 	const sm = d && d.summary;
 	const kv = (k, v, cl) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line)" }, h("span", { class: "f3" }, k), h("b", { class: "mono " + (cl || "") }, v));
+	const cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
 	const age = ppAge(sm);
 	const tagC = (k, t) => h("span", { class: "tag " + k }, t);
-	put(body, h("div", { class: "note" }, "Paper money only. Orders are carried out by the paper runner through the risk gate: the gate, not this page, decides. Nothing here can reach a broker."));
-	if (!sm) put(body, h("div", { class: "note warn" }, "The paper runner has not reported yet. Orders wait two minutes, then expire. It starts by itself on trading days from about 08:30."));
-	else if (inSession() && !(age < 45)) put(body, h("div", { class: "note warn" }, `The paper runner last reported ${liveAge(age)} ago. If it is not running, orders will expire unfilled.`));
-	if (sm && sm.stuck && sm.stuck.length) put(body, h("div", { class: "note warn" }, `Held past expiry with no price: ${sm.stuck.join(", ")}. New orders are refused until this is settled.`));
-	if (sm) put(body, h("div", { class: "panel" },
-		kv("Equity", fin(sm.equity) ? inr(sm.equity) : "unknown (a position has no price)"), kv("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""),
-		kv("Today", fin(sm.equity) && fin(sm.day_start) ? inr(sm.equity - sm.day_start, true) : "—"), kv("Cash", inr(sm.cash)), kv("Fees paid", inr(sm.fees)),
+	if (!sm) put(body, h("div", { class: "banner warn" }, icon("alert"), "The paper runner has not reported yet. Orders wait two minutes, then expire. It starts by itself on trading days from about 08:30."));
+	else if (inSession() && !(age < 45)) put(body, h("div", { class: "banner warn" }, icon("alert"), `The paper runner last reported ${liveAge(age)} ago. If it is not running, orders will expire unfilled.`));
+	if (sm && sm.stuck && sm.stuck.length) put(body, h("div", { class: "banner warn" }, icon("alert"), `Held past expiry with no price: ${sm.stuck.join(", ")}. New orders are refused until this is settled.`));
+	if (sm && sm.day_halted) put(body, h("div", { class: "banner err" }, icon("stop"), "Stopped for today: the daily loss limit was hit."));
+	if (sm && sm.halt) put(body, h("div", { class: "banner err" }, icon("stop"), "Drawdown halt is ON: only the owner clears it."));
+	if (P.note) put(body, h("div", { class: "banner warn" }, icon("alert"), P.note));
+	const pos = sm && sm.positions ? sm.positions : [], day = sm && fin(sm.equity) && fin(sm.day_start) ? sm.equity - sm.day_start : null;
+	if (sm) put(body, h("div", { class: "grp" },
+		h("div", { class: "sec-h" }, h("h2", {}, "Paper account"), h("span", { class: "hint" }, sm.asof ? "as of " + ist(sm.asof) : "")),
+		h("div", { class: "acct" }, h("div", {}, h("span", { class: "k" }, "Equity"), h("div", { class: "eq mono" }, fin(sm.equity) ? inr(sm.equity) : "unknown (a position has no price)")),
+			h("div", { class: "day mono " + cls(day) }, h("span", { class: "k" }, "Today"), fin(day) ? inr(day, true) : "—")),
+		h("div", { class: "kstrip" }, cell("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""), cell("Cash", inr(sm.cash)), cell("Fees paid", inr(sm.fees)), cell("Open positions", String(pos.length)))));
+	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, `Positions (${pos.length})`)),
+		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", { class: "mono", style: "font-size:13px" }, p.symbol),
+				h("span", { class: "mono " + (fin(p.pnl) ? (p.pnl >= 0 ? "up" : "dn") : "f3"), style: "font-size:15px" }, fin(p.pnl) ? inr(p.pnl, true) : "no price")),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, `${p.lots} lot${p.lots === 1 ? "" : "s"} (${p.qty} units) · bought at ${num(p.avg)} · bid ${fin(p.mark) ? num(p.mark) : "—"} · expires ${p.expiry || "?"} · ${p.strategy || ""}`),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:2px" }, p.thesis || ""),
+			P.confirm === "sell:" + p.symbol ? h("div", { style: "display:flex;gap:8px;margin-top:8px" },
+				h("button", { class: "btn danger", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const o = PT.sellFor(p.symbol); const r = await paperCall("POST", "/paper/order", o); P.acting = false; P.note = r.status === 200 ? "" : "The sell was not queued (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, "Yes, sell all at the bid"),
+				h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
+				: h("div", { style: "display:flex;gap:8px;margin-top:8px" }, h("button", { class: "btn", onclick: () => { P.confirm = "sell:" + p.symbol; P.confirmAt = Date.now(); ppDraw(); } }, "Sell all"),
+					h("button", { class: "btn", onclick: () => { show("live"); liveOpen(p.symbol); } }, "Open the chain"))))
+			: h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 14px" }, "Nothing held. Open an instrument on Markets, go to Options and tap a price to make a paper order.")));
+	const pend = d && d.pending ? d.pending : [], res = d && d.results ? d.results.slice(-10).reverse() : [];
+	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Orders"), h("span", { class: "hint" }, pend.length ? pend.length + " waiting" : "the last ten")),
+		pend.map((o) => h("div", { class: "row", style: "padding:8px 16px;font-size:12.5px;justify-content:space-between;border-top:1px solid var(--line)" }, h("span", { class: "mono" }, `${o.side} ${o.lots} ${o.symbol}`), tagC("warn", "waiting"))),
+		res.map((r) => h("div", { style: "padding:8px 16px;border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "justify-content:space-between;font-size:12.5px" }, h("span", { class: "mono" }, r.fill && r.fill.symbol ? `${r.fill.kind || ""} ${r.fill.qty || ""} ${r.fill.symbol}` : r.id), tagC(r.status === "filled" ? "bull" : r.status === "done" ? "flat" : "bear", r.status)),
+			r.fill && fin(r.fill.price) ? h("div", { class: "f3", style: "font-size:12px" }, `at ${num(r.fill.price)} · fees ${fin(r.fill.fees) ? num(r.fill.fees) : "—"}`) : null,
+			(r.reasons || []).map((x) => h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, x)))),
+		!pend.length && !res.length ? h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 14px" }, "No orders yet.") : null));
+	if (sm) put(body, fold("pp-risk", "Loss limits", "where the desk stops by itself", h("div", { class: "panel", style: "margin:0;border:0" },
 		kv("Stops for the day below", fin(sm.day_floor) ? inr(sm.day_floor) : "—"), kv("Halts below", fin(sm.dd_floor) ? inr(sm.dd_floor) : "—"),
-		sm.day_halted ? kv("Today", "stopped: the daily loss limit was hit", "dn") : null, sm.halt ? kv("Drawdown halt", "ON: only the owner clears it", "dn") : null));
+		sm.day_halted ? kv("Today", "stopped: the daily loss limit was hit", "dn") : null, sm.halt ? kv("Drawdown halt", "ON: only the owner clears it", "dn") : null)));
 	const sl = sm && sm.slippage;
 	if (sl && sl.fills > 0) {
 		const bpsTxt = fin(sl.bps) ? `${sl.bps} bps of the value traded` : "";
-		put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Slippage (${sl.fills} fill${sl.fills === 1 ? "" : "s"})`),
+		put(body, fold("pp-slip", "Slippage", `${sl.fills} fill${sl.fills === 1 ? "" : "s"} · ${inr(sl.total_inr)}`, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Slippage (${sl.fills} fill${sl.fills === 1 ? "" : "s"})`),
 			kv("Total cost vs the price you saw", inr(sl.total_inr), sl.total_inr > 0 ? "dn" : ""), kv("Spread paid (measured)", inr(sl.spread_inr)),
 			kv(`Price moved before the fill (measured, ${sl.fills_with_decision_price} of ${sl.fills})`, inr(sl.delay_inr, true)), kv("Size impact (a model, not measured)", inr(sl.impact_inr)),
 			bpsTxt ? h("div", { class: "f3", style: "font-size:12px;padding:4px 16px" }, bpsTxt) : null,
 			(d.summary.slips || []).slice().reverse().map((r) => h("div", { class: "row", style: "padding:4px 16px;font-size:12px;justify-content:space-between;gap:8px;border-top:1px solid var(--line)" },
 				h("span", { class: "mono" }, `#${r.seq} ${r.side} ${r.symbol || ""}`), h("span", { class: "mono f3" }, `${fin(r.total_inr) ? inr(r.total_inr) : "—"}${fin(r.delay_s) ? " · " + r.delay_s + "s" : ""}${r.impact_ticks ? " · +" + r.impact_ticks + " tick" + (r.impact_ticks === 1 ? "" : "s") : ""}`))),
-			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "Positive is a cost. The spread and the price move come from the live board. The size impact is a conservative model (the board shows only the best price and its size) and is shown apart so it is never mistaken for an observation.")));
+			h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "Positive is a cost. The spread and the price move come from the live board. The size impact is a conservative model (the board shows only the best price and its size) and is shown apart so it is never mistaken for an observation."))));
 	}
-	const killOn = d ? d.kill === true : false;
-	put(body, h("div", { class: "panel pad", style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
-		h("b", {}, "Kill switch"), killOn ? tagC("bear", "ON: nothing opens, everything is sold") : tagC("bull", "off"),
-		P.confirm === (killOn ? "kill:off" : "kill:on") ? h("span", { style: "display:flex;gap:8px" }, h("button", { class: "btn", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const r = await paperCall("POST", "/paper/kill", { on: !killOn }); P.acting = false; P.note = r.status === 200 ? "" : "The kill switch could not be changed (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, killOn ? "Yes, resume trading" : "Yes, stop and sell everything"), h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
-			: h("button", { class: "btn", onclick: () => { P.confirm = killOn ? "kill:off" : "kill:on"; P.confirmAt = Date.now(); ppDraw(); } }, killOn ? "Resume trading" : "Stop all trading and sell everything")));
-	if (P.note) put(body, h("div", { class: "note warn" }, P.note));
-	const pos = sm && sm.positions ? sm.positions : [];
-	put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Positions (${pos.length})`),
-		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
-			h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", { class: "mono", style: "font-size:13px" }, p.symbol),
-				h("span", { class: "mono " + (fin(p.pnl) ? (p.pnl >= 0 ? "up" : "dn") : "f3") }, fin(p.pnl) ? inr(p.pnl, true) : "no price")),
-			h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, `${p.lots} lot${p.lots === 1 ? "" : "s"} (${p.qty} units) · bought at ${num(p.avg)} · bid ${fin(p.mark) ? num(p.mark) : "—"} · expires ${p.expiry || "?"} · ${p.strategy || ""}`),
-			h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:2px" }, p.thesis || ""),
-			P.confirm === "sell:" + p.symbol ? h("div", { style: "display:flex;gap:8px;margin-top:6px" },
-				h("button", { class: "btn", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const o = PT.sellFor(p.symbol); const r = await paperCall("POST", "/paper/order", o); P.acting = false; P.note = r.status === 200 ? "" : "The sell was not queued (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, "Yes, sell all at the bid"),
-				h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
-				: h("button", { class: "btn", style: "margin-top:6px", onclick: () => { P.confirm = "sell:" + p.symbol; P.confirmAt = Date.now(); ppDraw(); } }, "Sell all")))
-			: h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Nothing held.")));
-	const pend = d && d.pending ? d.pending : [], res = d && d.results ? d.results.slice(-10).reverse() : [];
-	put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Orders"),
-		pend.map((o) => h("div", { class: "row", style: "padding:5px 16px;font-size:12.5px;justify-content:space-between" }, h("span", { class: "mono" }, `${o.side} ${o.lots} ${o.symbol}`), tagC("flat", "waiting"))),
-		res.map((r) => h("div", { style: "padding:5px 16px;border-top:1px solid var(--line)" },
-			h("div", { class: "row", style: "justify-content:space-between;font-size:12.5px" }, h("span", { class: "mono" }, r.fill && r.fill.symbol ? `${r.fill.kind || ""} ${r.fill.qty || ""} ${r.fill.symbol}` : r.id), tagC(r.status === "filled" ? "bull" : r.status === "done" ? "flat" : "bear", r.status)),
-			r.fill && fin(r.fill.price) ? h("div", { class: "f3", style: "font-size:12px" }, `at ${num(r.fill.price)} · fees ${fin(r.fill.fees) ? num(r.fill.fees) : "—"}`) : null,
-			(r.reasons || []).map((x) => h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, x)))),
-		!pend.length && !res.length ? h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "No orders yet.") : null));
 	const tail = sm && sm.ledger_tail ? sm.ledger_tail.slice(-10).reverse() : [];
-	put(body, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Ledger (${sm ? sm.ledger_len : 0} rows, ${sm && sm.ledger_ok ? "chain verified" : "NOT verified"})`),
+	put(body, fold("pp-ledger", "Ledger", `${sm ? sm.ledger_len : 0} rows, ${sm && sm.ledger_ok ? "chain verified" : "NOT verified"}`, h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, `Ledger (${sm ? sm.ledger_len : 0} rows, ${sm && sm.ledger_ok ? "chain verified" : "NOT verified"})`),
 		tail.map((r) => h("div", { class: "row", style: "padding:4px 16px;font-size:12px;justify-content:space-between;gap:8px" }, h("span", { class: "mono" }, `#${r.seq} ${r.kind}${r.symbol ? " " + r.symbol : ""}`), h("span", { class: "mono f3" }, fin(r.price) ? `${r.qty} @ ${num(r.price)}` : ""))),
-		!tail.length ? h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Empty.") : null));
+		!tail.length ? h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Empty.") : null)));
+	const killOn = d ? d.kill === true : false;
+	put(body, h("div", { class: "panel pad", style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px" },
+		h("b", {}, "Kill switch"), killOn ? tagC("bear", "ON: nothing opens, everything is sold") : tagC("bull", "off"),
+		P.confirm === (killOn ? "kill:off" : "kill:on") ? h("span", { style: "display:flex;gap:8px" }, h("button", { class: "btn danger", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const r = await paperCall("POST", "/paper/kill", { on: !killOn }); P.acting = false; P.note = r.status === 200 ? "" : "The kill switch could not be changed (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, killOn ? "Yes, resume trading" : "Yes, stop and sell everything"), h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
+			: h("button", { class: "btn" + (killOn ? "" : " danger"), style: "margin-left:auto", onclick: () => { P.confirm = killOn ? "kill:off" : "kill:on"; P.confirmAt = Date.now(); ppDraw(); } }, killOn ? "Resume trading" : "Stop all trading and sell everything")),
+		h("div", { class: "note" }, "Paper money only. Orders are carried out by the paper runner through the risk gate: the gate, not this page, decides. Nothing here can reach a broker."));
 }
 async function renderPaper(force) {
 	const body = $("#pp-body"), P = S.pp;
@@ -1870,7 +2088,6 @@ async function refresh(full, force) {
 		if (force && window.QD_PUBLISHED && window.qdReload) await window.qdReload();
 		const t = S.tab;
 		if (t === "live") await renderLive();
-		else if (t === "build") await renderBuild();
 		else if (t === "paper") await renderPaper();
 		else if (t === "today") await renderToday(full);
 		else if (t === "trades") await renderTrades(full);

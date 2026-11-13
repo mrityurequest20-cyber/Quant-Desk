@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0A0C10" id="meta-theme">
 <meta name="color-scheme" content="dark light">
-<meta name="description" content="QuantDesk: an automated options paper-trading desk. Live read, chart, trades, the news it reads, and a pre-market brief across every F&O instrument.">
+<meta name="description" content="QuantDesk: a trading desk for Indian indices, the most traded F&amp;O stocks, commodities and currencies. Live prices, candlestick charts, market depth, option chains and paper orders.">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -102,7 +102,7 @@ main>section{animation:fade .16s ease-out}
 .o1{order:1}.o2{order:2}.o3{order:3}.o4{order:4}.o5{order:5}
 
 /* ---- tab bar: bottom on phones, a labelled sidebar on wide screens ---- */
-.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(6,1fr);background:var(--bg);
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(5,1fr);background:var(--bg);
 border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 .tabbar .brand{display:none}
 .tabbar button{position:relative;height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:10.5px;font-weight:500;
@@ -335,6 +335,90 @@ border-bottom:1px solid var(--line);font-weight:500}
 .grow-row .s{grid-column:1/-1;font-size:11px;color:var(--fg3)}
 .reg-h{display:flex;align-items:center;min-height:30px;padding:0 16px;background:var(--panel2);font-size:10.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3)}
 
+/* ---- form controls ---- */
+.search{display:block;width:100%;height:40px;padding:0 12px;border-radius:6px;border:1px solid var(--line2);background:var(--panel);color:var(--fg);font:inherit;font-size:13.5px;outline:none;-webkit-appearance:none;appearance:none}
+textarea.search{height:auto;padding:10px 12px;line-height:1.5}
+select.search{padding-right:8px}
+.search:focus{border-color:var(--acc)}
+.search::placeholder{color:var(--fg3)}
+input[type=range]{accent-color:var(--acc)}
+.btn.sq{width:36px;height:36px;padding:0;font-size:16px}
+.btn:disabled{opacity:.45;cursor:default}
+.chip.up[aria-pressed="true"]{color:var(--up);background:var(--up-bg);border-color:var(--up-bg)}
+.chip.dn{color:var(--dn);background:var(--dn-bg);border-color:var(--dn-bg)}
+.note.warn{color:var(--warn)}
+
+/* ---- markets: the watchlist ---- */
+.mtop{display:flex;align-items:center;gap:10px;padding:10px 0 4px;min-width:0}
+.mtop .grow{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.whead{display:none}
+.wrow{display:grid;grid-template-columns:minmax(0,1fr) auto 78px;align-items:center;gap:12px;width:100%;min-height:52px;padding:8px 16px;text-align:left;border-top:1px solid var(--line)}
+button.wrow:hover,button.wrow:active{background:var(--panel2)}
+.wrow .nm{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wrow .sub{font-size:11px;color:var(--fg3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wrow .px{text-align:right;font-size:14.5px;font-weight:500;padding:2px 4px;margin:0 -4px;border-radius:4px}
+.wrow .x{display:none}
+.wrow.off{opacity:.5}
+.pct{display:inline-flex;align-items:center;justify-content:flex-end;justify-self:end;min-width:70px;height:24px;padding:0 8px;border-radius:4px;font:500 12px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pct.up{color:var(--up);background:var(--up-bg)}.pct.dn{color:var(--dn);background:var(--dn-bg)}.pct.flat{color:var(--fg3);background:var(--raise)}
+@keyframes flashup{from{background:var(--up-bg);color:var(--up)}to{background:transparent}}
+@keyframes flashdn{from{background:var(--dn-bg);color:var(--dn)}to{background:transparent}}
+.flash-up{animation:flashup 1s ease-out}.flash-dn{animation:flashdn 1s ease-out}
+
+/* ---- one instrument ---- */
+.ibar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0 2px}
+.ibar .btn{height:36px}
+.ihead{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding:10px 0 12px}
+.ihead .nm{font-size:17px;font-weight:500;letter-spacing:-.01em}
+.ihead .sub{font-size:11.5px;color:var(--fg3);margin-top:2px}
+.ihead .pxb{display:flex;align-items:center;gap:10px;flex:none}
+.ihead .px{font-size:26px;font-weight:400;letter-spacing:-.02em;line-height:1.1}
+.facts>div>span{display:block;font-size:10.5px;color:var(--fg3)}
+.kstrip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+.kstrip>div{background:var(--panel);padding:8px 12px 9px 16px;min-width:0}
+.kstrip span{display:block;font-size:10.5px;color:var(--fg3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kstrip b{display:block;font-size:14px;font-weight:500;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kstrip small{display:block;font-size:11px;color:var(--fg3)}
+@media (min-width:560px){.kstrip{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.dom{display:grid;grid-template-columns:1fr 1fr;column-gap:1px;background:var(--line);border-top:1px solid var(--line)}
+.dom .lv{display:grid;grid-template-columns:44px minmax(0,1fr) minmax(0,1fr);align-items:center;gap:6px;min-height:28px;padding:0 10px 0 16px;background-color:var(--panel);font:12.5px var(--mono);font-variant-numeric:tabular-nums}
+.dom .lv:nth-child(even){grid-template-columns:minmax(0,1fr) minmax(0,1fr) 44px;padding:0 16px 0 10px}
+.dom .lv>*{text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dom .lv:nth-child(even)>*{text-align:left}.dom .lv:nth-child(even)>:last-child{text-align:right}
+.dom .lv:nth-child(odd)>:first-child{text-align:left}
+.dom .lv b{font-weight:500}
+.dom .lv.hd{min-height:24px;font:500 10.5px var(--sans);color:var(--fg3)}
+.dom .lv.tot{border-top:1px solid var(--line);color:var(--fg2)}
+.stale .dom{opacity:.5}
+.chartbox .lw,.chartbox>div{height:100%}
+
+/* ---- option chain ---- */
+.chain{font-variant-numeric:tabular-nums}
+.chain th{text-align:center!important;padding:6px 6px!important}
+.chain th.side{font-size:11px;color:var(--fg2);border-bottom:1px solid var(--line)}
+.chain td{text-align:center!important;padding:0 6px!important;height:44px}
+.chain td.k{font-weight:600;background:var(--raise);min-width:64px}
+.chain td.oi{font:12px var(--mono);color:var(--fg2);min-width:58px}
+.chain td.itm{background:var(--acc-bg)}
+.chain tr.atm td.k{background:var(--acc);color:var(--on-acc)}
+.chain td.pxc{padding:0!important}
+.chain td.pxc button{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;min-width:72px;height:44px;gap:1px}
+.chain td.pxc button:hover{background:var(--raise)}
+.chain td.pxc b{font-size:13px;font-weight:500}.chain td.pxc small{font-size:10.5px}
+.chain .x{display:none}
+
+/* ---- folded sections ---- */
+.fold{margin:8px -16px 0;background:var(--panel);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.fold>summary{display:flex;align-items:center;gap:10px;min-height:46px;padding:0 16px;font-size:13.5px;font-weight:500;cursor:pointer;list-style:none}
+.fold>summary::-webkit-details-marker{display:none}
+.fold>summary .hint{flex:1;min-width:0;font-size:11.5px;font-weight:400;color:var(--fg3);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fold>summary::after{content:"";flex:none;width:7px;height:7px;margin:-3px 2px 0 auto;border-right:1.6px solid var(--fg3);border-bottom:1.6px solid var(--fg3);transform:rotate(45deg);transition:transform .15s}
+.fold[open]>summary::after{transform:rotate(-135deg);margin-top:3px}
+.fold[open]>summary{border-bottom:1px solid var(--line)}
+.fold>.grp,.fold>.panel{margin:0;border:0;border-radius:0}
+.fold>.grp>.pad:first-child{display:none}
+.fold>.note{padding:12px 16px}
+
 /* ---- sheet, toast, pull-to-refresh ---- */
 .sheet{position:fixed;inset:0;z-index:70;display:flex;align-items:flex-end;justify-content:center;background:var(--scrim);opacity:0;pointer-events:none;transition:opacity .2s}
 .sheet.open{opacity:1;pointer-events:auto}
@@ -383,6 +467,16 @@ border:1px solid var(--line);display:grid;place-items:center;color:var(--acc);op
   .cpanel{margin:0 0 16px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
   .subnav{margin:0 0 16px;padding:0;position:static}
   .wide-only{display:block!important}
+  main>section[data-view="live"]{max-width:1240px}
+  .fold{margin:0 0 16px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .mtop{padding-top:0}
+  .whead,.wrow{grid-template-columns:minmax(0,1.3fr) 170px 90px 90px 120px 78px}
+  .whead{display:grid;align-items:center;gap:12px;min-height:28px;padding:0 16px;border-top:1px solid var(--line);background:var(--panel2);font-size:10.5px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--fg3)}
+  .whead>*{text-align:right}.whead>:first-child{text-align:left}
+  .whead .x,.wrow .x{display:block;text-align:right;font:12px var(--mono);font-variant-numeric:tabular-nums;color:var(--fg2);white-space:nowrap}
+  .wrow{min-height:44px;padding:5px 16px}
+  .chain .x{display:table-cell}
+  .ihead .px{font-size:30px}
   #toast{bottom:24px}
 }
 @media (min-width:1100px){
@@ -398,7 +492,7 @@ border:1px solid var(--line);display:grid;place-items:center;color:var(--acc);op
 </head>
 <body>
 <header class="bar">
-  <h1><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#0B0E13"/><path d="M12 34H31M39.5 34H52" stroke="#5A6474" stroke-width="3.5" stroke-linecap="round"/><path d="M12 48L21 40L28 45L40 27L52 15" fill="none" stroke="#7D95FF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="title">Live</span><small id="subtitle"></small></h1>
+  <h1><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#0B0E13"/><path d="M12 34H31M39.5 34H52" stroke="#5A6474" stroke-width="3.5" stroke-linecap="round"/><path d="M12 48L21 40L28 45L40 27L52 15" fill="none" stroke="#7D95FF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="title">Markets</span><small id="subtitle"></small></h1>
   <button class="pill off" id="status" aria-label="Live feed status, tap to refresh"><span class="dot"></span><b id="status-t">Connecting</b><span id="status-s"></span></button>
   <button class="ib" id="btn-settings" aria-label="Settings"><svg class="i" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button>
 </header>
@@ -412,10 +506,6 @@ border:1px solid var(--line);display:grid;place-items:center;color:var(--acc);op
 
   <section data-view="live" hidden>
     <div id="lv-body"></div>
-  </section>
-
-  <section data-view="build" hidden>
-    <div id="bd-body"></div>
   </section>
 
   <section data-view="paper" hidden>

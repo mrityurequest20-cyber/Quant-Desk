@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .kite_universe import build_wide
+from .kite_universe import build_wide, deep_symbols
 from .live_push import LivePusher, book_from_tick, quote_from_tick
 
 IST = "Asia/Kolkata"
@@ -296,7 +296,7 @@ def fetch_reference(kite, tokens: dict[str, int], day: dt.date, out_dir: Path) -
 
 
 def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite=None, ticker_factory=None, now=None, sleep=time.sleep, with_reference: bool = False,
-                watchlist: dict | None = None) -> dict:
+                watchlist: dict | None = None, stock_steps: int = 8) -> dict:
     """Record from now until `until_hhmm` IST today. Credentials from the environment. Writes to `out_dir`; refuses a folder inside a git tree outside runtime/.
     `watchlist` (config `desk.watchlist`) names what the owner trades: those instruments and every option are subscribed with their order book, for the live view only."""
     from ..ml.build import refuse_tracked_tree
@@ -318,7 +318,7 @@ def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite
     wide_errors: list[str] = []
     if os.environ.get("KITE_WIDE", "1") != "0":                    # everything else the desk watches; fail-soft: the core five are recorded whatever happens here
         try:
-            wide_tokens, wide_meta, wide_errors = build_wide(kite, today, tokens)
+            wide_tokens, wide_meta, wide_errors = build_wide(kite, today, tokens, stock_options=(watchlist or {}).get("stocks") or (), stock_steps=stock_steps)
             tokens.update(wide_tokens)
             meta.update(wide_meta)
         except Exception as e:                                     # noqa: BLE001
