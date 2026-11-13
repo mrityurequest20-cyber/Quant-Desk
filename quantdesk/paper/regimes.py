@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import math
 
+from . import kalman as KF
+
 K = 3                                   # calm, active, stressed
 NAMES = ("calm", "active", "stressed")
 MIN_BARS = 60                           # an hour of minutes before the model says anything
@@ -34,6 +36,7 @@ CUSUM_K, CUSUM_H = 0.5, 5.0
 CUSUM_KV, CUSUM_HV = 1.0, 10.0          # calibrated on pure noise: about one false volatility alarm per 500 minutes, as the mean detector
 CUSUM_MIN_RETURNS = 30                  # no change detection before half an hour of returns gives the robust scale something to stand on
 CHANGE_FRESH_S = 900
+TREND_MIN_BARS = 30                     # the Kalman trend needs half an hour of closes before it votes
 
 
 # ---------------------------------------------------------------------------------------------------------------- the hidden Markov model
@@ -182,6 +185,7 @@ class RegimeBook:
         self.fit_at: dict[str, float] = {}
         self.cusum: dict[str, Cusum] = {}
         self.changes: dict[str, list[tuple[float, str]]] = {}
+        self.kf: dict[str, KF.LocalLinearTrend] = {}                  # the Kalman trend on log closes (kalman.py), refitted with the HMM
 
     def update(self, u: str, t: float, price: float) -> None:
         """Feed the latest price; work happens only when a minute closes."""
@@ -216,8 +220,14 @@ class RegimeBook:
             fitted = fit_hmm(rets[-MAX_BARS:])
             if fitted:
                 self.models[u], self.p[u] = fitted, fitted["p"]
-        elif model is not None:
-            self.p[u] = filter_step(model, self.p.get(u, model["p"]), r)
+            kf = KF.fit([math.log(c) for _, c in b[:-1][-MAX_BARS:] if c > 0], min_n=TREND_MIN_BARS)
+            if kf:
+                self.kf[u] = kf["filter"]
+        else:
+            if model is not None:
+                self.p[u] = filter_step(model, self.p.get(u, model["p"]), r)
+            if u in self.kf:
+                self.kf[u].step(math.log(c1))
 
     def returns(self, u: str) -> list[float]:
         b = self.bars.get(u) or []
@@ -241,4 +251,7 @@ class RegimeBook:
             out.update(hmm=NAMES[k], p={NAMES[i]: round(p[i], 3) for i in range(K)}, stress=p[2] >= STRESS_P)
         if change == "volatility up":
             out["stress"] = True
+        kf = self.kf.get(u)
+        tr = kf.trend() if kf else None
+        out["trend"] = None if tr is None else {"slope_pct": round(tr["slope"] * 100, 4), "t": round(tr["t"], 2), "vote": tr["vote"]}    # slope: % a minute
         return out

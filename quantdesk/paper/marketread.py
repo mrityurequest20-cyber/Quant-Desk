@@ -8,7 +8,9 @@ For one underlying, from the live board (and the same board a quarter of an hour
 * FLOW         the future's open-interest build-up against its price: long build-up (price up, OI up: new longs), short build-up (down, up), short covering (up, down),
                long unwinding (down, down); and near-the-money writing: call OI added faster than put OI is resistance being sold (bearish), puts faster is support (bullish).
 * EXPECTATIONS the implied move to expiry from the at-the-money straddle; skew (out-of-the-money put volatility over call volatility: the price of crash protection) and its
-               change; the term structure (near against next expiry volatility: inverted means an event is priced); the future's premium over spot.
+               change; the term structure (near against next expiry volatility: inverted means an event is priced); the future's premium over spot, SMOOTHED by a Kalman
+               filter (kalman.py: a local linear trend fitted by maximum likelihood to the last two hours of 30-second readings), so its change is read from the
+               premium's estimated level and not from two noisy prints of a future and an index that do not tick together.
 
 They are combined as BAYESIAN EVIDENCE: each reading is a signal s in [-1, 1] with a weight w (a log-likelihood ratio), and the read's probability that the market leans up is
 P = 1 / (1 + exp(-(sum of w * s))). The weights are PRIORS set from what each reading is known to mean, not fitted: the lab's record is what will tell which of them carry
@@ -20,10 +22,13 @@ from __future__ import annotations
 
 import math
 
+from . import kalman as KF
+
 SKEW_OTM = 0.03          # the out-of-the-money strikes skew compares: about 3% either side of the price
 BUILDUP_MIN_OI = 0.005   # a futures open-interest change under 0.5% is no build-up
 BUILDUP_MIN_PX = 0.001   # nor a price change under 0.1%
 LOOKBACK_S = 900         # changes are read against the board about a quarter of an hour earlier
+BASIS_KEEP, BASIS_REFIT, BASIS_MIN = 240, 20, 20     # the premium's Kalman filter: fitted to the last 240 readings (two hours), refitted every 20, from 20 on
 READ_VOTE_P = 0.65       # the read votes up at P >= 0.65, down at P <= 0.35
 WEIGHTS = {              # log-likelihood ratios per unit signal (priors)
     "pcr": 0.35,         # a high put/call OI ratio: puts written for support (contrarian-bullish in Indian index options)
@@ -140,6 +145,27 @@ class MarketRead:
         self.last: dict[str, dict] = {}
         self.pending: dict[str, list[tuple[float, float, float]]] = {}    # (time, P(up), price) awaiting their outcome
         self.scored: dict[str, list[float]] = {}                            # [n, sum of squared errors] per underlying: the Brier score
+        self.basis_obs: dict[str, list[float]] = {}                         # the raw premium readings the Kalman filter is fitted to
+        self.basis_kf: dict[str, KF.LocalLinearTrend] = {}
+
+    def smooth_basis(self, u: str, raw: float | None) -> tuple[float | None, dict | None]:
+        """(the Kalman-smoothed premium, its trend) after one more raw reading; the raw reading itself until there are BASIS_MIN of them."""
+        if raw is None or not math.isfinite(raw):
+            kf = self.basis_kf.get(u)
+            return (kf.level if kf else None), (kf.trend() if kf else None)
+        obs = self.basis_obs.setdefault(u, [])
+        obs.append(raw)
+        del obs[:-BASIS_KEEP]
+        kf = self.basis_kf.get(u)
+        if len(obs) >= BASIS_MIN and (kf is None or len(obs) % BASIS_REFIT == 0):
+            got = KF.fit(obs, min_n=BASIS_MIN)
+            if got:
+                self.basis_kf[u] = kf = got["filter"]
+            elif kf is not None:
+                kf.step(raw)
+        elif kf is not None:
+            kf.step(raw)
+        return (kf.level, kf.trend()) if kf else (raw, None)
 
     def _score(self, u: str, t: float, price: float | None, p: float) -> None:
         """CALIBRATION by a proper scoring rule: each read's P(up) against what the price did over the next look-back window, as the Brier score (mean of (P - outcome)^2;
@@ -177,7 +203,10 @@ class MarketRead:
         fq = _q(snap, fut_name)
         fut, foi = (_mid(fq), _num(fq.get("oi"))) if fq else (None, None)
         sp = _num((_q(snap, spot_name) or {}).get("ltp")) if spot_name else None
-        cur = {**cr, "spot": spot, "fut": fut, "foi": foi, "basis": ((fut / sp - 1) if fut and sp else None)}
+        raw = (fut / sp - 1) if fut and sp else None
+        basis, btrend = self.smooth_basis(u, raw)
+        cur = {**cr, "spot": spot, "fut": fut, "foi": foi, "basis": basis if raw is not None else None, "basis_raw": raw,
+               "basis_t": btrend["t"] if btrend else None}
         if next_chain and T_next:
             nxt = chain_read(snap, next_chain, spot, T_next, r, iv_fn)
             cur["term"] = (cur["atm_iv"] - nxt["atm_iv"]) if cur["atm_iv"] and nxt["atm_iv"] else None
@@ -231,10 +260,13 @@ class MarketRead:
                 if abs(sig["skew_chg"]) >= 0.5:
                     why.append(f"protection {'dearer' if sig['skew_chg'] < 0 else 'cheaper'} (skew {then['skew'] * 100:+.1f} to {cur['skew'] * 100:+.1f} vol pts)")
             if cur.get("basis") is not None and then.get("basis") is not None:
-                sig["basis_chg"] = _clip((cur["basis"] - then["basis"]) / 0.001)
+                sig["basis_chg"] = _clip((cur["basis"] - then["basis"]) / 0.001)       # the smoothed premium's change (smooth_basis)
+                if abs(sig["basis_chg"]) >= 0.5:
+                    why.append(f"futures premium {'widening' if sig['basis_chg'] > 0 else 'narrowing'} {then['basis'] * 100:.2f}% to {cur['basis'] * 100:.2f}% (Kalman)")
         logit = sum(WEIGHTS[k] * v for k, v in sig.items())
         p = 1 / (1 + math.exp(-logit))
         r2 = lambda x, n=4: round(x, n) if isinstance(x, float) else x                 # noqa: E731
         return {"p_up": round(p, 3), "vote": 1 if p >= READ_VOTE_P else -1 if p <= 1 - READ_VOTE_P else 0, "why": why[:5], "signals": {k: round(v, 2) for k, v in sig.items()},
                 "pcr": r2(pcr, 3), "max_pain": mp, "call_wall": cw, "put_wall": pw, "implied_move": r2(cur.get("implied_move")), "skew": r2(cur.get("skew")),
-                "term": r2(cur.get("term")), "buildup": label, "event_priced": bool(cur.get("term") is not None and cur["term"] > 0.02)}
+                "term": r2(cur.get("term")), "buildup": label, "event_priced": bool(cur.get("term") is not None and cur["term"] > 0.02),
+                "basis": r2(cur.get("basis"), 6), "basis_raw": r2(cur.get("basis_raw"), 6), "basis_t": r2(cur.get("basis_t"), 2)}

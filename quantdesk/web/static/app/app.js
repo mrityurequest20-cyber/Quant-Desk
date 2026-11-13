@@ -2261,6 +2261,7 @@ function ppLab(lab) {
 	const td = lab.today || {}, rows = Array.isArray(lab.top) ? lab.top : [];
 	const st = lab.state && typeof lab.state === "object" ? Object.entries(lab.state) : [];
 	const word = (v) => (v === "up" ? "▲ up" : v === "down" ? "▼ down" : v === "flat" ? "◆ flat" : "—");
+	const fams = Array.isArray(lab.families) ? lab.families : [];
 	return h("div", { class: "grp" },
 		h("div", { class: "sec-h" }, h("h2", {}, "Strategy lab (AUTO v2)"), h("span", { class: "hint" }, `${num(lab.strategies, 0)} strategies written`)),
 		h("div", { class: "kstrip" }, cell("With a record", num(lab.tested, 0)), cell("Shadow trades", num(lab.trades, 0)), cell("Proven enough to trade", num(lab.eligible, 0), lab.eligible ? "up" : ""),
@@ -2272,8 +2273,10 @@ function ppLab(lab) {
 				h("td", {}, r.live ? h("span", { class: "tag bull" }, "live") : h("span", { class: "tag flat" }, r.n < lab.min_trades ? "testing" : "below 0")))))))
 			: h("div", { class: "f3", style: "font-size:12.5px;padding:10px 16px" }, "No shadow trade has closed yet. Every strategy whose market context holds is traded in shadow at the real prices; a record builds through the session."),
 		st.length ? fold("lab-state", "What it sees now", `${st.length} underlyings`, h("div", { class: "rows" }, st.map(([u, v]) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;font-size:12.5px;border-top:1px solid var(--line)" },
-			h("b", { class: "mono" }, u), h("span", { class: "f2", style: "text-align:right" }, `${word(v[0])} · volatility ${v[1] || "—"}${fin(v[2]) ? " (" + v[2].toFixed(2) + "x realized)" : ""}${v[3] ? " · expiry tomorrow" : ""}${fin(v[4]) ? " · read P(up) " + v[4].toFixed(2) : ""}${v[5] ? " (" + v[5] + ")" : ""}${v[6] ? " · " + v[6] : ""}${v[7] ? " · HMM " + v[7] : ""}${v[8] ? " · change point: " + v[8] : ""}`))))) : null,
-		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `Each strategy is a combination of a market context, a structure, a width, an expiry and its exits. It trades with paper money only after ${lab.min_trades} shadow trades, chosen by Thompson sampling: a short record is shrunk towards zero, so an unproven idea keeps being tested before it gets capital. Not proven to make money.`));
+			h("b", { class: "mono" }, u), h("span", { class: "f2", style: "text-align:right" }, `${word(v[0])} · volatility ${v[1] || "—"}${fin(v[2]) ? " (" + v[2].toFixed(2) + "x realized)" : ""}${v[3] ? " · expiry tomorrow" : ""}${fin(v[4]) ? " · read P(up) " + v[4].toFixed(2) : ""}${v[5] ? " (" + v[5] + ")" : ""}${v[6] ? " · " + v[6] : ""}${v[7] ? " · HMM " + v[7] : ""}${v[8] ? " · change point: " + v[8] : ""}${fin(v[9]) ? " · Kalman trend t " + (v[9] > 0 ? "+" : "") + v[9].toFixed(1) : ""}${v[10] ? " · " + v[10] : ""}`))))) : null,
+		fams.length ? fold("lab-fam", "By structure (evidence shared)", `spread within ±${num(lab.tau, 2)}R`, h("div", { class: "rows" }, fams.map((f) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;font-size:12.5px;border-top:1px solid var(--line)" },
+			h("b", {}, f.name), h("span", { class: "f2 mono", style: "text-align:right" }, `${signed(f.mu_r)}R ± ${num(f.se, 2)} · ${num(f.members, 0)} strategies · ${num(f.trades, 0)} trades`))))) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `Each strategy is a combination of a market context, a structure, a width, an expiry and its exits. It trades with paper money only after ${lab.min_trades} shadow trades, chosen by Thompson sampling over a hierarchical model: a short record is pulled towards the record of its structure (every iron condor informs every other), and each structure's towards zero, so an unproven idea keeps being tested before it gets capital. An option sale also has to pay for its tail, measured by extreme value theory. Not proven to make money.`));
 }
 async function renderPaper(force) {
 	const body = $("#pp-body"), P = S.pp;

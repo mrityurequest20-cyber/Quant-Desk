@@ -38,6 +38,7 @@ from ..markets import sessions as MK
 from . import auto as V1
 from . import marketread as MR
 from . import regimes as RG
+from . import tails as TL
 from .runner import _num
 
 IST = MK.IST
@@ -48,12 +49,21 @@ TICK = 0.05
 # ---- the knobs ------------------------------------------------------------------------------------------------------------------------------
 RICH, CHEAP = 1.25, 0.85                 # implied over realized volatility: rich at or above, cheap at or below
 CALM_PCT = 0.10                          # flat: no direction, and the five-minute move under this
+FLAT_TREND_T = 1.0                       # flat also needs the Kalman trend's t-statistic under this (when it has one): a market drifting steadily is not flat
 RV_WINDOW_S, RV_STEP_S, RV_MIN_POINTS = 3600, 60, 20      # realized volatility: one-minute returns over the last hour, at least twenty of them
 QUOTE_MAX_AGE_S, MAX_LEG_SPREAD = 30.0, 0.10              # every leg needs a two-sided book this fresh, no wider than this (of its mid)
 MIN_PREMIUM = 1.0                        # a leg priced below this is not traded (ticks dominate)
 REENTRY_S = 15 * 60                      # a strategy waits this long on an underlying after a shadow trade closes (correlated copies of one trade are not evidence)
 MIN_TRADES = 8                           # shadow trades a strategy needs before it may trade with paper money
-PRIOR_N, PRIOR_SD = 5.0, 1.0             # shrinkage: a short record is pulled towards zero
+PRIOR_SD = 1.0                           # a strategy's R is taken to vary about this much trade to trade until its own record says otherwise
+# The HIERARCHICAL model of the record (owner, 13 Nov 2026: "Hierarchical Bayesian models: sharing evidence between similar strategies"), Lab.fit below:
+#   strategy mean R  theta_i ~ N(mu_family, tau^2)       the 180-odd strategies of one structure (an iron condor's widths, filters, exits, holds) are a family
+#   family mean R    mu_f    ~ N(0, HB_TAU_TOP^2)        and every family is anchored at zero edge after costs: the honest prior for a rule never seen to work
+HB_TAU_TOP = 0.25                        # how far a whole structure's mean R is believed to sit from zero, before any record (a prior, in R)
+HB_TAU_MIN, HB_TAU_MAX, HB_TAU_DEFAULT = 0.05, 1.0, 0.25     # tau (strategies about their family's mean) is estimated from the record (DerSimonian-Laird), within these
+HB_RHO = 0.3                             # the assumed correlation of strategies within a family (the same market moments, other filters and exits): their records are worth
+#                                          fewer independent pieces of evidence about the family, by the design effect 1 + (m - 1) rho
+HB_NU0 = 4.0                             # a strategy's own spread of R is shrunk towards PRIOR_SD as if PRIOR_SD came from this many trades
 ENTRY_BACKOFF_S = 60.0                   # after a live entry on an underlying (filled or not), the next waits this long
 EXIT_RESEND_S = 15.0
 DAY_EXIT = dt.time(15, 15)               # "day" strategies are out by here
@@ -69,6 +79,12 @@ FUT_SUFFIX = {"mcx": "-MCX", "nse_cds": "-CDS"}           # their underlying is 
 SHORT_VOL = frozenset({"IC", "IF"})
 EVENT_TOUCHES = {"geopolitics": "all", "policy": "all", "inflation": "all", "growth": "all", "flows": "equity", "global": "equity", "regulation": "equity",
                  "commodities": "mcx", "currency": "cds"}
+# The TAIL CHECK (owner, 13 Nov 2026: "Extreme value theory: tail-risk estimates"): a structure that SELLS options sells a tail. The shadow record cannot price that tail (a
+# few weeks of trades rarely hold the day that costs most), so before one is opened, shadow or live, its expected value to expiry is taken over the underlying's fitted
+# distribution (tails.py: conditional EVT, today's volatility with history's shape; never a volatility below the last hour's realized one), and it opens only when the
+# premium pays for the tail: that expectation, net of costs, at least TAIL_MIN_EDGE_R. No tail model in the brief (or no brief): no check, and the plan says so.
+CREDIT = frozenset({"BPS", "BRC", "IC", "IF"})
+TAIL_MIN_EDGE_R = 0.0
 READ_EVERY_S = 30                                          # the market read is refreshed this often per underlying
 MIN_PREMIUM_TICKS = 20                                     # an MCX or currency option's premium floor, in its own ticks (a currency option trades near 0.05)
 SWING_SESSIONS = 3
@@ -257,7 +273,12 @@ def _ist(t: float) -> dt.datetime:
 
 # ---- the record -----------------------------------------------------------------------------------------------------------------------------
 class Lab:
-    """Each strategy's shadow record: [n, sum of R, sum of R squared, wins]. Pooled over underlyings (a strategy is a rule, not a stock)."""
+    """Each strategy's shadow record: [n, sum of R, sum of R squared, wins]. Pooled over underlyings (a strategy is a rule, not a stock).
+
+    What a record says is read through a HIERARCHICAL (multilevel) normal model, fitted by empirical Bayes (fit): each strategy's mean R is shrunk towards its FAMILY's (the
+    structure it trades: iron condor, bull call spread, ...), and each family's towards zero. A strategy with a short record borrows strength from its family's; one with a
+    long record speaks for itself; a family whose members all lose drags a new member down before it has traded once. How much a member is pulled is not set by hand: the
+    spread of members about their family (tau) is estimated from the record itself."""
 
     def __init__(self, stats: dict | None = None):
         self.stats: dict[str, list] = {}
@@ -266,20 +287,81 @@ class Lab:
                 self.stats[sid] = [int(v[0]), float(v[1]), float(v[2]), int(v[3])]
         self.dirty = False
         self.today = {"shadow_opened": 0, "shadow_closed": 0, "live_entries": 0}
+        self._ver, self._fit = 0, None
 
     def add(self, sid: str, r: float) -> None:
         n, s, ss, w = self.stats.get(sid, [0, 0.0, 0.0, 0])
         r = max(-5.0, min(10.0, r))                                            # a bad quote cannot write a record of +500R
         self.stats[sid] = [n + 1, s + r, ss + r * r, w + (1 if r > 0 else 0)]
         self.dirty = True
+        self._ver += 1
         self.today["shadow_closed"] += 1
 
+    @staticmethod
+    def _own(v: list) -> tuple[float, float] | None:
+        """(mean R, its sampling variance) from one record, the spread of R shrunk towards PRIOR_SD (HB_NU0 pseudo-trades); None with no trades."""
+        n, s, ss = v[0], v[1], v[2]
+        if n <= 0:
+            return None
+        s2 = max((ss - s * s / n) / (n - 1), 0.0) if n >= 2 else 0.0
+        s2 = ((n - 1) * s2 + HB_NU0 * PRIOR_SD ** 2) / ((n - 1) + HB_NU0)
+        return s / n, s2 / n
+
+    def fit(self) -> dict:
+        """The hierarchical model, refitted when the record changes. {"tau", "family": {struct: (mu, var, members, trades)}, "post": {sid: (n, mean, se)}}.
+
+        1. tau^2, the spread of true strategy means about their family's, by DerSimonian-Laird's method of moments pooled over families: Q = sum of w (y - weighted family
+           mean)^2 with w = 1 / v; tau^2 = (Q - df) / (sum w - sum w^2 / sum w), kept within HB_TAU_MIN..HB_TAU_MAX (HB_TAU_DEFAULT while there is too little to say).
+        2. Each family's mean: its members' means weighted by 1 / (tau^2 + v), their total weight divided by the design effect 1 + (m - 1) HB_RHO (correlated members are
+           not independent evidence), combined with the N(0, HB_TAU_TOP^2) prior.
+        3. Each strategy: the normal-normal posterior of its mean between its own record (precision n / s^2) and its family's mean (precision 1 / tau^2), with the family
+           mean's own uncertainty carried through: var = 1 / precision + B^2 var(mu) where B is the weight on the family."""
+        key = (self._ver, len(self.stats))
+        if self._fit is not None and self._fit["key"] == key:
+            return self._fit
+        fam: dict[str, list] = {}
+        for sid, v in self.stats.items():
+            own = self._own(v)
+            if own is not None:
+                fam.setdefault(BY_SID[sid].struct, []).append((sid, v[0], own[0], own[1]))
+        Q = df = C = 0.0
+        for rows in fam.values():
+            if len(rows) < 2:
+                continue
+            w = [1 / r[3] for r in rows]
+            W = sum(w)
+            ybar = sum(wi * r[2] for wi, r in zip(w, rows)) / W
+            Q += sum(wi * (r[2] - ybar) ** 2 for wi, r in zip(w, rows))
+            df += len(rows) - 1
+            C += W - sum(wi * wi for wi in w) / W
+        tau2 = min(max((Q - df) / C, HB_TAU_MIN ** 2), HB_TAU_MAX ** 2) if df >= 2 and C > 0 else HB_TAU_DEFAULT ** 2
+        family = {}
+        for struct in STRUCTURES:
+            rows = fam.get(struct) or []
+            w = [1 / (tau2 + r[3]) for r in rows]
+            W = sum(w)
+            prec_data = W / (1 + (len(rows) - 1) * HB_RHO) if rows else 0.0
+            prec = prec_data + 1 / HB_TAU_TOP ** 2
+            ymean = sum(wi * r[2] for wi, r in zip(w, rows)) / W if rows else 0.0
+            family[struct] = (prec_data * ymean / prec, 1 / prec, len(rows), sum(r[1] for r in rows))
+        post = {}
+        for rows in fam.values():
+            for sid, n, y, v in rows:
+                mu, vmu = family[BY_SID[sid].struct][:2]
+                p_i = 1 / v + 1 / tau2
+                B = (1 / tau2) / p_i
+                post[sid] = (n, (y / v + mu / tau2) / p_i, math.sqrt(1 / p_i + B * B * vmu))
+        self._fit = {"key": key, "tau": math.sqrt(tau2), "family": family, "post": post}
+        return self._fit
+
     def posterior(self, sid: str) -> tuple[int, float, float]:
-        """(n, shrunk mean R, standard error of it)."""
-        n, s, ss, _ = self.stats.get(sid, [0, 0.0, 0.0, 0])
-        mean = s / (n + PRIOR_N)
-        sd = math.sqrt(max((ss - s * s / n) / (n - 1), 1e-6)) if n >= 2 else PRIOR_SD
-        return n, mean, sd / math.sqrt(n + PRIOR_N)
+        """(n, the hierarchical posterior mean R, its standard deviation). A strategy with no record gets its family's: (0, mu_family, sqrt(tau^2 + var(mu)))."""
+        f = self.fit()
+        got = f["post"].get(sid)
+        if got is not None:
+            return got
+        mu, vmu = f["family"][BY_SID[sid].struct][:2] if sid in BY_SID else (0.0, HB_TAU_TOP ** 2)
+        return 0, mu, math.sqrt(f["tau"] ** 2 + vmu)
 
     def draw(self, sid: str, rng: random.Random) -> float:
         n, mean, se = self.posterior(sid)
@@ -303,8 +385,13 @@ class Lab:
                 rows.append({"sid": sid, "what": BY_SID[sid].describe(), "n": n, "mean_r": round(s / n, 3), "shrunk_r": round(mean, 3), "win": round(w / n, 3),
                              "live": n >= MIN_TRADES and mean > 0})
         rows.sort(key=lambda r: (-r["shrunk_r"], -r["n"]))
+        f = self.fit()
+        fams = [{"struct": k, "name": NAMES[k], "mu_r": round(mu, 3), "se": round(math.sqrt(vmu), 3), "members": m, "trades": n}
+                for k, (mu, vmu, m, n) in f["family"].items() if m]
+        fams.sort(key=lambda r: -r["mu_r"])
         return {"strategies": len(CATALOGUE), "tested": len(rows), "trades": sum(r["n"] for r in rows), "eligible": sum(1 for r in rows if r["live"]),
-                "min_trades": MIN_TRADES, "today": dict(self.today), "top": rows[:top], "worst": sorted(rows, key=lambda r: r["shrunk_r"])[:3]}
+                "min_trades": MIN_TRADES, "today": dict(self.today), "top": rows[:top], "worst": sorted(rows, key=lambda r: r["shrunk_r"])[:3],
+                "families": fams, "tau": round(f["tau"], 3)}
 
 
 # ---- the engine -----------------------------------------------------------------------------------------------------------------------------
@@ -415,9 +502,12 @@ class AutoPilotV2:
             self.regimes = RG.RegimeBook()
         self.regimes.update(u, t, sp)                                                      # the HMM regime and the CUSUM change points (regimes.py)
         rg = self.regimes.state(u, t)
-        d, why = V1.direction(rd["pressure"], rd["gap_pct"], mom, nv, nwhy)
-        d, why = self.with_read(d, why, rd, mom, nv, nwhy, read, (rg["vote"], f"CUSUM change point: {rg['change']}") if rg["vote"] else None)
-        view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < CALM_PCT and not (read or {}).get("vote") else None)
+        pmom, pvote = self.price_vote(mom, rg)
+        d, why = V1.direction(rd["pressure"], rd["gap_pct"], pmom, nv, nwhy)
+        d, why = self.with_read(d, why, rd, pmom, nv, nwhy, read, pvote)
+        tr = rg.get("trend")
+        view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < CALM_PCT and not (read or {}).get("vote")
+                                                            and (tr is None or abs(tr["t"]) < FLAT_TREND_T) else None)
         ratio = iv / rv if iv and rv else None
         vol = "rich" if ratio is not None and ratio >= RICH else "cheap" if ratio is not None and ratio <= CHEAP else "mid"
         eve = self._trading_days_to(ist.date(), near) == 1
@@ -430,9 +520,67 @@ class AutoPilotV2:
         if regime == "event":
             self.last_state[u]["event"] = (rwhy or "")[:160]
         self.last_state[u]["hmm"], self.last_state[u]["change"] = rg["hmm"], rg["change"]
+        self.last_state[u]["trend_t"] = tr["t"] if tr else None
+        self.last_state[u]["tail"] = self.tail_text(u)
         if read:
             self.last_state[u]["read"] = {k: read[k] for k in ("p_up", "why", "pcr", "buildup", "event_priced")}
         return st
+
+    # ---- extreme value theory: the tails the premium must pay for --------------------------------------------------------------------------------
+    def tail_model(self, u: str):
+        """The underlying's tails.Model from the brief, read once per brief."""
+        b = self.brief if isinstance(self.brief, dict) else {}
+        if getattr(self, "_tails_of", None) is not b:
+            self._tails_of, self._tails, self._tail_ev = b, {}, {}
+            for k, d in (b.get("tails") or {}).items():
+                m = TL.Model.read(d)
+                if m is not None:
+                    self._tails[str(k).upper()] = m
+        return self._tails.get(u)
+
+    def tail_text(self, u: str) -> str:
+        m = self.tail_model(u)
+        return f"1-day 99% ES -{m.es_pct(0.99, 1, 'loss'):.1f}% / +{m.es_pct(0.99, 1, 'gain'):.1f}%" if m else ""
+
+    def tail_check(self, s: Strategy, st: dict, p: dict, today: dt.date) -> tuple[bool, str | None, float | None]:
+        """(open it?, why not, the expected R to expiry over the tail model) for an option sale; (True, None, None) for anything else or with no model."""
+        if s.struct not in CREDIT:
+            return True, None, None
+        u = st["u"]
+        m = self.tail_model(u)
+        if m is None or not p.get("risk") or p["risk"] <= 0:
+            return True, None, None
+        days = max(1, self._trading_days_to(today, p["exp"]))
+        sig = st["rv"] / math.sqrt(252) if st.get("rv") else None
+        legs = tuple((l["side"], l["right"], l["k"]) for l in p["legs"])
+        key = (u, p["exp"], legs, round(st["spot"], -int(math.floor(math.log10(st["spot"]))) + 3), days, round(sig or 0.0, 5))
+        ev = self._tail_ev.get(key)
+        if ev is None:
+            pay = lambda S: sum(sd * (max(S - k, 0.0) if r == "CE" else max(k - S, 0.0)) for sd, r, k in legs)      # noqa: E731
+            ev = m.expected_payoff(pay, st["spot"], days, sig)
+            if len(self._tail_ev) > 5000:
+                self._tail_ev.clear()
+            self._tail_ev[key] = ev
+        cost = sum(l["side"] * l["px"] for l in p["legs"])
+        edge = (ev - cost - p["fees"]) / p["risk"]
+        if edge >= TAIL_MIN_EDGE_R:
+            return True, None, edge
+        return False, f"the premium does not pay for the tail it sells: {edge:+.2f}R expected to expiry over {u}'s fitted tails (EVT)", edge
+
+    @staticmethod
+    def price_vote(mom, rg: dict) -> tuple[float | None, tuple | None]:
+        """The price's ONE vote in the view: (the raw five-minute move for AUTO v1's rule, or None; an extra (vote, reason), or None).
+        The Kalman trend (kalman.py), once fitted, replaces the raw five-minute move: its slope over its standard error is a t-statistic, so one noisy print moves it
+        little. A fresh CUSUM drift change point votes only when neither does: the trend, the move and the change point all read the same prices, and the same evidence
+        counted twice would let price alone satisfy "two readings agree"."""
+        tr = rg.get("trend")
+        if tr is not None:
+            if tr["vote"]:
+                return None, (tr["vote"], f"Kalman trend {tr['slope_pct'] * 60:+.2f}% an hour (t {tr['t']:+.1f})")
+            return None, ((rg["vote"], f"CUSUM change point: {rg['change']}") if rg.get("vote") else None)
+        if mom is not None and abs(mom) >= V1.MOMENTUM_TH_PCT:
+            return mom, None
+        return mom, ((rg["vote"], f"CUSUM change point: {rg['change']}") if rg.get("vote") else None)
 
     # ---- the event regime: news and data together --------------------------------------------------------------------------------------------------
     def regime(self, u: str, news, read: dict | None, rg: dict | None = None) -> tuple[str, str | None]:
@@ -487,8 +635,8 @@ class AutoPilotV2:
 
     @staticmethod
     def with_read(d: int, why: list, rd: dict, mom, nv: int, nwhy, read: dict | None, extra: tuple | None = None) -> tuple[int, list]:
-        """The view with the market read (and `extra`: a CUSUM change point's (vote, reason)) as more votes: the rule is AUTO v1's (at least two readings agree, none
-        points the other way)."""
+        """The view with the market read (and `extra`: the price's vote from price_vote, the Kalman trend or a CUSUM change point, as (vote, reason)) as more votes: the rule
+        is AUTO v1's (at least two readings agree, none points the other way)."""
         has_read = bool(read and read.get("vote"))
         if not has_read and not extra:
             return d, why
@@ -593,7 +741,7 @@ class AutoPilotV2:
                 if key in self.shadow or self.cool.get(key, 0) > t or not self.matches(s, st):
                     continue
                 p = self.price(snap, s, st, ch)
-                if p is None:
+                if p is None or not self.tail_check(s, st, p, ist.date())[0]:
                     continue
                 self.shadow[key] = {"s": s, "legs": p["legs"], "risk": p["risk"], "fees": p["fees"], "best_r": (p["best"] / p["risk"]) if math.isfinite(p["best"]) else math.inf,
                                     "opened": ist, "exp": p["exp"]}
@@ -711,7 +859,7 @@ class AutoPilotV2:
                 if not self.matches(s, st):
                     continue
                 p = self.price(cs, s, st, ch)
-                if p is None:
+                if p is None or not self.tail_check(s, st, p, ist.date())[0]:
                     continue
                 reward = min(s.tp * p["risk"], p["best"]) if math.isfinite(p["best"]) else s.tp * p["risk"]
                 rr = reward / (s.sl * p["risk"]) if p["risk"] > 0 else 0.0
@@ -729,6 +877,9 @@ class AutoPilotV2:
             notes.append(f"No candidate is proven yet: a strategy trades only after {MIN_TRADES} shadow trades with a positive record. Until then the open shadow-trades these.")
         if not b:
             notes.append("No pre-market brief yet: planned without results, macro and headline catalysts.")
+        no_tail = [u for u in states if self.tail_model(u) is None]
+        if no_tail:
+            notes.append(f"No tail model for {', '.join(no_tail[:6])}{'...' if len(no_tail) > 6 else ''}: option sales there are not tail-checked.")
         if not (cs.get("quotes") or {}):
             notes.append("No closing prices on the board: nothing to price.")
         self.day_plan = {"built_at": ist.isoformat(timespec="minutes"), "from": "last close", "overnight_pct": None if over is None else round(over, 2),
@@ -817,7 +968,12 @@ class AutoPilotV2:
             p = self.price(snap, s, st, ch)
             if p is None or any(l["name"] in held_syms for l in p["legs"]):            # a contract held by anyone is not shared: every position has one owner
                 continue
+            ok, _, edge = self.tail_check(s, st, p, ist.date())
+            if not ok:
+                continue
             o = self._order(s, st, p, t, best[0])
+            if edge is not None:
+                o["thesis"] = (o["thesis"] + f" Tail check (EVT): {edge:+.2f}R expected to expiry.")[:1000]
             if s.sid in self.planned(u):
                 o["thesis"] = (o["thesis"] + " On the day plan built before the open.")[:1000]
             orders.append(o)
@@ -829,7 +985,8 @@ class AutoPilotV2:
         n, total, w = self.lab.stats[s.sid][0], self.lab.stats[s.sid][1], self.lab.stats[s.sid][3]
         thesis = (f"{TAG}: {st['u']} {s.describe()}. Now: view {st['view']}" + (f" ({'; '.join(st['why'])})" if st["why"] else "")
                   + (f", implied {st['iv'] * 100:.1f}% against realized {st['rv'] * 100:.1f}%" if st["iv"] and st["rv"] else "") + (", expiry tomorrow" if st["eve"] else "")
-                  + f". Shadow record {n} trades, average {total / n:+.2f}R, {w / n * 100:.0f}% won; chosen by Thompson sampling (draw {draw:+.2f}R). Risk {p['risk'] * p['lot']:.0f} rupees a lot.")
+                  + f". Shadow record {n} trades, average {total / n:+.2f}R, {w / n * 100:.0f}% won; {self.lab.posterior(s.sid)[1]:+.2f}R after sharing evidence with the other "
+                  + f"{NAMES[s.struct]}s; chosen by Thompson sampling (draw {draw:+.2f}R). Risk {p['risk'] * p['lot']:.0f} rupees a lot.")
         strategy = f"{TAG} {s.sid} {st['u']}"[:60]
         ref = lambda l: {"bid": l["bid"], "ask": l["ask"], "at": int(t * 1000 - (l["age"] or 0) * 1000)}      # noqa: E731
         if len(p["legs"]) == 1 and p["legs"][0]["side"] > 0:
@@ -866,7 +1023,7 @@ class AutoPilotV2:
         """For the app's Strategy lab panel: the record's leaders, today's counts, and each underlying's state now (compact: the runner's whole state must fit the relay's cap)."""
         state = {u: [st.get("view"), st.get("vol"), st.get("ratio"), bool(st.get("eve")),
                      st["read"]["p_up"] if st.get("read") else None, "; ".join(st["read"]["why"][:2])[:120] if st.get("read") else "", st.get("event", ""),
-                     st.get("hmm") or "", st.get("change") or ""]
+                     st.get("hmm") or "", st.get("change") or "", st.get("trend_t"), st.get("tail") or ""]
                  for u, st in sorted(self.last_state.items())}
         cal = self.reader.calibration().get("all") if hasattr(self, "reader") else None
         return {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan, "read_calibration": cal}

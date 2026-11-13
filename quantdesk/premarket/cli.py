@@ -27,6 +27,7 @@ def add_parser(sub) -> None:
     s.add_argument("--out", default="runtime/premarket", help="history: the history file (.parquet); brief: the output folder")
     s.add_argument("--now", help="brief: the moment to brief for (ISO, IST; default now)")
     s.add_argument("--offline", action="store_true", help="brief: skip Yahoo and the RSS feeds")
+    s.add_argument("--tails", help="brief: the day's tail models (tails.json): reused when built today (IST), else built now and written there")
     s.set_defaults(fn=run)
 
 
@@ -38,6 +39,39 @@ def build_history(wh: dict) -> pd.DataFrame:
     sessions = H.sessions_of(implied)
     cal = H.results_calendar(wh["corp_events"], sessions, symbols=set(implied["symbol"]))
     return H.results_history(so, implied, cal, H.inferred_results(implied))
+
+
+def paper_underlyings(cfg) -> list[str]:
+    u = cfg.get("paper.underlyings", {}) or {}
+    out = []
+    for seg in ("nse_fo", "mcx", "nse_cds"):
+        out += [str(x).upper() for x in (u.get(seg) or [])]
+    return list(dict.fromkeys(out))
+
+
+def day_tails(cfg, a, wh: dict, now: pd.Timestamp, health: dict) -> dict:
+    """The paper underlyings' tail models: today's file when there is one (`--tails`), else fitted now (Yahoo unless --offline) and written there."""
+    from . import tailrisk as TR
+    path = Path(a.tails) if getattr(a, "tails", None) else None
+    today = now.date().isoformat()
+    if path and path.exists():
+        try:
+            got = json.loads(path.read_text(encoding="utf-8"))
+            if got.get("built") == today and isinstance(got.get("models"), dict):
+                health["tails"] = f"ok {len(got['models'])} models, built earlier today"
+                return got["models"]
+        except (OSError, ValueError):
+            pass
+    unds = paper_underlyings(cfg)
+    yahoo = {} if a.offline else TR.fetch_yahoo(TR.tickers_for(unds), health)
+    models = TR.build(unds, wh.get("index_close"), yahoo)
+    health.setdefault("tails", f"ok {len(models)} of {len(unds)} underlyings")
+    if path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"built": today, "models": models}, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(path)
+    return models
 
 
 def run(cfg, a) -> None:
@@ -67,6 +101,7 @@ def run(cfg, a) -> None:
     if not a.offline:
         inp.globals_ = SRC.fetch_globals(health)
         inp.headlines = SRC.fetch_headlines(health, now)
+    inp.tails = day_tails(cfg, a, wh, now, health)
     brief = B.jsonable(B.build(inp))
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)

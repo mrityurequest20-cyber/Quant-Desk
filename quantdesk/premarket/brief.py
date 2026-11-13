@@ -76,6 +76,7 @@ class Inputs:
     globals_: list | None = None                  # [{key, name, last, change}] from sources.fetch_globals
     headlines: list | None = None                 # [{ts, source, title, link}] from sources.fetch_headlines
     health: dict = field(default_factory=dict)    # source -> "ok ..." / "fail ..."
+    tails: dict | None = None                     # tailrisk.build: each paper underlying's conditional EVT model (quantdesk/paper/tails.py)
 
 
 def _company_aliases(corp_events: pd.DataFrame | None) -> dict[str, list[str]]:
@@ -290,6 +291,7 @@ def build(inp: Inputs) -> dict:
                      "stocks": int((univ["segment"] == "stock").sum()) if len(univ) else 0},
         "expiring": expiring, "macro": macro, "results": results, "results_note": RESULTS_NOTE,
         "analogs": _analogs(inp),                                       # what NIFTY and BANKNIFTY did on past episodes of each kind (the news analyser's "what happened before")
+        "tails": inp.tails or {},                                       # extreme value theory: each paper underlying's tail model (AUTO v2's tail check reads it)
         "global": inp.globals_ or [], "headlines": {"total": len(inp.headlines or []), "named": {k: v[:3] for k, v in news.items()}},
         "watch": watch, "record_plan": record_plan(watch) if watch else {"budget": 0, "used": 0, "names": 0, "of": 0, "plan": []},
         "history": {"events": int(len(hist)), "calendar": int((hist["source"] == "calendar").sum()) if len(hist) else 0,
@@ -319,6 +321,10 @@ def summary(b: dict) -> list[str]:
     g = [x for x in b["global"] if x.get("change") is not None]
     if g:
         s.append("Overnight: " + ", ".join(f"{x['name']} {x['change']:+.1%}" for x in g[:6]) + ".")
+    from .tailrisk import summary_line
+    tl = summary_line(b.get("tails") or {})
+    if tl:
+        s.append(tl)
     top = [w for w in b["watch"] if w["segment"] == "stock"][:5]
     if top:
         s.append("Watch first: " + "; ".join(f"{w['symbol']} ({', '.join(w['why'][:2])})" for w in top) + ".")

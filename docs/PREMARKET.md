@@ -22,6 +22,7 @@ recording plan it writes is advisory: no recorder reads it yet.
 | Results | `corp_events` (NSE's event calendar) | Every F&O company reporting today, or reacting today to results after the last close: the move its options price for the event, against its own past results moves |
 | Overnight | Yahoo (the desk's global list) | Last daily change of US, Asian and European indices, the dollar, crude, gold and US yields |
 | Headlines | the desk's RSS feeds | Headlines that name an instrument (its company name, or its symbol when that is not an ordinary word) |
+| Tail risk | `nse_index_close`; Yahoo (stocks, MCX proxies in rupees, currencies) | Each paper underlying's conditional extreme-value model (1, 3, 5 and 10 sessions) with its out-of-sample backtest; built once a morning (`tails.json`), read by AUTO v2's tail check (docs/PAPER_TRADING.md) |
 | Watch-list | all of the above | Every instrument ranked by reasons it can state; the recording plan spends Kite's subscription budget (3 connections x 3,000 instruments) down that list |
 
 ### The results comparison

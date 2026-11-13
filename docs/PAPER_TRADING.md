@@ -146,7 +146,7 @@ For each underlying, every 30 seconds, from the options, the future and the spot
 |---|---|
 | Positioning | put/call ratio (OI, volume), max pain, the call wall (resistance) and the put wall (support) |
 | Flow (against a quarter of an hour earlier) | the future's build-up (long build-up, short build-up, short covering, long unwinding); near-the-money call against put writing; the put/call ratio's change |
-| Expectations | the straddle's implied move, skew (out-of-the-money put over call volatility) and its change, the near against next expiry's volatility, the future's premium |
+| Expectations | the straddle's implied move, skew (out-of-the-money put over call volatility) and its change, the near against next expiry's volatility, the future's premium (Kalman-smoothed, below) |
 
 **Combining them (Bayesian evidence):** each reading is a signal s in [-1, 1] with a weight w (a log-likelihood ratio), and
 P(up) = 1 / (1 + exp(-sum w*s)).
@@ -180,6 +180,67 @@ Calibrated on pure noise: about one false alarm per few hundred minutes. Nothing
   regime: no short-volatility structure is opened.
 - **In the app:** the state and any fresh change point show on each underlying in the strategy lab.
 
+## Kalman filtering (`quantdesk/paper/kalman.py`)
+
+One model, used twice: a **local linear trend**, observation = level + noise, level moves by a slope plus shocks, slope wanders slowly.
+The filter estimates (level, slope) after each observation; the slope over its standard error is a t-statistic.
+- **No hand-set noise.** The three variances come from **maximum likelihood** (the prediction-error decomposition, concentrated over
+  the overall scale, so only two ratios are searched).
+- **Trend.** On each underlying's log one-minute closes (refitted every 5 minutes on the last 390). Its t-statistic, at |t| >= 2, is
+  AUTO v2's **price vote**, in place of the raw five-minute move. On driftless random walks it voted 3.5% of the time (two-sided 5%
+  nominal). "Flat" now also needs |t| < 1.
+- **Price is one vote.** The Kalman trend, the raw move and a CUSUM drift all read the same prices. Only one of them counts (the trend
+  once fitted, else the raw move, a CUSUM drift only when neither votes), so price alone can never satisfy "two readings agree".
+- **Futures premium.** (future / spot - 1), read every 30 seconds, is smoothed the same way (fitted to the last two hours). The market
+  read takes its change from the smoothed premium. On a simulated noisy premium the smoothed series was under half the raw prints' error.
+
+## Extreme value theory: tail risk (`quantdesk/paper/tails.py`, `quantdesk/premarket/tailrisk.py`)
+
+**The model (conditional EVT, McNeil and Frey 2000).** Each day's return is standardised by the volatility known the evening before (EWMA,
+lambda 0.94). Each tail of the standardised returns beyond its 95th percentile (90th for a short history) is fitted with a **generalised
+Pareto distribution** by probability-weighted moments; the body is the empirical distribution. Today's distribution = today's volatility x
+history's shape. Horizons of 1, 3, 5 and 10 sessions are fitted on their own returns.
+
+**Where the history comes from.** Built once a morning by the pre-market brief (`tails.json`, reused all morning), ten years where it exists:
+- indices: NSE's official closes;
+- stocks: Yahoo, adjusted for splits;
+- MCX: a proxy, the international future in rupees (WTI x USD/INR for crude, COMEX gold x USD/INR for gold), with non-positive prices and
+  roll steps dropped;
+- currencies: Yahoo's spot rates.
+
+**Measured, on distributions with known tails** (`tests/test_tails.py`):
+- **The 99% level is right.** On Student-t(4), the 99% VaR is within 6% of the truth and the 99% ES within 8%; the normal model with
+  the same variance understates both by 12% to 28%.
+- **Backtest.** GARCH returns with t shocks pass their own out-of-sample backtest: 500 days, Kupiec's test.
+- **Known bias.** The 99.9% level comes out about 17% too low, by moments and maximum likelihood alike (the t's tail approaches its
+  power law slowly). The desk works at 99%.
+
+**Use: the tail check.** A structure that sells options (bull put spread, bear call spread, iron condor, iron butterfly) sells a tail the
+shadow record cannot price: a few weeks of trades rarely hold the day that costs most. Before one opens (shadow, live or on the day plan):
+- **The test.** Its expected value to expiry is integrated over the fitted distribution. The volatility used is never below the last
+  hour's realized volatility.
+- **The rule.** It opens only if that expectation, net of costs, is at least 0R: the premium must pay for the tail.
+- **No model, no check.** An underlying with no tail model is not checked, and the day plan names it.
+
+**In the app:** each underlying's 1-day 99% expected shortfall, both sides; the brief's summary gives NIFTY's and BANKNIFTY's.
+
+## The hierarchical record (AUTO v2's `Lab`)
+
+A strategy's record is read through a **multilevel normal model**, fitted by empirical Bayes every time the record changes:
+- **Levels.** Strategy mean R ~ N(its structure's mean, tau^2); each structure's mean ~ N(0, 0.25^2), anchored at zero edge after costs.
+- **Tau is estimated, not set.** tau, the spread of strategies within a structure, comes from the record itself (DerSimonian-Laird,
+  pooled over structures).
+- **What it changes:**
+  - A strategy with no trades starts from its structure's record instead of zero.
+  - A short record is pulled towards its structure's.
+  - A long record speaks for itself.
+- **Correlated strategies are not independent evidence.** The 180-odd strategies of one structure trade the same market moments with
+  other filters and exits. Their combined weight is divided by the design effect 1 + (m - 1) x 0.3.
+- **Measured on a simulated record with known truth** (`tests/test_lab_hierarchy.py`): tau is recovered, each structure's sign is right,
+  and the error against the true means is under a quarter of each strategy's raw average on short records.
+- **The proof gate is unchanged:** 8 shadow trades of its own and a positive draw before any paper money.
+- **In the app:** each structure's shared estimate, and the order thesis gives the strategy's shared estimate next to its own average.
+
 ## The news analyser and the event regime
 
 - **The event watch.** The news job gathers the stories' own event types (`intraday/nlp.py`: policy, geopolitics, inflation, growth,
@@ -204,7 +265,7 @@ Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a 
   * a structure that suits it: long call or put, debit or credit spreads, iron condor or butterfly, long straddle or strangle;
   * a width, an expiry (the near one or the next), a take-profit, a stop, and out-by-the-close or up to three sessions.
 * **It tests them.** Whenever a strategy's context holds for an underlying (the four indices and the 20 stocks), it is traded **in shadow**: no money, but at the real bid and offer of every leg, with the desk's real fees, closed by its own exits. Each result is scored in R (profit over the most it could have lost). The record is kept on the private relay, so it grows across sessions.
-* **It chooses.** A strategy trades with paper money only after **8 shadow trades**, and then by **Thompson sampling**: a short record is shrunk towards zero, the best plausible draw wins, and a draw at or below zero does not trade. Capital flows to what has worked and away from what has not.
+* **It chooses.** A strategy trades with paper money only after **8 shadow trades**, and then by **Thompson sampling** over a **hierarchical model** of the record (below): a short record is pulled towards its structure's, the best plausible draw wins, and a draw at or below zero does not trade. Capital flows to what has worked and away from what has not.
 * **It trades** through the runner and the risk gate like your orders: one lot, a multi-leg structure as one package, sold options only inside a bounded structure. Its own exits close it, with sold legs bought back first. Your hand-placed orders work beside it.
 * **What it sees:** direction from the same four readings as v1, and the volatility state: the options' at-the-money implied volatility against the volatility the price has shown over the last hour. Your own research found direction hard to forecast and volatility easier; the catalogue lets the record decide which contexts pay.
 * **Where to watch it:** Positions → Strategy lab (the record's leaders, what is live, what it sees now), and the 15:50 push.

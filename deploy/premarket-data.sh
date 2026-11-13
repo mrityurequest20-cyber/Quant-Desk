@@ -3,7 +3,8 @@
 #   WAREHOUSE  the last 3 months of every F&O stock's options (fo_stock_opts), the last 2 of the indices' (fo_bhav),
 #              NSE's event calendar (corp_events) and the official index closes (nse_index_close)
 #   HISTORY    results_history.parquet + history_built.txt: reused from the premarket branch when they were built
-#              today (IST), else rebuilt from PREMARKET_HISTORY_MONTHS (default 24) months of fo_stock_opts
+#              today (IST), else rebuilt from PREMARKET_HISTORY_MONTHS (default 24) months of fo_stock_opts;
+#              tails.json (the EVT tail models) from the same branch: the brief reuses it when its date is today
 # Needs GH_TOKEN (read: the release and the branch). Python is started without it in its environment. Never fails the job: the brief says what
 # it lacked.
 set -uo pipefail
@@ -27,6 +28,8 @@ if [ "$(raw history_built.txt | tr -d '[:space:]')" = "$today" ] && raw results_
 else
   rm -f "$hist/results_history.parquet" "$hist/history_built.txt"
 fi
+# The day's tail models (docs/PREMARKET.md): the brief reuses them when they were built today (it reads their date), so Yahoo is asked once a morning.
+raw tails.json > "$hist/tails.json" 2>/dev/null && [ -s "$hist/tails.json" ] || rm -f "$hist/tails.json"
 # shellcheck disable=SC2046
 gh release download warehouse $(pat fo_stock_opts "$need") $(pat fo_bhav 2) --pattern 'corp_events_*.parquet' \
    --pattern 'nse_index_close_*.parquet' --dir "$wh" --clobber || echo "::warning::the warehouse download was incomplete"
