@@ -288,7 +288,7 @@ def test_the_poller_source_can_trade_nothing_and_holds_the_key_only_in_its_heade
 
 def test_the_live_tab_shows_each_prices_source_the_disagreement_flag_and_the_sources_health():
     app = (ROOT / "quantdesk/web/static/app/app.js").read_text()
-    for needle in ('v.src === "z" ? "Kite"', '"Kotak"', "v.x.toFixed(1)", "the two sources differ", "/live/health", "lv-sources", "disagree", "sources agree"):
+    for needle in ('SRC_NAME = { z: "Kite", k: "Kotak"', "SRC_NAME[v.src]", "v.x.toFixed(1)", "feeds differ", "/live/health", "lv-sources", "hl.disagree", "hl.sources"):
         assert needle in app, needle
 
 

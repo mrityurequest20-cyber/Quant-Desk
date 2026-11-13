@@ -322,7 +322,7 @@ def test_the_service_worker_never_caches_live_prices():
 def test_the_live_tab_is_wired_in():
     app = (ROOT / "quantdesk/web/static/app/app.js").read_text()
     html = (ROOT / "quantdesk/web/static/app/index.html").read_text()
-    assert '["live", "Live"]' in app and 'data-view="live"' in html and "renderLive" in app and "/live/snapshot" in app
+    assert '["live", "Markets"]' in app and 'data-view="live"' in html and "renderLive" in app and "/live/snapshot" in app
     assert "5000" in app and "Authorization" in app and "qd.livekey" in app
 
 

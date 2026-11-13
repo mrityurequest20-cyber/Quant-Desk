@@ -272,9 +272,9 @@ def test_the_pusher_will_not_follow_a_redirect_with_its_token():
     assert [h[0] for h in hits] == ["/live/ingest"]                       # the redirect target was never contacted, so the token never went there
 
 
-def test_the_live_tab_has_search_segments_sorting_and_show_more_and_skips_github_io():
+def test_the_markets_tab_shows_the_watchlist_by_group_searches_everything_and_skips_github_io():
     app = (ROOT / "quantdesk/web/static/app/app.js").read_text()
-    for needle in ("Search every instrument", "LIVE_SEGS", "LIVE_SORTS", "Show ${", "github\\.io"):
+    for needle in ("Search every instrument", "WATCH_GROUPS", "LIVE_FOUND", "function watchlist()", "window.QD_TRADE.watch", "github\\.io"):
         assert needle in app, needle
     assert "innerHTML" not in app
 

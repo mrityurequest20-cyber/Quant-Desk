@@ -140,5 +140,6 @@ def test_the_flow_block_places_no_order_and_touches_no_network_or_page_and_the_p
     panel = APP[APP.index("function bdFlow"):APP.index("// ---- custom legs")]
     assert "innerHTML" not in panel and "paperCall" not in panel and "fetch(" not in panel
     assert "not forecasts" in panel and "UNPROVEN" in panel and "kept in this browser only" in panel
-    draw = APP[APP.index("function bdDraw"):APP.index("function legsTable2")]
-    assert draw.index("bdRead({") < draw.index("bdFlow({") < draw.index("bdIdeas({")
+    chain = APP[APP.index("function liveChainView"):APP.index("function bdSync")]
+    assert chain.index("bdFlow(ctx)") < chain.index("if (Date.now() - (L.extraAt || 0) < 14000) return;")      # the session's tape is read on every refresh, even while the panel is folded or not redrawn
+    assert chain.index("bdRead(ctx)") < chain.index('fold("flow"') < chain.index("bdNews(S.bd, data)")
