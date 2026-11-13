@@ -50,6 +50,10 @@ STOCK_WORKFLOW, STOCK_MAX_STARTS = "record-stocks.yml", 2
 # It is safe to start again after a failure (it restores its account from the relay and the ledger branch, and an order is never filled twice), so it gets three starts a day.
 PAPER_WORKFLOW, PAPER_MAX_STARTS = "paper-desk.yml", 3
 PAPER_WINDOW = (dt.time(5, 55), dt.time(23, 25))     # the owner's desk hours, 06:00 to midnight IST (13 Nov 2026): first started at 05:55; a runner that stopped early is started again until 23:25, so the 15:20 sale, the 15:31 settlement and the MCX evening are still covered
+# The Fyers feed (fyers-feed.yml, docs/FEEDS.md): MCX and currency to the live relay, 09:00 to 23:58. It logs in to Fyers by itself, so like the Kite recorder it is started once a day and
+# never again after a failure (a wrong PIN retried every few minutes could lock the owner's Fyers account). Its window runs into the evening: a late start still covers the MCX evening.
+FYERS_WORKFLOW, FYERS_MAX_STARTS = "fyers-feed.yml", 1
+FYERS_WINDOW = (dt.time(8, 25), dt.time(20, 0))
 # The news digest (news.yml): the desk's public RSS feeds read by its news engine and sent to the relay for the app's News panel. Unlike the recorders it is not once a day: it is started on every tick of
 # the session (the Worker's cron fires this scheduler every ten minutes) if none is queued or running and the last one is at least eight minutes old. A failure here never matters to anything else.
 # News does not keep market hours: it runs around the clock, every day (8 Nov 2026, owner: "nothing is getting missed out"), so a story at night or on a weekend is already in the digest when the market opens.
@@ -177,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     now = dt.datetime.now(IST)
     started = False
-    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (PAPER_WORKFLOW, PAPER_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
+    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (FYERS_WORKFLOW, FYERS_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (PAPER_WORKFLOW, PAPER_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
         try:
             wf_runs = _runs(wf)
         except (subprocess.SubprocessError, OSError, ValueError):                 # a hung or missing gh, a bad answer: for the extra recorders never fatal
@@ -187,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
                 runs = []
             print(f"{wf}: could not list its runs; not starting it")          # the Kite recorder never holds up the main one
             continue
-        action, why = decide(now, wf_runs, hols, limit, PAPER_WINDOW if wf == PAPER_WORKFLOW else WINDOW)
+        action, why = decide(now, wf_runs, hols, limit, {PAPER_WORKFLOW: PAPER_WINDOW, FYERS_WORKFLOW: FYERS_WINDOW}.get(wf, WINDOW))
         print(f"{wf}: {action}: {why}")
         if action == "start":
             try:
