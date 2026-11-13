@@ -108,6 +108,69 @@ circulars.
 
 **Not built:** AUTO does not trade futures; they are the owner's tickets only. There are no MCX or currency options.
 
+## MCX and currency options (owner, 13 Nov 2026: "treated in the same way" as index and stock options)
+
+**Data:**
+- **MCX option chains** come from Fyers (`options-chain-v3`, three chains a cycle, in turn).
+- **Currency options** come from Angel One: one FULL quote call gives price, OI and five-level depth; the window follows the price
+  every half hour.
+- **Kite** carries both in its hours, from its instrument list.
+- **Routing:** they have their own route labels, `mopt` (Fyers, Kite, Kotak) and `copt` (Angel One, Fyers, Kite, Kotak), so each segment
+  is shown from the broker the owner chose for it, futures and options alike. Names are the same as NSE options; a currency strike has
+  decimals (`USDINR20NOV2684.25CE`).
+
+**Trading:** from the chain and the strategy builder exactly as NSE options, by the owner or by AUTO v2:
+- **Lot:** the future's.
+- **Costs:** their own schedules (`costs.segments.mcx_options`: CTT 0.05% on the sale, MCX 0.0418%, stamp 0.003%;
+  `cds_options`: no STT, NSE 0.0311% + IPFT, stamp 0.0001%; brokerage 20 rupees flat).
+- **Slippage:** in each contract's own tick (`opt_tick`).
+- **Pricing:** off the near-month future at rate 0 (Black-76: an option on a future).
+- **Expiry:** sold from 15:20 on the trading day before expiry, never held into it (an MCX option turns into the future at expiry; a
+  currency option expires at 12:30).
+
+**AUTO v2's hours by segment:**
+
+| Segment | First entry | Last entry | Day strategies out by |
+|---|---|---|---|
+| NSE | 09:20 | 15:00 | 15:15 |
+| Currency | 09:10 | 16:15 | 16:40 |
+| MCX | 09:10 | 22:45 | 23:10 |
+
+A currency option's premium floor is 20 of its ticks.
+
+## The market read (`quantdesk/paper/marketread.py`)
+
+For each underlying, every 30 seconds, from the options, the future and the spot:
+
+| Group | What it reads |
+|---|---|
+| Positioning | put/call ratio (OI, volume), max pain, the call wall (resistance) and the put wall (support) |
+| Flow (against a quarter of an hour earlier) | the future's build-up (long build-up, short build-up, short covering, long unwinding); near-the-money call against put writing; the put/call ratio's change |
+| Expectations | the straddle's implied move, skew (out-of-the-money put over call volatility) and its change, the near against next expiry's volatility, the future's premium |
+
+**Combining them (Bayesian evidence):** each reading is a signal s in [-1, 1] with a weight w (a log-likelihood ratio), and
+P(up) = 1 / (1 + exp(-sum w*s)).
+- **A vote at 0.65 or 0.35.** A read votes up at P(up) 0.65 or more and down at 0.35 or less, as one more vote in AUTO v2's view.
+- **The rule is unchanged:** at least two readings agree and none disagrees, so the read alone never opens a trade.
+- **The weights are priors**, set from what each reading is known to mean, not fitted.
+- **Calibration:** every read is scored against what the future did over the next quarter hour (the Brier score: 0.25 is a coin toss,
+  lower is better; `read_calibration` in the runner's state). That record will show which readings carry information.
+
+## The news analyser and the event regime
+
+- **The event watch.** The news job gathers the stories' own event types (`intraday/nlp.py`: policy, geopolitics, inflation, growth,
+  flows, commodities, currency, and more) into active events: severity from impact x novelty x the type's weight, decayed by its
+  half-life; tone from the stories' tones. At severity 2.5 an event is "high". It is in the digest (`events`) and the app's news panel.
+- **What happened before.** The pre-market brief measures, from the warehouse's own closes, what NIFTY and BANKNIFTY did on past
+  episodes of each kind: the median signed move, how often it fell, the worst, the five-session move
+  (`history.macro_history`, `macro_dates.json`). The kinds now include geopolitical shocks (14 episodes, 2016 to 2025) and oil shocks
+  (5). The app shows this line beside each event, and AUTO v2 writes it into its reasons.
+- **News and data together.** When a high event touches an underlying (geopolitics, policy, inflation, growth: everything;
+  commodities: MCX and the indices; currency events: currency), or the options price one (the near expiry's volatility above the
+  next's), AUTO v2 is in the **event regime**: it opens no short-volatility structure (iron condor, iron fly), the trade that loses
+  most when an event moves the market. Bought volatility and directional spreads stay open to it.
+- **Same limits.** The loss caps, sizes and the proof gate are unchanged.
+
 ## AUTO v2: the paper desk writing, testing and choosing its own strategies (paper money only)
 
 Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a system which is sophisticated, advanced ... can take any strategy in its place, create its own strategy, permutation, combination, can trade."

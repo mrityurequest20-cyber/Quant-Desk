@@ -155,6 +155,39 @@
         "2024-06-03",
         "2024-06-04"
       ]
+    },
+    "geopolitics": {
+      "label": "Geopolitical shock (war, strikes, attacks)",
+      "reacts": "same_session",
+      "evidence": "Added 13 Nov 2026 (owner: 'what happened in the past in these kind of scenarios'). The first Indian session that could react to each episode: surgical strikes (29 Sep 2016), Balakot and the next day's air clash (26, 27 Feb 2019), Soleimani (3 Jan 2020), Iran's missiles on US bases (8 Jan 2020), Galwan (16 Jun 2020), Russia's invasion of Ukraine (24 Feb 2022), Hamas's attack on Israel (Sat 7 Oct 2023: 9 Oct), Iran's drones on Israel (Sat 13 Apr 2024: 15 Apr), Iran's missiles on Israel (1 Oct 2024, 2 Oct a holiday: 3 Oct), Pahalgam (22 Apr 2025: 23 Apr), Operation Sindoor (7 May 2025), Israel's strikes on Iran (13 Jun 2025), US strikes on Iran (Sun 22 Jun 2025: 23 Jun). Well-known dates, not yet checked line by line against a dated source.",
+      "dates": [
+        "2016-09-29",
+        "2019-02-26",
+        "2019-02-27",
+        "2020-01-03",
+        "2020-01-08",
+        "2020-06-16",
+        "2022-02-24",
+        "2023-10-09",
+        "2024-04-15",
+        "2024-10-03",
+        "2025-04-23",
+        "2025-05-07",
+        "2025-06-13",
+        "2025-06-23"
+      ]
+    },
+    "oil_shock": {
+      "label": "Oil shock (supply attack, price war, OPEC+ surprise)",
+      "reacts": "same_session",
+      "evidence": "Added 13 Nov 2026. The first Indian session after: the Abqaiq attack (Sat 14 Sep 2019: 16 Sep), the Saudi-Russia price war (9 Mar 2020), US crude below zero (20 Apr 2020 US: 21 Apr), Brent near 139 dollars (7 Mar 2022), the OPEC+ surprise cut (Sun 2 Apr 2023: 3 Apr). Not yet checked line by line.",
+      "dates": [
+        "2019-09-16",
+        "2020-03-09",
+        "2020-04-21",
+        "2022-03-07",
+        "2023-04-03"
+      ]
     }
   }
 }

@@ -36,6 +36,7 @@ from dataclasses import dataclass
 
 from ..markets import sessions as MK
 from . import auto as V1
+from . import marketread as MR
 from .runner import _num
 
 IST = MK.IST
@@ -57,6 +58,18 @@ EXIT_RESEND_S = 15.0
 DAY_EXIT = dt.time(15, 15)               # "day" strategies are out by here
 FIRST_ENTRY = dt.time(9, 20)             # no entries in the opening auction's aftermath
 LAST_ENTRY = dt.time(15, 0)
+# MCX and currency options (owner, 13 Nov 2026: "treated in the same way" as index and stock options): each segment's own hours. (first entry, last entry, day strategies out by)
+WINDOWS = {"nse_fo": (FIRST_ENTRY, LAST_ENTRY, dt.time(15, 15)), "nse_cds": (dt.time(9, 10), dt.time(16, 15), dt.time(16, 40)),
+           "mcx": (dt.time(9, 10), dt.time(22, 45), dt.time(23, 10))}
+FUT_SUFFIX = {"mcx": "-MCX", "nse_cds": "-CDS"}           # their underlying is the near-month future the board shows
+# The event regime (owner, 13 Nov 2026: "the whole analysis of news and data can go hand in hand in a big event situation or in any move geopolitical situation"): a high-severity
+# event in the news digest's event watch that touches the underlying, or the options pricing one (the near expiry's volatility above the next's), and AUTO v2 opens no short-
+# volatility structure: an iron condor or fly sold into an event is the trade that loses most when the event moves the market.
+SHORT_VOL = frozenset({"IC", "IF"})
+EVENT_TOUCHES = {"geopolitics": "all", "policy": "all", "inflation": "all", "growth": "all", "flows": "equity", "global": "equity", "regulation": "equity",
+                 "commodities": "mcx", "currency": "cds"}
+READ_EVERY_S = 30                                          # the market read is refreshed this often per underlying
+MIN_PREMIUM_TICKS = 20                                     # an MCX or currency option's premium floor, in its own ticks (a currency option trades near 0.05)
 SWING_SESSIONS = 3
 LEDGER_SOFT_LIMIT = V1.LEDGER_SOFT_LIMIT
 LAB_MAX_CHARS = 110000                   # the relay keeps the record in one stored value (128 KiB at most)
@@ -206,7 +219,7 @@ def _book(q, now_ok=QUOTE_MAX_AGE_S):
     return b, a
 
 
-def atm_iv(snap, chain, strikes, atm_i, spot, T) -> float | None:
+def atm_iv(snap, chain, strikes, atm_i, spot, T, r: float = RATE) -> float | None:
     """The at-the-money implied volatility: the mean of the call's and the put's, each from the mid of its book."""
     if not (T > 0) or atm_i is None:
         return None
@@ -214,7 +227,7 @@ def atm_iv(snap, chain, strikes, atm_i, spot, T) -> float | None:
     for right in ("CE", "PE"):
         bk = _book((snap.get("quotes") or {}).get(chain[k].get(right)))
         if bk:
-            iv = implied_vol((bk[0] + bk[1]) / 2, spot, k, T, RATE, right)
+            iv = implied_vol((bk[0] + bk[1]) / 2, spot, k, T, r, right)                     # r = 0 for an option on a future (MCX, currency): the future is the forward
             if iv is not None and 0.01 < iv < 3:
                 ivs.append(iv)
     return sum(ivs) / len(ivs) if ivs else None
@@ -295,8 +308,11 @@ class Lab:
 
 # ---- the engine -----------------------------------------------------------------------------------------------------------------------------
 class AutoPilotV2:
-    def __init__(self, underlyings, lots: dict, fees_fn, cal, capital: float = 500_000.0, seed: int | None = None, lab: Lab | None = None):
+    def __init__(self, underlyings, lots: dict, fees_fn, cal, capital: float = 500_000.0, seed: int | None = None, lab: Lab | None = None,
+                 segments: dict | None = None, ticks: dict | None = None):
         self.und = tuple(underlyings)
+        self.segments = {str(u).upper(): s for u, s in (segments or {}).items() if s in FUT_SUFFIX}      # MCX and currency underlyings; everything else is NSE F&O
+        self.ticks = {str(u).upper(): float(t) for u, t in (ticks or {}).items() if isinstance(t, (int, float)) and t > 0}
         self.lots = dict(lots)
         self.fees_fn = fees_fn                     # (underlying, expiry, strike, right, signed qty, price) -> rupees, the desk's real cost model
         self.cal = cal                             # core.calendar.TradingCalendar
@@ -352,15 +368,33 @@ class AutoPilotV2:
             n += 1
         return n
 
+    # ---- each segment on its own terms ---------------------------------------------------------------------------------------------------------
+    def window(self, u: str) -> tuple:
+        return WINDOWS[self.segments.get(u, "nse_fo")]
+
+    def spot(self, snap, u: str):
+        """The underlying's price: the index or stock itself, or for an MCX or currency option its near-month future."""
+        return V1._spot(snap, u) if u not in self.segments else V1._spot(snap, u + FUT_SUFFIX[self.segments[u]])
+
+    def rate(self, u: str) -> float:
+        return 0.0 if u in self.segments else RATE
+
+    def min_premium(self, u: str) -> float:
+        return MIN_PREMIUM_TICKS * self.ticks.get(u, 0.05) if u in self.segments else MIN_PREMIUM
+
+    def tradable_expiries(self, u: str, exps, today: dt.date) -> list:
+        """Expiries it may open: never today's; for MCX and currency, never one whose last holding day (the trading day before expiry, the runner's rule) is today."""
+        out = [e for e in exps if e > today]
+        return [e for e in out if self._trading_days_to(today, e) >= 2] if u in self.segments else out
+
     def state(self, snap, u, ch, now: dt.datetime, news) -> dict | None:
         """This underlying's market state, or None when the board cannot say."""
         t, ist = now.timestamp(), now.astimezone(IST)
-        sp = V1._spot(snap, u)
+        sp = self.spot(snap, u)
         if not sp or u not in ch:
             return None
         self._tape(u, t, sp)
-        exps = sorted(e for e in ch[u] if e > ist.date() or (e == ist.date() and ist.time() < dt.time(15, 0)))
-        exps = [e for e in exps if e > ist.date()]                                       # never open on an expiry day's own contracts
+        exps = self.tradable_expiries(u, sorted(ch[u]), ist.date())                       # never open on an expiry day's own contracts (MCX, currency: nor on the day before)
         if not exps:
             return None
         near, nxt = exps[0], (exps[1] if len(exps) > 1 else None)
@@ -368,24 +402,101 @@ class AutoPilotV2:
         strikes = sorted(chain)
         atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - sp)) if strikes else None
         T = max((dt.datetime.combine(near, dt.time(15, 30), tzinfo=IST) - ist).total_seconds() / (365.25 * 86400), 0.0)
-        iv = atm_iv(snap, chain, strikes, atm_i, sp, T)
+        iv = atm_iv(snap, chain, strikes, atm_i, sp, T, self.rate(u))
         rv = realized_vol(self.tape.get(u, []), t)
         fq = (snap.get("quotes") or {}).get(u + "-FUT")
         fut = V1._mid(fq) if isinstance(fq, dict) and (_num(fq.get("age_s")) or 1e9) <= 60 else None
         rd = V1.readings(snap, u, near, chain, ist, sp, fut)
         mom = self._momentum(u, t)
         nv, nwhy = V1.news_vote(news, u, now)
+        read = self.read(snap, u, ch, t, sp, near, nxt, T, ist)
         d, why = V1.direction(rd["pressure"], rd["gap_pct"], mom, nv, nwhy)
-        view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < CALM_PCT else None)
+        d, why = self.with_read(d, why, rd, mom, nv, nwhy, read)
+        view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < CALM_PCT and not (read or {}).get("vote") else None)
         ratio = iv / rv if iv and rv else None
         vol = "rich" if ratio is not None and ratio >= RICH else "cheap" if ratio is not None and ratio <= CHEAP else "mid"
         eve = self._trading_days_to(ist.date(), near) == 1
-        st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt}
-        self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items() if k != "why"}
+        regime, rwhy = self.regime(u, news, read)
+        if rwhy:
+            why = list(why) + [rwhy]
+        st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt, "read": read,
+              "regime": regime}
+        self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items() if k not in ("why", "read")}
+        if regime == "event":
+            self.last_state[u]["event"] = (rwhy or "")[:160]
+        if read:
+            self.last_state[u]["read"] = {k: read[k] for k in ("p_up", "why", "pcr", "buildup", "event_priced")}
         return st
+
+    # ---- the event regime: news and data together --------------------------------------------------------------------------------------------------
+    def regime(self, u: str, news, read: dict | None) -> tuple[str, str | None]:
+        """("event", why) when a high event in the digest's event watch touches `u`, or the options price one; else ("normal", None)."""
+        seg = self.segments.get(u)
+        group = "mcx" if seg == "mcx" else "cds" if seg == "nse_cds" else "equity"
+        for e in ((news or {}).get("events") or []) if isinstance(news, dict) else []:
+            if not isinstance(e, dict) or e.get("level") != "high":
+                continue
+            reach = EVENT_TOUCHES.get(e.get("type"))
+            if reach == "all" or reach == group or (reach == "mcx" and group == "equity" and e.get("type") == "commodities"):
+                past = self.analog_line(e.get("kind"))
+                return "event", f"event regime: {e.get('type')} (severity {e.get('severity')}, tone {e.get('tone'):+.2f})" + (f"; {past}" if past else "")
+        if read and read.get("event_priced"):
+            return "event", "event regime: the near expiry's volatility is above the next's (an event is priced)"
+        return "normal", None
+
+    def analog_line(self, kind) -> str | None:
+        """What NIFTY did on the past episodes of this kind (the pre-market brief's analogue table), in one line."""
+        a = (((self.brief or {}).get("analogs") or {}).get(kind) or {}).get("NIFTY") if kind else None
+        if not isinstance(a, dict) or not a.get("n"):
+            return None
+        part = f"the last {a['n']} {kind.replace('_', ' ')} episodes: NIFTY median {a.get('median_ret', 0) * 100:+.1f}% on the day"
+        if a.get("share_down") is not None:
+            part += f", fell {round(a['share_down'] * a['n'])} of {a['n']}"
+        if a.get("worst") is not None:
+            part += f", worst {a['worst'] * 100:+.1f}%"
+        if a.get("median_5d") is not None:
+            part += f", {a['median_5d'] * 100:+.1f}% over five sessions"
+        return part
+
+    # ---- the market read (marketread.py): options, futures and spot together ------------------------------------------------------------------
+    def read(self, snap, u, ch, t, sp, near, nxt, T, ist) -> dict | None:
+        """The market read of `u`, at most every READ_EVERY_S (a chain read prices a few implied volatilities)."""
+        if not hasattr(self, "reader"):
+            self.reader, self.read_at = MR.MarketRead(), {}
+        if t - self.read_at.get(u, -1e18) < READ_EVERY_S and u in self.reader.last:
+            return self.reader.last[u]
+        self.read_at[u] = t
+        seg = self.segments.get(u)
+        fut_name = u + FUT_SUFFIX[seg] if seg else u + "-FUT"
+        T_next = max((dt.datetime.combine(nxt, dt.time(15, 30), tzinfo=IST) - ist).total_seconds() / (365.25 * 86400), 0.0) if nxt else None
+        try:
+            return self.reader.update(u, t, snap, ch[u][near], sp, T, self.rate(u), implied_vol, fut_name=fut_name, next_chain=ch[u].get(nxt) if nxt else None,
+                                      T_next=T_next, spot_name=None if seg else u)
+        except Exception:                                                                # noqa: BLE001 - a read that fails costs the read, never the session
+            return None
+
+    @staticmethod
+    def with_read(d: int, why: list, rd: dict, mom, nv: int, nwhy, read: dict | None) -> tuple[int, list]:
+        """The view with the market read as one more vote: the rule is AUTO v1's (at least two readings agree, none points the other way)."""
+        if not read or not read.get("vote"):
+            return d, why
+        votes = []
+        if rd["pressure"] is not None and abs(rd["pressure"]) >= V1.PRESSURE_TH:
+            votes.append(1 if rd["pressure"] > 0 else -1)
+        if rd["gap_pct"] is not None and abs(rd["gap_pct"]) >= V1.PARITY_TH_PCT:
+            votes.append(1 if rd["gap_pct"] > 0 else -1)
+        if mom is not None and abs(mom) >= V1.MOMENTUM_TH_PCT:
+            votes.append(1 if mom > 0 else -1)
+        if nv:
+            votes.append(nv)
+        votes.append(read["vote"])
+        why = list(why) + [f"market read P(up) {read['p_up']:.2f}" + (f": {'; '.join(read['why'][:2])}" if read.get("why") else "")]
+        return (votes[0] if len(votes) >= 2 and len(set(votes)) == 1 else 0), why
 
     def matches(self, s: Strategy, st: dict) -> bool:
         if st["view"] != s.view:
+            return False
+        if st.get("regime") == "event" and s.struct in SHORT_VOL:                       # no volatility sold into an event
             return False
         if s.vol != "any" and st["vol"] != s.vol:
             return False
@@ -409,7 +520,7 @@ class AutoPilotV2:
         for side, right, k in lg:
             name = chain[k].get(right)
             bk = _book(q.get(name))
-            if bk is None or bk[1] < MIN_PREMIUM or (bk[1] - bk[0]) / ((bk[0] + bk[1]) / 2) > MAX_LEG_SPREAD:
+            if bk is None or bk[1] < self.min_premium(u) or (bk[1] - bk[0]) / ((bk[0] + bk[1]) / 2) > MAX_LEG_SPREAD:
                 return None
             legs.append({"name": name, "side": side, "right": right, "k": k, "px": bk[1] if side > 0 else bk[0], "bid": bk[0], "ask": bk[1], "age": _num(q[name].get("age_s"))})
         worst, best = payoff_bounds([(l["side"], l["right"], l["k"], l["px"]) for l in legs])
@@ -428,14 +539,15 @@ class AutoPilotV2:
             v += l["side"] * ((bk[0] if l["side"] > 0 else bk[1]) - l["px"])
         return v
 
-    def _exit_why(self, s: Strategy, pnl_r: float, best_r: float, opened: dt.datetime, ist: dt.datetime, exp: dt.date) -> str | None:
+    def _exit_why(self, s: Strategy, pnl_r: float, best_r: float, opened: dt.datetime, ist: dt.datetime, exp: dt.date, u: str | None = None) -> str | None:
+        day_exit = self.window(u)[2] if u else DAY_EXIT
         if pnl_r >= min(s.tp, 0.9 * best_r if math.isfinite(best_r) else s.tp):
             return f"take-profit ({pnl_r:+.2f}R)"
         if pnl_r <= -s.sl * 0.999:
             return f"stop ({pnl_r:+.2f}R)"
-        if s.hold == "day" and ist.time() >= DAY_EXIT:
-            return "a day strategy is out by 15:15"
-        if s.hold == "swing" and (self._trading_days_to(opened.date(), ist.date()) >= SWING_SESSIONS or (ist.date() >= self.cal.prev_trading_day(exp) and ist.time() >= DAY_EXIT)):
+        if s.hold == "day" and ist.time() >= day_exit:
+            return f"a day strategy is out by {day_exit:%H:%M}"
+        if s.hold == "swing" and (self._trading_days_to(opened.date(), ist.date()) >= SWING_SESSIONS or (ist.date() >= self.cal.prev_trading_day(exp) and ist.time() >= day_exit)):
             return "held its three sessions, or its expiry is next"
         return None
 
@@ -445,18 +557,20 @@ class AutoPilotV2:
         for key, sh in list(self.shadow.items()):                                       # exits first
             v = self.mark(snap, sh["legs"])
             if v is None:
-                if ist.time() >= dt.time(15, 31) and sh["s"].hold == "day":             # a day trade that cannot be marked by the close is dropped, not scored
+                close = (dt.datetime.combine(ist.date(), self.window(key[1])[2]) + dt.timedelta(minutes=16)).time()
+                if ist.time() >= close and sh["s"].hold == "day":                        # a day trade that cannot be marked by its segment's close is dropped, not scored
                     self.shadow.pop(key)
                 continue
             r = (v - sh["fees"]) / sh["risk"]
-            why = self._exit_why(sh["s"], r, sh["best_r"], sh["opened"], ist, sh["exp"])
+            why = self._exit_why(sh["s"], r, sh["best_r"], sh["opened"], ist, sh["exp"], key[1])
             if why:
                 self.lab.add(sh["s"].sid, r)
                 self.shadow.pop(key)
                 self.cool[key] = t + REENTRY_S
-        if not (FIRST_ENTRY <= ist.time() <= LAST_ENTRY):
-            return
         for u, st in states.items():
+            first, last, _ = self.window(u)
+            if not (first <= ist.time() <= last):                                       # each segment's own hours
+                continue
             for s in CATALOGUE:
                 key = (s.sid, u)
                 if key in self.shadow or self.cool.get(key, 0) > t or not self.matches(s, st):
@@ -505,10 +619,10 @@ class AutoPilotV2:
     def plan_state(self, cs, u, ch, now: dt.datetime, news, over: float | None, over_why: str | None, result: dict | None) -> dict | None:
         """This underlying's state for the day plan, from the closing board: the same fields as state(), without touching the live tape."""
         ist = now.astimezone(IST)
-        sp = V1._spot(cs, u)
+        sp = self.spot(cs, u)
         if not sp or u not in ch:
             return None
-        exps = [e for e in sorted(ch[u]) if e > ist.date()]
+        exps = self.tradable_expiries(u, sorted(ch[u]), ist.date())
         if not exps:
             return None
         near, nxt = exps[0], (exps[1] if len(exps) > 1 else None)
@@ -516,7 +630,7 @@ class AutoPilotV2:
         strikes = sorted(chain)
         atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - sp)) if strikes else None
         T = max((dt.datetime.combine(near, dt.time(15, 30), tzinfo=IST) - ist).total_seconds() / (365.25 * 86400), 0.0)
-        iv = atm_iv(cs, chain, strikes, atm_i, sp, T)
+        iv = atm_iv(cs, chain, strikes, atm_i, sp, T, self.rate(u))
         fq = (cs.get("quotes") or {}).get(u + "-FUT")
         fut = V1._mid(fq) if isinstance(fq, dict) else None
         rd = V1.readings(cs, u, near, chain, ist, sp, fut)
@@ -538,8 +652,11 @@ class AutoPilotV2:
         view = "up" if d > 0 else "down" if d < 0 else ("flat" if not votes and (over is None or abs(over) < OVERNIGHT_TH_PCT / 2) else None)
         label = (result or {}).get("label")
         vol = "rich" if label == "rich" else "cheap" if label == "cheap" else "mid"      # the brief's results test is the only volatility reading before the open
+        regime, rwhy = self.regime(u, news, None)
+        if rwhy:
+            why.append(rwhy)
         return {"u": u, "spot": sp, "view": view, "why": why, "mom": None, "iv": iv, "rv": None, "ratio": None, "vol": vol,
-                "eve": self._trading_days_to(ist.date(), near) == 1, "near": near, "next": nxt}
+                "eve": self._trading_days_to(ist.date(), near) == 1, "near": near, "next": nxt, "regime": regime}
 
     def plan(self, snap, now: dt.datetime, news=None) -> dict:
         """The day plan: for each underlying, the defined-risk strategies whose pre-open context holds and whose reward to risk is PLAN_MIN_RR or better, priced on the
@@ -643,7 +760,7 @@ class AutoPilotV2:
                 opened = dt.datetime.fromisoformat(first.opened_at).astimezone(IST)
             except (TypeError, ValueError):
                 opened = ist
-            why = self._exit_why(s, r, (best / risk) if math.isfinite(best) else math.inf, opened, ist, first.instrument.expiry)
+            why = self._exit_why(s, r, (best / risk) if math.isfinite(best) else math.inf, opened, ist, first.instrument.expiry, pkg["u"])
             if not why:
                 continue
             for sym, p in sorted(pkg["legs"].items(), key=lambda kv: kv[1].qty > 0):    # sold legs bought back first: nothing is ever left uncovered
@@ -651,12 +768,13 @@ class AutoPilotV2:
                     continue
                 self.pending_exit[sym] = t + EXIT_RESEND_S
                 orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": sym, "lots": "all", "queued_at": int(t * 1000), "_why": f"{TAG} exit: {why}"})
-        if kill or entries_blocked or len(account.ledger) >= LEDGER_SOFT_LIMIT or not (FIRST_ENTRY <= ist.time() <= LAST_ENTRY):
+        if kill or entries_blocked or len(account.ledger) >= LEDGER_SOFT_LIMIT:
             return orders
         held_syms = set(account.positions)
         busy = {(pkg["sid"], pkg["u"]) for pkg in pk.values()}
         for u, st in states.items():                                                    # live entries: Thompson sampling over the strategies whose context holds
-            if self.backoff.get(u, 0) > t:
+            first_t, last_t, _ = self.window(u)
+            if self.backoff.get(u, 0) > t or not (first_t <= ist.time() <= last_t):    # each segment's own hours
                 continue
             best = None
             for sid in self.planned(u):                                                 # the day plan first: a planned strategy whose context still holds, proven, with a positive draw
@@ -729,5 +847,8 @@ class AutoPilotV2:
 
     def summary(self) -> dict:
         """For the app's Strategy lab panel: the record's leaders, today's counts, and each underlying's state now (compact: the runner's whole state must fit the relay's cap)."""
-        state = {u: [st.get("view"), st.get("vol"), st.get("ratio"), bool(st.get("eve"))] for u, st in sorted(self.last_state.items())}
-        return {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan}
+        state = {u: [st.get("view"), st.get("vol"), st.get("ratio"), bool(st.get("eve")),
+                     st["read"]["p_up"] if st.get("read") else None, "; ".join(st["read"]["why"][:2])[:120] if st.get("read") else "", st.get("event", "")]
+                 for u, st in sorted(self.last_state.items())}
+        cal = self.reader.calibration().get("all") if hasattr(self, "reader") else None
+        return {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan, "read_calibration": cal}

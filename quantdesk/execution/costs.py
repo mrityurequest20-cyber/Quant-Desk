@@ -27,16 +27,16 @@ class CostModel:
         self.opt_min = float(s.get("option_min_half_spread", 0.10))
         self.tick = float(s.get("option_tick", 0.05))
 
-    def fees(self, inst: Instrument, qty: int, price: float, intraday: bool = False) -> tuple[float, dict]:
-        """Total statutory + brokerage charges for one executed order (qty signed: + buy)."""
-        seg = inst.cost_segment(intraday)
+    def fees(self, inst: Instrument, qty: int, price: float, intraday: bool = False, segment: str | None = None) -> tuple[float, dict]:
+        """Total statutory + brokerage charges for one executed order (qty signed: + buy). `segment`: the exchange segment (mcx, nse_cds) where it decides the schedule."""
+        seg = inst.cost_segment(intraday, segment)
         rates = self.segments.get(seg, {})
         turnover = abs(qty) * price
         buy = qty > 0
         if seg == "equity_delivery":
             brokerage = self.delivery_brokerage
         else:
-            brokerage = min(self.per_order, self.pct_cap * turnover) if seg != "options" else self.per_order
+            brokerage = self.per_order if seg.endswith("options") else min(self.per_order, self.pct_cap * turnover)
         stt = turnover * float(rates.get("stt_buy" if buy else "stt_sell", 0.0))
         exchange = turnover * float(rates.get("exchange", 0.0))
         sebi = turnover * self.sebi

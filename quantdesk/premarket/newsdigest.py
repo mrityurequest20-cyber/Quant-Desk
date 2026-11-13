@@ -72,6 +72,50 @@ def _iso(ts) -> str:
     return pd.Timestamp(ts).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# ---- the event watch (owner, 13 Nov 2026: "Advanced news analyser ... analyse news and predict what could happen and what happened in the past in these kind of scenarios") ----
+# The stories' own event types (intraday/nlp.py) gathered into active EVENTS: each story counts by its impact, its novelty and its type's weight, decayed by the type's half-life;
+# an event's severity is the sum, its tone the weighted mean of the stories' tones. The `kind` names the past episodes the pre-market brief measures (history.macro_history:
+# what NIFTY and BANKNIFTY did on them), so the app and AUTO v2 can put "what happened the last times" beside "what is happening now".
+EVENT_KIND = {"geopolitics": "geopolitics", "commodities": "oil_shock", "regulation": "budget"}          # the event type -> the analogue kind (policy: rbi or fomc, by the words)
+IMPACT_W = {"high": 1.0, "medium": 0.5, "low": 0.2}
+EVENT_WATCH, EVENT_HIGH = 1.0, 2.5                                    # severity at which an event is listed, and at which it is "high" (AUTO v2's event regime)
+EVENT_WINDOW_H = 12
+
+
+def event_watch(rows: list[dict], now: pd.Timestamp) -> list[dict]:
+    from ..intraday import nlp as NLP
+    spec = {n: (hl, w) for n, _p, hl, w in NLP.EVENTS}
+    acc: dict[str, dict] = {}
+    for r in rows:
+        ev = r.get("event")
+        if ev not in spec or r.get("recap"):
+            continue
+        try:
+            age_min = (now - pd.Timestamp(r["ts"])).total_seconds() / 60
+        except (KeyError, ValueError, TypeError):
+            continue
+        if not (0 <= age_min <= EVENT_WINDOW_H * 60):
+            continue
+        hl, w = spec[ev]
+        x = IMPACT_W.get(r.get("impact"), 0.2) * max(0.2, float(r.get("novelty") or 0.0)) * w * 0.5 ** (age_min / hl)
+        a = acc.setdefault(ev, {"sev": 0.0, "tone": 0.0, "n": 0, "top": [], "kind": None})
+        a["sev"] += x
+        a["tone"] += x * float(r.get("tone") or 0.0)
+        a["n"] += 1
+        if len(a["top"]) < 3:
+            a["top"].append(str(r.get("title"))[:140])
+        if ev == "policy":
+            t = str(r.get("title", "")).lower()
+            a["kind"] = a["kind"] or ("rbi" if any(k in t for k in ("rbi", "repo", "mpc")) else "fomc" if any(k in t for k in ("fed", "fomc")) else None)
+    out = []
+    for ev, a in acc.items():
+        if a["sev"] < EVENT_WATCH:
+            continue
+        out.append({"type": ev, "severity": round(a["sev"], 2), "level": "high" if a["sev"] >= EVENT_HIGH else "watch", "tone": round(a["tone"] / a["sev"], 2),
+                    "n": a["n"], "top": a["top"], "kind": a["kind"] or EVENT_KIND.get(ev)})
+    return sorted(out, key=lambda e: -e["severity"])[:6]
+
+
 def build(items, now: pd.Timestamp, health: dict | None = None, limit: int = MAX_ITEMS, max_age_h: float = MAX_AGE_H) -> dict:
     """The digest the relay serves: newest first, at most `limit` stories from the last `max_age_h` hours."""
     rows = []
@@ -90,7 +134,8 @@ def build(items, now: pd.Timestamp, health: dict | None = None, limit: int = MAX
         })
         if len(rows) >= limit:
             break
-    return {"v": 1, "asof": _iso(now), "n": len(rows), "sources": {str(k)[:40]: str(v)[:60] for k, v in (health or {}).items()}, "items": rows}
+    return {"v": 1, "asof": _iso(now), "n": len(rows), "sources": {str(k)[:40]: str(v)[:60] for k, v in (health or {}).items()}, "items": rows,
+            "events": event_watch(rows, now)}
 
 
 def fetch_digest(cfg, now: pd.Timestamp | None = None, fetch=None, sources=None) -> dict:

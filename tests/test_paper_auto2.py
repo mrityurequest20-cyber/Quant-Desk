@@ -209,7 +209,7 @@ def test_the_session_loads_and_saves_the_record_and_puts_the_lab_in_the_apps_sta
     assert 'auto.load(relay)' in src and "auto.save(relay, time.monotonic())" in src and "auto.save(relay, time.monotonic(), force=True)" in src
     assert 'summ["lab"] = auto.summary()' in src
     cli = (ROOT / "quantdesk/paperlink/cli.py").read_text()
-    assert 'os.environ.get("PAPER_AUTO_ENGINE", "v2")' in cli and "auto = auto_v2(cfg, tradable, lots)" in cli         # v2 is the engine unless PAPER_AUTO_ENGINE=v1
+    assert 'os.environ.get("PAPER_AUTO_ENGINE", "v2")' in cli and "auto = auto_v2(cfg, tradable + tuple(segs), lots_all, segs)" in cli         # v2 is the engine unless PAPER_AUTO_ENGINE=v1
 
 
 @needs_node

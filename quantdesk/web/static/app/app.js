@@ -648,7 +648,7 @@ const SRC_NAME = { z: "Kite", k: "Kotak", u: "Upstox", d: "Dhan", a: "Angel One"
 S.lv = { q: "", grp: "all", data: null, built: false, sel: null, view: "spot", series: null, cand: null, tf: 1, exp: null, allStrikes: false, last: {}, chart: null, at: 0, heavyAt: 0 };
 S.open = {};                                                     // which folded sections are open, by id: a redraw keeps them as the reader left them
 let liveBusy = false;
-const livePx = (v, seg) => (fin(v) ? v.toLocaleString("en-IN", seg === "cds" ? { minimumFractionDigits: 4, maximumFractionDigits: 4 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+const livePx = (v, seg) => (fin(v) ? v.toLocaleString("en-IN", seg === "cds" || seg === "copt" || ((seg === "opt" || seg === "mopt") && Math.abs(v) < 1) ? { minimumFractionDigits: 4, maximumFractionDigits: 4 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");      // a currency price, or an option under a rupee, in four decimals
 function liveAge(sec) {
 	if (!fin(sec)) return "—";
 	if (sec < 90) return Math.round(sec) + "s";
@@ -834,7 +834,7 @@ function liveQuoteView(u, name, v) {
 	stats.textContent = "";
 	put(stats, h("div", { class: "facts" }, liveField("Open", livePx(o, seg)), liveField("Previous close", livePx(prev, seg)), liveField("High", livePx(hi, seg)), liveField("Low", livePx(lo, seg)),
 		liveField("Volume", fin(v.vol) ? v.vol.toLocaleString("en-IN") : "—"), liveField("Open interest", fin(v.oi) ? v.oi.toLocaleString("en-IN") : "—"),
-		inst ? liveField("Lot size", String(inst.lot)) : null, inst ? liveField("Strike step", String(inst.step)) : null),
+		inst ? liveField("Lot size", String(inst.lot)) : null, inst ? liveField("Strike step", inst.step != null ? String(inst.step) : "from the chain") : null),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:8px 16px 10px" }, "Open, high and low are of the minutes the relay holds for today, not the exchange's own figures."));
 }
 // Options: the whole chain of one expiry, live. A tap on a price opens the ticket for that contract (the ticket itself is further down, with the other paper tickets).
@@ -844,7 +844,7 @@ function liveChainView(u, data, chains, n) {
 	if (!exps.includes(L.exp)) L.exp = exps[0];
 	const ch = chains[u][L.exp], strikes = Object.keys(ch).map(Number).sort((a, b) => a - b);
 	const sq = data.quotes[n.spot] || data.quotes[n.fut] || {}, spot = sq.ltp, c = QB.conf(), T = QB.yearsTo(L.exp, Date.now());
-	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r), a = AN.atm(rows, spot, T, sq.chg), pc = AN.pcr(rows), mp = AN.maxPain(rows);
+	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(u, c)), a = AN.atm(rows, spot, T, sq.chg), pc = AN.pcr(rows), mp = AN.maxPain(rows);
 	let atm = 0;
 	if (fin(spot)) strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
 	// 25 strikes around the money. The window stays where it is while the money is well inside it, and moves only when the price nears an edge: rows never slide under a finger
@@ -1121,7 +1121,7 @@ const QB = (() => {
 		limits: { risk_per_trade: 0.025, max_premium_outlay: 0.20, max_total_outlay: 0.5, max_lots: 10, max_open: 2, max_spread_pct: 0.06, max_margin: 0.5, credit_margin_per_lot: 30000, daily_loss_limit: 0.05 },
 		costs: { brokerage_per_order: 20, gst: 0.18, sebi_per_crore: 10, options: { stt_buy: 0, stt_sell: 0.0015, exchange: 0.0003503, stamp_buy: 0.00003 } },
 		slippage: { option_half_spread_pct: 0.012, option_min_half_spread: 0.10, option_tick: 0.05 },
-		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BANKNIFTY", "BHARTIARTL", "BHEL", "BSE", "DIVISLAB", "DIXON", "FINNIFTY", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "KOTAKBANK", "LAURUSLABS", "M&M", "MARUTI", "MIDCPNIFTY", "NIFTY", "PAYTM", "RELIANCE", "SBIN", "TCS"], allow_short_legs: true },     // the paper desk's gate (quantdesk/paper/risk.py)
+		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BANKNIFTY", "BHARTIARTL", "BHEL", "BSE", "COPPER", "CRUDEOIL", "CRUDEOILM", "DIVISLAB", "DIXON", "EURINR", "FINNIFTY", "GBPINR", "GOLD", "GOLDM", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "JPYINR", "KOTAKBANK", "LAURUSLABS", "M&M", "MARUTI", "MIDCPNIFTY", "NATGASMINI", "NATURALGAS", "NIFTY", "PAYTM", "RELIANCE", "SBIN", "SILVER", "SILVERM", "TCS", "USDINR"], allow_short_legs: true },     // the paper desk's gate (quantdesk/paper/risk.py)
 		inst: { NIFTY: { lot: 65, step: 50 }, BANKNIFTY: { lot: 30, step: 100 }, FINNIFTY: { lot: 60, step: 50 }, MIDCPNIFTY: { lot: 120, step: 25 }, SENSEX: { lot: 20, step: 100 } },
 	};
 	const conf = () => {
@@ -1157,15 +1157,16 @@ const QB = (() => {
 		return (lo + hi) / 2;
 	}
 	// ---- statutory costs: the same formulas as quantdesk/execution/costs.py CostModel.fees for options (a test compares them) -------------------------
-	function fees(side, price, units, c) {
-		const turnover = units * price, o = c.costs.options, brokerage = c.costs.brokerage_per_order, sebi = turnover * c.costs.sebi_per_crore / 1e7;
+	function fees(side, price, units, c, inst) {
+		const turnover = units * price, o = (inst && inst.cost && c.costs[inst.cost]) || c.costs.options, brokerage = c.costs.brokerage_per_order, sebi = turnover * c.costs.sebi_per_crore / 1e7;      // MCX and currency options: their own schedule
 		const stt = turnover * (side > 0 ? o.stt_buy : o.stt_sell), exchange = turnover * o.exchange, stamp = side > 0 ? turnover * o.stamp_buy : 0, gst = c.costs.gst * (brokerage + exchange + sebi);
 		return brokerage + stt + exchange + sebi + stamp + gst;
 	}
-	function halfSpread(price, c) {                                      // the model's adverse slippage per unit (CostModel.slippage for options)
-		const s = c.slippage, half = Math.max(s.option_half_spread_pct * price, s.option_min_half_spread);
-		return Math.round(half / s.option_tick) * s.option_tick;
+	function halfSpread(price, c, inst) {                                // the model's adverse slippage per unit (CostModel.slippage for options); an MCX or currency option in its own ticks
+		const s = c.slippage, tick = inst && inst.tick > 0 ? inst.tick : s.option_tick, half = Math.max(s.option_half_spread_pct * price, inst && inst.tick > 0 ? 2 * inst.tick : s.option_min_half_spread);
+		return Math.round(half / tick) * tick;
 	}
+	const rateOf = (u, c) => { c = c || conf(); const i = c.inst[u]; return i && typeof i.r === "number" ? i.r : c.r; };       // an option on a future (MCX, currency) is priced off the future: rate 0
 	// ---- templates: [side, type, offset in strike steps from the at-the-money strike] -------------------------------------------------
 	const TEMPLATES = {
 		long_call: { name: "Long call", view: "Bullish: wants a big move up", wide: false, legs: () => [[1, "CE", 0]] },
@@ -1229,7 +1230,7 @@ const QB = (() => {
 	// ---- the analysis ----------------------------------------------------------------------------------------------------------------
 	// spec: {u, legs:[{side,type,strike,name}], quotes:{name:{ltp,bid,ask,oi}}, spot, T (years), lots, c (config, optional)}
 	function analyze(spec) {
-		const c = spec.c || conf(), inst = c.inst[spec.u] || { lot: 1, step: 1 }, lots = Math.max(1, Math.round(spec.lots || 1)), r = c.r;
+		const c = spec.c || conf(), inst = c.inst[spec.u] || { lot: 1, step: 1 }, lots = Math.max(1, Math.round(spec.lots || 1)), r = rateOf(spec.u, c);
 		const lot = inst.lots && typeof inst.lots === "object" ? inst.lots[spec.exp] : inst.lot;          // a stock's lot belongs to the contract: NSE revises it from a given expiry
 		const legs = spec.legs.map((l) => {
 			const e = entry(l, spec.quotes[l.name]);
@@ -1268,9 +1269,9 @@ const QB = (() => {
 		out.expiry = out.grid.map(pay);
 		out.today = out.grid.map((S) => legs.reduce((a, l) => a + l.side * l.units * ((isFinite(l.iv) ? bs(l.type, S, l.strike, spec.T, l.iv, r) : (l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S))) - l.px), 0));
 		out.greeks = legs.reduce((a, l) => { const g = greeks(l.type, spec.spot, l.strike, spec.T, isFinite(l.iv) ? l.iv : 0.2, r); const m = l.side * l.units; return { delta: a.delta + m * g.delta, gamma: a.gamma + m * g.gamma, theta: a.theta + m * g.theta, vega: a.vega + m * g.vega }; }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
-		out.fees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c) + fees(-l.side, l.px, l.units, c), 0);       // in and out at the entry price: the statutory part of a round trip
-		out.exitSpread = legs.reduce((a, l) => a + l.units * (isFinite(l.spread) ? (l.spread * l.px) / 2 : halfSpread(l.px, c)), 0);   // crossing the spread again on the way out
-		out.entryFees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c), 0);                       // the entry leg only: the paper gate counts "the whole premium plus fees"
+		out.fees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c, inst) + fees(-l.side, l.px, l.units, c, inst), 0);       // in and out at the entry price: the statutory part of a round trip
+		out.exitSpread = legs.reduce((a, l) => a + l.units * (isFinite(l.spread) ? (l.spread * l.px) / 2 : halfSpread(l.px, c, inst)), 0);   // crossing the spread again on the way out
+		out.entryFees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c, inst), 0);                       // the entry leg only: the paper gate counts "the whole premium plus fees"
 		out.cost = out.fees + out.exitSpread;
 		out.margin = out.premium < 0 ? c.limits.credit_margin_per_lot * lots : 0;                         // a credit structure ties up margin (config estimate per lot); a debit one only the premium
 		out.risk = out.maxLoss + out.entryFees;                                                            // worst loss plus the fees to get in, as the paper gate counts it
@@ -1318,7 +1319,7 @@ const QB = (() => {
 	// what the structure would be worth under a what-if, against what it cost to open (theoretical value at each leg's own implied volatility shifted by `dvol` (absolute, 0.02 = two vol points), spot moved by
 	// `move` (0.01 = +1%), and `days` closer to expiry; exit spread and fees are NOT included). At expiry this is the payoff, to the paisa.
 	function scenario(a, spec, s) {
-		const c = spec.c || conf(), r = c.r, S = spec.spot * (1 + s.move), T = Math.max(0, spec.T - s.days / 365);
+		const c = spec.c || conf(), r = rateOf(spec.u, c), S = spec.spot * (1 + s.move), T = Math.max(0, spec.T - s.days / 365);
 		let v = 0;
 		for (const l of a.legs) {
 			const iv = Number.isFinite(l.iv) ? Math.max(0.01, l.iv + s.dvol) : NaN;
@@ -1327,7 +1328,7 @@ const QB = (() => {
 		}
 		return v;
 	}
-	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, CUSTOM, MAX_CUSTOM_LEGS, customLegs, legsFor, entry, analyze, scenario, suggestLots, yearsTo, ncdf, legPay };
+	return { conf, bs, greeks, impliedVol, fees, halfSpread, rateOf, TEMPLATES, CUSTOM, MAX_CUSTOM_LEGS, customLegs, legsFor, entry, analyze, scenario, suggestLots, yearsTo, ncdf, legPay };
 })();
 /* @@builder:end */
 
@@ -1642,10 +1643,10 @@ function bdChains(data) {                                                // the 
 // ---- the market read and the ideas for a view, above the builder ----------------------------------------------------------------------------
 function bdRead(ctx) {
 	const { B, data, chains, ch, exps, spot, T, sq, c } = ctx;
-	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r), a = AN.atm(rows, spot, T, sq.chg);
+	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(B.u, c)), a = AN.atm(rows, spot, T, sq.chg);
 	if (!a || a.iv == null) return h("div", { class: "note" }, "Not enough two-sided prices around the money yet to read the market.");
 	const sk = AN.skew(rows, spot, 3), pc = AN.pcr(rows), mp = AN.maxPain(rows), w = AN.walls(rows, spot, 2);
-	const next = exps[exps.indexOf(B.exp) + 1], tm = next ? AN.term(rows, AN.chainRows(chains[B.u][next], data.quotes, spot, QB.yearsTo(next, Date.now()), c.r), spot, T, QB.yearsTo(next, Date.now())) : null;
+	const next = exps[exps.indexOf(B.exp) + 1], tm = next ? AN.term(rows, AN.chainRows(chains[B.u][next], data.quotes, spot, QB.yearsTo(next, Date.now()), QB.rateOf(B.u || u, c)), spot, T, QB.yearsTo(next, Date.now())) : null;
 	const ages = rows.filter((r) => r.k === a.k).flatMap((r) => [r.ce && r.ce.age, r.pe && r.pe.age]).filter((x) => x != null), oldest = ages.length ? Math.max(...ages) + Math.max(0, (Date.now() - (B.at || Date.now())) / 1000) : null;
 	const kv = (k, v, note) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line);gap:12px;align-items:flex-start" }, h("span", { class: "f3" }, k), h("span", { style: "text-align:right" }, h("b", { class: "mono" }, v), note ? h("div", { class: "f3", style: "font-size:11.5px" }, note) : null));
 	const pct = (x, d = 2) => (x == null ? "—" : x.toFixed(d) + "%"), lv = (list) => (list.length ? list.map((x) => num(x.k, 0)).join(", ") : "—");
@@ -1676,7 +1677,7 @@ function bdIdeas(ctx) {
 		const L = QB.legsFor(id, strikes, spot, names, width);
 		return L.error ? null : QB.analyze({ u: B.u, exp: B.exp, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: 1 });
 	};
-	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: c.r }), B.sort).slice(0, 6);
+	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: QB.rateOf(B.u || u, c) }), B.sort).slice(0, 6);
 	put(box, h("div", { class: "chips", style: "padding:0 16px 4px" }, [["rr", "Best reward for the risk"], ["pop", "Most likely to profit"], ["cheap", "Cheapest"]].map(([id, t]) => chip(t, B.sort === id, () => { B.sort = id; bdDraw(); }))));
 	if (!list.length) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "None of these structures can be priced on the board right now."));
 	for (const x of list) put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
@@ -1718,6 +1719,16 @@ function bdNews(B, data) {
 			names.length ? h("div", { style: "margin-top:3px" }, names) : null);
 	};
 	if (old > 25 && inSession()) put(box, h("div", { class: "warn", style: "font-size:12.5px;padding:2px 16px" }, `The newest digest is ${ageText(old)}: the news job may not be running.`));
+	const evs = Array.isArray(n.digest.events) ? n.digest.events : [];                        // the event watch (newsdigest.py) and, from the pre-market brief, what happened the last times
+	if (evs.length) put(box, h("div", { class: "f3", style: "font-size:12px;padding:6px 16px 2px" }, "Event watch"), evs.map((e) => {
+		const a = S.pm && S.pm.analogs && e.kind && S.pm.analogs[e.kind] ? S.pm.analogs[e.kind].NIFTY : null;
+		const past = a && a.n ? `The last ${a.n} ${String(e.kind).replace(/_/g, " ")} episodes: NIFTY ${signed((a.median_ret || 0) * 100)}% on the day (median), fell ${Math.round((a.share_down || 0) * a.n)} of ${a.n}, worst ${signed((a.worst || 0) * 100)}%` + (a.median_5d != null ? `, ${signed(a.median_5d * 100)}% over five sessions.` : ".") : "";
+		return h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "gap:6px;align-items:center;flex-wrap:wrap" }, h("b", {}, String(e.type).replace(/_/g, " ")), h("span", { class: "tag " + (e.level === "high" ? "bear" : "flat") }, e.level === "high" ? "high: AUTO sells no volatility into it" : "watch"),
+				h("span", { class: "f3 mono", style: "font-size:11.5px" }, `severity ${fin(e.severity) ? e.severity.toFixed(1) : "—"} · tone ${fin(e.tone) ? signed(e.tone) : "—"} · ${e.n} stor${e.n === 1 ? "y" : "ies"}`)),
+			(e.top || []).length ? h("div", { class: "f3", style: "font-size:12px;line-height:1.45;margin-top:2px" }, e.top[0]) : null,
+			past ? h("div", { class: "f2", style: "font-size:12px;line-height:1.45;margin-top:2px" }, past) : null);
+	}));
 	if (about.length) put(box, h("div", { class: "f3", style: "font-size:12px;padding:2px 16px" }, `About ${B.u}`), about.map(row));
 	if (top.length) put(box, h("div", { class: "f3", style: "font-size:12px;padding:6px 16px 2px;border-top:1px solid var(--line)" }, "Top stories right now"), top.map(row));
 	if (!about.length && !top.length) note("No stories in the digest.");
@@ -1764,7 +1775,7 @@ function bdDraw() {
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
-	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r);
+	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(u, c));
 	const ideas = () => fold("ideas", "Ideas for your view", "structures that fit what you expect", bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
 	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error), ideas());
@@ -1815,7 +1826,7 @@ function bdFlow(ctx) {
 	const nowT = typeof data.now === "number" ? data.now : Date.now();
 	if (B.sampledAt !== B.at) {                                                                    // one reading per fetch of the board, however often the page is redrawn
 		B.sampledAt = B.at;
-		const sm = FL.sample({ t: nowT, spot, fut: Number.isFinite(fut) ? fut : null, rows, chain: ch, quotes: data.quotes, T, r: c.r, lot: inst.lot, atm: AN.atm(rows, spot, T, null) });
+		const sm = FL.sample({ t: nowT, spot, fut: Number.isFinite(fut) ? fut : null, rows, chain: ch, quotes: data.quotes, T, r: QB.rateOf(u, c), lot: inst.lot, atm: AN.atm(rows, spot, T, null) });
 		if (sm && (!B.tape.length || sm.t > B.tape[B.tape.length - 1].t)) {
 			B.tape.push(sm);
 			if (B.tape.length > FL.MAX_HIST) B.tape.shift();
@@ -2026,6 +2037,7 @@ function tkDraw() {
 		h("div", { class: "f3", style: "font-size:11.5px;padding:8px 0 0" }, `Heard ${liveAge(q.age_s)} ago${SRC_NAME[q.src] ? " from " + SRC_NAME[q.src] : ""}.`));
 	if (!inst) return void put(K.box, h("div", { class: "note" }, `${o.u} options are shown for reading only: the paper desk has no verified lot size or costs for ${o.u}.`));
 	if (inst.physical) put(K.box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:6px 0 0" }, "A stock option is settled by delivery of the shares: the paper desk sells it from 15:20 on the trading day before its expiry, and does not buy it after that."));
+	if (inst.prior_day) put(K.box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:6px 0 0" }, `${inst.segment === "mcx" ? "An MCX option turns into the future at expiry" : "A currency option expires at 12:30"}: the paper desk sells it from 15:20 on the trading day before its expiry, and does not buy it after that. Priced off the near-month future.`));
 	const lot = inst.lots ? inst.lots[o.e] : inst.lot;
 	if (!lot) return void put(K.box, h("div", { class: "note" }, `${o.u} has no verified lot size for the ${o.e} expiry yet (paper.stock_options.lots in the config), so this contract is shown for reading only.`));
 	put(K.box, h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:14px 0 10px" }, h("span", {}, `Lots (${lot} units each)`),
@@ -2260,7 +2272,7 @@ function ppLab(lab) {
 				h("td", {}, r.live ? h("span", { class: "tag bull" }, "live") : h("span", { class: "tag flat" }, r.n < lab.min_trades ? "testing" : "below 0")))))))
 			: h("div", { class: "f3", style: "font-size:12.5px;padding:10px 16px" }, "No shadow trade has closed yet. Every strategy whose market context holds is traded in shadow at the real prices; a record builds through the session."),
 		st.length ? fold("lab-state", "What it sees now", `${st.length} underlyings`, h("div", { class: "rows" }, st.map(([u, v]) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;font-size:12.5px;border-top:1px solid var(--line)" },
-			h("b", { class: "mono" }, u), h("span", { class: "f2" }, `${word(v[0])} · volatility ${v[1] || "—"}${fin(v[2]) ? " (" + v[2].toFixed(2) + "x realized)" : ""}${v[3] ? " · expiry tomorrow" : ""}`))))) : null,
+			h("b", { class: "mono" }, u), h("span", { class: "f2", style: "text-align:right" }, `${word(v[0])} · volatility ${v[1] || "—"}${fin(v[2]) ? " (" + v[2].toFixed(2) + "x realized)" : ""}${v[3] ? " · expiry tomorrow" : ""}${fin(v[4]) ? " · read P(up) " + v[4].toFixed(2) : ""}${v[5] ? " (" + v[5] + ")" : ""}${v[6] ? " · " + v[6] : ""}`))))) : null,
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `Each strategy is a combination of a market context, a structure, a width, an expiry and its exits. It trades with paper money only after ${lab.min_trades} shadow trades, chosen by Thompson sampling: a short record is shrunk towards zero, so an unproven idea keeps being tested before it gets capital. Not proven to make money.`));
 }
 async function renderPaper(force) {

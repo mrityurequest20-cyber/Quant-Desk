@@ -186,6 +186,14 @@ def _macro(inp: Inputs, day: dt.date, last_close: dt.date) -> list[dict]:
     return out
 
 
+def _analogs(inp: Inputs) -> dict:
+    """{kind: {symbol: {n, median_move, median_ret, share_down, worst, median_5d, ...}}} for every kind in macro_dates.json (geopolitics and oil shocks included)."""
+    try:
+        return H.macro_history(inp.index_close, H.macro_dates())
+    except Exception:                                                   # noqa: BLE001 - no analogue table is a thinner brief, never a failed one
+        return {}
+
+
 def _expiries(index_bhav: pd.DataFrame | None, day: dt.date) -> list[dict]:
     if index_bhav is None or len(index_bhav) == 0:
         return []
@@ -281,6 +289,7 @@ def build(inp: Inputs) -> dict:
         "universe": {"indices": int((univ["segment"] == "index").sum()) if len(univ) else 0,
                      "stocks": int((univ["segment"] == "stock").sum()) if len(univ) else 0},
         "expiring": expiring, "macro": macro, "results": results, "results_note": RESULTS_NOTE,
+        "analogs": _analogs(inp),                                       # what NIFTY and BANKNIFTY did on past episodes of each kind (the news analyser's "what happened before")
         "global": inp.globals_ or [], "headlines": {"total": len(inp.headlines or []), "named": {k: v[:3] for k, v in news.items()}},
         "watch": watch, "record_plan": record_plan(watch) if watch else {"budget": 0, "used": 0, "names": 0, "of": 0, "plan": []},
         "history": {"events": int(len(hist)), "calendar": int((hist["source"] == "calendar").sum()) if len(hist) else 0,

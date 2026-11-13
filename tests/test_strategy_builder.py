@@ -152,7 +152,11 @@ def test_the_published_page_carries_the_configs_limits_costs_and_lot_sizes_and_t
     assert tc["costs"]["options"]["stt_sell"] == cfg.get("costs.segments.options.stt_sell") and tc["slippage"]["option_tick"] == 0.05
     risk = cfg.get("intraday.risk")
     assert tc["limits"] and tc["limits"] == {k: risk[k] for k in tc["limits"]} and set(tc["limits"]) == {"risk_per_trade", "max_premium_outlay", "max_total_outlay", "max_lots", "max_open", "max_spread_pct", "max_margin", "credit_margin_per_lot", "daily_loss_limit"}   # every limit, none dropped
-    assert tc["paper"] == {"risk_per_trade": cfg.get("paper.risk_per_trade"), "max_quote_age_s": cfg.get("paper.max_quote_age_s"), "underlyings": sorted(cfg.get("paper.underlyings")["nse_fo"]), "allow_short_legs": cfg.get("paper.allow_short_legs") is True}
+    pu = cfg.get("paper.underlyings")
+    assert tc["paper"] == {"risk_per_trade": cfg.get("paper.risk_per_trade"), "max_quote_age_s": cfg.get("paper.max_quote_age_s"),
+                           "underlyings": sorted(set(pu["nse_fo"]) | set(pu["mcx"]) | set(pu["nse_cds"])), "allow_short_legs": cfg.get("paper.allow_short_legs") is True}     # MCX and currency options too (13 Nov 2026)
+    assert tc["inst"]["CRUDEOIL"] == {"lot": 100, "tick": 0.1, "r": 0.0, "cost": "mcx_options", "prior_day": True, "segment": "mcx"}                   # priced off the future, its own charges and tick
+    assert tc["inst"]["USDINR"]["tick"] == 0.0025 and tc["costs"]["cds_options"]["exchange"] == cfg.get("costs.segments.cds_options.exchange")
     script = E._trade_script(cfg)
     assert script.startswith("<script>window.QD_TRADE=") and "</" not in script[len("<script>"):-len("</script>")]
     out = tmp_path / "site"

@@ -286,7 +286,7 @@ def macro_dates(path: Path = MACRO_DATES) -> dict:
 def kind_of(name: str) -> str | None:
     n = name.lower()
     for key, words in (("rbi", ("rbi", "mpc")), ("fomc", ("fomc", "federal reserve")), ("budget", ("budget",)),
-                       ("election", ("election", "exit poll"))):
+                       ("election", ("election", "exit poll")), ("geopolitics", ("war", "strike", "attack", "missile", "geopolit")), ("oil_shock", ("oil shock", "opec"))):
         if any(w in n for w in words):
             return key
     return None
@@ -309,15 +309,21 @@ def macro_history(index_close: pd.DataFrame | None, dates: dict | None = None, s
             s = ic[ic["symbol"] == sym].sort_values("date").drop_duplicates("date")
             if len(s) < 30:
                 continue
-            s = s.assign(absret=(s["close"] / s["close"].shift() - 1).abs()).dropna(subset=["absret"])
+            s = s.assign(ret=s["close"] / s["close"].shift() - 1, ret5=s["close"].shift(-4) / s["close"].shift() - 1)
+            s = s.assign(absret=s["ret"].abs()).dropna(subset=["absret"])
             idx = pd.DatetimeIndex(s["date"])
             k = idx.searchsorted(days, side="right" if spec.get("reacts") == "next_session" else "left")
             hit = sorted({idx[i] for i in k if i < len(idx)})
             e = s[s["date"].isin(hit)]
             if e.empty:
                 continue
+            r5 = e["ret5"].dropna()
             res[sym] = {"n": int(len(e)), "median_move": float(e["absret"].median()), "median_move_all": float(s["absret"].median()),
-                        "share_over_1pct": float((e["absret"] > 0.01).mean()), "share_over_1pct_all": float((s["absret"] > 0.01).mean())}
+                        "share_over_1pct": float((e["absret"] > 0.01).mean()), "share_over_1pct_all": float((s["absret"] > 0.01).mean()),
+                        # which way, not only how far (13 Nov 2026: "what happened in the past in these kind of scenarios"): the event session's signed move, how often it fell,
+                        # the worst one, and the move over the event session and the four after it
+                        "median_ret": float(e["ret"].median()), "share_down": float((e["ret"] < 0).mean()), "worst": float(e["ret"].min()),
+                        "median_5d": float(r5.median()) if len(r5) else None}
         if res:
             out[kind] = res
     return out

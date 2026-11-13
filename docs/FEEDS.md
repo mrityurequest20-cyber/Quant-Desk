@@ -10,6 +10,8 @@ fills are priced from whichever feed the relay shows.
 |---|---|---|---|---|
 | Indices, NSE cash, NSE futures | Kite | — | — | Kotak |
 | Index and stock **options** | Kite (full mode: the bid and offer) | — | — | Kotak (last price only) |
+| **MCX options** (`mopt`) | **Fyers** | Kite | — | Kotak |
+| **Currency options** (`copt`) | **Angel One** | Fyers | Kite | Kotak |
 | **MCX** commodities | **Fyers** | Kite | — | Kotak |
 | **Currency** | **Angel One** | Fyers | Kite | Kotak |
 

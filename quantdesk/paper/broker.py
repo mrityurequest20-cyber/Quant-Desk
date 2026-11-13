@@ -28,6 +28,13 @@ class PaperBroker:
         self.gate = gate or RiskGate(cfg)
         self.costs = CostModel(cfg)
         self.tick = SL.TICK
+        self.ticks = {str(u).upper(): float(c["opt_tick"]) for u, c in ((cfg.get("paper.futures.contracts") or {}) if isinstance(cfg.get("paper.futures.contracts"), dict) else {}).items()
+                      if isinstance(c, dict) and isinstance(c.get("opt_tick"), (int, float)) and c["opt_tick"] > 0}      # an MCX or currency option's own price step (a currency option trades near 0.05)
+
+    def tick_for(self, inst) -> float:
+        if getattr(inst, "kind", None) != OPTION:                                # (a malformed order is refused by the gate, never by this lookup)
+            return self.tick
+        return self.ticks.get(str(getattr(inst, "underlying", "") or "").upper(), self.tick)
 
     @staticmethod
     def _seen(ref: dict | None, now: dt.datetime, quote: Quote | None = None):
@@ -50,7 +57,7 @@ class PaperBroker:
         wide = quote
         impact = 0.0
         if quote is not None and is_number(quote.ask):
-            impact = SL.impact_ticks(order.qty, quote.ask_qty) * self.tick
+            impact = SL.impact_ticks(order.qty, quote.ask_qty) * self.tick_for(order.instrument)
             wide = Quote(quote.bid, quote.ask + impact, quote.ts, quote.bid_qty, quote.ask_qty)      # the gate judges the order at the price it will really pay
         d = self.gate.check_entry(self.account, order, wide, marks, now)
         if not d.allowed:
@@ -58,7 +65,7 @@ class PaperBroker:
         px = wide.ask
         if limit is not None and px > limit + 1e-9:                                  # the owner's "at most" is judged on what would really be paid, impact included
             return Decision(False, [f"the offer is {quote.ask:g} and this size is expected to pay {impact:g} more ({px:g}), above your limit {limit:g}: not bought"]), None
-        fees, _ = self.costs.fees(order.instrument, order.qty, px)
+        fees, _ = self.costs.fees(order.instrument, order.qty, px, segment=order.segment)
         sb, sa, delay = self._seen(ref, now, quote)
         slip = SL.clean(SL.split("buy", order.qty, px, quote.bid, quote.ask, impact, sb, sa, delay)) or SL.clean(SL.split("buy", order.qty, px, quote.bid, quote.ask, impact))
         row = self.account.apply_fill("buy", order.instrument, order.segment, order.qty, px, fees, now.isoformat(), order.strategy, order.thesis, slip)
@@ -69,12 +76,12 @@ class PaperBroker:
         if not d.allowed:
             return d, None
         pos = self.account.positions[symbol]
-        impact = SL.impact_ticks(qty, quote.bid_qty) * self.tick
+        impact = SL.impact_ticks(qty, quote.bid_qty) * self.tick_for(pos.instrument)
         px = max(quote.bid - impact, 0.0)
         impact = quote.bid - px                                                  # what was really given up (a bid below the impact is sold at nothing, not below)
         if limit is not None and px < limit - 1e-9:
             return Decision(False, [f"the bid is {quote.bid:g} and this size is expected to give up {impact:g} ({px:g}), below your limit {limit:g}: not sold"]), None
-        fees, _ = self.costs.fees(pos.instrument, -qty, px)
+        fees, _ = self.costs.fees(pos.instrument, -qty, px, segment=pos.segment)
         sb, sa, delay = self._seen(ref, now, quote)
         slip = SL.clean(SL.split("sell", qty, px, quote.bid, quote.ask, impact, sb, sa, delay)) or SL.clean(SL.split("sell", qty, px, quote.bid, quote.ask, impact))
         row = self.account.apply_fill("sell", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}", slip)
@@ -91,7 +98,7 @@ class PaperBroker:
             return d, None
         if limit is not None and ((short and px < limit - 1e-9) or (not short and px > limit + 1e-9)):
             return Decision(False, [f"the {'bid' if short else 'offer'} is {px:g}, {'below' if short else 'above'} your limit {limit:g}: not opened"]), None
-        fees, _ = self.costs.fees(order.instrument, -order.qty if short else order.qty, px)
+        fees, _ = self.costs.fees(order.instrument, -order.qty if short else order.qty, px, segment=order.segment)
         sb, sa, delay = self._seen(ref, now, quote)
         side = "sell" if short else "buy"
         slip = SL.clean(SL.split(side, order.qty, px, quote.bid, quote.ask, 0.0, sb, sa, delay)) or SL.clean(SL.split(side, order.qty, px, quote.bid, quote.ask, 0.0))
@@ -112,7 +119,7 @@ class PaperBroker:
                 wide.append(l)
                 impacts.append(0.0)
                 continue
-            imp = SL.impact_ticks(l["qty"], q.bid_qty if sell else q.ask_qty) * self.tick
+            imp = SL.impact_ticks(l["qty"], q.bid_qty if sell else q.ask_qty) * self.tick_for(l["instrument"])
             impacts.append(imp)
             wide.append({**l, "quote": Quote(max(q.bid - imp, 0.0), q.ask, q.ts, q.bid_qty, q.ask_qty) if sell else Quote(q.bid, q.ask + imp, q.ts, q.bid_qty, q.ask_qty)})
         d = self.gate.check_package(self.account, wide, strategy, thesis, marks, now)
@@ -126,7 +133,7 @@ class PaperBroker:
             for l, w, imp in sorted(zip(legs, wide, impacts), key=lambda x: x[0]["side"] != "sell"):          # the sales first: their cash pays for the purchases
                 q, sell, inst = l["quote"], l["side"] == "sell", l["instrument"]
                 px = w["quote"].bid if sell else w["quote"].ask
-                fees, _ = self.costs.fees(inst, -l["qty"] if sell else l["qty"], px)
+                fees, _ = self.costs.fees(inst, -l["qty"] if sell else l["qty"], px, segment=l["segment"])
                 ref = (refs or {}).get(inst.symbol)
                 sb, sa, delay = self._seen(ref, now, q)
                 side = "sell" if sell else "buy"
@@ -143,11 +150,11 @@ class PaperBroker:
         if not d.allowed:
             return d, None
         pos = self.account.positions[symbol]
-        impact = SL.impact_ticks(qty, quote.ask_qty) * self.tick
+        impact = SL.impact_ticks(qty, quote.ask_qty) * self.tick_for(pos.instrument)
         px = quote.ask + impact
         if limit is not None and px > limit + 1e-9:
             return Decision(False, [f"the offer is {quote.ask:g} and this size is expected to pay {impact:g} more ({px:g}), above your limit {limit:g}: not bought back"]), None
-        fees, _ = self.costs.fees(pos.instrument, qty, px)
+        fees, _ = self.costs.fees(pos.instrument, qty, px, segment=pos.segment)
         sb, sa, delay = self._seen(ref, now, quote)
         slip = SL.clean(SL.split("buy", qty, px, quote.bid, quote.ask, impact, sb, sa, delay)) or SL.clean(SL.split("buy", qty, px, quote.bid, quote.ask, impact))
         row = self.account.apply_fill("btc", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}", slip)

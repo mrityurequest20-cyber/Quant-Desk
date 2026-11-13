@@ -26,7 +26,8 @@ const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 qu
 const MAX_SYMBOLS = 3000;               // in one push
 const MAX_TOTAL = 6000;                 // symbols the board will ever hold: a stolen ingest key cannot grow it without bound
 const SYMBOL = /^[A-Za-z0-9&_.:-]{1,40}$/;
-const SEGMENTS = new Set(["idx", "eq", "fut", "bfo", "mcx", "cds", "opt"]);
+const SEGMENTS = new Set(["idx", "eq", "fut", "bfo", "mcx", "cds", "opt", "mopt", "copt"]);      // mopt, copt: MCX and currency options, routed like their own segment (Fyers, Angel One first)
+const isOpt = (s) => s === "opt" || s === "mopt" || s === "copt";
 const NUMBERS = ["ltp", "bid", "ask", "bid_qty", "ask_qty", "vol", "oi", "chg"];
 const WINDOW = ["hi", "lo"];            // the highest and lowest tick since the feed's previous push: they shape the minute's candle and are never stored on the quote or shown in the snapshot
 const MAX_DEPTH = 2000;                 // instruments whose order book is held (the ones a feed sends five levels for)
@@ -414,7 +415,7 @@ export class LiveBoard {
 		const seg = this.label(e), route = this.routes ? this.routes[seg] : undefined;
 		const leads = (cur) => !(cur && cur.src !== src && now - cur.at <= FRESH_S * 1000 && rank(cur.src, route) <= rank(src, route));      // false while another feed, alive and at least as preferred, already holds it
 		if (!(route && !route.includes(src))) {                                             // a feed that is not shown for this kind draws neither its chart nor its book
-			if (seg !== "opt" && !OPT_EXPIRY.test(name)) {                                  // options keep the line chart (series.js): thousands of contracts, most of them quiet
+			if (!isOpt(seg) && !OPT_EXPIRY.test(name)) {                                  // options keep the line chart (series.js): thousands of contracts, most of them quiet
 				const cur = this.candleSrc.get(name);
 				if (leads(cur)) { this.candleSrc.set(name, { src, at: now }); this.candles.add(name, now, { ltp: quote.ltp, hi, lo, vol: quote.vol }, !!cur && cur.src !== src); }
 			}
@@ -502,7 +503,7 @@ export class LiveBoard {
 		for (const e of this.quotes.values()) {
 			for (const src of ["z", "k"]) if (e[src] && (now - e[src].at) / 1000 <= FRESH_S) { const g = /^[a-z]{1,6}$/.test(String(e[src].s)) ? e[src].s : "other"; fresh[src][g] = (fresh[src][g] || 0) + 1; }
 			if (!(e.z && e.k) || (now - e.z.at) / 1000 > FRESH_S || (now - e.k.at) / 1000 > FRESH_S || !(e.z.ltp > 0) || !(e.k.ltp > 0)) continue;
-			const opt = e.z.s === "opt", bad = (Math.abs(e.z.ltp - e.k.ltp) / e.z.ltp) * 100 > (opt ? TOL.opt : TOL.other);
+			const opt = isOpt(e.z.s), bad = (Math.abs(e.z.ltp - e.k.ltp) / e.z.ltp) * 100 > (opt ? TOL.opt : TOL.other);
 			both += 1; if (bad) dis += 1;
 			if (opt) { ob += 1; if (bad) od += 1; }
 		}
@@ -529,7 +530,7 @@ export class LiveBoard {
 				out.alt = { src: oh.src, ltp: o.ltp, age_s: round1(ao) };
 				if (ao <= FRESH_S && age <= FRESH_S && p.ltp > 0 && o.ltp > 0) {
 					const d = (Math.abs(p.ltp - o.ltp) / p.ltp) * 100;
-					if (d > (p.s === "opt" ? TOL.opt : TOL.other)) out.x = round2(d);          // the two brokers disagree by more than a spread can explain
+					if (d > (isOpt(p.s) ? TOL.opt : TOL.other)) out.x = round2(d);          // the two brokers disagree by more than a spread can explain
 					else {                                                                    // the other source fills what this one lacks, but never on a flagged row, and a bid and an ask only as a pair
 						if (!("bid" in out) && !("ask" in out) && o.bid > 0 && o.ask >= o.bid) { out.bid = o.bid; out.ask = o.ask; for (const f of ["bid_qty", "ask_qty"]) if (f in o) out[f] = o[f]; }
 						if (!("oi" in out) && "oi" in o) out.oi = o.oi;
@@ -554,7 +555,7 @@ export class LiveBoard {
 			}
 			if (e.z && e.k && (now - e.z.at) / 1000 <= FRESH_S && (now - e.k.at) / 1000 <= FRESH_S && e.z.ltp > 0 && e.k.ltp > 0) {
 				both += 1;
-				if ((Math.abs(e.z.ltp - e.k.ltp) / e.z.ltp) * 100 > (e.z.s === "opt" ? TOL.opt : TOL.other)) disagree += 1;
+				if ((Math.abs(e.z.ltp - e.k.ltp) / e.z.ltp) * 100 > (isOpt(e.z.s) ? TOL.opt : TOL.other)) disagree += 1;
 			}
 		}
 		const k = this.k;

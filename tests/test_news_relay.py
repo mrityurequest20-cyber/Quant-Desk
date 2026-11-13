@@ -98,7 +98,7 @@ out.stored = got.stored_at; out.now = got.now;
     assert by[ids[5]]["symbols"] == ["NIFTY", "RELIANCE"]
     assert (by[ids[6]]["impact"], by[ids[6]]["tone_from"], by[ids[6]]["event"], by[ids[6]]["novelty"]) == ("low", "words", "general", 1)
     assert by[ids[12]]["sources"] == ["A" * 40, "B"]
-    assert o["keys"] == sorted(["id", "ts", "source", "sources", "title", "link", "tone", "tone_from", "impact", "recap", "event", "novelty", "symbols"]) and o["top"] == ["asof", "items", "n", "sources", "v"]
+    assert o["keys"] == sorted(["id", "ts", "source", "sources", "title", "link", "tone", "tone_from", "impact", "recap", "event", "novelty", "symbols"]) and o["top"] == ["asof", "events", "items", "n", "sources", "v"]
     assert list(o["sources"]) == ["Outlet A", "x" * 40] and len(o["sources"]["x" * 40]) == 60 and o["stored"] == o["now"]
 
 
@@ -186,3 +186,22 @@ out.byId = Object.fromEntries(got.digest.items.map((x) => [x.id, x]));
     assert by[ids[3]]["event"] == "general" and by[ids[4]]["event"] == "general"                                                   # "undefined" is not an event
     assert by[ids[5]]["link"] == "" and by[ids[6]]["link"] == ""                                                                   # no userinfo, no direction-changing character
     assert by[ids[7]]["title"] == "pay txt now"                                                                                    # direction controls become spaces
+
+
+@needs_node
+def test_the_event_watch_is_kept_field_by_field_and_a_bad_event_is_dropped(tmp_path):
+    import shutil as _sh
+    import subprocess as _sp
+    _sh.copyfile(ROOT / "deploy" / "cloudflare" / "news.js", tmp_path / "news.mjs")
+    js = """import { cleanEvents } from './news.mjs';
+console.log(JSON.stringify(cleanEvents([
+  { type: 'geopolitics', severity: 3.2, level: 'high', tone: -0.6, n: 5, top: ['Missiles hit', 'x'.repeat(300)], kind: 'geopolitics', evil: 1 },
+  { type: 'Bad Type!', severity: 1, level: 'high', tone: 0 },
+  { type: 'policy', severity: 'big', level: 'watch', tone: 0 },
+  { type: 'policy', severity: 1.2, level: 'extreme', tone: 0 },
+])));"""
+    (tmp_path / "t.mjs").write_text(js)
+    out = _sp.run(["node", "t.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    import json as _json
+    ev = _json.loads(out.stdout.strip())
+    assert len(ev) == 1 and ev[0]["type"] == "geopolitics" and ev[0]["level"] == "high" and "evil" not in ev[0] and len(ev[0]["top"][1]) == 140

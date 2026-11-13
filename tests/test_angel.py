@@ -175,7 +175,7 @@ class FakePusher:
         return {}
 
 
-NAMES = {"USDINR-CDS": {"token": "1165", "expiry": dt.date(2026, 11, 26)}, "EURINR-CDS": {"token": "1181", "expiry": dt.date(2026, 11, 26)}}
+NAMES = {"USDINR-CDS": {"token": "1165", "expiry": dt.date(2026, 11, 26), "under": "USDINR"}, "EURINR-CDS": {"token": "1181", "expiry": dt.date(2026, 11, 26), "under": "EURINR"}}
 
 
 def test_a_cycle_pushes_changed_quotes_once_as_currency():
@@ -188,7 +188,7 @@ def test_a_cycle_pushes_changed_quotes_once_as_currency():
 
 
 def test_tokens_go_fifty_a_call():
-    names = {f"P{i}-CDS": {"token": str(1000 + i), "expiry": dt.date(2026, 11, 26)} for i in range(75)}
+    names = {f"P{i}-CDS": {"token": str(1000 + i), "expiry": dt.date(2026, 11, 26), "under": f"P{i}"} for i in range(75)}
     api = FakeAPI({})
     A.AngelFeed(api, names, FakePusher()).cycle()
     assert [len(c) for c in api.calls] == [50, 25]
@@ -231,7 +231,7 @@ def test_the_data_client_sends_smartapis_headers_and_full_mode_and_stops_on_429_
 
 def test_the_feed_stops_at_the_currency_close_or_when_the_session_is_refused(monkeypatch):
     rows = {"1165": _row("1165", 84.51, 84.5075, 84.5125)}
-    monkeypatch.setattr(A, "load_contracts", lambda opener=None: [])
+    monkeypatch.setattr(A, "load_master", lambda opener=None: [])
     monkeypatch.setattr(A, "near_futures", lambda c, d: NAMES)
     clock = [dt.datetime(2026, 11, 13, 16, 59, tzinfo=IST)]
     step = lambda s: clock.__setitem__(0, clock[0] + dt.timedelta(seconds=max(s, 5)))     # noqa: E731
@@ -308,3 +308,33 @@ def test_the_gate_and_the_watchdog_know_the_angel_one_feed(monkeypatch):
     importlib.reload(G)
     wd = (ROOT / "deploy" / "cloudflare" / "watchdog.js").read_text()
     assert '{ at: "09:40", days: "trading", run: ranToday("angel-feed.yml", "Angel One feed (currency)", "P2", "W20"), check: "W20" }' in wd
+
+
+
+OPT_MASTER = [{"token": str(5000 + i), "symbol": f"USDINR20NOV26{int(k * 100)}{t}", "name": "USDINR", "expiry": "20NOV2026", "strike": f"{k * 100000:.6f}",
+               "lotsize": "1", "instrumenttype": "OPTCUR", "exch_seg": "CDS"} for i, (k, t) in enumerate((83.0 + 0.25 * j, t) for j in range(25) for t in ("CE", "PE"))] + \
+             [{"token": "6000", "symbol": "USDINR27NOV2684CE", "name": "USDINR", "expiry": "27NOV2026", "strike": "8400000.000000", "lotsize": "1", "instrumenttype": "OPTCUR", "exch_seg": "CDS"},
+              {"token": "6001", "symbol": "USDINR13NOV2684CE", "name": "USDINR", "expiry": "13NOV2026", "strike": "8400000.000000", "lotsize": "1", "instrumenttype": "OPTCUR", "exch_seg": "CDS"}]
+
+
+def test_currency_options_are_windowed_around_the_future_with_the_strike_scale_read_from_the_data():
+    opts = A.parse_options(OPT_MASTER + MASTER)
+    assert A.strike_scale([o["raw"] for o in opts]) == 1e5
+    window, notes = A.option_window(opts, {"USDINR": 84.53}, dt.date(2026, 11, 14), steps=2)
+    assert notes == [] and sorted(window.values()) == sorted(f"USDINR20NOV26{k}{t}" for k in ("84", "84.25", "84.5", "84.75", "85") for t in ("CE", "PE"))
+    assert A.option_window(opts, {}, dt.date(2026, 11, 14))[1] == ["USDINR options: no future price to centre on"]
+    assert A.strike_scale([5.0, 7.0]) is None                                                    # nothing plausible: no options rather than wrong strikes
+
+
+def test_the_feed_prices_the_future_first_then_quotes_its_option_window_with_books():
+    rows = {"1165": _row("1165", 84.53, 84.5275, 84.5325), "1181": _row("1181", 97.2, 97.19, 97.21)}
+    opts = A.parse_options(OPT_MASTER)
+    for o in opts:
+        rows[o["token"]] = _row(o["token"], 0.05 + o["raw"] / 1e9, 0.0475, 0.0525)
+    api, push = FakeAPI(rows), FakePusher()
+    feed = A.AngelFeed(api, NAMES, push, now=lambda: dt.datetime(2026, 11, 14, 10, 0, tzinfo=IST), options=opts)
+    feed.cycle()                                                                                  # the first cycle learns the futures' prices
+    feed.cycle()                                                                                  # the second quotes the window too
+    got = dict(push.got)
+    assert got["USDINR20NOV2684.5CE"]["s"] == "copt" and got["USDINR20NOV2684.5CE"]["bid"] == 0.0475 and "d" in got["USDINR20NOV2684.5CE"] and "e" not in got["USDINR20NOV2684.5CE"]
+    assert len([n for n in got if n.startswith("USDINR20NOV26")]) == 30                              # 8 strikes above the money, 6 below (the chain starts at 83): 15 strikes, calls and puts

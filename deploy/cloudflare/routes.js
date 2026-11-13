@@ -13,7 +13,7 @@
 // The feeds the board knows by code. A new broker is one line here, one in config/quantdesk.yaml `feeds.sources`, and an adapter that POSTs {"src": "<code>", "quotes": {...}} to /live/ingest.
 export const SOURCES = { z: "Kite", k: "Kotak", u: "Upstox", d: "Dhan", a: "Angel One", f: "Fyers" };
 export const PUSH_SOURCES = new Set(["z", "u", "d", "a", "f"]);          // feeds that push to /live/ingest; "k" is polled by the board itself and cannot be pushed, so a pusher can never pose as it
-export const SEGMENT_KEYS = ["idx", "eq", "fut", "bfo", "mcx", "cds", "opt"];
+export const SEGMENT_KEYS = ["idx", "eq", "fut", "bfo", "mcx", "cds", "opt", "mopt", "copt"];
 
 // {segment: [code, ...]} from the Worker variable (a JSON string, or an object in tests). Anything malformed is dropped: an unknown segment, an unknown code, a repeat. null = no routes.
 export function parseRoutes(raw) {

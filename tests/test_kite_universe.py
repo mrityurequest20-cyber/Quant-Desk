@@ -355,3 +355,31 @@ def test_a_freak_error_in_the_wide_flush_never_skips_the_core_flush(tmp_path):
     rec._on_ticks(None, [{"instrument_token": 1, "last_price": 25000.0, "exchange_timestamp": pd.Timestamp("2026-11-09 09:15:01").to_pydatetime()}])
     rec._flush_wide = lambda: (_ for _ in ()).throw(RuntimeError("freak"))
     assert rec.flush() is not None and list(tmp_path.glob("ticks_*.parquet"))                          # the core part was still written
+
+
+def test_mcx_and_currency_option_chains_are_built_like_stock_options():
+    lists = make_lists()
+    lists["MCX"] = [_inst(700, "CRUDEOIL", "FUT", "2026-11-19", exch="MCX", sym="CRUDEOIL26NOVFUT")]
+    lists["CDS"] = [_inst(800, "USDINR", "FUT", "2026-11-26", exch="CDS", sym="USDINR26NOVFUT")]
+    tok = 60_000
+    for k in range(-20, 21):
+        for typ in ("CE", "PE"):
+            tok += 1
+            lists["MCX"].append(_inst(tok, "CRUDEOIL", typ, "2026-11-17", exch="MCX", strike=float(5800 + 50 * k), sym=f"CRUDEOIL{5800 + 50 * k}{typ}"))
+            tok += 1
+            lists["CDS"].append(_inst(tok, "USDINR", typ, "2026-11-20", exch="CDS", strike=84.5 + 0.25 * k, sym=f"USDINR{84.5 + 0.25 * k}{typ}"))
+
+    class K(FakeKite):
+        def ltp(self, keys):
+            px = {"MCX:CRUDEOIL26NOVFUT": (700, 5812.0), "CDS:USDINR26NOVFUT": (800, 84.53)}
+            out = super().ltp([k for k in keys if k not in px])
+            out.update({k: {"instrument_token": px[k][0], "last_price": px[k][1]} for k in keys if k in px})
+            return out
+
+    toks, meta, errs = U.build_wide(K(lists), TODAY, CORE, commodity_options=["CRUDEOIL"], currency_options=["USDINR"], fx_steps=8)
+    crude = sorted(n for n, m in meta.items() if m.get("name") == "CRUDEOIL" and m["s"] == "mopt")         # their own route labels: Fyers first for MCX options
+    usd = sorted(n for n, m in meta.items() if m.get("name") == "USDINR" and m["s"] == "copt")             # and Angel One first for currency options
+    assert len(crude) == 34 and len(usd) == 34                                                  # 17 strikes either way of the money, calls and puts
+    assert "CRUDEOIL17NOV265800CE" in crude and "CRUDEOIL17NOV265400PE" in crude and "CRUDEOIL17NOV266200CE" in crude and "CRUDEOIL17NOV265350CE" not in crude
+    assert "USDINR20NOV2684.5CE" in usd and "USDINR20NOV2684.25PE" in usd and "USDINR20NOV2686.5CE" in usd     # decimal strikes, named as everywhere else
+    assert meta["USDINR20NOV2684.25PE"]["strike"] == 84.25 and meta["CRUDEOIL17NOV265800CE"]["expiry"] == "2026-11-17"

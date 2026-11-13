@@ -29,7 +29,7 @@ OPT_STEPS = 10
 EXTRA_INDEX = {"FINNIFTY": "NSE:NIFTY FIN SERVICE", "MIDCPNIFTY": "NSE:NIFTY MID SELECT", "NIFTYNXT50": "NSE:NIFTY NEXT 50",
                "SENSEX": "BSE:SENSEX", "BANKEX": "BSE:BANKEX"}
 SPOT_FOR_OPTIONS = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK", "FINNIFTY": "NSE:NIFTY FIN SERVICE", "MIDCPNIFTY": "NSE:NIFTY MID SELECT"}
-SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt")
+SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt", "mopt", "copt")
 NAME_OK = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")                # what the live relay accepts as a symbol: an instrument named otherwise is not subscribed (it could never be shown)
 
 
@@ -86,7 +86,8 @@ def _near_futures(df: pd.DataFrame, today: dt.date, exclude=()) -> list[tuple[st
     return [(str(r.name_), int(r.instrument_token), r.expiry) for r in first.rename(columns={"name": "name_"}).itertuples()]
 
 
-def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBSCRIBE, stock_options=(), stock_steps: int = 8) -> tuple[dict[str, int], dict[str, dict], list[str]]:
+def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBSCRIBE, stock_options=(), stock_steps: int = 8, commodity_options=(), currency_options=(),
+               fx_steps: int = 8) -> tuple[dict[str, int], dict[str, dict], list[str]]:
     errors: list[str] = []
     tokens: dict[str, int] = {}
     meta: dict[str, dict] = {}
@@ -182,6 +183,40 @@ def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBS
             keep = set(strikes[max(0, atm - steps): atm + steps + 1])
             for r in oe[oe["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
                 add(option_name(n, expiry, float(r.strike), str(r.instrument_type)), r.instrument_token, "opt", str(r.instrument_type), name=n, expiry=str(expiry), strike=float(r.strike))
+
+    # 6. MCX and currency options (owner, 13 Nov 2026: "MCX and currency options should be treated in the same way" as index and stock options): for each watchlist commodity
+    #    and currency pair, its nearest option expiry, `fx_steps` strikes either side of its near-month future's price, under the same names as every option (option_name).
+    #    MCX options are options on the future; currency options settle on the RBI reference rate. Last of all, so a cut takes these first.
+    for want_names, ex_df, exch, label in ((commodity_options, mcx, "MCX", "MCX"), (currency_options, cds, "CDS", "currency")):
+        names = [n for n in dict.fromkeys(str(x).strip().upper() for x in (want_names or ())) if n]
+        if not names or ex_df.empty or not {"instrument_type", "name", "strike", "tradingsymbol", "instrument_token", "expiry"} <= set(ex_df.columns):
+            continue
+        futs = {n: t for n, t, _ in _near_futures(ex_df[ex_df["name"].isin(names)], today)}
+        sym = ex_df.set_index("instrument_token")["tradingsymbol"].to_dict()
+        try:
+            fl = kite.ltp([f"{exch}:{sym[t]}" for t in futs.values() if t in sym]) if futs else {}
+        except Exception as e:                                       # noqa: BLE001
+            fl = {}
+            errors.append(f"{label} future prices for the option chains: {type(e).__name__}")
+        for n in names:
+            t = futs.get(n)
+            spot = (fl.get(f"{exch}:{sym.get(t)}") or {}).get("last_price") if t in sym else None
+            if not (isinstance(spot, (int, float)) and spot > 0):
+                errors.append(f"{n} options: no future price to centre on")
+                continue
+            o = ex_df[(ex_df["name"] == n) & ex_df["instrument_type"].isin(["CE", "PE"]) & ex_df["expiry"].notna() & (ex_df["expiry"] >= today)]
+            if o.empty:
+                continue
+            expiry = min(o["expiry"])
+            oe = o[o["expiry"] == expiry]
+            strikes = sorted(oe["strike"].dropna().unique())
+            if not strikes:
+                continue
+            atm = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
+            keep = set(strikes[max(0, atm - fx_steps): atm + fx_steps + 1])
+            for r in oe[oe["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
+                add(option_name(n, expiry, float(r.strike), str(r.instrument_type)), r.instrument_token, "mopt" if exch == "MCX" else "copt", str(r.instrument_type), name=n,
+                    expiry=str(expiry), strike=float(r.strike))                  # their own route labels: Fyers (MCX) and Angel One (currency) are shown first
 
     room = max(0, int(limit) - len(core))
     if len(tokens) > room:

@@ -9,7 +9,7 @@
   "vars": {
     "ORIGIN": "https://mrityurequest20-cyber.github.io/Quant-Desk",
     // which broker's feed the live relay SHOWS for which kind of instrument (deploy/cloudflare/routes.js, docs/FEEDS.md); the same table as config/quantdesk.yaml feeds.routes (a test compares them)
-    "FEED_ROUTES": "{\"idx\":[\"z\",\"k\"],\"eq\":[\"z\",\"k\"],\"fut\":[\"z\",\"k\"],\"opt\":[\"z\",\"k\"],\"mcx\":[\"f\",\"z\",\"k\"],\"cds\":[\"a\",\"f\",\"z\",\"k\"]}"
+    "FEED_ROUTES": "{\"idx\":[\"z\",\"k\"],\"eq\":[\"z\",\"k\"],\"fut\":[\"z\",\"k\"],\"opt\":[\"z\",\"k\"],\"mopt\":[\"f\",\"z\",\"k\"],\"copt\":[\"a\",\"f\",\"z\",\"k\"],\"mcx\":[\"f\",\"z\",\"k\"],\"cds\":[\"a\",\"f\",\"z\",\"k\"]}"
   },
   "observability": { "enabled": true },
   // The live price relay (deploy/cloudflare/live.js): one Durable Object holds the latest snapshot the Kite recorder pushes every 5 seconds.
