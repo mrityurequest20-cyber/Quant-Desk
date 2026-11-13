@@ -156,6 +156,30 @@ P(up) = 1 / (1 + exp(-sum w*s)).
 - **Calibration:** every read is scored against what the future did over the next quarter hour (the Brier score: 0.25 is a coin toss,
   lower is better; `read_calibration` in the runner's state). That record will show which readings carry information.
 
+## Regimes and change points (`quantdesk/paper/regimes.py`)
+
+**Hidden Markov model.** Each underlying's one-minute log returns are modelled as coming from one of three hidden states, calm, active
+and stressed, each with its own Gaussian, moving between them by a Markov chain.
+- **Fitting:** Baum-Welch (expectation-maximisation with scaled forward-backward passes) on the last 390 minutes, every five minutes.
+  Between fits, one forward step a minute gives P(state now | every return so far). The states are named by their variance.
+- **Model selection:** the three-state model must beat a single Gaussian on the Bayesian information criterion (BIC = -2 log L + parameters x
+  log n). If it doesn't, the series is one regime and nothing is called "stressed": reading noise as regimes is the classic way an HMM
+  misleads.
+
+**CUSUM change points (Page).** On returns standardised by a robust scale (1.4826 x the median absolute deviation):
+- a two-sided cumulative sum for a shift in the mean (k = 0.5, h = 5);
+- a one-sided sum for a rise in volatility, measured around an exponentially weighted running mean so a steady drift is not read as
+  turbulence (k = 1, h = 10).
+
+Calibrated on pure noise: about one false alarm per few hundred minutes. Nothing is tested before 30 returns exist.
+
+**Use in AUTO v2:**
+- **Drift change point.** A drift change point within the last 15 minutes is one more vote in the view, under the unchanged rule (at
+  least two agree, none against), so it never opens a trade alone.
+- **Stress or a volatility change point.** The stressed state (P >= 0.6) or a volatility change point puts the underlying in the event
+  regime: no short-volatility structure is opened.
+- **In the app:** the state and any fresh change point show on each underlying in the strategy lab.
+
 ## The news analyser and the event regime
 
 - **The event watch.** The news job gathers the stories' own event types (`intraday/nlp.py`: policy, geopolitics, inflation, growth,

@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from ..markets import sessions as MK
 from . import auto as V1
 from . import marketread as MR
+from . import regimes as RG
 from .runner import _num
 
 IST = MK.IST
@@ -410,26 +411,31 @@ class AutoPilotV2:
         mom = self._momentum(u, t)
         nv, nwhy = V1.news_vote(news, u, now)
         read = self.read(snap, u, ch, t, sp, near, nxt, T, ist)
+        if not hasattr(self, "regimes"):
+            self.regimes = RG.RegimeBook()
+        self.regimes.update(u, t, sp)                                                      # the HMM regime and the CUSUM change points (regimes.py)
+        rg = self.regimes.state(u, t)
         d, why = V1.direction(rd["pressure"], rd["gap_pct"], mom, nv, nwhy)
-        d, why = self.with_read(d, why, rd, mom, nv, nwhy, read)
+        d, why = self.with_read(d, why, rd, mom, nv, nwhy, read, (rg["vote"], f"CUSUM change point: {rg['change']}") if rg["vote"] else None)
         view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < CALM_PCT and not (read or {}).get("vote") else None)
         ratio = iv / rv if iv and rv else None
         vol = "rich" if ratio is not None and ratio >= RICH else "cheap" if ratio is not None and ratio <= CHEAP else "mid"
         eve = self._trading_days_to(ist.date(), near) == 1
-        regime, rwhy = self.regime(u, news, read)
+        regime, rwhy = self.regime(u, news, read, rg)
         if rwhy:
             why = list(why) + [rwhy]
         st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt, "read": read,
-              "regime": regime}
-        self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items() if k not in ("why", "read")}
+              "regime": regime, "hmm": rg}
+        self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items() if k not in ("why", "read", "hmm")}
         if regime == "event":
             self.last_state[u]["event"] = (rwhy or "")[:160]
+        self.last_state[u]["hmm"], self.last_state[u]["change"] = rg["hmm"], rg["change"]
         if read:
             self.last_state[u]["read"] = {k: read[k] for k in ("p_up", "why", "pcr", "buildup", "event_priced")}
         return st
 
     # ---- the event regime: news and data together --------------------------------------------------------------------------------------------------
-    def regime(self, u: str, news, read: dict | None) -> tuple[str, str | None]:
+    def regime(self, u: str, news, read: dict | None, rg: dict | None = None) -> tuple[str, str | None]:
         """("event", why) when a high event in the digest's event watch touches `u`, or the options price one; else ("normal", None)."""
         seg = self.segments.get(u)
         group = "mcx" if seg == "mcx" else "cds" if seg == "nse_cds" else "equity"
@@ -442,6 +448,10 @@ class AutoPilotV2:
                 return "event", f"event regime: {e.get('type')} (severity {e.get('severity')}, tone {e.get('tone'):+.2f})" + (f"; {past}" if past else "")
         if read and read.get("event_priced"):
             return "event", "event regime: the near expiry's volatility is above the next's (an event is priced)"
+        if rg and rg.get("stress"):
+            if rg.get("change") == "volatility up":
+                return "event", "event regime: a CUSUM change point to higher volatility in the last quarter hour"
+            return "event", f"event regime: the HMM puts {u} in its stressed state (P {((rg.get('p') or {}).get('stressed') or 0):.2f})"
         return "normal", None
 
     def analog_line(self, kind) -> str | None:
@@ -476,9 +486,11 @@ class AutoPilotV2:
             return None
 
     @staticmethod
-    def with_read(d: int, why: list, rd: dict, mom, nv: int, nwhy, read: dict | None) -> tuple[int, list]:
-        """The view with the market read as one more vote: the rule is AUTO v1's (at least two readings agree, none points the other way)."""
-        if not read or not read.get("vote"):
+    def with_read(d: int, why: list, rd: dict, mom, nv: int, nwhy, read: dict | None, extra: tuple | None = None) -> tuple[int, list]:
+        """The view with the market read (and `extra`: a CUSUM change point's (vote, reason)) as more votes: the rule is AUTO v1's (at least two readings agree, none
+        points the other way)."""
+        has_read = bool(read and read.get("vote"))
+        if not has_read and not extra:
             return d, why
         votes = []
         if rd["pressure"] is not None and abs(rd["pressure"]) >= V1.PRESSURE_TH:
@@ -489,8 +501,13 @@ class AutoPilotV2:
             votes.append(1 if mom > 0 else -1)
         if nv:
             votes.append(nv)
-        votes.append(read["vote"])
-        why = list(why) + [f"market read P(up) {read['p_up']:.2f}" + (f": {'; '.join(read['why'][:2])}" if read.get("why") else "")]
+        why = list(why)
+        if has_read:
+            votes.append(read["vote"])
+            why.append(f"market read P(up) {read['p_up']:.2f}" + (f": {'; '.join(read['why'][:2])}" if read.get("why") else ""))
+        if extra:
+            votes.append(extra[0])
+            why.append(extra[1])
         return (votes[0] if len(votes) >= 2 and len(set(votes)) == 1 else 0), why
 
     def matches(self, s: Strategy, st: dict) -> bool:
@@ -848,7 +865,8 @@ class AutoPilotV2:
     def summary(self) -> dict:
         """For the app's Strategy lab panel: the record's leaders, today's counts, and each underlying's state now (compact: the runner's whole state must fit the relay's cap)."""
         state = {u: [st.get("view"), st.get("vol"), st.get("ratio"), bool(st.get("eve")),
-                     st["read"]["p_up"] if st.get("read") else None, "; ".join(st["read"]["why"][:2])[:120] if st.get("read") else "", st.get("event", "")]
+                     st["read"]["p_up"] if st.get("read") else None, "; ".join(st["read"]["why"][:2])[:120] if st.get("read") else "", st.get("event", ""),
+                     st.get("hmm") or "", st.get("change") or ""]
                  for u, st in sorted(self.last_state.items())}
         cal = self.reader.calibration().get("all") if hasattr(self, "reader") else None
         return {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan, "read_calibration": cal}
