@@ -115,6 +115,7 @@ export function clean(body) {
 		if (depth) row.d = depth;
 		if (typeof q.t === "string" && q.t.length <= 40) row.t = q.t;                // the exchange's timestamp, shown as is
 		if (typeof q.s === "string" && SEGMENTS.has(q.s)) row.s = q.s;               // what kind of instrument: index, stock, future, option, MCX, currency
+		if (typeof q.e === "string" && isDate(q.e)) row.e = q.e;                       // a future's contract expiry: the name (CRUDEOIL-MCX) moves to the next month at expiry, so a paper position records which contract it holds
 		if (!("ltp" in row)) { dropped += 1; continue; }                               // a quote without a last price is not a quote
 		out[name] = row;
 	}

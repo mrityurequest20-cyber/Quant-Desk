@@ -25,7 +25,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core.types import Instrument
+from ..core.types import FUTURE, Instrument
 
 GENESIS = "0" * 64
 FILL_KINDS = ("buy", "sell", "settle", "sto", "btc")      # buy = buy to open a long, sell = sell to close a long, sto = sell to open a short, btc = buy to close a short, settle = cash settlement at expiry
@@ -41,15 +41,35 @@ class Position:
     opened_at: str
     strategy: str
     thesis: str
+    stop: float | None = None        # a future's stop (every futures entry has one): the price the runner closes it at, and what its worst case is counted to
+    target: float | None = None      # a future's optional target
+
+    @property
+    def is_future(self) -> bool:
+        return self.instrument.kind == FUTURE
 
     def to_dict(self) -> dict:
-        return {"instrument": self.instrument.to_dict(), "segment": self.segment, "qty": self.qty, "avg_price": self.avg_price,
-                "opened_at": self.opened_at, "strategy": self.strategy, "thesis": self.thesis}
+        d = {"instrument": self.instrument.to_dict(), "segment": self.segment, "qty": self.qty, "avg_price": self.avg_price,
+             "opened_at": self.opened_at, "strategy": self.strategy, "thesis": self.thesis}
+        for k in ("stop", "target"):                                  # only a future has them: an option's saved form is unchanged
+            if getattr(self, k) is not None:
+                d[k] = getattr(self, k)
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Position":
         return cls(Instrument.from_dict(d["instrument"]), d["segment"], int(d["qty"]), float(d["avg_price"]), d["opened_at"],
-                   d["strategy"], d["thesis"])
+                   d["strategy"], d["thesis"], float(d["stop"]) if d.get("stop") is not None else None, float(d["target"]) if d.get("target") is not None else None)
+
+    def value(self, mark: float) -> float:
+        """What the position adds to equity at `mark`: an option is worth its price; a future (margined, not paid for) only its profit or loss since it opened."""
+        return self.qty * (float(mark) - self.avg_price) if self.is_future else self.qty * float(mark)
+
+    def at_stop(self) -> float:
+        """A future's profit or loss if it closes at its stop (negative for a loss); -inf without a stop."""
+        if self.stop is None or not is_number(self.stop):
+            return float("-inf")
+        return self.qty * (self.stop - self.avg_price)
 
 
 def is_whole_positive(x) -> bool:
@@ -72,12 +92,18 @@ def stress_equity(cash: float, positions: dict) -> float:
     not a plain option. For a book of long options only it is at least the cash; for a hedged book of spreads, condors and butterflies it is exactly cash less the worst possible loss; for a naked short it
     is -inf, which is how the risk gate refuses one. Groups settle at different times, so their worst cases are added (the safe way round)."""
     groups: dict[tuple, list] = {}
+    futures = 0.0
     for p in positions.values():
         i = p.instrument
+        if getattr(p, "is_future", False):
+            futures += p.at_stop()                               # a future counts at its stop (-inf without one); it moves no cash of its own, so this is all it can cost
+            continue
         if not is_number(i.strike) or i.strike <= 0 or i.right not in ("CE", "PE") or i.expiry is None or not is_number(p.qty) or not p.qty:
             return float("-inf")                                 # anything that is not a plain option with a real strike and quantity cannot be valued: treated as unbounded (and a NaN can never slip past a comparison)
         groups.setdefault((i.underlying, i.expiry), []).append((float(i.strike), i.right, p.qty))
-    total = float(cash)
+    total = float(cash) + futures
+    if not math.isfinite(total):
+        return float("-inf")
     for legs in groups.values():
         if sum(q for _k, r, q in legs if r == "CE") < 0:
             return float("-inf")                                  # more calls sold than bought: the loss grows with the price without limit
@@ -110,7 +136,7 @@ class Account:
             m = marks.get(sym)
             if not _usable(m):
                 return float("nan")
-            total += p.qty * float(m)
+            total += p.value(m)
         return total
 
     def has_shorts(self) -> bool:
@@ -124,22 +150,37 @@ class Account:
         """Equity with every position that has no usable mark counted as worth nothing. For a long-only book that is a floor under
         the true equity, so a loss cap breached by this figure is truly breached. With a short position that has no price, the true
         figure could be far lower, so the worst-case equity (`stress`) is used instead."""
-        if any(p.qty < 0 and not _usable(marks.get(sym)) for sym, p in self.positions.items()):
+        if any(p.qty < 0 and not p.is_future and not _usable(marks.get(sym)) for sym, p in self.positions.items()):
             return self.stress()
         total = self.cash
         for sym, p in self.positions.items():
             m = marks.get(sym)
-            total += p.qty * float(m) if _usable(m) else 0.0
+            if p.is_future:
+                total += p.value(m) if _usable(m) else min(p.at_stop(), 0.0)          # a future with no price: counted at its stop, the loss it was opened to bear
+            else:
+                total += p.qty * float(m) if _usable(m) else 0.0
         return total
 
     def open_value(self, marks: dict[str, float]) -> float:
-        """What the open positions are worth at their marks (NaN if a mark is missing): the most they can still lose."""
+        """The most the open positions can still lose (NaN if a mark is missing): an option's value at its mark; a future's distance from its mark to its stop."""
         total = 0.0
         for sym, p in self.positions.items():
             m = marks.get(sym)
             if not _usable(m):
                 return float("nan")
-            total += p.qty * float(m)
+            if p.is_future:
+                total += max(0.0, p.value(m) - p.at_stop()) if math.isfinite(p.at_stop()) else float("inf")
+            else:
+                total += p.qty * float(m)
+        return total
+
+    def margin_used(self, marks: dict[str, float], rates: dict[str, float]) -> float:
+        """The margin the open futures hold: lots x price x the contract's rate (`rates` by underlying), at the mark or, without one, the price paid."""
+        total = 0.0
+        for sym, p in self.positions.items():
+            if p.is_future:
+                m = marks.get(sym)
+                total += abs(p.qty) * (float(m) if _usable(m) else p.avg_price) * float(rates.get(p.instrument.underlying, 1.0))
         return total
 
     def net_pnl(self, marks: dict[str, float]) -> float:
@@ -147,7 +188,7 @@ class Account:
 
     # ---- the one way money moves ---------------------------------------------------------------------------------------------
     def apply_fill(self, kind: str, instrument: Instrument, segment: str, qty: int, price: float, fees: float, ts: str,
-                   strategy: str, thesis: str, slip: dict | None = None) -> dict:
+                   strategy: str, thesis: str, slip: dict | None = None, stop: float | None = None, target: float | None = None) -> dict:
         """kind: 'buy' (open a long) | 'sell' (close a long) | 'sto' (sell to open a short) | 'btc' (buy to close a short) | 'settle' (cash settlement of either). Raises ValueError, changing nothing,
         for anything that would leave the account wrong."""
         if kind not in FILL_KINDS:
@@ -167,32 +208,43 @@ class Account:
         qty, price, fees = int(qty), float(price), float(fees)
         sym = instrument.symbol
         pos = self.positions.get(sym)
+        fut = instrument.kind == FUTURE
+        if fut:                                                 # a future: margined, so a fill moves cash only by its fees and, on a close, its profit; every opening has a stop
+            if kind == "settle":
+                raise ValueError("bad fill: a future is closed in the session (intraday), never settled")
+            if kind in ("buy", "sto"):
+                if not (_usable(stop) and stop > 0) or (target is not None and not (_usable(target) and target > 0)):
+                    raise ValueError("bad fill: a futures entry needs a stop (and a target, if any) that is a positive price")
+                if pos is not None:
+                    raise ValueError(f"bad fill: {sym} is already held; one futures position per contract")
+        elif stop is not None or target is not None:
+            raise ValueError("bad fill: a stop or a target belongs to a future only")
         new_pos: Position | None
         realized = self.realized
         if kind == "sto":
             if pos is not None and pos.qty > 0:
                 raise ValueError(f"cannot sell to open {sym}: it is held long (sell it to close)")
-            cash = self.cash + qty * price - fees
+            cash = self.cash - fees if fut else self.cash + qty * price - fees
             if pos is None:
-                new_pos = Position(instrument, segment, -qty, price, ts, strategy, thesis)
+                new_pos = Position(instrument, segment, -qty, price, ts, strategy, thesis, stop if fut else None, target if fut else None)
             else:
                 held = -pos.qty
                 new_pos = Position(pos.instrument, pos.segment, -(held + qty), (pos.avg_price * held + price * qty) / (held + qty), pos.opened_at, pos.strategy, pos.thesis)
         elif kind == "btc" or (kind == "settle" and pos is not None and pos.qty < 0):
             if pos is None or pos.qty >= 0 or qty > -pos.qty:
                 raise ValueError(f"cannot {kind} {qty} of {sym}: short {-pos.qty if pos and pos.qty < 0 else 0}")
-            cash = self.cash - (qty * price + fees)                 # closing a short is never refused for cash or fees: it only ever reduces the risk
+            cash = self.cash + (pos.avg_price - price) * qty - fees if fut else self.cash - (qty * price + fees)      # closing a short is never refused for cash or fees: it only ever reduces the risk
             realized += (pos.avg_price - price) * qty
-            new_pos = None if -pos.qty == qty else Position(pos.instrument, pos.segment, pos.qty + qty, pos.avg_price, pos.opened_at, pos.strategy, pos.thesis)
+            new_pos = None if -pos.qty == qty else Position(pos.instrument, pos.segment, pos.qty + qty, pos.avg_price, pos.opened_at, pos.strategy, pos.thesis, pos.stop, pos.target)
         elif kind == "buy":
             if pos is not None and pos.qty < 0:
                 raise ValueError(f"cannot buy to open {sym}: it is held short (buy it to close)")
-            cost = qty * price + fees
+            cost = fees if fut else qty * price + fees
             if cost > self.cash + 1e-9:
                 raise ValueError("not enough cash")
             cash = self.cash - cost
             if pos is None:
-                new_pos = Position(instrument, segment, qty, price, ts, strategy, thesis)
+                new_pos = Position(instrument, segment, qty, price, ts, strategy, thesis, stop if fut else None, target if fut else None)
             else:
                 total = pos.qty + qty
                 new_pos = Position(pos.instrument, pos.segment, total, (pos.avg_price * pos.qty + price * qty) / total, pos.opened_at,
@@ -200,15 +252,19 @@ class Account:
         else:
             if pos is None or pos.qty <= 0 or qty > pos.qty:
                 raise ValueError(f"cannot {kind} {qty} of {sym}: holding {pos.qty if pos else 0}")
-            cash = self.cash + qty * price - fees
+            cash = self.cash + (price - pos.avg_price) * qty - fees if fut else self.cash + qty * price - fees
             realized += (price - pos.avg_price) * qty
             new_pos = None if pos.qty == qty else Position(pos.instrument, pos.segment, pos.qty - qty, pos.avg_price, pos.opened_at,
-                                                           pos.strategy, pos.thesis)
+                                                           pos.strategy, pos.thesis, pos.stop, pos.target)
         body = {"seq": len(self.ledger) + 1, "ts": ts, "kind": kind, "symbol": sym, "instrument": instrument.to_dict(),
                 "segment": segment, "qty": qty, "price": price, "fees": fees, "strategy": strategy, "thesis": thesis,
                 "cash_after": cash}
         if slip is not None:
             body["slip"] = slip
+        if fut and kind in ("buy", "sto"):
+            body["stop"] = float(stop)
+            if target is not None:
+                body["target"] = float(target)
         row = self._seal(body)                                  # raises (e.g. a thesis that cannot be saved) BEFORE anything changes
         self.cash, self.realized, self.fees = cash, realized, self.fees + fees
         if new_pos is None:
@@ -288,7 +344,7 @@ class Account:
         for row in self.ledger:
             if row["kind"] in FILL_KINDS:
                 s.apply_fill(row["kind"], Instrument.from_dict(row["instrument"]), row["segment"], row["qty"], row["price"],
-                             row["fees"], row["ts"], row["strategy"], row["thesis"], row.get("slip"))
+                             row["fees"], row["ts"], row["strategy"], row["thesis"], row.get("slip"), row.get("stop"), row.get("target"))
             else:
                 s.record_event(row["kind"], row["ts"], **{k: v for k, v in row.items() if k not in ("seq", "ts", "kind", "prev", "hash")})
         same = (s.ledger == self.ledger and math.isclose(s.cash, self.cash, abs_tol=1e-6) and math.isclose(s.realized, self.realized, abs_tol=1e-6)

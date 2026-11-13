@@ -55,14 +55,23 @@ def test_nothing_trades_at_the_weekend_or_on_an_nse_holiday(cal):
     assert S.session("bse_fo", dt.date(2026, 11, 10), cal) is None
 
 
-def test_an_unverified_calendar_records_but_does_not_trade(cal):
+def test_mcx_and_currency_are_verified_for_2026_and_2027_is_not(cal):
     d = dt.date(2026, 11, 9)
-    assert not cal.known("mcx", d) and not cal.known("nse_cds", d) and cal.known("nse_fo", d)
-    assert S.session("mcx", d, cal, trading=False) is not None                                      # recording: open by default
-    assert S.session("mcx", d, cal, trading=True) is None                                           # trading: not until verified
-    assert S.open_segments(at("2026-11-09 20:00"), cal, trading=True) == []
-    assert S.open_segments(at("2026-11-09 20:00"), cal, trading=False) == ["mcx"]
-    assert S.open_segments(at("2026-11-09 10:00"), cal, trading=True) == ["nse_fo", "bse_fo"]       # NSE and BSE are verified for 2026
+    assert cal.known("mcx", d) and cal.known("nse_cds", d) and cal.known("nse_fo", d)                 # owner's order of 13 Nov 2026: MCX and currency trade on paper
+    assert S.open_segments(at("2026-11-09 20:00"), cal, trading=True) == ["mcx"]
+    assert S.open_segments(at("2026-11-09 10:00"), cal, trading=True) == ["nse_fo", "bse_fo", "nse_cds", "mcx"]
+    d27 = dt.date(2027, 1, 4)                                                                       # a Monday in a year neither list covers
+    assert not cal.known("mcx", d27) and not cal.known("nse_cds", d27)
+    assert S.session("mcx", d27, cal, trading=True) is None and S.session("mcx", d27, cal, trading=False) is not None      # recording only, until 2027's list is entered
+
+
+def test_on_an_nse_holiday_mcx_trades_only_its_evening_session_and_records_all_day(cal):
+    d = dt.date(2026, 11, 24)                                                                       # Guru Nanak Jayanti: NSE shut, MCX not on its full-closure list
+    o, c = S.session("mcx", d, cal, trading=True)
+    assert (o.time(), c.time()) == (dt.time(17, 0), dt.time(23, 30))                                # conservative: the morning is never traded
+    assert S.session("mcx", d, cal, trading=False)[0].time() == dt.time(9, 0)                       # recording unchanged
+    assert S.session("mcx", dt.date(2026, 11, 25), cal, trading=True)[0].time() == dt.time(9, 0)    # an ordinary day opens at 09:00
+    assert S.session("mcx", dt.date(2026, 12, 25), cal, trading=True) is None                       # a full closure is closed all day
 
 
 def test_a_year_without_an_nse_list_is_unverified_for_trading_too(cal):
@@ -99,9 +108,8 @@ def test_the_chained_jobs_cover_every_open_minute_with_no_gap_and_none_too_long(
 def test_a_normal_day_is_three_jobs_and_a_holiday_or_weekend_is_none(cal):
     assert [j["minutes"] for j in S.plan_jobs(dt.date(2026, 11, 9), cal)] == [300, 300, 300]
     assert S.plan_jobs(dt.date(2026, 11, 8), cal) == [] and S.plan_jobs(dt.date(2026, 11, 7), cal) == []
-    assert S.plan_jobs(dt.date(2026, 11, 9), cal, trading=True)[0]["segments"] == ["nse_fo", "bse_fo"]
-    nse_only = S.plan_jobs(dt.date(2026, 11, 9), cal, trading=True)                                 # only the verified NSE/BSE hours: 08:50-15:35
-    assert [j["from"][11:16] for j in nse_only] == ["08:50", "12:12"] and nse_only[-1]["until"][11:16] == "15:35"   # 405 min > 330: two jobs
+    assert S.plan_jobs(dt.date(2026, 11, 9), cal, trading=True)[0]["segments"] == ["nse_fo", "bse_fo", "nse_cds", "mcx"]
+    assert S.plan_jobs(dt.date(2026, 11, 9), cal, trading=True)[-1]["until"][11:16] == "23:35"       # MCX is verified now: the trading day runs to its close
 
 
 def test_the_market_map_touches_nothing_it_should_not():
@@ -115,7 +123,9 @@ def test_the_market_map_touches_nothing_it_should_not():
 
 def test_the_cli_prints_the_day_and_the_plan():
     out = subprocess.run([sys.executable, "-m", "quantdesk", "markets", "today", "--date", "2026-11-09"], cwd=ROOT, capture_output=True, text=True)
-    assert out.returncode == 0 and "mcx" in out.stdout and "09:00-23:30" in out.stdout and "NOT verified" in out.stdout
+    assert out.returncode == 0 and "mcx" in out.stdout and "09:00-23:30" in out.stdout and "calendar verified" in out.stdout
+    later = subprocess.run([sys.executable, "-m", "quantdesk", "markets", "today", "--date", "2027-01-04"], cwd=ROOT, capture_output=True, text=True)
+    assert later.returncode == 0 and "NOT verified" in later.stdout
     plan = subprocess.run([sys.executable, "-m", "quantdesk", "markets", "plan", "--date", "2026-11-09"], cwd=ROOT, capture_output=True, text=True)
     assert plan.returncode == 0 and len(json.loads(plan.stdout)) == 3
 
@@ -129,12 +139,13 @@ def test_the_nse_list_matches_zerodhas_published_calendar(cal):
     assert sorted(d.isoformat() for d in cal.nse_days) == ZERODHA_NSE_2026
 
 
-def test_mcx_is_closed_on_its_full_day_holidays_for_recording_but_still_not_verified_for_trading(cal):
+def test_mcx_is_closed_on_its_full_day_holidays_and_trades_only_the_evening_of_other_nse_holidays(cal):
     for d in ("2026-01-26", "2026-04-03", "2026-10-02", "2026-12-25"):
         day = dt.date.fromisoformat(d)
-        assert S.session("mcx", day, cal) is None and not cal.known("mcx", day)
-    assert S.session("mcx", dt.date(2026, 3, 3), cal) is not None            # Holi: NSE shut, MCX's evening session runs (partial: not modelled)
-    assert S.session("mcx", dt.date(2026, 11, 9), cal, trading=True) is None
+        assert S.session("mcx", day, cal) is None and S.session("mcx", day, cal, trading=True) is None
+    assert S.session("mcx", dt.date(2026, 3, 3), cal) is not None            # Holi: NSE shut, MCX's evening session runs
+    assert S.session("mcx", dt.date(2026, 3, 3), cal, trading=True)[0].time() == dt.time(17, 0)
+    assert S.session("mcx", dt.date(2026, 11, 9), cal, trading=True) is not None
 
 
 def test_the_currency_segment_follows_nse_plus_the_four_settlement_dates_for_recording(cal):
@@ -143,5 +154,5 @@ def test_the_currency_segment_follows_nse_plus_the_four_settlement_dates_for_rec
         if day.weekday() < 5:
             assert S.session("nse_cds", day, cal) is None, d
     assert S.session("nse_cds", dt.date(2026, 11, 9), cal) is not None
-    assert not cal.known("nse_cds", dt.date(2026, 11, 9))                    # inferred, not read from the circular: not verified
+    assert cal.known("nse_cds", dt.date(2026, 11, 9))                        # verified for 2026 (13 Nov 2026, the owner's order to paper trade currency)
     assert S.session("nse_fo", dt.date(2026, 2, 19), cal) is not None        # a settlement holiday does not close the equity-derivative market

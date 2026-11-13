@@ -30,7 +30,8 @@ TIMEOUT_S = 4.0
 FIELDS = ("ltp", "bid", "ask", "bid_qty", "ask_qty", "vol", "oi", "chg")
 BATCH = 800                                                      # quotes in one POST: a wide universe is sent in several, each far under the relay's size limit
 SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt")
-SYMBOL = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")                 # the relay's own rule for a name: one it would refuse is dropped here, so it can never hold up a batch
+SYMBOL = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")
+EXPIRY = re.compile(r"^\d{4}-\d{2}-\d{2}$")                 # the relay's own rule for a name: one it would refuse is dropped here, so it can never hold up a batch
 PUSH_SOURCES = ("z", "u", "d", "a", "f")                         # the feeds the relay takes a push from, by code (deploy/cloudflare/routes.js PUSH_SOURCES; a test compares the two)
 
 
@@ -42,8 +43,9 @@ def _num(x):
     return v if math.isfinite(v) else None
 
 
-def quote_from_tick(row: dict, change=None, seg: str | None = None) -> dict | None:
-    """The display fields of one recorded tick row (`kite_record.tick_row`) plus Kite's own percent change; None if there is no last price."""
+def quote_from_tick(row: dict, change=None, seg: str | None = None, expiry=None) -> dict | None:
+    """The display fields of one recorded tick row (`kite_record.tick_row`) plus Kite's own percent change; None if there is no last price. `expiry` (a future's
+    contract expiry, YYYY-MM-DD) goes as `e`: the board's name for a future moves to the next month at expiry, so a paper position records which contract it holds."""
     q = {"ltp": _num(row.get("last_price")), "bid": _num(row.get("bid")), "ask": _num(row.get("ask")), "bid_qty": _num(row.get("bid_qty")),
          "ask_qty": _num(row.get("ask_qty")), "vol": _num(row.get("volume")), "oi": _num(row.get("oi")), "chg": _num(change)}
     q = {k: v for k, v in q.items() if v is not None}
@@ -51,6 +53,8 @@ def quote_from_tick(row: dict, change=None, seg: str | None = None) -> dict | No
         return None
     if seg in SEGMENTS:
         q["s"] = seg
+    if isinstance(expiry, str) and EXPIRY.match(expiry[:10]):
+        q["e"] = expiry[:10]
     ts = row.get("ts_exchange")
     if ts is not None and str(ts) not in ("NaT", "None"):
         q["t"] = str(ts)[:40]

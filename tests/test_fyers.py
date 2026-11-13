@@ -309,8 +309,8 @@ class FakePusher:
         return {"pushes_ok": 1}
 
 
-NAMES = {"CRUDEOIL-MCX": {"seg": "mcx", "ticker": "MCX:CRUDEOIL26NOVFUT"}, "GOLD-MCX": {"seg": "mcx", "ticker": "MCX:GOLD26DECFUT"},
-         "USDINR-CDS": {"seg": "cds", "ticker": "NSE:USDINR26NOVFUT"}}
+NAMES = {"CRUDEOIL-MCX": {"seg": "mcx", "ticker": "MCX:CRUDEOIL26NOVFUT", "expiry": dt.date(2026, 11, 19)}, "GOLD-MCX": {"seg": "mcx", "ticker": "MCX:GOLD26DECFUT", "expiry": dt.date(2026, 12, 4)},
+         "USDINR-CDS": {"seg": "cds", "ticker": "NSE:USDINR26NOVFUT", "expiry": dt.date(2026, 11, 26)}}
 PRICES = {"MCX:CRUDEOIL26NOVFUT": (5812.0, 5811.0, 5813.0), "MCX:GOLD26DECFUT": (77000.0, 76990.0, 77010.0), "NSE:USDINR26NOVFUT": (84.5, 84.4975, 84.5025)}
 
 
@@ -319,6 +319,7 @@ def test_a_cycle_pushes_each_changed_quote_once_with_its_segment_and_book():
     feed = F.FyersFeed(api, NAMES, ["CRUDEOIL-MCX", "USDINR-CDS", "SILVER-MCX"], push, depth_per_cycle=1, now=lambda: dt.datetime(2026, 11, 13, 10, 0, tzinfo=IST))
     assert feed.cycle() == 3
     q = dict(push.got)
+    assert q["CRUDEOIL-MCX"]["e"] == "2026-11-19" and q["USDINR-CDS"]["e"] == "2026-11-26"          # the contract each name holds, for the paper desk
     assert q["CRUDEOIL-MCX"]["s"] == "mcx" and q["USDINR-CDS"]["s"] == "cds" and q["CRUDEOIL-MCX"]["oi"] == 99 and q["CRUDEOIL-MCX"]["d"]["b"] == [[5811.0, 5, 1]]
     assert "d" not in q["GOLD-MCX"]                                                     # not on the watchlist: price only
     assert [p for p, _ in api.calls] == ["/quotes", "/depth"] and api.calls[0][1]["symbols"].count(",") == 2
@@ -338,7 +339,7 @@ def test_currency_is_not_polled_after_its_close_but_mcx_is_until_midnight():
 
 
 def test_quotes_go_fifty_symbols_a_call():
-    names = {f"X{i}-MCX": {"seg": "mcx", "ticker": f"MCX:X{i}26NOVFUT"} for i in range(120)}
+    names = {f"X{i}-MCX": {"seg": "mcx", "ticker": f"MCX:X{i}26NOVFUT", "expiry": dt.date(2026, 11, 19)} for i in range(120)}
     api = FakeAPI({c["ticker"]: (1.0, 0.9, 1.1) for c in names.values()})
     F.FyersFeed(api, names, [], FakePusher(), now=lambda: dt.datetime(2026, 11, 13, 10, 0, tzinfo=IST)).cycle()
     assert [len(p["symbols"].split(",")) for _, p in api.calls] == [50, 50, 20]

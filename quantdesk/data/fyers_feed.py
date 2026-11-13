@@ -354,7 +354,7 @@ class FyersFeed:
                     self.oi[n] = book["oi"]
         sent = 0
         for n, q in quotes.items():
-            full = {**q, "s": self.names[n]["seg"]}
+            full = {**q, "s": self.names[n]["seg"], "e": self.names[n]["expiry"].isoformat()}      # the contract: a paper position records which month it holds
             if n in self.oi:
                 full["oi"] = self.oi[n]                               # open interest moves slowly: the last one read stands between depth turns
             key = {k: v for k, v in full.items() if k != "t"}

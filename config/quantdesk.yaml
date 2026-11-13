@@ -57,6 +57,11 @@ costs:
     equity_intraday: {stt_buy: 0.0,    stt_sell: 0.00025, exchange: 0.0000297, stamp_buy: 0.00003}
     futures:         {stt_buy: 0.0,    stt_sell: 0.0005,  exchange: 0.0000173, stamp_buy: 0.00002}
     options:         {stt_buy: 0.0,    stt_sell: 0.0015,  exchange: 0.0003503, stamp_buy: 0.00003}
+    # MCX and NSE currency futures (owner's order, 13 Nov 2026: "enable the MCX and the currency in the paper trading"). Source: https://zerodha.com/charges, Commodity and
+    # Currency tables, read 13 Nov 2026. MCX non-agri futures: CTT 0.01% on the sale, MCX transaction charge 0.0021%, stamp duty 0.002% on the buy. Currency futures: no
+    # STT, NSE transaction charge 0.00035% plus NSE's IPFT levy 0.05 rupees a lakh (0.00005%), stamp duty 0.0001% on the buy. Brokerage, SEBI and GST as above.
+    mcx_futures:     {stt_buy: 0.0,    stt_sell: 0.0001,  exchange: 0.000021,  stamp_buy: 0.00002}
+    cds_futures:     {stt_buy: 0.0,    stt_sell: 0.0,     exchange: 0.000004,  stamp_buy: 0.000001}
   # STT on the intrinsic value of a LONG index option cash-settled at expiry. Dated: the latest entry on or before the
   # settlement day applies. 0.15% from 1-Apr-2026 (owner-confirmed, F-05); the earlier 0.125% is what the code carried
   # before (start date not verified) and is what the frozen research and pre-registered sleeve specs still use.
@@ -379,11 +384,40 @@ backtest:
 # is never loosened without the owner's written word.
 paper:
   capital: 500000
+  # MCX and currency FUTURES (owner's order, 13 Nov 2026: "First, enable the MCX and the currency in the paper trading"). quantdesk/paper/runner.py, docs/PAPER_TRADING.md.
+  #   * The near-month contract the board shows (CRUDEOIL-MCX, USDINR-CDS); its expiry comes with the quote (the feeds' instrument lists) and is recorded on the position.
+  #   * Long or short, a whole number of lots, and EVERY entry has a stop: the loss to it (plus a slippage allowance and both sides' fees) is held to risk_per_trade, as the
+  #     whole premium is for an option. A target is optional. The runner closes at the stop or the target at the bid (long) or the offer (short).
+  #   * INTRADAY ONLY: every futures position is closed square_off_min before its segment's close, so nothing is held overnight, across a roll or into a delivery period.
+  #   * No entry in the last no_entry_days trading days before the contract's expiry (MCX: a tender or delivery period may begin; brokers square off before it).
+  #   * Margin: lot x price x margin, against equity less the margin already in use; a futures fill moves cash only by its fees and, on the close, its profit.
+  # Lots (units of the quoted price per lot) and margins: https://zerodha.com/margin-calculator/Commodity/ and /Currency/ (NRML rates, read 13 Nov 2026; lot x price x
+  # rate reconciles on that page for every commodity, which confirms the units). Ticks: MCX 1 rupee for crude and gold (Zerodha Varsity); the rest are not used by the
+  # desk's checks. Margins are the page's rate, rounded up where its own rupee figure is higher. NOT read from the exchanges (mcxindia.com and nseindia.com refused the
+  # reading session): to be checked against MCX's and NSE's contract specifications.
+  futures:
+    square_off_min: 5
+    entry_cutoff_min: 15             # no new entry in the last 15 minutes of a segment's session
+    stop_max_pct: 0.10               # a stop more than 10% from the price is a typo, not a stop
+    contracts:
+      CRUDEOIL:   {segment: mcx,     lot: 100,  unit: "per barrel",      margin: 0.32, no_entry_days: 5}
+      CRUDEOILM:  {segment: mcx,     lot: 10,   unit: "per barrel",      margin: 0.32, no_entry_days: 5}
+      NATURALGAS: {segment: mcx,     lot: 1250, unit: "per mmBtu",       margin: 0.16, no_entry_days: 5}
+      NATGASMINI: {segment: mcx,     lot: 250,  unit: "per mmBtu",       margin: 0.16, no_entry_days: 5}
+      GOLD:       {segment: mcx,     lot: 100,  unit: "per 10 grams",    margin: 0.10, no_entry_days: 5}
+      GOLDM:      {segment: mcx,     lot: 10,   unit: "per 10 grams",    margin: 0.10, no_entry_days: 5}
+      SILVER:     {segment: mcx,     lot: 30,   unit: "per kg",          margin: 0.16, no_entry_days: 5}
+      SILVERM:    {segment: mcx,     lot: 5,    unit: "per kg",          margin: 0.16, no_entry_days: 5}
+      COPPER:     {segment: mcx,     lot: 2500, unit: "per kg",          margin: 0.10, no_entry_days: 5}
+      USDINR:     {segment: nse_cds, lot: 1000, unit: "per US dollar",   margin: 0.025, no_entry_days: 1}
+      EURINR:     {segment: nse_cds, lot: 1000, unit: "per euro",        margin: 0.026, no_entry_days: 1}
+      GBPINR:     {segment: nse_cds, lot: 1000, unit: "per pound",       margin: 0.033, no_entry_days: 1}
+      JPYINR:     {segment: nse_cds, lot: 1000, unit: "per 100 yen",     margin: 0.044, no_entry_days: 1}
   risk_per_trade: 0.025            # the most one entry may lose (the whole premium plus fees), as a share of equity
   daily_loss_limit: 0.05           # entries stop for the day, and the desk flattens, at this loss from the day's starting equity
   drawdown_halt: 0.10              # entries stop until the OWNER clears it, at this fall from the equity high-water mark
   max_quote_age_s: 30              # a data-quality guard: a fill needs a quote this fresh
-  cost_verified_segments: [nse_fo] # segments whose costs.segments rates are configured and verified; others are refused, never guessed
+  cost_verified_segments: [nse_fo, mcx, nse_cds]   # segments whose costs.segments rates are configured and verified; others are refused, never guessed. mcx and nse_cds: 13 Nov 2026 (paper.futures)
   kill_switch_file: runtime/paper/KILL   # while this file exists nothing new opens and the desk flattens
   # Owner's written order, 8 Nov 2026: "give yourself this freedom of selling, also selling options ... a selling option is just a hedging position" and, later the same day, "turn the sell option [on] ... it would not work
   # in silos. It will always be working as a leg." ON means: a sold option is allowed ONLY as a leg of a package whose worst case is bounded (spreads, condors, butterflies), every leg opening together or none; a lone
@@ -393,6 +427,8 @@ paper:
   # USD/INR or SENSEX option cannot be labelled nse_fo to dodge the costs and hours check. NSE's F&O stocks are added from the
   # warehouse universe by the runner (M3); the four index families are listed here.
   underlyings:
+    mcx: [CRUDEOIL, CRUDEOILM, NATURALGAS, NATGASMINI, GOLD, GOLDM, SILVER, SILVERM, COPPER]     # futures only (paper.futures)
+    nse_cds: [USDINR, EURINR, GBPINR, JPYINR]                                                    # futures only (paper.futures)
     nse_fo: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY,
              RELIANCE, HDFCBANK, SBIN, ICICIBANK, TCS, BHARTIARTL, BSE, INFY, AXISBANK, MARUTI, DIXON, PAYTM, BAJAJ-AUTO, KOTAKBANK, BHEL, LAURUSLABS, DIVISLAB, ITC, BAJFINANCE, "M&M"]
   # Stock options (owner's written order, 13 Nov 2026: "Enable the stock option trading"): the 20 stocks of desk.watchlist.stocks. They trade in nse_fo with the same verified
@@ -462,14 +498,19 @@ feeds:
 # These lists are used for RECORDING only. `holiday_years` is deliberately not set, so neither segment counts as verified for
 # trading until the exchange's own circular (MCX/TRD/636/2025; NSE/CD/71962 and its 15 Jan amendment) has been read and, for MCX,
 # the partial-day sessions (morning shut, evening open) are modelled: those are not on the page above.
+# 13 Nov 2026 (owner's order to paper trade MCX and currency): holiday_years [2026] is set for both, from Zerodha's calendar above, cross-checked again that day. The
+# exchanges' own circulars could not be read from the session that set it (mcxindia.com and nseindia.com refused). The MCX evening-only days are modelled conservatively
+# (quantdesk/markets/sessions.py: a weekday NSE holiday MCX does not list as a full closure opens at 17:00 for trading). 2027 trades on neither until its list is entered.
 markets:
   mcx:
+    holiday_years: [2026]
     holidays:                      # the weekday full-day closures Zerodha lists (15 Aug and 8 Nov 2026 fall on a weekend)
       - 2026-01-26   # Republic Day
       - 2026-04-03   # Good Friday
       - 2026-10-02   # Mahatma Gandhi Jayanti
       - 2026-12-25   # Christmas
   nse_cds:
+    holiday_years: [2026]
     # NSE's 16 weekday holidays plus the four dates Zerodha lists as settlement holidays. The currency segment's own circular
     # declares 19 weekday holidays before the 15 Jan amendment and 20 after: 15 + 4 = 19, then 16 + 4 = 20. That count is how the four
     # extra dates are inferred; it is not read from the circular itself.

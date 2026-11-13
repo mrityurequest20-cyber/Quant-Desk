@@ -75,6 +75,7 @@ def test_the_instrument_view_is_wired_to_the_key_the_rows_and_the_back_button_an
     code = re.sub(r"//[^\n]*", "", view)                                                           # comments say what the view cannot do; only the code is checked
     assert "/api/" not in code and "paperCall" not in code and not re.search(r"\b(order|orders|place|submit|buy|sell|trade)\b|POST", code, re.I)          # whole words: "border-top" is not an order
     assert code.count("tkOpen(name)") == 1                                                          # a tap on a chain price only OPENS the ticket; the ticket (tested in test_paper_ticket) is the one place that sends
+    assert code.count("ftOpen(name)") == 1                                                          # an MCX or currency future's button only OPENS its futures ticket (tests/test_paper_futures.py, the runner's gate), which is where an order is sent
 
 
 @needs_node

@@ -175,20 +175,20 @@ class FakePusher:
         return {}
 
 
-NAMES = {"USDINR-CDS": {"token": "1165"}, "EURINR-CDS": {"token": "1181"}}
+NAMES = {"USDINR-CDS": {"token": "1165", "expiry": dt.date(2026, 11, 26)}, "EURINR-CDS": {"token": "1181", "expiry": dt.date(2026, 11, 26)}}
 
 
 def test_a_cycle_pushes_changed_quotes_once_as_currency():
     api, push = FakeAPI({"1165": _row("1165", 84.51, 84.5075, 84.5125), "1181": _row("1181", 97.2, 97.19, 97.21)}), FakePusher()
     feed = A.AngelFeed(api, NAMES, push)
-    assert feed.cycle() == 2 and all(q["s"] == "cds" and "d" in q for _, q in push.got)
+    assert feed.cycle() == 2 and all(q["s"] == "cds" and "d" in q and q["e"] == "2026-11-26" for _, q in push.got)
     assert feed.cycle() == 0                                                            # nothing moved: nothing pushed
     api.rows["1165"] = _row("1165", 84.52, 84.5175, 84.5225)
     assert feed.cycle() == 1 and push.got[-1][0] == "USDINR-CDS"
 
 
 def test_tokens_go_fifty_a_call():
-    names = {f"P{i}-CDS": {"token": str(1000 + i)} for i in range(75)}
+    names = {f"P{i}-CDS": {"token": str(1000 + i), "expiry": dt.date(2026, 11, 26)} for i in range(75)}
     api = FakeAPI({})
     A.AngelFeed(api, names, FakePusher()).cycle()
     assert [len(c) for c in api.calls] == [50, 25]

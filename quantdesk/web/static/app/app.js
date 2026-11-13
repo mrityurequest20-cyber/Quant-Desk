@@ -190,7 +190,7 @@ function openSheet(title, ...content) {
 	b.scrollTop = 0;
 	document.body.style.overflow = "hidden";
 }
-function closeSheet() { $("#sheet").classList.remove("open"); document.body.style.overflow = ""; S.tk = null; }
+function closeSheet() { $("#sheet").classList.remove("open"); document.body.style.overflow = ""; S.tk = null; S.ft = null; }
 function themeMode() { return store("qd.theme") || "auto"; }
 function applyTheme(mode) {
 	const r = document.documentElement;
@@ -818,7 +818,8 @@ function liveHead(u, name, v) {
 	const kind = seg === "idx" ? "Index" : seg === "eq" ? "NSE cash" : seg === "mcx" ? "MCX near-month future" : seg === "cds" ? "Currency near-month future" : "Near-month future";
 	return h("div", { class: "ihead" },
 		h("div", { class: "grow" }, h("div", { class: "nm" }, u), h("div", { class: "sub" }, kind + " · " + liveAge(v.age_s) + " ago" + (src ? " · " + src : "") + (fin(v.x) ? " · ⚠ feeds differ " + v.x.toFixed(1) + "%" : ""))),
-		h("div", { class: "pxb" }, h("div", { class: "px mono" }, livePx(v.ltp, seg)), pctTag(v.chg)));
+		h("div", { class: "pxb" }, h("div", { class: "px mono" }, livePx(v.ltp, seg)), pctTag(v.chg),
+			ftContract(name) ? h("button", { class: "btn", style: "margin-top:6px;font-size:12px;padding:4px 10px", onclick: () => ftOpen(name) }, "Paper ticket") : null));
 }
 // Spot and Futures: the chart, the book, the day's figures
 function liveQuoteView(u, name, v) {
@@ -1105,6 +1106,7 @@ async function renderLive() {
 	if (!S.lv.built) liveBuild();
 	liveDraw();
 	if (S.tk) tkDraw();                                                      // an open ticket follows the price
+	if (S.ft) ftCalc();                                                      // so does a futures ticket (its inputs are never rebuilt under the user's fingers)
 	if (S.lv.sel) liveSeries();                                              // the open view's candles and book, with every refresh
 }
 
@@ -2001,6 +2003,81 @@ function bdTicket(a, tpl, st, rd) {
 // ---- the ticket for one contract, opened by a tap on its price in an option chain: what it is quoted at, what one or more lots would cost and could lose, whether the paper
 // desk can open it, and then the same why / review / send as the builder's ticket. It follows the live price while it is open, except under the reader's fingers.
 S.tk = null;
+// ---- an MCX or currency future: Buy or Short, lots, a stop (required) and a target. The runner's gate decides (quantdesk/paper/risk.py check_future); this shows the numbers. ----
+function ftContract(name) {
+	const m = /^([A-Z][A-Z0-9&]{1,20})-(MCX|CDS)$/.exec(String(name || "")), f = QB.conf().futures;
+	if (!m || !f || !f.contracts) return null;
+	const c = f.contracts[m[1]];
+	return c && c.segment === (m[2] === "MCX" ? "mcx" : "nse_cds") ? { u: m[1], ...c } : null;
+}
+function ftOpen(name) {
+	const c = ftContract(name);
+	if (!c) return;
+	const box = h("div", {}), calc = h("div", {}), act = h("div", {});
+	S.tk = null;
+	S.ft = { name, c, side: "buy", lots: 1, stop: "", target: "", strategy: "", thesis: "", box, calc, act, sent: null, busy: false, err: "" };
+	const F = S.ft, num_ = (v) => { const x = parseFloat(String(v).replace(/,/g, "")); return Number.isFinite(x) && x > 0 ? x : null; };
+	const sideBtn = (k, t) => h("button", { class: "btn" + (F.side === k ? " primary" : ""), "data-side": k, "aria-pressed": String(F.side === k), onclick: () => { F.side = k; box.querySelectorAll("[data-side]").forEach((b) => { b.classList.toggle("primary", b.dataset.side === k); b.setAttribute("aria-pressed", String(b.dataset.side === k)); }); ftCalc(); } }, t);
+	const field = (lbl, key, ph) => h("label", { class: "row", style: "justify-content:space-between;align-items:center;gap:10px;padding:6px 0" }, h("span", {}, lbl),
+		h("input", { class: "mono", inputmode: "decimal", placeholder: ph, style: "width:140px;text-align:right", oninput: (e) => { F[key] = e.target.value; ftCalc(); } }));
+	const lotsB = h("b", { class: "mono", style: "min-width:28px;text-align:center" }, "1");
+	put(box,
+		h("div", { class: "f3", style: "font-size:12px;line-height:1.5;padding:2px 0 8px" }, `${c.segment === "mcx" ? "MCX" : "NSE currency"} near-month future · ${c.lot} units a lot, priced ${c.unit} · margin ${(c.margin * 100).toFixed(1)}% · paper money only`),
+		h("div", { style: "display:flex;gap:8px;padding:4px 0 8px" }, sideBtn("buy", "Buy (long)"), sideBtn("short", "Sell (short)")),
+		h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:6px 0" }, h("span", {}, "Lots"),
+			h("span", { style: "display:flex;gap:10px;align-items:center" },
+				h("button", { class: "btn sq", "aria-label": "fewer lots", onclick: () => { F.lots = Math.max(1, F.lots - 1); lotsB.textContent = String(F.lots); ftCalc(); } }, "−"), lotsB,
+				h("button", { class: "btn sq", "aria-label": "more lots", onclick: () => { F.lots = Math.min(100, F.lots + 1); lotsB.textContent = String(F.lots); ftCalc(); } }, "+"))),
+		field("Stop (required)", "stop", "price"), field("Target (optional)", "target", "price"),
+		calc,
+		h("label", { style: "display:block;padding:8px 0 4px" }, h("span", { class: "lbl" }, "Strategy"), h("input", { style: "width:100%", maxlength: "60", placeholder: "e.g. crude breakout", oninput: (e) => { F.strategy = e.target.value; ftCalc(); } })),
+		h("label", { style: "display:block;padding:4px 0" }, h("span", { class: "lbl" }, "Thesis: why this trade, now"), h("textarea", { style: "width:100%;min-height:64px", maxlength: "1000", oninput: (e) => { F.thesis = e.target.value; ftCalc(); } })),
+		act,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 0 0" }, `Intraday only: the desk closes every futures position ${QB.conf().futures.square_off_min || 5} minutes before the ${c.segment === "mcx" ? "MCX" : "currency"} close, and takes no new one in the last ${QB.conf().futures.entry_cutoff_min || 15} minutes or in a contract's last ${c.no_entry_days} trading day${c.no_entry_days === 1 ? "" : "s"}. The stop and the target are watched by the runner and closed at the bid (long) or the offer (short).`));
+	openSheet(`${c.u} future · paper`, box);
+	F.num = num_;
+	ftCalc();
+}
+function ftCalc() {
+	const F = S.ft, B = S.bd, data = B && B.data;
+	if (!F) return;
+	const q = data && data.quotes ? data.quotes[F.name] : null, c = F.c, conf = QB.conf(), cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
+	F.calc.textContent = "";
+	if (!q || !fin(q.bid) || !fin(q.ask)) { F.act.textContent = ""; return void put(F.calc, h("div", { class: "note warn" }, `${F.name} has no two-sided price on the board right now.`)); }
+	const short = F.side === "short", px = short ? q.bid : q.ask, qty = F.lots * c.lot, stop = F.num(F.stop), target = F.num(F.target);
+	const costs = (conf.futures.costs || {})[c.segment === "mcx" ? "mcx_futures" : "cds_futures"] || {}, cc = conf.costs || {};
+	const fee = (buy, price) => { const t = qty * price, br = Math.min(cc.brokerage_per_order || 20, 0.0003 * t), ex = t * (costs.exchange || 0), sebi = t * (cc.sebi_per_crore || 10) / 1e7;
+		return br + t * (buy ? costs.stt_buy || 0 : costs.stt_sell || 0) + ex + sebi + (buy ? t * (costs.stamp_buy || 0) : 0) + (cc.gst || 0.18) * (br + ex + sebi); };
+	const eq = S.pp && S.pp.data && S.pp.data.summary && fin(S.pp.data.summary.equity) ? S.pp.data.summary.equity : conf.equity;
+	const why = [];
+	if (stop === null) why.push("Set a stop: every futures entry needs one.");
+	else if (short ? stop <= px : stop >= px) why.push(`The stop must be ${short ? "above" : "below"} the ${short ? "bid" : "offer"} ${num(px)}.`);
+	else if (Math.abs(px - stop) / px > (conf.futures.stop_max_pct || 0.1)) why.push(`The stop is ${(Math.abs(px - stop) / px * 100).toFixed(1)}% away: that looks like a typo.`);
+	if (target !== null && (short ? target >= px : target <= px)) why.push(`The target must be ${short ? "below" : "above"} the entry.`);
+	const risk = stop === null ? null : qty * (Math.abs(px - stop) + 0.001 * px) + fee(!short, px) + fee(short, stop), margin = qty * px * c.margin;
+	const rr = stop !== null && target !== null ? Math.abs(target - px) / Math.abs(px - stop) : null;
+	if (fin(risk) && risk > conf.paper.risk_per_trade * eq) why.push(`It risks ${inr(risk)} to the stop: over ${(conf.paper.risk_per_trade * 100).toFixed(1)}% of equity (${inr(conf.paper.risk_per_trade * eq)}). A closer stop or fewer lots.`);
+	if (margin > eq) why.push(`It needs ${inr(margin)} of margin: more than the account's equity.`);
+	put(F.calc,
+		h("div", { class: "kstrip", style: "margin:6px -16px 0;border-top:1px solid var(--line)" }, cell("Bid", num(q.bid), "up"), cell("Offer", num(q.ask), "dn"), cell(short ? "You sell at" : "You buy at", num(px)), cell("Heard", liveAge(q.age_s) + " ago")),
+		h("div", { class: "kstrip", style: "margin:0 -16px" }, cell("Risk to the stop", fin(risk) ? inr(risk) : "—", "dn"), cell("Margin", inr(margin)), cell("Target gain", fin(target) && stop !== null ? inr(qty * Math.abs(target - px)) : "—", "up"), cell("Reward:risk", fin(rr) ? rr.toFixed(1) : "—")),
+		why.length ? h("div", { style: "padding:8px 0 0" }, why.map((x) => h("div", { class: "row", style: "padding:3px 0;gap:8px;align-items:flex-start" }, h("b", { class: "dn", style: "width:14px" }, "✗"), h("span", { style: "font-size:12.5px" }, x)))) : null);
+	const okText = PT.stratOk(F.strategy) && PT.thesisOk(F.thesis);
+	F.act.textContent = "";
+	if (F.sent) return void put(F.act, h("div", { class: "note" }, `Queued ${F.sent}: the runner fills it at the ${short ? "bid" : "offer"} if its gate allows. Watch Positions.`));
+	if (F.err) put(F.act, h("div", { class: "note warn" }, F.err));
+	put(F.act, h("button", { class: "btn primary", style: "width:100%;margin-top:10px", disabled: why.length || !okText || F.busy ? "" : null, onclick: async (ev) => {
+		if (F.busy || why.length || !okText) return;
+		F.busy = true;
+		if (ev && ev.currentTarget) ev.currentTarget.disabled = true;
+		const o = { id: PT.idNow(), side: short ? "short" : "buy", symbol: F.name, lots: F.lots, stop, ...(target !== null ? { target } : {}), strategy: PT.flat(F.strategy), thesis: PT.flat(F.thesis),
+			ref: { bid: q.bid, ask: q.ask, ...(typeof data.now === "number" && fin(q.age_s) ? { at: Math.round(data.now - q.age_s * 1000) } : {}) } };
+		const r = await paperCall("POST", "/paper/order", o);
+		F.busy = false;
+		if (r.status === 200) F.sent = `${short ? "a short" : "a buy"} of ${F.lots} lot${F.lots === 1 ? "" : "s"}`; else F.err = "Not queued (" + ((r.body && r.body.error) || "HTTP " + r.status) + ").";
+		ftCalc();
+	} }, okText ? `${short ? "Sell short" : "Buy"} ${F.lots} lot${F.lots === 1 ? "" : "s"} (paper)` : "Name the strategy and write the thesis (20+ characters)"));
+}
 function tkOpen(name) {
 	const o = liveOpt(name);
 	if (!o) return;
@@ -2068,13 +2145,15 @@ function ppDraw() {
 		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
 			h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", { class: "mono", style: "font-size:13px" }, p.symbol),
 				h("span", { class: "mono " + (fin(p.pnl) ? (p.pnl >= 0 ? "up" : "dn") : "f3"), style: "font-size:15px" }, fin(p.pnl) ? inr(p.pnl, true) : "no price")),
-			h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, `${p.lots} lot${p.lots === 1 ? "" : "s"} (${p.qty} units) · bought at ${num(p.avg)} · bid ${fin(p.mark) ? num(p.mark) : "—"} · expires ${p.expiry || "?"} · ${p.strategy || ""}`),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.5" }, p.kind === "future"
+				? `${p.qty < 0 ? "Short" : "Long"} ${Math.abs(p.lots)} lot${Math.abs(p.lots) === 1 ? "" : "s"} (${Math.abs(p.qty)} units) at ${num(p.avg)} · ${p.qty < 0 ? "offer" : "bid"} ${fin(p.mark) ? num(p.mark) : "—"} · stop ${fin(p.stop) ? num(p.stop) : "—"}${fin(p.target) ? " · target " + num(p.target) : ""} · intraday (${p.segment === "mcx" ? "MCX" : "currency"}) · ${p.strategy || ""}`
+				: `${p.lots} lot${p.lots === 1 ? "" : "s"} (${p.qty} units) · bought at ${num(p.avg)} · bid ${fin(p.mark) ? num(p.mark) : "—"} · expires ${p.expiry || "?"} · ${p.strategy || ""}`),
 			h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:2px" }, p.thesis || ""),
 			P.confirm === "sell:" + p.symbol ? h("div", { style: "display:flex;gap:8px;margin-top:8px" },
-				h("button", { class: "btn danger", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const o = PT.sellFor(p.symbol); const r = await paperCall("POST", "/paper/order", o); P.acting = false; P.note = r.status === 200 ? "" : "The sell was not queued (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, "Yes, sell all at the bid"),
+				h("button", { class: "btn danger", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const o = PT.sellFor(p.symbol); const r = await paperCall("POST", "/paper/order", o); P.acting = false; P.note = r.status === 200 ? "" : "The sell was not queued (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, p.kind === "future" ? (p.qty < 0 ? "Yes, buy it back at the offer" : "Yes, sell it at the bid") : "Yes, sell all at the bid"),
 				h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
-				: h("div", { style: "display:flex;gap:8px;margin-top:8px" }, h("button", { class: "btn", onclick: () => { P.confirm = "sell:" + p.symbol; P.confirmAt = Date.now(); ppDraw(); } }, "Sell all"),
-					h("button", { class: "btn", onclick: () => { show("live"); liveOpen(p.symbol); } }, "Open the chain"))))
+				: h("div", { style: "display:flex;gap:8px;margin-top:8px" }, h("button", { class: "btn", onclick: () => { P.confirm = "sell:" + p.symbol; P.confirmAt = Date.now(); ppDraw(); } }, p.kind === "future" ? "Close" : "Sell all"),
+					p.kind === "future" ? null : h("button", { class: "btn", onclick: () => { show("live"); liveOpen(p.symbol); } }, "Open the chain"))))
 			: h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 14px" }, "Nothing held. Open an instrument on Markets, go to Options and tap a price to make a paper order.")));
 	const pend = d && d.pending ? d.pending : [], res = d && d.results ? d.results.slice(-10).reverse() : [];
 	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Orders"), h("span", { class: "hint" }, pend.length ? pend.length + " waiting" : "the last ten")),

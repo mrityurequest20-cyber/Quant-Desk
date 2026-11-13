@@ -60,7 +60,7 @@ def test_contract_names_parse_only_for_the_papers_own_underlyings():
 
 
 @pytest.mark.parametrize("patch, word", [
-    ({"id": "x"}, "id"), ({"id": None}, "id"), ({"side": "short"}, "side"), ({"lots": 0}, "lots"), ({"lots": -1}, "lots"), ({"lots": 1.5}, "lots"), ({"lots": True}, "lots"),
+    ({"id": "x"}, "id"), ({"id": None}, "id"), ({"side": "hold"}, "side"), ({"lots": 0}, "lots"), ({"lots": -1}, "lots"), ({"lots": 1.5}, "lots"), ({"lots": True}, "lots"),
     ({"lots": "all"}, "lots"), ({"lots": 10**6}, "lots"), ({"thesis": "buy it"}, "thesis"), ({"thesis": None}, "thesis"), ({"strategy": ""}, "strategy"), ({"limit": -3}, "limit"),
     ({"limit": "100"}, "limit"), ({"group": "g" * 41}, "group")])
 def test_a_malformed_order_is_refused_with_its_reason(rn, patch, word):

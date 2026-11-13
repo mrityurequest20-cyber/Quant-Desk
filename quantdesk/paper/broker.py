@@ -80,6 +80,25 @@ class PaperBroker:
         row = self.account.apply_fill("sell", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}", slip)
         return d, row
 
+    # ---- MCX and currency futures: long or short, with a stop ----------------------------------------------------------------------------
+    def open_future(self, order: Order, short: bool, quote: Quote | None, stop: float, target: float | None, marks: dict[str, float], now: dt.datetime,
+                    rules: dict, ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
+        """Open a future: a long at the offer, a short at the bid (the size is held to what is displayed there, so no impact is modelled). The gate judges it at that price
+        (RiskGate.check_future); the stop and the target go into the sealed fill, so a restart knows them."""
+        px = (quote.bid if short else quote.ask) if quote is not None and is_number(quote.bid) and is_number(quote.ask) else None
+        d = self.gate.check_future(self.account, order, short, quote, px, stop, target, marks, now, rules)
+        if not d.allowed:
+            return d, None
+        if limit is not None and ((short and px < limit - 1e-9) or (not short and px > limit + 1e-9)):
+            return Decision(False, [f"the {'bid' if short else 'offer'} is {px:g}, {'below' if short else 'above'} your limit {limit:g}: not opened"]), None
+        fees, _ = self.costs.fees(order.instrument, -order.qty if short else order.qty, px)
+        sb, sa, delay = self._seen(ref, now, quote)
+        side = "sell" if short else "buy"
+        slip = SL.clean(SL.split(side, order.qty, px, quote.bid, quote.ask, 0.0, sb, sa, delay)) or SL.clean(SL.split(side, order.qty, px, quote.bid, quote.ask, 0.0))
+        row = self.account.apply_fill("sto" if short else "buy", order.instrument, order.segment, order.qty, px, fees, now.isoformat(), order.strategy, order.thesis, slip,
+                                      stop=float(stop), target=float(target) if target is not None else None)
+        return d, row
+
     # ---- sold options: packages, buying back --------------------------------------------------------------------------------------------
     def open_package(self, legs: list[dict], strategy: str, thesis: str, marks: dict[str, float], now: dt.datetime, refs: dict | None = None,
                      max_debit: float | None = None) -> tuple[Decision, list[dict]]:
@@ -148,7 +167,7 @@ class PaperBroker:
         if self.account.has_shorts():                                           # sold options cannot be trimmed piece by piece without risking an uncovered one: the whole book is closed
             return self.flatten(quotes, now, why)
         excess = self.gate.trim_excess(self.account, marks)
-        for sym in sorted(self.account.positions, key=lambda k: -self.account.positions[k].qty * float(marks.get(k, 0.0) or 0.0)):
+        for sym in sorted((k for k in self.account.positions if not self.account.positions[k].is_future), key=lambda k: -self.account.positions[k].qty * float(marks.get(k, 0.0) or 0.0)):
             if excess <= 0:
                 break
             pos = self.account.positions[sym]

@@ -64,6 +64,50 @@ On a day the exchange opens for a special window (Diwali Muhurat trading, 8 Nov 
 
 Nothing else changes: the same risk gate, the same limits, paper money only.
 
+## MCX and currency futures (owner's order, 13 Nov 2026)
+
+"First, enable the MCX and the currency in the paper trading." The paper desk trades the **near-month futures** the Markets page
+shows: crude oil and its mini, natural gas and its mini, gold and gold mini, silver and silver mini, copper, and USD, EUR, GBP and
+JPY against the rupee. Futures only: no MCX or currency options.
+
+**Opening a trade.** Open the instrument on Markets and press **Paper trade**. Then:
+- choose Buy (long) or Sell (short) and the number of lots;
+- set a **stop** (required) and, if you like, a target;
+- name the strategy and write the thesis.
+
+The ticket shows the price you would get, the risk to the stop, the margin and the reward to risk. The runner's gate
+(`RiskGate.check_future`) decides.
+
+**The rules:**
+- **The stop bounds the risk.** The loss to the stop, plus a 0.1% slippage allowance and both sides' fees, must fit in
+  `risk_per_trade` (2.5% of equity), exactly as an option's whole premium must. A stop more than 10% away is refused as a typo.
+- **Margin, not cash.** A futures fill moves cash only by its fees; the profit or loss arrives on the close. The margin (lot x
+  price x the contract's rate, from Zerodha's NRML rates) must fit in the equity left free. The loss budget counts each open
+  future at its stop.
+- **Intraday only.** Every futures position is closed 5 minutes before its segment's close: currency at 16:55; MCX at 23:25 (23:50
+  while the US is on daylight saving). No new entry in the last 15 minutes. Nothing is held overnight, across a roll or into a
+  delivery period.
+- **Near expiry.** No new entry in an MCX contract's last 5 trading days (a tender or delivery period may start), or in a
+  currency contract on its last trading day.
+- **Contract identity.** Which contract month the board shows comes with each quote (`e`, from the feeds' instrument lists) and is
+  recorded on the position. If the board's name moves to another month, the position has no price rather than a wrong one.
+- **Stops and targets** are watched by the runner every cycle and closed at the bid (long) or the offer (short). The stop and
+  target are in the sealed ledger row, so a restart rebuilds them; a saved file with a different stop fails verification.
+- **Fills** are at the touch: a long at the offer, a short at the bid. The size can be at most what is displayed there.
+- **Costs** (`costs.segments.mcx_futures` and `cds_futures`, from Zerodha's charges page):
+  - MCX: commodity transaction tax 0.01% on the sale.
+  - Currency: no STT.
+  - Each also pays its exchange's charge and stamp duty on the buy.
+  - Both pay brokerage of 20 rupees or 0.03% (whichever is lower), SEBI's fee and GST.
+- **Calendars:** both segments are verified for 2026. On an NSE holiday that MCX does not list as a full closure, MCX trades only
+  its evening session (from 17:00), the conservative reading. **2027 trades on neither until its holiday lists are entered.**
+
+**What is not verified at the source:** the lots, margins, charges and holidays come from Zerodha's published pages (13 Nov 2026).
+The exchanges' own sites refused the session that set this up. Check them against MCX's and NSE's contract specifications and
+circulars.
+
+**Not built:** AUTO does not trade futures; they are the owner's tickets only. There are no MCX or currency options.
+
 ## AUTO v2: the paper desk writing, testing and choosing its own strategies (paper money only)
 
 Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a system which is sophisticated, advanced ... can take any strategy in its place, create its own strategy, permutation, combination, can trade."

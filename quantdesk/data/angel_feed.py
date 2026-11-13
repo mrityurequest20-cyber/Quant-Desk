@@ -205,7 +205,7 @@ class AngelFeed:
                 n = self.by_token.get(tok)
                 if not n:
                     continue
-                q = {**q, "s": "cds"}
+                q = {**q, "s": "cds", "e": self.names[n]["expiry"].isoformat()}      # the contract: a paper position records which month it holds
                 self.stats["quotes"] += 1
                 self.stats["books"] += "d" in q
                 key = {k: v for k, v in q.items() if k != "t"}
