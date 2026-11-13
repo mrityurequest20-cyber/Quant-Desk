@@ -84,8 +84,11 @@ def test_the_page_posts_to_exactly_two_relay_routes_and_only_after_a_review_step
     assert sorted(set(posts)) == ["/paper/kill", "/paper/order"]                                                                  # nothing else is ever sent
     assert 'const PAPER_ROUTES = { "/paper/order": "POST", "/paper/kill": "POST", "/paper/state": "GET" };' in APP and "not a paper route" in APP
     assert len(re.findall(r"fetch\(", APP[APP.index("async function paperCall"):APP.index("// ---- the ticket in the Build tab")])) == 1      # one fetch, in paperCall
-    ticket = APP[APP.index("function bdTicket"):APP.index("// ---- the Paper tab")]
+    ticket = APP[APP.index("function bdTicket"):APP.index("// ---- the futures ticket")]
     assert ticket.count('paperCall("POST", "/paper/order", o)') == 1 and ticket.index('if (tk.stage === "review" && built.orders)') < ticket.index('paperCall("POST", "/paper/order", o)')      # the send exists only on the review step
+    fut = APP[APP.index("// ---- the futures ticket"):APP.index("// ---- the Paper tab")]                                           # MCX and currency futures (13 Nov 2026): the same two steps
+    assert fut.count('paperCall("POST", "/paper/order", o)') == 1 and fut.index('F.stage !== "review") {') < fut.index('paperCall("POST", "/paper/order", o)')
+    assert 'if (F.busy || F.stage !== "review") return;' in fut and fut.count('F.stage = "edit"') >= 6                          # every change to the ticket sends it back to the review
     assert 'if (r.status !== 200) break;' in ticket                                                                              # a refused first leg stops the rest
     tab = APP[APP.index("// ---- the Paper tab"):APP.index("// refresh loop, pull to refresh, boot")]
     assert 'P.confirm = killOn ? "kill:off" : "kill:on"' in tab and 'P.confirm = "sell:" + p.symbol' in tab                          # kill and sell are two taps, and the kill tap names its direction
