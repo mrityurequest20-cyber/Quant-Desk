@@ -64,6 +64,50 @@ On a day the exchange opens for a special window (Diwali Muhurat trading, 8 Nov 
 
 Nothing else changes: the same risk gate, the same limits, paper money only.
 
+## MCX and currency futures (owner's order, 13 Nov 2026)
+
+"First, enable the MCX and the currency in the paper trading." The paper desk trades the **near-month futures** the Markets page
+shows: crude oil and its mini, natural gas and its mini, gold and gold mini, silver and silver mini, copper, and USD, EUR, GBP and
+JPY against the rupee. Futures only: no MCX or currency options.
+
+**Opening a trade.** Open the instrument on Markets and press **Paper trade**. Then:
+- choose Buy (long) or Sell (short) and the number of lots;
+- set a **stop** (required) and, if you like, a target;
+- name the strategy and write the thesis.
+
+The ticket shows the price you would get, the risk to the stop, the margin and the reward to risk. The runner's gate
+(`RiskGate.check_future`) decides.
+
+**The rules:**
+- **The stop bounds the risk.** The loss to the stop, plus a 0.1% slippage allowance and both sides' fees, must fit in
+  `risk_per_trade` (2.5% of equity), exactly as an option's whole premium must. A stop more than 10% away is refused as a typo.
+- **Margin, not cash.** A futures fill moves cash only by its fees; the profit or loss arrives on the close. The margin (lot x
+  price x the contract's rate, from Zerodha's NRML rates) must fit in the equity left free. The loss budget counts each open
+  future at its stop.
+- **Intraday only.** Every futures position is closed 5 minutes before its segment's close: currency at 16:55; MCX at 23:25 (23:50
+  while the US is on daylight saving). No new entry in the last 15 minutes. Nothing is held overnight, across a roll or into a
+  delivery period.
+- **Near expiry.** No new entry in an MCX contract's last 5 trading days (a tender or delivery period may start), or in a
+  currency contract on its last trading day.
+- **Contract identity.** Which contract month the board shows comes with each quote (`e`, from the feeds' instrument lists) and is
+  recorded on the position. If the board's name moves to another month, the position has no price rather than a wrong one.
+- **Stops and targets** are watched by the runner every cycle and closed at the bid (long) or the offer (short). The stop and
+  target are in the sealed ledger row, so a restart rebuilds them; a saved file with a different stop fails verification.
+- **Fills** are at the touch: a long at the offer, a short at the bid. The size can be at most what is displayed there.
+- **Costs** (`costs.segments.mcx_futures` and `cds_futures`, from Zerodha's charges page):
+  - MCX: commodity transaction tax 0.01% on the sale.
+  - Currency: no STT.
+  - Each also pays its exchange's charge and stamp duty on the buy.
+  - Both pay brokerage of 20 rupees or 0.03% (whichever is lower), SEBI's fee and GST.
+- **Calendars:** both segments are verified for 2026. On an NSE holiday that MCX does not list as a full closure, MCX trades only
+  its evening session (from 17:00), the conservative reading. **2027 trades on neither until its holiday lists are entered.**
+
+**What is not verified at the source:** the lots, margins, charges and holidays come from Zerodha's published pages (13 Nov 2026).
+The exchanges' own sites refused the session that set this up. Check them against MCX's and NSE's contract specifications and
+circulars.
+
+**Not built:** AUTO does not trade futures; they are the owner's tickets only. There are no MCX or currency options.
+
 ## AUTO v2: the paper desk writing, testing and choosing its own strategies (paper money only)
 
 Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a system which is sophisticated, advanced ... can take any strategy in its place, create its own strategy, permutation, combination, can trade."
@@ -80,6 +124,40 @@ Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a 
 * **Bounds:** the risk gate's loss caps only (2.5% of the account a trade with fees, 5% a day, a 10% drawdown halt). No cap on trades, strategies or positions.
 * **Switches:** off with the repository variable `PAPER_AUTO` = `no`; back to v1 with `PAPER_AUTO_ENGINE` = `v1`.
 * **Not proven to make money.** The shadow record is the evidence it builds; the first days are mostly shadow trades.
+
+### The day plan, 06:00 to 09:15 (owner's order, 13 Nov 2026)
+
+"6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis
+and look for high risk to reward trades." Every ten minutes from 06:00 to 09:15, AUTO v2 builds a **day plan**
+(`AutoPilotV2.plan`).
+
+**What it reads:**
+- **Options and futures:** last night's closing books from the relay (kept through the night since the board is stored): the
+  at-the-money implied volatility, the closing book pressure, and the options' forward against the futures.
+- **News:** the news engine's tone for each underlying.
+- **Overnight markets:** the brief's US, Asian and European equity moves; their median is one vote for the indices.
+- **The pre-market brief** (`premarket.yml`, now from 06:00): results today (options rich or cheap against the company's own
+  history, which sets the volatility context), macro events, expiries, headlines naming the instrument, futures OI shifts.
+
+**What it decides:**
+- **A pre-open view** per underlying: up or down when at least two readings agree and none disagrees; flat when nothing moves.
+- **Candidates:** every catalogue strategy whose context holds, priced on the closing books, kept only if its reward to risk
+  is **2 or better** (the strategy's own take-profit against its stop, capped by what the structure can make).
+- **Ranking:** proven strategies first, then by measured expectancy in R, then by catalysts and reward to risk. At most two per
+  underlying and ten in all. Each comes with its legs, rupees at risk and to gain per lot, and its reasons.
+
+**At the open:** from 09:20, for each underlying, AUTO v2 takes a **planned** strategy first, but only if its context still holds
+on the live board, it has its `MIN_TRADES` shadow record, and its Thompson draw is positive. Otherwise it chooses as before. A
+planned trade's thesis says so.
+- **Same limits:** the plan changes the order of choice, not the limits. The risk gate, the loss caps, the proof gate and the
+  sizes are the same as for any trade.
+- **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
+- **Yesterday's plan** never steers today.
+
+**Where to see it:** the Positions tab, the "Day plan" panel, above the strategy lab.
+
+**What it is not:** a forecast that has been tested. The repository's own research found direction hard to forecast. The plan
+writes down what the desk will look for and why. Whether planned trades do better than unplanned ones is for the record to show.
 
 ## AUTO v1: the paper desk deciding for itself (paper money only)
 

@@ -49,7 +49,8 @@ class Instrument:
         if self.kind == OPTION:
             return "options"
         if self.kind == FUTURE:
-            return "futures"
+            sym = (self.symbol or "").upper()
+            return "mcx_futures" if sym.endswith("-MCX") else "cds_futures" if sym.endswith("-CDS") else "futures"      # the board's names: MCX and NSE currency futures have their own charges
         return "equity_intraday" if intraday else "equity_delivery"
 
     def to_dict(self) -> dict:

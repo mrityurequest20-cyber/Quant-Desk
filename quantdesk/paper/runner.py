@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 
 from ..core.calendar import TradingCalendar
-from ..core.types import OPTION, Instrument
+from ..core.types import FUTURE, OPTION, Instrument
 from ..markets import sessions as MK
 from .account import Account, is_number
 from . import review as RV
@@ -52,6 +52,8 @@ MIN_THESIS = 20
 MAX_LEGS = 50                 # a sanity bound on the shape of a package (the gate's worst-case check is what limits the risk)
 MAX_LOTS = 1000               # a sanity bound on the shape of an order; the risk gate is what limits the size
 SEGMENT = "nse_fo"            # this version trades the NSE index options only
+FUT_RE = re.compile(r"^([A-Z][A-Z0-9&]{1,20})-(MCX|CDS)$")      # an MCX or currency future as the board names it: the near month (paper.futures)
+FUT_SEG = {"MCX": "mcx", "CDS": "nse_cds"}
 
 
 def _num(x):
@@ -138,8 +140,8 @@ def clean_order(raw) -> tuple[dict | None, str | None]:
     if raw.get("side") == "package":
         return clean_package(raw)
     side = raw.get("side")
-    if side not in ("buy", "sell"):
-        return None, "side must be buy or sell"
+    if side not in ("buy", "sell", "short"):
+        return None, "side must be buy, sell or short (short: a future only)"
     lots = raw.get("lots")
     if side == "sell" and lots == "all":
         pass
@@ -150,7 +152,7 @@ def clean_order(raw) -> tuple[dict | None, str | None]:
         strategy = " ".join(strategy.split())                              # whitespace (the markers' control character included) becomes one space
     if isinstance(thesis, str):
         thesis = " ".join(thesis.split())
-    if side == "buy":
+    if side in ("buy", "short"):
         if not _text(strategy, 1, 60) or CTRL.search(strategy):
             return None, "a buy needs a strategy name (1 to 60 characters, no control characters)"
         if not _text(thesis, MIN_THESIS, 1000) or CTRL.search(thesis):
@@ -158,6 +160,10 @@ def clean_order(raw) -> tuple[dict | None, str | None]:
     limit = raw.get("limit")
     if limit is not None and not (_num(limit) is not None and limit > 0):
         return None, "the limit price must be a number above zero"
+    stop, target = raw.get("stop"), raw.get("target")                      # a future's stop (required for a futures entry) and its optional target
+    for k, v in (("stop", stop), ("target", target)):
+        if v is not None and not (_num(v) is not None and v > 0):
+            return None, f"the {k} price must be a number above zero"
     group = raw.get("group")
     if group is not None and not (_text(group, 1, 40) and not CTRL.search(group)):
         return None, "the group label is malformed"
@@ -170,7 +176,7 @@ def clean_order(raw) -> tuple[dict | None, str | None]:
             ref = {"bid": rb, "ask": ra, "at": rt if rt is not None and 0 < rt < 4e12 else None}
     return {"id": oid, "side": side, "symbol": raw.get("symbol"), "lots": lots, "strategy": strategy.strip() if isinstance(strategy, str) else None,
             "thesis": thesis.strip() if isinstance(thesis, str) else None, "limit": float(limit) if limit is not None else None,
-            "group": group, "queued_at": q, "ref": ref}, None
+            "group": group, "queued_at": q, "ref": ref, "stop": float(stop) if stop is not None else None, "target": float(target) if target is not None else None}, None
 
 
 def clean_package(raw: dict) -> tuple[dict | None, str | None]:
@@ -259,6 +265,10 @@ class Runner:
         self.seen: set[str] = set(done_ids(account))
         self.results: list[dict] = []
         self.entries_blocked: str | None = None       # set by the session while the relay cannot be given the fills: new entries wait, exits and the brakes still run
+        fut = cfg.get("paper.futures") or {}                                 # MCX and currency futures (owner's order, 13 Nov 2026)
+        self.fut = {str(u).upper(): dict(c) for u, c in (fut.get("contracts") or {}).items() if isinstance(c, dict)}
+        self.fut_rules = {k: v for k, v in fut.items() if k != "contracts"}
+        self.fut_margins = {u: float(c.get("margin", 1.0)) for u, c in self.fut.items()}
 
     # ---- the board ---------------------------------------------------------------------------------------------------------
     @staticmethod
@@ -287,10 +297,27 @@ class Runner:
                 sizes[k] = _num(v)
         return Quote(bid, ask, now - dt.timedelta(seconds=age), sizes["bid_qty"], sizes["ask_qty"])
 
+    @staticmethod
+    def board_expiry(snap, name) -> dt.date | None:
+        """The contract month the board shows under a future's name (its quote's `e`), or None."""
+        q = (snap.get("quotes") or {}).get(name) if isinstance(snap, dict) and isinstance(snap.get("quotes"), dict) else None
+        e = q.get("e") if isinstance(q, dict) else None
+        try:
+            return dt.date.fromisoformat(e) if isinstance(e, str) and len(e) == 10 else None
+        except ValueError:
+            return None
+
+    def held_quote(self, snap, sym, now, max_age) -> Quote | None:
+        """A held position's quote; for a future only while the board still shows the same contract month (after a roll the name is another contract: no price, never a wrong one)."""
+        pos = self.account.positions.get(sym)
+        if pos is not None and pos.instrument.kind == FUTURE and self.board_expiry(snap, sym) != pos.instrument.expiry:
+            return None
+        return self.quote_from(snap, sym, now, max_age)
+
     def marks(self, snap, now) -> dict[str, float]:
         out = {}
         for sym in self.account.positions:
-            q = self.quote_from(snap, sym, now, MARK_MAX_AGE_S)
+            q = self.held_quote(snap, sym, now, MARK_MAX_AGE_S)
             short = self.account.positions[sym].qty < 0
             if q is not None and q.bid > 0 and (not short or q.ask > 0):
                 out[sym] = q.ask if short else q.bid                          # what it could be sold for now (a sold option: what it would cost to buy back): never the mid, never the last trade
@@ -323,7 +350,7 @@ class Runner:
             rep["skipped"] = f"the relay's clock and this machine's differ by more than {MAX_SKEW_S}s: nothing is done"
             return rep
         marks = self.marks(snap, now)
-        quotes = {s: self.quote_from(snap, s, now, FORCED_EXIT_AGE_S) for s in self.account.positions}
+        quotes = {s: self.held_quote(snap, s, now, FORCED_EXIT_AGE_S) for s in self.account.positions}
         try:
             reasons = self.gate.update(self.account, marks, now)
         except ValueError as e:                                              # a clock that ran backwards: refuse the cycle, change nothing
@@ -338,7 +365,10 @@ class Runner:
             ds = self.broker.trim(quotes, marks, now)
             rep["forced"].append({"action": "trim", "why": trim, "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
         ist = now.astimezone(IST)
-        today = [s for s, p in self.account.positions.items() if p.instrument.expiry is not None and p.instrument.expiry >= ist.date() and self.past_last_entry(p.instrument, ist)]      # an expired one is "stuck" and reported, not retried every cycle
+        fx = self.futures_exits(quotes, now, ist)
+        if fx:
+            rep["forced"].append({"action": "futures", "why": sorted({w for w, _ in fx.values()}), "decisions": {k: v.reasons or ["closed"] for k, (_, v) in fx.items()}})
+        today = [s for s, p in self.account.positions.items() if not p.is_future and p.instrument.expiry is not None and p.instrument.expiry >= ist.date() and self.past_last_entry(p.instrument, ist)]      # an expired one is "stuck" and reported, not retried every cycle
         if today:
             ds = {}
             for s in sorted(today, key=lambda k: self.account.positions[k].qty >= 0):          # sold options first: buying them back never leaves anything uncovered
@@ -346,7 +376,7 @@ class Runner:
                 ds[s] = self.broker.close(s, abs(self.account.positions[s].qty), quotes.get(s), now, why)[0]
             rep["forced"].append({"action": "sell expiring", "why": ["expires today, or a stock option on its last day before expiry"], "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
         if ist.time() >= SETTLE_AT:
-            left = {s: p for s, p in self.account.positions.items() if p.instrument.expiry == ist.date()}
+            left = {s: p for s, p in self.account.positions.items() if not p.is_future and p.instrument.expiry == ist.date()}
             if left:                                                         # the session has closed and these could not be sold: cash-settle them at the index price (the broker's own settle)
                 spot = {}
                 for u in {p.instrument.underlying for p in left.values()}:
@@ -382,6 +412,11 @@ class Runner:
             return res
         if o["side"] == "package":
             return self._package(o, snap, now, res)
+        if isinstance(o["symbol"], str) and FUT_RE.match(o["symbol"]):
+            return self._future(o, snap, now, res)
+        if o["side"] == "short":
+            res.update(status="refused", reasons=["a short is opened on an MCX or currency future only (an option is sold only as a leg of a package)"])
+            return res
         inst, why = parse_contract(o["symbol"], self.und, self.lots)
         if inst is None:
             res.update(status="refused", reasons=[why])
@@ -418,6 +453,88 @@ class Runner:
             res.update(status="filled", reasons=[], fill={k: row[k] for k in ("seq", "kind", "ts", "qty", "price", "fees") if k in row} | {"symbol": inst.symbol}
                        | ({"slip": row["slip"]} if isinstance(row.get("slip"), dict) else {}))
         return res
+
+    # ---- MCX and currency futures ------------------------------------------------------------------------------------------------------
+    def parse_future(self, symbol: str, snap) -> tuple[Instrument | None, str | None, str | None]:
+        """(instrument, segment, None) for a future the desk trades, its contract month read from the board; or (None, None, why)."""
+        m = FUT_RE.match(symbol or "")
+        if not m:
+            return None, None, f"{_safe(symbol)} is not an MCX or currency future"
+        u, seg = m.group(1), FUT_SEG[m.group(2)]
+        c = self.fut.get(u)
+        if c is None or c.get("segment") != seg or u not in self.gate.limits.underlyings.get(seg, frozenset()):
+            return None, None, f"{_safe(symbol)}: {u} is not a {seg} future the paper desk trades (paper.futures)"
+        lot = c.get("lot")
+        if not (isinstance(lot, int) and not isinstance(lot, bool) and lot > 0):
+            return None, None, f"{u} has no verified lot (paper.futures)"
+        exp = self.board_expiry(snap, symbol)
+        if exp is None:
+            return None, None, f"the board does not say which contract month {_safe(symbol)} is: not traded"
+        return Instrument(symbol=symbol, kind=FUTURE, underlying=u, lot_size=lot, expiry=exp), seg, None
+
+    def _future(self, o: dict, snap, now, res: dict) -> dict:
+        sym = o["symbol"]
+        pos = self.account.positions.get(sym)
+        if o["side"] == "sell":                                              # close it, whichever way it is held
+            if pos is None:
+                res.update(status="refused", reasons=[f"{sym} is not held"])
+                return res
+            qty = abs(pos.qty) if o["lots"] == "all" else min(abs(pos.qty), o["lots"] * pos.instrument.lot_size)
+            quote = self.held_quote(snap, sym, now, EXIT_AGE_S)
+            d, row = self.broker.close(sym, qty, quote, now, f"{MARK}exit {o['id']}", self._ref(o, now), o["limit"])
+        else:
+            if self.entries_blocked:
+                res.update(status="refused", reasons=[self.entries_blocked])
+                return res
+            if pos is not None:
+                res.update(status="refused", reasons=[f"{sym} is already held: one futures position per contract (close it first)"])
+                return res
+            inst, seg, why = self.parse_future(sym, snap)
+            if inst is None:
+                res.update(status="refused", reasons=[why])
+                return res
+            if o["stop"] is None:
+                res.update(status="refused", reasons=["every futures entry needs a stop price"])
+                return res
+            short = o["side"] == "short"
+            order = Order(inst, seg, o["lots"] * inst.lot_size, o["strategy"], f"{o['thesis']}{MARK}[order {o['id']}]")
+            rules = {**self.fut_rules, **self.fut[inst.underlying], "margins": self.fut_margins}
+            d, row = self.broker.open_future(order, short, self.quote_from(snap, sym, now, None), o["stop"], o["target"], self.marks(snap, now), now, rules,
+                                             self._ref(o, now), o["limit"])
+        if row is None:
+            res.update(status="refused", reasons=d.reasons or ["refused"])
+        else:
+            res.update(status="filled", reasons=[], fill={k: row[k] for k in ("seq", "kind", "ts", "qty", "price", "fees", "stop", "target") if k in row} | {"symbol": sym}
+                       | ({"slip": row["slip"]} if isinstance(row.get("slip"), dict) else {}))
+        return res
+
+    def futures_exits(self, quotes: dict, now: dt.datetime, ist: dt.datetime) -> dict:
+        """Each cycle, for every futures position: its stop, its target, the square-off before its segment's close (futures are intraday), and one somehow held from an
+        earlier day closed at once. {symbol: (why, decision)} for what was tried."""
+        out = {}
+        sq = dt.timedelta(minutes=int(self.fut_rules.get("square_off_min", 5)))
+        for sym, p in sorted(self.account.positions.items()):
+            if not p.is_future:
+                continue
+            q = quotes.get(sym)
+            sess = MK.exit_session(p.segment, ist.date(), self.gate.cal)
+            why = None
+            try:
+                opened = dt.datetime.fromisoformat(p.opened_at).astimezone(IST).date()
+            except (TypeError, ValueError):
+                opened = ist.date()
+            if opened < ist.date():
+                why = "held past its day: futures are intraday"
+            elif sess is not None and ist >= sess[1] - sq:
+                why = f"square-off {sq.seconds // 60} minutes before the {p.segment} close: futures are intraday"
+            elif q is not None and p.stop is not None and ((p.qty > 0 and q.bid <= p.stop) or (p.qty < 0 and q.ask >= p.stop)):
+                why = f"stop {p.stop:g} reached ({'bid' if p.qty > 0 else 'offer'} {q.bid if p.qty > 0 else q.ask:g})"
+            elif q is not None and p.target is not None and ((p.qty > 0 and q.bid >= p.target) or (p.qty < 0 and q.ask <= p.target)):
+                why = f"target {p.target:g} reached ({'bid' if p.qty > 0 else 'offer'} {q.bid if p.qty > 0 else q.ask:g})"
+            if why:
+                d, _ = self.broker.close(sym, abs(p.qty), q, now, why)
+                out[sym] = (why, d)
+        return out
 
     def _package(self, o: dict, snap, now, res: dict) -> dict:
         """Open several legs together (see PaperBroker.open_package). All the legs are checked first; any refusal means none is opened."""
@@ -484,11 +601,12 @@ class Runner:
         for s, p in sorted(a.positions.items()):
             m = marks.get(s)
             pos.append({"symbol": s, "lots": p.qty // max(1, p.instrument.lot_size), "qty": p.qty, "avg": p.avg_price, "mark": fin(m), "pnl": fin((m - p.avg_price) * p.qty) if m is not None else None,
-                        "strategy": p.strategy, "thesis": visible(p.thesis), "opened_at": p.opened_at, "expiry": p.instrument.expiry.isoformat() if p.instrument.expiry else None})
+                        "strategy": p.strategy, "thesis": visible(p.thesis), "opened_at": p.opened_at, "expiry": p.instrument.expiry.isoformat() if p.instrument.expiry else None,
+                        **({"kind": "future", "segment": p.segment, "stop": p.stop, "target": p.target, "lot_size": p.instrument.lot_size} if p.is_future else {})})
         day_floor, dd_floor = self.gate.floors(a)
         return {"v": 1, "asof": now.isoformat(), "equity": fin(eq), "cash": a.cash, "capital0": a.capital0, "net_pnl": fin(eq - a.capital0) if is_number(eq) else None,
                 "realized": a.realized, "fees": a.fees, "hwm": a.hwm, "day": a.day, "day_start": a.day_start, "day_halted": a.day_halted, "halt": a.halt,
-                "kill": self.kill_file.exists(), "stuck": [s for s, p in a.positions.items() if p.instrument.expiry and p.instrument.expiry < now.astimezone(IST).date()], "day_floor": fin(day_floor), "dd_floor": fin(dd_floor), "positions": pos,
+                "kill": self.kill_file.exists(), "stuck": [s for s, p in a.positions.items() if not p.is_future and p.instrument.expiry and p.instrument.expiry < now.astimezone(IST).date()], "day_floor": fin(day_floor), "dd_floor": fin(dd_floor), "positions": pos,
                 "slippage": SL.totals(a.ledger), "slips": [{"seq": r["seq"], "symbol": r.get("symbol"), **r["slip"]} for r in [x for x in a.ledger if isinstance(x.get("slip"), dict)][-8:]],
                 "ledger_tail": [_tail(r) for r in a.ledger[-40:]],
                 "ledger_len": len(a.ledger), "ledger_ok": a.verify_ledger(), "reviews": self._reviews(now, eq)}

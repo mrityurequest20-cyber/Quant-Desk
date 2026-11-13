@@ -180,7 +180,8 @@ These are not questions. The engineer never asks about them; it simply does not 
     credentials are repository secrets the owner sets, reach only the step that logs in or streams, and are never
     printed, logged, committed or published; a login that fails is tried at most once a day, so a wrong password or
     PIN cannot lock the account; and the data reaches the private live relay only. Ends on 31 December 2027 or when
-    the owner removes the secrets, whichever is first. Does not cover real money.
+    the owner removes the secrets, whichever is first. Does not cover real money. The owner named the third broker the same day: "Added angel one
+    api too" (Angel One, for currency).
 
   
 - **No looser risk:** never loosen a risk limit (`intraday.risk`, the drawdown halts, the loss budget), and never size

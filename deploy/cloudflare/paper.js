@@ -33,17 +33,20 @@ export function cleanOrder(o) {
 	if (!o || typeof o !== "object" || Array.isArray(o)) return null;
 	if (!(typeof o.id === "string" && ID.test(o.id))) return null;
 	if (o.side === "package") return cleanPackage(o);
-	if (o.side !== "buy" && o.side !== "sell") return null;
+	if (o.side !== "buy" && o.side !== "sell" && o.side !== "short") return null;        // short: an MCX or currency future only (the runner refuses it on anything else)
 	if (!(typeof o.symbol === "string" && NAME.test(o.symbol))) return null;
 	const all = o.side === "sell" && o.lots === "all";
 	if (!all && !(Number.isInteger(o.lots) && o.lots >= 1 && o.lots <= 1000)) return null;
 	const out = { id: o.id, side: o.side, symbol: o.symbol, lots: o.lots };
-	if (o.side === "buy") {
+	if (o.side === "buy" || o.side === "short") {
 		if (!isStr(o.strategy, 1, 60) || !isStr(o.thesis, 20, 1000)) return null;
 		out.strategy = o.strategy.trim();
 		out.thesis = o.thesis.trim();
 	}
 	if (o.limit !== undefined && o.limit !== null) { if (!(isNum(o.limit) && o.limit > 0)) return null; out.limit = o.limit; }
+	for (const k of ["stop", "target"]) {                                                     // a future's stop (required by the runner for every futures entry) and its target
+		if (o[k] !== undefined && o[k] !== null) { if (!(isNum(o[k]) && o[k] > 0)) return null; out[k] = o[k]; }
+	}
 	if (o.group !== undefined && o.group !== null) { if (!isStr(o.group, 1, 40)) return null; out.group = o.group.trim(); }
 	// what the trader saw when deciding (used only to report slippage; a bad one is dropped, the order still goes)
 	if (o.ref && typeof o.ref === "object" && !Array.isArray(o.ref) && isNum(o.ref.bid) && isNum(o.ref.ask) && o.ref.bid > 0 && o.ref.bid <= o.ref.ask) {

@@ -171,6 +171,16 @@ def register(sub):
     x.add_argument("--until", required=True, help="HH:MM IST")
     x.add_argument("--with-reference", action="store_true", help="after the close, also fetch Kite's historical minute candles as the reference")
     x.set_defaults(fn=cmd_kite_record)
+    x = ss.add_parser("fyers-feed", help="Fyers: MCX and currency near-month futures (price, book, OI) to the private live relay every 5 s until --until (IST), as feed 'f'. "
+                                         "Market data only, nothing written to disk; env FYERS_APP_ID, FYERS_DATA_TOKEN, LIVE_URL, LIVE_INGEST_TOKEN (docs/FEEDS.md)")
+    x.add_argument("--until", required=True, help="HH:MM IST")
+    x.add_argument("--metrics", help="write the run's counts (no price, no token) here as JSON")
+    x.set_defaults(fn=cmd_fyers_feed)
+    x = ss.add_parser("angel-feed", help="Angel One: currency near-month futures (price, five-level book, OI) to the private live relay every 5 s until --until (IST) or 17:05, "
+                                         "as feed 'a'. Market data only, nothing written to disk; env ANGEL_API_KEY, ANGEL_DATA_TOKEN, LIVE_URL, LIVE_INGEST_TOKEN (docs/FEEDS.md)")
+    x.add_argument("--until", required=True, help="HH:MM IST")
+    x.add_argument("--metrics", help="write the run's counts (no price, no token) here as JSON")
+    x.set_defaults(fn=cmd_angel_feed)
     x = ss.add_parser("kite-compare", help="Kite: the session's measures from a recorded folder (counts and ratios only)")
     x.add_argument("--dir", required=True)
     x.add_argument("--day", required=True, help="YYYY-MM-DD")
@@ -332,6 +342,79 @@ def cmd_kite_record(cfg, a):
         print(f"::warning::kite-record: no usable session today ({type(exc).__name__}); nothing recorded")      # a token that decrypts but is no longer valid (the daily workflow was not run), an API refusal, the network: a clean exit
         return
     print(f"kite-record: {rep['day']}: {rep['ticks']:,} ticks in {rep['parts']} parts, instruments {sorted(rep['tokens'])}")
+
+
+def cmd_fyers_feed(cfg, a):
+    import datetime as _dt
+    import json as _json
+    import re as _re
+
+    from . import fyers_feed as F
+    from .live_push import LivePusher
+    if not _re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", a.until or ""):
+        raise SystemExit("fyers-feed: --until must be HH:MM")
+    if _dt.datetime.now(F.IST).date() >= F.AUTHORITY_ENDS:
+        print("fyers-feed: the owner's Fyers data authority has ended (docs/AUTONOMY.md); nothing streamed")
+        return
+    app_id, token = (os.environ.get("FYERS_APP_ID") or "").strip(), (os.environ.get("FYERS_DATA_TOKEN") or "").strip()
+    url, ingest = (os.environ.get("LIVE_URL") or "").strip(), (os.environ.get("LIVE_INGEST_TOKEN") or "").strip()
+    if not (app_id and token):
+        print("fyers-feed: no Fyers app id or no token for today (the login did not run or failed); nothing streamed")
+        return
+    if not (url and ingest):
+        print("fyers-feed: no live relay configured (LIVE_URL, LIVE_INGEST_TOKEN); the feed is display only, so nothing to do")
+        return
+    watch = cfg.get("desk.watchlist", {}) or {}
+    try:
+        rep = F.run(a.until, app_id, token, LivePusher(url, ingest, src="f"), watchlist=watch if isinstance(watch, dict) else {})
+    except (OSError, ValueError) as exc:                            # Fyers or the network (urllib's errors are OSErrors), or an answer that is not JSON: a warning, not a red run
+        rep = {"stopped": f"Fyers side: {type(exc).__name__}"}
+        print(f"::warning::fyers-feed: {rep['stopped']}")
+    if a.metrics:
+        Path(a.metrics).write_text(_json.dumps(rep, indent=1, default=str))
+    for n in rep.get("notes") or []:
+        print(f"::warning::fyers-feed: {n}")
+    for n in rep.get("shape") or []:
+        print(f"::warning::fyers-feed: an answer it could not read: {n}")
+    print(f"fyers-feed: {rep.get('contracts', 0)} contracts, {rep.get('cycles', 0)} cycles, {rep.get('pushed', 0)} quotes pushed, "
+          f"{rep.get('books', 0)} books, {rep.get('errors', 0)} errors; stopped: {rep.get('stopped')}")
+    if str(rep.get("stopped", "")).startswith(("Fyers refused", "blocked")):
+        print(f"::warning::fyers-feed: {rep['stopped']}")
+
+
+def cmd_angel_feed(cfg, a):
+    import datetime as _dt
+    import json as _json
+    import re as _re
+
+    from . import angel_feed as A
+    from .live_push import LivePusher
+    if not _re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", a.until or ""):
+        raise SystemExit("angel-feed: --until must be HH:MM")
+    if _dt.datetime.now(A.IST).date() >= A.AUTHORITY_ENDS:
+        print("angel-feed: the owner's data authority for Angel One has ended (docs/AUTONOMY.md); nothing streamed")
+        return
+    key, jwt = (os.environ.get("ANGEL_API_KEY") or "").strip(), (os.environ.get("ANGEL_DATA_TOKEN") or "").strip()
+    url, ingest = (os.environ.get("LIVE_URL") or "").strip(), (os.environ.get("LIVE_INGEST_TOKEN") or "").strip()
+    if not (key and jwt):
+        print("angel-feed: no Angel One API key or no session for today (the login did not run or failed); nothing streamed")
+        return
+    if not (url and ingest):
+        print("angel-feed: no live relay configured (LIVE_URL, LIVE_INGEST_TOKEN); the feed is display only, so nothing to do")
+        return
+    try:
+        rep = A.run(a.until, key, jwt, LivePusher(url, ingest, src="a"))
+    except (OSError, ValueError) as exc:                            # Angel One or the network, or an answer that is not JSON: a warning, not a red run
+        rep = {"stopped": f"Angel One side: {type(exc).__name__}"}
+        print(f"::warning::angel-feed: {rep['stopped']}")
+    if a.metrics:
+        Path(a.metrics).write_text(_json.dumps(rep, indent=1, default=str))
+    for n in rep.get("shape") or []:
+        print(f"::warning::angel-feed: an answer it could not read: {n}")
+    print(f"angel-feed: {rep.get('contracts', 0)} contracts, {rep.get('cycles', 0)} cycles, {rep.get('pushed', 0)} quotes pushed, "
+          f"{rep.get('books', 0)} books, {rep.get('errors', 0)} errors; stopped: {rep.get('stopped')}")
+    if str(rep.get("stopped", "")).startswith(("Angel One refused", "blocked")):
+        print(f"::warning::angel-feed: {rep['stopped']}")
 
 
 def cmd_kite_compare(cfg, a):

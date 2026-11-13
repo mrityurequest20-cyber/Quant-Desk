@@ -27,6 +27,7 @@ from dataclasses import dataclass
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 MCX_EARLY_CLOSE = dt.time(23, 30)       # US standard time
 MCX_LATE_CLOSE = dt.time(23, 55)        # US daylight saving time
+MCX_EVENING_OPEN = dt.time(17, 0)       # on a day MCX shuts only its morning session
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,10 @@ class Calendars:
             days = {_d(x) for x in ((cfg.get(f"markets.{key}.holidays") if cfg is not None else None) or [])}
             years = {int(y) for y in ((cfg.get(f"markets.{key}.holiday_years") if cfg is not None else None) or [])}
             self.own[key] = (days, years)
+        # MCX keeps its evening session on most NSE holidays and shuts only the morning. For TRADING, a weekday NSE holiday that MCX does not list as a full closure counts as
+        # evening-only (opens 17:00), as does any date in markets.mcx.evening_only: conservative, so a closed morning is never traded; at worst an open one is missed.
+        listed = {_d(x) for x in ((cfg.get("markets.mcx.evening_only") if cfg is not None else None) or [])}
+        self.mcx_evening = listed | {d for d in self.nse_days if d.weekday() < 5 and d not in self.own.get("mcx", (set(), set()))[0]}
 
     def known(self, key: str, day: dt.date) -> bool:
         years = self.nse_years if SEGMENTS[key].calendar == "nse" else self.own[key][1]
@@ -97,7 +102,8 @@ def session(key: str, day: dt.date, cal: Calendars, trading: bool = False) -> tu
         return None
     if trading and not cal.known(key, day):
         return None
-    return (dt.datetime.combine(day, seg.opens, tzinfo=IST), dt.datetime.combine(day, closes_at(seg, day), tzinfo=IST))
+    opens = MCX_EVENING_OPEN if trading and key == "mcx" and day in cal.mcx_evening else seg.opens
+    return (dt.datetime.combine(day, opens, tzinfo=IST), dt.datetime.combine(day, closes_at(seg, day), tzinfo=IST))
 
 
 def exit_session(key: str, day: dt.date, cal: Calendars) -> tuple[dt.datetime, dt.datetime] | None:

@@ -16,6 +16,26 @@ EXIT_REFUSED = 3             # the saved histories disagree or do not verify: th
 UNSAFE_AFTER_S = 30.0        # new entries wait when the relay has not been given the latest fill for this long (exits and the brakes still run)
 NEWS_EVERY_S = 60.0          # the autopilot reads the news digest at most this often
 FULL_EVERY_S = 60.0          # the whole account goes to the relay at least this often when only the figures the brakes use (high-water mark, day start) have moved
+BRIEF_EVERY_S = 900.0        # the pre-market brief is fetched for the day plan this often, 05:50 to 09:20 IST
+BRIEF_WINDOW = (dt.time(5, 50), dt.time(9, 20))
+BRIEF_MAX_BYTES = 4 << 20
+
+
+def fetch_brief(repo: str, today: dt.date, opener=None) -> dict | None:
+    """Today's pre-market brief (premarket.yml publishes it to the public `premarket` branch), or None: not published yet, not today's, unreadable or the network.
+    Public data only (NSE tables, Yahoo, RSS); it holds no secret and needs none."""
+    import json
+    import re
+    import urllib.request
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", repo or ""):
+        return None
+    url = f"https://raw.githubusercontent.com/{repo}/premarket/brief.json"
+    try:
+        with (opener or urllib.request.urlopen)(urllib.request.Request(url, headers={"User-Agent": "quantdesk-paper"}), timeout=20) as r:
+            b = json.loads(r.read(BRIEF_MAX_BYTES))
+    except Exception:                                                  # noqa: BLE001 - no brief only means planning without it
+        return None
+    return b if isinstance(b, dict) and b.get("session") == today.isoformat() else None
 
 
 def restore(cfg, relay: Relay, ledger_path: Path, say=print, sleep=time.sleep, tries: int = 6, wait_s: float = 10.0, allow_new: bool = False) -> Account:
@@ -79,6 +99,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         log(f"paper: could not send the opening state to the relay ({type(e).__name__}); will retry")
     unsafe_since = None
     news, news_at = None, -1e9
+    brief_at = -1e9
     while clock().astimezone(IST).time() < until_ist:
         t0 = time.monotonic()
         try:
@@ -95,6 +116,13 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         orders = [o for o in raw_orders if not (isinstance(o, dict) and isinstance(o.get("id"), str) and o["id"] in waiting)]
         kill = q.get("kill") is not False                              # a missing or odd answer counts as ON: the safe way round
         if auto is not None:                                           # AUTO v1: its orders join the owner's and go through the very same step, gate and brakes
+            ist_now = clock().astimezone(IST)
+            if hasattr(auto, "brief") and BRIEF_WINDOW[0] <= ist_now.time() <= BRIEF_WINDOW[1] and time.monotonic() - brief_at >= BRIEF_EVERY_S:
+                brief_at = time.monotonic()                            # the day plan's catalysts: fetched every fifteen minutes before the open; a failure keeps the last one
+                import os
+                got_brief = fetch_brief(os.environ.get("GITHUB_REPOSITORY", ""), ist_now.date())
+                if got_brief is not None:
+                    auto.brief = got_brief
             if time.monotonic() - news_at >= NEWS_EVERY_S:             # the news digest, at most once a minute; a failure just means no news reading (it never blocks anything)
                 news_at = time.monotonic()
                 try:

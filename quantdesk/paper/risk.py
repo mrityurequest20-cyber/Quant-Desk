@@ -29,7 +29,7 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..core.types import OPTION, Instrument
+from ..core.types import FUTURE, OPTION, Instrument
 from ..execution.costs import CostModel
 from ..markets import sessions as MK
 from .account import Account, is_number, is_whole_positive, stress_equity
@@ -120,6 +120,9 @@ def _two_sided(q) -> bool:
 
 def _size_ok(x) -> bool:
     return x is None or (is_number(x) and x > 0)
+
+
+FUTURES_ONLY = ("mcx", "nse_cds")         # MCX and currency: futures only (paper.futures, owner's order of 13 Nov 2026)
 
 
 class RiskGate:
@@ -216,6 +219,8 @@ class RiskGate:
             why.append(f"{order.qty} is not a whole number of lots of {inst.lot_size!r}")
         if seg not in MK.SEGMENTS:
             why.append(f"unknown segment {seg!r}")
+        elif seg in FUTURES_ONLY:
+            why.append(f"{seg} trades futures only on this desk (paper.futures): an option is not opened there")
         else:
             if seg not in self.limits.cost_verified or "options" not in self.configured_costs:
                 why.append(f"the costs for {seg} are not configured and verified: they would be guessed, so nothing trades there")
@@ -257,6 +262,96 @@ class RiskGate:
                 if at_risk > budget:
                     why.append(f"if every open position and this one fell to zero together, {at_risk:,.0f} would be lost against a loss "
                                f"budget of {max(budget, 0):,.0f} left before the daily or drawdown floor")
+        return Decision(not why, why)
+
+    # ---- MCX and currency futures (owner's order, 13 Nov 2026): long or short, every entry with a stop --------------------------------
+    def check_future(self, account: Account, order: Order, short: bool, quote: Quote | None, px: float | None, stop, target, marks: dict[str, float],
+                     now: dt.datetime, rules: dict) -> Decision:
+        """A futures entry at fill price `px` (the offer for a long, the bid for a short). `rules`: the contract's paper.futures entry (lot, margin, no_entry_days) and the
+        section's square_off/entry cutoff and stop_max_pct, plus `margins` {underlying: rate}. The loss to the stop, with a slippage allowance and both sides' fees, is held to
+        risk_per_trade, as the whole premium is for an option; the margin to what equity has free; and, with everything else open, to the loss budget."""
+        try:
+            return self._check_future(account, order, short, quote, px, stop, target, marks, now, rules)
+        except Exception as e:                                                  # noqa: BLE001 - a check that fails refuses, never allows
+            return Decision(False, [f"the check itself failed ({type(e).__name__}): not opened"])
+
+    def _check_future(self, account, order, short, quote, px, stop, target, marks, now, rules) -> Decision:
+        if not _aware(now) or (quote is not None and not _aware(quote.ts)):
+            return Decision(False, ["a time with no timezone cannot be placed in the session: refused"])
+        why = list(self.update(account, marks, now))
+        eq = account.equity(marks)
+        if not is_number(eq):
+            why.append("equity is unknown (a position has no usable mark)")
+        inst, seg = order.instrument, order.segment
+        if inst.kind != FUTURE or seg not in FUTURES_ONLY:
+            why.append("not an MCX or currency future")
+        if not is_whole_positive(order.qty) or not (isinstance(inst.lot_size, int) and inst.lot_size > 0) or order.qty % inst.lot_size:
+            why.append(f"{order.qty!r} is not a whole number of lots of {inst.lot_size!r}")
+        if seg in FUTURES_ONLY:
+            cost_key = "mcx_futures" if seg == "mcx" else "cds_futures"
+            if seg not in self.limits.cost_verified or cost_key not in self.configured_costs:
+                why.append(f"the costs for {seg} futures are not configured and verified: nothing trades there")
+            if (inst.underlying or "").upper() not in self.limits.underlyings.get(seg, frozenset()):
+                why.append(f"{inst.underlying!r} is not on the list of underlyings that trade in {seg}")
+            ist = now.astimezone(IST)
+            sess = MK.session(seg, ist.date(), self.cal, trading=True)
+            cutoff = dt.timedelta(minutes=int(rules.get("entry_cutoff_min", 15)))
+            if sess is None:
+                why.append(f"{seg} does not trade today, or its holiday calendar is not verified for {ist.year}")
+            elif not (sess[0] <= ist < sess[1] - cutoff):
+                why.append(f"{seg} is closed at {ist:%H:%M}, or within {cutoff.seconds // 60} minutes of its close (futures are closed before it: intraday only)")
+            if inst.expiry is None:
+                why.append("the board does not say which contract month this is: not opened")
+            elif inst.expiry < ist.date():
+                why.append("the contract has expired")
+            else:
+                n, d = 0, ist.date()                                             # this segment's trading days from today to the expiry
+                while d < inst.expiry and n < 40:
+                    d += dt.timedelta(days=1)
+                    if MK.session(seg, d, self.cal) is not None:
+                        n += 1
+                if n < int(rules.get("no_entry_days", 5)):
+                    why.append(f"{inst.expiry:%d %b} is {n} trading day{'s' if n != 1 else ''} away: no new entry in a contract's last {rules.get('no_entry_days')} (delivery or settlement)")
+        if not (order.strategy or "").strip() or not (order.thesis or "").strip():
+            why.append("every entry needs a strategy name and a written thesis")
+        if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)) or not is_number(px) or px <= 0:
+            why.append("no usable two-sided quote")
+        else:
+            age = (now - quote.ts).total_seconds()
+            if not (0 <= age <= self.limits.max_quote_age_s):
+                why.append(f"the quote is {age:.0f}s old (limit {self.limits.max_quote_age_s:.0f}s) or from the future")
+            shown = quote.bid_qty if short else quote.ask_qty
+            if shown is not None and order.qty > shown:
+                why.append(f"{order.qty} is more than the {shown:g} {'bid' if short else 'offered'}")
+            if not (is_number(stop) and stop > 0):
+                why.append("every futures entry needs a stop price")
+            elif (short and stop <= px) or (not short and stop >= px):
+                why.append(f"the stop {stop:g} must be {'above' if short else 'below'} the {'bid' if short else 'offer'} {px:g}")
+            elif abs(px - stop) / px > float(rules.get("stop_max_pct", 0.10)):
+                why.append(f"the stop is {abs(px - stop) / px:.1%} away: more than {float(rules.get('stop_max_pct', 0.10)):.0%} looks like a typo")
+            if target is not None and not (is_number(target) and target > 0 and ((short and target < px) or (not short and target > px))):
+                why.append(f"the target must be {'below' if short else 'above'} the entry")
+            if not why and is_number(eq):
+                fees_in, _ = self.costs.fees(inst, -order.qty if short else order.qty, px)
+                fees_out, _ = self.costs.fees(inst, order.qty if short else -order.qty, stop)
+                slip = 0.001 * px                                                 # a stop fills worse than its price: a tenth of a percent allowed for it
+                risk = order.qty * (abs(px - stop) + slip) + fees_in + fees_out
+                if risk > self.limits.risk_per_trade * eq:
+                    why.append(f"to the stop it would risk {risk:,.0f} (with a slippage allowance and both sides' fees), over {self.limits.risk_per_trade:.1%} of equity "
+                               f"({self.limits.risk_per_trade * eq:,.0f}): a closer stop or fewer lots")
+                rates = rules.get("margins") or {}
+                margin = order.qty * px * float(rules.get("margin", 1.0))
+                used = account.margin_used(marks, rates)
+                if used + margin > eq:
+                    why.append(f"it needs {margin:,.0f} of margin; {used:,.0f} is in use and equity is {eq:,.0f}")
+                if fees_in > account.cash:
+                    why.append(f"the fees of {fees_in:,.0f} are more than the cash")
+                day_floor, dd_floor = self.floors(account)
+                floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
+                at_risk = account.open_value(marks) + risk
+                if not (at_risk <= eq - floor):
+                    why.append(f"if every open position went to its worst together with this one at its stop, {at_risk:,.0f} would be lost against a loss budget of "
+                               f"{max(eq - floor, 0):,.0f} left before the daily or drawdown floor")
         return Decision(not why, why)
 
     # ---- packages: several legs at once, some of them SOLD, judged together ------------------------------------------------------------
@@ -324,7 +419,7 @@ class RiskGate:
         if why or not is_number(eq):
             return Decision(False, why)
         cash_after = account.cash
-        after = {s: type(p)(p.instrument, p.segment, p.qty, p.avg_price, p.opened_at, p.strategy, p.thesis) for s, p in account.positions.items()}
+        after = {s: type(p)(p.instrument, p.segment, p.qty, p.avg_price, p.opened_at, p.strategy, p.thesis, p.stop, p.target) for s, p in account.positions.items()}
         for l in legs:
             inst, qty, sell, q = l["instrument"], l["qty"], l["side"] == "sell", l["quote"]
             px = q.bid if sell else q.ask
@@ -395,7 +490,7 @@ class RiskGate:
             if pos is None or not is_whole_positive(qty) or pos.qty <= 0 or qty > pos.qty:
                 why.append(f"cannot sell {qty!r} of {symbol}: holding {pos.qty if pos else 0}")
             elif account.has_shorts():                                                   # selling a long that is the cover of a sold option would leave that option naked: close the short first
-                rest = {s: type(p)(p.instrument, p.segment, p.qty, p.avg_price, p.opened_at, p.strategy, p.thesis) for s, p in account.positions.items()}
+                rest = {s: type(p)(p.instrument, p.segment, p.qty, p.avg_price, p.opened_at, p.strategy, p.thesis, p.stop, p.target) for s, p in account.positions.items()}
                 rest[symbol].qty -= qty
                 if rest[symbol].qty == 0:
                     del rest[symbol]

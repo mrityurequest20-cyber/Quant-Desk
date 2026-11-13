@@ -165,7 +165,8 @@ class Recorder:
                     self.wide_ticks += 1
                     if self.live is not None:
                         try:
-                            q = quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s"))
+                            m = self.meta.get(sym) or {}
+                            q = quote_from_tick(row, t.get("change"), m.get("s"), m.get("expiry") if m.get("kind") == "future" else None)
                             if q and sym in self.deep:                # FULL mode: the tick carries the book
                                 q.update(book_from_tick(t))
                             self.live.update(sym, q)
@@ -180,7 +181,8 @@ class Recorder:
                 self.ticks += 1
                 if self.live is not None:
                     try:
-                        q = quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s"))
+                        m = self.meta.get(sym) or {}
+                        q = quote_from_tick(row, t.get("change"), m.get("s"), m.get("expiry") if m.get("kind") == "future" else None)
                         if q:
                             q.update({k: v for k, v in book_from_tick(t).items() if k == "d"})      # the five levels; the best bid and offer are already on the row
                         self.live.update(sym, q)

@@ -1,0 +1,132 @@
+# The Angel One feed (docs/FEEDS.md): currency futures, every five seconds, to the private live relay as feed "a". The owner's split of 13 Nov 2026: Kite carries indices, stocks
+# and options; Fyers carries MCX; Angel One carries currency; Kotak stands behind them all. Market data only: the code calls SmartAPI's quote API and nothing else (a test checks),
+# and writes no price to disk, to the repository or to a release.
+#
+# Login (docs/AUTONOMY.md, "More market-data brokers"): SmartAPI's documented login (client code, MPIN, TOTP), one call, in standard-library Python under `-I -S`
+# (deploy/angel_autologin.py). The MPIN and TOTP key reach that step only. Lockout guard: only the first run of the IST day, on its first attempt, may log in
+# (deploy/kite_login_gate.py with GATE_WORKFLOW), and the second job logs in only after the first job's login worked. So a wrong MPIN costs at most one failed login a day.
+# Nothing is stored between jobs and nothing is written to the repository: this workflow may only read.
+#
+# Two jobs because a hosted job may run at most six hours and currency trades 09:00 to 17:00.
+name: Angel One feed
+
+on:
+  workflow_dispatch:            # started once a day by deploy/scheduler.py; no cron of its own, so it never starts twice
+    inputs:
+      first_until:
+        description: "First job streams until (HH:MM IST)"
+        default: "14:50"
+        type: string
+      second_until:
+        description: "Second job streams until (HH:MM IST)"
+        default: "17:05"
+        type: string
+
+permissions:
+  contents: read
+  actions: read                # the login gate lists this workflow's runs
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: angel-feed
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+
+jobs:
+  feed-1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    outputs:
+      login: ${{ steps.login.outcome }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Check the inputs (before the day's only login is spent)
+        env:
+          A: ${{ inputs.first_until || '14:50' }}
+          B: ${{ inputs.second_until || '17:05' }}
+        run: |
+          for t in "$A" "$B"; do [[ "$t" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || { echo "::error::times must be HH:MM"; exit 1; }; done
+      - name: May this run log in? (only the first run of the day, first attempt)
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_WORKFLOW: angel-feed.yml
+        run: /usr/bin/python3 -I -S deploy/kite_login_gate.py
+      - name: Log in to Angel One by itself (data only; the MPIN and TOTP key reach this step alone)
+        id: login
+        if: steps.gate.outputs.first == 'true' && github.run_attempt == '1'
+        env:
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+        run: /usr/bin/python3 -I -S deploy/angel_autologin.py --out "$RUNNER_TEMP/angel.json"
+      - name: Hand the session to the feed (masked)
+        if: steps.login.outcome == 'success'
+        run: deploy/angel-export.sh
+      - name: Stream currency to the live relay
+        env:
+          UNTIL: ${{ inputs.first_until || '14:50' }}
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          LIVE_URL: ${{ vars.LIVE_URL }}
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
+        run: |
+          cap=$(date -d '+340 minutes' +%H:%M)     # an early start must still stop before the job's 358-minute limit
+          if [[ "$cap" < "$UNTIL" ]] && [[ "$cap" > "$(date +%H:%M)" ]]; then UNTIL=$cap; fi
+          python -m quantdesk data angel-feed --until "$UNTIL" --metrics angel_metrics.json
+      - name: The run's counts (no price, no token)
+        if: always()
+        run: if [ -f angel_metrics.json ]; then { echo '```'; cat angel_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+
+  feed-2:
+    needs: feed-1
+    if: always() && needs.feed-1.outputs.login == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Log in to Angel One again (only because the first job's login worked today, and never on a re-run)
+        id: login
+        if: github.run_attempt == '1'
+        env:
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+        run: /usr/bin/python3 -I -S deploy/angel_autologin.py --out "$RUNNER_TEMP/angel.json"
+      - name: Hand the session to the feed (masked)
+        if: steps.login.outcome == 'success'
+        run: deploy/angel-export.sh
+      - name: Stream currency to the live relay until the close
+        env:
+          UNTIL: ${{ inputs.second_until || '17:05' }}
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          LIVE_URL: ${{ vars.LIVE_URL }}
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
+        run: |
+          cap=$(date -d '+340 minutes' +%H:%M)
+          if [[ "$cap" < "$UNTIL" ]] && [[ "$cap" > "$(date +%H:%M)" ]]; then UNTIL=$cap; fi
+          python -m quantdesk data angel-feed --until "$UNTIL" --metrics angel_metrics.json
+      - name: The run's counts (no price, no token)
+        if: always()
+        run: if [ -f angel_metrics.json ]; then { echo '```'; cat angel_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi

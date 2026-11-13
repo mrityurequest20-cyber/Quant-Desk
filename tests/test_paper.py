@@ -89,8 +89,8 @@ def test_a_sell_fills_at_the_bid_and_the_round_trip_pays_the_spread_and_fees(des
     ("zero quantity", dict(o=order(qty=0)), "long options only"),
     ("too much risk", dict(o=order(qty=150)), "risk"),
     ("unknown segment", dict(o=order(seg="nyse")), "unknown segment"),
-    ("mcx costs unverified", dict(o=order(seg="mcx")), "not configured and verified"),
-    ("currency costs unverified", dict(o=order(seg="nse_cds")), "not configured and verified"),
+    ("an option labelled mcx", dict(o=order(seg="mcx")), "futures only"),
+    ("an option labelled currency", dict(o=order(seg="nse_cds")), "futures only"),
     ("bse costs unverified", dict(o=order(seg="bse_fo")), "not configured and verified"),
     ("expired option", dict(o=order(inst=opt(expiry=dt.date(2026, 11, 6)))), "expired"),
 ])
@@ -463,10 +463,12 @@ def test_the_scan_itself_catches_what_it_is_meant_to(tmp_path):
 def test_the_config_carries_loss_caps_only(cfg):
     p = cfg.get("paper")
     assert set(p) == {"capital", "risk_per_trade", "daily_loss_limit", "drawdown_halt", "max_quote_age_s", "cost_verified_segments", "kill_switch_file",
-                      "underlyings", "allow_short_legs", "stock_options"}
-    assert set(p["stock_options"]) == {"lots", "steps"}                                 # contract facts only (lots per expiry, strike steps): no cap on trades, positions or size hides there
+                      "underlyings", "allow_short_legs", "stock_options", "futures"}
+    assert set(p["stock_options"]) == {"lots", "steps"}
+    assert set(p["futures"]) == {"square_off_min", "entry_cutoff_min", "stop_max_pct", "contracts"}                   # MCX and currency (13 Nov 2026): contract facts and session mechanics, no cap on size
+    assert all(set(c) == {"segment", "lot", "unit", "margin", "no_entry_days"} for c in p["futures"]["contracts"].values())                                 # contract facts only (lots per expiry, strike steps): no cap on trades, positions or size hides there
     assert p["allow_short_legs"] is True                                        # sold options, only as legs of bounded packages, are ON by the owner's written order (8 Nov 2026)
-    assert p["risk_per_trade"] == 0.025 and p["daily_loss_limit"] == 0.05 and p["drawdown_halt"] == 0.10 and p["cost_verified_segments"] == ["nse_fo"]
+    assert p["risk_per_trade"] == 0.025 and p["daily_loss_limit"] == 0.05 and p["drawdown_halt"] == 0.10 and p["cost_verified_segments"] == ["nse_fo", "mcx", "nse_cds"]
 
 
 # ---- a mislabelled order cannot dodge the costs and hours checks (B3) ---------------------------------------------------------------

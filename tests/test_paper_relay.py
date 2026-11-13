@@ -96,7 +96,7 @@ out.good = await call("POST", "/paper/order", { token: READ, body: order("ord-bb
 out.dup = await call("POST", "/paper/order", { token: READ, body: order("ord-bbbb1") });
 out.sellall = await call("POST", "/paper/order", { token: READ, body: { id: "ord-bbbb2", side: "sell", symbol: "NIFTY12NOV2624500CE", lots: "all" } });
 const bad = {};
-for (const [k, v] of Object.entries({ id: order("x"), side: order("ord-cccc1", { side: "short" }), lots0: order("ord-cccc2", { lots: 0 }), lotsF: order("ord-cccc3", { lots: 1.5 }), lotsAll: order("ord-cccc4", { lots: "all" }),
+for (const [k, v] of Object.entries({ id: order("x"), side: order("ord-cccc1", { side: "hold" }), stopBad: order("ord-cccc9", { side: "short", symbol: "CRUDEOIL-MCX", stop: -5 }), lots0: order("ord-cccc2", { lots: 0 }), lotsF: order("ord-cccc3", { lots: 1.5 }), lotsAll: order("ord-cccc4", { lots: "all" }),
   lotsBig: order("ord-cccc5", { lots: 5000 }), thesis: order("ord-cccc6", { thesis: "buy it" }), strat: order("ord-cccc7", { strategy: "" }), sym: order("ord-cccc8", { symbol: "<script>" }), symlow: order("ord-cccc9", { symbol: "nifty" }),
   limit: order("ord-cccd1", { limit: -1 }), limitS: order("ord-cccd2", { limit: "9" }), group: order("ord-cccd3", { group: "g".repeat(50) }), arr: [order("ord-cccd4")], str: "x" })) bad[k] = (await call("POST", "/paper/order", { token: READ, body: v })).status;
 out.bad = bad;

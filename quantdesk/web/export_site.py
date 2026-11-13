@@ -222,13 +222,20 @@ def trade_config(cfg) -> dict:
     paper = {"risk_per_trade": float(cfg.get("paper.risk_per_trade")), "max_quote_age_s": float(cfg.get("paper.max_quote_age_s")),
              "underlyings": sorted(str(u).upper() for u in ((cfg.get("paper.underlyings") or {}).get("nse_fo") or [])),
              "allow_short_legs": cfg.get("paper.allow_short_legs") is True}
+    # MCX and currency futures (paper.futures, 13 Nov 2026): the facts the futures ticket shows; the runner's gate decides
+    fut = cfg.get("paper.futures") or {}
+    seg_costs = costs.get("segments") or {}
+    futures = {"stop_max_pct": float(fut.get("stop_max_pct", 0.10)), "entry_cutoff_min": int(fut.get("entry_cutoff_min", 15)), "square_off_min": int(fut.get("square_off_min", 5)),
+               "contracts": {str(u).upper(): {"segment": c["segment"], "lot": int(c["lot"]), "unit": str(c.get("unit", "")), "margin": float(c["margin"]), "no_entry_days": int(c.get("no_entry_days", 5))}
+                             for u, c in (fut.get("contracts") or {}).items() if isinstance(c, dict) and {"segment", "lot", "margin"} <= set(c)},
+               "costs": {k: {r: float((seg_costs.get(k) or {}).get(r, 0.0)) for r in ("stt_buy", "stt_sell", "exchange", "stamp_buy")} for k in ("mcx_futures", "cds_futures")}}
     return {"watch": watchlist(cfg),
             "equity": float(cfg.get("paper.capital") or cfg.get("intraday.capital")), "r": float(cfg.get("backtest.risk_free", 0.065)),
             "limits": {k: risk[k] for k in keys if k in risk}, "paper": paper,
             "costs": {"brokerage_per_order": float(costs.get("brokerage_per_order", 20.0)), "gst": float(costs.get("gst", 0.18)), "sebi_per_crore": float(costs.get("sebi_per_crore", 10.0)),
                       "options": {k: float(opt.get(k, 0.0)) for k in ("stt_buy", "stt_sell", "exchange", "stamp_buy")}},
             "slippage": {k: float(slip[k]) for k in ("option_half_spread_pct", "option_min_half_spread", "option_tick") if k in slip},
-            "inst": inst}
+            "inst": inst, "futures": futures}
 
 
 def _trade_script(cfg) -> str:

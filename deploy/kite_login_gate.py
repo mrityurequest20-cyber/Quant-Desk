@@ -18,6 +18,10 @@ import subprocess
 import sys
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+# Which workflow's runs to count: the Kite recorder by default; the Fyers and Angel One feeds set GATE_WORKFLOW, so its login has the same one-a-day guard.
+WORKFLOW = os.environ.get("GATE_WORKFLOW") or "kite-record.yml"
+if WORKFLOW not in ("kite-record.yml", "fyers-feed.yml", "angel-feed.yml"):
+    WORKFLOW = "kite-record.yml"
 
 
 def may_log_in(runs: list[dict], run_id: int, attempt: int, today: dt.date) -> tuple[bool, str]:
@@ -40,7 +44,7 @@ def may_log_in(runs: list[dict], run_id: int, attempt: int, today: dt.date) -> t
 def main() -> int:
     run_id, attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
     try:
-        out = subprocess.run(["gh", "run", "list", "-R", os.environ["GITHUB_REPOSITORY"], "--workflow", "kite-record.yml",
+        out = subprocess.run(["gh", "run", "list", "-R", os.environ["GITHUB_REPOSITORY"], "--workflow", WORKFLOW,
                               "--limit", "30", "--json", "databaseId,createdAt"], check=True, capture_output=True, text=True,
                              timeout=60).stdout
         runs = json.loads(out or "[]")
@@ -48,7 +52,7 @@ def main() -> int:
         ok, why = False, f"could not read this workflow's runs ({type(e).__name__}): not logging in"
     else:
         ok, why = may_log_in(runs, run_id, attempt, dt.datetime.now(IST).date())
-    print(f"kite login gate: {'yes' if ok else 'no'}: {why}")
+    print(f"login gate ({WORKFLOW}): {'yes' if ok else 'no'}: {why}")
     with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as fh:
         fh.write(f"first={'true' if ok else 'false'}\n")
     return 0
