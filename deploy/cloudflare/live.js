@@ -317,9 +317,21 @@ export function expiredOption(name, today) {          // today: the IST date as 
 const STALE_MS = 4 * 86400e3;               // a quote not seen for 4 days is dropped (expired contracts must not fill the board for good); shorter would empty the board over a weekend, when the last prices are worth showing, aged
 const FIRST_SEEN_MS = 12 * 3600e3;          // Kotak's own timestamp dates a first-seen price only if it is within this of now
 
-// The Durable Object: per instrument, the latest quote of each source and when it arrived. MEMORY ONLY for quotes: a wide universe is too big to rewrite to storage every
-// five seconds, and the record of every tick is the recorder's Parquet, not this. After a restart the board fills again as instruments tick (seconds for a liquid one).
-// Only the universe (what to poll) is stored. A quote keeps its own arrival time: Kite's is the moment a new tick arrives, Kotak's is refreshed only when its price, volume or
+// ---- the board in storage: BOARD_SHARDS keys, each {q: {name: {src: quote}}, d: {name: {src, at, b, a}}} ------------------------------------------------------------------------
+export const BOARD_SHARDS = 32;
+const BOARD_MAX_CHARS = 120000;                                                   // a shard is kept under 128 KiB whatever the storage backend allows
+export const boardKeys = () => Array.from({ length: BOARD_SHARDS }, (_, i) => `brd:${i}`);
+export function boardShard(name) {
+	let h = 5381;
+	for (let i = 0; i < name.length; i++) h = (((h << 5) + h) + name.charCodeAt(i)) >>> 0;
+	return h % BOARD_SHARDS;
+}
+const goodAt = (at, now) => typeof at === "number" && Number.isFinite(at) && at > 0 && at <= now + 60000;
+
+// The Durable Object: per instrument, the latest quote of each source and when it arrived. The board and the order books are KEPT IN STORAGE too (13 Nov 2026), in BOARD_SHARDS
+// shards written with the chart series every five minutes, only the shards that changed: before that they were memory only, so an eviction after the close, or the redeploy every
+// merge to main makes, left the app with nothing until the next open ("why does this whole app show nothing when markets are closed?", owner, 13 Nov 2026). Read back on start,
+// every quote re-checked as a push is and every book as cleanDepth checks it, each with its own arrival time: after hours the app shows the last prices, aged, never as live. A quote keeps its own arrival time: Kite's is the moment a new tick arrives, Kotak's is refreshed only when its price, volume or
 // book CHANGED, so a quiet instrument, a holiday or a dead feed grows an age instead of looking live. Age is the relay's, not the exchange's.
 export class LiveBoard {
 	constructor(state, env) {
@@ -331,7 +343,8 @@ export class LiveBoard {
 		this.series = new Series();                 // one close a minute per instrument, for the app's chart (series.js); stored in shards
 		this.candles = new Candles();               // today's one-minute candles of everything but options (candles.js); stored in shards
 		this.candleSrc = new Map();                 // name -> {src, at}: the feed drawing its candles now (two feeds' volume counters must never be mixed in one chart)
-		this.depth = new Map();                     // name -> {src, at, b, a}: the latest order book a feed sent, five levels a side; memory only
+		this.depth = new Map();                     // name -> {src, at, b, a}: the latest order book a feed sent, five levels a side; kept in the board shards
+		this.boardDirty = new Set();                // board shards changed since the last flush
 		this.routes = parseRoutes(this.env.FEED_ROUTES);      // which feed is shown for which kind of instrument (routes.js); null = the freshest of any
 		this.lastFlush = 0;
 		this.seq = 0;
@@ -349,6 +362,7 @@ export class LiveBoard {
 			if (u) this.universe = u;
 			try { this.series.load(await state.storage.get(shardKeys())); } catch (e) { /* no chart history: the board still starts */ }
 			try { this.candles.load(await state.storage.get(candleKeys())); } catch (e) { /* no candles yet today: they build again from here */ }
+			try { this.loadBoard(await state.storage.get(boardKeys()), this.now()); } catch (e) { /* no stored board: it fills again as instruments tick */ }
 			try {                                                                            // the tally survives an eviction or a deploy: a restart must not cost the day its number
 				const ag = cleanAgree(await state.storage.get("agree"));
 				if (ag) { this.agree = ag.today; this.agreeDays = ag.days; }
@@ -368,11 +382,11 @@ export class LiveBoard {
 		let gone = 0;
 		const today = Number(istParts(now).date.replace(/-/g, ""));
 		for (const [name, e] of this.quotes) {
-			if (expiredOption(name, today)) { this.quotes.delete(name); this.depth.delete(name); this.candleSrc.delete(name); gone += 1; continue; }        // an expired contract has no price to show, and at a roll its names must not keep the room the next expiry needs
-			for (const s of Object.keys(e)) if (now - e[s].at > STALE_MS) delete e[s];
-			if (!Object.keys(e).length) { this.quotes.delete(name); this.depth.delete(name); this.candleSrc.delete(name); gone += 1; }
+			if (expiredOption(name, today)) { this.quotes.delete(name); this.depth.delete(name); this.candleSrc.delete(name); this.boardDirty.add(boardShard(name)); gone += 1; continue; }        // an expired contract has no price to show, and at a roll its names must not keep the room the next expiry needs
+			for (const s of Object.keys(e)) if (now - e[s].at > STALE_MS) { delete e[s]; this.boardDirty.add(boardShard(name)); }
+			if (!Object.keys(e).length) { this.quotes.delete(name); this.depth.delete(name); this.candleSrc.delete(name); this.boardDirty.add(boardShard(name)); gone += 1; }
 		}
-		for (const [name, d] of this.depth) if (now - d.at > DEPTH_KEEP_MS) this.depth.delete(name);
+		for (const [name, d] of this.depth) if (now - d.at > DEPTH_KEEP_MS) { this.depth.delete(name); this.boardDirty.add(boardShard(name)); }
 		this.k.pruned += gone;
 		this.series.prune(now);
 		this.candles.prune(now);
@@ -390,6 +404,7 @@ export class LiveBoard {
 		}
 		const { lst, hi, lo, d, ...quote } = q;
 		const prev = e[src];
+		this.boardDirty.add(boardShard(name));
 		if (prev && onlyIfChanged && sameQuote(prev, quote)) { e[src] = { ...prev, ...quote, at: prev.at }; return true; }     // unchanged: it keeps its arrival time, and any field it lacked
 		let at = now;
 		if (!prev && Number.isFinite(lst)) at = Math.min(now, Math.max(lst, now - FIRST_SEEN_MS));      // first sight of a price Kotak itself dates: a last-known price is as old as it is
@@ -402,7 +417,7 @@ export class LiveBoard {
 				const cur = this.candleSrc.get(name);
 				if (leads(cur)) { this.candleSrc.set(name, { src, at: now }); this.candles.add(name, now, { ltp: quote.ltp, hi, lo, vol: quote.vol }, !!cur && cur.src !== src); }
 			}
-			if (d && (this.depth.has(name) || this.depth.size < MAX_DEPTH) && leads(this.depth.get(name))) this.depth.set(name, { src, at: now, b: d.b, a: d.a });
+			if (d && (this.depth.has(name) || this.depth.size < MAX_DEPTH) && leads(this.depth.get(name))) { this.depth.set(name, { src, at: now, b: d.b, a: d.a }); this.boardDirty.add(boardShard(name)); }
 		}
 		return true;
 	}
@@ -556,12 +571,66 @@ export class LiveBoard {
 		};
 	}
 
+	// The board's changed shards to storage. A shard over BOARD_MAX_CHARS loses its books first, then its oldest quotes, in the stored copy only (rare: 6000 names over 32 shards).
+	async flushBoard(storage) {
+		if (!this.boardDirty.size) return 0;
+		const todo = new Set(this.boardDirty);
+		this.boardDirty.clear();
+		const shards = new Map([...todo].map((i) => [i, { q: {}, d: {} }]));
+		for (const [name, e] of this.quotes) { const o = shards.get(boardShard(name)); if (o) o.q[name] = e; }
+		for (const [name, d] of this.depth) { const o = shards.get(boardShard(name)); if (o) o.d[name] = d; }
+		let done = 0;
+		for (const [i, o] of shards) {
+			try {
+				if (JSON.stringify(o).length > BOARD_MAX_CHARS) o.d = {};
+				if (JSON.stringify(o).length > BOARD_MAX_CHARS) {
+					const newest = (e) => Math.max(...Object.values(e).map((q) => q.at || 0));
+					const names = Object.keys(o.q).sort((a, b) => newest(o.q[b]) - newest(o.q[a]));
+					const keep = {};
+					let size = 20;
+					for (const n of names) { const len = JSON.stringify(o.q[n]).length + n.length + 4; if (size + len > BOARD_MAX_CHARS) break; keep[n] = o.q[n]; size += len; }
+					o.q = keep;
+				}
+				if (Object.keys(o.q).length || Object.keys(o.d).length) await storage.put(`brd:${i}`, o); else await storage.delete(`brd:${i}`);
+				done += 1;
+			} catch (e) {
+				this.boardDirty.add(i);
+			}
+		}
+		return done;
+	}
+
+	// Read the stored board back. Storage is not trusted: each quote goes through clean() as a push would, each book through cleanDepth, every arrival time must be a real past time,
+	// every feed code a known one, and the board's own limits hold. What is already in memory (a push that arrived first) is never overwritten.
+	loadBoard(entries, now) {
+		for (const v of entries instanceof Map ? entries.values() : Object.values(entries || {})) {
+			if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+			for (const [name, e] of Object.entries(v.q && typeof v.q === "object" ? v.q : {})) {
+				if (!SYMBOL.test(name) || !e || typeof e !== "object" || this.quotes.has(name) || this.quotes.size >= MAX_TOTAL) continue;
+				const row = {};
+				for (const [src, q] of Object.entries(e)) {
+					if (!Object.prototype.hasOwnProperty.call(SOURCES, src) || !q || typeof q !== "object" || !goodAt(q.at, now) || now - q.at > STALE_MS) continue;
+					const c = clean({ quotes: { [name]: q } });
+					if (c && c.quotes[name]) { const { d: _d, hi: _h, lo: _l, ...plain } = c.quotes[name]; row[src] = { ...plain, at: q.at }; }
+				}
+				if (Object.keys(row).length) this.quotes.set(name, row);
+			}
+			for (const [name, d] of Object.entries(v.d && typeof v.d === "object" ? v.d : {})) {
+				if (!SYMBOL.test(name) || !d || typeof d !== "object" || this.depth.has(name) || this.depth.size >= MAX_DEPTH || !this.quotes.has(name)) continue;
+				if (!Object.prototype.hasOwnProperty.call(SOURCES, d.src) || !goodAt(d.at, now) || now - d.at > DEPTH_KEEP_MS) continue;
+				const book = cleanDepth({ b: d.b, a: d.a });
+				if (book) this.depth.set(name, { src: d.src, at: d.at, b: book.b, a: book.a });
+			}
+		}
+	}
+
 	// The chart series are written to storage at most every five minutes, and only the shards that changed (series.js). Never raises: a chart is not worth the board.
 	async maybeFlush(now) {
 		if (now - this.lastFlush < FLUSH_MS) return;
 		this.lastFlush = now;
 		try { await this.series.flush(this.state.storage); } catch (e) { /* the shards stay marked and the next flush tries again */ }
 		try { await this.candles.flush(this.state.storage); } catch (e) { /* likewise */ }
+		try { await this.flushBoard(this.state.storage); } catch (e) { /* the shards stay marked and the next flush tries again */ }
 		try { await this.state.storage.put("agree", { today: this.agree, days: this.agreeDays }); } catch (e) { /* the in-memory tally still stands */ }
 	}
 
