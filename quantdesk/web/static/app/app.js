@@ -1119,7 +1119,7 @@ const QB = (() => {
 		limits: { risk_per_trade: 0.025, max_premium_outlay: 0.20, max_total_outlay: 0.5, max_lots: 10, max_open: 2, max_spread_pct: 0.06, max_margin: 0.5, credit_margin_per_lot: 30000, daily_loss_limit: 0.05 },
 		costs: { brokerage_per_order: 20, gst: 0.18, sebi_per_crore: 10, options: { stt_buy: 0, stt_sell: 0.0015, exchange: 0.0003503, stamp_buy: 0.00003 } },
 		slippage: { option_half_spread_pct: 0.012, option_min_half_spread: 0.10, option_tick: 0.05 },
-		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"], allow_short_legs: true },     // the paper desk's gate (quantdesk/paper/risk.py)
+		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BANKNIFTY", "BHARTIARTL", "BHEL", "BSE", "DIVISLAB", "DIXON", "FINNIFTY", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "KOTAKBANK", "LAURUSLABS", "M&M", "MARUTI", "MIDCPNIFTY", "NIFTY", "PAYTM", "RELIANCE", "SBIN", "TCS"], allow_short_legs: true },     // the paper desk's gate (quantdesk/paper/risk.py)
 		inst: { NIFTY: { lot: 65, step: 50 }, BANKNIFTY: { lot: 30, step: 100 }, FINNIFTY: { lot: 60, step: 50 }, MIDCPNIFTY: { lot: 120, step: 25 }, SENSEX: { lot: 20, step: 100 } },
 	};
 	const conf = () => {
@@ -1227,7 +1227,8 @@ const QB = (() => {
 	// ---- the analysis ----------------------------------------------------------------------------------------------------------------
 	// spec: {u, legs:[{side,type,strike,name}], quotes:{name:{ltp,bid,ask,oi}}, spot, T (years), lots, c (config, optional)}
 	function analyze(spec) {
-		const c = spec.c || conf(), inst = c.inst[spec.u] || { lot: 1, step: 1 }, lots = Math.max(1, Math.round(spec.lots || 1)), lot = inst.lot, r = c.r;
+		const c = spec.c || conf(), inst = c.inst[spec.u] || { lot: 1, step: 1 }, lots = Math.max(1, Math.round(spec.lots || 1)), r = c.r;
+		const lot = inst.lots && typeof inst.lots === "object" ? inst.lots[spec.exp] : inst.lot;          // a stock's lot belongs to the contract: NSE revises it from a given expiry
 		const legs = spec.legs.map((l) => {
 			const e = entry(l, spec.quotes[l.name]);
 			const mid = e.src === "book" ? (e.bid + e.ask) / 2 : (spec.quotes[l.name] || {}).ltp;
@@ -1237,6 +1238,7 @@ const QB = (() => {
 			return { ...l, mult, units: lots * lot * mult, lots: lots * mult, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
 		});
 		const out = { legs, lots, lot, errors: [], checks: [], paperChecks: [], ok: false, paperOk: false };
+		if (!(Number.isInteger(lot) && lot > 0)) { out.errors.push(`${spec.u} has no verified lot size for the ${spec.exp || "chosen"} expiry, so this cannot be priced or sent.`); return out; }
 		if (!(spec.T >= 0)) { out.errors.push("The expiry on the board could not be read, so the time to expiry is unknown."); return out; }
 		const crossed = legs.filter((l) => l.src === "crossed");
 		if (crossed.length) { out.errors.push(`Crossed bid/ask (bid above ask) on ${crossed.map((l) => l.strike + l.type).join(", ")}: a bad quote, not a price.`); return out; }
@@ -1670,7 +1672,7 @@ function bdIdeas(ctx) {
 	if (!sigma || sigma.iv == null) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "No volatility to price the chances with yet."));
 	const analyzeFn = (id, width) => {
 		const L = QB.legsFor(id, strikes, spot, names, width);
-		return L.error ? null : QB.analyze({ u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: 1 });
+		return L.error ? null : QB.analyze({ u: B.u, exp: B.exp, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: 1 });
 	};
 	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: c.r }), B.sort).slice(0, 6);
 	put(box, h("div", { class: "chips", style: "padding:0 16px 4px" }, [["rr", "Best reward for the risk"], ["pop", "Most likely to profit"], ["cheap", "Cheapest"]].map(([id, t]) => chip(t, B.sort === id, () => { B.sort = id; bdDraw(); }))));
@@ -1756,7 +1758,7 @@ function bdDraw() {
 				chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
 			B.tpl === "custom" ? bdCustom(B, strikes, spot) : null,
 			tpl.wide ? step("Width (strikes)", B.width, () => { B.width = Math.max(1, B.width - 1); bdDraw(); }, () => { B.width = Math.min(10, B.width + 1); bdDraw(); }) : null,
-			step("Lots (" + inst.lot + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); })));
+			step("Lots (" + ((inst.lots ? inst.lots[B.exp] : inst.lot) || "?") + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); })));
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
@@ -1764,7 +1766,7 @@ function bdDraw() {
 	const ideas = () => fold("ideas", "Ideas for your view", "structures that fit what you expect", bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
 	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error), ideas());
-	const spec = { u: B.u, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
+	const spec = { u: B.u, exp: B.exp, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
 	const a = QB.analyze(spec);
 	if (a.errors.length) return void put(body, h("div", { class: "note" }, a.errors[0]), legsTable2(a), ideas());
 	const best = QB.suggestLots(spec);
@@ -2014,14 +2016,17 @@ function tkDraw() {
 	K.box.textContent = "";
 	if (!q) return void put(K.box, h("div", { class: "note" }, K.name + " is no longer on the board."));
 	const T = QB.yearsTo(o.e, Date.now()), redraw = () => { K.editing = false; tkDraw(); };
-	const a = QB.analyze({ u: o.u, legs: [{ side: 1, type: o.t, strike: o.k, name: K.name }], quotes: data.quotes, spot: sq.ltp, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: K.lots });
+	const a = QB.analyze({ u: o.u, exp: o.e, legs: [{ side: 1, type: o.t, strike: o.k, name: K.name }], quotes: data.quotes, spot: sq.ltp, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: K.lots });
 	const leg = a.legs[0], cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
 	put(K.box,
 		h("div", { class: "kstrip", style: "margin:0 -16px;border-top:1px solid var(--line)" }, cell("Last", livePx(q.ltp, "opt")), cell("Bid", fin(q.bid) ? livePx(q.bid, "opt") : "—", "up"), cell("Offer", fin(q.ask) ? livePx(q.ask, "opt") : "—", "dn"), cell("Change", fin(q.chg) ? signed(q.chg) + "%" : "—", cls(q.chg))),
 		h("div", { class: "kstrip", style: "margin:0 -16px" }, cell("Open interest", fin(q.oi) ? LIVE_VOL.format(q.oi) : "—"), cell("Volume", fin(q.vol) ? LIVE_VOL.format(q.vol) : "—"), cell("Implied volatility", fin(leg.iv) ? (leg.iv * 100).toFixed(1) + "%" : "—"), cell(o.u, fin(sq.ltp) ? livePx(sq.ltp, "idx") : "—")),
 		h("div", { class: "f3", style: "font-size:11.5px;padding:8px 0 0" }, `Heard ${liveAge(q.age_s)} ago${SRC_NAME[q.src] ? " from " + SRC_NAME[q.src] : ""}.`));
-	if (!inst) return void put(K.box, h("div", { class: "note" }, `${o.u} options are shown for reading only: the paper desk trades ${c.paper.underlyings.join(", ")} for now, and it has no verified lot size or costs for ${o.u}.`));
-	put(K.box, h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:14px 0 10px" }, h("span", {}, `Lots (${inst.lot} units each)`),
+	if (!inst) return void put(K.box, h("div", { class: "note" }, `${o.u} options are shown for reading only: the paper desk has no verified lot size or costs for ${o.u}.`));
+	if (inst.physical) put(K.box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:6px 0 0" }, "A stock option is settled by delivery of the shares: the paper desk sells it from 15:20 on the trading day before its expiry, and does not buy it after that."));
+	const lot = inst.lots ? inst.lots[o.e] : inst.lot;
+	if (!lot) return void put(K.box, h("div", { class: "note" }, `${o.u} has no verified lot size for the ${o.e} expiry yet (paper.stock_options.lots in the config), so this contract is shown for reading only.`));
+	put(K.box, h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:14px 0 10px" }, h("span", {}, `Lots (${lot} units each)`),
 		h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn sq", "aria-label": "fewer lots", onclick: () => { K.lots = Math.max(1, K.lots - 1); redraw(); } }, "−"), h("b", { class: "mono", style: "min-width:28px;text-align:center" }, String(K.lots)),
 			h("button", { class: "btn sq", "aria-label": "more lots", onclick: () => { K.lots = Math.min(c.limits.max_lots, K.lots + 1); redraw(); } }, "+"))));
 	if (a.errors.length) return void put(K.box, h("div", { class: "note warn" }, a.errors[0]));
@@ -2056,6 +2061,7 @@ function ppDraw() {
 		h("div", { class: "acct" }, h("div", {}, h("span", { class: "k" }, "Equity"), h("div", { class: "eq mono" }, fin(sm.equity) ? inr(sm.equity) : "unknown (a position has no price)")),
 			h("div", { class: "day mono " + cls(day) }, h("span", { class: "k" }, "Today"), fin(day) ? inr(day, true) : "—")),
 		h("div", { class: "kstrip" }, cell("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""), cell("Cash", inr(sm.cash)), cell("Fees paid", inr(sm.fees)), cell("Open positions", String(pos.length)))));
+	if (sm && Array.isArray(sm.reviews) && sm.reviews.length) put(body, ppReview(sm.reviews));
 	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, `Positions (${pos.length})`)),
 		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
 			h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", { class: "mono", style: "font-size:13px" }, p.symbol),
@@ -2100,6 +2106,34 @@ function ppDraw() {
 		P.confirm === (killOn ? "kill:off" : "kill:on") ? h("span", { style: "display:flex;gap:8px" }, h("button", { class: "btn danger", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const r = await paperCall("POST", "/paper/kill", { on: !killOn }); P.acting = false; P.note = r.status === 200 ? "" : "The kill switch could not be changed (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, killOn ? "Yes, resume trading" : "Yes, stop and sell everything"), h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"))
 			: h("button", { class: "btn" + (killOn ? "" : " danger"), style: "margin-left:auto", onclick: () => { P.confirm = killOn ? "kill:off" : "kill:on"; P.confirmAt = Date.now(); ppDraw(); } }, killOn ? "Resume trading" : "Stop all trading and sell everything")),
 		h("div", { class: "note" }, "Paper money only. Orders are carried out by the paper runner through the risk gate: the gate, not this page, decides. Nothing here can reach a broker."));
+}
+// The session review (quantdesk/paper/review.py): what the account did on a day, from its own ledger. Today's whole-day result includes what is still held; an earlier day's is
+// realized profit less fees, because the ledger keeps no closing marks for it, and the panel says which it is showing.
+const KIND_WORD = { buy: "Bought", sell: "Sold", sto: "Sold to open", btc: "Bought back", settle: "Settled" };
+function ppReview(reviews) {
+	const P = S.pp, pick = reviews.find((r) => r.day === P.revDay) || reviews[0];
+	P.revDay = pick.day;
+	const dayName = (d) => new Date(d + "T00:00:00Z").toLocaleDateString("en-IN", { timeZone: "UTC", weekday: "short", day: "2-digit", month: "short" });
+	const cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
+	const whole = fin(pick.equity_change), head = whole ? pick.equity_change : pick.net;
+	const box = h("div", { class: "grp" },
+		h("div", { class: "sec-h" }, h("h2", {}, "Session review"), h("span", { class: "hint" }, pick.today ? (inSession() ? "today so far" : "today") : dayName(pick.day))),
+		reviews.length > 1 ? h("div", { class: "chips", style: "padding:8px 16px" }, reviews.map((r) => h("button", { class: "chip", "aria-pressed": String(r.day === pick.day), onclick: () => { P.revDay = r.day; ppDraw(); } }, r.today ? "Today" : dayName(r.day)))) : null,
+		h("div", { class: "kstrip" },
+			cell(whole ? "Day's result (all in)" : "Closed trades, after fees", inr(head, true), cls(head)), cell("Realized", inr(pick.realized, true), cls(pick.realized)),
+			cell("Fees", inr(pick.fees)), cell("Trades closed", pick.closes ? `${pick.closes} (${pick.wins} won, ${pick.losses} lost)` : "none")),
+		pick.closes ? h("div", { class: "kstrip" }, cell("Best close", inr(pick.best, true), cls(pick.best)), cell("Worst close", inr(pick.worst, true), cls(pick.worst)),
+			cell("Opened", String((pick.opened || []).length)), cell("Still held", pick.today ? String((pick.still_open || []).length) : "—")) : null,
+		(pick.events || []).map((e) => h("div", { class: "banner warn", style: "margin:0" }, icon("alert"), e)),
+		pick.fills.length ? h("div", { class: "rows" }, pick.fills.slice().reverse().map((f) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "justify-content:space-between;gap:8px;font-size:12.5px" }, h("span", { class: "mono" }, `${f.t} ${KIND_WORD[f.kind] || f.kind} ${f.qty} ${f.symbol}`),
+				h("span", { class: "mono " + (f.pnl == null ? "f3" : cls(f.pnl - f.fees)) }, f.pnl == null ? `at ${num(f.price)}` : inr(f.pnl - f.fees, true))),
+			f.thesis ? h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:2px" }, (f.strategy ? f.strategy + ": " : "") + f.thesis) : null)))
+			: h("div", { class: "f3", style: "font-size:12.5px;padding:10px 16px 14px" }, pick.today ? "No trades yet today." : "No trades that day."),
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:8px 16px 12px" }, whole
+			? "The day's result is the account's equity against where it started the day: closed trades, fees and the change in what is still held, together. A close's figure is after its own fees."
+			: "For an earlier day the panel shows closed trades less fees only: the ledger keeps no closing price for what was still held that evening. A close's figure is after its own fees."));
+	return box;
 }
 async function renderPaper(force) {
 	const body = $("#pp-body"), P = S.pp;

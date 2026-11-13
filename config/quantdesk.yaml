@@ -393,7 +393,40 @@ paper:
   # USD/INR or SENSEX option cannot be labelled nse_fo to dodge the costs and hours check. NSE's F&O stocks are added from the
   # warehouse universe by the runner (M3); the four index families are listed here.
   underlyings:
-    nse_fo: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY]
+    nse_fo: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY,
+             RELIANCE, HDFCBANK, SBIN, ICICIBANK, TCS, BHARTIARTL, BSE, INFY, AXISBANK, MARUTI, DIXON, PAYTM, BAJAJ-AUTO, KOTAKBANK, BHEL, LAURUSLABS, DIVISLAB, ITC, BAJFINANCE, "M&M"]
+  # Stock options (owner's written order, 13 Nov 2026: "Enable the stock option trading"): the 20 stocks of desk.watchlist.stocks. They trade in nse_fo with the same verified
+  # costs as index options (costs.segments.options: STT on the sale, NSE's transaction charge on premium and stamp duty are one schedule for index and stock options). Two
+  # differences, both handled by the runner (quantdesk/paper/runner.py):
+  #   * NSE settles a stock option by DELIVERY of the shares. A paper account cannot take delivery honestly, so the desk sells a stock option from 15:20 IST on the trading
+  #     day BEFORE its expiry and does not buy one after that moment.
+  #   * NSE revises a stock's lot from a given expiry, so the lot belongs to the contract, not the stock. lots: {STOCK: {expiry: lot}}, read from NSE's own F&O bhavcopy
+  #     (NewBrdLotQty) of 12 Nov 2026; a contract whose expiry is not listed is REFUSED, never guessed. Add the new far month when NSE lists it (the last week of each month).
+  stock_options:
+    lots:
+      "RELIANCE": {2026-11-23: 500, 2026-12-29: 500, 2027-01-25: 500}
+      "HDFCBANK": {2026-11-23: 650, 2026-12-29: 650, 2027-01-25: 750}
+      "SBIN": {2026-11-23: 750, 2026-12-29: 750, 2027-01-25: 750}
+      "ICICIBANK": {2026-11-23: 700, 2026-12-29: 700, 2027-01-25: 700}
+      "TCS": {2026-11-23: 225, 2026-12-29: 225, 2027-01-25: 250}
+      "BHARTIARTL": {2026-11-23: 475, 2026-12-29: 475, 2027-01-25: 475}
+      "BSE": {2026-11-23: 200, 2026-12-29: 200, 2027-01-25: 200}
+      "INFY": {2026-11-23: 400, 2026-12-29: 400, 2027-01-25: 500}
+      "AXISBANK": {2026-11-23: 625, 2026-12-29: 625, 2027-01-25: 625}
+      "MARUTI": {2026-11-23: 50, 2026-12-29: 50, 2027-01-25: 50}
+      "DIXON": {2026-11-23: 50, 2026-12-29: 50, 2027-01-25: 50}
+      "PAYTM": {2026-11-23: 725, 2026-12-29: 725, 2027-01-25: 325}
+      "BAJAJ-AUTO": {2026-11-23: 75, 2026-12-29: 75, 2027-01-25: 75}
+      "KOTAKBANK": {2026-11-23: 2000, 2026-12-29: 2000, 2027-01-25: 2000}
+      "BHEL": {2026-11-23: 2625, 2026-12-29: 2625, 2027-01-25: 1250}
+      "LAURUSLABS": {2026-11-23: 425, 2026-12-29: 425, 2027-01-25: 425}
+      "DIVISLAB": {2026-11-23: 100, 2026-12-29: 100, 2027-01-25: 100}
+      "ITC": {2026-11-23: 1725, 2026-12-29: 1725, 2027-01-25: 1975}
+      "BAJFINANCE": {2026-11-23: 750, 2026-12-29: 750, 2027-01-25: 750}
+      "M&M": {2026-11-23: 200, 2026-12-29: 200, 2027-01-25: 200}
+    steps:                         # the strike interval near the money on 12 Nov 2026 (the builder's widths; the board's own strikes are what is priced)
+      {RELIANCE: 10, HDFCBANK: 10, SBIN: 10, ICICIBANK: 10, TCS: 20, BHARTIARTL: 20, BSE: 50, INFY: 10, AXISBANK: 10, MARUTI: 100, DIXON: 250, PAYTM: 20,
+       BAJAJ-AUTO: 100, KOTAKBANK: 5, BHEL: 10, LAURUSLABS: 20, DIVISLAB: 100, ITC: 2.5, BAJFINANCE: 10, "M&M": 50}
 
 # What the desk SHOWS: the app's Markets tab and the instruments subscribed with their order book (quantdesk/data/kite_universe.py deep_symbols). It is NOT what the desk
 # records: every F&O underlying, every MCX commodity and every currency pair is still recorded and can be found with the app's search. Names are the board's own (an index or

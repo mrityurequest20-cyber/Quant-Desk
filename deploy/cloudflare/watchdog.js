@@ -262,6 +262,30 @@ async function w9Calendar(c) {
 
 // Fixed IST times for each check. They must coincide with a cron firing in wrangler.jsonc (a test checks this).
 //   days: "trading" = Mon-Fri not a holiday; "weekdays" = Mon-Fri; "saturday"
+// W18: the session review, pushed after the close. The paper runner puts the review in the state it keeps on the relay (quantdesk/paper/review.py); this reads today's
+// straight from the Durable Object (no key: same Worker) and sends its figures by PUSH ONLY. Never by the email path: that opens a GitHub issue, and this repository is
+// public, so the paper account's results would be published. Silent when the live view is off; one INFO line when the runner left no review for today.
+const rs = (x) => (Number.isFinite(x) ? (x < 0 ? "-" : x > 0 ? "+" : "") + "Rs " + Math.round(Math.abs(x)).toLocaleString("en-IN") : "?");
+export function reviewLine(rv) {
+	if (!rv || typeof rv !== "object") return null;
+	const head = Number.isFinite(rv.equity_change) ? `${rs(rv.equity_change)} on the day (all in)` : `${rs(rv.net)} from closed trades after fees`;
+	const closes = Number.isInteger(rv.closes) && rv.closes > 0 ? `${rv.closes} closed (${rv.wins} won, ${rv.losses} lost), best ${rs(rv.best)}, worst ${rs(rv.worst)}` : "nothing closed";
+	const held = Array.isArray(rv.still_open) ? `${rv.still_open.length} still held` : "";
+	const opened = Array.isArray(rv.opened) ? `${rv.opened.length} opened` : "";
+	const ev = Array.isArray(rv.events) && rv.events.length ? ` ${rv.events.length} brake event(s).` : "";
+	return `${head}. ${closes}; ${opened}${opened && held ? ", " : ""}${held}; fees ${rs(rv.fees).replace("+", "")}.${ev} Open the app's Positions tab for every trade.`;
+}
+async function w18Review(c) {
+	if (!configured(c.env)) return [];
+	const r = await c.env.LIVE.get(c.env.LIVE.idFromName("board")).fetch("https://live/paper/state");
+	const st = r.ok ? await r.json() : null;
+	const reviews = st && st.summary && Array.isArray(st.summary.reviews) ? st.summary.reviews : [];
+	const today = reviews.find((x) => x && x.day === c.now.date);
+	if (!today) return [{ sev: "INFO", check: "W18", pushOnly: true, link: actionsUrl(c.env, PAPER_RUNNER), title: `Session review ${c.now.date}: none`,
+		body: "The paper runner left no review for today on the relay: it did not run, or it stopped before the close." }];
+	return [{ sev: "INFO", check: "W18", pushOnly: true, link: "", title: `Session review ${c.now.date}`, body: reviewLine(today) }];
+}
+
 export const SLOTS = [
 	{ at: "07:30", days: "weekdays", run: w7Expiry, check: "W7" },
 	{ at: "07:30", days: "weekdays", run: w9Calendar, check: "W9" },
@@ -280,6 +304,7 @@ export const SLOTS = [
 	{ at: "16:00", days: "trading", run: ranToday(STOCK_RECORDER, "Stock chain recorder", "P2", "W12"), check: "W12" },
 	{ at: "16:00", days: "trading", run: ranToday(KITE_RECORDER, "Kite tick recorder", "P2", "W13"), check: "W13" },
 	{ at: "16:00", days: "trading", run: ranToday(PAPER_RUNNER, "Paper runner", "P2", "W14"), check: "W14" },
+	{ at: "15:50", days: "trading", run: w18Review, check: "W18" },
 	{ at: "16:00", days: "trading", run: (c) => w6Failures(c, "08:00"), check: "W6" },
 	{ at: "18:00", days: "trading", run: (c) => w6Failures(c, "16:00"), check: "W6" },
 	{ at: "21:00", days: "trading", run: ranToday("data.yml", "Data warehouse", "P2", "W5"), check: "W5" },

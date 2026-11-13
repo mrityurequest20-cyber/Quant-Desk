@@ -211,6 +211,13 @@ def trade_config(cfg) -> dict:
     slip = cfg.get("slippage", {}) or {}
     inst = {u: {"lot": int(v["lot_size"]), "step": float(v["strike_step"])} for u, v in (cfg.get("instruments") or {}).items()
             if isinstance(v, dict) and v.get("kind") == "index" and "lot_size" in v and "strike_step" in v}
+    # stock options: a lot per expiry (NSE revises a stock's lot from a given expiry), keyed by the board's expiry code (23NOV26), and settled by delivery (physical)
+    from ..paper.runner import stock_lots
+    steps = cfg.get("paper.stock_options.steps") or {}
+    for u, by in stock_lots(cfg).items():
+        codes = {f"{d.day:02d}{d.strftime('%b').upper()}{d.year % 100:02d}": lot for d, lot in sorted(by.items())}
+        step = steps.get(u) if isinstance(steps, dict) else None
+        inst[u] = {"lot": next(iter(codes.values())), "lots": codes, "step": float(step) if isinstance(step, (int, float)) and step > 0 else 1.0, "physical": True}
     # the paper desk's own gate (quantdesk/paper/risk.py): what a manual paper entry is checked against at the ticket
     paper = {"risk_per_trade": float(cfg.get("paper.risk_per_trade")), "max_quote_age_s": float(cfg.get("paper.max_quote_age_s")),
              "underlyings": sorted(str(u).upper() for u in ((cfg.get("paper.underlyings") or {}).get("nse_fo") or [])),

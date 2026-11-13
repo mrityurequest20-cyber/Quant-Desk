@@ -23,9 +23,11 @@ import math
 import re
 from pathlib import Path
 
+from ..core.calendar import TradingCalendar
 from ..core.types import OPTION, Instrument
 from ..markets import sessions as MK
 from .account import Account, is_number
+from . import review as RV
 from . import slippage as SL
 from .broker import PaperBroker
 from .risk import Order, Quote, RiskGate
@@ -77,6 +79,25 @@ def visible(thesis) -> str:
     return VIS_RE.sub("", str(thesis or "")).strip()
 
 
+def stock_lots(cfg) -> dict[str, dict[dt.date, int]]:
+    """{STOCK: {expiry: lot}} from config paper.stock_options.lots: only whole, positive lots on real dates; anything else is left out, and a contract with no lot is refused."""
+    out: dict[str, dict[dt.date, int]] = {}
+    for u, by in ((cfg.get("paper.stock_options.lots") or {}) if isinstance(cfg.get("paper.stock_options.lots"), dict) else {}).items():
+        if not isinstance(by, dict):
+            continue
+        good = {}
+        for e, lot in by.items():
+            try:
+                d = e if isinstance(e, dt.date) else dt.date.fromisoformat(str(e))
+            except ValueError:
+                continue
+            if isinstance(lot, int) and not isinstance(lot, bool) and lot > 0:
+                good[d] = lot
+        if good:
+            out[str(u).upper()] = good
+    return out
+
+
 def parse_contract(symbol, underlyings, lot_sizes: dict) -> tuple[Instrument | None, str | None]:
     """A board option name (NIFTY12NOV2624500CE) to an Instrument, or (None, why). The underlying must be on the paper desk's list and have a known lot."""
     if not isinstance(symbol, str) or symbol != symbol.strip().upper() or not (8 <= len(symbol) <= 40) or CTRL.search(symbol):
@@ -92,6 +113,10 @@ def parse_contract(symbol, underlyings, lot_sizes: dict) -> tuple[Instrument | N
         except ValueError:
             return None, f"{_safe(symbol)}: the expiry date does not exist"
         lot = lot_sizes.get(u)
+        if isinstance(lot, dict):                                            # a stock: NSE revises its lot from a given expiry, so the lot is the contract's own, never the stock's
+            lot = lot.get(expiry)
+            if not (isinstance(lot, int) and not isinstance(lot, bool) and lot > 0):
+                return None, f"{u} has no verified lot size for the {expiry:%d %b %Y} expiry (paper.stock_options.lots): not traded"
         if not (isinstance(lot, int) and lot > 0):
             return None, f"{u} has no known lot size"
         if int(m.group(4)) <= 0:
@@ -227,6 +252,9 @@ class Runner:
         self.broker = PaperBroker(cfg, account, self.gate)
         self.und = frozenset(self.gate.limits.underlyings.get(SEGMENT, ()))
         self.lots = {str(u).upper(): int(v["lot_size"]) for u, v in (cfg.get("instruments") or {}).items() if isinstance(v, dict) and isinstance(v.get("lot_size"), int)}
+        self.physical = stock_lots(cfg)                                      # stock options: physically settled, a lot per expiry (config paper.stock_options)
+        self.lots.update(self.physical)
+        self.cal = TradingCalendar(cfg.holidays())
         self.kill_file = Path(kill_file) if kill_file else Path(self.gate.kill.path)      # the gate's own file: the flag and the gate can never point at two places
         self.seen: set[str] = set(done_ids(account))
         self.results: list[dict] = []
@@ -310,13 +338,13 @@ class Runner:
             ds = self.broker.trim(quotes, marks, now)
             rep["forced"].append({"action": "trim", "why": trim, "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
         ist = now.astimezone(IST)
-        if ist.time() >= FLATTEN_AT:
-            today = [s for s, p in self.account.positions.items() if p.instrument.expiry == ist.date()]
-            if today:
-                ds = {}
-                for s in sorted(today, key=lambda k: self.account.positions[k].qty >= 0):          # sold options first: buying them back never leaves anything uncovered
-                    ds[s] = self.broker.close(s, abs(self.account.positions[s].qty), quotes.get(s), now, "flatten: expires today")[0]
-                rep["forced"].append({"action": "sell expiring", "why": ["expires today"], "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
+        today = [s for s, p in self.account.positions.items() if p.instrument.expiry is not None and p.instrument.expiry >= ist.date() and self.past_last_entry(p.instrument, ist)]      # an expired one is "stuck" and reported, not retried every cycle
+        if today:
+            ds = {}
+            for s in sorted(today, key=lambda k: self.account.positions[k].qty >= 0):          # sold options first: buying them back never leaves anything uncovered
+                why = "flatten: expires today" if self.account.positions[s].instrument.expiry == ist.date() else "flatten: a stock option is physically settled, so it is sold before its expiry day"
+                ds[s] = self.broker.close(s, abs(self.account.positions[s].qty), quotes.get(s), now, why)[0]
+            rep["forced"].append({"action": "sell expiring", "why": ["expires today, or a stock option on its last day before expiry"], "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
         if ist.time() >= SETTLE_AT:
             left = {s: p for s, p in self.account.positions.items() if p.instrument.expiry == ist.date()}
             if left:                                                         # the session has closed and these could not be sold: cash-settle them at the index price (the broker's own settle)
@@ -362,8 +390,8 @@ class Runner:
         if o["side"] == "buy" and self.entries_blocked:
             res.update(status="refused", reasons=[self.entries_blocked])
             return res
-        if o["side"] == "buy" and inst.expiry == ist.date() and ist.time() >= FLATTEN_AT:
-            res.update(status="refused", reasons=["this contract expires today and the desk sells those from 15:20: not bought"])
+        if o["side"] == "buy" and self.past_last_entry(inst, ist):
+            res.update(status="refused", reasons=[self.last_entry_why(inst)])
             return res
         quote = self.quote_from(snap, inst.symbol, now, None if o["side"] == "buy" else EXIT_AGE_S)
         if o["side"] == "buy":
@@ -403,8 +431,8 @@ class Runner:
             if inst is None:
                 res.update(status="refused", reasons=[why])
                 return res
-            if inst.expiry == ist.date() and ist.time() >= FLATTEN_AT:
-                res.update(status="refused", reasons=[f"{inst.symbol} expires today and the desk closes those from 15:20: nothing opened"])
+            if self.past_last_entry(inst, ist):
+                res.update(status="refused", reasons=[f"{inst.symbol}: {self.last_entry_why(inst)}; nothing opened"])
                 return res
             legs.append({"side": l["side"], "instrument": inst, "segment": SEGMENT, "qty": l["lots"] * inst.lot_size, "quote": self.quote_from(snap, inst.symbol, now, None)})
             if l["ref"]:
@@ -427,6 +455,26 @@ class Runner:
         at = r.get("at") if r.get("at") is not None else o.get("queued_at")
         return {"bid": r["bid"], "ask": r["ask"], "at": at}
 
+    # ---- the last moment a contract may be held ------------------------------------------------------------------------------------
+    def last_day(self, inst: Instrument) -> dt.date | None:
+        """The day from whose 15:20 IST a contract is sold and no longer bought: its expiry day for a cash-settled index option; for a stock option, which NSE settles by
+        DELIVERY of the shares (a paper account cannot take delivery honestly), the trading day before its expiry."""
+        if inst.expiry is None:
+            return None
+        if (inst.underlying or "").upper() in self.physical:
+            return self.cal.prev_trading_day(inst.expiry)
+        return inst.expiry
+
+    def past_last_entry(self, inst: Instrument, ist: dt.datetime) -> bool:
+        last = self.last_day(inst)
+        return last is not None and (ist.date() > last or (ist.date() == last and ist.time() >= FLATTEN_AT))
+
+    def last_entry_why(self, inst: Instrument) -> str:
+        if (inst.underlying or "").upper() in self.physical:
+            return (f"a stock option is settled by delivery of the shares, so the desk sells it from 15:20 on {self.last_day(inst):%d %b}, the day before its expiry, "
+                    "and does not buy it after that: not bought")
+        return "this contract expires today and the desk sells those from 15:20: not bought"
+
     # ---- what the app shows ------------------------------------------------------------------------------------------------------
     def summary(self, snap, now) -> dict:
         a, marks = self.account, self.marks(snap, now)
@@ -443,7 +491,13 @@ class Runner:
                 "kill": self.kill_file.exists(), "stuck": [s for s, p in a.positions.items() if p.instrument.expiry and p.instrument.expiry < now.astimezone(IST).date()], "day_floor": fin(day_floor), "dd_floor": fin(dd_floor), "positions": pos,
                 "slippage": SL.totals(a.ledger), "slips": [{"seq": r["seq"], "symbol": r.get("symbol"), **r["slip"]} for r in [x for x in a.ledger if isinstance(x.get("slip"), dict)][-8:]],
                 "ledger_tail": [_tail(r) for r in a.ledger[-40:]],
-                "ledger_len": len(a.ledger), "ledger_ok": a.verify_ledger()}
+                "ledger_len": len(a.ledger), "ledger_ok": a.verify_ledger(), "reviews": self._reviews(now, eq)}
+
+    def _reviews(self, now, eq) -> list:
+        try:
+            return RV.session_reviews(self.account, now, float(eq) if is_number(eq) else None, visible)
+        except Exception:                                                    # noqa: BLE001 - a review that cannot be worked out never costs the state the app and the brakes read
+            return []
 
 
 def _tail(r: dict) -> dict:
