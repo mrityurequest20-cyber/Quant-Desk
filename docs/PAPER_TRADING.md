@@ -10,7 +10,7 @@ Build tab (you)  ->  relay queue  ->  paper runner (GitHub Actions)  ->  risk ga
 ```
 
 * You choose and size a trade in the **Build** tab (the market read, the news and the ideas are above the builder), write **why**, review it, and send it.
-* The **paper runner** (started by the scheduler on trading days, from about 08:30 IST) takes it through the risk gate within seconds, fills it at the **offer** (a buy) or the **bid** (a sell) with the real costs, and writes it into a hash-chained ledger.
+* The **paper runner** (started by the scheduler on trading days at 06:00 IST and running to midnight, in four parts) takes it through the risk gate within seconds, fills it at the **offer** (a buy) or the **bid** (a sell) with the real costs, and writes it into a hash-chained ledger.
 * The **Paper** tab shows the account, the positions with your thesis, the orders and why any was refused, and the **kill switch**.
 
 ## The very first time (once, before the first trade)
@@ -33,7 +33,7 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 | it would risk X (the whole premium plus fees), over 2.5% of equity | too big: fewer lots |
 | … would be lost against a loss budget | the open positions plus this one could take equity under today's 5% floor or the 10% drawdown floor |
 | closed / does not trade today | outside 09:15-15:30 IST or a holiday |
-| expired (waited N s) | the runner was not running for 2 minutes after you sent it (for example the 12:20 hand-over): nothing was bought; send it again |
+| expired (waited N s) | the runner was not running for 2 minutes after you sent it (for example a hand-over at 11:50, 17:40 or 23:30): nothing was bought; send it again |
 | the offer is X, above your limit | the price ran away from what you saw: nothing was bought |
 | new orders wait: the relay could not be given the latest fills | the runner could not save to the relay for 30 s: exits still work |
 
@@ -48,7 +48,8 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 ## If something is red
 
 * **Paper tab says the runner has not reported:** Actions, *Paper runner*: is a run in progress? If the last one is red, open it: the log says why (the relay did not answer, a saved account did not verify, or two histories disagree). Orders wait two minutes and then expire, nothing is filled meanwhile. The scheduler starts it again within ten minutes up to three times a day; or Run workflow by hand.
-* **12:20-12:25:** the runner changes hands (a new job starts). An order sent then expires; send it again.
+* **11:50, 17:40 and 23:30 (a few minutes each):** the runner changes hands (a new job starts). An order sent then expires; send it again.
+* **What trades when:** the runner is up from 06:00 to midnight, but the risk gate decides what can trade: NSE F&O from 09:15 to 15:30. MCX and currency are refused until their costs and holiday calendars are verified in the config; until then the evening is watched, not traded.
 * The ledger backup on the `paper-ledger` branch is **off** (this repository is public: it would show every thesis and position). To turn it on, set the repository variable `PAPER_LEDGER_BACKUP` to `yes`.
 
 More: docs/RECORDING.md ("The paper runner", "Running the paper runner"), docs/LIVE.md (the relay's routes).
@@ -59,7 +60,7 @@ On a day the exchange opens for a special window (Diwali Muhurat trading, 8 Nov 
 
 1. **Kotak universe** (the option chains for the Build tab), any time before the window.
 2. **Kite tick recorder**: `first_until` 15:35, `second_until` 15:36. It logs in to Kite by itself.
-3. **Paper runner**: `handover` 14:05, `until` 15:35, leave `new_account` off.
+3. **Paper runner**: `handover` 14:05, `handover2` 15:35, `handover3` and `until` 15:36, leave `new_account` off.
 
 Nothing else changes: the same risk gate, the same limits, paper money only.
 

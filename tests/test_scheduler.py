@@ -148,12 +148,15 @@ def test_the_paper_runner_may_be_started_again_after_a_failure_but_not_forever_a
     assert ["gh", "workflow", "run", "record.yml", "--ref", "main"] in calls and ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"] not in calls
 
 
-def test_the_paper_runner_may_be_restarted_until_1525_but_the_recorders_only_until_1445():
+def test_the_paper_runner_runs_from_six_to_midnight_and_may_be_restarted_until_2325_but_the_recorders_only_until_1445():
     late = at("2026-10-05 15:10")
-    assert sch.PAPER_WINDOW == (sch.dt.time(8, 25), sch.dt.time(15, 25))
+    assert sch.PAPER_WINDOW == (sch.dt.time(5, 55), sch.dt.time(23, 25))                               # the owner's desk hours, 06:00 to midnight (13 Nov 2026)
     assert sch.decide(late, [], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW)[0] == "start"          # a runner that stopped early in the afternoon is started again
     assert sch.decide(late, [], HOLS, sch.MAX_STARTS)[0] == "wait"                                      # a recorder is not
-    assert sch.decide(at("2026-10-05 15:30"), [], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW)[0] == "wait"
+    assert sch.decide(at("2026-10-05 05:56"), [], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW)[0] == "start"
+    assert sch.decide(at("2026-10-05 21:00"), [], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW)[0] == "start"   # the MCX evening: a stopped runner comes back
+    assert sch.decide(at("2026-10-05 05:50"), [], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW)[0] == "wait"
+    assert sch.decide(at("2026-10-05 23:30"), [], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW)[0] == "wait"
 
 
 def test_main_at_1510_starts_only_the_paper_runner(monkeypatch):

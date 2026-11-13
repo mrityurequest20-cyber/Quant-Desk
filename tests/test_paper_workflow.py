@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RAW = (ROOT / ".github" / "workflows" / "paper-desk.yml").read_text(encoding="utf-8")
 WF = yaml.safe_load(RAW)
 JOBS = WF["jobs"]
+PARTS = ("morning", "afternoon", "evening", "night")
 
 
 def steps(job):
@@ -18,17 +19,17 @@ def steps(job):
 
 def test_only_the_publish_job_can_write_and_it_holds_no_secret():
     assert WF["permissions"] == {"contents": "read"}                                                  # everything else is read-only
-    assert JOBS["publish"]["permissions"] == {"contents": "write"} and "permissions" not in JOBS["morning"] and "permissions" not in JOBS["afternoon"]
+    assert JOBS["publish"]["permissions"] == {"contents": "write"} and all("permissions" not in JOBS[j] for j in PARTS)
     pub = yaml.safe_dump(JOBS["publish"])
     assert "secrets.LIVE" not in pub and "secrets." not in pub.replace("secrets.GITHUB_TOKEN", "") and "github.token" in pub    # the repository token for the branch, nothing else
 
 
 def test_the_relay_keys_live_in_the_one_step_that_runs_the_runner_in_each_half_and_nowhere_else():
-    for job in ("morning", "afternoon"):
+    for job in PARTS:
         holders = [s for s in steps(job) if "secrets." in yaml.safe_dump(s)]
         assert len(holders) == 1 and holders[0]["run"].find("quantdesk paper run") >= 0, job
         assert set(holders[0]["env"]) == {"LIVE_URL", "LIVE_READ_TOKEN", "LIVE_INGEST_TOKEN"}
-    assert RAW.count("secrets.LIVE_READ_TOKEN") == 2 and RAW.count("secrets.LIVE_INGEST_TOKEN") == 2     # a half each; the workflow-level env holds none
+    assert RAW.count("secrets.LIVE_READ_TOKEN") == 4 and RAW.count("secrets.LIVE_INGEST_TOKEN") == 4     # a part each; the workflow-level env holds none
     assert not any("secrets." in str(v) for v in WF["env"].values())
 
 
@@ -51,7 +52,8 @@ def test_the_publish_job_verifies_picks_the_longest_and_only_the_two_git_steps_h
     holders = [x["name"] for x in steps_ if "GH_TOKEN" in yaml.safe_dump(x)]
     assert holders == ["Fetch the paper-ledger branch (into its own directory)", "Add it to the branch (a new commit; never a force-push)"]      # the repository code (verify) never runs with the token
     pick = next(x["run"] for x in steps_ if x.get("name", "").startswith("Take the longest"))
-    assert "paper verify --file \"$f\"" in pick and "--extends \"$m\"" in pick and "the runner saved no account to publish" in pick and "exit 1" in pick      # each file verifies; the longer wins; nothing saved is an error
+    assert "paper verify --file \"$f\"" in pick and "--extends \"$pick\"" in pick and "the runner saved no account to publish" in pick and "exit 1" in pick      # each file verifies; the longer wins; nothing saved is an error
+    assert "for part in morning afternoon evening night" in pick                                       # every part's saved account is considered, in the order they ran
     check = next(x["run"] for x in steps_ if x.get("name", "").startswith("Check it continues"))
     assert "--extends \"$RUNNER_TEMP/ledger-branch/account.json\"" in check
     chk = next(x for x in steps_ if x.get("name", "").startswith("Check it continues"))
@@ -65,21 +67,25 @@ def test_the_publish_job_verifies_picks_the_longest_and_only_the_two_git_steps_h
 def test_the_backup_is_off_unless_the_owner_turns_it_on_because_the_repository_is_public():
     gate = "vars.PAPER_LEDGER_BACKUP == 'yes'"
     assert gate in JOBS["publish"]["if"]
-    for job in ("morning", "afternoon"):
+    for job in PARTS:
         up = [x for x in steps(job) if str(x.get("uses", "")).startswith("actions/upload-artifact")]
         assert len(up) == 1 and gate in up[0]["if"], job                                               # nothing is uploaded to a public place by default
     assert "PUBLIC" in RAW and "paper-ledger" in RAW
 
 
-def test_one_run_at_a_time_two_halves_inside_a_job_limit_and_the_first_account_is_a_declared_act():
+def test_one_run_at_a_time_four_parts_inside_a_job_limit_and_the_first_account_is_a_declared_act():
     assert WF["concurrency"] == {"group": "paper-desk", "cancel-in-progress": False}                      # two runners on one account would be dangerous
-    assert JOBS["afternoon"]["needs"] == "morning" and JOBS["publish"]["needs"] == "afternoon"
+    assert JOBS["afternoon"]["needs"] == "morning" and JOBS["evening"]["needs"] == "afternoon" and JOBS["night"]["needs"] == "evening" and JOBS["publish"]["needs"] == "night"
+    env, inp = WF["env"], WF[True]["workflow_dispatch"]["inputs"]                                         # 06:00 to midnight (owner, 13 Nov 2026); the afternoon part holds the 15:20 sale and the 15:31 settlement
+    assert [inp[k]["default"] for k in ("handover", "handover2", "handover3", "until")] == ["11:50", "17:40", "23:30", "23:59"]
+    assert "--until \"$HANDOVER2\"" in steps("afternoon")[-2]["run"] and "--until \"$HANDOVER3\"" in steps("evening")[-2]["run"] and "--until \"$UNTIL\"" in steps("night")[-2]["run"]
+    assert all(k in env for k in ("HANDOVER", "HANDOVER2", "HANDOVER3", "UNTIL"))
     for job in JOBS:
         assert JOBS[job]["timeout-minutes"] <= 359, job                                                   # under GitHub's six hours
-    assert JOBS["morning"]["timeout-minutes"] == 355 and JOBS["afternoon"]["timeout-minutes"] == 355     # the afternoon half must be able to run from an early morning crash to the close
+    assert all(JOBS[j]["timeout-minutes"] == 355 for j in PARTS)     # each part must be able to run from an early morning crash to the close
     inp = WF[True]["workflow_dispatch"]["inputs"]                                                         # (YAML reads the key `on` as True)
     assert inp["new_account"]["default"] is False and inp["new_account"]["type"] == "boolean"
-    assert "--new-account" in "\n".join(s.get("run", "") for s in steps("morning")) and "--new-account" not in "\n".join(s.get("run", "") for s in steps("afternoon"))
+    assert "--new-account" in "\n".join(s.get("run", "") for s in steps("morning")) and all("--new-account" not in "\n".join(s.get("run", "") for s in steps(j)) for j in PARTS[1:])
     assert "schedule" not in WF[True]                                                                     # started by deploy/scheduler.py or by hand, never by GitHub's own cron
 
 
