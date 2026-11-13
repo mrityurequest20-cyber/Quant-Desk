@@ -1,9 +1,9 @@
-# The pre-market brief (docs/PREMARKET.md): before the open, every 15 minutes from 07:15 to 09:15 IST, the desk reads
+# The pre-market brief (docs/PREMARKET.md): before the open, every 15 minutes from 06:00 to 09:15 IST, the desk reads
 # today's events, every F&O company's results against its own history, overnight markets and headlines, and ranks
 # every F&O instrument with its reasons. Public data only (NSE's warehouse tables, Yahoo, RSS); no secret.
 #
 # GitHub's cron has been hours late on this repo (S0-09), so one job does the whole morning: whichever firing starts
-# it first sleeps on its runner until 07:15 IST, then builds and publishes the brief every quarter-hour to 09:15. A
+# it first sleeps on its runner until 06:00 IST, then builds and publishes the brief every quarter-hour to 09:15. A
 # firing that arrives later (or a manual run) builds it once. Each brief replaces the `premarket` branch's content
 # (one orphan commit: a snapshot, not a log), which the app's Today tab reads. It places nothing and touches no other
 # branch, the desk, the journal or any limit.
@@ -53,7 +53,7 @@ jobs:
           export PATH=/usr/bin:/bin            # every other tool from the system, never a script pip installed
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           echo "::add-mask::$auth"
-          start=$(TZ=Asia/Kolkata date -d "07:15" +%s) end=$(TZ=Asia/Kolkata date -d "09:15" +%s)
+          start=$(TZ=Asia/Kolkata date -d "06:00" +%s) end=$(TZ=Asia/Kolkata date -d "09:15" +%s)
           once() {
             rm -rf _premarket
             env -u GH_TOKEN "$PY" -m quantdesk premarket brief --warehouse runtime/warehouse \
@@ -67,7 +67,7 @@ jobs:
           if [ "$now" -ge "$end" ]; then once; exit 0; fi
           while :; do
             now=$(date +%s)
-            if [ "$now" -lt "$start" ]; then echo "waiting for 07:15 IST"; sleep $((start - now)); continue; fi
+            if [ "$now" -lt "$start" ]; then echo "waiting for 06:00 IST"; sleep $((start - now)); continue; fi
             once
             now=$(date +%s)
             [ "$now" -ge "$end" ] && break

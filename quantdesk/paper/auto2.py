@@ -60,6 +60,17 @@ LAST_ENTRY = dt.time(15, 0)
 SWING_SESSIONS = 3
 LEDGER_SOFT_LIMIT = V1.LEDGER_SOFT_LIMIT
 LAB_MAX_CHARS = 110000                   # the relay keeps the record in one stored value (128 KiB at most)
+# The day plan (owner, 13 Nov 2026: "6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis and look
+# for high risk to reward trades"). Built from last night's closing books, the overnight markets, the news and the pre-market brief; it ranks defined-risk candidates and the
+# open takes a planned strategy first, through the same proof gate (MIN_TRADES, a positive draw) and the same risk gate as any other.
+PLAN_FROM, PLAN_UNTIL = dt.time(6, 0), dt.time(9, 15)
+PLAN_EVERY_S = 600
+PLAN_MAX_AGE_S = 4 * 86400                # last close: Friday's prices plan Monday morning
+PLAN_MIN_RR = 2.0                         # reward to risk at the strategy's own take-profit and stop, capped by what the structure can make
+PLAN_TOP = 10
+PLAN_PER_U = 2
+OVERNIGHT_TH_PCT = 0.40                   # the overnight markets' median move that counts as a vote
+INDEX_U = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"})     # the overnight cue and macro events are votes for the indices only
 
 # ---- the catalogue --------------------------------------------------------------------------------------------------------------------------
 # structure: (code, view, legs as (side, right, offset from the at-the-money strike in strike steps; "w" is the width), widths)
@@ -300,6 +311,9 @@ class AutoPilotV2:
         self.n = 0
         self.last_state: dict[str, dict] = {}
         self.lab_saved_at = -1e9
+        self.brief: dict | None = None             # the pre-market brief (quantdesk/premarket), handed in by the session; None = plan without it
+        self.day_plan: dict | None = None
+        self.plan_at = -1e9
 
     # ---- the session's hooks (the same as AUTO v1's) ----------------------------------------------------------------------------------------
     def drain_events(self) -> list[dict]:
@@ -467,6 +481,131 @@ class AutoPilotV2:
             out.setdefault(p.strategy, {"sid": parts[2], "u": parts[3], "legs": {}})["legs"][sym] = p
         return out
 
+    # ---- the day plan, 06:00 to 09:15 ----------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def close_snap(snap) -> dict:
+        """The board as it closed: every quote up to PLAN_MAX_AGE_S old, its age set to 0 so the pricing code reads it, and nothing older. For PLANNING ONLY: never traded on."""
+        q = {}
+        for name, v in (snap.get("quotes") or {}).items():
+            age = _num(v.get("age_s")) if isinstance(v, dict) else None
+            if age is not None and 0 <= age <= PLAN_MAX_AGE_S:
+                q[name] = {**v, "age_s": 0.0}
+        return {**snap, "quotes": q}
+
+    @staticmethod
+    def overnight(brief) -> tuple[float | None, str | None]:
+        """The overnight markets' median move in percent (equity markets the brief lists, each signed by how India usually follows it), and a reason."""
+        rows = [g for g in ((brief or {}).get("global") or []) if isinstance(g, dict) and g.get("kind") == "equity"]
+        moves = sorted(float(g["change"]) * 100 * (1 if (g.get("india_prior") or 1) > 0 else -1) for g in rows if _num(g.get("change")) is not None)
+        if len(moves) < 3:
+            return None, None
+        m = moves[len(moves) // 2] if len(moves) % 2 else (moves[len(moves) // 2 - 1] + moves[len(moves) // 2]) / 2
+        return m, f"overnight markets {m:+.2f}% (median of {len(moves)})"
+
+    def plan_state(self, cs, u, ch, now: dt.datetime, news, over: float | None, over_why: str | None, result: dict | None) -> dict | None:
+        """This underlying's state for the day plan, from the closing board: the same fields as state(), without touching the live tape."""
+        ist = now.astimezone(IST)
+        sp = V1._spot(cs, u)
+        if not sp or u not in ch:
+            return None
+        exps = [e for e in sorted(ch[u]) if e > ist.date()]
+        if not exps:
+            return None
+        near, nxt = exps[0], (exps[1] if len(exps) > 1 else None)
+        chain = ch[u][near]
+        strikes = sorted(chain)
+        atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - sp)) if strikes else None
+        T = max((dt.datetime.combine(near, dt.time(15, 30), tzinfo=IST) - ist).total_seconds() / (365.25 * 86400), 0.0)
+        iv = atm_iv(cs, chain, strikes, atm_i, sp, T)
+        fq = (cs.get("quotes") or {}).get(u + "-FUT")
+        fut = V1._mid(fq) if isinstance(fq, dict) else None
+        rd = V1.readings(cs, u, near, chain, ist, sp, fut)
+        votes, why = [], []
+        if rd["pressure"] is not None and abs(rd["pressure"]) >= V1.PRESSURE_TH:
+            votes.append(1 if rd["pressure"] > 0 else -1)
+            why.append(f"closing book pressure {rd['pressure']:+.2f}")
+        if rd["gap_pct"] is not None and abs(rd["gap_pct"]) >= V1.PARITY_TH_PCT:
+            votes.append(1 if rd["gap_pct"] > 0 else -1)
+            why.append(f"options forward {rd['gap_pct']:+.2f}% against futures at the close")
+        if over is not None and abs(over) >= OVERNIGHT_TH_PCT:
+            votes.append(1 if over > 0 else -1)
+            why.append(over_why)
+        nv, nwhy = V1.news_vote(news, u, now)
+        if nv:
+            votes.append(nv)
+            why.append(nwhy or "news")
+        d = votes[0] if len(votes) >= 2 and len(set(votes)) == 1 else 0
+        view = "up" if d > 0 else "down" if d < 0 else ("flat" if not votes and (over is None or abs(over) < OVERNIGHT_TH_PCT / 2) else None)
+        label = (result or {}).get("label")
+        vol = "rich" if label == "rich" else "cheap" if label == "cheap" else "mid"      # the brief's results test is the only volatility reading before the open
+        return {"u": u, "spot": sp, "view": view, "why": why, "mom": None, "iv": iv, "rv": None, "ratio": None, "vol": vol,
+                "eve": self._trading_days_to(ist.date(), near) == 1, "near": near, "next": nxt}
+
+    def plan(self, snap, now: dt.datetime, news=None) -> dict:
+        """The day plan: for each underlying, the defined-risk strategies whose pre-open context holds and whose reward to risk is PLAN_MIN_RR or better, priced on the
+        closing books; ranked proven first, then by the measured expectancy, then by reward to risk. What the open will look for, with every reason written down."""
+        ist = now.astimezone(IST)
+        b = self.brief if isinstance(self.brief, dict) else {}
+        cs = self.close_snap(snap)
+        ch = V1.chains(cs, self.und, self.lots)
+        over, over_why = self.overnight(b)
+        results = {r.get("symbol"): r for r in (b.get("results") or []) if isinstance(r, dict)}
+        watch = {w.get("symbol"): w for w in (b.get("watch") or []) if isinstance(w, dict)}
+        expiring = {e.get("symbol") for e in (b.get("expiring") or []) if isinstance(e, dict)}
+        macro = [m.get("name") for m in (b.get("macro") or []) if isinstance(m, dict) and m.get("name")]
+        items, states, notes = [], {}, []
+        for u in self.und:
+            st = self.plan_state(cs, u, ch, now, news, over if u in INDEX_U else None, over_why, results.get(u))
+            if st is None:
+                continue
+            states[u] = {"view": st["view"], "vol": st["vol"], "why": st["why"][:3]}
+            cat = []
+            r = results.get(u)
+            if r:
+                cat.append(f"results {r.get('when', '')}: options {r.get('label', '?')} against its own history"[:90])
+            if u in expiring:
+                cat.append("its options expire today")
+            if macro and u in INDEX_U:
+                cat.append("macro: " + ", ".join(macro[:2])[:80])
+            for why in (watch.get(u) or {}).get("why") or []:
+                if why.startswith(("in the news", "futures OI")):
+                    cat.append(str(why)[:90])
+            if st["view"] is None:
+                continue
+            found = []
+            for s in CATALOGUE:
+                if not self.matches(s, st):
+                    continue
+                p = self.price(cs, s, st, ch)
+                if p is None:
+                    continue
+                reward = min(s.tp * p["risk"], p["best"]) if math.isfinite(p["best"]) else s.tp * p["risk"]
+                rr = reward / (s.sl * p["risk"]) if p["risk"] > 0 else 0.0
+                if rr < PLAN_MIN_RR:
+                    continue
+                n, mean, _ = self.lab.posterior(s.sid)
+                found.append({"u": u, "sid": s.sid, "what": s.describe()[:160], "view": st["view"], "vol": st["vol"], "why": st["why"][:3], "catalysts": cat[:4],
+                              "rr": round(rr, 2), "risk_lot": round(s.sl * p["risk"] * p["lot"]), "reward_lot": round(reward * p["lot"]), "exp": p["exp"].isoformat(),
+                              "legs": [("+" if l["side"] > 0 else "-") + l["name"] for l in p["legs"]][:4], "n": n, "mean_r": round(mean, 3),
+                              "proven": n >= MIN_TRADES and mean > 0})
+            found.sort(key=lambda x: (not x["proven"], -x["mean_r"], -x["rr"]))
+            items += found[:PLAN_PER_U]
+        items.sort(key=lambda x: (not x["proven"], -x["mean_r"], -len(x["catalysts"]), -x["rr"]))
+        if not any(i["proven"] for i in items):
+            notes.append(f"No candidate is proven yet: a strategy trades only after {MIN_TRADES} shadow trades with a positive record. Until then the open shadow-trades these.")
+        if not b:
+            notes.append("No pre-market brief yet: planned without results, macro and headline catalysts.")
+        if not (cs.get("quotes") or {}):
+            notes.append("No closing prices on the board: nothing to price.")
+        self.day_plan = {"built_at": ist.isoformat(timespec="minutes"), "from": "last close", "overnight_pct": None if over is None else round(over, 2),
+                         "brief": b.get("session") if b else None, "states": states, "items": items[:PLAN_TOP], "notes": notes}
+        return self.day_plan
+
+    def planned(self, u: str) -> list[str]:
+        """The strategies the day plan names for this underlying, best first (empty after a day boundary)."""
+        dp = self.day_plan or {}
+        return [i["sid"] for i in dp.get("items") or [] if i.get("u") == u]
+
     def decide(self, snap, account, now: dt.datetime, *, kill: bool = False, entries_blocked: str | None = None, cal=None, news=None) -> list[dict]:
         if now is None:
             return []
@@ -478,6 +617,14 @@ class AutoPilotV2:
             if st is not None:
                 states[u] = st
         self.shadow_step(snap, states, ch, now)
+        if PLAN_FROM <= ist.time() < PLAN_UNTIL and t - self.plan_at >= PLAN_EVERY_S:      # before the open: plan the day from the closing books, every ten minutes
+            self.plan_at = t
+            try:
+                self.plan(snap, now, news)
+            except Exception:                                                              # noqa: BLE001 - a plan that fails costs the plan, never the session
+                self.day_plan = {"built_at": ist.isoformat(timespec="minutes"), "items": [], "notes": ["the plan could not be built this time"]}
+        if self.day_plan and str(self.day_plan.get("built_at", ""))[:10] != ist.date().isoformat():
+            self.day_plan = None                                                           # yesterday's plan never steers today
         orders: list[dict] = []
         pk = self.live_packages(account)
         for text, pkg in pk.items():                                                    # live exits: the strategy's own
@@ -512,7 +659,15 @@ class AutoPilotV2:
             if self.backoff.get(u, 0) > t:
                 continue
             best = None
-            for s in CATALOGUE:
+            for sid in self.planned(u):                                                 # the day plan first: a planned strategy whose context still holds, proven, with a positive draw
+                s = BY_SID.get(sid)
+                if s is None or (s.sid, u) in busy or not self.matches(s, st) or self.lab.stats.get(s.sid, [0])[0] < MIN_TRADES:
+                    continue
+                draw = self.lab.draw(s.sid, self.rng)
+                if draw > 0:
+                    best = (draw, s)
+                    break
+            for s in CATALOGUE if best is None else ():
                 if (s.sid, u) in busy or not self.matches(s, st):
                     continue
                 n = self.lab.stats.get(s.sid, [0])[0]
@@ -528,6 +683,8 @@ class AutoPilotV2:
             if p is None or any(l["name"] in held_syms for l in p["legs"]):            # a contract held by anyone is not shared: every position has one owner
                 continue
             o = self._order(s, st, p, t, best[0])
+            if s.sid in self.planned(u):
+                o["thesis"] = (o["thesis"] + " On the day plan built before the open.")[:1000]
             orders.append(o)
             self.backoff[u] = t + ENTRY_BACKOFF_S
             self.lab.today["live_entries"] += 1
@@ -573,4 +730,4 @@ class AutoPilotV2:
     def summary(self) -> dict:
         """For the app's Strategy lab panel: the record's leaders, today's counts, and each underlying's state now (compact: the runner's whole state must fit the relay's cap)."""
         state = {u: [st.get("view"), st.get("vol"), st.get("ratio"), bool(st.get("eve"))] for u, st in sorted(self.last_state.items())}
-        return {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state}
+        return {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan}

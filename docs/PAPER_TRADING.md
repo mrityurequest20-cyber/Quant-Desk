@@ -81,6 +81,40 @@ Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a 
 * **Switches:** off with the repository variable `PAPER_AUTO` = `no`; back to v1 with `PAPER_AUTO_ENGINE` = `v1`.
 * **Not proven to make money.** The shadow record is the evidence it builds; the first days are mostly shadow trades.
 
+### The day plan, 06:00 to 09:15 (owner's order, 13 Nov 2026)
+
+"6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis
+and look for high risk to reward trades." Every ten minutes from 06:00 to 09:15, AUTO v2 builds a **day plan**
+(`AutoPilotV2.plan`).
+
+**What it reads:**
+- **Options and futures:** last night's closing books from the relay (kept through the night since the board is stored): the
+  at-the-money implied volatility, the closing book pressure, and the options' forward against the futures.
+- **News:** the news engine's tone for each underlying.
+- **Overnight markets:** the brief's US, Asian and European equity moves; their median is one vote for the indices.
+- **The pre-market brief** (`premarket.yml`, now from 06:00): results today (options rich or cheap against the company's own
+  history, which sets the volatility context), macro events, expiries, headlines naming the instrument, futures OI shifts.
+
+**What it decides:**
+- **A pre-open view** per underlying: up or down when at least two readings agree and none disagrees; flat when nothing moves.
+- **Candidates:** every catalogue strategy whose context holds, priced on the closing books, kept only if its reward to risk
+  is **2 or better** (the strategy's own take-profit against its stop, capped by what the structure can make).
+- **Ranking:** proven strategies first, then by measured expectancy in R, then by catalysts and reward to risk. At most two per
+  underlying and ten in all. Each comes with its legs, rupees at risk and to gain per lot, and its reasons.
+
+**At the open:** from 09:20, for each underlying, AUTO v2 takes a **planned** strategy first, but only if its context still holds
+on the live board, it has its `MIN_TRADES` shadow record, and its Thompson draw is positive. Otherwise it chooses as before. A
+planned trade's thesis says so.
+- **Same limits:** the plan changes the order of choice, not the limits. The risk gate, the loss caps, the proof gate and the
+  sizes are the same as for any trade.
+- **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
+- **Yesterday's plan** never steers today.
+
+**Where to see it:** the Positions tab, the "Day plan" panel, above the strategy lab.
+
+**What it is not:** a forecast that has been tested. The repository's own research found direction hard to forecast. The plan
+writes down what the desk will look for and why. Whether planned trades do better than unplanned ones is for the record to show.
+
 ## AUTO v1: the paper desk deciding for itself (paper money only)
 
 You said go on 8 Nov 2026: the desk may take trades by itself beside yours. Since 13 Nov 2026 it is **ON for every run** ("enable the self-trading ... a system which trades itself"): it trades the four index families and the 20 watchlist stocks. To switch it off, set the repository variable `PAPER_AUTO` to `no`. Your hand-placed orders are unchanged and work at the same time.

@@ -482,7 +482,7 @@ function markdown(md) {
 }
 
 // ==================================================================================================================
-// TODAY: the pre-market brief (quantdesk/premarket; premarket.yml every 15 minutes, 07:15-09:15 IST)
+// TODAY: the pre-market brief (quantdesk/premarket; premarket.yml every 15 minutes, 06:00-09:15 IST)
 // ==================================================================================================================
 async function loadBrief(maxAge) {
 	if (S.pm && Date.now() - (S.pmAt || 0) < maxAge) return S.pm;
@@ -499,7 +499,7 @@ async function renderToday(full) {
 	body.textContent = "";
 	if (!b) {
 		put(body, grp("Pre-market brief", "", h("div", { class: "rows" }, empty("watch",
-			"No pre-market brief yet. It is built every 15 minutes from 07:15 to 09:15 IST on weekdays" + (S.pmErr ? ` (${S.pmErr}).` : "."))))); return;
+			"No pre-market brief yet. It is built every 15 minutes from 06:00 to 09:15 IST on weekdays" + (S.pmErr ? ` (${S.pmErr}).` : "."))))); return;
 	}
 	const sum = h("div", { class: "rows" }, (b.summary || []).map((line) => h("div", { class: "pad", style: "font-size:13.5px;line-height:1.5" }, line)));
 	put(body, grp("Pre-market brief", `built ${ago(b.generated_at)}`, sum));
@@ -556,7 +556,7 @@ const DATA_RECORDED = [
 	["Kite ticks with market depth", "the session", "kite-record.yml, encrypted with your API secret, kept as an artifact (licensed to you: never published)"],
 	["Stock option chains, minutes for all five indices", "15:25 and 15:45", "collect-wide.yml"],
 	["NSE warehouse: bhavcopy, participant open interest, FII/DII, events", "evenings", "data.yml"],
-	["Pre-market brief", "07:15 to 09:15", "premarket.yml, on its own branch; shown on the Today tab"],
+	["Pre-market brief", "06:00 to 09:15", "premarket.yml, on its own branch; shown on the Today tab"],
 ];
 const DATA_GAPS = [
 	"Live prices (Kite and Kotak) are for display. The relay keeps the latest price of each instrument and one close a minute for the last two days, so it is not a record. The record is the Kite tick recorder and the minute and chain files above.",
@@ -593,7 +593,7 @@ async function renderDataTab(full) {
 		row("Board", tag("flat", `${(hl.names || 0).toLocaleString("en-IN")} instruments`)),
 	];
 	put(body, grp("Live feeds", st.t, h("div", { class: "rows" }, live)));
-	const pmRows = !pm ? [empty("watch", "No pre-market brief yet. It is built every 15 minutes from 07:15 to 09:15 IST on weekdays.")]
+	const pmRows = !pm ? [empty("watch", "No pre-market brief yet. It is built every 15 minutes from 06:00 to 09:15 IST on weekdays.")]
 		: [row("Pre-market brief", tag("flat", "built " + ago(pm.generated_at))), row("NSE warehouse", pm.data_stale ? tag("bear", "behind") : tag("bull", "up to date"), `latest bhavcopy: ${pm.last_close}`)];
 	put(body, grp("Daily data", "", h("div", { class: "rows" }, pmRows)));
 	put(body, grp("What is recorded", "every trading day", h("div", { class: "rows" }, DATA_RECORDED.map(([what, when, where]) =>
@@ -2062,6 +2062,7 @@ function ppDraw() {
 			h("div", { class: "day mono " + cls(day) }, h("span", { class: "k" }, "Today"), fin(day) ? inr(day, true) : "—")),
 		h("div", { class: "kstrip" }, cell("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""), cell("Cash", inr(sm.cash)), cell("Fees paid", inr(sm.fees)), cell("Open positions", String(pos.length)))));
 	if (sm && Array.isArray(sm.reviews) && sm.reviews.length) put(body, ppReview(sm.reviews));
+	if (sm && sm.lab && sm.lab.plan && typeof sm.lab.plan === "object") put(body, ppPlan(sm.lab.plan));
 	if (sm && sm.lab && typeof sm.lab === "object") put(body, ppLab(sm.lab));
 	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, `Positions (${pos.length})`)),
 		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
@@ -2137,6 +2138,25 @@ function ppReview(reviews) {
 	return box;
 }
 // AUTO v2's Strategy lab (quantdesk/paper/auto2.py): every strategy it has written is traded in shadow at the real prices; the ones with a record go live. Display only.
+// The day plan (AUTO v2, 06:00 to 09:15): what the open will look for, priced on last night's closing books, with its reasons. Trades only through the lab's proof gate.
+function ppPlan(dp) {
+	const items = Array.isArray(dp.items) ? dp.items : [], notes = Array.isArray(dp.notes) ? dp.notes : [];
+	const word = (v) => (v === "up" ? "▲ up" : v === "down" ? "▼ down" : v === "flat" ? "◆ flat" : "—");
+	const when = String(dp.built_at || "").slice(11, 16);
+	return h("div", { class: "grp" },
+		h("div", { class: "sec-h" }, h("h2", {}, "Day plan"), h("span", { class: "hint" }, `built ${when || "—"} IST from the ${dp.from || "last close"}` + (fin(dp.overnight_pct) ? ` · overnight ${signed(dp.overnight_pct)}%` : ""))),
+		items.length ? h("div", { class: "rows" }, items.map((i) => h("div", { style: "padding:8px 16px;border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "justify-content:space-between;gap:8px" },
+				h("b", { class: "mono" }, `${i.u} ${word(i.view)}`),
+				i.proven ? h("span", { class: "tag bull" }, "can trade at the open") : h("span", { class: "tag flat" }, `testing: ${num(i.n, 0)} shadow trades`)),
+			h("div", { class: "f2", style: "font-size:12.5px;line-height:1.45;margin-top:2px" }, i.what || i.sid),
+			h("div", { class: "mono f2", style: "font-size:12px;margin-top:3px" }, `reward:risk ${fin(i.rr) ? i.rr.toFixed(1) : "—"} · risk ₹${num(i.risk_lot, 0)} · target ₹${num(i.reward_lot, 0)} a lot · expiry ${i.exp || "—"}`),
+			Array.isArray(i.legs) && i.legs.length ? h("div", { class: "mono f3", style: "font-size:11px;margin-top:2px;white-space:normal" }, i.legs.join("  ")) : null,
+			(i.why || []).length || (i.catalysts || []).length ? h("div", { class: "f3", style: "font-size:11.5px;line-height:1.45;margin-top:3px;white-space:normal" }, [...(i.why || []), ...(i.catalysts || [])].join(" · ")) : null)))
+			: h("div", { class: "f3", style: "font-size:12.5px;padding:10px 16px" }, "Nothing on the plan: no underlying has a clear pre-open view with a reward to risk of 2 or better."),
+		notes.length ? h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 0" }, notes.join(" ")) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "Built every ten minutes from 06:00 to 09:15 from last night's closing books, the overnight markets, the news and the pre-market brief. From 09:20 the desk takes a planned strategy first, if its context still holds and its record is proven; the risk limits are the same as for any trade."));
+}
 function ppLab(lab) {
 	const cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
 	const td = lab.today || {}, rows = Array.isArray(lab.top) ? lab.top : [];

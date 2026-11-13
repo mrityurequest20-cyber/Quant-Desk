@@ -1,7 +1,7 @@
 # The pre-market brief
 
 Before the open, the desk reads what today holds for **every F&O instrument** and writes it down with its reasons.
-`premarket.yml` builds it every 15 minutes from 07:15 to 09:15 IST on weekdays; the app's **Today** tab shows it.
+`premarket.yml` builds it every 15 minutes from 06:00 to 09:15 IST on weekdays; the app's **Today** tab shows it.
 
 ```
 python -m quantdesk premarket history --warehouse runtime/warehouse     # each company's results history (once a day)
