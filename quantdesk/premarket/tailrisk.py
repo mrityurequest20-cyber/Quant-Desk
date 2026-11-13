@@ -83,13 +83,20 @@ def series_for(u: str, index_close: pd.DataFrame | None, yahoo: dict) -> tuple[p
     return clean(s), ("proxy " if u in PROXY else "") + f"{t} (Yahoo)"
 
 
-def build(underlyings, index_close: pd.DataFrame | None, yahoo: dict) -> dict:
-    """{u: tails.fit_series(...) + {"src", "from", "to"}} for every underlying with enough history."""
+def all_series(underlyings, index_close: pd.DataFrame | None, yahoo: dict) -> dict:
+    """{u: (daily closes, source)} for every underlying with enough history (the tail models and the news analogues read the same series)."""
     out = {}
     for u in underlyings:
         s, src = series_for(u, index_close, yahoo)
-        if s is None or len(s) < TL.MIN_OBS:
-            continue
+        if s is not None and len(s) >= TL.MIN_OBS:
+            out[u] = (s, src)
+    return out
+
+
+def build(underlyings, index_close: pd.DataFrame | None, yahoo: dict, series: dict | None = None) -> dict:
+    """{u: tails.fit_series(...) + {"src", "from", "to"}} for every underlying with enough history."""
+    out = {}
+    for u, (s, src) in (series if series is not None else all_series(underlyings, index_close, yahoo)).items():
         fit = TL.fit_series([float(x) for x in s.values])
         if fit:
             out[u] = {**fit, "src": src, "from": str(pd.Timestamp(s.index[0]).date()), "to": str(pd.Timestamp(s.index[-1]).date())}

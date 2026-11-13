@@ -77,6 +77,7 @@ class Inputs:
     headlines: list | None = None                 # [{ts, source, title, link}] from sources.fetch_headlines
     health: dict = field(default_factory=dict)    # source -> "ok ..." / "fail ..."
     tails: dict | None = None                     # tailrisk.build: each paper underlying's conditional EVT model (quantdesk/paper/tails.py)
+    news_analogs: dict | None = None              # analogs.build: each paper underlying's past episodes of each kind, weighted by today's situation
 
 
 def _company_aliases(corp_events: pd.DataFrame | None) -> dict[str, list[str]]:
@@ -292,6 +293,7 @@ def build(inp: Inputs) -> dict:
         "expiring": expiring, "macro": macro, "results": results, "results_note": RESULTS_NOTE,
         "analogs": _analogs(inp),                                       # what NIFTY and BANKNIFTY did on past episodes of each kind (the news analyser's "what happened before")
         "tails": inp.tails or {},                                       # extreme value theory: each paper underlying's tail model (AUTO v2's tail check reads it)
+        "news_analogs": inp.news_analogs or {},                         # every instrument's own past episodes, most like today first (the news model reads it)
         "global": inp.globals_ or [], "headlines": {"total": len(inp.headlines or []), "named": {k: v[:3] for k, v in news.items()}},
         "watch": watch, "record_plan": record_plan(watch) if watch else {"budget": 0, "used": 0, "names": 0, "of": 0, "plan": []},
         "history": {"events": int(len(hist)), "calendar": int((hist["source"] == "calendar").sum()) if len(hist) else 0,

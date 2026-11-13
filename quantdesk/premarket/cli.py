@@ -50,7 +50,9 @@ def paper_underlyings(cfg) -> list[str]:
 
 
 def day_tails(cfg, a, wh: dict, now: pd.Timestamp, health: dict) -> dict:
-    """The paper underlyings' tail models: today's file when there is one (`--tails`), else fitted now (Yahoo unless --offline) and written there."""
+    """{"models": the paper underlyings' tail models, "analogs": each one's past episodes weighted by today's situation}: today's file when there is one (`--tails`),
+    else fitted now (Yahoo unless --offline) and written there."""
+    from . import analogs as AN
     from . import tailrisk as TR
     path = Path(a.tails) if getattr(a, "tails", None) else None
     today = now.date().isoformat()
@@ -59,19 +61,25 @@ def day_tails(cfg, a, wh: dict, now: pd.Timestamp, health: dict) -> dict:
             got = json.loads(path.read_text(encoding="utf-8"))
             if got.get("built") == today and isinstance(got.get("models"), dict):
                 health["tails"] = f"ok {len(got['models'])} models, built earlier today"
-                return got["models"]
+                return {"models": got["models"], "analogs": got.get("analogs") or {}}
         except (OSError, ValueError):
             pass
     unds = paper_underlyings(cfg)
     yahoo = {} if a.offline else TR.fetch_yahoo(TR.tickers_for(unds), health)
-    models = TR.build(unds, wh.get("index_close"), yahoo)
+    series = TR.all_series(unds, wh.get("index_close"), yahoo)
+    models = TR.build(unds, None, {}, series=series)
+    try:
+        analogs = AN.build({u: s for u, (s, _) in series.items()})
+    except Exception as exc:                                                            # noqa: BLE001 - no analogues is a thinner brief, never a failed one
+        analogs = {}
+        health["analogs"] = f"fail {type(exc).__name__}"
     health.setdefault("tails", f"ok {len(models)} of {len(unds)} underlyings")
     if path:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"built": today, "models": models}, separators=(",", ":")), encoding="utf-8")
+        tmp.write_text(json.dumps({"built": today, "models": models, "analogs": analogs}, separators=(",", ":")), encoding="utf-8")
         tmp.replace(path)
-    return models
+    return {"models": models, "analogs": analogs}
 
 
 def run(cfg, a) -> None:
@@ -101,7 +109,8 @@ def run(cfg, a) -> None:
     if not a.offline:
         inp.globals_ = SRC.fetch_globals(health)
         inp.headlines = SRC.fetch_headlines(health, now)
-    inp.tails = day_tails(cfg, a, wh, now, health)
+    got = day_tails(cfg, a, wh, now, health)
+    inp.tails, inp.news_analogs = got["models"], got["analogs"]
     brief = B.jsonable(B.build(inp))
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)

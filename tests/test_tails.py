@@ -124,7 +124,8 @@ def test_the_cli_reuses_the_days_models(tmp_path):
     ic = pd.DataFrame({"date": days, "symbol": "NIFTY", "close": y["^NSEI"].values})
     now, health = pd.Timestamp("2026-11-16 06:00", tz="Asia/Kolkata"), {}
     got = PC.day_tails(Cfg(), A, {"index_close": ic}, now, health)
-    assert set(got) == {"NIFTY"} and json.loads((tmp_path / "tails.json").read_text())["built"] == "2026-11-16"
+    assert set(got["models"]) == {"NIFTY"} and json.loads((tmp_path / "tails.json").read_text())["built"] == "2026-11-16"
+    assert "NIFTY" in got["analogs"]["rbi"]                                                    # the news analogues come from the same series
     health = {}
     assert PC.day_tails(Cfg(), A, {"index_close": None}, now, health) == got and "earlier today" in health["tails"]
 
@@ -167,6 +168,9 @@ def test_an_option_sale_must_pay_for_its_tail():
     hi, _, e_wild = ap.tail_check(s, {**st, "rv": 0.80}, _ic(8.0), today)
     assert e_wild < e_calm                                                                      # the last hour's volatility, when higher, makes the tail dearer
     long_call = A2.BY_SID["LC0.uaan.1/0.5.d"]
-    assert ap.tail_check(long_call, st, _ic(0.5), today) == (True, None, None)                   # a buyer sells no tail: nothing to check
+    paid = {"legs": [{"side": 1, "right": "CE", "k": 10100, "px": 40.0}], "exp": dt.date(2026, 11, 20), "lot": 65, "risk": 40.0, "best": math.inf, "fees": 0.0}
+    assert ap.tail_check(long_call, st, paid, today) == (True, None, None)                      # a structure paid for, not paid, sells no tail: nothing to check
     assert _ap(with_model=False).tail_check(s, st, _ic(0.5), today) == (True, None, None)       # no model in the brief: no check (and the plan says so)
+    bwc = A2.BY_SID["BWC1.uaan.1/0.5.d"]
+    assert not ap.tail_check(bwc, st, _ic(0.5), today)[0]                                       # whatever the structure: what takes in premium must pay for its tail
     assert "1-day 99% ES -" in ap.tail_text("NIFTY") and ap.tail_text("BANKNIFTY") == ""

@@ -241,6 +241,91 @@ A strategy's record is read through a **multilevel normal model**, fitted by emp
 - **The proof gate is unchanged:** 8 shadow trades of its own and a positive draw before any paper money.
 - **In the app:** each structure's shared estimate, and the order thesis gives the strategy's shared estimate next to its own average.
 
+## Strategy liberty and the inventor (`quantdesk/paper/inventor.py`)
+
+**The written catalogue** now has 16 structures, 3,132 strategies:
+- **The original ten:** long calls and puts, debit and credit spreads, iron condors and flies, straddles, strangles.
+- **New:** call and put butterflies, broken-wing butterflies, call and put ratio backspreads.
+- **Multi-lot legs:** a leg's size can be more than one lot (a butterfly's body is two).
+
+**The desk writes its own.** Every morning the inventor mutates the structures of the best records so far, the way a trader tinkers: move
+a strike, add a wing to cap a sold option, drop a leg, double one, flip one. A child is kept only if it is:
+- **defined risk** (no net short call);
+- **tradable** (1 to 4 legs, at most 6 lots, strikes within 4 steps of the money);
+- **new in shape:** its payoff, made level- and scale-free, matches nothing known. A call condor is an iron condor by put-call parity,
+  so it is not "new".
+
+Its view is read from its own payoff.
+
+**Inventions are held to a higher bar:**
+- **More trades.** An invention needs 12 shadow trades of its own, not 8, then a positive Thompson draw. A desk that writes many
+  strategies and keeps the best is fitting noise unless the bar rises with the number of tries.
+- **Their own family.** Each invention starts its own family in the hierarchical record, anchored at zero edge.
+- **Retirement.** One whose record is clearly negative (24 trades and mean + 2 sd below zero) is retired.
+- **A cap.** At most 60 live; past that, the worst record goes first.
+- **Persistence.** Inventions survive restarts in the stored record; tampered entries are dropped.
+
+**What does not change:**
+- **Defined risk.** Every structure must have a finite worst case, because that is what keeps the 2.5%-a-trade limit meaningful. A
+  structure that could lose without limit is refused whoever writes it.
+- **The limits.** The risk limits and the 1-lot size are untouched.
+
+**The cost gate.** A structure whose round-trip costs exceed 30% of its risk is not opened. It is born at -0.3R, so a 0.5R stop means nothing.
+A one-strike NIFTY butterfly or iron fly costs about half its risk to trade; the two-strike ones pass.
+
+## The news model (`quantdesk/paper/newsmodel.py`, `quantdesk/premarket/analogs.py`)
+
+A story moves instruments through channels, not only by naming them. Each story is read in three steps:
+1. **Subjects:** crude, gas, gold, silver, base metals, the rupee, the dollar, US yields, the Fed, the RBI, inflation, growth, foreign
+   flows, geopolitics, tariffs, China, Wall Street, the monsoon, IT spending, auto sales, the US FDA, telecom tariffs, F&O rules,
+   fintech rules, bad loans, capex, electronics, cigarettes.
+2. **Direction:** the direction word nearest the subject. "Crude jumps" is up; "rupee hits record low" is the rupee down; "RBI cuts"
+   is rates down; "ceasefire" is geopolitical risk down.
+3. **Channels:** each instrument's sensitivity to each subject going up. For example, crude up means:
+   - CRUDEOIL +1.0;
+   - the rupee pairs +0.3 (a dearer import bill);
+   - the indices -0.3;
+   - autos -0.2.
+
+   The same story gives every instrument its own score.
+
+**Present:** each instrument's channel score, summed over the last six hours of stories (impact x novelty x a two-hour half-life). A story
+naming the instrument also counts by its tone.
+
+**Past:** for each event kind under way (RBI, FOMC, budget, election, geopolitics, oil shock), the brief measures every instrument's own
+past episodes, weighting each by how much the market then resembled the market now:
+- the 20-session trend in standard deviations;
+- volatility against its own past year;
+- the drawdown from its 60-session high.
+
+The weighted share of rises is the analogue's P(up). Its effective number of episodes says how much it can be trusted.
+
+**Forecast:** log-odds = 1.5 x tanh(channel score) + sum over events of n_eff/(n_eff+4) x logit(the analogue's P(up)).
+- **One vote.** At P(up) 0.65 or 0.35 it is the news vote in AUTO v2's view, under the unchanged two-agree rule. For an index with no
+  opinion, AUTO v1's market-wide tone vote stands in. The pre-open plan uses the same model.
+- **Event reach.** A high event reaches an instrument if its stories' subjects do (sensitivity 0.3 or more), so crude news reaches the
+  rupee pairs. The event regime's reason then names the instrument's own past episodes and the closest dates.
+- **Scored.** Every forecast with an opinion is scored against the next hour (Brier, per instrument; "news forecasts" in the app).
+
+**The sensitivities are priors** written from how these markets transmit shocks. The Brier record is what will say which hold.
+
+## Instruments read differently
+
+- **The market read has a profile per class**, each with its own weights and normal put/call ratio:
+  - **index:** option OI positioning carries the most.
+  - **stock:** OI is mostly calls written against holdings, so the normal PCR is about 0.6 and walls mean less.
+  - **MCX:** the future's build-up leads; the chain is thin; no premium is read, since the underlying is the future.
+  - **currency:** a future's premium is carry, not sentiment, so it is not read.
+- **Each instrument learns its own weights.** Every scored outcome nudges them by online logistic regression, pulled back towards the
+  class prior.
+  - It learns from one outcome per 15-minute window, so overlapping reads are not counted as many.
+  - A signal that works backwards for an instrument can flip sign.
+  - The weights are kept with the strategy record across restarts, validated.
+- **Thresholds are in each instrument's own volatility.** With the last hour's realized volatility known, a five-minute move votes at
+  1.15 of its own five-minute standard deviations, and "calm" is under 1.15 of them. That is 0.10% for NIFTY at 12% a year, about
+  0.02% for USD/INR, and far more for natural gas. Until then, the fixed NIFTY-set thresholds.
+- **Already per instrument:** the HMM, CUSUM, Kalman trend, EVT tails, trading hours, costs and the news channels.
+
 ## The news analyser and the event regime
 
 - **The event watch.** The news job gathers the stories' own event types (`intraday/nlp.py`: policy, geopolitics, inflation, growth,

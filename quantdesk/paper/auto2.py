@@ -32,11 +32,14 @@ import datetime as dt
 import json
 import math
 import random
+import re
 from dataclasses import dataclass
 
 from ..markets import sessions as MK
 from . import auto as V1
+from . import inventor as INV
 from . import marketread as MR
+from . import newsmodel as NM
 from . import regimes as RG
 from . import tails as TL
 from .runner import _num
@@ -49,12 +52,22 @@ TICK = 0.05
 # ---- the knobs ------------------------------------------------------------------------------------------------------------------------------
 RICH, CHEAP = 1.25, 0.85                 # implied over realized volatility: rich at or above, cheap at or below
 CALM_PCT = 0.10                          # flat: no direction, and the five-minute move under this
+# Thresholds in each instrument's OWN volatility (owner, 13 Nov 2026: "Models should read differently as per the instrument"): 0.10% in five minutes is a real move for
+# USD/INR and noise for natural gas. With the last hour's realized volatility known, a five-minute move is measured in its five-minute standard deviation: a vote at
+# MOVE_K of them, "calm" under CALM_K. Until then, the fixed CALM_PCT and AUTO v1's threshold (both set for NIFTY, where 1.15 sd is about 0.10%).
+MOVE_K, CALM_K = 1.15, 1.15
+SD5_FROM_ANNUAL = math.sqrt(300 / (252 * 6.25 * 3600))   # an annualized volatility (realized_vol's units) to a five-minute standard deviation
 FLAT_TREND_T = 1.0                       # flat also needs the Kalman trend's t-statistic under this (when it has one): a market drifting steadily is not flat
 RV_WINDOW_S, RV_STEP_S, RV_MIN_POINTS = 3600, 60, 20      # realized volatility: one-minute returns over the last hour, at least twenty of them
 QUOTE_MAX_AGE_S, MAX_LEG_SPREAD = 30.0, 0.10              # every leg needs a two-sided book this fresh, no wider than this (of its mid)
 MIN_PREMIUM = 1.0                        # a leg priced below this is not traded (ticks dominate)
+MAX_FEES_R = 0.30                        # a structure whose round-trip costs exceed this share of its risk is not opened: born at -0.3R, a 0.5R stop means nothing (a one-strike
+#                                          NIFTY butterfly or iron fly costs about half its risk to trade)
 REENTRY_S = 15 * 60                      # a strategy waits this long on an underlying after a shadow trade closes (correlated copies of one trade are not evidence)
 MIN_TRADES = 8                           # shadow trades a strategy needs before it may trade with paper money
+MIN_TRADES_INVENTED = 12                 # an INVENTED strategy needs more (inventor.py): a desk that writes many strategies and keeps the best must raise its bar
+INVENT_PER_DAY = 6                       # new structures the inventor writes each morning
+MAX_INVENTED = 60                        # invented strategies alive at once; past it, the worst record is retired first
 PRIOR_SD = 1.0                           # a strategy's R is taken to vary about this much trade to trade until its own record says otherwise
 # The HIERARCHICAL model of the record (owner, 13 Nov 2026: "Hierarchical Bayesian models: sharing evidence between similar strategies"), Lab.fit below:
 #   strategy mean R  theta_i ~ N(mu_family, tau^2)       the 180-odd strategies of one structure (an iron condor's widths, filters, exits, holds) are a family
@@ -76,19 +89,20 @@ FUT_SUFFIX = {"mcx": "-MCX", "nse_cds": "-CDS"}           # their underlying is 
 # The event regime (owner, 13 Nov 2026: "the whole analysis of news and data can go hand in hand in a big event situation or in any move geopolitical situation"): a high-severity
 # event in the news digest's event watch that touches the underlying, or the options pricing one (the near expiry's volatility above the next's), and AUTO v2 opens no short-
 # volatility structure: an iron condor or fly sold into an event is the trade that loses most when the event moves the market.
-SHORT_VOL = frozenset({"IC", "IF"})
+SHORT_VOL = frozenset({"IC", "IF", "CBF", "PBF"})       # structures that are short volatility (is_short_vol: flat, nothing net long or short in calls or puts)
 EVENT_TOUCHES = {"geopolitics": "all", "policy": "all", "inflation": "all", "growth": "all", "flows": "equity", "global": "equity", "regulation": "equity",
                  "commodities": "mcx", "currency": "cds"}
-# The TAIL CHECK (owner, 13 Nov 2026: "Extreme value theory: tail-risk estimates"): a structure that SELLS options sells a tail. The shadow record cannot price that tail (a
+# The TAIL CHECK (owner, 13 Nov 2026: "Extreme value theory: tail-risk estimates"): a structure that TAKES IN PREMIUM sells a tail. The shadow record cannot price that tail (a
 # few weeks of trades rarely hold the day that costs most), so before one is opened, shadow or live, its expected value to expiry is taken over the underlying's fitted
 # distribution (tails.py: conditional EVT, today's volatility with history's shape; never a volatility below the last hour's realized one), and it opens only when the
 # premium pays for the tail: that expectation, net of costs, at least TAIL_MIN_EDGE_R. No tail model in the brief (or no brief): no check, and the plan says so.
-CREDIT = frozenset({"BPS", "BRC", "IC", "IF"})
 TAIL_MIN_EDGE_R = 0.0
+TOUCH_MIN = 0.3                                            # a high event touches an instrument whose sensitivity to its stories' subjects is at least this (newsmodel.py)
 READ_EVERY_S = 30                                          # the market read is refreshed this often per underlying
 MIN_PREMIUM_TICKS = 20                                     # an MCX or currency option's premium floor, in its own ticks (a currency option trades near 0.05)
 SWING_SESSIONS = 3
 LEDGER_SOFT_LIMIT = V1.LEDGER_SOFT_LIMIT
+SUMMARY_SOFT_MAX = 30000                 # AUTO v2's share of the runner's state (the relay's cap is 60,000 for all of it): past this, reasons are dropped before numbers
 LAB_MAX_CHARS = 110000                   # the relay keeps the record in one stored value (128 KiB at most)
 # The day plan (owner, 13 Nov 2026: "6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis and look
 # for high risk to reward trades"). Built from last night's closing books, the overnight markets, the news and the pre-market brief; it ranks defined-risk candidates and the
@@ -115,9 +129,19 @@ STRUCTURES = {
     "IF": ("flat", [(-1, "CE", "0"), (-1, "PE", "0"), (1, "CE", "w"), (1, "PE", "-w")], (1, 2)),          # iron butterfly
     "LS": ("flat", [(1, "CE", "0"), (1, "PE", "0")], (0,)),                           # long straddle
     "LG": ("flat", [(1, "CE", "w"), (1, "PE", "-w")], (1, 2)),                        # long strangle
+    # More of what traders trade (owner, 13 Nov 2026: "the trading desk has full liberty to use any trading strategy"). A leg's side is also its size in lots (2 = two
+    # lots): a contract appears once in a package. Every one has a defined worst case, which is what lets the 2.5%-a-trade limit hold; one that could lose without limit
+    # (a naked short call, a call ratio spread) is refused by price() whatever writes it.
+    "CBF": ("flat", [(1, "CE", "-w"), (-2, "CE", "0"), (1, "CE", "w")], (1, 2)),      # call butterfly: the price pinned near here
+    "PBF": ("flat", [(1, "PE", "w"), (-2, "PE", "0"), (1, "PE", "-w")], (1, 2)),      # put butterfly
+    "BWC": ("up", [(1, "CE", "0"), (-2, "CE", "w"), (1, "CE", "2w+1")], (1, 2)),      # broken-wing call butterfly: a drift up, little or nothing lost below
+    "BWP": ("down", [(1, "PE", "0"), (-2, "PE", "-w"), (1, "PE", "-2w-1")], (1, 2)),  # broken-wing put butterfly
+    "CRB": ("up", [(-1, "CE", "0"), (2, "CE", "w")], (1, 2)),                         # call ratio backspread: a big move up, paid for by a sold call
+    "PRB": ("down", [(-1, "PE", "0"), (2, "PE", "-w")], (1, 2)),                      # put ratio backspread
 }
 NAMES = {"LC": "long call", "BCS": "bull call spread", "BPS": "bull put spread", "LP": "long put", "BRP": "bear put spread", "BRC": "bear call spread",
-         "IC": "iron condor", "IF": "iron butterfly", "LS": "long straddle", "LG": "long strangle"}
+         "IC": "iron condor", "IF": "iron butterfly", "LS": "long straddle", "LG": "long strangle", "CBF": "call butterfly", "PBF": "put butterfly",
+         "BWC": "broken-wing call butterfly", "BWP": "broken-wing put butterfly", "CRB": "call ratio backspread", "PRB": "put ratio backspread"}
 VOLS = ("rich", "cheap", "any")
 TIMINGS = (("any", "near"), ("any", "next"), ("eve", "near"))      # (timing, expiry): the expiry eve only makes sense on the expiry that is tomorrow
 EXITS = ((0.5, 0.5), (1.0, 0.5), (2.0, 0.5), (0.5, 1.0), (1.0, 1.0), (2.0, 1.0))      # (take-profit in R, stop in R); a stop of 1 R holds to the worst case
@@ -164,12 +188,49 @@ CATALOGUE = catalogue()
 BY_SID = {s.sid: s for s in CATALOGUE}
 
 
-OFFSETS = {"0": (0, 0), "1": (1, 0), "-1": (-1, 0), "w": (0, 1), "-w": (0, -1), "2w": (0, 2), "-2w": (0, -2), "-1-w": (-1, -1), "1+w": (1, 1)}      # (strikes, widths)
+def resolved_legs(struct: str, width: int) -> tuple:
+    """A structure's legs as (lots, right, strike steps from the money), the canonical form the inventor works in."""
+    return INV.norm((side, right, _offset(expr, width)) for side, right, expr in STRUCTURES[struct][1])
+
+
+def is_short_vol(struct: str) -> bool:
+    """Short volatility: a flat structure with no net calls and no net puts (it is paid while the price sits still and is hurt when it moves)."""
+    view, legs, _ = STRUCTURES[struct]
+    return view == "flat" and sum(sd for sd, r, _ in legs if r == "CE") == 0 and sum(sd for sd, r, _ in legs if r == "PE") == 0
+
+
+def register_invention(legs, ctx: "Strategy | None" = None) -> list["Strategy"]:
+    """Make an invented structure known (STRUCTURES, NAMES, BY_SID) and return its strategies: one per context in `ctx` (the parent's volatility, timing, expiry, exits and
+    hold), or the plainest context when there is no parent. Idempotent."""
+    legs = INV.norm(legs)
+    code, view = INV.code_of(legs), INV.view_of(legs)
+    STRUCTURES[code] = (view, [(q, r, str(o)) for q, r, o in legs], (0,))
+    NAMES[code] = INV.describe(legs)
+    c = ctx or Strategy(code, 0, view, "any", "any", "near", 1.0, 0.5, "day")
+    s = Strategy(code, 0, view, c.vol, c.timing, c.expiry, c.tp, c.sl, c.hold)
+    BY_SID.setdefault(s.sid, s)
+    return [BY_SID[s.sid]]
+
+
+def known_shapes() -> set:
+    return {INV.fingerprint(resolved_legs(code, w)) for code, (_, _, widths) in STRUCTURES.items() for w in widths}
+
+
+_TERM = re.compile(r"([+-]?)(\d*)(w?)")
 
 
 def _offset(expr: str, w: int) -> int:
-    a, b = OFFSETS[expr]
-    return a + b * w
+    """A leg's place in strike steps from the at-the-money strike: a sum of terms, each a whole number of strikes or of widths ("1", "-w", "2w+1", "-1-w")."""
+    total, pos, e = 0, 0, expr.replace(" ", "")
+    while pos < len(e):
+        m = _TERM.match(e, pos)
+        if not m or m.end() == pos:
+            raise ValueError(f"bad leg offset {expr!r}")
+        sign, num, wid = m.groups()
+        k = int(num) if num else 1
+        total += (-1 if sign == "-" else 1) * (k * w if wid else k)
+        pos = m.end()
+    return total
 
 
 def legs_for(s: Strategy, strikes: list, atm_i: int) -> list[tuple[int, str, float]] | None:
@@ -280,7 +341,24 @@ class Lab:
     long record speaks for itself; a family whose members all lose drags a new member down before it has traded once. How much a member is pulled is not set by hand: the
     spread of members about their family (tau) is estimated from the record itself."""
 
-    def __init__(self, stats: dict | None = None):
+    def __init__(self, stats: dict | None = None, inv: dict | None = None):
+        self.inv: dict[str, dict] = {}                 # invented structures: code -> {"legs": [[lots, right, steps]...], "active": [sid, ...]} (inventor.py)
+        for code, d in (inv or {}).items():
+            try:
+                legs = INV.norm(tuple((int(q), str(r), int(o)) for q, r, o in d["legs"]))
+                if not (legs and all(r in ("CE", "PE") for _, r, _ in legs) and INV.tradable(legs) and INV.defined_risk(legs) and INV.code_of(legs) == code):
+                    continue
+                register_invention(legs)
+                active = []
+                for sid in d.get("active") or []:
+                    parts = str(sid).split(".")
+                    if len(parts) == 4 and parts[0] == code + "0" and sid not in BY_SID:
+                        self._register_sid(code, sid)
+                    if sid in BY_SID and BY_SID[sid].struct == code:
+                        active.append(sid)
+                self.inv[code] = {"legs": [list(l) for l in legs], "active": active}
+            except (KeyError, TypeError, ValueError):
+                continue
         self.stats: dict[str, list] = {}
         for sid, v in (stats or {}).items():
             if sid in BY_SID and isinstance(v, list) and len(v) == 4 and all(isinstance(x, (int, float)) and math.isfinite(x) for x in v) and v[0] >= 0:
@@ -288,6 +366,47 @@ class Lab:
         self.dirty = False
         self.today = {"shadow_opened": 0, "shadow_closed": 0, "live_entries": 0}
         self._ver, self._fit = 0, None
+
+    @staticmethod
+    def _register_sid(code: str, sid: str) -> None:
+        """An invented strategy's id read back from storage: its structure is known, its context is in the id."""
+        inv = {v: k for k, v in CODE.items() if k in ("up", "down", "flat")}
+        try:
+            _, ctx, ex, hold = sid.split(".")
+            tp, sl = (float(x) for x in ex.split("/"))
+            vol = {"r": "rich", "c": "cheap", "a": "any"}[ctx[1]]
+            timing = {"e": "eve", "a": "any"}[ctx[2]]
+            expiry = {"n": "near", "x": "next"}[ctx[3]]
+            s = Strategy(code, 0, inv[ctx[0]], vol, timing, expiry, tp, sl, {"d": "day", "s": "swing"}[hold])
+            if s.sid == sid and s.view == STRUCTURES[code][0]:
+                BY_SID[sid] = s
+        except (KeyError, ValueError, IndexError):
+            pass
+
+    def invented(self) -> list["Strategy"]:
+        return [BY_SID[sid] for d in self.inv.values() for sid in d["active"] if sid in BY_SID]
+
+    def min_trades(self, s: "Strategy") -> int:
+        return MIN_TRADES_INVENTED if s.struct in self.inv else MIN_TRADES
+
+    def adopt(self, legs, parent: "Strategy | None") -> list["Strategy"]:
+        legs = INV.norm(legs)
+        new = register_invention(legs, parent)
+        code = INV.code_of(legs)
+        d = self.inv.setdefault(code, {"legs": [list(l) for l in legs], "active": []})
+        for s in new:
+            if s.sid not in d["active"]:
+                d["active"].append(s.sid)
+        self.dirty = True
+        self._ver += 1                                                          # a new family: the hierarchical model is refitted
+        return new
+
+    def retire(self, sid: str) -> None:
+        for d in self.inv.values():
+            if sid in d["active"]:
+                d["active"].remove(sid)
+                self.dirty = True
+                self._ver += 1
 
     def add(self, sid: str, r: float) -> None:
         n, s, ss, w = self.stats.get(sid, [0, 0.0, 0.0, 0])
@@ -360,22 +479,26 @@ class Lab:
         got = f["post"].get(sid)
         if got is not None:
             return got
-        mu, vmu = f["family"][BY_SID[sid].struct][:2] if sid in BY_SID else (0.0, HB_TAU_TOP ** 2)
+        mu, vmu = (f["family"].get(BY_SID[sid].struct) or (0.0, HB_TAU_TOP ** 2))[:2] if sid in BY_SID else (0.0, HB_TAU_TOP ** 2)
         return 0, mu, math.sqrt(f["tau"] ** 2 + vmu)
 
     def draw(self, sid: str, rng: random.Random) -> float:
         n, mean, se = self.posterior(sid)
         return rng.gauss(mean, se)
 
-    def to_json(self) -> str:
+    def to_json(self, extra: dict | None = None) -> str:
+        inv = {code: d for code, d in self.inv.items() if d["active"] or any(sid.startswith(code + "0.") for sid in self.stats)}
+        head = {"v": 1, "inv": inv, **(extra or {})}
+        budget = LAB_MAX_CHARS - len(json.dumps(head, separators=(",", ":")))
         items = sorted(self.stats.items(), key=lambda kv: -kv[1][0])
-        out = {}
+        out, size = {}, 2
         for sid, v in items:                                                    # the busiest records first: if the cap is ever reached, the thinnest are the ones left out
-            out[sid] = [v[0], round(v[1], 4), round(v[2], 4), v[3]]
-            if len(json.dumps(out)) > LAB_MAX_CHARS:
-                out.pop(sid)
+            row = [v[0], round(v[1], 4), round(v[2], 4), v[3]]
+            size += len(json.dumps({sid: row}, separators=(",", ":"))) - 1
+            if size > budget:
                 break
-        return json.dumps({"v": 1, "stats": out}, separators=(",", ":"))
+            out[sid] = row
+        return json.dumps({**head, "stats": out}, separators=(",", ":"))
 
     def summary(self, top: int = 12) -> dict:
         rows = []
@@ -383,7 +506,7 @@ class Lab:
             if n:
                 _, mean, se = self.posterior(sid)
                 rows.append({"sid": sid, "what": BY_SID[sid].describe(), "n": n, "mean_r": round(s / n, 3), "shrunk_r": round(mean, 3), "win": round(w / n, 3),
-                             "live": n >= MIN_TRADES and mean > 0})
+                             "live": n >= self.min_trades(BY_SID[sid]) and mean > 0, "invented": BY_SID[sid].struct in self.inv})
         rows.sort(key=lambda r: (-r["shrunk_r"], -r["n"]))
         f = self.fit()
         fams = [{"struct": k, "name": NAMES[k], "mu_r": round(mu, 3), "se": round(math.sqrt(vmu), 3), "members": m, "trades": n}
@@ -391,7 +514,7 @@ class Lab:
         fams.sort(key=lambda r: -r["mu_r"])
         return {"strategies": len(CATALOGUE), "tested": len(rows), "trades": sum(r["n"] for r in rows), "eligible": sum(1 for r in rows if r["live"]),
                 "min_trades": MIN_TRADES, "today": dict(self.today), "top": rows[:top], "worst": sorted(rows, key=lambda r: r["shrunk_r"])[:3],
-                "families": fams, "tau": round(f["tau"], 3)}
+                "families": fams, "tau": round(f["tau"], 3), "invented": sum(len(d["active"]) for d in self.inv.values()), "min_trades_invented": MIN_TRADES_INVENTED}
 
 
 # ---- the engine -----------------------------------------------------------------------------------------------------------------------------
@@ -418,6 +541,37 @@ class AutoPilotV2:
         self.brief: dict | None = None             # the pre-market brief (quantdesk/premarket), handed in by the session; None = plan without it
         self.day_plan: dict | None = None
         self.plan_at = -1e9
+
+    def strategies(self) -> list[Strategy]:
+        """Everything it may trade: the written catalogue and what the inventor has written (inventor.py)."""
+        return CATALOGUE + self.lab.invented()
+
+    def evolve(self, today: dt.date) -> list[str]:
+        """Once a day: retire inventions whose record is clearly negative (or the worst, past MAX_INVENTED), then write INVENT_PER_DAY new structures by mutating the
+        structures of the best records so far (any written structure while there is no record). Returns the new strategy ids."""
+        if getattr(self, "evolved_on", None) == today:
+            return []
+        self.evolved_on = today
+        lab = self.lab
+        live = lab.invented()
+        for s in live:
+            n, mean, se = lab.posterior(s.sid)
+            if n >= 2 * MIN_TRADES_INVENTED and mean + 2 * se < 0:
+                lab.retire(s.sid)
+        live = lab.invented()
+        while len(live) > MAX_INVENTED - INVENT_PER_DAY:
+            worst = min(live, key=lambda s: lab.posterior(s.sid)[1])
+            lab.retire(worst.sid)
+            live = lab.invented()
+        ranked = sorted((sid for sid, v in lab.stats.items() if v[0] >= 3 and sid in BY_SID), key=lambda sid: -lab.posterior(sid)[1])[:8]
+        parents = [BY_SID[sid] for sid in ranked] or [s for s in CATALOGUE if s.width <= 1 and s.vol == "any" and s.timing == "any" and s.hold == "day"
+                                                         and s.tp == 1.0 and s.sl == 0.5 and s.expiry == "near"]
+        pool = [(resolved_legs(p.struct, p.width), p) for p in parents]
+        made = []
+        for child in INV.invent([lg for lg, _ in pool], known_shapes(), self.rng, INVENT_PER_DAY):
+            parent = min(pool, key=lambda lp: len(set(lp[0]) ^ set(child)))[1]          # the nearest parent lends its context (filters, exits, hold)
+            made += [s.sid for s in lab.adopt(child, parent)]
+        return made
 
     # ---- the session's hooks (the same as AUTO v1's) ----------------------------------------------------------------------------------------
     def drain_events(self) -> list[dict]:
@@ -464,6 +618,11 @@ class AutoPilotV2:
         """The underlying's price: the index or stock itself, or for an MCX or currency option its near-month future."""
         return V1._spot(snap, u) if u not in self.segments else V1._spot(snap, u + FUT_SUFFIX[self.segments[u]])
 
+    def profile(self, u: str) -> str:
+        """How the market read reads this instrument (marketread.PROFILES): an index, a stock, an MCX commodity or a currency."""
+        seg = self.segments.get(u)
+        return "mcx" if seg == "mcx" else "cds" if seg == "nse_cds" else "index" if u in INDEX_U else "stock"
+
     def rate(self, u: str) -> float:
         return 0.0 if u in self.segments else RATE
 
@@ -496,17 +655,19 @@ class AutoPilotV2:
         fut = V1._mid(fq) if isinstance(fq, dict) and (_num(fq.get("age_s")) or 1e9) <= 60 else None
         rd = V1.readings(snap, u, near, chain, ist, sp, fut)
         mom = self._momentum(u, t)
-        nv, nwhy = V1.news_vote(news, u, now)
+        nv, nwhy, nf = self.news_vote(news, u, t, sp)
         read = self.read(snap, u, ch, t, sp, near, nxt, T, ist)
         if not hasattr(self, "regimes"):
             self.regimes = RG.RegimeBook()
         self.regimes.update(u, t, sp)                                                      # the HMM regime and the CUSUM change points (regimes.py)
         rg = self.regimes.state(u, t)
-        pmom, pvote = self.price_vote(mom, rg)
+        sd5 = rv * SD5_FROM_ANNUAL * 100 if rv else None                                    # this instrument's five-minute standard deviation, in %
+        pmom, pvote = self.price_vote(mom, rg, sd5)
         d, why = V1.direction(rd["pressure"], rd["gap_pct"], pmom, nv, nwhy)
         d, why = self.with_read(d, why, rd, pmom, nv, nwhy, read, pvote)
         tr = rg.get("trend")
-        view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < CALM_PCT and not (read or {}).get("vote")
+        calm = CALM_K * sd5 if sd5 else CALM_PCT                                           # calm in its own terms
+        view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < calm and not (read or {}).get("vote")
                                                             and (tr is None or abs(tr["t"]) < FLAT_TREND_T) else None)
         ratio = iv / rv if iv and rv else None
         vol = "rich" if ratio is not None and ratio >= RICH else "cheap" if ratio is not None and ratio <= CHEAP else "mid"
@@ -523,7 +684,8 @@ class AutoPilotV2:
         self.last_state[u]["trend_t"] = tr["t"] if tr else None
         self.last_state[u]["tail"] = self.tail_text(u)
         if read:
-            self.last_state[u]["read"] = {k: read[k] for k in ("p_up", "why", "pcr", "buildup", "event_priced")}
+            self.last_state[u]["read"] = {k: read.get(k) for k in ("p_up", "why", "pcr", "buildup", "event_priced", "profile")}
+        self.last_state[u]["news"] = {"p_up": nf["p_up"], "why": nf["why"][:2]} if nf and (nf["why"] or nf["vote"]) else None
         return st
 
     # ---- extreme value theory: the tails the premium must pay for --------------------------------------------------------------------------------
@@ -544,7 +706,8 @@ class AutoPilotV2:
 
     def tail_check(self, s: Strategy, st: dict, p: dict, today: dt.date) -> tuple[bool, str | None, float | None]:
         """(open it?, why not, the expected R to expiry over the tail model) for an option sale; (True, None, None) for anything else or with no model."""
-        if s.struct not in CREDIT:
+        cost = sum(l["side"] * l["px"] for l in p["legs"])
+        if cost >= 0:                                                                  # paid for, not paid: it buys its tails
             return True, None, None
         u = st["u"]
         m = self.tail_model(u)
@@ -561,14 +724,31 @@ class AutoPilotV2:
             if len(self._tail_ev) > 5000:
                 self._tail_ev.clear()
             self._tail_ev[key] = ev
-        cost = sum(l["side"] * l["px"] for l in p["legs"])
         edge = (ev - cost - p["fees"]) / p["risk"]
         if edge >= TAIL_MIN_EDGE_R:
             return True, None, edge
         return False, f"the premium does not pay for the tail it sells: {edge:+.2f}R expected to expiry over {u}'s fitted tails (EVT)", edge
 
+    def news_vote(self, news, u: str, t: float, price: float) -> tuple[int, str | None, dict | None]:
+        """The news's ONE vote for this instrument (newsmodel.py): its own channel score and its own past episodes, as P(up); scored against the next hour. Where the model
+        has no opinion and `u` is an index, AUTO v1's market-wide tone vote stands in."""
+        try:
+            nf = NM.forecast(u, news, (self.brief or {}).get("news_analogs") if isinstance(self.brief, dict) else None, t)
+        except Exception:                                                                # noqa: BLE001 - a news model that fails costs the vote, never the session
+            nf = None
+        if not hasattr(self, "news_scorer"):
+            self.news_scorer = NM.Scorer()
+        if nf is not None:
+            self.news_scorer.add(u, t, nf["p_up"], price)
+            if nf["vote"]:
+                return nf["vote"], f"news P(up) {nf['p_up']:.2f}" + (f": {nf['why'][0]}" if nf["why"] else ""), nf
+        if u in NM.INDEX:
+            v, why = V1.news_vote(news, u, dt.datetime.fromtimestamp(t, tz=IST))
+            return v, why, nf
+        return 0, None, nf
+
     @staticmethod
-    def price_vote(mom, rg: dict) -> tuple[float | None, tuple | None]:
+    def price_vote(mom, rg: dict, sd5: float | None = None) -> tuple[float | None, tuple | None]:
         """The price's ONE vote in the view: (the raw five-minute move for AUTO v1's rule, or None; an extra (vote, reason), or None).
         The Kalman trend (kalman.py), once fitted, replaces the raw five-minute move: its slope over its standard error is a t-statistic, so one noisy print moves it
         little. A fresh CUSUM drift change point votes only when neither does: the trend, the move and the change point all read the same prices, and the same evidence
@@ -577,6 +757,10 @@ class AutoPilotV2:
         if tr is not None:
             if tr["vote"]:
                 return None, (tr["vote"], f"Kalman trend {tr['slope_pct'] * 60:+.2f}% an hour (t {tr['t']:+.1f})")
+            return None, ((rg["vote"], f"CUSUM change point: {rg['change']}") if rg.get("vote") else None)
+        if sd5:                                                                         # the move in the instrument's own five-minute standard deviations
+            if mom is not None and abs(mom) >= MOVE_K * sd5:
+                return None, ((1 if mom > 0 else -1), f"{mom:+.2f}% in 5 min ({abs(mom) / sd5:.1f} of its five-minute sd)")
             return None, ((rg["vote"], f"CUSUM change point: {rg['change']}") if rg.get("vote") else None)
         if mom is not None and abs(mom) >= V1.MOMENTUM_TH_PCT:
             return mom, None
@@ -591,8 +775,9 @@ class AutoPilotV2:
             if not isinstance(e, dict) or e.get("level") != "high":
                 continue
             reach = EVENT_TOUCHES.get(e.get("type"))
-            if reach == "all" or reach == group or (reach == "mcx" and group == "equity" and e.get("type") == "commodities"):
-                past = self.analog_line(e.get("kind"))
+            if (reach == "all" or reach == group or (reach == "mcx" and group == "equity" and e.get("type") == "commodities")
+                    or NM.touches(u, e) >= TOUCH_MIN):                                  # or its stories' subjects reach this instrument (crude news reaches the rupee)
+                past = self.analog_line(e.get("kind"), u)
                 return "event", f"event regime: {e.get('type')} (severity {e.get('severity')}, tone {e.get('tone'):+.2f})" + (f"; {past}" if past else "")
         if read and read.get("event_priced"):
             return "event", "event regime: the near expiry's volatility is above the next's (an event is priced)"
@@ -602,8 +787,14 @@ class AutoPilotV2:
             return "event", f"event regime: the HMM puts {u} in its stressed state (P {((rg.get('p') or {}).get('stressed') or 0):.2f})"
         return "normal", None
 
-    def analog_line(self, kind) -> str | None:
-        """What NIFTY did on the past episodes of this kind (the pre-market brief's analogue table), in one line."""
+    def analog_line(self, kind, u: str | None = None) -> str | None:
+        """What this instrument did on the past episodes of this kind most like today (the brief's news_analogs), else what NIFTY did on all of them, in one line."""
+        own = ((((self.brief or {}).get("news_analogs") or {}).get(kind) or {}).get(u)) if kind and u else None
+        if isinstance(own, dict) and own.get("n") and isinstance(own.get("p_up"), (int, float)):
+            near = ", ".join(f"{d} ({r * 100:+.1f}%)" for d, _, r in (own.get("nearest") or [])[:2])
+            return (f"{u} on the {own['n']} past {kind.replace('_', ' ')} episodes, weighted to the most like today (effective {own.get('n_eff', 0):.1f}): rose "
+                    f"{own['p_up'] * 100:.0f}% of the time, weighted mean {own.get('mean_ret_w', 0) * 100:+.1f}%, worst {own.get('worst', 0) * 100:+.1f}%"
+                    + (f"; closest: {near}" if near else ""))
         a = (((self.brief or {}).get("analogs") or {}).get(kind) or {}).get("NIFTY") if kind else None
         if not isinstance(a, dict) or not a.get("n"):
             return None
@@ -621,6 +812,7 @@ class AutoPilotV2:
         """The market read of `u`, at most every READ_EVERY_S (a chain read prices a few implied volatilities)."""
         if not hasattr(self, "reader"):
             self.reader, self.read_at = MR.MarketRead(), {}
+            self.reader.restore(getattr(self, "_read_w", None))                         # what each instrument's read learned on earlier days
         if t - self.read_at.get(u, -1e18) < READ_EVERY_S and u in self.reader.last:
             return self.reader.last[u]
         self.read_at[u] = t
@@ -629,7 +821,7 @@ class AutoPilotV2:
         T_next = max((dt.datetime.combine(nxt, dt.time(15, 30), tzinfo=IST) - ist).total_seconds() / (365.25 * 86400), 0.0) if nxt else None
         try:
             return self.reader.update(u, t, snap, ch[u][near], sp, T, self.rate(u), implied_vol, fut_name=fut_name, next_chain=ch[u].get(nxt) if nxt else None,
-                                      T_next=T_next, spot_name=None if seg else u)
+                                      T_next=T_next, spot_name=None if seg else u, profile=self.profile(u))
         except Exception:                                                                # noqa: BLE001 - a read that fails costs the read, never the session
             return None
 
@@ -661,7 +853,7 @@ class AutoPilotV2:
     def matches(self, s: Strategy, st: dict) -> bool:
         if st["view"] != s.view:
             return False
-        if st.get("regime") == "event" and s.struct in SHORT_VOL:                       # no volatility sold into an event
+        if st.get("regime") == "event" and is_short_vol(s.struct):                      # no volatility sold into an event
             return False
         if s.vol != "any" and st["vol"] != s.vol:
             return False
@@ -692,6 +884,8 @@ class AutoPilotV2:
         if not math.isfinite(worst) or worst >= 0:
             return None
         fees = sum(self.fees_fn(u, exp, l["k"], l["right"], l["side"] * lot, l["px"]) + self.fees_fn(u, exp, l["k"], l["right"], -l["side"] * lot, l["px"]) for l in legs) / lot
+        if fees > MAX_FEES_R * (-worst + fees):
+            return None
         return {"legs": legs, "exp": exp, "lot": lot, "risk": -worst + fees, "best": best, "fees": fees}
 
     def mark(self, snap, legs) -> float | None:
@@ -736,7 +930,7 @@ class AutoPilotV2:
             first, last, _ = self.window(u)
             if not (first <= ist.time() <= last):                                       # each segment's own hours
                 continue
-            for s in CATALOGUE:
+            for s in self.strategies():
                 key = (s.sid, u)
                 if key in self.shadow or self.cool.get(key, 0) > t or not self.matches(s, st):
                     continue
@@ -809,7 +1003,7 @@ class AutoPilotV2:
         if over is not None and abs(over) >= OVERNIGHT_TH_PCT:
             votes.append(1 if over > 0 else -1)
             why.append(over_why)
-        nv, nwhy = V1.news_vote(news, u, now)
+        nv, nwhy, _ = self.news_vote(news, u, now.timestamp(), None)                       # the news model, as in the session (no price: not scored before the open)
         if nv:
             votes.append(nv)
             why.append(nwhy or "news")
@@ -855,7 +1049,7 @@ class AutoPilotV2:
             if st["view"] is None:
                 continue
             found = []
-            for s in CATALOGUE:
+            for s in self.strategies():
                 if not self.matches(s, st):
                     continue
                 p = self.price(cs, s, st, ch)
@@ -869,7 +1063,7 @@ class AutoPilotV2:
                 found.append({"u": u, "sid": s.sid, "what": s.describe()[:160], "view": st["view"], "vol": st["vol"], "why": st["why"][:3], "catalysts": cat[:4],
                               "rr": round(rr, 2), "risk_lot": round(s.sl * p["risk"] * p["lot"]), "reward_lot": round(reward * p["lot"]), "exp": p["exp"].isoformat(),
                               "legs": [("+" if l["side"] > 0 else "-") + l["name"] for l in p["legs"]][:4], "n": n, "mean_r": round(mean, 3),
-                              "proven": n >= MIN_TRADES and mean > 0})
+                              "proven": n >= self.lab.min_trades(s) and mean > 0})
             found.sort(key=lambda x: (not x["proven"], -x["mean_r"], -x["rr"]))
             items += found[:PLAN_PER_U]
         items.sort(key=lambda x: (not x["proven"], -x["mean_r"], -len(x["catalysts"]), -x["rr"]))
@@ -901,6 +1095,11 @@ class AutoPilotV2:
             st = self.state(snap, u, ch, now, news)
             if st is not None:
                 states[u] = st
+        if ist.time() >= PLAN_FROM:
+            try:
+                self.evolve(ist.date())                                                    # the inventor's morning (inventor.py)
+            except Exception:                                                              # noqa: BLE001 - an inventor that fails costs inventions, never the session
+                pass
         self.shadow_step(snap, states, ch, now)
         if PLAN_FROM <= ist.time() < PLAN_UNTIL and t - self.plan_at >= PLAN_EVERY_S:      # before the open: plan the day from the closing books, every ten minutes
             self.plan_at = t
@@ -914,12 +1113,13 @@ class AutoPilotV2:
         pk = self.live_packages(account)
         for text, pkg in pk.items():                                                    # live exits: the strategy's own
             s = BY_SID[pkg["sid"]]
-            legs = [{"name": sym, "side": 1 if p.qty > 0 else -1, "right": p.instrument.right, "k": p.instrument.strike, "px": p.avg_price} for sym, p in pkg["legs"].items()]
+            first = next(iter(pkg["legs"].values()))
+            lot = max(1, first.instrument.lot_size)
+            legs = [{"name": sym, "side": (1 if p.qty > 0 else -1) * max(1, round(abs(p.qty) / max(1, p.instrument.lot_size))), "right": p.instrument.right,
+                     "k": p.instrument.strike, "px": p.avg_price} for sym, p in pkg["legs"].items()]           # a leg's side is its size in lots (a butterfly's body is 2)
             v = self.mark(snap, legs)
             if v is None:
                 continue
-            first = next(iter(pkg["legs"].values()))
-            lot = max(1, first.instrument.lot_size)
             worst, best = payoff_bounds([(l["side"], l["right"], l["k"], l["px"]) for l in legs])
             fees = sum(self.fees_fn(pkg["u"], first.instrument.expiry, l["k"], l["right"], -l["side"] * lot, l["px"]) for l in legs) / lot
             risk = max(-worst, 1e-9) + fees
@@ -947,17 +1147,17 @@ class AutoPilotV2:
             best = None
             for sid in self.planned(u):                                                 # the day plan first: a planned strategy whose context still holds, proven, with a positive draw
                 s = BY_SID.get(sid)
-                if s is None or (s.sid, u) in busy or not self.matches(s, st) or self.lab.stats.get(s.sid, [0])[0] < MIN_TRADES:
+                if s is None or (s.sid, u) in busy or not self.matches(s, st) or self.lab.stats.get(s.sid, [0])[0] < self.lab.min_trades(s):
                     continue
                 draw = self.lab.draw(s.sid, self.rng)
                 if draw > 0:
                     best = (draw, s)
                     break
-            for s in CATALOGUE if best is None else ():
+            for s in self.strategies() if best is None else ():
                 if (s.sid, u) in busy or not self.matches(s, st):
                     continue
                 n = self.lab.stats.get(s.sid, [0])[0]
-                if n < MIN_TRADES:
+                if n < self.lab.min_trades(s):
                     continue
                 draw = self.lab.draw(s.sid, self.rng)
                 if draw > 0 and (best is None or draw > best[0]):
@@ -994,8 +1194,10 @@ class AutoPilotV2:
             limit = round(math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK, 2)
             return {"id": self._oid(t, "b"), "side": "buy", "symbol": l["name"], "lots": 1, "strategy": strategy, "thesis": thesis[:1000], "limit": limit, "group": "auto2",
                     "queued_at": int(t * 1000), "ref": ref(l), "_why": f"{s.sid} draw {draw:+.2f}R"}
-        net = sum((math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK if l["side"] > 0 else -max(l["bid"] - max(3 * TICK, 0.02 * l["bid"]), 0)) for l in p["legs"]) * p["lot"]
-        return {"id": self._oid(t, "p"), "side": "package", "legs": [{"symbol": l["name"], "side": "buy" if l["side"] > 0 else "sell", "lots": 1, "ref": ref(l)} for l in p["legs"]],
+        net = sum(abs(l["side"]) * (math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK if l["side"] > 0 else -max(l["bid"] - max(3 * TICK, 0.02 * l["bid"]), 0))
+                  for l in p["legs"]) * p["lot"]
+        return {"id": self._oid(t, "p"), "side": "package", "legs": [{"symbol": l["name"], "side": "buy" if l["side"] > 0 else "sell", "lots": abs(l["side"]), "ref": ref(l)}
+                                                                      for l in p["legs"]],
                 "strategy": strategy, "thesis": thesis[:1000], "net_limit": round(net, 2), "group": "auto2", "queued_at": int(t * 1000), "_why": f"{s.sid} draw {draw:+.2f}R"}
 
     # ---- keeping the record ------------------------------------------------------------------------------------------------------------------
@@ -1003,8 +1205,12 @@ class AutoPilotV2:
         try:
             got = relay.get_lab()
             raw = got.get("lab") if isinstance(got, dict) else None
-            stats = json.loads(raw).get("stats") if isinstance(raw, str) else None
-            self.lab = Lab(stats if isinstance(stats, dict) else None)
+            got = json.loads(raw) if isinstance(raw, str) else {}
+            stats, inv = got.get("stats"), got.get("inv")
+            self.lab = Lab(stats if isinstance(stats, dict) else None, inv if isinstance(inv, dict) else None)
+            self._read_w = got.get("read_w") if isinstance(got.get("read_w"), dict) else None
+            if hasattr(self, "reader"):
+                self.reader.restore(self._read_w)
             return f"{len(self.lab.stats)} strategies with a record"
         except Exception as e:                                                          # noqa: BLE001 - no record means starting from zero, never not trading
             return f"no record could be read ({type(e).__name__}): starting from zero"
@@ -1013,7 +1219,7 @@ class AutoPilotV2:
         if not (self.lab.dirty and (force or mono - self.lab_saved_at >= 120)):
             return False
         try:
-            relay.put_lab(self.lab.to_json())
+            relay.put_lab(self.lab.to_json({"read_w": self.reader.export()} if hasattr(self, "reader") else None))
             self.lab.dirty, self.lab_saved_at = False, mono
             return True
         except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
@@ -1023,7 +1229,16 @@ class AutoPilotV2:
         """For the app's Strategy lab panel: the record's leaders, today's counts, and each underlying's state now (compact: the runner's whole state must fit the relay's cap)."""
         state = {u: [st.get("view"), st.get("vol"), st.get("ratio"), bool(st.get("eve")),
                      st["read"]["p_up"] if st.get("read") else None, "; ".join(st["read"]["why"][:2])[:120] if st.get("read") else "", st.get("event", ""),
-                     st.get("hmm") or "", st.get("change") or "", st.get("trend_t"), st.get("tail") or ""]
+                     st.get("hmm") or "", st.get("change") or "", st.get("trend_t"), st.get("tail") or "",
+                     (st.get("news") or {}).get("p_up"), "; ".join((st.get("news") or {}).get("why") or [])[:140]]
                  for u, st in sorted(self.last_state.items())}
         cal = self.reader.calibration().get("all") if hasattr(self, "reader") else None
-        return {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan, "read_calibration": cal}
+        ncal = self.news_scorer.calibration().get("all") if hasattr(self, "news_scorer") else None
+        learnt = self.reader.learned if hasattr(self, "reader") else {}
+        out = {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan, "read_calibration": cal, "news_calibration": ncal,
+               "read_learning": {"instruments": sum(1 for v in learnt.values() if v), "outcomes": sum(learnt.values())}}
+        if len(json.dumps(out, separators=(",", ":"), default=str)) > SUMMARY_SOFT_MAX:          # the relay refuses a runner state over 60,000 characters whole
+            out["state"] = {u: [x if i not in (5, 6, 12) else "" for i, x in enumerate(v)] for u, v in state.items()}     # the reasons go first, the numbers stay
+            if self.day_plan and len(json.dumps(out, separators=(",", ":"), default=str)) > SUMMARY_SOFT_MAX:
+                out["plan"] = {**self.day_plan, "items": [{k: v for k, v in i.items() if k not in ("what", "why", "catalysts")} for i in self.day_plan.get("items") or []]}
+        return out

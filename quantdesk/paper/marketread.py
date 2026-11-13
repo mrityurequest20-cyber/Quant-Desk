@@ -42,6 +42,24 @@ WEIGHTS = {              # log-likelihood ratios per unit signal (priors)
 }
 
 
+# INSTRUMENTS READ DIFFERENTLY (owner, 13 Nov 2026: "Models should read differently as per the instrument as these instruments are different"). Each class has its own prior
+# weights and its own normal put/call ratio:
+# * index options: the deepest market in India; option writers (the informed side) dominate its OI, so OI positioning carries the most;
+# * stock options: thinner, and their OI is mostly calls written against holdings, so a stock's normal PCR is lower (about 0.6) and its OI walls mean less; the future's
+#   build-up carries as much as for an index;
+# * MCX options: price discovery is in the future, whose OI build-up is the main read; the option chain is thin; the "spot" is the future itself, so no premium is read;
+# * currency options: thin, and a currency future's premium is the interest-rate differential (carry), not sentiment: no premium is read.
+# The weights are then LEARNED per instrument (MarketRead.learn): each scored outcome nudges them by online logistic regression, pulled back towards the class's prior.
+PROFILES = {
+    "index": dict(WEIGHTS),
+    "stock": {"pcr": 0.15, "pcr_chg": 0.25, "walls": 0.25, "buildup": 0.60, "writing": 0.30, "skew_chg": 0.20, "basis_chg": 0.20, "pain": 0.05},
+    "mcx": {"pcr": 0.10, "pcr_chg": 0.15, "walls": 0.15, "buildup": 0.60, "writing": 0.15, "skew_chg": 0.20, "basis_chg": 0.0, "pain": 0.05},
+    "cds": {"pcr": 0.10, "pcr_chg": 0.10, "walls": 0.20, "buildup": 0.40, "writing": 0.10, "skew_chg": 0.15, "basis_chg": 0.0, "pain": 0.05},
+}
+PCR_BASE = {"index": 1.0, "stock": 0.6, "mcx": 0.8, "cds": 1.0}
+LEARN_RATE, LEARN_PULL, LEARN_MAX_W = 0.05, 0.02, 2.0     # step, pull towards the prior, and a bound on any weight (a sign may flip if the record says so)
+
+
 def _num(x):
     try:
         v = float(x)
@@ -147,6 +165,43 @@ class MarketRead:
         self.scored: dict[str, list[float]] = {}                            # [n, sum of squared errors] per underlying: the Brier score
         self.basis_obs: dict[str, list[float]] = {}                         # the raw premium readings the Kalman filter is fitted to
         self.basis_kf: dict[str, KF.LocalLinearTrend] = {}
+        self.profile: dict[str, str] = {}                                   # u -> index | stock | mcx | cds
+        self.w: dict[str, dict] = {}                                        # u -> its learned weights (start: its class's prior)
+        self.learned: dict[str, int] = {}                                   # u -> outcomes learned from
+        self.learn_at: dict[str, float] = {}
+
+    def weights(self, u: str) -> dict:
+        prof = self.profile.get(u, "index")
+        return self.w.setdefault(u, dict(PROFILES[prof]))
+
+    def learn(self, u: str, signals: dict, p: float, y: float) -> None:
+        """One step of online logistic regression on one scored outcome: w <- w + rate * ((y - p) s - pull * (w - prior))."""
+        w, prior = self.weights(u), PROFILES[self.profile.get(u, "index")]
+        for k, sv in signals.items():
+            if k in w:
+                w[k] = min(max(w[k] + LEARN_RATE * ((y - p) * sv - LEARN_PULL * (w[k] - prior[k])), -LEARN_MAX_W), LEARN_MAX_W)
+        self.learned[u] = self.learned.get(u, 0) + 1
+
+    def export(self) -> dict:
+        """What was learned, for the record that survives a restart."""
+        return {u: {"p": self.profile.get(u, "index"), "n": self.learned.get(u, 0), "w": {k: round(v, 4) for k, v in w.items()}} for u, w in self.w.items() if self.learned.get(u)}
+
+    def restore(self, d) -> int:
+        """Read back what export() wrote, validated: a weight outside the bound, an unknown signal or class is dropped."""
+        n = 0
+        for u, v in (d or {}).items() if isinstance(d, dict) else ():
+            try:
+                prof = v["p"] if v["p"] in PROFILES else None
+                w = {k: float(x) for k, x in v["w"].items() if k in WEIGHTS and math.isfinite(float(x)) and abs(float(x)) <= LEARN_MAX_W}
+                if prof is None or not w:
+                    continue
+                self.profile[u] = prof
+                self.w[u] = {**PROFILES[prof], **w}
+                self.learned[u] = int(v.get("n", 0))
+                n += 1
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+        return n
 
     def smooth_basis(self, u: str, raw: float | None) -> tuple[float | None, dict | None]:
         """(the Kalman-smoothed premium, its trend) after one more raw reading; the raw reading itself until there are BASIS_MIN of them."""
@@ -167,21 +222,25 @@ class MarketRead:
             kf.step(raw)
         return (kf.level, kf.trend()) if kf else (raw, None)
 
-    def _score(self, u: str, t: float, price: float | None, p: float) -> None:
+    def _score(self, u: str, t: float, price: float | None, p: float, signals: dict | None = None) -> None:
         """CALIBRATION by a proper scoring rule: each read's P(up) against what the price did over the next look-back window, as the Brier score (mean of (P - outcome)^2;
         0.25 is a coin toss, lower is better). A move under BUILDUP_MIN_PX is no outcome. This is how the prior WEIGHTS will be judged."""
         if not price:
             return
         q = self.pending.setdefault(u, [])
         while q and t - q[0][0] >= self.lookback:
-            t0, p0, px0 = q.pop(0)
+            t0, p0, px0, sig0 = q.pop(0)
             mv = price / px0 - 1
             if abs(mv) >= BUILDUP_MIN_PX:
+                y = 1.0 if mv > 0 else 0.0
                 sc = self.scored.setdefault(u, [0, 0.0])
                 sc[0] += 1
-                sc[1] += (p0 - (1.0 if mv > 0 else 0.0)) ** 2
+                sc[1] += (p0 - y) ** 2
+                if sig0 and t0 - self.learn_at.get(u, -1e18) >= self.lookback:          # learn from one read per window: overlapping reads are one piece of evidence
+                    self.learn_at[u] = t0
+                    self.learn(u, sig0, p0, y)
         if not q or t - q[-1][0] >= 60:
-            q.append((t, p, price))
+            q.append((t, p, price, dict(signals or {})))
 
     def calibration(self) -> dict:
         """{underlying: {"n", "brier"}} and the pooled figure under "all"."""
@@ -198,7 +257,7 @@ class MarketRead:
         return old[-1] if old else (h[0][1] if h and t - h[0][0] >= 60 else None)
 
     def update(self, u: str, t: float, snap, chain: dict, spot: float, T: float, r: float, iv_fn, fut_name: str | None = None, next_chain: dict | None = None,
-               T_next: float | None = None, spot_name: str | None = None) -> dict:
+               T_next: float | None = None, spot_name: str | None = None, profile: str = "index") -> dict:
         cr = chain_read(snap, chain, spot, T, r, iv_fn)
         fq = _q(snap, fut_name)
         fut, foi = (_mid(fq), _num(fq.get("oi"))) if fq else (None, None)
@@ -215,19 +274,23 @@ class MarketRead:
         h.append((t, cur))
         while h and t - h[0][0] > self.lookback * 1.5:
             h.pop(0)
-        read = self.evidence(cur, then)
-        self._score(u, t, fut or spot, read["p_up"])
+        self.profile[u] = profile if profile in PROFILES else "index"
+        read = self.evidence(cur, then, self.weights(u), PCR_BASE[self.profile[u]])
+        read["profile"] = self.profile[u]
+        self._score(u, t, fut or spot, read["p_up"], read["signals"])
         self.last[u] = read
         return read
 
     @staticmethod
-    def evidence(cur: dict, then: dict | None) -> dict:
-        """Each reading as a signal and a reason; their weighted sum as log-odds; P(up)."""
+    def evidence(cur: dict, then: dict | None, weights: dict | None = None, pcr_base: float = 1.0) -> dict:
+        """Each reading as a signal and a reason; their weighted sum (the instrument's weights) as log-odds; P(up). A put/call ratio is read against the class's
+        normal one (pcr_base)."""
+        weights = weights or WEIGHTS
         sig, why = {}, []
         spot = cur.get("spot")
         pcr = cur.get("pcr")
         if pcr is not None:
-            sig["pcr"] = _clip((pcr - 1.0) / 0.4)
+            sig["pcr"] = _clip((pcr - pcr_base) / 0.4)
             if abs(sig["pcr"]) >= 0.5:
                 why.append(f"put/call OI {pcr:.2f}")
         cw, pw = cur.get("call_wall"), cur.get("put_wall")
@@ -263,7 +326,7 @@ class MarketRead:
                 sig["basis_chg"] = _clip((cur["basis"] - then["basis"]) / 0.001)       # the smoothed premium's change (smooth_basis)
                 if abs(sig["basis_chg"]) >= 0.5:
                     why.append(f"futures premium {'widening' if sig['basis_chg'] > 0 else 'narrowing'} {then['basis'] * 100:.2f}% to {cur['basis'] * 100:.2f}% (Kalman)")
-        logit = sum(WEIGHTS[k] * v for k, v in sig.items())
+        logit = sum(weights.get(k, 0.0) * v for k, v in sig.items())
         p = 1 / (1 + math.exp(-logit))
         r2 = lambda x, n=4: round(x, n) if isinstance(x, float) else x                 # noqa: E731
         return {"p_up": round(p, 3), "vote": 1 if p >= READ_VOTE_P else -1 if p <= 1 - READ_VOTE_P else 0, "why": why[:5], "signals": {k: round(v, 2) for k, v in sig.items()},
