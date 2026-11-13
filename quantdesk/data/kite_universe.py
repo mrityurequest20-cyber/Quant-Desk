@@ -43,6 +43,23 @@ def option_name(underlying: str, expiry, strike: float, side: str) -> str:
     return f"{underlying}{d.day:02d}{_MON[d.month - 1]}{d.year % 100:02d}{k}{side}"
 
 
+DEEP_MAX = 1200                                                  # FULL-mode subscriptions beyond the core five: a bound on the websocket's traffic, far under Kite's 3,000 a connection
+
+
+def deep_symbols(meta: dict[str, dict], watchlist: dict | None, limit: int = DEEP_MAX) -> list[str]:
+    """The wide-universe instruments to subscribe in Kite's FULL mode (price, open interest and five levels of order book) instead of QUOTE mode (price and volume only).
+
+    Two groups, in this order, so a cut can only ever drop the second:
+      1. every option on the board. A strategy can be priced, and a paper order filled, only against a real bid and offer; in QUOTE mode an option has neither, and no other
+         feed on the board supplies one (Kotak's chain call returns the last price, volume and open interest, not the book).
+      2. the desk's watchlist (config `desk.watchlist`): the cash price, the future, the MCX or the currency contract of each name the owner trades, for the depth on its page.
+    Everything else stays in QUOTE mode: it is recorded and searchable, with no book."""
+    names = {str(n).strip().upper() for group in (watchlist or {}).values() if isinstance(group, (list, tuple)) for n in group if str(n).strip()}
+    options = [sym for sym, m in meta.items() if m.get("s") == "opt"]
+    watched = [sym for sym, m in meta.items() if m.get("s") != "opt" and str(m.get("name") or "").upper() in names]
+    return (options + watched)[:max(0, int(limit))]
+
+
 def _frame(kite, exchange: str, errors: list[str]) -> pd.DataFrame:
     try:
         df = pd.DataFrame(kite.instruments(exchange))
