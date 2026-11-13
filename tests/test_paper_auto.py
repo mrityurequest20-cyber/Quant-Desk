@@ -203,7 +203,8 @@ def test_the_kill_switch_and_a_blocked_relay_stop_entries_and_it_is_off_unless_s
     cli = (ROOT / "quantdesk/paperlink/cli.py").read_text(encoding="utf-8")
     assert 'getattr(a, "auto", False) or os.environ.get("PAPER_AUTO"' in cli and "auto = None" in cli                           # no switch, no autopilot
     wf = (ROOT / ".github/workflows/paper-desk.yml").read_text(encoding="utf-8")
-    assert "PAPER_AUTO" in wf
+    assert "PAPER_AUTO: ${{ (inputs.auto || vars.PAPER_AUTO != 'no') && 'yes' || 'no' }}" in wf          # ON for every run by the owner's order (13 Nov 2026); the variable set to no switches it off
+    assert "lots.update(stock_lots(cfg))" in cli                                                        # and it trades the stocks as well as the indices
 
 
 # ---- holding: a small fixed risk, no cap on the gain ---------------------------------------------------------------------------------------------------------

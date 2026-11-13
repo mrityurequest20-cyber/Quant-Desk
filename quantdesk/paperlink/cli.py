@@ -17,7 +17,9 @@ def cmd_run(cfg, a):
         from ..paper.auto import AutoPilot
         from ..paper.risk import RiskGate
         und = sorted(RiskGate(cfg).limits.underlyings.get("nse_fo", ()))
+        from ..paper.runner import stock_lots
         lots = {str(u).upper(): int(v["lot_size"]) for u, v in (cfg.get("instruments") or {}).items() if isinstance(v, dict) and isinstance(v.get("lot_size"), int)}
+        lots.update(stock_lots(cfg))                                   # the stocks too (owner, 13 Nov 2026): a lot per expiry, and the runner's day-before-expiry rule for delivery
         auto = AutoPilot(tuple(u for u in und if u in lots), lots, float(cfg.get("paper.capital")))
         print(f"paper: AUTO v1 is ON for {', '.join(auto.und)} (one lot a trade, no cap on how many, through the same gate and its loss caps)", flush=True)
     raise SystemExit(run(cfg, relay, Path(a.ledger), parse_hhmm(a.until), every_s=a.every, new_account=a.new_account, auto=auto))

@@ -192,3 +192,38 @@ console.log(JSON.stringify([
     a, b, c = json.loads(r.stdout)
     assert a.startswith("+Rs 4,240 on the day (all in). 3 closed (2 won, 1 lost), best +Rs 2,500, worst -Rs 800; 2 opened, 1 still held; fees Rs 212.")
     assert b.startswith("-Rs 1,200 from closed trades after fees. nothing closed;") and "1 brake event(s)" in b and c is None
+
+
+# ---- AUTO trades the stocks too (owner, 13 Nov 2026) --------------------------------------------------------------------------------------------
+def stock_board(t, under="RELIANCE", spot=1340.0, cb=1000, ca=1000, pb=1000, pa=1000, fwd_gap=0.0, exp=dt.date(2026, 11, 23), code="23NOV26"):
+    """A consistent stock board for AUTO: Black-Scholes prices at 25% vol, with the sizes and the futures price chosen to make the signals."""
+    from math import exp as e, log, sqrt
+    from statistics import NormalDist
+    from quantdesk.paper import auto as A
+    N, r, iv = NormalDist().cdf, A.RATE, 0.25
+    T = (dt.datetime.combine(exp, dt.time(15, 30), tzinfo=IST) - t).total_seconds() / (365.25 * 86400)
+    fwd = spot * e(r * T)
+    q = {under: dict(ltp=spot, age_s=1.0), under + "-FUT": dict(bid=fwd * (1 + fwd_gap / 100) - 0.1, ask=fwd * (1 + fwd_gap / 100) + 0.1, ltp=fwd * (1 + fwd_gap / 100), age_s=1.0)}
+    for k in range(1300, 1381, 10):
+        d1 = (log(spot / k) + (r + iv * iv / 2) * T) / (iv * sqrt(T)); d2 = d1 - iv * sqrt(T)
+        for kind, bq, aq in (("CE", cb, ca), ("PE", pb, pa)):
+            m = spot * N(d1) - k * e(-r * T) * N(d2) if kind == "CE" else k * e(-r * T) * N(-d2) - spot * N(-d1)
+            bid, ask = max(0.05, round((m - 0.1) / 0.05) * 0.05), round((m + 0.1) / 0.05) * 0.05
+            q[f"{under}{code}{k}{kind}"] = dict(bid=bid, ask=ask, ltp=m, bid_qty=bq, ask_qty=aq, age_s=1.0, oi=100000)
+    return {"now": int(t.timestamp() * 1000), "quotes": q}
+
+
+def test_auto_buys_a_stock_option_with_its_own_expirys_lot_through_the_real_gate(cfg, rn):
+    from quantdesk.paper import auto as A
+    ap, cal = A.AutoPilot(("RELIANCE",), R.stock_lots(cfg), 500_000.0), MK.Calendars(cfg)
+    t0 = MON
+    for i in range(7):                                                                                   # a quiet tape first: AUTO needs five minutes of history
+        t = t0 + dt.timedelta(minutes=i)
+        snap = stock_board(t)
+        assert rn.step(snap, ap.decide(snap, rn.account, R.Runner.server_now(snap), cal=cal), False, t.astimezone(dt.timezone.utc))["results"] == []
+    t = t0 + dt.timedelta(minutes=7)
+    snap = stock_board(t, cb=3000, ca=1000, pb=1000, pa=3000, fwd_gap=-0.1)                              # calls bid, puts offered, futures below the options' forward: up
+    mine = ap.decide(snap, rn.account, R.Runner.server_now(snap), cal=cal)
+    res = rn.step(snap, mine, False, t.astimezone(dt.timezone.utc))["results"]
+    assert len(mine) == 1 and mine[0]["symbol"].startswith("RELIANCE23NOV26") and mine[0]["symbol"].endswith("CE") and mine[0]["strategy"].startswith("AUTO v1 RELIANCE")
+    assert res[0]["status"] == "filled" and res[0]["fill"]["qty"] == 500                                 # one lot of THIS contract: 500 shares

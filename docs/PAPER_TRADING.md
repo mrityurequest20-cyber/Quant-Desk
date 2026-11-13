@@ -66,7 +66,7 @@ Nothing else changes: the same risk gate, the same limits, paper money only.
 
 ## AUTO v1: the paper desk deciding for itself (paper money only)
 
-You said go on 8 Nov 2026: the desk may take trades by itself beside yours. It is **off unless switched on**: tick `auto` when you run the **Paper runner** by hand, or set the repository variable `PAPER_AUTO` to `yes` so every scheduled run has it. Your hand-placed orders are unchanged and work at the same time.
+You said go on 8 Nov 2026: the desk may take trades by itself beside yours. Since 13 Nov 2026 it is **ON for every run** ("enable the self-trading ... a system which trades itself"): it trades the four index families and the 20 watchlist stocks. To switch it off, set the repository variable `PAPER_AUTO` to `no`. Your hand-placed orders are unchanged and work at the same time.
 
 It looks for **high reward for little risk**, and it is **not an intraday-only system**.
 
