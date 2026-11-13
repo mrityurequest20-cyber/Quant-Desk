@@ -104,3 +104,12 @@ def test_an_invention_needs_more_trades_than_a_written_strategy(cfg, tmp_path):
         calm(rn, ap, minutes=5)
         held = {p.strategy for p in rn.account.positions.values()}
         assert (f"{A2.TAG} {sid} NIFTY" in held) is live, (n, held)
+
+
+def test_the_apps_strategy_builder_is_given_the_inventions_it_can_build(cfg, tmp_path):
+    _, ap = desk(cfg, tmp_path)
+    made = ap.evolve(dt.date(2026, 11, 16))
+    inv = ap.lab.summary()["inventions"]
+    assert len(inv) == len(made) and all(set(x) == {"code", "name", "view", "legs", "mu_r", "trades"} for x in inv)
+    x = inv[0]
+    assert x["view"] in ("up", "down", "flat") and all(len(l) == 3 and l[1] in ("CE", "PE") for l in x["legs"]) and x["name"].startswith("invented: ")

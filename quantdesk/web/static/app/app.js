@@ -1168,17 +1168,26 @@ const QB = (() => {
 	}
 	const rateOf = (u, c) => { c = c || conf(); const i = c.inst[u]; return i && typeof i.r === "number" ? i.r : c.r; };       // an option on a future (MCX, currency) is priced off the future: rate 0
 	// ---- templates: [side, type, offset in strike steps from the at-the-money strike] -------------------------------------------------
+	// Each template also says WHEN to use it, for the advisor (advise): its direction (up, down, range, big), its volatility stance (long: wants volatility to rise or a
+	// move bigger than priced; short: is paid while little happens), its conviction (strong: a naked long option or a backspread; mild: a spread), and its AUTO v2 code
+	// (the desk's shadow record for the structure). A leg's side may be 2: two lots of that leg (a butterfly's body).
 	const TEMPLATES = {
-		long_call: { name: "Long call", view: "Bullish: wants a big move up", wide: false, legs: () => [[1, "CE", 0]] },
-		long_put: { name: "Long put", view: "Bearish: wants a big move down", wide: false, legs: () => [[1, "PE", 0]] },
-		long_straddle: { name: "Long straddle", view: "Big move, either way", wide: false, legs: () => [[1, "CE", 0], [1, "PE", 0]] },
-		long_strangle: { name: "Long strangle", view: "Big move, either way, cheaper", wide: true, legs: (w) => [[1, "CE", w], [1, "PE", -w]] },
-		bull_call_spread: { name: "Bull call spread", view: "Moderately bullish, capped", wide: true, legs: (w) => [[1, "CE", 0], [-1, "CE", w]] },
-		bear_put_spread: { name: "Bear put spread", view: "Moderately bearish, capped", wide: true, legs: (w) => [[1, "PE", 0], [-1, "PE", -w]] },
-		bull_put_spread: { name: "Bull put spread", view: "Not bearish: collects premium", wide: true, legs: (w) => [[-1, "PE", 0], [1, "PE", -w]] },
-		bear_call_spread: { name: "Bear call spread", view: "Not bullish: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [1, "CE", w]] },
-		iron_condor: { name: "Iron condor", view: "Stays in a range: collects premium", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 2 * w], [-1, "PE", -w], [1, "PE", -2 * w]] },
-		iron_butterfly: { name: "Iron butterfly", view: "Pins near the strike: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [-1, "PE", 0], [1, "CE", w], [1, "PE", -w]] },
+		long_call: { name: "Long call", view: "Bullish: wants a big move up", wide: false, legs: () => [[1, "CE", 0]], dir: "up", vol: "long", conv: "strong", code: "LC" },
+		long_put: { name: "Long put", view: "Bearish: wants a big move down", wide: false, legs: () => [[1, "PE", 0]], dir: "down", vol: "long", conv: "strong", code: "LP" },
+		long_straddle: { name: "Long straddle", view: "Big move, either way", wide: false, legs: () => [[1, "CE", 0], [1, "PE", 0]], dir: "big", vol: "long", conv: "strong", code: "LS" },
+		long_strangle: { name: "Long strangle", view: "Big move, either way, cheaper", wide: true, legs: (w) => [[1, "CE", w], [1, "PE", -w]], dir: "big", vol: "long", conv: "strong", code: "LG" },
+		bull_call_spread: { name: "Bull call spread", view: "Moderately bullish, capped", wide: true, legs: (w) => [[1, "CE", 0], [-1, "CE", w]], dir: "up", vol: "neutral", conv: "mild", code: "BCS" },
+		bear_put_spread: { name: "Bear put spread", view: "Moderately bearish, capped", wide: true, legs: (w) => [[1, "PE", 0], [-1, "PE", -w]], dir: "down", vol: "neutral", conv: "mild", code: "BRP" },
+		bull_put_spread: { name: "Bull put spread", view: "Not bearish: collects premium", wide: true, legs: (w) => [[-1, "PE", 0], [1, "PE", -w]], dir: "up", vol: "short", conv: "mild", code: "BPS" },
+		bear_call_spread: { name: "Bear call spread", view: "Not bullish: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [1, "CE", w]], dir: "down", vol: "short", conv: "mild", code: "BRC" },
+		iron_condor: { name: "Iron condor", view: "Stays in a range: collects premium", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 2 * w], [-1, "PE", -w], [1, "PE", -2 * w]], dir: "range", vol: "short", conv: "mild", code: "IC" },
+		iron_butterfly: { name: "Iron butterfly", view: "Pins near the strike: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [-1, "PE", 0], [1, "CE", w], [1, "PE", -w]], dir: "range", vol: "short", conv: "strong", code: "IF" },
+		call_butterfly: { name: "Call butterfly", view: "Pins near the strike: cheap, paid for", wide: true, legs: (w) => [[1, "CE", -w], [-2, "CE", 0], [1, "CE", w]], dir: "range", vol: "short", conv: "strong", code: "CBF" },
+		put_butterfly: { name: "Put butterfly", view: "Pins near the strike: cheap, paid for", wide: true, legs: (w) => [[1, "PE", w], [-2, "PE", 0], [1, "PE", -w]], dir: "range", vol: "short", conv: "strong", code: "PBF" },
+		bw_call_butterfly: { name: "Broken-wing call butterfly", view: "A drift up to a target, little lost below", wide: true, legs: (w) => [[1, "CE", 0], [-2, "CE", w], [1, "CE", 2 * w + 1]], dir: "up", vol: "short", conv: "mild", code: "BWC" },
+		bw_put_butterfly: { name: "Broken-wing put butterfly", view: "A drift down to a target, little lost above", wide: true, legs: (w) => [[1, "PE", 0], [-2, "PE", -w], [1, "PE", -2 * w - 1]], dir: "down", vol: "short", conv: "mild", code: "BWP" },
+		call_backspread: { name: "Call ratio backspread", view: "A big move up, partly paid for by a sold call", wide: true, legs: (w) => [[-1, "CE", 0], [2, "CE", w]], dir: "up", vol: "long", conv: "strong", code: "CRB" },
+		put_backspread: { name: "Put ratio backspread", view: "A big move down, partly paid for by a sold put", wide: true, legs: (w) => [[-1, "PE", 0], [2, "PE", -w]], dir: "down", vol: "long", conv: "strong", code: "PRB" },
 	};
 	// ---- your own legs: any number (up to MAX_CUSTOM_LEGS, a bound on the arithmetic only), any strike on the board, buy or sell, call or put, each with a size multiple of the base lots ----------
 	const CUSTOM = { name: "Custom structure", view: "Your own legs: any number, any strike, any ratio", wide: false };
@@ -1210,7 +1219,7 @@ const QB = (() => {
 			const k = strikes[atm + off];
 			const name = k != null && names[k] ? names[k][type] : null;
 			if (k == null || !name) return { error: `The ${type} at ${off >= 0 ? "+" : ""}${off} strikes is not on the board: pick a smaller width.` };
-			legs.push({ side, type, strike: k, name });
+			legs.push(Math.abs(side) > 1 ? { side: Math.sign(side), type, strike: k, name, mult: Math.abs(side) } : { side, type, strike: k, name });
 		}
 		return { legs, atm: strikes[atm] };
 	}
@@ -1328,7 +1337,154 @@ const QB = (() => {
 		}
 		return v;
 	}
-	return { conf, bs, greeks, impliedVol, fees, halfSpread, rateOf, TEMPLATES, CUSTOM, MAX_CUSTOM_LEGS, customLegs, legsFor, entry, analyze, scenario, suggestLots, yearsTo, ncdf, legPay };
+	// ---- the advisor: which structure, when, and why (owner, 13 Nov 2026: "The strategy builder must have access to the every strategy which it can reason it out when
+	// to use which and create it's own if required") ----------------------------------------------------------------------------------------------------
+	// ctx: {view: up|down|range|big|null (the desk's read, or yours), vol: rich|cheap|mid|null (implied against realized), event: bool (the event regime), eve: bool (expiry
+	// tomorrow), pUp: number|null (the desk's P(up)), trendT: number|null (the Kalman trend's t), record: {code: {mu, se, n}} (AUTO v2's shadow record by structure),
+	// extra: [{id, name, dir, vol, conv, code, rows}] (the desk's own inventions)}. Every structure is scored by the textbook's reasons, each one written down, and ranked.
+	const ADV = { fit: 3, near: 1.5, against: -4, vol: 2, event: -5, eventLong: 1, eve: 1, conv: 1, trend: 1, recordK: 5, recordMax: 2, recordMinN: 8 };
+	function advise(ctx) {
+		ctx = ctx || {};
+		const list = [...Object.entries(TEMPLATES).map(([id, t]) => ({ id, ...t })), ...((ctx.extra || []).map((x) => ({ ...x, invented: true })))];
+		const out = [];
+		for (const t of list) {
+			let score = 0;
+			const why = [], against = [];
+			const add = (pts, text) => { score += pts; (pts >= 0 ? why : against).push(text); };
+			const v = ctx.view;
+			if (v) {
+				if (t.dir === v) add(ADV.fit, `fits the view (${v === "big" ? "a big move either way" : v === "range" ? "stays in a range" : v})`);
+				else if (v === "range" && t.vol === "short" && (t.dir === "up" || t.dir === "down")) add(ADV.near, "a credit spread also wins if the price stays put");
+				else if ((v === "up" || v === "down") && t.dir === "big") add(ADV.near / 3, `a move either way includes ${v}`);
+				else if ((v === "up" && t.dir === "down") || (v === "down" && t.dir === "up") || (v === "range" && t.dir === "big") || (v === "big" && t.dir === "range")) add(ADV.against, "against the view");
+			}
+			if (ctx.vol === "rich" && t.vol !== "neutral") add(t.vol === "short" ? ADV.vol : -ADV.vol, t.vol === "short" ? "options are dear against realized volatility: selling them is paid" : "options are dear: buying them pays up for the move");
+			if (ctx.vol === "cheap" && t.vol !== "neutral") add(t.vol === "long" ? ADV.vol : -ADV.vol, t.vol === "long" ? "options are cheap against realized volatility: buying them is cheap" : "options are cheap: selling them is not paid enough");
+			if (ctx.event && t.vol === "short") add(ADV.event, "an event is under way or priced: no volatility is sold into it (the desk's rule)");
+			if (ctx.event && t.vol === "long") add(ADV.eventLong, "an event can move the price further than usual");
+			if (ctx.eve && t.vol === "short" && t.dir === "range") add(ADV.eve, "expiry tomorrow: the premium decays fastest now");
+			if (ctx.eve && t.vol === "long") add(-ADV.eve, "expiry tomorrow: a bought option loses its value fastest now");
+			if (typeof ctx.pUp === "number" && (t.dir === "up" || t.dir === "down")) {
+				const c = Math.abs(ctx.pUp - 0.5);
+				if (c >= 0.2 && t.conv === "strong") add(ADV.conv, `strong conviction (P(up) ${ctx.pUp.toFixed(2)}): an uncapped structure`);
+				if (c < 0.12 && t.conv === "mild") add(ADV.conv, `mild conviction (P(up) ${ctx.pUp.toFixed(2)}): a capped structure risks less`);
+			}
+			if (typeof ctx.trendT === "number" && Math.abs(ctx.trendT) >= 2 && (t.dir === "up" || t.dir === "down")) {
+				const agree = (ctx.trendT > 0) === (t.dir === "up");
+				add(agree ? ADV.trend : -ADV.trend, `the Kalman trend ${agree ? "agrees" : "disagrees"} (t ${ctx.trendT > 0 ? "+" : ""}${ctx.trendT.toFixed(1)})`);
+			}
+			const rec = ctx.record && t.code ? ctx.record[t.code] : null;
+			if (rec && rec.n >= ADV.recordMinN && typeof rec.mu === "number") {
+				const pts = Math.max(-ADV.recordMax, Math.min(ADV.recordMax, rec.mu * ADV.recordK));
+				add(pts, `the desk's shadow record for ${t.invented ? "this invention" : "this structure"}: ${rec.mu >= 0 ? "+" : ""}${rec.mu.toFixed(2)}R a trade over ${rec.n} trades`);
+			}
+			out.push({ id: t.id, name: t.name, score: Math.round(score * 100) / 100, why, against, invented: !!t.invented, rows: t.rows || null, wide: !!t.wide });
+		}
+		return out.sort((a, b) => b.score - a.score);
+	}
+	// ---- the designer: a structure of its own for a view, when no written one fits well -----------------------------------------------------------------
+	// It mutates the written structures that fit the view (move a strike, add a wing, drop, double or flip a leg), keeps what is DEFINED RISK (no net short call),
+	// at most 4 legs and 6 lots, priced on the board, and ranks by what it pays IF THE VIEW IS RIGHT, per rupee it can lose, after costs. "Right" is a zone of prices at
+	// expiry built from the market's own expected move (em, from the at-the-money volatility): up = S to S + 1.5 em, down the mirror, range = S +- 0.5 em, big = beyond 1 em
+	// either side (to 2 em). The opposite zone is "wrong", and what the design does there is shown too. Seeded: the same board gives the same designs.
+	const ZONES = { up: [[0, 1.5]], down: [[-1.5, 0]], range: [[-0.5, 0.5]], big: [[-2, -1], [1, 2]] };
+	const OPPOSITE = { up: "down", down: "up", range: "big", big: "range" };
+	function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+	const gcd = (a, b) => (b ? gcd(b, a % b) : Math.abs(a));
+	function canon(rows) {
+		const m = new Map();
+		for (const r of rows) { const k = r.type + ":" + r.off; m.set(k, (m.get(k) || 0) + r.side); }
+		let g = 0;
+		for (const q of m.values()) g = gcd(g, Math.abs(q));
+		return g ? [...m.entries()].filter(([, q]) => q).map(([k, q]) => { const [type, off] = k.split(":"); return { side: q / g, type, off: +off }; }).sort((x, y) => (x.type + x.off).localeCompare(y.type + y.off)) : [];
+	}
+	function mutate(rows, rnd, span) {
+		const r = rows.map((x) => ({ ...x })), pick = (n) => Math.floor(rnd() * n), op = ["shift", "shift", "wing", "drop", "double", "flip", "add"][pick(7)];
+		if (op === "shift" && r.length) { const i = pick(r.length); r[i].off += rnd() < 0.5 ? -1 : 1; }
+		else if (op === "wing") { const sold = r.filter((x) => x.side < 0); if (sold.length) { const x = sold[pick(sold.length)]; r.push({ side: 1, type: x.type, off: x.off + (x.type === "CE" ? 1 : -1) * (1 + pick(2)) }); } }
+		else if (op === "drop" && r.length > 1) r.splice(pick(r.length), 1);
+		else if (op === "double" && r.length) { const i = pick(r.length); r[i].side *= 2; }
+		else if (op === "flip" && r.length) { const i = pick(r.length); r[i].side = -r[i].side; }
+		else r.push({ side: rnd() < 0.5 ? 1 : -1, type: rnd() < 0.5 ? "CE" : "PE", off: pick(5) - 2 });
+		return canon(r.filter((x) => Math.abs(x.off) <= span));                                         // off the board first, then the common size divided out
+	}
+	// the written structure a design turns out to be (its legs, at some width, are the design's), or null: a design of its own
+	function knownAs(rows) {
+		const key = JSON.stringify(canon(rows));
+		for (const [id, t] of Object.entries(TEMPLATES)) for (const w of t.wide ? [1, 2, 3, 4, 5, 6] : [1]) {
+			if (JSON.stringify(canon(t.legs(w).map(([side, type, off]) => ({ side, type, off })))) === key) return { id, width: w, name: t.name + (t.wide ? `, ${w} strike${w === 1 ? "" : "s"} wide` : "") };
+		}
+		return null;
+	}
+	const FIT_WELL = 3;                                                                                  // an advisor score under this: nothing fits the moment well
+	function verdict(ranked) {
+		const best = ranked && ranked[0];
+		if (!best || best.score < FIT_WELL) return { stand_aside: true, text: "Nothing fits the moment well: the reasons for and against cancel out. Standing aside is a position too; or design one for a view of your own." };
+		return { stand_aside: false, text: `${best.name} fits best now: ${best.why.slice(0, 2).join("; ")}.` };
+	}
+	function design(spec) {
+		const { view, strikes, names, spot, em } = spec, zones = ZONES[view];
+		if (!zones || !(em > 0) || !(spot > 0) || !strikes.length) return { error: "Pick a view, and wait for a price and a volatility on the board." };
+		let atm = 0;
+		strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
+		const span = Math.min(6, Math.max(atm, strikes.length - 1 - atm)), rnd = rng(spec.seed || 7);
+		const parents = [];
+		for (const [, t] of Object.entries(TEMPLATES)) if (t.dir === view) for (const w of t.wide ? [1, 2, 3] : [1]) parents.push(canon(t.legs(w).map(([side, type, off]) => ({ side, type, off }))));
+		if (!parents.length) return { error: "No structure to start from." };
+		const grid = (zs) => { const pts = []; for (const [a, b] of zs) for (let i = 0; i <= 12; i++) pts.push(spot + em * (a + (b - a) * i / 12)); return pts; };
+		const right = grid(zones), rightEach = zones.map((z) => grid([z])), wrong = grid(ZONES[OPPOSITE[view]]), seen = new Set(), found = [];
+		const tries = spec.tries || 800;
+		for (let n = 0; n < tries; n++) {
+			let rows = parents[Math.floor(rnd() * parents.length)];
+			for (let k = 0, m = 1 + Math.floor(rnd() * 3); k < m; k++) rows = mutate(rows, rnd, span);
+			if (!rows.length || rows.length > 4 || rows.reduce((a, x) => a + Math.abs(x.side), 0) > 6 || !rows.some((x) => x.side > 0)) continue;
+			if (rows.filter((x) => x.type === "CE").reduce((a, x) => a + x.side, 0) < 0) continue;              // a net short call: unlimited loss
+			const key = JSON.stringify(rows);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const legs = [];
+			let ok = true;
+			for (const x of rows) {
+				const kk = strikes[atm + x.off], name = kk != null && names[kk] ? names[kk][x.type] : null;
+				if (!name) { ok = false; break; }
+				legs.push({ side: Math.sign(x.side), type: x.type, strike: kk, name, mult: Math.abs(x.side) });
+			}
+			if (!ok) continue;
+			const a = analyze({ u: spec.u, exp: spec.exp, legs, quotes: spec.quotes, spot, spotAge: spec.spotAge, T: spec.T, lots: 1, c: spec.c });
+			if (a.errors.length || !(a.maxLoss > 0) || (spec.budget && a.maxLoss > spec.budget)) continue;
+			const pay = (S) => a.legs.reduce((acc, l) => acc + legPay(l, S), 0) - (a.cost || 0);
+			const avg = (pts) => pts.reduce((acc, S) => acc + pay(S), 0) / pts.length;
+			const avgRight = Math.min(...rightEach.map(avg)), avgWrong = avg(wrong);                  // "either way" must pay on BOTH sides: its worse side counts
+			if (!(avgRight > 0)) continue;
+			const shape = right.concat(wrong).map((S) => Math.round(pay(S) / a.maxLoss * 50)).join(",");
+			if (found.some((f) => f.shape === shape)) continue;
+			found.push({ shape, rows: legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: l.mult })), known: knownAs(rows), score: avgRight / a.maxLoss, avgRight, avgWrong, maxLoss: a.maxLoss,
+				maxProfit: a.unlimitedProfit ? Infinity : a.maxProfit, premium: a.premium, breakevens: a.breakevens,
+				text: legs.map((l) => `${l.side > 0 ? "buy" : "sell"} ${l.mult} ${num0(l.strike)} ${l.type === "CE" ? "call" : "put"}${l.mult > 1 ? "s" : ""}`).join(", ") });
+		}
+		found.sort((x, y) => y.score - x.score);
+		return { designs: found.slice(0, spec.top || 3).map(({ shape, ...rest }) => rest), tried: seen.size };
+	}
+	const num0 = (x) => (Math.round(x * 100) / 100).toString();
+	// AUTO v2's read of one underlying (the paper runner's lab summary: state rows, families, inventions) as the advisor's context, with what it saw in words.
+	// state row: [view, vol, iv/rv, eve, read P(up), read why, event, hmm, change point, trend t, tail, news P(up), news why]
+	function deskContext(lab, u) {
+		const v = lab && lab.state && Array.isArray(lab.state[u]) ? lab.state[u] : null;
+		const record = {};
+		for (const f of (lab && Array.isArray(lab.families) ? lab.families : [])) if (f && f.struct) record[f.struct] = { mu: f.mu_r, se: f.se, n: f.trades };
+		const extra = (lab && Array.isArray(lab.inventions) ? lab.inventions : []).filter((x) => x && Array.isArray(x.legs) && x.legs.length).map((x) => ({
+			id: "inv:" + x.code, name: x.name, dir: x.view === "flat" ? "range" : x.view, vol: "neutral", conv: "mild", code: x.code,
+			rows: x.legs.map(([q, r, o]) => ({ side: Math.sign(q), type: r, off: o, mult: Math.abs(q) })) }));
+		for (const x of (lab && Array.isArray(lab.inventions) ? lab.inventions : [])) if (x && x.code) record[x.code] = { mu: x.mu_r, n: x.trades };
+		if (!v) return { ctx: { record, extra }, seen: [] };
+		const event = !!v[6], view = v[0] === "up" ? "up" : v[0] === "down" ? "down" : v[0] === "flat" ? "range" : event ? "big" : null;
+		const pUp = typeof v[4] === "number" ? v[4] : typeof v[11] === "number" ? v[11] : null;
+		const seen = [view ? `view ${v[0] || "a big move (event)"}` : "no view", v[1] && v[1] !== "mid" ? `volatility ${v[1]}${typeof v[2] === "number" ? ` (${v[2].toFixed(2)}x realized)` : ""}` : "volatility fair",
+			v[3] ? "expiry tomorrow" : null, event ? "event regime" : null, typeof pUp === "number" ? `P(up) ${pUp.toFixed(2)}` : null,
+			typeof v[9] === "number" ? `Kalman trend t ${v[9] > 0 ? "+" : ""}${v[9].toFixed(1)}` : null, v[7] ? `HMM ${v[7]}` : null].filter(Boolean);
+		return { ctx: { view, vol: v[1] === "rich" || v[1] === "cheap" ? v[1] : "mid", event, eve: !!v[3], pUp, trendT: typeof v[9] === "number" ? v[9] : null, record, extra }, seen };
+	}
+	return { conf, bs, greeks, impliedVol, fees, halfSpread, rateOf, TEMPLATES, CUSTOM, MAX_CUSTOM_LEGS, customLegs, legsFor, entry, analyze, scenario, suggestLots, yearsTo, ncdf, legPay, advise, verdict, design, knownAs, deskContext, ZONES, FIT_WELL };
 })();
 /* @@builder:end */
 
@@ -1425,10 +1581,10 @@ const AN = (() => {
 		return tot > 0 ? prob / tot : null;
 	}
 	const VIEWS = {
-		up: { name: "Up", ids: ["long_call", "bull_call_spread", "bull_put_spread"] },
-		down: { name: "Down", ids: ["long_put", "bear_put_spread", "bear_call_spread"] },
-		range: { name: "Stays in a range", ids: ["iron_condor", "iron_butterfly", "bull_put_spread", "bear_call_spread"] },
-		big: { name: "Big move, either way", ids: ["long_straddle", "long_strangle"] },
+		up: { name: "Up", ids: ["long_call", "bull_call_spread", "bull_put_spread", "bw_call_butterfly", "call_backspread"] },
+		down: { name: "Down", ids: ["long_put", "bear_put_spread", "bear_call_spread", "bw_put_butterfly", "put_backspread"] },
+		range: { name: "Stays in a range", ids: ["iron_condor", "iron_butterfly", "call_butterfly", "put_butterfly", "bull_put_spread", "bear_call_spread"] },
+		big: { name: "Big move, either way", ids: ["long_straddle", "long_strangle", "call_backspread", "put_backspread"] },
 	};
 	// ideas for a view: every structure that fits it, at widths 1 to 4 strikes, each analysed on the live prices and ranked. analyzeFn(id, width) -> the builder's analysis (or {errors}).
 	function ideas(view, analyzeFn, ctx) {
@@ -1646,7 +1802,7 @@ function bdRead(ctx) {
 	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(B.u, c)), a = AN.atm(rows, spot, T, sq.chg);
 	if (!a || a.iv == null) return h("div", { class: "note" }, "Not enough two-sided prices around the money yet to read the market.");
 	const sk = AN.skew(rows, spot, 3), pc = AN.pcr(rows), mp = AN.maxPain(rows), w = AN.walls(rows, spot, 2);
-	const next = exps[exps.indexOf(B.exp) + 1], tm = next ? AN.term(rows, AN.chainRows(chains[B.u][next], data.quotes, spot, QB.yearsTo(next, Date.now()), QB.rateOf(B.u || u, c)), spot, T, QB.yearsTo(next, Date.now())) : null;
+	const next = exps[exps.indexOf(B.exp) + 1], tm = next ? AN.term(rows, AN.chainRows(chains[B.u][next], data.quotes, spot, QB.yearsTo(next, Date.now()), QB.rateOf(B.u, c)), spot, T, QB.yearsTo(next, Date.now())) : null;
 	const ages = rows.filter((r) => r.k === a.k).flatMap((r) => [r.ce && r.ce.age, r.pe && r.pe.age]).filter((x) => x != null), oldest = ages.length ? Math.max(...ages) + Math.max(0, (Date.now() - (B.at || Date.now())) / 1000) : null;
 	const kv = (k, v, note) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line);gap:12px;align-items:flex-start" }, h("span", { class: "f3" }, k), h("span", { style: "text-align:right" }, h("b", { class: "mono" }, v), note ? h("div", { class: "f3", style: "font-size:11.5px" }, note) : null));
 	const pct = (x, d = 2) => (x == null ? "—" : x.toFixed(d) + "%"), lv = (list) => (list.length ? list.map((x) => num(x.k, 0)).join(", ") : "—");
@@ -1665,6 +1821,51 @@ function bdRead(ctx) {
 			un.map((x) => h("div", { class: "row", style: "justify-content:space-between;font-size:12.5px;padding:2px 0" }, h("span", { class: "mono" }, `${x.u} ${x.e} ${num(x.k, 0)} ${x.t}`), h("span", { class: "mono f3" }, `${x.ratio.toFixed(1)}x · ${signed(x.chg || 0)}%`)))) : null,
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 10px" }, "What the options imply and what is open: counts and prices, not forecasts. Volatility is the market's own, from the mid of the bid and the offer."));
 }
+// ---- the advisor and the designer (QB.advise, QB.design) ------------------------------------------------------------------------------------------
+function deskLab() {                                                          // AUTO v2's read of the market, from the paper runner's state (fetched once a minute, with the live key)
+	const B = S.bd, lab = S.pp.data && S.pp.data.summary && S.pp.data.summary.lab;
+	if (lab || !store("qd.livekey") || Date.now() - (B.deskAt || 0) < 60000) return lab || null;
+	B.deskAt = Date.now();
+	paperCall("GET", "/paper/state").then((r) => { if (r.status === 200 && r.body) { S.pp.data = r.body; if (S.tab !== "paper") bdDraw(); } }).catch(() => {});
+	return null;
+}
+function bdAdvisor(cx) {
+	const { B, strikes, names, spot, T, c, data, sq, rows } = cx;
+	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
+	const dc = QB.deskContext(deskLab(), B.u), ctx = { ...dc.ctx, view: B.advView ? B.advView : dc.ctx.view };
+	const box = h("div", { class: "grp" },
+		h("div", { class: "f3", style: "font-size:12.5px;line-height:1.55;padding:8px 16px 4px" }, dc.seen.length ? `What the desk sees for ${B.u}: ${dc.seen.join(" · ")}.`
+			: `The desk has no read of ${B.u} yet${store("qd.livekey") ? " (AUTO v2 reads an underlying once its options are on the board)" : " (enter the live key on the Paper tab to bring it in)"}. Pick a view below and the advisor reasons from that.`),
+		h("div", { class: "chips", style: "padding:4px 16px" }, [chip("The desk's read", !B.advView, () => { B.advView = null; bdDraw(); }),
+			...Object.entries(AN.VIEWS).map(([id, v]) => chip(v.name, B.advView === id, () => { B.advView = id; B.design = null; bdDraw(); }))]));
+	const ranked = QB.advise(ctx), verdict = QB.verdict(ranked);
+	put(box, h("div", { class: "note", style: "margin:6px 16px;padding-top:4px" }, verdict.text));
+	const atmIdx = strikes.reduce((b, k, i) => (Math.abs(k - spot) < Math.abs(strikes[b] - spot) ? i : b), 0);
+	const buildRows = (rws) => { B.custom = rws.map((x) => ({ side: x.side, type: x.type, strike: x.strike != null ? x.strike : strikes[atmIdx + x.off], mult: x.mult || 1 })); B.tpl = "custom"; bdDraw(); scrollTo({ top: 0, behavior: "smooth" }); };
+	for (const x of ranked.slice(0, 6)) put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+		h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", {}, x.name), x.invented ? h("span", { class: "tag" }, "invented by the desk") : h("span", { class: "mono f3" }, `score ${x.score > 0 ? "+" : ""}${x.score}`)),
+		x.why.length ? h("div", { style: "font-size:12px;line-height:1.5" }, x.why.map((w) => h("div", {}, h("b", { class: "up" }, "✓ "), w))) : null,
+		x.against.length ? h("div", { style: "font-size:12px;line-height:1.5" }, x.against.map((w) => h("div", {}, h("b", { class: "dn" }, "✗ "), w))) : null,
+		h("button", { class: "btn", style: "margin-top:6px", onclick: () => { if (x.rows) buildRows(x.rows); else { B.tpl = x.id; if (x.wide && !B.width) B.width = 2; bdDraw(); scrollTo({ top: 0, behavior: "smooth" }); } } }, "Build this")));
+	const sigma = AN.atm(rows, spot, T, null), em = sigma && sigma.iv != null ? spot * sigma.iv * Math.sqrt(T) : null, view = ctx.view;
+	put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+		h("div", { style: "font-weight:600" }, "Design one for this view"),
+		h("div", { class: "f3", style: "font-size:12px;line-height:1.55" }, view ? `Searches leg combinations on the live board (defined risk only, up to 4 legs) for "${AN.VIEWS[view].name.toLowerCase()}", ranked by what each pays if the view is right, per rupee it can lose, after costs. It says when its answer is a structure that already has a name.`
+			: "Pick a view first (or wait for the desk's)."),
+		view && em ? h("button", { class: "btn", style: "margin-top:6px", onclick: () => { B.design = { view, at: Date.now(), out: QB.design({ u: B.u, exp: B.exp, view, strikes, names, quotes: data.quotes, spot, spotAge: sq.age_s, T, em, c,
+			budget: c.equity * c.limits.risk_per_trade, seed: Math.floor(Date.now() / 60000) % 100000 }) }; bdDraw(); } }, "Design it") : null));
+	const d = B.design && B.design.view === view ? B.design.out : null;
+	if (d && d.error) put(box, h("div", { class: "note" }, d.error));
+	if (d && d.designs) {
+		if (!d.designs.length) put(box, h("div", { class: "note" }, `Nothing on this board pays if the view is right without risking more than the per-trade limit (${d.tried} combinations tried).`));
+		for (const x of d.designs) put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "justify-content:space-between;gap:8px" }, h("b", {}, x.known ? x.known.name : "A structure of its own"), h("span", { class: "tag " + (x.known ? "flat" : "bull") }, x.known ? "has a name" : "new")),
+			h("div", { class: "mono", style: "font-size:12px" }, x.text),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.55" }, `If right, on average ${inr(x.avgRight, true)} (${(x.score * 100).toFixed(0)}% of the worst loss) · if wrong ${inr(x.avgWrong, true)} · worst loss ${inr(x.maxLoss)} · ${x.premium >= 0 ? "pay" : "receive"} ${inr(Math.abs(x.premium))}`),
+			h("button", { class: "btn", style: "margin-top:6px", onclick: () => buildRows(x.rows) }, "Build this")));
+	}
+	return put(box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "The reasons are the textbook's and the desk's own record by structure; the designs are judged on your view being right. Neither is a forecast: before costs, options at the market's own volatility are a fair bet."));
+}
 function bdIdeas(ctx) {
 	const { B, strikes, names, spot, T, c, data, sq, rows } = ctx;
 	const sigma = AN.atm(rows, spot, T, null);
@@ -1677,7 +1878,7 @@ function bdIdeas(ctx) {
 		const L = QB.legsFor(id, strikes, spot, names, width);
 		return L.error ? null : QB.analyze({ u: B.u, exp: B.exp, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: 1 });
 	};
-	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: QB.rateOf(B.u || u, c) }), B.sort).slice(0, 6);
+	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: QB.rateOf(B.u, c) }), B.sort).slice(0, 6);
 	put(box, h("div", { class: "chips", style: "padding:0 16px 4px" }, [["rr", "Best reward for the risk"], ["pop", "Most likely to profit"], ["cheap", "Cheapest"]].map(([id, t]) => chip(t, B.sort === id, () => { B.sort = id; bdDraw(); }))));
 	if (!list.length) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "None of these structures can be priced on the board right now."));
 	for (const x of list) put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
@@ -1775,7 +1976,9 @@ function bdDraw() {
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
-	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(u, c));
+	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(B.u, c));
+	if (S.open.advise === undefined) S.open.advise = true;                       // the advisor starts open, right under the structures: which one, and why, comes first
+	put(body, fold("advise", "Which strategy now, and why", "every structure, reasoned against the desk's read", bdAdvisor({ B, strikes, names, spot, T, c, data, sq, rows })));
 	const ideas = () => fold("ideas", "Ideas for your view", "structures that fit what you expect", bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
 	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error), ideas());
@@ -1826,7 +2029,7 @@ function bdFlow(ctx) {
 	const nowT = typeof data.now === "number" ? data.now : Date.now();
 	if (B.sampledAt !== B.at) {                                                                    // one reading per fetch of the board, however often the page is redrawn
 		B.sampledAt = B.at;
-		const sm = FL.sample({ t: nowT, spot, fut: Number.isFinite(fut) ? fut : null, rows, chain: ch, quotes: data.quotes, T, r: QB.rateOf(u, c), lot: inst.lot, atm: AN.atm(rows, spot, T, null) });
+		const sm = FL.sample({ t: nowT, spot, fut: Number.isFinite(fut) ? fut : null, rows, chain: ch, quotes: data.quotes, T, r: QB.rateOf(B.u, c), lot: inst.lot, atm: AN.atm(rows, spot, T, null) });
 		if (sm && (!B.tape.length || sm.t > B.tape[B.tape.length - 1].t)) {
 			B.tape.push(sm);
 			if (B.tape.length > FL.MAX_HIST) B.tape.shift();

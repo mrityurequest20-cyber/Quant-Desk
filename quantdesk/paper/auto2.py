@@ -514,7 +514,19 @@ class Lab:
         fams.sort(key=lambda r: -r["mu_r"])
         return {"strategies": len(CATALOGUE), "tested": len(rows), "trades": sum(r["n"] for r in rows), "eligible": sum(1 for r in rows if r["live"]),
                 "min_trades": MIN_TRADES, "today": dict(self.today), "top": rows[:top], "worst": sorted(rows, key=lambda r: r["shrunk_r"])[:3],
-                "families": fams, "tau": round(f["tau"], 3), "invented": sum(len(d["active"]) for d in self.inv.values()), "min_trades_invented": MIN_TRADES_INVENTED}
+                "families": fams, "tau": round(f["tau"], 3), "invented": sum(len(d["active"]) for d in self.inv.values()), "min_trades_invented": MIN_TRADES_INVENTED,
+                "inventions": self.inventions()}
+
+    def inventions(self, top: int = 12) -> list[dict]:
+        """The live inventions the app's strategy builder can build (legs as [lots, right, strike steps from the money]), best record first."""
+        out = []
+        for code, d in self.inv.items():
+            if not d["active"]:
+                continue
+            fam = self.fit()["family"].get(code) or (0.0, HB_TAU_TOP ** 2, 0, 0)
+            out.append({"code": code, "name": NAMES.get(code, code), "view": STRUCTURES[code][0], "legs": d["legs"], "mu_r": round(fam[0], 3), "trades": fam[3]})
+        out.sort(key=lambda x: (-x["mu_r"], -x["trades"]))
+        return out[:top]
 
 
 # ---- the engine -----------------------------------------------------------------------------------------------------------------------------

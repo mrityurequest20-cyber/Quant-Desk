@@ -20,7 +20,7 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 
 ## Placing a trade
 
-1. Build tab: pick the index, the expiry and a structure (or use *Ideas for your view*). Only structures the paper desk can open show **Send as a paper order**: long options on NIFTY, BANKNIFTY, FINNIFTY or MIDCPNIFTY, and, since 8 Nov 2026 (`paper.allow_short_legs: true`, the owner's order), **hedged packages with sold legs** (verticals, condors, butterflies): they go as ONE order, every leg opens together or none does, and the gate judges the worst case (a naked short call or a calendar is always refused; the long that covers a sold option cannot be sold before the sold option is bought back). A sold option never goes alone: only as a leg of a package. If the switch is turned off in the config, a structure with a sold leg is a what-if again.
+1. Build tab: pick the index, the expiry and a structure (or use *Which strategy now, and why*, *Design one for this view* or *Ideas for your view*). Only structures the paper desk can open show **Send as a paper order**: long options on NIFTY, BANKNIFTY, FINNIFTY or MIDCPNIFTY, and, since 8 Nov 2026 (`paper.allow_short_legs: true`, the owner's order), **hedged packages with sold legs** (verticals, condors, butterflies): they go as ONE order, every leg opens together or none does, and the gate judges the worst case (a naked short call or a calendar is always refused; the long that covers a sold option cannot be sold before the sold option is bought back). A sold option never goes alone: only as a leg of a package. If the switch is turned off in the config, a structure with a sold leg is a what-if again.
 2. Write the **strategy name** and the **thesis**: why this trade, now, and what would make you wrong (at least 20 characters; it is kept with the trade).
 3. **Review order**: each leg, its price limit (two ticks or 2% above the offer you saw), the most you can lose. **Send paper order**.
 4. Open the **Paper** tab. A fill shows under *Orders* as `filled`; a refusal shows the gate's reasons.
@@ -240,6 +240,35 @@ A strategy's record is read through a **multilevel normal model**, fitted by emp
   and the error against the true means is under a quarter of each strategy's raw average on short records.
 - **The proof gate is unchanged:** 8 shadow trades of its own and a positive draw before any paper money.
 - **In the app:** each structure's shared estimate, and the order thesis gives the strategy's shared estimate next to its own average.
+
+## The strategy builder: every structure, which one now and why, and designs of its own
+
+The app's Strategy tab (an instrument page) builds any defined-risk option structure on the live board. Owner, 13 Nov 2026: "The strategy builder must have access
+to the every strategy which it can reason it out when to use which and create it's own if required."
+
+**Every structure.** There are 16 written structures (the AUTO v2 catalogue's), and the legs can be any size: a butterfly's body is 2 lots. You can also use custom legs (any
+number, any strike, any ratio), and the desk's own inventions (from AUTO v2's record) appear beside the written ones.
+
+**Which strategy now, and why** (`QB.advise`, open under the structures). Every structure is scored against the desk's read of the underlying: AUTO v2's view, volatility
+rich or cheap against realized, the event regime, expiry tomorrow, its P(up), the Kalman trend, and AUTO v2's shadow record for that structure. Each point is a written
+reason, for or against:
+- **Fit with the view:** fits (+3); near, e.g. a credit spread when the view is a range (+1.5); against (-4).
+- **Volatility:** rich favours selling options and cheap favours buying them (+-2).
+- **Event:** in an event, no volatility is sold (-5); a long-volatility structure gains (+1).
+- **Expiry tomorrow:** decay favours a range sale and costs a bought option (+-1).
+- **Conviction:** strong conviction (P(up) 0.7 or more, or 0.3 or less) favours an uncapped structure, mild a capped one (+1).
+- **Trend:** the Kalman trend agrees or disagrees (+-1).
+- **The desk's record:** 5 x mean R, capped at +-2, once there are 8 trades.
+
+Below a best score of 3 the advisor says nothing fits and that standing aside is a position. You can replace the desk's view with your own.
+
+**Design one for this view** (`QB.design`). It mutates the structures that fit the view (move a strike, add a wing, drop, double or flip a leg). It keeps defined-risk
+results with up to 4 legs and 6 lots, priced on the board, within the per-trade loss limit.
+- **Ranking:** by the average result IF THE VIEW IS RIGHT, per rupee of worst loss, after costs. "Right" is a zone at expiry built from the market's own expected move
+  (up: the price to +1.5 moves; range: within half a move; big: beyond one move on either side). An either-way view must pay on BOTH sides.
+- **Shown with it:** what the design does if the view is wrong. When a design is a structure that already has a name ("Bull call spread, 4 strikes wide"), it says so;
+  otherwise it is "a structure of its own".
+- **What it is not:** neither the advice nor a design is a forecast. At the market's own volatility, options are a fair bet before costs; the edge is the view.
 
 ## Strategy liberty and the inventor (`quantdesk/paper/inventor.py`)
 
