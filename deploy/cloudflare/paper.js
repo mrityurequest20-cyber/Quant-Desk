@@ -16,6 +16,7 @@ export const MAX_PENDING = 20;
 export const MAX_QUEUE_BYTES = 90000;           // the whole queue is one stored value (limit 128 KiB): a full queue of big packages must not make the next order fail
 export const MAX_QUEUE_BYTES_EXIT = 120000;     // ...and a sale always has room above that, so an exit can be queued when the queue is full
 export const MAX_RESULTS = 50;                     // kept results: with the reason caps below, the stored value stays far under a Durable Object's 128 KiB limit
+export const MAX_LAB = 120000;                     // characters: AUTO v2's strategy record (quantdesk/paper/auto2.py), one stored value (128 KiB at most), ASCII only
 export const MAX_RESULTS_BYTES = 100000;           // characters of JSON in the stored results (far under a stored value's 128 KiB even with wide characters)
 export const MAX_SEEN = 1000;                      // order ids remembered as used (about 70 KB stored)
 export const MAX_SUMMARY = 60000;                  // characters
@@ -167,6 +168,8 @@ export class PaperBook {
 			if (p === "/paper/result" && m === "POST") return await this.result(await request.json());
 			if (p === "/paper/state" && m === "POST") return await this.putState(await request.json(), now);
 			if (p === "/paper/state" && m === "GET") return await this.getState(url.searchParams.get("full") === "1", now);
+			if (p === "/paper/lab" && m === "POST") return await this.putLab(await request.json(), now);
+			if (p === "/paper/lab" && m === "GET") { const lab = await this.state.storage.get("paper:lab"); return json(200, { lab: typeof lab === "string" ? lab : null, now }); }
 		} catch (e) {
 			return json(500, { error: "the paper store could not complete that; nothing was changed" });       // storage failed: memory is untouched (see below)
 		}
@@ -210,6 +213,17 @@ export class PaperBook {
 		const got = await this.state.storage.get(keys);
 		const parts = keys.map((k) => got.get(k));
 		return { meta, text: parts.every((x) => typeof x === "string") ? parts.join("") : null };
+	}
+
+	// AUTO v2's strategy record: {"lab": "<json text>"}. Kept as text (the runner re-validates every entry when it reads it back: storage is not trusted), bounded and ASCII only.
+	async putLab(raw, now) {
+		const lab = raw && typeof raw === "object" ? raw.lab : null;
+		if (typeof lab !== "string" || lab.length > MAX_LAB || /[^\x20-\x7e]/.test(lab)) return json(400, { error: "not a valid strategy record" });
+		let o;
+		try { o = JSON.parse(lab); } catch (e) { return json(400, { error: "not a valid strategy record" }); }
+		if (!o || typeof o !== "object" || o.v !== 1 || !o.stats || typeof o.stats !== "object" || Array.isArray(o.stats)) return json(400, { error: "not a valid strategy record" });
+		await this.state.storage.put("paper:lab", lab);
+		return json(200, { saved: true, chars: lab.length, now });
 	}
 
 	async putState(raw, now) {

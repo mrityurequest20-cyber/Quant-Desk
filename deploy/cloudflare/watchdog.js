@@ -283,7 +283,9 @@ async function w18Review(c) {
 	const today = reviews.find((x) => x && x.day === c.now.date);
 	if (!today) return [{ sev: "INFO", check: "W18", pushOnly: true, link: actionsUrl(c.env, PAPER_RUNNER), title: `Session review ${c.now.date}: none`,
 		body: "The paper runner left no review for today on the relay: it did not run, or it stopped before the close." }];
-	return [{ sev: "INFO", check: "W18", pushOnly: true, link: "", title: `Session review ${c.now.date}`, body: reviewLine(today) }];
+	const lab = st.summary.lab && typeof st.summary.lab === "object" ? st.summary.lab : null;
+	const labLine = lab ? ` AUTO v2: ${Number(lab.today && lab.today.shadow_closed) || 0} shadow trades scored today, ${Number(lab.eligible) || 0} strategies proven enough to trade.` : "";
+	return [{ sev: "INFO", check: "W18", pushOnly: true, link: "", title: `Session review ${c.now.date}`, body: reviewLine(today) + labLine }];
 }
 
 export const SLOTS = [

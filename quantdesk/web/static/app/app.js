@@ -2062,6 +2062,7 @@ function ppDraw() {
 			h("div", { class: "day mono " + cls(day) }, h("span", { class: "k" }, "Today"), fin(day) ? inr(day, true) : "—")),
 		h("div", { class: "kstrip" }, cell("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""), cell("Cash", inr(sm.cash)), cell("Fees paid", inr(sm.fees)), cell("Open positions", String(pos.length)))));
 	if (sm && Array.isArray(sm.reviews) && sm.reviews.length) put(body, ppReview(sm.reviews));
+	if (sm && sm.lab && typeof sm.lab === "object") put(body, ppLab(sm.lab));
 	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, `Positions (${pos.length})`)),
 		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
 			h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", { class: "mono", style: "font-size:13px" }, p.symbol),
@@ -2134,6 +2135,26 @@ function ppReview(reviews) {
 			? "The day's result is the account's equity against where it started the day: closed trades, fees and the change in what is still held, together. A close's figure is after its own fees."
 			: "For an earlier day the panel shows closed trades less fees only: the ledger keeps no closing price for what was still held that evening. A close's figure is after its own fees."));
 	return box;
+}
+// AUTO v2's Strategy lab (quantdesk/paper/auto2.py): every strategy it has written is traded in shadow at the real prices; the ones with a record go live. Display only.
+function ppLab(lab) {
+	const cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
+	const td = lab.today || {}, rows = Array.isArray(lab.top) ? lab.top : [];
+	const st = lab.state && typeof lab.state === "object" ? Object.entries(lab.state) : [];
+	const word = (v) => (v === "up" ? "▲ up" : v === "down" ? "▼ down" : v === "flat" ? "◆ flat" : "—");
+	return h("div", { class: "grp" },
+		h("div", { class: "sec-h" }, h("h2", {}, "Strategy lab (AUTO v2)"), h("span", { class: "hint" }, `${num(lab.strategies, 0)} strategies written`)),
+		h("div", { class: "kstrip" }, cell("With a record", num(lab.tested, 0)), cell("Shadow trades", num(lab.trades, 0)), cell("Proven enough to trade", num(lab.eligible, 0), lab.eligible ? "up" : ""),
+			cell("Today", `${td.shadow_closed || 0} scored · ${td.live_entries || 0} live`)),
+		rows.length ? h("div", { class: "panel scroll", style: "margin:0;border:0" }, h("table", { class: "tbl" },
+			h("thead", {}, h("tr", {}, ["Strategy", "Trades", "Avg R", "Won", ""].map((x) => h("th", {}, x)))),
+			h("tbody", {}, rows.map((r) => h("tr", {}, h("td", {}, h("div", { class: "mono", style: "font-size:12px" }, r.sid), h("div", { class: "f3", style: "font-size:11px;line-height:1.4;white-space:normal" }, r.what)),
+				h("td", {}, num(r.n, 0)), h("td", { class: cls(r.mean_r) }, signed(r.mean_r)), h("td", {}, Math.round((r.win || 0) * 100) + "%"),
+				h("td", {}, r.live ? h("span", { class: "tag bull" }, "live") : h("span", { class: "tag flat" }, r.n < lab.min_trades ? "testing" : "below 0")))))))
+			: h("div", { class: "f3", style: "font-size:12.5px;padding:10px 16px" }, "No shadow trade has closed yet. Every strategy whose market context holds is traded in shadow at the real prices; a record builds through the session."),
+		st.length ? fold("lab-state", "What it sees now", `${st.length} underlyings`, h("div", { class: "rows" }, st.map(([u, v]) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;font-size:12.5px;border-top:1px solid var(--line)" },
+			h("b", { class: "mono" }, u), h("span", { class: "f2" }, `${word(v[0])} · volatility ${v[1] || "—"}${fin(v[2]) ? " (" + v[2].toFixed(2) + "x realized)" : ""}${v[3] ? " · expiry tomorrow" : ""}`))))) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `Each strategy is a combination of a market context, a structure, a width, an expiry and its exits. It trades with paper money only after ${lab.min_trades} shadow trades, chosen by Thompson sampling: a short record is shrunk towards zero, so an unproven idea keeps being tested before it gets capital. Not proven to make money.`));
 }
 async function renderPaper(force) {
 	const body = $("#pp-body"), P = S.pp;

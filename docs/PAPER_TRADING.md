@@ -64,6 +64,23 @@ On a day the exchange opens for a special window (Diwali Muhurat trading, 8 Nov 
 
 Nothing else changes: the same risk gate, the same limits, paper money only.
 
+## AUTO v2: the paper desk writing, testing and choosing its own strategies (paper money only)
+
+Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a system which is sophisticated, advanced ... can take any strategy in its place, create its own strategy, permutation, combination, can trade."
+
+* **It writes the strategies.** Every combination of the following, 1,836 strategies in all, each with a short id that says exactly what it is (for example `IC1.fran.1/0.5.d`: an iron condor one strike wide, flat view, rich volatility, any day, the near expiry, take profit at 1R, stop at 0.5R, out by the close):
+  * a market context: direction up, down or flat; volatility rich, cheap or either; any day or the expiry eve;
+  * a structure that suits it: long call or put, debit or credit spreads, iron condor or butterfly, long straddle or strangle;
+  * a width, an expiry (the near one or the next), a take-profit, a stop, and out-by-the-close or up to three sessions.
+* **It tests them.** Whenever a strategy's context holds for an underlying (the four indices and the 20 stocks), it is traded **in shadow**: no money, but at the real bid and offer of every leg, with the desk's real fees, closed by its own exits. Each result is scored in R (profit over the most it could have lost). The record is kept on the private relay, so it grows across sessions.
+* **It chooses.** A strategy trades with paper money only after **8 shadow trades**, and then by **Thompson sampling**: a short record is shrunk towards zero, the best plausible draw wins, and a draw at or below zero does not trade. Capital flows to what has worked and away from what has not.
+* **It trades** through the runner and the risk gate like your orders: one lot, a multi-leg structure as one package, sold options only inside a bounded structure. Its own exits close it, with sold legs bought back first. Your hand-placed orders work beside it.
+* **What it sees:** direction from the same four readings as v1, and the volatility state: the options' at-the-money implied volatility against the volatility the price has shown over the last hour. Your own research found direction hard to forecast and volatility easier; the catalogue lets the record decide which contexts pay.
+* **Where to watch it:** Positions → Strategy lab (the record's leaders, what is live, what it sees now), and the 15:50 push.
+* **Bounds:** the risk gate's loss caps only (2.5% of the account a trade with fees, 5% a day, a 10% drawdown halt). No cap on trades, strategies or positions.
+* **Switches:** off with the repository variable `PAPER_AUTO` = `no`; back to v1 with `PAPER_AUTO_ENGINE` = `v1`.
+* **Not proven to make money.** The shadow record is the evidence it builds; the first days are mostly shadow trades.
+
 ## AUTO v1: the paper desk deciding for itself (paper money only)
 
 You said go on 8 Nov 2026: the desk may take trades by itself beside yours. Since 13 Nov 2026 it is **ON for every run** ("enable the self-trading ... a system which trades itself"): it trades the four index families and the 20 watchlist stocks. To switch it off, set the repository variable `PAPER_AUTO` to `no`. Your hand-placed orders are unchanged and work at the same time.
