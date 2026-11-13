@@ -35,7 +35,6 @@ import random
 from dataclasses import dataclass
 
 from ..markets import sessions as MK
-from ..options.pricing import implied_vol
 from . import auto as V1
 from .runner import _num
 
@@ -158,6 +157,35 @@ def payoff_bounds(legs) -> tuple[float, float]:
 
 
 # ---- market state ---------------------------------------------------------------------------------------------------------------------------
+# Black-Scholes and its implied volatility, here and not imported: the paper package may import only core, execution, markets and itself (a test pins that boundary).
+def _ncdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def bs_price(S: float, K: float, T: float, r: float, sigma: float, right: str) -> float:
+    if T <= 0 or sigma <= 0:
+        return max(0.0, S - K) if right == "CE" else max(0.0, K - S)
+    sq = sigma * math.sqrt(T)
+    d1 = (math.log(S / K) + (r + sigma * sigma / 2) * T) / sq
+    d2 = d1 - sq
+    return S * _ncdf(d1) - K * math.exp(-r * T) * _ncdf(d2) if right == "CE" else K * math.exp(-r * T) * _ncdf(-d2) - S * _ncdf(-d1)
+
+
+def implied_vol(price: float, S: float, K: float, T: float, r: float, right: str) -> float | None:
+    """The volatility at which Black-Scholes gives `price`, by bisection between 0.1% and 500%; None when the price is outside what any volatility gives."""
+    if not (price > 0 and S > 0 and K > 0 and T > 0):
+        return None
+    lo, hi = 0.001, 5.0
+    if not (bs_price(S, K, T, r, lo, right) - 1e-9 <= price <= bs_price(S, K, T, r, hi, right)):
+        return None
+    for _ in range(70):
+        mid = (lo + hi) / 2
+        if bs_price(S, K, T, r, mid, right) < price:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
 def _book(q, now_ok=QUOTE_MAX_AGE_S):
     if not isinstance(q, dict):
         return None
@@ -175,8 +203,8 @@ def atm_iv(snap, chain, strikes, atm_i, spot, T) -> float | None:
     for right in ("CE", "PE"):
         bk = _book((snap.get("quotes") or {}).get(chain[k].get(right)))
         if bk:
-            iv = implied_vol((bk[0] + bk[1]) / 2, spot, k, T, RATE, 0.0, right)
-            if iv == iv and 0.01 < iv < 3:
+            iv = implied_vol((bk[0] + bk[1]) / 2, spot, k, T, RATE, right)
+            if iv is not None and 0.01 < iv < 3:
                 ivs.append(iv)
     return sum(ivs) / len(ivs) if ivs else None
 
