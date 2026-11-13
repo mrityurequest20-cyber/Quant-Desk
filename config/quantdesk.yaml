@@ -442,6 +442,20 @@ desk:
     currencies: [USDINR, EURINR, GBPINR, JPYINR]
   stock_option_steps: 8            # strikes each side of the money subscribed for each watchlist stock's nearest expiry (calls and puts), for its option chain in the app
 
+# Which broker's feed is SHOWN for which kind of instrument (docs/FEEDS.md). Display only: no feed can place an order. The live relay shows the first feed in a segment's list
+# whose price is under a minute old, and steps over a dead one by itself; Kotak is last everywhere, so it is shown only when the others are not delivering. A feed that is not
+# in a segment's list is still recorded and compared, never shown for it. wrangler.jsonc carries the same table to the Worker as FEED_ROUTES (a test compares the two).
+# Codes (deploy/cloudflare/routes.js): z Kite, f Fyers, a Angel One, k Kotak. Fyers and Angel One are listed ahead of their segments' feeds before their adapters exist: a
+# feed that holds no price for an instrument is simply skipped, so until they deliver, those segments behave exactly as before (Kite, then Kotak).
+feeds:
+  routes:
+    idx: [z, k]          # indices: Kite, Kotak behind it
+    eq:  [z, k]          # NSE cash prices of the F&O stocks
+    fut: [z, k]          # NSE index and stock futures (and BSE index futures)
+    opt: [z, k]          # index and stock options: Kite carries the bid and offer (Kotak's chain has none)
+    mcx: [f, z, k]       # commodities: Fyers first (owner, 13 Nov 2026), Kite behind it
+    cds: [a, f, z, k]    # currency: the third broker first (Angel One proposed), then Fyers, then Kite
+
 # Holiday lists for the segments whose calendar is not NSE's (quantdesk/markets). Source for both: Zerodha's published holiday
 # calendar, https://zerodha.com/marketintel/holiday-calendar/, read on 6 Nov 2026. Its NSE/BSE list is identical to calendar.holidays
 # below, which cross-checks that page against the NSE circular this file already cites.
