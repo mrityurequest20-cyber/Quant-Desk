@@ -18,9 +18,9 @@ import subprocess
 import sys
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
-# Which workflow's runs to count: the Kite recorder by default; the Fyers feed (fyers-feed.yml) sets GATE_WORKFLOW, so its login has the same one-a-day guard.
+# Which workflow's runs to count: the Kite recorder by default; the Fyers and Angel One feeds set GATE_WORKFLOW, so its login has the same one-a-day guard.
 WORKFLOW = os.environ.get("GATE_WORKFLOW") or "kite-record.yml"
-if WORKFLOW not in ("kite-record.yml", "fyers-feed.yml"):
+if WORKFLOW not in ("kite-record.yml", "fyers-feed.yml", "angel-feed.yml"):
     WORKFLOW = "kite-record.yml"
 
 

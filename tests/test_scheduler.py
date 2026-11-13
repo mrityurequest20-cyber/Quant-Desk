@@ -111,11 +111,11 @@ def test_main_starts_both_recorders_and_a_kite_failure_never_blocks_the_main_one
     monkeypatch.setattr(sch, "_runs", runs)
     monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
     assert sch.main([]) == 0
-    assert calls == [["gh", "workflow", "run", "fyers-feed.yml", "--ref", "main"], ["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"], ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"], ["gh", "workflow", "run", "news.yml", "--ref", "main"]]
+    assert calls == [["gh", "workflow", "run", "fyers-feed.yml", "--ref", "main"], ["gh", "workflow", "run", "angel-feed.yml", "--ref", "main"], ["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"], ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"], ["gh", "workflow", "run", "news.yml", "--ref", "main"]]
     calls.clear()
     monkeypatch.setattr(sch, "_runs", lambda wf: [])
     assert sch.main([]) == 0
-    assert calls == [["gh", "workflow", "run", "kite-record.yml", "--ref", "main"], ["gh", "workflow", "run", "fyers-feed.yml", "--ref", "main"], ["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"],
+    assert calls == [["gh", "workflow", "run", "kite-record.yml", "--ref", "main"], ["gh", "workflow", "run", "fyers-feed.yml", "--ref", "main"], ["gh", "workflow", "run", "angel-feed.yml", "--ref", "main"], ["gh", "workflow", "run", "record-stocks.yml", "--ref", "main"],
                      ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"], ["gh", "workflow", "run", "record.yml", "--ref", "main"], ["gh", "workflow", "run", "news.yml", "--ref", "main"]]
     calls.clear()
     monkeypatch.setattr(sch, "_runs", lambda wf: (_ for _ in ()).throw(sp.CalledProcessError(1, "gh")) if wf == sch.STOCK_WORKFLOW else [])
@@ -130,6 +130,13 @@ def test_the_fyers_feed_is_started_once_a_day_never_again_after_a_failure_and_st
     assert sch.decide(at("2026-10-05 18:00"), [], HOLS, sch.FYERS_MAX_STARTS, sch.FYERS_WINDOW)[0] == "start"    # a late start still covers the MCX evening
     assert sch.decide(at("2026-10-05 20:30"), [], HOLS, sch.FYERS_MAX_STARTS, sch.FYERS_WINDOW)[0] == "wait"
     assert sch.decide(at("2026-10-04 10:00"), [], HOLS, sch.FYERS_MAX_STARTS, sch.FYERS_WINDOW)[0] == "wait"     # a Sunday
+
+
+def test_the_angel_one_feed_is_started_once_a_day_and_not_after_the_currency_afternoon():
+    assert sch.ANGEL_WORKFLOW == "angel-feed.yml" and sch.ANGEL_MAX_STARTS == 1
+    assert sch.decide(at("2026-10-05 09:30"), [], HOLS, sch.ANGEL_MAX_STARTS, sch.ANGEL_WINDOW)[0] == "start"
+    assert sch.decide(at("2026-10-05 09:30"), [run("2026-10-05 08:55", conclusion="failure")], HOLS, sch.ANGEL_MAX_STARTS, sch.ANGEL_WINDOW)[0] == "wait"
+    assert sch.decide(at("2026-10-05 16:30"), [], HOLS, sch.ANGEL_MAX_STARTS, sch.ANGEL_WINDOW)[0] == "wait"
 
 
 def test_the_stock_recorder_is_retried_once_but_never_twice():

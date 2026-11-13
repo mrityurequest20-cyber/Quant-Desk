@@ -298,6 +298,7 @@ export const SLOTS = [
 	{ at: "09:30", days: "trading", run: w11KotakUniverse, check: "W11" },
 	{ at: "09:40", days: "trading", run: ranToday("fyers-feed.yml", "Fyers feed (MCX, currency)", "P2", "W19"), check: "W19" },      // W19 (13 Nov 2026): the Fyers login and feed, docs/FEEDS.md
 	{ at: "20:30", days: "trading", run: ranToday("fyers-feed.yml", "Fyers feed (MCX, currency)", "P2", "W19"), check: "W19" },      // still running for the MCX evening
+	{ at: "09:40", days: "trading", run: ranToday("angel-feed.yml", "Angel One feed (currency)", "P2", "W20"), check: "W20" },      // W20 (13 Nov 2026): the Angel One login and feed, docs/FEEDS.md
 	{ at: "09:50", days: "trading", run: w10LiveFeed, check: "W10" },
 	{ at: "11:00", days: "trading", run: w10LiveFeed, check: "W10" },
 	{ at: "13:00", days: "trading", run: w10LiveFeed, check: "W10" },
