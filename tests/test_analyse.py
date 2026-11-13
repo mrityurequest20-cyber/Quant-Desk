@@ -159,9 +159,11 @@ def test_the_market_read_block_places_no_order_and_touches_no_network_or_page():
     assert not re.search(r"fetch\(|XMLHttpRequest|localStorage|document\.|window\.|innerHTML|paperCall|place_order", b)
 
 
-def test_the_build_tab_shows_the_read_and_the_ideas_above_the_builder_and_says_what_they_are_not():
+def test_the_read_sits_under_the_chain_and_the_ideas_in_the_builder_and_they_say_what_they_are_not():
+    chain = APP[APP.index("function liveChainView"):APP.index("function bdSync")]
+    assert 'fold("read", "Market read"' in chain and "bdRead(ctx)" in chain                       # the market read, folded under an instrument's option chain
     draw = APP[APP.index("function bdDraw"):APP.index("function legsTable2")]
-    assert "bdRead({" in draw and "bdIdeas({" in draw and draw.index("bdRead({") < draw.index('const L = B.tpl === "custom"')        # the read comes before the structure being built
+    assert 'fold("ideas", "Ideas for your view"' in draw and "bdIdeas({" in draw                 # the ideas, folded in the builder
     read = APP[APP.index("function bdRead"):APP.index("function bdIdeas")]
     ideas = APP[APP.index("function bdIdeas"):APP.index("function bdPayoff")].split("// ---- news and the board")[0]
     assert "not forecasts" in read and "this read may be stale" in read and "fair bet" in ideas and "Your edge is your view" in ideas

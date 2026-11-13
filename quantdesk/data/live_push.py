@@ -7,6 +7,13 @@ touches the recording** (every error is caught and counted, nothing is raised in
 It is off unless both `LIVE_URL` (https) and `LIVE_INGEST_TOKEN` are set in the environment. The token is never printed, logged or put in an error.
 Only quotes that CHANGED since the last push are sent, so a quiet market (or a closed one) shows on the app as a growing age instead of a repeated price that
 looks fresh.
+
+Two things ride along for the app's instrument page. An instrument subscribed in Kite's FULL mode sends its order book (`book_from_tick`: the best bid and offer, and five levels
+a side). And when an instrument ticks more than once between two pushes, the push carries the highest and lowest of those ticks (`hi`, `lo`), so the relay's one-minute candle has
+the wick of every trade and not only of the price that happened to be last.
+
+`LivePusher` is also the whole contract for another broker's feed: an adapter builds the same quote dicts under the desk's own instrument names and pushes them with its feed code
+(`src`). Which feed is then shown for which kind of instrument is `feeds.routes` in the config, not code (docs/LIVE.md, "More than one broker").
 """
 from __future__ import annotations
 
@@ -24,6 +31,7 @@ FIELDS = ("ltp", "bid", "ask", "bid_qty", "ask_qty", "vol", "oi", "chg")
 BATCH = 800                                                      # quotes in one POST: a wide universe is sent in several, each far under the relay's size limit
 SEGMENTS = ("idx", "eq", "fut", "bfo", "mcx", "cds", "opt")
 SYMBOL = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")                 # the relay's own rule for a name: one it would refuse is dropped here, so it can never hold up a batch
+PUSH_SOURCES = ("z", "u", "d", "a", "f")                         # the feeds the relay takes a push from, by code (deploy/cloudflare/routes.js PUSH_SOURCES; a test compares the two)
 
 
 def _num(x):
@@ -49,6 +57,33 @@ def quote_from_tick(row: dict, change=None, seg: str | None = None) -> dict | No
     return q
 
 
+DEPTH_LEVELS = 5
+
+
+def book_from_tick(tick: dict) -> dict:
+    """The order book of a Kite FULL-mode tick, for the display: the best bid and offer with their sizes, and up to five levels a side as `d` = {"b": [[price, quantity, orders], ...],
+    "a": [...]}. Empty when the tick carries no book (an index, or a QUOTE-mode tick). A level with no price or no size is left out; a side with nothing is left out."""
+    depth = tick.get("depth") or {}
+    out: dict = {}
+    book: dict = {}
+    for key, side, px, qty in (("b", "buy", "bid", "bid_qty"), ("a", "sell", "ask", "ask_qty")):
+        levels = []
+        for lv in (depth.get(side) or [])[:DEPTH_LEVELS]:
+            if not isinstance(lv, dict):
+                continue
+            p_, q_, n_ = _num(lv.get("price")), _num(lv.get("quantity")), _num(lv.get("orders"))
+            if p_ is not None and p_ > 0 and q_ is not None and q_ > 0:
+                levels.append([p_, q_, n_ if n_ is not None and n_ >= 0 else 0])
+        if levels:
+            book[key] = levels
+            out[px], out[qty] = levels[0][0], levels[0][1]
+    if "bid" in out and "ask" in out and out["bid"] > out["ask"]:      # a crossed book is a bad quote: nothing of it is sent
+        return {}
+    if book:
+        out["d"] = book
+    return out
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """A redirect would make urllib send the Authorization header to another host: refuse it (the relay never redirects)."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -56,12 +91,15 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class LivePusher:
-    def __init__(self, url: str, token: str, interval: float = INTERVAL_S, timeout: float = TIMEOUT_S, opener=None):
+    def __init__(self, url: str, token: str, interval: float = INTERVAL_S, timeout: float = TIMEOUT_S, opener=None, src: str = "z"):
         if not str(url).startswith("https://"):
             raise ValueError("LIVE_URL must be an https URL")
         if not token:
             raise ValueError("no token")
+        if src not in PUSH_SOURCES:
+            raise ValueError("not a feed code the relay takes a push from")
         self.url, self._token, self.interval, self.timeout = url, token, interval, timeout
+        self.src = src                                               # which feed this is, by the relay's one-letter code (deploy/cloudflare/routes.js); "z" (Kite) is the relay's default and is not sent
         self._open = opener or urllib.request.build_opener(_NoRedirect).open
         self.dirty: dict[str, dict] = {}
         self.lock = threading.Lock()
@@ -87,6 +125,9 @@ class LivePusher:
                 self.skipped += 1
                 return
             with self.lock:
+                prev = self.dirty.get(symbol)
+                if prev is not None and "ltp" in quote:              # a second tick before the push: remember the highest and lowest of the window, so the relay's one-minute candle has the true wick
+                    quote = {**quote, "hi": max(prev.get("hi", prev["ltp"]), quote["ltp"]), "lo": min(prev.get("lo", prev["ltp"]), quote["ltp"])}
                 self.dirty[symbol] = quote
 
     def push_once(self) -> bool:
@@ -100,7 +141,8 @@ class LivePusher:
         for i in range(0, len(items), BATCH):
             batch = dict(items[i:i + BATCH])
             try:
-                req = urllib.request.Request(self.url, data=json.dumps({"quotes": batch}).encode(), method="POST",
+                body = {"quotes": batch} if self.src == "z" else {"src": self.src, "quotes": batch}
+                req = urllib.request.Request(self.url, data=json.dumps(body).encode(), method="POST",
                                              headers={"Content-Type": "application/json", "Authorization": "Bearer " + self._token, "User-Agent": "quantdesk-live"})
                 with self._open(req, timeout=self.timeout) as r:
                     if not 200 <= getattr(r, "status", 200) < 300:

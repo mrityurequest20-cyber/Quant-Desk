@@ -57,7 +57,7 @@ def out(tmp_path_factory):
     if shutil.which("node") is None:
         pytest.skip("Node is not installed")
     d = tmp_path_factory.mktemp("agree")
-    for f in ("live.js", "kotak.js", "series.js", "paper.js", "news.js"):
+    for f in ("live.js", "kotak.js", "series.js", "paper.js", "news.js", "candles.js", "routes.js"):
         shutil.copyfile(ROOT / "deploy" / "cloudflare" / f, d / ("live.mjs" if f == "live.js" else f))
     (d / "package.json").write_text('{"type": "module"}', encoding="utf-8")
     (d / "run.mjs").write_text(HARNESS, encoding="utf-8")

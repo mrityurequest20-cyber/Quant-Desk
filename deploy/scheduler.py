@@ -49,7 +49,7 @@ STOCK_WORKFLOW, STOCK_MAX_STARTS = "record-stocks.yml", 2
 # The manual paper runner (paper-desk.yml): carries out the owner's queued paper orders through the paper risk gate. Like the stock recorder, a problem listing or starting it never holds up the main recorder.
 # It is safe to start again after a failure (it restores its account from the relay and the ledger branch, and an order is never filled twice), so it gets three starts a day.
 PAPER_WORKFLOW, PAPER_MAX_STARTS = "paper-desk.yml", 3
-PAPER_WINDOW = (dt.time(8, 25), dt.time(15, 25))     # later than the recorders': a runner that stopped early in the afternoon is started again until 15:25, so the 15:20 sale and the 15:31 settlement still happen
+PAPER_WINDOW = (dt.time(5, 55), dt.time(23, 25))     # the owner's desk hours, 06:00 to midnight IST (13 Nov 2026): first started at 05:55; a runner that stopped early is started again until 23:25, so the 15:20 sale, the 15:31 settlement and the MCX evening are still covered
 # The news digest (news.yml): the desk's public RSS feeds read by its news engine and sent to the relay for the app's News panel. Unlike the recorders it is not once a day: it is started on every tick of
 # the session (the Worker's cron fires this scheduler every ten minutes) if none is queued or running and the last one is at least eight minutes old. A failure here never matters to anything else.
 # News does not keep market hours: it runs around the clock, every day (8 Nov 2026, owner: "nothing is getting missed out"), so a story at night or on a weekend is already in the digest when the market opens.

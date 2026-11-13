@@ -27,7 +27,7 @@ GOOD_INGEST, GOOD_READ = "i" * 32, "r" * 32
 
 # ---- the relay (Node) -----------------------------------------------------------------------------------------------------------------
 def stage(tmp_path):
-    for f in ("live.js", "kotak.js", "series.js", "paper.js", "news.js"):
+    for f in ("live.js", "kotak.js", "series.js", "paper.js", "news.js", "candles.js", "routes.js"):
         shutil.copyfile(ROOT / "deploy" / "cloudflare" / f, tmp_path / ("live.mjs" if f == "live.js" else f))
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
 
@@ -242,7 +242,7 @@ def test_only_changed_quotes_are_sent_and_a_quiet_market_sends_nothing():
     p.update("NIFTY", {"ltp": 2.0})                                      # the newest wins
     p.update("BANKNIFTY", {"ltp": 3.0})
     assert p.push_once() and len(sent) == 1
-    assert json.loads(sent[0].data) == {"quotes": {"NIFTY": {"ltp": 2.0}, "BANKNIFTY": {"ltp": 3.0}}}
+    assert json.loads(sent[0].data) == {"quotes": {"NIFTY": {"ltp": 2.0, "hi": 2.0, "lo": 1.0}, "BANKNIFTY": {"ltp": 3.0}}}      # the newest price, with the highest and lowest tick of the window (the candle's wick)
     assert sent[0].get_header("Authorization") == "Bearer " + "T" * 30 and sent[0].full_url.startswith("https://")
     assert p.push_once() and len(sent) == 1                               # nothing changed: nothing sent, so the relay's age keeps growing
 
@@ -254,7 +254,7 @@ def test_a_failed_push_is_counted_not_raised_keeps_the_quote_and_never_names_the
     p.update("NIFTY", {"ltp": 1.0})
     assert p.push_once() is False and p.failed == 1 and p.dirty == {"NIFTY": {"ltp": 1.0}}
     p.update("NIFTY", {"ltp": 9.0})                                      # a newer tick replaces the unsent one
-    assert p.dirty["NIFTY"] == {"ltp": 9.0}
+    assert p.dirty["NIFTY"] == {"ltp": 9.0, "hi": 9.0, "lo": 1.0}             # and the window's range now spans both ticks
     assert p.last_error == "OSError" and "T" * 30 not in json.dumps(p.stats()) and "x.example" not in json.dumps(p.stats())
     p._open = lambda req, timeout: FakeResp(503)
     assert p.push_once() is False and p.last_error.startswith("HTTPError 503")
@@ -322,7 +322,7 @@ def test_the_service_worker_never_caches_live_prices():
 def test_the_live_tab_is_wired_in():
     app = (ROOT / "quantdesk/web/static/app/app.js").read_text()
     html = (ROOT / "quantdesk/web/static/app/index.html").read_text()
-    assert '["live", "Live"]' in app and 'data-view="live"' in html and "renderLive" in app and "/live/snapshot" in app
+    assert '["live", "Markets"]' in app and 'data-view="live"' in html and "renderLive" in app and "/live/snapshot" in app
     assert "5000" in app and "Authorization" in app and "qd.livekey" in app
 
 

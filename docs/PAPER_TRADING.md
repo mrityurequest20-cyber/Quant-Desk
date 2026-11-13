@@ -10,7 +10,7 @@ Build tab (you)  ->  relay queue  ->  paper runner (GitHub Actions)  ->  risk ga
 ```
 
 * You choose and size a trade in the **Build** tab (the market read, the news and the ideas are above the builder), write **why**, review it, and send it.
-* The **paper runner** (started by the scheduler on trading days, from about 08:30 IST) takes it through the risk gate within seconds, fills it at the **offer** (a buy) or the **bid** (a sell) with the real costs, and writes it into a hash-chained ledger.
+* The **paper runner** (started by the scheduler on trading days at 06:00 IST and running to midnight, in four parts) takes it through the risk gate within seconds, fills it at the **offer** (a buy) or the **bid** (a sell) with the real costs, and writes it into a hash-chained ledger.
 * The **Paper** tab shows the account, the positions with your thesis, the orders and why any was refused, and the **kill switch**.
 
 ## The very first time (once, before the first trade)
@@ -33,7 +33,7 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 | it would risk X (the whole premium plus fees), over 2.5% of equity | too big: fewer lots |
 | … would be lost against a loss budget | the open positions plus this one could take equity under today's 5% floor or the 10% drawdown floor |
 | closed / does not trade today | outside 09:15-15:30 IST or a holiday |
-| expired (waited N s) | the runner was not running for 2 minutes after you sent it (for example the 12:20 hand-over): nothing was bought; send it again |
+| expired (waited N s) | the runner was not running for 2 minutes after you sent it (for example a hand-over at 11:50, 17:40 or 23:30): nothing was bought; send it again |
 | the offer is X, above your limit | the price ran away from what you saw: nothing was bought |
 | new orders wait: the relay could not be given the latest fills | the runner could not save to the relay for 30 s: exits still work |
 
@@ -48,7 +48,8 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 ## If something is red
 
 * **Paper tab says the runner has not reported:** Actions, *Paper runner*: is a run in progress? If the last one is red, open it: the log says why (the relay did not answer, a saved account did not verify, or two histories disagree). Orders wait two minutes and then expire, nothing is filled meanwhile. The scheduler starts it again within ten minutes up to three times a day; or Run workflow by hand.
-* **12:20-12:25:** the runner changes hands (a new job starts). An order sent then expires; send it again.
+* **11:50, 17:40 and 23:30 (a few minutes each):** the runner changes hands (a new job starts). An order sent then expires; send it again.
+* **What trades when:** the runner is up from 06:00 to midnight, but the risk gate decides what can trade: NSE F&O from 09:15 to 15:30. MCX and currency are refused until their costs and holiday calendars are verified in the config; until then the evening is watched, not traded.
 * The ledger backup on the `paper-ledger` branch is **off** (this repository is public: it would show every thesis and position). To turn it on, set the repository variable `PAPER_LEDGER_BACKUP` to `yes`.
 
 More: docs/RECORDING.md ("The paper runner", "Running the paper runner"), docs/LIVE.md (the relay's routes).
@@ -59,13 +60,30 @@ On a day the exchange opens for a special window (Diwali Muhurat trading, 8 Nov 
 
 1. **Kotak universe** (the option chains for the Build tab), any time before the window.
 2. **Kite tick recorder**: `first_until` 15:35, `second_until` 15:36. It logs in to Kite by itself.
-3. **Paper runner**: `handover` 14:05, `until` 15:35, leave `new_account` off.
+3. **Paper runner**: `handover` 14:05, `handover2` 15:35, `handover3` and `until` 15:36, leave `new_account` off.
 
 Nothing else changes: the same risk gate, the same limits, paper money only.
 
+## AUTO v2: the paper desk writing, testing and choosing its own strategies (paper money only)
+
+Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a system which is sophisticated, advanced ... can take any strategy in its place, create its own strategy, permutation, combination, can trade."
+
+* **It writes the strategies.** Every combination of the following, 1,836 strategies in all, each with a short id that says exactly what it is (for example `IC1.fran.1/0.5.d`: an iron condor one strike wide, flat view, rich volatility, any day, the near expiry, take profit at 1R, stop at 0.5R, out by the close):
+  * a market context: direction up, down or flat; volatility rich, cheap or either; any day or the expiry eve;
+  * a structure that suits it: long call or put, debit or credit spreads, iron condor or butterfly, long straddle or strangle;
+  * a width, an expiry (the near one or the next), a take-profit, a stop, and out-by-the-close or up to three sessions.
+* **It tests them.** Whenever a strategy's context holds for an underlying (the four indices and the 20 stocks), it is traded **in shadow**: no money, but at the real bid and offer of every leg, with the desk's real fees, closed by its own exits. Each result is scored in R (profit over the most it could have lost). The record is kept on the private relay, so it grows across sessions.
+* **It chooses.** A strategy trades with paper money only after **8 shadow trades**, and then by **Thompson sampling**: a short record is shrunk towards zero, the best plausible draw wins, and a draw at or below zero does not trade. Capital flows to what has worked and away from what has not.
+* **It trades** through the runner and the risk gate like your orders: one lot, a multi-leg structure as one package, sold options only inside a bounded structure. Its own exits close it, with sold legs bought back first. Your hand-placed orders work beside it.
+* **What it sees:** direction from the same four readings as v1, and the volatility state: the options' at-the-money implied volatility against the volatility the price has shown over the last hour. Your own research found direction hard to forecast and volatility easier; the catalogue lets the record decide which contexts pay.
+* **Where to watch it:** Positions → Strategy lab (the record's leaders, what is live, what it sees now), and the 15:50 push.
+* **Bounds:** the risk gate's loss caps only (2.5% of the account a trade with fees, 5% a day, a 10% drawdown halt). No cap on trades, strategies or positions.
+* **Switches:** off with the repository variable `PAPER_AUTO` = `no`; back to v1 with `PAPER_AUTO_ENGINE` = `v1`.
+* **Not proven to make money.** The shadow record is the evidence it builds; the first days are mostly shadow trades.
+
 ## AUTO v1: the paper desk deciding for itself (paper money only)
 
-You said go on 8 Nov 2026: the desk may take trades by itself beside yours. It is **off unless switched on**: tick `auto` when you run the **Paper runner** by hand, or set the repository variable `PAPER_AUTO` to `yes` so every scheduled run has it. Your hand-placed orders are unchanged and work at the same time.
+You said go on 8 Nov 2026: the desk may take trades by itself beside yours. Since 13 Nov 2026 it is **ON for every run** ("enable the self-trading ... a system which trades itself"): it trades the four index families and the 20 watchlist stocks. To switch it off, set the repository variable `PAPER_AUTO` to `no`. Your hand-placed orders are unchanged and work at the same time.
 
 It looks for **high reward for little risk**, and it is **not an intraday-only system**.
 

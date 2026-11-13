@@ -1,11 +1,14 @@
-# The manual paper runner: carries out the owner's queued PAPER orders through the paper risk gate, all through the session (09:00 to 15:35 IST). PAPER MONEY ONLY.
+# The manual paper runner: carries out the owner's queued PAPER orders through the paper risk gate, 06:00 to midnight IST (owner, 13 Nov 2026: "it will start at 6 a.m. and will
+# close at 12 a.m.", so the whole MCX evening is covered). What can trade at a given hour is the risk gate's to decide (a segment's session and verified costs), not this
+# workflow's: outside those hours the runner only watches, keeps the brakes and reports. PAPER MONEY ONLY.
 #
 # The owner places a paper trade by hand in the app; it waits in the relay's queue (docs/LIVE.md, /paper/*); this job takes it through quantdesk/paper (the risk gate, the broker, the
 # hash-chained ledger) every few seconds and reports back. Nothing here can reach a broker: there is no broker credential in this workflow, and a test pins that.
 #
-# Three jobs, so that the one that holds the relay keys cannot write and the one that can write holds no secret:
-#   morning / afternoon   hold LIVE_READ_TOKEN and LIVE_INGEST_TOKEN in the one step that runs the runner; `contents: read`. A hosted job may run six hours and the session is longer,
-#                         so the day is two halves (hand-over at 12:20). The account lives on the relay (authoritative) and is restored at the start of each half.
+# Five jobs, so that the ones that hold the relay keys cannot write and the one that can write holds no secret:
+#   morning / afternoon / evening / night   hold LIVE_READ_TOKEN and LIVE_INGEST_TOKEN in the one step that runs the runner; `contents: read`. A hosted job may run six hours and
+#                         the day is eighteen, so it is four parts (hand-overs at 11:50, 17:40 and 23:30 IST; the afternoon part holds the 15:20 sale and the 15:31 settlement).
+#                         The account lives on the relay (authoritative) and is restored at the start of each part.
 #   publish               `contents: write`, NO secret: verifies the saved account and ADDS it to the `paper-ledger` branch as a new commit (a backup and an audit trail). It refuses an
 #                         account that does not continue the one already on the branch, and it never force-pushes.
 # Started by deploy/scheduler.py like the other recorders (best-effort), or by hand. One run at a time: two runners on one account would be dangerous.
@@ -15,13 +18,19 @@ on:
   workflow_dispatch:
     inputs:
       handover:
-        description: "The morning half hands over to the afternoon half at (HH:MM IST)"
-        default: "12:20"
+        description: "The morning part hands over to the afternoon part at (HH:MM IST)"
+        default: "11:50"
+      handover2:
+        description: "The afternoon part hands over to the evening part at (HH:MM IST)"
+        default: "17:40"
+      handover3:
+        description: "The evening part hands over to the night part at (HH:MM IST)"
+        default: "23:30"
       until:
-        description: "The afternoon half stops at (HH:MM IST)"
-        default: "15:35"
+        description: "The night part stops at (HH:MM IST)"
+        default: "23:59"
       auto:
-        description: "Switch AUTO v1 on for this run: the paper desk also decides for itself (one lot a trade, no cap on how many, through the same risk gate and its loss caps). Paper money only. Also on whenever the repository variable PAPER_AUTO is yes."
+        description: "(AUTO is now ON for every run unless the repository variable PAPER_AUTO is no.) Switch AUTO v1 on for this run: the paper desk also decides for itself (one lot a trade, no cap on how many, through the same risk gate and its loss caps). Paper money only. Also on whenever the repository variable PAPER_AUTO is yes."
         type: boolean
         default: false
       new_account:
@@ -43,10 +52,12 @@ defaults:
 env:
   PYTHONUNBUFFERED: "1"
   TZ: Asia/Kolkata
-  HANDOVER: ${{ inputs.handover || '12:20' }}
-  UNTIL: ${{ inputs.until || '15:35' }}
+  HANDOVER: ${{ inputs.handover || '11:50' }}
+  HANDOVER2: ${{ inputs.handover2 || '17:40' }}
+  HANDOVER3: ${{ inputs.handover3 || '23:30' }}
+  UNTIL: ${{ inputs.until || '23:59' }}
   NEW_ACCOUNT: ${{ inputs.new_account && 'yes' || 'no' }}
-  PAPER_AUTO: ${{ (inputs.auto || vars.PAPER_AUTO == 'yes') && 'yes' || 'no' }}
+  PAPER_AUTO: ${{ (inputs.auto || vars.PAPER_AUTO != 'no') && 'yes' || 'no' }}       # ON by the owner's order of 13 Nov 2026 ("enable the self-trading ... a system which trades itself"); the repository variable PAPER_AUTO set to no switches it off
 
 jobs:
   morning:
@@ -113,12 +124,12 @@ jobs:
         run: |
           mkdir -p runtime/paper/ledger
           if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
-      - name: Run the paper runner to the close
+      - name: Run the paper runner through the NSE close to the evening hand-over
         env:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
-        run: python -m quantdesk paper run --until "$UNTIL"
+        run: python -m quantdesk paper run --until "$HANDOVER2"
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -128,10 +139,88 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
 
-  publish:
+  evening:
     needs: afternoon
+    if: ${{ !cancelled() && needs.afternoon.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        continue-on-error: true
+        with:
+          ref: paper-ledger
+          path: ledger
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Put the ledger branch's copy of the account in place
+        run: |
+          mkdir -p runtime/paper/ledger
+          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+      - name: Run the paper runner through the MCX evening to the night hand-over
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}
+          LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
+        run: python -m quantdesk paper run --until "$HANDOVER3"
+      - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
+        if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-ledger-evening
+          path: runtime/paper/ledger/account.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+  night:
+    needs: evening
+    if: ${{ !cancelled() && needs.evening.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        continue-on-error: true
+        with:
+          ref: paper-ledger
+          path: ledger
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Put the ledger branch's copy of the account in place
+        run: |
+          mkdir -p runtime/paper/ledger
+          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+      - name: Run the paper runner to midnight
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}
+          LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
+        run: python -m quantdesk paper run --until "$UNTIL"
+      - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
+        if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-ledger-night
+          path: runtime/paper/ledger/account.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+  publish:
+    needs: night
     # Off unless the owner sets the repository variable PAPER_LEDGER_BACKUP to yes: this repository is PUBLIC, so the branch, the artifacts and the logs would show the paper account (every thesis, position and result) to anyone.
-    if: ${{ !cancelled() && needs.afternoon.result != 'skipped' && vars.PAPER_LEDGER_BACKUP == 'yes' }}
+    if: ${{ !cancelled() && needs.night.result != 'skipped' && vars.PAPER_LEDGER_BACKUP == 'yes' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -152,16 +241,16 @@ jobs:
       - name: Take the longest saved account that verifies
         run: |
           # no token in this step: the repository code runs here (hash chain, replay of every fill, flags)
-          m=art/paper-ledger-morning/account.json; a=art/paper-ledger-afternoon/account.json; pick=""
-          for f in "$m" "$a"; do
+          pick=""
+          for part in morning afternoon evening night; do                                   # the parts in the order they ran
+            f=art/paper-ledger-$part/account.json
             [ -f "$f" ] || continue
             python -m quantdesk paper verify --file "$f" || { echo "::error::$f does not verify"; exit 1; }
+            if [ -z "$pick" ]; then pick="$f"
+            elif python -m quantdesk paper verify --file "$f" --extends "$pick" > /dev/null; then pick="$f"              # a later part continues the earlier one (the usual case)
+            elif python -m quantdesk paper verify --file "$pick" --extends "$f" > /dev/null; then :                      # the earlier one is the longer: keep it
+            else echo "::error::$pick and $f are two different histories"; exit 1; fi
           done
-          if [ -f "$m" ] && [ -f "$a" ]; then
-            if python -m quantdesk paper verify --file "$a" --extends "$m" > /dev/null; then pick="$a"                 # the afternoon continues the morning (the usual case)
-            elif python -m quantdesk paper verify --file "$m" --extends "$a" > /dev/null; then pick="$m"               # the morning is the longer
-            else echo "::error::the morning's and the afternoon's accounts are two different histories"; exit 1; fi
-          elif [ -f "$a" ]; then pick="$a"; elif [ -f "$m" ]; then pick="$m"; fi
           if [ -z "$pick" ]; then echo "::error::the runner saved no account to publish"; exit 1; fi
           cp "$pick" "$RUNNER_TEMP/account.json"
           echo "publishing $pick"

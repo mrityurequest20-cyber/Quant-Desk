@@ -319,7 +319,9 @@ def cmd_kite_record(cfg, a):
         print("kite-record: no Kite key or no token for today (the 'Kite token' workflow was not run); nothing recorded")
         return
     try:
-        rep = K.run_session(Path(a.out), a.until, with_reference=a.with_reference)
+        watch = cfg.get("desk.watchlist", {}) or {}                 # what the owner trades: those instruments and every option on the board are subscribed with their order book (live view only)
+        rep = K.run_session(Path(a.out), a.until, with_reference=a.with_reference, watchlist=watch if isinstance(watch, dict) else {},
+                            stock_steps=int(cfg.get("desk.stock_option_steps", 8) or 8))
     except (K.KiteRecordError, ValueError) as exc:
         raise SystemExit(f"kite-record: {exc}") from None
     except ImportError as exc:                                     # the library did not install: that is a broken setup, not a quiet day

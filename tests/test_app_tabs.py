@@ -16,11 +16,12 @@ HTML = (ROOT / "quantdesk/web/static/app/index.html").read_text()
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
 
 
-def test_the_app_has_exactly_six_tabs_and_a_section_for_each():
+def test_the_app_has_exactly_five_tabs_and_a_section_for_each():
     tabs = re.search(r"const TABS = (\[.*?\]\]);", APP).group(1)
-    assert re.findall(r'\["(\w+)", "(\w+)"\]', tabs) == [("live", "Live"), ("build", "Build"), ("paper", "Paper"), ("today", "Today"), ("trades", "History"), ("data", "Data")]
-    assert re.findall(r'<section data-view="(\w+)"', HTML) == ["trades", "live", "build", "paper", "today", "data"]
-    assert "repeat(6,1fr)" in HTML and "repeat(7" not in HTML
+    assert re.findall(r'\["(\w+)", "(\w+)"\]', tabs) == [("live", "Markets"), ("paper", "Positions"), ("today", "Today"), ("trades", "History"), ("data", "Data")]
+    assert re.findall(r'<section data-view="(\w+)"', HTML) == ["trades", "live", "paper", "today", "data"]
+    assert "repeat(5,1fr)" in HTML and "repeat(6,1fr)" not in HTML
+    assert "renderBuild" not in APP and 'data-view="build"' not in HTML                     # the builder is an instrument's Strategy view now, not a tab of its own
     assert 'SUBS = { trades: [["history", "History"], ["performance", "Performance"], ["reviews", "Reviews"]] }' in APP     # no open-positions screen: nothing trades
 
 
@@ -129,7 +130,7 @@ def test_the_data_tab_says_what_is_recorded_and_what_is_not():
 
 
 def test_the_pill_follows_the_key_at_once_and_a_closed_market_says_so():
-    save = APP[APP.index("function liveKeyForm"):APP.index("function liveRows")]
+    save = APP[APP.index("function liveKeyForm"):APP.index("function watchlist()")]
     assert "renderLive(); pollHealth(); }" in save                                  # saving a key refreshes the pill now, not at the next 10 s poll
     forget = APP[APP.index('"Forget this key"') - 330:APP.index('"Forget this key"')]
     assert "L.health = null" in forget and "setStatus()" in forget                  # forgetting it clears the old health and the pill

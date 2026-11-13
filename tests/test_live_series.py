@@ -15,7 +15,7 @@ READ, INGEST = "r" * 32, "i" * 32
 
 
 def run(tmp_path, body: str) -> dict:
-    for f in ("live.js", "kotak.js", "series.js", "paper.js", "news.js"):
+    for f in ("live.js", "kotak.js", "series.js", "paper.js", "news.js", "candles.js", "routes.js"):
         shutil.copyfile(ROOT / "deploy" / "cloudflare" / f, tmp_path / ("live.mjs" if f == "live.js" else f))
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
     (tmp_path / "t.mjs").write_text((HEAD + body + "\nconsole.log(JSON.stringify(out));\n").replace("__R__", READ).replace("__I__", INGEST), encoding="utf-8")

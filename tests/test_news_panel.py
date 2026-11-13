@@ -98,6 +98,8 @@ def test_the_panel_shows_headlines_as_text_and_links_only_when_https_and_says_wh
     assert "a hint, not a view" in panel and "the news job may not be running" in panel and "Loading the news" in panel
     load = APP[APP.index("async function newsLoad"):APP.index("function bdNews")]
     assert load.count("fetch(") == 1 and 'fetch("/news"' in load and "method" not in load                                       # one read of one route; nothing is sent
-    draw = APP[APP.index("function bdDraw"):APP.index("function legsTable2")]
-    assert draw.index("bdRead({") < draw.index("bdNews(B, data)") < draw.index("bdIdeas({")
-    assert "newsLoad(key)" in APP[APP.index("async function renderBuild"):] and "60000" in APP[APP.index("async function renderBuild"):]      # at most once a minute
+    chain = APP[APP.index("function liveChainView"):APP.index("function bdSync")]
+    assert chain.index("bdRead(ctx)") < chain.index("bdNews(S.bd, data)")                       # under an instrument's option chain: the read, the flow, then the news
+    assert 'safe("news panel"' in chain                                                         # a story the panel cannot read never takes the chain down with it
+    live = APP[APP.index("async function renderLive()"):APP.index("/* @@builder:start */")]
+    assert "newsLoad(key)" in live and "60000" in live                                           # at most once a minute

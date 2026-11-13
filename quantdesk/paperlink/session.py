@@ -67,6 +67,8 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     ledger_pushed, last_full, last_sum, pending, fails = -1, 0.0, 0.0, [], 0
     account.save(ledger_path)
     fp_disk = fingerprint(account)
+    if auto is not None and hasattr(auto, "load"):                    # AUTO v2: its strategies' shadow record, kept on the relay across sessions
+        log(f"paper: AUTO v2 strategy record: {auto.load(relay)}")
     try:                                                              # the account goes to the relay once before the first cycle, so even a session with no cycles (the very first, by hand, out of hours) leaves it there
         snap0 = relay.snapshot()
         now0 = Runner.server_now(snap0)
@@ -111,8 +113,10 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             except Exception as e:                                     # noqa: BLE001 - a fault in the autopilot must never stop the runner or the brakes
                 mine = []
                 log(f"paper: the autopilot failed this cycle ({type(e).__name__}); the owner's orders and the brakes go on")
+            if hasattr(auto, "save"):
+                auto.save(relay, time.monotonic())                     # at most every two minutes, and only when the record changed
             for o in mine:
-                log(f"paper: auto proposes {o['side']} {o['symbol']}" + (f" ({o['_why']})" if o.get('_why') else ""))
+                log(f"paper: auto proposes {o['side']} {o.get('symbol') or '+'.join(l['symbol'] for l in o.get('legs', []))}" + (f" ({o['_why']})" if o.get('_why') else ""))
             orders = orders + mine
         try:
             rep = rn.step(snap, orders, kill, clock())
@@ -130,7 +134,10 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             full = fp[0] != ledger_pushed or (fp != fp_pushed and mono - last_full >= FULL_EVERY_S)      # the whole account: at once for a new fill, within a minute for the figures the brakes use
             if full or mono - last_sum > 10:
                 try:
-                    relay.put_state(rn.summary(snap, now), account_json(account) if full else None)
+                    summ = rn.summary(snap, now)
+                    if auto is not None and hasattr(auto, "summary"):
+                        summ["lab"] = auto.summary()                    # the Strategy lab panel in the app
+                    relay.put_state(summ, account_json(account) if full else None)
                     last_sum = mono
                     if full:
                         ledger_pushed, fp_pushed, last_full = fp[0], fp, mono
@@ -157,6 +164,8 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
                     log(f"paper: could not report order {res['id']} ({e}); will retry")
         sleep(max(0.0, every_s - (time.monotonic() - t0)))
     account.save(ledger_path)
+    if auto is not None and hasattr(auto, "save"):
+        auto.save(relay, time.monotonic(), force=True)
     log(f"paper: session ended; {len(account.ledger)} ledger rows")
     return 0
 

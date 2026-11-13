@@ -463,19 +463,20 @@ def test_the_scan_itself_catches_what_it_is_meant_to(tmp_path):
 def test_the_config_carries_loss_caps_only(cfg):
     p = cfg.get("paper")
     assert set(p) == {"capital", "risk_per_trade", "daily_loss_limit", "drawdown_halt", "max_quote_age_s", "cost_verified_segments", "kill_switch_file",
-                      "underlyings", "allow_short_legs"}
+                      "underlyings", "allow_short_legs", "stock_options"}
+    assert set(p["stock_options"]) == {"lots", "steps"}                                 # contract facts only (lots per expiry, strike steps): no cap on trades, positions or size hides there
     assert p["allow_short_legs"] is True                                        # sold options, only as legs of bounded packages, are ON by the owner's written order (8 Nov 2026)
     assert p["risk_per_trade"] == 0.025 and p["daily_loss_limit"] == 0.05 and p["drawdown_halt"] == 0.10 and p["cost_verified_segments"] == ["nse_fo"]
 
 
 # ---- a mislabelled order cannot dodge the costs and hours checks (B3) ---------------------------------------------------------------
-@pytest.mark.parametrize("under", ["CRUDEOIL", "USDINR", "SENSEX", "GOLD", "RELIANCE"])
+@pytest.mark.parametrize("under", ["CRUDEOIL", "USDINR", "SENSEX", "GOLD", "IDEA"])       # IDEA: an F&O stock that is not on the paper desk's list
 def test_an_underlying_that_does_not_trade_in_the_labelled_segment_is_refused(desk, under):
     d, row = buy(desk, o=order(inst=opt(under=under)))                             # labelled nse_fo
     assert not d.allowed and row is None and any("not on the list of underlyings" in r for r in d.reasons), d.reasons
 
 
-@pytest.mark.parametrize("under", ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "nifty"])
+@pytest.mark.parametrize("under", ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "nifty", "RELIANCE", "M&M", "BAJAJ-AUTO"])      # the stocks by the owner's order of 13 Nov 2026
 def test_the_listed_nse_indices_trade(desk, under):
     assert buy(desk, o=order(inst=opt(under=under)))[0].allowed
 

@@ -2,6 +2,10 @@
 //
 //   POST /live/ingest    the recorder (GitHub Actions) sends {"quotes": {"NIFTY": {"ltp": ..., "bid": ..., ...}}}; needs LIVE_INGEST_TOKEN
 //   GET  /live/snapshot  the app reads the latest quote of every symbol, each with its age in seconds; needs LIVE_READ_TOKEN
+//   GET  /live/candles   one instrument's page: today's one-minute candles (candles.js) and its order book, five levels a side; needs LIVE_READ_TOKEN
+//
+// A push may name the feed it comes from ({"src": "u", "quotes": ...}; routes.js lists the codes; none means Kite). Which feed is SHOWN for which kind of instrument is the route
+// table (routes.js, the Worker variable FEED_ROUTES): the first feed of the route that is fresh, so a dead feed is stepped over by itself.
 //
 // DISPLAY ONLY. Nothing here is read by the paper desk or any trading code, and nothing that arrives here can place an order. The prices are
 // Zerodha's licensed market data, so the read endpoint is private: it answers only to the owner's key, never to the public site's visitors, and the
@@ -13,8 +17,10 @@
 
 import { KotakPoller, istParts, runCycle, inSession, SPECIAL_SESSIONS } from "./kotak.js";
 import { Series, shardKeys, FLUSH_MS } from "./series.js";
-import { PaperBook, cleanOrder, cleanResult, cleanState } from "./paper.js";
+import { PaperBook, cleanOrder, cleanResult, cleanState, MAX_LAB } from "./paper.js";
 import { NewsBook } from "./news.js";
+import { Candles, candleKeys, cleanDepth } from "./candles.js";
+import { SOURCES, PUSH_SOURCES, parseRoutes, pick, rank, freshest } from "./routes.js";
 
 const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 quotes is about 100 KB)
 const MAX_SYMBOLS = 3000;               // in one push
@@ -22,6 +28,9 @@ const MAX_TOTAL = 6000;                 // symbols the board will ever hold: a s
 const SYMBOL = /^[A-Za-z0-9&_.:-]{1,40}$/;
 const SEGMENTS = new Set(["idx", "eq", "fut", "bfo", "mcx", "cds", "opt"]);
 const NUMBERS = ["ltp", "bid", "ask", "bid_qty", "ask_qty", "vol", "oi", "chg"];
+const WINDOW = ["hi", "lo"];            // the highest and lowest tick since the feed's previous push: they shape the minute's candle and are never stored on the quote or shown in the snapshot
+const MAX_DEPTH = 2000;                 // instruments whose order book is held (the ones a feed sends five levels for)
+const DEPTH_KEEP_MS = 86400e3;          // a book not refreshed for a day is dropped; the reply always carries its age, so an old one is never mistaken for a live one
 const MIN_SECRET = 24;                  // characters
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "x-robots-tag": "noindex" };
@@ -101,12 +110,17 @@ export function clean(body) {
 		if (!SYMBOL.test(name) || !q || typeof q !== "object") { dropped += 1; continue; }
 		const row = {};
 		for (const k of NUMBERS) if (typeof q[k] === "number" && Number.isFinite(q[k])) row[k] = q[k];
+		for (const k of WINDOW) if (typeof q[k] === "number" && Number.isFinite(q[k]) && q[k] > 0) row[k] = q[k];
+		const depth = q.d === undefined ? null : cleanDepth(q.d);                    // five levels a side, re-checked; a malformed book is dropped and the quote kept
+		if (depth) row.d = depth;
 		if (typeof q.t === "string" && q.t.length <= 40) row.t = q.t;                // the exchange's timestamp, shown as is
 		if (typeof q.s === "string" && SEGMENTS.has(q.s)) row.s = q.s;               // what kind of instrument: index, stock, future, option, MCX, currency
 		if (!("ltp" in row)) { dropped += 1; continue; }                               // a quote without a last price is not a quote
 		out[name] = row;
 	}
-	return Object.keys(out).length ? { quotes: out, dropped } : null;
+	if (!Object.keys(out).length) return null;
+	if (body.src !== undefined && !(typeof body.src === "string" && PUSH_SOURCES.has(body.src))) return null;      // a push that names a feed must name one that pushes: never the polled one, never an unknown code
+	return { quotes: out, dropped, ...(body.src !== undefined ? { src: body.src } : {}) };
 }
 
 // What the Kotak poller is told to fetch: [{n: name, s: segment, g: Kotak segment, t: token or index name, one?}] and the option chains [{u, x, e}]. Anything malformed is skipped.
@@ -205,6 +219,14 @@ export async function handleLive(request, env) {
 		if (!SYMBOL.test(name)) return reply(400, { error: "not an instrument name" });
 		return stub.fetch("https://live/series?name=" + encodeURIComponent(name));
 	}
+	if (url.pathname === "/live/candles") {
+		if (request.method !== "GET") return reply(405, { error: "GET only" });
+		if (!(await same(bearer(request), String(env.LIVE_READ_TOKEN).trim()))) return reply(401, { error: "no" });
+		const name = url.searchParams.get("name") || "", since = url.searchParams.get("since") || "";
+		if (!SYMBOL.test(name)) return reply(400, { error: "not an instrument name" });
+		if (since && !/^\d{1,9}$/.test(since)) return reply(400, { error: "since is a whole number of minutes" });
+		return stub.fetch("https://live/candles?name=" + encodeURIComponent(name) + (since ? "&since=" + since : ""));
+	}
 	return reply(404, { error: "no such live path" });
 }
 
@@ -213,6 +235,7 @@ export async function handleLive(request, env) {
 const PAPER_ROUTES = {
 	"POST /paper/order": "read", "POST /paper/kill": "read",
 	"GET /paper/queue": "ingest", "POST /paper/result": "ingest", "POST /paper/state": "ingest",
+	"POST /paper/lab": "ingest", "GET /paper/lab": "ingest",             // AUTO v2's strategy record: the runner's alone
 };
 async function handlePaper(request, env, url, stub) {
 	const route = request.method + " " + url.pathname;
@@ -228,6 +251,7 @@ async function handlePaper(request, env, url, stub) {
 		try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
 		if (route === "POST /paper/order" && !cleanOrder(body)) return reply(400, { error: "not a valid order" });
 		if (route === "POST /paper/result" && !cleanResult(body)) return reply(400, { error: "not a valid result" });
+		if (route === "POST /paper/lab" && !(body && typeof body.lab === "string" && body.lab.length <= MAX_LAB)) return reply(400, { error: "not a valid strategy record" });
 		let okState = true;
 		if (route === "POST /paper/state") { try { okState = !!cleanState(body); } catch (e) { okState = false; } }                    // absurdly deep nesting is a refusal, not an error
 		if (!okState) return reply(400, { error: "not a valid state" });
@@ -305,6 +329,10 @@ export class LiveBoard {
 		this.news = new NewsBook(state);            // the news digest (news.js)
 		this.book = new PaperBook(state);           // the paper-order queue and account (paper.js): same object, its own storage keys
 		this.series = new Series();                 // one close a minute per instrument, for the app's chart (series.js); stored in shards
+		this.candles = new Candles();               // today's one-minute candles of everything but options (candles.js); stored in shards
+		this.candleSrc = new Map();                 // name -> {src, at}: the feed drawing its candles now (two feeds' volume counters must never be mixed in one chart)
+		this.depth = new Map();                     // name -> {src, at, b, a}: the latest order book a feed sent, five levels a side; memory only
+		this.routes = parseRoutes(this.env.FEED_ROUTES);      // which feed is shown for which kind of instrument (routes.js); null = the freshest of any
 		this.lastFlush = 0;
 		this.seq = 0;
 		this.now = () => Date.now();
@@ -320,6 +348,7 @@ export class LiveBoard {
 			const u = cleanUniverse(await state.storage.get("universe"));                    // re-validated on every reload: storage is not trusted either
 			if (u) this.universe = u;
 			try { this.series.load(await state.storage.get(shardKeys())); } catch (e) { /* no chart history: the board still starts */ }
+			try { this.candles.load(await state.storage.get(candleKeys())); } catch (e) { /* no candles yet today: they build again from here */ }
 			try {                                                                            // the tally survives an eviction or a deploy: a restart must not cost the day its number
 				const ag = cleanAgree(await state.storage.get("agree"));
 				if (ag) { this.agree = ag.today; this.agreeDays = ag.days; }
@@ -339,12 +368,14 @@ export class LiveBoard {
 		let gone = 0;
 		const today = Number(istParts(now).date.replace(/-/g, ""));
 		for (const [name, e] of this.quotes) {
-			if (expiredOption(name, today)) { this.quotes.delete(name); gone += 1; continue; }        // an expired contract has no price to show, and at a roll its names must not keep the room the next expiry needs
-			for (const s of ["z", "k"]) if (e[s] && now - e[s].at > STALE_MS) delete e[s];
-			if (!e.z && !e.k) { this.quotes.delete(name); gone += 1; }
+			if (expiredOption(name, today)) { this.quotes.delete(name); this.depth.delete(name); this.candleSrc.delete(name); gone += 1; continue; }        // an expired contract has no price to show, and at a roll its names must not keep the room the next expiry needs
+			for (const s of Object.keys(e)) if (now - e[s].at > STALE_MS) delete e[s];
+			if (!Object.keys(e).length) { this.quotes.delete(name); this.depth.delete(name); this.candleSrc.delete(name); gone += 1; }
 		}
+		for (const [name, d] of this.depth) if (now - d.at > DEPTH_KEEP_MS) this.depth.delete(name);
 		this.k.pruned += gone;
 		this.series.prune(now);
+		this.candles.prune(now);
 		return gone;
 	}
 
@@ -357,14 +388,38 @@ export class LiveBoard {
 			e = {};
 			this.quotes.set(name, e);
 		}
-		const { lst, ...quote } = q;
+		const { lst, hi, lo, d, ...quote } = q;
 		const prev = e[src];
 		if (prev && onlyIfChanged && sameQuote(prev, quote)) { e[src] = { ...prev, ...quote, at: prev.at }; return true; }     // unchanged: it keeps its arrival time, and any field it lacked
 		let at = now;
 		if (!prev && Number.isFinite(lst)) at = Math.min(now, Math.max(lst, now - FIRST_SEEN_MS));      // first sight of a price Kotak itself dates: a last-known price is as old as it is
 		e[src] = { ...quote, at };
 		this.series.add(name, now, quote.ltp);
+		const seg = this.label(e), route = this.routes ? this.routes[seg] : undefined;
+		const leads = (cur) => !(cur && cur.src !== src && now - cur.at <= FRESH_S * 1000 && rank(cur.src, route) <= rank(src, route));      // false while another feed, alive and at least as preferred, already holds it
+		if (!(route && !route.includes(src))) {                                             // a feed that is not shown for this kind draws neither its chart nor its book
+			if (seg !== "opt" && !OPT_EXPIRY.test(name)) {                                  // options keep the line chart (series.js): thousands of contracts, most of them quiet
+				const cur = this.candleSrc.get(name);
+				if (leads(cur)) { this.candleSrc.set(name, { src, at: now }); this.candles.add(name, now, { ltp: quote.ltp, hi, lo, vol: quote.vol }, !!cur && cur.src !== src); }
+			}
+			if (d && (this.depth.has(name) || this.depth.size < MAX_DEPTH) && leads(this.depth.get(name))) this.depth.set(name, { src, at: now, b: d.b, a: d.a });
+		}
 		return true;
+	}
+
+	// What kind of instrument a row is: one label per instrument, Kite's first, so a row cannot hop between filters (or between routes) as feeds come and go.
+	label(e) {
+		if (e.z && e.z.s) return e.z.s;
+		if (e.k && e.k.s) return e.k.s;
+		for (const s of Object.keys(e)) if (e[s].s) return e[s].s;
+		return undefined;
+	}
+
+	// One instrument's page: today's candles (from `since` on) and its order book. The book carries its own age: the app dims an old one.
+	instrument(name, since, now) {
+		const d = this.depth.get(name), c = this.candleSrc.get(name);
+		return { name, ...this.candles.view(name, since), prev_close: this.series.view(name).prev_close, candle_src: c ? c.src : null,
+			depth: d ? { b: d.b, a: d.a, src: d.src, age_s: round1(Math.max(0, (now - d.at) / 1000)) } : null };
 	}
 
 	async arm() {
@@ -444,18 +499,18 @@ export class LiveBoard {
 		const quotes = Object.create(null);
 		let newest = null;
 		for (const [name, e] of this.quotes) {
-			const z = e.z, k = e.k;
-			const az = z ? (now - z.at) / 1000 : Infinity, ak = k ? (now - k.at) / 1000 : Infinity;
-			const useZ = az <= ak;
-			const p = useZ ? z : k, o = useZ ? k : z;
-			const age = Math.max(0, Math.min(az, ak));
-			const { at, ...rest } = p;
-			const out = { ...rest, age_s: round1(age), src: useZ ? "z" : "k" };
-			const label = (z && z.s) || (k && k.s);                                           // one label per instrument, Kite's first, so a row cannot hop between filters
+			const have = Object.keys(e).map((src) => ({ src, age: Math.max(0, (now - e[src].at) / 1000) }));
+			if (!have.length) continue;
+			const label = this.label(e);                                                      // one label per instrument, Kite's first, so a row cannot hop between filters
+			const use = pick(have, this.routes ? this.routes[label] : undefined, FRESH_S);    // the route's first fresh feed; with no route, the freshest (routes.js)
+			const p = e[use], age = have.find((x) => x.src === use).age;
+			const rest = have.filter((x) => x.src !== use), oh = rest.length ? freshest(rest) : null, o = oh ? e[oh.src] : null;
+			const { at, ...rest0 } = p;
+			const out = { ...rest0, age_s: round1(age), src: use };
 			if (label) out.s = label;
 			if (o) {
-				const ao = Math.max(0, useZ ? ak : az);
-				out.alt = { src: useZ ? "k" : "z", ltp: o.ltp, age_s: round1(ao) };
+				const ao = oh.age;
+				out.alt = { src: oh.src, ltp: o.ltp, age_s: round1(ao) };
 				if (ao <= FRESH_S && age <= FRESH_S && p.ltp > 0 && o.ltp > 0) {
 					const d = (Math.abs(p.ltp - o.ltp) / p.ltp) * 100;
 					if (d > (p.s === "opt" ? TOL.opt : TOL.other)) out.x = round2(d);          // the two brokers disagree by more than a spread can explain
@@ -475,8 +530,9 @@ export class LiveBoard {
 		const src = { z: { n: 0, newest: null }, k: { n: 0, newest: null } };
 		let both = 0, disagree = 0;
 		for (const e of this.quotes.values()) {
-			for (const s of ["z", "k"]) if (e[s]) {
+			for (const s of Object.keys(e)) {
 				const a = (now - e[s].at) / 1000;
+				if (!src[s]) src[s] = { n: 0, newest: null };
 				src[s].n += 1;
 				if (src[s].newest === null || a < src[s].newest) src[s].newest = a;
 			}
@@ -493,6 +549,9 @@ export class LiveBoard {
 				cycles: k.cycles, consecutive_auth: k.consecutive_auth, calls_ok: k.calls_ok, calls_failed: k.calls_failed, planned_calls: k.total_calls, errors: k.errors, last_error: k.last_error, refused: k.refused, pruned: k.pruned,
 				universe: this.universe ? { asof: this.universe.asof, quotes: this.universe.quotes.length, chains: this.universe.chains.length } : null },
 			both, disagree,
+			sources: Object.fromEntries(Object.entries(src).map(([c, x]) => [c, { name: SOURCES[c] || c, n: x.n, newest_age_s: x.newest === null ? null : round1(x.newest) }])),      // every feed on the board, by code
+			routes: this.routes,                                                                  // which feed is shown for which kind of instrument; null = the freshest of any
+			charts: { candle_names: this.candles.m.size, candles: this.candles.total, books: this.depth.size },
 			agreement: { today: this.agree, days: this.agreeDays },
 		};
 	}
@@ -502,6 +561,7 @@ export class LiveBoard {
 		if (now - this.lastFlush < FLUSH_MS) return;
 		this.lastFlush = now;
 		try { await this.series.flush(this.state.storage); } catch (e) { /* the shards stay marked and the next flush tries again */ }
+		try { await this.candles.flush(this.state.storage); } catch (e) { /* likewise */ }
 		try { await this.state.storage.put("agree", { today: this.agree, days: this.agreeDays }); } catch (e) { /* the in-memory tally still stands */ }
 	}
 
@@ -515,10 +575,11 @@ export class LiveBoard {
 		if (path === "/news" || path === "/news/ingest") return this.news.handle(request, url, now);              // the news digest (news.js)
 		if (path.startsWith("/paper/")) return this.book.handle(request, url, now);              // the paper-order queue (paper.js)
 		if (request.method === "POST" && path === "/push") {                                    // Kite, from the recorder
-			const { quotes, dropped } = await request.json();
+			const { quotes, dropped, src } = await request.json();
+			const from = typeof src === "string" && PUSH_SOURCES.has(src) ? src : "z";            // no feed named: Kite, as before the board knew more than one pusher
 			let added = 0, refused = 0;
 			for (const [name, q] of Object.entries(quotes)) {
-				if (this.put(name, "z", q, false)) added += 1; else refused += 1;
+				if (this.put(name, from, q, false)) added += 1; else refused += 1;
 			}
 			this.seq += 1;
 			return reply(200, { ok: true, seq: this.seq, n: added, refused, dropped: dropped || 0 });
@@ -542,6 +603,10 @@ export class LiveBoard {
 				try { await this.state.storage.put("lastAsk", now); } catch (e) { /* the in-memory throttle still holds */ }
 			}
 			return reply(200, { need });
+		}
+		if (path === "/candles") {
+			const name = url.searchParams.get("name") || "", since = Number(url.searchParams.get("since") || NaN);
+			return reply(200, SYMBOL.test(name) ? this.instrument(name, since, now) : { name, candles: [], exact: false, prev_close: null, candle_src: null, depth: null });
 		}
 		if (path === "/series") {
 			const name = url.searchParams.get("name") || "";

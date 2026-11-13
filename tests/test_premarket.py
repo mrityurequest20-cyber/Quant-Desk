@@ -408,7 +408,7 @@ def test_the_app_has_a_today_tab_and_the_site_can_reach_the_brief():
     app = (ROOT / "quantdesk" / "web" / "static" / "app" / "app.js").read_text()
     assert '["today", "Today"]' in app and "renderToday" in app and "/api/i/premarket" in app
     html = (ROOT / "quantdesk" / "web" / "static" / "app" / "index.html").read_text()
-    assert 'data-view="today"' in html and "repeat(6,1fr)" in html
+    assert 'data-view="today"' in html and "repeat(5,1fr)" in html
     from quantdesk.web import export_site as X
     assert '"/api/i/premarket"' in X.ROUTES and "window.qdRealFetch" in X.SHIM and "window.qdRealFetch" in X.LIVE_SHIM
 

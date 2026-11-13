@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from .kite_universe import build_wide
-from .live_push import LivePusher, quote_from_tick
+from .kite_universe import build_wide, deep_symbols
+from .live_push import LivePusher, book_from_tick, quote_from_tick
 
 IST = "Asia/Kolkata"
 INDEX_NAMES = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK", "INDIAVIX": "NSE:INDIA VIX"}
@@ -102,13 +102,14 @@ MAX_BUFFER = 1_000_000                                       # ticks held in mem
 class Recorder:
     """Collects ticks and writes them in parts. `now` is injectable so tests control time; the websocket object is whatever `ticker_factory` returns (KiteTicker's interface)."""
 
-    def __init__(self, out_dir: Path, tokens: dict[str, int], ticker_factory, now=None, flush_seconds: float = FLUSH_SECONDS, live=None, core=None, meta=None):
+    def __init__(self, out_dir: Path, tokens: dict[str, int], ticker_factory, now=None, flush_seconds: float = FLUSH_SECONDS, live=None, core=None, meta=None, deep=None):
         self.out = Path(out_dir)
         self.tokens = dict(tokens)
         self.by_token = {v: k for k, v in self.tokens.items()}
         self.now = now or (lambda: pd.Timestamp.now(tz=IST))
         self.flush_seconds = flush_seconds
         self.core = set(tokens) if core is None else set(core)       # symbols recorded in FULL mode (five levels of depth); the rest in QUOTE mode (price, volume, quantities, no depth)
+        self.deep = (set(deep or ()) & set(tokens)) - self.core      # wide symbols also SUBSCRIBED in FULL mode, for the live view's order book (options, the watchlist). They are still written as slim wide rows: the recorded layout does not change
         self.meta = dict(meta or {})                                 # symbol -> {'s': segment, ...}: what each instrument is, for the live view
         self.live = live                                             # the display-only 5-second push (live_push.py), or None; it never affects the recording
         self.rows: list[dict] = []
@@ -136,14 +137,17 @@ class Recorder:
 
     def _on_connect(self, ws, response) -> None:
         full = [t for s_, t in self.tokens.items() if s_ in self.core]
-        wide = [t for s_, t in self.tokens.items() if s_ not in self.core]
-        for i in range(0, len(full) + len(wide), 500):                 # subscribe in chunks: one oversized message is the easiest way to lose a subscription
-            ws.subscribe((full + wide)[i:i + 500])
+        deep = [t for s_, t in self.tokens.items() if s_ in self.deep]
+        wide = [t for s_, t in self.tokens.items() if s_ not in self.core and s_ not in self.deep]
+        for i in range(0, len(full) + len(deep) + len(wide), 500):     # subscribe in chunks: one oversized message is the easiest way to lose a subscription
+            ws.subscribe((full + deep + wide)[i:i + 500])
         if full:
             ws.set_mode(ws.MODE_FULL, full)
+        for i in range(0, len(deep), 500):                              # after the core five, so a refusal here can never cost them their mode
+            ws.set_mode(ws.MODE_FULL, deep[i:i + 500])
         for i in range(0, len(wide), 500):                              # QUOTE is the default mode of a subscription: this only makes it explicit, in messages of a size the socket takes
             ws.set_mode(getattr(ws, "MODE_QUOTE", "quote"), wide[i:i + 500])
-        self._event("connect", n=len(full) + len(wide), full=len(full), quote=len(wide))
+        self._event("connect", n=len(full) + len(deep) + len(wide), full=len(full), deep=len(deep), quote=len(wide))
 
     def _on_ticks(self, ws, ticks) -> None:
         recv = self.now()
@@ -161,7 +165,10 @@ class Recorder:
                     self.wide_ticks += 1
                     if self.live is not None:
                         try:
-                            self.live.update(sym, quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s")))
+                            q = quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s"))
+                            if q and sym in self.deep:                # FULL mode: the tick carries the book
+                                q.update(book_from_tick(t))
+                            self.live.update(sym, q)
                         except Exception:                           # noqa: BLE001
                             pass
                     continue
@@ -173,7 +180,10 @@ class Recorder:
                 self.ticks += 1
                 if self.live is not None:
                     try:
-                        self.live.update(sym, quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s")))
+                        q = quote_from_tick(row, t.get("change"), (self.meta.get(sym) or {}).get("s"))
+                        if q:
+                            q.update({k: v for k, v in book_from_tick(t).items() if k == "d"})      # the five levels; the best bid and offer are already on the row
+                        self.live.update(sym, q)
                     except Exception:                               # noqa: BLE001 - the display must never cost a recorded tick
                         pass
 
@@ -285,8 +295,10 @@ def fetch_reference(kite, tokens: dict[str, int], day: dt.date, out_dir: Path) -
     return path
 
 
-def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite=None, ticker_factory=None, now=None, sleep=time.sleep, with_reference: bool = False) -> dict:
-    """Record from now until `until_hhmm` IST today. Credentials from the environment. Writes to `out_dir`; refuses a folder inside a git tree outside runtime/."""
+def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite=None, ticker_factory=None, now=None, sleep=time.sleep, with_reference: bool = False,
+                watchlist: dict | None = None, stock_steps: int = 8) -> dict:
+    """Record from now until `until_hhmm` IST today. Credentials from the environment. Writes to `out_dir`; refuses a folder inside a git tree outside runtime/.
+    `watchlist` (config `desk.watchlist`) names what the owner trades: those instruments and every option are subscribed with their order book, for the live view only."""
     from ..ml.build import refuse_tracked_tree
     refuse_tracked_tree(Path(out_dir), "the Kite trial folder")
     key, token = os.environ.get("KITE_DATA_KEY"), os.environ.get("KITE_DATA_TOKEN")
@@ -306,22 +318,28 @@ def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite
     wide_errors: list[str] = []
     if os.environ.get("KITE_WIDE", "1") != "0":                    # everything else the desk watches; fail-soft: the core five are recorded whatever happens here
         try:
-            wide_tokens, wide_meta, wide_errors = build_wide(kite, today, tokens)
+            wide_tokens, wide_meta, wide_errors = build_wide(kite, today, tokens, stock_options=(watchlist or {}).get("stocks") or (), stock_steps=stock_steps)
             tokens.update(wide_tokens)
             meta.update(wide_meta)
         except Exception as e:                                     # noqa: BLE001
             wide_errors = [f"wide universe: {type(e).__name__}"]
+    deep: list[str] = []
+    if os.environ.get("KITE_DEEP", "1") != "0":                    # the order books for the live view; KITE_DEEP=0 puts every wide instrument back in QUOTE mode
+        try:
+            deep = deep_symbols(meta, watchlist)
+        except Exception as e:                                     # noqa: BLE001 - the live view's books never cost the recording
+            wide_errors = [*wide_errors, f"deep list: {type(e).__name__}"]
     (Path(out_dir)).mkdir(parents=True, exist_ok=True)
     all_tokens = dict(tokens)
     tokens = {k: v for k, v in all_tokens.items() if k in core}      # tokens.json is what the pre-registered trial measures: the five core instruments only
     (Path(out_dir) / "tokens.json").write_text(json.dumps(tokens, indent=1))
-    (Path(out_dir) / "universe.json").write_text(json.dumps({"meta": meta, "errors": wide_errors, "core": sorted(core), "wide_tokens": {k: v for k, v in all_tokens.items() if k not in core}}, indent=1))
+    (Path(out_dir) / "universe.json").write_text(json.dumps({"meta": meta, "errors": wide_errors, "core": sorted(core), "deep": sorted(deep), "wide_tokens": {k: v for k, v in all_tokens.items() if k not in core}}, indent=1))
     h, m = (int(x) for x in until_hhmm.split(":"))
     until = pd.Timestamp.combine(pd.Timestamp(today), dt.time(h, m)).tz_localize(IST)
-    rec = Recorder(Path(out_dir), all_tokens, ticker_factory, now=clock, live=LivePusher.from_env(), core=core, meta=meta)
+    rec = Recorder(Path(out_dir), all_tokens, ticker_factory, now=clock, live=LivePusher.from_env(), core=core, meta=meta, deep=deep)
     stats = rec.run(until, sleep=sleep)
     if with_reference:
         fetch_reference(kite, tokens, today, Path(out_dir))
     if stats["unwritten"] or stats["dropped"]:                     # ticks are gone (the last write failed, or the buffer overflowed while writes were failing): the run must not look clean
         raise KiteRecordError(f"{stats['unwritten']:,} ticks could not be written to {out_dir} and {stats['dropped']:,} were dropped from a full buffer; they are lost, the parts already written are kept")
-    return {"day": str(today), "tokens": tokens, "wide_n": len(all_tokens) - len(tokens), "wide_errors": wide_errors, **stats}
+    return {"day": str(today), "tokens": tokens, "wide_n": len(all_tokens) - len(tokens), "deep_n": len(deep), "wide_errors": wide_errors, **stats}

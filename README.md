@@ -3,10 +3,11 @@
 A research and data platform for Indian index and stock options. It records the market every session, keeps a
 warehouse of NSE data since 2019, runs pre-registered research on it, and briefs the morning before the open.
 
-**It does not trade.** On 6 Nov 2026 the owner retired the paper desk: every pre-registered test of intraday
-direction failed, so the engine, the direction brain, the learning loop and the expiry sleeves were removed. They are
-preserved on the branch `archive/pre-cleanup-2026-11-06`, and the full history stays in git. Trading comes back only
-through a new, separately tested system: the spike detector (docs/PREMARKET.md, Next).
+**It trades paper money only.** On 6 Nov 2026 the owner retired the old paper desk: every pre-registered test of intraday
+direction failed, so the engine, the direction brain, the learning loop and the expiry sleeves were removed (preserved on the
+branch `archive/pre-cleanup-2026-11-06`). Since 13 Nov 2026 a new paper desk trades: the owner's own orders from the app, and AUTO v2,
+which writes option strategies, tests every one in shadow at the real prices and gives paper money only to those with a record
+(docs/PAPER_TRADING.md). Real money is the owner's switch alone.
 
 ## What runs by itself
 

@@ -6,6 +6,7 @@ Market data only; a pure builder over Kite's own instrument lists, so it needs n
   2. the near-month future of EVERY NSE F&O underlying (indices and stocks), of every MCX commodity, every currency pair (CDS) and the BSE index futures
   3. the cash (spot) price of every NSE F&O stock
   4. index options: for NIFTY, BANKNIFTY, FINNIFTY and MIDCPNIFTY the nearest two expiries, the strikes within OPT_STEPS of the money, calls and puts
+  5. stock options: for each stock on the desk's watchlist (config desk.watchlist.stocks) the nearest expiry, a few strikes either side of the money, calls and puts
 
 The option chain of an index is thousands of contracts, so only a window around the money is subscribed (the full chains are recorded each minute by the Kotak recorder).
 Kite allows a limited number of instruments on one websocket (3,000 as far as I know; its documentation is not reachable from the build machine, so this is not
@@ -43,6 +44,23 @@ def option_name(underlying: str, expiry, strike: float, side: str) -> str:
     return f"{underlying}{d.day:02d}{_MON[d.month - 1]}{d.year % 100:02d}{k}{side}"
 
 
+DEEP_MAX = 1200                                                  # FULL-mode subscriptions beyond the core five: a bound on the websocket's traffic, far under Kite's 3,000 a connection
+
+
+def deep_symbols(meta: dict[str, dict], watchlist: dict | None, limit: int = DEEP_MAX) -> list[str]:
+    """The wide-universe instruments to subscribe in Kite's FULL mode (price, open interest and five levels of order book) instead of QUOTE mode (price and volume only).
+
+    Two groups, in this order, so a cut can only ever drop the second:
+      1. every option on the board. A strategy can be priced, and a paper order filled, only against a real bid and offer; in QUOTE mode an option has neither, and no other
+         feed on the board supplies one (Kotak's chain call returns the last price, volume and open interest, not the book).
+      2. the desk's watchlist (config `desk.watchlist`): the cash price, the future, the MCX or the currency contract of each name the owner trades, for the depth on its page.
+    Everything else stays in QUOTE mode: it is recorded and searchable, with no book."""
+    names = {str(n).strip().upper() for group in (watchlist or {}).values() if isinstance(group, (list, tuple)) for n in group if str(n).strip()}
+    options = [sym for sym, m in meta.items() if m.get("s") == "opt"]
+    watched = [sym for sym, m in meta.items() if m.get("s") != "opt" and str(m.get("name") or "").upper() in names]
+    return (options + watched)[:max(0, int(limit))]
+
+
 def _frame(kite, exchange: str, errors: list[str]) -> pd.DataFrame:
     try:
         df = pd.DataFrame(kite.instruments(exchange))
@@ -68,7 +86,7 @@ def _near_futures(df: pd.DataFrame, today: dt.date, exclude=()) -> list[tuple[st
     return [(str(r.name_), int(r.instrument_token), r.expiry) for r in first.rename(columns={"name": "name_"}).itertuples()]
 
 
-def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBSCRIBE) -> tuple[dict[str, int], dict[str, dict], list[str]]:
+def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBSCRIBE, stock_options=(), stock_steps: int = 8) -> tuple[dict[str, int], dict[str, dict], list[str]]:
     errors: list[str] = []
     tokens: dict[str, int] = {}
     meta: dict[str, dict] = {}
@@ -136,6 +154,34 @@ def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBS
                 keep = set(strikes[max(0, atm - OPT_STEPS): atm + OPT_STEPS + 1])
                 for r in oe[oe["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
                     add(option_name(fam, expiry, float(r.strike), str(r.instrument_type)), r.instrument_token, "opt", str(r.instrument_type), name=fam, expiry=str(expiry), strike=float(r.strike))
+
+    # 5. the option chain of each watchlist stock (`stock_options`, config desk.watchlist.stocks): its nearest expiry, `stock_steps` strikes either side of the money. Last of all,
+    #    so the cut below takes these before anything else.
+    wanted = [n for n in dict.fromkeys(str(x).strip().upper() for x in (stock_options or ())) if n in set(fno_names) and n not in OPT_FAMILIES and n not in EXTRA_INDEX]
+    if wanted and not nfo.empty and {"instrument_type", "name", "strike", "tradingsymbol", "instrument_token"} <= set(nfo.columns):
+        try:
+            sltp = kite.ltp([f"NSE:{n}" for n in wanted])
+        except Exception as e:                                       # noqa: BLE001
+            sltp = {}
+            errors.append(f"stock prices for the option chains: {type(e).__name__}")
+        steps = max(1, min(20, int(stock_steps)))
+        for n in wanted:
+            spot = (sltp.get(f"NSE:{n}") or {}).get("last_price")
+            if not (isinstance(spot, (int, float)) and spot > 0):
+                errors.append(f"{n} options: no price to centre on")
+                continue
+            o = nfo[(nfo["name"] == n) & nfo["instrument_type"].isin(["CE", "PE"]) & nfo["expiry"].notna() & (nfo["expiry"] >= today)]
+            if o.empty:
+                continue
+            expiry = min(o["expiry"])
+            oe = o[o["expiry"] == expiry]
+            strikes = sorted(oe["strike"].dropna().unique())
+            if not strikes:
+                continue
+            atm = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
+            keep = set(strikes[max(0, atm - steps): atm + steps + 1])
+            for r in oe[oe["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
+                add(option_name(n, expiry, float(r.strike), str(r.instrument_type)), r.instrument_token, "opt", str(r.instrument_type), name=n, expiry=str(expiry), strike=float(r.strike))
 
     room = max(0, int(limit) - len(core))
     if len(tokens) > room:

@@ -169,6 +169,19 @@ These are not questions. The engineer never asks about them; it simply does not 
     changed password costs at most one failed automatic login a day. The token the login produces is the same
     data-only token as above: no order, position, holding, margin or profile method.
 
+  - **More market-data brokers, with automatic login (owner-authorised 13 Nov 2026):** the owner's words: "I have the
+    kite and the fires API. Now I can use one more. So that will cover index, kite can cover index and the stock
+    options. Then fires can cover one thing more, and then one more can cover the currency", "all these APIs I'll
+    update in my secrets and variables in GitHub", and "I need to also enable them in the auto login standpoint so
+    that they can get the data easily." So the desk may use the owner's **Fyers** API credentials and, once the owner
+    names it, **one more broker's** (Angel One is proposed in [FEEDS.md](FEEDS.md)), to read market data only, and may
+    log in to each automatically every day. The same rules as Kite's exception apply to each: market data only (quotes,
+    websocket ticks, instrument lists); never an order, position, holding, margin, funds or profile method; the
+    credentials are repository secrets the owner sets, reach only the step that logs in or streams, and are never
+    printed, logged, committed or published; a login that fails is tried at most once a day, so a wrong password or
+    PIN cannot lock the account; and the data reaches the private live relay only. Ends on 31 December 2027 or when
+    the owner removes the secrets, whichever is first. Does not cover real money.
+
   
 - **No looser risk:** never loosen a risk limit (`intraday.risk`, the drawdown halts, the loss budget), and never size
   above what a registered spec allows.
