@@ -54,8 +54,10 @@ from . import eventcal as EC
 from . import marketread as MR
 from .account import multi_expiry_worst
 from . import newsmodel as NM
+from . import probation as PB
 from . import regimes as RG
 from . import tails as TL
+from . import votewatch as VW
 from .runner import _num
 
 IST = MK.IST
@@ -448,6 +450,11 @@ def realized_vol(tape: list[tuple[float, float]], now_s: float) -> float | None:
     return math.sqrt(var * 252 * 6.25 * 3600) if var > 0 else None              # per-second variance to a year of 6.25-hour sessions
 
 
+def clamp_r(sid: str, r: float) -> float:
+    """A trade's R as the record keeps it: -5 to +10 (convexity: up to R_CAP)."""
+    return max(-5.0, min(CX.R_CAP if CX.is_convex(CX.sid_struct(sid)) else 10.0, r))
+
+
 def _ist(t: float) -> dt.datetime:
     return dt.datetime.fromtimestamp(t, tz=IST)
 
@@ -541,7 +548,7 @@ class Lab:
 
     def add(self, sid: str, r: float) -> None:
         n, s, ss, w = self.stats.get(sid, [0, 0.0, 0.0, 0])
-        r = max(-5.0, min(CX.R_CAP if CX.is_convex(CX.sid_struct(sid)) else 10.0, r))       # a bad quote cannot write a record of +500R (convexity: up to R_CAP)
+        r = clamp_r(sid, r)                                                             # a bad quote cannot write a record of +500R (convexity: up to R_CAP)
         self.stats[sid] = [n + 1, s + r, ss + r * r, w + (1 if r > 0 else 0)]
         self.dirty = True
         self._ver += 1
@@ -674,6 +681,7 @@ class Lab:
         def packed(k):
             z = base64.b64encode(zlib.compress(plain(k).encode("ascii"), 9)).decode("ascii")
             return json.dumps({"v": 1, "stats": {}, "z": z}, separators=(",", ":"))
+        self.last_kept = len(rows)                                              # how many strategy records the text holds (fewer only past the size bound)
         text = plain(len(rows))
         if len(text) <= LAB_MAX_CHARS:
             return text
@@ -687,6 +695,7 @@ class Lab:
                 lo = mid
             else:
                 hi = mid - 1
+        self.last_kept = lo
         return packed(lo)
 
     @staticmethod
@@ -769,6 +778,13 @@ class AutoPilotV2:
         self.cx_backoff: dict[str, float] = {}
         self.cx_status: dict = {}
         self.plan_only = PLAN_ONLY
+        # ---- evolution phase 2 (docs/prereg/evolution_probation_v1.json): probation and the vote watch; both only tighten --------------------------------
+        self.probation = PB.Probation()
+        self.votes = VW.VoteWatch()
+        self.pb_ctx = PB.Ctx(stats=lambda sid: self.lab.stats.get(sid), min_trades=lambda sid: self.lab.min_trades(BY_SID[sid]),
+                             sessions_between=lambda a, b: self._trading_days_to(dt.date.fromisoformat(a), dt.date.fromisoformat(b)),
+                             struct=lambda sid: BY_SID[sid].struct if sid in BY_SID else None, hold=lambda sid: BY_SID[sid].hold if sid in BY_SID else None,
+                             watched=lambda sid: sid in BY_SID and not CX.is_convex(BY_SID[sid].struct))
 
     def strategies(self) -> list[Strategy]:
         """Everything it may trade: the written catalogue, what the inventor has written (inventor.py), and the futures strategies (MCX and currency only)."""
@@ -886,6 +902,9 @@ class AutoPilotV2:
         mom = self._momentum(u, t)
         nv, nwhy, nf = self.news_vote(news, u, t, sp)
         read = self.read(snap, u, ch, t, sp, near, nxt, T, ist)
+        self.votes.decide(ist.date().isoformat())                                       # once a session, for the session ahead
+        self.votes.observe("read", u, t, (read or {}).get("p_up"), sp)
+        self.votes.observe("news", u, t, nf["p_up"] if nf and nf.get("vote") else None, sp)
         if not hasattr(self, "regimes"):
             self.regimes = RG.RegimeBook()
         self.regimes.update(u, t, sp)                                                      # the HMM regime and the CUSUM change points (regimes.py)
@@ -901,8 +920,9 @@ class AutoPilotV2:
                                        ("price", tv or mv),                                     # the owner, 14 Nov 2026: price counts as ONE reading, however it is read
                                        ("news", nv), ("read", (read or {}).get("vote") or 0)) if v]
         votes = [v for _, v in labeled]
-        agree = votes[0] if len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0        # a strong live direction: the plan's bar on the live board
-        strong = agree if nv == agree else 0                                                   # the news among them: the news exception's bar
+        support = [v for k, v in labeled if not self.votes.muted(k, u)]                         # a muted model's vote supports nothing (evolution_probation_v1, C)
+        agree = support[0] if len(support) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0     # a strong live direction: the plan's bar; any reading against, muted or not, stops it
+        strong = agree if nv == agree and not self.votes.muted("news", u) else 0               # the news among them: the news exception's bar
         if not hasattr(self, "agree_since"):
             self.agree_since, self.read_base = {}, {}
         prev = self.agree_since.get(u)
@@ -923,7 +943,7 @@ class AutoPilotV2:
             why = list(why) + [rwhy]
         st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt, "read": read,
               "regime": regime, "hmm": rg, "today": ist.date(), "strong": "up" if strong > 0 else "down" if strong < 0 else None, "votes": len(votes),
-              "agree": "up" if agree > 0 else "down" if agree < 0 else None, "sources": [k for k, _ in labeled]}
+              "agree": "up" if agree > 0 else "down" if agree < 0 else None, "sources": [k for k, _ in labeled if not self.votes.muted(k, u)]}
         st["cx"] = self.convex_edges(snap, u, ch, st, ist, news, rg, read, T)
         self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items()
                               if k not in ("why", "read", "hmm", "today", "cx", "strong", "votes", "agree", "sources")}
@@ -1399,6 +1419,7 @@ class AutoPilotV2:
                 if act:
                     self.shadow_dirty = True
                 if total is not None:
+                    self.probation.close(sh["s"].sid, clamp_r(sh["s"].sid, total), ist.date().isoformat(), self.pb_ctx)
                     self.lab.add(sh["s"].sid, total)
                     self.lab.tag(sh["s"].sid, self.market_key(ist), total, key[1], ist.date().isoformat())
                     self.shadow.pop(key)
@@ -1407,6 +1428,7 @@ class AutoPilotV2:
                 continue
             why = self._exit_why(sh["s"], r, sh["best_r"], sh["opened"], ist, sh["exp"], key[1], sh.get("spot0"), sh.get("sd0"), (states.get(key[1]) or {}).get("spot"))
             if why:
+                self.probation.close(sh["s"].sid, clamp_r(sh["s"].sid, r), ist.date().isoformat(), self.pb_ctx)
                 self.lab.add(sh["s"].sid, r)
                 self.lab.tag(sh["s"].sid, self.market_key(ist), r, key[1], ist.date().isoformat())
                 self.shadow.pop(key)
@@ -1518,7 +1540,8 @@ class AutoPilotV2:
         if nv:
             votes.append(nv)
             why.append(nwhy or "news")
-        d = votes[0] if len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0      # a strong direction only: PLAN_DIR_VOTES agreeing readings, none against
+        support = len(votes) - (1 if nv and self.votes.muted("news", u) else 0)            # a muted news vote supports nothing; it still opposes, and is still a reading
+        d = votes[0] if support >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0         # a strong direction only: PLAN_DIR_VOTES agreeing readings, none against
         view = "up" if d > 0 else "down" if d < 0 else ("flat" if not votes and (over is None or abs(over) < OVERNIGHT_TH_PCT / 2) else None)
         if votes and not d:
             why.append(f"no planned direction: {len(votes)} reading{'s' if len(votes) > 1 else ''} ({'agreeing' if len(set(votes)) == 1 else 'split'}); "
@@ -1537,6 +1560,8 @@ class AutoPilotV2:
         """The day plan: for each underlying, the defined-risk strategies whose pre-open context holds and whose reward to risk is PLAN_MIN_RR or better, priced on the
         closing books; ranked proven first, then by the measured expectancy, then by reward to risk. What the open will look for, with every reason written down."""
         ist = now.astimezone(IST)
+        self.probation.flush(ist.date().isoformat(), self.pb_ctx)                       # every session that is over is applied before the plan (the spec's "when")
+        self.votes.decide(ist.date().isoformat())
         b = self.brief if isinstance(self.brief, dict) else {}
         cs = self.close_snap(snap)
         ch = V1.chains(cs, self.und, self.lots)
@@ -1577,7 +1602,8 @@ class AutoPilotV2:
                 found.append({"u": u, "sid": s.sid, "what": s.describe()[:160], "view": st["view"], "vol": st["vol"], "why": st["why"][:3], "catalysts": cat[:4],
                               "rr": round(rr, 2), "risk_lot": round(s.sl * p["risk"] * p["lot"]), "reward_lot": round(reward * p["lot"]), "exp": p["exp"].isoformat(),
                               "legs": [("+" if l["side"] > 0 else "-") + l["name"] for l in p["legs"]][:4], "n": n, "mean_r": round(mean, 3),
-                              "proven": n >= self.lab.min_trades(s) and mean > 0, "risk_unit": round(p["risk"], 4), "spot": st["spot"]})
+                              "proven": n >= self.lab.min_trades(s) and mean > 0 and not self.probation.blocked(s.sid),
+                              "probation": self.probation.blocked(s.sid), "risk_unit": round(p["risk"], 4), "spot": st["spot"]})
             found.sort(key=lambda x: (not x["proven"], -x["mean_r"], -x["rr"]))
             items += found[:PLAN_PER_U]
             big = []                                                                    # a big move, either way: the Convexity desk's tests on the closing board
@@ -1803,6 +1829,8 @@ class AutoPilotV2:
                 s = BY_SID.get(sid)
                 if s is None or CX.is_convex(s.struct) or (s.sid, u) in busy or self.lab.stats.get(s.sid, [0])[0] < self.lab.min_trades(s):
                     continue
+                if self.probation.blocked(s.sid):
+                    continue                                                           # in probation: shadow only (evolution_probation_v1, B)
                 if not (self.plan_ok(s, st, ist) if self.plan_only else self.matches(s, st)):
                     continue
                 if self.plan_only and s.hold == "overnight" and not self.daily_sd(u, st):
@@ -1818,7 +1846,7 @@ class AutoPilotV2:
             pool = (self.strategies() if not self.plan_only else                        # a planned strategy the plan's own checks refused does not come back this way
                     [s for s in self.strategies() if s.hold == "overnight" and s.view == st.get("agree") and s.sid not in planned_u] if nw else [])
             for s in pool if best is None else ():                                     # PLAN_ONLY: nothing the plan did not name, but important news or a change in the data
-                if (s.sid, u) in busy or not self.matches(s, st):
+                if (s.sid, u) in busy or not self.matches(s, st) or self.probation.blocked(s.sid):
                     continue
                 n = self.lab.stats.get(s.sid, [0])[0]
                 if n < self.lab.min_trades(s):
@@ -2195,6 +2223,12 @@ class AutoPilotV2:
             cx = got.get("cx")
             self.cx_peak = {str(k): float(v) for k, v in cx.items() if isinstance(v, (int, float)) and math.isfinite(v)} if isinstance(cx, dict) else {}
             self.day_plan = self.restore_plan(got.get("plan")) or self.day_plan          # a restart after 09:15 keeps today's plan (yesterday's is dropped as always)
+            try:
+                self.probation.restore(got.get("pb"), lambda sid: sid in BY_SID)
+                self.votes.restore(got.get("vw"))
+                self.probation.flush((now or dt.datetime.now(IST)).astimezone(IST).date().isoformat(), self.pb_ctx)
+            except Exception:                                                           # noqa: BLE001 - a bad phase 2 state starts empty; it never costs the record
+                self.probation, self.votes = PB.Probation(), VW.VoteWatch()
             ss = got.get("shadow_seq", 0)
             self.lab_shadow_seq = ss if isinstance(ss, int) and not isinstance(ss, bool) and ss >= 0 else 0
             if hasattr(self, "reader"):
@@ -2224,6 +2258,9 @@ class AutoPilotV2:
         """The open shadow book, then the record. The record is never kept ahead of the book: when it is due, an unsaved book goes first (whatever its own clock),
         and a book that could not be kept holds the record back. So a trade the record has scored is never still open in the book the next job reads: a job that
         ends badly can lose a trade, never count one twice (risk review of the carry, 14 Nov 2026)."""
+        p2 = json.dumps([self.probation.export(), self.votes.export()], sort_keys=True, default=str)
+        if p2 != getattr(self, "_p2_saved", None):
+            self.lab.dirty = True                                                       # phase 2's state changed: the record is due like any other change
         lab_due = self.lab.dirty and (force or mono - self.lab_saved_at >= 120)
         shadow = self.save_shadow(relay, mono, force or lab_due)
         if not lab_due:
@@ -2241,8 +2278,17 @@ class AutoPilotV2:
                 extra["cx"] = {k: round(v, 3) for k, v in self.cx_peak.items()}
             if self.day_plan:
                 extra["plan"] = self.day_plan
-            relay.put_lab(self.lab.to_json(extra or None))
-            self.lab.dirty, self.lab_saved_at = False, mono
+            extra["vw"] = self.votes.export()
+            max_g = None
+            while True:                                                                 # the smallest g go first, before any probation state and any strategy record
+                extra["pb"] = self.probation.export(max_g)
+                text = self.lab.to_json(extra)
+                gs = self.probation.left_out + sum(1 for e in extra["pb"]["st"].values() if "g" in e)
+                if self.lab.last_kept >= len(self.lab.stats) or gs == 0 or max_g == 0:
+                    break
+                max_g = (gs - self.probation.left_out) // 2 if max_g is None else max_g // 2
+            relay.put_lab(text)
+            self.lab.dirty, self.lab_saved_at, self._p2_saved = False, mono, p2
             return True
         except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
             return False
@@ -2281,6 +2327,9 @@ class AutoPilotV2:
         out["market"] = {"session": s(b.get("session"), 10), "key": s(fp.get("key"), 16), "label": s(fp.get("label"), 200), "since": s(fp.get("since"), 10)} if fp else None
         out["regimes"] = self.lab.by_regime()
         out["shadow_carry"] = dict(self.shadow_io)
+        today = dt.datetime.now(IST).date().isoformat()
+        out["probation"] = {**self.probation.report(today, self.pb_ctx.sessions_between), "list": self.probation.listing()}
+        out["votes"] = self.votes.report()
         out["convex"] = {**self.cx_status, "stake_pct": CX.STAKE_PCT, "budget_pct": CX.MONTH_BUDGET_PCT, "min_pooled": CX.MIN_POOLED, "min_own": CX.MIN_OWN,
                          "strategies": len(CX_CATALOGUE), "shadow_open": sum(1 for sid, _ in self.shadow if CX.is_convex(CX.sid_struct(sid))),
                          "now": {u: st["cx"] for u, st in sorted(self.last_state.items()) if st.get("cx") and (st["cx"][1] or st["cx"][0] is not None)}}
