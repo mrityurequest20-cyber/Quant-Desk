@@ -93,7 +93,9 @@ def test_the_page_posts_to_exactly_two_relay_routes_and_only_after_a_review_step
     tab = APP[APP.index("// ---- the Paper tab"):APP.index("// refresh loop, pull to refresh, boot")]
     assert 'P.confirm = killOn ? "kill:off" : "kill:on"' in tab and 'P.confirm = "sell:" + p.symbol' in tab                          # kill and sell are two taps, and the kill tap names its direction
     assert 'P.confirm === (killOn ? "kill:off" : "kill:on")' in tab                                                              # the second tap only counts for the direction that was asked about
-    assert tab.count('paperCall("POST"') == 2 and "innerHTML" not in APP
+    assert tab.count('paperCall("POST"') == 3 and "innerHTML" not in APP                                                          # sell, kill, and the owner's release
+    rel = tab[tab.index("function ppReleaseBtn"):tab.index("function ppAdapt")]
+    assert rel.count('paperCall("POST", "/paper/order", PT.releaseFor(sid))') == 1 and rel.index("P.confirm !== key") < rel.index("paperCall")   # two taps
 
 
 def test_the_ticket_is_not_offered_where_the_paper_desk_would_refuse_and_the_tab_says_when_the_runner_is_silent():
@@ -164,7 +166,9 @@ console.log(JSON.stringify({ same: PT.sigOf(a) === PT.sigOf(same), lots: PT.sigO
 
 def test_double_taps_on_sell_and_kill_do_nothing_and_a_half_made_confirm_expires():
     tab = APP[APP.index("// ---- the Paper tab"):APP.index("// refresh loop, pull to refresh, boot")]
-    assert tab.count("if (P.acting) return; P.acting = true;") == 2 and tab.count("P.acting = false;") >= 2
+    assert tab.count("if (P.acting) return; P.acting = true;") == 3 and tab.count("P.acting = false;") >= 3        # sell, kill and the release
+    rel = APP[APP.index("function ppReleaseBtn"):APP.index("function ppAdapt")]                                   # and the owner's release from probation
+    assert rel.count("if (P.acting) return; P.acting = true;") == 1 and "P.acting = false;" in rel and "P.confirmAt = Date.now();" in rel
     assert "Date.now() - P.confirmAt < 30000" in tab and "S.pp.confirm = null" in APP[APP.index("function show(tab"):APP.index("function show(tab") + 600]
     assert "it sends no order" not in APP and "sends no order" not in (ROOT / "docs/RECORDING.md").read_text(encoding="utf-8")        # the old "sends nothing" texts are gone
 

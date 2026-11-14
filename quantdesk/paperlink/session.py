@@ -117,6 +117,14 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         raw_orders = q.get("orders") if isinstance(q.get("orders"), list) else []
         orders = [o for o in raw_orders if not (isinstance(o, dict) and isinstance(o.get("id"), str) and o["id"] in waiting)]
         kill = q.get("kill") is not False                              # a missing or odd answer counts as ON: the safe way round
+        releases = [o for o in orders if isinstance(o, dict) and o.get("side") == "release"]
+        orders = [o for o in orders if not (isinstance(o, dict) and o.get("side") == "release")]
+        for o in releases:                                             # the owner releases a strategy from probation (evolution phase 2): no order, no money, never the gate
+            if not isinstance(o.get("id"), str):
+                continue
+            ok, why = auto.owner_release(o.get("sid"), clock()) if auto is not None and hasattr(auto, "owner_release") else (False, "AUTO v2 is not running in this session")
+            pending.append({"id": o["id"], "status": "done" if ok else "refused", "reasons": [why], "at": clock().isoformat()})
+            log(f"paper: owner release {o.get('sid')}: {'done' if ok else 'refused'}: {why}")
         if auto is not None:                                           # AUTO v1: its orders join the owner's and go through the very same step, gate and brakes
             ist_now = clock().astimezone(IST)
             if hasattr(auto, "brief") and BRIEF_WINDOW[0] <= ist_now.time() <= BRIEF_WINDOW[1] and time.monotonic() - brief_at >= BRIEF_EVERY_S:

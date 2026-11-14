@@ -2414,6 +2414,18 @@ class AutoPilotV2:
                 self.shadow_route = False                                               # a relay without the route (before its Worker is deployed) keeps no book that
             return False                                                                # could be read back stale, so the record is not held back for it
 
+    def owner_release(self, sid, now: dt.datetime) -> tuple[bool, str]:
+        """The owner's release of a strategy from probation (from the app, through the relay's queue). It restores the strategy's ordinary rules and nothing
+        more: it still needs its proof and a positive draw to trade. A strategy not in probation is refused, and so is anything unknown."""
+        if not (isinstance(sid, str) and sid in BY_SID):
+            return False, "no such strategy"
+        if not self.probation.blocked(sid):
+            return False, "not in probation"
+        if not self.probation.owner_release(sid, now.astimezone(IST).date().isoformat()):
+            return False, "could not release"
+        self.lab.dirty, self.shadow_dirty = True, True                                  # the record's list and the book both carry it at the next save
+        return True, f"released from probation by the owner; it still needs its proof and a positive draw to trade"
+
     def phase2_report(self) -> dict:
         """Phase 2's monthly report, aggregates only (the spec's `publication`): the spec and its SHA-256, the runner's commit, probation and the vote watch,
         the agreements and planned directions a mute stopped, the sessions run and the outages (the spec's `forward_rule`)."""

@@ -2188,9 +2188,10 @@ const PT = (() => {
 		return { orders: a.legs.map((l) => ({ id: idNow(), side: "buy", symbol: l.name, lots: Number.isInteger(l.lots) ? l.lots : a.lots, strategy: flat(strategy), thesis: flat(thesis), limit: limitFor(l.ask), group: g, ...(refOf(l) ? { ref: refOf(l) } : {}) })) };
 	}
 	const sellFor = (symbol) => ({ id: idNow(), side: "sell", symbol, lots: "all" });
+	const releaseFor = (sid) => ({ id: idNow(), side: "release", sid });            // the owner releases an AUTO v2 strategy from probation: no order, no money
 	// the structure a review belongs to: if it changes, the review is void and the user must press Review again
 	const sigOf = (a) => (a && a.paperOk === true && Array.isArray(a.legs) ? a.lots + "|" + a.legs.map((l) => l.side + ":" + l.name + ":" + (Number.isInteger(l.lots) ? l.lots : a.lots)).join(",") : "");
-	return { idNow, flat, thesisOk, stratOk, limitFor, ordersFor, sellFor, sigOf };
+	return { idNow, flat, thesisOk, stratOk, limitFor, ordersFor, sellFor, releaseFor, sigOf };
 })();
 // The only three routes this page may call, each with its one method; the request goes to that relative path, on this page's own origin, and nowhere else.
 const PAPER_ROUTES = { "/paper/order": "POST", "/paper/kill": "POST", "/paper/state": "GET" };
@@ -2517,6 +2518,17 @@ function ppPlan(dp) {
 }
 // The market fingerprint and the record by regime (docs/EVOLUTION.md, phase 1): what kind of market today is, and how each family of strategies has done in each
 // kind so far (shadow trades, tagged when they close). Display only.
+function ppReleaseBtn(sid, since) {
+	// a third demotion leaves a strategy in probation until the owner releases it (docs/prereg/evolution_probation_v1.json). Releasing restores its ordinary rules
+	// and nothing more: it still needs its proof and a positive draw to trade. The same confirm step as the kill switch.
+	const key = "rel:" + sid;
+	if (P.confirm !== key) return h("span", { class: "row", style: "gap:8px;align-items:center" }, h("span", { class: "f3" }, `since ${since} · yours to release`),
+		h("button", { class: "btn", onclick: () => { P.confirm = key; P.confirmAt = Date.now(); ppDraw(); } }, "Release"));
+	return h("span", { style: "display:flex;gap:8px" },
+		h("button", { class: "btn danger", onclick: async (ev) => { if (P.acting) return; P.acting = true; if (ev && ev.currentTarget) ev.currentTarget.disabled = true; P.confirm = null; const r = await paperCall("POST", "/paper/order", PT.releaseFor(sid)); P.acting = false; P.note = r.status === 200 ? "Release sent: the paper runner applies it at its next cycle." : "The release was not sent (" + ((r.body && r.body.error) || "HTTP " + r.status) + ")."; renderPaper(true); } }, "Yes, release it"),
+		h("button", { class: "btn", onclick: () => { P.confirm = null; ppDraw(); } }, "Cancel"));
+}
+
 function ppAdapt(lab) {
 	const pb = lab.probation || {}, vt = lab.votes || {}, list = Array.isArray(pb.list) ? pb.list : [];
 	const muted = [];
@@ -2525,7 +2537,7 @@ function ppAdapt(lab) {
 	return h("div", { class: "grp" },
 		h("div", { class: "sec-h" }, h("h2", {}, "Adapting"), h("span", { class: "hint" }, `${num(pb.in_probation || 0, 0)} on probation · ${num(vt.muted || 0, 0)} votes muted`)),
 		list.length ? fold("ad-pb", "On probation: shadow only until proven again", `${list.length} shown`, h("div", { class: "rows" }, list.map((r) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;border-top:1px solid var(--line);font-size:12.5px" },
-			h("span", { class: "mono" }, r.sid), h("span", { class: "f3" }, r.owner ? `since ${r.since} · yours to release` : `since ${r.since} · ${num(r.trades, 0)}/${8 * (r.mult || 1)} trades, ${num(r.sessions, 0)}/${8 * (r.mult || 1)} sessions`))))) : null,
+			h("span", { class: "mono" }, r.sid), r.owner ? ppReleaseBtn(r.sid, r.since) : h("span", { class: "f3" }, `since ${r.since} · ${num(r.trades, 0)}/${8 * (r.mult || 1)} trades, ${num(r.sessions, 0)}/${8 * (r.mult || 1)} sessions`))))) : null,
 		muted.length ? h("div", { class: "f2", style: "font-size:12.5px;line-height:1.5;padding:8px 16px" }, "Muted (can stop a trade, cannot start one): " + muted.join(" · ")) : null,
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `A strategy that starts losing goes to probation: it keeps trading in the shadow book and cannot trade paper money until it proves itself again on new trades. A model whose votes call direction no better than a coin can still stop a trade but cannot start one. Both only tighten (docs/prereg/evolution_probation_v1.json). Review: ${rv.status || "INSUFFICIENT"}, ${num(rv.demotions || 0, 0)} demotions measured.`));
 }
