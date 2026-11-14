@@ -278,7 +278,12 @@ def test_todays_plan_survives_a_restart_and_yesterdays_does_not(cfg, tmp_path):
                                                                                   {"u": "NIFTY", "sid": "NOPE", "risk_unit": 10.0, "spot": 24500.0},
                                                                                   {"u": "NIFTY", "sid": IC, "risk_unit": "x", "spot": 24500.0},
                                                                                   {"u": "NIFTY", "sid": IC, "risk_unit": 10.0},
-                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0, "event_at": "soon"}],
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0, "event_at": "soon"},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0, "event_at": 20261114},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": True, "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": float("nan"), "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": -1.0, "spot": 24500.0},
+                                                                                  {"u": 7, "sid": IC, "risk_unit": 10.0, "spot": 24500.0}],
                    "states": {"NIFTY": {"view": "up"}}, "notes": []}
     ap.lab.add(IC, 0.3)
     relay = FakeRelay()

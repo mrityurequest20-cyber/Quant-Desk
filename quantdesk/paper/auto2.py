@@ -1975,8 +1975,10 @@ class AutoPilotV2:
         def when(x):
             if x is None:
                 return True
+            if not isinstance(x, str):
+                return False                                                           # later code parses it as text: anything else is refused here
             try:
-                dt.datetime.fromisoformat(str(x))
+                dt.datetime.fromisoformat(x)
                 return True
             except ValueError:
                 return False
