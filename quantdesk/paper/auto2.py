@@ -750,6 +750,7 @@ class AutoPilotV2:
         self.cool: dict[tuple, float] = {}         # (sid, u) -> no shadow re-entry before this
         self.shadow_dirty = False                  # the open shadow book changed since it was last kept
         self.shadow_saved_at = -1e9
+        self.shadow_route = True                   # False once the relay answers 404 for /paper/shadow: it keeps no book, so the record never waits for one
         self.shadow_io: dict = {"restored": 0, "dropped": {}, "left_out": 0}     # what the last read back kept and dropped (by reason), and what the last save left out
         self.backoff: dict[str, float] = {}        # u -> no live entry before this
         self.pending_exit: dict[str, float] = {}
@@ -2207,7 +2208,7 @@ class AutoPilotV2:
         shadow = self.save_shadow(relay, mono, force or lab_due)
         if not lab_due:
             return shadow
-        if self.shadow_dirty and getattr(relay, "put_shadow", None) is not None:
+        if self.shadow_dirty and getattr(relay, "put_shadow", None) is not None and self.shadow_route:
             return shadow                                                               # the book could not be kept: the record waits for it
         try:
             extra = {"read_w": self.reader.export()} if hasattr(self, "reader") else {}
@@ -2228,11 +2229,13 @@ class AutoPilotV2:
         try:
             text, left_out = self.shadow_json()
             put(text)
-            self.shadow_dirty, self.shadow_saved_at = False, mono
+            self.shadow_dirty, self.shadow_saved_at, self.shadow_route = False, mono, True
             self.shadow_io["left_out"] = left_out
             return True
-        except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
-            return False
+        except Exception as e:                                                          # noqa: BLE001 - kept dirty: the next save tries again
+            if "HTTP 404" in str(e):
+                self.shadow_route = False                                               # a relay without the route (before its Worker is deployed) keeps no book that
+            return False                                                                # could be read back stale, so the record is not held back for it
 
     def summary(self) -> dict:
         """For the app's Strategy lab panel: the record's leaders, today's counts, and each underlying's state now (compact: the runner's whole state must fit the relay's cap)."""

@@ -196,6 +196,25 @@ def test_the_record_due_first_takes_the_book_with_it(cfg, tmp_path):
     assert ap.save(relay, 1125.0) and relay.shadow_puts == 2 and not ap.shadow_dirty and not ap.lab.dirty
 
 
+class NoRoute(Relay):
+    def put_shadow(self, text):
+        from quantdesk.paperlink.relay import RelayError
+        raise RelayError("POST /paper/shadow: HTTP 404")
+
+
+def test_a_relay_without_the_route_still_keeps_the_record(cfg, tmp_path):
+    """Before the Worker with /paper/shadow is deployed, the relay answers 404: it keeps no book, so nothing can be read back stale, and the record saves as before."""
+    rn, ap, t = opened(cfg, tmp_path)
+    relay = NoRoute()
+    assert ap.save(relay, 1000.0, force=True) and relay.puts == 1 and not ap.lab.dirty and not ap.shadow_route
+    late = dt.datetime.combine(T0.date(), dt.time(15, 20), tzinfo=A2.IST)
+    cycle(rn, ap, board(late), late)
+    assert ap.save(relay, 1200.0) and relay.puts == 2                                        # still saving, every two minutes as before
+    ok = Relay(relay.lab)
+    ap.shadow_dirty = True
+    assert ap.save_shadow(ok, 1400.0) and ap.shadow_route                                     # the route deployed: the book is kept again, and the record waits for it again
+
+
 def test_an_absurd_row_costs_only_itself(cfg, tmp_path):
     rn, ap, t = opened(cfg, tmp_path)
     rows = A2.Lab.unpack(ap.shadow_json()[0])["open"]
