@@ -93,12 +93,13 @@ class VoteWatch:
         for key, e in self.k.items():
             model, u = key.split("|", 1)
             out.setdefault(model, {})[u] = {"n": e["n"], "hit": None if e["ew"] is None else round(e["ew"], 3),
-                                            "base_up": round(e["up"] / e["n"], 3) if e["n"] else None, "muted": e["muted"]}
-        return {"decided": self.decided, "models": out, "muted": sum(1 for e in self.k.values() if e["muted"])}
+                                            "base_up": round(e["up"] / e["n"], 3) if e["n"] else None, "muted": e["muted"], "late": e.get("late", 0)}
+        return {"decided": self.decided, "models": out, "muted": sum(1 for e in self.k.values() if e["muted"]), "late": sum(e.get("late", 0) for e in self.k.values()),
+                "resolve_tol_s": RESOLVE_TOL_S}
 
     def export(self) -> dict:
         return {"d": self.decided, "k": {key: [e["n"], round(e["first"], 4), None if e["ew"] is None else round(e["ew"], 5), e["up"], e["muted"], e["pend"],
-                                               round(e["free"], 1)] for key, e in self.k.items()}}
+                                               round(e["free"], 1)] + ([e["late"]] if e.get("late") else []) for key, e in self.k.items()}}
 
     def restore(self, d) -> int:
         """Read back validated (storage is not trusted)."""
@@ -110,9 +111,10 @@ class VoteWatch:
         for key, v in (d.get("k") or {}).items() if isinstance(d.get("k"), dict) else ():
             if len(self.k) >= MAX_KEYS:
                 break
-            if not (isinstance(key, str) and key.split("|", 1)[0] in WINDOW_S and "|" in key and len(key) <= 40 and isinstance(v, list) and len(v) == 7):
+            if not (isinstance(key, str) and key.split("|", 1)[0] in WINDOW_S and "|" in key and len(key) <= 40 and isinstance(v, list) and len(v) in (7, 8)):
                 continue
-            n, first, ew, up, muted, pend, free = v
+            n, first, ew, up, muted, pend, free = v[:7]
+            late = v[7] if len(v) == 8 and intn(v[7]) else 0
             if not (intn(n) and fin(first) and 0 <= first <= n and (ew is None or (fin(ew) and 0 <= ew <= 1)) and intn(up) and up <= n and isinstance(muted, bool)
                     and fin(free)):
                 continue
@@ -122,7 +124,7 @@ class VoteWatch:
             if not ok_p:
                 continue
             self.k[key] = {"n": n, "first": float(first), "ew": None if ew is None else float(ew), "up": up, "muted": muted and n >= MIN_VOTES,
-                           "pend": None if pend is None else [float(pend[0]), pend[1], float(pend[2])], "free": float(free)}
+                           "pend": None if pend is None else [float(pend[0]), pend[1], float(pend[2])], "free": float(free), **({"late": late} if late else {})}
         if isinstance(d.get("d"), str) and len(d["d"]) == 10:
             self.decided = d["d"]
         return len(self.k)

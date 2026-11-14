@@ -206,9 +206,16 @@ class Probation:
         return rows[:top]
 
     # ---- kept on the relay: what decides, what is measured, and the backstop ------------------------------------------------------------------------------
-    def pset(self) -> dict:
-        """Who is in probation, as small as it can be: kept with the strategy record, so losing the shadow book can never release a strategy."""
-        return {sid: [e["P"]["since"], e["P"]["mult"], e["P"]["owner"]] for sid, e in self.st.items() if e.get("P")}
+    def pset(self, today: str | None = None) -> dict:
+        """Who is in probation, and who was released recently, as small as it can be: kept with the strategy record, so losing the shadow book can neither
+        release a strategy nor make a quick repeat count as a first demotion. [since | None, mult, owner, last release | None, repeats]."""
+        out = {}
+        for sid, e in self.st.items():
+            recent = e.get("rel") and (today is None or (dt.date.fromisoformat(today) - dt.date.fromisoformat(e["rel"])).days <= REPEAT_WINDOW * 2)
+            if e.get("P") or recent:
+                P = e.get("P") or {}
+                out[sid] = [P.get("since"), P.get("mult", 1), P.get("owner", False), e.get("rel"), e.get("rep", 0)]
+        return out
 
     def decision(self, max_g: int | None = None, pend: bool = True) -> dict:
         """The state that decides. g values are kept largest first, `max_g` of them when the store must shrink (the rest read back as zero, which only delays a
@@ -233,9 +240,17 @@ class Probation:
                 st[sid] = row
         return {"st": st, "f0": self.first_day, "g_total": len(gs)}
 
-    def measurement(self) -> dict:
-        return {"ev": self.events, "n": dict(self.counts), "hi": {d: {h: [v[0], round(v[1], 4), v[2]] for h, v in hv.items()} for d, hv in self.hits.items()},
-                "fo": [{**f, "own": [f["own"][0], round(f["own"][1], 4)], "ctrl": {k: [v[0], round(v[1], 4)] for k, v in f["ctrl"].items()}} for f in self.follow]}
+    def measurement(self, level: int = 0) -> dict:
+        """What is measured. Shed in steps when the store must shrink: the event list first (level 1), then the open windows (level 2, each counted as
+        unmeasured on read back); the counts and the per-day results are always kept (a few KB)."""
+        m = {"n": dict(self.counts), "hi": {d: {h: [v[0], round(v[1], 4), v[2]] for h, v in hv.items()} for d, hv in self.hits.items()}}
+        if level < 1:
+            m["ev"] = self.events
+        if level < 2:
+            m["fo"] = [{**f, "own": [f["own"][0], round(f["own"][1], 4)], "ctrl": {k: [v[0], round(v[1], 4)] for k, v in f["ctrl"].items()}} for f in self.follow]
+        elif self.follow:
+            m["n"] = {**m["n"], "unmeasured": m["n"].get("unmeasured", 0) + len(self.follow)}
+        return m
 
     def restore(self, decision, measurement, pset, known) -> int:
         """Read back validated, row by row (storage is not trusted). Whatever is in `pset` (the record's list) is in probation whatever the rest says: a
@@ -268,12 +283,18 @@ class Probation:
                 continue
         if is_day(d.get("f0")):
             self.first_day = d["f0"]
-        for sid, v in (pset.items() if isinstance(pset, dict) else ()):             # the backstop: in probation whatever the book said
+        for sid, v in (pset.items() if isinstance(pset, dict) else ()):             # the backstop: whatever the book said
             if not (isinstance(sid, str) and known(sid)):
                 continue
             e = self.st.setdefault(sid, {"g": 0.0, "pend": None, "P": None, "rel": None, "rep": 0})
-            if not e.get("P"):
-                ok = isinstance(v, list) and len(v) == 3 and is_day(v[0]) and v[1] in (1, 2) and isinstance(v[2], bool)
+            ok = isinstance(v, list) and len(v) in (3, 5) and (v[0] is None or is_day(v[0])) and v[1] in (1, 2) and isinstance(v[2], bool)
+            if len(v if isinstance(v, list) else []) == 5 and ok:
+                if is_day(v[3]) and (not e.get("rel") or v[3] > e["rel"]):
+                    e["rel"] = v[3]                                                     # the last release and the repeats: a quick repeat stays a repeat
+                if _int(v[4]) and v[4] <= 10:
+                    e["rep"] = max(e.get("rep", 0), v[4])
+            in_p = (not ok) or v[0] is not None
+            if in_p and not e.get("P"):
                 e["P"] = {"since": v[0] if ok else "1970-01-01", "n": 0, "ses": 0, "sm": 0.0, "mult": v[1] if ok else 1, "owner": v[2] if ok else True}
         m = measurement if isinstance(measurement, dict) else {}
         for ev in m.get("ev") if isinstance(m.get("ev"), list) else []:

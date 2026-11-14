@@ -927,8 +927,8 @@ class AutoPilotV2:
         votes = [v for _, v in labeled]
         support = [v for k, v in labeled if not self._muted(k, u)]                              # a muted model's vote supports nothing (evolution_probation_v1, C)
         agree = support[0] if len(support) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0     # a strong live direction: the plan's bar; any reading against, muted or not, stops it
-        if not agree and len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1:
-            self._p2_note("live", u, ist.date().isoformat())                            # an agreement there would have been without the mute
+        if not agree and len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1 and self.window(u)[0] <= ist.time() <= self.window(u)[1]:
+            self._p2_note("live", u, ist.date().isoformat())                            # an agreement there would have been without the mute, in the segment's hours
         strong = agree if nv == agree and not self._muted("news", u) else 0                    # the news among them: the news exception's bar
         if not hasattr(self, "agree_since"):
             self.agree_since, self.read_base = {}, {}
@@ -2158,13 +2158,14 @@ class AutoPilotV2:
             rows.append(row)
 
         def p2(level: int, max_g=None) -> dict | None:
-            """Phase 2's state in the book. Shed in this order when the book must shrink: what is measured, then the smallest g, then the sessions not yet
-            applied (both only delay a demotion), and only then open trades. Who is in probation is always kept (and is in the record too)."""
+            """Phase 2's state in the book. Shed in this order when the book must shrink: the event list, the open measurement windows, the smallest g, the
+            sessions not yet applied (these only delay a demotion), and then phase 2 altogether (the record keeps who is in probation and the vote watch): an
+            open trade is never left out while any of it is kept. The counts, the per-day results and the outage list are kept while anything of phase 2 is."""
+            if level >= 5:
+                return None
             try:
-                blob = {"d": self.probation.decision(max_g=max_g if level >= 2 else None, pend=level < 3), "vw": self.votes.export()}
-                if level < 1:
-                    blob["m"] = {"pb": self.probation.measurement(), "x": self.p2x}
-                return blob
+                return {"d": self.probation.decision(max_g=max_g if level >= 3 else None, pend=level < 4), "vw": self.votes.export(),
+                        "m": {"pb": self.probation.measurement(min(level, 2)), "x": self.p2x}}
             except Exception:                                                           # noqa: BLE001 - phase 2 never costs the book
                 return None
 
@@ -2172,27 +2173,28 @@ class AutoPilotV2:
             body = json.dumps({"v": 1, "seq": int(seq), "open": rows[:k], "p2": blob}, separators=(",", ":"), default=str)
             return json.dumps({"v": 1, "open": [], "z": base64.b64encode(zlib.compress(body.encode("ascii"), 9)).decode("ascii")}, separators=(",", ":"))
         self.shadow_io["p2_shed"] = 0
-        for level in (0, 1):
+        for level in (0, 1, 2):
             text = packed(len(rows), p2(level))
             if len(text) <= SHADOW_MAX_CHARS:
                 self.shadow_io["p2_shed"] = level
                 return text, 0
-        g_total = (p2(2) or {}).get("d", {}).get("g_total", 0)
+        g_total = (p2(3) or {}).get("d", {}).get("g_total", 0)
         lo, hi = -1, g_total                                                            # the most g that fit beside every open trade
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            if len(packed(len(rows), p2(2, mid))) <= SHADOW_MAX_CHARS:
+            if len(packed(len(rows), p2(3, mid))) <= SHADOW_MAX_CHARS:
                 lo = mid
             else:
                 hi = mid - 1
         if lo >= 0:
-            self.shadow_io["p2_shed"] = 2
-            return packed(len(rows), p2(2, lo)), 0
-        self.shadow_io["p2_shed"] = 3
-        blob = p2(3, 0)
-        text = packed(len(rows), blob)
-        if len(text) <= SHADOW_MAX_CHARS:
-            return text, 0
+            self.shadow_io["p2_shed"] = 3
+            return packed(len(rows), p2(3, lo)), 0
+        for level in (4, 5):
+            self.shadow_io["p2_shed"] = level
+            text = packed(len(rows), p2(level, 0))
+            if len(text) <= SHADOW_MAX_CHARS:
+                return text, 0
+        blob = None                                                                     # phase 2 is out of the book: only now do open trades give way
         lo, hi = 0, len(rows)
         while lo < hi:
             mid = (lo + hi + 1) // 2
@@ -2381,7 +2383,7 @@ class AutoPilotV2:
                 extra["plan"] = self.day_plan
             text = self.lab.to_json(extra or None)                                      # phase 2 never displaces a strategy record (risk review, 14 Nov 2026)
             base_kept = self.lab.last_kept
-            p2 = {"pbP": self._p2(self.probation.pset, {}), "vw": self._p2(self.votes.export, None)}
+            p2 = {"pbP": self._p2(lambda: self.probation.pset(dt.datetime.now(IST).date().isoformat()), {}), "vw": self._p2(self.votes.export, None)}
             for keep in (("pbP", "vw"), ("pbP",)):
                 cand = self.lab.to_json({**extra, **{k: p2[k] for k in keep if p2[k] is not None}})
                 if self.lab.last_kept >= base_kept:

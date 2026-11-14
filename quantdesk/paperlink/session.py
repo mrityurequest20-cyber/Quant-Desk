@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
 import time
 from pathlib import Path
@@ -120,7 +121,6 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             ist_now = clock().astimezone(IST)
             if hasattr(auto, "brief") and BRIEF_WINDOW[0] <= ist_now.time() <= BRIEF_WINDOW[1] and time.monotonic() - brief_at >= BRIEF_EVERY_S:
                 brief_at = time.monotonic()                            # the day plan's catalysts: fetched every fifteen minutes before the open; a failure keeps the last one
-                import os
                 got_brief = fetch_brief(os.environ.get("GITHUB_REPOSITORY", ""), ist_now.date())
                 if got_brief is not None:
                     auto.brief = got_brief

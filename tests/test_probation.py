@@ -264,7 +264,7 @@ def test_phase2_rides_with_the_book_and_the_record_keeps_who_is_in_probation(cfg
     ap.lab.dirty = True
     assert ap.save(relay, 1000.0, force=True)
     rec, book = A2.Lab.unpack(relay.lab), A2.Lab.unpack(relay.shadow)
-    assert rec["pbP"] == {IC: ["2026-11-06", 1, False]} and "pb" not in rec and rec["vw"]["k"]["read|NIFTY"][4] is True
+    assert rec["pbP"] == {IC: ["2026-11-06", 1, False, None, 0]} and "pb" not in rec and rec["vw"]["k"]["read|NIFTY"][4] is True
     assert book["p2"]["d"]["st"][IC]["P"]["n"] == 3 and "m" in book["p2"]
     ap2 = desk(cfg, tmp_path)[1]
     ap2.load(relay, now=T0)
@@ -438,3 +438,71 @@ def test_the_app_shows_who_is_on_probation_and_which_votes_are_muted():
     part = app[app.index("function ppAdapt"):app.index("function ppMarket")]
     assert "lab.probation" in part and "lab.votes" in part and "Adapting" in part and "cannot start one" in part
     assert "ppAdapt(sm.lab)" in app
+
+
+def test_the_records_backstop_keeps_a_quick_repeat_a_repeat():
+    """Risk re-review: with only since/mult/owner in the record, losing the book made a quick re-demotion count as a first one."""
+    known = lambda sid: sid in A2.BY_SID                                                       # noqa: E731
+    stats = {}
+    seed(stats, IC)
+    c, pb = ctx(stats), PB.Probation()
+    d = 0
+    while not pb.blocked(IC):
+        trade(pb, stats, IC, -2.0, DAYS[d], c)
+        d += 1
+        pb.flush(DAYS[d], c)
+    for i in range(PB.RELEASE_SESSIONS):
+        trade(pb, stats, IC, 0.5, DAYS[d + i], c)
+        pb.flush(DAYS[d + i + 1], c)
+    assert not pb.blocked(IC) and pb.st[IC]["rel"]
+    back = PB.Probation()
+    back.restore(None, None, pb.pset(DAYS[d + 9]), known)                                     # the book lost: only the record's backstop
+    assert not back.blocked(IC) and back.st[IC]["rel"] == pb.st[IC]["rel"]
+    d2 = d + PB.RELEASE_SESSIONS
+    while not back.blocked(IC):
+        trade(back, stats, IC, -2.0, DAYS[d2], c)
+        d2 += 1
+        back.flush(DAYS[d2], c)
+    assert back.st[IC]["P"]["mult"] == 2                                                       # still a quick repeat
+
+
+def test_shedding_keeps_the_counts_and_phase2_leaves_the_book_before_any_trade(cfg, tmp_path, monkeypatch):
+    from tests.test_shadow_carry import opened
+    rn, ap, t = opened(cfg, tmp_path)
+    ap.probation.counts["demoted"] = 7
+    ap.probation.hits = {DAYS[0]: {"overnight": [3, -0.6, 1]}}
+    ap.probation.events = [[DAYS[0], IC, "demoted", {"pad": "x" * 400}] for _ in range(300)]
+    m1 = ap.probation.measurement(1)
+    assert "ev" not in m1 and m1["n"]["demoted"] == 7 and m1["hi"] and "fo" in m1               # the event list goes first; the counts and results stay
+    full, _ = ap.shadow_json(1)
+    trades_only = A2.Lab.unpack(full)
+    noise = {s: {"g": 1.0, "pend": [DAYS[0], 1, 0.1, 0.01], "P": None, "rel": None, "rep": 0} for s in list(A2.BY_SID)[:3000]}
+    ap.probation.st.update(noise)
+    import json as J
+    bare = len(J.dumps({"v": 1, "open": [], "z": "x" * len(full)}))                            # about what the trades alone take, compressed
+    monkeypatch.setattr(A2, "SHADOW_MAX_CHARS", bare + 200)
+    text, left = ap.shadow_json(1)
+    got = A2.Lab.unpack(text)
+    assert left == 0 and len(got["open"]) == len(trades_only["open"])                          # every open trade kept...
+    assert ap.shadow_io["p2_shed"] >= 3                                                        # ...phase 2 gave way instead
+
+
+def test_late_votes_are_kept_and_reported():
+    w = VW.VoteWatch()
+    w.observe("read", "X", 0, 0.7, 100.0)
+    w.observe("read", "X", 900 + VW.RESOLVE_TOL_S + 5, None, 101.0)
+    back = VW.VoteWatch()
+    back.restore(json.loads(json.dumps(w.export())))
+    assert back.k["read|X"]["late"] == 1 and back.report()["late"] == 1 and back.report()["resolve_tol_s"] == VW.RESOLVE_TOL_S
+
+
+def test_no_stopped_agreement_is_noted_outside_the_segments_hours(cfg, tmp_path):
+    from tests.test_plan_first import NEWS_T, UP_BOOK, news_desk, rising
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    rising(rn, ap, 13, cusum_at=8)
+    t = NEWS_T + dt.timedelta(minutes=13)
+    snap = board(t, spot=24500 * math.exp(0.0005 * 13), **UP_BOOK)
+    ap.votes.muted = lambda k, u: k == "book"
+    ap.window = lambda u: (dt.time(15, 0), dt.time(15, 10), dt.time(15, 20))                   # the session's hours do not include now
+    ap.state(snap, "NIFTY", A2.V1.chains(board(NEWS_T), ap.und, ap.lots), t, None)
+    assert not ap.p2x["stop"]
