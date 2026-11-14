@@ -134,8 +134,8 @@ def test_an_overnight_and_a_convex_trade_carry_their_state(cfg, tmp_path):
 def test_a_book_too_large_keeps_its_longest_held_trades(cfg, tmp_path, monkeypatch):
     rn, ap, t = opened(cfg, tmp_path)
     full, _ = ap.shadow_json()
-    monkeypatch.setattr(A2, "SHADOW_MAX_CHARS", len(full) - 1)
-    text, left = ap.shadow_json()
+    monkeypatch.setattr(A2, "SHADOW_MAX_CHARS", int(len(full) * 0.7))
+    text, left = ap.shadow_json(ap.shadow_seq + 1)                                           # the stamp the next save will carry
     assert left >= 1 and len(text) <= A2.SHADOW_MAX_CHARS
     kept = A2.Lab.unpack(text)["open"]
     oldest = sorted(ap.shadow.items(), key=lambda kv: kv[1]["opened"])[:len(kept)]
@@ -213,6 +213,34 @@ def test_a_relay_without_the_route_still_keeps_the_record(cfg, tmp_path):
     ok = Relay(relay.lab)
     ap.shadow_dirty = True
     assert ap.save_shadow(ok, 1400.0) and ap.shadow_route                                     # the route deployed: the book is kept again, and the record waits for it again
+
+
+def test_a_book_older_than_the_record_is_never_read_back(cfg, tmp_path):
+    """Risk re-review, 14 Nov 2026: a Worker rolled back answers 404 but its storage still holds the last book; the record then saved with trades scored that the old
+    book still holds open, and a redeploy would have carried them again. Each book is stamped; the record names the last stamp before it; an older book is dropped."""
+    rn, ap, t = opened(cfg, tmp_path)
+    relay = Relay()
+    ap.save(relay, 1000.0, force=True)
+    stored = relay.shadow                                                                    # the book a rolled-back Worker keeps in storage
+    late = dt.datetime.combine(T0.date(), dt.time(15, 20), tzinfo=A2.IST)
+    cycle(rn, ap, board(late), late)                                                         # trades close and are scored
+    gone = NoRoute(relay.lab)
+    assert ap.save(gone, 2000.0, force=True) and gone.lab != relay.lab                       # the route gone: the record saves, stamped past every book
+    back = Relay(gone.lab, stored)                                                           # the route redeployed: the old book is still there
+    nxt = desk(cfg, tmp_path)[1]
+    msg = nxt.load(back, now=late)
+    assert nxt.shadow == {} and nxt.shadow_io["dropped"] == {"older than the record": len(A2.Lab.unpack(stored)["open"])} and "dropped" in msg
+    assert nxt.shadow_seq >= nxt.lab_shadow_seq > 0
+    fresh = desk(cfg, tmp_path)[1]                                                           # the normal order: book then record, both read back
+    r2 = Relay()
+    ap.shadow_dirty = ap.lab.dirty = True
+    ap.save(r2, 3000.0, force=True)
+    fresh.load(r2, now=late)
+    assert set(fresh.shadow) == set(ap.shadow) and "older than the record" not in fresh.shadow_io["dropped"]
+    held = desk(cfg, tmp_path)[1]
+    held.shadow, held.shadow_dirty, held.lab.dirty = dict(ap.shadow), True, True
+    held.save(FailingShadow(), 4000.0, force=True)
+    assert held.summary()["shadow_carry"]["held_back"] == 1                                  # a record held back is counted, never silent
 
 
 def test_an_absurd_row_costs_only_itself(cfg, tmp_path):

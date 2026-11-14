@@ -751,7 +751,10 @@ class AutoPilotV2:
         self.shadow_dirty = False                  # the open shadow book changed since it was last kept
         self.shadow_saved_at = -1e9
         self.shadow_route = True                   # False once the relay answers 404 for /paper/shadow: it keeps no book, so the record never waits for one
-        self.shadow_io: dict = {"restored": 0, "dropped": {}, "left_out": 0}     # what the last read back kept and dropped (by reason), and what the last save left out
+        self.shadow_seq = 0                        # the stamp of the last shadow book kept (or issued): each book carries its own, the record the last one before it
+        self.lab_shadow_seq = 0                    # the stamp the record read back names: a book older than it is stale (its trades may already be scored)
+        self.shadow_io: dict = {"restored": 0, "dropped": {}, "left_out": 0, "held_back": 0}   # the last read back (kept, dropped by reason), the last save's left out, and
+        #                                                                          how many times the record waited for a book that could not be kept
         self.backoff: dict[str, float] = {}        # u -> no live entry before this
         self.pending_exit: dict[str, float] = {}
         self.n = 0
@@ -2071,8 +2074,8 @@ class AutoPilotV2:
                  and num(i.get("risk_unit")) and num(i.get("spot")) and when(i.get("event_at"))]   # what plan_ok and plan_price_ok measure from must be real
         return {**d, "items": items[:PLAN_TOP], "states": d.get("states") if isinstance(d.get("states"), dict) else {}}
 
-    def shadow_json(self) -> tuple[str, int]:
-        """The open shadow book as the relay keeps it (compressed, at most SHADOW_MAX_CHARS) and how many trades did not fit: the longest held are kept first."""
+    def shadow_json(self, seq: int = 0) -> tuple[str, int]:
+        """The open shadow book as the relay keeps it (compressed, at most SHADOW_MAX_CHARS), stamped `seq`, and how many trades did not fit: the longest held first."""
         rows = []
         for (sid, u), sh in sorted(self.shadow.items(), key=lambda kv: kv[1]["opened"]):
             row = [sid, u, [[l["name"], int(l["side"]), round(float(l["px"]), 4)] for l in sh["legs"]], round(float(sh["risk"]), 6), round(float(sh["fees"]), 4),
@@ -2085,7 +2088,7 @@ class AutoPilotV2:
             rows.append(row)
 
         def packed(k: int) -> str:
-            body = json.dumps({"v": 1, "open": rows[:k]}, separators=(",", ":"), default=str)
+            body = json.dumps({"v": 1, "seq": int(seq), "open": rows[:k]}, separators=(",", ":"), default=str)
             return json.dumps({"v": 1, "open": [], "z": base64.b64encode(zlib.compress(body.encode("ascii"), 9)).decode("ascii")}, separators=(",", ":"))
         text = packed(len(rows))
         if len(text) <= SHADOW_MAX_CHARS:
@@ -2108,6 +2111,13 @@ class AutoPilotV2:
             dropped[why] = dropped.get(why, 0) + 1
         got = Lab.unpack(text) if isinstance(text, str) else {}
         rows = got.get("open") if isinstance(got.get("open"), list) else []
+        seq = got.get("seq", 0)
+        seq = seq if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0 else -1
+        self.shadow_seq = max(self.shadow_seq, seq, self.lab_shadow_seq)
+        if seq < self.lab_shadow_seq:                                                   # older than the record: some of its trades may be scored already
+            if rows:
+                dropped["older than the record"] = len(rows)
+            rows = []
         ist, und = now.astimezone(IST), {str(u).upper() for u in self.und}
         fin = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)     # noqa: E731
         for row in rows:
@@ -2178,6 +2188,8 @@ class AutoPilotV2:
             cx = got.get("cx")
             self.cx_peak = {str(k): float(v) for k, v in cx.items() if isinstance(v, (int, float)) and math.isfinite(v)} if isinstance(cx, dict) else {}
             self.day_plan = self.restore_plan(got.get("plan")) or self.day_plan          # a restart after 09:15 keeps today's plan (yesterday's is dropped as always)
+            ss = got.get("shadow_seq", 0)
+            self.lab_shadow_seq = ss if isinstance(ss, int) and not isinstance(ss, bool) and ss >= 0 else 0
             if hasattr(self, "reader"):
                 self.reader.restore(self._read_w)
             try:
@@ -2208,10 +2220,15 @@ class AutoPilotV2:
         shadow = self.save_shadow(relay, mono, force or lab_due)
         if not lab_due:
             return shadow
-        if self.shadow_dirty and getattr(relay, "put_shadow", None) is not None and self.shadow_route:
+        has_route = getattr(relay, "put_shadow", None) is not None and self.shadow_route
+        if self.shadow_dirty and has_route:
+            self.shadow_io["held_back"] = self.shadow_io.get("held_back", 0) + 1
             return shadow                                                               # the book could not be kept: the record waits for it
         try:
             extra = {"read_w": self.reader.export()} if hasattr(self, "reader") else {}
+            if not has_route:                                                           # no book kept now: any book still stored (a Worker rolled back) is older than this
+                self.shadow_seq += 1
+            extra["shadow_seq"] = self.shadow_seq                                       # record, and is dropped when read back
             if self.cx_peak:
                 extra["cx"] = {k: round(v, 3) for k, v in self.cx_peak.items()}
             if self.day_plan:
@@ -2227,8 +2244,10 @@ class AutoPilotV2:
         if put is None or not (self.shadow_dirty and (force or mono - self.shadow_saved_at >= 120)):
             return False
         try:
-            text, left_out = self.shadow_json()
+            seq = self.shadow_seq + 1
+            text, left_out = self.shadow_json(seq)
             put(text)
+            self.shadow_seq = seq
             self.shadow_dirty, self.shadow_saved_at, self.shadow_route = False, mono, True
             self.shadow_io["left_out"] = left_out
             return True
