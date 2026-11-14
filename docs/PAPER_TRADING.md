@@ -372,6 +372,12 @@ The weighted share of rises is the analogue's P(up). Its effective number of epi
   strike); a put calendar's, its debit plus about 3,100 rupees (the rate allowance).
 - **Still refused:** a sold leg in a later expiry (a reverse calendar), more near shorts than later longs, and selling the later long while it covers the near short.
 
+**The strategy builder** offers the four too: Call calendar, Put calendar, Call diagonal, Put diagonal.
+- **Building one:** the later leg goes on the next expiry's chain.
+- **What it shows:** the payoff at the near expiry (the later option at its model value) and the worst loss the paper desk will count (the later option at its
+  floor).
+- **The advisor** reasons about them like any structure, and none is suggested into an event.
+
 **AUTO v2** adds a call and a put calendar (same strike, at the money, near against next) and a call and a put diagonal (sell 1 or 2 strikes out of the money
 in the near expiry, buy at the money in the next): 432 strategies.
 - **Same treatment:** they are priced at the board's bid and offer and judged by the same worst case, shadow-tested and proof-gated.

@@ -1195,6 +1195,11 @@ const QB = (() => {
 		bw_put_butterfly: { name: "Broken-wing put butterfly", view: "A drift down to a target, little lost above", wide: true, legs: (w) => [[1, "PE", 0], [-2, "PE", -w], [1, "PE", -2 * w - 1]], dir: "down", vol: "short", conv: "mild", code: "BWP" },
 		call_backspread: { name: "Call ratio backspread", view: "A big move up, partly paid for by a sold call", wide: true, legs: (w) => [[-1, "CE", 0], [2, "CE", w]], dir: "up", vol: "long", conv: "strong", code: "CRB" },
 		put_backspread: { name: "Put ratio backspread", view: "A big move down, partly paid for by a sold put", wide: true, legs: (w) => [[-1, "PE", 0], [2, "PE", -w]], dir: "down", vol: "long", conv: "strong", code: "PRB" },
+		// calendars and diagonals: a leg marked "x" is in the NEXT expiry (owner, 14 Nov 2026: "Build Calendar and diagonal spreads")
+		call_calendar: { name: "Call calendar", view: "Sits near the strike into the near expiry; the later call keeps its value", wide: false, legs: () => [[-1, "CE", 0], [1, "CE", 0, "x"]], dir: "range", vol: "short", conv: "mild", code: "CAL", multi: true },
+		put_calendar: { name: "Put calendar", view: "Sits near the strike into the near expiry; the later put keeps its value", wide: false, legs: () => [[-1, "PE", 0], [1, "PE", 0, "x"]], dir: "range", vol: "short", conv: "mild", code: "PCAL", multi: true },
+		call_diagonal: { name: "Call diagonal", view: "A slow drift up to the sold strike", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 0, "x"]], dir: "up", vol: "short", conv: "mild", code: "DGC", multi: true },
+		put_diagonal: { name: "Put diagonal", view: "A slow drift down to the sold strike", wide: true, legs: (w) => [[-1, "PE", -w], [1, "PE", 0, "x"]], dir: "down", vol: "short", conv: "mild", code: "DGP", multi: true },
 	};
 	// ---- your own legs: any number (up to MAX_CUSTOM_LEGS, a bound on the arithmetic only), any strike on the board, buy or sell, call or put, each with a size multiple of the base lots ----------
 	const CUSTOM = { name: "Custom structure", view: "Your own legs: any number, any strike, any ratio", wide: false };
@@ -1215,14 +1220,22 @@ const QB = (() => {
 		return { legs: [...merged.values()] };
 	}
 	// legs for a template: strikes = sorted strikes on the board for the expiry; names = {strike: {CE: name, PE: name}}. Returns {legs} or {error}.
-	function legsFor(id, strikes, spot, names, width) {
+	// `next` (calendars and diagonals): {strikes, names, T} of the next expiry, where a leg marked "x" goes
+	function legsFor(id, strikes, spot, names, width, next) {
 		const t = TEMPLATES[id];
 		if (!t) return { error: "Unknown strategy." };
 		if (!strikes.length || !(spot > 0)) return { error: "No strikes or no price on the board for this underlying yet." };
-		let atm = 0;
-		strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
+		if (t.multi && !(next && next.strikes && next.strikes.length && next.T > 0)) return { error: "A calendar or diagonal needs the next expiry's chain on the board too." };
+		const atmOf = (ks) => ks.reduce((b, k, i) => (Math.abs(k - spot) < Math.abs(ks[b] - spot) ? i : b), 0);
+		const atm = atmOf(strikes), atmN = next && next.strikes ? atmOf(next.strikes) : 0;
 		const w = Math.max(1, Math.round(width || 1)), legs = [];
-		for (const [side, type, off] of t.legs(w)) {
+		for (const [side, type, off, x] of t.legs(w)) {
+			if (x === "x") {
+				const k = next.strikes[atmN + off], name = k != null && next.names[k] ? next.names[k][type] : null;
+				if (k == null || !name) return { error: `The next expiry's ${type} at ${off >= 0 ? "+" : ""}${off} strikes is not on the board.` };
+				legs.push({ side: Math.sign(side), type, strike: k, name, ...(Math.abs(side) > 1 ? { mult: Math.abs(side) } : {}), T: next.T });
+				continue;
+			}
 			const k = strikes[atm + off];
 			const name = k != null && names[k] ? names[k][type] : null;
 			if (k == null || !name) return { error: `The ${type} at ${off >= 0 ? "+" : ""}${off} strikes is not on the board: pick a smaller width.` };
@@ -1251,10 +1264,11 @@ const QB = (() => {
 		const legs = spec.legs.map((l) => {
 			const e = entry(l, spec.quotes[l.name]);
 			const mid = e.src === "book" ? (e.bid + e.ask) / 2 : (spec.quotes[l.name] || {}).ltp;
-			const iv = impliedVol(l.type, mid, spec.spot, l.strike, spec.T, r);
+			const T = Number.isFinite(l.T) && l.T > spec.T ? l.T : spec.T;                             // a calendar's later leg has its own time to run
+			const iv = impliedVol(l.type, mid, spec.spot, l.strike, T, r);
 			const spread = e.src === "book" ? (e.ask - e.bid) / ((e.ask + e.bid) / 2) : NaN;
 			const mult = Number.isInteger(l.mult) && l.mult >= 1 ? l.mult : 1;
-			return { ...l, mult, units: lots * lot * mult, lots: lots * mult, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
+			return { ...l, T, mult, units: lots * lot * mult, lots: lots * mult, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
 		});
 		const out = { legs, lots, lot, errors: [], checks: [], paperChecks: [], ok: false, paperOk: false };
 		if (!(Number.isInteger(lot) && lot > 0)) { out.errors.push(`${spec.u} has no verified lot size for the ${spec.exp || "chosen"} expiry, so this cannot be priced or sent.`); return out; }
@@ -1267,14 +1281,24 @@ const QB = (() => {
 		if (!out.definedRisk) { out.errors.push("This would leave a short call uncovered (unlimited loss). The builder only makes defined-risk structures."); return out; }
 		out.premium = legs.reduce((a, l) => a + l.side * l.units * l.px, 0);                               // + debit paid, - credit received
 		const ks = [...new Set(legs.map((l) => l.strike))].sort((a, b) => a - b), pts = [0, ...ks], far = (ks[ks.length - 1] || spec.spot) * 3;
-		const pay = (S) => legs.reduce((a, l) => a + legPay(l, S), 0), vals = [...pts, far].map((S) => pay(S));
+		const later = (l) => l.T > spec.T + 1e-9;
+		out.multi = legs.some(later);                                                                      // a calendar or diagonal: judged at the near expiry
+		if (out.multi && legs.some((l) => later(l) && l.side < 0)) { out.errors.push("A calendar's sale must be in the near expiry, covered by the later purchase (a reverse calendar's cover expires first)."); return out; }
+		// at the near expiry: the near legs at their value then; a later leg at its Black-Scholes value for the time it has left (the curve), or at the LEAST it can be
+		// worth (the worst case, as the paper gate judges it: a call S(1 - 0.02 t) - K, a put K(1 - 0.10 t) - S)
+		const floorOf = (l, S) => { const t = l.T - spec.T; return l.type === "CE" ? Math.max(0, S * (1 - 0.02 * t) - l.strike) : Math.max(0, l.strike * (1 - 0.10 * t) - S); };
+		const valOf = (l, S) => { const t = l.T - spec.T; return isFinite(l.iv) ? bs(l.type, S, l.strike, t, l.iv, r) : floorOf(l, S); };
+		const pay = out.multi ? (S) => legs.reduce((a, l) => a + (later(l) ? l.side * l.units * (valOf(l, S) - l.px) : legPay(l, S)), 0) : (S) => legs.reduce((a, l) => a + legPay(l, S), 0);
+		const payW = out.multi ? (S) => legs.reduce((a, l) => a + (later(l) ? l.side * l.units * (floorOf(l, S) - l.px) : legPay(l, S)), 0) : pay;
+		const wpts = out.multi ? [...pts, ...legs.filter(later).map((l) => (l.type === "CE" ? l.strike / (1 - 0.02 * (l.T - spec.T)) : l.strike * (1 - 0.10 * (l.T - spec.T)))), far] : [...pts, far];
+		const vals = [...pts, far].map((S) => pay(S));
 		const tailSlope = callSlope;                                                                       // beyond the highest strike the payoff slope is the net call position
 		out.unlimitedProfit = tailSlope > 0;
-		out.maxProfit = out.unlimitedProfit ? Infinity : Math.max(...vals);
-		out.maxLoss = -Math.min(...vals);
+		out.maxProfit = out.unlimitedProfit ? Infinity : out.multi ? Math.max(...Array.from({ length: 241 }, (_, i) => pay(spec.spot * (0.5 + i / 240)))) : Math.max(...vals);
+		out.maxLoss = -Math.min(...wpts.map((S) => payW(S)));
 		if (out.maxLoss < 0) { out.errors.push("This would be a guaranteed profit at every price, which is a bad quote rather than a trade. Check the prices on the board."); return out; }
 		const be = [];
-		const bp = [...pts, far];
+		const bp = out.multi ? Array.from({ length: 481 }, (_, i) => spec.spot * (0.5 + i / 480)) : [...pts, far];      // a calendar's curve needs a fine grid
 		for (let i = 0; i + 1 < bp.length; i++) {
 			const a = bp[i], b = bp[i + 1], fa = pay(a), fb = pay(b);
 			if (fa === 0 && i === 0) be.push(a); else if ((fa < 0 && fb > 0) || (fa > 0 && fb < 0)) be.push(a + (b - a) * (0 - fa) / (fb - fa));
@@ -1283,8 +1307,8 @@ const QB = (() => {
 		const lo = spec.spot * 0.85, hi = spec.spot * 1.15, n = 121;
 		out.grid = Array.from({ length: n }, (_, i) => lo + (hi - lo) * i / (n - 1));
 		out.expiry = out.grid.map(pay);
-		out.today = out.grid.map((S) => legs.reduce((a, l) => a + l.side * l.units * ((isFinite(l.iv) ? bs(l.type, S, l.strike, spec.T, l.iv, r) : (l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S))) - l.px), 0));
-		out.greeks = legs.reduce((a, l) => { const g = greeks(l.type, spec.spot, l.strike, spec.T, isFinite(l.iv) ? l.iv : 0.2, r); const m = l.side * l.units; return { delta: a.delta + m * g.delta, gamma: a.gamma + m * g.gamma, theta: a.theta + m * g.theta, vega: a.vega + m * g.vega }; }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
+		out.today = out.grid.map((S) => legs.reduce((a, l) => a + l.side * l.units * ((isFinite(l.iv) ? bs(l.type, S, l.strike, l.T, l.iv, r) : (l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S))) - l.px), 0));
+		out.greeks = legs.reduce((a, l) => { const g = greeks(l.type, spec.spot, l.strike, l.T, isFinite(l.iv) ? l.iv : 0.2, r); const m = l.side * l.units; return { delta: a.delta + m * g.delta, gamma: a.gamma + m * g.gamma, theta: a.theta + m * g.theta, vega: a.vega + m * g.vega }; }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
 		out.fees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c, inst) + fees(-l.side, l.px, l.units, c, inst), 0);       // in and out at the entry price: the statutory part of a round trip
 		out.exitSpread = legs.reduce((a, l) => a + l.units * (isFinite(l.spread) ? (l.spread * l.px) / 2 : halfSpread(l.px, c, inst)), 0);   // crossing the spread again on the way out
 		out.entryFees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c, inst), 0);                       // the entry leg only: the paper gate counts "the whole premium plus fees"
@@ -1418,7 +1442,7 @@ const QB = (() => {
 	// the written structure a design turns out to be (its legs, at some width, are the design's), or null: a design of its own
 	function knownAs(rows) {
 		const key = JSON.stringify(canon(rows));
-		for (const [id, t] of Object.entries(TEMPLATES)) for (const w of t.wide ? [1, 2, 3, 4, 5, 6] : [1]) {
+		for (const [id, t] of Object.entries(TEMPLATES)) if (!t.multi) for (const w of t.wide ? [1, 2, 3, 4, 5, 6] : [1]) {
 			if (JSON.stringify(canon(t.legs(w).map(([side, type, off]) => ({ side, type, off })))) === key) return { id, width: w, name: t.name + (t.wide ? `, ${w} strike${w === 1 ? "" : "s"} wide` : "") };
 		}
 		return null;
@@ -1436,7 +1460,7 @@ const QB = (() => {
 		strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
 		const span = Math.min(6, Math.max(atm, strikes.length - 1 - atm)), rnd = rng(spec.seed || 7);
 		const parents = [];
-		for (const [, t] of Object.entries(TEMPLATES)) if (t.dir === view) for (const w of t.wide ? [1, 2, 3] : [1]) parents.push(canon(t.legs(w).map(([side, type, off]) => ({ side, type, off }))));
+		for (const [, t] of Object.entries(TEMPLATES)) if (t.dir === view && !t.multi) for (const w of t.wide ? [1, 2, 3] : [1]) parents.push(canon(t.legs(w).map(([side, type, off]) => ({ side, type, off }))));
 		if (!parents.length) return { error: "No structure to start from." };
 		const grid = (zs) => { const pts = []; for (const [a, b] of zs) for (let i = 0; i <= 12; i++) pts.push(spot + em * (a + (b - a) * i / 12)); return pts; };
 		const right = grid(zones), rightEach = zones.map((z) => grid([z])), wrong = grid(ZONES[OPPOSITE[view]]), seen = new Set(), found = [];
@@ -1588,9 +1612,9 @@ const AN = (() => {
 		return tot > 0 ? prob / tot : null;
 	}
 	const VIEWS = {
-		up: { name: "Up", ids: ["long_call", "bull_call_spread", "bull_put_spread", "bw_call_butterfly", "call_backspread"] },
-		down: { name: "Down", ids: ["long_put", "bear_put_spread", "bear_call_spread", "bw_put_butterfly", "put_backspread"] },
-		range: { name: "Stays in a range", ids: ["iron_condor", "iron_butterfly", "call_butterfly", "put_butterfly", "bull_put_spread", "bear_call_spread"] },
+		up: { name: "Up", ids: ["long_call", "bull_call_spread", "bull_put_spread", "bw_call_butterfly", "call_backspread", "call_diagonal"] },
+		down: { name: "Down", ids: ["long_put", "bear_put_spread", "bear_call_spread", "bw_put_butterfly", "put_backspread", "put_diagonal"] },
+		range: { name: "Stays in a range", ids: ["iron_condor", "iron_butterfly", "call_butterfly", "put_butterfly", "call_calendar", "put_calendar", "bull_put_spread", "bear_call_spread"] },
 		big: { name: "Big move, either way", ids: ["long_straddle", "long_strangle", "call_backspread", "put_backspread"] },
 	};
 	// ideas for a view: every structure that fits it, at widths 1 to 4 strikes, each analysed on the live prices and ranked. analyzeFn(id, width) -> the builder's analysis (or {errors}).
@@ -1870,7 +1894,7 @@ function bdAdvisor(cx) {
 	return put(box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "The reasons are the textbook's and the desk's own record by structure; the designs are judged on your view being right. Neither is a forecast: before costs, options at the market's own volatility are a fair bet."));
 }
 function bdIdeas(ctx) {
-	const { B, strikes, names, spot, T, c, data, sq, rows } = ctx;
+	const { B, strikes, names, spot, T, c, data, sq, rows, next } = ctx;
 	const sigma = AN.atm(rows, spot, T, null);
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
 	const box = h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Ideas for your view"),
@@ -1878,7 +1902,7 @@ function bdIdeas(ctx) {
 	if (!B.view) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Pick what you expect and every structure that fits it is priced on the live board and ranked."));
 	if (!sigma || sigma.iv == null) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "No volatility to price the chances with yet."));
 	const analyzeFn = (id, width) => {
-		const L = QB.legsFor(id, strikes, spot, names, width);
+		const L = QB.legsFor(id, strikes, spot, names, width, next);
 		return L.error ? null : QB.analyze({ u: B.u, exp: B.exp, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: 1 });
 	};
 	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: QB.rateOf(B.u, c) }), B.sort).slice(0, 6);
@@ -1973,6 +1997,8 @@ function bdDraw() {
 	const exps = Object.keys(chains[B.u]).sort((p, q) => liveExpiryKey(p) - liveExpiryKey(q));
 	if (!exps.includes(B.exp)) B.exp = exps[0];
 	const ch = chains[B.u][B.exp], strikes = Object.keys(ch).map(Number).sort((p, q) => p - q);
+	const nextExp = exps[exps.indexOf(B.exp) + 1], nextCh = nextExp ? chains[B.u][nextExp] : null;          // a calendar's later leg: the next expiry on the board
+	const next = nextCh ? { strikes: Object.keys(nextCh).map(Number).sort((p, q) => p - q), names: nextCh, T: QB.yearsTo(nextExp, Date.now()), exp: nextExp } : null;
 	const sq = data.quotes[B.u] || data.quotes[liveNames(B.u, data.quotes).fut] || {}, spot = sq.ltp;        // an MCX or currency option's underlying is its future (-MCX, -CDS)
 	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = B.tpl === "custom" ? QB.CUSTOM : QB.TEMPLATES[B.tpl];
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
@@ -1982,7 +2008,7 @@ function bdDraw() {
 		h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Structure"), h("span", { class: "hint" }, tpl.view)),
 			h("div", { class: "chips", style: "padding:4px 16px 8px" }, exps.map((e) => chip(e.slice(0, 2) + " " + cap(e.slice(2, 5).toLowerCase()), e === B.exp, () => { B.exp = e; S.lv.exp = e; bdDraw(); }))),
 			h("div", { class: "chips", style: "padding:0 16px 10px" }, [...Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); })),
-				chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
+				chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length && !(QB.TEMPLATES[B.tpl] || {}).multi) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
 			B.tpl === "custom" ? bdCustom(B, strikes, spot) : null,
 			tpl.wide ? step("Width (strikes)", B.width, () => { B.width = Math.max(1, B.width - 1); bdDraw(); }, () => { B.width = Math.min(10, B.width + 1); bdDraw(); }) : null,
 			step("Lots (" + ((inst.lots ? inst.lots[B.exp] : inst.lot) || "?") + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); })));
@@ -1992,8 +2018,8 @@ function bdDraw() {
 	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(B.u, c));
 	if (S.open.advise === undefined) S.open.advise = true;                       // the advisor starts open, right under the structures: which one, and why, comes first
 	put(body, fold("advise", "Which strategy now, and why", "every structure, reasoned against the desk's read", bdAdvisor({ B, strikes, names, spot, T, c, data, sq, rows })));
-	const ideas = () => fold("ideas", "Ideas for your view", "structures that fit what you expect", bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
-	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
+	const ideas = () => fold("ideas", "Ideas for your view", "structures that fit what you expect", bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows, next }));
+	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width, next);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error), ideas());
 	const spec = { u: B.u, exp: B.exp, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
 	const a = QB.analyze(spec);
@@ -2008,7 +2034,8 @@ function bdDraw() {
 				h("div", {}, h("span", {}, "Worst loss"), h("b", { class: "mono dn" }, inr(-a.maxLoss))),
 				h("div", {}, h("span", {}, "Best profit"), h("b", { class: "mono up" }, a.unlimitedProfit ? "No cap" : inr(a.maxProfit, true))),
 				h("div", {}, h("span", {}, "Break-even" + (a.breakevens.length === 1 ? "" : "s")), h("b", { class: "mono" }, a.breakevens.map((b) => num(b, 0)).join(" · ") || "—"))),
-			h("div", { style: "padding:10px 16px 6px" }, bdPayoff(a, spot))),
+			h("div", { style: "padding:10px 16px 6px" }, bdPayoff(a, spot)),
+			a.multi ? h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:0 16px 10px" }, "A calendar is drawn at the near expiry, the later option at its model value. The worst loss counts the later option at the least it can ever be worth (the paper desk's own rule), so it sits below the curve.") : null),
 		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600;display:flex;gap:8px;align-items:center" }, "Could the paper desk open this today?", h("b", { class: a.paperOk ? "up" : "dn" }, a.paperOk ? "Yes, so far" : "No")),
 			(a.paperOk ? [] : a.paperChecks.filter((x) => !x.ok)).map(tick)),
 		bdTicket(a, tpl),

@@ -65,7 +65,7 @@ console.log(JSON.stringify({ c, p, parity: c - p - (100 - 100 * Math.exp(-0.05))
 @needs_node
 def test_each_structure_has_the_payoff_the_textbook_gives_and_defined_risk(tmp_path):
     o = node(tmp_path, BOARD + r"""
-for (const id of Object.keys(QB.TEMPLATES)) { const a = run(id, 2, 1); out[id] = a.error ? { error: a.error } : { risk: a.definedRisk, prem: a.premium, maxP: a.maxProfit === Infinity ? "inf" : a.maxProfit, maxL: a.maxLoss, be: a.breakevens, ok: a.ok, unl: a.unlimitedProfit }; }
+for (const id of Object.keys(QB.TEMPLATES).filter((i) => !QB.TEMPLATES[i].multi)) { const a = run(id, 2, 1); out[id] = a.error ? { error: a.error } : { risk: a.definedRisk, prem: a.premium, maxP: a.maxProfit === Infinity ? "inf" : a.maxProfit, maxL: a.maxLoss, be: a.breakevens, ok: a.ok, unl: a.unlimitedProfit }; }
 console.log(JSON.stringify(out));
 """)
     lot, step, w = 65, 50, 2
@@ -371,7 +371,7 @@ console.log(JSON.stringify({
     assert o["eventIC"]["score"] < 1 and any("no volatility is sold" in a for a in o["eventIC"]["against"])
     assert o["standAside"] is True and o["fits"] is False                                                       # a range view in an event: nothing fits, and it says so
     assert o["recTop"] == "call_butterfly" and any("shadow record" in a for a in o["recIC"]["against"])       # the desk's own record moves the ranking
-    assert o["every"] == o["n"] == 16
+    assert o["every"] == o["n"] == 20                                                                     # 16 single-expiry structures and 4 calendars or diagonals
     assert o["inv"]["id"] == "inv:Gabc12" and o["inv"]["invented"] is True                                   # the desk's inventions are on the list, judged the same way
 
 
@@ -426,3 +426,30 @@ def test_the_builder_finds_an_mcx_or_currency_underlying_and_uses_only_its_own_n
     assert 'data.quotes[B.u + "-FUT"]' not in draw + flow and "liveNames(B.u, data.quotes).fut" in draw + flow
     for body in (draw, flow, APP[APP.index("function bdIdeas"):APP.index("function bdPayoff")]):
         assert not re.search(r"rateOf\(u\b", body) and "B.u || u" not in body
+
+
+@needs_node
+def test_a_calendar_is_valued_at_the_near_expiry_with_its_worst_case_at_the_floor(tmp_path):
+    """Owner, 14 Nov 2026: "Build Calendar and diagonal spreads". The builder places a calendar's later leg on the next expiry's chain and judges it as the paper gate does."""
+    o = node(tmp_path, BOARD + r"""
+const T2 = T + 7 / 365, names2 = {};
+STRIKES.forEach((k) => { names2[k] = { CE: "X" + k + "CE", PE: "X" + k + "PE" };
+  for (const t of ["CE", "PE"]) { const v = QB.bs(t, SPOT, k, T2, 0.14, 0.07); q["X" + k + t] = { ltp: +v.toFixed(2), bid: +(v * 0.995).toFixed(2), ask: +(v * 1.005).toFixed(2), age_s: 2 }; } });
+const next = { strikes: STRIKES, names: names2, T: T2 };
+for (const id of ["call_calendar", "put_calendar", "call_diagonal", "put_diagonal"]) {
+  const L = QB.legsFor(id, STRIKES, SPOT, names, 2, next);
+  const a = QB.analyze({ u: "NIFTY", legs: L.legs, quotes: q, spot: SPOT, spotAge: 2, T, lots: 1 });
+  out[id] = { legs: L.legs.map((l) => [l.side, l.type, l.strike, l.name[0]]), err: a.errors, multi: a.multi, prem: a.premium, maxL: a.maxLoss, maxP: a.maxProfit, be: a.breakevens, risk: a.definedRisk };
+}
+out.none = QB.legsFor("call_calendar", STRIKES, SPOT, names, 1, null).error;
+const rev = QB.analyze({ u: "NIFTY", legs: [{ side: 1, type: "CE", strike: 24500, name: "C24500" }, { side: -1, type: "CE", strike: 24500, name: "X24500CE", T: T2 }], quotes: q, spot: SPOT, spotAge: 2, T, lots: 1 });
+out.rev = rev.errors;
+console.log(JSON.stringify(out));
+""")
+    cal = o["call_calendar"]
+    assert cal["err"] == [] and cal["multi"] is True and cal["risk"] is True and cal["legs"] == [[-1, "CE", 24500, "C"], [1, "CE", 24500, "X"]]
+    assert cal["prem"] > 0 and cal["maxL"] == pytest.approx(cal["prem"] + 0.02 * 7 / 365 * 3 * 24500 * 65, rel=1e-6)   # the debit, plus the floor's allowance at three times its strike (as the gate)
+    assert 0 < cal["maxP"] < 1e6 and len(cal["be"]) == 2                                                     # the tent: two break-evens either side of the strike
+    assert o["put_calendar"]["maxL"] > o["put_calendar"]["prem"] and o["put_calendar"]["err"] == []
+    assert o["call_diagonal"]["legs"] == [[-1, "CE", 24600, "C"], [1, "CE", 24500, "X"]] and o["call_diagonal"]["err"] == []
+    assert "next expiry" in o["none"] and o["rev"] and "near expiry" in o["rev"][0]
