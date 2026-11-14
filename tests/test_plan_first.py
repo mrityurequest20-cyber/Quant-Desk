@@ -134,7 +134,7 @@ def test_an_overnight_trade_is_out_by_the_close_of_the_session_before_expiry(cfg
     assert not rn.account.positions and any("its expiry is next" in o.get("_why", "") for o in mine)
 
 
-def test_a_convex_trade_also_goes_live_only_when_planned(cfg, tmp_path):
+def test_a_convex_trade_unplanned_and_not_yet_held_five_minutes_waits_and_a_planned_one_goes(cfg, tmp_path):
     from tests.test_convex import XG, desk as cx_desk, proven as cx_proven, wide_board
     rn, ap = cx_desk(cfg, tmp_path, stats=cx_proven())                                         # a 1-crore paper account: a strangle lot fits 0.5% of it
     ap.plan_only = True
@@ -301,3 +301,73 @@ def test_a_big_move_test_that_holds_on_the_live_board_is_a_reason_too(cfg, tmp_p
             assert not rn.account.ledger, i
     pos = list(rn.account.positions.values())
     assert {p.strategy.split()[2] for p in pos} == {XG} and "taken on a change in the live data (data: its test has held" in pos[0].thesis
+
+
+# ---- the risk review of 14 Nov 2026 (findings 1, 2, 4, 5): each pinned so it cannot come back -------------------------------------------------------------
+def test_a_tail_test_must_itself_hold_five_minutes_not_just_be_looked_at(cfg, tmp_path):
+    from quantdesk.paper import runner as RR
+    from tests.test_convex import desk as cx_desk, wide_board
+    tail = "XG2.atan.3/1.s"                                                                      # passes the EVT test on cheap options, fails it on rich ones
+    rn, ap = cx_desk(cfg, tmp_path, stats={tail: [20, 16.0, 80.0, 4]})
+    ap.plan_only = True
+    ap.day_plan = {"built_at": "2026-11-09T07:30+05:30", "items": []}
+
+    def at(i, iv):
+        t = NEWS_T + dt.timedelta(minutes=i)
+        snap = wide_board(t, iv=iv)
+        rn.step(snap, ap.decide(snap, rn.account, RR.Runner.server_now(snap), news={"items": [], "events": []}), False, t.astimezone(dt.timezone.utc))
+    for i in range(7):
+        at(i, 0.40)                                                                              # rich: the tail test fails, whatever matches() says
+    at(7, 0.10)                                                                                  # one cheap cycle: a flicker
+    assert not rn.account.ledger
+    for i in range(8, 12):
+        at(i, 0.10)
+    assert not rn.account.ledger                                                                 # four minutes held: not yet
+    for i in range(12, 14):
+        at(i, 0.10)
+    assert {p.strategy.split()[2] for p in rn.account.positions.values()} == {tail}             # five minutes of the test itself holding
+
+
+def test_a_hold_with_a_gap_starts_again():
+    ap = A2.AutoPilotV2(("NIFTY",), {"NIFTY": 65}, lambda *a: 0.0, None)
+    ap.cx_first = {}
+    k = ("NIFTY", "XS0.avan.3/1.s")
+    assert not ap._held(k, 0.0) and not ap._held(k, 60.0) and not ap._held(k, 240.0)            # 240 - 60 > LIVE_GAP_S: the clock restarted at 240
+    assert not ap._held(k, 480.0) and ap._held(k, 540.0) is False and ap._held(k, 600.0) is False   # 480 - 240 > gap again
+    for t in range(600, 960, 60):
+        held = ap._held(k, float(t))
+    assert held                                                                                  # sighted every minute for five: held
+    st = {"agree": "up", "sources": ["book", "forward", "move"], "votes": 3, "read": None, "hmm": {}}
+    ap.agree_since = {"NIFTY": (1, NEWS_T.timestamp() - 3600, NEWS_T.timestamp() - 1800)}       # held an hour, but last seen half an hour ago
+    assert ap.live_trigger("NIFTY", st, {"items": []}, NEWS_T) is None
+    ap.agree_since = {"NIFTY": (1, NEWS_T.timestamp() - 600, NEWS_T.timestamp())}
+    assert ap.live_trigger("NIFTY", st, {"items": []}, NEWS_T)["kind"] == "data"
+
+
+def test_a_planned_strategy_refused_by_the_plan_does_not_come_back_through_a_trigger(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    ap.day_plan["items"] = [{"u": "NIFTY", "sid": sid, "risk_unit": 1e9, "spot": 24500.0}]     # planned, but 11:30 is past its entry window
+    news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
+    session(rn, ap, news, **UP_BOOK)
+    assert not rn.account.ledger
+    rn, ap, sid = news_desk(cfg, tmp_path / "b")                                               # the same news with it unplanned: taken, and labelled as news
+    session(rn, ap, news, **UP_BOOK)
+    th = next(iter(rn.account.positions.values())).thesis
+    assert "taken on important news" in th and "On the day plan" not in th
+
+
+def test_the_convex_stake_holds_at_the_orders_own_limit_price(cfg, tmp_path):
+    from quantdesk.paper import convex as CX
+    from tests.test_convex import XG, desk as cx_desk, proven as cx_proven, wide_board
+    from quantdesk.paper import runner as RR
+    rn, ap = cx_desk(cfg, tmp_path, stats=cx_proven())
+    for i in range(2):
+        t = OPEN + dt.timedelta(minutes=i)
+        snap = wide_board(t)
+        mine = ap.decide(snap, rn.account, RR.Runner.server_now(snap))
+        rn.step(snap, mine, False, t.astimezone(dt.timezone.utc))
+        for o in mine:
+            if o.get("side") == "package":
+                assert o["net_limit"] <= CX.STAKE_PCT * 10_000_000                              # the most a fill may cost is inside the 0.5% stake
+    paid = sum(r["qty"] * r["price"] + r["fees"] for r in rn.account.ledger if r["kind"] == "buy")
+    assert 0 < paid <= CX.STAKE_PCT * 10_000_000 and {p.strategy.split()[2] for p in rn.account.positions.values()} == {XG}

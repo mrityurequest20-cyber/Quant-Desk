@@ -450,7 +450,9 @@ There is no price stop below that: the stake is the stop. One lot cannot be spli
 (the structure) has 20 shadow trades, it has 5 of its own, and its hierarchical average is above zero. A good record here is many small losses and a few large
 wins: the hit rate is not the measure, the average R is. Expect weeks of shadow trading before the first live trade.
 
-**Both books trade (the owner's choice):** the directional and premium-selling strategies keep trading exactly as before. The app's Paper tab has a Convexity
+**Both books trade (the owner's choice):** both are tested in shadow all day, and both go live only by the rules of plan-first trading below (the
+day plan, important news, or a change in the live data that holds). Since then, a flat view's premium selling (an iron condor) is never planned or triggered, so it
+trades in shadow only. The app's Paper tab has a Convexity
 desk panel: the month's spend against its budget, the stake, what is open, what is proven, and which tests pass now on each underlying.
 
 ## The scheduled-events calendar (`quantdesk/paper/eventcal.py`, 14 Nov 2026)
@@ -522,7 +524,8 @@ and look for high risk to reward trades." Every ten minutes from 06:00 to 09:15,
 - **Ranking:** proven strategies first, then by measured expectancy in R, then by catalysts and reward to risk. At most two per
   underlying and ten in all. Each comes with its legs, rupees at risk and to gain per lot, and its reasons.
 
-**At the open (since 14 Nov 2026: plan first, `PLAN_ONLY`):** the plan is the only way a trade is opened, in both books. The owner:
+**At the open (since 14 Nov 2026: plan first, `PLAN_ONLY`):** the plan is the main way a trade is opened, in both books; the news and the data
+exceptions below are the only others. The owner:
 "every day it should analyze the news and everything ... prior we are deciding it ... not when the market opens. Then it's fine.
 Okay, then it takes trade."
 - **Taken:** from the segment's first entry time (09:20 for NSE), for 100 minutes, a planned strategy with its shadow record
@@ -531,7 +534,8 @@ Okay, then it takes trade."
   been **contradicted**: the open's view is the opposite one, the underlying has already gone through the planned trade's
   volatility stop from the planned price, the trade now risks more than 1.5 times what the plan priced, a big-move trade's options
   have turned rich, or its event has passed.
-- **Nothing else is opened during the day, with one exception.** Prices, news and every reading are still recorded, and every
+- **Nothing else is opened during the day, except by the two exceptions below** (important news, a change in the live data) and a Convexity desk test that
+  has held five minutes on the live board. Prices, news and every reading are still recorded, and every
   strategy is still traded in shadow, so the record keeps growing.
 - **The exception: important news in the session, at any time** (the owner, 14 Nov 2026: "if during the trading time if any news
   comes up which could be important then also allow the system to trade", and "There is not like 45 minutes window ... in trading
@@ -562,8 +566,12 @@ Okay, then it takes trade."
     CUSUM change point is drifting the same way. What the plan already expected is not a new reason;
   - the strategy offers a **reward to risk of 2 or better**, as on the plan (an overnight strategy, the volatility stop).
 
-  A big-move trade opens when a Convexity desk test has held on the live board for five minutes. Same proof gates, sizing and
-  risk gate; one live-triggered directional position per instrument at a time. The thesis says what changed.
+  A big-move trade opens when a Convexity desk test has held on the live board for five minutes: the test itself (for the tail
+  test, the structure's EVT value) must pass at each sighting, and a gap of more than two minutes between sightings starts the
+  clock again; the same for the live agreement. A planned strategy the plan's own checks refused (late, contradicted, dear) does
+  not come back through a trigger, and every live-triggered trade needs the reward to risk of 2. A convex package is sized at
+  its order's own limit price (the offer plus its slippage allowance), so the 0.5% stake is a ceiling on what a fill can cost.
+  Same proof gates and risk gate; one live-triggered directional position per instrument at a time. The thesis says what changed.
 - **Same limits:** the risk gate, the loss caps and the proof gate are the same as for any trade.
 - **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
 - **Yesterday's plan** never steers today.

@@ -144,6 +144,7 @@ NEWS_MIN_NOVELTY = 0.5                    # a new story, not a repeat of one alr
 # pre-market read, in the options and OI sentiment since the open, or a CUSUM change point) is a reason as important news is. ------------------------------------------
 LIVE_PERSIST_S = 300                      # the live agreement (or a big-move test) must have held this long: a change, not a flicker
 READ_SHIFT = 0.15                         # the market read's P(up) has moved this much since the session's first read
+LIVE_GAP_S = 120                          # a hold is continuous: a gap longer than this between two sightings starts the clock again
 NEWS_TOUCH_MIN = 0.3                      # reaching an instrument: named in it, or its subjects move it this much (newsmodel channels)
 OVERNIGHT_TH_PCT = 0.40                   # the overnight markets' median move that counts as a vote
 INDEX_U = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"})     # the overnight cue and macro events are votes for the indices only
@@ -810,7 +811,8 @@ class AutoPilotV2:
         if not hasattr(self, "agree_since"):
             self.agree_since, self.read_base = {}, {}
         prev = self.agree_since.get(u)
-        self.agree_since[u] = (agree, prev[1] if prev and prev[0] == agree else t) if agree else None     # since when this agreement has held
+        first = prev[1] if agree and prev and prev[0] == agree and t - prev[2] <= LIVE_GAP_S else t
+        self.agree_since[u] = (agree, first, t) if agree else None                         # (direction, since when it has held without a gap, last seen)
         first_t = self.window(u)[0]
         if read and read.get("p_up") is not None and ist.time() >= first_t and (self.read_base.get(u) or (None,))[0] != ist.date():
             self.read_base[u] = (ist.date(), float(read["p_up"]), read.get("buildup"))           # the session's first read: what "since the open" is measured from
@@ -1550,8 +1552,9 @@ class AutoPilotV2:
         if nw and "news" in (st.get("sources") or []):
             return {"why": nw["why"], "kind": "news"}
         since = (getattr(self, "agree_since", {}) or {}).get(u)
-        if not since or ist.timestamp() - since[1] < LIVE_PERSIST_S:
-            return None
+        now_s = ist.timestamp()
+        if not since or now_s - since[2] > LIVE_GAP_S or now_s - since[1] < LIVE_PERSIST_S:
+            return None                                                                    # not seen just now, or not held long enough
         changes = []
         pv = (((self.day_plan or {}).get("states") or {}).get(u) or {}).get("view") if self.day_plan else None
         if pv != d:
@@ -1690,10 +1693,12 @@ class AutoPilotV2:
                 if draw > 0:
                     best = (draw, s)
                     break
+            via_plan = best is not None
             live_busy = any(pkg["u"] == u and not CX.is_convex(BY_SID[pkg["sid"]].struct) for pkg in pk.values())    # one directional position on it at a time
             nw = self.live_trigger(u, st, news, ist) if self.plan_only and best is None and not live_busy else None
-            pool = (self.strategies() if not self.plan_only else
-                    [s for s in self.strategies() if s.hold == "overnight" and s.view == st.get("agree")] if nw else [])
+            planned_u = set(self.planned(u))
+            pool = (self.strategies() if not self.plan_only else                        # a planned strategy the plan's own checks refused does not come back this way
+                    [s for s in self.strategies() if s.hold == "overnight" and s.view == st.get("agree") and s.sid not in planned_u] if nw else [])
             for s in pool if best is None else ():                                     # PLAN_ONLY: nothing the plan did not name, but important news or a change in the data
                 if (s.sid, u) in busy or not self.matches(s, st):
                     continue
@@ -1713,7 +1718,7 @@ class AutoPilotV2:
                 continue
             if self.plan_only and not self.plan_price_ok(s, u, p):
                 continue
-            if self.plan_only and nw and s.sid not in self.planned(u):                  # a live trade: the plan's reward to risk too
+            if self.plan_only and not via_plan:                                         # a live trade: the plan's reward to risk too
                 reward = min(s.tp * p["risk"], p["best"]) if math.isfinite(p["best"]) else s.tp * p["risk"]
                 if p["risk"] <= 0 or reward / (s.sl * p["risk"]) < PLAN_MIN_RR:
                     continue
@@ -1723,7 +1728,7 @@ class AutoPilotV2:
             o = self._order(s, st, p, t, best[0])
             if edge is not None:
                 o["thesis"] = (o["thesis"] + f" Tail check (EVT): {edge:+.2f}R expected to expiry.")[:1000]
-            if s.sid in self.planned(u):
+            if via_plan:
                 o["thesis"] = (o["thesis"] + " On the day plan built before the open.")[:1000]
             elif self.plan_only and nw:
                 o["thesis"] = (o["thesis"] + (f" Not on the plan: taken on important news in the session ({nw['why']}), with {st.get('votes')} readings agreeing."
@@ -1760,7 +1765,7 @@ class AutoPilotV2:
         meta = self._cx_meta(text)
         old = self.cx_peak.get(text, -math.inf)
         peak = max(old, r)
-        if peak >= old + 0.25 or text not in self.cx_peak:
+        if peak > old or text not in self.cx_peak:
             self.lab.dirty = True                                                       # kept with the record: a restart does not loosen the trail
         self.cx_peak[text] = peak
         n_now = min(abs(p.qty) // max(1, p.instrument.lot_size) for p in pkg["legs"].values())
@@ -1780,6 +1785,13 @@ class AutoPilotV2:
             self.pending_exit[sym] = t + EXIT_RESEND_S
             out.append({"id": self._oid(t, "x"), "side": "sell", "symbol": sym, "lots": lots, "queued_at": int(t * 1000), "_why": f"{TAG} exit: {why}"})
         return out
+
+    def _held(self, key, t: float) -> bool:
+        """A convex test seen now: has it held LIVE_PERSIST_S without a gap longer than LIVE_GAP_S between sightings?"""
+        prev = self.cx_first.get(key)
+        first = prev[0] if prev and t - prev[1] <= LIVE_GAP_S else t
+        self.cx_first[key] = (first, t)
+        return t - first >= LIVE_PERSIST_S
 
     def _cx_entries(self, snap, account, states: dict, ch, t: float, ist: dt.datetime, pk: dict, taken: set, news=None) -> list[dict]:
         """New convex packages: a ready strategy (convex_ready) whose test passes, chosen by Thompson sampling, sized to STAKE_PCT of the account, within this month's
@@ -1814,10 +1826,10 @@ class AutoPilotV2:
                 if planned:
                     if not self.plan_ok(s, st, ist):
                         continue
-                elif not self.matches(s, st):
-                    self.cx_first.pop((u, s.sid), None)
+                elif not self.matches(s, st) or (self.plan_only and not nw and self.price(snap, s, st, ch) is None):
+                    self.cx_first.pop((u, s.sid), None)                                # the test itself (the tail test is made when it is priced) fails now
                     continue
-                elif self.plan_only and not nw and t - self.cx_first.setdefault((u, s.sid), t) < LIVE_PERSIST_S:
+                elif self.plan_only and not nw and not self._held((u, s.sid), t):
                     continue                                                           # a test that has not held long enough: a flicker
                 draw = self.lab.draw(s.sid, self.rng)
                 if draw > 0 and (best is None or draw > best[0]):
@@ -1829,18 +1841,19 @@ class AutoPilotV2:
             if p is None or any(l["name"] in taken for l in p["legs"]) or (self.plan_only and not self.plan_price_ok(s, u, p)):
                 continue
             if self.plan_only and self.plan_item(u, s.sid) is None:
-                held = (t - self.cx_first.get((u, s.sid), t)) / 60
+                held = (t - (self.cx_first.get((u, s.sid)) or (t, t))[0]) / 60
                 st = {**st, "cx": {**(st.get("cx") or {}), "news": nw["why"] if nw else f"data: its test has held {held:.0f} minutes on the live board"}}
             stake = min(CX.STAKE_PCT * eq, budget - spent)
-            lots = CX.lots_for(stake, p["risk"], p["lot"])
+            worst = sum(math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK for l in p["legs"]) + p["fees"]   # the order's own limit: the most a fill can cost
+            lots = CX.lots_for(stake, worst, p["lot"])
             if lots < 1:
-                self.cx_status["note"] = (f"{ist:%d %b %H:%M} {u}: {s.sid} passed its test, but a lot risks Rs {p['risk'] * p['lot']:.0f} and it may risk Rs {max(stake, 0):.0f} "
+                self.cx_status["note"] = (f"{ist:%d %b %H:%M} {u}: {s.sid} passed its test, but a lot risks Rs {worst * p['lot']:.0f} and it may risk Rs {max(stake, 0):.0f} "
                                           f"(0.5% a trade; Rs {max(budget - spent, 0):.0f} left of this month's 3%)")
                 continue
             ev = (((self.plan_item(u, s.sid) or {}).get("event_at")) or ((st.get("cx") or {}).get("event") or {}).get("at")) if s.vol == "event" else None
             o = self._order(s, st, p, t, best[0], lots=lots, event_at=ev)
             out.append(o)
-            spent += lots * p["risk"] * p["lot"]
+            spent += lots * worst * p["lot"]
             busy.add(u)
             taken |= {l["name"] for l in p["legs"]}
             self.cx_backoff[u] = t + ENTRY_BACKOFF_S
