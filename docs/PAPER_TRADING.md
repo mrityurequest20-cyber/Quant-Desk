@@ -558,12 +558,14 @@ Okay, then it takes trade."
   particular risk reward opportunity ... Same applies to there also"). The 06:00 to 09:15 plan is what the market could look like
   from last night's data; the live market is its own setup. At any time in the session, a directional trade the plan did not
   name may open when:
-  - the live market shows a **strong direction**: three or more readings agreeing (book pressure, the options forward, the move,
-    the news, the options and OI market read, the Kalman trend), none against;
-  - it has **held for five minutes**, so a flicker is not a reason;
-  - it is a **change**: the pre-market read said something else (another direction, or none), or the options and OI read's
-    P(up) has moved 0.15 or more since the session's first read (a build-up appearing, the put-call ratio turning), or a fresh
-    CUSUM change point is drifting the same way. What the plan already expected is not a new reason;
+  - the live market shows a **strong direction**: three or more readings agreeing (book pressure, the options forward, price,
+    the news, the options and OI market read), none against. **Price is one reading** however many ways it is read (the
+    five-minute move, the Kalman trend, a drift change point); if those disagree with each other there is no agreement;
+  - it has **held for five minutes** without a gap, so a flicker is not a reason;
+  - the pre-market read did not already say it (what the plan expected is not a new reason), **and the data has really shifted**
+    (the owner's choice, 14 Nov 2026, "Stricter: real data shift"): the options and OI read's P(up) has moved 0.15 or more since
+    the session's first read and agrees (a build-up appearing, the put-call ratio turning), or a fresh CUSUM change point is
+    drifting the same way. The plan's silence alone is not a change;
   - the strategy offers a **reward to risk of 2 or better**, as on the plan (an overnight strategy, the volatility stop).
 
   A big-move trade opens when a Convexity desk test has held on the live board for five minutes: the test itself (for the tail

@@ -801,10 +801,14 @@ class AutoPilotV2:
         pmom, pvote = self.price_vote(mom, rg, sd5)
         d, why = V1.direction(rd["pressure"], rd["gap_pct"], pmom, nv, nwhy)
         d, why = self.with_read(d, why, rd, pmom, nv, nwhy, read, pvote)
+        mv = (1 if pmom > 0 else -1) if pmom is not None and abs(pmom) >= V1.MOMENTUM_TH_PCT else 0
+        tv = pvote[0] if pvote else 0                                                           # the Kalman trend or a CUSUM drift: price again
         labeled = [(k, v) for k, v in (("book", (1 if rd["pressure"] > 0 else -1) if rd["pressure"] is not None and abs(rd["pressure"]) >= V1.PRESSURE_TH else 0),
                                        ("forward", (1 if rd["gap_pct"] > 0 else -1) if rd["gap_pct"] is not None and abs(rd["gap_pct"]) >= V1.PARITY_TH_PCT else 0),
-                                       ("move", (1 if pmom > 0 else -1) if pmom is not None and abs(pmom) >= V1.MOMENTUM_TH_PCT else 0),
-                                       ("news", nv), ("read", (read or {}).get("vote") or 0), ("trend", pvote[0] if pvote else 0)) if v]
+                                       ("price", tv or mv),                                     # the owner, 14 Nov 2026: price counts as ONE reading, however many ways it is read
+                                       ("news", nv), ("read", (read or {}).get("vote") or 0)) if v]
+        if mv and tv and mv != tv:
+            labeled.append(("price, read another way", mv))                                    # price disagreeing with itself: no agreement
         votes = [v for _, v in labeled]
         agree = votes[0] if len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0        # a strong live direction: the plan's bar on the live board
         strong = agree if nv == agree else 0                                                   # the news among them: the news exception's bar
@@ -1542,9 +1546,9 @@ class AutoPilotV2:
 
     def live_trigger(self, u: str, st: dict, news, ist: dt.datetime) -> dict | None:
         """Why the live market may open a directional trade on `u` now that the plan did not name, or None. Both need a strong live direction (PLAN_DIR_VOTES readings
-        agreeing, none against). NEWS: an important story of today's session (news_trigger) with the news among the agreeing readings. DATA: the agreement has held
-        LIVE_PERSIST_S and it is a change: from the pre-market read (the plan's view for `u`), in the options and OI sentiment (the market read's P(up) moved READ_SHIFT
-        since the session's first read, and it agrees), or a fresh CUSUM drift change point the same way."""
+        agreeing, none against; price, however many ways it is read, is one reading). NEWS: an important story of today's session (news_trigger) with the news among
+        the agreeing readings. DATA: the agreement has held LIVE_PERSIST_S without a gap, the pre-market read did not already say it, and the data has really shifted
+        (the owner's choice, 14 Nov 2026): the market read's P(up) moved READ_SHIFT since the session's first read and it agrees, or a fresh CUSUM drift the same way."""
         d = st.get("agree")
         if not d:
             return None
@@ -1555,18 +1559,19 @@ class AutoPilotV2:
         now_s = ist.timestamp()
         if not since or now_s - since[2] > LIVE_GAP_S or now_s - since[1] < LIVE_PERSIST_S:
             return None                                                                    # not seen just now, or not held long enough
-        changes = []
         pv = (((self.day_plan or {}).get("states") or {}).get(u) or {}).get("view") if self.day_plan else None
-        if pv != d:
-            changes.append(f"the pre-market read was {pv or 'no direction'}, the live market says {d}")
+        if pv == d:
+            return None                                                                    # what the plan already expected is not a new reason
+        shifts = []                                                                        # the owner's choice (14 Nov 2026): a real shift in the data, beyond the plan's silence
         base, rd = (getattr(self, "read_base", {}) or {}).get(u), st.get("read") or {}
         if base and base[0] == ist.date() and rd.get("p_up") is not None and abs(rd["p_up"] - base[1]) >= READ_SHIFT and "read" in st["sources"]:
-            changes.append(f"the options and OI read moved from P(up) {base[1]:.2f} to {rd['p_up']:.2f} since the open"
-                           + (f" ({base[2] or 'no build-up'} to {rd.get('buildup')})" if rd.get("buildup") and rd.get("buildup") != base[2] else ""))
+            shifts.append(f"the options and OI read moved from P(up) {base[1]:.2f} to {rd['p_up']:.2f} since the open"
+                          + (f" ({base[2] or 'no build-up'} to {rd.get('buildup')})" if rd.get("buildup") and rd.get("buildup") != base[2] else ""))
         if (st.get("hmm") or {}).get("change") == f"drift {d}":
-            changes.append(f"a CUSUM change point: drift {d}")
-        if not changes:
+            shifts.append(f"a CUSUM change point: drift {d}")
+        if not shifts:
             return None
+        changes = [f"the pre-market read was {pv or 'no direction'}, the live market says {d}"] + shifts
         mins = (ist.timestamp() - since[1]) / 60
         return {"why": f"data: {'; '.join(changes)} ({st['votes']} readings agree for {mins:.0f} minutes: {', '.join(st['sources'])})", "kind": "data"}
 

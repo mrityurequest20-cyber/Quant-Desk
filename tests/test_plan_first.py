@@ -253,24 +253,42 @@ def test_important_news_also_lets_a_proven_convex_trade_through_when_its_test_pa
 
 
 # ---- and the data (owner, 14 Nov 2026: "it's not only limited to news, it's also applies to data also ... In a live market, there is a different setup") -----------
-def rising(rn, ap, minutes, start=NEWS_T, step=0.0005, **kw):
-    """A live market going up: the book and the options forward say up, and the price climbs `step` a minute (a five-minute move of 0.25%)."""
+def rising(rn, ap, minutes, start=NEWS_T, step=0.0005, cusum_at=None, book=UP_BOOK, **kw):
+    """A live market going up: the book and the options forward say up, and the price climbs `step` a minute (a five-minute move of 0.25%). cusum_at: the minute
+    a CUSUM drift-up change point is recorded (the regime book's own record, as its detector writes it)."""
     from quantdesk.paper import runner as RR
     for i in range(minutes):
         t = start + dt.timedelta(minutes=i)
-        snap = board(t, spot=24500 * math.exp(step * i), **UP_BOOK, **kw)
+        if cusum_at is not None and i == cusum_at and hasattr(ap, "regimes"):
+            ap.regimes.changes["NIFTY"] = [(t.timestamp(), "drift up")]
+        snap = board(t, spot=24500 * math.exp(step * i), **book, **kw)
         rn.step(snap, ap.decide(snap, rn.account, RR.Runner.server_now(snap), news={"items": [], "events": []}), False, t.astimezone(dt.timezone.utc))
 
 
 def test_a_change_in_the_live_data_that_holds_is_a_reason_to_trade(cfg, tmp_path):
     rn, ap, sid = news_desk(cfg, tmp_path)                                                     # the plan saw no direction for NIFTY
-    rising(rn, ap, 13)
+    rising(rn, ap, 13, cusum_at=8)                                                               # and the data really shifts: a change point drifting up
     st = ap.state(board(NEWS_T + dt.timedelta(minutes=13), spot=24500 * math.exp(0.0005 * 13), **UP_BOOK), "NIFTY",
                   A2.V1.chains(board(NEWS_T), ap.und, ap.lots), NEWS_T + dt.timedelta(minutes=13), None)
-    assert st["agree"] == "up" and {"book", "forward", "move"} <= set(st["sources"])
+    assert st["agree"] == "up" and {"book", "forward", "price"} <= set(st["sources"])
     pos = list(rn.account.positions.values())
     assert pos and pos[0].strategy.startswith(f"{A2.TAG} {sid} NIFTY p"), [p.strategy for p in pos]
-    assert "Not on the plan: taken on a change in the live data (data: the pre-market read was no direction, the live market says up" in pos[0].thesis
+    assert "Not on the plan: taken on a change in the live data (data: the pre-market read was no direction, the live market says up; a CUSUM change point: drift up" in pos[0].thesis
+
+
+def test_the_plans_silence_alone_is_not_a_change_the_data_must_really_shift(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)                                                     # the owner's choice, 14 Nov 2026: "Stricter: real data shift"
+    rising(rn, ap, 13)                                                                           # a strong, held agreement the plan did not foresee, but no shift in the data
+    assert ap.agree_since["NIFTY"][0] == 1 and not rn.account.ledger
+
+
+def test_price_counts_as_one_reading_however_many_ways_it_is_read(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    only_book = dict(cb=3000, ca=500, pb=500, pa=3000)                                           # the book says up, the forward is silent
+    rising(rn, ap, 36, book=only_book)                                                           # long enough for the Kalman trend as well as the five-minute move
+    t = NEWS_T + dt.timedelta(minutes=36)
+    st = ap.state(board(t, spot=24500 * math.exp(0.0005 * 36), **only_book), "NIFTY", A2.V1.chains(board(t), ap.und, ap.lots), t, None)
+    assert st["sources"] == ["book", "price"] and st["agree"] is None and not rn.account.ledger     # two readings, not three
 
 
 def test_a_flicker_is_not_a_change(cfg, tmp_path):
@@ -337,7 +355,7 @@ def test_a_hold_with_a_gap_starts_again():
     for t in range(600, 960, 60):
         held = ap._held(k, float(t))
     assert held                                                                                  # sighted every minute for five: held
-    st = {"agree": "up", "sources": ["book", "forward", "move"], "votes": 3, "read": None, "hmm": {}}
+    st = {"agree": "up", "sources": ["book", "forward", "price"], "votes": 3, "read": None, "hmm": {"change": "drift up"}}
     ap.agree_since = {"NIFTY": (1, NEWS_T.timestamp() - 3600, NEWS_T.timestamp() - 1800)}       # held an hour, but last seen half an hour ago
     assert ap.live_trigger("NIFTY", st, {"items": []}, NEWS_T) is None
     ap.agree_since = {"NIFTY": (1, NEWS_T.timestamp() - 600, NEWS_T.timestamp())}
