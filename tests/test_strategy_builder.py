@@ -416,3 +416,13 @@ console.log(JSON.stringify(out));
     assert o["again"] == o["up"]                                                                          # the same board and seed, the same designs
     assert all(d["maxLoss"] <= 1500 for d in o["tight"]["designs"])
     assert all(m[0] is True and m[1] > 0 for m in o["check"]) and "error" in o["bad"]
+
+
+def test_the_builder_finds_an_mcx_or_currency_underlying_and_uses_only_its_own_names():
+    """Two bugs found by driving the page (14 Nov 2026): the builder priced an option's underlying from NAME or NAME-FUT only, so an MCX (-MCX) or currency (-CDS)
+    option had "no price on the board"; and it read a variable `u` that does not exist in its scope, so the Strategy tab stopped drawing."""
+    draw = APP[APP.index("function bdDraw"):APP.index("function legsTable2")]
+    flow = APP[APP.index("function bdFlow"):APP.index("function bdFlow") + 4000]
+    assert 'data.quotes[B.u + "-FUT"]' not in draw + flow and "liveNames(B.u, data.quotes).fut" in draw + flow
+    for body in (draw, flow, APP[APP.index("function bdIdeas"):APP.index("function bdPayoff")]):
+        assert not re.search(r"rateOf\(u\b", body) and "B.u || u" not in body

@@ -1755,7 +1755,7 @@ const NW = (() => {
 	const isIndex = (sym) => ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY"].includes(sym);
 	// today's move of a name on the board (spot, else its future) and how many of its options are trading hard (volume against open interest, fresh quotes)
 	function boardOf(sym, quotes, hot) {
-		const q = quotes[sym] || quotes[sym + "-FUT"] || null;
+		const q = quotes[sym] || ["-FUT", "-MCX", "-CDS", "-BFO"].map((x) => quotes[sym + x]).find(Boolean) || null;     // spot, else its future (NSE, MCX, currency, BSE)
 		return { sym, chg: q ? fnum(q.chg) : null, price: q ? fnum(q.ltp) : null, hot: (hot[sym] || []).length, hotTop: (hot[sym] || [])[0] || null };
 	}
 	// "the market cared": the name moved at least 1% (an index 0.5%) or its options are trading unusually hard
@@ -1967,7 +1967,7 @@ function bdDraw() {
 	const exps = Object.keys(chains[B.u]).sort((p, q) => liveExpiryKey(p) - liveExpiryKey(q));
 	if (!exps.includes(B.exp)) B.exp = exps[0];
 	const ch = chains[B.u][B.exp], strikes = Object.keys(ch).map(Number).sort((p, q) => p - q);
-	const sq = data.quotes[B.u] || data.quotes[B.u + "-FUT"] || {}, spot = sq.ltp;
+	const sq = data.quotes[B.u] || data.quotes[liveNames(B.u, data.quotes).fut] || {}, spot = sq.ltp;        // an MCX or currency option's underlying is its future (-MCX, -CDS)
 	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = B.tpl === "custom" ? QB.CUSTOM : QB.TEMPLATES[B.tpl];
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
 	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px;border-top:1px solid var(--line)" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn sq", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono", style: "min-width:28px;text-align:center" }, String(val)), h("button", { class: "btn sq", "aria-label": "more " + label, onclick: up }, "+")));
@@ -2032,7 +2032,7 @@ function bdFlow(ctx) {
 		let raw = []; try { raw = JSON.parse(store(logKey) || "[]"); } catch (e) { raw = []; }
 		B.flowLogs[B.u] = (Array.isArray(raw) ? raw : []).filter((e) => e && typeof e.rule === "string" && FL.RULES[e.rule] && Number.isFinite(e.t) && Number.isFinite(e.spot)).slice(-400);
 	}
-	const fq = data.quotes[B.u + "-FUT"], fut = fq ? (fq.bid > 0 && fq.ask >= fq.bid ? (fq.bid + fq.ask) / 2 : fq.ltp) : NaN;
+	const fq = data.quotes[liveNames(B.u, data.quotes).fut], fut = fq ? (fq.bid > 0 && fq.ask >= fq.bid ? (fq.bid + fq.ask) / 2 : fq.ltp) : NaN;
 	const nowT = typeof data.now === "number" ? data.now : Date.now();
 	if (B.sampledAt !== B.at) {                                                                    // one reading per fetch of the board, however often the page is redrawn
 		B.sampledAt = B.at;
