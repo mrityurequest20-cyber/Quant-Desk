@@ -126,6 +126,8 @@ REGIME_KEY = re.compile(r"^(low|normal|high)/(up|down|range)$")
 # shadow book is kept on the relay beside the record (private, the runner's key only) and read back validated by the next job.
 SHADOW_MAX_CHARS = 990_000                # the relay keeps it in up to ten stored pieces of 100,000 characters
 SHADOW_LEG = re.compile(r"^[A-Z0-9][A-Z0-9&_.-]{2,39}$")
+SHADOW_MIN_RISK = 0.01                    # rupees a unit: a trade read back must risk something (a near-zero risk would score every mark at the clip)
+SHADOW_MAX_DAYS = 400                     # an expiry this far after its opening is not one the desk trades
 # The day plan (owner, 13 Nov 2026: "6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis and look
 # for high risk to reward trades"). Built from last night's closing books, the overnight markets, the news and the pre-market brief; it ranks defined-risk candidates and the
 # open takes a planned strategy first, through the same proof gate (MIN_TRADES, a positive draw) and the same risk gate as any other.
@@ -2120,7 +2122,7 @@ class AutoPilotV2:
                 ok_legs = isinstance(legs, list) and 1 <= len(legs) <= 8 and all(
                     isinstance(l, list) and len(l) == 3 and isinstance(l[0], str) and SHADOW_LEG.match(l[0]) and isinstance(l[1], int) and not isinstance(l[1], bool)
                     and 1 <= abs(l[1]) <= 10 and fin(l[2]) and l[2] >= 0 for l in legs)
-                if not (ok_legs and fin(risk) and risk > 0 and fin(fees) and fees >= 0 and (best is None or fin(best)) and isinstance(opened, str) and isinstance(exp, str)
+                if not (ok_legs and fin(risk) and risk >= SHADOW_MIN_RISK and fin(fees) and fees >= 0 and (best is None or fin(best)) and isinstance(opened, str) and isinstance(exp, str)
                         and (spot0 is None or fin(spot0)) and (sd0 is None or fin(sd0))):
                     drop("malformed")
                     continue
@@ -2131,6 +2133,9 @@ class AutoPilotV2:
                     continue
                 if e < ist.date():
                     drop("past its expiry")
+                    continue
+                if e > o.date() + dt.timedelta(days=SHADOW_MAX_DAYS):
+                    drop("malformed")                                                  # no contract the desk trades runs this long
                     continue
                 if s.hold == "day" and o.astimezone(IST).date() < ist.date():
                     drop("a day trade from an earlier session")
@@ -2156,7 +2161,7 @@ class AutoPilotV2:
                     continue
                 self.shadow[key] = sh
                 kept += 1
-            except (TypeError, ValueError, AttributeError):
+            except (TypeError, ValueError, AttributeError, OverflowError):
                 drop("malformed")
         self.shadow_io.update({"restored": kept, "dropped": dropped})
         return self.shadow_io
@@ -2195,9 +2200,15 @@ class AutoPilotV2:
             return f"; no open shadow trades could be read ({type(e).__name__})"
 
     def save(self, relay, mono: float, force: bool = False) -> bool:
-        shadow = self.save_shadow(relay, mono, force)
-        if not (self.lab.dirty and (force or mono - self.lab_saved_at >= 120)):
+        """The open shadow book, then the record. The record is never kept ahead of the book: when it is due, an unsaved book goes first (whatever its own clock),
+        and a book that could not be kept holds the record back. So a trade the record has scored is never still open in the book the next job reads: a job that
+        ends badly can lose a trade, never count one twice (risk review of the carry, 14 Nov 2026)."""
+        lab_due = self.lab.dirty and (force or mono - self.lab_saved_at >= 120)
+        shadow = self.save_shadow(relay, mono, force or lab_due)
+        if not lab_due:
             return shadow
+        if self.shadow_dirty and getattr(relay, "put_shadow", None) is not None:
+            return shadow                                                               # the book could not be kept: the record waits for it
         try:
             extra = {"read_w": self.reader.export()} if hasattr(self, "reader") else {}
             if self.cx_peak:

@@ -157,6 +157,55 @@ def test_the_book_is_saved_at_most_every_two_minutes_and_at_the_end(cfg, tmp_pat
     assert not ap.save_shadow(FakeRelay(), 2000.0, force=True)                               # a relay without the route: nothing, no error
 
 
+class FailingShadow(Relay):
+    def put_shadow(self, text):
+        raise OSError("the relay is down")
+
+
+def test_a_trade_is_never_scored_twice_when_the_book_could_not_be_kept(cfg, tmp_path):
+    """Risk review, 14 Nov 2026: the record was saved on its own clock, so a record that had scored a trade could sit beside an older book still holding it open, and
+    the next job scored it again."""
+    rn, ap, t = opened(cfg, tmp_path)
+    relay = Relay()
+    ap.save(relay, 1000.0, force=True)                                                       # the book with every trade open, and the record
+    late = dt.datetime.combine(T0.date(), dt.time(15, 20), tzinfo=A2.IST)
+    cycle(rn, ap, board(late), late)                                                         # the day trades close and are scored
+    closed = {k for k in json_keys(relay.shadow)} - set(ap.shadow)
+    assert closed and ap.lab.dirty and ap.shadow_dirty
+    down = FailingShadow(relay.lab, relay.shadow)
+    assert not ap.save(down, 2000.0, force=True)                                             # the book cannot be kept: the record waits too
+    assert down.lab == relay.lab and ap.lab.dirty and ap.shadow_dirty
+    nxt = desk(cfg, tmp_path)[1]
+    nxt.load(down, now=late)                                                                 # what the next job would see: the old book with the old record
+    before = A2.Lab(json.loads(relay.lab).get("stats"))
+    assert all(nxt.lab.stats.get(sid, [0])[0] == before.stats.get(sid, [0])[0] for sid, _ in closed)   # carried open, and not yet scored: once, not twice
+    assert ap.save(relay, 2001.0, force=True) and relay.shadow_puts == 2                     # the relay back: the book first, then the record
+    assert json_keys(relay.shadow) == set(ap.shadow)
+
+
+def json_keys(text):
+    return {(r[0], r[1]) for r in A2.Lab.unpack(text)["open"]}
+
+
+def test_the_record_due_first_takes_the_book_with_it(cfg, tmp_path):
+    rn, ap, t = opened(cfg, tmp_path)
+    relay = Relay()
+    ap.save(relay, 1000.0, force=True)
+    ap.shadow_saved_at = 1100.0                                                              # the book saved more recently than the record
+    ap.shadow_dirty, ap.lab.dirty = True, True
+    assert ap.save(relay, 1125.0) and relay.shadow_puts == 2 and not ap.shadow_dirty and not ap.lab.dirty
+
+
+def test_an_absurd_row_costs_only_itself(cfg, tmp_path):
+    rn, ap, t = opened(cfg, tmp_path)
+    rows = A2.Lab.unpack(ap.shadow_json()[0])["open"]
+    good = rows[:3]
+    bad = [[*good[0][:6], "0001-01-01T00:00:00+14:00", *good[0][7:]], [*good[1][:3], 1e-300, *good[1][4:]], [*good[2][:7], "9999-12-31", *good[2][8:]]]
+    ap2 = desk(cfg, tmp_path)[1]
+    io = ap2.restore_shadow(json.dumps({"v": 1, "open": [bad[0], *good, bad[1], bad[2]]}), t + dt.timedelta(minutes=1))
+    assert io["restored"] == 3 and io["dropped"] == {"malformed": 3}
+
+
 @needs_node
 def test_the_relay_keeps_the_book_in_pieces_for_the_runners_key_only(tmp_path):
     shutil.copyfile(ROOT / "deploy/cloudflare/paper.js", tmp_path / "paper.js")

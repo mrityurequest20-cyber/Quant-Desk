@@ -249,7 +249,7 @@ export class PaperBook {
 		await this.state.storage.put(writes);                                                // the pieces and their count together, or nothing
 		const stale = [];
 		for (let i = n; i < MAX_SHADOW_CHUNKS; i++) stale.push("paper:shadow:" + i);
-		await this.state.storage.delete(stale);                                              // pieces of a longer book before it: never read (the count says n)
+		try { await this.state.storage.delete(stale); } catch (e) { /* never read (the count says n): the book itself is kept, so this is no failure */ }
 		return json(200, { saved: true, chars: text.length, now });
 	}
 
