@@ -122,3 +122,29 @@ def test_the_analogues_follow_todays_situation():
     assert AN.for_instrument(s.iloc[:200], dates) == {}                                          # too short: nothing
     got = AN.build({"X": s, "Y": None}, dates)
     assert set(got["rbi"]) == {"X"}
+
+
+# ---- global markets (owner, 14 Nov 2026: "Global market inputs in the news model") ------------------------------------------------------------------------
+RISK_OFF = [{"key": "NASDAQ", "name": "Nasdaq", "change": -0.021}, {"key": "USVIX", "name": "VIX", "change": 0.18}, {"key": "BRENT", "name": "Brent", "change": 0.035},
+            {"key": "DXY", "name": "Dollar index", "change": 0.004}]
+
+
+def test_last_nights_markets_reach_each_instrument_through_its_own_channels():
+    f = {u: NM.forecast(u, {"items": []}, None, NOW, RISK_OFF) for u in ("NIFTY", "CRUDEOIL", "USDINR", "TCS")}
+    assert f["NIFTY"]["vote"] == -1 and f["CRUDEOIL"]["vote"] == 1 and f["USDINR"]["vote"] == 1                 # risk off: indices down, crude up, the rupee down
+    assert "overnight VIX +18.0%" in f["NIFTY"]["why"][0] and "Brent" in f["CRUDEOIL"]["why"][0]
+    calm = [{"key": "SPX", "name": "S&P 500", "change": 0.001}]
+    assert abs(NM.forecast("NIFTY", {"items": []}, None, NOW, calm)["p_up"] - 0.5) < 0.05                        # a quiet night says little
+    huge = [{"key": "SPX", "name": "S&P 500", "change": 0.20}]
+    assert NM.global_score("NIFTY", huge)[0] == pytest.approx(NM.GLOBAL_CAP * 0.4)                              # a bad print is capped at three typical days
+    assert NM.global_score("NIFTY", [{"key": "NOPE", "change": 0.05}, {"key": "SPX", "change": None}, "junk"]) == (0.0, [])
+
+
+def test_auto_v2_reads_the_briefs_global_markets_on_its_own_session_only():
+    ap = A2.AutoPilotV2(("NIFTY",), {"NIFTY": 65}, lambda *a: 0.0, None)
+    today = dt.datetime.fromtimestamp(NOW, tz=A2.IST).date().isoformat()
+    ap.brief = {"session": today, "global": RISK_OFF}
+    assert ap.news_vote({"items": []}, "NIFTY", NOW, 24000.0)[0] == -1
+    assert ap.news_vote({"items": []}, "NIFTY", NOW, 24000.0, with_globals=False)[0] == 0                         # the plan's own overnight vote: not counted twice
+    ap.brief = {"session": "2026-11-13", "global": RISK_OFF}
+    assert ap.news_vote({"items": []}, "NIFTY", NOW, 24000.0)[0] == 0                                              # yesterday's brief: its night is old news

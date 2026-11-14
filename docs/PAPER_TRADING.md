@@ -336,6 +336,12 @@ The weighted share of rises is the analogue's P(up). Its effective number of epi
   rupee pairs. The event regime's reason then names the instrument's own past episodes and the closest dates.
 - **Scored.** Every forecast with an opinion is scored against the next hour (Brier, per instrument; "news forecasts" in the app).
 
+**Global markets** (14 Nov 2026). The brief's overnight moves of 18 markets go through the same channels:
+- **The markets:** US, Asian and European indices, the VIX, the dollar index, USD/INR, Brent, gold and the US 10-year yield.
+- **How a move counts:** each market's move is in units of its own typical day, capped at 3. The Nasdaq is Wall Street, the VIX is US fear, Brent is crude.
+- **In the forecast:** 1.0 x tanh(global score / 2), on the brief's own session only.
+- **No double counting:** in the pre-open plan an index already has the overnight markets as a vote of their own, so its news vote leaves them out.
+
 **The sensitivities are priors** written from how these markets transmit shocks. The Brier record is what will say which hold.
 
 ## Instruments read differently

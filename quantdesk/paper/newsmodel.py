@@ -127,6 +127,45 @@ CHANNELS = {
     "electronics": [("DIXON", 0.6, "its orders")],
     "cigarettes": [("ITC", -0.8, "a tax on cigarettes is a tax on its profit")],
 }
+CHANNELS.update({
+    "asia": [("INDEX", 0.3, "Asian markets set the tone for the Indian open"), ("MIDCPNIFTY", 0.1, "risk appetite")],
+    "europe": [("INDEX", 0.2, "European risk appetite"), ("EURINR", 0.2, "the euro's own market"), ("GBPINR", 0.1, "sterling's neighbours")],
+    "us_fear": [("INDEX", -0.4, "fear on Wall Street travels"), ("MIDCPNIFTY", -0.2, "risk off, harder"), ("GOLD", 0.2, "the safe haven"), ("USDINR", 0.2, "the dollar is the haven"),
+                ("JPYINR", 0.2, "the yen is a haven")],
+})
+# GLOBAL MARKETS (owner, 14 Nov 2026: "Global market inputs in the news model"): the pre-market brief's overnight moves (data/global_universe.py: the last close against the
+# one before), read as subjects moving. key -> (subject, sign of the subject's move per a rise in this market, a typical daily move in percent): a move counts in units of
+# its own typical size, capped at 3, so a 2% Nasdaq day and a 0.6% dollar day count alike.
+GLOBAL_SUBJECT = {
+    "ES": ("wall_street", 1, 1.0), "NQ": ("wall_street", 1, 1.3), "SPX": ("wall_street", 1, 1.0), "NASDAQ": ("wall_street", 1, 1.3), "DJI": ("wall_street", 1, 0.9),
+    "N225": ("asia", 1, 1.2), "HSI": ("asia", 1, 1.5), "KOSPI": ("asia", 1, 1.1), "SSE": ("china", 1, 1.0),
+    "STOXX": ("europe", 1, 1.0), "DAX": ("europe", 1, 1.1), "FTSE": ("europe", 1, 0.8),
+    "USVIX": ("us_fear", 1, 6.0), "DXY": ("dollar", 1, 0.4), "USDINR": ("rupee", -1, 0.3), "BRENT": ("crude", 1, 2.0), "GOLD": ("gold", 1, 1.0), "UST10": ("us_yields", 1, 1.5),
+}
+W_GLOBAL, GLOBAL_SCALE, GLOBAL_CAP = 1.0, 2.0, 3.0
+
+
+def global_score(u: str, globals_) -> tuple[float, list[str]]:
+    """(the instrument's evidence from last night's global markets, its strongest reasons). Each market's move in units of its typical daily move, through the same
+    channels as a story about the same subject."""
+    score, parts = 0.0, []
+    for g in globals_ or []:
+        if not isinstance(g, dict):
+            continue
+        spec = GLOBAL_SUBJECT.get(g.get("key"))
+        ch = g.get("change")
+        if not spec or not isinstance(ch, (int, float)) or not math.isfinite(ch):
+            continue
+        subj, sign, typical = spec
+        z = max(-GLOBAL_CAP, min(GLOBAL_CAP, ch * 100 / typical))
+        for sens, why in sensitivity(u, subj):
+            x = sign * z * sens
+            score += x
+            parts.append((abs(x), f"overnight {g.get('name', g.get('key'))} {ch * 100:+.1f}% ({subj.replace('_', ' ')} {'up' if sign * z > 0 else 'down'}: {why})"))
+    parts.sort(key=lambda p: -p[0])
+    return score, [p[1] for p in parts[:2]]
+
+
 # subjects whose words are themselves a direction (a story about F&O rules is about tightening them, a story about bad loans is about more of them) unless it says otherwise
 DEFAULT_UP = frozenset({"geopolitics", "tariffs", "fno_rules", "fintech_rules", "bad_loans", "cigarettes"})
 
@@ -249,13 +288,16 @@ def analog_evidence(u: str, digest, analogs: dict | None) -> tuple[float, list[s
     return lo, why
 
 
-def forecast(u: str, digest, analogs: dict | None, t: float) -> dict:
-    """{"p_up", "vote", "score", "why"}: the channel score (present) and the analogues (past) as log-odds."""
+def forecast(u: str, digest, analogs: dict | None, t: float, globals_=None) -> dict:
+    """{"p_up", "vote", "score", "global", "why"}: the channel score (present: the news), last night's global markets (globals_: the brief's list), and the analogues
+    (past), as log-odds."""
     sc, why_ch = channel_score(digest, u, t)
+    gs, why_g = global_score(u, globals_)
     lo_an, why_an = analog_evidence(u, digest, analogs)
-    logit = W_CHANNEL * math.tanh(sc / CH_SCALE) + lo_an
+    logit = W_CHANNEL * math.tanh(sc / CH_SCALE) + W_GLOBAL * math.tanh(gs / GLOBAL_SCALE) + lo_an
     p = 1 / (1 + math.exp(-logit))
-    return {"p_up": round(p, 3), "vote": 1 if p >= VOTE_P else -1 if p <= 1 - VOTE_P else 0, "score": round(sc, 3), "why": (why_ch + why_an)[:4]}
+    return {"p_up": round(p, 3), "vote": 1 if p >= VOTE_P else -1 if p <= 1 - VOTE_P else 0, "score": round(sc, 3), "global": round(gs, 3),
+            "why": (why_ch[:2] + why_g + why_an)[:4]}
 
 
 class Scorer:

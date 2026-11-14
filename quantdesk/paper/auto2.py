@@ -741,11 +741,14 @@ class AutoPilotV2:
             return True, None, edge
         return False, f"the premium does not pay for the tail it sells: {edge:+.2f}R expected to expiry over {u}'s fitted tails (EVT)", edge
 
-    def news_vote(self, news, u: str, t: float, price: float) -> tuple[int, str | None, dict | None]:
+    def news_vote(self, news, u: str, t: float, price: float, with_globals: bool = True) -> tuple[int, str | None, dict | None]:
         """The news's ONE vote for this instrument (newsmodel.py): its own channel score and its own past episodes, as P(up); scored against the next hour. Where the model
         has no opinion and `u` is an index, AUTO v1's market-wide tone vote stands in."""
+        b = self.brief if isinstance(self.brief, dict) else {}
+        today = dt.datetime.fromtimestamp(t, tz=IST).date().isoformat()
+        glob = b.get("global") if with_globals and b.get("session") == today else None    # last night's markets bear on today's session only
         try:
-            nf = NM.forecast(u, news, (self.brief or {}).get("news_analogs") if isinstance(self.brief, dict) else None, t)
+            nf = NM.forecast(u, news, b.get("news_analogs"), t, glob)
         except Exception:                                                                # noqa: BLE001 - a news model that fails costs the vote, never the session
             nf = None
         if not hasattr(self, "news_scorer"):
@@ -1015,7 +1018,8 @@ class AutoPilotV2:
         if over is not None and abs(over) >= OVERNIGHT_TH_PCT:
             votes.append(1 if over > 0 else -1)
             why.append(over_why)
-        nv, nwhy, _ = self.news_vote(news, u, now.timestamp(), None)                       # the news model, as in the session (no price: not scored before the open)
+        nv, nwhy, _ = self.news_vote(news, u, now.timestamp(), None, with_globals=over is None)   # the news model (no price: not scored before the open); an index already
+        #                                                                                   has the overnight markets as their own vote here, so they are not counted twice
         if nv:
             votes.append(nv)
             why.append(nwhy or "news")
