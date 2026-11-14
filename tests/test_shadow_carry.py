@@ -135,7 +135,9 @@ def test_a_book_too_large_keeps_its_longest_held_trades(cfg, tmp_path, monkeypat
     rn, ap, t = opened(cfg, tmp_path)
     full, _ = ap.shadow_json()
     monkeypatch.setattr(A2, "SHADOW_MAX_CHARS", int(len(full) * 0.7))
-    text, left = ap.shadow_json(ap.shadow_seq + 1)                                           # the stamp the next save will carry
+    stamp = 1_800_000_000_000
+    monkeypatch.setattr(ap, "next_seq", lambda: stamp)                                       # the stamp the next save will carry
+    text, left = ap.shadow_json(stamp)
     assert left >= 1 and len(text) <= A2.SHADOW_MAX_CHARS
     kept = A2.Lab.unpack(text)["open"]
     oldest = sorted(ap.shadow.items(), key=lambda kv: kv[1]["opened"])[:len(kept)]
@@ -241,6 +243,63 @@ def test_a_book_older_than_the_record_is_never_read_back(cfg, tmp_path):
     held.shadow, held.shadow_dirty, held.lab.dirty = dict(ap.shadow), True, True
     held.save(FailingShadow(), 4000.0, force=True)
     assert held.summary()["shadow_carry"]["held_back"] == 1                                  # a record held back is counted, never silent
+
+
+class ReadFails(Relay):
+    def get_shadow(self):
+        raise OSError("a transient error at the job's start")
+
+
+class RolledBack(Relay):
+    """A Worker rolled back: both shadow routes answer 404, its storage still holds the last book."""
+    def get_shadow(self):
+        from quantdesk.paperlink.relay import RelayError
+        raise RelayError("GET /paper/shadow: HTTP 404")
+
+    def put_shadow(self, text):
+        from quantdesk.paperlink.relay import RelayError
+        raise RelayError("POST /paper/shadow: HTTP 404")
+
+
+def test_a_failed_read_at_the_start_never_gets_a_fresh_book_dropped(cfg, tmp_path):
+    """Risk re-review S1(a): a job whose read of the book failed stamped its books from zero, below the record's stamp, so the next job dropped them as stale."""
+    rn, ap, t = opened(cfg, tmp_path)
+    relay = Relay()
+    for i in range(3):                                                                       # a job that kept its book a few times before its record
+        ap.shadow_dirty = True
+        ap.save_shadow(relay, 900.0 + i, force=True)
+    ap.shadow_dirty = True
+    ap.save(relay, 1000.0, force=True)                                                       # the record and the book, stamped
+    b = desk(cfg, tmp_path)[1]
+    b.load(ReadFails(relay.lab, relay.shadow), now=t)                                        # the next job: the record read, the book's read fails
+    b.shadow = dict(ap.shadow)
+    b.shadow_dirty = True
+    assert b.save_shadow(relay, 2000.0, force=True)                                          # it keeps its book; its record is unchanged and not saved
+    c = desk(cfg, tmp_path)[1]
+    c.load(relay, now=t + dt.timedelta(minutes=1))
+    assert set(c.shadow) == set(ap.shadow) and "older than the record" not in c.shadow_io["dropped"]
+
+
+def test_a_rollback_across_two_jobs_never_scores_a_trade_twice(cfg, tmp_path):
+    """Risk re-review S1(b): job A keeps a book, the Worker is rolled back, A closes trades and saves its record; job B starts on the rolled-back Worker and saves its
+    record; the Worker is redeployed. Job C must not carry A's closed trades again."""
+    rn, ap, t = opened(cfg, tmp_path)
+    store = Relay()
+    ap.save(store, 1000.0, force=True)                                                       # job A: the book with every trade open
+    back = RolledBack(store.lab, store.shadow)
+    late = dt.datetime.combine(T0.date(), dt.time(15, 20), tzinfo=A2.IST)
+    cycle(rn, ap, board(late), late)                                                         # A closes trades and scores them
+    closed = json_keys(store.shadow) - set(ap.shadow)
+    assert closed and ap.save(back, 2000.0, force=True)                                      # A's record saved on the rolled-back Worker
+    b = desk(cfg, tmp_path)[1]
+    b.load(back, now=late)                                                                   # job B: its book's read 404s
+    b.lab.dirty = True
+    assert b.save(back, 3000.0, force=True)                                                  # B's record saved, still rolled back
+    redeployed = Relay(back.lab, store.shadow)                                               # the Worker back, its storage still holding A's first book
+    c = desk(cfg, tmp_path)[1]
+    c.load(redeployed, now=late)
+    assert not (set(c.shadow) & closed)                                                      # nothing A scored is carried open again
+    assert c.shadow_io["dropped"].get("older than the record") == len(json_keys(store.shadow))
 
 
 def test_an_absurd_row_costs_only_itself(cfg, tmp_path):

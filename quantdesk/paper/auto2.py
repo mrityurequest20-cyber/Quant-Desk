@@ -40,6 +40,7 @@ import base64
 import datetime as dt
 import json
 import math
+import time
 import random
 import re
 import zlib
@@ -2074,6 +2075,12 @@ class AutoPilotV2:
                  and num(i.get("risk_unit")) and num(i.get("spot")) and when(i.get("event_at"))]   # what plan_ok and plan_price_ok measure from must be real
         return {**d, "items": items[:PLAN_TOP], "states": d.get("states") if isinstance(d.get("states"), dict) else {}}
 
+    def next_seq(self) -> int:
+        """A new stamp: above every stamp this job has seen or issued, and never below the wall clock in milliseconds, so stamps rise across jobs whether or not
+        any read at a job's start succeeded (risk re-review, 14 Nov 2026)."""
+        self.shadow_seq = max(self.shadow_seq + 1, self.lab_shadow_seq + 1, int(time.time() * 1000))
+        return self.shadow_seq
+
     def shadow_json(self, seq: int = 0) -> tuple[str, int]:
         """The open shadow book as the relay keeps it (compressed, at most SHADOW_MAX_CHARS), stamped `seq`, and how many trades did not fit: the longest held first."""
         rows = []
@@ -2201,6 +2208,7 @@ class AutoPilotV2:
             return f"no record could be read ({type(e).__name__}): starting from zero" + self._load_shadow(relay, now)
 
     def _load_shadow(self, relay, now: dt.datetime | None = None) -> str:
+        self.shadow_seq = max(self.shadow_seq, self.lab_shadow_seq)                     # whatever the book's read does, stamps start above the record's
         get = getattr(relay, "get_shadow", None)
         if get is None:
             return ""
@@ -2227,7 +2235,7 @@ class AutoPilotV2:
         try:
             extra = {"read_w": self.reader.export()} if hasattr(self, "reader") else {}
             if not has_route:                                                           # no book kept now: any book still stored (a Worker rolled back) is older than this
-                self.shadow_seq += 1
+                self.next_seq()
             extra["shadow_seq"] = self.shadow_seq                                       # record, and is dropped when read back
             if self.cx_peak:
                 extra["cx"] = {k: round(v, 3) for k, v in self.cx_peak.items()}
@@ -2244,10 +2252,9 @@ class AutoPilotV2:
         if put is None or not (self.shadow_dirty and (force or mono - self.shadow_saved_at >= 120)):
             return False
         try:
-            seq = self.shadow_seq + 1
+            seq = self.next_seq()                                                       # used once issued: a put whose reply is lost may still have been stored
             text, left_out = self.shadow_json(seq)
             put(text)
-            self.shadow_seq = seq
             self.shadow_dirty, self.shadow_saved_at, self.shadow_route = False, mono, True
             self.shadow_io["left_out"] = left_out
             return True
