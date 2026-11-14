@@ -36,10 +36,11 @@ def cfg():
     return Config.load(ROOT / "config" / "quantdesk.yaml")
 
 
-def desk(cfg, tmp_path, stats=None, seed=1):
+def desk(cfg, tmp_path, stats=None, seed=1, plan_only=False):
     rn = R.Runner(cfg, Account(500_000), gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "K")), kill_file=tmp_path / "K")
     ap = auto_v2(cfg, ("NIFTY",), {"NIFTY": 65})
     ap.rng = random.Random(seed)
+    ap.plan_only = plan_only                    # these tests drive the intraday mechanics; live trading takes only the plan (PLAN_ONLY, tests/test_plan_first.py)
     if stats is not None:
         ap.lab = A2.Lab(stats)
     return rn, ap
@@ -63,8 +64,9 @@ def calm(rn, ap, t0=T0, minutes=6):
 
 # ---- the catalogue ----------------------------------------------------------------------------------------------------------------------------
 def test_the_catalogue_is_every_combination_with_unique_readable_ids():
-    assert len(A2.CATALOGUE) == len({s.sid for s in A2.CATALOGUE}) == 3132 + 432                # (9 up + 9 down + 11 flat structure-widths) x 3 vols x 3 timings x 6 exits x 2 holds,
-    #                                                                                             and calendars and diagonals (6 structure-widths, near expiry only: 2 timings)
+    assert len(A2.CATALOGUE) == len({s.sid for s in A2.CATALOGUE}) == 3654 + 504                # (9 up + 9 down + 11 flat structure-widths) x 3 vols x 3 timings x (6 exits x 2
+    #                                                                                             holds + 2 overnight take-profits), and calendars and diagonals (6 structure-widths, near
+    #                                                                                             expiry only: 2 timings)
     assert all(A2.BY_SID[s.sid] is s for s in A2.CATALOGUE)                                     # BY_SID also holds what the inventor writes (test_inventor.py)
     assert {s.view for s in A2.CATALOGUE} == {"up", "down", "flat"} and all(len(s.sid) <= 22 for s in A2.CATALOGUE)
     s = A2.BY_SID[IC]

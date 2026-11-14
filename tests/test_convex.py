@@ -71,6 +71,7 @@ def desk(cfg, tmp_path, capital=10_000_000, stats=None, seed=1):
     rn = R.Runner(cfg, Account(capital), gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "K")), kill_file=tmp_path / "K")
     ap = auto_v2(cfg, ("NIFTY",), {"NIFTY": 65})
     ap.rng = random.Random(seed)
+    ap.plan_only = False                        # the intraday mechanics; live trading takes only the plan (tests/test_plan_first.py)
     ap.brief = {"tails": {"NIFTY": fat_tails()}}
     if stats is not None:
         ap.lab = A2.Lab(stats)

@@ -52,6 +52,7 @@ def crude_board(t, F=5800.0, age=1.0, exp=EXP):
 def desk(cfg, tmp_path, stats=None):
     rn = R.Runner(cfg, Account(500_000), gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "K")), kill_file=tmp_path / "K")
     ap = auto_v2(cfg, ("CRUDEOIL",), {"CRUDEOIL": 100}, {"CRUDEOIL": "mcx"})
+    ap.plan_only = False                        # the intraday mechanics (tests/test_plan_first.py)
     ap.rng = random.Random(1)
     if stats:
         ap.lab = A2.Lab(stats)
@@ -103,6 +104,7 @@ def test_nothing_opens_outside_mcx_hours_or_on_a_contracts_last_holding_day(cfg,
 
 def test_a_currency_options_premium_floor_is_in_its_own_ticks(cfg, tmp_path):
     ap = auto_v2(cfg, ("USDINR",), {"USDINR": 1000}, {"USDINR": "nse_cds"})
+    ap.plan_only = False                        # the intraday mechanics (tests/test_plan_first.py)
     assert ap.min_premium("USDINR") == pytest.approx(20 * 0.0025) and ap.min_premium("NIFTY") == A2.MIN_PREMIUM
 
 

@@ -34,15 +34,11 @@ def test_the_overnight_cue_is_the_median_equity_move_and_needs_three_markets():
     assert A2.AutoPilotV2.overnight({"global": BRIEF["global"][:2]}) == (None, None) and A2.AutoPilotV2.overnight(None) == (None, None)
 
 
-def test_a_quiet_close_plans_the_flat_strategies_with_reward_to_risk_of_two_or_better(cfg, tmp_path):
-    rn, ap = desk(cfg, tmp_path)
+def test_a_quiet_close_plans_no_trade_a_trade_is_planned_for_a_big_move_or_a_strong_direction_only(cfg, tmp_path):
+    rn, ap = desk(cfg, tmp_path)                                                         # the owner, 14 Nov 2026: "big move or strong direction"; a quiet close is neither
     dp = ap.plan(board(T0, age=CLOSE_AGE), PRE)
     assert dp["from"] == "last close" and dp["built_at"].startswith("2026-11-10T07:30") and dp["states"]["NIFTY"]["view"] == "flat"
-    assert dp["items"], dp
-    for i in dp["items"]:
-        assert i["u"] == "NIFTY" and i["view"] == "flat" and i["rr"] >= A2.PLAN_MIN_RR and i["risk_lot"] > 0 and i["reward_lot"] >= 2 * i["risk_lot"] - 1
-        assert i["legs"] and all(l[0] in "+-" for l in i["legs"]) and not i["proven"]
-    assert len(dp["items"]) <= A2.PLAN_PER_U
+    assert dp["items"] == [], dp
     assert any("No candidate is proven yet" in n for n in dp["notes"]) and any("No pre-market brief" in n for n in dp["notes"])
 
 
@@ -64,13 +60,31 @@ def test_one_overnight_vote_alone_is_no_view(cfg, tmp_path):
     assert dp["states"]["NIFTY"]["view"] is None and dp["items"] == []
 
 
-def test_a_proven_strategy_is_planned_first_ahead_of_a_better_ratio_without_a_record(cfg, tmp_path):
-    rn, ap = desk(cfg, tmp_path, stats=proven())
-    dp = ap.plan(board(T0, age=CLOSE_AGE), PRE)
+UP = dict(cb=3000, ca=500, pb=500, pa=3000, fwd_gap=-0.2)                                 # the closing book and the options forward both say up
+
+
+def test_a_strong_direction_is_planned_with_overnight_strategies_and_a_proven_one_first(cfg, tmp_path):
+    rn, ap = desk(cfg, tmp_path)
+    ap.brief = BRIEF
+    dp = ap.plan(board(T0, age=CLOSE_AGE, **UP), PRE)                                    # three readings agree: book, forward, overnight markets
+    assert dp["states"]["NIFTY"]["view"] == "up" and dp["items"]
+    for i in dp["items"]:
+        assert A2.BY_SID[i["sid"]].hold == "overnight" and i["view"] == "up" and i["rr"] >= A2.PLAN_MIN_RR and i["risk_lot"] > 0 and i["risk_unit"] > 0
+    low = min(dp["items"], key=lambda i: i["rr"])["sid"]
+    rn, ap = desk(cfg, tmp_path / "b", stats=proven(sid=low))
+    ap.brief = BRIEF
+    dp = ap.plan(board(T0, age=CLOSE_AGE, **UP), PRE)
     first, rest = dp["items"][0], dp["items"][1:]
-    assert first["sid"] == IC and first["proven"] and first["n"] == 20 and first["mean_r"] > 0
-    assert rest and all(not i["proven"] for i in rest) and max(i["rr"] for i in rest) > first["rr"]          # a measured record outranks a prettier ratio
+    assert first["sid"] == low and first["proven"] and first["n"] == 20 and first["mean_r"] > 0
     assert not any("No candidate is proven yet" in n for n in dp["notes"])
+
+
+def test_two_agreeing_readings_are_not_a_strong_direction(cfg, tmp_path):
+    rn, ap = desk(cfg, tmp_path)
+    ap.brief = BRIEF
+    dp = ap.plan(board(T0, age=CLOSE_AGE, cb=3000, ca=500, pb=500, pa=3000), PRE)        # the book and the overnight markets agree; the forward is silent
+    st = dp["states"]["NIFTY"]
+    assert st["view"] is None and dp["items"] == [] and any("a direction needs 3 agreeing" in w for w in st["why"])
 
 
 def _other_flat_ic():

@@ -511,17 +511,29 @@ and look for high risk to reward trades." Every ten minutes from 06:00 to 09:15,
   history, which sets the volatility context), macro events, expiries, headlines naming the instrument, futures OI shifts.
 
 **What it decides:**
-- **A pre-open view** per underlying: up or down when at least two readings agree and none disagrees; flat when nothing moves.
-- **Candidates:** every catalogue strategy whose context holds, priced on the closing books, kept only if its reward to risk
-  is **2 or better** (the strategy's own take-profit against its stop, capped by what the structure can make).
+- **A pre-open view** per underlying: up or down only when **three** readings agree and none disagrees (since 14 Nov 2026: "a
+  strong direction"); with fewer, the reason is written down and no direction is planned. Flat when nothing moves.
+- **Directional candidates:** the **overnight** strategies whose context holds, priced on the closing books, kept only if their
+  reward to risk is **2 or better** (the take-profit against the structure's worst case, capped by what it can make).
+- **Big-move candidates:** the Convexity desk's strategies whose test passes on the closing board (options cheap against the
+  forecast, a scheduled event priced small, tails underpriced). The squeeze test needs the live tape, so it is never planned.
+- **Not planned:** a flat view's premium selling (an iron condor expects no move: neither a big move nor a direction), day and
+  swing strategies, and futures (intraday). All of them are still tested in shadow.
 - **Ranking:** proven strategies first, then by measured expectancy in R, then by catalysts and reward to risk. At most two per
   underlying and ten in all. Each comes with its legs, rupees at risk and to gain per lot, and its reasons.
 
-**At the open:** from 09:20, for each underlying, AUTO v2 takes a **planned** strategy first, but only if its context still holds
-on the live board, it has its `MIN_TRADES` shadow record, and its Thompson draw is positive. Otherwise it chooses as before. A
-planned trade's thesis says so.
-- **Same limits:** the plan changes the order of choice, not the limits. The risk gate, the loss caps, the proof gate and the
-  sizes are the same as for any trade.
+**At the open (since 14 Nov 2026: plan first, `PLAN_ONLY`):** the plan is the only way a trade is opened, in both books. The owner:
+"every day it should analyze the news and everything ... prior we are deciding it ... not when the market opens. Then it's fine.
+Okay, then it takes trade."
+- **Taken:** from the segment's first entry time (09:20 for NSE), for 100 minutes, a planned strategy with its shadow record
+  (8 trades and a positive Thompson draw; the Convexity desk's own gate for its strategies).
+- **Decided before, not at the open:** the intraday view does not have to agree. A plan is dropped for the day only when it has
+  been **contradicted**: the open's view is the opposite one, the underlying has already gone through the planned trade's
+  volatility stop from the planned price, the trade now risks more than 1.5 times what the plan priced, a big-move trade's options
+  have turned rich, or its event has passed.
+- **Nothing else is opened during the day.** Prices, news and every reading are still recorded, and every strategy is still
+  traded in shadow, so the record keeps growing. They only feed the exits of what is open.
+- **Same limits:** the risk gate, the loss caps and the proof gate are the same as for any trade.
 - **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
 - **Yesterday's plan** never steers today.
 
@@ -529,6 +541,27 @@ planned trade's thesis says so.
 
 **What it is not:** a forecast that has been tested. The repository's own research found direction hard to forecast. The plan
 writes down what the desk will look for and why. Whether planned trades do better than unplanned ones is for the record to show.
+
+### Held overnight, and a stop set by volatility (owner, 14 Nov 2026)
+
+The owner: "my options, whether buying or selling, must have the overnight holding power", and the stop "based on the market
+conditions. How much volatile the market is". His choices: an underlying-move stop, held until its exits say so.
+
+**The overnight strategies:** every catalogue context also has two overnight variants (take-profit 2R or 3R of the structure's
+worst case). They are the only directional strategies the plan names. Each is:
+- **held past the close and across sessions**, with no session cap;
+- **stopped by the underlying, not the premium:** out when the index or stock has moved against the trade by
+  **1.5 × its daily standard deviation × √(sessions held)** since entry. The daily standard deviation is the tail model's (or the
+  last hour's realized, if larger), taken at entry, so a volatile market gets a wide stop and a calm one a tight stop. Against
+  an up view is down, against a down view is up, and against a short-volatility structure is a move either way. A long straddle
+  and the Convexity desk want the move, so their premium is their stop. The entry price and volatility travel in the position's
+  strategy name (`p24500 d1075`: spot 24,500, a 1.075% day), so a restart keeps the stop;
+- **out by the close of the session before expiry**, so no position is held into an expiry day;
+- bounded, as always, by the structure's own worst case and the risk gate.
+
+The runner's forced sales (expiry, a stock option's last day, MCX and currency last holding days, the brakes, the kill switch)
+still apply on top. A sold option is held overnight only as a leg of a defined-risk structure, so a gap cannot lose more than the
+risk gate already allowed.
 
 ## AUTO v1: the paper desk deciding for itself (paper money only)
 
