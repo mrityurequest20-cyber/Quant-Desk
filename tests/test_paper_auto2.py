@@ -36,10 +36,11 @@ def cfg():
     return Config.load(ROOT / "config" / "quantdesk.yaml")
 
 
-def desk(cfg, tmp_path, stats=None, seed=1):
+def desk(cfg, tmp_path, stats=None, seed=1, plan_only=False):
     rn = R.Runner(cfg, Account(500_000), gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "K")), kill_file=tmp_path / "K")
     ap = auto_v2(cfg, ("NIFTY",), {"NIFTY": 65})
     ap.rng = random.Random(seed)
+    ap.plan_only = plan_only                    # these tests drive the intraday mechanics; live trading takes only the plan (PLAN_ONLY, tests/test_plan_first.py)
     if stats is not None:
         ap.lab = A2.Lab(stats)
     return rn, ap
@@ -63,8 +64,9 @@ def calm(rn, ap, t0=T0, minutes=6):
 
 # ---- the catalogue ----------------------------------------------------------------------------------------------------------------------------
 def test_the_catalogue_is_every_combination_with_unique_readable_ids():
-    assert len(A2.CATALOGUE) == len({s.sid for s in A2.CATALOGUE}) == 3132 + 432                # (9 up + 9 down + 11 flat structure-widths) x 3 vols x 3 timings x 6 exits x 2 holds,
-    #                                                                                             and calendars and diagonals (6 structure-widths, near expiry only: 2 timings)
+    assert len(A2.CATALOGUE) == len({s.sid for s in A2.CATALOGUE}) == 3654 + 504                # (9 up + 9 down + 11 flat structure-widths) x 3 vols x 3 timings x (6 exits x 2
+    #                                                                                             holds + 2 overnight take-profits), and calendars and diagonals (6 structure-widths, near
+    #                                                                                             expiry only: 2 timings)
     assert all(A2.BY_SID[s.sid] is s for s in A2.CATALOGUE)                                     # BY_SID also holds what the inventor writes (test_inventor.py)
     assert {s.view for s in A2.CATALOGUE} == {"up", "down", "flat"} and all(len(s.sid) <= 22 for s in A2.CATALOGUE)
     s = A2.BY_SID[IC]
@@ -244,3 +246,59 @@ console.log(JSON.stringify(out));""")
     assert o["big"][0] == 400 and o["wide"][0] == 400 and o["shape"][0] == 400
     live = (ROOT / "deploy/cloudflare/live.js").read_text()
     assert '"POST /paper/lab": "ingest", "GET /paper/lab": "ingest"' in live                       # the runner's key only: the app's key cannot read or write the record
+
+
+def test_the_whole_catalogue_fits_the_relay_compressed_and_a_bad_record_is_refused(cfg, tmp_path):
+    import base64
+    import random as _r
+    import zlib
+    rng = _r.Random(1)
+    lab = A2.Lab()
+    for s in A2.CATALOGUE + A2.CX_CATALOGUE:                                                       # every strategy with a record: plain JSON would hold about 2,600 of them
+        for _ in range(rng.randint(1, 30)):
+            lab.add(s.sid, rng.gauss(0, 1))
+    text = lab.to_json({"read_w": {}})
+    assert len(text) <= A2.LAB_MAX_CHARS and json.loads(text)["v"] == 1 and json.loads(text)["stats"] == {} and "z" in json.loads(text)
+    assert text.isascii()                                                                        # the relay's own checks: v, stats an object, ASCII
+    relay = FakeRelay(text)
+    ap = desk(cfg, tmp_path)[1]
+    assert f"{len(lab.stats)} strategies" in ap.load(relay) and ap.lab.stats == {k: [v[0], round(v[1], 4), round(v[2], 4), v[3]] for k, v in lab.stats.items()}
+    small = A2.Lab({IC: [3, 1.0, 1.0, 2]}).to_json()
+    assert "z" not in json.loads(small)                                                          # a record that fits stays plain
+    bomb = base64.b64encode(zlib.compress(b"{}" + b" " * (A2.LAB_MAX_INFLATED + 10))).decode()   # cut at the bound it would still parse: only the bound refuses it
+    ap2 = desk(cfg, tmp_path)[1]
+    assert "starting from zero" in ap2.load(FakeRelay(json.dumps({"v": 1, "stats": {}, "z": bomb}))) and ap2.lab.stats == {}
+    ap3 = desk(cfg, tmp_path)[1]
+    assert "starting from zero" in ap3.load(FakeRelay(json.dumps({"v": 1, "stats": {}, "z": "not base64!"})))
+
+
+def test_todays_plan_survives_a_restart_and_yesterdays_does_not(cfg, tmp_path):
+    rn, ap = desk(cfg, tmp_path)
+    ap.day_plan = {"built_at": T0.date().isoformat() + "T07:30+05:30", "items": [{"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": "NOPE", "risk_unit": 10.0, "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": "x", "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": 10.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0, "event_at": "soon"},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0, "event_at": 20261114},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": True, "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": float("nan"), "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": -1.0, "spot": 24500.0},
+                                                                                  {"u": 7, "sid": IC, "risk_unit": 10.0, "spot": 24500.0}],
+                   "states": {"NIFTY": {"view": "up"}}, "notes": []}
+    ap.lab.add(IC, 0.3)
+    relay = FakeRelay()
+    assert ap.save(relay, 1000.0)
+    ap2 = desk(cfg, tmp_path)[1]
+    ap2.load(relay)
+    assert ap2.day_plan and [i["sid"] for i in ap2.day_plan["items"]] == [IC] and ap2.planned("NIFTY") == [IC]     # an unknown strategy, a bad price, no spot, a bad time: dropped
+    many = {"built_at": T0.date().isoformat() + "T07:30+05:30", "items": [{"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0}] * (A2.PLAN_TOP + 5)}
+    assert len(A2.AutoPilotV2.restore_plan(many)["items"]) == A2.PLAN_TOP                       # no longer than a plan the desk builds itself
+    assert ap2.day_plan["states"]["NIFTY"]["view"] == "up"
+    cycle(rn, ap2, board(T0), T0)
+    assert ap2.day_plan is not None                                                              # the same day: it steers the session
+    ap3 = desk(cfg, tmp_path)[1]
+    ap3.load(relay)
+    nxt = T0 + dt.timedelta(days=2)
+    cycle(rn, ap3, board(nxt), nxt)
+    assert ap3.day_plan is None or not str(ap3.day_plan.get("built_at", "")).startswith(T0.date().isoformat())   # another day: never
+    assert A2.AutoPilotV2.restore_plan({"built_at": "not a date", "items": []}) is None and A2.AutoPilotV2.restore_plan("x") is None

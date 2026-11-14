@@ -131,6 +131,17 @@ def _ok(status: int, obj: dict) -> bool:
     return 200 <= status < 300 and obj.get("s") in ("ok", None) and obj.get("code", 200) in (200, 1)
 
 
+def _step_ok(status: int, obj: dict) -> bool:
+    """A login step's answer: HTTP 2xx and not an explicit error. Its own code is not judged: the first run against the real Fyers (14 Nov 2026) answered step 1 with
+    HTTP 200, code 1043, "otp has been successfully sent", which is a success. What each step must hand back (a request key, a session, a token) is checked by the
+    caller, and that is the real proof."""
+    return 200 <= status < 300 and obj.get("s") != "error"
+
+
+def _has(obj: dict, key: str) -> str:
+    return f"; a {key.replace('_', ' ')} came back" if obj.get(key) else f"; no {key.replace('_', ' ')} in the answer"
+
+
 def refresh(app_id: str, secret: str, refresh_token: str, pin: str, send=post) -> str:
     """Today's access token from a stored refresh token and the PIN."""
     status, obj = send(f"{API}/validate-refresh-token", {"grant_type": "refresh_token", "appIdHash": app_hash(app_id, secret),
@@ -147,20 +158,21 @@ def totp_login(app_id: str, secret: str, client_id: str, pin: str, totp_secret: 
     now, sleep = now or time.time, sleep or time.sleep
     status, obj = send(f"{VAGATOR}/send_login_otp_v2", {"fy_id": _b64(client_id), "app_id": "2"})
     key = obj.get("request_key")
-    if not (_ok(status, obj) and isinstance(key, str) and key):
-        raise LoginError("step 1 (start the login for the client id) failed (" + _why(status, obj) + ")")
+    if not (_step_ok(status, obj) and isinstance(key, str) and key):
+        raise LoginError("step 1 (start the login for the client id) failed (" + _why(status, obj) + _has(obj, "request_key")
+                         + "); check FYERS_CLIENT_ID, and that the account's two-factor login is TOTP (an authenticator app), not an OTP by SMS or email")
 
     left = 30 - now() % 30
     if left < 5:                                                     # a code about to expire would be refused: wait for the next window instead of spending a failed attempt
         sleep(left + 0.5)
     status, obj = send(f"{VAGATOR}/verify_otp", {"request_key": key, "otp": totp(totp_secret, now())})
     key = obj.get("request_key")
-    if not (_ok(status, obj) and isinstance(key, str) and key):
-        raise LoginError("step 2 (TOTP code) refused (" + _why(status, obj) + "); check FYERS_TOTP_SECRET")
+    if not (_step_ok(status, obj) and isinstance(key, str) and key):
+        raise LoginError("step 2 (TOTP code) refused (" + _why(status, obj) + _has(obj, "request_key") + "); check FYERS_TOTP_SECRET")
 
     status, obj = send(f"{VAGATOR}/verify_pin_v2", {"request_key": key, "identity_type": "pin", "identifier": _b64(pin)})
     sess = (obj.get("data") or {}).get("access_token") if isinstance(obj.get("data"), dict) else None
-    if not (_ok(status, obj) and isinstance(sess, str) and TOKEN_SHAPE.match(sess)):
+    if not (_step_ok(status, obj) and isinstance(sess, str) and TOKEN_SHAPE.match(sess)):
         raise LoginError("step 3 (PIN) refused (" + _why(status, obj) + "); check FYERS_PIN")
 
     app, _, kind = app_id.partition("-")
@@ -182,8 +194,8 @@ def totp_login(app_id: str, secret: str, client_id: str, pin: str, totp_secret: 
 
     status, obj = send(f"{API}/validate-authcode", {"grant_type": "authorization_code", "appIdHash": app_hash(app_id, secret), "code": code})
     acc, ref = obj.get("access_token"), obj.get("refresh_token")
-    if not (_ok(status, obj) and isinstance(acc, str) and TOKEN_SHAPE.match(acc)):
-        raise LoginError("step 5 (exchange the auth code) failed (" + _why(status, obj) + "); check FYERS_SECRET_ID")
+    if not (_step_ok(status, obj) and isinstance(acc, str) and TOKEN_SHAPE.match(acc)):
+        raise LoginError("step 5 (exchange the auth code) failed (" + _why(status, obj) + _has(obj, "access_token") + "); check FYERS_SECRET_ID")
     return acc, (ref if isinstance(ref, str) and TOKEN_SHAPE.match(ref) else "")
 
 

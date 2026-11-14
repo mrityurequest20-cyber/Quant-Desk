@@ -240,6 +240,13 @@ A strategy's record is read through a **multilevel normal model**, fitted by emp
   and the error against the true means is under a quarter of each strategy's raw average on short records.
 - **The proof gate is unchanged:** 8 shadow trades of its own and a positive draw before any paper money.
 - **In the app:** each structure's shared estimate, and the order thesis gives the strategy's shared estimate next to its own average.
+- **Where it is kept:** on the private relay, in one stored value of at most 110,000 characters. Since 14 Nov 2026 the record is written as plain JSON while
+  it fits and, past that, zlib-compressed into the same value (`{"v": 1, "stats": {}, "z": ...}`; the relay's checks are unchanged), so the whole catalogue
+  with a record for every strategy fits in about 70,000 characters instead of losing a third of it. Read back, a compressed record may not inflate past 8 MB
+  (storage is not trusted); only if even the compressed record were too large would the thinnest records be left out, the busiest kept.
+  **Before rolling back** below 14 Nov 2026's commit 6a06ac5: older code reads the compressed record as empty and its next save would overwrite it, so keep a
+  copy of the stored record first. A stored record that cannot be read at all (corrupted or tampered: only the runner's ingest key can write it) is started
+  from zero and overwritten at the next save, as before.
 
 ## The strategy builder: every structure, which one now and why, and designs of its own
 
@@ -405,6 +412,56 @@ AUTO v2 also trades the MCX and currency near-month futures the paper desk allow
 **A live entry:** one lot, buy or short, with its stop and target. The runner enforces both, squares it off before the close (futures are intraday) and allows
 one position per contract. The pre-open plan stays with option structures.
 
+## The Convexity desk (`quantdesk/paper/convex.py`, 14 Nov 2026)
+
+The owner: "Direction, to be honest, is very hard to understand ... We want to have things of high risk to reward only ... 100, 200, 300, 400, 500, 1000%
+return." So this book never forecasts direction. It buys both sides at once and wins when the move is big, whichever way it goes.
+
+**Why it can work, and why blind buying does not:** a bought option makes five to ten times its price when the underlying moves much more than the option's
+price assumed. On average, though, options price more movement than follows: that is the premium option sellers earn, and buying every day pays it. So the desk
+buys only when one of four tests says the next move is priced **too small**:
+- **Cheap options:** the options' move to expiry (implied volatility × √T) is at most 0.8 × what the tail model forecasts over the same trading days.
+- **An event priced small:** a scheduled event that touches the instrument is before the expiry, within two sessions. The event's own move is split out of the
+  near and next expiries (both contain it). It passes if that day's implied move is at most 0.8 × what this instrument did on past episodes of the same kind
+  (weighted to today, at least 3 effective episodes: RBI, FOMC, the Budget, elections). Or, unscheduled: a high news event touching it while the options have
+  not repriced.
+- **Tails underpriced:** the structure's expected payoff over the fitted fat-tailed distribution (extreme value theory) is at least 1.25 × its cost. Far wings
+  live here: they cost a few rupees, and option prices behave like a normal distribution that underweights the tails.
+- **A quiet market breaking out:** the last hour's realized volatility is at most 0.6 × the daily forecast, and a fresh CUSUM change point says it has started
+  to move (either way; the direction is not used), with the options not yet rich.
+
+Every structure must also be worth at least 0.9 × its cost over the tail model, whatever its test.
+
+**The structures:** a long straddle, a long strangle (1 or 2 strikes out) and long wings (1.5 or 2.5 forecast standard deviations out), each on the near or
+next expiry. Every leg is bought, so the most a trade can lose is its premium. 40 strategies (structure × width × test × expiry).
+
+**Sizing (the owner's choices, 14 Nov 2026):**
+- 0.5% of the account a trade, premium and fees (₹2,500 on ₹5 lakh);
+- at most 3% of the account spent on convexity premium in a calendar month (₹15,000), counted from the ledger, so a restart forgets nothing;
+- at most 3 packages open, one per underlying.
+
+The risk gate's own caps (2.5% a trade, 5% a day, 10% drawdown) apply on top, unchanged. On ₹5 lakh an at-the-money NIFTY straddle (about ₹15,000 a lot) does
+not fit the stake. Far wings do, and they are the ones that can make 5 to 10 times. When a test passes but a lot does not fit, the app says so.
+
+**Exits (the owner's choice: thirds):**
+- a third sold at +100% of the premium (its cost is back);
+- a third at +300%;
+- the last third trailed: out when it gives back more than 35% of its peak gain;
+- after a scheduled event: out 15 minutes after it, before the options' price collapses;
+- the options repriced rich before the move came: out if it is not losing;
+- five sessions without the move, or the session before expiry: out.
+
+There is no price stop below that: the stake is the stop. One lot cannot be split, so it is trailed whole; two lots sell one at +100%.
+
+**Evidence:** every convex strategy is traded in the shadow book with these exits and scored in R (capped at +20R). It trades paper money only when its family
+(the structure) has 20 shadow trades, it has 5 of its own, and its hierarchical average is above zero. A good record here is many small losses and a few large
+wins: the hit rate is not the measure, the average R is. Expect weeks of shadow trading before the first live trade.
+
+**Both books trade (the owner's choice):** both are tested in shadow all day, and both go live only by the rules of plan-first trading below (the
+day plan, important news, or a change in the live data that holds). Since then, a flat view's premium selling (an iron condor) is never planned or triggered, so it
+trades in shadow only. The app's Paper tab has a Convexity
+desk panel: the month's spend against its budget, the stake, what is open, what is proven, and which tests pass now on each underlying.
+
 ## The scheduled-events calendar (`quantdesk/paper/eventcal.py`, 14 Nov 2026)
 
 The brief lists the next week's scheduled events. Each event touches instruments through the news model's channels. A named symbol is touched fully, and the
@@ -463,24 +520,97 @@ and look for high risk to reward trades." Every ten minutes from 06:00 to 09:15,
   history, which sets the volatility context), macro events, expiries, headlines naming the instrument, futures OI shifts.
 
 **What it decides:**
-- **A pre-open view** per underlying: up or down when at least two readings agree and none disagrees; flat when nothing moves.
-- **Candidates:** every catalogue strategy whose context holds, priced on the closing books, kept only if its reward to risk
-  is **2 or better** (the strategy's own take-profit against its stop, capped by what the structure can make).
+- **A pre-open view** per underlying: up or down only when **three** readings agree and none disagrees (since 14 Nov 2026: "a
+  strong direction"); with fewer, the reason is written down and no direction is planned. Flat when nothing moves.
+- **Directional candidates:** the **overnight** strategies whose context holds, priced on the closing books, kept only if their
+  reward to risk is **2 or better** (the take-profit against the structure's worst case, capped by what it can make).
+- **Big-move candidates:** the Convexity desk's strategies whose test passes on the closing board (options cheap against the
+  forecast, a scheduled event priced small, tails underpriced). The squeeze test needs the live tape, so it is never planned.
+- **Not planned:** a flat view's premium selling (an iron condor expects no move: neither a big move nor a direction), day and
+  swing strategies, and futures (intraday). All of them are still tested in shadow.
 - **Ranking:** proven strategies first, then by measured expectancy in R, then by catalysts and reward to risk. At most two per
   underlying and ten in all. Each comes with its legs, rupees at risk and to gain per lot, and its reasons.
 
-**At the open:** from 09:20, for each underlying, AUTO v2 takes a **planned** strategy first, but only if its context still holds
-on the live board, it has its `MIN_TRADES` shadow record, and its Thompson draw is positive. Otherwise it chooses as before. A
-planned trade's thesis says so.
-- **Same limits:** the plan changes the order of choice, not the limits. The risk gate, the loss caps, the proof gate and the
-  sizes are the same as for any trade.
+**At the open (since 14 Nov 2026: plan first, `PLAN_ONLY`):** the plan is the main way a trade is opened, in both books; the news and the data
+exceptions below are the only others. The owner:
+"every day it should analyze the news and everything ... prior we are deciding it ... not when the market opens. Then it's fine.
+Okay, then it takes trade."
+- **Taken:** from the segment's first entry time (09:20 for NSE), for 100 minutes, a planned strategy with its shadow record
+  (8 trades and a positive Thompson draw; the Convexity desk's own gate for its strategies).
+- **Decided before, not at the open:** the intraday view does not have to agree. A plan is dropped for the day only when it has
+  been **contradicted**: the open's view is the opposite one, the underlying has already gone through the planned trade's
+  volatility stop from the planned price, the trade now risks more than 1.5 times what the plan priced, a big-move trade's options
+  have turned rich, or its event has passed.
+- **Nothing else is opened during the day, except by the two exceptions below** (important news, a change in the live data) and a Convexity desk test that
+  has held five minutes on the live board. Prices, news and every reading are still recorded, and every
+  strategy is still traded in shadow, so the record keeps growing.
+- **The exception: important news in the session, at any time** (the owner, 14 Nov 2026: "if during the trading time if any news
+  comes up which could be important then also allow the system to trade", and "There is not like 45 minutes window ... in trading
+  session also you can take a trade given that there is a news which is important or is relevant to our risk to reward part").
+  The news counts for an instrument when a story is:
+  - of today's session: published after today's plan was built, and not in the future;
+  - of **high impact**, new (novelty 0.5 or more) and not a recap;
+  - about the instrument: it names it, or its subjects move it by 0.3 or more through the news model's channels (crude news
+    reaches the rupee, not an IT exporter).
+
+  There is no time window. While such a story exists, the plan's own bar applies to the live board at any time in the session.
+  A directional trade needs a **strong direction**: three or more live readings agreeing (book pressure, the options forward,
+  the move, the news, the market read, the Kalman trend), **the news among them**, none against; then an overnight strategy
+  with the volatility stop. A big-move trade needs a Convexity desk test to pass on the live board (for example a high news
+  event the options have not repriced for). How long a story keeps counting is the market's answer: the news model's vote
+  halves in two hours and is gone after six, and the other readings must still agree. One news-driven directional position per
+  instrument at a time; same proof gates, sizing and risk gate. The trade's thesis names the headline.
+- **And the same for the data** (the owner, 14 Nov 2026: "it's not only limited to news, it's also applies to data also. That if
+  we feel the data is changing in the market and that particular sentiment change in the data ... is signaling us to that
+  particular risk reward opportunity ... Same applies to there also"). The 06:00 to 09:15 plan is what the market could look like
+  from last night's data; the live market is its own setup. At any time in the session, a directional trade the plan did not
+  name may open when:
+  - the live market shows a **strong direction**: three or more readings agreeing (book pressure, the options forward, price,
+    the news, the options and OI market read), none against. **Price is one reading** however it is read (the five-minute
+    move, or once fitted the Kalman trend, or a drift change point: one of them, never two);
+  - it has **held for five minutes** without a gap, so a flicker is not a reason;
+  - the pre-market read did not already say it (what the plan expected is not a new reason), **and the data has really shifted**
+    (the owner's choice, 14 Nov 2026, "Stricter: real data shift"): the options and OI read's P(up) has moved 0.15 or more since
+    the session's first read **towards** the direction (a read weakening towards neutral is not a shift) and agrees (a build-up appearing, the put-call ratio turning), or a fresh CUSUM change point is
+    drifting the same way. The plan's silence alone is not a change;
+  - the strategy offers a **reward to risk of 2 or better**, as on the plan (an overnight strategy, the volatility stop).
+
+  A big-move trade opens when a Convexity desk test has held on the live board for five minutes: the test itself (for the tail
+  test, the structure's EVT value) must pass at each sighting, and a gap of more than two minutes between sightings starts the
+  clock again; the same for the live agreement. A planned strategy the plan's own checks refused (late, contradicted, dear) does
+  not come back through a trigger, and every live-triggered trade needs the reward to risk of 2. A convex package is sized at
+  its order's own limit price (the offer plus its slippage allowance), so the 0.5% stake is a ceiling on what a fill can cost.
+  Same proof gates and risk gate; one live-triggered directional position per instrument at a time. The thesis says what changed.
+- **Same limits:** the risk gate, the loss caps and the proof gate are the same as for any trade.
 - **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
-- **Yesterday's plan** never steers today.
+- **Yesterday's plan** never steers today. Today's is kept with the strategy record (since 14 Nov 2026), so a restart after 09:15 still has it; read
+  back, only its items that name a known strategy with a real planned price, spot and (if any) event time are kept, at most as many as a plan holds.
 
 **Where to see it:** the Positions tab, the "Day plan" panel, above the strategy lab.
 
 **What it is not:** a forecast that has been tested. The repository's own research found direction hard to forecast. The plan
 writes down what the desk will look for and why. Whether planned trades do better than unplanned ones is for the record to show.
+
+### Held overnight, and a stop set by volatility (owner, 14 Nov 2026)
+
+The owner: "my options, whether buying or selling, must have the overnight holding power", and the stop "based on the market
+conditions. How much volatile the market is". His choices: an underlying-move stop, held until its exits say so.
+
+**The overnight strategies:** every catalogue context also has two overnight variants (take-profit 2R or 3R of the structure's
+worst case). They are the only directional strategies the plan names. Each is:
+- **held past the close and across sessions**, with no session cap;
+- **stopped by the underlying, not the premium:** out when the index or stock has moved against the trade by
+  **1.5 × its daily standard deviation × √(sessions held)** since entry. The daily standard deviation is the tail model's (or the
+  last hour's realized, if larger), taken at entry, so a volatile market gets a wide stop and a calm one a tight stop. Against
+  an up view is down, against a down view is up, and against a short-volatility structure is a move either way. A long straddle
+  and the Convexity desk want the move, so their premium is their stop. The entry price and volatility travel in the position's
+  strategy name (`p24500 d1075`: spot 24,500, a 1.075% day), so a restart keeps the stop;
+- **out by the close of the session before expiry**, so no position is held into an expiry day;
+- bounded, as always, by the structure's own worst case and the risk gate.
+
+The runner's forced sales (expiry, a stock option's last day, MCX and currency last holding days, the brakes, the kill switch)
+still apply on top. A sold option is held overnight only as a leg of a defined-risk structure, so a gap cannot lose more than the
+risk gate already allowed.
 
 ## AUTO v1: the paper desk deciding for itself (paper money only)
 

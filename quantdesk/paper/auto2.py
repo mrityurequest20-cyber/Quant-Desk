@@ -24,19 +24,30 @@ How it works, every cycle of the paper runner (a few seconds):
 What bounds it: only the risk gate's loss caps (2.5% of the account a trade with fees, 5% a day, a 10% drawdown halt) and the relay's storage guard. No cap on the number of trades,
 strategies or positions (owner, 8 Nov 2026). A sold option is only ever a leg of a structure whose worst case is bounded.
 
+PLAN FIRST, HOLD OVERNIGHT (owner, 14 Nov 2026): with PLAN_ONLY, paper money goes only into what the day plan (06:00 to 09:15) named, a strong direction (three readings
+agreeing, none against) or a big move priced too small, taken in the first 100 minutes unless contradicted since. The exceptions: important news of today's session
+(news_trigger) or a change in the live data that has held (live_trigger) let the plan's bar apply to the live board at any time in the session. Nothing else is opened during the day; every strategy is still traded in
+shadow. The directional strategies the plan names are held overnight with a volatility stop (the underlying 1.5 daily sd x sqrt(sessions) against).
+
+THE CONVEXITY DESK (owner, 14 Nov 2026; convex.py): a second book alongside, with no view on direction. It buys both sides (straddles, strangles, far wings) only when a
+test says the next move is priced too small, risks 0.5% of the account a trade and at most 3% a month, and sells in thirds (+100%, +300%, the rest trailed).
+
 NOT proven to make money. The shadow record is the evidence it builds; it is shown in the app (Positions, Strategy lab) and pushed with the session review.
 """
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import math
 import random
 import re
+import zlib
 from dataclasses import dataclass
 
 from ..markets import sessions as MK
 from . import auto as V1
+from . import convex as CX
 from . import inventor as INV
 from . import eventcal as EC
 from . import marketread as MR
@@ -106,6 +117,7 @@ SWING_SESSIONS = 3
 LEDGER_SOFT_LIMIT = V1.LEDGER_SOFT_LIMIT
 SUMMARY_SOFT_MAX = 30000                 # AUTO v2's share of the runner's state (the relay's cap is 60,000 for all of it): past this, reasons are dropped before numbers
 LAB_MAX_CHARS = 110000                   # the relay keeps the record in one stored value (128 KiB at most)
+LAB_MAX_INFLATED = 8_000_000              # a compressed record read back may not inflate past this (storage is not trusted)
 # The day plan (owner, 13 Nov 2026: "6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis and look
 # for high risk to reward trades"). Built from last night's closing books, the overnight markets, the news and the pre-market brief; it ranks defined-risk candidates and the
 # open takes a planned strategy first, through the same proof gate (MIN_TRADES, a positive draw) and the same risk gate as any other.
@@ -115,6 +127,28 @@ PLAN_MAX_AGE_S = 4 * 86400                # last close: Friday's prices plan Mon
 PLAN_MIN_RR = 2.0                         # reward to risk at the strategy's own take-profit and stop, capped by what the structure can make
 PLAN_TOP = 10
 PLAN_PER_U = 2
+# ---- plan first, hold overnight (owner, 14 Nov 2026: "every day it should analyze the news and everything ... prior we are deciding it up, not when the market opens.
+# Then it's fine. Okay, then it takes trade"; "my options, whether buying or selling, must have the overnight holding power"; the stop "based on ... how much volatile
+# the market is") --------------------------------------------------------------------------------------------------------------------------------------------
+PLAN_ONLY = True                          # paper money only for what the day plan named before the open; the shadow book still records everything, all day
+PLAN_DIR_VOTES = 3                        # a planned direction: this many agreeing pre-open readings and none against (the owner: "big move or strong direction")
+PLAN_ENTRY_MIN = 100                      # a planned entry is taken within this many minutes of its segment's first entry time, or not that day
+PLAN_PRICE_SLACK = 1.5                    # nor when it now risks more than this times what the plan priced it at (the market has already moved)
+VOL_STOP_K = 1.5                          # the owner's stop: the underlying moving against the trade by 1.5 daily standard deviations (times sqrt(sessions held))
+OVERNIGHT_TPS = (2.0, 3.0)                # the overnight strategies' take-profits, in R of the structure's worst case
+# ---- the one exception: important news in the session (owner, 14 Nov 2026: "if during the trading time if any news comes up which could be important then also allow
+# the system to trade"; and: "There is not like 45 minutes window ... in trading session also you can take a trade given that there is a news which is important or is
+# relevant to our risk to reward part"). Any time in the session: an important story of today's session, reaching the instrument, lets the plan's own bar apply to the
+# live board. No window: how long a story still counts is the news model's own decay (its vote halves in two hours and is gone after six). --------------------------
+NEWS_MIN_NOVELTY = 0.5                    # a new story, not a repeat of one already out
+# ---- and the same for the data (owner, 14 Nov 2026: "it's not only limited to news, it's also applies to data also. That if we feel the data is changing in the market
+# and that particular sentiment change in the data ... is signaling us to that particular risk reward opportunity ... Same applies to there also"; the 06:00-09:15
+# plan is what the market could look like; "In a live market, there is a different setup"). A live strong direction that has HELD and is a CHANGE (from the
+# pre-market read, in the options and OI sentiment since the open, or a CUSUM change point) is a reason as important news is. ------------------------------------------
+LIVE_PERSIST_S = 300                      # the live agreement (or a big-move test) must have held this long: a change, not a flicker
+READ_SHIFT = 0.15                         # the market read's P(up) has moved this much since the session's first read
+LIVE_GAP_S = 120                          # a hold is continuous: a gap longer than this between two sightings starts the clock again
+NEWS_TOUCH_MIN = 0.3                      # reaching an instrument: named in it, or its subjects move it this much (newsmodel channels)
 OVERNIGHT_TH_PCT = 0.40                   # the overnight markets' median move that counts as a vote
 INDEX_U = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"})     # the overnight cue and macro events are votes for the indices only
 
@@ -157,6 +191,9 @@ EXITS = ((0.5, 0.5), (1.0, 0.5), (2.0, 0.5), (0.5, 1.0), (1.0, 1.0), (2.0, 1.0))
 HOLDS = ("day", "swing")
 # one letter for each part of a strategy id, each distinct within its part: up/down/flat, rich/cheap/any (volatility), any/eve (timing; "t" for any), near/next (expiry), day/swing
 CODE = {"up": "u", "down": "d", "flat": "f", "rich": "r", "cheap": "c", "any": "a", "eve": "e", "near": "n", "next": "x", "day": "d", "swing": "s"}
+CODE["overnight"] = "o"
+CODE.update(CX.EDGE_CODE)                # the Convexity desk's tests sit in the volatility part of its ids (convex.py): v cheapvol, k event, t tail, q squeeze
+NAMES.update(CX.STRUCTS)
 
 
 @dataclass(frozen=True)
@@ -176,10 +213,19 @@ class Strategy:
         return f"{self.struct}{self.width}.{CODE[self.view]}{CODE[self.vol]}{CODE[self.timing]}{CODE[self.expiry]}.{self.tp:g}/{self.sl:g}.{CODE[self.hold]}"
 
     def describe(self) -> str:
+        if CX.is_convex(self.struct):
+            w = (f" {self.width / 10:g} sd out" if self.struct == "XW" else f" {self.width}-strike" if self.width else "")
+            return (f"{NAMES[self.struct]}{w}, {self.expiry} expiry, when {CX.EDGE_TEXT[self.vol]} (no view on direction); a third sold at +100%, a third at +300%, "
+                    f"the rest trailed")
         if self.struct in FUT_STRUCTS:
             return (f"{NAMES[self.struct]} (the near-month future) when the view is {self.view}; stop {self.width * FUT_STOP_SD:g} of a day's standard deviation away, "
                     f"take profit at {self.tp:g}R, out by the close (futures are intraday)")
         w = f" {self.width}-strike" if self.width else ""
+        if self.hold == "overnight":
+            stop = ("a move of 1.5 daily standard deviations against it" if self.view in ("up", "down") or is_short_vol(self.struct)
+                    else "its premium (it wants the move)")
+            return (f"{NAMES[self.struct]}{w}, {self.expiry} expiry, when the view is {self.view} and volatility is {self.vol}"
+                    + (" on an expiry eve" if self.timing == "eve" else "") + f"; held overnight: take profit at {self.tp:g}R, stop at {stop}, out by the session before expiry")
         return (f"{NAMES[self.struct]}{w}, {self.expiry} expiry, when the view is {self.view} and volatility is {self.vol}"
                 + (" on an expiry eve" if self.timing == "eve" else "") + f"; take profit at {self.tp:g}R, stop at {self.sl:g}R, " + ("out by the close" if self.hold == "day" else "held up to three sessions"))
 
@@ -200,6 +246,8 @@ def catalogue() -> list[Strategy]:
                     for tp, sl in EXITS:
                         for hold in HOLDS:
                             out.append(Strategy(code, w, view, vol, timing, expiry, tp, sl, hold))
+                    for tp in OVERNIGHT_TPS:                                   # held overnight: the volatility stop, no session cap (owner, 14 Nov 2026)
+                        out.append(Strategy(code, w, view, vol, timing, expiry, tp, 1.0, "overnight"))
     return out
 
 
@@ -219,6 +267,13 @@ FUT_STOP_MAX_PCT = 0.10                  # the paper desk's own bound on a stop'
 FUT_CATALOGUE = [Strategy(code, w, view, "any", "any", "near", tp, 1.0, "day") for code, (view, _) in FUT_STRUCTS.items() for w in (1, 2) for tp in (1.0, 2.0, 3.0)]
 BY_SID.update({s.sid: s for s in FUT_CATALOGUE})
 
+# ---- the Convexity desk (owner, 14 Nov 2026: "high risk to reward only ... 100, 200, 300, 400, 500, 1000% return"; convex.py) -------------------------------
+# Bought optionality, both sides, no view on direction: each structure x width x test x expiry. Its view is "any"; the "volatility" part of its id names its test; its
+# exits are convex.exit_action's (thirds), whatever tp and sl say (tp RUNG2_R, sl 1: the second rung and the premium).
+CX_CATALOGUE = [Strategy(code, w, "any", edge, "any", exp, CX.RUNG2_R, 1.0, "swing") for code in CX.STRUCTS for w in CX.WIDTHS[code] for edge in CX.EDGES
+                for exp in ("near", "next")]
+BY_SID.update({s.sid: s for s in CX_CATALOGUE})
+
 
 def resolved_legs(struct: str, width: int) -> tuple:
     """A structure's legs as (lots, right, strike steps from the money), the canonical form the inventor works in."""
@@ -229,6 +284,22 @@ def is_short_vol(struct: str) -> bool:
     """Short volatility: a flat structure with no net calls and no net puts (it is paid while the price sits still and is hurt when it moves)."""
     view, legs, _ = STRUCTURES[struct]
     return view == "flat" and sum(l[0] for l in legs if l[1] == "CE") == 0 and sum(l[0] for l in legs if l[1] == "PE") == 0
+
+
+def vol_stop(view: str, struct: str, spot0, sd, spot, sessions: int) -> str | None:
+    """The owner's stop (14 Nov 2026), or None: the underlying has moved against the trade by VOL_STOP_K daily standard deviations times sqrt(sessions held) since entry.
+    Against an up view is down, against a down view is up, and against a short-volatility structure is either way. A structure that is long the move (a long straddle,
+    the Convexity desk) has no such stop: its premium is its stop."""
+    if not (isinstance(spot0, (int, float)) and spot0 > 0 and isinstance(sd, (int, float)) and sd > 0 and isinstance(spot, (int, float)) and spot > 0):
+        return None
+    if CX.is_convex(struct) or (view not in ("up", "down") and not (struct in STRUCTURES and is_short_vol(struct))):
+        return None
+    lim = VOL_STOP_K * sd * math.sqrt(max(1, sessions))
+    mv = math.log(spot / spot0)
+    against = -mv if view == "up" else mv if view == "down" else abs(mv)
+    if against < lim:
+        return None
+    return f"volatility stop: {mv * 100:+.2f}% since entry, beyond {lim * 100:.2f}% ({VOL_STOP_K:g} x a {sd * 100:.2f}% day x sqrt({max(1, sessions)} sessions))"
 
 
 def register_invention(legs, ctx: "Strategy | None" = None) -> list["Strategy"]:
@@ -415,7 +486,7 @@ class Lab:
             vol = {"r": "rich", "c": "cheap", "a": "any"}[ctx[1]]
             timing = {"e": "eve", "a": "any"}[ctx[2]]
             expiry = {"n": "near", "x": "next"}[ctx[3]]
-            s = Strategy(code, 0, inv[ctx[0]], vol, timing, expiry, tp, sl, {"d": "day", "s": "swing"}[hold])
+            s = Strategy(code, 0, inv[ctx[0]], vol, timing, expiry, tp, sl, {"d": "day", "s": "swing", "o": "overnight"}[hold])
             if s.sid == sid and s.view == STRUCTURES[code][0]:
                 BY_SID[sid] = s
         except (KeyError, ValueError, IndexError):
@@ -425,7 +496,16 @@ class Lab:
         return [BY_SID[sid] for d in self.inv.values() for sid in d["active"] if sid in BY_SID]
 
     def min_trades(self, s: "Strategy") -> int:
-        return MIN_TRADES_INVENTED if s.struct in self.inv else MIN_TRADES
+        return CX.MIN_OWN if CX.is_convex(s.struct) else MIN_TRADES_INVENTED if s.struct in self.inv else MIN_TRADES
+
+    def convex_ready(self, s: "Strategy") -> bool:
+        """A convex strategy may trade paper money: its family (the structure) has MIN_POOLED shadow trades, it has MIN_OWN of its own, and its hierarchical posterior
+        mean is above zero (convex.py). A record of many small losses and a few large wins is judged by its mean, never its hit rate."""
+        n = self.stats.get(s.sid, [0])[0]
+        if n < CX.MIN_OWN:
+            return False
+        fam = self.fit()["family"].get(s.struct)
+        return bool(fam) and fam[3] >= CX.MIN_POOLED and self.posterior(s.sid)[1] > 0
 
     def adopt(self, legs, parent: "Strategy | None") -> list["Strategy"]:
         legs = INV.norm(legs)
@@ -448,7 +528,7 @@ class Lab:
 
     def add(self, sid: str, r: float) -> None:
         n, s, ss, w = self.stats.get(sid, [0, 0.0, 0.0, 0])
-        r = max(-5.0, min(10.0, r))                                            # a bad quote cannot write a record of +500R
+        r = max(-5.0, min(CX.R_CAP if CX.is_convex(CX.sid_struct(sid)) else 10.0, r))       # a bad quote cannot write a record of +500R (convexity: up to R_CAP)
         self.stats[sid] = [n + 1, s + r, ss + r * r, w + (1 if r > 0 else 0)]
         self.dirty = True
         self._ver += 1
@@ -493,7 +573,7 @@ class Lab:
             C += W - sum(wi * wi for wi in w) / W
         tau2 = min(max((Q - df) / C, HB_TAU_MIN ** 2), HB_TAU_MAX ** 2) if df >= 2 and C > 0 else HB_TAU_DEFAULT ** 2
         family = {}
-        for struct in [*STRUCTURES, *FUT_STRUCTS]:
+        for struct in [*STRUCTURES, *FUT_STRUCTS, *CX.STRUCTS]:
             rows = fam.get(struct) or []
             w = [1 / (tau2 + r[3]) for r in rows]
             W = sum(w)
@@ -525,18 +605,45 @@ class Lab:
         return rng.gauss(mean, se)
 
     def to_json(self, extra: dict | None = None) -> str:
+        """The record as the relay keeps it (one ASCII value of at most LAB_MAX_CHARS). Plain JSON while it fits; past that the whole record is zlib-compressed into
+        {"v": 1, "stats": {}, "z": base64} (the relay checks only v and that stats is an object), which holds every strategy of the catalogue; only if even that
+        is too large are the thinnest records left out, the busiest kept."""
         inv = {code: d for code, d in self.inv.items() if d["active"] or any(sid.startswith(code + "0.") for sid in self.stats)}
         head = {"v": 1, "inv": inv, **(extra or {})}
-        budget = LAB_MAX_CHARS - len(json.dumps(head, separators=(",", ":")))
-        items = sorted(self.stats.items(), key=lambda kv: -kv[1][0])
-        out, size = {}, 2
-        for sid, v in items:                                                    # the busiest records first: if the cap is ever reached, the thinnest are the ones left out
-            row = [v[0], round(v[1], 4), round(v[2], 4), v[3]]
-            size += len(json.dumps({sid: row}, separators=(",", ":"))) - 1
-            if size > budget:
-                break
-            out[sid] = row
-        return json.dumps({**head, "stats": out}, separators=(",", ":"))
+        rows = [(sid, [v[0], round(v[1], 4), round(v[2], 4), v[3]]) for sid, v in sorted(self.stats.items(), key=lambda kv: -kv[1][0])]
+
+        def plain(k):
+            return json.dumps({**head, "stats": dict(rows[:k])}, separators=(",", ":"))
+
+        def packed(k):
+            z = base64.b64encode(zlib.compress(plain(k).encode("ascii"), 9)).decode("ascii")
+            return json.dumps({"v": 1, "stats": {}, "z": z}, separators=(",", ":"))
+        text = plain(len(rows))
+        if len(text) <= LAB_MAX_CHARS:
+            return text
+        text = packed(len(rows))
+        if len(text) <= LAB_MAX_CHARS:
+            return text
+        lo, hi = 0, len(rows)                                                   # the most records (busiest first) whose compressed record fits
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(packed(mid)) <= LAB_MAX_CHARS:
+                lo = mid
+            else:
+                hi = mid - 1
+        return packed(lo)
+
+    @staticmethod
+    def unpack(raw: str) -> dict:
+        """A record read back from the relay: plain JSON, or the compressed form inflated (at most LAB_MAX_INFLATED bytes); {} for anything else."""
+        got = json.loads(raw) if isinstance(raw, str) else {}
+        if isinstance(got, dict) and isinstance(got.get("z"), str):
+            d = zlib.decompressobj()
+            body = d.decompress(base64.b64decode(got["z"], validate=True), LAB_MAX_INFLATED)
+            if d.unconsumed_tail:
+                raise ValueError("the record inflates past its bound")
+            got = json.loads(body.decode("ascii"))
+        return got if isinstance(got, dict) else {}
 
     def summary(self, top: int = 12) -> dict:
         rows = []
@@ -544,7 +651,8 @@ class Lab:
             if n:
                 _, mean, se = self.posterior(sid)
                 rows.append({"sid": sid, "what": BY_SID[sid].describe(), "n": n, "mean_r": round(s / n, 3), "shrunk_r": round(mean, 3), "win": round(w / n, 3),
-                             "live": n >= self.min_trades(BY_SID[sid]) and mean > 0, "invented": BY_SID[sid].struct in self.inv})
+                             "live": (self.convex_ready(BY_SID[sid]) if CX.is_convex(BY_SID[sid].struct) else n >= self.min_trades(BY_SID[sid]) and mean > 0),
+                             "invented": BY_SID[sid].struct in self.inv, "convex": CX.is_convex(BY_SID[sid].struct)})
         rows.sort(key=lambda r: (-r["shrunk_r"], -r["n"]))
         f = self.fit()
         fams = [{"struct": k, "name": NAMES[k], "mu_r": round(mu, 3), "se": round(math.sqrt(vmu), 3), "members": m, "trades": n}
@@ -593,6 +701,11 @@ class AutoPilotV2:
         self.brief: dict | None = None             # the pre-market brief (quantdesk/premarket), handed in by the session; None = plan without it
         self.day_plan: dict | None = None
         self.plan_at = -1e9
+        self.cx_peak: dict[str, float] = {}       # the Convexity desk: a live package's best R so far (its strategy text -> R), kept with the record
+        self.cx_at: dict[str, float] = {}         # u -> when its convex shadow entries were last looked at
+        self.cx_backoff: dict[str, float] = {}
+        self.cx_status: dict = {}
+        self.plan_only = PLAN_ONLY
 
     def strategies(self) -> list[Strategy]:
         """Everything it may trade: the written catalogue, what the inventor has written (inventor.py), and the futures strategies (MCX and currency only)."""
@@ -718,6 +831,23 @@ class AutoPilotV2:
         pmom, pvote = self.price_vote(mom, rg, sd5)
         d, why = V1.direction(rd["pressure"], rd["gap_pct"], pmom, nv, nwhy)
         d, why = self.with_read(d, why, rd, pmom, nv, nwhy, read, pvote)
+        mv = (1 if pmom > 0 else -1) if pmom is not None and abs(pmom) >= V1.MOMENTUM_TH_PCT else 0
+        tv = pvote[0] if pvote else 0                                                           # the Kalman trend or a CUSUM drift (price_vote gives one or the other)
+        labeled = [(k, v) for k, v in (("book", (1 if rd["pressure"] > 0 else -1) if rd["pressure"] is not None and abs(rd["pressure"]) >= V1.PRESSURE_TH else 0),
+                                       ("forward", (1 if rd["gap_pct"] > 0 else -1) if rd["gap_pct"] is not None and abs(rd["gap_pct"]) >= V1.PARITY_TH_PCT else 0),
+                                       ("price", tv or mv),                                     # the owner, 14 Nov 2026: price counts as ONE reading, however it is read
+                                       ("news", nv), ("read", (read or {}).get("vote") or 0)) if v]
+        votes = [v for _, v in labeled]
+        agree = votes[0] if len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0        # a strong live direction: the plan's bar on the live board
+        strong = agree if nv == agree else 0                                                   # the news among them: the news exception's bar
+        if not hasattr(self, "agree_since"):
+            self.agree_since, self.read_base = {}, {}
+        prev = self.agree_since.get(u)
+        first = prev[1] if agree and prev and prev[0] == agree and t - prev[2] <= LIVE_GAP_S else t
+        self.agree_since[u] = (agree, first, t) if agree else None                         # (direction, since when it has held without a gap, last seen)
+        first_t = self.window(u)[0]
+        if read and read.get("p_up") is not None and ist.time() >= first_t and (self.read_base.get(u) or (None,))[0] != ist.date():
+            self.read_base[u] = (ist.date(), float(read["p_up"]), read.get("buildup"))           # the session's first read: what "since the open" is measured from
         tr = rg.get("trend")
         calm = CALM_K * sd5 if sd5 else CALM_PCT                                           # calm in its own terms
         view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < calm and not (read or {}).get("vote")
@@ -729,9 +859,12 @@ class AutoPilotV2:
         if rwhy:
             why = list(why) + [rwhy]
         st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt, "read": read,
-              "regime": regime, "hmm": rg, "today": ist.date()}
+              "regime": regime, "hmm": rg, "today": ist.date(), "strong": "up" if strong > 0 else "down" if strong < 0 else None, "votes": len(votes),
+              "agree": "up" if agree > 0 else "down" if agree < 0 else None, "sources": [k for k, _ in labeled]}
+        st["cx"] = self.convex_edges(snap, u, ch, st, ist, news, rg, read, T)
         self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items()
-                              if k not in ("why", "read", "hmm", "today")}
+                              if k not in ("why", "read", "hmm", "today", "cx", "strong", "votes", "agree", "sources")}
+        self.last_state[u]["cx"] = [round(st["cx"]["ratio"], 3) if st["cx"].get("ratio") is not None else None, [k for k in CX.EDGES if k in st["cx"]]]
         if regime == "event":
             self.last_state[u]["event"] = (rwhy or "")[:160]
         self.last_state[u]["hmm"], self.last_state[u]["change"] = rg["hmm"], rg["change"]
@@ -833,6 +966,19 @@ class AutoPilotV2:
             sched = EC.regime(u, (self.brief or {}).get("calendar") if isinstance(self.brief, dict) else None, now)
             if sched:
                 return "event", f"event regime: {sched}"
+        ne = self._news_event(u, news)
+        if ne:
+            return "event", f"event regime: {ne}"
+        if read and read.get("event_priced"):
+            return "event", "event regime: the near expiry's volatility is above the next's (an event is priced)"
+        if rg and rg.get("stress"):
+            if rg.get("change") == "volatility up":
+                return "event", "event regime: a CUSUM change point to higher volatility in the last quarter hour"
+            return "event", f"event regime: the HMM puts {u} in its stressed state (P {((rg.get('p') or {}).get('stressed') or 0):.2f})"
+        return "normal", None
+
+    def _news_event(self, u: str, news) -> str | None:
+        """The digest's high event that touches `u` now, in words, or None."""
         seg = self.segments.get(u)
         group = "mcx" if seg == "mcx" else "cds" if seg == "nse_cds" else "equity"
         for e in ((news or {}).get("events") or []) if isinstance(news, dict) else []:
@@ -842,14 +988,78 @@ class AutoPilotV2:
             if (reach == "all" or reach == group or (reach == "mcx" and group == "equity" and e.get("type") == "commodities")
                     or NM.touches(u, e) >= TOUCH_MIN):                                  # or its stories' subjects reach this instrument (crude news reaches the rupee)
                 past = self.analog_line(e.get("kind"), u)
-                return "event", f"event regime: {e.get('type')} (severity {e.get('severity')}, tone {e.get('tone'):+.2f})" + (f"; {past}" if past else "")
-        if read and read.get("event_priced"):
-            return "event", "event regime: the near expiry's volatility is above the next's (an event is priced)"
-        if rg and rg.get("stress"):
-            if rg.get("change") == "volatility up":
-                return "event", "event regime: a CUSUM change point to higher volatility in the last quarter hour"
-            return "event", f"event regime: the HMM puts {u} in its stressed state (P {((rg.get('p') or {}).get('stressed') or 0):.2f})"
-        return "normal", None
+                return f"{e.get('type')} (severity {e.get('severity')}, tone {e.get('tone'):+.2f})" + (f"; {past}" if past else "")
+        return None
+
+    # ---- the Convexity desk's tests (convex.py): is the next move priced too small? No direction anywhere here ----------------------------------------
+    def convex_edges(self, snap, u, ch, st, ist, news, rg, read, T) -> dict:
+        """{"ratio": the options' move to expiry over the tail model's forecast (None without a model), and each structure-free test that passes now: cheapvol, event,
+        squeeze -> {"why", "score", "at"?}}. The tail test depends on the structure and is made in price_convex."""
+        out: dict = {"ratio": None}
+        try:
+            m = self.tail_model(u)
+            sig = m.sigma if m else None
+            days_n = self._trading_days_to(ist.date(), st["near"])
+            ratio = CX.vol_ratio(st["iv"], T, sig, days_n) if sig else None
+            out["ratio"] = ratio
+            if ratio is not None and ratio <= CX.CHEAP_RATIO:
+                out["cheapvol"] = {"why": f"the options price {ratio:.2f}x the move {u}'s tail model forecasts to expiry", "score": 1 / ratio}
+            sq = CX.squeeze(st["rv"], sig, (rg or {}).get("change"), ratio)
+            if sq:
+                out["squeeze"] = {"why": sq, "score": 1.0}
+            ev = self._convex_event(snap, u, ch, st, ist, T, days_n, ratio, news, read)
+            if ev:
+                out["event"] = ev
+        except Exception:                                                                # noqa: BLE001 - a test that fails costs the test, never the session
+            pass
+        return out
+
+    def _convex_event(self, snap, u, ch, st, ist, T, days_n, ratio, news, read) -> dict | None:
+        """A scheduled event before the near expiry whose move the options price under EVENT_RATIO of this instrument's past, or an unscheduled high event the options
+        have not repriced for."""
+        b = self.brief if isinstance(self.brief, dict) else {}
+        nxt, near = st["next"], st["near"]
+        split, tried = None, False
+
+        def term_split():
+            if not (nxt and T > 0 and st.get("iv")):
+                return None
+            cx_chain = ch[u].get(nxt) or {}
+            ks = sorted(cx_chain)
+            if not ks:
+                return None
+            ai = min(range(len(ks)), key=lambda i: abs(ks[i] - st["spot"]))
+            T_x = max((dt.datetime.combine(nxt, dt.time(15, 30), tzinfo=IST) - ist).total_seconds() / (365.25 * 86400), 0.0)
+            iv_x = atm_iv(snap, cx_chain, ks, ai, st["spot"], T_x, self.rate(u))
+            return CX.event_split(st["iv"], T, iv_x, T_x) if iv_x else None
+        near_close = dt.datetime.combine(near, dt.time(15, 30), tzinfo=IST)
+        for ev in b.get("calendar") or []:
+            if not isinstance(ev, dict) or ev.get("impact") not in ("high", "medium"):
+                continue
+            try:
+                at = dt.datetime.fromisoformat(ev["at"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not (ist < at <= near_close) or self._trading_days_to(ist.date(), at.date()) > CX.EVENT_AHEAD_SESSIONS:
+                continue
+            if EC.touches(u, ev) < EC.TOUCH_MIN[ev["impact"]]:
+                continue
+            hist = CX.hist_event_abs((((b.get("news_analogs") or {}).get(ev.get("kind")) or {}).get(u)))
+            if not hist:
+                continue                                                               # no past of this kind for this instrument: no test
+            if not tried:
+                split, tried = term_split(), True                                      # the next expiry's volatility, only when an event needs it
+            if split is None:
+                continue
+            imp = CX.implied_event_abs(split[0], split[1], T, days_n)
+            if imp <= CX.EVENT_RATIO * hist[0]:
+                return {"why": (f"{ev.get('name')} at {at:%d %b %H:%M}: the options imply a {imp * 100:.2f}% move that day, {u} moved {hist[0] * 100:.2f}% on average "
+                                f"on its past {str(ev.get('kind')).replace('_', ' ')} days (effective {hist[1]:.1f})"),
+                        "score": hist[0] / imp if imp > 0 else 99.0, "at": at.isoformat(timespec="minutes")}
+        storm = self._news_event(u, news)
+        if storm and ratio is not None and ratio <= CX.STORM_IV_MAX and not (read or {}).get("event_priced"):
+            return {"why": f"news: {storm}; the options have not repriced ({ratio:.2f}x the forecast)", "score": 1.0, "at": None}
+        return None
 
     def analog_line(self, kind, u: str | None = None) -> str | None:
         """What this instrument did on the past episodes of this kind most like today (the brief's news_analogs), else what NIFTY did on all of them, in one line."""
@@ -915,6 +1125,10 @@ class AutoPilotV2:
         return (votes[0] if len(votes) >= 2 and len(set(votes)) == 1 else 0), why
 
     def matches(self, s: Strategy, st: dict) -> bool:
+        if CX.is_convex(s.struct):                                                      # no view: its own test (the tail test is made when it is priced)
+            if (st["near"] if s.expiry == "near" else st["next"]) is None:
+                return False
+            return s.vol == "tail" or s.vol in (st.get("cx") or {})
         if st["view"] != s.view:
             return False
         if s.struct in FUT_STRUCTS:                                                     # a future: MCX and currency only, never in an event (a gap through the stop)
@@ -967,6 +1181,8 @@ class AutoPilotV2:
         """The structure on the live board: its legs with the price each would be dealt at (a buy at the offer, a sale at the bid), R and the most it can make, per unit."""
         if s.struct in FUT_STRUCTS:
             return self.price_future(snap, s, st)
+        if CX.is_convex(s.struct):
+            return self.price_convex(snap, s, st, ch)
         u, exp = st["u"], st["near"] if s.expiry == "near" else st["next"]
         chain = ch[u].get(exp)
         if not chain:
@@ -1007,6 +1223,68 @@ class AutoPilotV2:
             return None
         return {"legs": legs, "exp": exp, "lot": lot, "risk": -worst + fees, "best": best, "fees": fees, "multi": multi}
 
+    def price_convex(self, snap, s: Strategy, st: dict, ch) -> dict | None:
+        """A convex structure on the live board (every leg bought at the offer): R is its premium and fees; "evt" is its expected payoff over the fitted tails as a
+        multiple of that. The tail test needs evt >= TAIL_RATIO; every other test evt >= EVT_FLOOR when there is a model."""
+        u, exp = st["u"], st["near"] if s.expiry == "near" else st["next"]
+        chain = ch[u].get(exp) if exp else None
+        if not chain:
+            return None
+        strikes = sorted(chain)
+        atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - st["spot"]))
+        today = st.get("today")
+        days = max(1, self._trading_days_to(today, exp)) if today else 1
+        sd = self.daily_sd(u, st)
+        lg = CX.legs(s.struct, s.width, strikes, atm_i, st["spot"], sd * math.sqrt(days) if sd else None)
+        lot = self._lot(u, exp)
+        if lg is None or lot is None:
+            return None
+        legs, q = [], snap.get("quotes") or {}
+        for side, right, k in lg:
+            name = chain[k].get(right)
+            bk = _book(q.get(name))
+            if bk is None or bk[1] < self.min_premium(u) or (bk[1] - bk[0]) / ((bk[0] + bk[1]) / 2) > MAX_LEG_SPREAD:
+                return None
+            legs.append({"name": name, "side": side, "right": right, "k": k, "px": bk[1], "bid": bk[0], "ask": bk[1], "age": _num(q[name].get("age_s")), "exp": exp})
+        debit = sum(l["px"] for l in legs)
+        fees = sum(self.fees_fn(u, exp, l["k"], l["right"], lot, l["px"]) + self.fees_fn(u, exp, l["k"], l["right"], -lot, l["px"]) for l in legs) / lot
+        risk = debit + fees
+        if fees > MAX_FEES_R * risk:
+            return None
+        m, evt = self.tail_model(u), None
+        if m is not None:
+            sig = st["rv"] / math.sqrt(252) if st.get("rv") else None
+            key = ("cx", u, exp, tuple((l["right"], l["k"]) for l in legs), round(st["spot"], -int(math.floor(math.log10(st["spot"]))) + 3), days, round(sig or 0.0, 5))
+            ev = self._tail_ev.get(key)
+            if ev is None:
+                ks = [(l["right"], l["k"]) for l in legs]
+                ev = m.expected_payoff(lambda S: sum(max(S - k, 0.0) if r == "CE" else max(k - S, 0.0) for r, k in ks), st["spot"], days, sig)
+                if len(self._tail_ev) > 5000:
+                    self._tail_ev.clear()
+                self._tail_ev[key] = ev
+            evt = ev / risk
+        if s.vol == "tail" and (evt is None or evt < CX.TAIL_RATIO):
+            return None
+        if evt is not None and evt < CX.EVT_FLOOR:
+            return None
+        return {"legs": legs, "exp": exp, "lot": lot, "risk": risk, "best": math.inf, "fees": fees, "multi": False, "convex": True, "evt": evt}
+
+    def _cx_exit(self, s: Strategy, r: float, peak: float, done1: bool, done2: bool, opened: dt.datetime, ist: dt.datetime, exp: dt.date, u: str,
+                 event_at, states: dict) -> tuple[str | None, str | None]:
+        """convex.exit_action with this desk's clock: the expiry's last day (out by the close of the session before it), sessions held, the options repriced rich (for
+        the volatility tests), a scheduled event's time."""
+        last_day = ist.date() >= self.cal.prev_trading_day(exp) and ist.time() >= self.window(u)[2]
+        held = self._trading_days_to(opened.date(), ist.date())
+        ratio = ((states.get(u) or {}).get("cx") or {}).get("ratio")
+        rich = s.vol in ("cheapvol", "squeeze") and ratio is not None and ratio >= CX.RICH_RATIO
+        at = None
+        if s.vol == "event" and event_at:
+            try:
+                at = event_at if isinstance(event_at, dt.datetime) else dt.datetime.fromisoformat(str(event_at))
+            except ValueError:
+                at = None
+        return CX.exit_action(r, peak, done1, done2, now=ist, event_at=at, rich=rich, last_day=last_day, held_sessions=held)
+
     def mark(self, snap, legs) -> float | None:
         """What closing the structure now would get, per unit (a long sold at the bid, a short bought back at the offer), less what it cost to open."""
         q, v = snap.get("quotes") or {}, 0.0
@@ -1017,12 +1295,21 @@ class AutoPilotV2:
             v += l["side"] * ((bk[0] if l["side"] > 0 else bk[1]) - l["px"])
         return v
 
-    def _exit_why(self, s: Strategy, pnl_r: float, best_r: float, opened: dt.datetime, ist: dt.datetime, exp: dt.date, u: str | None = None) -> str | None:
+    def _exit_why(self, s: Strategy, pnl_r: float, best_r: float, opened: dt.datetime, ist: dt.datetime, exp: dt.date, u: str | None = None,
+                  spot0=None, sd=None, spot=None) -> str | None:
         day_exit = self.window(u)[2] if u else DAY_EXIT
         if pnl_r >= min(s.tp, 0.9 * best_r if math.isfinite(best_r) else s.tp):
             return f"take-profit ({pnl_r:+.2f}R)"
+        if s.hold == "overnight":                                                       # the owner's volatility stop is its stop; -1R is the structure's own worst case
+            vs = vol_stop(s.view, s.struct, spot0, sd, spot, 1 + self._trading_days_to(opened.date(), ist.date()))
+            if vs:
+                return f"{vs} ({pnl_r:+.2f}R)"
         if pnl_r <= -s.sl * 0.999:
             return f"stop ({pnl_r:+.2f}R)"
+        if s.hold == "overnight":
+            if ist.date() >= self.cal.prev_trading_day(exp) and ist.time() >= day_exit:
+                return f"its expiry is next: out by the close of the session before it ({pnl_r:+.2f}R)"
+            return None
         if s.hold == "day" and ist.time() >= day_exit:
             return f"a day strategy is out by {day_exit:%H:%M}"
         if s.hold == "swing" and (self._trading_days_to(opened.date(), ist.date()) >= SWING_SESSIONS or (ist.date() >= self.cal.prev_trading_day(exp) and ist.time() >= day_exit)):
@@ -1040,7 +1327,16 @@ class AutoPilotV2:
                     self.shadow.pop(key)
                 continue
             r = (v - sh["fees"]) / sh["risk"]
-            why = self._exit_why(sh["s"], r, sh["best_r"], sh["opened"], ist, sh["exp"], key[1])
+            if "lad" in sh:                                                             # a convex trade: its thirds (convex.py)
+                sh["peak"] = max(sh["peak"], r)
+                act, _ = self._cx_exit(sh["s"], r, sh["peak"], sh["lad"].done1, sh["lad"].done2, sh["opened"], ist, sh["exp"], key[1], sh.get("event_at"), states)
+                total = sh["lad"].step(act, r)
+                if total is not None:
+                    self.lab.add(sh["s"].sid, total)
+                    self.shadow.pop(key)
+                    self.cool[key] = t + REENTRY_S
+                continue
+            why = self._exit_why(sh["s"], r, sh["best_r"], sh["opened"], ist, sh["exp"], key[1], sh.get("spot0"), sh.get("sd0"), (states.get(key[1]) or {}).get("spot"))
             if why:
                 self.lab.add(sh["s"].sid, r)
                 self.shadow.pop(key)
@@ -1057,8 +1353,20 @@ class AutoPilotV2:
                 if p is None or not self.tail_check(s, st, p, ist.date())[0]:
                     continue
                 self.shadow[key] = {"s": s, "legs": p["legs"], "risk": p["risk"], "fees": p["fees"], "best_r": (p["best"] / p["risk"]) if math.isfinite(p["best"]) else math.inf,
-                                    "opened": ist, "exp": p["exp"]}
+                                    "opened": ist, "exp": p["exp"], "spot0": st["spot"], "sd0": self.daily_sd(u, st)}
                 self.lab.today["shadow_opened"] += 1
+            if t - self.cx_at.get(u, -1e18) >= CX.EVERY_S:                             # the Convexity desk's strategies, in shadow like the rest
+                self.cx_at[u] = t
+                for s in CX_CATALOGUE:
+                    key = (s.sid, u)
+                    if key in self.shadow or self.cool.get(key, 0) > t or not self.matches(s, st):
+                        continue
+                    p = self.price(snap, s, st, ch)
+                    if p is None:
+                        continue
+                    self.shadow[key] = {"s": s, "legs": p["legs"], "risk": p["risk"], "fees": p["fees"], "best_r": math.inf, "opened": ist, "exp": p["exp"], "peak": 0.0,
+                                        "lad": CX.ShadowLadder(), "event_at": ((st.get("cx") or {}).get("event") or {}).get("at") if s.vol == "event" else None}
+                    self.lab.today["shadow_opened"] += 1
 
     # ---- live --------------------------------------------------------------------------------------------------------------------------------
     def live_packages(self, account) -> dict:
@@ -1137,15 +1445,20 @@ class AutoPilotV2:
         if nv:
             votes.append(nv)
             why.append(nwhy or "news")
-        d = votes[0] if len(votes) >= 2 and len(set(votes)) == 1 else 0
+        d = votes[0] if len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0      # a strong direction only: PLAN_DIR_VOTES agreeing readings, none against
         view = "up" if d > 0 else "down" if d < 0 else ("flat" if not votes and (over is None or abs(over) < OVERNIGHT_TH_PCT / 2) else None)
+        if votes and not d:
+            why.append(f"no planned direction: {len(votes)} reading{'s' if len(votes) > 1 else ''} ({'agreeing' if len(set(votes)) == 1 else 'split'}); "
+                       f"a direction needs {PLAN_DIR_VOTES} agreeing and none against")
         label = (result or {}).get("label")
         vol = "rich" if label == "rich" else "cheap" if label == "cheap" else "mid"      # the brief's results test is the only volatility reading before the open
         regime, rwhy = self.regime(u, news, None, None, now)
         if rwhy:
             why.append(rwhy)
-        return {"u": u, "spot": sp, "view": view, "why": why, "mom": None, "iv": iv, "rv": None, "ratio": None, "vol": vol,
-                "eve": self._trading_days_to(ist.date(), near) == 1, "near": near, "next": nxt, "regime": regime}
+        st = {"u": u, "spot": sp, "view": view, "why": why, "mom": None, "iv": iv, "rv": None, "ratio": None, "vol": vol,
+              "eve": self._trading_days_to(ist.date(), near) == 1, "near": near, "next": nxt, "regime": regime, "today": ist.date()}
+        st["cx"] = self.convex_edges(cs, u, ch, st, ist, news, None, None, T)               # the Convexity desk's tests on the closing board (no squeeze before the open)
+        return st
 
     def plan(self, snap, now: dt.datetime, news=None) -> dict:
         """The day plan: for each underlying, the defined-risk strategies whose pre-open context holds and whose reward to risk is PLAN_MIN_RR or better, priced on the
@@ -1176,11 +1489,9 @@ class AutoPilotV2:
             for why in (watch.get(u) or {}).get("why") or []:
                 if why.startswith(("in the news", "futures OI")):
                     cat.append(str(why)[:90])
-            if st["view"] is None:
-                continue
             found = []
-            for s in self.strategies():
-                if s.struct in FUT_STRUCTS or not self.matches(s, st):                 # the plan is of option structures: futures are intraday, decided in the session
+            for s in self.strategies() if st["view"] in ("up", "down") else ():           # a strong direction: the overnight strategies that can hold it
+                if s.struct in FUT_STRUCTS or s.hold != "overnight" or not self.matches(s, st):     # futures are intraday; day and swing strategies are tested in shadow
                     continue
                 p = self.price(cs, s, st, ch)
                 if p is None or not self.tail_check(s, st, p, ist.date())[0]:
@@ -1193,10 +1504,25 @@ class AutoPilotV2:
                 found.append({"u": u, "sid": s.sid, "what": s.describe()[:160], "view": st["view"], "vol": st["vol"], "why": st["why"][:3], "catalysts": cat[:4],
                               "rr": round(rr, 2), "risk_lot": round(s.sl * p["risk"] * p["lot"]), "reward_lot": round(reward * p["lot"]), "exp": p["exp"].isoformat(),
                               "legs": [("+" if l["side"] > 0 else "-") + l["name"] for l in p["legs"]][:4], "n": n, "mean_r": round(mean, 3),
-                              "proven": n >= self.lab.min_trades(s) and mean > 0})
+                              "proven": n >= self.lab.min_trades(s) and mean > 0, "risk_unit": round(p["risk"], 4), "spot": st["spot"]})
             found.sort(key=lambda x: (not x["proven"], -x["mean_r"], -x["rr"]))
             items += found[:PLAN_PER_U]
-        items.sort(key=lambda x: (not x["proven"], -x["mean_r"], -len(x["catalysts"]), -x["rr"]))
+            big = []                                                                    # a big move, either way: the Convexity desk's tests on the closing board
+            for s in CX_CATALOGUE:
+                if s.vol == "squeeze" or not self.matches(s, st):
+                    continue
+                p = self.price(cs, s, st, ch)
+                if p is None:
+                    continue
+                test = ((st["cx"].get(s.vol) or {}).get("why")) or (f"the fat-tailed distribution values it at {p['evt']:.2f}x its price" if p.get("evt") else "")
+                n, mean, _ = self.lab.posterior(s.sid)
+                big.append({"u": u, "sid": s.sid, "what": s.describe()[:160], "view": "big move", "vol": st["vol"], "why": [test[:200]] + st["why"][:2],
+                            "catalysts": cat[:4], "rr": None, "risk_lot": round(p["risk"] * p["lot"]), "reward_lot": None, "exp": p["exp"].isoformat(),
+                            "legs": ["+" + l["name"] for l in p["legs"]][:4], "n": n, "mean_r": round(mean, 3), "proven": self.lab.convex_ready(s), "convex": True,
+                            "risk_unit": round(p["risk"], 4), "spot": st["spot"], "event_at": ((st["cx"].get("event") or {}).get("at")) if s.vol == "event" else None})
+            big.sort(key=lambda x: (not x["proven"], -x["mean_r"]))
+            items += big[:PLAN_PER_U]
+        items.sort(key=lambda x: (not x["proven"], -x["mean_r"], -len(x["catalysts"]), -(x["rr"] or 0)))
         if not any(i["proven"] for i in items):
             notes.append(f"No candidate is proven yet: a strategy trades only after {MIN_TRADES} shadow trades with a positive record. Until then the open shadow-trades these.")
         if not b:
@@ -1214,6 +1540,108 @@ class AutoPilotV2:
         """The strategies the day plan names for this underlying, best first (empty after a day boundary)."""
         dp = self.day_plan or {}
         return [i["sid"] for i in dp.get("items") or [] if i.get("u") == u]
+
+    def news_trigger(self, u: str, news, ist: dt.datetime) -> dict | None:
+        """The news exception for `u` now, or None: {"why"} for the latest important story of today's session that reaches `u`. Important: high impact, new (novelty
+        NEWS_MIN_NOVELTY or more), not a recap. Of today's session: published after today's plan was built (or, without a plan, after the segment's first entry time),
+        and not after now. Reaching `u`: it names `u`, or its subjects move `u` by NEWS_TOUCH_MIN through the news model's channels. There is no window: the story stays a
+        reason while the market still agrees with it, and the news model's vote, which the strong direction needs, fades as the story ages."""
+        since = None
+        try:
+            if self.day_plan and str(self.day_plan.get("built_at", ""))[:10] == ist.date().isoformat():
+                since = dt.datetime.fromisoformat(self.day_plan["built_at"])
+        except ValueError:
+            since = None
+        if since is None:
+            since = dt.datetime.combine(ist.date(), self.window(u)[0], tzinfo=IST)
+        best = None
+        for it in ((news or {}).get("items") or []) if isinstance(news, dict) else []:
+            if not isinstance(it, dict) or it.get("impact") != "high" or it.get("recap") or float(it.get("novelty") or 0.0) < NEWS_MIN_NOVELTY:
+                continue
+            try:
+                ts = dt.datetime.fromisoformat(str(it.get("ts")).replace("Z", "+00:00")).astimezone(IST)
+            except ValueError:
+                continue
+            if not (since < ts <= ist and ts.date() == ist.date()):
+                continue
+            title = str(it.get("title") or "")
+            reach = 1.0 if u in (it.get("symbols") or []) else max((abs(x) for subj, _ in NM.subjects(title) for x, _ in NM.sensitivity(u, subj)), default=0.0)
+            if reach >= NEWS_TOUCH_MIN and (best is None or ts > best[0]):
+                best = (ts, title)
+        if best is None:
+            return None
+        return {"why": f"news at {best[0]:%H:%M}: {best[1][:140]}"}
+
+    def live_trigger(self, u: str, st: dict, news, ist: dt.datetime) -> dict | None:
+        """Why the live market may open a directional trade on `u` now that the plan did not name, or None. Both need a strong live direction (PLAN_DIR_VOTES readings
+        agreeing, none against; price, however many ways it is read, is one reading). NEWS: an important story of today's session (news_trigger) with the news among
+        the agreeing readings. DATA: the agreement has held LIVE_PERSIST_S without a gap, the pre-market read did not already say it, and the data has really shifted
+        (the owner's choice, 14 Nov 2026): the market read's P(up) moved READ_SHIFT since the session's first read and it agrees, or a fresh CUSUM drift the same way."""
+        d = st.get("agree")
+        if not d:
+            return None
+        nw = self.news_trigger(u, news, ist)
+        if nw and "news" in (st.get("sources") or []):
+            return {"why": nw["why"], "kind": "news"}
+        since = (getattr(self, "agree_since", {}) or {}).get(u)
+        now_s = ist.timestamp()
+        if not since or now_s - since[2] > LIVE_GAP_S or now_s - since[1] < LIVE_PERSIST_S:
+            return None                                                                    # not seen just now, or not held long enough
+        pv = (((self.day_plan or {}).get("states") or {}).get(u) or {}).get("view") if self.day_plan else None
+        if pv == d:
+            return None                                                                    # what the plan already expected is not a new reason
+        shifts = []                                                                        # the owner's choice (14 Nov 2026): a real shift in the data, beyond the plan's silence
+        base, rd = (getattr(self, "read_base", {}) or {}).get(u), st.get("read") or {}
+        if (base and base[0] == ist.date() and rd.get("p_up") is not None and "read" in st["sources"]
+                and (rd["p_up"] - base[1]) * (1 if d == "up" else -1) >= READ_SHIFT):           # shifted TOWARDS the direction; a read weakening towards neutral is not
+            shifts.append(f"the options and OI read moved from P(up) {base[1]:.2f} to {rd['p_up']:.2f} since the open"
+                          + (f" ({base[2] or 'no build-up'} to {rd.get('buildup')})" if rd.get("buildup") and rd.get("buildup") != base[2] else ""))
+        if (st.get("hmm") or {}).get("change") == f"drift {d}":
+            shifts.append(f"a CUSUM change point: drift {d}")
+        if not shifts:
+            return None
+        changes = [f"the pre-market read was {pv or 'no direction'}, the live market says {d}"] + shifts
+        mins = (ist.timestamp() - since[1]) / 60
+        return {"why": f"data: {'; '.join(changes)} ({st['votes']} readings agree for {mins:.0f} minutes: {', '.join(st['sources'])})", "kind": "data"}
+
+    def plan_item(self, u: str, sid: str) -> dict | None:
+        return next((i for i in (self.day_plan or {}).get("items") or [] if i.get("u") == u and i.get("sid") == sid), None)
+
+    def plan_ok(self, s: Strategy, st: dict, ist: dt.datetime) -> bool:
+        """A planned strategy may still be opened now: within PLAN_ENTRY_MIN of its segment's first entry, not contradicted since the plan (the live view is not the
+        opposite one; the underlying has not already gone through its volatility stop from the planned price; a convex test's options have not turned rich; a planned
+        event is still ahead), its expiry on the board, no volatility sold into an event."""
+        u = st["u"]
+        item = self.plan_item(u, s.sid)
+        if item is None:
+            return False
+        first_t = self.window(u)[0]
+        if (dt.datetime.combine(ist.date(), ist.time()) - dt.datetime.combine(ist.date(), first_t)).total_seconds() > PLAN_ENTRY_MIN * 60:
+            return False
+        if (st["near"] if s.expiry == "near" else st["next"]) is None or (s.timing == "eve" and not st["eve"]):
+            return False
+        if CX.is_convex(s.struct):
+            ratio = (st.get("cx") or {}).get("ratio")
+            if ratio is not None and ratio >= CX.RICH_RATIO:
+                return False
+            if item.get("event_at"):
+                try:
+                    if dt.datetime.fromisoformat(item["event_at"]) <= ist:
+                        return False
+                except ValueError:
+                    return False
+            return True
+        if st.get("view") == {"up": "down", "down": "up"}.get(s.view):
+            return False
+        if st.get("regime") == "event" and is_short_vol(s.struct):
+            return False
+        sd = self.daily_sd(u, st)
+        return not (sd and vol_stop(s.view, s.struct, item.get("spot"), sd, st["spot"], 1))
+
+    def plan_price_ok(self, s: Strategy, u: str, p: dict) -> bool:
+        item = self.plan_item(u, s.sid)
+        ru = (item or {}).get("risk_unit")
+        return not (isinstance(ru, (int, float)) and ru > 0 and p["risk"] > PLAN_PRICE_SLACK * ru)
 
     def decide(self, snap, account, now: dt.datetime, *, kill: bool = False, entries_blocked: str | None = None, cal=None, news=None) -> list[dict]:
         if now is None:
@@ -1237,10 +1665,12 @@ class AutoPilotV2:
                 self.plan(snap, now, news)
             except Exception:                                                              # noqa: BLE001 - a plan that fails costs the plan, never the session
                 self.day_plan = {"built_at": ist.isoformat(timespec="minutes"), "items": [], "notes": ["the plan could not be built this time"]}
+            self.lab.dirty = True                                                          # the plan is kept with the record: a restart after 09:15 still has it
         if self.day_plan and str(self.day_plan.get("built_at", ""))[:10] != ist.date().isoformat():
             self.day_plan = None                                                           # yesterday's plan never steers today
         orders: list[dict] = []
         pk = self.live_packages(account)
+        self.cx_peak = {k: v for k, v in self.cx_peak.items() if k in pk}               # a closed package's peak goes with it
         for text, pkg in pk.items():                                                    # live exits: the strategy's own
             s = BY_SID[pkg["sid"]]
             first = next(iter(pkg["legs"].values()))
@@ -1264,7 +1694,12 @@ class AutoPilotV2:
                 opened = dt.datetime.fromisoformat(first.opened_at).astimezone(IST)
             except (TypeError, ValueError):
                 opened = ist
-            why = self._exit_why(s, r, (best / risk) if math.isfinite(best) else math.inf, opened, ist, first.instrument.expiry, pkg["u"])
+            if CX.is_convex(s.struct):                                                  # the Convexity desk: thirds, then the trail (convex.py)
+                orders += self._cx_live_exit(text, pkg, s, r, opened, ist, first.instrument.expiry, t, states)
+                continue
+            meta = self._cx_meta(text)
+            why = self._exit_why(s, r, (best / risk) if math.isfinite(best) else math.inf, opened, ist, first.instrument.expiry, pkg["u"],
+                                 meta.get("p"), meta.get("d"), (states.get(pkg["u"]) or {}).get("spot"))
             if not why:
                 continue
             for sym, p in sorted(pkg["legs"].items(), key=lambda kv: kv[1].qty > 0):    # sold legs bought back first: nothing is ever left uncovered
@@ -1283,13 +1718,23 @@ class AutoPilotV2:
             best = None
             for sid in self.planned(u):                                                 # the day plan first: a planned strategy whose context still holds, proven, with a positive draw
                 s = BY_SID.get(sid)
-                if s is None or (s.sid, u) in busy or not self.matches(s, st) or self.lab.stats.get(s.sid, [0])[0] < self.lab.min_trades(s):
+                if s is None or CX.is_convex(s.struct) or (s.sid, u) in busy or self.lab.stats.get(s.sid, [0])[0] < self.lab.min_trades(s):
                     continue
+                if not (self.plan_ok(s, st, ist) if self.plan_only else self.matches(s, st)):
+                    continue
+                if self.plan_only and s.hold == "overnight" and not self.daily_sd(u, st):
+                    continue                                                           # no volatility to set its stop from: not opened
                 draw = self.lab.draw(s.sid, self.rng)
                 if draw > 0:
                     best = (draw, s)
                     break
-            for s in self.strategies() if best is None else ():
+            via_plan = best is not None
+            live_busy = any(pkg["u"] == u and not CX.is_convex(BY_SID[pkg["sid"]].struct) for pkg in pk.values())    # one directional position on it at a time
+            nw = self.live_trigger(u, st, news, ist) if self.plan_only and best is None and not live_busy else None
+            planned_u = set(self.planned(u))
+            pool = (self.strategies() if not self.plan_only else                        # a planned strategy the plan's own checks refused does not come back this way
+                    [s for s in self.strategies() if s.hold == "overnight" and s.view == st.get("agree") and s.sid not in planned_u] if nw else [])
+            for s in pool if best is None else ():                                     # PLAN_ONLY: nothing the plan did not name, but important news or a change in the data
                 if (s.sid, u) in busy or not self.matches(s, st):
                     continue
                 n = self.lab.stats.get(s.sid, [0])[0]
@@ -1301,29 +1746,171 @@ class AutoPilotV2:
             if best is None:
                 continue
             s = best[1]
+            if self.plan_only and s.hold == "overnight" and not self.daily_sd(u, st):
+                continue                                                               # no volatility to set its stop from: not opened
             p = self.price(snap, s, st, ch)
             if p is None or any(l["name"] in held_syms for l in p["legs"]):            # a contract held by anyone is not shared: every position has one owner
                 continue
+            if self.plan_only and not self.plan_price_ok(s, u, p):
+                continue
+            if self.plan_only and not via_plan:                                         # a live trade: the plan's reward to risk too
+                reward = min(s.tp * p["risk"], p["best"]) if math.isfinite(p["best"]) else s.tp * p["risk"]
+                if p["risk"] <= 0 or reward / (s.sl * p["risk"]) < PLAN_MIN_RR:
+                    continue
             ok, _, edge = self.tail_check(s, st, p, ist.date())
             if not ok:
                 continue
             o = self._order(s, st, p, t, best[0])
             if edge is not None:
                 o["thesis"] = (o["thesis"] + f" Tail check (EVT): {edge:+.2f}R expected to expiry.")[:1000]
-            if s.sid in self.planned(u):
+            if via_plan:
                 o["thesis"] = (o["thesis"] + " On the day plan built before the open.")[:1000]
+            elif self.plan_only and nw:
+                o["thesis"] = (o["thesis"] + (f" Not on the plan: taken on important news in the session ({nw['why']}), with {st.get('votes')} readings agreeing."
+                                              if nw["kind"] == "news" else f" Not on the plan: taken on a change in the live data ({nw['why']})."))[:1000]
             orders.append(o)
             self.backoff[u] = t + ENTRY_BACKOFF_S
             self.lab.today["live_entries"] += 1
+        taken = held_syms | {o.get("symbol") for o in orders} | {l.get("symbol") for o in orders for l in (o.get("legs") or [])}
+        orders += self._cx_entries(snap, account, states, ch, t, ist, pk, taken, news)
         return orders
 
-    def _order(self, s: Strategy, st: dict, p: dict, t: float, draw: float) -> dict:
+    # ---- the Convexity desk, live (convex.py; the owner's sizing, 14 Nov 2026) ---------------------------------------------------------------------------
+    @staticmethod
+    def _cx_meta(text: str) -> dict:
+        """What a package's strategy text carries: n<lots> (a convex package's size when opened), e<yymmddHHMM> (a scheduled event's time, IST), p<spot> and
+        d<sd x 1e5> (an overnight strategy's entry spot and daily standard deviation: its volatility stop)."""
+        out: dict = {}
+        for tok in text.split()[4:]:
+            if re.fullmatch(r"n\d{1,4}", tok):
+                out["n"] = int(tok[1:])
+            elif re.fullmatch(r"p\d+(\.\d+)?", tok):
+                out["p"] = float(tok[1:])                                                # an overnight strategy's entry spot
+            elif re.fullmatch(r"d\d{1,6}", tok):
+                out["d"] = int(tok[1:]) / 1e5                                            # and the day's standard deviation it was opened with
+            elif re.fullmatch(r"e\d{10}", tok):
+                try:
+                    out["event_at"] = dt.datetime.strptime(tok[1:], "%y%m%d%H%M").replace(tzinfo=IST)
+                except ValueError:
+                    pass
+        return out
+
+    def _cx_live_exit(self, text, pkg, s: Strategy, r: float, opened, ist, exp, t: float, states: dict) -> list[dict]:
+        """A live convex package's exit orders: the lots of a rung (a third at +100%, a third at +300%), or everything left."""
+        meta = self._cx_meta(text)
+        old = self.cx_peak.get(text, -math.inf)
+        peak = max(old, r)
+        if peak > old or text not in self.cx_peak:
+            self.lab.dirty = True                                                       # kept with the record: a restart does not loosen the trail
+        self.cx_peak[text] = peak
+        n_now = min(abs(p.qty) // max(1, p.instrument.lot_size) for p in pkg["legs"].values())
+        n0 = max(meta.get("n") or n_now, n_now)
+        sold = n0 - n_now
+        t1, t2 = CX.tranches(n0)
+        act, why = self._cx_exit(s, r, peak, sold >= t1, sold >= t1 + t2, opened, ist, exp, pkg["u"], meta.get("event_at"), states)
+        if act is None:
+            return []
+        lots = "all" if act == "all" else ((t1 - sold) if act == "rung1" else (t1 + t2 - sold))
+        if lots != "all" and lots <= 0:
+            return []
+        out = []
+        for sym in pkg["legs"]:
+            if self.pending_exit.get(sym, 0) > t:
+                continue
+            self.pending_exit[sym] = t + EXIT_RESEND_S
+            out.append({"id": self._oid(t, "x"), "side": "sell", "symbol": sym, "lots": lots, "queued_at": int(t * 1000), "_why": f"{TAG} exit: {why}"})
+        return out
+
+    def _held(self, key, t: float) -> bool:
+        """A convex test seen now: has it held LIVE_PERSIST_S without a gap longer than LIVE_GAP_S between sightings?"""
+        prev = self.cx_first.get(key)
+        first = prev[0] if prev and t - prev[1] <= LIVE_GAP_S else t
+        self.cx_first[key] = (first, t)
+        return t - first >= LIVE_PERSIST_S
+
+    def _cx_entries(self, snap, account, states: dict, ch, t: float, ist: dt.datetime, pk: dict, taken: set, news=None) -> list[dict]:
+        """New convex packages: a ready strategy (convex_ready) whose test passes, chosen by Thompson sampling, sized to STAKE_PCT of the account, within this month's
+        MONTH_BUDGET_PCT and MAX_OPEN, one per underlying."""
+        cx_pk = [pkg for pkg in pk.values() if CX.is_convex(BY_SID[pkg["sid"]].struct)]
+        month = ist.strftime("%Y-%m")
+        spent = CX.month_spent(account.ledger, month)
+        le = getattr(account, "last_equity", None)
+        eq = float(le) if isinstance(le, (int, float)) and math.isfinite(le) and le > 0 else self.capital
+        budget = CX.MONTH_BUDGET_PCT * eq
+        self.cx_status = {"month": month, "spent": round(spent), "budget": round(budget), "stake": round(CX.STAKE_PCT * eq), "open": len(cx_pk), "max_open": CX.MAX_OPEN,
+                          "ready": sum(1 for s in CX_CATALOGUE if self.lab.convex_ready(s)), "note": self.cx_status.get("note")}
+        out: list[dict] = []
+        busy = {pkg["u"] for pkg in cx_pk}
+        for u, st in states.items():
+            if len(cx_pk) + len(out) >= CX.MAX_OPEN:
+                break
+            first_t, last_t, _ = self.window(u)
+            if u in busy or self.cx_backoff.get(u, 0) > t or not (first_t <= ist.time() <= last_t):
+                continue
+            best = None
+            cands = [BY_SID[sid] for sid in self.planned(u) if sid in BY_SID and CX.is_convex(BY_SID[sid].struct)] if self.plan_only else CX_CATALOGUE
+            nw = self.news_trigger(u, news, ist) if self.plan_only else None
+            if self.plan_only:
+                cands = cands + [s for s in CX_CATALOGUE if s not in cands]              # the live board's own tests: on important news, or once a test has held
+            if not hasattr(self, "cx_first"):
+                self.cx_first = {}
+            for s in cands:
+                planned = self.plan_only and self.plan_item(u, s.sid) is not None
+                if not self.lab.convex_ready(s):
+                    continue
+                if planned:
+                    if not self.plan_ok(s, st, ist):
+                        continue
+                elif not self.matches(s, st) or (self.plan_only and not nw and self.price(snap, s, st, ch) is None):
+                    self.cx_first.pop((u, s.sid), None)                                # the test itself (the tail test is made when it is priced) fails now
+                    continue
+                elif self.plan_only and not nw and not self._held((u, s.sid), t):
+                    continue                                                           # a test that has not held long enough: a flicker
+                draw = self.lab.draw(s.sid, self.rng)
+                if draw > 0 and (best is None or draw > best[0]):
+                    best = (draw, s)
+            if best is None:
+                continue
+            s = best[1]
+            p = self.price(snap, s, st, ch)
+            if p is None or any(l["name"] in taken for l in p["legs"]) or (self.plan_only and not self.plan_price_ok(s, u, p)):
+                continue
+            if self.plan_only and self.plan_item(u, s.sid) is None:
+                held = (t - (self.cx_first.get((u, s.sid)) or (t, t))[0]) / 60
+                st = {**st, "cx": {**(st.get("cx") or {}), "news": nw["why"] if nw else f"data: its test has held {held:.0f} minutes on the live board"}}
+            stake = min(CX.STAKE_PCT * eq, budget - spent)
+            lims = [math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK for l in p["legs"]]       # the order's own limit per leg
+            worst = sum(lims) + sum(self.fees_fn(u, l["exp"], l["k"], l["right"], p["lot"], x) + self.fees_fn(u, l["exp"], l["k"], l["right"], -p["lot"], x)
+                                    for l, x in zip(p["legs"], lims)) / p["lot"]           # the most a fill can cost, a unit, fees at that price too
+            p = {**p, "worst": worst}
+            lots = CX.lots_for(stake, worst, p["lot"])
+            if lots < 1:
+                self.cx_status["note"] = (f"{ist:%d %b %H:%M} {u}: {s.sid} passed its test, but a lot risks Rs {worst * p['lot']:.0f} and it may risk Rs {max(stake, 0):.0f} "
+                                          f"(0.5% a trade; Rs {max(budget - spent, 0):.0f} left of this month's 3%)")
+                continue
+            ev = (((self.plan_item(u, s.sid) or {}).get("event_at")) or ((st.get("cx") or {}).get("event") or {}).get("at")) if s.vol == "event" else None
+            o = self._order(s, st, p, t, best[0], lots=lots, event_at=ev)
+            out.append(o)
+            spent += lots * worst * p["lot"]
+            busy.add(u)
+            taken |= {l["name"] for l in p["legs"]}
+            self.cx_backoff[u] = t + ENTRY_BACKOFF_S
+            self.lab.today["live_entries"] += 1
+        return out
+
+    def _order(self, s: Strategy, st: dict, p: dict, t: float, draw: float, lots: int = 1, event_at: str | None = None) -> dict:
         n, total, w = self.lab.stats[s.sid][0], self.lab.stats[s.sid][1], self.lab.stats[s.sid][3]
+        if CX.is_convex(s.struct):
+            return self._cx_order(s, st, p, t, draw, lots, event_at)
         thesis = (f"{TAG}: {st['u']} {s.describe()}. Now: view {st['view']}" + (f" ({'; '.join(st['why'])})" if st["why"] else "")
                   + (f", implied {st['iv'] * 100:.1f}% against realized {st['rv'] * 100:.1f}%" if st["iv"] and st["rv"] else "") + (", expiry tomorrow" if st["eve"] else "")
                   + f". Shadow record {n} trades, average {total / n:+.2f}R, {w / n * 100:.0f}% won; {self.lab.posterior(s.sid)[1]:+.2f}R after sharing evidence with the other "
                   + f"{NAMES[s.struct]}s; chosen by Thompson sampling (draw {draw:+.2f}R). Risk {p['risk'] * p['lot']:.0f} rupees a lot.")
-        strategy = f"{TAG} {s.sid} {st['u']}"[:60]
+        strategy = f"{TAG} {s.sid} {st['u']}"
+        sd = self.daily_sd(st["u"], st) if s.hold == "overnight" else None
+        if sd:
+            strategy += f" p{st['spot']:.6g} d{round(sd * 1e5)}"                       # what its volatility stop is measured from
+        strategy = strategy[:60]
         ref = lambda l: {"bid": l["bid"], "ask": l["ask"], "at": int(t * 1000 - (l["age"] or 0) * 1000)}      # noqa: E731
         if p.get("fut"):                                                                # a future: buy or short one lot, with its stop and target (the runner enforces both)
             l = p["legs"][0]
@@ -1342,15 +1929,74 @@ class AutoPilotV2:
                                                                       for l in p["legs"]],
                 "strategy": strategy, "thesis": thesis[:1000], "net_limit": round(net, 2), "group": "auto2", "queued_at": int(t * 1000), "_why": f"{s.sid} draw {draw:+.2f}R"}
 
+    def _cx_order(self, s: Strategy, st: dict, p: dict, t: float, draw: float, lots: int, event_at: str | None) -> dict:
+        """A convex package: every leg bought, `lots` of each, at most 2% (or three ticks) above the offer."""
+        n, total, w = self.lab.stats[s.sid][0], self.lab.stats[s.sid][1], self.lab.stats[s.sid][3]
+        test = ((st.get("cx") or {}).get(s.vol) or {}).get("why") if s.vol != "tail" else None
+        item = self.plan_item(st["u"], s.sid)
+        if item and not test and s.vol != "tail":
+            test = f"before the open: {(item.get('why') or [''])[0]}"
+        evt = p.get("evt")
+        fam = self.lab.fit()["family"].get(s.struct) or (0.0, 0.0, 0, 0)
+        thesis = (f"{TAG} Convexity: {st['u']} {s.describe()}. Why now: " + (test or f"the fat-tailed distribution (EVT) values it at {evt:.2f}x its price")
+                  + (f"; EVT value {evt:.2f}x its price" if evt is not None and test else "")
+                  + f". Shadow record {n} trades, average {total / n:+.2f}R, {w / n * 100:.0f}% won ({fam[3]} in its family); {self.lab.posterior(s.sid)[1]:+.2f}R after sharing "
+                  + f"evidence; Thompson draw {draw:+.2f}R. {lots} lot{'s' if lots > 1 else ''}, at most Rs {p.get('worst', p['risk']) * p['lot'] * lots:.0f} (premium and fees at the order's limit: 0.5% of the "
+                  + "account). Exits: a third at +100%, a third at +300%, the rest trailed."
+                  + ((f" Not on the plan: taken on important news in the session ({(st.get('cx') or {}).get('news')})."
+                      if not str((st.get("cx") or {}).get("news")).startswith("data:") else f" Not on the plan: taken on a change in the live data ({(st.get('cx') or {}).get('news')}).")
+                     if (st.get("cx") or {}).get("news") else ""))
+        ev = ""
+        if event_at:
+            try:
+                ev = " e" + dt.datetime.fromisoformat(event_at).astimezone(IST).strftime("%y%m%d%H%M")
+            except ValueError:
+                ev = ""
+        strategy = f"{TAG} {s.sid} {st['u']} n{lots}{ev}"[:60]
+        ref = lambda l: {"bid": l["bid"], "ask": l["ask"], "at": int(t * 1000 - (l["age"] or 0) * 1000)}      # noqa: E731
+        net = sum(math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK for l in p["legs"]) * p["lot"] * lots
+        return {"id": self._oid(t, "p"), "side": "package", "legs": [{"symbol": l["name"], "side": "buy", "lots": lots, "ref": ref(l)} for l in p["legs"]],
+                "strategy": strategy, "thesis": thesis[:1000], "net_limit": round(net, 2), "group": "auto2", "queued_at": int(t * 1000),
+                "_why": f"{s.sid} convexity draw {draw:+.2f}R, {lots} lots"}
+
     # ---- keeping the record ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def restore_plan(d) -> dict | None:
+        """A day plan read back with the record: kept only if it is well formed, and only its items naming a known strategy (storage is not trusted)."""
+        if not (isinstance(d, dict) and isinstance(d.get("built_at"), str) and isinstance(d.get("items"), list)):
+            return None
+        try:
+            dt.datetime.fromisoformat(d["built_at"])
+        except ValueError:
+            return None
+        def num(x):
+            return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and x > 0
+
+        def when(x):
+            if x is None:
+                return True
+            if not isinstance(x, str):
+                return False                                                           # later code parses it as text: anything else is refused here
+            try:
+                dt.datetime.fromisoformat(x)
+                return True
+            except ValueError:
+                return False
+        items = [i for i in d["items"] if isinstance(i, dict) and isinstance(i.get("u"), str) and i.get("sid") in BY_SID
+                 and num(i.get("risk_unit")) and num(i.get("spot")) and when(i.get("event_at"))]   # what plan_ok and plan_price_ok measure from must be real
+        return {**d, "items": items[:PLAN_TOP], "states": d.get("states") if isinstance(d.get("states"), dict) else {}}
+
     def load(self, relay) -> str:
         try:
             got = relay.get_lab()
             raw = got.get("lab") if isinstance(got, dict) else None
-            got = json.loads(raw) if isinstance(raw, str) else {}
+            got = Lab.unpack(raw) if isinstance(raw, str) else {}
             stats, inv = got.get("stats"), got.get("inv")
             self.lab = Lab(stats if isinstance(stats, dict) else None, inv if isinstance(inv, dict) else None)
             self._read_w = got.get("read_w") if isinstance(got.get("read_w"), dict) else None
+            cx = got.get("cx")
+            self.cx_peak = {str(k): float(v) for k, v in cx.items() if isinstance(v, (int, float)) and math.isfinite(v)} if isinstance(cx, dict) else {}
+            self.day_plan = self.restore_plan(got.get("plan")) or self.day_plan          # a restart after 09:15 keeps today's plan (yesterday's is dropped as always)
             if hasattr(self, "reader"):
                 self.reader.restore(self._read_w)
             return f"{len(self.lab.stats)} strategies with a record"
@@ -1361,7 +2007,12 @@ class AutoPilotV2:
         if not (self.lab.dirty and (force or mono - self.lab_saved_at >= 120)):
             return False
         try:
-            relay.put_lab(self.lab.to_json({"read_w": self.reader.export()} if hasattr(self, "reader") else None))
+            extra = {"read_w": self.reader.export()} if hasattr(self, "reader") else {}
+            if self.cx_peak:
+                extra["cx"] = {k: round(v, 3) for k, v in self.cx_peak.items()}
+            if self.day_plan:
+                extra["plan"] = self.day_plan
+            relay.put_lab(self.lab.to_json(extra or None))
             self.lab.dirty, self.lab_saved_at = False, mono
             return True
         except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
@@ -1379,6 +2030,9 @@ class AutoPilotV2:
         learnt = self.reader.learned if hasattr(self, "reader") else {}
         out = {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan, "read_calibration": cal, "news_calibration": ncal,
                "read_learning": {"instruments": sum(1 for v in learnt.values() if v), "outcomes": sum(learnt.values())}}
+        out["convex"] = {**self.cx_status, "stake_pct": CX.STAKE_PCT, "budget_pct": CX.MONTH_BUDGET_PCT, "min_pooled": CX.MIN_POOLED, "min_own": CX.MIN_OWN,
+                         "strategies": len(CX_CATALOGUE), "shadow_open": sum(1 for sid, _ in self.shadow if CX.is_convex(CX.sid_struct(sid))),
+                         "now": {u: st["cx"] for u, st in sorted(self.last_state.items()) if st.get("cx") and (st["cx"][1] or st["cx"][0] is not None)}}
         if len(json.dumps(out, separators=(",", ":"), default=str)) > SUMMARY_SOFT_MAX:          # the relay refuses a runner state over 60,000 characters whole
             out["state"] = {u: [x if i not in (5, 6, 12) else "" for i, x in enumerate(v)] for u, v in state.items()}     # the reasons go first, the numbers stay
             if self.day_plan and len(json.dumps(out, separators=(",", ":"), default=str)) > SUMMARY_SOFT_MAX:
