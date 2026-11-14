@@ -2414,6 +2414,7 @@ function ppDraw() {
 	if (sm && Array.isArray(sm.reviews) && sm.reviews.length) put(body, ppReview(sm.reviews));
 	if (sm && sm.lab && sm.lab.plan && typeof sm.lab.plan === "object") put(body, ppPlan(sm.lab.plan));
 	if (sm && sm.lab && (sm.lab.market || (sm.lab.regimes && Object.keys(sm.lab.regimes).length))) put(body, ppMarket(sm.lab));
+	if (sm && sm.lab && (sm.lab.probation || sm.lab.votes)) put(body, ppAdapt(sm.lab));
 	if (sm && sm.lab && sm.lab.convex && typeof sm.lab.convex === "object") put(body, ppConvex(sm.lab.convex));
 	else if (sm && sm.lab) put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Convexity desk"), h("span", { class: "hint" }, "waiting for its first session")),
 		h("div", { class: "f3", style: "font-size:12.5px;line-height:1.55;padding:10px 16px" }, "Switched on with the 14 Nov 2026 update. The paper desk reports it from its next session (the runner works on trading days, from the 06:00 plan): then this panel shows the month's spend against its 3% budget, the 0.5% stake, what is open and proven, and which tests pass on each instrument.")));
@@ -2516,6 +2517,19 @@ function ppPlan(dp) {
 }
 // The market fingerprint and the record by regime (docs/EVOLUTION.md, phase 1): what kind of market today is, and how each family of strategies has done in each
 // kind so far (shadow trades, tagged when they close). Display only.
+function ppAdapt(lab) {
+	const pb = lab.probation || {}, vt = lab.votes || {}, list = Array.isArray(pb.list) ? pb.list : [];
+	const muted = [];
+	for (const [model, us] of Object.entries(vt.models || {})) for (const [u, e] of Object.entries(us || {})) if (e && e.muted) muted.push(`${model === "read" ? "market read" : "news"} on ${u} (${Math.round((e.hit || 0) * 100)}% right over ${num(e.n || 0, 0)} votes)`);
+	const rv = pb.review || {};
+	return h("div", { class: "grp" },
+		h("div", { class: "sec-h" }, h("h2", {}, "Adapting"), h("span", { class: "hint" }, `${num(pb.in_probation || 0, 0)} on probation · ${num(vt.muted || 0, 0)} votes muted`)),
+		list.length ? fold("ad-pb", "On probation: shadow only until proven again", `${list.length} shown`, h("div", { class: "rows" }, list.map((r) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;border-top:1px solid var(--line);font-size:12.5px" },
+			h("span", { class: "mono" }, r.sid), h("span", { class: "f3" }, r.owner ? `since ${r.since} · yours to release` : `since ${r.since} · ${num(r.trades, 0)}/${8 * (r.mult || 1)} trades, ${num(r.sessions, 0)}/${8 * (r.mult || 1)} sessions`))))) : null,
+		muted.length ? h("div", { class: "f2", style: "font-size:12.5px;line-height:1.5;padding:8px 16px" }, "Muted (can stop a trade, cannot start one): " + muted.join(" · ")) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `A strategy that starts losing goes to probation: it keeps trading in the shadow book and cannot trade paper money until it proves itself again on new trades. A model whose votes call direction no better than a coin can still stop a trade but cannot start one. Both only tighten (docs/prereg/evolution_probation_v1.json). Review: ${rv.status || "INSUFFICIENT"}, ${num(rv.demotions || 0, 0)} demotions measured.`));
+}
+
 function ppMarket(lab) {
 	const m = lab.market, reg = lab.regimes && typeof lab.regimes === "object" ? Object.entries(lab.regimes) : [];
 	const words = (k) => { const [v, d] = String(k || "").split("/"); return k === "unknown" ? "no fingerprint" : `${v || "?"} volatility, ${d === "up" ? "trending up" : d === "down" ? "trending down" : "in a range"}`; };

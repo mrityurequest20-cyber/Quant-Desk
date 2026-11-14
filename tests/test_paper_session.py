@@ -605,3 +605,21 @@ def test_a_new_peak_from_the_autopilot_is_written_into_the_ledger_and_survives_t
     assert any(r["kind"] == "auto_peak" and r["peak"] == 130.5 and r["symbol"] == NAME for r in saved.ledger) and saved.verify_ledger()
     again = R.load_account((tmp_path / "ledger" / "account.json").read_text())
     assert again.ledger == saved.ledger and [r["status"] for r in rl.results] == ["filled"]
+
+
+class _Loading(_Pilot):
+    """An autopilot with a record to load, as AUTO v2 is: the session hands it the runner's commit before it loads."""
+    def load(self, relay):
+        self.loaded = True
+        return "loaded"
+
+
+def test_a_session_with_an_autopilot_that_loads_starts_and_runs(cfg, tmp_path, monkeypatch):
+    """Risk review, 14 Nov 2026: a local `import os` later in run() made `os` local to it, so the line handing AUTO v2 the commit raised before the first cycle."""
+    monkeypatch.setenv("GITHUB_SHA", "abc123")
+    clk = Clock()
+    rl = FakeRelay(clk)
+    pilot = _Loading()
+    S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
+          say=lambda *a: None, new_account=True, auto=pilot)
+    assert pilot.loaded and pilot.runner_commit == "abc123"

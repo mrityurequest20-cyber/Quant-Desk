@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
 import time
 from pathlib import Path
@@ -88,6 +89,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     account.save(ledger_path)
     fp_disk = fingerprint(account)
     if auto is not None and hasattr(auto, "load"):                    # AUTO v2: its strategies' shadow record, kept on the relay across sessions
+        auto.runner_commit = os.environ.get("GITHUB_SHA") or None      # phase 2's monthly report names the code that produced it (the paper package reads no environment)
         log(f"paper: AUTO v2 strategy record: {auto.load(relay)}")
     try:                                                              # the account goes to the relay once before the first cycle, so even a session with no cycles (the very first, by hand, out of hours) leaves it there
         snap0 = relay.snapshot()
@@ -119,7 +121,6 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             ist_now = clock().astimezone(IST)
             if hasattr(auto, "brief") and BRIEF_WINDOW[0] <= ist_now.time() <= BRIEF_WINDOW[1] and time.monotonic() - brief_at >= BRIEF_EVERY_S:
                 brief_at = time.monotonic()                            # the day plan's catalysts: fetched every fifteen minutes before the open; a failure keeps the last one
-                import os
                 got_brief = fetch_brief(os.environ.get("GITHUB_REPOSITORY", ""), ist_now.date())
                 if got_brief is not None:
                     auto.brief = got_brief
