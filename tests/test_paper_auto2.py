@@ -63,7 +63,8 @@ def calm(rn, ap, t0=T0, minutes=6):
 
 # ---- the catalogue ----------------------------------------------------------------------------------------------------------------------------
 def test_the_catalogue_is_every_combination_with_unique_readable_ids():
-    assert len(A2.CATALOGUE) == len({s.sid for s in A2.CATALOGUE}) == 3132                      # (9 up + 9 down + 11 flat structure-widths) x 3 vols x 3 timings x 6 exits x 2 holds
+    assert len(A2.CATALOGUE) == len({s.sid for s in A2.CATALOGUE}) == 3132 + 432                # (9 up + 9 down + 11 flat structure-widths) x 3 vols x 3 timings x 6 exits x 2 holds,
+    #                                                                                             and calendars and diagonals (6 structure-widths, near expiry only: 2 timings)
     assert all(A2.BY_SID[s.sid] is s for s in A2.CATALOGUE)                                     # BY_SID also holds what the inventor writes (test_inventor.py)
     assert {s.view for s in A2.CATALOGUE} == {"up", "down", "flat"} and all(len(s.sid) <= 22 for s in A2.CATALOGUE)
     s = A2.BY_SID[IC]
@@ -76,9 +77,14 @@ def test_the_catalogue_is_every_combination_with_unique_readable_ids():
 
 def test_every_structure_has_a_bounded_worst_case_and_the_bounds_are_right():
     strikes = list(range(24100, 24901, 50))                                                      # the at-the-money strike 24500 and 8 either side (a broken wing reaches 5)
+    near, nxt = dt.date(2026, 11, 12), dt.date(2026, 11, 19)
     for s in A2.CATALOGUE:
-        lg = A2.legs_for(s, strikes, 8)
+        lg = A2.legs_for(s, strikes, 8, (strikes, 8))                                            # a calendar's later legs on the next expiry's board (the same strikes here)
         assert lg is not None, s.sid
+        if A2.is_multi(s.struct):
+            worst = A2.multi_expiry_worst([(l[2], l[1], l[0], nxt if len(l) > 3 else near) for l in lg])
+            assert worst is not None and math.isfinite(worst), s.sid                               # the later long covers the near sale
+            continue
         worst, best = A2.payoff_bounds([(side, r, k, 10.0) for side, r, k in lg])
         assert math.isfinite(worst), s.sid                                                       # a sold option is only ever a leg of a bounded structure
     assert A2.payoff_bounds([(1, "CE", 100, 5.0), (-1, "CE", 110, 2.0)]) == (-3.0, 7.0)          # a bull call spread paid 3: lose 3, make 7

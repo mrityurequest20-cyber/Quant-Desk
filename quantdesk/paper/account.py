@@ -86,12 +86,47 @@ def _usable(x) -> bool:
     return is_number(x) and x >= 0
 
 
+# CALENDARS AND DIAGONALS (owner, 14 Nov 2026: "Build Calendar and diagonal spreads"): a sold option in the NEAREST expiry may be covered by a long option of a LATER
+# expiry. At the near expiry that long is still alive, and a European option is never worth less than a floor known in advance: a call at least S(1 - q t) - K (any
+# dividend yield q up to Q_MAX: an index's is about 1.3%), a put at least K(1 - r t) - S (any rate r up to R_MAX), where t is the time it still has to run. Valuing the
+# later longs at that floor, never more, keeps the worst case a true worst case. A sold option in a later expiry (a reverse calendar) is never covered this way.
+Q_MAX, R_MAX = 0.02, 0.10
+CAL_S_MAX = 3.0                                  # a calendar's worst case is searched over prices up to three times its highest strike
+
+
+def option_floor(right: str, k: float, s: float, tau: float) -> float:
+    """The least a European option with `tau` years left can be worth at spot `s` (yield at most Q_MAX, rate at most R_MAX)."""
+    return max(0.0, s * (1 - Q_MAX * tau) - k) if right == "CE" else max(0.0, k * (1 - R_MAX * tau) - s)
+
+
+def multi_expiry_worst(legs) -> float | None:
+    """The worst value at the NEAREST expiry of one underlying's legs [(strike, right, qty, expiry)] whose sold legs are all in that expiry: the near legs at their
+    intrinsic value, the later (long) legs at option_floor. None when it does not apply (one expiry, or a sold leg later); -inf when a call is left uncovered."""
+    exps = sorted({e for _k, _r, _q, e in legs})
+    if len(exps) < 2 or any(q < 0 and e != exps[0] for _k, _r, q, e in legs):
+        return None
+    if sum(q for _k, r, q, _e in legs if r == "CE") < 0:
+        return float("-inf")                                     # more calls sold than bought across the expiries
+    e1 = exps[0]
+    taus = {e: (e - e1).days / 365.0 for e in exps}
+    pts = {0.0}
+    for k, r, _q, e in legs:
+        pts.add(k)
+        if e != e1:
+            pts.add(k / (1 - Q_MAX * taus[e]) if r == "CE" else k * (1 - R_MAX * taus[e]))
+    pts.add(CAL_S_MAX * max(k for k, _r, _q, _e in legs))
+    value = lambda s: sum(q * ((max(s - k, 0.0) if r == "CE" else max(k - s, 0.0)) if e == e1 else option_floor(r, k, s, taus[e])) for k, r, q, e in legs)   # noqa: E731
+    return min(value(x) for x in sorted(pts))
+
+
 def stress_equity(cash: float, positions: dict) -> float:
     """The WORST-CASE equity if every option expired now: the cash plus, for each underlying and expiry, the lowest value the group's legs can have at expiry over every spot price (each leg at its
     intrinsic value; time value is ignored, which is conservative for the longs). It is -infinity when some group could lose without limit (a short call not covered by a long call) or when a position is
     not a plain option. For a book of long options only it is at least the cash; for a hedged book of spreads, condors and butterflies it is exactly cash less the worst possible loss; for a naked short it
-    is -inf, which is how the risk gate refuses one. Groups settle at different times, so their worst cases are added (the safe way round)."""
+    is -inf, which is how the risk gate refuses one. Groups settle at different times, so their worst cases are added (the safe way round). An underlying whose sold legs
+    are all in its nearest expiry, with longs in later ones (a calendar, a diagonal), is valued as one at that expiry (multi_expiry_worst)."""
     groups: dict[tuple, list] = {}
+    by_under: dict[str, list] = {}
     futures = 0.0
     for p in positions.values():
         i = p.instrument
@@ -100,8 +135,17 @@ def stress_equity(cash: float, positions: dict) -> float:
             continue
         if not is_number(i.strike) or i.strike <= 0 or i.right not in ("CE", "PE") or i.expiry is None or not is_number(p.qty) or not p.qty:
             return float("-inf")                                 # anything that is not a plain option with a real strike and quantity cannot be valued: treated as unbounded (and a NaN can never slip past a comparison)
-        groups.setdefault((i.underlying, i.expiry), []).append((float(i.strike), i.right, p.qty))
+        by_under.setdefault(i.underlying, []).append((float(i.strike), i.right, p.qty, i.expiry))
     total = float(cash) + futures
+    if not math.isfinite(total):
+        return float("-inf")
+    for u, legs4 in by_under.items():
+        cal = multi_expiry_worst(legs4)                          # calendars and diagonals: the later longs cover the near shorts at their floor
+        if cal is not None:
+            total += cal
+            continue
+        for k, r, q, e in legs4:
+            groups.setdefault((u, e), []).append((k, r, q))
     if not math.isfinite(total):
         return float("-inf")
     for legs in groups.values():

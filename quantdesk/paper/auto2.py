@@ -40,6 +40,7 @@ from . import auto as V1
 from . import inventor as INV
 from . import eventcal as EC
 from . import marketread as MR
+from .account import multi_expiry_worst
 from . import newsmodel as NM
 from . import regimes as RG
 from . import tails as TL
@@ -139,10 +140,17 @@ STRUCTURES = {
     "BWP": ("down", [(1, "PE", "0"), (-2, "PE", "-w"), (1, "PE", "-2w-1")], (1, 2)),  # broken-wing put butterfly
     "CRB": ("up", [(-1, "CE", "0"), (2, "CE", "w")], (1, 2)),                         # call ratio backspread: a big move up, paid for by a sold call
     "PRB": ("down", [(-1, "PE", "0"), (2, "PE", "-w")], (1, 2)),                      # put ratio backspread
+    # Calendars and diagonals (owner, 14 Nov 2026: "Build Calendar and diagonal spreads"): a leg tagged "x" is in the NEXT expiry, the rest in the near one. The near
+    # sale decays faster than the later purchase; the later long covers it, valued at the least it can be worth (account.multi_expiry_worst). Near expiry only.
+    "CAL": ("flat", [(-1, "CE", "0"), (1, "CE", "0", "x")], (0,)),                   # call calendar: the price sits near the strike into the near expiry
+    "PCAL": ("flat", [(-1, "PE", "0"), (1, "PE", "0", "x")], (0,)),                  # put calendar
+    "DGC": ("up", [(-1, "CE", "w"), (1, "CE", "0", "x")], (1, 2)),                   # call diagonal: a slow drift up to the sold strike
+    "DGP": ("down", [(-1, "PE", "-w"), (1, "PE", "0", "x")], (1, 2)),                # put diagonal
 }
 NAMES = {"LC": "long call", "BCS": "bull call spread", "BPS": "bull put spread", "LP": "long put", "BRP": "bear put spread", "BRC": "bear call spread",
          "IC": "iron condor", "IF": "iron butterfly", "LS": "long straddle", "LG": "long strangle", "CBF": "call butterfly", "PBF": "put butterfly",
-         "BWC": "broken-wing call butterfly", "BWP": "broken-wing put butterfly", "CRB": "call ratio backspread", "PRB": "put ratio backspread"}
+         "BWC": "broken-wing call butterfly", "BWP": "broken-wing put butterfly", "CRB": "call ratio backspread", "PRB": "put ratio backspread",
+         "CAL": "call calendar", "PCAL": "put calendar", "DGC": "call diagonal", "DGP": "put diagonal"}
 VOLS = ("rich", "cheap", "any")
 TIMINGS = (("any", "near"), ("any", "next"), ("eve", "near"))      # (timing, expiry): the expiry eve only makes sense on the expiry that is tomorrow
 EXITS = ((0.5, 0.5), (1.0, 0.5), (2.0, 0.5), (0.5, 1.0), (1.0, 1.0), (2.0, 1.0))      # (take-profit in R, stop in R); a stop of 1 R holds to the worst case
@@ -176,12 +184,19 @@ class Strategy:
                 + (" on an expiry eve" if self.timing == "eve" else "") + f"; take profit at {self.tp:g}R, stop at {self.sl:g}R, " + ("out by the close" if self.hold == "day" else "held up to three sessions"))
 
 
+def is_multi(struct: str) -> bool:
+    """A calendar or diagonal: some leg is in the next expiry."""
+    return any(len(l) > 3 and l[3] == "x" for l in STRUCTURES[struct][1])
+
+
 def catalogue() -> list[Strategy]:
     out = []
     for code, (view, _legs, widths) in STRUCTURES.items():
         for w in widths:
             for vol in VOLS:
                 for timing, expiry in TIMINGS:
+                    if expiry == "next" and is_multi(code):
+                        continue                                       # a calendar is near against next: there is no "next against the one after" on the board
                     for tp, sl in EXITS:
                         for hold in HOLDS:
                             out.append(Strategy(code, w, view, vol, timing, expiry, tp, sl, hold))
@@ -207,13 +222,13 @@ BY_SID.update({s.sid: s for s in FUT_CATALOGUE})
 
 def resolved_legs(struct: str, width: int) -> tuple:
     """A structure's legs as (lots, right, strike steps from the money), the canonical form the inventor works in."""
-    return INV.norm((side, right, _offset(expr, width)) for side, right, expr in STRUCTURES[struct][1])
+    return INV.norm((l[0], l[1], _offset(l[2], width)) for l in STRUCTURES[struct][1])
 
 
 def is_short_vol(struct: str) -> bool:
     """Short volatility: a flat structure with no net calls and no net puts (it is paid while the price sits still and is hurt when it moves)."""
     view, legs, _ = STRUCTURES[struct]
-    return view == "flat" and sum(sd for sd, r, _ in legs if r == "CE") == 0 and sum(sd for sd, r, _ in legs if r == "PE") == 0
+    return view == "flat" and sum(l[0] for l in legs if l[1] == "CE") == 0 and sum(l[0] for l in legs if l[1] == "PE") == 0
 
 
 def register_invention(legs, ctx: "Strategy | None" = None) -> list["Strategy"]:
@@ -250,14 +265,20 @@ def _offset(expr: str, w: int) -> int:
     return total
 
 
-def legs_for(s: Strategy, strikes: list, atm_i: int) -> list[tuple[int, str, float]] | None:
-    """[(side, right, strike)] on the board's strikes, or None if a strike is not there."""
+def legs_for(s: Strategy, strikes: list, atm_i: int, far: tuple | None = None) -> list[tuple] | None:
+    """[(side, right, strike)] on the board's strikes, or None if a strike is not there. A calendar's next-expiry legs are placed on `far` = (its strikes, its at-the-money
+    index) and come back as (side, right, strike, "x")."""
     out = []
-    for side, right, expr in STRUCTURES[s.struct][1]:
-        i = atm_i + _offset(expr, s.width)
-        if not 0 <= i < len(strikes):
+    for l in STRUCTURES[s.struct][1]:
+        side, right, expr = l[:3]
+        x = len(l) > 3 and l[3] == "x"
+        ks, a = (far if x else (strikes, atm_i)) if not x or far else (None, None)
+        if ks is None:
             return None
-        out.append((side, right, strikes[i]))
+        i = a + _offset(expr, s.width)
+        if not 0 <= i < len(ks):
+            return None
+        out.append((side, right, ks[i], "x") if x else (side, right, ks[i]))
     return out
 
 
@@ -594,7 +615,8 @@ class AutoPilotV2:
             worst = min(live, key=lambda s: lab.posterior(s.sid)[1])
             lab.retire(worst.sid)
             live = lab.invented()
-        ranked = sorted((sid for sid, v in lab.stats.items() if v[0] >= 3 and sid in BY_SID and BY_SID[sid].struct in STRUCTURES), key=lambda sid: -lab.posterior(sid)[1])[:8]
+        ranked = sorted((sid for sid, v in lab.stats.items() if v[0] >= 3 and sid in BY_SID and BY_SID[sid].struct in STRUCTURES and not is_multi(BY_SID[sid].struct)),
+                        key=lambda sid: -lab.posterior(sid)[1])[:8]
         parents = [BY_SID[sid] for sid in ranked] or [s for s in CATALOGUE if s.width <= 1 and s.vol == "any" and s.timing == "any" and s.hold == "day"
                                                          and s.tp == 1.0 and s.sl == 0.5 and s.expiry == "near"]
         pool = [(resolved_legs(p.struct, p.width), p) for p in parents]
@@ -738,7 +760,7 @@ class AutoPilotV2:
 
     def tail_check(self, s: Strategy, st: dict, p: dict, today: dt.date) -> tuple[bool, str | None, float | None]:
         """(open it?, why not, the expected R to expiry over the tail model) for an option sale; (True, None, None) for anything else or with no model."""
-        if p.get("fut"):                                                               # a future's tail is its stop (and the event regime keeps it out of events)
+        if p.get("fut") or p.get("multi"):                                             # a future's tail is its stop; a calendar is a debit whose later long is its cover
             return True, None, None
         cost = sum(l["side"] * l["px"] for l in p["legs"])
         if cost >= 0:                                                                  # paid for, not paid: it buys its tails
@@ -951,24 +973,39 @@ class AutoPilotV2:
             return None
         strikes = sorted(chain)
         atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - st["spot"]))
-        lg = legs_for(s, strikes, atm_i)
+        multi = is_multi(s.struct)
+        far_exp = st.get("next") if multi else None
+        far_chain = ch[u].get(far_exp) if far_exp else None
+        if multi and not far_chain:
+            return None
+        fks = sorted(far_chain) if far_chain else None
+        far = (fks, min(range(len(fks)), key=lambda i: abs(fks[i] - st["spot"]))) if fks else None
+        lg = legs_for(s, strikes, atm_i, far)
         lot = self._lot(u, exp)
-        if lg is None or lot is None:
+        if lg is None or lot is None or (multi and self._lot(u, far_exp) != lot):
             return None
         legs, q = [], snap.get("quotes") or {}
-        for side, right, k in lg:
-            name = chain[k].get(right)
+        for l in lg:
+            side, right, k = l[:3]
+            lexp, lchain = (far_exp, far_chain) if len(l) > 3 else (exp, chain)
+            name = lchain[k].get(right)
             bk = _book(q.get(name))
             if bk is None or bk[1] < self.min_premium(u) or (bk[1] - bk[0]) / ((bk[0] + bk[1]) / 2) > MAX_LEG_SPREAD:
                 return None
-            legs.append({"name": name, "side": side, "right": right, "k": k, "px": bk[1] if side > 0 else bk[0], "bid": bk[0], "ask": bk[1], "age": _num(q[name].get("age_s"))})
-        worst, best = payoff_bounds([(l["side"], l["right"], l["k"], l["px"]) for l in legs])
+            legs.append({"name": name, "side": side, "right": right, "k": k, "px": bk[1] if side > 0 else bk[0], "bid": bk[0], "ask": bk[1], "age": _num(q[name].get("age_s")),
+                         "exp": lexp})
+        if multi:                                                                       # the worst at the near expiry, the later long at its floor
+            w = multi_expiry_worst([(l["k"], l["right"], l["side"], l["exp"]) for l in legs])
+            worst, best = ((w - sum(l["side"] * l["px"] for l in legs)) if w is not None else -math.inf), math.inf
+        else:
+            worst, best = payoff_bounds([(l["side"], l["right"], l["k"], l["px"]) for l in legs])
         if not math.isfinite(worst) or worst >= 0:
             return None
-        fees = sum(self.fees_fn(u, exp, l["k"], l["right"], l["side"] * lot, l["px"]) + self.fees_fn(u, exp, l["k"], l["right"], -l["side"] * lot, l["px"]) for l in legs) / lot
+        fees = sum(self.fees_fn(u, l["exp"], l["k"], l["right"], l["side"] * lot, l["px"]) + self.fees_fn(u, l["exp"], l["k"], l["right"], -l["side"] * lot, l["px"])
+                   for l in legs) / lot
         if fees > MAX_FEES_R * (-worst + fees):
             return None
-        return {"legs": legs, "exp": exp, "lot": lot, "risk": -worst + fees, "best": best, "fees": fees}
+        return {"legs": legs, "exp": exp, "lot": lot, "risk": -worst + fees, "best": best, "fees": fees, "multi": multi}
 
     def mark(self, snap, legs) -> float | None:
         """What closing the structure now would get, per unit (a long sold at the bid, a short bought back at the offer), less what it cost to open."""
@@ -1209,11 +1246,17 @@ class AutoPilotV2:
             first = next(iter(pkg["legs"].values()))
             lot = max(1, first.instrument.lot_size)
             legs = [{"name": sym, "side": (1 if p.qty > 0 else -1) * max(1, round(abs(p.qty) / max(1, p.instrument.lot_size))), "right": p.instrument.right,
-                     "k": p.instrument.strike, "px": p.avg_price} for sym, p in pkg["legs"].items()]           # a leg's side is its size in lots (a butterfly's body is 2)
+                     "k": p.instrument.strike, "px": p.avg_price, "exp": p.instrument.expiry} for sym, p in pkg["legs"].items()]   # a leg's side is its size in lots
             v = self.mark(snap, legs)
             if v is None:
                 continue
-            worst, best = payoff_bounds([(l["side"], l["right"], l["k"], l["px"]) for l in legs])
+            exps = {l["exp"] for l in legs}
+            if len(exps) > 1:                                                           # a calendar or diagonal: judged at the near expiry, the later long at its floor
+                first = min(pkg["legs"].values(), key=lambda p: p.instrument.expiry)
+                w = multi_expiry_worst([(l["k"], l["right"], l["side"], l["exp"]) for l in legs])
+                worst, best = ((w - sum(l["side"] * l["px"] for l in legs)) if w is not None else -math.inf), math.inf
+            else:
+                worst, best = payoff_bounds([(l["side"], l["right"], l["k"], l["px"]) for l in legs])
             fees = sum(self.fees_fn(pkg["u"], first.instrument.expiry, l["k"], l["right"], -l["side"] * lot, l["px"]) for l in legs) / lot
             risk = max(-worst, 1e-9) + fees
             r = (v - fees) / risk

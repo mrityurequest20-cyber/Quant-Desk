@@ -1,7 +1,8 @@
 """Sold options in the paper desk (owner's order, 8 Nov 2026: "give yourself this freedom of selling options ... a selling option is just a hedging position").
 
-What is allowed: a sold option only INSIDE a package whose worst case is bounded (verticals, condors, butterflies...). What is never allowed: a naked short call, a sold option whose cover
-expires first (calendar), a sale of the long that covers a short, any package that risks more than the per-trade limit, or any of it while `paper.allow_short_legs` is off.
+What is allowed: a sold option only INSIDE a package whose worst case is bounded (verticals, condors, butterflies, and since 14 Nov 2026 calendars and diagonals whose later
+long covers the near short). What is never allowed: a naked short call, a sold option whose cover expires first (a reverse calendar), a sale of the long that covers a short,
+any package that risks more than the per-trade limit, or any of it while `paper.allow_short_legs` is off.
 Everything here is paper money, through the REAL gate, broker, account and runner."""
 import dataclasses
 import datetime as dt
@@ -103,15 +104,35 @@ def test_a_package_whose_worst_case_would_break_the_day_floor_is_refused_even_wh
     assert not d.allowed and rows == [] and any("floor" in r for r in d.reasons) and not any("at risk" in r for r in d.reasons), d.reasons
 
 
-def test_an_uncovered_short_call_and_a_ratio_spread_and_a_calendar_are_refused(cfg, tmp_path):
+def test_an_uncovered_short_call_and_a_ratio_spread_are_refused(cfg, tmp_path):
     th = "a view long enough to pass the thesis rule of the desk"
     b, acct, _ = make(cfg, tmp_path)
     d, rows = b.open_package([leg("sell", opt(25000, "CE"), q(55, 57))], "naked call", th, {}, MON)
     assert not d.allowed and rows == [] and any("uncovered" in r for r in d.reasons)
     ratio = [leg("sell", opt(25000, "CE"), q(55, 57), 2), leg("buy", opt(24900, "CE"), q(90, 92), 1)]
     assert not b.open_package(ratio, "ratio", th, {}, MON)[0].allowed
-    cal = [leg("sell", opt(25000, "CE", EXP), q(55, 57)), leg("buy", opt(25000, "CE", dt.date(2026, 11, 19)), q(95, 97))]      # different expiries are different groups: the near short has no cover of its own
-    assert not b.open_package(cal, "calendar", th, {}, MON)[0].allowed and not acct.ledger
+    cal2 = [leg("sell", opt(25000, "CE", EXP), q(55, 57), 2), leg("buy", opt(25000, "CE", dt.date(2026, 11, 19)), q(95, 97), 1)]
+    assert not b.open_package(cal2, "calendar 2:1", th, {}, MON)[0].allowed and not acct.ledger         # one later long cannot cover two near shorts
+
+
+def test_a_calendar_whose_later_long_covers_the_near_short_is_allowed_with_a_true_worst_case(cfg, tmp_path):
+    """Owner, 14 Nov 2026: "Build Calendar and diagonal spreads". Until then the gate refused every calendar (each expiry was its own group). Now a sold option in the
+    nearest expiry may be covered by a long of a later one, valued at the least a European option can be worth (account.option_floor)."""
+    b, acct, _ = make(cfg, tmp_path)
+    th = "a view long enough to pass the thesis rule of the desk"
+    far = dt.date(2026, 11, 19)
+    cal = [leg("sell", opt(25000, "CE", EXP), q(55, 57)), leg("buy", opt(25000, "CE", far), q(95, 97))]
+    d, rows = b.open_package(cal, "call calendar", th, {}, MON)
+    assert d.allowed and len(rows) == 2
+    assert acct.cash == pytest.approx(500_000 - (97 - 55) * LOT - sum(r["fees"] for r in rows))           # the debit and the fees are paid
+    allowance = 0.02 * 7 / 365 * (3 * 25000) * LOT                                                        # beyond the debit: the floor's dividend allowance at three times the strike
+    assert acct.stress() - acct.cash == pytest.approx(-allowance, rel=1e-9)
+    later = MON + dt.timedelta(minutes=30)
+    d, row = b.sell(opt(25000, "CE", far).symbol, LOT, q(95, 97, later), later)
+    assert not d.allowed and row is None                                                                   # the later long cannot be sold while it covers the near short
+    diag = [leg("sell", opt(24600, "PE", EXP), q(40, 42)), leg("buy", opt(24700, "PE", far), q(120, 122))]
+    b2, acct2, _ = make(cfg, tmp_path)
+    assert b2.open_package(diag, "put diagonal", th, {}, MON)[0].allowed
 
 
 def test_a_calendar_with_the_cover_expiring_first_is_refused(cfg, tmp_path):

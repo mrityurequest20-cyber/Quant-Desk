@@ -361,6 +361,24 @@ The weighted share of rises is the analogue's P(up). Its effective number of epi
   0.02% for USD/INR, and far more for natural gas. Until then, the fixed NIFTY-set thresholds.
 - **Already per instrument:** the HMM, CUSUM, Kalman trend, EVT tails, trading hours, costs and the news channels.
 
+## Calendars and diagonals (14 Nov 2026)
+
+**The gate's rule.** A sold option in an underlying's NEAREST expiry may be covered by a long option of a LATER expiry.
+- **The worst case** is judged at the near expiry. The near legs count at their intrinsic value; the later longs at the least a European option can be
+  worth: a call at least S(1 - q t) - K with any dividend yield q up to 2%, a put at least K(1 - r t) - S with any rate r up to 10%, t being the time it
+  still has to run.
+- **The price range** searched goes up to three times the highest strike.
+- **What that costs:** a 1-week NIFTY call calendar's worst case is its debit plus about 1,900 rupees a lot (the dividend allowance at three times the
+  strike); a put calendar's, its debit plus about 3,100 rupees (the rate allowance).
+- **Still refused:** a sold leg in a later expiry (a reverse calendar), more near shorts than later longs, and selling the later long while it covers the near short.
+
+**AUTO v2** adds a call and a put calendar (same strike, at the money, near against next) and a call and a put diagonal (sell 1 or 2 strikes out of the money
+in the near expiry, buy at the money in the next): 432 strategies.
+- **Same treatment:** they are priced at the board's bid and offer and judged by the same worst case, shadow-tested and proof-gated.
+- **Exits:** by the near expiry.
+- **Events:** a calendar is short the near expiry's movement, so none is opened in the event regime. The market read's "event priced" (the near expiry's
+  volatility above the next's) is such a regime.
+
 ## Futures in AUTO v2 (14 Nov 2026)
 
 AUTO v2 also trades the MCX and currency near-month futures the paper desk allows (`paper.futures`).
