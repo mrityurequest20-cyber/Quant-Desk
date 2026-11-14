@@ -136,3 +136,20 @@ def test_the_pill_follows_the_key_at_once_and_a_closed_market_says_so():
     assert "L.health = null" in forget and "setStatus()" in forget                  # forgetting it clears the old health and the pill
     assert 'setStatus(); return void put(body, liveKeyForm(note))' in APP          # a refused key or a down relay updates the pill too
     assert '"Market closed, opens " + nextOpen()' in APP and 'inSession() ? "No prices yet"' in APP
+
+
+def test_every_desk_feed_is_listed_even_before_it_has_pushed_anything():
+    """The owner, 14 Nov 2026: "it is only showing me Kotak and Kite. Why the fires and the Angel one is not showing". The Data tab and the Live tab's strip
+    list the desk's four feeds always (a feed that has pushed nothing shows "nothing yet"), from the relay's /live/health `sources` by code."""
+    feeds = APP[APP.index("const DESK_FEEDS"):APP.index("];", APP.index("const DESK_FEEDS"))]
+    for code, name in (('"z"', "Kite"), ('"k"', "Kotak"), ('"f"', "Fyers"), ('"a"', "Angel One")):
+        assert code in feeds and name in feeds, name
+    body = APP[APP.index("async function renderDataTab"):APP.index("function openSettings")]
+    assert "DESK_FEEDS.filter" in body and "hl.sources" in body                       # the Data tab: a row for Fyers and Angel One from the relay's sources
+    strip = APP[APP.index("const hl = L.health, ln = $(\"#lv-sources\")"):APP.index("$(\"#lv-list\").hidden")]
+    assert "DESK_FEEDS.map" in strip                                                    # the Live tab's strip: all four, then anything else that pushed
+
+
+def test_the_paper_tab_says_the_convexity_desk_is_waiting_until_its_first_session():
+    part = APP[APP.index("sm.lab.convex && typeof sm.lab.convex"):APP.index("ppLab(sm.lab)")]
+    assert "waiting for its first session" in part and "ppConvex(sm.lab.convex)" in part

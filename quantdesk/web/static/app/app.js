@@ -595,6 +595,8 @@ async function renderDataTab(full) {
 			kt.configured === false ? "Add KOTAK_CONSUMER_KEY to the Worker to switch the second source on." :
 				`${kt.calls_ok || 0} calls ok, ${kt.calls_failed || 0} failed since the relay started${kt.last_error ? " · last problem: " + kt.last_error : ""}`),
 		row("Kotak universe", kn ? tag("flat", `${kn.quotes} quotes · ${kn.chains} chains`) : tag("bear", "none"), kn ? `built for ${kn.asof}` : "The universe workflow has not pushed one yet."),
+		...DESK_FEEDS.filter(([c]) => c !== "z" && c !== "k").map(([c, label, note]) => { const x = (hl.sources && hl.sources[c]) || {}; return row(label, feed(x.n, x.newest_age_s), note); }),
+		...Object.entries(hl.sources || {}).filter(([c]) => !DESK_FEEDS.some(([d]) => d === c)).map(([c, x]) => row(SRC_NAME[c] || c, feed(x.n, x.newest_age_s), "")),
 		row("Both sources on the same name", tag(hl.disagree ? "bear" : "bull", hl.both ? `${hl.both} compared · ${hl.disagree || 0} differ` : "none compared"), "A name differs when Kite and Kotak disagree by more than a spread explains."),
 		row("Board", tag("flat", `${(hl.names || 0).toLocaleString("en-IN")} instruments`)),
 	];
@@ -651,6 +653,12 @@ const LIVE_FOUND = 60;                                           // rows a searc
 const LIVE_TF = [[1, "1m"], [5, "5m"], [15, "15m"]];
 const LIVE_VOL = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
 const SRC_NAME = { z: "Kite", k: "Kotak", u: "Upstox", d: "Dhan", a: "Angel One", f: "Fyers" };          // the feeds, by the relay's code (deploy/cloudflare/routes.js)
+// The desk's own feeds, always listed (a feed that has pushed nothing yet shows "nothing yet", not nothing): code, label, what it is.
+const DESK_FEEDS = [
+	["z", "Kite", ""], ["k", "Kotak", ""],
+	["f", "Fyers (MCX: crude oil, gold, silver and the rest, futures and options)", "Pushed by the Fyers feed workflow, which logs in by itself once a trading day and streams MCX hours. Nothing yet: its feed has not run or has not logged in today (Actions, Fyers feed)."],
+	["a", "Angel One (currency: USDINR and the rest, futures and options)", "Pushed by the Angel One feed workflow, which logs in by itself once a trading day and streams currency hours. Nothing yet: its feed has not run today (Actions, Angel One feed)."],
+];
 S.lv = { q: "", grp: "all", data: null, built: false, sel: null, view: "spot", series: null, cand: null, tf: 1, exp: null, allStrikes: false, last: {}, chart: null, at: 0, heavyAt: 0 };
 S.open = {};                                                     // which folded sections are open, by id: a redraw keeps them as the reader left them
 let liveBusy = false;
@@ -1058,7 +1066,9 @@ function liveDraw() {
 	$("#lv-count").textContent = total.toLocaleString("en-IN") + " on the board";
 	const hl = L.health, ln = $("#lv-sources");
 	if (hl && ln) {                                                   // the state of each feed, from /live/health
-		const feeds = hl.sources ? Object.entries(hl.sources).map(([c, x]) => [SRC_NAME[c] || c, x, c === "k" && hl.kotak && hl.kotak.status && hl.kotak.status !== "ok" ? hl.kotak.status : ""]) : [["Kite", hl.kite || {}, ""], ["Kotak", hl.kotak || {}, hl.kotak && hl.kotak.status && hl.kotak.status !== "ok" ? hl.kotak.status : ""]];
+		const src = hl.sources || { z: hl.kite || {}, k: hl.kotak || {} };
+		const codes = [...DESK_FEEDS.map(([c]) => c), ...Object.keys(src).filter((c) => !DESK_FEEDS.some(([d]) => d === c))];
+		const feeds = codes.map((c) => [SRC_NAME[c] || c, src[c] || {}, c === "k" && hl.kotak && hl.kotak.status && hl.kotak.status !== "ok" ? hl.kotak.status : ""]);
 		ln.textContent = feeds.map(([nm, x, st]) => `${x.n > 0 && fin(x.newest_age_s) && x.newest_age_s <= LIVE_FRESH * 2 ? "●" : "○"} ${nm}${st ? " (" + st + ")" : ""}`).join("   ") + (hl.disagree ? `   ⚠ ${hl.disagree} differ` : "");
 	}
 	$("#lv-list").hidden = !!L.sel; $("#lv-detail").hidden = !L.sel;
@@ -2404,6 +2414,8 @@ function ppDraw() {
 	if (sm && Array.isArray(sm.reviews) && sm.reviews.length) put(body, ppReview(sm.reviews));
 	if (sm && sm.lab && sm.lab.plan && typeof sm.lab.plan === "object") put(body, ppPlan(sm.lab.plan));
 	if (sm && sm.lab && sm.lab.convex && typeof sm.lab.convex === "object") put(body, ppConvex(sm.lab.convex));
+	else if (sm && sm.lab) put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Convexity desk"), h("span", { class: "hint" }, "waiting for its first session")),
+		h("div", { class: "f3", style: "font-size:12.5px;line-height:1.55;padding:10px 16px" }, "Switched on with the 14 Nov 2026 update. The paper desk reports it from its next session (the runner works on trading days, from the 06:00 plan): then this panel shows the month's spend against its 3% budget, the 0.5% stake, what is open and proven, and which tests pass on each instrument.")));
 	if (sm && sm.lab && typeof sm.lab === "object") put(body, ppLab(sm.lab));
 	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, `Positions (${pos.length})`)),
 		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
