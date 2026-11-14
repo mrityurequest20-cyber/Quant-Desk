@@ -47,7 +47,15 @@ def auto_v2(cfg, underlyings, lots, segments=None):
         return costs.fees(Instrument.option(u, expiry, float(strike), right, int(lot or 1)), int(qty), float(price), segment=(segments or {}).get(u))[0]
     contracts = cfg.get("paper.futures.contracts") or {}
     ticks = {u: c.get("opt_tick") for u, c in contracts.items() if isinstance(c, dict)}
-    return AutoPilotV2(underlyings, lots, fees, TradingCalendar(cfg.holidays()), float(cfg.get("paper.capital")), segments=segments or {}, ticks=ticks)
+    suffix = {"mcx": "-MCX", "nse_cds": "-CDS"}
+
+    def fut_fees(u, qty, price):                                                   # the near-month future's real charges (mcx_futures, cds_futures)
+        from ..core.types import FUTURE
+        c = contracts.get(u) or {}
+        inst = Instrument(symbol=u + suffix.get(c.get("segment"), "-FUT"), kind=FUTURE, underlying=u, lot_size=int(c.get("lot") or 1))
+        return costs.fees(inst, int(qty), float(price), segment=c.get("segment"))[0]
+    return AutoPilotV2(underlyings, lots, fees, TradingCalendar(cfg.holidays()), float(cfg.get("paper.capital")), segments=segments or {}, ticks=ticks,
+                       fut_fees_fn=fut_fees if segments else None, fut_specs={u: c for u, c in contracts.items() if isinstance(c, dict)})
 
 
 def cmd_verify(cfg, a):

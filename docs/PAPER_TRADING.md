@@ -361,6 +361,26 @@ The weighted share of rises is the analogue's P(up). Its effective number of epi
   0.02% for USD/INR, and far more for natural gas. Until then, the fixed NIFTY-set thresholds.
 - **Already per instrument:** the HMM, CUSUM, Kalman trend, EVT tails, trading hours, costs and the news channels.
 
+## Futures in AUTO v2 (14 Nov 2026)
+
+AUTO v2 also trades the MCX and currency near-month futures the paper desk allows (`paper.futures`).
+
+**The strategies:** 12 of them.
+- Long when its view is up, short when it is down.
+- The stop is 0.5 or 1 day's standard deviation away (the brief's tail-model volatility, or the last hour's realized volatility if larger).
+- The take-profit is 1, 2 or 3R, where R is the stop's distance plus the round trip's real costs (mcx_futures, cds_futures).
+- Each is shadow-tested at the board's bid and offer, scored in R, and goes live only after 8 shadow trades and a positive Thompson draw.
+
+**When none opens:**
+- in the event regime, because an event can gap a future through its stop;
+- within the contract's no-entry days before expiry;
+- when the board does not say which contract month it is;
+- when the book is wider than 0.2%;
+- when the stop would be beyond the desk's 10% bound.
+
+**A live entry:** one lot, buy or short, with its stop and target. The runner enforces both, squares it off before the close (futures are intraday) and allows
+one position per contract. The pre-open plan stays with option structures.
+
 ## The scheduled-events calendar (`quantdesk/paper/eventcal.py`, 14 Nov 2026)
 
 The brief lists the next week's scheduled events. Each event touches instruments through the news model's channels. A named symbol is touched fully, and the

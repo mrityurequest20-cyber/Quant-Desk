@@ -104,3 +104,61 @@ def test_nothing_opens_outside_mcx_hours_or_on_a_contracts_last_holding_day(cfg,
 def test_a_currency_options_premium_floor_is_in_its_own_ticks(cfg, tmp_path):
     ap = auto_v2(cfg, ("USDINR",), {"USDINR": 1000}, {"USDINR": "nse_cds"})
     assert ap.min_premium("USDINR") == pytest.approx(20 * 0.0025) and ap.min_premium("NIFTY") == A2.MIN_PREMIUM
+
+
+# ---- futures in AUTO v2 (owner, 14 Nov 2026: "Futures in automated strategies") ------------------------------------------------------------------------------
+FL = "FL1.uaan.1/1.d"            # long future, stop half a day's sd away, take profit at 1R
+FS = "FS2.daan.2/1.d"            # short future, stop one day's sd away, take profit at 2R
+
+
+def futures_state(view, regime="normal", rv=0.32):
+    return {"u": "CRUDEOIL", "spot": 5800.0, "view": view, "why": ["test view"], "mom": 0.3, "iv": 0.35, "rv": rv, "ratio": 1.1, "vol": "mid", "eve": False, "near": EXP,
+            "next": None, "read": None, "regime": regime, "hmm": {}, "today": EVE.date()}
+
+
+def test_a_proven_futures_strategy_goes_long_or_short_through_the_real_gate_with_its_stop_and_target(cfg, tmp_path, monkeypatch):
+    for sid, view, side in ((FL, "up", "buy"), (FS, "down", "short")):
+        rn, ap = desk(cfg, tmp_path, proven(sid))
+        ap.evolved_on = EVE.date()
+        monkeypatch.setattr(ap, "state", lambda snap, u, ch, now, news, v=view: futures_state(v))
+        mine, rep = cycle(rn, ap, EVE)
+        fut = [o for o in mine if o.get("symbol") == "CRUDEOIL-MCX"]
+        assert len(fut) == 1 and fut[0]["side"] == side and fut[0]["strategy"] == f"{A2.TAG} {sid} CRUDEOIL"
+        o, sd = fut[0], 0.32 / math.sqrt(252)
+        entry = 5801.0 if side == "buy" else 5799.0
+        dist = A2.BY_SID[sid].width * A2.FUT_STOP_SD * sd * entry
+        assert o["stop"] == pytest.approx(entry - dist if side == "buy" else entry + dist, rel=1e-6)
+        assert (o["target"] > entry) == (side == "buy") and abs(o["target"] - entry) > A2.BY_SID[sid].tp * dist      # the target counts the costs into R
+        res = next(r for r in rep["results"] if r["id"] == o["id"])
+        assert res["status"] == "filled", res
+        pos = rn.account.positions["CRUDEOIL-MCX"]
+        assert pos.qty == (100 if side == "buy" else -100) and pos.stop == pytest.approx(o["stop"]) and pos.target == pytest.approx(o["target"])
+        mine2, _ = cycle(rn, ap, EVE + dt.timedelta(minutes=2))
+        assert not [x for x in mine2 if x.get("symbol") == "CRUDEOIL-MCX"]                    # one position per contract; its exits are the runner's
+
+
+def test_no_future_in_an_event_near_expiry_or_without_its_contract_month(cfg, tmp_path):
+    _, ap = desk(cfg, tmp_path)
+    s, board = A2.BY_SID[FL], crude_board(EVE)
+    assert ap.matches(s, futures_state("up")) and not ap.matches(s, futures_state("up", regime="event")) and not ap.matches(s, futures_state("down"))
+    assert ap.price(board, s, futures_state("up"), None) is not None
+    near = crude_board(EVE)
+    near["quotes"]["CRUDEOIL-MCX"]["e"] = "2026-11-19"                                           # three days out: inside crude's five no-entry days
+    assert ap.price(near, s, futures_state("up"), None) is None
+    del near["quotes"]["CRUDEOIL-MCX"]["e"]
+    assert ap.price(near, s, futures_state("up"), None) is None                                  # the board must say which contract it is
+    wide = crude_board(EVE)
+    wide["quotes"]["CRUDEOIL-MCX"].update(bid=5780.0, ask=5820.0)
+    assert ap.price(wide, s, futures_state("up"), None) is None
+    assert ap.price(board, s, futures_state("up", rv=None), None) is None                        # no volatility: no stop to set
+
+
+def test_a_shadow_futures_trade_is_scored_in_r_at_its_target(cfg, tmp_path, monkeypatch):
+    _, ap = desk(cfg, tmp_path)
+    ap.evolved_on = EVE.date()
+    monkeypatch.setattr(ap, "state", lambda snap, u, ch, now, news: futures_state("up"))
+    ap.decide(crude_board(EVE), Account(500_000), EVE)
+    sh = ap.shadow[(FL, "CRUDEOIL")]
+    up = sh["risk"] * 1.2 + 2                                                                      # beyond 1R
+    ap.decide(crude_board(EVE + dt.timedelta(minutes=3), F=5800.0 + up), Account(500_000), EVE + dt.timedelta(minutes=3))
+    assert (FL, "CRUDEOIL") not in ap.shadow and ap.lab.stats[FL][0] == 1 and ap.lab.stats[FL][1] >= 1.0

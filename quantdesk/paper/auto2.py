@@ -168,6 +168,9 @@ class Strategy:
         return f"{self.struct}{self.width}.{CODE[self.view]}{CODE[self.vol]}{CODE[self.timing]}{CODE[self.expiry]}.{self.tp:g}/{self.sl:g}.{CODE[self.hold]}"
 
     def describe(self) -> str:
+        if self.struct in FUT_STRUCTS:
+            return (f"{NAMES[self.struct]} (the near-month future) when the view is {self.view}; stop {self.width * FUT_STOP_SD:g} of a day's standard deviation away, "
+                    f"take profit at {self.tp:g}R, out by the close (futures are intraday)")
         w = f" {self.width}-strike" if self.width else ""
         return (f"{NAMES[self.struct]}{w}, {self.expiry} expiry, when the view is {self.view} and volatility is {self.vol}"
                 + (" on an expiry eve" if self.timing == "eve" else "") + f"; take profit at {self.tp:g}R, stop at {self.sl:g}R, " + ("out by the close" if self.hold == "day" else "held up to three sessions"))
@@ -187,6 +190,19 @@ def catalogue() -> list[Strategy]:
 
 CATALOGUE = catalogue()
 BY_SID = {s.sid: s for s in CATALOGUE}
+
+# ---- futures (owner, 14 Nov 2026: "Futures in automated strategies") ----------------------------------------------------------------------------------
+# The paper desk trades MCX and currency near-month futures, intraday, with a stop on every entry (paper.futures). AUTO v2's futures strategies are directional: long
+# when its view is up, short when it is down; the stop is `width` x FUT_STOP_SD of a day's standard deviation away (the brief's tail model's volatility, else the last
+# hour's realized), the take-profit tp x R (R: the stop's distance plus the round trip's costs). Shadow-tested and Thompson-chosen like the options; the runner itself
+# enforces the stop, the target and the square-off before the close. None is opened in the event regime: an event can gap a future through its stop.
+FUT_STRUCTS = {"FL": ("up", 1), "FS": ("down", -1)}
+NAMES.update({"FL": "long future", "FS": "short future"})
+FUT_STOP_SD = 0.5
+FUT_MAX_SPREAD = 0.002                   # a future's book wider than this (of its mid) is not traded
+FUT_STOP_MAX_PCT = 0.10                  # the paper desk's own bound on a stop's distance (paper.futures.stop_max_pct)
+FUT_CATALOGUE = [Strategy(code, w, view, "any", "any", "near", tp, 1.0, "day") for code, (view, _) in FUT_STRUCTS.items() for w in (1, 2) for tp in (1.0, 2.0, 3.0)]
+BY_SID.update({s.sid: s for s in FUT_CATALOGUE})
 
 
 def resolved_legs(struct: str, width: int) -> tuple:
@@ -456,7 +472,7 @@ class Lab:
             C += W - sum(wi * wi for wi in w) / W
         tau2 = min(max((Q - df) / C, HB_TAU_MIN ** 2), HB_TAU_MAX ** 2) if df >= 2 and C > 0 else HB_TAU_DEFAULT ** 2
         family = {}
-        for struct in STRUCTURES:
+        for struct in [*STRUCTURES, *FUT_STRUCTS]:
             rows = fam.get(struct) or []
             w = [1 / (tau2 + r[3]) for r in rows]
             W = sum(w)
@@ -533,7 +549,9 @@ class Lab:
 # ---- the engine -----------------------------------------------------------------------------------------------------------------------------
 class AutoPilotV2:
     def __init__(self, underlyings, lots: dict, fees_fn, cal, capital: float = 500_000.0, seed: int | None = None, lab: Lab | None = None,
-                 segments: dict | None = None, ticks: dict | None = None):
+                 segments: dict | None = None, ticks: dict | None = None, fut_fees_fn=None, fut_specs: dict | None = None):
+        self.fut_fees_fn = fut_fees_fn                 # (underlying, signed qty, price) -> rupees for its near-month future; None: no futures strategies
+        self.fut_specs = {str(u).upper(): v for u, v in (fut_specs or {}).items() if isinstance(v, dict)}     # paper.futures.contracts: lot, no_entry_days
         self.und = tuple(underlyings)
         self.segments = {str(u).upper(): s for u, s in (segments or {}).items() if s in FUT_SUFFIX}      # MCX and currency underlyings; everything else is NSE F&O
         self.ticks = {str(u).upper(): float(t) for u, t in (ticks or {}).items() if isinstance(t, (int, float)) and t > 0}
@@ -556,8 +574,8 @@ class AutoPilotV2:
         self.plan_at = -1e9
 
     def strategies(self) -> list[Strategy]:
-        """Everything it may trade: the written catalogue and what the inventor has written (inventor.py)."""
-        return CATALOGUE + self.lab.invented()
+        """Everything it may trade: the written catalogue, what the inventor has written (inventor.py), and the futures strategies (MCX and currency only)."""
+        return CATALOGUE + self.lab.invented() + (FUT_CATALOGUE if self.fut_fees_fn and self.segments else [])
 
     def evolve(self, today: dt.date) -> list[str]:
         """Once a day: retire inventions whose record is clearly negative (or the worst, past MAX_INVENTED), then write INVENT_PER_DAY new structures by mutating the
@@ -576,7 +594,7 @@ class AutoPilotV2:
             worst = min(live, key=lambda s: lab.posterior(s.sid)[1])
             lab.retire(worst.sid)
             live = lab.invented()
-        ranked = sorted((sid for sid, v in lab.stats.items() if v[0] >= 3 and sid in BY_SID), key=lambda sid: -lab.posterior(sid)[1])[:8]
+        ranked = sorted((sid for sid, v in lab.stats.items() if v[0] >= 3 and sid in BY_SID and BY_SID[sid].struct in STRUCTURES), key=lambda sid: -lab.posterior(sid)[1])[:8]
         parents = [BY_SID[sid] for sid in ranked] or [s for s in CATALOGUE if s.width <= 1 and s.vol == "any" and s.timing == "any" and s.hold == "day"
                                                          and s.tp == 1.0 and s.sl == 0.5 and s.expiry == "near"]
         pool = [(resolved_legs(p.struct, p.width), p) for p in parents]
@@ -689,8 +707,9 @@ class AutoPilotV2:
         if rwhy:
             why = list(why) + [rwhy]
         st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt, "read": read,
-              "regime": regime, "hmm": rg}
-        self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items() if k not in ("why", "read", "hmm")}
+              "regime": regime, "hmm": rg, "today": ist.date()}
+        self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items()
+                              if k not in ("why", "read", "hmm", "today")}
         if regime == "event":
             self.last_state[u]["event"] = (rwhy or "")[:160]
         self.last_state[u]["hmm"], self.last_state[u]["change"] = rg["hmm"], rg["change"]
@@ -719,6 +738,8 @@ class AutoPilotV2:
 
     def tail_check(self, s: Strategy, st: dict, p: dict, today: dt.date) -> tuple[bool, str | None, float | None]:
         """(open it?, why not, the expected R to expiry over the tail model) for an option sale; (True, None, None) for anything else or with no model."""
+        if p.get("fut"):                                                               # a future's tail is its stop (and the event regime keeps it out of events)
+            return True, None, None
         cost = sum(l["side"] * l["px"] for l in p["legs"])
         if cost >= 0:                                                                  # paid for, not paid: it buys its tails
             return True, None, None
@@ -874,6 +895,8 @@ class AutoPilotV2:
     def matches(self, s: Strategy, st: dict) -> bool:
         if st["view"] != s.view:
             return False
+        if s.struct in FUT_STRUCTS:                                                     # a future: MCX and currency only, never in an event (a gap through the stop)
+            return st["u"] in self.segments and st.get("regime") != "event"
         if st.get("regime") == "event" and is_short_vol(s.struct):                      # no volatility sold into an event
             return False
         if s.vol != "any" and st["vol"] != s.vol:
@@ -882,8 +905,46 @@ class AutoPilotV2:
             return False
         return (st["near"] if s.expiry == "near" else st["next"]) is not None
 
+    def daily_sd(self, u: str, st: dict) -> float | None:
+        """A day's standard deviation of `u` as a fraction: the brief's tail model's volatility, else the last hour's realized volatility; the larger when both."""
+        m = self.tail_model(u)
+        rv = st.get("rv") / math.sqrt(252) if st.get("rv") else None
+        vals = [x for x in (m.sigma if m else None, rv) if x and x > 0]
+        return max(vals) if vals else None
+
+    def price_future(self, snap, s: Strategy, st: dict) -> dict | None:
+        """A futures strategy on the board: one leg (the near-month future at the offer to buy, the bid to sell short), its stop and target, R per unit."""
+        u = st["u"]
+        name, spec = u + FUT_SUFFIX[self.segments[u]], self.fut_specs.get(u) or {}
+        q = (snap.get("quotes") or {}).get(name)
+        bk, lot = _book(q), spec.get("lot")
+        if bk is None or not (isinstance(lot, int) and lot > 0) or (bk[1] - bk[0]) / ((bk[0] + bk[1]) / 2) > FUT_MAX_SPREAD:
+            return None
+        try:
+            exp = dt.date.fromisoformat(str(q.get("e"))[:10])
+        except ValueError:
+            return None                                                                  # the board must say which contract it is (the runner refuses otherwise)
+        today = st.get("today")
+        if today is None or self._trading_days_to(today, exp) <= int(spec.get("no_entry_days", 0)):
+            return None                                                                  # too close to its expiry for the paper desk
+        sd = self.daily_sd(u, st)
+        if not sd:
+            return None
+        side = FUT_STRUCTS[s.struct][1]
+        entry = bk[1] if side > 0 else bk[0]
+        dist = s.width * FUT_STOP_SD * sd * entry
+        if not (0 < dist <= FUT_STOP_MAX_PCT * entry):
+            return None
+        fees = (self.fut_fees_fn(u, side * lot, entry) + self.fut_fees_fn(u, -side * lot, entry)) / lot
+        risk = dist + fees
+        return {"legs": [{"name": name, "side": side, "right": None, "k": None, "px": entry, "bid": bk[0], "ask": bk[1], "age": _num(q.get("age_s")), "fut": True}],
+                "exp": exp, "lot": lot, "risk": risk, "best": math.inf, "fees": fees, "fut": True,
+                "stop": entry - side * dist, "target": entry + side * s.tp * risk}
+
     def price(self, snap, s: Strategy, st: dict, ch) -> dict | None:
         """The structure on the live board: its legs with the price each would be dealt at (a buy at the offer, a sale at the bid), R and the most it can make, per unit."""
+        if s.struct in FUT_STRUCTS:
+            return self.price_future(snap, s, st)
         u, exp = st["u"], st["near"] if s.expiry == "near" else st["next"]
         chain = ch[u].get(exp)
         if not chain:
@@ -967,12 +1028,22 @@ class AutoPilotV2:
         """{strategy text: {"sid", "u", "legs": {symbol: position}}} of AUTO v2's open positions (each package carries its strategy id and underlying in its strategy text)."""
         out = {}
         for sym, p in account.positions.items():
-            if not self._is_mine(p.strategy):
+            if not self._is_mine(p.strategy) or getattr(p, "is_future", False):             # a future's stop, target and square-off are the runner's (futures_exits)
                 continue
             parts = p.strategy.split()
             if len(parts) < 4 or parts[2] not in BY_SID:
                 continue
             out.setdefault(p.strategy, {"sid": parts[2], "u": parts[3], "legs": {}})["legs"][sym] = p
+        return out
+
+    def live_futures(self, account) -> set:
+        """{(sid, underlying)} of AUTO v2's open futures positions."""
+        out = set()
+        for p in account.positions.values():
+            if self._is_mine(p.strategy) and getattr(p, "is_future", False):
+                parts = p.strategy.split()
+                if len(parts) >= 4:
+                    out.add((parts[2], parts[3]))
         return out
 
     # ---- the day plan, 06:00 to 09:15 ----------------------------------------------------------------------------------------------------------------
@@ -1072,7 +1143,7 @@ class AutoPilotV2:
                 continue
             found = []
             for s in self.strategies():
-                if not self.matches(s, st):
+                if s.struct in FUT_STRUCTS or not self.matches(s, st):                 # the plan is of option structures: futures are intraday, decided in the session
                     continue
                 p = self.price(cs, s, st, ch)
                 if p is None or not self.tail_check(s, st, p, ist.date())[0]:
@@ -1161,7 +1232,7 @@ class AutoPilotV2:
         if kill or entries_blocked or len(account.ledger) >= LEDGER_SOFT_LIMIT:
             return orders
         held_syms = set(account.positions)
-        busy = {(pkg["sid"], pkg["u"]) for pkg in pk.values()}
+        busy = {(pkg["sid"], pkg["u"]) for pkg in pk.values()} | self.live_futures(account)
         for u, st in states.items():                                                    # live entries: Thompson sampling over the strategies whose context holds
             first_t, last_t, _ = self.window(u)
             if self.backoff.get(u, 0) > t or not (first_t <= ist.time() <= last_t):    # each segment's own hours
@@ -1211,6 +1282,12 @@ class AutoPilotV2:
                   + f"{NAMES[s.struct]}s; chosen by Thompson sampling (draw {draw:+.2f}R). Risk {p['risk'] * p['lot']:.0f} rupees a lot.")
         strategy = f"{TAG} {s.sid} {st['u']}"[:60]
         ref = lambda l: {"bid": l["bid"], "ask": l["ask"], "at": int(t * 1000 - (l["age"] or 0) * 1000)}      # noqa: E731
+        if p.get("fut"):                                                                # a future: buy or short one lot, with its stop and target (the runner enforces both)
+            l = p["legs"][0]
+            slack = max(0.0005 * l["px"], l["ask"] - l["bid"])
+            return {"id": self._oid(t, "f"), "side": "buy" if l["side"] > 0 else "short", "symbol": l["name"], "lots": 1, "strategy": strategy, "thesis": thesis[:1000],
+                    "limit": round(l["px"] + l["side"] * slack, 4), "stop": round(p["stop"], 4), "target": round(p["target"], 4), "group": "auto2",
+                    "queued_at": int(t * 1000), "ref": ref(l), "_why": f"{s.sid} draw {draw:+.2f}R"}
         if len(p["legs"]) == 1 and p["legs"][0]["side"] > 0:
             l = p["legs"][0]
             limit = round(math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK, 2)
