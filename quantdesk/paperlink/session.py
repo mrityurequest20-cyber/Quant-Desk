@@ -88,6 +88,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     account.save(ledger_path)
     fp_disk = fingerprint(account)
     if auto is not None and hasattr(auto, "load"):                    # AUTO v2: its strategies' shadow record, kept on the relay across sessions
+        auto.runner_commit = os.environ.get("GITHUB_SHA") or None      # phase 2's monthly report names the code that produced it (the paper package reads no environment)
         log(f"paper: AUTO v2 strategy record: {auto.load(relay)}")
     try:                                                              # the account goes to the relay once before the first cycle, so even a session with no cycles (the very first, by hand, out of hours) leaves it there
         snap0 = relay.snapshot()

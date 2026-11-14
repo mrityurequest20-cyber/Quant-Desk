@@ -13,17 +13,34 @@ strategy's ordinary rules, never more. Convexity strategies are not watched. It 
 Standard library only (paper package rules)."""
 from __future__ import annotations
 
+import datetime as dt
 import math
-import re
 
 K, H, RHO_REG, SD_FLOOR = 0.25, 5.0, 0.45, 0.5
 RELEASE_TRADES, RELEASE_SESSIONS, REPEAT_WINDOW = 8, 8, 60
 HIT_HORIZON_SESSIONS = 20
 REVIEW_MIN_DEMOTIONS, REVIEW_FIRST_SESSIONS, REVIEW_ROLL_SESSIONS, REVIEW_Z = 20, 120, 60, 1.2816   # one-sided 90%
 G_DECIMALS = 2
-EVENTS_MAX, FOLLOW_MAX, HITS_MAX = 300, 30, 400
-CTRL_MAX = 200                               # control strategies kept per demotion window (a storage bound; when it binds, it is counted)
-DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+EVENTS_SHOWN = 300                     # the latest events kept whole for the app; every event is also counted
+FOLLOW_MAX = 200                       # open hit-rate windows; a demotion past it is not measured and is counted (`unmeasured`)
+
+
+def is_day(x) -> bool:
+    """A real calendar date as YYYY-MM-DD (storage is not trusted: '2026-02-30' is not a day)."""
+    if not (isinstance(x, str) and len(x) == 10):
+        return False
+    try:
+        return dt.date.fromisoformat(x).isoformat() == x
+    except ValueError:
+        return False
+
+
+def _fin(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def _int(x, lo=0) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool) and x >= lo
 
 
 class Ctx:
@@ -36,13 +53,17 @@ class Ctx:
 
 class Probation:
     def __init__(self):
+        # what decides (kept with the open shadow book; who is in probation is also kept with the record, so it survives losing the book)
         self.st: dict[str, dict] = {}       # sid -> {"g", "pend": [day, k, sum R, sum R^2] | None, "P": None | {...}, "rel": day | None, "rep": int}
-        self.events: list[list] = []         # [day, sid, "demoted" | "released", detail]
+        self.first_day: str | None = None   # the first session watched (the review's clock)
+        # what is measured (kept with the open shadow book; the first thing shed if it must shrink)
+        self.events: list[list] = []         # the latest EVENTS_SHOWN [day, sid, "demoted" | "released", detail]
+        self.counts = {"demoted": 0, "released": 0, "unmeasured": 0}
         self.follow: list[dict] = []         # demotions whose hit-rate window is open
-        self.hits: list[list] = []           # [demotion day, sid, hold, own mean R - control mean R] | [day, sid, hold, None] when excluded
-        self.first_day: str | None = None    # the first session watched (the review's clock)
-        self.left_out = 0                    # g values left out of the last save for the record's size bound
-        self.capped = 0                      # demotion windows whose control reached CTRL_MAX strategies
+        self.hits: dict[str, dict] = {}     # demotion day -> hold -> [paired differences n, their sum, excluded]
+        self.left_out = 0                    # g values left out of the last save for its size bound
+        self.ver = 0                         # bumped on every change (what the shadow book keeps)
+        self.pver = 0                        # bumped when who is in probation changes (what the record keeps)
 
     # ---- the rule ------------------------------------------------------------------------------------------------------------------------------------
     def blocked(self, sid: str) -> bool:
@@ -51,6 +72,7 @@ class Probation:
 
     def close(self, sid: str, r: float, day: str, ctx: Ctx) -> None:
         """A closed shadow trade, BEFORE it is added to the cumulative record (so the record still says what it said before this session)."""
+        self.ver += 1
         self._follow(sid, r, day, ctx)
         if not ctx.watched(sid):
             return
@@ -71,6 +93,7 @@ class Probation:
         self._close_follows(today, ctx)
 
     def _finalize(self, sid: str, e: dict, ctx: Ctx) -> None:
+        self.ver += 1
         day, k, s, q = e["pend"]
         e["pend"] = None
         if k <= 0:
@@ -89,19 +112,22 @@ class Probation:
         if not row:
             return
         n0, s0, q0 = row[0] - k, row[1] - s, row[2] - q                                 # the record before this session (this session's trades are already in it)
-        if n0 < ctx.min_trades(sid) or n0 <= 0:
+        if n0 <= 0 or n0 < ctx.min_trades(sid):
             return
         mean = s0 / n0
         sd = max(math.sqrt(max(q0 / n0 - mean * mean, 0.0)), SD_FLOOR)
         z = x / (sd * math.sqrt(1 / k + RHO_REG * (1 - 1 / k)))
         e["g"] = max(0.0, e["g"] - z - K)
         if e["g"] > H:
-            rep = e.get("rep", 0) + 1 if e.get("rel") and ctx.sessions_between(e["rel"], day) <= REPEAT_WINDOW else 0
+            quick = bool(e.get("rel")) and ctx.sessions_between(e["rel"], day) <= REPEAT_WINDOW
+            rep = e.get("rep", 0) + 1 if quick else 0
             e["rep"] = rep
             e["P"] = {"since": day, "n": 0, "ses": 0, "sm": 0.0, "mult": 2 if rep == 1 else 1, "owner": rep >= 2}
             self._event(day, sid, "demoted", {"g": round(e["g"], 2), "repeat": rep, "owner_release": rep >= 2})
             if len(self.follow) < FOLLOW_MAX:
                 self.follow.append({"sid": sid, "struct": ctx.struct(sid), "hold": ctx.hold(sid), "day": day, "own": [0, 0.0], "ctrl": {}})
+            else:
+                self.counts["unmeasured"] += 1
 
     def owner_release(self, sid: str, day: str) -> bool:
         """The owner's release (the only way out after a third demotion)."""
@@ -113,8 +139,11 @@ class Probation:
         return True
 
     def _event(self, day, sid, kind, detail) -> None:
+        self.ver += 1
+        self.pver += 1
+        self.counts[kind] = self.counts.get(kind, 0) + 1
         self.events.append([day, sid, kind, detail])
-        del self.events[:-EVENTS_MAX]
+        del self.events[:-EVENTS_SHOWN]
 
     # ---- the hit rate (measured, monthly; the review is descriptive) ------------------------------------------------------------------------------------
     def _follow(self, sid: str, r: float, day: str, ctx: Ctx) -> None:
@@ -125,51 +154,49 @@ class Probation:
                 f["own"][0] += 1
                 f["own"][1] += r
             elif ctx.struct(sid) == f["struct"] and not self.blocked(sid):
-                if sid not in f["ctrl"] and len(f["ctrl"]) >= CTRL_MAX:
-                    f["capped"] = True
-                    continue
                 c = f["ctrl"].setdefault(sid, [0, 0.0])
                 c[0] += 1
                 c[1] += r
 
     def _close_follows(self, today: str, ctx: Ctx) -> None:
         keep = []
+        if self.follow:
+            self.ver += 1
         for f in self.follow:
             if ctx.sessions_between(f["day"], today) <= HIT_HORIZON_SESSIONS:
                 keep.append(f)
                 continue
             ctrl = [s / n for n, s in f["ctrl"].values() if n > 0]
-            diff = (f["own"][1] / f["own"][0] - sum(ctrl) / len(ctrl)) if f["own"][0] > 0 and ctrl else None
-            self.hits.append([f["day"], f["sid"], f["hold"], None if diff is None else round(diff, 4)])
-            self.capped += 1 if f.get("capped") else 0
-            del self.hits[:-HITS_MAX]
+            h = self.hits.setdefault(f["day"], {}).setdefault(f["hold"] or "?", [0, 0.0, 0])
+            if f["own"][0] > 0 and ctrl:
+                h[0] += 1
+                h[1] += f["own"][1] / f["own"][0] - sum(ctrl) / len(ctrl)
+            else:
+                h[2] += 1                                                               # nothing to compare: excluded, and counted
         self.follow = keep
 
     def report(self, today: str | None = None, sessions_between=None) -> dict:
         """Aggregates only (counts, shares, means): what may be published (the spec's `publication`). Per strategy, it stays on the relay."""
         on = [sid for sid, e in self.st.items() if e.get("P")]
-        dem = [e for e in self.events if e[2] == "demoted"]
-        rel = [e for e in self.events if e[2] == "released"]
-        night = [h for h in self.hits if h[2] == "overnight"]
-        used = [h for h in night if h[3] is not None]
-        review = {"demotions": len(used), "excluded": len(night) - len(used), "status": "INSUFFICIENT"}
-        if len(used) >= REVIEW_MIN_DEMOTIONS:
-            by: dict[str, list] = {}
-            for h in used:
-                by.setdefault(h[0], []).append(h[3])
-            mean = sum(h[3] for h in used) / len(used)
-            G = len(by)
-            resid = [sum(v) - mean * len(v) for v in by.values()]
-            se = math.sqrt(G / (G - 1) * sum(x * x for x in resid)) / len(used) if G > 1 else float("inf")
+        by = {d: v["overnight"] for d, v in self.hits.items() if "overnight" in v}
+        n = sum(v[0] for v in by.values())
+        review = {"demotions": n, "excluded": sum(v[2] for v in by.values()), "status": "INSUFFICIENT"}
+        if n >= REVIEW_MIN_DEMOTIONS:
+            mean = sum(v[1] for v in by.values()) / n
+            groups = [v for v in by.values() if v[0]]
+            G = len(groups)
+            resid = [v[1] - mean * v[0] for v in groups]                                 # each starting session's sum, about the mean: the clustered spread
+            se = math.sqrt(G / (G - 1) * sum(x * x for x in resid)) / n if G > 1 else float("inf")
             upper = mean + REVIEW_Z * se
             review.update({"mean_diff": round(mean, 4), "upper90": round(upper, 4) if math.isfinite(upper) else None, "clusters": G,
                            "status": "WORKING" if upper < 0 else "NOT WORKING (the owner decides)"})
         due = None
         if today and self.first_day and sessions_between:
-            n = sessions_between(self.first_day, today)
-            due = n >= REVIEW_FIRST_SESSIONS and (n - REVIEW_FIRST_SESSIONS) % REVIEW_ROLL_SESSIONS == 0
+            k = sessions_between(self.first_day, today)
+            due = k >= REVIEW_FIRST_SESSIONS and (k - REVIEW_FIRST_SESSIONS) % REVIEW_ROLL_SESSIONS == 0
         return {"watched": len(self.st), "in_probation": len(on), "owner_only": sum(1 for sid in on if self.st[sid]["P"]["owner"]),
-                "demotions": len(dem), "releases": len(rel), "review": review, "review_due": due, "left_out": self.left_out, "control_capped": self.capped}
+                "demotions": self.counts.get("demoted", 0), "releases": self.counts.get("released", 0), "unmeasured": self.counts.get("unmeasured", 0),
+                "open_windows": len(self.follow), "review": review, "review_due": due, "left_out": self.left_out}
 
     def listing(self, top: int = 12) -> list[dict]:
         """For the private app panel: the strategies in probation now, longest first."""
@@ -178,10 +205,14 @@ class Probation:
         rows.sort(key=lambda r: r["since"])
         return rows[:top]
 
-    # ---- kept with the private strategy record ----------------------------------------------------------------------------------------------------
-    def export(self, max_g: int | None = None) -> dict:
-        """The state as the record keeps it. Probation states, pending sessions and the measurement are always kept; g values are kept largest first,
-        `max_g` of them when the record must shrink (the rest read back as zero, which only delays a demotion)."""
+    # ---- kept on the relay: what decides, what is measured, and the backstop ------------------------------------------------------------------------------
+    def pset(self) -> dict:
+        """Who is in probation, as small as it can be: kept with the strategy record, so losing the shadow book can never release a strategy."""
+        return {sid: [e["P"]["since"], e["P"]["mult"], e["P"]["owner"]] for sid, e in self.st.items() if e.get("P")}
+
+    def decision(self, max_g: int | None = None, pend: bool = True) -> dict:
+        """The state that decides. g values are kept largest first, `max_g` of them when the store must shrink (the rest read back as zero, which only delays a
+        demotion); without `pend` a session not yet applied is left out (it is then skipped, which also only delays). Probation states are always kept."""
         gs = sorted(((sid, round(e["g"], G_DECIMALS)) for sid, e in self.st.items() if round(e["g"], G_DECIMALS) > 0), key=lambda kv: -kv[1])
         keep_g = dict(gs if max_g is None else gs[:max_g])
         self.left_out = len(gs) - len(keep_g)
@@ -190,7 +221,7 @@ class Probation:
             row = {}
             if sid in keep_g:
                 row["g"] = keep_g[sid]
-            if e.get("pend"):
+            if pend and e.get("pend"):
                 row["p"] = [e["pend"][0], e["pend"][1], round(e["pend"][2], 4), round(e["pend"][3], 4)]
             if e.get("P"):
                 row["P"] = {**e["P"], "sm": round(e["P"]["sm"], 4)}
@@ -200,54 +231,73 @@ class Probation:
                 row["k"] = e["rep"]
             if row:
                 st[sid] = row
-        return {"st": st, "ev": self.events, "fo": self.follow, "hi": self.hits, "f0": self.first_day, "cc": self.capped}
+        return {"st": st, "f0": self.first_day, "g_total": len(gs)}
 
-    def restore(self, d, known) -> int:
-        """Read back validated (storage is not trusted): unknown strategies, bad dates and bad numbers are dropped. `known(sid)`: a strategy in the catalogue."""
+    def measurement(self) -> dict:
+        return {"ev": self.events, "n": dict(self.counts), "hi": {d: {h: [v[0], round(v[1], 4), v[2]] for h, v in hv.items()} for d, hv in self.hits.items()},
+                "fo": [{**f, "own": [f["own"][0], round(f["own"][1], 4)], "ctrl": {k: [v[0], round(v[1], 4)] for k, v in f["ctrl"].items()}} for f in self.follow]}
+
+    def restore(self, decision, measurement, pset, known) -> int:
+        """Read back validated, row by row (storage is not trusted). Whatever is in `pset` (the record's list) is in probation whatever the rest says: a
+        probation can only be lost by the owner's release. `known(sid)`: a strategy in the catalogue."""
         self.__init__()
-        if not isinstance(d, dict):
-            return 0
-        fin = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)     # noqa: E731
-        day = lambda x: isinstance(x, str) and bool(DAY.match(x))                                          # noqa: E731
-        for sid, row in (d.get("st") or {}).items() if isinstance(d.get("st"), dict) else ():
-            if not (isinstance(sid, str) and known(sid) and isinstance(row, dict)):
+        d = decision if isinstance(decision, dict) else {}
+        rows = d.get("st") if isinstance(d.get("st"), dict) else {}
+        for sid, row in rows.items():
+            try:
+                if not (isinstance(sid, str) and known(sid) and isinstance(row, dict)):
+                    continue
+                e = {"g": 0.0, "pend": None, "P": None, "rel": None, "rep": 0}
+                if _fin(row.get("g")) and 0 <= row["g"] <= 1e6:
+                    e["g"] = float(row["g"])
+                p = row.get("p")
+                if isinstance(p, list) and len(p) == 4 and is_day(p[0]) and _int(p[1], 1) and _fin(p[2]) and _fin(p[3]) and p[3] >= 0:
+                    e["pend"] = [p[0], p[1], float(p[2]), float(p[3])]
+                P = row.get("P")
+                if (isinstance(P, dict) and is_day(P.get("since")) and _int(P.get("n")) and _int(P.get("ses")) and _fin(P.get("sm"))
+                        and P.get("mult") in (1, 2) and isinstance(P.get("owner"), bool)):
+                    e["P"] = {"since": P["since"], "n": P["n"], "ses": P["ses"], "sm": float(P["sm"]), "mult": P["mult"], "owner": P["owner"]}
+                elif P is not None:
+                    e["P"] = {"since": "1970-01-01", "n": 0, "ses": 0, "sm": 0.0, "mult": 1, "owner": True}   # unreadable: still a probation, the owner's
+                if is_day(row.get("r")):
+                    e["rel"] = row["r"]
+                if _int(row.get("k")) and row["k"] <= 10:
+                    e["rep"] = row["k"]
+                self.st[sid] = e
+            except Exception:                                                           # noqa: BLE001 - one bad row costs only itself
                 continue
-            e = {"g": 0.0, "pend": None, "P": None, "rel": None, "rep": 0}
-            if fin(row.get("g")) and 0 <= row["g"] <= 1e6:
-                e["g"] = float(row["g"])
-            p = row.get("p")
-            if isinstance(p, list) and len(p) == 4 and day(p[0]) and isinstance(p[1], int) and not isinstance(p[1], bool) and p[1] > 0 and fin(p[2]) and fin(p[3]):
-                e["pend"] = [p[0], p[1], float(p[2]), float(p[3])]
-            P = row.get("P")
-            if (isinstance(P, dict) and day(P.get("since")) and all(isinstance(P.get(x), int) and not isinstance(P.get(x), bool) and P[x] >= 0 for x in ("n", "ses"))
-                    and fin(P.get("sm")) and P.get("mult") in (1, 2) and isinstance(P.get("owner"), bool)):
-                e["P"] = {"since": P["since"], "n": P["n"], "ses": P["ses"], "sm": float(P["sm"]), "mult": P["mult"], "owner": P["owner"]}
-            elif P is not None:
-                e["P"] = {"since": "1970-01-01", "n": 0, "ses": 0, "sm": 0.0, "mult": 1, "owner": True}   # a probation that cannot be read stays a probation, the owner's
-            if day(row.get("r")):
-                e["rel"] = row["r"]
-            if isinstance(row.get("k"), int) and not isinstance(row["k"], bool) and 0 <= row["k"] <= 10:
-                e["rep"] = row["k"]
-            self.st[sid] = e
-        for ev in d.get("ev") or [] if isinstance(d.get("ev"), list) else []:
-            if isinstance(ev, list) and len(ev) == 4 and day(ev[0]) and isinstance(ev[1], str) and ev[2] in ("demoted", "released") and isinstance(ev[3], dict):
-                self.events.append(ev)
-        self.events = self.events[-EVENTS_MAX:]
-        for f in d.get("fo") or [] if isinstance(d.get("fo"), list) else []:
-            if (isinstance(f, dict) and isinstance(f.get("sid"), str) and known(f["sid"]) and isinstance(f.get("struct"), str) and isinstance(f.get("hold"), str)
-                    and day(f.get("day")) and isinstance(f.get("own"), list) and len(f["own"]) == 2 and isinstance(f.get("ctrl"), dict)):
-                ctrl = {k: [int(v[0]), float(v[1])] for k, v in f["ctrl"].items()
-                        if isinstance(k, str) and isinstance(v, list) and len(v) == 2 and isinstance(v[0], int) and not isinstance(v[0], bool) and fin(v[1])}
-                if isinstance(f["own"][0], int) and fin(f["own"][1]):
-                    self.follow.append({"sid": f["sid"], "struct": f["struct"], "hold": f["hold"], "day": f["day"], "own": [int(f["own"][0]), float(f["own"][1])],
-                                        "ctrl": dict(list(ctrl.items())[:CTRL_MAX]), **({"capped": True} if f.get("capped") is True else {})})
-        self.follow = self.follow[:FOLLOW_MAX]
-        for h in d.get("hi") or [] if isinstance(d.get("hi"), list) else []:
-            if isinstance(h, list) and len(h) == 4 and day(h[0]) and isinstance(h[1], str) and isinstance(h[2], str) and (h[3] is None or fin(h[3])):
-                self.hits.append(h)
-        self.hits = self.hits[-HITS_MAX:]
-        if day(d.get("f0")):
+        if is_day(d.get("f0")):
             self.first_day = d["f0"]
-        if isinstance(d.get("cc"), int) and not isinstance(d["cc"], bool) and d["cc"] >= 0:
-            self.capped = d["cc"]
+        for sid, v in (pset.items() if isinstance(pset, dict) else ()):             # the backstop: in probation whatever the book said
+            if not (isinstance(sid, str) and known(sid)):
+                continue
+            e = self.st.setdefault(sid, {"g": 0.0, "pend": None, "P": None, "rel": None, "rep": 0})
+            if not e.get("P"):
+                ok = isinstance(v, list) and len(v) == 3 and is_day(v[0]) and v[1] in (1, 2) and isinstance(v[2], bool)
+                e["P"] = {"since": v[0] if ok else "1970-01-01", "n": 0, "ses": 0, "sm": 0.0, "mult": v[1] if ok else 1, "owner": v[2] if ok else True}
+        m = measurement if isinstance(measurement, dict) else {}
+        for ev in m.get("ev") if isinstance(m.get("ev"), list) else []:
+            if isinstance(ev, list) and len(ev) == 4 and is_day(ev[0]) and isinstance(ev[1], str) and ev[2] in ("demoted", "released") and isinstance(ev[3], dict):
+                self.events.append(ev)
+        self.events = self.events[-EVENTS_SHOWN:]
+        if isinstance(m.get("n"), dict):
+            for k in self.counts:
+                if _int(m["n"].get(k)):
+                    self.counts[k] = m["n"][k]
+        for f in m.get("fo") if isinstance(m.get("fo"), list) else []:
+            try:
+                if not (isinstance(f, dict) and isinstance(f.get("sid"), str) and known(f["sid"]) and isinstance(f.get("struct"), str)
+                        and isinstance(f.get("hold"), str) and is_day(f.get("day")) and isinstance(f.get("own"), list) and len(f["own"]) == 2
+                        and _int(f["own"][0]) and _fin(f["own"][1]) and isinstance(f.get("ctrl"), dict)):
+                    continue
+                ctrl = {k: [v[0], float(v[1])] for k, v in f["ctrl"].items() if isinstance(k, str) and isinstance(v, list) and len(v) == 2 and _int(v[0]) and _fin(v[1])}
+                self.follow.append({"sid": f["sid"], "struct": f["struct"], "hold": f["hold"], "day": f["day"], "own": [f["own"][0], float(f["own"][1])], "ctrl": ctrl})
+            except Exception:                                                           # noqa: BLE001
+                continue
+        self.follow = self.follow[:FOLLOW_MAX]
+        for day, hv in (m.get("hi").items() if isinstance(m.get("hi"), dict) else ()):
+            if is_day(day) and isinstance(hv, dict):
+                for hold, v in hv.items():
+                    if isinstance(hold, str) and isinstance(v, list) and len(v) == 3 and _int(v[0]) and _fin(v[1]) and _int(v[2]):
+                        self.hits.setdefault(day, {})[hold] = [v[0], float(v[1]), v[2]]
         return len(self.st)

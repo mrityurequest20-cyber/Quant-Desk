@@ -16,13 +16,20 @@ WINDOW_S = {"read": 900, "news": 3600}
 MIN_MOVE = 0.001
 ALPHA, MIN_VOTES, MUTE_BELOW, UNMUTE_AT = 0.02, 50, 0.50, 0.53
 MODELS = tuple(WINDOW_S)
-MAX_KEYS = 400
+MAX_KEYS = 120                                # two models by the desk's instruments
+RESOLVE_TOL_S = 300                           # a vote is judged at its window's end: within this of it, the same IST day, or it has no outcome
+IST_OFFSET_S = 19800
+
+
+def _ist_day(t: float) -> int:
+    return int((t + IST_OFFSET_S) // 86400)
 
 
 class VoteWatch:
     def __init__(self):
         self.k: dict[str, dict] = {}         # "model|u" -> {"n", "first", "ew", "up", "muted", "pend": [t, dir, price] | None, "free": t}
         self.decided: str | None = None      # the IST day the mutes were last decided for
+        self.ver = 0                         # bumped on every change
 
     @staticmethod
     def _key(model: str, u: str) -> str:
@@ -40,14 +47,19 @@ class VoteWatch:
             e = self.k[key] = {"n": 0, "first": 0.0, "ew": None, "up": 0, "muted": False, "pend": None, "free": 0.0}
         w = WINDOW_S[model]
         if e["pend"] and t - e["pend"][0] >= w:
+            self.ver += 1
             t0, d, px0 = e["pend"]
             e["pend"], e["free"] = None, t0 + w
-            mv = price / px0 - 1
-            if abs(mv) >= MIN_MOVE:
-                e["up"] += 1 if mv > 0 else 0
-                self._score(e, 1.0 if (mv > 0) == (d > 0) else 0.0)
+            if t - (t0 + w) > RESOLVE_TOL_S or _ist_day(t) != _ist_day(t0):
+                e["late"] = e.get("late", 0) + 1                                        # not seen at its window's end (a gap, the close): no outcome
+            else:
+                mv = price / px0 - 1
+                if abs(mv) >= MIN_MOVE:
+                    e["up"] += 1 if mv > 0 else 0
+                    self._score(e, 1.0 if (mv > 0) == (d > 0) else 0.0)
         if p is not None and e["pend"] is None and t >= e["free"] and (p >= VOTE_P or p <= 1 - VOTE_P):
             e["pend"] = [t, 1 if p >= VOTE_P else -1, float(price)]
+            self.ver += 1
 
     @staticmethod
     def _score(e: dict, y: float) -> None:
@@ -63,6 +75,7 @@ class VoteWatch:
         """Once a session: the mutes for the session ahead, from the scores so far."""
         if self.decided == day:
             return
+        self.ver += 1
         for e in self.k.values():
             if e["n"] >= MIN_VOTES and e["ew"] is not None:
                 e["muted"] = e["ew"] < UNMUTE_AT if e["muted"] else e["ew"] < MUTE_BELOW

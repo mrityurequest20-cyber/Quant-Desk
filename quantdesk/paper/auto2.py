@@ -782,9 +782,14 @@ class AutoPilotV2:
         self.probation = PB.Probation()
         self.votes = VW.VoteWatch()
         self.pb_ctx = PB.Ctx(stats=lambda sid: self.lab.stats.get(sid), min_trades=lambda sid: self.lab.min_trades(BY_SID[sid]),
-                             sessions_between=lambda a, b: self._trading_days_to(dt.date.fromisoformat(a), dt.date.fromisoformat(b)),
+                             sessions_between=lambda a, b: self.cal.trading_days_between(dt.date.fromisoformat(a), dt.date.fromisoformat(b)),
                              struct=lambda sid: BY_SID[sid].struct if sid in BY_SID else None, hold=lambda sid: BY_SID[sid].hold if sid in BY_SID else None,
                              watched=lambda sid: sid in BY_SID and not CX.is_convex(BY_SID[sid].struct))
+        self.p2x: dict = {"stop": {}, "days": [], "carry_missing": [], "errors": 0}      # phase 2's own record: agreements a mute stopped, sessions run, outages
+        self._p2x_ver = 0
+        self._p2_book_ver = None                   # the phase 2 versions the last kept book / record carried
+        self._p2_rec_ver = None
+        self._p2_book = None                       # phase 2's state as the book read back carried it (None: not read, or older than the record)
 
     def strategies(self) -> list[Strategy]:
         """Everything it may trade: the written catalogue, what the inventor has written (inventor.py), and the futures strategies (MCX and currency only)."""
@@ -902,9 +907,9 @@ class AutoPilotV2:
         mom = self._momentum(u, t)
         nv, nwhy, nf = self.news_vote(news, u, t, sp)
         read = self.read(snap, u, ch, t, sp, near, nxt, T, ist)
-        self.votes.decide(ist.date().isoformat())                                       # once a session, for the session ahead
-        self.votes.observe("read", u, t, (read or {}).get("p_up"), sp)
-        self.votes.observe("news", u, t, nf["p_up"] if nf and nf.get("vote") else None, sp)
+        self._p2(lambda: self.votes.decide(ist.date().isoformat()))                     # once a session, for the session ahead
+        self._p2(lambda: self.votes.observe("read", u, t, (read or {}).get("p_up"), sp))
+        self._p2(lambda: self.votes.observe("news", u, t, nf["p_up"] if nf and nf.get("vote") else None, sp))
         if not hasattr(self, "regimes"):
             self.regimes = RG.RegimeBook()
         self.regimes.update(u, t, sp)                                                      # the HMM regime and the CUSUM change points (regimes.py)
@@ -920,9 +925,11 @@ class AutoPilotV2:
                                        ("price", tv or mv),                                     # the owner, 14 Nov 2026: price counts as ONE reading, however it is read
                                        ("news", nv), ("read", (read or {}).get("vote") or 0)) if v]
         votes = [v for _, v in labeled]
-        support = [v for k, v in labeled if not self.votes.muted(k, u)]                         # a muted model's vote supports nothing (evolution_probation_v1, C)
+        support = [v for k, v in labeled if not self._muted(k, u)]                              # a muted model's vote supports nothing (evolution_probation_v1, C)
         agree = support[0] if len(support) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0     # a strong live direction: the plan's bar; any reading against, muted or not, stops it
-        strong = agree if nv == agree and not self.votes.muted("news", u) else 0               # the news among them: the news exception's bar
+        if not agree and len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1:
+            self._p2_note("live", u, ist.date().isoformat())                            # an agreement there would have been without the mute
+        strong = agree if nv == agree and not self._muted("news", u) else 0                    # the news among them: the news exception's bar
         if not hasattr(self, "agree_since"):
             self.agree_since, self.read_base = {}, {}
         prev = self.agree_since.get(u)
@@ -943,7 +950,7 @@ class AutoPilotV2:
             why = list(why) + [rwhy]
         st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt, "read": read,
               "regime": regime, "hmm": rg, "today": ist.date(), "strong": "up" if strong > 0 else "down" if strong < 0 else None, "votes": len(votes),
-              "agree": "up" if agree > 0 else "down" if agree < 0 else None, "sources": [k for k, _ in labeled if not self.votes.muted(k, u)]}
+              "agree": "up" if agree > 0 else "down" if agree < 0 else None, "sources": [k for k, _ in labeled if not self._muted(k, u)]}
         st["cx"] = self.convex_edges(snap, u, ch, st, ist, news, rg, read, T)
         self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items()
                               if k not in ("why", "read", "hmm", "today", "cx", "strong", "votes", "agree", "sources")}
@@ -1400,8 +1407,34 @@ class AutoPilotV2:
         return None
 
     # ---- the shadow book --------------------------------------------------------------------------------------------------------------------
+    def _p2(self, fn, default=None):
+        """A phase 2 step that can never cost a cycle: on any error it is skipped, counted, and the desk runs as it would without phase 2."""
+        try:
+            return fn()
+        except Exception:                                                               # noqa: BLE001
+            self.p2x["errors"] = self.p2x.get("errors", 0) + 1
+            self._p2x_ver += 1
+            return default
+
+    def _muted(self, model: str, u: str) -> bool:
+        return bool(self._p2(lambda: self.votes.muted(model, u), False))
+
+    def _p2_note(self, kind: str, u: str, day: str) -> None:
+        """An agreement (live) or a planned direction (plan) the vote watch's mute stopped: kept per session, at most once per instrument."""
+        d = self.p2x["stop"].setdefault(day, {})
+        if u not in d.setdefault(kind, []):
+            d[kind].append(u)
+            self._p2x_ver += 1
+            for old in sorted(self.p2x["stop"])[:-400]:
+                self.p2x["stop"].pop(old, None)
+
     def shadow_step(self, snap, states: dict, ch, now: dt.datetime) -> None:
         t, ist = now.timestamp(), now.astimezone(IST)
+        day = ist.date().isoformat()
+        if not self.p2x["days"] or self.p2x["days"][-1] != day:
+            if day not in self.p2x["days"]:
+                self.p2x["days"] = (self.p2x["days"] + [day])[-500:]                    # the sessions the runner ran (the report's outage list)
+                self._p2x_ver += 1
         for key, sh in list(self.shadow.items()):                                       # exits first
             v = self.mark(snap, sh["legs"])
             if v is None:
@@ -1419,7 +1452,7 @@ class AutoPilotV2:
                 if act:
                     self.shadow_dirty = True
                 if total is not None:
-                    self.probation.close(sh["s"].sid, clamp_r(sh["s"].sid, total), ist.date().isoformat(), self.pb_ctx)
+                    self._p2(lambda: self.probation.close(sh["s"].sid, clamp_r(sh["s"].sid, total), ist.date().isoformat(), self.pb_ctx))
                     self.lab.add(sh["s"].sid, total)
                     self.lab.tag(sh["s"].sid, self.market_key(ist), total, key[1], ist.date().isoformat())
                     self.shadow.pop(key)
@@ -1428,7 +1461,7 @@ class AutoPilotV2:
                 continue
             why = self._exit_why(sh["s"], r, sh["best_r"], sh["opened"], ist, sh["exp"], key[1], sh.get("spot0"), sh.get("sd0"), (states.get(key[1]) or {}).get("spot"))
             if why:
-                self.probation.close(sh["s"].sid, clamp_r(sh["s"].sid, r), ist.date().isoformat(), self.pb_ctx)
+                self._p2(lambda: self.probation.close(sh["s"].sid, clamp_r(sh["s"].sid, r), ist.date().isoformat(), self.pb_ctx))
                 self.lab.add(sh["s"].sid, r)
                 self.lab.tag(sh["s"].sid, self.market_key(ist), r, key[1], ist.date().isoformat())
                 self.shadow.pop(key)
@@ -1540,8 +1573,10 @@ class AutoPilotV2:
         if nv:
             votes.append(nv)
             why.append(nwhy or "news")
-        support = len(votes) - (1 if nv and self.votes.muted("news", u) else 0)            # a muted news vote supports nothing; it still opposes, and is still a reading
+        support = len(votes) - (1 if nv and self._muted("news", u) else 0)               # a muted news vote supports nothing; it still opposes, and is still a reading
         d = votes[0] if support >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0         # a strong direction only: PLAN_DIR_VOTES agreeing readings, none against
+        if not d and len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1:
+            self._p2_note("plan", u, now.astimezone(IST).date().isoformat())
         view = "up" if d > 0 else "down" if d < 0 else ("flat" if not votes and (over is None or abs(over) < OVERNIGHT_TH_PCT / 2) else None)
         if votes and not d:
             why.append(f"no planned direction: {len(votes)} reading{'s' if len(votes) > 1 else ''} ({'agreeing' if len(set(votes)) == 1 else 'split'}); "
@@ -1560,8 +1595,8 @@ class AutoPilotV2:
         """The day plan: for each underlying, the defined-risk strategies whose pre-open context holds and whose reward to risk is PLAN_MIN_RR or better, priced on the
         closing books; ranked proven first, then by the measured expectancy, then by reward to risk. What the open will look for, with every reason written down."""
         ist = now.astimezone(IST)
-        self.probation.flush(ist.date().isoformat(), self.pb_ctx)                       # every session that is over is applied before the plan (the spec's "when")
-        self.votes.decide(ist.date().isoformat())
+        self._p2(lambda: self.probation.flush(ist.date().isoformat(), self.pb_ctx))     # every session that is over is applied before the plan (the spec's "when")
+        self._p2(lambda: self.votes.decide(ist.date().isoformat()))
         b = self.brief if isinstance(self.brief, dict) else {}
         cs = self.close_snap(snap)
         ch = V1.chains(cs, self.und, self.lots)
@@ -2122,20 +2157,50 @@ class AutoPilotV2:
                             "event_at": sh.get("event_at") if isinstance(sh.get("event_at"), str) else None})
             rows.append(row)
 
-        def packed(k: int) -> str:
-            body = json.dumps({"v": 1, "seq": int(seq), "open": rows[:k]}, separators=(",", ":"), default=str)
+        def p2(level: int, max_g=None) -> dict | None:
+            """Phase 2's state in the book. Shed in this order when the book must shrink: what is measured, then the smallest g, then the sessions not yet
+            applied (both only delay a demotion), and only then open trades. Who is in probation is always kept (and is in the record too)."""
+            try:
+                blob = {"d": self.probation.decision(max_g=max_g if level >= 2 else None, pend=level < 3), "vw": self.votes.export()}
+                if level < 1:
+                    blob["m"] = {"pb": self.probation.measurement(), "x": self.p2x}
+                return blob
+            except Exception:                                                           # noqa: BLE001 - phase 2 never costs the book
+                return None
+
+        def packed(k: int, blob) -> str:
+            body = json.dumps({"v": 1, "seq": int(seq), "open": rows[:k], "p2": blob}, separators=(",", ":"), default=str)
             return json.dumps({"v": 1, "open": [], "z": base64.b64encode(zlib.compress(body.encode("ascii"), 9)).decode("ascii")}, separators=(",", ":"))
-        text = packed(len(rows))
+        self.shadow_io["p2_shed"] = 0
+        for level in (0, 1):
+            text = packed(len(rows), p2(level))
+            if len(text) <= SHADOW_MAX_CHARS:
+                self.shadow_io["p2_shed"] = level
+                return text, 0
+        g_total = (p2(2) or {}).get("d", {}).get("g_total", 0)
+        lo, hi = -1, g_total                                                            # the most g that fit beside every open trade
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(packed(len(rows), p2(2, mid))) <= SHADOW_MAX_CHARS:
+                lo = mid
+            else:
+                hi = mid - 1
+        if lo >= 0:
+            self.shadow_io["p2_shed"] = 2
+            return packed(len(rows), p2(2, lo)), 0
+        self.shadow_io["p2_shed"] = 3
+        blob = p2(3, 0)
+        text = packed(len(rows), blob)
         if len(text) <= SHADOW_MAX_CHARS:
             return text, 0
         lo, hi = 0, len(rows)
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            if len(packed(mid)) <= SHADOW_MAX_CHARS:
+            if len(packed(mid, blob)) <= SHADOW_MAX_CHARS:
                 lo = mid
             else:
                 hi = mid - 1
-        return packed(lo), len(rows) - lo
+        return packed(lo, blob), len(rows) - lo
 
     def restore_shadow(self, text, now: dt.datetime) -> dict:
         """The open shadow book read back (storage is not trusted: every field is checked). A day trade from an earlier session, a trade past its expiry, an unknown
@@ -2149,10 +2214,11 @@ class AutoPilotV2:
         seq = got.get("seq", 0)
         seq = seq if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0 else -1
         self.shadow_seq = max(self.shadow_seq, seq, self.lab_shadow_seq)
+        self._p2_book = got.get("p2") if isinstance(got.get("p2"), dict) else None
         if seq < self.lab_shadow_seq:                                                   # older than the record: some of its trades may be scored already
             if rows:
                 dropped["older than the record"] = len(rows)
-            rows = []
+            rows, self._p2_book = [], None
         ist, und = now.astimezone(IST), {str(u).upper() for u in self.und}
         fin = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)     # noqa: E731
         for row in rows:
@@ -2223,12 +2289,7 @@ class AutoPilotV2:
             cx = got.get("cx")
             self.cx_peak = {str(k): float(v) for k, v in cx.items() if isinstance(v, (int, float)) and math.isfinite(v)} if isinstance(cx, dict) else {}
             self.day_plan = self.restore_plan(got.get("plan")) or self.day_plan          # a restart after 09:15 keeps today's plan (yesterday's is dropped as always)
-            try:
-                self.probation.restore(got.get("pb"), lambda sid: sid in BY_SID)
-                self.votes.restore(got.get("vw"))
-                self.probation.flush((now or dt.datetime.now(IST)).astimezone(IST).date().isoformat(), self.pb_ctx)
-            except Exception:                                                           # noqa: BLE001 - a bad phase 2 state starts empty; it never costs the record
-                self.probation, self.votes = PB.Probation(), VW.VoteWatch()
+            self._rec_p2 = (got.get("pbP"), got.get("vw"))
             ss = got.get("shadow_seq", 0)
             self.lab_shadow_seq = ss if isinstance(ss, int) and not isinstance(ss, bool) and ss >= 0 else 0
             if hasattr(self, "reader"):
@@ -2237,13 +2298,50 @@ class AutoPilotV2:
                 self.lab.restore_tags(got.get("reg"), got.get("recent"))                 # last, and on its own: a bad tag never costs the trail peaks or the plan
             except Exception:                                                           # noqa: BLE001
                 self.lab.reg, self.lab.recent = {}, []
-            return f"{len(self.lab.stats)} strategies with a record" + self._load_shadow(relay, now)
+            msg = f"{len(self.lab.stats)} strategies with a record" + self._load_shadow(relay, now)
         except Exception as e:                                                          # noqa: BLE001 - no record means starting from zero, never not trading
-            return f"no record could be read ({type(e).__name__}): starting from zero" + self._load_shadow(relay, now)
+            msg = f"no record could be read ({type(e).__name__}): starting from zero" + self._load_shadow(relay, now)
+        self._restore_p2(now)
+        return msg
+
+    def _restore_p2(self, now: dt.datetime | None) -> None:
+        """Phase 2's state: from the book when it was read and is not older than the record; who is in probation from the record whatever the book said (a
+        probation is only ever lost by the owner's release); the vote watch from the book, else the record. Validated row by row; it never costs the load."""
+        pset, rec_vw = getattr(self, "_rec_p2", (None, None))
+        b = self._p2_book if isinstance(self._p2_book, dict) else {}
+        m = b.get("m") if isinstance(b.get("m"), dict) else {}
+        known = lambda sid: sid in BY_SID                                               # noqa: E731
+        try:
+            self.probation.restore(b.get("d"), m.get("pb"), pset, known)
+        except Exception:                                                               # noqa: BLE001
+            self.probation = PB.Probation()
+            self._p2(lambda: self.probation.restore(None, None, pset, known))
+        try:
+            self.votes.restore(b["vw"] if isinstance(b.get("vw"), dict) else rec_vw)
+        except Exception:                                                               # noqa: BLE001
+            self.votes = VW.VoteWatch()
+            self._p2(lambda: self.votes.restore(rec_vw))
+        x = m.get("x") if isinstance(m.get("x"), dict) else {}
+        for key in ("days", "carry_missing"):
+            v = x.get(key)
+            if isinstance(v, list):
+                self.p2x[key] = [d for d in v if PB.is_day(d)][-500:]
+        if isinstance(x.get("stop"), dict):
+            self.p2x["stop"] = {d: {k: [u for u in us if isinstance(u, str)][:200] for k, us in v.items() if k in ("live", "plan") and isinstance(us, list)}
+                                for d, v in x["stop"].items() if PB.is_day(d) and isinstance(v, dict)}
+        if isinstance(x.get("errors"), int) and not isinstance(x["errors"], bool) and x["errors"] >= 0:
+            self.p2x["errors"] = x["errors"]
+        today = (now or dt.datetime.now(IST)).astimezone(IST).date().isoformat()
+        if not self._p2_book and getattr(self, "_book_expected", False) and today not in self.p2x["carry_missing"]:
+            self.p2x["carry_missing"].append(today)                                     # the forward rule's outage list: a session started without the carry
+        self._p2(lambda: self.probation.flush(today, self.pb_ctx))
+        self._p2_book_ver = self._p2_rec_ver = None
 
     def _load_shadow(self, relay, now: dt.datetime | None = None) -> str:
         self.shadow_seq = max(self.shadow_seq, self.lab_shadow_seq)                     # whatever the book's read does, stamps start above the record's
+        self._p2_book = None
         get = getattr(relay, "get_shadow", None)
+        self._book_expected = get is not None
         if get is None:
             return ""
         try:
@@ -2258,9 +2356,12 @@ class AutoPilotV2:
         """The open shadow book, then the record. The record is never kept ahead of the book: when it is due, an unsaved book goes first (whatever its own clock),
         and a book that could not be kept holds the record back. So a trade the record has scored is never still open in the book the next job reads: a job that
         ends badly can lose a trade, never count one twice (risk review of the carry, 14 Nov 2026)."""
-        p2 = json.dumps([self.probation.export(), self.votes.export()], sort_keys=True, default=str)
-        if p2 != getattr(self, "_p2_saved", None):
-            self.lab.dirty = True                                                       # phase 2's state changed: the record is due like any other change
+        book_ver = (self.probation.ver, self.votes.ver, self._p2x_ver)
+        if book_ver != self._p2_book_ver:
+            self.shadow_dirty = True                                                    # phase 2 rides with the book: the book is due
+        rec_ver = (self.probation.pver, self.votes.ver)
+        if rec_ver != self._p2_rec_ver:
+            self.lab.dirty = True                                                       # the record's backstop and vote watch changed
         lab_due = self.lab.dirty and (force or mono - self.lab_saved_at >= 120)
         shadow = self.save_shadow(relay, mono, force or lab_due)
         if not lab_due:
@@ -2278,17 +2379,18 @@ class AutoPilotV2:
                 extra["cx"] = {k: round(v, 3) for k, v in self.cx_peak.items()}
             if self.day_plan:
                 extra["plan"] = self.day_plan
-            extra["vw"] = self.votes.export()
-            max_g = None
-            while True:                                                                 # the smallest g go first, before any probation state and any strategy record
-                extra["pb"] = self.probation.export(max_g)
-                text = self.lab.to_json(extra)
-                gs = self.probation.left_out + sum(1 for e in extra["pb"]["st"].values() if "g" in e)
-                if self.lab.last_kept >= len(self.lab.stats) or gs == 0 or max_g == 0:
+            text = self.lab.to_json(extra or None)                                      # phase 2 never displaces a strategy record (risk review, 14 Nov 2026)
+            base_kept = self.lab.last_kept
+            p2 = {"pbP": self._p2(self.probation.pset, {}), "vw": self._p2(self.votes.export, None)}
+            for keep in (("pbP", "vw"), ("pbP",)):
+                cand = self.lab.to_json({**extra, **{k: p2[k] for k in keep if p2[k] is not None}})
+                if self.lab.last_kept >= base_kept:
+                    text = cand
                     break
-                max_g = (gs - self.probation.left_out) // 2 if max_g is None else max_g // 2
+            else:
+                self.p2x["record_left_out"] = self.p2x.get("record_left_out", 0) + 1     # even the backstop did not fit beside the records: the book still has it
             relay.put_lab(text)
-            self.lab.dirty, self.lab_saved_at, self._p2_saved = False, mono, p2
+            self.lab.dirty, self.lab_saved_at, self._p2_rec_ver = False, mono, rec_ver
             return True
         except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
             return False
@@ -2303,11 +2405,38 @@ class AutoPilotV2:
             put(text)
             self.shadow_dirty, self.shadow_saved_at, self.shadow_route = False, mono, True
             self.shadow_io["left_out"] = left_out
+            self._p2_book_ver = (self.probation.ver, self.votes.ver, self._p2x_ver)
             return True
         except Exception as e:                                                          # noqa: BLE001 - kept dirty: the next save tries again
             if "HTTP 404" in str(e):
                 self.shadow_route = False                                               # a relay without the route (before its Worker is deployed) keeps no book that
             return False                                                                # could be read back stale, so the record is not held back for it
+
+    def phase2_report(self) -> dict:
+        """Phase 2's monthly report, aggregates only (the spec's `publication`): the spec and its SHA-256, the runner's commit, probation and the vote watch,
+        the agreements and planned directions a mute stopped, the sessions run and the outages (the spec's `forward_rule`)."""
+        import hashlib
+        from pathlib import Path
+        spec = Path(__file__).resolve().parents[2] / "docs" / "prereg" / "evolution_probation_v1.json"
+        sha = hashlib.sha256(spec.read_bytes()).hexdigest() if spec.exists() else None
+        today = dt.datetime.now(IST).date()
+        ran = set(self.p2x.get("days") or [])
+        first = self.probation.first_day or (min(ran) if ran else None)
+        missing = []
+        if first:
+            d = dt.date.fromisoformat(first)
+            while d < today and len(missing) < 60:
+                if self.cal.is_trading_day(d) and d.isoformat() not in ran:
+                    missing.append(d.isoformat())
+                d += dt.timedelta(days=1)
+        stop = self.p2x.get("stop") or {}
+        v = self.votes.report()
+        return {"spec": "evolution_probation_v1", "spec_sha256": sha, "runner_commit": getattr(self, "runner_commit", None),
+                "probation": self.probation.report(today.isoformat(), self.pb_ctx.sessions_between),
+                "votes": {"muted": v.get("muted", 0), "decided": v.get("decided")},
+                "stopped": {"live": sum(len(x.get("live", [])) for x in stop.values()), "plan": sum(len(x.get("plan", [])) for x in stop.values())},
+                "sessions_run": len(ran), "outages": missing, "carry_missing": list(self.p2x.get("carry_missing") or [])[-60:],
+                "errors": self.p2x.get("errors", 0), "book_shed": self.shadow_io.get("p2_shed", 0), "record_left_out": self.p2x.get("record_left_out", 0)}
 
     def summary(self) -> dict:
         """For the app's Strategy lab panel: the record's leaders, today's counts, and each underlying's state now (compact: the runner's whole state must fit the relay's cap)."""
@@ -2327,9 +2456,10 @@ class AutoPilotV2:
         out["market"] = {"session": s(b.get("session"), 10), "key": s(fp.get("key"), 16), "label": s(fp.get("label"), 200), "since": s(fp.get("since"), 10)} if fp else None
         out["regimes"] = self.lab.by_regime()
         out["shadow_carry"] = dict(self.shadow_io)
-        today = dt.datetime.now(IST).date().isoformat()
-        out["probation"] = {**self.probation.report(today, self.pb_ctx.sessions_between), "list": self.probation.listing()}
-        out["votes"] = self.votes.report()
+        out["probation"] = {**(self._p2(lambda: self.probation.report(dt.datetime.now(IST).date().isoformat(), self.pb_ctx.sessions_between), {}) or {}),
+                            "list": self._p2(self.probation.listing, [])}
+        out["votes"] = self._p2(self.votes.report, {})
+        out["phase2"] = self._p2(self.phase2_report, {})
         out["convex"] = {**self.cx_status, "stake_pct": CX.STAKE_PCT, "budget_pct": CX.MONTH_BUDGET_PCT, "min_pooled": CX.MIN_POOLED, "min_own": CX.MIN_OWN,
                          "strategies": len(CX_CATALOGUE), "shadow_open": sum(1 for sid, _ in self.shadow if CX.is_convex(CX.sid_struct(sid))),
                          "now": {u: st["cx"] for u, st in sorted(self.last_state.items()) if st.get("cx") and (st["cx"][1] or st["cx"][0] is not None)}}
@@ -2337,4 +2467,9 @@ class AutoPilotV2:
             out["state"] = {u: [x if i not in (5, 6, 12) else "" for i, x in enumerate(v)] for u, v in state.items()}     # the reasons go first, the numbers stay
             if self.day_plan and len(json.dumps(out, separators=(",", ":"), default=str)) > SUMMARY_SOFT_MAX:
                 out["plan"] = {**self.day_plan, "items": [{k: v for k, v in i.items() if k not in ("what", "why", "catalysts")} for i in self.day_plan.get("items") or []]}
+        if len(json.dumps(out, separators=(",", ":"), default=str)) > SUMMARY_SOFT_MAX:          # then phase 2's detail (its counts stay)
+            if isinstance(out.get("votes"), dict):
+                out["votes"] = {k: v for k, v in out["votes"].items() if k != "models"}
+            if isinstance(out.get("probation"), dict):
+                out["probation"] = {k: v for k, v in out["probation"].items() if k != "list"}
         return out

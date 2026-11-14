@@ -164,7 +164,7 @@ def test_the_hit_rate_compares_with_the_family_and_excludes_a_window_with_nothin
     trade(pb, stats, "A", 1.0, DAYS[d], c)
     trade(pb, stats, "B", 0.0, DAYS[d], c)
     pb.flush(DAYS[d + PB.HIT_HORIZON_SESSIONS + 1], c)
-    assert pb.hits[-1] == [demoted_on, "S", "overnight", -1.5]                                 # -1 - mean(+1, 0): a mean of per-strategy means
+    assert pb.hits[demoted_on]["overnight"] == [1, pytest.approx(-1.5), 0]                    # -1 - mean(+1, 0): a mean of per-strategy means
     lone = PB.Probation()
     s2 = {}
     seed(s2, "S")
@@ -174,22 +174,22 @@ def test_the_hit_rate_compares_with_the_family_and_excludes_a_window_with_nothin
         dd += 1
         lone.flush(DAYS[dd], ctx(s2))
     lone.flush(DAYS[dd + 30], ctx(s2))
-    assert lone.hits[-1][3] is None and lone.report()["review"]["excluded"] == 1
+    assert lone.report()["review"]["excluded"] == 1 and lone.report()["review"]["demotions"] == 0
 
 
 def test_the_review_is_insufficient_under_twenty_demotions_and_the_report_names_no_strategy():
     pb = PB.Probation()
-    pb.hits = [[DAYS[i], f"S{i}", "overnight", -0.3] for i in range(19)]
+    pb.hits = {DAYS[i]: {"overnight": [1, -0.3, 0]} for i in range(19)}
     r = pb.report()
     assert r["review"]["status"] == "INSUFFICIENT"
-    pb.hits.append([DAYS[19], "S19", "overnight", -0.3])
-    pb.hits += [[DAYS[0], "D", "day", 5.0]]                                                    # day strategies are not the review's population
+    pb.hits[DAYS[19]] = {"overnight": [1, -0.3, 0], "day": [5, 25.0, 0]}                      # day strategies are not the review's population
+    pb.events = [[DAYS[0], "S1", "demoted", {}]]
     r = pb.report()
     assert r["review"]["demotions"] == 20 and r["review"]["status"] == "WORKING" and r["review"]["mean_diff"] == pytest.approx(-0.3)
     assert "S1" not in json.dumps(r)                                                           # aggregates only: what may be published
 
 
-def test_probation_state_round_trips_and_a_bad_one_is_dropped_or_held():
+def test_probation_state_round_trips_and_a_bad_one_costs_only_itself():
     stats = {}
     seed(stats, IC)
     c, pb = ctx(stats), PB.Probation()
@@ -199,18 +199,26 @@ def test_probation_state_round_trips_and_a_bad_one_is_dropped_or_held():
         d += 1
         pb.flush(DAYS[d], c)
     trade(pb, stats, IC, 0.5, DAYS[d], c)
+    known = lambda sid: sid in A2.BY_SID                                                       # noqa: E731
     back = PB.Probation()
-    back.restore(json.loads(json.dumps(pb.export())), lambda sid: sid in A2.BY_SID)
-    assert back.st[IC]["P"] == pb.st[IC]["P"] and back.st[IC]["pend"] == pb.st[IC]["pend"] and back.events == pb.events
-    bad = {"st": {"NOPE": {"g": 9}, IC: {"g": "x", "P": {"since": "garbage"}}}, "ev": [["x"], [DAYS[0], IC, "hacked", {}]], "fo": "junk", "hi": [[1, 2, 3, 4]]}
+    back.restore(json.loads(json.dumps(pb.decision())), json.loads(json.dumps(pb.measurement())), pb.pset(), known)
+    assert back.st[IC]["P"] == pb.st[IC]["P"] and back.st[IC]["pend"] == pb.st[IC]["pend"] and back.events == pb.events and back.counts == pb.counts
+    other = next(s for s in A2.BY_SID if s != IC and not A2.CX.is_convex(A2.BY_SID[s].struct))
+    bad = {"st": {"NOPE": {"g": 9}, IC: {"g": "x", "P": {"since": "garbage"}}, other: {"g": 2.0, "p": ["2026-02-30", 1, 0.5, 0.25], "r": "2026-13-01"}}}
     held = PB.Probation()
-    held.restore(bad, lambda sid: sid in A2.BY_SID)
-    assert set(held.st) == {IC} and held.st[IC]["g"] == 0.0 and held.blocked(IC) and held.st[IC]["P"]["owner"]   # an unreadable probation stays one, the owner's
-    assert held.events == [] and held.follow == [] and held.hits == []
-    assert PB.Probation().restore(None, lambda sid: True) == 0
-    full = pb.export()
-    assert "g" not in pb.export(max_g=0)["st"].get(IC, {}) or not pb.st[IC]["g"]                # g goes first when the record must shrink...
-    assert pb.export(max_g=0)["st"][IC]["P"] == full["st"][IC]["P"]                             # ...never the probation itself
+    held.restore(bad, {"ev": [["x"], [DAYS[0], IC, "hacked", {}]], "fo": [{"sid": IC, "day": "2026-02-30"}], "hi": {"bad": 1}}, None, known)
+    assert set(held.st) == {IC, other} and held.blocked(IC) and held.st[IC]["P"]["owner"]   # an unreadable probation stays one, the owner's
+    assert held.st[other]["g"] == 2.0 and held.st[other]["pend"] is None and held.st[other]["rel"] is None   # a bad date costs only its own field
+    assert held.events == [] and held.follow == [] and held.hits == {}
+    lost = PB.Probation()
+    lost.restore(None, None, {IC: [DAYS[3], 2, False]}, known)                                 # the book lost, the record's list kept: still in probation
+    assert lost.blocked(IC) and lost.st[IC]["P"]["mult"] == 2 and lost.st[IC]["P"]["since"] == DAYS[3]
+    junk = PB.Probation()
+    junk.restore(None, None, {IC: "junk"}, known)
+    assert junk.blocked(IC) and junk.st[IC]["P"]["owner"]
+    assert PB.is_day("2026-02-28") and not PB.is_day("2026-02-30") and not PB.is_day(20261116)
+    shrunk = pb.decision(max_g=0)
+    assert "g" not in shrunk["st"].get(IC, {}) or not pb.st[IC]["g"] and shrunk["st"][IC]["P"] == pb.decision()["st"][IC]["P"]
 
 
 # ---- B: in AUTO v2 ------------------------------------------------------------------------------------------------------------------------------------
@@ -245,20 +253,71 @@ def test_auto2_feeds_probation_each_shadow_close_before_the_record(cfg, tmp_path
         assert n_before < ap.lab.stats[sid][0] and -5 <= r <= 10                                # seen before the record added it, clamped as the record clamps it
 
 
-def test_phase2_state_is_kept_with_the_private_record_and_read_back(cfg, tmp_path):
+def test_phase2_rides_with_the_book_and_the_record_keeps_who_is_in_probation(cfg, tmp_path):
+    from tests.test_shadow_carry import Relay
     rn, ap = desk(cfg, tmp_path)
-    ap.probation.st[IC] = {"g": 1.25, "pend": ["2026-11-09", 2, -1.0, 1.0], "P": None, "rel": None, "rep": 0}
+    ap.probation.st[IC] = {"g": 6.5, "pend": None, "P": {"since": "2026-11-06", "n": 3, "ses": 2, "sm": 0.4, "mult": 1, "owner": False}, "rel": None, "rep": 0}
+    ap.probation.pver += 1
     ap.votes.k["read|NIFTY"] = {"n": 60, "first": 28.0, "ew": 0.47, "up": 30, "muted": True, "pend": None, "free": 0.0}
-    relay = FakeRelay()
+    ap.votes.ver += 1
+    relay = Relay()
+    ap.lab.dirty = True
     assert ap.save(relay, 1000.0, force=True)
-    got = A2.Lab.unpack(relay.lab)
-    assert got["pb"]["st"][IC]["g"] == 1.25 and got["vw"]["k"]["read|NIFTY"][2] == 0.47
+    rec, book = A2.Lab.unpack(relay.lab), A2.Lab.unpack(relay.shadow)
+    assert rec["pbP"] == {IC: ["2026-11-06", 1, False]} and "pb" not in rec and rec["vw"]["k"]["read|NIFTY"][4] is True
+    assert book["p2"]["d"]["st"][IC]["P"]["n"] == 3 and "m" in book["p2"]
     ap2 = desk(cfg, tmp_path)[1]
-    ap2.load(relay, now=T0)                                                                     # the same day: the pending session is not applied yet
-    assert ap2.probation.st[IC]["pend"] == ["2026-11-09", 2, -1.0, 1.0] and ap2.votes.k["read|NIFTY"]["muted"]
+    ap2.load(relay, now=T0)
+    assert ap2.probation.st[IC]["P"]["n"] == 3 and ap2.votes.muted("read", "NIFTY")
+    ap3 = desk(cfg, tmp_path)[1]
+    ap3.load(Relay(relay.lab, None), now=T0)                                                   # the book lost: the record's list keeps the probation
+    assert ap3.probation.blocked(IC) and ap3.probation.st[IC]["P"]["n"] == 0 and ap3.votes.muted("read", "NIFTY")
+    assert T0.date().isoformat() in ap3.p2x["carry_missing"]
     s = ap2.summary()
-    assert s["probation"]["watched"] == 1 and s["votes"]["muted"] == 1
+    assert s["probation"]["in_probation"] == 1 and s["votes"]["muted"] == 1 and s["phase2"]["spec"] == "evolution_probation_v1"
+    assert s["phase2"]["spec_sha256"] and len(s["phase2"]["spec_sha256"]) == 64
     assert not ap.save(relay, 1010.0)                                                          # nothing changed: nothing sent
+
+
+def test_phase2_never_displaces_a_strategy_record(cfg, tmp_path):
+    """Risk review, 14 Nov 2026: measurement state saved with the record pushed cumulative records out of it. Now the record carries only who is in probation
+    and the vote watch, and only when that costs no record; the rest rides with the book, shed first there."""
+    import random
+    rng = random.Random(3)
+    sids = [s for s in A2.BY_SID if not A2.CX.is_convex(A2.BY_SID[s].struct)]
+    stats = {s: [rng.randint(8, 400), rng.uniform(-40, 40), rng.uniform(1, 600), rng.randint(0, 200)] for s in sids}
+    rn, ap = desk(cfg, tmp_path, stats=stats)
+    for i, s in enumerate(sids[:200]):
+        ap.probation.st[s] = {"g": rng.uniform(0, 4), "pend": [DAYS[0], 3, rng.uniform(-3, 3), rng.uniform(0, 9)], "P": None, "rel": None, "rep": 0}
+    for i in range(30):                                                                        # thirty open windows, each with a full family of controls
+        ap.probation.follow.append({"sid": sids[i], "struct": "IC", "hold": "overnight", "day": DAYS[0], "own": [3, rng.uniform(-3, 3)],
+                                    "ctrl": {s: [rng.randint(1, 9), rng.uniform(-9, 9)] for s in sids[:252]}})
+    ap.lab.to_json({})
+    alone = ap.lab.last_kept
+    from tests.test_shadow_carry import Relay
+    relay = Relay()
+    ap.lab.dirty = True
+    assert ap.save(relay, 1000.0, force=True)
+    back = A2.Lab.unpack(relay.lab)
+    assert len(back["stats"]) == alone and len(relay.lab) <= A2.LAB_MAX_CHARS                  # every record the record held before phase 2, and within the bound
+    assert len(relay.shadow) <= A2.SHADOW_MAX_CHARS
+
+
+def test_the_session_count_is_not_capped(cfg, tmp_path):
+    ap = desk(cfg, tmp_path)[1]
+    n = ap.pb_ctx.sessions_between("2026-01-01", "2026-12-31")
+    assert n > 200                                                                             # the repeat window and the review clock count real sessions
+
+
+def test_a_mute_that_stops_an_agreement_is_recorded(cfg, tmp_path):
+    from tests.test_plan_first import NEWS_T, UP_BOOK, news_desk, rising
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    rising(rn, ap, 13, cusum_at=8)
+    t = NEWS_T + dt.timedelta(minutes=13)
+    snap = board(t, spot=24500 * math.exp(0.0005 * 13), **UP_BOOK)
+    ap.votes.muted = lambda k, u: k == "book"
+    ap.state(snap, "NIFTY", A2.V1.chains(board(NEWS_T), ap.und, ap.lots), t, None)
+    assert ap.p2x["stop"][t.date().isoformat()]["live"] == ["NIFTY"] and ap.phase2_report()["stopped"]["live"] == 1
 
 
 # ---- C: the vote watch -----------------------------------------------------------------------------------------------------------------------------
@@ -279,6 +338,15 @@ def test_votes_are_scored_as_calls_one_per_window_from_the_first_vote_after_it()
     assert w.k["news|NIFTY"]["n"] == 0
     w.observe("news", "NIFTY", 2000 + 3600, None, 99.0)
     assert w.k["news|NIFTY"]["n"] == 1 and w.k["news|NIFTY"]["first"] == 0.0
+    late = VW.VoteWatch()
+    late.observe("read", "X", 0, 0.7, 100.0)
+    late.observe("read", "X", 900 + VW.RESOLVE_TOL_S + 1, None, 105.0)                         # not seen at its window's end: no outcome
+    assert late.k["read|X"]["n"] == 0 and late.k["read|X"]["late"] == 1
+    night = VW.VoteWatch()
+    t0 = dt.datetime(2026, 11, 16, 15, 25, tzinfo=A2.IST).timestamp()
+    night.observe("read", "X", t0, 0.7, 100.0)
+    night.observe("read", "X", dt.datetime(2026, 11, 17, 9, 15, tzinfo=A2.IST).timestamp(), None, 103.0)   # judged across the night: never
+    assert night.k["read|X"]["n"] == 0
 
 
 def test_the_weighted_rate_starts_at_the_mean_of_fifty_and_mutes_once_a_day_with_hysteresis():
