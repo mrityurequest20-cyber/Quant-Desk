@@ -101,5 +101,12 @@ class Relay:
     def put_lab(self, text: str) -> dict:
         return self._call("POST", "/paper/lab", self._ingest, {"lab": text})
 
+    def get_shadow(self) -> dict:
+        """AUTO v2's open shadow trades (INGEST key): {"shadow": "<json text>" or None}."""
+        return self._call("GET", "/paper/shadow", self._ingest)
+
+    def put_shadow(self, text: str) -> dict:
+        return self._call("POST", "/paper/shadow", self._ingest, {"shadow": text})
+
     def get_state(self) -> dict:
         return self._call("GET", "/paper/state?full=1", self._ingest)
