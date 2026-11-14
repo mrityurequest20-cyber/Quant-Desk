@@ -26,7 +26,7 @@ self.addEventListener("fetch", (e) => {
 		e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => keep(req, res))));
 		return;
 	}
-	e.respondWith(fetch(req).then((res) => keep(req, res)).catch(async () => {
+	e.respondWith(fetch(req, { cache: "no-cache" }).then((res) => keep(req, res)).catch(async () => {     // revalidated each time: never the browser's stale copy
 		const hit = await caches.match(req, { ignoreSearch: true });
 		if (!hit) return req.mode === "navigate" ? caches.match("index.html") : Response.error();
 		const headers = new Headers(hit.headers);
