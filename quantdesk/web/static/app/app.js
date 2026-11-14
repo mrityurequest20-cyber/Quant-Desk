@@ -507,6 +507,12 @@ async function renderToday(full) {
 	const notes = (t) => h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:4px" }, t);
 	if ((b.expiring || []).length)
 		put(body, grp("Expiry today", b.expiring.map((e) => e.symbol).join(", "), h("div", { class: "rows" }, h("div", { class: "pad" }, notes(b.expiring[0].note)))));
+	const cal = (b.calendar || []).filter((e) => e && e.impact !== "low" && e.source !== "brief");
+	if (cal.length)                                                          // the scheduled-events calendar (paper/eventcal.py): the next week, IST
+		put(body, grp("Coming up", "the next 7 days, IST", h("div", { class: "rows" }, cal.slice(0, 14).map((e) => h("div", { class: "pad row", style: "gap:8px;font-size:13px" },
+			h("span", { class: "mono f3", style: "min-width:92px" }, `${e.at.slice(8, 10)}/${e.at.slice(5, 7)} ${e.at.slice(11, 16)}`), h("span", { class: "grow" }, e.name),
+			h("span", { class: "tag " + (e.impact === "high" ? "bear" : "flat") }, e.impact + (e.source === "rule" ? " · by rule" : "")))),
+			h("div", { class: "pad f3", style: "font-size:11.5px;line-height:1.5" }, "The desk sells no volatility into an event that touches an instrument: a day ahead of a high one, two hours ahead of a release. Dates marked \"by rule\" follow the release's usual rule (a holiday can move one): the owner's own calendar wins."))));
 	if ((b.macro || []).length)
 		put(body, grp("Macro events", `${b.macro.length}`, h("div", { class: "rows" }, b.macro.map((m) => h("div", { class: "pad", style: "display:grid;gap:4px" },
 			h("div", { class: "row" }, h("b", { style: "font-weight:500" }, m.name), h("span", { class: "grow" }), h("span", { class: "tag flat" }, (m.time ? m.time + " IST · " : "") + m.when)),

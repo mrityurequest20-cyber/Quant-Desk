@@ -196,6 +196,16 @@ def _analogs(inp: Inputs) -> dict:
         return {}
 
 
+def _calendar(inp: Inputs, now: pd.Timestamp, expiring: list, results: list) -> list[dict]:
+    """The scheduled-events calendar (quantdesk/paper/eventcal.py): the owner's dates, the recurring releases by rule, today's expiries and results."""
+    from ..paper import eventcal as EC
+    try:
+        cfg_events = [(e.day, e.time, e.name) for e in inp.macro_events or [] if getattr(e, "source", "calendar") == "calendar"]
+        return EC.build(now.to_pydatetime(), cfg_events, days=7, expiring=expiring, results=results)
+    except Exception:                                                   # noqa: BLE001 - no calendar is a thinner brief, never a failed one
+        return []
+
+
 def _expiries(index_bhav: pd.DataFrame | None, day: dt.date) -> list[dict]:
     if index_bhav is None or len(index_bhav) == 0:
         return []
@@ -294,6 +304,7 @@ def build(inp: Inputs) -> dict:
         "analogs": _analogs(inp),                                       # what NIFTY and BANKNIFTY did on past episodes of each kind (the news analyser's "what happened before")
         "tails": inp.tails or {},                                       # extreme value theory: each paper underlying's tail model (AUTO v2's tail check reads it)
         "news_analogs": inp.news_analogs or {},                         # every instrument's own past episodes, most like today first (the news model reads it)
+        "calendar": _calendar(inp, now, expiring, results),             # the scheduled events of the next week, each with the instruments it touches (paper/eventcal.py)
         "global": inp.globals_ or [], "headlines": {"total": len(inp.headlines or []), "named": {k: v[:3] for k, v in news.items()}},
         "watch": watch, "record_plan": record_plan(watch) if watch else {"budget": 0, "used": 0, "names": 0, "of": 0, "plan": []},
         "history": {"events": int(len(hist)), "calendar": int((hist["source"] == "calendar").sum()) if len(hist) else 0,
@@ -323,6 +334,9 @@ def summary(b: dict) -> list[str]:
     g = [x for x in b["global"] if x.get("change") is not None]
     if g:
         s.append("Overnight: " + ", ".join(f"{x['name']} {x['change']:+.1%}" for x in g[:6]) + ".")
+    nxt = [e for e in b.get("calendar") or [] if e.get("impact") in ("high", "medium") and e.get("source") != "brief"][:4]
+    if nxt:
+        s.append("Coming up: " + "; ".join(f"{e['name']} {pd.Timestamp(e['at']):%a %d %b %H:%M}" + (" (by rule: check)" if e.get("source") == "rule" else "") for e in nxt) + ".")
     from .tailrisk import summary_line
     tl = summary_line(b.get("tails") or {})
     if tl:

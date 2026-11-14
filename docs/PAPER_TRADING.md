@@ -361,6 +361,17 @@ The weighted share of rises is the analogue's P(up). Its effective number of epi
   0.02% for USD/INR, and far more for natural gas. Until then, the fixed NIFTY-set thresholds.
 - **Already per instrument:** the HMM, CUSUM, Kalman trend, EVT tails, trading hours, costs and the news channels.
 
+## The scheduled-events calendar (`quantdesk/paper/eventcal.py`, 14 Nov 2026)
+
+The brief lists the next week's scheduled events. Each event touches instruments through the news model's channels. A named symbol is touched fully, and the
+Budget or an election touches every Indian equity. AUTO v2 is in the event regime, and sells no volatility, when an event that touches an instrument is close:
+- **A high event** (a policy decision, the Budget, an election, OPEC): from 24 hours before to 90 minutes after, if it touches with 0.3 or more. An RBI
+  decision tomorrow at 10:00 keeps NIFTY's condors closed today.
+- **A medium release** (CPI, the US jobs report, the EIA crude report, GDP, results): from two hours before to an hour after, if it touches directly (0.5 or
+  more). The 21:00 EIA report reaches crude, not NIFTY.
+
+Dates marked "by rule" follow the release's usual rule, and a holiday can move one; the owner's `calendar.events` wins. The pre-open plan uses the same regime.
+
 ## The news analyser and the event regime
 
 - **The event watch.** The news job gathers the stories' own event types (`intraday/nlp.py`: policy, geopolitics, inflation, growth,

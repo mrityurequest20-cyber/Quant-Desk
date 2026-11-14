@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from ..markets import sessions as MK
 from . import auto as V1
 from . import inventor as INV
+from . import eventcal as EC
 from . import marketread as MR
 from . import newsmodel as NM
 from . import regimes as RG
@@ -684,7 +685,7 @@ class AutoPilotV2:
         ratio = iv / rv if iv and rv else None
         vol = "rich" if ratio is not None and ratio >= RICH else "cheap" if ratio is not None and ratio <= CHEAP else "mid"
         eve = self._trading_days_to(ist.date(), near) == 1
-        regime, rwhy = self.regime(u, news, read, rg)
+        regime, rwhy = self.regime(u, news, read, rg, now)
         if rwhy:
             why = list(why) + [rwhy]
         st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt, "read": read,
@@ -782,8 +783,13 @@ class AutoPilotV2:
         return mom, ((rg["vote"], f"CUSUM change point: {rg['change']}") if rg.get("vote") else None)
 
     # ---- the event regime: news and data together --------------------------------------------------------------------------------------------------
-    def regime(self, u: str, news, read: dict | None, rg: dict | None = None) -> tuple[str, str | None]:
-        """("event", why) when a high event in the digest's event watch touches `u`, or the options price one; else ("normal", None)."""
+    def regime(self, u: str, news, read: dict | None, rg: dict | None = None, now: dt.datetime | None = None) -> tuple[str, str | None]:
+        """("event", why) when a high event in the digest's event watch touches `u`, a scheduled event touching it is near (eventcal.py, the brief's calendar), or the
+        options price one; else ("normal", None)."""
+        if now is not None:
+            sched = EC.regime(u, (self.brief or {}).get("calendar") if isinstance(self.brief, dict) else None, now)
+            if sched:
+                return "event", f"event regime: {sched}"
         seg = self.segments.get(u)
         group = "mcx" if seg == "mcx" else "cds" if seg == "nse_cds" else "equity"
         for e in ((news or {}).get("events") or []) if isinstance(news, dict) else []:
@@ -1027,7 +1033,7 @@ class AutoPilotV2:
         view = "up" if d > 0 else "down" if d < 0 else ("flat" if not votes and (over is None or abs(over) < OVERNIGHT_TH_PCT / 2) else None)
         label = (result or {}).get("label")
         vol = "rich" if label == "rich" else "cheap" if label == "cheap" else "mid"      # the brief's results test is the only volatility reading before the open
-        regime, rwhy = self.regime(u, news, None)
+        regime, rwhy = self.regime(u, news, None, None, now)
         if rwhy:
             why.append(rwhy)
         return {"u": u, "spot": sp, "view": view, "why": why, "mom": None, "iv": iv, "rv": None, "ratio": None, "vol": vol,
