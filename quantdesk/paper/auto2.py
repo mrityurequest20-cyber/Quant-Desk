@@ -802,13 +802,11 @@ class AutoPilotV2:
         d, why = V1.direction(rd["pressure"], rd["gap_pct"], pmom, nv, nwhy)
         d, why = self.with_read(d, why, rd, pmom, nv, nwhy, read, pvote)
         mv = (1 if pmom > 0 else -1) if pmom is not None and abs(pmom) >= V1.MOMENTUM_TH_PCT else 0
-        tv = pvote[0] if pvote else 0                                                           # the Kalman trend or a CUSUM drift: price again
+        tv = pvote[0] if pvote else 0                                                           # the Kalman trend or a CUSUM drift (price_vote gives one or the other)
         labeled = [(k, v) for k, v in (("book", (1 if rd["pressure"] > 0 else -1) if rd["pressure"] is not None and abs(rd["pressure"]) >= V1.PRESSURE_TH else 0),
                                        ("forward", (1 if rd["gap_pct"] > 0 else -1) if rd["gap_pct"] is not None and abs(rd["gap_pct"]) >= V1.PARITY_TH_PCT else 0),
-                                       ("price", tv or mv),                                     # the owner, 14 Nov 2026: price counts as ONE reading, however many ways it is read
+                                       ("price", tv or mv),                                     # the owner, 14 Nov 2026: price counts as ONE reading, however it is read
                                        ("news", nv), ("read", (read or {}).get("vote") or 0)) if v]
-        if mv and tv and mv != tv:
-            labeled.append(("price, read another way", mv))                                    # price disagreeing with itself: no agreement
         votes = [v for _, v in labeled]
         agree = votes[0] if len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1 else 0        # a strong live direction: the plan's bar on the live board
         strong = agree if nv == agree else 0                                                   # the news among them: the news exception's bar
@@ -1564,7 +1562,8 @@ class AutoPilotV2:
             return None                                                                    # what the plan already expected is not a new reason
         shifts = []                                                                        # the owner's choice (14 Nov 2026): a real shift in the data, beyond the plan's silence
         base, rd = (getattr(self, "read_base", {}) or {}).get(u), st.get("read") or {}
-        if base and base[0] == ist.date() and rd.get("p_up") is not None and abs(rd["p_up"] - base[1]) >= READ_SHIFT and "read" in st["sources"]:
+        if (base and base[0] == ist.date() and rd.get("p_up") is not None and "read" in st["sources"]
+                and (rd["p_up"] - base[1]) * (1 if d == "up" else -1) >= READ_SHIFT):           # shifted TOWARDS the direction; a read weakening towards neutral is not
             shifts.append(f"the options and OI read moved from P(up) {base[1]:.2f} to {rd['p_up']:.2f} since the open"
                           + (f" ({base[2] or 'no build-up'} to {rd.get('buildup')})" if rd.get("buildup") and rd.get("buildup") != base[2] else ""))
         if (st.get("hmm") or {}).get("change") == f"drift {d}":
@@ -1849,7 +1848,10 @@ class AutoPilotV2:
                 held = (t - (self.cx_first.get((u, s.sid)) or (t, t))[0]) / 60
                 st = {**st, "cx": {**(st.get("cx") or {}), "news": nw["why"] if nw else f"data: its test has held {held:.0f} minutes on the live board"}}
             stake = min(CX.STAKE_PCT * eq, budget - spent)
-            worst = sum(math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK for l in p["legs"]) + p["fees"]   # the order's own limit: the most a fill can cost
+            lims = [math.ceil((l["ask"] + max(3 * TICK, 0.02 * l["ask"])) / TICK - 1e-9) * TICK for l in p["legs"]]       # the order's own limit per leg
+            worst = sum(lims) + sum(self.fees_fn(u, l["exp"], l["k"], l["right"], p["lot"], x) + self.fees_fn(u, l["exp"], l["k"], l["right"], -p["lot"], x)
+                                    for l, x in zip(p["legs"], lims)) / p["lot"]           # the most a fill can cost, a unit, fees at that price too
+            p = {**p, "worst": worst}
             lots = CX.lots_for(stake, worst, p["lot"])
             if lots < 1:
                 self.cx_status["note"] = (f"{ist:%d %b %H:%M} {u}: {s.sid} passed its test, but a lot risks Rs {worst * p['lot']:.0f} and it may risk Rs {max(stake, 0):.0f} "
@@ -1908,7 +1910,7 @@ class AutoPilotV2:
         thesis = (f"{TAG} Convexity: {st['u']} {s.describe()}. Why now: " + (test or f"the fat-tailed distribution (EVT) values it at {evt:.2f}x its price")
                   + (f"; EVT value {evt:.2f}x its price" if evt is not None and test else "")
                   + f". Shadow record {n} trades, average {total / n:+.2f}R, {w / n * 100:.0f}% won ({fam[3]} in its family); {self.lab.posterior(s.sid)[1]:+.2f}R after sharing "
-                  + f"evidence; Thompson draw {draw:+.2f}R. {lots} lot{'s' if lots > 1 else ''}, at most Rs {p['risk'] * p['lot'] * lots:.0f} (premium and fees: 0.5% of the "
+                  + f"evidence; Thompson draw {draw:+.2f}R. {lots} lot{'s' if lots > 1 else ''}, at most Rs {p.get('worst', p['risk']) * p['lot'] * lots:.0f} (premium and fees at the order's limit: 0.5% of the "
                   + "account). Exits: a third at +100%, a third at +300%, the rest trailed."
                   + ((f" Not on the plan: taken on important news in the session ({(st.get('cx') or {}).get('news')})."
                       if not str((st.get("cx") or {}).get("news")).startswith("data:") else f" Not on the plan: taken on a change in the live data ({(st.get('cx') or {}).get('news')}).")

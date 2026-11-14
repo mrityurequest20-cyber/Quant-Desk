@@ -253,7 +253,7 @@ def test_important_news_also_lets_a_proven_convex_trade_through_when_its_test_pa
 
 
 # ---- and the data (owner, 14 Nov 2026: "it's not only limited to news, it's also applies to data also ... In a live market, there is a different setup") -----------
-def rising(rn, ap, minutes, start=NEWS_T, step=0.0005, cusum_at=None, book=UP_BOOK, **kw):
+def rising(rn, ap, minutes, start=NEWS_T, step=0.0005, cusum_at=None, book=UP_BOOK, offset=0, **kw):
     """A live market going up: the book and the options forward say up, and the price climbs `step` a minute (a five-minute move of 0.25%). cusum_at: the minute
     a CUSUM drift-up change point is recorded (the regime book's own record, as its detector writes it)."""
     from quantdesk.paper import runner as RR
@@ -261,7 +261,7 @@ def rising(rn, ap, minutes, start=NEWS_T, step=0.0005, cusum_at=None, book=UP_BO
         t = start + dt.timedelta(minutes=i)
         if cusum_at is not None and i == cusum_at and hasattr(ap, "regimes"):
             ap.regimes.changes["NIFTY"] = [(t.timestamp(), "drift up")]
-        snap = board(t, spot=24500 * math.exp(step * i), **book, **kw)
+        snap = board(t, spot=24500 * math.exp(step * (i + offset)), **book, **kw)
         rn.step(snap, ap.decide(snap, rn.account, RR.Runner.server_now(snap), news={"items": [], "events": []}), False, t.astimezone(dt.timezone.utc))
 
 
@@ -300,9 +300,9 @@ def test_a_flicker_is_not_a_change(cfg, tmp_path):
 def test_what_the_plan_already_expected_is_not_a_change(cfg, tmp_path):
     rn, ap, sid = news_desk(cfg, tmp_path)
     ap.day_plan["states"] = {"NIFTY": {"view": "up"}}                                          # the pre-market read already said up (and nothing was proven to take it)
-    rising(rn, ap, 13)
+    rising(rn, ap, 13, cusum_at=8)                                                               # even with a real shift in the data
     assert ap.agree_since["NIFTY"][0] == 1                                                       # the live market does agree, strongly and for long enough
-    assert not rn.account.ledger                                                                 # but no change in the read since the open, no change point: not a new reason
+    assert not rn.account.ledger                                                                 # what the plan already expected is not a new reason
 
 
 def test_a_big_move_test_that_holds_on_the_live_board_is_a_reason_too(cfg, tmp_path):
@@ -376,9 +376,18 @@ def test_a_planned_strategy_refused_by_the_plan_does_not_come_back_through_a_tri
 
 def test_the_convex_stake_holds_at_the_orders_own_limit_price(cfg, tmp_path):
     from quantdesk.paper import convex as CX
-    from tests.test_convex import XG, desk as cx_desk, proven as cx_proven, wide_board
     from quantdesk.paper import runner as RR
-    rn, ap = cx_desk(cfg, tmp_path, stats=cx_proven())
+    from tests.test_convex import XG, desk as cx_desk, proven as cx_proven, wide_board
+    probe_rn, probe = cx_desk(cfg, tmp_path / "probe", stats=cx_proven())                       # the strangle's offer cost and its limit cost, a unit
+    snap = wide_board(OPEN)
+    ch = A2.V1.chains(snap, probe.und, probe.lots)
+    st = probe.state(snap, "NIFTY", ch, OPEN, None)
+    p = probe.price(snap, A2.BY_SID[XG], st, ch)
+    lims = [math.ceil((l["ask"] + max(3 * A2.TICK, 0.02 * l["ask"])) / A2.TICK - 1e-9) * A2.TICK for l in p["legs"]]
+    limit_unit = sum(lims) + p["fees"]
+    assert limit_unit > p["risk"] * 1.01
+    capital = 3 * p["risk"] * 65 * 1.005 / CX.STAKE_PCT                                         # three lots fit at the offer, only two at the limit
+    rn, ap = cx_desk(cfg, tmp_path, capital=capital, stats=cx_proven())
     for i in range(2):
         t = OPEN + dt.timedelta(minutes=i)
         snap = wide_board(t)
@@ -386,6 +395,31 @@ def test_the_convex_stake_holds_at_the_orders_own_limit_price(cfg, tmp_path):
         rn.step(snap, mine, False, t.astimezone(dt.timezone.utc))
         for o in mine:
             if o.get("side") == "package":
-                assert o["net_limit"] <= CX.STAKE_PCT * 10_000_000                              # the most a fill may cost is inside the 0.5% stake
+                assert o["net_limit"] <= CX.STAKE_PCT * capital                                 # the most a fill may cost is inside the 0.5% stake
+    pos = {s_: q for s_, q in rn.account.positions.items()}
+    assert pos and {q.qty // 65 for q in pos.values()} == {2}, {s_: q.qty for s_, q in pos.items()}
     paid = sum(r["qty"] * r["price"] + r["fees"] for r in rn.account.ledger if r["kind"] == "buy")
-    assert 0 < paid <= CX.STAKE_PCT * 10_000_000 and {p.strategy.split()[2] for p in rn.account.positions.values()} == {XG}
+    assert paid <= CX.STAKE_PCT * capital
+
+
+def test_a_read_weakening_towards_neutral_is_not_a_shift_one_strengthening_is():
+    ap = A2.AutoPilotV2(("NIFTY",), {"NIFTY": 65}, lambda *a: 0.0, None)
+    now = NEWS_T.timestamp()
+    ap.agree_since = {"NIFTY": (1, now - 600, now)}
+    st = {"agree": "up", "sources": ["book", "forward", "read"], "votes": 3, "hmm": {}, "read": {"p_up": 0.68, "buildup": None}}
+    ap.read_base = {"NIFTY": (NEWS_T.date(), 0.85, None)}                                        # it was more bullish at the open: weaker now, not a new reason
+    assert ap.live_trigger("NIFTY", st, {"items": []}, NEWS_T) is None
+    ap.read_base = {"NIFTY": (NEWS_T.date(), 0.50, None)}                                        # it was neutral at the open: shifted towards up
+    got = ap.live_trigger("NIFTY", st, {"items": []}, NEWS_T)
+    assert got and got["kind"] == "data" and "from P(up) 0.50 to 0.68" in got["why"]
+    st_dn = {**st, "agree": "down", "read": {"p_up": 0.30, "buildup": None}}
+    ap.agree_since = {"NIFTY": (-1, now - 600, now)}
+    ap.read_base = {"NIFTY": (NEWS_T.date(), 0.20, None)}                                        # a bearish read getting less bearish: not a down shift
+    assert ap.live_trigger("NIFTY", st_dn, {"items": []}, NEWS_T) is None
+
+
+def test_a_live_agreement_with_a_gap_in_it_starts_its_clock_again(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    rising(rn, ap, 9, cusum_at=7)                                                                # agreement from minute 5 to 8
+    rising(rn, ap, 3, start=NEWS_T + dt.timedelta(minutes=12), offset=12, cusum_at=0)            # three minutes unseen, then three more
+    assert ap.agree_since["NIFTY"][1] >= (NEWS_T + dt.timedelta(minutes=12)).timestamp() and not rn.account.ledger     # held two minutes since the gap, not nine
