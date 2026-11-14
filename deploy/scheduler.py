@@ -57,6 +57,11 @@ FYERS_WINDOW = (dt.time(8, 25), dt.time(20, 0))
 # The Angel One feed (angel-feed.yml, docs/FEEDS.md): currency to the live relay, 09:00 to 17:05. It logs in to Angel One, so it too is started once a day and never retried.
 ANGEL_WORKFLOW, ANGEL_MAX_STARTS = "angel-feed.yml", 1
 ANGEL_WINDOW = (dt.time(8, 25), dt.time(16, 0))
+# The pre-market brief (premarket.yml, docs/PREMARKET.md): its own cron was delivered 5 to 6 hours late on every trading day from 10 to 13 Nov 2026 (first runs at 10:54 to 11:57 IST), so the
+# brief, its tail models and news analogues were never ready for the 06:00 to 09:15 day plan. Dispatched from here instead (this scheduler is fired by the Worker's cron every ten minutes). The job sleeps
+# on its runner until 06:00 IST and then publishes every quarter hour to 09:15, so a start from 05:20 is what it expects. It logs in to no broker: one more start after a failure is safe.
+PREMARKET_WORKFLOW, PREMARKET_MAX_STARTS = "premarket.yml", 2
+PREMARKET_WINDOW = (dt.time(5, 20), dt.time(9, 10))
 # The news digest (news.yml): the desk's public RSS feeds read by its news engine and sent to the relay for the app's News panel. Unlike the recorders it is not once a day: it is started on every tick of
 # the session (the Worker's cron fires this scheduler every ten minutes) if none is queued or running and the last one is at least eight minutes old. A failure here never matters to anything else.
 # News does not keep market hours: it runs around the clock, every day (8 Nov 2026, owner: "nothing is getting missed out"), so a story at night or on a weekend is already in the digest when the market opens.
@@ -184,7 +189,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     now = dt.datetime.now(IST)
     started = False
-    for wf, limit in ((KITE_WORKFLOW, KITE_MAX_STARTS), (FYERS_WORKFLOW, FYERS_MAX_STARTS), (ANGEL_WORKFLOW, ANGEL_MAX_STARTS), (STOCK_WORKFLOW, STOCK_MAX_STARTS), (PAPER_WORKFLOW, PAPER_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
+    for wf, limit in ((PREMARKET_WORKFLOW, PREMARKET_MAX_STARTS), (KITE_WORKFLOW, KITE_MAX_STARTS), (FYERS_WORKFLOW, FYERS_MAX_STARTS), (ANGEL_WORKFLOW, ANGEL_MAX_STARTS),
+                      (STOCK_WORKFLOW, STOCK_MAX_STARTS), (PAPER_WORKFLOW, PAPER_MAX_STARTS), (WORKFLOW, MAX_STARTS)):
         try:
             wf_runs = _runs(wf)
         except (subprocess.SubprocessError, OSError, ValueError):                 # a hung or missing gh, a bad answer: for the extra recorders never fatal
@@ -194,7 +200,8 @@ def main(argv: list[str] | None = None) -> int:
                 runs = []
             print(f"{wf}: could not list its runs; not starting it")          # the Kite recorder never holds up the main one
             continue
-        action, why = decide(now, wf_runs, hols, limit, {PAPER_WORKFLOW: PAPER_WINDOW, FYERS_WORKFLOW: FYERS_WINDOW, ANGEL_WORKFLOW: ANGEL_WINDOW}.get(wf, WINDOW))
+        action, why = decide(now, wf_runs, hols, limit, {PAPER_WORKFLOW: PAPER_WINDOW, FYERS_WORKFLOW: FYERS_WINDOW, ANGEL_WORKFLOW: ANGEL_WINDOW,
+                                                          PREMARKET_WORKFLOW: PREMARKET_WINDOW}.get(wf, WINDOW))
         print(f"{wf}: {action}: {why}")
         if action == "start":
             try:
