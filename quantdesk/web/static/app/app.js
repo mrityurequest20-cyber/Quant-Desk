@@ -1102,6 +1102,7 @@ async function renderLive() {
 	const B = S.bd;
 	S.lv.data = j; S.lv.at = Date.now();
 	B.data = j; B.at = S.lv.at;                                              // the chain views and the tickets price from this same snapshot
+	if (S.lv.sel && S.lv.view === "strat" && S.tab === "live") deskLoad().then((got) => { if (got && S.tab === "live" && S.lv.view === "strat" && !S.bd.editing) bdDraw(); });     // the desk's read, for the advisor
 	if (S.lv.sel && (S.lv.view === "opt" || S.lv.view === "strat") && Date.now() - B.newsAt > 60000) { B.newsAt = Date.now(); newsLoad(key).then(() => { if (S.tab === "live" && S.lv.view === "opt") liveDraw(); }); }       // the digest changes every ten minutes: once a minute is plenty
 	if (!S.lv.built) liveBuild();
 	liveDraw();
@@ -1822,12 +1823,8 @@ function bdRead(ctx) {
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 10px" }, "What the options imply and what is open: counts and prices, not forecasts. Volatility is the market's own, from the mid of the bid and the offer."));
 }
 // ---- the advisor and the designer (QB.advise, QB.design) ------------------------------------------------------------------------------------------
-function deskLab() {                                                          // AUTO v2's read of the market, from the paper runner's state (fetched once a minute, with the live key)
-	const B = S.bd, lab = S.pp.data && S.pp.data.summary && S.pp.data.summary.lab;
-	if (lab || !store("qd.livekey") || Date.now() - (B.deskAt || 0) < 60000) return lab || null;
-	B.deskAt = Date.now();
-	paperCall("GET", "/paper/state").then((r) => { if (r.status === 200 && r.body) { S.pp.data = r.body; if (S.tab !== "paper") bdDraw(); } }).catch(() => {});
-	return null;
+function deskLab() {                                                          // AUTO v2's read of the market, from the paper runner's state (deskLoad fetches it): display only
+	return (S.pp.data && S.pp.data.summary && S.pp.data.summary.lab) || null;
 }
 function bdAdvisor(cx) {
 	const { B, strikes, names, spot, T, c, data, sq, rows } = cx;
@@ -1888,6 +1885,16 @@ function bdIdeas(ctx) {
 	return put(box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "The chance uses the market's own volatility, so before costs every structure here is a fair bet: it tells you how a trade pays, not whether to take it. Your edge is your view."));
 }
 // ---- news and the board, in the Build tab ------------------------------------------------------------------------------------------------------
+async function deskLoad() {                                                   // the paper runner's state, for the builder's advisor (a read: GET only), at most once a minute
+	const B = S.bd;
+	if (!store("qd.livekey") || Date.now() - (B.deskAt || 0) < 60000) return false;
+	B.deskAt = Date.now();
+	try {
+		const r = await paperCall("GET", "/paper/state");
+		if (r.status === 200 && r.body) { S.pp.data = r.body; return true; }
+	} catch (e) { /* no read: the advisor reasons from the view you pick */ }
+	return false;
+}
 async function newsLoad(key) {
 	const B = S.bd;
 	try {
