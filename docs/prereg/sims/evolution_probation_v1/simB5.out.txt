@@ -1,0 +1,44 @@
+v3 per-session CUSUM, z scaled by the session's trade count; horizons in calendar sessions, a strategy closing trades on half of them; N 2,000 a cell
+K=0.25 H=4 RHO_REG=0.6: worst false demotion at +0.3R within 120 sessions 0.16, at +0.15R 0.40 | a +0.3 -> -0.3R turn caught 0.54-1.00, median 13-100 sessions after it
+K=0.25 H=5 RHO_REG=0.6: worst false demotion at +0.3R within 120 sessions 0.07, at +0.15R 0.19 | a +0.3 -> -0.3R turn caught 0.37-1.00, median 18-111 sessions after it
+K=0.3 H=5 RHO_REG=0.6: worst false demotion at +0.3R within 120 sessions 0.06, at +0.15R 0.14 | a +0.3 -> -0.3R turn caught 0.09-1.00, median 20-116 sessions after it
+K=0.25 H=6 RHO_REG=0.6: worst false demotion at +0.3R within 120 sessions 0.02, at +0.15R 0.08 | a +0.3 -> -0.3R turn caught 0.23-1.00, median 24-124 sessions after it
+K=0.3 H=6 RHO_REG=0.6: worst false demotion at +0.3R within 120 sessions 0.01, at +0.15R 0.06 | a +0.3 -> -0.3R turn caught 0.04-1.00, median 27-131 sessions after it
+K=0.25 H=5 RHO_REG=0.3: worst false demotion at +0.3R within 120 sessions 0.16, at +0.15R 0.42 | a +0.3 -> -0.3R turn caught 0.81-1.00, median 12-73 sessions after it
+K=0.25 H=5 RHO_REG=0.45: worst false demotion at +0.3R within 120 sessions 0.08, at +0.15R 0.23 | a +0.3 -> -0.3R turn caught 0.68-1.00, median 15-97 sessions after it  <- registered
+    normal  m= 1 rho=0.0: FA +0.3R 0.05 (120) 0.10 (250), +0.15R 0.16 (120) | caught 0.94 median 39
+    normal  m= 1 rho=0.3: FA +0.3R 0.06 (120) 0.10 (250), +0.15R 0.15 (120) | caught 0.94 median 40
+    normal  m= 1 rho=0.6: FA +0.3R 0.05 (120) 0.10 (250), +0.15R 0.16 (120) | caught 0.93 median 38
+    normal  m= 2 rho=0.0: FA +0.3R 0.01 (120) 0.01 (250), +0.15R 0.05 (120) | caught 0.95 median 46
+    normal  m= 2 rho=0.3: FA +0.3R 0.02 (120) 0.05 (250), +0.15R 0.10 (120) | caught 0.96 median 40
+    normal  m= 2 rho=0.6: FA +0.3R 0.06 (120) 0.11 (250), +0.15R 0.18 (120) | caught 0.96 median 34
+    normal  m= 5 rho=0.0: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.00 (120) | caught 0.96 median 52
+    normal  m= 5 rho=0.3: FA +0.3R 0.01 (120) 0.01 (250), +0.15R 0.04 (120) | caught 0.98 median 37
+    normal  m= 5 rho=0.6: FA +0.3R 0.08 (120) 0.13 (250), +0.15R 0.22 (120) | caught 0.97 median 29
+    normal  m=10 rho=0.0: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.00 (120) | caught 0.99 median 55
+    normal  m=10 rho=0.3: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.02 (120) | caught 0.99 median 36
+    normal  m=10 rho=0.6: FA +0.3R 0.06 (120) 0.11 (250), +0.15R 0.23 (120) | caught 0.96 median 28
+    credit  m= 1 rho=0.0: FA +0.3R 0.06 (120) 0.15 (250), +0.15R 0.17 (120) | caught 0.99 median 18
+    credit  m= 1 rho=0.3: FA +0.3R 0.06 (120) 0.17 (250), +0.15R 0.17 (120) | caught 0.99 median 18
+    credit  m= 1 rho=0.6: FA +0.3R 0.06 (120) 0.16 (250), +0.15R 0.18 (120) | caught 0.99 median 18
+    credit  m= 2 rho=0.0: FA +0.3R 0.00 (120) 0.02 (250), +0.15R 0.05 (120) | caught 1.00 median 20
+    credit  m= 2 rho=0.3: FA +0.3R 0.01 (120) 0.04 (250), +0.15R 0.07 (120) | caught 1.00 median 18
+    credit  m= 2 rho=0.6: FA +0.3R 0.03 (120) 0.08 (250), +0.15R 0.12 (120) | caught 0.99 median 17
+    credit  m= 5 rho=0.0: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.00 (120) | caught 1.00 median 21
+    credit  m= 5 rho=0.3: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.01 (120) | caught 1.00 median 18
+    credit  m= 5 rho=0.6: FA +0.3R 0.01 (120) 0.03 (250), +0.15R 0.09 (120) | caught 1.00 median 16
+    credit  m=10 rho=0.0: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.00 (120) | caught 1.00 median 21
+    credit  m=10 rho=0.3: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.00 (120) | caught 1.00 median 18
+    credit  m=10 rho=0.6: FA +0.3R 0.00 (120) 0.02 (250), +0.15R 0.07 (120) | caught 1.00 median 15
+    2/-1    m= 1 rho=0.0: FA +0.3R 0.04 (120) 0.08 (250), +0.15R 0.12 (120) | caught 0.83 median 64
+    2/-1    m= 1 rho=0.3: FA +0.3R 0.05 (120) 0.09 (250), +0.15R 0.11 (120) | caught 0.82 median 62
+    2/-1    m= 1 rho=0.6: FA +0.3R 0.04 (120) 0.09 (250), +0.15R 0.11 (120) | caught 0.81 median 59
+    2/-1    m= 2 rho=0.0: FA +0.3R 0.01 (120) 0.01 (250), +0.15R 0.03 (120) | caught 0.79 median 67
+    2/-1    m= 2 rho=0.3: FA +0.3R 0.02 (120) 0.03 (250), +0.15R 0.06 (120) | caught 0.82 median 63
+    2/-1    m= 2 rho=0.6: FA +0.3R 0.03 (120) 0.06 (250), +0.15R 0.11 (120) | caught 0.87 median 61
+    2/-1    m= 5 rho=0.0: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.00 (120) | caught 0.71 median 82
+    2/-1    m= 5 rho=0.3: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.02 (120) | caught 0.83 median 67
+    2/-1    m= 5 rho=0.6: FA +0.3R 0.03 (120) 0.04 (250), +0.15R 0.08 (120) | caught 0.90 median 54
+    2/-1    m=10 rho=0.0: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.00 (120) | caught 0.68 median 97
+    2/-1    m=10 rho=0.3: FA +0.3R 0.00 (120) 0.00 (250), +0.15R 0.01 (120) | caught 0.84 median 71
+    2/-1    m=10 rho=0.6: FA +0.3R 0.02 (120) 0.03 (250), +0.15R 0.08 (120) | caught 0.91 median 54

@@ -22,11 +22,13 @@ learn from history before it repeats, and re-check its own rules. Every step is 
 
 1. **Sense.** A daily **market fingerprint**: what kind of market it is (phase 1, built). Later, a Bayesian online change-point detector on the fingerprint finds
    structural breaks that last weeks or months, not intraday wiggles (phase 4).
-2. **Remember with context.** Every trade is tagged with the market it was taken in (phase 1, built). The record then forgets: it is discounted with a half-life of
-   about 60 sessions, shortened for a while after a break (phase 2). It is estimated **by regime**, so strategy × regime is a hierarchical model, and Thompson sampling
+2. **Remember with context.** Every trade is tagged with the market it was taken in (phase 1, built). A record that forgets (a half-life of about 60 sessions) was
+   planned for phase 2 and is deferred to phase 5: simulated on this desk's book, it chose worse than the cumulative record in every case short of a large break after
+   long history (`docs/prereg/evolution_probation_v1.json`, `not_registered_A_forgetting`); reacting to a fall is probation's job (layer 3). It is estimated **by regime**, so strategy × regime is a hierarchical model, and Thompson sampling
    asks "how good is this in markets like today's?" (phase 3).
-3. **Monitor and demote.** A Page-Hinkley watch on each live strategy's R and on each model's calibration. A strategy that falls well below its record goes to
-   **probation** (shadow only), and a model that degrades loses voting weight. These only tighten, so they need no approval; promotion and anything that loosens is the
+3. **Monitor and demote.** A CUSUM on each strategy's R, once a session, scaled by that session's trade count (a plain Page-Hinkley test was simulated and caught
+   too little), and a watch on each model's votes. A strategy that starts losing goes to **probation** (shadow only), and a model whose votes call direction no
+   better than a coin can no longer start a trade (it can still stop one). These only tighten, so they need no approval; promotion and anything that loosens is the
    owner's (phase 2).
 4. **An unfamiliar-market guard.** When today's fingerprint is outside anything in the library (a statistical distance past its 99th percentile), live sizes halve and
    the shadow book explores more, with a red flag in the app (phase 4).
@@ -46,7 +48,7 @@ be tested exactly on the record already kept, before it touches paper money.
 | Phase | What | Exit test |
 |---|---|---|
 | **1. Fingerprint and tags** (built 14 Nov 2026) | The brief's daily fingerprint; every closed shadow trade tagged with its regime; live theses say the market; the app's Market regime panel | 30 sessions of fingerprints; every closed shadow trade tagged (none `unknown` on a day the brief ran) |
-| 2. Forgetting and probation | A discounted record beside the cumulative one; Page-Hinkley demotion of live strategies; model weights cut on falling calibration | Pre-registered: on the shadow record, choosing with the discounted record does at least as well as with the cumulative |
+| 2. Probation and the vote watch (spec 14 Nov 2026: `docs/prereg/evolution_probation_v1.json`) | The open shadow book carried across runner jobs first (PR #264); probation of strategies that start losing; muting of votes no better than a coin. The forgetting record is deferred to phase 5 (simulation) | Both rules applied as registered, and the probation review reported at its registered number of demotions; its verdict, either way, goes to the owner |
 | 3. Choosing by regime | Strategy × regime hierarchical model; Thompson sampling on today's regime | Pre-registered off-policy test on 60+ sessions of shadow trades. Phase 1 tags a trade with the regime of the day it **closes**; the test must condition on the regime at **entry** (a trade held overnight closes in a later fingerprint), so phase 3 first records the entry regime with each shadow position |
 | 4. Breaks and the unfamiliar market | Change points on the fingerprint; automatic size halving | Finds the library's known breaks within 10 sessions |
 | 5. The regime library | Fingerprints back to 2007; strategies replayed through them; priors by similarity | Similarity priors beat flat priors on regimes held out |
