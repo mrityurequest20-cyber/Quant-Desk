@@ -61,7 +61,7 @@ def day_tails(cfg, a, wh: dict, now: pd.Timestamp, health: dict) -> dict:
             got = json.loads(path.read_text(encoding="utf-8"))
             if got.get("built") == today and isinstance(got.get("models"), dict):
                 health["tails"] = f"ok {len(got['models'])} models, built earlier today"
-                return {"models": got["models"], "analogs": got.get("analogs") or {}}
+                return {"models": got["models"], "analogs": got.get("analogs") or {}, "fingerprint": got.get("fingerprint")}
         except (OSError, ValueError):
             pass
     unds = paper_underlyings(cfg)
@@ -74,12 +74,19 @@ def day_tails(cfg, a, wh: dict, now: pd.Timestamp, health: dict) -> dict:
         analogs = {}
         health["analogs"] = f"fail {type(exc).__name__}"
     health.setdefault("tails", f"ok {len(models)} of {len(unds)} underlyings")
+    from . import fingerprint as FP
+    try:
+        fp = FP.compute(series)                                                          # the market fingerprint (docs/EVOLUTION.md): from the same closes
+        health["fingerprint"] = f"ok {fp['key']}" if fp else "fail not enough NIFTY history"
+    except Exception as exc:                                                            # noqa: BLE001 - no fingerprint is a thinner brief, never a failed one
+        fp = None
+        health["fingerprint"] = f"fail {type(exc).__name__}"
     if path:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"built": today, "models": models, "analogs": analogs}, separators=(",", ":")), encoding="utf-8")
+        tmp.write_text(json.dumps({"built": today, "models": models, "analogs": analogs, "fingerprint": fp}, separators=(",", ":")), encoding="utf-8")
         tmp.replace(path)
-    return {"models": models, "analogs": analogs}
+    return {"models": models, "analogs": analogs, "fingerprint": fp}
 
 
 def run(cfg, a) -> None:
@@ -110,7 +117,7 @@ def run(cfg, a) -> None:
         inp.globals_ = SRC.fetch_globals(health)
         inp.headlines = SRC.fetch_headlines(health, now)
     got = day_tails(cfg, a, wh, now, health)
-    inp.tails, inp.news_analogs = got["models"], got["analogs"]
+    inp.tails, inp.news_analogs, inp.fingerprint = got["models"], got["analogs"], got.get("fingerprint")
     brief = B.jsonable(B.build(inp))
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)

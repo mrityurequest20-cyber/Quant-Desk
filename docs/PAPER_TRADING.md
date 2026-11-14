@@ -248,6 +248,10 @@ A strategy's record is read through a **multilevel normal model**, fitted by emp
   copy of the stored record first. A stored record that cannot be read at all (corrupted or tampered: only the runner's ingest key can write it) is started
   from zero and overwritten at the next save, as before.
 
+### Tagged with the market (since 14 Nov 2026; docs/EVOLUTION.md, phase 1)
+
+Every closed shadow trade is also added to its structure's record in today's market regime (the brief's fingerprint key, `unknown` without today's brief): `reg`, regime -> structure -> trades, sum of R, sum of R squared, wins. The latest 400 closes are kept whole (date, strategy, underlying, R, regime). Both live in the strategy record on the relay, private like the rest of it, and are read back validated (a regime or structure that is not a real one is dropped). A live trade's thesis ends with the market it was taken in. Nothing chooses by regime yet: that is phase 3, after a pre-registered test. The Paper tab's **Market regime** panel shows today's regime and each regime's trades and best structures.
+
 ## The strategy builder: every structure, which one now and why, and designs of its own
 
 The app's Strategy tab (an instrument page) builds any defined-risk option structure on the live board. Owner, 13 Nov 2026: "The strategy builder must have access

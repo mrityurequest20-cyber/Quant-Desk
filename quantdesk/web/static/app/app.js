@@ -2413,6 +2413,7 @@ function ppDraw() {
 		h("div", { class: "kstrip" }, cell("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""), cell("Cash", inr(sm.cash)), cell("Fees paid", inr(sm.fees)), cell("Open positions", String(pos.length)))));
 	if (sm && Array.isArray(sm.reviews) && sm.reviews.length) put(body, ppReview(sm.reviews));
 	if (sm && sm.lab && sm.lab.plan && typeof sm.lab.plan === "object") put(body, ppPlan(sm.lab.plan));
+	if (sm && sm.lab && (sm.lab.market || (sm.lab.regimes && Object.keys(sm.lab.regimes).length))) put(body, ppMarket(sm.lab));
 	if (sm && sm.lab && sm.lab.convex && typeof sm.lab.convex === "object") put(body, ppConvex(sm.lab.convex));
 	else if (sm && sm.lab) put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Convexity desk"), h("span", { class: "hint" }, "waiting for its first session")),
 		h("div", { class: "f3", style: "font-size:12.5px;line-height:1.55;padding:10px 16px" }, "Switched on with the 14 Nov 2026 update. The paper desk reports it from its next session (the runner works on trading days, from the 06:00 plan): then this panel shows the month's spend against its 3% budget, the 0.5% stake, what is open and proven, and which tests pass on each instrument.")));
@@ -2512,6 +2513,21 @@ function ppPlan(dp) {
 			: h("div", { class: "f3", style: "font-size:12.5px;padding:10px 16px" }, "Nothing on the plan today: no underlying has a strong pre-open direction (three readings agreeing, none against) with a reward to risk of 2 or better, and no big move is priced too small. No trade is taken: the desk only records and learns."),
 		notes.length ? h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 0" }, notes.join(" ")) : null,
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "Built every ten minutes from 06:00 to 09:15 from last night's closing books, the overnight markets, the news, the event calendar and the pre-market brief. Only what is on this plan can trade: from 09:20, for 100 minutes, a planned strategy is opened if its record is proven and it has not been contradicted since (the open turned against it, it already went through its stop, or it now costs 1.5x what was planned). The plan is the forecast; the live market is its own setup. So during the session, at any time, two things can open a trade the plan did not name, with the same bar applied to the live board: important news of today that reaches an instrument (three live readings agreeing, the news among them), or a real shift in the live data that has held for five minutes (three readings agreeing, price counted once, something the pre-market read did not expect, and the options and OI sentiment shifting since the open or a change point firing); or a big-move test passing. Reward to risk of 2 or better, the same proof gates and risk limits. Otherwise nothing is opened; everything is still recorded and tested in shadow. Planned trades are held overnight until their target, the volatility stop (the underlying 1.5 daily standard deviations against it, wider for each session held) or the session before expiry."));
+}
+// The market fingerprint and the record by regime (docs/EVOLUTION.md, phase 1): what kind of market today is, and how each family of strategies has done in each
+// kind so far (shadow trades, tagged when they close). Display only.
+function ppMarket(lab) {
+	const m = lab.market, reg = lab.regimes && typeof lab.regimes === "object" ? Object.entries(lab.regimes) : [];
+	const words = (k) => { const [v, d] = String(k || "").split("/"); return k === "unknown" ? "no fingerprint" : `${v || "?"} volatility, ${d === "up" ? "trending up" : d === "down" ? "trending down" : "in a range"}`; };
+	reg.sort((a, b) => (b[1].trades || 0) - (a[1].trades || 0));
+	return h("div", { class: "grp" },
+		h("div", { class: "sec-h" }, h("h2", {}, "Market regime"), h("span", { class: "hint" }, m && m.key ? `today: ${m.key}${m.since ? " · since " + m.since : ""}` : "no fingerprint for today yet")),
+		m && m.label ? h("div", { class: "f2", style: "font-size:13px;line-height:1.5;padding:8px 16px" }, m.label) : null,
+		reg.length ? fold("mk-reg", "How each family has done in each kind of market", `${reg.length} regimes seen`, h("div", { class: "rows" }, reg.map(([k, v]) => h("div", { style: "padding:6px 16px;border-top:1px solid var(--line);font-size:12.5px" },
+			h("div", { class: "row", style: "justify-content:space-between" }, h("b", {}, `${k}${m && m.key === k ? " (today)" : ""}`), h("span", { class: "f3" }, `${num(v.trades || 0, 0)} shadow trades · ${words(k)}`)),
+			(v.best || []).length ? h("div", { class: "f2 mono", style: "font-size:12px;margin-top:2px" }, v.best.map((b) => `${b.name} ${signed(b.mean_r)}R (${num(b.n, 0)}, ${Math.round((b.win || 0) * 100)}% won)`).join(" · "))
+				: h("div", { class: "f3", style: "font-size:11.5px" }, "no family with 5 trades here yet"))))) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, "Every morning the brief describes what kind of market it is (volatility against three years, direction, chop, how much stocks move together, stress). Every shadow trade is tagged with it when it closes, so the desk learns which strategies work in which markets. Nine regimes, on purpose few. A description, not a forecast."));
 }
 // The Convexity desk (quantdesk/paper/convex.py; owner, 14 Nov 2026): bought optionality both sides, no view on direction; 0.5% of the account a trade, 3% a month,
 // a third sold at +100%, a third at +300%, the rest trailed. Display only.

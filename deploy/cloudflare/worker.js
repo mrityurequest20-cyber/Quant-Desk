@@ -28,7 +28,8 @@ import { armLive, handleLive, needsUniverse } from "./live.js";
 
 export { LiveBoard } from "./live.js";      // the Durable Object behind /live/* (live.js): wrangler.jsonc binds it as LIVE
 
-const LIVE = /(^|\/)(data\.json|sw\.js)$/;         // live data and the service worker: never from an edge cache
+const LIVE = /(^|\/)(data\.json|sw\.js|app\.js|index\.html)$|\/$/;   // live data, the service worker, the app and its page: never from an edge cache (a new
+//                                                                                version shows on the next open, not ten minutes later; unchanged, it is a 304)
 const PASS = ["accept", "accept-encoding", "if-none-match", "if-modified-since", "range"];
 
 // What kind of token the secret holds, never any of its value: a classic token (ghp_, 40 characters) cannot be

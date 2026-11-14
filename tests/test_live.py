@@ -316,7 +316,23 @@ def test_the_push_module_can_trade_nothing_and_holds_no_secret_in_the_source():
 # ---- the app and the workflow ---------------------------------------------------------------------------------------------------------------
 def test_the_service_worker_never_caches_live_prices():
     sw = (ROOT / "quantdesk/web/static/app/sw.js").read_text()
-    assert "/live/" in sw and sw.index("/live/") < sw.index("e.respondWith(fetch(req)")
+    assert "/live/" in sw and sw.index("/live/") < sw.index('e.respondWith(fetch(req, { cache: "no-cache" })')
+
+
+def test_a_new_app_version_shows_on_the_next_open():
+    """The owner, 14 Nov 2026: a merged app update did not show (GitHub Pages lets app.js be cached for ten minutes). The service worker revalidates every
+    fetch, and the Worker never serves the app, its page or its data from an edge cache."""
+    import shutil
+    import subprocess
+    wk = (ROOT / "deploy/cloudflare/worker.js").read_text()
+    rx = re.search(r"const LIVE = /(.+)/;", wk).group(1)
+    paths = ["/data.json", "/sw.js", "/app.js", "/index.html", "/", "/icon-192.png", "/fonts/geist-sans.woff2"]
+    if shutil.which("node"):
+        js = "const LIVE = /" + rx + "/; console.log(JSON.stringify(" + json.dumps(paths) + ".map((p) => LIVE.test(p))));"
+        out = json.loads(subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True).stdout)
+    else:
+        out = [bool(re.search(rx.replace("\\/", "/"), p)) for p in paths]
+    assert out == [True, True, True, True, True, False, False]                          # icons and fonts may stay cached; the app never
 
 
 def test_the_live_tab_is_wired_in():
