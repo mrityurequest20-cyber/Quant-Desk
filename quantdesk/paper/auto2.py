@@ -562,8 +562,11 @@ class Lab:
                 if (struct in STRUCTURES or struct in FUT_STRUCTS or CX.is_convex(struct)) and isinstance(v, list) and len(v) == 4 \
                         and all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v) and v[0] >= 0:
                     self.reg.setdefault(key, {})[struct] = [int(v[0]), float(v[1]), float(v[2]), int(v[3])]
-        self.recent = [list(x) for x in (recent or []) if isinstance(recent, list) and isinstance(x, list) and len(x) == 5 and x[1] in BY_SID
-                       and isinstance(x[3], (int, float)) and math.isfinite(x[3]) and isinstance(x[4], str)][-RECENT_MAX:]
+        def ok(x) -> bool:
+            return (isinstance(x, list) and len(x) == 5 and all(isinstance(x[i], str) for i in (0, 1, 2, 4)) and len(x[0]) <= 10 and len(x[2]) <= 24
+                    and x[1] in BY_SID and isinstance(x[3], (int, float)) and not isinstance(x[3], bool) and math.isfinite(x[3])
+                    and (x[4] == "unknown" or bool(REGIME_KEY.match(x[4]))))
+        self.recent = [list(x) for x in (recent if isinstance(recent, list) else []) if ok(x)][-RECENT_MAX:]
 
     def by_regime(self, top: int = 3) -> dict:
         """For the app: in each regime seen, the trades and the best structures by mean R (at least 5 trades)."""
@@ -2056,13 +2059,16 @@ class AutoPilotV2:
             got = Lab.unpack(raw) if isinstance(raw, str) else {}
             stats, inv = got.get("stats"), got.get("inv")
             self.lab = Lab(stats if isinstance(stats, dict) else None, inv if isinstance(inv, dict) else None)
-            self.lab.restore_tags(got.get("reg"), got.get("recent"))
             self._read_w = got.get("read_w") if isinstance(got.get("read_w"), dict) else None
             cx = got.get("cx")
             self.cx_peak = {str(k): float(v) for k, v in cx.items() if isinstance(v, (int, float)) and math.isfinite(v)} if isinstance(cx, dict) else {}
             self.day_plan = self.restore_plan(got.get("plan")) or self.day_plan          # a restart after 09:15 keeps today's plan (yesterday's is dropped as always)
             if hasattr(self, "reader"):
                 self.reader.restore(self._read_w)
+            try:
+                self.lab.restore_tags(got.get("reg"), got.get("recent"))                 # last, and on its own: a bad tag never costs the trail peaks or the plan
+            except Exception:                                                           # noqa: BLE001
+                self.lab.reg, self.lab.recent = {}, []
             return f"{len(self.lab.stats)} strategies with a record"
         except Exception as e:                                                          # noqa: BLE001 - no record means starting from zero, never not trading
             return f"no record could be read ({type(e).__name__}): starting from zero"
@@ -2096,7 +2102,8 @@ class AutoPilotV2:
                "read_learning": {"instruments": sum(1 for v in learnt.values() if v), "outcomes": sum(learnt.values())}}
         b = self.brief if isinstance(self.brief, dict) else {}
         fp = b.get("fingerprint") if isinstance(b.get("fingerprint"), dict) else None
-        out["market"] = {"session": b.get("session"), "key": fp.get("key"), "label": fp.get("label"), "since": fp.get("since")} if fp else None
+        s = lambda v, n: v[:n] if isinstance(v, str) else None                         # noqa: E731 - the brief is read, not trusted: strings, capped
+        out["market"] = {"session": s(b.get("session"), 10), "key": s(fp.get("key"), 16), "label": s(fp.get("label"), 200), "since": s(fp.get("since"), 10)} if fp else None
         out["regimes"] = self.lab.by_regime()
         out["convex"] = {**self.cx_status, "stake_pct": CX.STAKE_PCT, "budget_pct": CX.MONTH_BUDGET_PCT, "min_pooled": CX.MIN_POOLED, "min_own": CX.MIN_OWN,
                          "strategies": len(CX_CATALOGUE), "shadow_open": sum(1 for sid, _ in self.shadow if CX.is_convex(CX.sid_struct(sid))),

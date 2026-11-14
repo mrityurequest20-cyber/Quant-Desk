@@ -118,6 +118,28 @@ def test_a_bad_stored_regime_record_is_dropped(cfg, tmp_path):
     assert ap.lab.reg == {"high/down": {"IC": [3, 1.0, 1.0, 2]}} and ap.lab.recent == [["2026-11-09", IC, "NIFTY", 0.3, "high/down"]]
 
 
+def test_a_malformed_tag_row_never_costs_the_rest_of_the_record(cfg, tmp_path):
+    """Risk review, 14 Nov 2026: an unhashable strategy id in a stored row raised inside load(), before the convex trail peaks and today's plan were read back."""
+    from tests.test_paper_auto2 import FakeRelay, IC, desk
+    rows = [["2026-11-09", [1], "NIFTY", 0.3, "high/down"], ["2026-11-09", {"a": 1}, "NIFTY", 0.3, "high/down"], ["x" * 500, IC, "NIFTY", 0.3, "high/down"],
+            ["2026-11-09", IC, {"n": 1}, 0.3, "high/down"], ["2026-11-09", IC, "NIFTY", True, "high/down"], ["2026-11-09", IC, "NIFTY", 0.3, "made/up"],
+            ["2026-11-09", IC, "NIFTY", 0.3, "unknown"]]
+    bad = json.dumps({"v": 1, "stats": {IC: [2, 0.5, 0.3, 1]}, "cx": {"pkg1": 4.2}, "reg": {"high/down": {"IC": [1, 0.1, 0.01, 1]}}, "recent": rows})
+    ap = desk(cfg, tmp_path)[1]
+    msg = ap.load(FakeRelay(bad))
+    assert "no record" not in msg and ap.cx_peak == {"pkg1": 4.2} and IC in ap.lab.stats
+    assert ap.lab.recent == [["2026-11-09", IC, "NIFTY", 0.3, "unknown"]] and ap.lab.reg == {"high/down": {"IC": [1, 0.1, 0.01, 1]}}
+
+
+def test_the_summary_caps_what_it_reads_from_the_brief(cfg, tmp_path):
+    from tests.test_paper_auto import T0
+    from tests.test_paper_auto2 import desk
+    ap = desk(cfg, tmp_path)[1]
+    ap.brief = {"session": T0.date().isoformat(), "fingerprint": {"key": "low/up", "label": "x" * 5000, "since": {"evil": 1}}}
+    m = ap.summary()["market"]
+    assert m["key"] == "low/up" and len(m["label"]) == 200 and m["since"] is None
+
+
 def test_the_shadow_book_tags_what_it_closes(cfg, tmp_path):
     from tests.test_paper_auto import T0, board
     from tests.test_paper_auto2 import calm, desk

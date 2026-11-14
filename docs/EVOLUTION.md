@@ -47,7 +47,7 @@ be tested exactly on the record already kept, before it touches paper money.
 |---|---|---|
 | **1. Fingerprint and tags** (built 14 Nov 2026) | The brief's daily fingerprint; every closed shadow trade tagged with its regime; live theses say the market; the app's Market regime panel | 30 sessions of fingerprints; every closed shadow trade tagged (none `unknown` on a day the brief ran) |
 | 2. Forgetting and probation | A discounted record beside the cumulative one; Page-Hinkley demotion of live strategies; model weights cut on falling calibration | Pre-registered: on the shadow record, choosing with the discounted record does at least as well as with the cumulative |
-| 3. Choosing by regime | Strategy × regime hierarchical model; Thompson sampling on today's regime | Pre-registered off-policy test on 60+ sessions of shadow trades |
+| 3. Choosing by regime | Strategy × regime hierarchical model; Thompson sampling on today's regime | Pre-registered off-policy test on 60+ sessions of shadow trades. Phase 1 tags a trade with the regime of the day it **closes**; the test must condition on the regime at **entry** (a trade held overnight closes in a later fingerprint), so phase 3 first records the entry regime with each shadow position |
 | 4. Breaks and the unfamiliar market | Change points on the fingerprint; automatic size halving | Finds the library's known breaks within 10 sessions |
 | 5. The regime library | Fingerprints back to 2007; strategies replayed through them; priors by similarity | Similarity priors beat flat priors on regimes held out |
 | 6. Re-validation and rule changes | Monthly walk-forward plateau reports; loosening only with the owner; the rule-change freeze | The first monthly report reviewed |
