@@ -76,7 +76,7 @@ def test_worker_passes_requests_to_pages(tmp_path):
     assert d["url"] == "https://pages.example/Quant-Desk/data.json?t=1"          # path and query kept
     assert d["cache"] == "no-store" and d["cc"] == "no-cache"                    # live data: never edge-cached
     assert d["inm"] == '"e1"' and d["cookie"] is None                            # revalidation passes, cookies don't
-    assert out["root"] == {"url": "https://pages.example/Quant-Desk/", "cc": "max-age=600", "cache": None, "body": "ok"}
+    assert out["root"] == {"url": "https://pages.example/Quant-Desk/", "cc": "no-cache", "cache": "no-store", "body": "ok"}   # the app's page: never edge-cached
     assert out["redirect"] == {"status": 301, "location": "https://qd.example.workers.dev/fonts/"}   # stays on Cloudflare
     assert out["post"] == {"status": 405, "upstream": 0}
 
