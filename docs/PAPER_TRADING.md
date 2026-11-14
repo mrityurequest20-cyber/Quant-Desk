@@ -595,6 +595,10 @@ Okay, then it takes trade."
 **What it is not:** a forecast that has been tested. The repository's own research found direction hard to forecast. The plan
 writes down what the desk will look for and why. Whether planned trades do better than unplanned ones is for the record to show.
 
+### Open shadow trades outlive a runner job (14 Nov 2026)
+
+The paper desk runs as chained jobs with handovers (`paper-desk.yml`: 11:50, 17:40 and 23:30 IST, then the end of the day). Until 14 Nov 2026 a shadow trade still open at a handover was lost and never scored: a strategy held overnight could never be held overnight in shadow, and every record was built only from trades that resolved inside one job. Now the open shadow book is saved beside the strategy record, on the same two-minute cadence and at the end of every job, to the relay's `/paper/shadow` (the runner's INGEST key only, never the app's; compressed, in up to ten stored pieces). The next job reads it back with every field checked and closes each trade by its own exits. Dropped, not scored, and counted by reason (`shadow_carry` in the runner's state): a day trade from an earlier session, a trade past its expiry, an unknown strategy or instrument, anything malformed. A book too large for the relay keeps its longest-held trades and counts the rest (`left_out`). Like the record, it is private: it is never published.
+
 ### Held overnight, and a stop set by volatility (owner, 14 Nov 2026)
 
 The owner: "my options, whether buying or selling, must have the overnight holding power", and the stop "based on the market

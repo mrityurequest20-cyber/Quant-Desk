@@ -8,6 +8,8 @@
 //   POST /paper/result  the runner (INGEST)   what happened to an order; removes it from the queue
 //   POST /paper/state   the runner (INGEST)   {summary, account?}: refuses an account whose ledger is shorter than, or does not extend, the one held
 //   GET  /paper/state?full=1  the runner (INGEST)  the summary and the full saved account (to restore from)
+//   POST /paper/lab, GET /paper/lab        the runner (INGEST)  AUTO v2's strategy record
+//   POST /paper/shadow, GET /paper/shadow  the runner (INGEST)  AUTO v2's open shadow trades, so they outlive a handover between runner jobs
 //
 // The relay validates the SHAPE of everything that crosses it and stamps the queue time itself; every rule about whether a trade happens is the Python risk gate's.
 // All of it lives in the same Durable Object as the live board (class LiveBoard), in storage, so it survives a restart. No secret and no price is stored here.
@@ -22,6 +24,8 @@ export const MAX_SEEN = 1000;                      // order ids remembered as us
 export const MAX_SUMMARY = 60000;                  // characters
 export const CHUNK = 100000;                       // characters per stored piece of the account (a stored value is limited to 128 KiB; the account is ASCII only, so a character is a byte)
 export const MAX_CHUNKS = 12;
+export const MAX_SHADOW = 1000000;                // characters: AUTO v2's open shadow trades, kept in pieces of CHUNK (ASCII only)
+export const MAX_SHADOW_CHUNKS = Math.ceil(MAX_SHADOW / CHUNK);
 const ID = /^[A-Za-z0-9_-]{6,64}$/;
 const NAME = /^[A-Z0-9][A-Z0-9&_.-]{2,39}$/;
 const STATUS = new Set(["filled", "refused", "expired", "invalid", "done"]);
@@ -173,6 +177,8 @@ export class PaperBook {
 			if (p === "/paper/state" && m === "GET") return await this.getState(url.searchParams.get("full") === "1", now);
 			if (p === "/paper/lab" && m === "POST") return await this.putLab(await request.json(), now);
 			if (p === "/paper/lab" && m === "GET") { const lab = await this.state.storage.get("paper:lab"); return json(200, { lab: typeof lab === "string" ? lab : null, now }); }
+			if (p === "/paper/shadow" && m === "POST") return await this.putShadow(await request.json(), now);
+			if (p === "/paper/shadow" && m === "GET") return json(200, { shadow: await this.heldShadow(), now });
 		} catch (e) {
 			return json(500, { error: "the paper store could not complete that; nothing was changed" });       // storage failed: memory is untouched (see below)
 		}
@@ -227,6 +233,33 @@ export class PaperBook {
 		if (!o || typeof o !== "object" || o.v !== 1 || !o.stats || typeof o.stats !== "object" || Array.isArray(o.stats)) return json(400, { error: "not a valid strategy record" });
 		await this.state.storage.put("paper:lab", lab);
 		return json(200, { saved: true, chars: lab.length, now });
+	}
+
+	// AUTO v2's open shadow trades: {"shadow": "<json text>"}, text like the record (the runner re-validates every trade it reads back), in pieces of CHUNK.
+	async putShadow(raw, now) {
+		const text = raw && typeof raw === "object" ? raw.shadow : null;
+		if (typeof text !== "string" || text.length > MAX_SHADOW || /[^\x20-\x7e]/.test(text)) return json(400, { error: "not a valid shadow book" });
+		let o;
+		try { o = JSON.parse(text); } catch (e) { return json(400, { error: "not a valid shadow book" }); }
+		if (!o || typeof o !== "object" || o.v !== 1 || !Array.isArray(o.open)) return json(400, { error: "not a valid shadow book" });
+		const n = Math.max(1, Math.ceil(text.length / CHUNK));
+		const writes = {};
+		for (let i = 0; i < n; i++) writes["paper:shadow:" + i] = text.slice(i * CHUNK, (i + 1) * CHUNK);
+		writes["paper:shadowmeta"] = { n };
+		await this.state.storage.put(writes);                                                // the pieces and their count together, or nothing
+		const stale = [];
+		for (let i = n; i < MAX_SHADOW_CHUNKS; i++) stale.push("paper:shadow:" + i);
+		try { await this.state.storage.delete(stale); } catch (e) { /* never read (the count says n): the book itself is kept, so this is no failure */ }
+		return json(200, { saved: true, chars: text.length, now });
+	}
+
+	async heldShadow() {
+		const meta = await this.state.storage.get("paper:shadowmeta");
+		if (!meta || !Number.isInteger(meta.n) || meta.n < 1 || meta.n > MAX_SHADOW_CHUNKS) return null;
+		const keys = Array.from({ length: meta.n }, (_, i) => "paper:shadow:" + i);
+		const got = await this.state.storage.get(keys);
+		const parts = keys.map((k) => got.get(k));
+		return parts.every((x) => typeof x === "string") ? parts.join("") : null;
 	}
 
 	async putState(raw, now) {

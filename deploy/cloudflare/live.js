@@ -17,7 +17,7 @@
 
 import { KotakPoller, istParts, runCycle, inSession, SPECIAL_SESSIONS } from "./kotak.js";
 import { Series, shardKeys, FLUSH_MS } from "./series.js";
-import { PaperBook, cleanOrder, cleanResult, cleanState, MAX_LAB } from "./paper.js";
+import { PaperBook, cleanOrder, cleanResult, cleanState, MAX_LAB, MAX_SHADOW } from "./paper.js";
 import { NewsBook } from "./news.js";
 import { Candles, candleKeys, cleanDepth } from "./candles.js";
 import { SOURCES, PUSH_SOURCES, parseRoutes, pick, rank, freshest } from "./routes.js";
@@ -238,6 +238,7 @@ const PAPER_ROUTES = {
 	"POST /paper/order": "read", "POST /paper/kill": "read",
 	"GET /paper/queue": "ingest", "POST /paper/result": "ingest", "POST /paper/state": "ingest",
 	"POST /paper/lab": "ingest", "GET /paper/lab": "ingest",             // AUTO v2's strategy record: the runner's alone
+	"POST /paper/shadow": "ingest", "GET /paper/shadow": "ingest",       // AUTO v2's open shadow trades: the runner's alone
 };
 async function handlePaper(request, env, url, stub) {
 	const route = request.method + " " + url.pathname;
@@ -254,6 +255,7 @@ async function handlePaper(request, env, url, stub) {
 		if (route === "POST /paper/order" && !cleanOrder(body)) return reply(400, { error: "not a valid order" });
 		if (route === "POST /paper/result" && !cleanResult(body)) return reply(400, { error: "not a valid result" });
 		if (route === "POST /paper/lab" && !(body && typeof body.lab === "string" && body.lab.length <= MAX_LAB)) return reply(400, { error: "not a valid strategy record" });
+		if (route === "POST /paper/shadow" && !(body && typeof body.shadow === "string" && body.shadow.length <= MAX_SHADOW)) return reply(400, { error: "not a valid shadow book" });
 		let okState = true;
 		if (route === "POST /paper/state") { try { okState = !!cleanState(body); } catch (e) { okState = false; } }                    // absurdly deep nesting is a refusal, not an error
 		if (!okState) return reply(400, { error: "not a valid state" });

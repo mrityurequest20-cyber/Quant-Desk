@@ -40,6 +40,7 @@ import base64
 import datetime as dt
 import json
 import math
+import time
 import random
 import re
 import zlib
@@ -121,6 +122,13 @@ LAB_MAX_INFLATED = 8_000_000              # a compressed record read back may no
 # ---- the evolution, phase 1 (docs/EVOLUTION.md): every closed shadow trade is tagged with the market it was taken in (the brief's fingerprint key) ---------------
 RECENT_MAX = 400                          # the latest closed shadow trades kept whole (date, strategy, underlying, R, regime) for the later phases' replays
 REGIME_KEY = re.compile(r"^(low|normal|high)/(up|down|range)$")
+# Open shadow trades outlive a runner (14 Nov 2026): the desk runs as chained jobs with handovers (paper-desk.yml), and a shadow trade still open at a handover was lost,
+# never scored, so a strategy held overnight could never be held overnight in shadow, and its record was built only from trades that resolved inside one job. The open
+# shadow book is kept on the relay beside the record (private, the runner's key only) and read back validated by the next job.
+SHADOW_MAX_CHARS = 990_000                # the relay keeps it in up to ten stored pieces of 100,000 characters
+SHADOW_LEG = re.compile(r"^[A-Z0-9][A-Z0-9&_.-]{2,39}$")
+SHADOW_MIN_RISK = 0.01                    # rupees a unit: a trade read back must risk something (a near-zero risk would score every mark at the clip)
+SHADOW_MAX_DAYS = 400                     # an expiry this far after its opening is not one the desk trades
 # The day plan (owner, 13 Nov 2026: "6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis and look
 # for high risk to reward trades"). Built from last night's closing books, the overnight markets, the news and the pre-market brief; it ranks defined-risk candidates and the
 # open takes a planned strategy first, through the same proof gate (MIN_TRADES, a positive draw) and the same risk gate as any other.
@@ -741,6 +749,13 @@ class AutoPilotV2:
         self.tape: dict[str, list[tuple[float, float]]] = {}
         self.shadow: dict[tuple, dict] = {}        # (sid, u) -> open shadow trade
         self.cool: dict[tuple, float] = {}         # (sid, u) -> no shadow re-entry before this
+        self.shadow_dirty = False                  # the open shadow book changed since it was last kept
+        self.shadow_saved_at = -1e9
+        self.shadow_route = True                   # False once the relay answers 404 for /paper/shadow: it keeps no book, so the record never waits for one
+        self.shadow_seq = 0                        # the stamp of the last shadow book kept (or issued): each book carries its own, the record the last one before it
+        self.lab_shadow_seq = 0                    # the stamp the record read back names: a book older than it is stale (its trades may already be scored)
+        self.shadow_io: dict = {"restored": 0, "dropped": {}, "left_out": 0, "held_back": 0}   # the last read back (kept, dropped by reason), the last save's left out, and
+        #                                                                          how many times the record waited for a book that could not be kept
         self.backoff: dict[str, float] = {}        # u -> no live entry before this
         self.pending_exit: dict[str, float] = {}
         self.n = 0
@@ -1373,16 +1388,21 @@ class AutoPilotV2:
                 close = (dt.datetime.combine(ist.date(), self.window(key[1])[2]) + dt.timedelta(minutes=16)).time()
                 if ist.time() >= close and sh["s"].hold == "day":                        # a day trade that cannot be marked by its segment's close is dropped, not scored
                     self.shadow.pop(key)
+                    self.shadow_dirty = True
                 continue
             r = (v - sh["fees"]) / sh["risk"]
             if "lad" in sh:                                                             # a convex trade: its thirds (convex.py)
-                sh["peak"] = max(sh["peak"], r)
+                if r > sh["peak"]:
+                    sh["peak"], self.shadow_dirty = r, True
                 act, _ = self._cx_exit(sh["s"], r, sh["peak"], sh["lad"].done1, sh["lad"].done2, sh["opened"], ist, sh["exp"], key[1], sh.get("event_at"), states)
                 total = sh["lad"].step(act, r)
+                if act:
+                    self.shadow_dirty = True
                 if total is not None:
                     self.lab.add(sh["s"].sid, total)
                     self.lab.tag(sh["s"].sid, self.market_key(ist), total, key[1], ist.date().isoformat())
                     self.shadow.pop(key)
+                    self.shadow_dirty = True
                     self.cool[key] = t + REENTRY_S
                 continue
             why = self._exit_why(sh["s"], r, sh["best_r"], sh["opened"], ist, sh["exp"], key[1], sh.get("spot0"), sh.get("sd0"), (states.get(key[1]) or {}).get("spot"))
@@ -1390,6 +1410,7 @@ class AutoPilotV2:
                 self.lab.add(sh["s"].sid, r)
                 self.lab.tag(sh["s"].sid, self.market_key(ist), r, key[1], ist.date().isoformat())
                 self.shadow.pop(key)
+                self.shadow_dirty = True
                 self.cool[key] = t + REENTRY_S
         for u, st in states.items():
             first, last, _ = self.window(u)
@@ -1405,6 +1426,7 @@ class AutoPilotV2:
                 self.shadow[key] = {"s": s, "legs": p["legs"], "risk": p["risk"], "fees": p["fees"], "best_r": (p["best"] / p["risk"]) if math.isfinite(p["best"]) else math.inf,
                                     "opened": ist, "exp": p["exp"], "spot0": st["spot"], "sd0": self.daily_sd(u, st)}
                 self.lab.today["shadow_opened"] += 1
+                self.shadow_dirty = True
             if t - self.cx_at.get(u, -1e18) >= CX.EVERY_S:                             # the Convexity desk's strategies, in shadow like the rest
                 self.cx_at[u] = t
                 for s in CX_CATALOGUE:
@@ -1417,6 +1439,7 @@ class AutoPilotV2:
                     self.shadow[key] = {"s": s, "legs": p["legs"], "risk": p["risk"], "fees": p["fees"], "best_r": math.inf, "opened": ist, "exp": p["exp"], "peak": 0.0,
                                         "lad": CX.ShadowLadder(), "event_at": ((st.get("cx") or {}).get("event") or {}).get("at") if s.vol == "event" else None}
                     self.lab.today["shadow_opened"] += 1
+                    self.shadow_dirty = True
 
     # ---- live --------------------------------------------------------------------------------------------------------------------------------
     def live_packages(self, account) -> dict:
@@ -2052,7 +2075,116 @@ class AutoPilotV2:
                  and num(i.get("risk_unit")) and num(i.get("spot")) and when(i.get("event_at"))]   # what plan_ok and plan_price_ok measure from must be real
         return {**d, "items": items[:PLAN_TOP], "states": d.get("states") if isinstance(d.get("states"), dict) else {}}
 
-    def load(self, relay) -> str:
+    def next_seq(self) -> int:
+        """A new stamp: above every stamp this job has seen or issued, and never below the wall clock in milliseconds, so stamps rise across jobs whether or not
+        any read at a job's start succeeded (risk re-review, 14 Nov 2026)."""
+        self.shadow_seq = max(self.shadow_seq + 1, self.lab_shadow_seq + 1, int(time.time() * 1000))
+        return self.shadow_seq
+
+    def shadow_json(self, seq: int = 0) -> tuple[str, int]:
+        """The open shadow book as the relay keeps it (compressed, at most SHADOW_MAX_CHARS), stamped `seq`, and how many trades did not fit: the longest held first."""
+        rows = []
+        for (sid, u), sh in sorted(self.shadow.items(), key=lambda kv: kv[1]["opened"]):
+            row = [sid, u, [[l["name"], int(l["side"]), round(float(l["px"]), 4)] for l in sh["legs"]], round(float(sh["risk"]), 6), round(float(sh["fees"]), 4),
+                   round(sh["best_r"], 4) if math.isfinite(sh["best_r"]) else None, sh["opened"].isoformat(), sh["exp"].isoformat()[:10],
+                   sh.get("spot0"), sh.get("sd0")]
+            if "lad" in sh:
+                lad = sh["lad"]
+                row.append({"peak": round(sh["peak"], 4), "lad": [round(lad.left, 6), round(lad.banked, 6), bool(lad.done1), bool(lad.done2)],
+                            "event_at": sh.get("event_at") if isinstance(sh.get("event_at"), str) else None})
+            rows.append(row)
+
+        def packed(k: int) -> str:
+            body = json.dumps({"v": 1, "seq": int(seq), "open": rows[:k]}, separators=(",", ":"), default=str)
+            return json.dumps({"v": 1, "open": [], "z": base64.b64encode(zlib.compress(body.encode("ascii"), 9)).decode("ascii")}, separators=(",", ":"))
+        text = packed(len(rows))
+        if len(text) <= SHADOW_MAX_CHARS:
+            return text, 0
+        lo, hi = 0, len(rows)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(packed(mid)) <= SHADOW_MAX_CHARS:
+                lo = mid
+            else:
+                hi = mid - 1
+        return packed(lo), len(rows) - lo
+
+    def restore_shadow(self, text, now: dt.datetime) -> dict:
+        """The open shadow book read back (storage is not trusted: every field is checked). A day trade from an earlier session, a trade past its expiry, an unknown
+        strategy or instrument, and anything malformed is dropped, not scored, and counted by reason."""
+        kept, dropped = 0, {}
+
+        def drop(why: str) -> None:
+            dropped[why] = dropped.get(why, 0) + 1
+        got = Lab.unpack(text) if isinstance(text, str) else {}
+        rows = got.get("open") if isinstance(got.get("open"), list) else []
+        seq = got.get("seq", 0)
+        seq = seq if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0 else -1
+        self.shadow_seq = max(self.shadow_seq, seq, self.lab_shadow_seq)
+        if seq < self.lab_shadow_seq:                                                   # older than the record: some of its trades may be scored already
+            if rows:
+                dropped["older than the record"] = len(rows)
+            rows = []
+        ist, und = now.astimezone(IST), {str(u).upper() for u in self.und}
+        fin = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)     # noqa: E731
+        for row in rows:
+            try:
+                if not (isinstance(row, list) and len(row) in (10, 11)):
+                    drop("malformed")
+                    continue
+                sid, u, legs, risk, fees, best, opened, exp, spot0, sd0 = row[:10]
+                if not (isinstance(sid, str) and sid in BY_SID and isinstance(u, str) and u in und):
+                    drop("unknown strategy or instrument")
+                    continue
+                s = BY_SID[sid]
+                ok_legs = isinstance(legs, list) and 1 <= len(legs) <= 8 and all(
+                    isinstance(l, list) and len(l) == 3 and isinstance(l[0], str) and SHADOW_LEG.match(l[0]) and isinstance(l[1], int) and not isinstance(l[1], bool)
+                    and 1 <= abs(l[1]) <= 10 and fin(l[2]) and l[2] >= 0 for l in legs)
+                if not (ok_legs and fin(risk) and risk >= SHADOW_MIN_RISK and fin(fees) and fees >= 0 and (best is None or fin(best)) and isinstance(opened, str) and isinstance(exp, str)
+                        and (spot0 is None or fin(spot0)) and (sd0 is None or fin(sd0))):
+                    drop("malformed")
+                    continue
+                o = dt.datetime.fromisoformat(opened)
+                e = dt.date.fromisoformat(exp[:10])
+                if o.tzinfo is None or o > now + dt.timedelta(minutes=5):
+                    drop("malformed")
+                    continue
+                if e < ist.date():
+                    drop("past its expiry")
+                    continue
+                if e > o.date() + dt.timedelta(days=SHADOW_MAX_DAYS):
+                    drop("malformed")                                                  # no contract the desk trades runs this long
+                    continue
+                if s.hold == "day" and o.astimezone(IST).date() < ist.date():
+                    drop("a day trade from an earlier session")
+                    continue
+                if len(row) == 11 and not CX.is_convex(s.struct):                      # only a convexity trade carries its thirds
+                    drop("malformed")
+                    continue
+                sh = {"s": s, "legs": [{"name": l[0], "side": l[1], "px": float(l[2])} for l in legs], "risk": float(risk), "fees": float(fees),
+                      "best_r": math.inf if best is None else float(best), "opened": o.astimezone(IST), "exp": e, "spot0": spot0, "sd0": sd0}
+                if CX.is_convex(s.struct):
+                    x = row[10] if len(row) == 11 else None
+                    lad = x.get("lad") if isinstance(x, dict) else None
+                    if not (isinstance(lad, list) and len(lad) == 4 and fin(lad[0]) and 0 <= lad[0] <= 1 and fin(lad[1]) and isinstance(lad[2], bool)
+                            and isinstance(lad[3], bool) and fin(x.get("peak"))) or not (x.get("event_at") is None or isinstance(x.get("event_at"), str)):
+                        drop("malformed")
+                        continue
+                    ladder = CX.ShadowLadder()
+                    ladder.left, ladder.banked, ladder.done1, ladder.done2 = float(lad[0]), float(lad[1]), lad[2], lad[3]
+                    sh.update({"lad": ladder, "peak": float(x["peak"]), "event_at": (x.get("event_at") or None) and x["event_at"][:40]})
+                key = (sid, u)
+                if key in self.shadow:
+                    drop("already open")
+                    continue
+                self.shadow[key] = sh
+                kept += 1
+            except (TypeError, ValueError, AttributeError, OverflowError):
+                drop("malformed")
+        self.shadow_io.update({"restored": kept, "dropped": dropped})
+        return self.shadow_io
+
+    def load(self, relay, now: dt.datetime | None = None) -> str:
         try:
             got = relay.get_lab()
             raw = got.get("lab") if isinstance(got, dict) else None
@@ -2063,21 +2195,48 @@ class AutoPilotV2:
             cx = got.get("cx")
             self.cx_peak = {str(k): float(v) for k, v in cx.items() if isinstance(v, (int, float)) and math.isfinite(v)} if isinstance(cx, dict) else {}
             self.day_plan = self.restore_plan(got.get("plan")) or self.day_plan          # a restart after 09:15 keeps today's plan (yesterday's is dropped as always)
+            ss = got.get("shadow_seq", 0)
+            self.lab_shadow_seq = ss if isinstance(ss, int) and not isinstance(ss, bool) and ss >= 0 else 0
             if hasattr(self, "reader"):
                 self.reader.restore(self._read_w)
             try:
                 self.lab.restore_tags(got.get("reg"), got.get("recent"))                 # last, and on its own: a bad tag never costs the trail peaks or the plan
             except Exception:                                                           # noqa: BLE001
                 self.lab.reg, self.lab.recent = {}, []
-            return f"{len(self.lab.stats)} strategies with a record"
+            return f"{len(self.lab.stats)} strategies with a record" + self._load_shadow(relay, now)
         except Exception as e:                                                          # noqa: BLE001 - no record means starting from zero, never not trading
-            return f"no record could be read ({type(e).__name__}): starting from zero"
+            return f"no record could be read ({type(e).__name__}): starting from zero" + self._load_shadow(relay, now)
+
+    def _load_shadow(self, relay, now: dt.datetime | None = None) -> str:
+        self.shadow_seq = max(self.shadow_seq, self.lab_shadow_seq)                     # whatever the book's read does, stamps start above the record's
+        get = getattr(relay, "get_shadow", None)
+        if get is None:
+            return ""
+        try:
+            got = get()
+            io = self.restore_shadow(got.get("shadow") if isinstance(got, dict) else None, now or dt.datetime.now(IST))
+            gone = sum(io["dropped"].values())
+            return f"; {io['restored']} open shadow trades carried over" + (f", {gone} dropped" if gone else "")
+        except Exception as e:                                                          # noqa: BLE001 - an unreadable shadow book starts empty, as it always did
+            return f"; no open shadow trades could be read ({type(e).__name__})"
 
     def save(self, relay, mono: float, force: bool = False) -> bool:
-        if not (self.lab.dirty and (force or mono - self.lab_saved_at >= 120)):
-            return False
+        """The open shadow book, then the record. The record is never kept ahead of the book: when it is due, an unsaved book goes first (whatever its own clock),
+        and a book that could not be kept holds the record back. So a trade the record has scored is never still open in the book the next job reads: a job that
+        ends badly can lose a trade, never count one twice (risk review of the carry, 14 Nov 2026)."""
+        lab_due = self.lab.dirty and (force or mono - self.lab_saved_at >= 120)
+        shadow = self.save_shadow(relay, mono, force or lab_due)
+        if not lab_due:
+            return shadow
+        has_route = getattr(relay, "put_shadow", None) is not None and self.shadow_route
+        if self.shadow_dirty and has_route:
+            self.shadow_io["held_back"] = self.shadow_io.get("held_back", 0) + 1
+            return shadow                                                               # the book could not be kept: the record waits for it
         try:
             extra = {"read_w": self.reader.export()} if hasattr(self, "reader") else {}
+            if not has_route:                                                           # no book kept now: any book still stored (a Worker rolled back) is older than this
+                self.next_seq()
+            extra["shadow_seq"] = self.shadow_seq                                       # record, and is dropped when read back
             if self.cx_peak:
                 extra["cx"] = {k: round(v, 3) for k, v in self.cx_peak.items()}
             if self.day_plan:
@@ -2087,6 +2246,22 @@ class AutoPilotV2:
             return True
         except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
             return False
+
+    def save_shadow(self, relay, mono: float, force: bool = False) -> bool:
+        put = getattr(relay, "put_shadow", None)
+        if put is None or not (self.shadow_dirty and (force or mono - self.shadow_saved_at >= 120)):
+            return False
+        try:
+            seq = self.next_seq()                                                       # used once issued: a put whose reply is lost may still have been stored
+            text, left_out = self.shadow_json(seq)
+            put(text)
+            self.shadow_dirty, self.shadow_saved_at, self.shadow_route = False, mono, True
+            self.shadow_io["left_out"] = left_out
+            return True
+        except Exception as e:                                                          # noqa: BLE001 - kept dirty: the next save tries again
+            if "HTTP 404" in str(e):
+                self.shadow_route = False                                               # a relay without the route (before its Worker is deployed) keeps no book that
+            return False                                                                # could be read back stale, so the record is not held back for it
 
     def summary(self) -> dict:
         """For the app's Strategy lab panel: the record's leaders, today's counts, and each underlying's state now (compact: the runner's whole state must fit the relay's cap)."""
@@ -2105,6 +2280,7 @@ class AutoPilotV2:
         s = lambda v, n: v[:n] if isinstance(v, str) else None                         # noqa: E731 - the brief is read, not trusted: strings, capped
         out["market"] = {"session": s(b.get("session"), 10), "key": s(fp.get("key"), 16), "label": s(fp.get("label"), 200), "since": s(fp.get("since"), 10)} if fp else None
         out["regimes"] = self.lab.by_regime()
+        out["shadow_carry"] = dict(self.shadow_io)
         out["convex"] = {**self.cx_status, "stake_pct": CX.STAKE_PCT, "budget_pct": CX.MONTH_BUDGET_PCT, "min_pooled": CX.MIN_POOLED, "min_own": CX.MIN_OWN,
                          "strategies": len(CX_CATALOGUE), "shadow_open": sum(1 for sid, _ in self.shadow if CX.is_convex(CX.sid_struct(sid))),
                          "now": {u: st["cx"] for u, st in sorted(self.last_state.items()) if st.get("cx") and (st["cx"][1] or st["cx"][0] is not None)}}
