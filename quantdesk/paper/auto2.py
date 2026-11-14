@@ -1969,8 +1969,20 @@ class AutoPilotV2:
             dt.datetime.fromisoformat(d["built_at"])
         except ValueError:
             return None
-        items = [i for i in d["items"] if isinstance(i, dict) and isinstance(i.get("u"), str) and i.get("sid") in BY_SID]
-        return {**d, "items": items[:PLAN_TOP * 2], "states": d.get("states") if isinstance(d.get("states"), dict) else {}}
+        def num(x):
+            return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and x > 0
+
+        def when(x):
+            if x is None:
+                return True
+            try:
+                dt.datetime.fromisoformat(str(x))
+                return True
+            except ValueError:
+                return False
+        items = [i for i in d["items"] if isinstance(i, dict) and isinstance(i.get("u"), str) and i.get("sid") in BY_SID
+                 and num(i.get("risk_unit")) and num(i.get("spot")) and when(i.get("event_at"))]   # what plan_ok and plan_price_ok measure from must be real
+        return {**d, "items": items[:PLAN_TOP], "states": d.get("states") if isinstance(d.get("states"), dict) else {}}
 
     def load(self, relay) -> str:
         try:

@@ -274,14 +274,20 @@ def test_the_whole_catalogue_fits_the_relay_compressed_and_a_bad_record_is_refus
 
 def test_todays_plan_survives_a_restart_and_yesterdays_does_not(cfg, tmp_path):
     rn, ap = desk(cfg, tmp_path)
-    ap.day_plan = {"built_at": T0.date().isoformat() + "T07:30+05:30", "items": [{"u": "NIFTY", "sid": IC, "risk_unit": 10.0}, {"u": "NIFTY", "sid": "NOPE"}],
+    ap.day_plan = {"built_at": T0.date().isoformat() + "T07:30+05:30", "items": [{"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": "NOPE", "risk_unit": 10.0, "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": "x", "spot": 24500.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": 10.0},
+                                                                                  {"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0, "event_at": "soon"}],
                    "states": {"NIFTY": {"view": "up"}}, "notes": []}
     ap.lab.add(IC, 0.3)
     relay = FakeRelay()
     assert ap.save(relay, 1000.0)
     ap2 = desk(cfg, tmp_path)[1]
     ap2.load(relay)
-    assert ap2.day_plan and [i["sid"] for i in ap2.day_plan["items"]] == [IC] and ap2.planned("NIFTY") == [IC]     # an unknown strategy is dropped
+    assert ap2.day_plan and [i["sid"] for i in ap2.day_plan["items"]] == [IC] and ap2.planned("NIFTY") == [IC]     # an unknown strategy, a bad price, no spot, a bad time: dropped
+    many = {"built_at": T0.date().isoformat() + "T07:30+05:30", "items": [{"u": "NIFTY", "sid": IC, "risk_unit": 10.0, "spot": 24500.0}] * (A2.PLAN_TOP + 5)}
+    assert len(A2.AutoPilotV2.restore_plan(many)["items"]) == A2.PLAN_TOP                       # no longer than a plan the desk builds itself
     assert ap2.day_plan["states"]["NIFTY"]["view"] == "up"
     cycle(rn, ap2, board(T0), T0)
     assert ap2.day_plan is not None                                                              # the same day: it steers the session

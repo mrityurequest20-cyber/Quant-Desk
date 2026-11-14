@@ -244,6 +244,9 @@ A strategy's record is read through a **multilevel normal model**, fitted by emp
   it fits and, past that, zlib-compressed into the same value (`{"v": 1, "stats": {}, "z": ...}`; the relay's checks are unchanged), so the whole catalogue
   with a record for every strategy fits in about 70,000 characters instead of losing a third of it. Read back, a compressed record may not inflate past 8 MB
   (storage is not trusted); only if even the compressed record were too large would the thinnest records be left out, the busiest kept.
+  **Before rolling back** below 14 Nov 2026's commit 6a06ac5: older code reads the compressed record as empty and its next save would overwrite it, so keep a
+  copy of the stored record first. A stored record that cannot be read at all (corrupted or tampered: only the runner's ingest key can write it) is started
+  from zero and overwritten at the next save, as before.
 
 ## The strategy builder: every structure, which one now and why, and designs of its own
 
@@ -581,7 +584,7 @@ Okay, then it takes trade."
 - **Same limits:** the risk gate, the loss caps and the proof gate are the same as for any trade.
 - **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
 - **Yesterday's plan** never steers today. Today's is kept with the strategy record (since 14 Nov 2026), so a restart after 09:15 still has it; read
-  back, only its items that name a known strategy are kept.
+  back, only its items that name a known strategy with a real planned price, spot and (if any) event time are kept, at most as many as a plan holds.
 
 **Where to see it:** the Positions tab, the "Day plan" panel, above the strategy lab.
 
