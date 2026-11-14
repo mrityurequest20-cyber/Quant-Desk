@@ -147,3 +147,91 @@ def test_a_convex_trade_also_goes_live_only_when_planned(cfg, tmp_path):
         t = OPEN + dt.timedelta(minutes=i)
         cycle(rn, ap, wide_board(t), t)
     assert {p.strategy.split()[2] for p in rn.account.positions.values()} == {XG}
+
+
+# ---- the one exception: important news in the session (owner, 14 Nov 2026: "if during the trading time if any news comes up which could be important then also allow
+# the system to trade") ----------------------------------------------------------------------------------------------------------------------------------------------
+NEWS_T = dt.datetime(2026, 11, 9, 11, 30, tzinfo=IST)                   # mid-session, long after the plan's entry window
+UP_BOOK = dict(cb=3000, ca=500, pb=500, pa=3000, fwd_gap=-0.2)          # the live book and the options forward both say up
+CUT = "RBI cuts repo rate by 25 bps, signals more easing"
+
+
+def story(title, t, impact="high", novelty=0.9, recap=False, symbols=("NIFTY",), sid="s1"):
+    return {"id": sid, "title": title, "ts": t.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "impact": impact, "novelty": novelty, "tone": 0.6,
+            "symbols": list(symbols), "recap": recap}
+
+
+def news_desk(cfg, tmp_path):
+    """PLAN_ONLY, a plan built at 07:30 with nothing on it, a tail model, and a proven overnight long call (the strategy a strong up view can take)."""
+    sid = "LC0.uaan.3/1.o"
+    rn, ap = desk(cfg, tmp_path, stats=proven(sid=sid), plan_only=True)
+    ap.brief = {**BRIEF, "tails": TAILS}
+    ap.day_plan = {"built_at": "2026-11-09T07:30+05:30", "items": []}
+    return rn, ap, sid
+
+
+def session(rn, ap, news, start=NEWS_T, minutes=6, **kw):
+    """Cycles exactly as the session runs them, with the news digest handed in."""
+    from quantdesk.paper import runner as RR
+    for i in range(minutes):
+        t = start + dt.timedelta(minutes=i)
+        snap = board(t, **kw)
+        rn.step(snap, ap.decide(snap, rn.account, RR.Runner.server_now(snap), news=news), False, t.astimezone(dt.timezone.utc))
+
+
+def test_important_news_in_the_session_opens_a_window_for_a_strong_direction(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
+    session(rn, ap, news, **UP_BOOK)
+    pos = list(rn.account.positions.values())
+    assert pos and pos[0].strategy.startswith(f"{A2.TAG} {sid} NIFTY p"), [p.strategy for p in pos]
+    assert "Not on the plan: taken on important news in the session (news at" in pos[0].thesis and CUT[:30] in pos[0].thesis
+
+
+def test_without_fresh_important_news_the_same_readings_open_nothing(cfg, tmp_path):
+    for label, news in (("no news", {"items": [], "events": []}),
+                        ("old", {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=45))], "events": []}),
+                        ("before the plan", {"items": [story(CUT, dt.datetime(2026, 11, 9, 7, 0, tzinfo=IST))], "events": []}),
+                        ("a recap", {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2), recap=True)], "events": []}),
+                        ("low impact", {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2), impact="medium")], "events": []}),
+                        ("a repeat", {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2), novelty=0.2)], "events": []})):
+        rn, ap, sid = news_desk(cfg, tmp_path / label.replace(" ", "_"))
+        session(rn, ap, news, **UP_BOOK)
+        assert not rn.account.ledger, label
+
+
+def test_important_news_without_a_strong_direction_takes_no_directional_trade(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
+    session(rn, ap, news)                                                                        # the news says up, but the book and the forward say nothing
+    assert ap.news_win["NIFTY"]["why"].startswith("news at")                                     # the window did open
+    assert not rn.account.ledger                                                                 # one reading is not a strong direction
+
+
+def test_a_story_opens_its_window_once_and_the_window_closes(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
+    w = ap.news_trigger("NIFTY", news, NEWS_T)
+    assert w and w["until"] == NEWS_T - dt.timedelta(minutes=2) + dt.timedelta(minutes=A2.NEWS_WINDOW_MIN)
+    assert ap.news_trigger("NIFTY", news, NEWS_T + dt.timedelta(minutes=10)) is w
+    assert ap.news_trigger("NIFTY", news, NEWS_T + dt.timedelta(minutes=50)) is None               # past its window; the same story never reopens it
+    other = {"items": [story("Crude jumps 7% after strikes on Gulf tankers", NEWS_T - dt.timedelta(minutes=1), symbols=(), sid="s2")], "events": []}
+    assert ap.news_trigger("USDINR", other, NEWS_T) and ap.news_trigger("TCS", other, NEWS_T) is None   # crude reaches the rupee, not an IT exporter
+
+
+def test_important_news_also_lets_a_proven_convex_trade_through_when_its_test_passes(cfg, tmp_path):
+    from quantdesk.paper import runner as RR
+    from tests.test_convex import XG, desk as cx_desk, proven as cx_proven, wide_board
+    news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
+    for label, nw in (("without", {"items": [], "events": []}), ("with", news)):
+        rn, ap = cx_desk(cfg, tmp_path / label, stats=cx_proven())
+        ap.plan_only = True
+        ap.day_plan = {"built_at": "2026-11-09T07:30+05:30", "items": []}
+        for i in range(4):
+            t = NEWS_T + dt.timedelta(minutes=i)
+            snap = wide_board(t)
+            rn.step(snap, ap.decide(snap, rn.account, RR.Runner.server_now(snap), news=nw), False, t.astimezone(dt.timezone.utc))
+        got = {p.strategy.split()[2] for p in rn.account.positions.values()}
+        assert got == ({XG} if label == "with" else set()), (label, got)
+        if got:
+            assert "taken on important news in the session" in next(iter(rn.account.positions.values())).thesis

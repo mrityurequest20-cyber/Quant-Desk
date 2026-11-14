@@ -25,8 +25,8 @@ What bounds it: only the risk gate's loss caps (2.5% of the account a trade with
 strategies or positions (owner, 8 Nov 2026). A sold option is only ever a leg of a structure whose worst case is bounded.
 
 PLAN FIRST, HOLD OVERNIGHT (owner, 14 Nov 2026): with PLAN_ONLY, paper money goes only into what the day plan (06:00 to 09:15) named, a strong direction (three readings
-agreeing, none against) or a big move priced too small, taken in the first 100 minutes unless contradicted since. Nothing else is opened during the day; every strategy
-is still traded in shadow. The directional strategies the plan names are held overnight with a volatility stop (the underlying 1.5 daily sd x sqrt(sessions) against).
+agreeing, none against) or a big move priced too small, taken in the first 100 minutes unless contradicted since. The one exception: important news in the session (news_trigger) opens
+a 45-minute window in which the plan's bar applies to the live board. Nothing else is opened during the day; every strategy is still traded in shadow. The directional strategies the plan names are held overnight with a volatility stop (the underlying 1.5 daily sd x sqrt(sessions) against).
 
 THE CONVEXITY DESK (owner, 14 Nov 2026; convex.py): a second book alongside, with no view on direction. It buys both sides (straddles, strangles, far wings) only when a
 test says the next move is priced too small, risks 0.5% of the account a trade and at most 3% a month, and sells in thirds (+100%, +300%, the rest trailed).
@@ -132,6 +132,12 @@ PLAN_ENTRY_MIN = 100                      # a planned entry is taken within this
 PLAN_PRICE_SLACK = 1.5                    # nor when it now risks more than this times what the plan priced it at (the market has already moved)
 VOL_STOP_K = 1.5                          # the owner's stop: the underlying moving against the trade by 1.5 daily standard deviations (times sqrt(sessions held))
 OVERNIGHT_TPS = (2.0, 3.0)                # the overnight strategies' take-profits, in R of the structure's worst case
+# ---- the one exception: important news in the session (owner, 14 Nov 2026: "if during the trading time if any news comes up which could be important then also allow
+# the system to trade"). A fresh high-impact story after the plan, reaching the instrument, opens a window in which the plan's own bar applies to the live board. --------
+NEWS_FRESH_MIN = 30                       # the story is at most this old
+NEWS_WINDOW_MIN = 45                      # and opens this long a window for the instruments it reaches
+NEWS_MIN_NOVELTY = 0.5                    # a new story, not a repeat of one already out
+NEWS_TOUCH_MIN = 0.3                      # reaching an instrument: named in it, or its subjects move it this much (newsmodel channels)
 OVERNIGHT_TH_PCT = 0.40                   # the overnight markets' median move that counts as a vote
 INDEX_U = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"})     # the overnight cue and macro events are votes for the indices only
 
@@ -787,6 +793,11 @@ class AutoPilotV2:
         pmom, pvote = self.price_vote(mom, rg, sd5)
         d, why = V1.direction(rd["pressure"], rd["gap_pct"], pmom, nv, nwhy)
         d, why = self.with_read(d, why, rd, pmom, nv, nwhy, read, pvote)
+        votes = [v for v in ((1 if rd["pressure"] > 0 else -1) if rd["pressure"] is not None and abs(rd["pressure"]) >= V1.PRESSURE_TH else 0,
+                             (1 if rd["gap_pct"] > 0 else -1) if rd["gap_pct"] is not None and abs(rd["gap_pct"]) >= V1.PARITY_TH_PCT else 0,
+                             (1 if pmom > 0 else -1) if pmom is not None and abs(pmom) >= V1.MOMENTUM_TH_PCT else 0,
+                             nv, (read or {}).get("vote") or 0, pvote[0] if pvote else 0) if v]
+        strong = votes[0] if len(votes) >= PLAN_DIR_VOTES and len(set(votes)) == 1 and nv == votes[0] else 0     # the news among them: the news exception's bar
         tr = rg.get("trend")
         calm = CALM_K * sd5 if sd5 else CALM_PCT                                           # calm in its own terms
         view = "up" if d > 0 else "down" if d < 0 else ("flat" if mom is not None and abs(mom) < calm and not (read or {}).get("vote")
@@ -798,10 +809,10 @@ class AutoPilotV2:
         if rwhy:
             why = list(why) + [rwhy]
         st = {"u": u, "spot": sp, "view": view, "why": why, "mom": mom, "iv": iv, "rv": rv, "ratio": ratio, "vol": vol, "eve": eve, "near": near, "next": nxt, "read": read,
-              "regime": regime, "hmm": rg, "today": ist.date()}
+              "regime": regime, "hmm": rg, "today": ist.date(), "strong": "up" if strong > 0 else "down" if strong < 0 else None, "votes": len(votes)}
         st["cx"] = self.convex_edges(snap, u, ch, st, ist, news, rg, read, T)
         self.last_state[u] = {k: (round(v, 4) if isinstance(v, float) else (v.isoformat() if isinstance(v, dt.date) else v)) for k, v in st.items()
-                              if k not in ("why", "read", "hmm", "today", "cx")}
+                              if k not in ("why", "read", "hmm", "today", "cx", "strong", "votes")}
         self.last_state[u]["cx"] = [round(st["cx"]["ratio"], 3) if st["cx"].get("ratio") is not None else None, [k for k in CX.EDGES if k in st["cx"]]]
         if regime == "event":
             self.last_state[u]["event"] = (rwhy or "")[:160]
@@ -1479,6 +1490,47 @@ class AutoPilotV2:
         dp = self.day_plan or {}
         return [i["sid"] for i in dp.get("items") or [] if i.get("u") == u]
 
+    def news_trigger(self, u: str, news, ist: dt.datetime) -> dict | None:
+        """The news exception for `u` now: {"until", "why"} while a window is open. A window opens on a story at most NEWS_FRESH_MIN old, published after today's
+        plan was built (or the segment's first entry, without a plan), of high impact, new (novelty NEWS_MIN_NOVELTY, not a recap), that names `u` or whose subjects
+        move it by NEWS_TOUCH_MIN through the news model's channels. Each story opens one window per instrument."""
+        if not hasattr(self, "news_win"):
+            self.news_win, self.news_used = {}, set()
+        w = self.news_win.get(u)
+        if w and w["until"] > ist:
+            return w
+        since = None
+        try:
+            if self.day_plan and str(self.day_plan.get("built_at", ""))[:10] == ist.date().isoformat():
+                since = dt.datetime.fromisoformat(self.day_plan["built_at"])
+        except ValueError:
+            since = None
+        if since is None:
+            since = dt.datetime.combine(ist.date(), self.window(u)[0], tzinfo=IST)
+        best = None
+        for it in ((news or {}).get("items") or []) if isinstance(news, dict) else []:
+            if not isinstance(it, dict) or it.get("impact") != "high" or it.get("recap") or float(it.get("novelty") or 0.0) < NEWS_MIN_NOVELTY:
+                continue
+            try:
+                ts = dt.datetime.fromisoformat(str(it.get("ts")).replace("Z", "+00:00")).astimezone(IST)
+            except ValueError:
+                continue
+            if not (since < ts <= ist and (ist - ts).total_seconds() <= NEWS_FRESH_MIN * 60):
+                continue
+            key = (u, str(it.get("id") or it.get("title")))
+            if key in self.news_used:
+                continue
+            title = str(it.get("title") or "")
+            reach = 1.0 if u in (it.get("symbols") or []) else max((abs(x) for subj, _ in NM.subjects(title) for x, _ in NM.sensitivity(u, subj)), default=0.0)
+            if reach >= NEWS_TOUCH_MIN and (best is None or ts > best[0]):
+                best = (ts, key, title)
+        if best is None:
+            return None
+        self.news_used.add(best[1])
+        w = {"until": best[0] + dt.timedelta(minutes=NEWS_WINDOW_MIN), "why": f"news at {best[0]:%H:%M}: {best[2][:140]}"}
+        self.news_win[u] = w
+        return w
+
     def plan_item(self, u: str, sid: str) -> dict | None:
         return next((i for i in (self.day_plan or {}).get("items") or [] if i.get("u") == u and i.get("sid") == sid), None)
 
@@ -1602,7 +1654,10 @@ class AutoPilotV2:
                 if draw > 0:
                     best = (draw, s)
                     break
-            for s in self.strategies() if best is None and not self.plan_only else ():  # PLAN_ONLY: nothing the plan did not name before the open
+            nw = self.news_trigger(u, news, ist) if self.plan_only and best is None else None
+            pool = (self.strategies() if not self.plan_only else
+                    [s for s in self.strategies() if s.hold == "overnight" and s.view == st.get("strong")] if nw and st.get("strong") else [])
+            for s in pool if best is None else ():                                     # PLAN_ONLY: nothing the plan did not name, but important news in the session
                 if (s.sid, u) in busy or not self.matches(s, st):
                     continue
                 n = self.lab.stats.get(s.sid, [0])[0]
@@ -1614,6 +1669,8 @@ class AutoPilotV2:
             if best is None:
                 continue
             s = best[1]
+            if self.plan_only and s.hold == "overnight" and not self.daily_sd(u, st):
+                continue                                                               # no volatility to set its stop from: not opened
             p = self.price(snap, s, st, ch)
             if p is None or any(l["name"] in held_syms for l in p["legs"]):            # a contract held by anyone is not shared: every position has one owner
                 continue
@@ -1627,11 +1684,13 @@ class AutoPilotV2:
                 o["thesis"] = (o["thesis"] + f" Tail check (EVT): {edge:+.2f}R expected to expiry.")[:1000]
             if s.sid in self.planned(u):
                 o["thesis"] = (o["thesis"] + " On the day plan built before the open.")[:1000]
+            elif self.plan_only and nw:
+                o["thesis"] = (o["thesis"] + f" Not on the plan: taken on important news in the session ({nw['why']}), with {st.get('votes')} readings agreeing.")[:1000]
             orders.append(o)
             self.backoff[u] = t + ENTRY_BACKOFF_S
             self.lab.today["live_entries"] += 1
         taken = held_syms | {o.get("symbol") for o in orders} | {l.get("symbol") for o in orders for l in (o.get("legs") or [])}
-        orders += self._cx_entries(snap, account, states, ch, t, ist, pk, taken)
+        orders += self._cx_entries(snap, account, states, ch, t, ist, pk, taken, news)
         return orders
 
     # ---- the Convexity desk, live (convex.py; the owner's sizing, 14 Nov 2026) ---------------------------------------------------------------------------
@@ -1680,7 +1739,7 @@ class AutoPilotV2:
             out.append({"id": self._oid(t, "x"), "side": "sell", "symbol": sym, "lots": lots, "queued_at": int(t * 1000), "_why": f"{TAG} exit: {why}"})
         return out
 
-    def _cx_entries(self, snap, account, states: dict, ch, t: float, ist: dt.datetime, pk: dict, taken: set) -> list[dict]:
+    def _cx_entries(self, snap, account, states: dict, ch, t: float, ist: dt.datetime, pk: dict, taken: set, news=None) -> list[dict]:
         """New convex packages: a ready strategy (convex_ready) whose test passes, chosen by Thompson sampling, sized to STAKE_PCT of the account, within this month's
         MONTH_BUDGET_PCT and MAX_OPEN, one per underlying."""
         cx_pk = [pkg for pkg in pk.values() if CX.is_convex(BY_SID[pkg["sid"]].struct)]
@@ -1701,8 +1760,12 @@ class AutoPilotV2:
                 continue
             best = None
             cands = [BY_SID[sid] for sid in self.planned(u) if sid in BY_SID and CX.is_convex(BY_SID[sid].struct)] if self.plan_only else CX_CATALOGUE
+            nw = self.news_trigger(u, news, ist) if self.plan_only else None
+            if nw:
+                cands = cands + [s for s in CX_CATALOGUE if s not in cands]              # important news: its tests on the live board as well
             for s in cands:
-                if not self.lab.convex_ready(s) or not (self.plan_ok(s, st, ist) if self.plan_only else self.matches(s, st)):
+                planned = self.plan_only and self.plan_item(u, s.sid) is not None
+                if not self.lab.convex_ready(s) or not (self.plan_ok(s, st, ist) if planned else self.matches(s, st)):
                     continue
                 draw = self.lab.draw(s.sid, self.rng)
                 if draw > 0 and (best is None or draw > best[0]):
@@ -1713,6 +1776,8 @@ class AutoPilotV2:
             p = self.price(snap, s, st, ch)
             if p is None or any(l["name"] in taken for l in p["legs"]) or (self.plan_only and not self.plan_price_ok(s, u, p)):
                 continue
+            if self.plan_only and self.plan_item(u, s.sid) is None and nw:
+                st = {**st, "cx": {**(st.get("cx") or {}), "news": nw["why"]}}
             stake = min(CX.STAKE_PCT * eq, budget - spent)
             lots = CX.lots_for(stake, p["risk"], p["lot"])
             if lots < 1:
@@ -1773,7 +1838,8 @@ class AutoPilotV2:
                   + (f"; EVT value {evt:.2f}x its price" if evt is not None and test else "")
                   + f". Shadow record {n} trades, average {total / n:+.2f}R, {w / n * 100:.0f}% won ({fam[3]} in its family); {self.lab.posterior(s.sid)[1]:+.2f}R after sharing "
                   + f"evidence; Thompson draw {draw:+.2f}R. {lots} lot{'s' if lots > 1 else ''}, at most Rs {p['risk'] * p['lot'] * lots:.0f} (premium and fees: 0.5% of the "
-                  + "account). Exits: a third at +100%, a third at +300%, the rest trailed.")
+                  + "account). Exits: a third at +100%, a third at +300%, the rest trailed."
+                  + (f" Not on the plan: taken on important news in the session ({(st.get('cx') or {}).get('news')})." if (st.get("cx") or {}).get("news") else ""))
         ev = ""
         if event_at:
             try:
