@@ -294,7 +294,7 @@ def test_the_workflow_only_reads_and_the_second_job_logs_in_only_after_the_first
     for job in WF["jobs"].values():
         assert "permissions" not in job and int(job["timeout-minutes"]) <= 358
         assert next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@"))["with"]["persist-credentials"] is False
-    assert WF["jobs"]["feed-2"]["if"] == "always() && needs.feed-1.outputs.login == 'success'"
+    assert WF["jobs"]["feed-2"]["if"] == "always() && !inputs.check_only && needs.feed-1.outputs.login == 'success'"     # (and never in a login check)
     gate = next(s for s in WF["jobs"]["feed-1"]["steps"] if s.get("id") == "gate")
     assert gate["env"]["GATE_WORKFLOW"] == "angel-feed.yml"
 
@@ -338,3 +338,25 @@ def test_the_feed_prices_the_future_first_then_quotes_its_option_window_with_boo
     got = dict(push.got)
     assert got["USDINR20NOV2684.5CE"]["s"] == "copt" and got["USDINR20NOV2684.5CE"]["bid"] == 0.0475 and "d" in got["USDINR20NOV2684.5CE"] and "e" not in got["USDINR20NOV2684.5CE"]
     assert len([n for n in got if n.startswith("USDINR20NOV26")]) == 30                              # 8 strikes above the money, 6 below (the chain starts at 83): 15 strikes, calls and puts
+
+
+def test_the_login_check_makes_one_round_and_sends_nothing(monkeypatch):
+    rows = {"1165": _row("1165", 84.51, 84.5075, 84.5125), "1181": _row("1181", 97.2, 97.19, 97.21)}
+    monkeypatch.setattr(A, "load_master", lambda opener=None: [])
+    monkeypatch.setattr(A, "near_futures", lambda c, d: NAMES)
+    monkeypatch.setattr(A, "AngelData", lambda *a, **k: FakeAPI(rows))
+    rep = A.check("k", JWT, today=dt.date(2026, 11, 14))
+    assert rep["result"] == "ok" and rep["instruments"] == 2
+    monkeypatch.setattr(A, "AngelData", lambda *a, **k: FakeAPI(rows, refuse_after=0))
+    assert A.check("k", JWT, today=dt.date(2026, 11, 14))["result"] == "Angel One refused the session"
+
+
+def test_the_workflow_can_check_only_without_streaming_or_a_second_login():
+    import yaml
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "angel-feed.yml").read_text())
+    assert wf[True]["workflow_dispatch"]["inputs"]["check_only"]["default"] is False
+    steps = wf["jobs"]["feed-1"]["steps"]
+    chk = next(s for s in steps if "--check" in str(s.get("run", "")))
+    stream = next(s for s in steps if s.get("name") == "Stream currency to the live relay")
+    assert chk["if"] == "inputs.check_only" and "LIVE_URL" not in str(chk) and stream["if"] == "!inputs.check_only"
+    assert "!inputs.check_only" in wf["jobs"]["feed-2"]["if"]                                    # the second job logs in again: not in a check

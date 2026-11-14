@@ -21,6 +21,10 @@ on:
         description: "Second job streams until (HH:MM IST)"
         default: "17:05"
         type: string
+      check_only:
+        description: "Only check the login and the data: one round, nothing sent to the relay (run it before the first session)"
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -77,7 +81,13 @@ jobs:
       - name: Hand the session to the feed (masked)
         if: steps.login.outcome == 'success'
         run: deploy/angel-export.sh
+      - name: One round against Angel One, nothing sent anywhere (check_only)
+        if: inputs.check_only
+        env:
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+        run: python -m quantdesk data angel-feed --check --metrics angel_metrics.json
       - name: Stream currency to the live relay
+        if: "!inputs.check_only"
         env:
           UNTIL: ${{ inputs.first_until || '14:50' }}
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
@@ -93,7 +103,7 @@ jobs:
 
   feed-2:
     needs: feed-1
-    if: always() && needs.feed-1.outputs.login == 'success'
+    if: always() && !inputs.check_only && needs.feed-1.outputs.login == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 358
     steps:

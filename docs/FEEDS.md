@@ -124,6 +124,13 @@ is the test, and like the Fyers feed it names any answer it cannot read by its k
 **First run by hand:** Actions, then "Angel One feed", then Run workflow (between 09:00 and 16:00 on a trading day). Look for "angel
 login: logged in" and "N contracts, N cycles, N quotes pushed".
 
+## Checking a login before the first session (14 Nov 2026)
+
+Run **Fyers feed** or **Angel One feed** from the Actions tab with **check_only** ticked. It logs in exactly as the morning run does (the same login gate:
+one login a day, first attempt only), makes ONE round of requests with the clock held at midday, and sends nothing to the relay. On a weekend the
+brokers answer with the last prices. The run's summary shows counts only: contracts, instruments with a quote, and calls. It is green only if quotes
+came back. A Fyers check also stores the token (and the 15-day refresh token), so the next morning's run starts from it.
+
 ## How it rolls out
 
 1. **Done:** the relay takes pushes from any feed by its code, the route table is in place, and the instrument page

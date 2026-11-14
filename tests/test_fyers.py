@@ -537,3 +537,26 @@ def test_an_unreadable_chain_is_reported_by_its_key_names():
     got, odd = F.parse_chain({"s": "ok", "data": {"chain": [1, 2]}}, "CRUDEOIL")
     assert got == {} and "chain" in odd[0]
     assert F.option_name("USDINR", dt.date(2026, 11, 20), 84.5, "CE") == "USDINR20NOV2684.5CE" and F.option_name("GOLD", dt.date(2026, 11, 25), 136000.0, "PE") == "GOLD25NOV26136000PE"
+
+
+def test_the_login_check_makes_one_round_on_a_saturday_and_sends_nothing(monkeypatch):
+    api = FakeAPI(dict(PRICES))
+    monkeypatch.setattr(F, "load_contracts", lambda opener=None: ([], []))
+    monkeypatch.setattr(F, "near_futures", lambda c, d: NAMES)
+    monkeypatch.setattr(F, "FyersData", lambda *a, **k: api)
+    rep = F.check("A-100", "t", today=dt.date(2026, 11, 14))                                    # a Saturday: the clock is held at midday, so every contract counts as open
+    assert rep["result"] == "ok" and rep["instruments"] == len(PRICES) and rep["calls"] >= 1 and "price" not in str(rep)
+    monkeypatch.setattr(F, "FyersData", lambda *a, **k: FakeAPI({}, block_after=0))
+    assert F.check("A-100", "t", today=dt.date(2026, 11, 14))["result"] == "blocked by Fyers (HTTP 429)"
+    monkeypatch.setattr(F, "near_futures", lambda c, d: {})
+    assert F.check("A-100", "t")["result"].startswith("no MCX")
+
+
+def test_the_workflow_can_check_only_and_then_streams_nothing():
+    inp = WF[True]["workflow_dispatch"]["inputs"]["check_only"]
+    assert inp["type"] == "boolean" and inp["default"] is False
+    jobs = WF["jobs"]
+    assert jobs["check"]["needs"] == "token" and "inputs.check_only" in jobs["check"]["if"]
+    assert all("!inputs.check_only" in jobs[j]["if"] for j in ("feed-1", "feed-2", "feed-3"))
+    run = next(s["run"] for s in jobs["check"]["steps"] if "--check" in str(s.get("run", "")))
+    assert "LIVE_URL" not in str(jobs["check"]) and "LIVE_INGEST_TOKEN" not in str(jobs["check"]) and "fyers-feed --check" in run   # the check job cannot reach the relay

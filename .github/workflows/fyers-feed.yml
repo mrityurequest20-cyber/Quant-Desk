@@ -26,6 +26,10 @@ on:
         description: "Third feed job streams until (HH:MM IST)"
         default: "23:58"
         type: string
+      check_only:
+        description: "Only check the login and the data: one round, nothing sent to the relay (run it before the first session)"
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -104,9 +108,35 @@ jobs:
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
           echo "Fyers token for today: $ok"
 
+  check:
+    needs: token
+    if: inputs.check_only && needs.token.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Today's Fyers token
+        env:
+          FYERS_SECRET_ID: ${{ secrets.FYERS_SECRET_ID }}
+        run: deploy/fyers-token.sh export
+      - name: One round against Fyers, nothing sent anywhere
+        env:
+          FYERS_APP_ID: ${{ secrets.FYERS_APP_ID }}
+        run: python -m quantdesk data fyers-feed --check --metrics fyers_check.json
+      - name: The check's counts (no price, no token)
+        if: always()
+        run: if [ -f fyers_check.json ]; then { echo "## Fyers login and data check"; echo '```'; cat fyers_check.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+
   feed-1:
     needs: token
-    if: needs.token.outputs.ok == 'true'
+    if: "!inputs.check_only && needs.token.outputs.ok == 'true'"
     runs-on: ubuntu-latest
     timeout-minutes: 358
     steps:
@@ -138,7 +168,7 @@ jobs:
 
   feed-2:
     needs: [token, feed-1]
-    if: always() && needs.token.outputs.ok == 'true'
+    if: always() && !inputs.check_only && needs.token.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 358
     steps:
@@ -170,7 +200,7 @@ jobs:
 
   feed-3:
     needs: [token, feed-2]
-    if: always() && needs.token.outputs.ok == 'true'
+    if: always() && !inputs.check_only && needs.token.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:

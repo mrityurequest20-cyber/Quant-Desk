@@ -342,3 +342,49 @@ def run(until: str, api_key: str, jwt: str, pusher, opener=None, now=lambda: dt.
         pusher.stop()
     rep.update(feed.stats, calls=feed.api.calls, push=pusher.stats())
     return rep
+
+
+class CountingPusher:
+    """A pusher that sends nothing: it counts what a real one would have sent (the login check)."""
+
+    def __init__(self):
+        self.n, self.names = 0, set()
+
+    def update(self, symbol: str, quote: dict | None) -> None:
+        if quote:
+            self.n += 1
+            self.names.add(symbol)
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def stats(self) -> dict:
+        return {"would_push": self.n, "instruments": len(self.names)}
+
+
+def check(api_key: str, jwt: str, opener=None, today: dt.date | None = None) -> dict:
+    """ONE round against Angel One with today's session, sending nothing anywhere: proves the login, the instrument master, the quotes and the option window before
+    the first real session. The clock is held at midday. Returns counts only (no price, no token)."""
+    day = today or dt.datetime.now(IST).date()
+    master = load_master(opener)
+    names = near_futures(parse_master(master), day)
+    rep = {"day": str(day), "contracts": len(names)}
+    if not names:
+        rep["result"] = "no currency futures in Angel One's instrument master"
+        return rep
+    noon = dt.datetime.combine(day, dt.time(12, 0), IST)
+    pusher = CountingPusher()
+    feed = AngelFeed(AngelData(api_key, jwt, opener=opener), names, pusher, now=lambda: noon, options=parse_options(master))
+    try:
+        feed.cycle()
+        rep["result"] = "ok" if pusher.n else "logged in, but no quote came back"
+    except Refused:
+        rep["result"] = "Angel One refused the session"
+    except Blocked:
+        rep["result"] = "blocked by Angel One (HTTP 429)"
+    c = feed.api.calls
+    rep.update(feed.stats, calls=c if isinstance(c, int) else len(c), **pusher.stats())
+    return rep

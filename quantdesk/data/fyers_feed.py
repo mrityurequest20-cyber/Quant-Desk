@@ -509,3 +509,50 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
         pusher.stop()
     rep.update({k: v for k, v in feed.stats.items()}, calls=feed.api.calls, push=pusher.stats())
     return rep
+
+
+class CountingPusher:
+    """A pusher that sends nothing: it counts what a real one would have sent (the login check)."""
+
+    def __init__(self):
+        self.n, self.names = 0, set()
+
+    def update(self, symbol: str, quote: dict | None) -> None:
+        if quote:
+            self.n += 1
+            self.names.add(symbol)
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def stats(self) -> dict:
+        return {"would_push": self.n, "instruments": len(self.names)}
+
+
+def check(app_id: str, token: str, watchlist: dict | None = None, opener=None, today: dt.date | None = None) -> dict:
+    """ONE round against Fyers with today's token, sending nothing anywhere: proves the login, the instrument list, the quotes, a book and the option chains before
+    the first real session (owner, 14 Nov 2026: "Confirm the broker integration status"). The clock is held at midday so every contract counts as open: on a weekend
+    Fyers answers with the last prices. Returns counts only (no price, no token)."""
+    day = today or dt.datetime.now(IST).date()
+    contracts, notes = load_contracts(opener)
+    names = near_futures(contracts, day)
+    rep = {"day": str(day), "contracts": len(names), "notes": notes}
+    if not names:
+        rep["result"] = "no MCX or currency futures in Fyers' instrument list"
+        return rep
+    noon = dt.datetime.combine(day, dt.time(12, 0), IST)
+    pusher = CountingPusher()
+    feed = FyersFeed(FyersData(app_id, token, opener=opener), names, depth_watch(watchlist or {}), pusher, now=lambda: noon)
+    try:
+        feed.cycle()
+        rep["result"] = "ok" if pusher.n else "logged in, but no quote came back"
+    except Refused:
+        rep["result"] = "Fyers refused the token"
+    except Blocked:
+        rep["result"] = "blocked by Fyers (HTTP 429)"
+    c = feed.api.calls
+    rep.update(feed.stats, calls=c if isinstance(c, int) else len(c), **pusher.stats())
+    return rep
