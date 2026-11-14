@@ -1,0 +1,12 @@
+normal   d=0.5 lam= 6  false alarm/150 trades 0.094 | caught 0.50 median 19.0 p90 68.0
+normal   d=0.5 lam= 8  false alarm/150 trades 0.015 | caught 0.25 median 21.0 p90 57.0
+normal   d=0.5 lam=10  false alarm/150 trades 0.002 | caught 0.11 median 26.0 p90 57.0
+normal   d=0.75 lam= 6  false alarm/150 trades 0.013 | caught 0.09 median 16.0 p90 56.69999999999999
+normal   d=0.75 lam= 8  false alarm/150 trades 0.002 | caught 0.02 median 14.0 p90 33.400000000000034
+normal   d=0.75 lam=10  false alarm/150 trades 0.000 | caught 0.00 median 19.0 p90 38.0
+twopoint d=0.5 lam= 6  false alarm/150 trades 0.157 | caught 0.45 median 15.0 p90 48.100000000000136
+twopoint d=0.5 lam= 8  false alarm/150 trades 0.058 | caught 0.25 median 19.0 p90 49.0
+twopoint d=0.5 lam=10  false alarm/150 trades 0.024 | caught 0.14 median 22.0 p90 50.19999999999999
+twopoint d=0.75 lam= 6  false alarm/150 trades 0.042 | caught 0.07 median 12.0 p90 26.0
+twopoint d=0.75 lam= 8  false alarm/150 trades 0.021 | caught 0.02 median 11.5 p90 24.0
+twopoint d=0.75 lam=10  false alarm/150 trades 0.005 | caught 0.01 median 14.0 p90 25.300000000000004

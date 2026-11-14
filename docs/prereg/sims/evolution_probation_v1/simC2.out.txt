@@ -1,0 +1,6 @@
+share of sessions muted once the model has 50 votes (250 sessions, Poisson(3) votes a session, N 2,000), by true hit rate
+mute < 0.47, unmute >= 0.52, alpha 0.02 | 0.60: 0.03  0.56: 0.11  0.53: 0.25  0.50: 0.46  0.45: 0.80
+mute < 0.5, unmute >= 0.54, alpha 0.02 | 0.60: 0.07  0.56: 0.23  0.53: 0.44  0.50: 0.64  0.45: 0.90
+mute < 0.51, unmute >= 0.54, alpha 0.02 | 0.60: 0.09  0.56: 0.26  0.53: 0.46  0.50: 0.67  0.45: 0.91
+mute < 0.5, unmute >= 0.54, alpha 0.03 | 0.60: 0.12  0.56: 0.27  0.53: 0.44  0.50: 0.62  0.45: 0.85
+mute < 0.5, unmute >= 0.53, alpha 0.02 | 0.60: 0.06  0.56: 0.21  0.53: 0.39  0.50: 0.61  0.45: 0.88  <- registered

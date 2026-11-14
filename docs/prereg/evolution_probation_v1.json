@@ -1,0 +1,88 @@
+{
+  "name": "evolution_probation_v1",
+  "registered": "2026-11-14",
+  "plan": "docs/EVOLUTION.md, phase 2 (the owner, 14 Nov 2026: \"market may not behave the same way 2 months later, 3 months later, a year later. How our trading desk is going to evolve in that process?\")",
+  "supersedes": "the draft evolution_forgetting_v1, never committed: its research review (14 Nov 2026) was NOT CLEAR, and the simulation it asked for showed that its test (A, below) could not answer its question",
+  "dataset": "AUTO v2's own shadow book (quantdesk/paper/auto2.py, shadow_step): every closed shadow trade of every strategy whose context held, scored in R with the desk's real fees and clamped as Lab.add clamps it (-5 to +10 R), paper money only. Forward only, from the first session after both (1) the open-shadow carry (PR #264: open shadow trades outlive a runner job) and (2) the code that applies these rules are merged and deployed, and the runner's state shows open shadow trades carried over. The cumulative records these rules read (sd, min_trades) were partly built before the carry existed, from trades that resolved inside one runner job, so they lean towards quickly resolved trades; that bias fades as carried trades accumulate and is reported with every result",
+  "not_for": "both rules only tighten: they can stop a strategy or a vote from starting a paper-money trade, never start one, never move a limit (2.5% a trade, 5% a day, 10% drawdown; the convexity book's 0.5% a trade and 3% a month) and never size a trade. They change nothing in the shadow book: every strategy keeps trading there, so the record and its tests are unchanged. Nothing here supports a profitability claim",
+  "question": "B: when a strategy that has earned paper money stops earning, does the desk take it off paper money soon enough, without benching strategies that still have an edge? C: when the market read or the news model stops calling direction better than a coin, does its vote stop starting trades? Both are rules, registered here with every parameter before they act, so that what they do is measured, not tuned after the fact",
+  "not_registered_A_forgetting": {
+    "idea": "a second record beside the cumulative one in which each trade's weight halves every 60 sessions, to choose strategies after the market changes",
+    "evidence": "docs/prereg/sims/evolution_probation_v1/powerA2.py (numpy, seed 23): 594 strategies in 20 families, half active each session, within-session family shocks (rho 0.4), each record's choice as the live rule's chance of a positive Thompson draw (Phi(mean / sd)), compared only where the two records choose differently (a session-clustered ratio estimator, t on G - 1 degrees of freedom, at least 300 disagreeing trades over 40 sessions; PASS needs the lower 90% bound above -0.05 R). Its output, the mean D in R a trade where they differ: 120 sessions: stable market -0.092; a break at 30, a third of families lose 0.4R -0.057; two thirds lose 0.3R -0.048; forgetting much too fast (half-life 3) -0.113; too fast (half-life 8) -0.105. 250 sessions: stable -0.100; a break at 150, a third lose 0.4R -0.083; two thirds lose 0.4R -0.067; a break at 100, half lose 0.5R -0.001 (PASS 0.71). Forgetting widens each strategy's uncertainty, so Thompson sampling keeps exploring the ones that lost; it draws only after a large break with long history behind it",
+    "decision": "not built and not tested now. The change it was for is B's job (B reacts to a fall directly). Forgetting is revisited in phase 5, where replays over years of history give it the long, stale records it needs, and a test that can pass"
+  },
+  "B_probation": {
+    "who": "every strategy that is not a convexity strategy, from its min_trades-th cumulative shadow trade (Lab.min_trades: 8, an invention 12). Convexity strategies are not watched: a long run of small losses is their normal record (convex.py), and they already leave paper money when their posterior mean is not above zero. Day and swing strategies are watched though, under PLAN_ONLY, they cannot trade paper money; the primary population for every report is the overnight strategies, which can",
+    "session": "an IST trading day; a trade belongs to the session of its IST close date",
+    "statistic": "a CUSUM on 'losing on average', updated ONCE per strategy per session in which it closed at least one shadow trade: z = x / (sd * sqrt(1/k + RHO_REG * (1 - 1/k))), x being the mean R of the k trades the strategy closed that session (pooled over underlyings), sd the population standard deviation (divide by n) of all its cumulative R before that session, floored at SD_FLOOR; g <- max(0, g - z - K). One update per session, scaled by that session's own trade count: one trade reads as one trade, many trades in one market as the spread of their mean if they share it to RHO_REG",
+    "K": 0.25,
+    "H": 5.0,
+    "SD_FLOOR": 0.5,
+    "when": "a session's update, and any release it brings, is applied once that session is over (after the last segment's close for the IST day, MCX at 23:30), and always before the next day plan is built (06:00 IST): the plan's live list is where probation acts first",
+    "demotion": "g above H: the strategy goes to probation. In probation it keeps trading in the shadow book, and it may not trade paper money: it is left off the day plan's live list and is not chosen on the live board. g is frozen while it is in probation",
+    "release": "at the end of a session in probation, when the trades closed since its demotion number at least RELEASE_TRADES and fall in at least RELEASE_SESSIONS distinct sessions, and the mean of those sessions' mean R is above zero. g then starts again at zero. A released strategy still needs everything it needed before its demotion (its cumulative min_trades and a positive Thompson draw): release restores today's rules, never more",
+    "RELEASE_TRADES": 8,
+    "RELEASE_SESSIONS": 8,
+    "repeat": "a strategy demoted again within REPEAT_WINDOW sessions of a release needs twice RELEASE_TRADES over twice RELEASE_SESSIONS; a third demotion within REPEAT_WINDOW of the second release leaves it in probation until the owner releases it",
+    "REPEAT_WINDOW": 60,
+    "kept": "g (two decimals), the probation state (since, trades, sessions, sum of session means, demotions with their dates) are kept with the private strategy record on the relay and read back validated. If the record would exceed its size bound, the smallest g are left out (read back as zero, which only delays a demotion) before any probation state and before any cumulative record; the count left out is reported",
+    "parameter_evidence": {
+      "file": "docs/prereg/sims/evolution_probation_v1/simB5.py (numpy, seed 53, N 2,000 a cell); its output is quoted here verbatim",
+      "setting": "the full grid: trades a session m in 1, 2, 5, 10 (1 + Poisson(m - 1)), true within-session correlation 0, 0.3, 0.6, three R shapes (normal sd 1; credit-like +0.5 / -1; +2 / -1), a strategy closing trades on half of the sessions (no closes, no update); every horizon is in calendar sessions",
+      "registered_summary": "K 0.25, H 5, RHO_REG 0.45: worst false demotion at +0.3R within 120 sessions 0.08, at +0.15R 0.23 | a +0.3 -> -0.3R turn caught 0.68-1.00, median 15-97 sessions after it",
+      "by_shape_worst": "false demotion of a +0.3R strategy within 120 sessions, worst over m and rho: normal 0.08 (m 5, rho 0.6), credit-like 0.06 (m 1), +2/-1 0.05 (m 1); within 250 sessions: normal 0.13, credit-like 0.17, +2/-1 0.09. A +0.3 -> -0.3R turn caught: normal 0.93-0.99 (median 28-55 sessions), credit-like 0.99-1.00 (15-21), +2/-1 0.68-0.91 (54-97)",
+      "against_the_per_trade_rule": "the draft's per-trade CUSUM (K 0.2, H 6) demoted a +0.3 R strategy within 150 trades 34 to 49% of the time once trades clustered five a session, and the first per-session rule (K 0.25, H 4, no count scaling) 27-32% at one trade a session: both reported in the research review of 14 Nov 2026, from the reviewer's own runs of these files"
+    },
+    "variants_counted": "for B: 6 per-trade Page-Hinkley pairs (pagehinkley_draft.py), 6 per-trade CUSUM pairs (cusum_per_trade_draft.py), 5 per-session CUSUM pairs on 3 shapes at 5 trades a session (simB3.py, superseded), 7 count-scaled pairs over the full grid (simB5.py), 5 release rules at 3 (trades, correlation) settings (simB4.py); every file is in docs/prereg/sims/evolution_probation_v1/ with its captured output (*.out.txt); the values above are the ones registered",
+    "measured": {
+      "what": "every demotion and release, kept with the record. Monthly: the demotions, the releases, the share of watched strategies in probation; the rule's hit rate below",
+      "HIT_HORIZON_SESSIONS": 20,
+      "hit_rate": "for each demotion: the mean shadow R of the demoted strategy over the next HIT_HORIZON_SESSIONS calendar sessions, minus the matched control: the mean, over the strategies of its family that are not in probation and closed at least one shadow trade in those sessions, of each one's own mean R over them (a mean of per-strategy means, so a busy strategy does not stand for the family). One paired difference per demotion. A demotion whose strategy, or whose control, closed no shadow trade in the window is excluded from the review and counted",
+      "REVIEW_MIN_DEMOTIONS": 20,
+      "REVIEW_FIRST_SESSIONS": 120,
+      "REVIEW_ROLL_SESSIONS": 60,
+      "REVIEW_ONE_SIDED": 0.9,
+      "review": "of overnight strategies only. At REVIEW_FIRST_SESSIONS, and then every REVIEW_ROLL_SESSIONS: with fewer than REVIEW_MIN_DEMOTIONS demotions the result is INSUFFICIENT and the review rolls forward. Otherwise: the mean of the paired differences, its standard error clustered by the session each demotion began in (demotions that start in the same session share a market; their windows can overlap, and overlap across starting sessions is not corrected for: the review is descriptive, its power is not claimed), one-sided at REVIEW_ONE_SIDED. If the demoted strategies did not do worse than their control (the upper bound is not below zero), the rule is reported as not working and the owner decides whether it stays. Switching it off is a loosening, so it is the owner's"
+    },
+    "RHO_REG": 0.45,
+    "G_DECIMALS": 2,
+    "release_evidence": "docs/prereg/sims/evolution_probation_v1/simB4.py (numpy; simB5's series, a strategy closing trades on half of the sessions, N 3,000), its output for the registered rule (8 trades over 8 sessions), released within 20 calendar sessions, min-max over the three R shapes: one trade a session, no correlation: -0.3R 0.12-0.27, -0.1R 0.34-0.43, +0.15R 0.61-0.71, +0.3R 0.67-0.84; two trades, correlation 0.3: 0.09-0.22, 0.34-0.40, 0.61-0.74, 0.72-0.86; five trades, 0.6: 0.06-0.19, 0.31-0.40, 0.64-0.77, 0.74-0.86. A bad strategy released early is watched again from g = 0, and a second release needs twice the proof"
+  },
+  "C_vote_watch": {
+    "who": "the market read's vote (marketread.py: votes at P >= 0.65 or <= 0.35) and the news model's vote (newsmodel.py: the same), per instrument",
+    "score": "what the model contributes is its vote, so its VOTES are scored, as calls: a vote is P >= VOTE_P (up) or P <= 1 - VOTE_P (down). The vote scored in a window is the first vote cast after the previous scored window for that model and instrument ended; it is right when the price moved its way over the model's own window (WINDOW_MIN), and a move under MIN_MOVE (as a fraction of the price) is no outcome. Into an exponentially weighted hit rate with weight ALPHA per vote, started at the plain mean of the first MIN_VOTES votes",
+    "ALPHA": 0.02,
+    "MIN_VOTES": 50,
+    "MUTE_BELOW": 0.5,
+    "UNMUTE_AT": 0.53,
+    "decided": "once a session, after the last segment's close for the IST day (MCX at 23:30), for the next session: muted when the weighted hit rate is below MUTE_BELOW, unmuted when it is at UNMUTE_AT or above, otherwise unchanged. A model with fewer than MIN_VOTES scored votes is never muted",
+    "muted_means": "the muted model's vote stays a READING wherever readings are counted (the count of readings and the day plan's 'flat' test, which needs no reading at all) and still counts AGAINST an agreement; it is removed only from the count of readings that SUPPORT an agreement. In exactly these places: the live board's labeled readings, agree, strong and sources (auto2.py state()), and the day plan's votes (plan_state). It is not applied to the view or the shadow book's matching (the shadow book must see the same market as before, or the record changes), nor to the read's event pricing or the convexity edges. When the news model is muted for an index, AUTO v1's market-wide tone vote does not stand in for it",
+    "why_only_tightens": "an agreement needs PLAN_DIR_VOTES supporting readings and none against; a muted vote can only remove a supporting reading, still blocks when it disagrees, and still counts as a reading for 'flat', so every agreement and every flat view with the mute was one without it. The news exception and the data trigger read sources and strong, where the mute applies, so a muted model cannot start a trade through them either",
+    "kept": "per model and instrument: the count of scored votes, the weighted hit rate, the mute state and the votes awaiting their outcome, kept with the private strategy record and read back validated, so a handover does not reset them. It is small (two models by the desk's instruments) and is never left out for the record's size bound; B's smallest g go first",
+    "parameter_evidence": {
+      "file": "docs/prereg/sims/evolution_probation_v1/simC2.py (numpy, seed 37, N 2,000 a case, 250 sessions)",
+      "setting": "Poisson(3) votes a session, the votes of one session sharing a session hit probability (true rate + N(0, 0.15))",
+      "result": "its output for the registered pair (mute below 0.50, unmute at 0.53, ALPHA 0.02), the share of sessions muted once 50 votes are in, by true hit rate: 0.60: 0.06, 0.56: 0.21, 0.53: 0.39, 0.50: 0.61, 0.45: 0.88"
+    },
+    "variants_counted": "the draft's Brier-score watch (one set) and five hit-rate threshold pairs (simC2.py, all printed): 0.47/0.52, 0.50/0.54, 0.51/0.54, 0.50/0.54 at ALPHA 0.03, and the registered 0.50/0.53",
+    "measured": "monthly: each model's share of sessions muted, per instrument, with each instrument's base rate (the share of up moves in the scored windows) beside its hit rate (a model with no skill that always votes with a trending month clears 0.50); and the paper-money entries a mute stopped (an agreement there would have been without it)",
+    "VOTE_P": 0.65,
+    "WINDOW_MIN": {
+      "read": 15,
+      "news": 60
+    },
+    "MIN_MOVE": {
+      "read": 0.001,
+      "news": 0.001
+    }
+  },
+  "code": {
+    "module": "quantdesk/paper/auto2.py (the rules), with the monthly report in the same code",
+    "rule": "the code that applies these rules is merged after this spec. Every monthly report records the git commit of the runner that produced it and this spec's SHA-256; a change to any definition or parameter above after this spec is merged is a new spec (evolution_probation_v2)"
+  },
+  "forward_rule": "no session is left out for its outcome. A session the runner did not run, or ran without the carry (the runner's state shows no carried trades while some were open at the last save), is listed in the report as an outage, and its trades are still applied",
+  "publication": "the reports are private, with the strategy record on the relay: per strategy and per model (demotions, releases, mutes) they never leave it. What is committed to this public repository (docs/prereg/results) is aggregates only: counts, shares, means across strategies and their bounds, no strategy id and no single strategy's record, and it carries this spec's SHA-256. Decided by the builder on the owner's delegation, given in the owner's Claude Code session on 14 Nov 2026 (claude.ai/code/session_011DBceCbQNtu6df3GhXrgYD), in reply to this question: \"Up to you how you feel it's right to do, so do it in that way.\"",
+  "lock": "this file is never edited once it is merged",
+  "use_if_passed": "there is no pass: these are rules. If B's review finds it not working, or C mutes a model the owner believes in, the owner decides; neither rule is loosened or removed without the owner's written word (docs/RENAISSANCE.md, invariant 7)",
+  "owner_decisions": "this spec changes phase 2 of the plan (docs/EVOLUTION.md): the forgetting record is deferred and the exit test is replaced. The owner merges it. The publication split was delegated by the owner and is set above"
+}

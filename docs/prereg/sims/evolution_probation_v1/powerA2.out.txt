@@ -1,0 +1,10 @@
+the forgetting record against the cumulative one, on the trades where they choose differently (D in R a trade; PASS needs the lower 90% bound above -0.05)
+120 sessions: stable market, half-life 60                  PASS 0.00 FAIL 1.00 INCONCL 0.00 short 0.00 | mean D -0.092 R
+120 sessions: a break at 30, a third of families lose 0.4R PASS 0.05 FAIL 0.95 INCONCL 0.00 short 0.00 | mean D -0.057 R
+120 sessions: a break at 30, two thirds lose 0.3R          PASS 0.10 FAIL 0.90 INCONCL 0.00 short 0.00 | mean D -0.048 R
+120 sessions: forgetting much too fast (half-life 3)       PASS 0.00 FAIL 1.00 INCONCL 0.00 short 0.00 | mean D -0.113 R
+120 sessions: forgetting too fast (half-life 8)            PASS 0.00 FAIL 1.00 INCONCL 0.00 short 0.00 | mean D -0.105 R
+250 sessions: stable                                       PASS 0.00 FAIL 1.00 INCONCL 0.00 short 0.00 | mean D -0.100 R
+250 sessions: a break at 150, a third lose 0.4R            PASS 0.00 FAIL 1.00 INCONCL 0.00 short 0.00 | mean D -0.083 R
+250 sessions: a break at 150, two thirds lose 0.4R         PASS 0.00 FAIL 1.00 INCONCL 0.00 short 0.00 | mean D -0.067 R
+250 sessions: a break at 100, half lose 0.5R               PASS 0.71 FAIL 0.29 INCONCL 0.00 short 0.00 | mean D -0.001 R
