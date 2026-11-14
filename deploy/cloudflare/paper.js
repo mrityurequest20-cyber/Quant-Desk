@@ -28,6 +28,7 @@ export const MAX_SHADOW = 1000000;                // characters: AUTO v2's open 
 export const MAX_SHADOW_CHUNKS = Math.ceil(MAX_SHADOW / CHUNK);
 const ID = /^[A-Za-z0-9_-]{6,64}$/;
 const NAME = /^[A-Z0-9][A-Z0-9&_.-]{2,39}$/;
+const SID = /^[A-Za-z0-9][A-Za-z0-9._/-]{2,59}$/;     // an AUTO v2 strategy id (docs/prereg/evolution_probation_v1.json): what the owner may release from probation
 const STATUS = new Set(["filled", "refused", "expired", "invalid", "done"]);
 const isStr = (x, lo, hi) => typeof x === "string" && x.trim().length >= lo && x.length <= hi;
 const isNum = (x) => typeof x === "number" && Number.isFinite(x);
@@ -37,6 +38,7 @@ export function cleanOrder(o) {
 	if (!o || typeof o !== "object" || Array.isArray(o)) return null;
 	if (!(typeof o.id === "string" && ID.test(o.id))) return null;
 	if (o.side === "package") return cleanPackage(o);
+	if (o.side === "release") return typeof o.sid === "string" && SID.test(o.sid) ? { id: o.id, side: "release", sid: o.sid } : null;   // the owner releases a strategy from probation: no order, no money
 	if (o.side !== "buy" && o.side !== "sell" && o.side !== "short") return null;        // short: an MCX or currency future only (the runner refuses it on anything else)
 	if (!(typeof o.symbol === "string" && NAME.test(o.symbol))) return null;
 	const all = o.side === "sell" && o.lots === "all";
@@ -290,7 +292,7 @@ export class PaperBook {
 
 	async getState(full, now) {
 		const summary = (await this.state.storage.get("paper:summary")) || null;
-		const base = { summary, results: this.d.results.slice(-30), pending: this.d.queue.map((q) => ({ id: q.id, side: q.side, symbol: q.side === "package" ? `${q.legs.length} legs` : q.symbol, lots: q.lots, queued_at: q.queued_at })), kill: this.d.kill === true, now };
+		const base = { summary, results: this.d.results.slice(-30), pending: this.d.queue.map((q) => ({ id: q.id, side: q.side, symbol: q.side === "package" ? `${q.legs.length} legs` : q.side === "release" ? `release ${q.sid}` : q.symbol, lots: q.lots, queued_at: q.queued_at })), kill: this.d.kill === true, now };
 		if (!full) return json(200, base);
 		const held = await this.heldAccount();
 		return json(200, { summary, account: held.text, kill: this.d.kill === true, now });
