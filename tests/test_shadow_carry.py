@@ -47,6 +47,8 @@ def opened(cfg, tmp_path):
     rn, ap = desk(cfg, tmp_path)
     t = calm(rn, ap, minutes=6)
     assert ap.shadow, "the quiet tape opens shadow trades"
+    ap.lab.dirty = True                                                                      # a job that has learned something since its last save: set,
+    #                                                                                          not left to whether the inventor happened to adopt anything here
     return rn, ap, t
 
 
