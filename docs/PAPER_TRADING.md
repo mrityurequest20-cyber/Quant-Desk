@@ -405,6 +405,54 @@ AUTO v2 also trades the MCX and currency near-month futures the paper desk allow
 **A live entry:** one lot, buy or short, with its stop and target. The runner enforces both, squares it off before the close (futures are intraday) and allows
 one position per contract. The pre-open plan stays with option structures.
 
+## The Convexity desk (`quantdesk/paper/convex.py`, 14 Nov 2026)
+
+The owner: "Direction, to be honest, is very hard to understand ... We want to have things of high risk to reward only ... 100, 200, 300, 400, 500, 1000%
+return." So this book never forecasts direction. It buys both sides at once and wins when the move is big, whichever way it goes.
+
+**Why it can work, and why blind buying does not:** a bought option makes five to ten times its price when the underlying moves much more than the option's
+price assumed. On average, though, options price more movement than follows: that is the premium option sellers earn, and buying every day pays it. So the desk
+buys only when one of four tests says the next move is priced **too small**:
+- **Cheap options:** the options' move to expiry (implied volatility × √T) is at most 0.8 × what the tail model forecasts over the same trading days.
+- **An event priced small:** a scheduled event that touches the instrument is before the expiry, within two sessions. The event's own move is split out of the
+  near and next expiries (both contain it). It passes if that day's implied move is at most 0.8 × what this instrument did on past episodes of the same kind
+  (weighted to today, at least 3 effective episodes: RBI, FOMC, the Budget, elections). Or, unscheduled: a high news event touching it while the options have
+  not repriced.
+- **Tails underpriced:** the structure's expected payoff over the fitted fat-tailed distribution (extreme value theory) is at least 1.25 × its cost. Far wings
+  live here: they cost a few rupees, and option prices behave like a normal distribution that underweights the tails.
+- **A quiet market breaking out:** the last hour's realized volatility is at most 0.6 × the daily forecast, and a fresh CUSUM change point says it has started
+  to move (either way; the direction is not used), with the options not yet rich.
+
+Every structure must also be worth at least 0.9 × its cost over the tail model, whatever its test.
+
+**The structures:** a long straddle, a long strangle (1 or 2 strikes out) and long wings (1.5 or 2.5 forecast standard deviations out), each on the near or
+next expiry. Every leg is bought, so the most a trade can lose is its premium. 40 strategies (structure × width × test × expiry).
+
+**Sizing (the owner's choices, 14 Nov 2026):**
+- 0.5% of the account a trade, premium and fees (₹2,500 on ₹5 lakh);
+- at most 3% of the account spent on convexity premium in a calendar month (₹15,000), counted from the ledger, so a restart forgets nothing;
+- at most 3 packages open, one per underlying.
+
+The risk gate's own caps (2.5% a trade, 5% a day, 10% drawdown) apply on top, unchanged. On ₹5 lakh an at-the-money NIFTY straddle (about ₹15,000 a lot) does
+not fit the stake. Far wings do, and they are the ones that can make 5 to 10 times. When a test passes but a lot does not fit, the app says so.
+
+**Exits (the owner's choice: thirds):**
+- a third sold at +100% of the premium (its cost is back);
+- a third at +300%;
+- the last third trailed: out when it gives back more than 35% of its peak gain;
+- after a scheduled event: out 15 minutes after it, before the options' price collapses;
+- the options repriced rich before the move came: out if it is not losing;
+- five sessions without the move, or the session before expiry: out.
+
+There is no price stop below that: the stake is the stop. One lot cannot be split, so it is trailed whole; two lots sell one at +100%.
+
+**Evidence:** every convex strategy is traded in the shadow book with these exits and scored in R (capped at +20R). It trades paper money only when its family
+(the structure) has 20 shadow trades, it has 5 of its own, and its hierarchical average is above zero. A good record here is many small losses and a few large
+wins: the hit rate is not the measure, the average R is. Expect weeks of shadow trading before the first live trade.
+
+**Both books trade (the owner's choice):** the directional and premium-selling strategies keep trading exactly as before. The app's Paper tab has a Convexity
+desk panel: the month's spend against its budget, the stake, what is open, what is proven, and which tests pass now on each underlying.
+
 ## The scheduled-events calendar (`quantdesk/paper/eventcal.py`, 14 Nov 2026)
 
 The brief lists the next week's scheduled events. Each event touches instruments through the news model's channels. A named symbol is touched fully, and the

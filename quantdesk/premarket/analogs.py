@@ -39,7 +39,7 @@ def situation(close: pd.Series) -> pd.DataFrame:
 
 
 def for_instrument(close: pd.Series, dates: dict, today: pd.Series | None = None) -> dict:
-    """{kind: {n, n_eff, p_up, median_ret, mean_ret_w, worst, ret5_w, nearest: [(date, similarity, ret)]}} for one instrument's daily closes."""
+    """{kind: {n, n_eff, p_up, median_ret, mean_ret_w, worst, abs_w, ret5_w, nearest: [(date, similarity, ret)]}} for one instrument's daily closes."""
     close = close.dropna().sort_index()
     close = close[close > 0]
     if len(close) < MIN_DAYS:
@@ -75,6 +75,7 @@ def for_instrument(close: pd.Series, dates: dict, today: pd.Series | None = None
         near = sorted(rows, key=lambda r: -r[1])[:3]
         out[kind] = {"n": len(rows), "n_eff": round(float(sw ** 2 / (w ** 2).sum()), 2), "p_up": round(float((w * (y > 0)).sum() / sw), 3),
                      "median_ret": round(float(np.median(y)), 5), "mean_ret_w": round(float((w * y).sum() / sw), 5), "worst": round(float(y.min()), 5),
+                     "abs_w": round(float((w * np.abs(y)).sum() / sw), 5),           # the weighted mean size of the move, either way (the Convexity desk's event test)
                      "ret5_w": round(sum(a * b for a, b in y5) / sum(a for a, _ in y5), 5) if y5 and sum(a for a, _ in y5) > 0 else None,
                      "nearest": [[str(d.date()), round(s, 3), round(r, 5)] for d, s, r, _ in near]}
     return out

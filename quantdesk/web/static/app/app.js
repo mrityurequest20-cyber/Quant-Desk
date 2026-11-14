@@ -2403,6 +2403,7 @@ function ppDraw() {
 		h("div", { class: "kstrip" }, cell("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""), cell("Cash", inr(sm.cash)), cell("Fees paid", inr(sm.fees)), cell("Open positions", String(pos.length)))));
 	if (sm && Array.isArray(sm.reviews) && sm.reviews.length) put(body, ppReview(sm.reviews));
 	if (sm && sm.lab && sm.lab.plan && typeof sm.lab.plan === "object") put(body, ppPlan(sm.lab.plan));
+	if (sm && sm.lab && sm.lab.convex && typeof sm.lab.convex === "object") put(body, ppConvex(sm.lab.convex));
 	if (sm && sm.lab && typeof sm.lab === "object") put(body, ppLab(sm.lab));
 	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, `Positions (${pos.length})`)),
 		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
@@ -2498,6 +2499,25 @@ function ppPlan(dp) {
 			: h("div", { class: "f3", style: "font-size:12.5px;padding:10px 16px" }, "Nothing on the plan: no underlying has a clear pre-open view with a reward to risk of 2 or better."),
 		notes.length ? h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 0" }, notes.join(" ")) : null,
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "Built every ten minutes from 06:00 to 09:15 from last night's closing books, the overnight markets, the news and the pre-market brief. From 09:20 the desk takes a planned strategy first, if its context still holds and its record is proven; the risk limits are the same as for any trade."));
+}
+// The Convexity desk (quantdesk/paper/convex.py; owner, 14 Nov 2026): bought optionality both sides, no view on direction; 0.5% of the account a trade, 3% a month,
+// a third sold at +100%, a third at +300%, the rest trailed. Display only.
+function ppConvex(c) {
+	const cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
+	const now = c.now && typeof c.now === "object" ? Object.entries(c.now).filter(([, v]) => Array.isArray(v)) : [];
+	const names = { cheapvol: "options cheap", event: "event priced small", squeeze: "breaking out of a quiet spell" };
+	const used = fin(c.spent) && fin(c.budget) && c.budget > 0 ? c.spent / c.budget : null;
+	const share = (x) => (fin(x) ? (x * 100).toFixed(1).replace(/\.0$/, "") + "%" : "—");
+	const passing = now.filter(([, v]) => Array.isArray(v[1]) && v[1].length).length;
+	return h("div", { class: "grp" },
+		h("div", { class: "sec-h" }, h("h2", {}, "Convexity desk"), h("span", { class: "hint" }, "no direction · big moves either way")),
+		h("div", { class: "kstrip" }, cell("This month", fin(c.spent) && fin(c.budget) ? `₹${num(c.spent, 0)} of ₹${num(c.budget, 0)}` : "—", used !== null && used >= 0.9 ? "down" : ""),
+			cell("Stake a trade", fin(c.stake) ? `₹${num(c.stake, 0)}` : "—"), cell("Open", `${num(c.open || 0, 0)} of ${num(c.max_open || 3, 0)}`),
+			cell("Proven enough", num(c.ready || 0, 0), c.ready ? "up" : ""), cell("In shadow now", num(c.shadow_open || 0, 0))),
+		now.length ? fold("cx-now", "Tests passing now", `${passing} of ${now.length} underlyings`, h("div", { class: "rows" }, now.map(([u, v]) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;font-size:12.5px;border-top:1px solid var(--line)" },
+			h("b", { class: "mono" }, u), h("span", { class: "f2", style: "text-align:right" }, `options price ${fin(v[0]) ? v[0].toFixed(2) + "x the forecast move" : "— (no tail model)"}${Array.isArray(v[1]) && v[1].length ? " · " + v[1].map((x) => names[x] || x).join(", ") : ""}`))))) : null,
+		c.note ? h("div", { class: "f3", style: "font-size:12px;padding:6px 16px" }, c.note) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `Buys both sides (a straddle, a strangle or far wings) only when the next move looks priced too small: the options cheap against the tail model's forecast, an event the options price under its own past, tails the fat-tailed distribution values above their price, or a quiet market starting to break out. ${share(c.stake_pct)} of the account a trade, at most ${share(c.budget_pct)} a month. A third is sold at +100%, a third at +300%, and the rest trailed. A strategy trades paper money only after ${num(c.min_pooled || 20, 0)} shadow trades in its family and ${num(c.min_own || 5, 0)} of its own, with a positive average. Expect many small losses and a few large wins. Not proven to make money.`));
 }
 function ppLab(lab) {
 	const cell = (k, v, cl) => h("div", {}, h("span", {}, k), h("b", { class: "mono " + (cl || "") }, v));
