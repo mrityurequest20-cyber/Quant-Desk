@@ -130,9 +130,10 @@ class Probation:
                 self.counts["unmeasured"] += 1
 
     def owner_release(self, sid: str, day: str) -> bool:
-        """The owner's release (the only way out after a third demotion)."""
+        """The owner's release: only where the spec makes it the owner's (a third quick demotion: P["owner"]). Every other probation ends only on its
+        registered proof (RELEASE_TRADES over RELEASE_SESSIONS, doubled after a quick repeat); the owner cannot shorten it."""
         e = self.st.get(sid)
-        if not (e and e.get("P")):
+        if not (e and e.get("P") and e["P"].get("owner") is True):
             return False
         e["P"], e["g"], e["rel"] = None, 0.0, day
         self._event(day, sid, "released", {"by": "owner"})

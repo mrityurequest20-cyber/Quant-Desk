@@ -122,9 +122,12 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         for o in releases:                                             # the owner releases a strategy from probation (evolution phase 2): no order, no money, never the gate
             if not isinstance(o.get("id"), str):
                 continue
-            ok, why = auto.owner_release(o.get("sid"), clock()) if auto is not None and hasattr(auto, "owner_release") else (False, "AUTO v2 is not running in this session")
-            pending.append({"id": o["id"], "status": "done" if ok else "refused", "reasons": [why], "at": clock().isoformat()})
-            log(f"paper: owner release {o.get('sid')}: {'done' if ok else 'refused'}: {why}")
+            try:
+                ok, why = auto.owner_release(o.get("sid"), clock()) if auto is not None and hasattr(auto, "owner_release") else (False, "AUTO v2 is not running in this session")
+            except Exception as e:                                     # noqa: BLE001 - a fault here must never stop the runner or the brakes
+                ok, why = False, f"the release failed ({type(e).__name__})"
+            pending.append({"id": o["id"], "status": "done" if ok else "refused", "reasons": [str(why)[:200]], "at": clock().isoformat()})
+            log(f"paper: owner release request {o['id']}: {'done' if ok else 'refused'}")   # no strategy named: per strategy, it stays on the relay (the spec's publication)
         if auto is not None:                                           # AUTO v1: its orders join the owner's and go through the very same step, gate and brakes
             ist_now = clock().astimezone(IST)
             if hasattr(auto, "brief") and BRIEF_WINDOW[0] <= ist_now.time() <= BRIEF_WINDOW[1] and time.monotonic() - brief_at >= BRIEF_EVERY_S:

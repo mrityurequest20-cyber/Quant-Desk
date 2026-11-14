@@ -2421,6 +2421,8 @@ class AutoPilotV2:
             return False, "no such strategy"
         if not self.probation.blocked(sid):
             return False, "not in probation"
+        if self.probation.st[sid]["P"].get("owner") is not True:                       # the spec: only a third quick demotion is the owner's to release
+            return False, "not the owner's to release: it comes back on its own registered proof"
         if not self.probation.owner_release(sid, now.astimezone(IST).date().isoformat()):
             return False, "could not release"
         self.lab.dirty, self.shadow_dirty = True, True                                  # the record's list and the book both carry it at the next save

@@ -114,3 +114,30 @@ def test_auto_v2_releases_only_a_strategy_in_probation_and_keeps_it(cfg, tmp_pat
     assert ap.lab.dirty and ap.shadow_dirty
     assert ap.probation.pset(T0.date().isoformat())[IC][0] is None                             # the record's list: released, with its last release kept
     assert ap.owner_release(IC, T0) == (False, "not in probation")                             # a second request (a restart before its result) changes nothing
+
+
+def test_only_a_third_quick_demotion_is_the_owners_to_release(cfg, tmp_path):
+    """Risk review, 14 Nov 2026: the first version released any probation; the spec gives the owner only the third quick demotion."""
+    rn, ap = desk(cfg, tmp_path)
+    in_probation(ap, IC, owner=False)
+    ok, why = ap.owner_release(IC, T0)
+    assert not ok and "registered proof" in why and ap.probation.blocked(IC)
+    assert not ap.probation.owner_release(IC, T0.date().isoformat()) and ap.probation.blocked(IC)       # the rule lives in probation.py as well
+
+
+class _Failing(_Pilot):
+    def owner_release(self, sid, now):
+        raise RuntimeError("boom")
+
+
+def test_a_failing_release_never_stops_the_runner_and_the_log_names_no_strategy(cfg, tmp_path):
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.orders = [{"id": "ord-rel00009", "side": "release", "sid": "IC1.faan.1/0.5.d"}]
+    lines = []
+    pilot = _Failing()
+    S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
+          say=lines.append, new_account=True, auto=pilot)
+    assert pilot.calls > 1                                                                     # the loop went on, cycle after cycle
+    assert rl.results and rl.results[0]["status"] == "refused" and "RuntimeError" in rl.results[0]["reasons"][0]
+    assert not any("IC1.faan" in str(x) for x in lines)                                        # the public log names no strategy
