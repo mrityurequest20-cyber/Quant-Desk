@@ -118,6 +118,9 @@ LEDGER_SOFT_LIMIT = V1.LEDGER_SOFT_LIMIT
 SUMMARY_SOFT_MAX = 30000                 # AUTO v2's share of the runner's state (the relay's cap is 60,000 for all of it): past this, reasons are dropped before numbers
 LAB_MAX_CHARS = 110000                   # the relay keeps the record in one stored value (128 KiB at most)
 LAB_MAX_INFLATED = 8_000_000              # a compressed record read back may not inflate past this (storage is not trusted)
+# ---- the evolution, phase 1 (docs/EVOLUTION.md): every closed shadow trade is tagged with the market it was taken in (the brief's fingerprint key) ---------------
+RECENT_MAX = 400                          # the latest closed shadow trades kept whole (date, strategy, underlying, R, regime) for the later phases' replays
+REGIME_KEY = re.compile(r"^(low|normal|high)/(up|down|range)$")
 # The day plan (owner, 13 Nov 2026: "6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis and look
 # for high risk to reward trades"). Built from last night's closing books, the overnight markets, the news and the pre-market brief; it ranks defined-risk candidates and the
 # open takes a planned strategy first, through the same proof gate (MIN_TRADES, a positive draw) and the same risk gate as any other.
@@ -472,6 +475,8 @@ class Lab:
         for sid, v in (stats or {}).items():
             if sid in BY_SID and isinstance(v, list) and len(v) == 4 and all(isinstance(x, (int, float)) and math.isfinite(x) for x in v) and v[0] >= 0:
                 self.stats[sid] = [int(v[0]), float(v[1]), float(v[2]), int(v[3])]
+        self.reg: dict[str, dict[str, list]] = {}      # regime key -> structure -> [n, sum R, sum R^2, wins]: each family's record in each kind of market
+        self.recent: list[list] = []                   # [date, sid, underlying, R, regime key]: the latest RECENT_MAX closed shadow trades
         self.dirty = False
         self.today = {"shadow_opened": 0, "shadow_closed": 0, "live_entries": 0}
         self._ver, self._fit = 0, None
@@ -533,6 +538,42 @@ class Lab:
         self.dirty = True
         self._ver += 1
         self.today["shadow_closed"] += 1
+
+    def tag(self, sid: str, key: str | None, r: float, u: str, day: str) -> None:
+        """A closed shadow trade's market: its structure's record in that regime (key from the brief's fingerprint; "unknown" without one), and the trade itself
+        among the latest RECENT_MAX."""
+        if sid not in BY_SID:
+            return
+        key = key if isinstance(key, str) and REGIME_KEY.match(key) else "unknown"
+        r = max(-5.0, min(CX.R_CAP if CX.is_convex(BY_SID[sid].struct) else 10.0, r))
+        row = self.reg.setdefault(key, {}).setdefault(BY_SID[sid].struct, [0, 0.0, 0.0, 0])
+        row[0], row[1], row[2], row[3] = row[0] + 1, row[1] + r, row[2] + r * r, row[3] + (1 if r > 0 else 0)
+        self.recent.append([str(day), sid, str(u)[:24], round(r, 3), key])
+        del self.recent[:-RECENT_MAX]
+        self.dirty = True
+
+    def restore_tags(self, reg, recent) -> None:
+        """The regime records read back with the record (storage is not trusted: known regimes and structures, numbers only)."""
+        self.reg = {}
+        for key, fam in (reg or {}).items() if isinstance(reg, dict) else ():
+            if not (isinstance(key, str) and (key == "unknown" or REGIME_KEY.match(key)) and isinstance(fam, dict)):
+                continue
+            for struct, v in fam.items():
+                if (struct in STRUCTURES or struct in FUT_STRUCTS or CX.is_convex(struct)) and isinstance(v, list) and len(v) == 4 \
+                        and all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v) and v[0] >= 0:
+                    self.reg.setdefault(key, {})[struct] = [int(v[0]), float(v[1]), float(v[2]), int(v[3])]
+        self.recent = [list(x) for x in (recent or []) if isinstance(recent, list) and isinstance(x, list) and len(x) == 5 and x[1] in BY_SID
+                       and isinstance(x[3], (int, float)) and math.isfinite(x[3]) and isinstance(x[4], str)][-RECENT_MAX:]
+
+    def by_regime(self, top: int = 3) -> dict:
+        """For the app: in each regime seen, the trades and the best structures by mean R (at least 5 trades)."""
+        out = {}
+        for key, fam in self.reg.items():
+            n = sum(v[0] for v in fam.values())
+            best = sorted(((st, v) for st, v in fam.items() if v[0] >= 5), key=lambda kv: -kv[1][1] / kv[1][0])[:top]
+            out[key] = {"trades": n, "best": [{"struct": st, "name": NAMES.get(st, st), "n": v[0], "mean_r": round(v[1] / v[0], 3), "win": round(v[3] / v[0], 3)}
+                                              for st, v in best]}
+        return out
 
     @staticmethod
     def _own(v: list) -> tuple[float, float] | None:
@@ -610,6 +651,10 @@ class Lab:
         is too large are the thinnest records left out, the busiest kept."""
         inv = {code: d for code, d in self.inv.items() if d["active"] or any(sid.startswith(code + "0.") for sid in self.stats)}
         head = {"v": 1, "inv": inv, **(extra or {})}
+        if self.reg:
+            head["reg"] = {k: {st: [v[0], round(v[1], 4), round(v[2], 4), v[3]] for st, v in fam.items()} for k, fam in self.reg.items()}
+        if self.recent:
+            head["recent"] = self.recent
         rows = [(sid, [v[0], round(v[1], 4), round(v[2], 4), v[3]]) for sid, v in sorted(self.stats.items(), key=lambda kv: -kv[1][0])]
 
         def plain(k):
@@ -1333,12 +1378,14 @@ class AutoPilotV2:
                 total = sh["lad"].step(act, r)
                 if total is not None:
                     self.lab.add(sh["s"].sid, total)
+                    self.lab.tag(sh["s"].sid, self.market_key(ist), total, key[1], ist.date().isoformat())
                     self.shadow.pop(key)
                     self.cool[key] = t + REENTRY_S
                 continue
             why = self._exit_why(sh["s"], r, sh["best_r"], sh["opened"], ist, sh["exp"], key[1], sh.get("spot0"), sh.get("sd0"), (states.get(key[1]) or {}).get("spot"))
             if why:
                 self.lab.add(sh["s"].sid, r)
+                self.lab.tag(sh["s"].sid, self.market_key(ist), r, key[1], ist.date().isoformat())
                 self.shadow.pop(key)
                 self.cool[key] = t + REENTRY_S
         for u, st in states.items():
@@ -1540,6 +1587,16 @@ class AutoPilotV2:
         """The strategies the day plan names for this underlying, best first (empty after a day boundary)."""
         dp = self.day_plan or {}
         return [i["sid"] for i in dp.get("items") or [] if i.get("u") == u]
+
+    def market(self, ist: dt.datetime) -> dict | None:
+        """The brief's market fingerprint for today's session (docs/EVOLUTION.md), or None: a brief for another session does not describe today."""
+        b = self.brief if isinstance(self.brief, dict) else {}
+        fp = b.get("fingerprint")
+        return fp if isinstance(fp, dict) and b.get("session") == ist.date().isoformat() else None
+
+    def market_key(self, ist: dt.datetime) -> str | None:
+        fp = self.market(ist)
+        return fp.get("key") if fp else None
 
     def news_trigger(self, u: str, news, ist: dt.datetime) -> dict | None:
         """The news exception for `u` now, or None: {"why"} for the latest important story of today's session that reaches `u`. Important: high impact, new (novelty
@@ -1761,6 +1818,9 @@ class AutoPilotV2:
             if not ok:
                 continue
             o = self._order(s, st, p, t, best[0])
+            mk = self.market(ist)
+            if mk and mk.get("key"):
+                o["thesis"] = (o["thesis"] + f" Market: {mk['key']} ({mk.get('label', '')}).")[:1000]      # the regime it was taken in (docs/EVOLUTION.md)
             if edge is not None:
                 o["thesis"] = (o["thesis"] + f" Tail check (EVT): {edge:+.2f}R expected to expiry.")[:1000]
             if via_plan:
@@ -1890,6 +1950,9 @@ class AutoPilotV2:
                 continue
             ev = (((self.plan_item(u, s.sid) or {}).get("event_at")) or ((st.get("cx") or {}).get("event") or {}).get("at")) if s.vol == "event" else None
             o = self._order(s, st, p, t, best[0], lots=lots, event_at=ev)
+            mk = self.market(ist)
+            if mk and mk.get("key"):
+                o["thesis"] = (o["thesis"] + f" Market: {mk['key']} ({mk.get('label', '')}).")[:1000]
             out.append(o)
             spent += lots * worst * p["lot"]
             busy.add(u)
@@ -1993,6 +2056,7 @@ class AutoPilotV2:
             got = Lab.unpack(raw) if isinstance(raw, str) else {}
             stats, inv = got.get("stats"), got.get("inv")
             self.lab = Lab(stats if isinstance(stats, dict) else None, inv if isinstance(inv, dict) else None)
+            self.lab.restore_tags(got.get("reg"), got.get("recent"))
             self._read_w = got.get("read_w") if isinstance(got.get("read_w"), dict) else None
             cx = got.get("cx")
             self.cx_peak = {str(k): float(v) for k, v in cx.items() if isinstance(v, (int, float)) and math.isfinite(v)} if isinstance(cx, dict) else {}
@@ -2030,6 +2094,10 @@ class AutoPilotV2:
         learnt = self.reader.learned if hasattr(self, "reader") else {}
         out = {**self.lab.summary(), "shadow_open": len(self.shadow), "state": state, "plan": self.day_plan, "read_calibration": cal, "news_calibration": ncal,
                "read_learning": {"instruments": sum(1 for v in learnt.values() if v), "outcomes": sum(learnt.values())}}
+        b = self.brief if isinstance(self.brief, dict) else {}
+        fp = b.get("fingerprint") if isinstance(b.get("fingerprint"), dict) else None
+        out["market"] = {"session": b.get("session"), "key": fp.get("key"), "label": fp.get("label"), "since": fp.get("since")} if fp else None
+        out["regimes"] = self.lab.by_regime()
         out["convex"] = {**self.cx_status, "stake_pct": CX.STAKE_PCT, "budget_pct": CX.MONTH_BUDGET_PCT, "min_pooled": CX.MIN_POOLED, "min_own": CX.MIN_OWN,
                          "strategies": len(CX_CATALOGUE), "shadow_open": sum(1 for sid, _ in self.shadow if CX.is_convex(CX.sid_struct(sid))),
                          "now": {u: st["cx"] for u, st in sorted(self.last_state.items()) if st.get("cx") and (st["cx"][1] or st["cx"][0] is not None)}}

@@ -78,6 +78,7 @@ class Inputs:
     health: dict = field(default_factory=dict)    # source -> "ok ..." / "fail ..."
     tails: dict | None = None                     # tailrisk.build: each paper underlying's conditional EVT model (quantdesk/paper/tails.py)
     news_analogs: dict | None = None              # analogs.build: each paper underlying's past episodes of each kind, weighted by today's situation
+    fingerprint: dict | None = None               # fingerprint.compute: what kind of market it is (docs/EVOLUTION.md, phase 1)
 
 
 def _company_aliases(corp_events: pd.DataFrame | None) -> dict[str, list[str]]:
@@ -295,6 +296,8 @@ def build(inp: Inputs) -> dict:
     news = match_headlines(inp.headlines, list(univ["symbol"]) if len(univ) else [], aliases)
     watch = _watch(univ, results, news, {e["symbol"] for e in expiring}) if len(univ) else []
     stale = (pd.Timestamp(day) - last_close.normalize()).days > 4
+    calendar = _calendar(inp, now, expiring, results)
+    from . import fingerprint as FP
     brief = {
         "generated_at": now.isoformat(timespec="seconds"), "session": day.isoformat(), "last_close": last_close.date().isoformat(),
         "data_stale": bool(stale),
@@ -304,7 +307,8 @@ def build(inp: Inputs) -> dict:
         "analogs": _analogs(inp),                                       # what NIFTY and BANKNIFTY did on past episodes of each kind (the news analyser's "what happened before")
         "tails": inp.tails or {},                                       # extreme value theory: each paper underlying's tail model (AUTO v2's tail check reads it)
         "news_analogs": inp.news_analogs or {},                         # every instrument's own past episodes, most like today first (the news model reads it)
-        "calendar": _calendar(inp, now, expiring, results),             # the scheduled events of the next week, each with the instruments it touches (paper/eventcal.py)
+        "calendar": calendar,                                           # the scheduled events of the next week, each with the instruments it touches (paper/eventcal.py)
+        "fingerprint": FP.with_brief(inp.fingerprint, inp.globals_, calendar),     # what kind of market it is: every trade is tagged with it (docs/EVOLUTION.md)
         "global": inp.globals_ or [], "headlines": {"total": len(inp.headlines or []), "named": {k: v[:3] for k, v in news.items()}},
         "watch": watch, "record_plan": record_plan(watch) if watch else {"budget": 0, "used": 0, "names": 0, "of": 0, "plan": []},
         "history": {"events": int(len(hist)), "calendar": int((hist["source"] == "calendar").sum()) if len(hist) else 0,
@@ -341,6 +345,10 @@ def summary(b: dict) -> list[str]:
     tl = summary_line(b.get("tails") or {})
     if tl:
         s.append(tl)
+    from .fingerprint import summary_line as fp_line
+    fl = fp_line(b.get("fingerprint"))
+    if fl:
+        s.append(fl)
     top = [w for w in b["watch"] if w["segment"] == "stock"][:5]
     if top:
         s.append("Watch first: " + "; ".join(f"{w['symbol']} ({', '.join(w['why'][:2])})" for w in top) + ".")
