@@ -549,6 +549,21 @@ Okay, then it takes trade."
   event the options have not repriced for). How long a story keeps counting is the market's answer: the news model's vote
   halves in two hours and is gone after six, and the other readings must still agree. One news-driven directional position per
   instrument at a time; same proof gates, sizing and risk gate. The trade's thesis names the headline.
+- **And the same for the data** (the owner, 14 Nov 2026: "it's not only limited to news, it's also applies to data also. That if
+  we feel the data is changing in the market and that particular sentiment change in the data ... is signaling us to that
+  particular risk reward opportunity ... Same applies to there also"). The 06:00 to 09:15 plan is what the market could look like
+  from last night's data; the live market is its own setup. At any time in the session, a directional trade the plan did not
+  name may open when:
+  - the live market shows a **strong direction**: three or more readings agreeing (book pressure, the options forward, the move,
+    the news, the options and OI market read, the Kalman trend), none against;
+  - it has **held for five minutes**, so a flicker is not a reason;
+  - it is a **change**: the pre-market read said something else (another direction, or none), or the options and OI read's
+    P(up) has moved 0.15 or more since the session's first read (a build-up appearing, the put-call ratio turning), or a fresh
+    CUSUM change point is drifting the same way. What the plan already expected is not a new reason;
+  - the strategy offers a **reward to risk of 2 or better**, as on the plan (an overnight strategy, the volatility stop).
+
+  A big-move trade opens when a Convexity desk test has held on the live board for five minutes. Same proof gates, sizing and
+  risk gate; one live-triggered directional position per instrument at a time. The thesis says what changed.
 - **Same limits:** the risk gate, the loss caps and the proof gate are the same as for any trade.
 - **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
 - **Yesterday's plan** never steers today.

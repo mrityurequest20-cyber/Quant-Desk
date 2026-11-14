@@ -250,3 +250,54 @@ def test_important_news_also_lets_a_proven_convex_trade_through_when_its_test_pa
         assert got == ({XG} if label == "with" else set()), (label, got)
         if got:
             assert "taken on important news in the session" in next(iter(rn.account.positions.values())).thesis
+
+
+# ---- and the data (owner, 14 Nov 2026: "it's not only limited to news, it's also applies to data also ... In a live market, there is a different setup") -----------
+def rising(rn, ap, minutes, start=NEWS_T, step=0.0005, **kw):
+    """A live market going up: the book and the options forward say up, and the price climbs `step` a minute (a five-minute move of 0.25%)."""
+    from quantdesk.paper import runner as RR
+    for i in range(minutes):
+        t = start + dt.timedelta(minutes=i)
+        snap = board(t, spot=24500 * math.exp(step * i), **UP_BOOK, **kw)
+        rn.step(snap, ap.decide(snap, rn.account, RR.Runner.server_now(snap), news={"items": [], "events": []}), False, t.astimezone(dt.timezone.utc))
+
+
+def test_a_change_in_the_live_data_that_holds_is_a_reason_to_trade(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)                                                     # the plan saw no direction for NIFTY
+    rising(rn, ap, 13)
+    st = ap.state(board(NEWS_T + dt.timedelta(minutes=13), spot=24500 * math.exp(0.0005 * 13), **UP_BOOK), "NIFTY",
+                  A2.V1.chains(board(NEWS_T), ap.und, ap.lots), NEWS_T + dt.timedelta(minutes=13), None)
+    assert st["agree"] == "up" and {"book", "forward", "move"} <= set(st["sources"])
+    pos = list(rn.account.positions.values())
+    assert pos and pos[0].strategy.startswith(f"{A2.TAG} {sid} NIFTY p"), [p.strategy for p in pos]
+    assert "Not on the plan: taken on a change in the live data (data: the pre-market read was no direction, the live market says up" in pos[0].thesis
+
+
+def test_a_flicker_is_not_a_change(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    rising(rn, ap, 8)                                                                            # the five-minute move exists from minute 5: three minutes of agreement
+    assert ap.agree_since["NIFTY"] and not rn.account.ledger
+
+
+def test_what_the_plan_already_expected_is_not_a_change(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    ap.day_plan["states"] = {"NIFTY": {"view": "up"}}                                          # the pre-market read already said up (and nothing was proven to take it)
+    rising(rn, ap, 13)
+    assert ap.agree_since["NIFTY"][0] == 1                                                       # the live market does agree, strongly and for long enough
+    assert not rn.account.ledger                                                                 # but no change in the read since the open, no change point: not a new reason
+
+
+def test_a_big_move_test_that_holds_on_the_live_board_is_a_reason_too(cfg, tmp_path):
+    from quantdesk.paper import runner as RR
+    from tests.test_convex import XG, desk as cx_desk, proven as cx_proven, wide_board
+    rn, ap = cx_desk(cfg, tmp_path, stats=cx_proven())
+    ap.plan_only = True
+    ap.day_plan = {"built_at": "2026-11-09T07:30+05:30", "items": []}
+    for i in range(8):                                                                           # cheap options all along: the test holds past LIVE_PERSIST_S
+        t = NEWS_T + dt.timedelta(minutes=i)
+        snap = wide_board(t)
+        rn.step(snap, ap.decide(snap, rn.account, RR.Runner.server_now(snap), news={"items": [], "events": []}), False, t.astimezone(dt.timezone.utc))
+        if i < 5:
+            assert not rn.account.ledger, i
+    pos = list(rn.account.positions.values())
+    assert {p.strategy.split()[2] for p in pos} == {XG} and "taken on a change in the live data (data: its test has held" in pos[0].thesis
