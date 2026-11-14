@@ -33,8 +33,8 @@ IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 class FakeFyers:
     """Answers the five login calls and the refresh call. `refuse` names the calls that fail."""
 
-    def __init__(self, refuse=(), v3_token=True):
-        self.calls, self.refuse, self.v3_token = [], set(refuse), v3_token
+    def __init__(self, refuse=(), v3_token=True, step1=None):
+        self.calls, self.refuse, self.v3_token, self.step1 = [], set(refuse), v3_token, step1
 
     def __call__(self, url, body, bearer=None):
         self.calls.append((url, body, bearer))
@@ -44,7 +44,7 @@ class FakeFyers:
         if name == "validate-refresh-token":
             return 200, {"s": "ok", "code": 200, "message": "", "access_token": ACCESS}
         if name == "send_login_otp_v2":
-            return 200, {"s": "ok", "code": 200, "request_key": "RK1"}
+            return self.step1 or (200, {"s": "ok", "code": 200, "request_key": "RK1"})
         if name == "verify_otp":
             return 200, {"s": "ok", "code": 200, "request_key": "RK2"}
         if name == "verify_pin_v2":
@@ -560,3 +560,18 @@ def test_the_workflow_can_check_only_and_then_streams_nothing():
     assert all("!inputs.check_only" in jobs[j]["if"] for j in ("feed-1", "feed-2", "feed-3"))
     run = next(s["run"] for s in jobs["check"]["steps"] if "--check" in str(s.get("run", "")))
     assert "LIVE_URL" not in str(jobs["check"]) and "LIVE_INGEST_TOKEN" not in str(jobs["check"]) and "fyers-feed --check" in run   # the check job cannot reach the relay
+
+
+def test_fyers_first_answer_code_1043_is_a_success_when_it_hands_back_a_request_key(tmp_path, capsys):
+    """The first run against the real Fyers (14 Nov 2026) stopped at step 1: HTTP 200, code 1043, "otp has been successfully sent". The login judged the code; it now
+    judges what came back."""
+    fake = FakeFyers(step1=(200, {"code": 1043, "message": "otp has been successfully sent", "request_key": "RK1"}))
+    rc, out = _run(tmp_path, fake)
+    assert rc == 0 and json.loads(out.read_text())["how"] == "totp"
+    assert [c[0].rsplit("/", 1)[-1] for c in fake.calls][:3] == ["send_login_otp_v2", "verify_otp", "verify_pin_v2"]
+    fake = FakeFyers(step1=(200, {"code": 1043, "message": "otp has been successfully sent"}))
+    rc, _ = _run(tmp_path, fake)
+    printed = capsys.readouterr().out + capsys.readouterr().err
+    assert rc != 0 and [c[0].rsplit("/", 1)[-1] for c in fake.calls] == ["send_login_otp_v2"]          # no key: it stops before any code or PIN is sent
+    fake = FakeFyers(step1=(200, {"s": "error", "code": -1001, "request_key": "RK1"}))
+    assert _run(tmp_path, fake)[0] != 0                                                               # an explicit error stays an error
