@@ -148,7 +148,8 @@ console.log(JSON.stringify({ upIds: [...new Set(up.map((x) => x.id))].sort(), bi
   rrOrder: byRR.map((x) => x.rr === Infinity ? 1e9 : x.rr), popOrder: byPop.map((x) => x.pop), cheapOrder: byCheap.map((x) => Math.abs(x.premium)),
   flags: up.map((x) => [x.id, x.paperOk]), fields: Object.keys(up[0]).sort() }));
 """)
-    assert o["upIds"] == ["bull_call_spread", "bull_put_spread", "long_call"] and o["bigIds"] == ["long_straddle", "long_strangle"] and o["none"] == []
+    assert o["upIds"] == ["bull_call_spread", "bull_put_spread", "bw_call_butterfly", "call_backspread", "long_call"] and o["none"] == []    # the newer structures too (13 Nov 2026)
+    assert o["bigIds"] == ["call_backspread", "long_straddle", "long_strangle", "put_backspread"]
     assert o["rrOrder"] == sorted(o["rrOrder"], reverse=True) and o["popOrder"] == sorted(o["popOrder"], reverse=True) and o["cheapOrder"] == sorted(o["cheapOrder"])
     assert all(isinstance(ok, bool) for id, ok in o["flags"])                                                              # a spread has a sold leg: with selling on it can go as one package, if it fits the limits (the builder tests pin both settings)
     assert {"id", "width", "name", "premium", "maxLoss", "maxProfit", "rr", "breakevens", "paperOk", "fits", "pop"} <= set(o["fields"])

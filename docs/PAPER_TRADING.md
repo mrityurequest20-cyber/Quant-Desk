@@ -20,7 +20,7 @@ GitHub, Actions, **Paper runner**, Run workflow: tick **new_account**, set **han
 
 ## Placing a trade
 
-1. Build tab: pick the index, the expiry and a structure (or use *Ideas for your view*). Only structures the paper desk can open show **Send as a paper order**: long options on NIFTY, BANKNIFTY, FINNIFTY or MIDCPNIFTY, and, since 8 Nov 2026 (`paper.allow_short_legs: true`, the owner's order), **hedged packages with sold legs** (verticals, condors, butterflies): they go as ONE order, every leg opens together or none does, and the gate judges the worst case (a naked short call or a calendar is always refused; the long that covers a sold option cannot be sold before the sold option is bought back). A sold option never goes alone: only as a leg of a package. If the switch is turned off in the config, a structure with a sold leg is a what-if again.
+1. Build tab: pick the index, the expiry and a structure (or use *Which strategy now, and why*, *Design one for this view* or *Ideas for your view*). Only structures the paper desk can open show **Send as a paper order**: long options on NIFTY, BANKNIFTY, FINNIFTY or MIDCPNIFTY, and, since 8 Nov 2026 (`paper.allow_short_legs: true`, the owner's order), **hedged packages with sold legs** (verticals, condors, butterflies): they go as ONE order, every leg opens together or none does, and the gate judges the worst case (a naked short call or a calendar is always refused; the long that covers a sold option cannot be sold before the sold option is bought back). A sold option never goes alone: only as a leg of a package. If the switch is turned off in the config, a structure with a sold leg is a what-if again.
 2. Write the **strategy name** and the **thesis**: why this trade, now, and what would make you wrong (at least 20 characters; it is kept with the trade).
 3. **Review order**: each leg, its price limit (two ticks or 2% above the offer you saw), the most you can lose. **Send paper order**.
 4. Open the **Paper** tab. A fill shows under *Orders* as `filled`; a refusal shows the gate's reasons.
@@ -108,6 +108,329 @@ circulars.
 
 **Not built:** AUTO does not trade futures; they are the owner's tickets only. There are no MCX or currency options.
 
+## MCX and currency options (owner, 13 Nov 2026: "treated in the same way" as index and stock options)
+
+**Data:**
+- **MCX option chains** come from Fyers (`options-chain-v3`, three chains a cycle, in turn).
+- **Currency options** come from Angel One: one FULL quote call gives price, OI and five-level depth; the window follows the price
+  every half hour.
+- **Kite** carries both in its hours, from its instrument list.
+- **Routing:** they have their own route labels, `mopt` (Fyers, Kite, Kotak) and `copt` (Angel One, Fyers, Kite, Kotak), so each segment
+  is shown from the broker the owner chose for it, futures and options alike. Names are the same as NSE options; a currency strike has
+  decimals (`USDINR20NOV2684.25CE`).
+
+**Trading:** from the chain and the strategy builder exactly as NSE options, by the owner or by AUTO v2:
+- **Lot:** the future's.
+- **Costs:** their own schedules (`costs.segments.mcx_options`: CTT 0.05% on the sale, MCX 0.0418%, stamp 0.003%;
+  `cds_options`: no STT, NSE 0.0311% + IPFT, stamp 0.0001%; brokerage 20 rupees flat).
+- **Slippage:** in each contract's own tick (`opt_tick`).
+- **Pricing:** off the near-month future at rate 0 (Black-76: an option on a future).
+- **Expiry:** sold from 15:20 on the trading day before expiry, never held into it (an MCX option turns into the future at expiry; a
+  currency option expires at 12:30).
+
+**AUTO v2's hours by segment:**
+
+| Segment | First entry | Last entry | Day strategies out by |
+|---|---|---|---|
+| NSE | 09:20 | 15:00 | 15:15 |
+| Currency | 09:10 | 16:15 | 16:40 |
+| MCX | 09:10 | 22:45 | 23:10 |
+
+A currency option's premium floor is 20 of its ticks.
+
+## The market read (`quantdesk/paper/marketread.py`)
+
+For each underlying, every 30 seconds, from the options, the future and the spot:
+
+| Group | What it reads |
+|---|---|
+| Positioning | put/call ratio (OI, volume), max pain, the call wall (resistance) and the put wall (support) |
+| Flow (against a quarter of an hour earlier) | the future's build-up (long build-up, short build-up, short covering, long unwinding); near-the-money call against put writing; the put/call ratio's change |
+| Expectations | the straddle's implied move, skew (out-of-the-money put over call volatility) and its change, the near against next expiry's volatility, the future's premium (Kalman-smoothed, below) |
+
+**Combining them (Bayesian evidence):** each reading is a signal s in [-1, 1] with a weight w (a log-likelihood ratio), and
+P(up) = 1 / (1 + exp(-sum w*s)).
+- **A vote at 0.65 or 0.35.** A read votes up at P(up) 0.65 or more and down at 0.35 or less, as one more vote in AUTO v2's view.
+- **The rule is unchanged:** at least two readings agree and none disagrees, so the read alone never opens a trade.
+- **The weights are priors**, set from what each reading is known to mean, not fitted.
+- **Calibration:** every read is scored against what the future did over the next quarter hour (the Brier score: 0.25 is a coin toss,
+  lower is better; `read_calibration` in the runner's state). That record will show which readings carry information.
+
+## Regimes and change points (`quantdesk/paper/regimes.py`)
+
+**Hidden Markov model.** Each underlying's one-minute log returns are modelled as coming from one of three hidden states, calm, active
+and stressed, each with its own Gaussian, moving between them by a Markov chain.
+- **Fitting:** Baum-Welch (expectation-maximisation with scaled forward-backward passes) on the last 390 minutes, every five minutes.
+  Between fits, one forward step a minute gives P(state now | every return so far). The states are named by their variance.
+- **Model selection:** the three-state model must beat a single Gaussian on the Bayesian information criterion (BIC = -2 log L + parameters x
+  log n). If it doesn't, the series is one regime and nothing is called "stressed": reading noise as regimes is the classic way an HMM
+  misleads.
+
+**CUSUM change points (Page).** On returns standardised by a robust scale (1.4826 x the median absolute deviation):
+- a two-sided cumulative sum for a shift in the mean (k = 0.5, h = 5);
+- a one-sided sum for a rise in volatility, measured around an exponentially weighted running mean so a steady drift is not read as
+  turbulence (k = 1, h = 10).
+
+Calibrated on pure noise: about one false alarm per few hundred minutes. Nothing is tested before 30 returns exist.
+
+**Use in AUTO v2:**
+- **Drift change point.** A drift change point within the last 15 minutes is one more vote in the view, under the unchanged rule (at
+  least two agree, none against), so it never opens a trade alone.
+- **Stress or a volatility change point.** The stressed state (P >= 0.6) or a volatility change point puts the underlying in the event
+  regime: no short-volatility structure is opened.
+- **In the app:** the state and any fresh change point show on each underlying in the strategy lab.
+
+## Kalman filtering (`quantdesk/paper/kalman.py`)
+
+One model, used twice: a **local linear trend**, observation = level + noise, level moves by a slope plus shocks, slope wanders slowly.
+The filter estimates (level, slope) after each observation; the slope over its standard error is a t-statistic.
+- **No hand-set noise.** The three variances come from **maximum likelihood** (the prediction-error decomposition, concentrated over
+  the overall scale, so only two ratios are searched).
+- **Trend.** On each underlying's log one-minute closes (refitted every 5 minutes on the last 390). Its t-statistic, at |t| >= 2, is
+  AUTO v2's **price vote**, in place of the raw five-minute move. On driftless random walks it voted 3.5% of the time (two-sided 5%
+  nominal). "Flat" now also needs |t| < 1.
+- **Price is one vote.** The Kalman trend, the raw move and a CUSUM drift all read the same prices. Only one of them counts (the trend
+  once fitted, else the raw move, a CUSUM drift only when neither votes), so price alone can never satisfy "two readings agree".
+- **Futures premium.** (future / spot - 1), read every 30 seconds, is smoothed the same way (fitted to the last two hours). The market
+  read takes its change from the smoothed premium. On a simulated noisy premium the smoothed series was under half the raw prints' error.
+
+## Extreme value theory: tail risk (`quantdesk/paper/tails.py`, `quantdesk/premarket/tailrisk.py`)
+
+**The model (conditional EVT, McNeil and Frey 2000).** Each day's return is standardised by the volatility known the evening before (EWMA,
+lambda 0.94). Each tail of the standardised returns beyond its 95th percentile (90th for a short history) is fitted with a **generalised
+Pareto distribution** by probability-weighted moments; the body is the empirical distribution. Today's distribution = today's volatility x
+history's shape. Horizons of 1, 3, 5 and 10 sessions are fitted on their own returns.
+
+**Where the history comes from.** Built once a morning by the pre-market brief (`tails.json`, reused all morning), ten years where it exists:
+- indices: NSE's official closes;
+- stocks: Yahoo, adjusted for splits;
+- MCX: a proxy, the international future in rupees (WTI x USD/INR for crude, COMEX gold x USD/INR for gold), with non-positive prices and
+  roll steps dropped;
+- currencies: Yahoo's spot rates.
+
+**Measured, on distributions with known tails** (`tests/test_tails.py`):
+- **The 99% level is right.** On Student-t(4), the 99% VaR is within 6% of the truth and the 99% ES within 8%; the normal model with
+  the same variance understates both by 12% to 28%.
+- **Backtest.** GARCH returns with t shocks pass their own out-of-sample backtest: 500 days, Kupiec's test.
+- **Known bias.** The 99.9% level comes out about 17% too low, by moments and maximum likelihood alike (the t's tail approaches its
+  power law slowly). The desk works at 99%.
+
+**Use: the tail check.** A structure that sells options (bull put spread, bear call spread, iron condor, iron butterfly) sells a tail the
+shadow record cannot price: a few weeks of trades rarely hold the day that costs most. Before one opens (shadow, live or on the day plan):
+- **The test.** Its expected value to expiry is integrated over the fitted distribution. The volatility used is never below the last
+  hour's realized volatility.
+- **The rule.** It opens only if that expectation, net of costs, is at least 0R: the premium must pay for the tail.
+- **No model, no check.** An underlying with no tail model is not checked, and the day plan names it.
+
+**In the app:** each underlying's 1-day 99% expected shortfall, both sides; the brief's summary gives NIFTY's and BANKNIFTY's.
+
+## The hierarchical record (AUTO v2's `Lab`)
+
+A strategy's record is read through a **multilevel normal model**, fitted by empirical Bayes every time the record changes:
+- **Levels.** Strategy mean R ~ N(its structure's mean, tau^2); each structure's mean ~ N(0, 0.25^2), anchored at zero edge after costs.
+- **Tau is estimated, not set.** tau, the spread of strategies within a structure, comes from the record itself (DerSimonian-Laird,
+  pooled over structures).
+- **What it changes:**
+  - A strategy with no trades starts from its structure's record instead of zero.
+  - A short record is pulled towards its structure's.
+  - A long record speaks for itself.
+- **Correlated strategies are not independent evidence.** The 180-odd strategies of one structure trade the same market moments with
+  other filters and exits. Their combined weight is divided by the design effect 1 + (m - 1) x 0.3.
+- **Measured on a simulated record with known truth** (`tests/test_lab_hierarchy.py`): tau is recovered, each structure's sign is right,
+  and the error against the true means is under a quarter of each strategy's raw average on short records.
+- **The proof gate is unchanged:** 8 shadow trades of its own and a positive draw before any paper money.
+- **In the app:** each structure's shared estimate, and the order thesis gives the strategy's shared estimate next to its own average.
+
+## The strategy builder: every structure, which one now and why, and designs of its own
+
+The app's Strategy tab (an instrument page) builds any defined-risk option structure on the live board. Owner, 13 Nov 2026: "The strategy builder must have access
+to the every strategy which it can reason it out when to use which and create it's own if required."
+
+**Every structure.** There are 16 written structures (the AUTO v2 catalogue's), and the legs can be any size: a butterfly's body is 2 lots. You can also use custom legs (any
+number, any strike, any ratio), and the desk's own inventions (from AUTO v2's record) appear beside the written ones.
+
+**Which strategy now, and why** (`QB.advise`, open under the structures). Every structure is scored against the desk's read of the underlying: AUTO v2's view, volatility
+rich or cheap against realized, the event regime, expiry tomorrow, its P(up), the Kalman trend, and AUTO v2's shadow record for that structure. Each point is a written
+reason, for or against:
+- **Fit with the view:** fits (+3); near, e.g. a credit spread when the view is a range (+1.5); against (-4).
+- **Volatility:** rich favours selling options and cheap favours buying them (+-2).
+- **Event:** in an event, no volatility is sold (-5); a long-volatility structure gains (+1).
+- **Expiry tomorrow:** decay favours a range sale and costs a bought option (+-1).
+- **Conviction:** strong conviction (P(up) 0.7 or more, or 0.3 or less) favours an uncapped structure, mild a capped one (+1).
+- **Trend:** the Kalman trend agrees or disagrees (+-1).
+- **The desk's record:** 5 x mean R, capped at +-2, once there are 8 trades.
+
+Below a best score of 3 the advisor says nothing fits and that standing aside is a position. You can replace the desk's view with your own.
+
+**Design one for this view** (`QB.design`). It mutates the structures that fit the view (move a strike, add a wing, drop, double or flip a leg). It keeps defined-risk
+results with up to 4 legs and 6 lots, priced on the board, within the per-trade loss limit.
+- **Ranking:** by the average result IF THE VIEW IS RIGHT, per rupee of worst loss, after costs. "Right" is a zone at expiry built from the market's own expected move
+  (up: the price to +1.5 moves; range: within half a move; big: beyond one move on either side). An either-way view must pay on BOTH sides.
+- **Shown with it:** what the design does if the view is wrong. When a design is a structure that already has a name ("Bull call spread, 4 strikes wide"), it says so;
+  otherwise it is "a structure of its own".
+- **What it is not:** neither the advice nor a design is a forecast. At the market's own volatility, options are a fair bet before costs; the edge is the view.
+
+## Strategy liberty and the inventor (`quantdesk/paper/inventor.py`)
+
+**The written catalogue** now has 16 structures, 3,132 strategies:
+- **The original ten:** long calls and puts, debit and credit spreads, iron condors and flies, straddles, strangles.
+- **New:** call and put butterflies, broken-wing butterflies, call and put ratio backspreads.
+- **Multi-lot legs:** a leg's size can be more than one lot (a butterfly's body is two).
+
+**The desk writes its own.** Every morning the inventor mutates the structures of the best records so far, the way a trader tinkers: move
+a strike, add a wing to cap a sold option, drop a leg, double one, flip one. A child is kept only if it is:
+- **defined risk** (no net short call);
+- **tradable** (1 to 4 legs, at most 6 lots, strikes within 4 steps of the money);
+- **new in shape:** its payoff, made level- and scale-free, matches nothing known. A call condor is an iron condor by put-call parity,
+  so it is not "new".
+
+Its view is read from its own payoff.
+
+**Inventions are held to a higher bar:**
+- **More trades.** An invention needs 12 shadow trades of its own, not 8, then a positive Thompson draw. A desk that writes many
+  strategies and keeps the best is fitting noise unless the bar rises with the number of tries.
+- **Their own family.** Each invention starts its own family in the hierarchical record, anchored at zero edge.
+- **Retirement.** One whose record is clearly negative (24 trades and mean + 2 sd below zero) is retired.
+- **A cap.** At most 60 live; past that, the worst record goes first.
+- **Persistence.** Inventions survive restarts in the stored record; tampered entries are dropped.
+
+**What does not change:**
+- **Defined risk.** Every structure must have a finite worst case, because that is what keeps the 2.5%-a-trade limit meaningful. A
+  structure that could lose without limit is refused whoever writes it.
+- **The limits.** The risk limits and the 1-lot size are untouched.
+
+**The cost gate.** A structure whose round-trip costs exceed 30% of its risk is not opened. It is born at -0.3R, so a 0.5R stop means nothing.
+A one-strike NIFTY butterfly or iron fly costs about half its risk to trade; the two-strike ones pass.
+
+## The news model (`quantdesk/paper/newsmodel.py`, `quantdesk/premarket/analogs.py`)
+
+A story moves instruments through channels, not only by naming them. Each story is read in three steps:
+1. **Subjects:** crude, gas, gold, silver, base metals, the rupee, the dollar, US yields, the Fed, the RBI, inflation, growth, foreign
+   flows, geopolitics, tariffs, China, Wall Street, the monsoon, IT spending, auto sales, the US FDA, telecom tariffs, F&O rules,
+   fintech rules, bad loans, capex, electronics, cigarettes.
+2. **Direction:** the direction word nearest the subject. "Crude jumps" is up; "rupee hits record low" is the rupee down; "RBI cuts"
+   is rates down; "ceasefire" is geopolitical risk down.
+3. **Channels:** each instrument's sensitivity to each subject going up. For example, crude up means:
+   - CRUDEOIL +1.0;
+   - the rupee pairs +0.3 (a dearer import bill);
+   - the indices -0.3;
+   - autos -0.2.
+
+   The same story gives every instrument its own score.
+
+**Present:** each instrument's channel score, summed over the last six hours of stories (impact x novelty x a two-hour half-life). A story
+naming the instrument also counts by its tone.
+
+**Past:** for each event kind under way (RBI, FOMC, budget, election, geopolitics, oil shock), the brief measures every instrument's own
+past episodes, weighting each by how much the market then resembled the market now:
+- the 20-session trend in standard deviations;
+- volatility against its own past year;
+- the drawdown from its 60-session high.
+
+The weighted share of rises is the analogue's P(up). Its effective number of episodes says how much it can be trusted.
+
+**Forecast:** log-odds = 1.5 x tanh(channel score) + sum over events of n_eff/(n_eff+4) x logit(the analogue's P(up)).
+- **One vote.** At P(up) 0.65 or 0.35 it is the news vote in AUTO v2's view, under the unchanged two-agree rule. For an index with no
+  opinion, AUTO v1's market-wide tone vote stands in. The pre-open plan uses the same model.
+- **Event reach.** A high event reaches an instrument if its stories' subjects do (sensitivity 0.3 or more), so crude news reaches the
+  rupee pairs. The event regime's reason then names the instrument's own past episodes and the closest dates.
+- **Scored.** Every forecast with an opinion is scored against the next hour (Brier, per instrument; "news forecasts" in the app).
+
+**Global markets** (14 Nov 2026). The brief's overnight moves of 18 markets go through the same channels:
+- **The markets:** US, Asian and European indices, the VIX, the dollar index, USD/INR, Brent, gold and the US 10-year yield.
+- **How a move counts:** each market's move is in units of its own typical day, capped at 3. The Nasdaq is Wall Street, the VIX is US fear, Brent is crude.
+- **In the forecast:** 1.0 x tanh(global score / 2), on the brief's own session only.
+- **No double counting:** in the pre-open plan an index already has the overnight markets as a vote of their own, so its news vote leaves them out.
+
+**The sensitivities are priors** written from how these markets transmit shocks. The Brier record is what will say which hold.
+
+## Instruments read differently
+
+- **The market read has a profile per class**, each with its own weights and normal put/call ratio:
+  - **index:** option OI positioning carries the most.
+  - **stock:** OI is mostly calls written against holdings, so the normal PCR is about 0.6 and walls mean less.
+  - **MCX:** the future's build-up leads; the chain is thin; no premium is read, since the underlying is the future.
+  - **currency:** a future's premium is carry, not sentiment, so it is not read.
+- **Each instrument learns its own weights.** Every scored outcome nudges them by online logistic regression, pulled back towards the
+  class prior.
+  - It learns from one outcome per 15-minute window, so overlapping reads are not counted as many.
+  - A signal that works backwards for an instrument can flip sign.
+  - The weights are kept with the strategy record across restarts, validated.
+- **Thresholds are in each instrument's own volatility.** With the last hour's realized volatility known, a five-minute move votes at
+  1.15 of its own five-minute standard deviations, and "calm" is under 1.15 of them. That is 0.10% for NIFTY at 12% a year, about
+  0.02% for USD/INR, and far more for natural gas. Until then, the fixed NIFTY-set thresholds.
+- **Already per instrument:** the HMM, CUSUM, Kalman trend, EVT tails, trading hours, costs and the news channels.
+
+## Calendars and diagonals (14 Nov 2026)
+
+**The gate's rule.** A sold option in an underlying's NEAREST expiry may be covered by a long option of a LATER expiry.
+- **The worst case** is judged at the near expiry. The near legs count at their intrinsic value; the later longs at the least a European option can be
+  worth: a call at least S(1 - q t) - K with any dividend yield q up to 2%, a put at least K(1 - r t) - S with any rate r up to 10%, t being the time it
+  still has to run.
+- **The price range** searched goes up to three times the highest strike.
+- **What that costs:** a 1-week NIFTY call calendar's worst case is its debit plus about 1,900 rupees a lot (the dividend allowance at three times the
+  strike); a put calendar's, its debit plus about 3,100 rupees (the rate allowance).
+- **Still refused:** a sold leg in a later expiry (a reverse calendar), more near shorts than later longs, and selling the later long while it covers the near short.
+
+**The strategy builder** offers the four too: Call calendar, Put calendar, Call diagonal, Put diagonal.
+- **Building one:** the later leg goes on the next expiry's chain.
+- **What it shows:** the payoff at the near expiry (the later option at its model value) and the worst loss the paper desk will count (the later option at its
+  floor).
+- **The advisor** reasons about them like any structure, and none is suggested into an event.
+
+**AUTO v2** adds a call and a put calendar (same strike, at the money, near against next) and a call and a put diagonal (sell 1 or 2 strikes out of the money
+in the near expiry, buy at the money in the next): 432 strategies.
+- **Same treatment:** they are priced at the board's bid and offer and judged by the same worst case, shadow-tested and proof-gated.
+- **Exits:** by the near expiry.
+- **Events:** a calendar is short the near expiry's movement, so none is opened in the event regime. The market read's "event priced" (the near expiry's
+  volatility above the next's) is such a regime.
+
+## Futures in AUTO v2 (14 Nov 2026)
+
+AUTO v2 also trades the MCX and currency near-month futures the paper desk allows (`paper.futures`).
+
+**The strategies:** 12 of them.
+- Long when its view is up, short when it is down.
+- The stop is 0.5 or 1 day's standard deviation away (the brief's tail-model volatility, or the last hour's realized volatility if larger).
+- The take-profit is 1, 2 or 3R, where R is the stop's distance plus the round trip's real costs (mcx_futures, cds_futures).
+- Each is shadow-tested at the board's bid and offer, scored in R, and goes live only after 8 shadow trades and a positive Thompson draw.
+
+**When none opens:**
+- in the event regime, because an event can gap a future through its stop;
+- within the contract's no-entry days before expiry;
+- when the board does not say which contract month it is;
+- when the book is wider than 0.2%;
+- when the stop would be beyond the desk's 10% bound.
+
+**A live entry:** one lot, buy or short, with its stop and target. The runner enforces both, squares it off before the close (futures are intraday) and allows
+one position per contract. The pre-open plan stays with option structures.
+
+## The scheduled-events calendar (`quantdesk/paper/eventcal.py`, 14 Nov 2026)
+
+The brief lists the next week's scheduled events. Each event touches instruments through the news model's channels. A named symbol is touched fully, and the
+Budget or an election touches every Indian equity. AUTO v2 is in the event regime, and sells no volatility, when an event that touches an instrument is close:
+- **A high event** (a policy decision, the Budget, an election, OPEC): from 24 hours before to 90 minutes after, if it touches with 0.3 or more. An RBI
+  decision tomorrow at 10:00 keeps NIFTY's condors closed today.
+- **A medium release** (CPI, the US jobs report, the EIA crude report, GDP, results): from two hours before to an hour after, if it touches directly (0.5 or
+  more). The 21:00 EIA report reaches crude, not NIFTY.
+
+Dates marked "by rule" follow the release's usual rule, and a holiday can move one; the owner's `calendar.events` wins. The pre-open plan uses the same regime.
+
+## The news analyser and the event regime
+
+- **The event watch.** The news job gathers the stories' own event types (`intraday/nlp.py`: policy, geopolitics, inflation, growth,
+  flows, commodities, currency, and more) into active events: severity from impact x novelty x the type's weight, decayed by its
+  half-life; tone from the stories' tones. At severity 2.5 an event is "high". It is in the digest (`events`) and the app's news panel.
+- **What happened before.** The pre-market brief measures, from the warehouse's own closes, what NIFTY and BANKNIFTY did on past
+  episodes of each kind: the median signed move, how often it fell, the worst, the five-session move
+  (`history.macro_history`, `macro_dates.json`). The kinds now include geopolitical shocks (14 episodes, 2016 to 2025) and oil shocks
+  (5). The app shows this line beside each event, and AUTO v2 writes it into its reasons.
+- **News and data together.** When a high event touches an underlying (geopolitics, policy, inflation, growth: everything;
+  commodities: MCX and the indices; currency events: currency), or the options price one (the near expiry's volatility above the
+  next's), AUTO v2 is in the **event regime**: it opens no short-volatility structure (iron condor, iron fly), the trade that loses
+  most when an event moves the market. Bought volatility and directional spreads stay open to it.
+- **Same limits.** The loss caps, sizes and the proof gate are unchanged.
+
 ## AUTO v2: the paper desk writing, testing and choosing its own strategies (paper money only)
 
 Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a system which is sophisticated, advanced ... can take any strategy in its place, create its own strategy, permutation, combination, can trade."
@@ -117,7 +440,7 @@ Since 13 Nov 2026 AUTO runs **v2** (`quantdesk/paper/auto2.py`). Your words: "a 
   * a structure that suits it: long call or put, debit or credit spreads, iron condor or butterfly, long straddle or strangle;
   * a width, an expiry (the near one or the next), a take-profit, a stop, and out-by-the-close or up to three sessions.
 * **It tests them.** Whenever a strategy's context holds for an underlying (the four indices and the 20 stocks), it is traded **in shadow**: no money, but at the real bid and offer of every leg, with the desk's real fees, closed by its own exits. Each result is scored in R (profit over the most it could have lost). The record is kept on the private relay, so it grows across sessions.
-* **It chooses.** A strategy trades with paper money only after **8 shadow trades**, and then by **Thompson sampling**: a short record is shrunk towards zero, the best plausible draw wins, and a draw at or below zero does not trade. Capital flows to what has worked and away from what has not.
+* **It chooses.** A strategy trades with paper money only after **8 shadow trades**, and then by **Thompson sampling** over a **hierarchical model** of the record (below): a short record is pulled towards its structure's, the best plausible draw wins, and a draw at or below zero does not trade. Capital flows to what has worked and away from what has not.
 * **It trades** through the runner and the risk gate like your orders: one lot, a multi-leg structure as one package, sold options only inside a bounded structure. Its own exits close it, with sold legs bought back first. Your hand-placed orders work beside it.
 * **What it sees:** direction from the same four readings as v1, and the volatility state: the options' at-the-money implied volatility against the volatility the price has shown over the last hour. Your own research found direction hard to forecast and volatility easier; the catalogue lets the record decide which contexts pay.
 * **Where to watch it:** Positions → Strategy lab (the record's leaders, what is live, what it sees now), and the 15:50 push.

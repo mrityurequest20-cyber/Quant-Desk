@@ -57,8 +57,8 @@ jobs:
           once() {
             rm -rf _premarket
             env -u GH_TOKEN "$PY" -m quantdesk premarket brief --warehouse runtime/warehouse \
-              --history runtime/premarket-history/results_history.parquet --out _premarket || return 0
-            cp runtime/premarket-history/results_history.parquet runtime/premarket-history/history_built.txt _premarket/ 2>/dev/null || true
+              --history runtime/premarket-history/results_history.parquet --tails runtime/premarket-history/tails.json --out _premarket || return 0
+            cp runtime/premarket-history/results_history.parquet runtime/premarket-history/history_built.txt runtime/premarket-history/tails.json _premarket/ 2>/dev/null || true
             GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$auth" \
               /usr/bin/bash deploy/push-dir.sh _premarket premarket "pre-market brief $(TZ=Asia/Kolkata date '+%F %H:%M') IST" \
               || echo "::warning::the brief was built but not published"

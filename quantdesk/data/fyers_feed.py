@@ -1,4 +1,4 @@
-"""The Fyers feed: MCX and currency prices, every five seconds, to the private live relay (docs/FEEDS.md).
+"""The Fyers feed: MCX and currency prices, and their OPTION CHAINS, every five seconds, to the private live relay (docs/FEEDS.md).
 
 The owner's split of 13 Nov 2026: Kite carries indices, stocks and options; **Fyers carries MCX** (and is currency's
 second feed); Kotak stands behind everything. The relay's `feeds.routes` decides what is shown; this only pushes, under
@@ -46,7 +46,9 @@ SUFFIX = {"mcx": "MCX", "cds": "CDS"}
 EXCHANGE = {"mcx": "MCX", "cds": "NSE"}
 QUOTE_BATCH = 50
 INTERVAL_S = 5.0
-DEPTH_PER_CYCLE = 3
+DEPTH_PER_CYCLE = 2
+CHAINS_PER_CYCLE = 3                  # option chains (one call each), in turn: each watchlist commodity and currency every few cycles
+CHAIN_STRIKES = 8
 PER_SECOND, PER_MINUTE = 5, 100       # our own caps, about half of what Fyers allows, so a burst never comes near theirs
 TIMEOUT_S = 10.0
 SESSIONS = {"mcx": (dt.time(8, 59), dt.time(23, 59)), "cds": (dt.time(8, 59), dt.time(17, 5))}    # MCX to 23:30 or 23:55 (US daylight saving), currency to 17:00
@@ -92,7 +94,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 class FyersData:
     """GET a Fyers data endpoint with the day's token. Only /data/quotes and /data/depth are ever asked for."""
 
-    PATHS = ("/quotes", "/depth")
+    PATHS = ("/quotes", "/depth", "/options-chain-v3")
 
     def __init__(self, app_id: str, token: str, opener=None, limiter: Limiter | None = None):
         if not app_id or not token:
@@ -290,6 +292,60 @@ def parse_depth(obj: dict, ticker: str) -> tuple[dict, list[str]]:
     return out, odd
 
 
+_MON = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+
+
+def option_name(u: str, expiry: dt.date, strike: float, side: str) -> str:
+    """The desk's one name for an option (kite_universe.option_name): CRUDEOIL17NOV265800CE, USDINR20NOV2684.25PE."""
+    k = round(float(strike), 4)
+    k = int(k) if k.is_integer() else k
+    return f"{u}{expiry.day:02d}{_MON[expiry.month - 1]}{expiry.year % 100:02d}{k}{side}"
+
+
+def _chain_expiry(data: dict) -> dt.date | None:
+    """The chain's own expiry: the first of `expiryData` (the nearest, which is what a call without a timestamp returns)."""
+    for e in (data.get("expiryData") or [])[:1]:
+        if isinstance(e, dict):
+            d = _expiry(e.get("expiry"))
+            if d:
+                return d
+            try:
+                return dt.datetime.strptime(str(e.get("date", "")), "%d-%m-%Y").date()
+            except ValueError:
+                return None
+    return None
+
+
+def parse_chain(obj: dict, u: str, label: str = "mopt") -> tuple[dict[str, dict], list[str]]:
+    """{desk option name: quote} from an /options-chain-v3 answer ({"data": {"expiryData": [...], "optionsChain": [{strike_price, option_type, ltp, bid, ask, oi, volume, ltpchp}]}})."""
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else None
+    rows = (data or {}).get("optionsChain") or (data or {}).get("options_chain")
+    if not isinstance(rows, list):
+        return {}, [f"chain: no data.optionsChain list (keys {sorted(obj)[:10]}{', data keys ' + str(sorted(data)[:12]) if data else ''})"]
+    exp = _chain_expiry(data)
+    if exp is None:
+        return {}, [f"chain: no expiry in data.expiryData (keys {sorted(data)[:12]})"]
+    out, odd = {}, []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        side = str(r.get("option_type") or "").upper()
+        if side not in ("CE", "PE"):
+            continue                                                 # the underlying's own row
+        k, lp = _num(r.get("strike_price")), _num(r.get("ltp"))
+        if k is None or k <= 0 or lp is None:
+            if "strike_price" not in r:
+                odd.append(f"chain: an option row without strike_price (keys {sorted(r)[:16]})")
+            continue
+        q = {"ltp": lp, "bid": _num(r.get("bid")), "ask": _num(r.get("ask")), "oi": _num(r.get("oi")), "vol": _num(r.get("volume")), "chg": _num(r.get("ltpchp")), "s": label}
+        q = {kk: v for kk, v in q.items() if v is not None}
+        if q.get("bid", 1) <= 0 or q.get("ask", 1) <= 0 or ("bid" in q and "ask" in q and q["bid"] > q["ask"]):
+            q.pop("bid", None), q.pop("ask", None)
+        if q["ltp"] > 0 or "bid" in q:
+            out[option_name(u, exp, k, side)] = q
+    return out, odd
+
+
 # ---------------------------------------------------------------------------------------------------------------- the loop
 
 class FyersFeed:
@@ -299,6 +355,10 @@ class FyersFeed:
         self.depth_names = [n for n in depth_names if n in names]
         self.per = max(0, int(depth_per_cycle))
         self.turn = 0
+        self.chain_names = [n for n in self.depth_names]                    # the watchlist's commodities and currencies: their option chains, in turn
+        self.chain_turn = 0
+        self.chains_per = CHAINS_PER_CYCLE
+        self.last_opt: dict[str, dict] = {}
         self.oi: dict[str, float] = {}
         self.last: dict[str, dict] = {}
         self.last_book: dict[str, dict] = {}
@@ -352,6 +412,28 @@ class FyersFeed:
                 self.stats["books"] += 1
                 if "oi" in book:
                     self.oi[n] = book["oi"]
+        want_c = [n for n in self.chain_names if n in live]
+        opts: dict[str, dict] = {}
+        for _ in range(min(self.chains_per, len(want_c))):
+            n = want_c[self.chain_turn % len(want_c)]
+            self.chain_turn += 1
+            try:
+                obj = self.api.get("/options-chain-v3", {"symbol": self.names[n]["ticker"], "strikecount": CHAIN_STRIKES})
+                self.stats["chain_calls"] = self.stats.get("chain_calls", 0) + 1
+            except (Blocked, Refused):
+                raise
+            except Exception:                                         # noqa: BLE001
+                self.stats["errors"] += 1
+                continue
+            got, odd = parse_chain(obj, self.names[n]["under"] if "under" in self.names[n] else n.rsplit("-", 1)[0], "mopt" if self.names[n]["seg"] == "mcx" else "copt")
+            self._note(odd)
+            opts.update(got)
+        for name, q in opts.items():                                  # an option is pushed when it moved, like everything else
+            key = {k: v for k, v in q.items() if k != "t"}
+            if self.last_opt.get(name) != key:
+                self.last_opt[name] = key
+                self.pusher.update(name, q)
+                self.stats["options_pushed"] = self.stats.get("options_pushed", 0) + 1
         sent = 0
         for n, q in quotes.items():
             full = {**q, "s": self.names[n]["seg"], "e": self.names[n]["expiry"].isoformat()}      # the contract: a paper position records which month it holds
@@ -426,4 +508,51 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
     finally:
         pusher.stop()
     rep.update({k: v for k, v in feed.stats.items()}, calls=feed.api.calls, push=pusher.stats())
+    return rep
+
+
+class CountingPusher:
+    """A pusher that sends nothing: it counts what a real one would have sent (the login check)."""
+
+    def __init__(self):
+        self.n, self.names = 0, set()
+
+    def update(self, symbol: str, quote: dict | None) -> None:
+        if quote:
+            self.n += 1
+            self.names.add(symbol)
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def stats(self) -> dict:
+        return {"would_push": self.n, "instruments": len(self.names)}
+
+
+def check(app_id: str, token: str, watchlist: dict | None = None, opener=None, today: dt.date | None = None) -> dict:
+    """ONE round against Fyers with today's token, sending nothing anywhere: proves the login, the instrument list, the quotes, a book and the option chains before
+    the first real session (owner, 14 Nov 2026: "Confirm the broker integration status"). The clock is held at midday so every contract counts as open: on a weekend
+    Fyers answers with the last prices. Returns counts only (no price, no token)."""
+    day = today or dt.datetime.now(IST).date()
+    contracts, notes = load_contracts(opener)
+    names = near_futures(contracts, day)
+    rep = {"day": str(day), "contracts": len(names), "notes": notes}
+    if not names:
+        rep["result"] = "no MCX or currency futures in Fyers' instrument list"
+        return rep
+    noon = dt.datetime.combine(day, dt.time(12, 0), IST)
+    pusher = CountingPusher()
+    feed = FyersFeed(FyersData(app_id, token, opener=opener), names, depth_watch(watchlist or {}), pusher, now=lambda: noon)
+    try:
+        feed.cycle()
+        rep["result"] = "ok" if pusher.n else "logged in, but no quote came back"
+    except Refused:
+        rep["result"] = "Fyers refused the token"
+    except Blocked:
+        rep["result"] = "blocked by Fyers (HTTP 429)"
+    c = feed.api.calls
+    rep.update(feed.stats, calls=c if isinstance(c, int) else len(c), **pusher.stats())
     return rep

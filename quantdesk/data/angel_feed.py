@@ -36,7 +36,9 @@ MASTER = "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMa
 HOSTS = {"apiconnect.angelone.in", "margincalculator.angelone.in"}
 BATCH = 50
 INTERVAL_S = 5.0
-PER_SECOND, PER_MINUTE = 2, 40
+PER_SECOND, PER_MINUTE = 3, 60
+OPT_STEPS = 8                                                   # option strikes either side of the money, per pair
+RECENTRE_S = 1800                                               # the option window follows the price every half hour
 TIMEOUT_S = 10.0
 SESSION = (dt.time(8, 59), dt.time(17, 5))                     # currency trades 09:00 to 17:00
 AUTHORITY_ENDS = dt.date(2027, 12, 31)                          # docs/AUTONOMY.md
@@ -116,6 +118,33 @@ def parse_master(rows) -> list[dict]:
     return out
 
 
+def parse_options(rows) -> list[dict]:
+    """Currency options (OPTCUR on CDS): [{under, expiry, token, raw, side}]. `raw` is the master's strike as stored; its scale is worked out per pair (strike_scale)."""
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict) or r.get("exch_seg") != "CDS" or r.get("instrumenttype") != "OPTCUR":
+            continue
+        name, token, e, sym = str(r.get("name") or "").strip().upper(), str(r.get("token") or "").strip(), _expiry(r.get("expiry")), str(r.get("symbol") or "").upper()
+        side = sym[-2:] if sym.endswith(("CE", "PE")) else None
+        try:
+            raw = float(r.get("strike"))
+        except (TypeError, ValueError):
+            continue
+        if CURRENCY.match(name) and token.isdigit() and e and side and raw > 0:
+            out.append({"under": name, "expiry": e, "token": token, "raw": raw, "side": side})
+    return out
+
+
+def strike_scale(raws: list[float]) -> float | None:
+    """The factor the master's strikes are stored at, worked out from the data: the one (of the usual 1, 100, ..., 10^7) that puts the pair's median strike between 10 and 500
+    rupees, where every quoted rupee pair lives (JPYINR is quoted per 100 yen). None when no factor or more than one fits."""
+    if not raws:
+        return None
+    med = sorted(raws)[len(raws) // 2]
+    fits = [f for f in (1.0, 100.0, 1e3, 1e4, 1e5, 1e6, 1e7) if 10 <= med / f <= 500]
+    return fits[0] if len(fits) == 1 else None
+
+
 def near_futures(contracts: list[dict], today: dt.date) -> dict[str, dict]:
     """{desk name: contract}: the nearest unexpired future of each currency pair, the same rule as Kite's."""
     best: dict[str, dict] = {}
@@ -125,12 +154,16 @@ def near_futures(contracts: list[dict], today: dt.date) -> dict[str, dict]:
     return {f"{u}-CDS": c for u, c in sorted(best.items())}
 
 
-def load_contracts(opener=None) -> list[dict]:
+def load_master(opener=None) -> list:
     u = urllib.parse.urlsplit(MASTER)
     if u.scheme != "https" or u.hostname not in HOSTS:
         raise ValueError("not Angel One's host")
     with (opener or urllib.request.build_opener(_NoRedirect).open)(urllib.request.Request(MASTER, headers={"User-Agent": "quantdesk-angel-data"}), timeout=120) as r:
-        return parse_master(json.loads(r.read(256 << 20)))
+        return json.loads(r.read(256 << 20))
+
+
+def load_contracts(opener=None) -> list[dict]:
+    return parse_master(load_master(opener))
 
 
 # ---------------------------------------------------------------------------------------------------------------- the prices
@@ -178,15 +211,62 @@ def parse_quote(obj: dict) -> tuple[dict[str, dict], list[str]]:
     return out, odd
 
 
+_MON = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+
+
+def option_name(u: str, expiry: dt.date, strike: float, side: str) -> str:
+    """The desk's one name for an option (kite_universe.option_name): USDINR20NOV2684.25PE."""
+    k = round(float(strike), 4)
+    k = int(k) if k.is_integer() else k
+    return f"{u}{expiry.day:02d}{_MON[expiry.month - 1]}{expiry.year % 100:02d}{k}{side}"
+
+
+def option_window(options: list[dict], futures_px: dict[str, float], today: dt.date, steps: int = OPT_STEPS) -> tuple[dict[str, str], list[str]]:
+    """{token: desk option name}: for each pair with a future price, its nearest option expiry, `steps` strikes either side of the money. And notes (never a price)."""
+    out, notes = {}, []
+    by: dict[str, list[dict]] = {}
+    for o in options:
+        by.setdefault(o["under"], []).append(o)
+    for u, rows in sorted(by.items()):
+        px = futures_px.get(u)
+        scale = strike_scale([r["raw"] for r in rows])
+        if not px or scale is None:
+            notes.append(f"{u} options: {'no future price to centre on' if not px else 'the strike scale in the instrument master is not clear'}")
+            continue
+        live = [r for r in rows if r["expiry"] >= today]
+        if not live:
+            continue
+        exp = min(r["expiry"] for r in live)
+        rows_e = [r for r in live if r["expiry"] == exp]
+        strikes = sorted({round(r["raw"] / scale, 4) for r in rows_e})
+        atm = min(range(len(strikes)), key=lambda i: abs(strikes[i] - px))
+        keep = set(strikes[max(0, atm - steps): atm + steps + 1])
+        for r in rows_e:
+            k = round(r["raw"] / scale, 4)
+            if k in keep:
+                out[r["token"]] = option_name(u, exp, k, r["side"])
+    return out, notes
+
+
 class AngelFeed:
-    def __init__(self, api: AngelData, names: dict[str, dict], pusher, now=lambda: dt.datetime.now(IST)):
+    def __init__(self, api: AngelData, names: dict[str, dict], pusher, now=lambda: dt.datetime.now(IST), options: list[dict] | None = None):
         self.api, self.names, self.pusher, self.now = api, names, pusher, now
         self.by_token = {c["token"]: n for n, c in names.items()}
+        self.options = list(options or [])                            # the pairs' option contracts (parse_options); their window is chosen from the futures' prices
+        self.opt_tokens: dict[str, str] = {}
+        self.centred_at = -1e18
+        self.px: dict[str, float] = {}
         self.last: dict[str, dict] = {}
         self.stats = {"cycles": 0, "calls": 0, "quotes": 0, "pushed": 0, "books": 0, "errors": 0, "shape": []}
 
     def cycle(self) -> int:
-        tokens = [c["token"] for c in self.names.values()]
+        if self.options and self.px and (not self.opt_tokens or self.now().timestamp() - self.centred_at >= RECENTRE_S):
+            self.opt_tokens, notes = option_window(self.options, self.px, self.now().date())
+            self.centred_at = self.now().timestamp()
+            for o in notes:
+                if o not in self.stats["shape"] and len(self.stats["shape"]) < 20:
+                    self.stats["shape"].append(o)
+        tokens = [c["token"] for c in self.names.values()] + list(self.opt_tokens)
         sent = 0
         for i in range(0, len(tokens), BATCH):
             try:
@@ -203,9 +283,14 @@ class AngelFeed:
                     self.stats["shape"].append(o)
             for tok, q in got.items():
                 n = self.by_token.get(tok)
-                if not n:
+                if n:
+                    self.px[self.names[n]["under"]] = q["ltp"]
+                    q = {**q, "s": "cds", "e": self.names[n]["expiry"].isoformat()}      # the contract: a paper position records which month it holds
+                elif tok in self.opt_tokens:
+                    n = self.opt_tokens[tok]
+                    q = {**q, "s": "copt"}                                    # a currency option: its own route (Angel One first)
+                else:
                     continue
-                q = {**q, "s": "cds", "e": self.names[n]["expiry"].isoformat()}      # the contract: a paper position records which month it holds
                 self.stats["quotes"] += 1
                 self.stats["books"] += "d" in q
                 key = {k: v for k, v in q.items() if k != "t"}
@@ -228,12 +313,14 @@ def run(until: str, api_key: str, jwt: str, pusher, opener=None, now=lambda: dt.
     """Stream until `until` (HH:MM IST) or the currency close. Returns the run's counts (no price, no token)."""
     start = now()
     stop = min(_at(until, start.date()), dt.datetime.combine(start.date(), SESSION[1], IST))
-    names = near_futures(load_contracts(opener), start.date())
+    master = load_master(opener)
+    names = near_futures(parse_master(master), start.date())
+    options = parse_options(master)
     rep = {"day": str(start.date()), "contracts": len(names), "stopped": "until"}
     if not names:
         rep["stopped"] = "no currency futures in Angel One's instrument master"
         return rep
-    feed = AngelFeed(AngelData(api_key, jwt, opener=opener), names, pusher, now=now)
+    feed = AngelFeed(AngelData(api_key, jwt, opener=opener), names, pusher, now=now, options=options)
     if now().time() < SESSION[0]:
         wait = (dt.datetime.combine(start.date(), SESSION[0], IST) - now()).total_seconds()
         if wait > 0:
@@ -254,4 +341,50 @@ def run(until: str, api_key: str, jwt: str, pusher, opener=None, now=lambda: dt.
     finally:
         pusher.stop()
     rep.update(feed.stats, calls=feed.api.calls, push=pusher.stats())
+    return rep
+
+
+class CountingPusher:
+    """A pusher that sends nothing: it counts what a real one would have sent (the login check)."""
+
+    def __init__(self):
+        self.n, self.names = 0, set()
+
+    def update(self, symbol: str, quote: dict | None) -> None:
+        if quote:
+            self.n += 1
+            self.names.add(symbol)
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def stats(self) -> dict:
+        return {"would_push": self.n, "instruments": len(self.names)}
+
+
+def check(api_key: str, jwt: str, opener=None, today: dt.date | None = None) -> dict:
+    """ONE round against Angel One with today's session, sending nothing anywhere: proves the login, the instrument master, the quotes and the option window before
+    the first real session. The clock is held at midday. Returns counts only (no price, no token)."""
+    day = today or dt.datetime.now(IST).date()
+    master = load_master(opener)
+    names = near_futures(parse_master(master), day)
+    rep = {"day": str(day), "contracts": len(names)}
+    if not names:
+        rep["result"] = "no currency futures in Angel One's instrument master"
+        return rep
+    noon = dt.datetime.combine(day, dt.time(12, 0), IST)
+    pusher = CountingPusher()
+    feed = AngelFeed(AngelData(api_key, jwt, opener=opener), names, pusher, now=lambda: noon, options=parse_options(master))
+    try:
+        feed.cycle()
+        rep["result"] = "ok" if pusher.n else "logged in, but no quote came back"
+    except Refused:
+        rep["result"] = "Angel One refused the session"
+    except Blocked:
+        rep["result"] = "blocked by Angel One (HTTP 429)"
+    c = feed.api.calls
+    rep.update(feed.stats, calls=c if isinstance(c, int) else len(c), **pusher.stats())
     return rep

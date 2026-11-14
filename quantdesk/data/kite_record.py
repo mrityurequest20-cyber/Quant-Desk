@@ -320,7 +320,8 @@ def run_session(out_dir: Path, until_hhmm: str, day: dt.date | None = None, kite
     wide_errors: list[str] = []
     if os.environ.get("KITE_WIDE", "1") != "0":                    # everything else the desk watches; fail-soft: the core five are recorded whatever happens here
         try:
-            wide_tokens, wide_meta, wide_errors = build_wide(kite, today, tokens, stock_options=(watchlist or {}).get("stocks") or (), stock_steps=stock_steps)
+            wide_tokens, wide_meta, wide_errors = build_wide(kite, today, tokens, stock_options=(watchlist or {}).get("stocks") or (), stock_steps=stock_steps,
+                                                                commodity_options=(watchlist or {}).get("commodities") or (), currency_options=(watchlist or {}).get("currencies") or ())
             tokens.update(wide_tokens)
             meta.update(wide_meta)
         except Exception as e:                                     # noqa: BLE001

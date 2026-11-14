@@ -34,7 +34,7 @@ def node(tmp_path, script: str):
 
 
 BOARD = r"""
-const STRIKES = [24300, 24350, 24400, 24450, 24500, 24550, 24600, 24650, 24700];
+const STRIKES = [24200, 24250, 24300, 24350, 24400, 24450, 24500, 24550, 24600, 24650, 24700, 24750, 24800];      // the money and 6 strikes either side (a broken wing reaches 5)
 const names = {}; STRIKES.forEach((k) => names[k] = { CE: "C" + k, PE: "P" + k });
 const SPOT = 24500, T = 3 / 365;
 const q = {};
@@ -65,7 +65,7 @@ console.log(JSON.stringify({ c, p, parity: c - p - (100 - 100 * Math.exp(-0.05))
 @needs_node
 def test_each_structure_has_the_payoff_the_textbook_gives_and_defined_risk(tmp_path):
     o = node(tmp_path, BOARD + r"""
-for (const id of Object.keys(QB.TEMPLATES)) { const a = run(id, 2, 1); out[id] = a.error ? { error: a.error } : { risk: a.definedRisk, prem: a.premium, maxP: a.maxProfit === Infinity ? "inf" : a.maxProfit, maxL: a.maxLoss, be: a.breakevens, ok: a.ok, unl: a.unlimitedProfit }; }
+for (const id of Object.keys(QB.TEMPLATES).filter((i) => !QB.TEMPLATES[i].multi)) { const a = run(id, 2, 1); out[id] = a.error ? { error: a.error } : { risk: a.definedRisk, prem: a.premium, maxP: a.maxProfit === Infinity ? "inf" : a.maxProfit, maxL: a.maxLoss, be: a.breakevens, ok: a.ok, unl: a.unlimitedProfit }; }
 console.log(JSON.stringify(out));
 """)
     lot, step, w = 65, 50, 2
@@ -90,7 +90,7 @@ def test_a_structure_with_an_uncovered_short_call_is_refused_and_a_missing_price
 const naked = QB.analyze({ u: "NIFTY", legs: [{ side: -1, type: "CE", strike: 24500, name: "C24500" }], quotes: q, spot: SPOT, T, lots: 1 });
 const ratio = QB.analyze({ u: "NIFTY", legs: [{ side: 1, type: "CE", strike: 24500, name: "C24500" }, { side: -1, type: "CE", strike: 24600, name: "C24600" }, { side: -1, type: "CE", strike: 24650, name: "C24650" }], quotes: q, spot: SPOT, T, lots: 1 });
 const nopx = QB.analyze({ u: "NIFTY", legs: [{ side: 1, type: "CE", strike: 24500, name: "NOPE" }], quotes: q, spot: SPOT, T, lots: 1 });
-const edge = QB.legsFor("iron_condor", STRIKES, SPOT, names, 4);
+const edge = QB.legsFor("iron_condor", STRIKES, SPOT, names, 4);   // 8 strikes out: off this board
 const nakedPut = QB.analyze({ u: "NIFTY", legs: [{ side: -1, type: "PE", strike: 24500, name: "P24500" }], quotes: q, spot: SPOT, T, lots: 1 });
 console.log(JSON.stringify({ naked: naked.errors, ratio: ratio.errors, nopx: nopx.errors, edge: edge.error, nakedPutDefined: nakedPut.definedRisk }));
 """)
@@ -152,7 +152,11 @@ def test_the_published_page_carries_the_configs_limits_costs_and_lot_sizes_and_t
     assert tc["costs"]["options"]["stt_sell"] == cfg.get("costs.segments.options.stt_sell") and tc["slippage"]["option_tick"] == 0.05
     risk = cfg.get("intraday.risk")
     assert tc["limits"] and tc["limits"] == {k: risk[k] for k in tc["limits"]} and set(tc["limits"]) == {"risk_per_trade", "max_premium_outlay", "max_total_outlay", "max_lots", "max_open", "max_spread_pct", "max_margin", "credit_margin_per_lot", "daily_loss_limit"}   # every limit, none dropped
-    assert tc["paper"] == {"risk_per_trade": cfg.get("paper.risk_per_trade"), "max_quote_age_s": cfg.get("paper.max_quote_age_s"), "underlyings": sorted(cfg.get("paper.underlyings")["nse_fo"]), "allow_short_legs": cfg.get("paper.allow_short_legs") is True}
+    pu = cfg.get("paper.underlyings")
+    assert tc["paper"] == {"risk_per_trade": cfg.get("paper.risk_per_trade"), "max_quote_age_s": cfg.get("paper.max_quote_age_s"),
+                           "underlyings": sorted(set(pu["nse_fo"]) | set(pu["mcx"]) | set(pu["nse_cds"])), "allow_short_legs": cfg.get("paper.allow_short_legs") is True}     # MCX and currency options too (13 Nov 2026)
+    assert tc["inst"]["CRUDEOIL"] == {"lot": 100, "tick": 0.1, "r": 0.0, "cost": "mcx_options", "prior_day": True, "segment": "mcx"}                   # priced off the future, its own charges and tick
+    assert tc["inst"]["USDINR"]["tick"] == 0.0025 and tc["costs"]["cds_options"]["exchange"] == cfg.get("costs.segments.cds_options.exchange")
     script = E._trade_script(cfg)
     assert script.startswith("<script>window.QD_TRADE=") and "</" not in script[len("<script>"):-len("</script>")]
     out = tmp_path / "site"
@@ -325,3 +329,127 @@ console.log(JSON.stringify(out));
     assert o["up"] > o["now0"] > o["down"]                                                                                      # a bull call spread gains when spot rises
     assert o["now0"] < 0 and o["now0"] > -abs(o["premium"])                                                                     # right after opening it is down by about the spread, never by the whole premium
     assert o["longVolUp"] > 0 and o["longDecay"] < 0                                                                            # a long option gains from higher volatility and loses to time
+
+
+# ---- every structure, the advisor and the designer (owner, 13 Nov 2026: "The strategy builder must have access to the every strategy which it can reason it out when to
+# use which and create it's own if required") ---------------------------------------------------------------------------------------------------------------------------
+@needs_node
+def test_the_newer_structures_have_their_textbook_payoffs(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+for (const id of ["call_butterfly", "put_butterfly", "bw_call_butterfly", "bw_put_butterfly", "call_backspread", "put_backspread"]) {
+  const L = QB.legsFor(id, STRIKES, SPOT, names, 2), a = run(id, 2, 1);
+  out[id] = { legs: L.legs.map((l) => [l.side, l.type, l.strike, l.mult || 1]), prem: a.premium, maxP: a.maxProfit === Infinity ? "inf" : a.maxProfit, maxL: a.maxLoss, risk: a.definedRisk, units: a.legs.map((l) => l.units) };
+}
+console.log(JSON.stringify(out));
+""")
+    lot, step, w = 65, 50, 2
+    assert o["call_butterfly"]["legs"] == [[1, "CE", 24400, 1], [-1, "CE", 24500, 2], [1, "CE", 24600, 1]] and o["call_butterfly"]["units"] == [65, 130, 65]
+    for id in ("call_butterfly", "put_butterfly"):                                                   # a long butterfly: pay a debit, make the wing width less it at the body
+        assert o[id]["prem"] > 0 and o[id]["maxL"] == pytest.approx(o[id]["prem"], rel=1e-9) and o[id]["maxP"] == pytest.approx(w * step * lot - o[id]["prem"], rel=1e-9)
+    assert o["bw_call_butterfly"]["legs"] == [[1, "CE", 24500, 1], [-1, "CE", 24600, 2], [1, "CE", 24750, 1]]
+    assert o["call_backspread"]["maxP"] == "inf" and o["put_backspread"]["maxP"] != "inf"           # unlimited up; down to zero is bounded
+    assert all(d["risk"] is True for d in o.values())
+
+
+@needs_node
+def test_the_advisor_reasons_from_the_textbook_and_the_desks_record(tmp_path):
+    o = node(tmp_path, r"""
+const top = (ctx, n) => QB.advise(ctx).slice(0, n || 3).map((x) => x.id);
+const ev = QB.advise({ view: "range", vol: "rich", event: true });
+const rec = QB.advise({ view: "range", vol: "rich", record: { CBF: { mu: 0.4, n: 60 }, IC: { mu: -0.3, n: 80 } } });
+console.log(JSON.stringify({
+  rangeRich: top({ view: "range", vol: "rich" }, 4), upCheapStrong: top({ view: "up", vol: "cheap", pUp: 0.8, trendT: 2.5 }, 2), upMild: top({ view: "up", vol: "mid", pUp: 0.56 }, 3),
+  bigCheap: top({ view: "big", vol: "cheap" }, 2), eventIC: ev.find((x) => x.id === "iron_condor"), eventTop: ev[0].id, standAside: QB.verdict(ev).stand_aside,
+  fits: QB.verdict(QB.advise({ view: "range", vol: "rich" })).stand_aside, recTop: rec[0].id, recIC: rec.find((x) => x.id === "iron_condor"),
+  every: QB.advise({}).length, n: Object.keys(QB.TEMPLATES).length,
+  inv: QB.advise({ view: "up", extra: [{ id: "inv:Gabc12", name: "invented: x", dir: "up", vol: "neutral", conv: "mild", code: "Gabc12", rows: [] }], record: { Gabc12: { mu: 0.3, n: 20 } } })[0] }));
+""")
+    assert set(o["rangeRich"]) == {"iron_condor", "iron_butterfly", "call_butterfly", "put_butterfly"}       # a range and dear options: sell them, in a defined-risk shape
+    assert set(o["upCheapStrong"]) == {"long_call", "call_backspread"}                                         # a strong view up and cheap options: buy the move
+    assert o["upMild"][0] in ("bull_call_spread", "bull_put_spread", "bw_call_butterfly")                    # a mild view: capped
+    assert set(o["bigCheap"]) <= {"long_straddle", "long_strangle"}
+    assert o["eventIC"]["score"] < 1 and any("no volatility is sold" in a for a in o["eventIC"]["against"])
+    assert o["standAside"] is True and o["fits"] is False                                                       # a range view in an event: nothing fits, and it says so
+    assert o["recTop"] == "call_butterfly" and any("shadow record" in a for a in o["recIC"]["against"])       # the desk's own record moves the ranking
+    assert o["every"] == o["n"] == 20                                                                     # 16 single-expiry structures and 4 calendars or diagonals
+    assert o["inv"]["id"] == "inv:Gabc12" and o["inv"]["invented"] is True                                   # the desk's inventions are on the list, judged the same way
+
+
+@needs_node
+def test_the_desks_read_becomes_the_advisors_context(tmp_path):
+    o = node(tmp_path, r"""
+const lab = { state: { NIFTY: ["flat", "rich", 1.31, true, 0.52, "", "", "calm", "", 0.4, "", 0.5, ""], CRUDEOIL: [null, "mid", 1.0, false, null, "", "event regime: oil", "stressed", "volatility up", null, "", 0.71, ""] },
+  families: [{ struct: "IC", mu_r: 0.08, se: 0.1, trades: 120 }], inventions: [{ code: "Gabc12", name: "invented: buy 1 call", view: "flat", legs: [[1, "CE", 1], [-2, "CE", 2], [1, "CE", 3]], mu_r: 0.1, trades: 14 }] };
+const n = QB.deskContext(lab, "NIFTY"), cr = QB.deskContext(lab, "CRUDEOIL"), none = QB.deskContext(null, "X");
+console.log(JSON.stringify({ n: n.ctx, seen: n.seen, cr: cr.ctx, none: none.ctx, noneSeen: none.seen }));
+""")
+    assert o["n"]["view"] == "range" and o["n"]["vol"] == "rich" and o["n"]["eve"] is True and o["n"]["pUp"] == 0.52 and o["n"]["record"]["IC"]["n"] == 120
+    assert "volatility rich (1.31x realized)" in o["seen"] and "expiry tomorrow" in o["seen"]
+    assert o["cr"]["view"] == "big" and o["cr"]["event"] is True and o["cr"]["pUp"] == 0.71                  # no view but an event: a big move; the news model's P(up)
+    inv = o["n"]["extra"][0]
+    assert inv["dir"] == "range" and inv["rows"][1] == {"side": -1, "type": "CE", "off": 2, "mult": 2} and o["n"]["record"]["Gabc12"]["n"] == 14
+    assert "view" not in o["none"] and o["noneSeen"] == []                                                  # no read: the advisor reasons from the view you pick
+
+
+@needs_node
+def test_the_designer_builds_defined_risk_structures_that_pay_if_the_view_is_right(tmp_path):
+    o = node(tmp_path, BOARD + r"""
+const em = SPOT * 0.14 * Math.sqrt(T), base = { u: "NIFTY", strikes: STRIKES, names, quotes: q, spot: SPOT, spotAge: 2, T, em, seed: 3, top: 4 };
+for (const v of ["up", "down", "range", "big"]) out[v] = QB.design({ ...base, view: v });
+out.again = QB.design({ ...base, view: "up" });
+out.tight = QB.design({ ...base, view: "up", budget: 1500 });
+out.bad = QB.design({ ...base, view: "sideways" });
+out.check = out.up.designs.map((d) => { const a = QB.analyze({ u: "NIFTY", legs: d.rows.map((r) => ({ ...r, name: names[r.strike][r.type] })), quotes: q, spot: SPOT, spotAge: 2, T, lots: 1 }); return [a.definedRisk, a.maxLoss]; });
+console.log(JSON.stringify(out));
+""")
+    for v in ("up", "down", "range", "big"):
+        ds = o[v]["designs"]
+        assert ds and all(d["avgRight"] > 0 and d["maxLoss"] > 0 for d in ds), v
+        assert [d["score"] for d in ds] == sorted((d["score"] for d in ds), reverse=True)
+        for d in ds:
+            calls = sum((1 if r["side"] > 0 else -1) * r["mult"] for r in d["rows"] if r["type"] == "CE")
+            assert calls >= 0 and len(d["rows"]) <= 4 and sum(r["mult"] for r in d["rows"]) <= 6           # defined risk, at most 4 legs and 6 lots
+    assert all(d["avgRight"] > d["avgWrong"] for d in o["up"]["designs"])                                # it pays more where the view is right than where it is wrong
+    assert any(d["known"] and d["known"]["id"] == "bull_call_spread" for d in o["up"]["designs"])            # it says when its answer already has a name
+    assert any(d["known"] is None for v in ("up", "range", "big") for d in o[v]["designs"])                   # and it finds structures of its own
+    assert all(any(r["type"] == "CE" and r["side"] > 0 for r in d["rows"]) and any(r["type"] == "PE" and r["side"] > 0 for r in d["rows"]) for d in o["big"]["designs"][:2])   # either way: both sides
+    assert o["again"] == o["up"]                                                                          # the same board and seed, the same designs
+    assert all(d["maxLoss"] <= 1500 for d in o["tight"]["designs"])
+    assert all(m[0] is True and m[1] > 0 for m in o["check"]) and "error" in o["bad"]
+
+
+def test_the_builder_finds_an_mcx_or_currency_underlying_and_uses_only_its_own_names():
+    """Two bugs found by driving the page (14 Nov 2026): the builder priced an option's underlying from NAME or NAME-FUT only, so an MCX (-MCX) or currency (-CDS)
+    option had "no price on the board"; and it read a variable `u` that does not exist in its scope, so the Strategy tab stopped drawing."""
+    draw = APP[APP.index("function bdDraw"):APP.index("function legsTable2")]
+    flow = APP[APP.index("function bdFlow"):APP.index("function bdFlow") + 4000]
+    assert 'data.quotes[B.u + "-FUT"]' not in draw + flow and "liveNames(B.u, data.quotes).fut" in draw + flow
+    for body in (draw, flow, APP[APP.index("function bdIdeas"):APP.index("function bdPayoff")]):
+        assert not re.search(r"rateOf\(u\b", body) and "B.u || u" not in body
+
+
+@needs_node
+def test_a_calendar_is_valued_at_the_near_expiry_with_its_worst_case_at_the_floor(tmp_path):
+    """Owner, 14 Nov 2026: "Build Calendar and diagonal spreads". The builder places a calendar's later leg on the next expiry's chain and judges it as the paper gate does."""
+    o = node(tmp_path, BOARD + r"""
+const T2 = T + 7 / 365, names2 = {};
+STRIKES.forEach((k) => { names2[k] = { CE: "X" + k + "CE", PE: "X" + k + "PE" };
+  for (const t of ["CE", "PE"]) { const v = QB.bs(t, SPOT, k, T2, 0.14, 0.07); q["X" + k + t] = { ltp: +v.toFixed(2), bid: +(v * 0.995).toFixed(2), ask: +(v * 1.005).toFixed(2), age_s: 2 }; } });
+const next = { strikes: STRIKES, names: names2, T: T2 };
+for (const id of ["call_calendar", "put_calendar", "call_diagonal", "put_diagonal"]) {
+  const L = QB.legsFor(id, STRIKES, SPOT, names, 2, next);
+  const a = QB.analyze({ u: "NIFTY", legs: L.legs, quotes: q, spot: SPOT, spotAge: 2, T, lots: 1 });
+  out[id] = { legs: L.legs.map((l) => [l.side, l.type, l.strike, l.name[0]]), err: a.errors, multi: a.multi, prem: a.premium, maxL: a.maxLoss, maxP: a.maxProfit, be: a.breakevens, risk: a.definedRisk };
+}
+out.none = QB.legsFor("call_calendar", STRIKES, SPOT, names, 1, null).error;
+const rev = QB.analyze({ u: "NIFTY", legs: [{ side: 1, type: "CE", strike: 24500, name: "C24500" }, { side: -1, type: "CE", strike: 24500, name: "X24500CE", T: T2 }], quotes: q, spot: SPOT, spotAge: 2, T, lots: 1 });
+out.rev = rev.errors;
+console.log(JSON.stringify(out));
+""")
+    cal = o["call_calendar"]
+    assert cal["err"] == [] and cal["multi"] is True and cal["risk"] is True and cal["legs"] == [[-1, "CE", 24500, "C"], [1, "CE", 24500, "X"]]
+    assert cal["prem"] > 0 and cal["maxL"] == pytest.approx(cal["prem"] + 0.02 * 7 / 365 * 3 * 24500 * 65, rel=1e-6)   # the debit, plus the floor's allowance at three times its strike (as the gate)
+    assert 0 < cal["maxP"] < 1e6 and len(cal["be"]) == 2                                                     # the tent: two break-evens either side of the strike
+    assert o["put_calendar"]["maxL"] > o["put_calendar"]["prem"] and o["put_calendar"]["err"] == []
+    assert o["call_diagonal"]["legs"] == [[-1, "CE", 24600, "C"], [1, "CE", 24500, "X"]] and o["call_diagonal"]["err"] == []
+    assert "next expiry" in o["none"] and o["rev"] and "near expiry" in o["rev"][0]

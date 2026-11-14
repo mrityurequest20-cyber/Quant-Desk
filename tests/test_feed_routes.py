@@ -25,7 +25,8 @@ def test_the_worker_carries_exactly_the_configs_route_table():
 
 def test_every_segment_has_a_route_of_known_feeds_and_kotak_is_the_last_resort_everywhere():
     routes = Config.load(ROOT / "config" / "quantdesk.yaml").get("feeds.routes")
-    assert set(routes) == {"idx", "eq", "fut", "opt", "mcx", "cds"}
+    assert set(routes) == {"idx", "eq", "fut", "opt", "mcx", "cds", "mopt", "copt"}
+    assert routes["mcx"][0] == routes["mopt"][0] == "f" and routes["cds"][0] == routes["copt"][0] == "a"     # owner, 13 Nov 2026: MCX from Fyers, currency from Angel One, options as futures
     for seg, r in routes.items():
         assert r and set(r) <= CODES and len(set(r)) == len(r), seg
         assert r[-1] == "k" and "z" in r, seg                                  # Kotak only when nothing else delivers; Kite behind every segment

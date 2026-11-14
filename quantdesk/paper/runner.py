@@ -37,7 +37,7 @@ ID_RE = re.compile(r"[A-Za-z0-9_-]{6,64}")                                   # m
 MARK = "\x1f"                                                                 # the unit separator: order text cannot contain it (clean_order turns it into a space), so a marker behind it is the runner's own
 CTRL = re.compile(r"[\x00-\x1f\x7f]")
 MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
-OPT_TAIL = re.compile(r"^(\d{2})(" + "|".join(MONTHS) + r")(\d{2})(\d{1,6})(CE|PE)$")
+OPT_TAIL = re.compile(r"^(\d{2})(" + "|".join(MONTHS) + r")(\d{2})(\d{1,6}(?:\.\d{1,4})?)(CE|PE)$")      # a currency option's strike has decimals (USDINR 84.25)
 DONE_RE = re.compile(r"\x1f\[order ([A-Za-z0-9_-]{6,64})\]\Z|\A\x1fexit ([A-Za-z0-9_-]{6,64}):")
 VIS_RE = re.compile(r"\x1f(?:\[order [A-Za-z0-9_-]+\]|exit [A-Za-z0-9_-]+:)")
 MAX_SKEW_S = 120              # the relay's clock and this machine's may differ by this much; more and nothing is done (a wrong clock must not place a trade)
@@ -100,7 +100,7 @@ def stock_lots(cfg) -> dict[str, dict[dt.date, int]]:
     return out
 
 
-def parse_contract(symbol, underlyings, lot_sizes: dict) -> tuple[Instrument | None, str | None]:
+def parse_contract(symbol, underlyings, lot_sizes: dict, decimal_strikes=frozenset()) -> tuple[Instrument | None, str | None]:
     """A board option name (NIFTY12NOV2624500CE) to an Instrument, or (None, why). The underlying must be on the paper desk's list and have a known lot."""
     if not isinstance(symbol, str) or symbol != symbol.strip().upper() or not (8 <= len(symbol) <= 40) or CTRL.search(symbol):
         return None, "the contract name is missing or malformed"
@@ -121,9 +121,11 @@ def parse_contract(symbol, underlyings, lot_sizes: dict) -> tuple[Instrument | N
                 return None, f"{u} has no verified lot size for the {expiry:%d %b %Y} expiry (paper.stock_options.lots): not traded"
         if not (isinstance(lot, int) and lot > 0):
             return None, f"{u} has no known lot size"
-        if int(m.group(4)) <= 0:
+        if float(m.group(4)) <= 0:
             return None, f"{_safe(symbol)}: the strike must be above zero"
-        inst = Instrument.option(u, expiry, int(m.group(4)), m.group(5), lot)
+        if "." in m.group(4) and u not in decimal_strikes:
+            return None, f"{_safe(symbol)}: {u}'s strikes are whole numbers"                # decimals only where they exist (currency, some MCX): NIFTY 24500.5 is not a contract
+        inst = Instrument.option(u, expiry, float(m.group(4)), m.group(5), lot)
         if inst.symbol != symbol:
             return None, f"{_safe(symbol)} is not in the board's naming"
         return inst, None
@@ -256,7 +258,9 @@ class Runner:
         self.account = account
         self.gate = gate or RiskGate(cfg)
         self.broker = PaperBroker(cfg, account, self.gate)
-        self.und = frozenset(self.gate.limits.underlyings.get(SEGMENT, ()))
+        lim = self.gate.limits.underlyings
+        self.seg_of = {u: seg for seg in ("mcx", "nse_cds") for u in lim.get(seg, ())}       # MCX and currency options trade too (owner, 13 Nov 2026); everything else is NSE F&O
+        self.und = frozenset(lim.get(SEGMENT, ())) | frozenset(self.seg_of)
         self.lots = {str(u).upper(): int(v["lot_size"]) for u, v in (cfg.get("instruments") or {}).items() if isinstance(v, dict) and isinstance(v.get("lot_size"), int)}
         self.physical = stock_lots(cfg)                                      # stock options: physically settled, a lot per expiry (config paper.stock_options)
         self.lots.update(self.physical)
@@ -269,6 +273,10 @@ class Runner:
         self.fut = {str(u).upper(): dict(c) for u, c in (fut.get("contracts") or {}).items() if isinstance(c, dict)}
         self.fut_rules = {k: v for k, v in fut.items() if k != "contracts"}
         self.fut_margins = {u: float(c.get("margin", 1.0)) for u, c in self.fut.items()}
+        for u, c in self.fut.items():                                        # an MCX or currency option's lot is its future's
+            if u in self.seg_of and isinstance(c.get("lot"), int) and c["lot"] > 0:
+                self.lots.setdefault(u, c["lot"])
+        self.prior_day = frozenset(self.seg_of)                              # MCX options turn into the future at expiry, currency options expire at 12:30: sold the trading day before
 
     # ---- the board ---------------------------------------------------------------------------------------------------------
     @staticmethod
@@ -417,7 +425,7 @@ class Runner:
         if o["side"] == "short":
             res.update(status="refused", reasons=["a short is opened on an MCX or currency future only (an option is sold only as a leg of a package)"])
             return res
-        inst, why = parse_contract(o["symbol"], self.und, self.lots)
+        inst, why = parse_contract(o["symbol"], self.und, self.lots, frozenset(self.seg_of))
         if inst is None:
             res.update(status="refused", reasons=[why])
             return res
@@ -433,7 +441,7 @@ class Runner:
             if quote is not None and o["limit"] is not None and quote.ask > o["limit"]:
                 res.update(status="refused", reasons=[f"the offer is {quote.ask:g}, above your limit {o['limit']:g}: not bought"])
                 return res
-            order = Order(inst, SEGMENT, o["lots"] * inst.lot_size, o["strategy"], f"{o['thesis']}{MARK}[order {o['id']}]")
+            order = Order(inst, self.segment(inst), o["lots"] * inst.lot_size, o["strategy"], f"{o['thesis']}{MARK}[order {o['id']}]")
             marks = self.marks(snap, now)
             d, row = self.broker.buy(order, quote, marks, now, self._ref(o, now), o["limit"])
         else:
@@ -544,14 +552,14 @@ class Runner:
             return res
         legs, refs = [], {}
         for l in o["legs"]:
-            inst, why = parse_contract(l["symbol"], self.und, self.lots)
+            inst, why = parse_contract(l["symbol"], self.und, self.lots, frozenset(self.seg_of))
             if inst is None:
                 res.update(status="refused", reasons=[why])
                 return res
             if self.past_last_entry(inst, ist):
                 res.update(status="refused", reasons=[f"{inst.symbol}: {self.last_entry_why(inst)}; nothing opened"])
                 return res
-            legs.append({"side": l["side"], "instrument": inst, "segment": SEGMENT, "qty": l["lots"] * inst.lot_size, "quote": self.quote_from(snap, inst.symbol, now, None)})
+            legs.append({"side": l["side"], "instrument": inst, "segment": self.segment(inst), "qty": l["lots"] * inst.lot_size, "quote": self.quote_from(snap, inst.symbol, now, None)})
             if l["ref"]:
                 refs[inst.symbol] = {"bid": l["ref"]["bid"], "ask": l["ref"]["ask"], "at": l["ref"]["at"] if l["ref"]["at"] is not None else o.get("queued_at")}
         marks = self.marks(snap, now)
@@ -573,12 +581,16 @@ class Runner:
         return {"bid": r["bid"], "ask": r["ask"], "at": at}
 
     # ---- the last moment a contract may be held ------------------------------------------------------------------------------------
+    def segment(self, inst: Instrument) -> str:
+        """The exchange segment an option trades in: MCX or currency for their underlyings, NSE F&O otherwise."""
+        return self.seg_of.get((inst.underlying or "").upper(), SEGMENT)
+
     def last_day(self, inst: Instrument) -> dt.date | None:
         """The day from whose 15:20 IST a contract is sold and no longer bought: its expiry day for a cash-settled index option; for a stock option, which NSE settles by
         DELIVERY of the shares (a paper account cannot take delivery honestly), the trading day before its expiry."""
         if inst.expiry is None:
             return None
-        if (inst.underlying or "").upper() in self.physical:
+        if (inst.underlying or "").upper() in self.physical or (inst.underlying or "").upper() in self.prior_day:
             return self.cal.prev_trading_day(inst.expiry)
         return inst.expiry
 
@@ -590,6 +602,9 @@ class Runner:
         if (inst.underlying or "").upper() in self.physical:
             return (f"a stock option is settled by delivery of the shares, so the desk sells it from 15:20 on {self.last_day(inst):%d %b}, the day before its expiry, "
                     "and does not buy it after that: not bought")
+        if (inst.underlying or "").upper() in self.prior_day:
+            return (f"an {'MCX' if self.segment(inst) == 'mcx' else 'currency'} option is sold from 15:20 on {self.last_day(inst):%d %b}, the trading day before its expiry "
+                    f"({'it turns into the future at expiry' if self.segment(inst) == 'mcx' else 'it expires at 12:30'}), and is not bought after that: not bought")
         return "this contract expires today and the desk sells those from 15:20: not bought"
 
     # ---- what the app shows ------------------------------------------------------------------------------------------------------

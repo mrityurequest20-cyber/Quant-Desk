@@ -62,6 +62,12 @@ costs:
     # STT, NSE transaction charge 0.00035% plus NSE's IPFT levy 0.05 rupees a lakh (0.00005%), stamp duty 0.0001% on the buy. Brokerage, SEBI and GST as above.
     mcx_futures:     {stt_buy: 0.0,    stt_sell: 0.0001,  exchange: 0.000021,  stamp_buy: 0.00002}
     cds_futures:     {stt_buy: 0.0,    stt_sell: 0.0,     exchange: 0.000004,  stamp_buy: 0.000001}
+    # MCX and currency OPTIONS (owner, 13 Nov 2026: "MCX and currency options should be treated in the same way"), same source, read that day. Brokerage flat 20 rupees an order,
+    # as for every option. MCX options: CTT 0.05% on the sale, MCX transaction charge 0.0418%, stamp duty 0.003% on the buy. Currency options: no STT, NSE transaction
+    # charge 0.0311% plus NSE's IPFT levy 2 rupees a lakh (0.002%), stamp duty 0.0001% on the buy. Charged on the premium, as for NSE options (the page's option rows do not
+    # repeat "on premium"; the equity options row does).
+    mcx_options:     {stt_buy: 0.0,    stt_sell: 0.0005,  exchange: 0.000418,  stamp_buy: 0.00003}
+    cds_options:     {stt_buy: 0.0,    stt_sell: 0.0,     exchange: 0.000331,  stamp_buy: 0.000001}
   # STT on the intrinsic value of a LONG index option cash-settled at expiry. Dated: the latest entry on or before the
   # settlement day applies. 0.15% from 1-Apr-2026 (owner-confirmed, F-05); the earlier 0.125% is what the code carried
   # before (start date not verified) and is what the frozen research and pre-registered sleeve specs still use.
@@ -395,24 +401,28 @@ paper:
   # rate reconciles on that page for every commodity, which confirms the units). Ticks: MCX 1 rupee for crude and gold (Zerodha Varsity); the rest are not used by the
   # desk's checks. Margins are the page's rate, rounded up where its own rupee figure is higher. NOT read from the exchanges (mcxindia.com and nseindia.com refused the
   # reading session): to be checked against MCX's and NSE's contract specifications.
+  # Their OPTIONS trade too (owner, 13 Nov 2026), from the chain like NSE's: a contract's option lot is its future's (Zerodha's list of tradable commodity options, read that
+  # day). opt_tick is the option's price step, used by the slippage model (a currency option trades near 0.05 rupees: NSE's 0.05 tick would be a 100% impact); the values
+  # are the usual MCX and NSE option ticks and are NOT read from the exchanges. MCX options turn into the future at expiry and currency options expire at 12:30, so both are
+  # sold from 15:20 on the trading day before their expiry (as a stock option is), never held into it.
   futures:
     square_off_min: 5
     entry_cutoff_min: 15             # no new entry in the last 15 minutes of a segment's session
     stop_max_pct: 0.10               # a stop more than 10% from the price is a typo, not a stop
     contracts:
-      CRUDEOIL:   {segment: mcx,     lot: 100,  unit: "per barrel",      margin: 0.32, no_entry_days: 5}
-      CRUDEOILM:  {segment: mcx,     lot: 10,   unit: "per barrel",      margin: 0.32, no_entry_days: 5}
-      NATURALGAS: {segment: mcx,     lot: 1250, unit: "per mmBtu",       margin: 0.16, no_entry_days: 5}
-      NATGASMINI: {segment: mcx,     lot: 250,  unit: "per mmBtu",       margin: 0.16, no_entry_days: 5}
-      GOLD:       {segment: mcx,     lot: 100,  unit: "per 10 grams",    margin: 0.10, no_entry_days: 5}
-      GOLDM:      {segment: mcx,     lot: 10,   unit: "per 10 grams",    margin: 0.10, no_entry_days: 5}
-      SILVER:     {segment: mcx,     lot: 30,   unit: "per kg",          margin: 0.16, no_entry_days: 5}
-      SILVERM:    {segment: mcx,     lot: 5,    unit: "per kg",          margin: 0.16, no_entry_days: 5}
-      COPPER:     {segment: mcx,     lot: 2500, unit: "per kg",          margin: 0.10, no_entry_days: 5}
-      USDINR:     {segment: nse_cds, lot: 1000, unit: "per US dollar",   margin: 0.025, no_entry_days: 1}
-      EURINR:     {segment: nse_cds, lot: 1000, unit: "per euro",        margin: 0.026, no_entry_days: 1}
-      GBPINR:     {segment: nse_cds, lot: 1000, unit: "per pound",       margin: 0.033, no_entry_days: 1}
-      JPYINR:     {segment: nse_cds, lot: 1000, unit: "per 100 yen",     margin: 0.044, no_entry_days: 1}
+      CRUDEOIL:   {segment: mcx,     lot: 100,  unit: "per barrel",      margin: 0.32, no_entry_days: 5, opt_tick: 0.1}
+      CRUDEOILM:  {segment: mcx,     lot: 10,   unit: "per barrel",      margin: 0.32, no_entry_days: 5, opt_tick: 0.1}
+      NATURALGAS: {segment: mcx,     lot: 1250, unit: "per mmBtu",       margin: 0.16, no_entry_days: 5, opt_tick: 0.05}
+      NATGASMINI: {segment: mcx,     lot: 250,  unit: "per mmBtu",       margin: 0.16, no_entry_days: 5, opt_tick: 0.05}
+      GOLD:       {segment: mcx,     lot: 100,  unit: "per 10 grams",    margin: 0.10, no_entry_days: 5, opt_tick: 0.5}
+      GOLDM:      {segment: mcx,     lot: 10,   unit: "per 10 grams",    margin: 0.10, no_entry_days: 5, opt_tick: 0.5}
+      SILVER:     {segment: mcx,     lot: 30,   unit: "per kg",          margin: 0.16, no_entry_days: 5, opt_tick: 0.5}
+      SILVERM:    {segment: mcx,     lot: 5,    unit: "per kg",          margin: 0.16, no_entry_days: 5, opt_tick: 0.5}
+      COPPER:     {segment: mcx,     lot: 2500, unit: "per kg",          margin: 0.10, no_entry_days: 5, opt_tick: 0.05}
+      USDINR:     {segment: nse_cds, lot: 1000, unit: "per US dollar",   margin: 0.025, no_entry_days: 1, opt_tick: 0.0025}
+      EURINR:     {segment: nse_cds, lot: 1000, unit: "per euro",        margin: 0.026, no_entry_days: 1, opt_tick: 0.0025}
+      GBPINR:     {segment: nse_cds, lot: 1000, unit: "per pound",       margin: 0.033, no_entry_days: 1, opt_tick: 0.0025}
+      JPYINR:     {segment: nse_cds, lot: 1000, unit: "per 100 yen",     margin: 0.044, no_entry_days: 1, opt_tick: 0.0025}
   risk_per_trade: 0.025            # the most one entry may lose (the whole premium plus fees), as a share of equity
   daily_loss_limit: 0.05           # entries stop for the day, and the desk flattens, at this loss from the day's starting equity
   drawdown_halt: 0.10              # entries stop until the OWNER clears it, at this fall from the equity high-water mark
@@ -489,6 +499,8 @@ feeds:
     eq:  [z, k]          # NSE cash prices of the F&O stocks
     fut: [z, k]          # NSE index and stock futures (and BSE index futures)
     opt: [z, k]          # index and stock options: Kite carries the bid and offer (Kotak's chain has none)
+    mopt: [f, z, k]      # MCX options: Fyers first, as MCX futures (owner, 13 Nov 2026: "the data feed for mcx should come from fyers"); Kite in its hours behind it
+    copt: [a, f, z, k]   # currency options: Angel One first, as currency futures ("currency would be angel one"); Fyers, then Kite behind it
     mcx: [f, z, k]       # commodities: Fyers first (owner, 13 Nov 2026), Kite behind it
     cds: [a, f, z, k]    # currency: the third broker first (Angel One proposed), then Fyers, then Kite
 

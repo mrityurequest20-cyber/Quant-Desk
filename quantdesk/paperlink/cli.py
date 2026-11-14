@@ -21,16 +21,20 @@ def cmd_run(cfg, a):
         lots = {str(u).upper(): int(v["lot_size"]) for u, v in (cfg.get("instruments") or {}).items() if isinstance(v, dict) and isinstance(v.get("lot_size"), int)}
         lots.update(stock_lots(cfg))                                   # the stocks too (owner, 13 Nov 2026): a lot per expiry, and the runner's day-before-expiry rule for delivery
         tradable = tuple(u for u in und if u in lots)
+        lim = RiskGate(cfg).limits.underlyings                         # MCX and currency options (owner, 13 Nov 2026): their future's lot, for AUTO v2
+        contracts = cfg.get("paper.futures.contracts") or {}
+        segs = {u: seg for seg in ("mcx", "nse_cds") for u in sorted(lim.get(seg, ())) if isinstance(contracts.get(u), dict) and isinstance(contracts[u].get("lot"), int)}
         if os.environ.get("PAPER_AUTO_ENGINE", "v2").strip().lower() == "v1":
             auto = AutoPilot(tradable, lots, float(cfg.get("paper.capital")))
         else:                                                          # AUTO v2 (owner, 13 Nov 2026): writes, tests and chooses its own strategies (quantdesk/paper/auto2.py)
-            auto = auto_v2(cfg, tradable, lots)
+            lots_all = {**lots, **{u: contracts[u]["lot"] for u in segs}}
+            auto = auto_v2(cfg, tradable + tuple(segs), lots_all, segs)
         print(f"paper: {'AUTO v2' if hasattr(auto, 'lab') else 'AUTO v1'} is ON for {', '.join(auto.und)} (one lot a trade, no cap on how many, through the same gate and its loss caps)", flush=True)
     raise SystemExit(run(cfg, relay, Path(a.ledger), parse_hhmm(a.until), every_s=a.every, new_account=a.new_account, auto=auto))
 
 
-def auto_v2(cfg, underlyings, lots):
-    """AUTO v2 with the desk's real cost model and trading calendar."""
+def auto_v2(cfg, underlyings, lots, segments=None):
+    """AUTO v2 with the desk's real cost model and trading calendar; `segments` {underlying: mcx | nse_cds} for MCX and currency options (their own charges, hours and ticks)."""
     from ..core.calendar import TradingCalendar
     from ..core.types import Instrument
     from ..execution.costs import CostModel
@@ -40,8 +44,18 @@ def auto_v2(cfg, underlyings, lots):
     def fees(u, expiry, strike, right, qty, price):
         lot = lots.get(u)
         lot = lot.get(expiry) if isinstance(lot, dict) else lot
-        return costs.fees(Instrument.option(u, expiry, int(strike), right, int(lot or 1)), int(qty), float(price))[0]
-    return AutoPilotV2(underlyings, lots, fees, TradingCalendar(cfg.holidays()), float(cfg.get("paper.capital")))
+        return costs.fees(Instrument.option(u, expiry, float(strike), right, int(lot or 1)), int(qty), float(price), segment=(segments or {}).get(u))[0]
+    contracts = cfg.get("paper.futures.contracts") or {}
+    ticks = {u: c.get("opt_tick") for u, c in contracts.items() if isinstance(c, dict)}
+    suffix = {"mcx": "-MCX", "nse_cds": "-CDS"}
+
+    def fut_fees(u, qty, price):                                                   # the near-month future's real charges (mcx_futures, cds_futures)
+        from ..core.types import FUTURE
+        c = contracts.get(u) or {}
+        inst = Instrument(symbol=u + suffix.get(c.get("segment"), "-FUT"), kind=FUTURE, underlying=u, lot_size=int(c.get("lot") or 1))
+        return costs.fees(inst, int(qty), float(price), segment=c.get("segment"))[0]
+    return AutoPilotV2(underlyings, lots, fees, TradingCalendar(cfg.holidays()), float(cfg.get("paper.capital")), segments=segments or {}, ticks=ticks,
+                       fut_fees_fn=fut_fees if segments else None, fut_specs={u: c for u, c in contracts.items() if isinstance(c, dict)})
 
 
 def cmd_verify(cfg, a):

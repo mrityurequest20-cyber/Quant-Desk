@@ -122,7 +122,8 @@ def _size_ok(x) -> bool:
     return x is None or (is_number(x) and x > 0)
 
 
-FUTURES_ONLY = ("mcx", "nse_cds")         # MCX and currency: futures only (paper.futures, owner's order of 13 Nov 2026)
+FUTURES_ONLY = ("mcx", "nse_cds")         # the segments whose futures the desk trades (paper.futures, owner's order of 13 Nov 2026); their options trade too
+OPTION_COSTS = {"mcx": "mcx_options", "nse_cds": "cds_options"}       # the cost schedule of an option by its segment; NSE and BSE: "options"
 
 
 class RiskGate:
@@ -219,10 +220,8 @@ class RiskGate:
             why.append(f"{order.qty} is not a whole number of lots of {inst.lot_size!r}")
         if seg not in MK.SEGMENTS:
             why.append(f"unknown segment {seg!r}")
-        elif seg in FUTURES_ONLY:
-            why.append(f"{seg} trades futures only on this desk (paper.futures): an option is not opened there")
         else:
-            if seg not in self.limits.cost_verified or "options" not in self.configured_costs:
+            if seg not in self.limits.cost_verified or OPTION_COSTS.get(seg, "options") not in self.configured_costs:
                 why.append(f"the costs for {seg} are not configured and verified: they would be guessed, so nothing trades there")
             if not str(inst.symbol or "").upper().startswith(str(inst.underlying or "").upper()):
                 why.append(f"the contract {inst.symbol!r} does not belong to its underlying {inst.underlying!r}")
@@ -248,7 +247,7 @@ class RiskGate:
             if quote.ask_qty is not None and order.qty > quote.ask_qty:
                 why.append(f"{order.qty} is more than the {quote.ask_qty:g} on offer")
             if not why and is_number(eq):
-                fees, _ = self.costs.fees(inst, order.qty, quote.ask)
+                fees, _ = self.costs.fees(inst, order.qty, quote.ask, segment=seg)
                 outlay = order.qty * quote.ask + fees
                 if outlay > self.limits.risk_per_trade * eq:
                     why.append(f"it would risk {outlay:,.0f} (the whole premium plus fees), over {self.limits.risk_per_trade:.1%} of equity "
@@ -332,8 +331,8 @@ class RiskGate:
             if target is not None and not (is_number(target) and target > 0 and ((short and target < px) or (not short and target > px))):
                 why.append(f"the target must be {'below' if short else 'above'} the entry")
             if not why and is_number(eq):
-                fees_in, _ = self.costs.fees(inst, -order.qty if short else order.qty, px)
-                fees_out, _ = self.costs.fees(inst, order.qty if short else -order.qty, stop)
+                fees_in, _ = self.costs.fees(inst, -order.qty if short else order.qty, px, segment=seg)
+                fees_out, _ = self.costs.fees(inst, order.qty if short else -order.qty, stop, segment=seg)
                 slip = 0.001 * px                                                 # a stop fills worse than its price: a tenth of a percent allowed for it
                 risk = order.qty * (abs(px - stop) + slip) + fees_in + fees_out
                 if risk > self.limits.risk_per_trade * eq:
@@ -391,7 +390,7 @@ class RiskGate:
             if seg not in MK.SEGMENTS:
                 why.append(tag + f"unknown segment {seg!r}")
             else:
-                if seg not in self.limits.cost_verified or "options" not in self.configured_costs:
+                if seg not in self.limits.cost_verified or OPTION_COSTS.get(seg, "options") not in self.configured_costs:
                     why.append(tag + f"the costs for {seg} are not configured and verified: they would be guessed, so nothing trades there")
                 if not str(inst.symbol or "").upper().startswith(str(inst.underlying or "").upper()):
                     why.append(tag + f"the contract does not belong to its underlying {inst.underlying!r}")
@@ -423,7 +422,7 @@ class RiskGate:
         for l in legs:
             inst, qty, sell, q = l["instrument"], l["qty"], l["side"] == "sell", l["quote"]
             px = q.bid if sell else q.ask
-            fees, _ = self.costs.fees(inst, -qty if sell else qty, px)
+            fees, _ = self.costs.fees(inst, -qty if sell else qty, px, segment=l.get("segment"))
             cash_after += (qty * px - fees) if sell else -(qty * px + fees)
             signed = -qty if sell else qty
             if inst.symbol in after:
@@ -440,7 +439,7 @@ class RiskGate:
         if not (risk <= self.limits.risk_per_trade * eq + 1e-9):
             why.append(f"it would put {risk:,.0f} at risk (its worst possible loss plus fees), over {self.limits.risk_per_trade:.1%} of equity ({self.limits.risk_per_trade * eq:,.0f})")
         if not any(l["side"] == "sell" for l in legs):                          # bought options only: the plain rules apply as they always did (the whole premium plus fees is the risk, and it shares the loss budget with what is open), whatever the worst-case arithmetic says
-            outlay = sum(l["qty"] * l["quote"].ask + self.costs.fees(l["instrument"], l["qty"], l["quote"].ask)[0] for l in legs)
+            outlay = sum(l["qty"] * l["quote"].ask + self.costs.fees(l["instrument"], l["qty"], l["quote"].ask, segment=l.get("segment"))[0] for l in legs)
             if outlay > self.limits.risk_per_trade * eq + 1e-9:
                 why.append(f"it would risk {outlay:,.0f} (the whole premium plus fees), over {self.limits.risk_per_trade:.1%} of equity ({self.limits.risk_per_trade * eq:,.0f})")
             d_floor, f_floor = self.floors(account)

@@ -89,8 +89,8 @@ def test_a_sell_fills_at_the_bid_and_the_round_trip_pays_the_spread_and_fees(des
     ("zero quantity", dict(o=order(qty=0)), "long options only"),
     ("too much risk", dict(o=order(qty=150)), "risk"),
     ("unknown segment", dict(o=order(seg="nyse")), "unknown segment"),
-    ("an option labelled mcx", dict(o=order(seg="mcx")), "futures only"),
-    ("an option labelled currency", dict(o=order(seg="nse_cds")), "futures only"),
+    ("a NIFTY option labelled mcx", dict(o=order(seg="mcx")), "not on the list of underlyings that trade in mcx"),
+    ("a NIFTY option labelled currency", dict(o=order(seg="nse_cds")), "not on the list of underlyings that trade in nse_cds"),
     ("bse costs unverified", dict(o=order(seg="bse_fo")), "not configured and verified"),
     ("expired option", dict(o=order(inst=opt(expiry=dt.date(2026, 11, 6)))), "expired"),
 ])
@@ -466,7 +466,7 @@ def test_the_config_carries_loss_caps_only(cfg):
                       "underlyings", "allow_short_legs", "stock_options", "futures"}
     assert set(p["stock_options"]) == {"lots", "steps"}
     assert set(p["futures"]) == {"square_off_min", "entry_cutoff_min", "stop_max_pct", "contracts"}                   # MCX and currency (13 Nov 2026): contract facts and session mechanics, no cap on size
-    assert all(set(c) == {"segment", "lot", "unit", "margin", "no_entry_days"} for c in p["futures"]["contracts"].values())                                 # contract facts only (lots per expiry, strike steps): no cap on trades, positions or size hides there
+    assert all(set(c) == {"segment", "lot", "unit", "margin", "no_entry_days", "opt_tick"} for c in p["futures"]["contracts"].values())                                 # contract facts only (lots per expiry, strike steps): no cap on trades, positions or size hides there
     assert p["allow_short_legs"] is True                                        # sold options, only as legs of bounded packages, are ON by the owner's written order (8 Nov 2026)
     assert p["risk_per_trade"] == 0.025 and p["daily_loss_limit"] == 0.05 and p["drawdown_halt"] == 0.10 and p["cost_verified_segments"] == ["nse_fo", "mcx", "nse_cds"]
 

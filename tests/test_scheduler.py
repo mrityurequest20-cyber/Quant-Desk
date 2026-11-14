@@ -225,3 +225,23 @@ def test_the_fx_minute_bars_are_dispatched_each_morning_until_one_run_succeeds_w
     assert sch.fx_due(at("2026-10-06 05:00"), [run_("2026-10-06 04:10", ok="failure")])[0] is True                                  # a failure is retried (nothing logs in)
     assert sch.fx_due(at("2026-10-06 07:00"), [run_("2026-10-06 04:10"), run_("2026-10-06 05:10"), run_("2026-10-06 06:10")])[0] is False   # but three is the limit
     assert sch.fx_due(at("2026-10-06 05:00"), [run_("2026-10-05 04:10")])[0] is True                                                # yesterday's does not count
+
+
+def test_the_premarket_brief_is_dispatched_before_six_because_its_own_cron_comes_hours_late():
+    assert sch.PREMARKET_WORKFLOW == "premarket.yml" and sch.PREMARKET_MAX_STARTS == 2               # it logs in to no broker: one more start after a failure is safe
+    assert sch.decide(at("2026-11-16 05:30"), [], HOLS, sch.PREMARKET_MAX_STARTS, sch.PREMARKET_WINDOW)[0] == "start"
+    assert sch.decide(at("2026-11-16 05:10"), [], HOLS, sch.PREMARKET_MAX_STARTS, sch.PREMARKET_WINDOW)[0] == "wait"      # too early to sleep on a runner
+    assert sch.decide(at("2026-11-16 09:20"), [], HOLS, sch.PREMARKET_MAX_STARTS, sch.PREMARKET_WINDOW)[0] == "wait"      # the open: too late to plan
+    assert sch.decide(at("2026-11-16 06:40"), [run("2026-11-16 05:30", status="in_progress", conclusion=None)], HOLS, sch.PREMARKET_MAX_STARTS, sch.PREMARKET_WINDOW)[0] == "wait"
+    assert sch.decide(at("2026-11-16 06:40"), [run("2026-11-16 05:30", conclusion="failure")], HOLS, sch.PREMARKET_MAX_STARTS, sch.PREMARKET_WINDOW)[0] == "start"
+    assert sch.decide(at("2026-11-14 05:30"), [], HOLS, sch.PREMARKET_MAX_STARTS, sch.PREMARKET_WINDOW)[0] == "wait"      # a Saturday
+
+
+def test_main_at_0530_dispatches_the_brief_and_the_paper_runner(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sch.dt, "datetime", type("D", (sch.dt.datetime,), {"now": classmethod(lambda c, tz=None: at("2026-11-16 05:30"))}))
+    monkeypatch.setattr(sch, "_runs", lambda wf: [])
+    monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    sch.main([])
+    started = [c[3] for c in calls if c[:3] == ["gh", "workflow", "run"]]
+    assert "premarket.yml" in started and "record.yml" not in started

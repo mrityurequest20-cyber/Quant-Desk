@@ -507,6 +507,12 @@ async function renderToday(full) {
 	const notes = (t) => h("div", { class: "f3", style: "font-size:12px;line-height:1.5;margin-top:4px" }, t);
 	if ((b.expiring || []).length)
 		put(body, grp("Expiry today", b.expiring.map((e) => e.symbol).join(", "), h("div", { class: "rows" }, h("div", { class: "pad" }, notes(b.expiring[0].note)))));
+	const cal = (b.calendar || []).filter((e) => e && e.impact !== "low" && e.source !== "brief");
+	if (cal.length)                                                          // the scheduled-events calendar (paper/eventcal.py): the next week, IST
+		put(body, grp("Coming up", "the next 7 days, IST", h("div", { class: "rows" }, cal.slice(0, 14).map((e) => h("div", { class: "pad row", style: "gap:8px;font-size:13px" },
+			h("span", { class: "mono f3", style: "min-width:92px" }, `${e.at.slice(8, 10)}/${e.at.slice(5, 7)} ${e.at.slice(11, 16)}`), h("span", { class: "grow" }, e.name),
+			h("span", { class: "tag " + (e.impact === "high" ? "bear" : "flat") }, e.impact + (e.source === "rule" ? " · by rule" : "")))),
+			h("div", { class: "pad f3", style: "font-size:11.5px;line-height:1.5" }, "The desk sells no volatility into an event that touches an instrument: a day ahead of a high one, two hours ahead of a release. Dates marked \"by rule\" follow the release's usual rule (a holiday can move one): the owner's own calendar wins."))));
 	if ((b.macro || []).length)
 		put(body, grp("Macro events", `${b.macro.length}`, h("div", { class: "rows" }, b.macro.map((m) => h("div", { class: "pad", style: "display:grid;gap:4px" },
 			h("div", { class: "row" }, h("b", { style: "font-weight:500" }, m.name), h("span", { class: "grow" }), h("span", { class: "tag flat" }, (m.time ? m.time + " IST · " : "") + m.when)),
@@ -648,7 +654,7 @@ const SRC_NAME = { z: "Kite", k: "Kotak", u: "Upstox", d: "Dhan", a: "Angel One"
 S.lv = { q: "", grp: "all", data: null, built: false, sel: null, view: "spot", series: null, cand: null, tf: 1, exp: null, allStrikes: false, last: {}, chart: null, at: 0, heavyAt: 0 };
 S.open = {};                                                     // which folded sections are open, by id: a redraw keeps them as the reader left them
 let liveBusy = false;
-const livePx = (v, seg) => (fin(v) ? v.toLocaleString("en-IN", seg === "cds" ? { minimumFractionDigits: 4, maximumFractionDigits: 4 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+const livePx = (v, seg) => (fin(v) ? v.toLocaleString("en-IN", seg === "cds" || seg === "copt" || ((seg === "opt" || seg === "mopt") && Math.abs(v) < 1) ? { minimumFractionDigits: 4, maximumFractionDigits: 4 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");      // a currency price, or an option under a rupee, in four decimals
 function liveAge(sec) {
 	if (!fin(sec)) return "—";
 	if (sec < 90) return Math.round(sec) + "s";
@@ -834,7 +840,7 @@ function liveQuoteView(u, name, v) {
 	stats.textContent = "";
 	put(stats, h("div", { class: "facts" }, liveField("Open", livePx(o, seg)), liveField("Previous close", livePx(prev, seg)), liveField("High", livePx(hi, seg)), liveField("Low", livePx(lo, seg)),
 		liveField("Volume", fin(v.vol) ? v.vol.toLocaleString("en-IN") : "—"), liveField("Open interest", fin(v.oi) ? v.oi.toLocaleString("en-IN") : "—"),
-		inst ? liveField("Lot size", String(inst.lot)) : null, inst ? liveField("Strike step", String(inst.step)) : null),
+		inst ? liveField("Lot size", String(inst.lot)) : null, inst ? liveField("Strike step", inst.step != null ? String(inst.step) : "from the chain") : null),
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:8px 16px 10px" }, "Open, high and low are of the minutes the relay holds for today, not the exchange's own figures."));
 }
 // Options: the whole chain of one expiry, live. A tap on a price opens the ticket for that contract (the ticket itself is further down, with the other paper tickets).
@@ -844,7 +850,7 @@ function liveChainView(u, data, chains, n) {
 	if (!exps.includes(L.exp)) L.exp = exps[0];
 	const ch = chains[u][L.exp], strikes = Object.keys(ch).map(Number).sort((a, b) => a - b);
 	const sq = data.quotes[n.spot] || data.quotes[n.fut] || {}, spot = sq.ltp, c = QB.conf(), T = QB.yearsTo(L.exp, Date.now());
-	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r), a = AN.atm(rows, spot, T, sq.chg), pc = AN.pcr(rows), mp = AN.maxPain(rows);
+	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(u, c)), a = AN.atm(rows, spot, T, sq.chg), pc = AN.pcr(rows), mp = AN.maxPain(rows);
 	let atm = 0;
 	if (fin(spot)) strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
 	// 25 strikes around the money. The window stays where it is while the money is well inside it, and moves only when the price nears an edge: rows never slide under a finger
@@ -1102,6 +1108,7 @@ async function renderLive() {
 	const B = S.bd;
 	S.lv.data = j; S.lv.at = Date.now();
 	B.data = j; B.at = S.lv.at;                                              // the chain views and the tickets price from this same snapshot
+	if (S.lv.sel && S.lv.view === "strat" && S.tab === "live") deskLoad().then((got) => { if (got && S.tab === "live" && S.lv.view === "strat" && !S.bd.editing) bdDraw(); });     // the desk's read, for the advisor
 	if (S.lv.sel && (S.lv.view === "opt" || S.lv.view === "strat") && Date.now() - B.newsAt > 60000) { B.newsAt = Date.now(); newsLoad(key).then(() => { if (S.tab === "live" && S.lv.view === "opt") liveDraw(); }); }       // the digest changes every ten minutes: once a minute is plenty
 	if (!S.lv.built) liveBuild();
 	liveDraw();
@@ -1121,7 +1128,7 @@ const QB = (() => {
 		limits: { risk_per_trade: 0.025, max_premium_outlay: 0.20, max_total_outlay: 0.5, max_lots: 10, max_open: 2, max_spread_pct: 0.06, max_margin: 0.5, credit_margin_per_lot: 30000, daily_loss_limit: 0.05 },
 		costs: { brokerage_per_order: 20, gst: 0.18, sebi_per_crore: 10, options: { stt_buy: 0, stt_sell: 0.0015, exchange: 0.0003503, stamp_buy: 0.00003 } },
 		slippage: { option_half_spread_pct: 0.012, option_min_half_spread: 0.10, option_tick: 0.05 },
-		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BANKNIFTY", "BHARTIARTL", "BHEL", "BSE", "DIVISLAB", "DIXON", "FINNIFTY", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "KOTAKBANK", "LAURUSLABS", "M&M", "MARUTI", "MIDCPNIFTY", "NIFTY", "PAYTM", "RELIANCE", "SBIN", "TCS"], allow_short_legs: true },     // the paper desk's gate (quantdesk/paper/risk.py)
+		paper: { risk_per_trade: 0.025, max_quote_age_s: 30, underlyings: ["AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BANKNIFTY", "BHARTIARTL", "BHEL", "BSE", "COPPER", "CRUDEOIL", "CRUDEOILM", "DIVISLAB", "DIXON", "EURINR", "FINNIFTY", "GBPINR", "GOLD", "GOLDM", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "JPYINR", "KOTAKBANK", "LAURUSLABS", "M&M", "MARUTI", "MIDCPNIFTY", "NATGASMINI", "NATURALGAS", "NIFTY", "PAYTM", "RELIANCE", "SBIN", "SILVER", "SILVERM", "TCS", "USDINR"], allow_short_legs: true },     // the paper desk's gate (quantdesk/paper/risk.py)
 		inst: { NIFTY: { lot: 65, step: 50 }, BANKNIFTY: { lot: 30, step: 100 }, FINNIFTY: { lot: 60, step: 50 }, MIDCPNIFTY: { lot: 120, step: 25 }, SENSEX: { lot: 20, step: 100 } },
 	};
 	const conf = () => {
@@ -1157,27 +1164,42 @@ const QB = (() => {
 		return (lo + hi) / 2;
 	}
 	// ---- statutory costs: the same formulas as quantdesk/execution/costs.py CostModel.fees for options (a test compares them) -------------------------
-	function fees(side, price, units, c) {
-		const turnover = units * price, o = c.costs.options, brokerage = c.costs.brokerage_per_order, sebi = turnover * c.costs.sebi_per_crore / 1e7;
+	function fees(side, price, units, c, inst) {
+		const turnover = units * price, o = (inst && inst.cost && c.costs[inst.cost]) || c.costs.options, brokerage = c.costs.brokerage_per_order, sebi = turnover * c.costs.sebi_per_crore / 1e7;      // MCX and currency options: their own schedule
 		const stt = turnover * (side > 0 ? o.stt_buy : o.stt_sell), exchange = turnover * o.exchange, stamp = side > 0 ? turnover * o.stamp_buy : 0, gst = c.costs.gst * (brokerage + exchange + sebi);
 		return brokerage + stt + exchange + sebi + stamp + gst;
 	}
-	function halfSpread(price, c) {                                      // the model's adverse slippage per unit (CostModel.slippage for options)
-		const s = c.slippage, half = Math.max(s.option_half_spread_pct * price, s.option_min_half_spread);
-		return Math.round(half / s.option_tick) * s.option_tick;
+	function halfSpread(price, c, inst) {                                // the model's adverse slippage per unit (CostModel.slippage for options); an MCX or currency option in its own ticks
+		const s = c.slippage, tick = inst && inst.tick > 0 ? inst.tick : s.option_tick, half = Math.max(s.option_half_spread_pct * price, inst && inst.tick > 0 ? 2 * inst.tick : s.option_min_half_spread);
+		return Math.round(half / tick) * tick;
 	}
+	const rateOf = (u, c) => { c = c || conf(); const i = c.inst[u]; return i && typeof i.r === "number" ? i.r : c.r; };       // an option on a future (MCX, currency) is priced off the future: rate 0
 	// ---- templates: [side, type, offset in strike steps from the at-the-money strike] -------------------------------------------------
+	// Each template also says WHEN to use it, for the advisor (advise): its direction (up, down, range, big), its volatility stance (long: wants volatility to rise or a
+	// move bigger than priced; short: is paid while little happens), its conviction (strong: a naked long option or a backspread; mild: a spread), and its AUTO v2 code
+	// (the desk's shadow record for the structure). A leg's side may be 2: two lots of that leg (a butterfly's body).
 	const TEMPLATES = {
-		long_call: { name: "Long call", view: "Bullish: wants a big move up", wide: false, legs: () => [[1, "CE", 0]] },
-		long_put: { name: "Long put", view: "Bearish: wants a big move down", wide: false, legs: () => [[1, "PE", 0]] },
-		long_straddle: { name: "Long straddle", view: "Big move, either way", wide: false, legs: () => [[1, "CE", 0], [1, "PE", 0]] },
-		long_strangle: { name: "Long strangle", view: "Big move, either way, cheaper", wide: true, legs: (w) => [[1, "CE", w], [1, "PE", -w]] },
-		bull_call_spread: { name: "Bull call spread", view: "Moderately bullish, capped", wide: true, legs: (w) => [[1, "CE", 0], [-1, "CE", w]] },
-		bear_put_spread: { name: "Bear put spread", view: "Moderately bearish, capped", wide: true, legs: (w) => [[1, "PE", 0], [-1, "PE", -w]] },
-		bull_put_spread: { name: "Bull put spread", view: "Not bearish: collects premium", wide: true, legs: (w) => [[-1, "PE", 0], [1, "PE", -w]] },
-		bear_call_spread: { name: "Bear call spread", view: "Not bullish: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [1, "CE", w]] },
-		iron_condor: { name: "Iron condor", view: "Stays in a range: collects premium", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 2 * w], [-1, "PE", -w], [1, "PE", -2 * w]] },
-		iron_butterfly: { name: "Iron butterfly", view: "Pins near the strike: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [-1, "PE", 0], [1, "CE", w], [1, "PE", -w]] },
+		long_call: { name: "Long call", view: "Bullish: wants a big move up", wide: false, legs: () => [[1, "CE", 0]], dir: "up", vol: "long", conv: "strong", code: "LC" },
+		long_put: { name: "Long put", view: "Bearish: wants a big move down", wide: false, legs: () => [[1, "PE", 0]], dir: "down", vol: "long", conv: "strong", code: "LP" },
+		long_straddle: { name: "Long straddle", view: "Big move, either way", wide: false, legs: () => [[1, "CE", 0], [1, "PE", 0]], dir: "big", vol: "long", conv: "strong", code: "LS" },
+		long_strangle: { name: "Long strangle", view: "Big move, either way, cheaper", wide: true, legs: (w) => [[1, "CE", w], [1, "PE", -w]], dir: "big", vol: "long", conv: "strong", code: "LG" },
+		bull_call_spread: { name: "Bull call spread", view: "Moderately bullish, capped", wide: true, legs: (w) => [[1, "CE", 0], [-1, "CE", w]], dir: "up", vol: "neutral", conv: "mild", code: "BCS" },
+		bear_put_spread: { name: "Bear put spread", view: "Moderately bearish, capped", wide: true, legs: (w) => [[1, "PE", 0], [-1, "PE", -w]], dir: "down", vol: "neutral", conv: "mild", code: "BRP" },
+		bull_put_spread: { name: "Bull put spread", view: "Not bearish: collects premium", wide: true, legs: (w) => [[-1, "PE", 0], [1, "PE", -w]], dir: "up", vol: "short", conv: "mild", code: "BPS" },
+		bear_call_spread: { name: "Bear call spread", view: "Not bullish: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [1, "CE", w]], dir: "down", vol: "short", conv: "mild", code: "BRC" },
+		iron_condor: { name: "Iron condor", view: "Stays in a range: collects premium", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 2 * w], [-1, "PE", -w], [1, "PE", -2 * w]], dir: "range", vol: "short", conv: "mild", code: "IC" },
+		iron_butterfly: { name: "Iron butterfly", view: "Pins near the strike: collects premium", wide: true, legs: (w) => [[-1, "CE", 0], [-1, "PE", 0], [1, "CE", w], [1, "PE", -w]], dir: "range", vol: "short", conv: "strong", code: "IF" },
+		call_butterfly: { name: "Call butterfly", view: "Pins near the strike: cheap, paid for", wide: true, legs: (w) => [[1, "CE", -w], [-2, "CE", 0], [1, "CE", w]], dir: "range", vol: "short", conv: "strong", code: "CBF" },
+		put_butterfly: { name: "Put butterfly", view: "Pins near the strike: cheap, paid for", wide: true, legs: (w) => [[1, "PE", w], [-2, "PE", 0], [1, "PE", -w]], dir: "range", vol: "short", conv: "strong", code: "PBF" },
+		bw_call_butterfly: { name: "Broken-wing call butterfly", view: "A drift up to a target, little lost below", wide: true, legs: (w) => [[1, "CE", 0], [-2, "CE", w], [1, "CE", 2 * w + 1]], dir: "up", vol: "short", conv: "mild", code: "BWC" },
+		bw_put_butterfly: { name: "Broken-wing put butterfly", view: "A drift down to a target, little lost above", wide: true, legs: (w) => [[1, "PE", 0], [-2, "PE", -w], [1, "PE", -2 * w - 1]], dir: "down", vol: "short", conv: "mild", code: "BWP" },
+		call_backspread: { name: "Call ratio backspread", view: "A big move up, partly paid for by a sold call", wide: true, legs: (w) => [[-1, "CE", 0], [2, "CE", w]], dir: "up", vol: "long", conv: "strong", code: "CRB" },
+		put_backspread: { name: "Put ratio backspread", view: "A big move down, partly paid for by a sold put", wide: true, legs: (w) => [[-1, "PE", 0], [2, "PE", -w]], dir: "down", vol: "long", conv: "strong", code: "PRB" },
+		// calendars and diagonals: a leg marked "x" is in the NEXT expiry (owner, 14 Nov 2026: "Build Calendar and diagonal spreads")
+		call_calendar: { name: "Call calendar", view: "Sits near the strike into the near expiry; the later call keeps its value", wide: false, legs: () => [[-1, "CE", 0], [1, "CE", 0, "x"]], dir: "range", vol: "short", conv: "mild", code: "CAL", multi: true },
+		put_calendar: { name: "Put calendar", view: "Sits near the strike into the near expiry; the later put keeps its value", wide: false, legs: () => [[-1, "PE", 0], [1, "PE", 0, "x"]], dir: "range", vol: "short", conv: "mild", code: "PCAL", multi: true },
+		call_diagonal: { name: "Call diagonal", view: "A slow drift up to the sold strike", wide: true, legs: (w) => [[-1, "CE", w], [1, "CE", 0, "x"]], dir: "up", vol: "short", conv: "mild", code: "DGC", multi: true },
+		put_diagonal: { name: "Put diagonal", view: "A slow drift down to the sold strike", wide: true, legs: (w) => [[-1, "PE", -w], [1, "PE", 0, "x"]], dir: "down", vol: "short", conv: "mild", code: "DGP", multi: true },
 	};
 	// ---- your own legs: any number (up to MAX_CUSTOM_LEGS, a bound on the arithmetic only), any strike on the board, buy or sell, call or put, each with a size multiple of the base lots ----------
 	const CUSTOM = { name: "Custom structure", view: "Your own legs: any number, any strike, any ratio", wide: false };
@@ -1198,18 +1220,26 @@ const QB = (() => {
 		return { legs: [...merged.values()] };
 	}
 	// legs for a template: strikes = sorted strikes on the board for the expiry; names = {strike: {CE: name, PE: name}}. Returns {legs} or {error}.
-	function legsFor(id, strikes, spot, names, width) {
+	// `next` (calendars and diagonals): {strikes, names, T} of the next expiry, where a leg marked "x" goes
+	function legsFor(id, strikes, spot, names, width, next) {
 		const t = TEMPLATES[id];
 		if (!t) return { error: "Unknown strategy." };
 		if (!strikes.length || !(spot > 0)) return { error: "No strikes or no price on the board for this underlying yet." };
-		let atm = 0;
-		strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
+		if (t.multi && !(next && next.strikes && next.strikes.length && next.T > 0)) return { error: "A calendar or diagonal needs the next expiry's chain on the board too." };
+		const atmOf = (ks) => ks.reduce((b, k, i) => (Math.abs(k - spot) < Math.abs(ks[b] - spot) ? i : b), 0);
+		const atm = atmOf(strikes), atmN = next && next.strikes ? atmOf(next.strikes) : 0;
 		const w = Math.max(1, Math.round(width || 1)), legs = [];
-		for (const [side, type, off] of t.legs(w)) {
+		for (const [side, type, off, x] of t.legs(w)) {
+			if (x === "x") {
+				const k = next.strikes[atmN + off], name = k != null && next.names[k] ? next.names[k][type] : null;
+				if (k == null || !name) return { error: `The next expiry's ${type} at ${off >= 0 ? "+" : ""}${off} strikes is not on the board.` };
+				legs.push({ side: Math.sign(side), type, strike: k, name, ...(Math.abs(side) > 1 ? { mult: Math.abs(side) } : {}), T: next.T });
+				continue;
+			}
 			const k = strikes[atm + off];
 			const name = k != null && names[k] ? names[k][type] : null;
 			if (k == null || !name) return { error: `The ${type} at ${off >= 0 ? "+" : ""}${off} strikes is not on the board: pick a smaller width.` };
-			legs.push({ side, type, strike: k, name });
+			legs.push(Math.abs(side) > 1 ? { side: Math.sign(side), type, strike: k, name, mult: Math.abs(side) } : { side, type, strike: k, name });
 		}
 		return { legs, atm: strikes[atm] };
 	}
@@ -1229,15 +1259,16 @@ const QB = (() => {
 	// ---- the analysis ----------------------------------------------------------------------------------------------------------------
 	// spec: {u, legs:[{side,type,strike,name}], quotes:{name:{ltp,bid,ask,oi}}, spot, T (years), lots, c (config, optional)}
 	function analyze(spec) {
-		const c = spec.c || conf(), inst = c.inst[spec.u] || { lot: 1, step: 1 }, lots = Math.max(1, Math.round(spec.lots || 1)), r = c.r;
+		const c = spec.c || conf(), inst = c.inst[spec.u] || { lot: 1, step: 1 }, lots = Math.max(1, Math.round(spec.lots || 1)), r = rateOf(spec.u, c);
 		const lot = inst.lots && typeof inst.lots === "object" ? inst.lots[spec.exp] : inst.lot;          // a stock's lot belongs to the contract: NSE revises it from a given expiry
 		const legs = spec.legs.map((l) => {
 			const e = entry(l, spec.quotes[l.name]);
 			const mid = e.src === "book" ? (e.bid + e.ask) / 2 : (spec.quotes[l.name] || {}).ltp;
-			const iv = impliedVol(l.type, mid, spec.spot, l.strike, spec.T, r);
+			const T = Number.isFinite(l.T) && l.T > spec.T ? l.T : spec.T;                             // a calendar's later leg has its own time to run
+			const iv = impliedVol(l.type, mid, spec.spot, l.strike, T, r);
 			const spread = e.src === "book" ? (e.ask - e.bid) / ((e.ask + e.bid) / 2) : NaN;
 			const mult = Number.isInteger(l.mult) && l.mult >= 1 ? l.mult : 1;
-			return { ...l, mult, units: lots * lot * mult, lots: lots * mult, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
+			return { ...l, T, mult, units: lots * lot * mult, lots: lots * mult, px: e.px, src: e.src, bid: e.bid, ask: e.ask, age: e.age + (spec.ageAdd || 0), iv, spread };
 		});
 		const out = { legs, lots, lot, errors: [], checks: [], paperChecks: [], ok: false, paperOk: false };
 		if (!(Number.isInteger(lot) && lot > 0)) { out.errors.push(`${spec.u} has no verified lot size for the ${spec.exp || "chosen"} expiry, so this cannot be priced or sent.`); return out; }
@@ -1250,14 +1281,24 @@ const QB = (() => {
 		if (!out.definedRisk) { out.errors.push("This would leave a short call uncovered (unlimited loss). The builder only makes defined-risk structures."); return out; }
 		out.premium = legs.reduce((a, l) => a + l.side * l.units * l.px, 0);                               // + debit paid, - credit received
 		const ks = [...new Set(legs.map((l) => l.strike))].sort((a, b) => a - b), pts = [0, ...ks], far = (ks[ks.length - 1] || spec.spot) * 3;
-		const pay = (S) => legs.reduce((a, l) => a + legPay(l, S), 0), vals = [...pts, far].map((S) => pay(S));
+		const later = (l) => l.T > spec.T + 1e-9;
+		out.multi = legs.some(later);                                                                      // a calendar or diagonal: judged at the near expiry
+		if (out.multi && legs.some((l) => later(l) && l.side < 0)) { out.errors.push("A calendar's sale must be in the near expiry, covered by the later purchase (a reverse calendar's cover expires first)."); return out; }
+		// at the near expiry: the near legs at their value then; a later leg at its Black-Scholes value for the time it has left (the curve), or at the LEAST it can be
+		// worth (the worst case, as the paper gate judges it: a call S(1 - 0.02 t) - K, a put K(1 - 0.10 t) - S)
+		const floorOf = (l, S) => { const t = l.T - spec.T; return l.type === "CE" ? Math.max(0, S * (1 - 0.02 * t) - l.strike) : Math.max(0, l.strike * (1 - 0.10 * t) - S); };
+		const valOf = (l, S) => { const t = l.T - spec.T; return isFinite(l.iv) ? bs(l.type, S, l.strike, t, l.iv, r) : floorOf(l, S); };
+		const pay = out.multi ? (S) => legs.reduce((a, l) => a + (later(l) ? l.side * l.units * (valOf(l, S) - l.px) : legPay(l, S)), 0) : (S) => legs.reduce((a, l) => a + legPay(l, S), 0);
+		const payW = out.multi ? (S) => legs.reduce((a, l) => a + (later(l) ? l.side * l.units * (floorOf(l, S) - l.px) : legPay(l, S)), 0) : pay;
+		const wpts = out.multi ? [...pts, ...legs.filter(later).map((l) => (l.type === "CE" ? l.strike / (1 - 0.02 * (l.T - spec.T)) : l.strike * (1 - 0.10 * (l.T - spec.T)))), far] : [...pts, far];
+		const vals = [...pts, far].map((S) => pay(S));
 		const tailSlope = callSlope;                                                                       // beyond the highest strike the payoff slope is the net call position
 		out.unlimitedProfit = tailSlope > 0;
-		out.maxProfit = out.unlimitedProfit ? Infinity : Math.max(...vals);
-		out.maxLoss = -Math.min(...vals);
+		out.maxProfit = out.unlimitedProfit ? Infinity : out.multi ? Math.max(...Array.from({ length: 241 }, (_, i) => pay(spec.spot * (0.5 + i / 240)))) : Math.max(...vals);
+		out.maxLoss = -Math.min(...wpts.map((S) => payW(S)));
 		if (out.maxLoss < 0) { out.errors.push("This would be a guaranteed profit at every price, which is a bad quote rather than a trade. Check the prices on the board."); return out; }
 		const be = [];
-		const bp = [...pts, far];
+		const bp = out.multi ? Array.from({ length: 481 }, (_, i) => spec.spot * (0.5 + i / 480)) : [...pts, far];      // a calendar's curve needs a fine grid
 		for (let i = 0; i + 1 < bp.length; i++) {
 			const a = bp[i], b = bp[i + 1], fa = pay(a), fb = pay(b);
 			if (fa === 0 && i === 0) be.push(a); else if ((fa < 0 && fb > 0) || (fa > 0 && fb < 0)) be.push(a + (b - a) * (0 - fa) / (fb - fa));
@@ -1266,11 +1307,11 @@ const QB = (() => {
 		const lo = spec.spot * 0.85, hi = spec.spot * 1.15, n = 121;
 		out.grid = Array.from({ length: n }, (_, i) => lo + (hi - lo) * i / (n - 1));
 		out.expiry = out.grid.map(pay);
-		out.today = out.grid.map((S) => legs.reduce((a, l) => a + l.side * l.units * ((isFinite(l.iv) ? bs(l.type, S, l.strike, spec.T, l.iv, r) : (l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S))) - l.px), 0));
-		out.greeks = legs.reduce((a, l) => { const g = greeks(l.type, spec.spot, l.strike, spec.T, isFinite(l.iv) ? l.iv : 0.2, r); const m = l.side * l.units; return { delta: a.delta + m * g.delta, gamma: a.gamma + m * g.gamma, theta: a.theta + m * g.theta, vega: a.vega + m * g.vega }; }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
-		out.fees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c) + fees(-l.side, l.px, l.units, c), 0);       // in and out at the entry price: the statutory part of a round trip
-		out.exitSpread = legs.reduce((a, l) => a + l.units * (isFinite(l.spread) ? (l.spread * l.px) / 2 : halfSpread(l.px, c)), 0);   // crossing the spread again on the way out
-		out.entryFees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c), 0);                       // the entry leg only: the paper gate counts "the whole premium plus fees"
+		out.today = out.grid.map((S) => legs.reduce((a, l) => a + l.side * l.units * ((isFinite(l.iv) ? bs(l.type, S, l.strike, l.T, l.iv, r) : (l.type === "CE" ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S))) - l.px), 0));
+		out.greeks = legs.reduce((a, l) => { const g = greeks(l.type, spec.spot, l.strike, l.T, isFinite(l.iv) ? l.iv : 0.2, r); const m = l.side * l.units; return { delta: a.delta + m * g.delta, gamma: a.gamma + m * g.gamma, theta: a.theta + m * g.theta, vega: a.vega + m * g.vega }; }, { delta: 0, gamma: 0, theta: 0, vega: 0 });
+		out.fees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c, inst) + fees(-l.side, l.px, l.units, c, inst), 0);       // in and out at the entry price: the statutory part of a round trip
+		out.exitSpread = legs.reduce((a, l) => a + l.units * (isFinite(l.spread) ? (l.spread * l.px) / 2 : halfSpread(l.px, c, inst)), 0);   // crossing the spread again on the way out
+		out.entryFees = legs.reduce((a, l) => a + fees(l.side, l.px, l.units, c, inst), 0);                       // the entry leg only: the paper gate counts "the whole premium plus fees"
 		out.cost = out.fees + out.exitSpread;
 		out.margin = out.premium < 0 ? c.limits.credit_margin_per_lot * lots : 0;                         // a credit structure ties up margin (config estimate per lot); a debit one only the premium
 		out.risk = out.maxLoss + out.entryFees;                                                            // worst loss plus the fees to get in, as the paper gate counts it
@@ -1318,7 +1359,7 @@ const QB = (() => {
 	// what the structure would be worth under a what-if, against what it cost to open (theoretical value at each leg's own implied volatility shifted by `dvol` (absolute, 0.02 = two vol points), spot moved by
 	// `move` (0.01 = +1%), and `days` closer to expiry; exit spread and fees are NOT included). At expiry this is the payoff, to the paisa.
 	function scenario(a, spec, s) {
-		const c = spec.c || conf(), r = c.r, S = spec.spot * (1 + s.move), T = Math.max(0, spec.T - s.days / 365);
+		const c = spec.c || conf(), r = rateOf(spec.u, c), S = spec.spot * (1 + s.move), T = Math.max(0, spec.T - s.days / 365);
 		let v = 0;
 		for (const l of a.legs) {
 			const iv = Number.isFinite(l.iv) ? Math.max(0.01, l.iv + s.dvol) : NaN;
@@ -1327,7 +1368,154 @@ const QB = (() => {
 		}
 		return v;
 	}
-	return { conf, bs, greeks, impliedVol, fees, halfSpread, TEMPLATES, CUSTOM, MAX_CUSTOM_LEGS, customLegs, legsFor, entry, analyze, scenario, suggestLots, yearsTo, ncdf, legPay };
+	// ---- the advisor: which structure, when, and why (owner, 13 Nov 2026: "The strategy builder must have access to the every strategy which it can reason it out when
+	// to use which and create it's own if required") ----------------------------------------------------------------------------------------------------
+	// ctx: {view: up|down|range|big|null (the desk's read, or yours), vol: rich|cheap|mid|null (implied against realized), event: bool (the event regime), eve: bool (expiry
+	// tomorrow), pUp: number|null (the desk's P(up)), trendT: number|null (the Kalman trend's t), record: {code: {mu, se, n}} (AUTO v2's shadow record by structure),
+	// extra: [{id, name, dir, vol, conv, code, rows}] (the desk's own inventions)}. Every structure is scored by the textbook's reasons, each one written down, and ranked.
+	const ADV = { fit: 3, near: 1.5, against: -4, vol: 2, event: -5, eventLong: 1, eve: 1, conv: 1, trend: 1, recordK: 5, recordMax: 2, recordMinN: 8 };
+	function advise(ctx) {
+		ctx = ctx || {};
+		const list = [...Object.entries(TEMPLATES).map(([id, t]) => ({ id, ...t })), ...((ctx.extra || []).map((x) => ({ ...x, invented: true })))];
+		const out = [];
+		for (const t of list) {
+			let score = 0;
+			const why = [], against = [];
+			const add = (pts, text) => { score += pts; (pts >= 0 ? why : against).push(text); };
+			const v = ctx.view;
+			if (v) {
+				if (t.dir === v) add(ADV.fit, `fits the view (${v === "big" ? "a big move either way" : v === "range" ? "stays in a range" : v})`);
+				else if (v === "range" && t.vol === "short" && (t.dir === "up" || t.dir === "down")) add(ADV.near, "a credit spread also wins if the price stays put");
+				else if ((v === "up" || v === "down") && t.dir === "big") add(ADV.near / 3, `a move either way includes ${v}`);
+				else if ((v === "up" && t.dir === "down") || (v === "down" && t.dir === "up") || (v === "range" && t.dir === "big") || (v === "big" && t.dir === "range")) add(ADV.against, "against the view");
+			}
+			if (ctx.vol === "rich" && t.vol !== "neutral") add(t.vol === "short" ? ADV.vol : -ADV.vol, t.vol === "short" ? "options are dear against realized volatility: selling them is paid" : "options are dear: buying them pays up for the move");
+			if (ctx.vol === "cheap" && t.vol !== "neutral") add(t.vol === "long" ? ADV.vol : -ADV.vol, t.vol === "long" ? "options are cheap against realized volatility: buying them is cheap" : "options are cheap: selling them is not paid enough");
+			if (ctx.event && t.vol === "short") add(ADV.event, "an event is under way or priced: no volatility is sold into it (the desk's rule)");
+			if (ctx.event && t.vol === "long") add(ADV.eventLong, "an event can move the price further than usual");
+			if (ctx.eve && t.vol === "short" && t.dir === "range") add(ADV.eve, "expiry tomorrow: the premium decays fastest now");
+			if (ctx.eve && t.vol === "long") add(-ADV.eve, "expiry tomorrow: a bought option loses its value fastest now");
+			if (typeof ctx.pUp === "number" && (t.dir === "up" || t.dir === "down")) {
+				const c = Math.abs(ctx.pUp - 0.5);
+				if (c >= 0.2 && t.conv === "strong") add(ADV.conv, `strong conviction (P(up) ${ctx.pUp.toFixed(2)}): an uncapped structure`);
+				if (c < 0.12 && t.conv === "mild") add(ADV.conv, `mild conviction (P(up) ${ctx.pUp.toFixed(2)}): a capped structure risks less`);
+			}
+			if (typeof ctx.trendT === "number" && Math.abs(ctx.trendT) >= 2 && (t.dir === "up" || t.dir === "down")) {
+				const agree = (ctx.trendT > 0) === (t.dir === "up");
+				add(agree ? ADV.trend : -ADV.trend, `the Kalman trend ${agree ? "agrees" : "disagrees"} (t ${ctx.trendT > 0 ? "+" : ""}${ctx.trendT.toFixed(1)})`);
+			}
+			const rec = ctx.record && t.code ? ctx.record[t.code] : null;
+			if (rec && rec.n >= ADV.recordMinN && typeof rec.mu === "number") {
+				const pts = Math.max(-ADV.recordMax, Math.min(ADV.recordMax, rec.mu * ADV.recordK));
+				add(pts, `the desk's shadow record for ${t.invented ? "this invention" : "this structure"}: ${rec.mu >= 0 ? "+" : ""}${rec.mu.toFixed(2)}R a trade over ${rec.n} trades`);
+			}
+			out.push({ id: t.id, name: t.name, score: Math.round(score * 100) / 100, why, against, invented: !!t.invented, rows: t.rows || null, wide: !!t.wide });
+		}
+		return out.sort((a, b) => b.score - a.score);
+	}
+	// ---- the designer: a structure of its own for a view, when no written one fits well -----------------------------------------------------------------
+	// It mutates the written structures that fit the view (move a strike, add a wing, drop, double or flip a leg), keeps what is DEFINED RISK (no net short call),
+	// at most 4 legs and 6 lots, priced on the board, and ranks by what it pays IF THE VIEW IS RIGHT, per rupee it can lose, after costs. "Right" is a zone of prices at
+	// expiry built from the market's own expected move (em, from the at-the-money volatility): up = S to S + 1.5 em, down the mirror, range = S +- 0.5 em, big = beyond 1 em
+	// either side (to 2 em). The opposite zone is "wrong", and what the design does there is shown too. Seeded: the same board gives the same designs.
+	const ZONES = { up: [[0, 1.5]], down: [[-1.5, 0]], range: [[-0.5, 0.5]], big: [[-2, -1], [1, 2]] };
+	const OPPOSITE = { up: "down", down: "up", range: "big", big: "range" };
+	function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+	const gcd = (a, b) => (b ? gcd(b, a % b) : Math.abs(a));
+	function canon(rows) {
+		const m = new Map();
+		for (const r of rows) { const k = r.type + ":" + r.off; m.set(k, (m.get(k) || 0) + r.side); }
+		let g = 0;
+		for (const q of m.values()) g = gcd(g, Math.abs(q));
+		return g ? [...m.entries()].filter(([, q]) => q).map(([k, q]) => { const [type, off] = k.split(":"); return { side: q / g, type, off: +off }; }).sort((x, y) => (x.type + x.off).localeCompare(y.type + y.off)) : [];
+	}
+	function mutate(rows, rnd, span) {
+		const r = rows.map((x) => ({ ...x })), pick = (n) => Math.floor(rnd() * n), op = ["shift", "shift", "wing", "drop", "double", "flip", "add"][pick(7)];
+		if (op === "shift" && r.length) { const i = pick(r.length); r[i].off += rnd() < 0.5 ? -1 : 1; }
+		else if (op === "wing") { const sold = r.filter((x) => x.side < 0); if (sold.length) { const x = sold[pick(sold.length)]; r.push({ side: 1, type: x.type, off: x.off + (x.type === "CE" ? 1 : -1) * (1 + pick(2)) }); } }
+		else if (op === "drop" && r.length > 1) r.splice(pick(r.length), 1);
+		else if (op === "double" && r.length) { const i = pick(r.length); r[i].side *= 2; }
+		else if (op === "flip" && r.length) { const i = pick(r.length); r[i].side = -r[i].side; }
+		else r.push({ side: rnd() < 0.5 ? 1 : -1, type: rnd() < 0.5 ? "CE" : "PE", off: pick(5) - 2 });
+		return canon(r.filter((x) => Math.abs(x.off) <= span));                                         // off the board first, then the common size divided out
+	}
+	// the written structure a design turns out to be (its legs, at some width, are the design's), or null: a design of its own
+	function knownAs(rows) {
+		const key = JSON.stringify(canon(rows));
+		for (const [id, t] of Object.entries(TEMPLATES)) if (!t.multi) for (const w of t.wide ? [1, 2, 3, 4, 5, 6] : [1]) {
+			if (JSON.stringify(canon(t.legs(w).map(([side, type, off]) => ({ side, type, off })))) === key) return { id, width: w, name: t.name + (t.wide ? `, ${w} strike${w === 1 ? "" : "s"} wide` : "") };
+		}
+		return null;
+	}
+	const FIT_WELL = 3;                                                                                  // an advisor score under this: nothing fits the moment well
+	function verdict(ranked) {
+		const best = ranked && ranked[0];
+		if (!best || best.score < FIT_WELL) return { stand_aside: true, text: "Nothing fits the moment well: the reasons for and against cancel out. Standing aside is a position too; or design one for a view of your own." };
+		return { stand_aside: false, text: `${best.name} fits best now: ${best.why.slice(0, 2).join("; ")}.` };
+	}
+	function design(spec) {
+		const { view, strikes, names, spot, em } = spec, zones = ZONES[view];
+		if (!zones || !(em > 0) || !(spot > 0) || !strikes.length) return { error: "Pick a view, and wait for a price and a volatility on the board." };
+		let atm = 0;
+		strikes.forEach((k, i) => { if (Math.abs(k - spot) < Math.abs(strikes[atm] - spot)) atm = i; });
+		const span = Math.min(6, Math.max(atm, strikes.length - 1 - atm)), rnd = rng(spec.seed || 7);
+		const parents = [];
+		for (const [, t] of Object.entries(TEMPLATES)) if (t.dir === view && !t.multi) for (const w of t.wide ? [1, 2, 3] : [1]) parents.push(canon(t.legs(w).map(([side, type, off]) => ({ side, type, off }))));
+		if (!parents.length) return { error: "No structure to start from." };
+		const grid = (zs) => { const pts = []; for (const [a, b] of zs) for (let i = 0; i <= 12; i++) pts.push(spot + em * (a + (b - a) * i / 12)); return pts; };
+		const right = grid(zones), rightEach = zones.map((z) => grid([z])), wrong = grid(ZONES[OPPOSITE[view]]), seen = new Set(), found = [];
+		const tries = spec.tries || 800;
+		for (let n = 0; n < tries; n++) {
+			let rows = parents[Math.floor(rnd() * parents.length)];
+			for (let k = 0, m = 1 + Math.floor(rnd() * 3); k < m; k++) rows = mutate(rows, rnd, span);
+			if (!rows.length || rows.length > 4 || rows.reduce((a, x) => a + Math.abs(x.side), 0) > 6 || !rows.some((x) => x.side > 0)) continue;
+			if (rows.filter((x) => x.type === "CE").reduce((a, x) => a + x.side, 0) < 0) continue;              // a net short call: unlimited loss
+			const key = JSON.stringify(rows);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const legs = [];
+			let ok = true;
+			for (const x of rows) {
+				const kk = strikes[atm + x.off], name = kk != null && names[kk] ? names[kk][x.type] : null;
+				if (!name) { ok = false; break; }
+				legs.push({ side: Math.sign(x.side), type: x.type, strike: kk, name, mult: Math.abs(x.side) });
+			}
+			if (!ok) continue;
+			const a = analyze({ u: spec.u, exp: spec.exp, legs, quotes: spec.quotes, spot, spotAge: spec.spotAge, T: spec.T, lots: 1, c: spec.c });
+			if (a.errors.length || !(a.maxLoss > 0) || (spec.budget && a.maxLoss > spec.budget)) continue;
+			const pay = (S) => a.legs.reduce((acc, l) => acc + legPay(l, S), 0) - (a.cost || 0);
+			const avg = (pts) => pts.reduce((acc, S) => acc + pay(S), 0) / pts.length;
+			const avgRight = Math.min(...rightEach.map(avg)), avgWrong = avg(wrong);                  // "either way" must pay on BOTH sides: its worse side counts
+			if (!(avgRight > 0)) continue;
+			const shape = right.concat(wrong).map((S) => Math.round(pay(S) / a.maxLoss * 50)).join(",");
+			if (found.some((f) => f.shape === shape)) continue;
+			found.push({ shape, rows: legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: l.mult })), known: knownAs(rows), score: avgRight / a.maxLoss, avgRight, avgWrong, maxLoss: a.maxLoss,
+				maxProfit: a.unlimitedProfit ? Infinity : a.maxProfit, premium: a.premium, breakevens: a.breakevens,
+				text: legs.map((l) => `${l.side > 0 ? "buy" : "sell"} ${l.mult} ${num0(l.strike)} ${l.type === "CE" ? "call" : "put"}${l.mult > 1 ? "s" : ""}`).join(", ") });
+		}
+		found.sort((x, y) => y.score - x.score);
+		return { designs: found.slice(0, spec.top || 3).map(({ shape, ...rest }) => rest), tried: seen.size };
+	}
+	const num0 = (x) => (Math.round(x * 100) / 100).toString();
+	// AUTO v2's read of one underlying (the paper runner's lab summary: state rows, families, inventions) as the advisor's context, with what it saw in words.
+	// state row: [view, vol, iv/rv, eve, read P(up), read why, event, hmm, change point, trend t, tail, news P(up), news why]
+	function deskContext(lab, u) {
+		const v = lab && lab.state && Array.isArray(lab.state[u]) ? lab.state[u] : null;
+		const record = {};
+		for (const f of (lab && Array.isArray(lab.families) ? lab.families : [])) if (f && f.struct) record[f.struct] = { mu: f.mu_r, se: f.se, n: f.trades };
+		const extra = (lab && Array.isArray(lab.inventions) ? lab.inventions : []).filter((x) => x && Array.isArray(x.legs) && x.legs.length).map((x) => ({
+			id: "inv:" + x.code, name: x.name, dir: x.view === "flat" ? "range" : x.view, vol: "neutral", conv: "mild", code: x.code,
+			rows: x.legs.map(([q, r, o]) => ({ side: Math.sign(q), type: r, off: o, mult: Math.abs(q) })) }));
+		for (const x of (lab && Array.isArray(lab.inventions) ? lab.inventions : [])) if (x && x.code) record[x.code] = { mu: x.mu_r, n: x.trades };
+		if (!v) return { ctx: { record, extra }, seen: [] };
+		const event = !!v[6], view = v[0] === "up" ? "up" : v[0] === "down" ? "down" : v[0] === "flat" ? "range" : event ? "big" : null;
+		const pUp = typeof v[4] === "number" ? v[4] : typeof v[11] === "number" ? v[11] : null;
+		const seen = [view ? `view ${v[0] || "a big move (event)"}` : "no view", v[1] && v[1] !== "mid" ? `volatility ${v[1]}${typeof v[2] === "number" ? ` (${v[2].toFixed(2)}x realized)` : ""}` : "volatility fair",
+			v[3] ? "expiry tomorrow" : null, event ? "event regime" : null, typeof pUp === "number" ? `P(up) ${pUp.toFixed(2)}` : null,
+			typeof v[9] === "number" ? `Kalman trend t ${v[9] > 0 ? "+" : ""}${v[9].toFixed(1)}` : null, v[7] ? `HMM ${v[7]}` : null].filter(Boolean);
+		return { ctx: { view, vol: v[1] === "rich" || v[1] === "cheap" ? v[1] : "mid", event, eve: !!v[3], pUp, trendT: typeof v[9] === "number" ? v[9] : null, record, extra }, seen };
+	}
+	return { conf, bs, greeks, impliedVol, fees, halfSpread, rateOf, TEMPLATES, CUSTOM, MAX_CUSTOM_LEGS, customLegs, legsFor, entry, analyze, scenario, suggestLots, yearsTo, ncdf, legPay, advise, verdict, design, knownAs, deskContext, ZONES, FIT_WELL };
 })();
 /* @@builder:end */
 
@@ -1424,10 +1612,10 @@ const AN = (() => {
 		return tot > 0 ? prob / tot : null;
 	}
 	const VIEWS = {
-		up: { name: "Up", ids: ["long_call", "bull_call_spread", "bull_put_spread"] },
-		down: { name: "Down", ids: ["long_put", "bear_put_spread", "bear_call_spread"] },
-		range: { name: "Stays in a range", ids: ["iron_condor", "iron_butterfly", "bull_put_spread", "bear_call_spread"] },
-		big: { name: "Big move, either way", ids: ["long_straddle", "long_strangle"] },
+		up: { name: "Up", ids: ["long_call", "bull_call_spread", "bull_put_spread", "bw_call_butterfly", "call_backspread", "call_diagonal"] },
+		down: { name: "Down", ids: ["long_put", "bear_put_spread", "bear_call_spread", "bw_put_butterfly", "put_backspread", "put_diagonal"] },
+		range: { name: "Stays in a range", ids: ["iron_condor", "iron_butterfly", "call_butterfly", "put_butterfly", "call_calendar", "put_calendar", "bull_put_spread", "bear_call_spread"] },
+		big: { name: "Big move, either way", ids: ["long_straddle", "long_strangle", "call_backspread", "put_backspread"] },
 	};
 	// ideas for a view: every structure that fits it, at widths 1 to 4 strikes, each analysed on the live prices and ranked. analyzeFn(id, width) -> the builder's analysis (or {errors}).
 	function ideas(view, analyzeFn, ctx) {
@@ -1597,7 +1785,7 @@ const NW = (() => {
 	const isIndex = (sym) => ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY"].includes(sym);
 	// today's move of a name on the board (spot, else its future) and how many of its options are trading hard (volume against open interest, fresh quotes)
 	function boardOf(sym, quotes, hot) {
-		const q = quotes[sym] || quotes[sym + "-FUT"] || null;
+		const q = quotes[sym] || ["-FUT", "-MCX", "-CDS", "-BFO"].map((x) => quotes[sym + x]).find(Boolean) || null;     // spot, else its future (NSE, MCX, currency, BSE)
 		return { sym, chg: q ? fnum(q.chg) : null, price: q ? fnum(q.ltp) : null, hot: (hot[sym] || []).length, hotTop: (hot[sym] || [])[0] || null };
 	}
 	// "the market cared": the name moved at least 1% (an index 0.5%) or its options are trading unusually hard
@@ -1642,10 +1830,10 @@ function bdChains(data) {                                                // the 
 // ---- the market read and the ideas for a view, above the builder ----------------------------------------------------------------------------
 function bdRead(ctx) {
 	const { B, data, chains, ch, exps, spot, T, sq, c } = ctx;
-	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r), a = AN.atm(rows, spot, T, sq.chg);
+	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(B.u, c)), a = AN.atm(rows, spot, T, sq.chg);
 	if (!a || a.iv == null) return h("div", { class: "note" }, "Not enough two-sided prices around the money yet to read the market.");
 	const sk = AN.skew(rows, spot, 3), pc = AN.pcr(rows), mp = AN.maxPain(rows), w = AN.walls(rows, spot, 2);
-	const next = exps[exps.indexOf(B.exp) + 1], tm = next ? AN.term(rows, AN.chainRows(chains[B.u][next], data.quotes, spot, QB.yearsTo(next, Date.now()), c.r), spot, T, QB.yearsTo(next, Date.now())) : null;
+	const next = exps[exps.indexOf(B.exp) + 1], tm = next ? AN.term(rows, AN.chainRows(chains[B.u][next], data.quotes, spot, QB.yearsTo(next, Date.now()), QB.rateOf(B.u, c)), spot, T, QB.yearsTo(next, Date.now())) : null;
 	const ages = rows.filter((r) => r.k === a.k).flatMap((r) => [r.ce && r.ce.age, r.pe && r.pe.age]).filter((x) => x != null), oldest = ages.length ? Math.max(...ages) + Math.max(0, (Date.now() - (B.at || Date.now())) / 1000) : null;
 	const kv = (k, v, note) => h("div", { class: "row", style: "justify-content:space-between;padding:7px 16px;border-top:1px solid var(--line);gap:12px;align-items:flex-start" }, h("span", { class: "f3" }, k), h("span", { style: "text-align:right" }, h("b", { class: "mono" }, v), note ? h("div", { class: "f3", style: "font-size:11.5px" }, note) : null));
 	const pct = (x, d = 2) => (x == null ? "—" : x.toFixed(d) + "%"), lv = (list) => (list.length ? list.map((x) => num(x.k, 0)).join(", ") : "—");
@@ -1664,8 +1852,49 @@ function bdRead(ctx) {
 			un.map((x) => h("div", { class: "row", style: "justify-content:space-between;font-size:12.5px;padding:2px 0" }, h("span", { class: "mono" }, `${x.u} ${x.e} ${num(x.k, 0)} ${x.t}`), h("span", { class: "mono f3" }, `${x.ratio.toFixed(1)}x · ${signed(x.chg || 0)}%`)))) : null,
 		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 10px" }, "What the options imply and what is open: counts and prices, not forecasts. Volatility is the market's own, from the mid of the bid and the offer."));
 }
+// ---- the advisor and the designer (QB.advise, QB.design) ------------------------------------------------------------------------------------------
+function deskLab() {                                                          // AUTO v2's read of the market, from the paper runner's state (deskLoad fetches it): display only
+	return (S.pp.data && S.pp.data.summary && S.pp.data.summary.lab) || null;
+}
+function bdAdvisor(cx) {
+	const { B, strikes, names, spot, T, c, data, sq, rows } = cx;
+	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
+	const dc = QB.deskContext(deskLab(), B.u), ctx = { ...dc.ctx, view: B.advView ? B.advView : dc.ctx.view };
+	const box = h("div", { class: "grp" },
+		h("div", { class: "f3", style: "font-size:12.5px;line-height:1.55;padding:8px 16px 4px" }, dc.seen.length ? `What the desk sees for ${B.u}: ${dc.seen.join(" · ")}.`
+			: `The desk has no read of ${B.u} yet${store("qd.livekey") ? " (AUTO v2 reads an underlying once its options are on the board)" : " (enter the live key on the Paper tab to bring it in)"}. Pick a view below and the advisor reasons from that.`),
+		h("div", { class: "chips", style: "padding:4px 16px" }, [chip("The desk's read", !B.advView, () => { B.advView = null; bdDraw(); }),
+			...Object.entries(AN.VIEWS).map(([id, v]) => chip(v.name, B.advView === id, () => { B.advView = id; B.design = null; bdDraw(); }))]));
+	const ranked = QB.advise(ctx), verdict = QB.verdict(ranked);
+	put(box, h("div", { class: "note", style: "margin:6px 16px;padding-top:4px" }, verdict.text));
+	const atmIdx = strikes.reduce((b, k, i) => (Math.abs(k - spot) < Math.abs(strikes[b] - spot) ? i : b), 0);
+	const buildRows = (rws) => { B.custom = rws.map((x) => ({ side: x.side, type: x.type, strike: x.strike != null ? x.strike : strikes[atmIdx + x.off], mult: x.mult || 1 })); B.tpl = "custom"; bdDraw(); scrollTo({ top: 0, behavior: "smooth" }); };
+	for (const x of ranked.slice(0, 6)) put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+		h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", {}, x.name), x.invented ? h("span", { class: "tag" }, "invented by the desk") : h("span", { class: "mono f3" }, `score ${x.score > 0 ? "+" : ""}${x.score}`)),
+		x.why.length ? h("div", { style: "font-size:12px;line-height:1.5" }, x.why.map((w) => h("div", {}, h("b", { class: "up" }, "✓ "), w))) : null,
+		x.against.length ? h("div", { style: "font-size:12px;line-height:1.5" }, x.against.map((w) => h("div", {}, h("b", { class: "dn" }, "✗ "), w))) : null,
+		h("button", { class: "btn", style: "margin-top:6px", onclick: () => { if (x.rows) buildRows(x.rows); else { B.tpl = x.id; if (x.wide && !B.width) B.width = 2; bdDraw(); scrollTo({ top: 0, behavior: "smooth" }); } } }, "Build this")));
+	const sigma = AN.atm(rows, spot, T, null), em = sigma && sigma.iv != null ? spot * sigma.iv * Math.sqrt(T) : null, view = ctx.view;
+	put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+		h("div", { style: "font-weight:600" }, "Design one for this view"),
+		h("div", { class: "f3", style: "font-size:12px;line-height:1.55" }, view ? `Searches leg combinations on the live board (defined risk only, up to 4 legs) for "${AN.VIEWS[view].name.toLowerCase()}", ranked by what each pays if the view is right, per rupee it can lose, after costs. It says when its answer is a structure that already has a name.`
+			: "Pick a view first (or wait for the desk's)."),
+		view && em ? h("button", { class: "btn", style: "margin-top:6px", onclick: () => { B.design = { view, at: Date.now(), out: QB.design({ u: B.u, exp: B.exp, view, strikes, names, quotes: data.quotes, spot, spotAge: sq.age_s, T, em, c,
+			budget: c.equity * c.limits.risk_per_trade, seed: Math.floor(Date.now() / 60000) % 100000 }) }; bdDraw(); } }, "Design it") : null));
+	const d = B.design && B.design.view === view ? B.design.out : null;
+	if (d && d.error) put(box, h("div", { class: "note" }, d.error));
+	if (d && d.designs) {
+		if (!d.designs.length) put(box, h("div", { class: "note" }, `Nothing on this board pays if the view is right without risking more than the per-trade limit (${d.tried} combinations tried).`));
+		for (const x of d.designs) put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "justify-content:space-between;gap:8px" }, h("b", {}, x.known ? x.known.name : "A structure of its own"), h("span", { class: "tag " + (x.known ? "flat" : "bull") }, x.known ? "has a name" : "new")),
+			h("div", { class: "mono", style: "font-size:12px" }, x.text),
+			h("div", { class: "f3", style: "font-size:12px;line-height:1.55" }, `If right, on average ${inr(x.avgRight, true)} (${(x.score * 100).toFixed(0)}% of the worst loss) · if wrong ${inr(x.avgWrong, true)} · worst loss ${inr(x.maxLoss)} · ${x.premium >= 0 ? "pay" : "receive"} ${inr(Math.abs(x.premium))}`),
+			h("button", { class: "btn", style: "margin-top:6px", onclick: () => buildRows(x.rows) }, "Build this")));
+	}
+	return put(box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "The reasons are the textbook's and the desk's own record by structure; the designs are judged on your view being right. Neither is a forecast: before costs, options at the market's own volatility are a fair bet."));
+}
 function bdIdeas(ctx) {
-	const { B, strikes, names, spot, T, c, data, sq, rows } = ctx;
+	const { B, strikes, names, spot, T, c, data, sq, rows, next } = ctx;
 	const sigma = AN.atm(rows, spot, T, null);
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
 	const box = h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600" }, "Ideas for your view"),
@@ -1673,10 +1902,10 @@ function bdIdeas(ctx) {
 	if (!B.view) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "Pick what you expect and every structure that fits it is priced on the live board and ranked."));
 	if (!sigma || sigma.iv == null) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "No volatility to price the chances with yet."));
 	const analyzeFn = (id, width) => {
-		const L = QB.legsFor(id, strikes, spot, names, width);
+		const L = QB.legsFor(id, strikes, spot, names, width, next);
 		return L.error ? null : QB.analyze({ u: B.u, exp: B.exp, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: 1 });
 	};
-	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: c.r }), B.sort).slice(0, 6);
+	const list = AN.rank(AN.ideas(B.view, analyzeFn, { spot, T, sigma: sigma.iv, r: QB.rateOf(B.u, c) }), B.sort).slice(0, 6);
 	put(box, h("div", { class: "chips", style: "padding:0 16px 4px" }, [["rr", "Best reward for the risk"], ["pop", "Most likely to profit"], ["cheap", "Cheapest"]].map(([id, t]) => chip(t, B.sort === id, () => { B.sort = id; bdDraw(); }))));
 	if (!list.length) return put(box, h("div", { class: "f3", style: "font-size:12.5px;padding:2px 16px 12px" }, "None of these structures can be priced on the board right now."));
 	for (const x of list) put(box, h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
@@ -1686,6 +1915,16 @@ function bdIdeas(ctx) {
 	return put(box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:6px 16px 12px" }, "The chance uses the market's own volatility, so before costs every structure here is a fair bet: it tells you how a trade pays, not whether to take it. Your edge is your view."));
 }
 // ---- news and the board, in the Build tab ------------------------------------------------------------------------------------------------------
+async function deskLoad() {                                                   // the paper runner's state, for the builder's advisor (a read: GET only), at most once a minute
+	const B = S.bd;
+	if (!store("qd.livekey") || Date.now() - (B.deskAt || 0) < 60000) return false;
+	B.deskAt = Date.now();
+	try {
+		const r = await paperCall("GET", "/paper/state");
+		if (r.status === 200 && r.body) { S.pp.data = r.body; return true; }
+	} catch (e) { /* no read: the advisor reasons from the view you pick */ }
+	return false;
+}
 async function newsLoad(key) {
 	const B = S.bd;
 	try {
@@ -1718,6 +1957,16 @@ function bdNews(B, data) {
 			names.length ? h("div", { style: "margin-top:3px" }, names) : null);
 	};
 	if (old > 25 && inSession()) put(box, h("div", { class: "warn", style: "font-size:12.5px;padding:2px 16px" }, `The newest digest is ${ageText(old)}: the news job may not be running.`));
+	const evs = Array.isArray(n.digest.events) ? n.digest.events : [];                        // the event watch (newsdigest.py) and, from the pre-market brief, what happened the last times
+	if (evs.length) put(box, h("div", { class: "f3", style: "font-size:12px;padding:6px 16px 2px" }, "Event watch"), evs.map((e) => {
+		const a = S.pm && S.pm.analogs && e.kind && S.pm.analogs[e.kind] ? S.pm.analogs[e.kind].NIFTY : null;
+		const past = a && a.n ? `The last ${a.n} ${String(e.kind).replace(/_/g, " ")} episodes: NIFTY ${signed((a.median_ret || 0) * 100)}% on the day (median), fell ${Math.round((a.share_down || 0) * a.n)} of ${a.n}, worst ${signed((a.worst || 0) * 100)}%` + (a.median_5d != null ? `, ${signed(a.median_5d * 100)}% over five sessions.` : ".") : "";
+		return h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
+			h("div", { class: "row", style: "gap:6px;align-items:center;flex-wrap:wrap" }, h("b", {}, String(e.type).replace(/_/g, " ")), h("span", { class: "tag " + (e.level === "high" ? "bear" : "flat") }, e.level === "high" ? "high: AUTO sells no volatility into it" : "watch"),
+				h("span", { class: "f3 mono", style: "font-size:11.5px" }, `severity ${fin(e.severity) ? e.severity.toFixed(1) : "—"} · tone ${fin(e.tone) ? signed(e.tone) : "—"} · ${e.n} stor${e.n === 1 ? "y" : "ies"}`)),
+			(e.top || []).length ? h("div", { class: "f3", style: "font-size:12px;line-height:1.45;margin-top:2px" }, e.top[0]) : null,
+			past ? h("div", { class: "f2", style: "font-size:12px;line-height:1.45;margin-top:2px" }, past) : null);
+	}));
 	if (about.length) put(box, h("div", { class: "f3", style: "font-size:12px;padding:2px 16px" }, `About ${B.u}`), about.map(row));
 	if (top.length) put(box, h("div", { class: "f3", style: "font-size:12px;padding:6px 16px 2px;border-top:1px solid var(--line)" }, "Top stories right now"), top.map(row));
 	if (!about.length && !top.length) note("No stories in the digest.");
@@ -1748,7 +1997,9 @@ function bdDraw() {
 	const exps = Object.keys(chains[B.u]).sort((p, q) => liveExpiryKey(p) - liveExpiryKey(q));
 	if (!exps.includes(B.exp)) B.exp = exps[0];
 	const ch = chains[B.u][B.exp], strikes = Object.keys(ch).map(Number).sort((p, q) => p - q);
-	const sq = data.quotes[B.u] || data.quotes[B.u + "-FUT"] || {}, spot = sq.ltp;
+	const nextExp = exps[exps.indexOf(B.exp) + 1], nextCh = nextExp ? chains[B.u][nextExp] : null;          // a calendar's later leg: the next expiry on the board
+	const next = nextCh ? { strikes: Object.keys(nextCh).map(Number).sort((p, q) => p - q), names: nextCh, T: QB.yearsTo(nextExp, Date.now()), exp: nextExp } : null;
+	const sq = data.quotes[B.u] || data.quotes[liveNames(B.u, data.quotes).fut] || {}, spot = sq.ltp;        // an MCX or currency option's underlying is its future (-MCX, -CDS)
 	const T = QB.yearsTo(B.exp, Date.now()), inst = c.inst[B.u], tpl = B.tpl === "custom" ? QB.CUSTOM : QB.TEMPLATES[B.tpl];
 	const chip = (label, on, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label);
 	const step = (label, val, dn, up) => h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:8px 16px;border-top:1px solid var(--line)" }, h("span", {}, label), h("span", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn sq", "aria-label": "less " + label, onclick: dn }, "−"), h("b", { class: "mono", style: "min-width:28px;text-align:center" }, String(val)), h("button", { class: "btn sq", "aria-label": "more " + label, onclick: up }, "+")));
@@ -1757,16 +2008,18 @@ function bdDraw() {
 		h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Structure"), h("span", { class: "hint" }, tpl.view)),
 			h("div", { class: "chips", style: "padding:4px 16px 8px" }, exps.map((e) => chip(e.slice(0, 2) + " " + cap(e.slice(2, 5).toLowerCase()), e === B.exp, () => { B.exp = e; S.lv.exp = e; bdDraw(); }))),
 			h("div", { class: "chips", style: "padding:0 16px 10px" }, [...Object.keys(QB.TEMPLATES).map((id) => chip(QB.TEMPLATES[id].name, id === B.tpl, () => { B.tpl = id; bdDraw(); })),
-				chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
+				chip("Custom legs", B.tpl === "custom", () => { if (!B.custom.length && !(QB.TEMPLATES[B.tpl] || {}).multi) { const seed = QB.legsFor(B.tpl, strikes, spot, ch, B.width); if (seed.legs) B.custom = seed.legs.map((l) => ({ side: l.side, type: l.type, strike: l.strike, mult: 1 })); } B.tpl = "custom"; bdDraw(); })]),
 			B.tpl === "custom" ? bdCustom(B, strikes, spot) : null,
 			tpl.wide ? step("Width (strikes)", B.width, () => { B.width = Math.max(1, B.width - 1); bdDraw(); }, () => { B.width = Math.min(10, B.width + 1); bdDraw(); }) : null,
 			step("Lots (" + ((inst.lots ? inst.lots[B.exp] : inst.lot) || "?") + " units each)", B.lots, () => { B.lots = Math.max(1, B.lots - 1); bdDraw(); }, () => { B.lots = Math.min(c.limits.max_lots, B.lots + 1); bdDraw(); })));
 	if (!fin(spot)) return void put(body, h("div", { class: "note" }, `No price for ${B.u} on the board yet.`));
 	const names = {};
 	for (const k of strikes) names[k] = ch[k];
-	const rows = AN.chainRows(ch, data.quotes, spot, T, c.r);
-	const ideas = () => fold("ideas", "Ideas for your view", "structures that fit what you expect", bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows }));
-	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width);
+	const rows = AN.chainRows(ch, data.quotes, spot, T, QB.rateOf(B.u, c));
+	if (S.open.advise === undefined) S.open.advise = true;                       // the advisor starts open, right under the structures: which one, and why, comes first
+	put(body, fold("advise", "Which strategy now, and why", "every structure, reasoned against the desk's read", bdAdvisor({ B, strikes, names, spot, T, c, data, sq, rows })));
+	const ideas = () => fold("ideas", "Ideas for your view", "structures that fit what you expect", bdIdeas({ B, strikes, names, spot, T, c, data, sq, rows, next }));
+	const L = B.tpl === "custom" ? QB.customLegs(B.custom, names) : QB.legsFor(B.tpl, strikes, spot, names, B.width, next);
 	if (L.error) return void put(body, h("div", { class: "note" }, L.error), ideas());
 	const spec = { u: B.u, exp: B.exp, legs: L.legs, quotes: data.quotes, spot, spotAge: sq.age_s, ageAdd: Math.max(0, (Date.now() - (B.at || Date.now())) / 1000), T, lots: B.lots };
 	const a = QB.analyze(spec);
@@ -1781,7 +2034,8 @@ function bdDraw() {
 				h("div", {}, h("span", {}, "Worst loss"), h("b", { class: "mono dn" }, inr(-a.maxLoss))),
 				h("div", {}, h("span", {}, "Best profit"), h("b", { class: "mono up" }, a.unlimitedProfit ? "No cap" : inr(a.maxProfit, true))),
 				h("div", {}, h("span", {}, "Break-even" + (a.breakevens.length === 1 ? "" : "s")), h("b", { class: "mono" }, a.breakevens.map((b) => num(b, 0)).join(" · ") || "—"))),
-			h("div", { style: "padding:10px 16px 6px" }, bdPayoff(a, spot))),
+			h("div", { style: "padding:10px 16px 6px" }, bdPayoff(a, spot)),
+			a.multi ? h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:0 16px 10px" }, "A calendar is drawn at the near expiry, the later option at its model value. The worst loss counts the later option at the least it can ever be worth (the paper desk's own rule), so it sits below the curve.") : null),
 		h("div", { class: "grp" }, h("div", { class: "pad", style: "font-weight:600;display:flex;gap:8px;align-items:center" }, "Could the paper desk open this today?", h("b", { class: a.paperOk ? "up" : "dn" }, a.paperOk ? "Yes, so far" : "No")),
 			(a.paperOk ? [] : a.paperChecks.filter((x) => !x.ok)).map(tick)),
 		bdTicket(a, tpl),
@@ -1811,11 +2065,11 @@ function bdFlow(ctx) {
 		let raw = []; try { raw = JSON.parse(store(logKey) || "[]"); } catch (e) { raw = []; }
 		B.flowLogs[B.u] = (Array.isArray(raw) ? raw : []).filter((e) => e && typeof e.rule === "string" && FL.RULES[e.rule] && Number.isFinite(e.t) && Number.isFinite(e.spot)).slice(-400);
 	}
-	const fq = data.quotes[B.u + "-FUT"], fut = fq ? (fq.bid > 0 && fq.ask >= fq.bid ? (fq.bid + fq.ask) / 2 : fq.ltp) : NaN;
+	const fq = data.quotes[liveNames(B.u, data.quotes).fut], fut = fq ? (fq.bid > 0 && fq.ask >= fq.bid ? (fq.bid + fq.ask) / 2 : fq.ltp) : NaN;
 	const nowT = typeof data.now === "number" ? data.now : Date.now();
 	if (B.sampledAt !== B.at) {                                                                    // one reading per fetch of the board, however often the page is redrawn
 		B.sampledAt = B.at;
-		const sm = FL.sample({ t: nowT, spot, fut: Number.isFinite(fut) ? fut : null, rows, chain: ch, quotes: data.quotes, T, r: c.r, lot: inst.lot, atm: AN.atm(rows, spot, T, null) });
+		const sm = FL.sample({ t: nowT, spot, fut: Number.isFinite(fut) ? fut : null, rows, chain: ch, quotes: data.quotes, T, r: QB.rateOf(B.u, c), lot: inst.lot, atm: AN.atm(rows, spot, T, null) });
 		if (sm && (!B.tape.length || sm.t > B.tape[B.tape.length - 1].t)) {
 			B.tape.push(sm);
 			if (B.tape.length > FL.MAX_HIST) B.tape.shift();
@@ -2026,6 +2280,7 @@ function tkDraw() {
 		h("div", { class: "f3", style: "font-size:11.5px;padding:8px 0 0" }, `Heard ${liveAge(q.age_s)} ago${SRC_NAME[q.src] ? " from " + SRC_NAME[q.src] : ""}.`));
 	if (!inst) return void put(K.box, h("div", { class: "note" }, `${o.u} options are shown for reading only: the paper desk has no verified lot size or costs for ${o.u}.`));
 	if (inst.physical) put(K.box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:6px 0 0" }, "A stock option is settled by delivery of the shares: the paper desk sells it from 15:20 on the trading day before its expiry, and does not buy it after that."));
+	if (inst.prior_day) put(K.box, h("div", { class: "f3", style: "font-size:11.5px;line-height:1.5;padding:6px 0 0" }, `${inst.segment === "mcx" ? "An MCX option turns into the future at expiry" : "A currency option expires at 12:30"}: the paper desk sells it from 15:20 on the trading day before its expiry, and does not buy it after that. Priced off the near-month future.`));
 	const lot = inst.lots ? inst.lots[o.e] : inst.lot;
 	if (!lot) return void put(K.box, h("div", { class: "note" }, `${o.u} has no verified lot size for the ${o.e} expiry yet (paper.stock_options.lots in the config), so this contract is shown for reading only.`));
 	put(K.box, h("div", { class: "row", style: "justify-content:space-between;align-items:center;padding:14px 0 10px" }, h("span", {}, `Lots (${lot} units each)`),
@@ -2249,19 +2504,24 @@ function ppLab(lab) {
 	const td = lab.today || {}, rows = Array.isArray(lab.top) ? lab.top : [];
 	const st = lab.state && typeof lab.state === "object" ? Object.entries(lab.state) : [];
 	const word = (v) => (v === "up" ? "▲ up" : v === "down" ? "▼ down" : v === "flat" ? "◆ flat" : "—");
+	const fams = Array.isArray(lab.families) ? lab.families : [];
 	return h("div", { class: "grp" },
 		h("div", { class: "sec-h" }, h("h2", {}, "Strategy lab (AUTO v2)"), h("span", { class: "hint" }, `${num(lab.strategies, 0)} strategies written`)),
 		h("div", { class: "kstrip" }, cell("With a record", num(lab.tested, 0)), cell("Shadow trades", num(lab.trades, 0)), cell("Proven enough to trade", num(lab.eligible, 0), lab.eligible ? "up" : ""),
-			cell("Today", `${td.shadow_closed || 0} scored · ${td.live_entries || 0} live`)),
+			cell("Today", `${td.shadow_closed || 0} scored · ${td.live_entries || 0} live`), cell("Invented by the desk", num(lab.invented || 0, 0)),
+			cell("News forecasts (Brier)", lab.news_calibration && fin(lab.news_calibration.brier) ? `${num(lab.news_calibration.brier, 3)} · ${num(lab.news_calibration.n, 0)}` : "—")),
 		rows.length ? h("div", { class: "panel scroll", style: "margin:0;border:0" }, h("table", { class: "tbl" },
 			h("thead", {}, h("tr", {}, ["Strategy", "Trades", "Avg R", "Won", ""].map((x) => h("th", {}, x)))),
 			h("tbody", {}, rows.map((r) => h("tr", {}, h("td", {}, h("div", { class: "mono", style: "font-size:12px" }, r.sid), h("div", { class: "f3", style: "font-size:11px;line-height:1.4;white-space:normal" }, r.what)),
 				h("td", {}, num(r.n, 0)), h("td", { class: cls(r.mean_r) }, signed(r.mean_r)), h("td", {}, Math.round((r.win || 0) * 100) + "%"),
-				h("td", {}, r.live ? h("span", { class: "tag bull" }, "live") : h("span", { class: "tag flat" }, r.n < lab.min_trades ? "testing" : "below 0")))))))
+				h("td", {}, r.live ? h("span", { class: "tag bull" }, "live") : h("span", { class: "tag flat" }, r.n < (r.invented ? lab.min_trades_invented || lab.min_trades : lab.min_trades) ? "testing" : "below 0"),
+					r.invented ? h("span", { class: "tag", style: "margin-left:4px" }, "invented") : null))))))
 			: h("div", { class: "f3", style: "font-size:12.5px;padding:10px 16px" }, "No shadow trade has closed yet. Every strategy whose market context holds is traded in shadow at the real prices; a record builds through the session."),
 		st.length ? fold("lab-state", "What it sees now", `${st.length} underlyings`, h("div", { class: "rows" }, st.map(([u, v]) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;font-size:12.5px;border-top:1px solid var(--line)" },
-			h("b", { class: "mono" }, u), h("span", { class: "f2" }, `${word(v[0])} · volatility ${v[1] || "—"}${fin(v[2]) ? " (" + v[2].toFixed(2) + "x realized)" : ""}${v[3] ? " · expiry tomorrow" : ""}`))))) : null,
-		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `Each strategy is a combination of a market context, a structure, a width, an expiry and its exits. It trades with paper money only after ${lab.min_trades} shadow trades, chosen by Thompson sampling: a short record is shrunk towards zero, so an unproven idea keeps being tested before it gets capital. Not proven to make money.`));
+			h("b", { class: "mono" }, u), h("span", { class: "f2", style: "text-align:right" }, `${word(v[0])} · volatility ${v[1] || "—"}${fin(v[2]) ? " (" + v[2].toFixed(2) + "x realized)" : ""}${v[3] ? " · expiry tomorrow" : ""}${fin(v[4]) ? " · read P(up) " + v[4].toFixed(2) : ""}${v[5] ? " (" + v[5] + ")" : ""}${v[6] ? " · " + v[6] : ""}${v[7] ? " · HMM " + v[7] : ""}${v[8] ? " · change point: " + v[8] : ""}${fin(v[9]) ? " · Kalman trend t " + (v[9] > 0 ? "+" : "") + v[9].toFixed(1) : ""}${v[10] ? " · " + v[10] : ""}${fin(v[11]) ? " · news P(up) " + v[11].toFixed(2) : ""}${v[12] ? " (" + v[12] + ")" : ""}`))))) : null,
+		fams.length ? fold("lab-fam", "By structure (evidence shared)", `spread within ±${num(lab.tau, 2)}R`, h("div", { class: "rows" }, fams.map((f) => h("div", { class: "row", style: "justify-content:space-between;padding:6px 16px;font-size:12.5px;border-top:1px solid var(--line)" },
+			h("b", {}, f.name), h("span", { class: "f2 mono", style: "text-align:right" }, `${signed(f.mu_r)}R ± ${num(f.se, 2)} · ${num(f.members, 0)} strategies · ${num(f.trades, 0)} trades`))))) : null,
+		h("div", { class: "f3", style: "font-size:11.5px;line-height:1.55;padding:8px 16px 12px" }, `Each strategy is a combination of a market context, a structure, a width, an expiry and its exits. It trades with paper money only after ${lab.min_trades} shadow trades, chosen by Thompson sampling over a hierarchical model: a short record is pulled towards the record of its structure (every iron condor informs every other), and each structure's towards zero, so an unproven idea keeps being tested before it gets capital. An option sale also has to pay for its tail, measured by extreme value theory. Every morning the desk also INVENTS strategies (new leg combinations, defined risk only), which need ${lab.min_trades_invented || 12} shadow trades before paper money. News is read per instrument: what each story means for that instrument, and what it did in past episodes most like today. Not proven to make money.`));
 }
 async function renderPaper(force) {
 	const body = $("#pp-body"), P = S.pp;

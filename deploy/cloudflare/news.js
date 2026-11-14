@@ -31,13 +31,26 @@ export function cleanItem(r) {
 	};
 }
 
+// The event watch (quantdesk/premarket/newsdigest.py event_watch): at most six active events, each re-checked field by field.
+export function cleanEvents(list) {
+	const out = [];
+	for (const e of Array.isArray(list) ? list.slice(0, 6) : []) {
+		if (!e || typeof e !== "object" || Array.isArray(e) || !isStr(e.type) || !/^[a-z][a-z_]{0,23}$/.test(e.type)) continue;
+		const sev = num(e.severity, 0, 1000), tone = num(e.tone, -1, 1);
+		if (sev === null || tone === null || !["watch", "high"].includes(e.level)) continue;
+		out.push({ type: e.type, severity: sev, level: e.level, tone, n: Number.isInteger(e.n) && e.n >= 0 && e.n <= 1000 ? e.n : 0,
+			top: (Array.isArray(e.top) ? e.top : []).map((t) => str(t, 140)).filter(Boolean).slice(0, 3), kind: isStr(e.kind) && /^[a-z][a-z_]{0,23}$/.test(e.kind) ? e.kind : null });
+	}
+	return out;
+}
+
 // The digest as the relay keeps it: a fresh object of known fields, newest first, cut (oldest first) until it fits.
 export function cleanDigest(b) {
 	if (!b || typeof b !== "object" || Array.isArray(b) || b.v !== 1 || !isStr(b.asof) || !ISO.test(b.asof) || !Array.isArray(b.items)) return null;
 	const items = b.items.map(cleanItem).filter(Boolean).sort((x, y) => (x.ts < y.ts ? 1 : x.ts > y.ts ? -1 : 0)).slice(0, MAX_ITEMS);
 	const sources = {};
 	for (const [k, v] of Object.entries(b.sources && typeof b.sources === "object" && !Array.isArray(b.sources) ? b.sources : {}).slice(0, 20)) { const kk = str(k, 40), vv = str(v, 60); if (kk && vv) sources[kk] = vv; }
-	const out = { v: 1, asof: b.asof, sources, items };
+	const out = { v: 1, asof: b.asof, sources, items, events: cleanEvents(b.events) };
 	while (out.items.length > 1 && JSON.stringify(out).length > MAX_CHARS) out.items.pop();
 	out.n = out.items.length;
 	return out.items.length && JSON.stringify(out).length <= MAX_CHARS ? out : null;

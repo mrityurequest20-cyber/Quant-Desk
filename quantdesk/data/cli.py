@@ -173,13 +173,15 @@ def register(sub):
     x.set_defaults(fn=cmd_kite_record)
     x = ss.add_parser("fyers-feed", help="Fyers: MCX and currency near-month futures (price, book, OI) to the private live relay every 5 s until --until (IST), as feed 'f'. "
                                          "Market data only, nothing written to disk; env FYERS_APP_ID, FYERS_DATA_TOKEN, LIVE_URL, LIVE_INGEST_TOKEN (docs/FEEDS.md)")
-    x.add_argument("--until", required=True, help="HH:MM IST")
+    x.add_argument("--until", default="23:58", help="HH:MM IST")
     x.add_argument("--metrics", help="write the run's counts (no price, no token) here as JSON")
+    x.add_argument("--check", action="store_true", help="one round with today's token, sending nothing: proves the login and the data (counts only)")
     x.set_defaults(fn=cmd_fyers_feed)
     x = ss.add_parser("angel-feed", help="Angel One: currency near-month futures (price, five-level book, OI) to the private live relay every 5 s until --until (IST) or 17:05, "
                                          "as feed 'a'. Market data only, nothing written to disk; env ANGEL_API_KEY, ANGEL_DATA_TOKEN, LIVE_URL, LIVE_INGEST_TOKEN (docs/FEEDS.md)")
-    x.add_argument("--until", required=True, help="HH:MM IST")
+    x.add_argument("--until", default="23:58", help="HH:MM IST")
     x.add_argument("--metrics", help="write the run's counts (no price, no token) here as JSON")
+    x.add_argument("--check", action="store_true", help="one round with today's token, sending nothing: proves the login and the data (counts only)")
     x.set_defaults(fn=cmd_angel_feed)
     x = ss.add_parser("kite-compare", help="Kite: the session's measures from a recorded folder (counts and ratios only)")
     x.add_argument("--dir", required=True)
@@ -360,7 +362,11 @@ def cmd_fyers_feed(cfg, a):
     url, ingest = (os.environ.get("LIVE_URL") or "").strip(), (os.environ.get("LIVE_INGEST_TOKEN") or "").strip()
     if not (app_id and token):
         print("fyers-feed: no Fyers app id or no token for today (the login did not run or failed); nothing streamed")
+        if a.check:
+            raise SystemExit(1)
         return
+    if a.check:
+        return _feed_check("fyers-feed", lambda: F.check(app_id, token, watchlist=cfg.get("desk.watchlist", {}) or {}), a.metrics)
     if not (url and ingest):
         print("fyers-feed: no live relay configured (LIVE_URL, LIVE_INGEST_TOKEN); the feed is display only, so nothing to do")
         return
@@ -382,6 +388,20 @@ def cmd_fyers_feed(cfg, a):
         print(f"::warning::fyers-feed: {rep['stopped']}")
 
 
+def _feed_check(label: str, fn, metrics: str | None) -> None:
+    """Run a feed's login check; print its counts; a red run unless the broker answered with quotes."""
+    import json as _json
+    try:
+        rep = fn()
+    except (OSError, ValueError) as exc:
+        rep = {"result": f"the broker side: {type(exc).__name__}"}
+    if metrics:
+        Path(metrics).write_text(_json.dumps(rep, indent=1, default=str))
+    print(f"{label} check: {rep.get('result')}; {rep.get('contracts', 0)} contracts, {rep.get('instruments', 0)} instruments with a quote, {rep.get('calls', 0)} calls")
+    if rep.get("result") != "ok":
+        raise SystemExit(1)
+
+
 def cmd_angel_feed(cfg, a):
     import datetime as _dt
     import json as _json
@@ -398,7 +418,11 @@ def cmd_angel_feed(cfg, a):
     url, ingest = (os.environ.get("LIVE_URL") or "").strip(), (os.environ.get("LIVE_INGEST_TOKEN") or "").strip()
     if not (key and jwt):
         print("angel-feed: no Angel One API key or no session for today (the login did not run or failed); nothing streamed")
+        if a.check:
+            raise SystemExit(1)
         return
+    if a.check:
+        return _feed_check("angel-feed", lambda: A.check(key, jwt), a.metrics)
     if not (url and ingest):
         print("angel-feed: no live relay configured (LIVE_URL, LIVE_INGEST_TOKEN); the feed is display only, so nothing to do")
         return

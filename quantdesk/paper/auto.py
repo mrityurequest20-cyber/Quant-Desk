@@ -83,7 +83,8 @@ def chains(snap, underlyings, lots) -> dict:
                     exp = dt.date(2000 + int(m.group(3)), MONTHS.index(m.group(2)) + 1, int(m.group(1)))
                 except ValueError:
                     break
-                out.setdefault(u, {}).setdefault(exp, {}).setdefault(int(m.group(4)), {})[m.group(5)] = name
+                k = float(m.group(4))
+                out.setdefault(u, {}).setdefault(exp, {}).setdefault(int(k) if k.is_integer() else k, {})[m.group(5)] = name      # a currency strike has decimals
             break
     return out
 

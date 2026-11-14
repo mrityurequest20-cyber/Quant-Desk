@@ -218,9 +218,17 @@ def trade_config(cfg) -> dict:
         codes = {f"{d.day:02d}{d.strftime('%b').upper()}{d.year % 100:02d}": lot for d, lot in sorted(by.items())}
         step = steps.get(u) if isinstance(steps, dict) else None
         inst[u] = {"lot": next(iter(codes.values())), "lots": codes, "step": float(step) if isinstance(step, (int, float)) and step > 0 else 1.0, "physical": True}
+    # MCX and currency options (owner, 13 Nov 2026: "treated in the same way" as index and stock options): the future's lot, priced off the future (rate 0, Black-76), their own
+    # price step and their own cost schedule; sold from 15:20 on the trading day before expiry (the paper runner's rule)
+    pu = cfg.get("paper.underlyings") or {}
+    for u, c in ((cfg.get("paper.futures.contracts") or {}) if isinstance(cfg.get("paper.futures.contracts"), dict) else {}).items():
+        seg = c.get("segment") if isinstance(c, dict) else None
+        if seg in ("mcx", "nse_cds") and str(u).upper() in {str(x).upper() for x in (pu.get(seg) or [])} and isinstance(c.get("lot"), int):
+            inst[str(u).upper()] = {"lot": int(c["lot"]), "tick": float(c.get("opt_tick") or 0.05), "r": 0.0, "cost": "mcx_options" if seg == "mcx" else "cds_options", "prior_day": True,
+                                    "segment": seg}
     # the paper desk's own gate (quantdesk/paper/risk.py): what a manual paper entry is checked against at the ticket
     paper = {"risk_per_trade": float(cfg.get("paper.risk_per_trade")), "max_quote_age_s": float(cfg.get("paper.max_quote_age_s")),
-             "underlyings": sorted(str(u).upper() for u in ((cfg.get("paper.underlyings") or {}).get("nse_fo") or [])),
+             "underlyings": sorted({str(u).upper() for seg in ("nse_fo", "mcx", "nse_cds") for u in (pu.get(seg) or [])}),
              "allow_short_legs": cfg.get("paper.allow_short_legs") is True}
     # MCX and currency futures (paper.futures, 13 Nov 2026): the facts the futures ticket shows; the runner's gate decides
     fut = cfg.get("paper.futures") or {}
@@ -233,7 +241,8 @@ def trade_config(cfg) -> dict:
             "equity": float(cfg.get("paper.capital") or cfg.get("intraday.capital")), "r": float(cfg.get("backtest.risk_free", 0.065)),
             "limits": {k: risk[k] for k in keys if k in risk}, "paper": paper,
             "costs": {"brokerage_per_order": float(costs.get("brokerage_per_order", 20.0)), "gst": float(costs.get("gst", 0.18)), "sebi_per_crore": float(costs.get("sebi_per_crore", 10.0)),
-                      "options": {k: float(opt.get(k, 0.0)) for k in ("stt_buy", "stt_sell", "exchange", "stamp_buy")}},
+                      "options": {k: float(opt.get(k, 0.0)) for k in ("stt_buy", "stt_sell", "exchange", "stamp_buy")},
+                      **{seg: {k: float(((costs.get("segments") or {}).get(seg) or {}).get(k, 0.0)) for k in ("stt_buy", "stt_sell", "exchange", "stamp_buy")} for seg in ("mcx_options", "cds_options")}},
             "slippage": {k: float(slip[k]) for k in ("option_half_spread_pct", "option_min_half_spread", "option_tick") if k in slip},
             "inst": inst, "futures": futures}
 

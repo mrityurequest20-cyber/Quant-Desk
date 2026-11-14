@@ -76,6 +76,8 @@ class Inputs:
     globals_: list | None = None                  # [{key, name, last, change}] from sources.fetch_globals
     headlines: list | None = None                 # [{ts, source, title, link}] from sources.fetch_headlines
     health: dict = field(default_factory=dict)    # source -> "ok ..." / "fail ..."
+    tails: dict | None = None                     # tailrisk.build: each paper underlying's conditional EVT model (quantdesk/paper/tails.py)
+    news_analogs: dict | None = None              # analogs.build: each paper underlying's past episodes of each kind, weighted by today's situation
 
 
 def _company_aliases(corp_events: pd.DataFrame | None) -> dict[str, list[str]]:
@@ -186,6 +188,24 @@ def _macro(inp: Inputs, day: dt.date, last_close: dt.date) -> list[dict]:
     return out
 
 
+def _analogs(inp: Inputs) -> dict:
+    """{kind: {symbol: {n, median_move, median_ret, share_down, worst, median_5d, ...}}} for every kind in macro_dates.json (geopolitics and oil shocks included)."""
+    try:
+        return H.macro_history(inp.index_close, H.macro_dates())
+    except Exception:                                                   # noqa: BLE001 - no analogue table is a thinner brief, never a failed one
+        return {}
+
+
+def _calendar(inp: Inputs, now: pd.Timestamp, expiring: list, results: list) -> list[dict]:
+    """The scheduled-events calendar (quantdesk/paper/eventcal.py): the owner's dates, the recurring releases by rule, today's expiries and results."""
+    from ..paper import eventcal as EC
+    try:
+        cfg_events = [(e.day, e.time, e.name) for e in inp.macro_events or [] if getattr(e, "source", "calendar") == "calendar"]
+        return EC.build(now.to_pydatetime(), cfg_events, days=7, expiring=expiring, results=results)
+    except Exception:                                                   # noqa: BLE001 - no calendar is a thinner brief, never a failed one
+        return []
+
+
 def _expiries(index_bhav: pd.DataFrame | None, day: dt.date) -> list[dict]:
     if index_bhav is None or len(index_bhav) == 0:
         return []
@@ -281,6 +301,10 @@ def build(inp: Inputs) -> dict:
         "universe": {"indices": int((univ["segment"] == "index").sum()) if len(univ) else 0,
                      "stocks": int((univ["segment"] == "stock").sum()) if len(univ) else 0},
         "expiring": expiring, "macro": macro, "results": results, "results_note": RESULTS_NOTE,
+        "analogs": _analogs(inp),                                       # what NIFTY and BANKNIFTY did on past episodes of each kind (the news analyser's "what happened before")
+        "tails": inp.tails or {},                                       # extreme value theory: each paper underlying's tail model (AUTO v2's tail check reads it)
+        "news_analogs": inp.news_analogs or {},                         # every instrument's own past episodes, most like today first (the news model reads it)
+        "calendar": _calendar(inp, now, expiring, results),             # the scheduled events of the next week, each with the instruments it touches (paper/eventcal.py)
         "global": inp.globals_ or [], "headlines": {"total": len(inp.headlines or []), "named": {k: v[:3] for k, v in news.items()}},
         "watch": watch, "record_plan": record_plan(watch) if watch else {"budget": 0, "used": 0, "names": 0, "of": 0, "plan": []},
         "history": {"events": int(len(hist)), "calendar": int((hist["source"] == "calendar").sum()) if len(hist) else 0,
@@ -310,6 +334,13 @@ def summary(b: dict) -> list[str]:
     g = [x for x in b["global"] if x.get("change") is not None]
     if g:
         s.append("Overnight: " + ", ".join(f"{x['name']} {x['change']:+.1%}" for x in g[:6]) + ".")
+    nxt = [e for e in b.get("calendar") or [] if e.get("impact") in ("high", "medium") and e.get("source") != "brief"][:4]
+    if nxt:
+        s.append("Coming up: " + "; ".join(f"{e['name']} {pd.Timestamp(e['at']):%a %d %b %H:%M}" + (" (by rule: check)" if e.get("source") == "rule" else "") for e in nxt) + ".")
+    from .tailrisk import summary_line
+    tl = summary_line(b.get("tails") or {})
+    if tl:
+        s.append(tl)
     top = [w for w in b["watch"] if w["segment"] == "stock"][:5]
     if top:
         s.append("Watch first: " + "; ".join(f"{w['symbol']} ({', '.join(w['why'][:2])})" for w in top) + ".")

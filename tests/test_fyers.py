@@ -285,6 +285,8 @@ class FakeAPI:
         self.calls.append((path, dict(params)))
         if self.block_after is not None and len(self.calls) > self.block_after:
             raise F.Blocked()
+        if path == "/options-chain-v3":
+            return CHAIN.get(params["symbol"], {"s": "ok", "data": {"expiryData": [], "optionsChain": []}})
         if path == "/quotes":
             return {"s": "ok", "d": [_quote(t, *self.prices[t]) for t in params["symbols"].split(",") if t in self.prices]}
         t = params["symbol"]
@@ -309,6 +311,20 @@ class FakePusher:
         return {"pushes_ok": 1}
 
 
+def _chain_row(k, t, ltp, bid, ask, oi):
+    return {"strike_price": k, "option_type": t, "ltp": ltp, "bid": bid, "ask": ask, "oi": oi, "volume": 1200, "ltpchp": 1.5, "symbol": f"X{k}{t}"}
+
+
+CHAIN = {
+    "MCX:CRUDEOIL26NOVFUT": {"s": "ok", "code": 200, "data": {"expiryData": [{"date": "17-11-2026", "expiry": _epoch("2026-11-17", 23, 30)}],
+                             "optionsChain": [{"strike_price": -1, "option_type": "", "ltp": 5812.0, "symbol": "MCX:CRUDEOIL26NOVFUT"},
+                                              _chain_row(5800, "CE", 92.0, 91.5, 92.5, 4400), _chain_row(5800, "PE", 80.0, 79.5, 80.5, 3900),
+                                              _chain_row(5850, "CE", 70.0, 70.5, 70.0, 100)]}},                     # a crossed book: price kept, book dropped
+    "NSE:USDINR26NOVFUT": {"s": "ok", "code": 200, "data": {"expiryData": [{"date": "20-11-2026", "expiry": _epoch("2026-11-20", 12, 30)}],
+                           "optionsChain": [_chain_row(84.25, "PE", 0.0425, 0.04, 0.045, 90000), _chain_row(84.5, "CE", 0.11, 0.1075, 0.1125, 150000)]}},
+}
+
+
 NAMES = {"CRUDEOIL-MCX": {"seg": "mcx", "ticker": "MCX:CRUDEOIL26NOVFUT", "expiry": dt.date(2026, 11, 19)}, "GOLD-MCX": {"seg": "mcx", "ticker": "MCX:GOLD26DECFUT", "expiry": dt.date(2026, 12, 4)},
          "USDINR-CDS": {"seg": "cds", "ticker": "NSE:USDINR26NOVFUT", "expiry": dt.date(2026, 11, 26)}}
 PRICES = {"MCX:CRUDEOIL26NOVFUT": (5812.0, 5811.0, 5813.0), "MCX:GOLD26DECFUT": (77000.0, 76990.0, 77010.0), "NSE:USDINR26NOVFUT": (84.5, 84.4975, 84.5025)}
@@ -322,7 +338,7 @@ def test_a_cycle_pushes_each_changed_quote_once_with_its_segment_and_book():
     assert q["CRUDEOIL-MCX"]["e"] == "2026-11-19" and q["USDINR-CDS"]["e"] == "2026-11-26"          # the contract each name holds, for the paper desk
     assert q["CRUDEOIL-MCX"]["s"] == "mcx" and q["USDINR-CDS"]["s"] == "cds" and q["CRUDEOIL-MCX"]["oi"] == 99 and q["CRUDEOIL-MCX"]["d"]["b"] == [[5811.0, 5, 1]]
     assert "d" not in q["GOLD-MCX"]                                                     # not on the watchlist: price only
-    assert [p for p, _ in api.calls] == ["/quotes", "/depth"] and api.calls[0][1]["symbols"].count(",") == 2
+    assert [p for p, _ in api.calls if p != "/options-chain-v3"] == ["/quotes", "/depth"] and api.calls[0][1]["symbols"].count(",") == 2
     push.got.clear()
     assert feed.cycle() == 1 and push.got[0][0] == "USDINR-CDS"                         # nothing moved but USDINR's book arrived (the depth turn moved on)
     push.got.clear()
@@ -342,7 +358,7 @@ def test_quotes_go_fifty_symbols_a_call():
     names = {f"X{i}-MCX": {"seg": "mcx", "ticker": f"MCX:X{i}26NOVFUT", "expiry": dt.date(2026, 11, 19)} for i in range(120)}
     api = FakeAPI({c["ticker"]: (1.0, 0.9, 1.1) for c in names.values()})
     F.FyersFeed(api, names, [], FakePusher(), now=lambda: dt.datetime(2026, 11, 13, 10, 0, tzinfo=IST)).cycle()
-    assert [len(p["symbols"].split(",")) for _, p in api.calls] == [50, 50, 20]
+    assert [len(p["symbols"].split(",")) for path, p in api.calls if path == "/quotes"] == [50, 50, 20]
 
 
 def test_the_limiter_keeps_well_under_fyers_caps():
@@ -499,3 +515,48 @@ def test_a_ladder_is_sent_only_in_the_cycle_it_was_read_so_it_is_never_older_tha
     feed.cycle()
     q = dict(push.got)["CRUDEOIL-MCX"]
     assert "d" not in q and q["bid"] == 5819.0 and q["oi"] == 99                       # the fresh quote's bid/offer, the last OI, and no stale ladder (the relay keeps the old one with its age)
+
+
+
+def test_option_chains_arrive_under_the_desks_option_names_with_bid_offer_and_oi():
+    api, push = FakeAPI(dict(PRICES)), FakePusher()
+    feed = F.FyersFeed(api, NAMES, ["CRUDEOIL-MCX", "USDINR-CDS"], push, depth_per_cycle=0, now=lambda: dt.datetime(2026, 11, 13, 10, 0, tzinfo=IST))
+    feed.cycle()
+    got = dict(push.got)
+    assert got["CRUDEOIL17NOV265800CE"] == {"ltp": 92.0, "bid": 91.5, "ask": 92.5, "oi": 4400, "vol": 1200, "chg": 1.5, "s": "mopt"}          # an MCX option: Fyers' route
+    assert got["USDINR20NOV2684.5CE"]["s"] == "copt"                                                                                       # a currency option: Angel One's route
+    assert "bid" not in got["CRUDEOIL17NOV265850CE"] and got["CRUDEOIL17NOV265850CE"]["ltp"] == 70.0
+    assert got["USDINR20NOV2684.25PE"]["bid"] == 0.04 and got["USDINR20NOV2684.5CE"]["oi"] == 150000      # decimal strikes, named as Kite names them
+    assert [p["symbol"] for path, p in api.calls if path == "/options-chain-v3"] == ["MCX:CRUDEOIL26NOVFUT", "NSE:USDINR26NOVFUT"]
+    push.got.clear()
+    feed.cycle()
+    assert not [n for n, _ in push.got if n.endswith(("CE", "PE"))]                             # nothing moved: no option pushed again
+
+
+def test_an_unreadable_chain_is_reported_by_its_key_names():
+    got, odd = F.parse_chain({"s": "ok", "data": {"chain": [1, 2]}}, "CRUDEOIL")
+    assert got == {} and "chain" in odd[0]
+    assert F.option_name("USDINR", dt.date(2026, 11, 20), 84.5, "CE") == "USDINR20NOV2684.5CE" and F.option_name("GOLD", dt.date(2026, 11, 25), 136000.0, "PE") == "GOLD25NOV26136000PE"
+
+
+def test_the_login_check_makes_one_round_on_a_saturday_and_sends_nothing(monkeypatch):
+    api = FakeAPI(dict(PRICES))
+    monkeypatch.setattr(F, "load_contracts", lambda opener=None: ([], []))
+    monkeypatch.setattr(F, "near_futures", lambda c, d: NAMES)
+    monkeypatch.setattr(F, "FyersData", lambda *a, **k: api)
+    rep = F.check("A-100", "t", today=dt.date(2026, 11, 14))                                    # a Saturday: the clock is held at midday, so every contract counts as open
+    assert rep["result"] == "ok" and rep["instruments"] == len(PRICES) and rep["calls"] >= 1 and "price" not in str(rep)
+    monkeypatch.setattr(F, "FyersData", lambda *a, **k: FakeAPI({}, block_after=0))
+    assert F.check("A-100", "t", today=dt.date(2026, 11, 14))["result"] == "blocked by Fyers (HTTP 429)"
+    monkeypatch.setattr(F, "near_futures", lambda c, d: {})
+    assert F.check("A-100", "t")["result"].startswith("no MCX")
+
+
+def test_the_workflow_can_check_only_and_then_streams_nothing():
+    inp = WF[True]["workflow_dispatch"]["inputs"]["check_only"]
+    assert inp["type"] == "boolean" and inp["default"] is False
+    jobs = WF["jobs"]
+    assert jobs["check"]["needs"] == "token" and "inputs.check_only" in jobs["check"]["if"]
+    assert all("!inputs.check_only" in jobs[j]["if"] for j in ("feed-1", "feed-2", "feed-3"))
+    run = next(s["run"] for s in jobs["check"]["steps"] if "--check" in str(s.get("run", "")))
+    assert "LIVE_URL" not in str(jobs["check"]) and "LIVE_INGEST_TOKEN" not in str(jobs["check"]) and "fyers-feed --check" in run   # the check job cannot reach the relay

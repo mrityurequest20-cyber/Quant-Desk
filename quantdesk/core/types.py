@@ -41,13 +41,15 @@ class Instrument:
         right = right.upper()
         if right not in ("CE", "PE"):
             raise ValueError(f"option right must be CE or PE, got {right!r}")
-        sym = f"{underlying}{expiry:%d%b%y}{int(round(strike))}{right}".upper()
+        k = round(float(strike), 4)
+        k = int(k) if k.is_integer() else k                           # a currency option's strike has decimals (USDINR 84.25): named as the feeds name it
+        sym = f"{underlying}{expiry:%d%b%y}{k}{right}".upper()
         return cls(symbol=sym, kind=OPTION, underlying=underlying, lot_size=lot_size,
                    strike=float(strike), expiry=expiry, right=right)
 
-    def cost_segment(self, intraday: bool = False) -> str:
+    def cost_segment(self, intraday: bool = False, segment: str | None = None) -> str:
         if self.kind == OPTION:
-            return "options"
+            return "mcx_options" if segment == "mcx" else "cds_options" if segment == "nse_cds" else "options"      # MCX and currency options have their own charges
         if self.kind == FUTURE:
             sym = (self.symbol or "").upper()
             return "mcx_futures" if sym.endswith("-MCX") else "cds_futures" if sym.endswith("-CDS") else "futures"      # the board's names: MCX and NSE currency futures have their own charges
