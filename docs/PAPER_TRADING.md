@@ -533,19 +533,22 @@ Okay, then it takes trade."
   have turned rich, or its event has passed.
 - **Nothing else is opened during the day, with one exception.** Prices, news and every reading are still recorded, and every
   strategy is still traded in shadow, so the record keeps growing.
-- **The exception: important news in the session** (the owner, 14 Nov 2026: "if during the trading time if any news comes up
-  which could be important then also allow the system to trade"). A window of **45 minutes** opens for an instrument when a
-  story is:
-  - at most 30 minutes old and published after today's plan was built;
+- **The exception: important news in the session, at any time** (the owner, 14 Nov 2026: "if during the trading time if any news
+  comes up which could be important then also allow the system to trade", and "There is not like 45 minutes window ... in trading
+  session also you can take a trade given that there is a news which is important or is relevant to our risk to reward part").
+  The news counts for an instrument when a story is:
+  - of today's session: published after today's plan was built, and not in the future;
   - of **high impact**, new (novelty 0.5 or more) and not a recap;
   - about the instrument: it names it, or its subjects move it by 0.3 or more through the news model's channels (crude news
     reaches the rupee, not an IT exporter).
 
-  Inside the window the plan's own bar applies to the live board. A directional trade needs a **strong direction**: three or
-  more live readings agreeing (book pressure, the options forward, the move, the news, the market read, the Kalman trend),
-  **the news among them**, none against; then an overnight strategy with the volatility stop. A big-move trade needs a Convexity
-  desk test to pass on the live board (for example a high news event the options have not repriced for). Same proof gates, same
-  sizing, same risk gate. Each story opens one window per instrument, and the trade's thesis names the headline.
+  There is no time window. While such a story exists, the plan's own bar applies to the live board at any time in the session.
+  A directional trade needs a **strong direction**: three or more live readings agreeing (book pressure, the options forward,
+  the move, the news, the market read, the Kalman trend), **the news among them**, none against; then an overnight strategy
+  with the volatility stop. A big-move trade needs a Convexity desk test to pass on the live board (for example a high news
+  event the options have not repriced for). How long a story keeps counting is the market's answer: the news model's vote
+  halves in two hours and is gone after six, and the other readings must still agree. One news-driven directional position per
+  instrument at a time; same proof gates, sizing and risk gate. The trade's thesis names the headline.
 - **Same limits:** the risk gate, the loss caps and the proof gate are the same as for any trade.
 - **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
 - **Yesterday's plan** never steers today.

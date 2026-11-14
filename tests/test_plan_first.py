@@ -162,7 +162,7 @@ def story(title, t, impact="high", novelty=0.9, recap=False, symbols=("NIFTY",),
 
 
 def news_desk(cfg, tmp_path):
-    """PLAN_ONLY, a plan built at 07:30 with nothing on it, a tail model, and a proven overnight long call (the strategy a strong up view can take)."""
+    """PLAN_ONLY, a plan built at 07:30 with nothing on it, a tail model, and a proven overnight long call (one strategy a strong up view can take)."""
     sid = "LC0.uaan.3/1.o"
     rn, ap = desk(cfg, tmp_path, stats=proven(sid=sid), plan_only=True)
     ap.brief = {**BRIEF, "tails": TAILS}
@@ -179,7 +179,7 @@ def session(rn, ap, news, start=NEWS_T, minutes=6, **kw):
         rn.step(snap, ap.decide(snap, rn.account, RR.Runner.server_now(snap), news=news), False, t.astimezone(dt.timezone.utc))
 
 
-def test_important_news_in_the_session_opens_a_window_for_a_strong_direction(cfg, tmp_path):
+def test_important_news_in_the_session_lets_a_strong_direction_trade(cfg, tmp_path):
     rn, ap, sid = news_desk(cfg, tmp_path)
     news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
     session(rn, ap, news, **UP_BOOK)
@@ -188,10 +188,10 @@ def test_important_news_in_the_session_opens_a_window_for_a_strong_direction(cfg
     assert "Not on the plan: taken on important news in the session (news at" in pos[0].thesis and CUT[:30] in pos[0].thesis
 
 
-def test_without_fresh_important_news_the_same_readings_open_nothing(cfg, tmp_path):
+def test_without_important_news_of_todays_session_the_same_readings_open_nothing(cfg, tmp_path):
     for label, news in (("no news", {"items": [], "events": []}),
-                        ("old", {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=45))], "events": []}),
                         ("before the plan", {"items": [story(CUT, dt.datetime(2026, 11, 9, 7, 0, tzinfo=IST))], "events": []}),
+                        ("yesterday", {"items": [story(CUT, dt.datetime(2026, 11, 6, 14, 0, tzinfo=IST))], "events": []}),
                         ("a recap", {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2), recap=True)], "events": []}),
                         ("low impact", {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2), impact="medium")], "events": []}),
                         ("a repeat", {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2), novelty=0.2)], "events": []})):
@@ -200,23 +200,38 @@ def test_without_fresh_important_news_the_same_readings_open_nothing(cfg, tmp_pa
         assert not rn.account.ledger, label
 
 
+def test_there_is_no_window_news_from_earlier_in_the_session_still_counts_while_the_market_agrees(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=80))], "events": []}           # an hour and twenty minutes ago
+    session(rn, ap, news, **UP_BOOK)
+    assert rn.account.positions                                                                  # the news still votes, the book and the forward agree: taken
+    rn, ap, sid = news_desk(cfg, tmp_path / "b")
+    session(rn, ap, news)                                                                        # the same story, but the market no longer agrees with it
+    assert not rn.account.ledger
+
+
+def test_one_news_driven_directional_position_per_instrument_at_a_time(cfg, tmp_path):
+    rn, ap, sid = news_desk(cfg, tmp_path)
+    ap.lab = A2.Lab({**proven(sid=sid), **proven(sid="LC0.uaan.2/1.o")})                       # two proven overnight strategies that could both take it
+    news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
+    session(rn, ap, news, minutes=10, **UP_BOOK)
+    pk = ap.live_packages(rn.account)
+    assert len(pk) == 1, list(pk)
+
+
 def test_important_news_without_a_strong_direction_takes_no_directional_trade(cfg, tmp_path):
     rn, ap, sid = news_desk(cfg, tmp_path)
     news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
-    session(rn, ap, news)                                                                        # the news says up, but the book and the forward say nothing
-    assert ap.news_win["NIFTY"]["why"].startswith("news at")                                     # the window did open
+    assert ap.news_trigger("NIFTY", news, NEWS_T)["why"].startswith("news at")                  # the news counts
+    session(rn, ap, news)                                                                        # it says up, but the book and the forward say nothing
     assert not rn.account.ledger                                                                 # one reading is not a strong direction
 
 
-def test_a_story_opens_its_window_once_and_the_window_closes(cfg, tmp_path):
+def test_news_reaches_the_instruments_it_moves(cfg, tmp_path):
     rn, ap, sid = news_desk(cfg, tmp_path)
-    news = {"items": [story(CUT, NEWS_T - dt.timedelta(minutes=2))], "events": []}
-    w = ap.news_trigger("NIFTY", news, NEWS_T)
-    assert w and w["until"] == NEWS_T - dt.timedelta(minutes=2) + dt.timedelta(minutes=A2.NEWS_WINDOW_MIN)
-    assert ap.news_trigger("NIFTY", news, NEWS_T + dt.timedelta(minutes=10)) is w
-    assert ap.news_trigger("NIFTY", news, NEWS_T + dt.timedelta(minutes=50)) is None               # past its window; the same story never reopens it
-    other = {"items": [story("Crude jumps 7% after strikes on Gulf tankers", NEWS_T - dt.timedelta(minutes=1), symbols=(), sid="s2")], "events": []}
-    assert ap.news_trigger("USDINR", other, NEWS_T) and ap.news_trigger("TCS", other, NEWS_T) is None   # crude reaches the rupee, not an IT exporter
+    crude = {"items": [story("Crude jumps 7% after strikes on Gulf tankers", NEWS_T - dt.timedelta(minutes=1), symbols=(), sid="s2")], "events": []}
+    assert ap.news_trigger("USDINR", crude, NEWS_T) and ap.news_trigger("TCS", crude, NEWS_T) is None   # crude reaches the rupee, not an IT exporter
+    assert ap.news_trigger("NIFTY", crude, NEWS_T - dt.timedelta(minutes=5)) is None             # not before it was published
 
 
 def test_important_news_also_lets_a_proven_convex_trade_through_when_its_test_passes(cfg, tmp_path):

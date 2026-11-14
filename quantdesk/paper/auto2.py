@@ -25,8 +25,9 @@ What bounds it: only the risk gate's loss caps (2.5% of the account a trade with
 strategies or positions (owner, 8 Nov 2026). A sold option is only ever a leg of a structure whose worst case is bounded.
 
 PLAN FIRST, HOLD OVERNIGHT (owner, 14 Nov 2026): with PLAN_ONLY, paper money goes only into what the day plan (06:00 to 09:15) named, a strong direction (three readings
-agreeing, none against) or a big move priced too small, taken in the first 100 minutes unless contradicted since. The one exception: important news in the session (news_trigger) opens
-a 45-minute window in which the plan's bar applies to the live board. Nothing else is opened during the day; every strategy is still traded in shadow. The directional strategies the plan names are held overnight with a volatility stop (the underlying 1.5 daily sd x sqrt(sessions) against).
+agreeing, none against) or a big move priced too small, taken in the first 100 minutes unless contradicted since. The one exception: important news of today's session
+(news_trigger) lets the plan's bar apply to the live board at any time in the session. Nothing else is opened during the day; every strategy is still traded in
+shadow. The directional strategies the plan names are held overnight with a volatility stop (the underlying 1.5 daily sd x sqrt(sessions) against).
 
 THE CONVEXITY DESK (owner, 14 Nov 2026; convex.py): a second book alongside, with no view on direction. It buys both sides (straddles, strangles, far wings) only when a
 test says the next move is priced too small, risks 0.5% of the account a trade and at most 3% a month, and sells in thirds (+100%, +300%, the rest trailed).
@@ -133,9 +134,9 @@ PLAN_PRICE_SLACK = 1.5                    # nor when it now risks more than this
 VOL_STOP_K = 1.5                          # the owner's stop: the underlying moving against the trade by 1.5 daily standard deviations (times sqrt(sessions held))
 OVERNIGHT_TPS = (2.0, 3.0)                # the overnight strategies' take-profits, in R of the structure's worst case
 # ---- the one exception: important news in the session (owner, 14 Nov 2026: "if during the trading time if any news comes up which could be important then also allow
-# the system to trade"). A fresh high-impact story after the plan, reaching the instrument, opens a window in which the plan's own bar applies to the live board. --------
-NEWS_FRESH_MIN = 30                       # the story is at most this old
-NEWS_WINDOW_MIN = 45                      # and opens this long a window for the instruments it reaches
+# the system to trade"; and: "There is not like 45 minutes window ... in trading session also you can take a trade given that there is a news which is important or is
+# relevant to our risk to reward part"). Any time in the session: an important story of today's session, reaching the instrument, lets the plan's own bar apply to the
+# live board. No window: how long a story still counts is the news model's own decay (its vote halves in two hours and is gone after six). --------------------------
 NEWS_MIN_NOVELTY = 0.5                    # a new story, not a repeat of one already out
 NEWS_TOUCH_MIN = 0.3                      # reaching an instrument: named in it, or its subjects move it this much (newsmodel channels)
 OVERNIGHT_TH_PCT = 0.40                   # the overnight markets' median move that counts as a vote
@@ -1491,14 +1492,10 @@ class AutoPilotV2:
         return [i["sid"] for i in dp.get("items") or [] if i.get("u") == u]
 
     def news_trigger(self, u: str, news, ist: dt.datetime) -> dict | None:
-        """The news exception for `u` now: {"until", "why"} while a window is open. A window opens on a story at most NEWS_FRESH_MIN old, published after today's
-        plan was built (or the segment's first entry, without a plan), of high impact, new (novelty NEWS_MIN_NOVELTY, not a recap), that names `u` or whose subjects
-        move it by NEWS_TOUCH_MIN through the news model's channels. Each story opens one window per instrument."""
-        if not hasattr(self, "news_win"):
-            self.news_win, self.news_used = {}, set()
-        w = self.news_win.get(u)
-        if w and w["until"] > ist:
-            return w
+        """The news exception for `u` now, or None: {"why"} for the latest important story of today's session that reaches `u`. Important: high impact, new (novelty
+        NEWS_MIN_NOVELTY or more), not a recap. Of today's session: published after today's plan was built (or, without a plan, after the segment's first entry time),
+        and not after now. Reaching `u`: it names `u`, or its subjects move `u` by NEWS_TOUCH_MIN through the news model's channels. There is no window: the story stays a
+        reason while the market still agrees with it, and the news model's vote, which the strong direction needs, fades as the story ages."""
         since = None
         try:
             if self.day_plan and str(self.day_plan.get("built_at", ""))[:10] == ist.date().isoformat():
@@ -1515,21 +1512,15 @@ class AutoPilotV2:
                 ts = dt.datetime.fromisoformat(str(it.get("ts")).replace("Z", "+00:00")).astimezone(IST)
             except ValueError:
                 continue
-            if not (since < ts <= ist and (ist - ts).total_seconds() <= NEWS_FRESH_MIN * 60):
-                continue
-            key = (u, str(it.get("id") or it.get("title")))
-            if key in self.news_used:
+            if not (since < ts <= ist and ts.date() == ist.date()):
                 continue
             title = str(it.get("title") or "")
             reach = 1.0 if u in (it.get("symbols") or []) else max((abs(x) for subj, _ in NM.subjects(title) for x, _ in NM.sensitivity(u, subj)), default=0.0)
             if reach >= NEWS_TOUCH_MIN and (best is None or ts > best[0]):
-                best = (ts, key, title)
+                best = (ts, title)
         if best is None:
             return None
-        self.news_used.add(best[1])
-        w = {"until": best[0] + dt.timedelta(minutes=NEWS_WINDOW_MIN), "why": f"news at {best[0]:%H:%M}: {best[2][:140]}"}
-        self.news_win[u] = w
-        return w
+        return {"why": f"news at {best[0]:%H:%M}: {best[1][:140]}"}
 
     def plan_item(self, u: str, sid: str) -> dict | None:
         return next((i for i in (self.day_plan or {}).get("items") or [] if i.get("u") == u and i.get("sid") == sid), None)
@@ -1654,7 +1645,8 @@ class AutoPilotV2:
                 if draw > 0:
                     best = (draw, s)
                     break
-            nw = self.news_trigger(u, news, ist) if self.plan_only and best is None else None
+            news_busy = any(pkg["u"] == u and not CX.is_convex(BY_SID[pkg["sid"]].struct) for pkg in pk.values())    # one directional position on it at a time
+            nw = self.news_trigger(u, news, ist) if self.plan_only and best is None and not news_busy else None
             pool = (self.strategies() if not self.plan_only else
                     [s for s in self.strategies() if s.hold == "overnight" and s.view == st.get("strong")] if nw and st.get("strong") else [])
             for s in pool if best is None else ():                                     # PLAN_ONLY: nothing the plan did not name, but important news in the session
