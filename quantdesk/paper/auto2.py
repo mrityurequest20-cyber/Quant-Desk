@@ -36,11 +36,13 @@ NOT proven to make money. The shadow record is the evidence it builds; it is sho
 """
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import math
 import random
 import re
+import zlib
 from dataclasses import dataclass
 
 from ..markets import sessions as MK
@@ -115,6 +117,7 @@ SWING_SESSIONS = 3
 LEDGER_SOFT_LIMIT = V1.LEDGER_SOFT_LIMIT
 SUMMARY_SOFT_MAX = 30000                 # AUTO v2's share of the runner's state (the relay's cap is 60,000 for all of it): past this, reasons are dropped before numbers
 LAB_MAX_CHARS = 110000                   # the relay keeps the record in one stored value (128 KiB at most)
+LAB_MAX_INFLATED = 8_000_000              # a compressed record read back may not inflate past this (storage is not trusted)
 # The day plan (owner, 13 Nov 2026: "6 am to 9:15 am, the desk will plan the day by analysing options data, futures data and top to bottom predictive news analysis and look
 # for high risk to reward trades"). Built from last night's closing books, the overnight markets, the news and the pre-market brief; it ranks defined-risk candidates and the
 # open takes a planned strategy first, through the same proof gate (MIN_TRADES, a positive draw) and the same risk gate as any other.
@@ -602,18 +605,45 @@ class Lab:
         return rng.gauss(mean, se)
 
     def to_json(self, extra: dict | None = None) -> str:
+        """The record as the relay keeps it (one ASCII value of at most LAB_MAX_CHARS). Plain JSON while it fits; past that the whole record is zlib-compressed into
+        {"v": 1, "stats": {}, "z": base64} (the relay checks only v and that stats is an object), which holds every strategy of the catalogue; only if even that
+        is too large are the thinnest records left out, the busiest kept."""
         inv = {code: d for code, d in self.inv.items() if d["active"] or any(sid.startswith(code + "0.") for sid in self.stats)}
         head = {"v": 1, "inv": inv, **(extra or {})}
-        budget = LAB_MAX_CHARS - len(json.dumps(head, separators=(",", ":")))
-        items = sorted(self.stats.items(), key=lambda kv: -kv[1][0])
-        out, size = {}, 2
-        for sid, v in items:                                                    # the busiest records first: if the cap is ever reached, the thinnest are the ones left out
-            row = [v[0], round(v[1], 4), round(v[2], 4), v[3]]
-            size += len(json.dumps({sid: row}, separators=(",", ":"))) - 1
-            if size > budget:
-                break
-            out[sid] = row
-        return json.dumps({**head, "stats": out}, separators=(",", ":"))
+        rows = [(sid, [v[0], round(v[1], 4), round(v[2], 4), v[3]]) for sid, v in sorted(self.stats.items(), key=lambda kv: -kv[1][0])]
+
+        def plain(k):
+            return json.dumps({**head, "stats": dict(rows[:k])}, separators=(",", ":"))
+
+        def packed(k):
+            z = base64.b64encode(zlib.compress(plain(k).encode("ascii"), 9)).decode("ascii")
+            return json.dumps({"v": 1, "stats": {}, "z": z}, separators=(",", ":"))
+        text = plain(len(rows))
+        if len(text) <= LAB_MAX_CHARS:
+            return text
+        text = packed(len(rows))
+        if len(text) <= LAB_MAX_CHARS:
+            return text
+        lo, hi = 0, len(rows)                                                   # the most records (busiest first) whose compressed record fits
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(packed(mid)) <= LAB_MAX_CHARS:
+                lo = mid
+            else:
+                hi = mid - 1
+        return packed(lo)
+
+    @staticmethod
+    def unpack(raw: str) -> dict:
+        """A record read back from the relay: plain JSON, or the compressed form inflated (at most LAB_MAX_INFLATED bytes); {} for anything else."""
+        got = json.loads(raw) if isinstance(raw, str) else {}
+        if isinstance(got, dict) and isinstance(got.get("z"), str):
+            d = zlib.decompressobj()
+            body = d.decompress(base64.b64decode(got["z"], validate=True), LAB_MAX_INFLATED)
+            if d.unconsumed_tail:
+                raise ValueError("the record inflates past its bound")
+            got = json.loads(body.decode("ascii"))
+        return got if isinstance(got, dict) else {}
 
     def summary(self, top: int = 12) -> dict:
         rows = []
@@ -1635,6 +1665,7 @@ class AutoPilotV2:
                 self.plan(snap, now, news)
             except Exception:                                                              # noqa: BLE001 - a plan that fails costs the plan, never the session
                 self.day_plan = {"built_at": ist.isoformat(timespec="minutes"), "items": [], "notes": ["the plan could not be built this time"]}
+            self.lab.dirty = True                                                          # the plan is kept with the record: a restart after 09:15 still has it
         if self.day_plan and str(self.day_plan.get("built_at", ""))[:10] != ist.date().isoformat():
             self.day_plan = None                                                           # yesterday's plan never steers today
         orders: list[dict] = []
@@ -1929,16 +1960,29 @@ class AutoPilotV2:
                 "_why": f"{s.sid} convexity draw {draw:+.2f}R, {lots} lots"}
 
     # ---- keeping the record ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def restore_plan(d) -> dict | None:
+        """A day plan read back with the record: kept only if it is well formed, and only its items naming a known strategy (storage is not trusted)."""
+        if not (isinstance(d, dict) and isinstance(d.get("built_at"), str) and isinstance(d.get("items"), list)):
+            return None
+        try:
+            dt.datetime.fromisoformat(d["built_at"])
+        except ValueError:
+            return None
+        items = [i for i in d["items"] if isinstance(i, dict) and isinstance(i.get("u"), str) and i.get("sid") in BY_SID]
+        return {**d, "items": items[:PLAN_TOP * 2], "states": d.get("states") if isinstance(d.get("states"), dict) else {}}
+
     def load(self, relay) -> str:
         try:
             got = relay.get_lab()
             raw = got.get("lab") if isinstance(got, dict) else None
-            got = json.loads(raw) if isinstance(raw, str) else {}
+            got = Lab.unpack(raw) if isinstance(raw, str) else {}
             stats, inv = got.get("stats"), got.get("inv")
             self.lab = Lab(stats if isinstance(stats, dict) else None, inv if isinstance(inv, dict) else None)
             self._read_w = got.get("read_w") if isinstance(got.get("read_w"), dict) else None
             cx = got.get("cx")
             self.cx_peak = {str(k): float(v) for k, v in cx.items() if isinstance(v, (int, float)) and math.isfinite(v)} if isinstance(cx, dict) else {}
+            self.day_plan = self.restore_plan(got.get("plan")) or self.day_plan          # a restart after 09:15 keeps today's plan (yesterday's is dropped as always)
             if hasattr(self, "reader"):
                 self.reader.restore(self._read_w)
             return f"{len(self.lab.stats)} strategies with a record"
@@ -1952,6 +1996,8 @@ class AutoPilotV2:
             extra = {"read_w": self.reader.export()} if hasattr(self, "reader") else {}
             if self.cx_peak:
                 extra["cx"] = {k: round(v, 3) for k, v in self.cx_peak.items()}
+            if self.day_plan:
+                extra["plan"] = self.day_plan
             relay.put_lab(self.lab.to_json(extra or None))
             self.lab.dirty, self.lab_saved_at = False, mono
             return True

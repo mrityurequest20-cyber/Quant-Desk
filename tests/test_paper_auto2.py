@@ -246,3 +246,48 @@ console.log(JSON.stringify(out));""")
     assert o["big"][0] == 400 and o["wide"][0] == 400 and o["shape"][0] == 400
     live = (ROOT / "deploy/cloudflare/live.js").read_text()
     assert '"POST /paper/lab": "ingest", "GET /paper/lab": "ingest"' in live                       # the runner's key only: the app's key cannot read or write the record
+
+
+def test_the_whole_catalogue_fits_the_relay_compressed_and_a_bad_record_is_refused(cfg, tmp_path):
+    import base64
+    import random as _r
+    import zlib
+    rng = _r.Random(1)
+    lab = A2.Lab()
+    for s in A2.CATALOGUE + A2.CX_CATALOGUE:                                                       # every strategy with a record: plain JSON would hold about 2,600 of them
+        for _ in range(rng.randint(1, 30)):
+            lab.add(s.sid, rng.gauss(0, 1))
+    text = lab.to_json({"read_w": {}})
+    assert len(text) <= A2.LAB_MAX_CHARS and json.loads(text)["v"] == 1 and json.loads(text)["stats"] == {} and "z" in json.loads(text)
+    assert text.isascii()                                                                        # the relay's own checks: v, stats an object, ASCII
+    relay = FakeRelay(text)
+    ap = desk(cfg, tmp_path)[1]
+    assert f"{len(lab.stats)} strategies" in ap.load(relay) and ap.lab.stats == {k: [v[0], round(v[1], 4), round(v[2], 4), v[3]] for k, v in lab.stats.items()}
+    small = A2.Lab({IC: [3, 1.0, 1.0, 2]}).to_json()
+    assert "z" not in json.loads(small)                                                          # a record that fits stays plain
+    bomb = base64.b64encode(zlib.compress(b"{}" + b" " * (A2.LAB_MAX_INFLATED + 10))).decode()   # cut at the bound it would still parse: only the bound refuses it
+    ap2 = desk(cfg, tmp_path)[1]
+    assert "starting from zero" in ap2.load(FakeRelay(json.dumps({"v": 1, "stats": {}, "z": bomb}))) and ap2.lab.stats == {}
+    ap3 = desk(cfg, tmp_path)[1]
+    assert "starting from zero" in ap3.load(FakeRelay(json.dumps({"v": 1, "stats": {}, "z": "not base64!"})))
+
+
+def test_todays_plan_survives_a_restart_and_yesterdays_does_not(cfg, tmp_path):
+    rn, ap = desk(cfg, tmp_path)
+    ap.day_plan = {"built_at": T0.date().isoformat() + "T07:30+05:30", "items": [{"u": "NIFTY", "sid": IC, "risk_unit": 10.0}, {"u": "NIFTY", "sid": "NOPE"}],
+                   "states": {"NIFTY": {"view": "up"}}, "notes": []}
+    ap.lab.add(IC, 0.3)
+    relay = FakeRelay()
+    assert ap.save(relay, 1000.0)
+    ap2 = desk(cfg, tmp_path)[1]
+    ap2.load(relay)
+    assert ap2.day_plan and [i["sid"] for i in ap2.day_plan["items"]] == [IC] and ap2.planned("NIFTY") == [IC]     # an unknown strategy is dropped
+    assert ap2.day_plan["states"]["NIFTY"]["view"] == "up"
+    cycle(rn, ap2, board(T0), T0)
+    assert ap2.day_plan is not None                                                              # the same day: it steers the session
+    ap3 = desk(cfg, tmp_path)[1]
+    ap3.load(relay)
+    nxt = T0 + dt.timedelta(days=2)
+    cycle(rn, ap3, board(nxt), nxt)
+    assert ap3.day_plan is None or not str(ap3.day_plan.get("built_at", "")).startswith(T0.date().isoformat())   # another day: never
+    assert A2.AutoPilotV2.restore_plan({"built_at": "not a date", "items": []}) is None and A2.AutoPilotV2.restore_plan("x") is None

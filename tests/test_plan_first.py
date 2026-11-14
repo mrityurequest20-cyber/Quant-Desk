@@ -423,3 +423,35 @@ def test_a_live_agreement_with_a_gap_in_it_starts_its_clock_again(cfg, tmp_path)
     rising(rn, ap, 9, cusum_at=7)                                                                # agreement from minute 5 to 8
     rising(rn, ap, 3, start=NEWS_T + dt.timedelta(minutes=12), offset=12, cusum_at=0)            # three minutes unseen, then three more
     assert ap.agree_since["NIFTY"][1] >= (NEWS_T + dt.timedelta(minutes=12)).timestamp() and not rn.account.ledger     # held two minutes since the gap, not nine
+
+
+def test_the_months_tally_inside_one_cycle_counts_the_limit_price_too(cfg, tmp_path):
+    """Two convex packages in one cycle: the second must see the first at its limit-price cost. The budget is set so that, counted at the offer, a second lot would
+    still fit, and counted at the limit it does not."""
+    from quantdesk.paper import convex as CX
+    from quantdesk.paper.account import Account
+    from tests.test_convex import XG, fat_tails, proven as cx_proven, wide_board
+    snap = wide_board(OPEN)
+    for name, q in list(snap["quotes"].items()):                                                 # a second underlying with the very same board
+        if name.startswith("NIFTY"):
+            snap["quotes"]["FINNIFTY" + name[len("NIFTY"):]] = dict(q)
+    from quantdesk.paperlink.cli import auto_v2
+    ap = auto_v2(cfg, ("NIFTY", "FINNIFTY"), {"NIFTY": 65, "FINNIFTY": 65})                       # the desk's real cost model and calendar
+    ap.plan_only, ap.lab = False, A2.Lab(cx_proven())
+    ap.brief = {"tails": {"NIFTY": fat_tails(), "FINNIFTY": fat_tails()}}
+    ch = A2.V1.chains(snap, ap.und, ap.lots)
+    st = ap.state(snap, "NIFTY", ch, OPEN, None)
+    p = ap.price(snap, A2.BY_SID[XG], st, ch)
+    lims = [math.ceil((l["ask"] + max(3 * A2.TICK, 0.02 * l["ask"])) / A2.TICK - 1e-9) * A2.TICK for l in p["legs"]]
+    w = (sum(lims) + sum(ap.fees_fn("NIFTY", l["exp"], l["k"], l["right"], 65, x) + ap.fees_fn("NIFTY", l["exp"], l["k"], l["right"], -65, x)
+                         for l, x in zip(p["legs"], lims)) / 65) * 65                            # a lot at the limit
+    o = p["risk"] * 65                                                                           # a lot at the offer
+    assert w > o
+    capital = 1.001 * w / CX.STAKE_PCT                                                           # the stake is one lot at the limit
+    acct = Account(capital)
+    acct.last_equity = capital
+    left = w + (w + o) / 2                                                                       # what the month has left: one lot at the limit, then less than one
+    acct.ledger.append({"kind": "buy", "ts": OPEN.isoformat(), "qty": 1, "price": CX.MONTH_BUDGET_PCT * capital - left, "fees": 0.0,
+                        "strategy": f"{A2.TAG} {XG} NIFTY n1"})
+    orders = [x for x in ap.decide(snap, acct, OPEN + dt.timedelta(seconds=1)) if x.get("side") == "package"]
+    assert len(orders) == 1, [x.get("strategy") for x in orders]                                 # counted at the offer, a second would have gone

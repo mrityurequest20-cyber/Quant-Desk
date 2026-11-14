@@ -240,6 +240,10 @@ A strategy's record is read through a **multilevel normal model**, fitted by emp
   and the error against the true means is under a quarter of each strategy's raw average on short records.
 - **The proof gate is unchanged:** 8 shadow trades of its own and a positive draw before any paper money.
 - **In the app:** each structure's shared estimate, and the order thesis gives the strategy's shared estimate next to its own average.
+- **Where it is kept:** on the private relay, in one stored value of at most 110,000 characters. Since 14 Nov 2026 the record is written as plain JSON while
+  it fits and, past that, zlib-compressed into the same value (`{"v": 1, "stats": {}, "z": ...}`; the relay's checks are unchanged), so the whole catalogue
+  with a record for every strategy fits in about 70,000 characters instead of losing a third of it. Read back, a compressed record may not inflate past 8 MB
+  (storage is not trusted); only if even the compressed record were too large would the thinnest records be left out, the busiest kept.
 
 ## The strategy builder: every structure, which one now and why, and designs of its own
 
@@ -576,7 +580,8 @@ Okay, then it takes trade."
   Same proof gates and risk gate; one live-triggered directional position per instrument at a time. The thesis says what changed.
 - **Same limits:** the risk gate, the loss caps and the proof gate are the same as for any trade.
 - **Unproven ideas:** an unproven strategy on the plan is shadow-traded like every other, and earns its way in.
-- **Yesterday's plan** never steers today.
+- **Yesterday's plan** never steers today. Today's is kept with the strategy record (since 14 Nov 2026), so a restart after 09:15 still has it; read
+  back, only its items that name a known strategy are kept.
 
 **Where to see it:** the Positions tab, the "Day plan" panel, above the strategy lab.
 
