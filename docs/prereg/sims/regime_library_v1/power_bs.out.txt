@@ -1,20 +1,20 @@
 h 0.5: 1626 test sessions from 2020-04-15; Black-Scholes outcomes
 sd of a family's overnight R over the test sessions (one world), NIFTY | BANKNIFTY:
-  LC 1.08|0.94  BCS 0.62|0.53  BPS 0.40|0.41  BWC 0.31|0.35  CRB 0.54|0.59  LP 1.24|0.97  BRP 0.63|0.54  BRC 0.39|0.40  BWP 0.31|0.34  PRB 0.62|0.58  IC 0.51|0.60  IF 0.75|0.98  LS 0.48|0.40  LG 0.81|0.57  CBF 0.73|0.96  PBF 0.73|0.96
+  LC 1.07|0.93  BCS 0.60|0.51  BPS 0.39|0.39  BWC 0.29|0.33  CRB 0.53|0.58  LP 1.22|0.96  BRP 0.61|0.52  BRC 0.38|0.39  BWP 0.29|0.32  PRB 0.61|0.57  IC 0.44|0.51  IF 0.65|0.90  LS 0.48|0.40  LG 0.79|0.56  CBF 0.65|0.90  PBF 0.65|0.90
 share of test sessions each family could be traded, NIFTY | BANKNIFTY:
-  LC 1.00|1.00  BCS 1.00|1.00  BPS 1.00|1.00  BWC 1.00|1.00  CRB 1.00|1.00  LP 1.00|1.00  BRP 1.00|1.00  BRC 1.00|1.00  BWP 1.00|1.00  PRB 1.00|1.00  IC 1.00|0.97  IF 0.98|0.82  LS 1.00|1.00  LG 1.00|1.00  CBF 0.97|0.80  PBF 0.97|0.80
+  LC 1.00|1.00  BCS 1.00|1.00  BPS 1.00|1.00  BWC 1.00|1.00  CRB 1.00|1.00  LP 1.00|1.00  BRP 1.00|1.00  BRC 1.00|1.00  BWP 1.00|1.00  PRB 1.00|1.00  IC 0.99|0.94  IF 0.88|0.52  LS 1.00|1.00  LG 1.00|1.00  CBF 0.92|0.60  PBF 0.92|0.60
 near-expiry trading days over the test sessions, NIFTY | BANKNIFTY: median 3 | 4, expiry eves 0.21 | 0.16
-  null: pricing only     S: mean D -0.0046 R (sd over worlds 0.0055); PASS (registered rule) 0.000; picks differ 0.41; sd of D 0.221 R, detectable mean D at 80% power 0.0154 R
-  null: pricing only     A: mean D -0.0053 R (sd over worlds 0.0062); PASS (registered rule) 0.000; picks differ 0.52; sd of D 0.245 R, detectable mean D at 80% power 0.0169 R
-  null: drift only       S: mean D -0.0033 R (sd over worlds 0.0055); PASS (registered rule) 0.005; picks differ 0.15; sd of D 0.151 R, detectable mean D at 80% power 0.0114 R
-  null: drift only       A: mean D +0.0062 R (sd over worlds 0.0083); PASS (registered rule) 0.235; picks differ 0.25; sd of D 0.184 R, detectable mean D at 80% power 0.0135 R
-  regime 0.05            S: mean D +0.0159 R (sd over worlds 0.0079); PASS (registered rule) 0.655; picks differ 0.48; sd of D 0.225 R, detectable mean D at 80% power 0.0171 R
-  regime 0.05            A: mean D +0.0082 R (sd over worlds 0.0065); PASS (registered rule) 0.215; picks differ 0.54; sd of D 0.244 R, detectable mean D at 80% power 0.0181 R
-  regime 0.10            S: mean D +0.0488 R (sd over worlds 0.0109); PASS (registered rule) 1.000; picks differ 0.51; sd of D 0.238 R, detectable mean D at 80% power 0.0222 R
-  regime 0.10            A: mean D +0.0301 R (sd over worlds 0.0080); PASS (registered rule) 0.950; picks differ 0.55; sd of D 0.252 R, detectable mean D at 80% power 0.0233 R
-  regime 0.20            S: mean D +0.1189 R (sd over worlds 0.0169); PASS (registered rule) 1.000; picks differ 0.54; sd of D 0.277 R, detectable mean D at 80% power 0.0371 R
-  regime 0.20            A: mean D +0.0769 R (sd over worlds 0.0112); PASS (registered rule) 1.000; picks differ 0.57; sd of D 0.292 R, detectable mean D at 80% power 0.0400 R
-  regime 0.30            S: mean D +0.1913 R (sd over worlds 0.0239); PASS (registered rule) 1.000; picks differ 0.56; sd of D 0.324 R, detectable mean D at 80% power 0.0544 R
-  regime 0.30            A: mean D +0.1253 R (sd over worlds 0.0150); PASS (registered rule) 1.000; picks differ 0.58; sd of D 0.344 R, detectable mean D at 80% power 0.0594 R
-  regime 0.20 + drift    S: mean D +0.0713 R (sd over worlds 0.0245); PASS (registered rule) 0.985; picks differ 0.35; sd of D 0.236 R, detectable mean D at 80% power 0.0294 R
-  regime 0.20 + drift    A: mean D +0.0495 R (sd over worlds 0.0187); PASS (registered rule) 0.950; picks differ 0.40; sd of D 0.256 R, detectable mean D at 80% power 0.0322 R
+  null: pricing only     S: mean D -0.0055 R (sd over worlds 0.0049); PASS (registered rule) 0.000; picks differ 0.37; sd of D 0.194 R, detectable mean D at 80% power 0.0136 R (0.0137 at 60 lags)
+  null: pricing only     A: mean D -0.0074 R (sd over worlds 0.0051); PASS (registered rule) 0.000; picks differ 0.47; sd of D 0.223 R, detectable mean D at 80% power 0.0151 R (0.0145 at 60 lags)
+  null: drift only       S: mean D -0.0038 R (sd over worlds 0.0052); PASS (registered rule) 0.005; picks differ 0.15; sd of D 0.145 R, detectable mean D at 80% power 0.0107 R (0.0114 at 60 lags)
+  null: drift only       A: mean D +0.0053 R (sd over worlds 0.0081); PASS (registered rule) 0.235; picks differ 0.25; sd of D 0.182 R, detectable mean D at 80% power 0.0132 R (0.0141 at 60 lags)
+  regime 0.05            S: mean D +0.0142 R (sd over worlds 0.0069); PASS (registered rule) 0.650; picks differ 0.44; sd of D 0.205 R, detectable mean D at 80% power 0.0155 R (0.0167 at 60 lags)
+  regime 0.05            A: mean D +0.0050 R (sd over worlds 0.0059); PASS (registered rule) 0.075; picks differ 0.50; sd of D 0.230 R, detectable mean D at 80% power 0.0170 R (0.0177 at 60 lags)
+  regime 0.10            S: mean D +0.0449 R (sd over worlds 0.0101); PASS (registered rule) 0.995; picks differ 0.48; sd of D 0.225 R, detectable mean D at 80% power 0.0209 R (0.0253 at 60 lags)
+  regime 0.10            A: mean D +0.0257 R (sd over worlds 0.0076); PASS (registered rule) 0.840; picks differ 0.52; sd of D 0.248 R, detectable mean D at 80% power 0.0226 R (0.0268 at 60 lags)
+  regime 0.20            S: mean D +0.1145 R (sd over worlds 0.0168); PASS (registered rule) 1.000; picks differ 0.52; sd of D 0.272 R, detectable mean D at 80% power 0.0362 R (0.0485 at 60 lags)
+  regime 0.20            A: mean D +0.0726 R (sd over worlds 0.0115); PASS (registered rule) 1.000; picks differ 0.56; sd of D 0.294 R, detectable mean D at 80% power 0.0394 R (0.0524 at 60 lags)
+  regime 0.30            S: mean D +0.1884 R (sd over worlds 0.0234); PASS (registered rule) 1.000; picks differ 0.55; sd of D 0.322 R, detectable mean D at 80% power 0.0536 R (0.0740 at 60 lags)
+  regime 0.30            A: mean D +0.1225 R (sd over worlds 0.0160); PASS (registered rule) 1.000; picks differ 0.58; sd of D 0.344 R, detectable mean D at 80% power 0.0588 R (0.0810 at 60 lags)
+  regime 0.20 + drift    S: mean D +0.0711 R (sd over worlds 0.0246); PASS (registered rule) 0.980; picks differ 0.35; sd of D 0.232 R, detectable mean D at 80% power 0.0289 R (0.0371 at 60 lags)
+  regime 0.20 + drift    A: mean D +0.0496 R (sd over worlds 0.0186); PASS (registered rule) 0.955; picks differ 0.40; sd of D 0.254 R, detectable mean D at 80% power 0.0321 R (0.0414 at 60 lags)

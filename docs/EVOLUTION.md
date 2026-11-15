@@ -99,7 +99,7 @@ computed:
   tests compare structures within a direction (up, down, flat).
 - **Two tests, walk-forward.** S chooses by the similar past, A by a record that forgets (weights halving every 60 sessions, the idea deferred from phase 2), each
   against the cumulative record. In a simulation on the real fingerprint path, with outcomes priced by Black-Scholes (synthetic, not measured), S passes about two
-  worlds in three when a structure's edge moves by 0.05 R with the kind of market, every world at 0.10 R, and almost never when nothing moves; the real report prints
+  worlds in three when a structure's edge moves by 0.05 R with the kind of market, nearly every world at 0.10 R, and almost never when nothing moves; the real report prints
   the effect its own noise lets it detect. A forgetting record follows a lasting kind of market as well as drift, so an A pass cannot say which.
 - **What a pass changes.** Nothing on its own: the estimate goes to the app, and using it to choose paper-money strategies is the owner's decision.
 

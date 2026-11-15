@@ -1,5 +1,6 @@
 """Power of the regime library's tests at a REALISTIC outcome noise (docs/prereg/regime_library_v1.json; research review of 15 Nov 2026, item 2: power.py's 0.2 R
-noise was assumed, and a Black-Scholes sketch put the overnight R of these structures at 0.5 to over 2 R, varying with the days to expiry).
+noise was assumed, and a Black-Scholes sketch put the overnight R of these structures at 0.3 to 1.8 R, over 2 R for the butterflies on an expiry eve, varying with the
+days to expiry).
 
 The outcomes here come from pricing, not from an assumed spread. Each session, for NIFTY and BANKNIFTY:
 
@@ -10,13 +11,17 @@ The outcomes here come from pricing, not from an assumed spread. Each session, f
   expiry that is not a session moves to the session before it;
 * each family's width: auto2's own legs (auto2.resolved_legs) on strikes STEP apart around an at-the-money strike at the spot, priced by Black-Scholes at the session's
   implied volatility (= its realized volatility: the expected move is priced in), bought at the price plus research.warehouse_research.leg_cost and sold at it minus,
-  the desk's option fee schedule (FEES, config/quantdesk.yaml) on each order; a leg under auto2.MIN_PREMIUM or a width whose round-trip fees exceed auto2.MAX_FEES_R of its
+  the desk's option fee schedule (FEES, config/quantdesk.yaml; brokerage the flat fee on every option order, as execution.costs.CostModel.fees charges it) on each order; a leg under auto2.MIN_PREMIUM or a width whose round-trip fees exceed auto2.MAX_FEES_R of its
   risk is not traded; out at the next session's Black-Scholes price (the new spot, the new implied volatility, a session less), or at expiry at intrinsic value with
   exercise STT on long legs in the money; R = profit / (worst loss at expiry from auto2.payoff_bounds + round-trip fees at the entry prices), clamped -5 .. +10;
 * added on top, as in power.py: a regime effect delta (each family's own smooth function of the six features, sd delta R over sessions), and optionally drift.
 
+Simplifications: the spot is fixed (20,000 and 45,000) with at-the-money exactly on a strike, so the noise that comes from where the spot sits between strikes is left
+out (slightly understated); implied volatility equals realized, so no structure has an edge from pricing.
+
 The choosers, the statistic and the registered PASS rule are power.py's. Also printed: the sd of D across sessions and the effect the test would detect with 80% power
-at that sd (2.80 x the 20-lag standard error of mean D, averaged over worlds), the number the real report prints.
+at that sd (2.80 x the 20-lag standard error of mean D, averaged over worlds; and at the 60-lag standard error, which a PASS also needs), the number the real report
+prints.
 
     PYTHONPATH=. python docs/prereg/sims/regime_library_v1/power_bs.py <features csv from library_features.py> [reps, default 200]
 """
@@ -45,7 +50,7 @@ S0 = {"NIFTY": 20000.0, "BANKNIFTY": 45000.0}
 STEP = {"NIFTY": 50.0, "BANKNIFTY": 100.0}
 LOT = {"NIFTY": 65, "BANKNIFTY": 30}
 IV_BETA = {"NIFTY": 1.0, "BANKNIFTY": 1.22}
-FEES = {"brokerage": 20.0, "brokerage_cap": 0.0003, "stt_sell": 0.0015, "exchange": 0.0003503, "stamp_buy": 0.00003, "gst": 0.18, "sebi_per_crore": 10.0,
+FEES = {"brokerage": 20.0, "stt_sell": 0.0015, "exchange": 0.0003503, "stamp_buy": 0.00003, "gst": 0.18, "sebi_per_crore": 10.0,
         "exercise_stt": 0.0015}
 IV_VOL, IV_RHO = 0.05, -0.5
 
@@ -53,7 +58,7 @@ IV_VOL, IV_RHO = 0.05, -0.5
 def order_fee(px: np.ndarray, units: int, sell: bool) -> np.ndarray:
     """Rupees per unit for one order of `units` at `px` (the desk's option schedule)."""
     turn = px * units
-    brk = np.minimum(FEES["brokerage"], FEES["brokerage_cap"] * turn)
+    brk = np.full_like(turn, FEES["brokerage"])                                # options pay the flat fee, no cap (execution.costs.CostModel.fees)
     exch = FEES["exchange"] * turn
     sebi = FEES["sebi_per_crore"] * turn / 1e7
     tax = FEES["stt_sell"] * turn if sell else FEES["stamp_buy"] * turn
@@ -90,7 +95,7 @@ def nominal_expiries(u: str, start: dt.date, end: dt.date) -> list[dt.date]:
                 wd = 3 if d < dt.date(2023, 9, 4) else 2
                 if d.weekday() == wd:
                     out.append(d)
-            elif d.day == 1:
+            elif d.day == 1 or d == dt.date(2024, 11, 21):                           # the month the monthlies start counts too
                 wd = 3 if d < dt.date(2025, 9, 1) else 1
                 out.append(_last_weekday(d.year, d.month, wd))
         d += dt.timedelta(days=1)
@@ -230,7 +235,8 @@ def choose(y: np.ndarray, lo: int, W: np.ndarray, tests: np.ndarray) -> dict:
         keep = dn > 0
         dd = dsum[keep] / dn[keep]
         se20 = abs(dd.mean() / nw_t(dd, LAGS)) if dd.mean() != 0 else float("nan")
-        out[name] = (dd.mean(), nw_t(dd, LAGS), differ / max(total, 1), nw_t(dd, LONG_LAGS), dd.std(), se20)
+        se60 = abs(dd.mean() / nw_t(dd, LONG_LAGS)) if dd.mean() != 0 else float("nan")
+        out[name] = (dd.mean(), nw_t(dd, LAGS), differ / max(total, 1), nw_t(dd, LONG_LAGS), dd.std(), se20, se60)
     return out
 
 
@@ -264,9 +270,10 @@ def main():
         for k in ("S", "A"):
             m = np.array([r[k][0] for r in res]); tt = np.array([r[k][1] for r in res]); dif = np.array([r[k][2] for r in res])
             t60 = np.array([r[k][3] for r in res]); sdd = np.array([r[k][4] for r in res]); se = np.array([r[k][5] for r in res])
+            se60 = np.array([r[k][6] for r in res])
             reg = (tt >= crit) & (t60 >= crit) & (dif >= MIN_DIFFER)
             print(f"  {label:22s} {k}: mean D {m.mean():+.4f} R (sd over worlds {m.std():.4f}); PASS (registered rule) {reg.mean():.3f}; picks differ {dif.mean():.2f}; "
-                  f"sd of D {np.nanmean(sdd):.3f} R, detectable mean D at 80% power {2.80 * np.nanmean(se):.4f} R")
+                  f"sd of D {np.nanmean(sdd):.3f} R, detectable mean D at 80% power {2.80 * np.nanmean(se):.4f} R ({2.80 * np.nanmean(se60):.4f} at 60 lags)")
 
 
 if __name__ == "__main__":
