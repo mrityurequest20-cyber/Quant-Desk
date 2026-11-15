@@ -171,7 +171,8 @@ def register(sub):
     x.add_argument("--until", required=True, help="HH:MM IST")
     x.add_argument("--with-reference", action="store_true", help="after the close, also fetch Kite's historical minute candles as the reference")
     x.set_defaults(fn=cmd_kite_record)
-    x = ss.add_parser("fyers-feed", help="Fyers: MCX and currency near-month futures (price, book, OI) to the private live relay every 5 s until --until (IST), as feed 'f'. "
+    x = ss.add_parser("fyers-feed", help="Fyers: MCX and currency near-month futures (price, book, OI) to the private live relay until --until (IST), as feed 'f', "
+                                         "every 5 s at most and within the day's call budget of the plan in config feeds.fyers_plan. "
                                          "Market data only, nothing written to disk; env FYERS_APP_ID, FYERS_DATA_TOKEN, LIVE_URL, LIVE_INGEST_TOKEN (docs/FEEDS.md)")
     x.add_argument("--until", default="23:58", help="HH:MM IST")
     x.add_argument("--metrics", help="write the run's counts (no price, no token) here as JSON")
@@ -372,7 +373,7 @@ def cmd_fyers_feed(cfg, a):
         return
     watch = cfg.get("desk.watchlist", {}) or {}
     try:
-        rep = F.run(a.until, app_id, token, LivePusher(url, ingest, src="f"), watchlist=watch if isinstance(watch, dict) else {})
+        rep = F.run(a.until, app_id, token, LivePusher(url, ingest, src="f"), watchlist=watch if isinstance(watch, dict) else {}, plan=cfg.get("feeds.fyers_plan"))
     except (OSError, ValueError) as exc:                            # Fyers or the network (urllib's errors are OSErrors), or an answer that is not JSON: a warning, not a red run
         rep = {"stopped": f"Fyers side: {type(exc).__name__}"}
         print(f"::warning::fyers-feed: {rep['stopped']}")
@@ -383,7 +384,8 @@ def cmd_fyers_feed(cfg, a):
     for n in rep.get("shape") or []:
         print(f"::warning::fyers-feed: an answer it could not read: {n}")
     print(f"fyers-feed: {rep.get('contracts', 0)} contracts, {rep.get('cycles', 0)} cycles, {rep.get('pushed', 0)} quotes pushed, "
-          f"{rep.get('books', 0)} books, {rep.get('errors', 0)} errors; stopped: {rep.get('stopped')}")
+          f"{rep.get('books', 0)} books, {rep.get('errors', 0)} errors; plan {rep.get('plan')}, {rep.get('calls', 0)} calls of the day's {rep.get('per_day')}; "
+          f"stopped: {rep.get('stopped')}")
     if str(rep.get("stopped", "")).startswith(("Fyers refused", "blocked")):
         print(f"::warning::fyers-feed: {rep['stopped']}")
 

@@ -49,9 +49,74 @@ INTERVAL_S = 5.0
 DEPTH_PER_CYCLE = 2
 CHAINS_PER_CYCLE = 3                  # option chains (one call each), in turn: each watchlist commodity and currency every few cycles
 CHAIN_STRIKES = 8
-PER_SECOND, PER_MINUTE = 5, 100       # our own caps, about half of what Fyers allows, so a burst never comes near theirs
 TIMEOUT_S = 10.0
 SESSIONS = {"mcx": (dt.time(8, 59), dt.time(23, 59)), "cds": (dt.time(8, 59), dt.time(17, 5))}    # MCX to 23:30 or 23:55 (US daylight saving), currency to 17:00
+# Fyers' limits for the DATA APIs (quotes, depth, option chains), from 16 Oct 2026 (fyers.in/api-docs/v3/getting-started/plans-and-limits): Standard 5 a second, 50 a minute,
+# 5,000 a day; Prime 10, 500 and 5,00,000. A user who breaks the minute cap more than three times in a day is blocked for the rest of it. Our own caps sit under each, and the
+# day's calls are spread across the session (DayBudget), so the feed never runs out at lunchtime. config feeds.fyers_plan names the plan; an unknown one counts as Standard.
+PLANS = {
+    "standard": {"per_second": 3, "per_minute": 40, "per_day": 4500},
+    "prime": {"per_second": 5, "per_minute": 250, "per_day": 450000},
+}
+DEFAULT_PLAN = "standard"
+PER_SECOND, PER_MINUTE = PLANS[DEFAULT_PLAN]["per_second"], PLANS[DEFAULT_PLAN]["per_minute"]
+EXTRAS_SHARE = 0.25                   # of the day's calls for the books and the option chains; the quotes, which every price on the board needs, take the rest
+BUDGET_BURST = 8                      # the most calls a bucket can hold: a cycle's quote batches, or its books and chains
+
+
+def plan_caps(plan: str | None) -> tuple[str, dict]:
+    """The plan's caps by name; anything unknown is Standard (the tighter one)."""
+    name = str(plan or "").strip().lower()
+    return (name, PLANS[name]) if name in PLANS else (DEFAULT_PLAN, PLANS[DEFAULT_PLAN])
+
+
+def _session_seconds_between(a: dt.datetime, b: dt.datetime) -> float:
+    """Seconds of [a, b] that fall inside the day's trading window (the first open to the last close, IST)."""
+    if b <= a:
+        return 0.0
+    lo, hi = min(o for o, _ in SESSIONS.values()), max(c for _, c in SESSIONS.values())
+    total, day = 0.0, a.astimezone(IST).date()
+    while dt.datetime.combine(day, dt.time(0), IST) < b:
+        w0, w1 = dt.datetime.combine(day, lo, IST), dt.datetime.combine(day, hi, IST)
+        total += max(0.0, (min(b, w1) - max(a, w0)).total_seconds())
+        day += dt.timedelta(days=1)
+    return total
+
+
+def session_length_s() -> float:
+    lo, hi = min(o for o, _ in SESSIONS.values()), max(c for _, c in SESSIONS.values())
+    return (dt.datetime.combine(dt.date(2026, 1, 1), hi) - dt.datetime.combine(dt.date(2026, 1, 1), lo)).total_seconds()
+
+
+class DayBudget:
+    """A share of the day's calls, spread evenly across the trading window: a bucket that fills at share x per_day / (window seconds), only inside the window, and
+    holds at most `burst`. Every run starts EMPTY: an earlier job of the same day is taken to have spent its whole share up to now, so however the day is split into
+    jobs (the feed runs as three back-to-back jobs, and a job can be re-run), the day's calls stay under share x per_day."""
+
+    def __init__(self, per_day: int, share: float, now, burst: int = BUDGET_BURST):
+        self.rate = per_day * share / session_length_s()
+        self.burst, self.now = float(burst), now
+        self.tokens, self.at, self.spent = 0.0, now(), 0
+
+    def _fill(self) -> None:
+        t = self.now()
+        self.tokens = min(self.burst, self.tokens + self.rate * _session_seconds_between(self.at, t))
+        self.at = t
+
+    def take(self, n: int = 1) -> bool:
+        self._fill()
+        if self.tokens + 1e-9 < n:
+            return False
+        self.tokens -= n
+        self.spent += n
+        return True
+
+    def wait_s(self, n: int = 1) -> float:
+        """Seconds of trading window until `n` calls are there (inf if `n` is more than the bucket holds)."""
+        self._fill()
+        if n > self.burst:
+            return float("inf")
+        return max(0.0, (n - self.tokens) / self.rate) if self.rate > 0 else float("inf")
 AUTHORITY_ENDS = dt.date(2027, 12, 31)                                                           # docs/AUTONOMY.md: the owner's Fyers data exception ends on this date
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 TICKER = re.compile(r"^(MCX|NSE):([A-Z][A-Z0-9&]*?)(\d{2})([A-Z]{3})FUT$")                     # MCX:CRUDEOIL26DECFUT, NSE:USDINR26NOVFUT
@@ -96,12 +161,13 @@ class FyersData:
 
     PATHS = ("/quotes", "/depth", "/options-chain-v3")
 
-    def __init__(self, app_id: str, token: str, opener=None, limiter: Limiter | None = None):
+    def __init__(self, app_id: str, token: str, opener=None, limiter: Limiter | None = None, plan: str | None = None):
         if not app_id or not token:
             raise ValueError("no Fyers app id or token")
         self._auth = f"{app_id}:{token}"                              # Fyers' header: APP_ID:ACCESS_TOKEN (fyers_apiv3 FyersModel.header)
         self._open = opener or urllib.request.build_opener(_NoRedirect).open
-        self.limiter = limiter or Limiter()
+        caps = plan_caps(plan)[1]
+        self.limiter = limiter or Limiter(caps["per_second"], caps["per_minute"])
         self.calls = 0
 
     def get(self, path: str, params: dict) -> dict:
@@ -121,6 +187,8 @@ class FyersData:
                 raise Refused() from None
             raise
         obj = json.loads(raw or b"{}")
+        if isinstance(obj, dict) and obj.get("code") == -429:                         # Fyers' rate-limit code, sent in the body too: the same stop as an HTTP 429
+            raise Blocked()
         if isinstance(obj, dict) and obj.get("code") in (-15, -16, -17, -8):          # Fyers' "token invalid / expired / not authenticated" codes, sent with HTTP 200
             raise Refused()
         return obj if isinstance(obj, dict) else {}
@@ -349,8 +417,10 @@ def parse_chain(obj: dict, u: str, label: str = "mopt") -> tuple[dict[str, dict]
 # ---------------------------------------------------------------------------------------------------------------- the loop
 
 class FyersFeed:
-    def __init__(self, api: FyersData, names: dict[str, dict], depth_names: list[str], pusher, depth_per_cycle: int = DEPTH_PER_CYCLE, now=lambda: dt.datetime.now(IST)):
+    def __init__(self, api: FyersData, names: dict[str, dict], depth_names: list[str], pusher, depth_per_cycle: int = DEPTH_PER_CYCLE, now=lambda: dt.datetime.now(IST),
+                 quotes_budget: DayBudget | None = None, extras_budget: DayBudget | None = None):
         self.api, self.names, self.pusher, self.now = api, names, pusher, now
+        self.qb, self.xb = quotes_budget, extras_budget                    # None: no day budget (the one-round login check)
         self.by_ticker = {c["ticker"]: n for n, c in names.items()}
         self.depth_names = [n for n in depth_names if n in names]
         self.per = max(0, int(depth_per_cycle))
@@ -358,11 +428,12 @@ class FyersFeed:
         self.chain_names = [n for n in self.depth_names]                    # the watchlist's commodities and currencies: their option chains, in turn
         self.chain_turn = 0
         self.chains_per = CHAINS_PER_CYCLE
+        self.extra_first = "c"                                              # which of a chain and a book has the next spare call
         self.last_opt: dict[str, dict] = {}
         self.oi: dict[str, float] = {}
         self.last: dict[str, dict] = {}
         self.last_book: dict[str, dict] = {}
-        self.stats = {"cycles": 0, "quote_calls": 0, "depth_calls": 0, "quotes": 0, "pushed": 0, "books": 0, "errors": 0, "shape": []}
+        self.stats = {"cycles": 0, "quote_calls": 0, "depth_calls": 0, "quotes": 0, "pushed": 0, "books": 0, "errors": 0, "shape": [], "budget_skips": 0}
 
     def _open(self, name: str) -> bool:
         a, b = SESSIONS[self.names[name]["seg"]]
@@ -373,12 +444,25 @@ class FyersFeed:
             if o not in self.stats["shape"] and len(self.stats["shape"]) < 20:
                 self.stats["shape"].append(o)
 
+    def quote_calls_needed(self) -> int:
+        """The quote batches one round needs now (50 contracts a call)."""
+        return math.ceil(sum(1 for n in self.names if self._open(n)) / QUOTE_BATCH)
+
+    def _spend(self, budget: DayBudget | None) -> bool:
+        if budget is None or budget.take(1):
+            return True
+        self.stats["budget_skips"] += 1
+        return False
+
     def cycle(self) -> int:
-        """One round: quotes for every open contract, depth for the next few watchlist names; returns how many changed quotes went to the pusher."""
+        """One round: quotes for every open contract, then, from what the day's budget leaves, the next option chains and books of the watchlist names; returns
+        how many changed quotes went to the pusher."""
         live = [n for n in self.names if self._open(n)]
         quotes: dict[str, dict] = {}
         tickers = [self.names[n]["ticker"] for n in live]
         for i in range(0, len(tickers), QUOTE_BATCH):
+            if not self._spend(self.qb):
+                break                                                 # the day's quote budget is used up for now: the rest wait for the next round
             try:
                 obj = self.api.get("/quotes", {"symbols": ",".join(tickers[i:i + QUOTE_BATCH])})
                 self.stats["quote_calls"] += 1
@@ -392,10 +476,34 @@ class FyersFeed:
             for t, q in got.items():
                 if t in self.by_ticker:
                     quotes[self.by_ticker[t]] = q
+        want_c = [n for n in self.chain_names if n in live]
         want = [n for n in self.depth_names if n in live]
+        plan_c = [want_c[(self.chain_turn + i) % len(want_c)] for i in range(min(self.chains_per, len(want_c)))] if want_c else []
+        plan_d = [want[(self.turn + i) % len(want)] for i in range(min(self.per, len(want)))] if want else []
+        order, firsts = [], ([("c", n) for n in plan_c], [("d", n) for n in plan_d])
+        pair = firsts if self.extra_first == "c" else firsts[::-1]
+        for i in range(max(len(plan_c), len(plan_d))):                # chains and books by turns, so a short budget shares itself between them
+            order += [x[i] for x in pair if i < len(x)]
+        opts: dict[str, dict] = {}
         fresh: dict[str, dict] = {}                                   # books fetched in THIS cycle: only these are sent, so a ladder is never older than its timestamp says
-        for _ in range(min(self.per, len(want))):
-            n = want[self.turn % len(want)]
+        for kind, n in order:
+            if not self._spend(self.xb):
+                break                                                 # the day's budget for chains and books is used up for now
+            self.extra_first = "d" if kind == "c" else "c"            # the next spare call goes to the other kind
+            if kind == "c":
+                self.chain_turn += 1
+                try:
+                    obj = self.api.get("/options-chain-v3", {"symbol": self.names[n]["ticker"], "strikecount": CHAIN_STRIKES})
+                    self.stats["chain_calls"] = self.stats.get("chain_calls", 0) + 1
+                except (Blocked, Refused):
+                    raise
+                except Exception:                                     # noqa: BLE001
+                    self.stats["errors"] += 1
+                    continue
+                got, odd = parse_chain(obj, self.names[n]["under"] if "under" in self.names[n] else n.rsplit("-", 1)[0], "mopt" if self.names[n]["seg"] == "mcx" else "copt")
+                self._note(odd)
+                opts.update(got)
+                continue
             self.turn += 1
             try:
                 obj = self.api.get("/depth", {"symbol": self.names[n]["ticker"], "ohlcv_flag": 1})
@@ -412,22 +520,6 @@ class FyersFeed:
                 self.stats["books"] += 1
                 if "oi" in book:
                     self.oi[n] = book["oi"]
-        want_c = [n for n in self.chain_names if n in live]
-        opts: dict[str, dict] = {}
-        for _ in range(min(self.chains_per, len(want_c))):
-            n = want_c[self.chain_turn % len(want_c)]
-            self.chain_turn += 1
-            try:
-                obj = self.api.get("/options-chain-v3", {"symbol": self.names[n]["ticker"], "strikecount": CHAIN_STRIKES})
-                self.stats["chain_calls"] = self.stats.get("chain_calls", 0) + 1
-            except (Blocked, Refused):
-                raise
-            except Exception:                                         # noqa: BLE001
-                self.stats["errors"] += 1
-                continue
-            got, odd = parse_chain(obj, self.names[n]["under"] if "under" in self.names[n] else n.rsplit("-", 1)[0], "mopt" if self.names[n]["seg"] == "mcx" else "copt")
-            self._note(odd)
-            opts.update(got)
         for name, q in opts.items():                                  # an option is pushed when it moved, like everything else
             key = {k: v for k, v in q.items() if k != "t"}
             if self.last_opt.get(name) != key:
@@ -473,17 +565,21 @@ def _at(hhmm: str, day: dt.date) -> dt.datetime:
 
 
 def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = None, opener=None, now=lambda: dt.datetime.now(IST),
-        sleep=time.sleep, interval: float = INTERVAL_S) -> dict:
-    """Stream until `until` (HH:MM IST). Returns the run's counts (no price, no token)."""
+        sleep=time.sleep, interval: float = INTERVAL_S, plan: str | None = None) -> dict:
+    """Stream until `until` (HH:MM IST), within the plan's caps and its day budget. Returns the run's counts (no price, no token)."""
     start = now()
     stop = _at(until, start.date())
     contracts, notes = load_contracts(opener)
     names = near_futures(contracts, start.date())
-    rep = {"day": str(start.date()), "contracts": len(names), "notes": notes, "stopped": "until"}
+    plan_name, caps = plan_caps(plan)
+    if plan and plan_name != str(plan).strip().lower():
+        notes = [*notes, f"unknown Fyers plan {str(plan)[:20]!r}: Standard's caps are used"]
+    rep = {"day": str(start.date()), "contracts": len(names), "notes": notes, "stopped": "until", "plan": plan_name, "per_day": caps["per_day"]}
     if not names:
         rep["stopped"] = "no contracts"
         return rep
-    feed = FyersFeed(FyersData(app_id, token, opener=opener), names, depth_watch(watchlist or {}), pusher, now=now)
+    qb, xb = DayBudget(caps["per_day"], 1 - EXTRAS_SHARE, now), DayBudget(caps["per_day"], EXTRAS_SHARE, now)
+    feed = FyersFeed(FyersData(app_id, token, opener=opener, plan=plan_name), names, depth_watch(watchlist or {}), pusher, now=now, quotes_budget=qb, extras_budget=xb)
     first = min(a for a, _ in SESSIONS.values())
     if now().time() < first:                                          # before the open: sleep to it instead of polling a closed market
         wait = (dt.datetime.combine(start.date(), first, IST) - now()).total_seconds()
@@ -504,10 +600,13 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
             if all(now().time() > b for _, b in SESSIONS.values()):
                 rep["stopped"] = "every session closed"
                 break
-            sleep(max(0.0, interval - (time.monotonic() - t0)))
+            need = min(max(1, feed.quote_calls_needed()), BUDGET_BURST)
+            pace = qb.wait_s(need)                                    # the day's budget sets the pace: at most one round a `interval`, and no faster than it allows
+            left = (stop - now()).total_seconds()
+            sleep(max(0.0, min(max(interval - (time.monotonic() - t0), pace), max(left, 0.0))))
     finally:
         pusher.stop()
-    rep.update({k: v for k, v in feed.stats.items()}, calls=feed.api.calls, push=pusher.stats())
+    rep.update({k: v for k, v in feed.stats.items()}, calls=feed.api.calls, push=pusher.stats(), budget_spent={"quotes": qb.spent, "extras": xb.spent})
     return rep
 
 

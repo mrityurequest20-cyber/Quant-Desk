@@ -83,10 +83,21 @@ Never paste any of these into a chat, an issue or a commit.
    (`quantdesk/data/fyers_feed.py`):
    - reads Fyers' public symbol master and picks the nearest unexpired future of every MCX commodity and currency pair (Kite's rule),
      under the desk's names (`CRUDEOIL-MCX`, `USDINR-CDS`);
-   - every 5 s: `/data/quotes` for all of them (50 a call), `/data/depth` for three watchlist names in turn (five levels, OI);
+   - each round: `/data/quotes` for all of them (50 a call), then the next option chains and `/data/depth` books (five levels, OI) of the
+     watchlist names in turn, chains first;
    - pushes only what changed, as feed `f`. Currency stops after 17:05, MCX runs to the close.
-   - Our own rate cap is 5 calls a second and 100 a minute, about half of Fyers'. A **429 stops the feed for the day** (Fyers blocks a
-     user who breaks the minute cap three times), and a refused token stops it too: both are warnings in the run, never a retry loop.
+   - **Fyers' limits** for these data calls, from 16 Oct 2026: **Standard 5 a second, 50 a minute, 5,000 a day**; Prime 10, 500 and
+     5,00,000 ([Plans & Limits](https://fyers.in/api-docs/v3/getting-started/plans-and-limits/)). `config feeds.fyers_plan` names the
+     plan (Standard unless changed). Our caps sit under each: Standard 3 a second, 40 a minute and **4,500 a day**; Prime 5, 250 and
+     4,50,000.
+   - **The day's calls are spread across the session** (08:59 to 23:59): three quarters for the quotes, a quarter for the chains and
+     books. On Standard that is a quote round about every 16 s and a chain or book about every 48 s (each watchlist chain every ten
+     minutes or so); on Prime the 5 s floor sets the pace, as before. Each of the day's three back-to-back jobs starts with an empty
+     budget, so however the day is split or re-run, it stays under the daily cap. When Fyers' price is over a minute old, the relay
+     shows Kite's for the segment in Kite's hours, as the routes say.
+   - A **429, in the HTTP status or as code -429 in the answer, stops the feed for the day** (Fyers blocks a user who breaks the minute
+     cap more than three times), and a refused token stops it too: both are warnings in the run, never a retry loop.
+   - The next step is Fyers' Data Socket (a WebSocket; 100 symbols on Standard, 5,000 on Prime), which streams without spending these calls.
    - Nothing is written to disk. The run summary shows counts only, and the key names of any answer it could not read, never a value.
 3. **Watchdog W19** at 09:40 and 20:30: the feed ran today and has not failed.
 
