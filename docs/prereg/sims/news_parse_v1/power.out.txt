@@ -1,0 +1,8 @@
+DEV: 200 headlines, 130 nonzero label pairs; simulated TEST: 200 headlines, about 140 pairs
+true accuracy  P(observed >= 0.90)  [independent pairs | pairs correlated within a headline, rho 0.3]
+  0.80          0.001 | 0.001
+  0.85          0.045 | 0.050
+  0.88          0.243 | 0.250
+  0.90          0.521 | 0.520
+  0.92          0.817 | 0.804
+  0.95          0.993 | 0.991

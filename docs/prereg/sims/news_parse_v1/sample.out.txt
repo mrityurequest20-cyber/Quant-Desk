@@ -1,0 +1,9 @@
+archive journal-archive-2026-09-28_2026-09-29.db: sha256 841e804a54f163544cfb0f434ae35a63bb003dc88349c247d6110908506a663b
+archive journal-archive-2026-09-30_2026-09-30.db: sha256 a35818c954caffda1b084c4a33685426fc45f774035d9224890c0ad0ded272fa
+archive journal-archive-2026-10-04_2026-10-08.db: sha256 551d9a0ea26e4a7aa68672d7aa900fbe3c6aca110e02a97dda3d5aed8eb4e43a
+archive journal-archive-2026-10-09_2026-10-14.db: sha256 b2129f480ea05dfacd91e06815ec20fba7640fcbd37af0ccee6cf1cdee7dc28b
+dev: 200 headlines, sha256 ee65a079a2e56a417fee58787cec2dcf51f67f48630e6fd03fd5ca9118567144
+test: 200 headlines, sha256 39bbdc99fc98902a873a3dcc81797ae4a638f6dfa11e275d09dd5b6b6ce8357c (hashed in memory, not written)
+audit: 50 headlines, sha256 580c3915eb25deedc62ff1116e693948e971f65f88f9fd014334db6ba8979c54 (hashed in memory, not written)
+test first half (the original draw): sha256 1182a6bd364d35c92818a124d11b55e64e1eed4d23febb8e454afb528b230847
+distinct headlines 6014, in the pool 3987, outside it 2027, seeds 20261115 20261116 20261117; python 3.13.18

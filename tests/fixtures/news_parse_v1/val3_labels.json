@@ -1,0 +1,622 @@
+[
+{
+"i": 0,
+"title": "M&M Share Price Live Updates: M&M Volume Performance",
+"labels": {}
+},
+{
+"i": 1,
+"title": "Weekly policy watch: RBI monetary policy, GST Council meet and PMI in focus",
+"labels": {}
+},
+{
+"i": 2,
+"title": "European shares rise as retreating bond yields and oil prices boost risk appetite",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 3,
+"title": "Sensex Retreats on RBI Rate Hike",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 4,
+"title": "Indian markets roughly unchanged; oil prices rise: Sensex remains afloat above 73,000 mark",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 5,
+"title": "Rupee Rebounds on Fresh RBI Measures",
+"labels": {
+"rupee": 1
+}
+},
+{
+"i": 6,
+"title": "Canadian Dollar remains subdued near two-month lows as falling oil prices weigh",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 7,
+"title": "Rupee Falls Ahead of RBI Monetary Policy Decision",
+"labels": {
+"rupee": -1
+}
+},
+{
+"i": 8,
+"title": "Global shares mixed after Wall Street dips; oil prices stabilise",
+"labels": {
+"wall_street": -1
+}
+},
+{
+"i": 9,
+"title": "RBI completes 1 trillion rupee net debt sale for first time in a decade",
+"labels": {}
+},
+{
+"i": 10,
+"title": "LG Electronics surges 6%; at record high; what's driving stock price?",
+"labels": {}
+},
+{
+"i": 11,
+"title": "HCL Tech Share Price Live Updates: HCL Tech's Recent Trading Activity",
+"labels": {}
+},
+{
+"i": 12,
+"title": "RBI allows customers to use any Account Aggregator for financial data",
+"labels": {}
+},
+{
+"i": 13,
+"title": "RBI MPC 25 bps rate hike impact on stock market: Sensex, Nifty fall - Experts reveal what investors should do now",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 14,
+"title": "3-day RBI MPC meet begins as balance of risks tilt towards rate hike",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 15,
+"title": "Stock market today LIVE: Gift Nifty signals relief rally for Sensex, Nifty | RBI MPC, IT, HDFC Bank, OMC stocks in focus",
+"labels": {}
+},
+{
+"i": 16,
+"title": "Apollo Hospital Share Price Live Updates: Apollo Hospital's six-month beta reflects market volatility",
+"labels": {}
+},
+{
+"i": 17,
+"title": "RBI MPC: Growth is booming, RBI is tightening, stocks are sulking; what next?",
+"labels": {
+"growth": 1,
+"rbi": 1
+}
+},
+{
+"i": 18,
+"title": "RBI rate hike pulls markets lower",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 19,
+"title": "RBI Monetary Policy raises India’s GDP forecast to 7.1%, says 'economy strong' - CNBC TV18",
+"labels": {
+"growth": 1
+}
+},
+{
+"i": 20,
+"title": "Loans to get costlier as RBI hikes key rate to 5.5%, first hike in nearly four years",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 21,
+"title": "Tata Steel Share Price Live Updates: Tata Steel Surpasses Key Resistance Level",
+"labels": {}
+},
+{
+"i": 22,
+"title": "RBI MPC policy, oil prices, bond yields may drive market this week",
+"labels": {}
+},
+{
+"i": 23,
+"title": "India bonds slip as traders wait for hawkish central bank action",
+"labels": {}
+},
+{
+"i": 24,
+"title": "US Fed minutes signal another rate hike by year-end as inflation stays high",
+"labels": {
+"fed": 1
+}
+},
+{
+"i": 25,
+"title": "US stocks end lower as Treasury yields rise",
+"labels": {
+"wall_street": -1,
+"us_yields": 1
+}
+},
+{
+"i": 26,
+"title": "Bitcoin Slips Below $83,000 as Treasury Yields Hit 2002 High",
+"labels": {
+"us_yields": 1
+}
+},
+{
+"i": 27,
+"title": "Stock Market Today: Treasury Yields Rise Despite Falling Oil Prices as Dow Slips",
+"labels": {
+"us_yields": 1,
+"wall_street": -1
+}
+},
+{
+"i": 28,
+"title": "Sensex, Nifty today: Markets open lower ahead of RBI policy; Sensex falls 446 points, Nifty slips 161 | Business News",
+"labels": {}
+},
+{
+"i": 29,
+"title": "Infosys Share Price Live Updates: Infosys Moves Past 20-Day SMA",
+"labels": {}
+},
+{
+"i": 30,
+"title": "Nifty slips 0.16%, Sensex gains 132 points as investors weigh volatile crude",
+"labels": {}
+},
+{
+"i": 31,
+"title": "Wall Street Rally, Falling Crude, Gift Nifty Positive: Today's Market Setup | Opening Bell",
+"labels": {
+"wall_street": 1,
+"crude": -1
+}
+},
+{
+"i": 32,
+"title": "Delta CEO: Airfare May Stay High Even If Oil Prices Ease - News and Statistics",
+"labels": {}
+},
+{
+"i": 33,
+"title": "Oil gains as traders weigh Gulf tensions against strong Mideast exports",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 34,
+"title": "RBI allows customer deposit details in statements; measure to be implemented by year-end - CNBC TV18",
+"labels": {}
+},
+{
+"i": 35,
+"title": "China stocks fall as trade talks disappoint",
+"labels": {
+"china": -1
+}
+},
+{
+"i": 36,
+"title": "Global shares slip as oil prices jumps and bond yields remain high",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 37,
+"title": "Oil Rally Peters Out With Mideast, Russia Tensions in Focus",
+"labels": {}
+},
+{
+"i": 38,
+"title": "Global Market: Goldman Sachs raises December Brent oil price forecast to $90 on supply risks",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 39,
+"title": "Axis Bank Share Price Live Updates: Axis Bank's recent performance shows a decline",
+"labels": {}
+},
+{
+"i": 40,
+"title": "Oil extends gains as Middle East supply concerns persist",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 41,
+"title": "RBI repo rate hike likely: Will your home loan EMI rise and what does it mean for your FD",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 42,
+"title": "Jio IPO GMP latest price today: Grey market premium is rising day by day - Check expected price band",
+"labels": {}
+},
+{
+"i": 43,
+"title": "TCS Share Price Live Updates: TCS Current Trading Status",
+"labels": {}
+},
+{
+"i": 44,
+"title": "Oil Prices Fall as Hormuz Crude Flows Top Pre-War Levels",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 45,
+"title": "IT firms' Q2 reality check: growth recovery still out of sight",
+"labels": {}
+},
+{
+"i": 46,
+"title": "Crude Oil Futures Fall Amid Weak Global Cues",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 47,
+"title": "Oil prices fall after Trump claims ‘energy ceasefire’ in Ukraine war",
+"labels": {
+"crude": -1,
+"geopolitics": -1
+}
+},
+{
+"i": 48,
+"title": "US stocks - 12-10-26",
+"labels": {}
+},
+{
+"i": 49,
+"title": "AI investment boosts growth prospects for Asian economies: IMF",
+"labels": {
+"growth": 1
+}
+},
+{
+"i": 50,
+"title": "Rapeseed oil instead of crude oil: Verbio starts industrial production of renewable chemicals",
+"labels": {}
+},
+{
+"i": 51,
+"title": "Sea6 Energy: How India Is Turning Seaweed Into an Alternative to Crude Oil",
+"labels": {}
+},
+{
+"i": 52,
+"title": "No Rate Cuts Anytime Soon, Says RBI, as It Raises the Cost of Money for Banks",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 53,
+"title": "Stocks to watch: Paytm, Tata Power, Ola Electric, Tata Steel, Varun Bev",
+"labels": {}
+},
+{
+"i": 54,
+"title": "Trump's proposed \"energy ceasefire\" fails to curb rising oil prices; former JPMorgan strategist calls it \"another scam\"",
+"labels": {
+"crude": 1,
+"geopolitics": -1
+}
+},
+{
+"i": 55,
+"title": "RBI’s historic rupee defence indicates 97 per dollar is central bank’s line in the sand",
+"labels": {}
+},
+{
+"i": 56,
+"title": "Reliance could be a cheaper way to own Jio after telecom unit's listing",
+"labels": {}
+},
+{
+"i": 57,
+"title": "ONGC Share Price Live Updates: ONGC's Daily Performance Update",
+"labels": {}
+},
+{
+"i": 58,
+"title": "India is cheaper. Why are foreign investors still selling?",
+"labels": {
+"fii": -1
+}
+},
+{
+"i": 59,
+"title": "Dollar Weakens as Treasury Yields Fall",
+"labels": {
+"dollar": -1,
+"us_yields": -1
+}
+},
+{
+"i": 60,
+"title": "Yields Race Above 5%, Elevating Stock Market Risk",
+"labels": {}
+},
+{
+"i": 61,
+"title": "Asian Equities Mixed as Traders Weigh Elevated Bond Yields and Wall Street Gains",
+"labels": {
+"wall_street": 1
+}
+},
+{
+"i": 62,
+"title": "HCL Tech Share Price Live Updates: HCL Tech Surpasses Key Technical Indicator",
+"labels": {}
+},
+{
+"i": 63,
+"title": "Oil Price Today (October 13): Crude oil falls to $105 as traders assess Russian supply, Mideast attacks. W",
+"labels": {
+"crude": -1,
+"geopolitics": 1
+}
+},
+{
+"i": 64,
+"title": "Orient Cables: IPO listed at 65% premium, but share price crashed the very next day - What's behind the lower circuit?",
+"labels": {}
+},
+{
+"i": 65,
+"title": "Indian Rupee: RBI tightening cycle resumes – Commerzbank",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 66,
+"title": "Sensex, Nifty Rise as Oil Eases and RBI Steps Lift Sentiment",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 67,
+"title": "M&M Share Price Live Updates: M&M's Market Activity Today",
+"labels": {}
+},
+{
+"i": 68,
+"title": "Rupee Slide Tests RBI’s Multiple Defenses as Record Low Nears",
+"labels": {
+"rupee": -1
+}
+},
+{
+"i": 69,
+"title": "FPIs rotate out of rate-sensitive sectors amid high interest rates",
+"labels": {}
+},
+{
+"i": 70,
+"title": "Iraq cuts November Basrah Medium crude oil price to Asia",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 71,
+"title": "Oil Prices - 07-10-26",
+"labels": {}
+},
+{
+"i": 72,
+"title": "Experts’ poll: RBI may hike rates by 0.25% in October policy amid inflationary pressures",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 73,
+"title": "Crude Oil Rises for 3rd Session",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 74,
+"title": "ConocoPhillips gains as oil prices jump on supply fears",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 75,
+"title": "Indian Rupee set for 1% rally as RBI curbs hedging rush that hit a record $77 billion",
+"labels": {
+"rupee": 1
+}
+},
+{
+"i": 76,
+"title": "IMF flags risks to global markets from war, debt and AI correction",
+"labels": {}
+},
+{
+"i": 77,
+"title": "RIIL share price surges 9%, up for the second straight day - Can Reliance Industrial Infrastructure stock rise further?",
+"labels": {}
+},
+{
+"i": 78,
+"title": "Global markets seek direction as oil rises ahead of US inflation release",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 79,
+"title": "Oil Price Today (October 14): Crude oil gains to $107 as Houthis attack Saudi Aramco building in new attac",
+"labels": {
+"crude": 1,
+"geopolitics": 1
+}
+},
+{
+"i": 80,
+"title": "Nestle India Share Price Live Updates: Nestle India Shows Positive Momentum Above 20-Day SMA",
+"labels": {}
+},
+{
+"i": 81,
+"title": "Stocks move lower despite oil prices dropping",
+"labels": {}
+},
+{
+"i": 82,
+"title": "RBI rate hike dampens consumption stocks’ festive cheer",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 83,
+"title": "Oil Climbs as U.S. Sends Another Aircraft Carrier to Middle East",
+"labels": {
+"crude": 1,
+"geopolitics": 1
+}
+},
+{
+"i": 84,
+"title": "RBI hikes repo rate by 25 bps to 5.5% as inflation fight takes centre stage",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 85,
+"title": "SBI Life Share Price Live Updates: SBI Life Records Weekly Returns of 0.86%",
+"labels": {}
+},
+{
+"i": 86,
+"title": "Oil Prices Down - 29-09-26",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 87,
+"title": "Oil Price Today (October 7): Crude oil rises to $101, up 45% in 3 months. Two reasons behind Wednesday’s surge",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 88,
+"title": "Gas and oil prices trending downward as new work week begins",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 89,
+"title": "Wall Street is booming. Surging yields could shake things up",
+"labels": {
+"wall_street": 1,
+"us_yields": 1
+}
+},
+{
+"i": 90,
+"title": "Sensex and Nifty Fall Sharply as Crude Spike and West Asia Standoff Hit Indian Equities",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 91,
+"title": "Oil Prices Rise as Hormuz Stays Shut Ahead of Trump Deadline, Strikes on Iran Intensify",
+"labels": {
+"crude": 1,
+"geopolitics": 1
+}
+},
+{
+"i": 92,
+"title": "RBI to allow inter-operability among account aggregators; integrate bank deposits with CAS",
+"labels": {}
+},
+{
+"i": 93,
+"title": "How will economy be impacted if India-US trade deal doesn’t happen? RBI governor Sanjay Malhotra answers",
+"labels": {}
+},
+{
+"i": 94,
+"title": "Global Stocks Fall on Higher Oil Prices, AI Pullback",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 95,
+"title": "What Does the Latest CME WTI Crude Oil Price Mean for Australia?",
+"labels": {}
+},
+{
+"i": 96,
+"title": "Domino’s Pizza Sales Growth Continued Slowing",
+"labels": {}
+},
+{
+"i": 97,
+"title": "Gift Nifty Signals Flat Start For Indian Markets Ahead Of RBI Policy Decision; Crude Oil, Global Cues In Fo",
+"labels": {}
+},
+{
+"i": 98,
+"title": "Grasim Inds Share Price Live Updates: Grasim Industries' previous day close",
+"labels": {}
+},
+{
+"i": 99,
+"title": "TCS Share Price Live Updates: TCS Market Update",
+"labels": {}
+}
+]
