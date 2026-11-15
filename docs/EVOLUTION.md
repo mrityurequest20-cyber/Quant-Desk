@@ -32,9 +32,10 @@ learn from history before it repeats, and re-check its own rules. Every step is 
    owner's (phase 2).
 4. **An unfamiliar-market guard.** When today's fingerprint is outside anything in the library (a statistical distance past its 99th percentile), live sizes halve and
    the shadow book explores more, with a red flag in the app (phase 4).
-5. **A regime library.** The fingerprint of every past session the desk has closes for (2007 onwards for the indices): the 2008 crash, the 2013 taper, the 2016
-   demonetisation, the 2020 crash, the 2022 rate hikes, the 2024-25 F&O rule changes. Strategies are replayed through them, so a new regime borrows its priors from the
-   most similar past one (phase 5).
+5. **A regime library.** The fingerprint of every past session the desk has closes for: from 2014 on the brief's own NIFTY series (2007 onwards from the index
+   minutes, for phase 4), so the 2020 crash, the 2022 rate hikes and the 2024-25 F&O rule changes, and later the 2008 crash, the 2013 taper and the 2016
+   demonetisation. The desk's structures are replayed on real option closes through every session the warehouse holds (2019 onwards; earlier years need a backfill and
+   their own spec), so a family can borrow its prior from the most similar past markets (phase 5).
 6. **Re-validate the rules.** Every threshold is re-tested walk-forward each month, choosing the plateau where results are stable, never the single best value. Many
    variants tried are corrected for (the deflated Sharpe ratio). A tightening applies itself; a loosening goes to the owner with the evidence. A market-rule change
    (lot sizes, weekly expiries, STT, margins; the news model tags `fno_rules` stories) freezes the affected strategies to shadow until they prove themselves again
@@ -51,7 +52,7 @@ be tested exactly on the record already kept, before it touches paper money.
 | **2. Probation and the vote watch** (spec 14 Nov 2026: `docs/prereg/evolution_probation_v1.json`; built 14 Nov 2026: `probation.py`, `votewatch.py`) | The open shadow book carried across runner jobs first (PR #264); probation of strategies that start losing; muting of votes no better than a coin. The forgetting record is deferred to phase 5 (simulation) | Both rules applied as registered, and the probation review reported at its registered number of demotions; its verdict, either way, goes to the owner |
 | 3. Choosing by regime | Strategy × regime hierarchical model; Thompson sampling on today's regime | Pre-registered off-policy test on 60+ sessions of shadow trades. Phase 1 tags a trade with the regime of the day it **closes**; the test must condition on the regime at **entry** (a trade held overnight closes in a later fingerprint), so phase 3 first records the entry regime with each shadow position |
 | 4. Breaks and the unfamiliar market | Change points on the fingerprint; automatic size halving | Finds the library's known breaks within 10 sessions |
-| 5. The regime library | Fingerprints back to 2007; strategies replayed through them; priors by similarity | Similarity priors beat flat priors on regimes held out |
+| **5. The regime library** (spec 15 Nov 2026: `docs/prereg/regime_library_v1.json`) | Fingerprints of every past session; the desk's 16 single-expiry structures replayed overnight on real option closes, 2019 onwards; a family's estimate from the most similar past markets (60 sessions embargoed); the deferred forgetting record tested on the same replay | Walk-forward, choosing by the similar past beats choosing by the cumulative record (S), and separately the forgetting record (A); each PASS goes to the owner before it changes any choice |
 | 6. Re-validation and rule changes | Monthly walk-forward plateau reports; loosening only with the owner; the rule-change freeze | The first monthly report reviewed |
 | 7. Capital between books | The convexity, directional and other books weighted by their regime record, always under the owner's caps | Pre-registered; the owner signs off |
 
@@ -84,6 +85,23 @@ replays. The daily library needs only the closes the desk already fetches.
 
 **In the app:** the Today tab's brief has the Market line. The Paper tab's **Market regime** panel shows today's regime and since when, and each regime seen with its
 shadow trades and its best structures by mean R (5 trades or more).
+
+## Phase 5: the regime library (`docs/prereg/regime_library_v1.json`)
+
+The question is whether what a kind of structure did in markets **like** today's says more than what it did **on average**. It is registered before any of it is
+computed:
+
+- **The library.** The fingerprint of every session since mid-2014 (phase 1's function, from the closes up to that session), described by six features: the volatility
+  percentile, the trend, the change in volatility, the chop, the drawdown and the tail days. Similarity is a kernel on their robust distance. The last 60 sessions
+  are left out on purpose. They are the live record's job; the library is for the markets like today's further back.
+- **The replay.** Every session from 2019 (the first month of real option closes in the warehouse): the 16 single-expiry structures on NIFTY and BANKNIFTY, entered
+  at the close, out at the next close, at closing prices worsened by a spread, with today's real costs, scored in R as the shadow book scores a trade. No view: the
+  tests compare structures within a direction (up, down, flat).
+- **Two tests, walk-forward.** S chooses by the similar past, A by a record that forgets (weights halving every 60 sessions, the idea deferred from phase 2), each
+  against the cumulative record. In a simulation on the real fingerprint path, with outcomes priced by Black-Scholes (synthetic, not measured), S passes about two
+  worlds in three when a structure's edge moves by 0.05 R with the kind of market, nearly every world at 0.10 R, and almost never when nothing moves; the real report prints
+  the effect its own noise lets it detect. A forgetting record follows a lasting kind of market as well as drift, so an A pass cannot say which.
+- **What a pass changes.** Nothing on its own: the estimate goes to the app, and using it to choose paper-money strategies is the owner's decision.
 
 ## Honest limits
 
