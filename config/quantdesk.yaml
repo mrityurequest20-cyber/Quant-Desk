@@ -494,6 +494,10 @@ desk:
 # Codes (deploy/cloudflare/routes.js): z Kite, f Fyers, a Angel One, k Kotak. Fyers and Angel One are listed ahead of their segments' feeds before their adapters exist: a
 # feed that holds no price for an instrument is simply skipped, so until they deliver, those segments behave exactly as before (Kite, then Kotak).
 feeds:
+  # Fyers' data plan (quantdesk/data/fyers_feed.py PLANS): standard (5 a second, 50 a minute, 5,000 a day for quotes, books and chains) or prime (10, 500 and 5,00,000). The feed
+  # spreads the day's calls across the session within the plan's caps; on Standard that is a quote round about every 22 s and every watchlist option chain within 8 to 9 minutes.
+  # Anything else counts as standard, the tighter one. Change it only to the plan the account really has: a feed that thinks it is on Prime would be blocked for the day.
+  fyers_plan: standard
   routes:
     idx: [z, k]          # indices: Kite, Kotak behind it
     eq:  [z, k]          # NSE cash prices of the F&O stocks
