@@ -432,9 +432,10 @@ def parse_chain(obj: dict, u: str, label: str = "mopt") -> tuple[dict[str, dict]
 
 class FyersFeed:
     def __init__(self, api: FyersData, names: dict[str, dict], depth_names: list[str], pusher, depth_per_cycle: int = DEPTH_PER_CYCLE, now=lambda: dt.datetime.now(IST),
-                 quotes_budget: DayBudget | None = None, extras_budget: DayBudget | None = None):
+                 quotes_budget: DayBudget | None = None, extras_budget: DayBudget | None = None, socket=None):
         self.api, self.names, self.pusher, self.now = api, names, pusher, now
         self.qb, self.xb = quotes_budget, extras_budget                    # None: no day budget (the one-round login check)
+        self.socket = socket                                               # fyers_socket.FyersSocket: the futures' quotes, streamed; None: quotes by REST
         self.by_ticker = {c["ticker"]: n for n, c in names.items()}
         self.depth_names = [n for n in depth_names if n in names]
         self.per = max(0, int(depth_per_cycle))
@@ -447,7 +448,8 @@ class FyersFeed:
         self.oi: dict[str, float] = {}
         self.last: dict[str, dict] = {}
         self.last_book: dict[str, dict] = {}
-        self.stats = {"cycles": 0, "quote_calls": 0, "depth_calls": 0, "quotes": 0, "pushed": 0, "books": 0, "errors": 0, "shape": [], "budget_skips": 0}
+        self.stats = {"cycles": 0, "quote_calls": 0, "depth_calls": 0, "quotes": 0, "pushed": 0, "books": 0, "errors": 0, "shape": [], "budget_skips": 0,
+                      "socket_rounds": 0}
 
     def _open(self, name: str) -> bool:
         a, b = SESSIONS[self.names[name]["seg"]]
@@ -458,13 +460,27 @@ class FyersFeed:
             if o not in self.stats["shape"] and len(self.stats["shape"]) < 20:
                 self.stats["shape"].append(o)
 
+    def _rest_names(self) -> list[str]:
+        """The open contracts whose quotes come by REST this round: all of them, or, while the socket streams, those it does not carry."""
+        live = [n for n in self.names if self._open(n)]
+        if not self.streaming():
+            return live
+        on_socket = set(self.socket.topics.values())
+        return [n for n in live if self.names[n]["ticker"] not in on_socket]
+
     def quote_calls_needed(self) -> int:
         """The quote batches one round needs now (50 contracts a call)."""
-        return math.ceil(sum(1 for n in self.names if self._open(n)) / QUOTE_BATCH)
+        return math.ceil(len(self._rest_names()) / QUOTE_BATCH)
+
+    def streaming(self) -> bool:
+        """The socket is delivering the futures' quotes (data in the last minute)."""
+        return self.socket is not None and self.socket.delivering()
 
     def _spend(self, budget: DayBudget | None) -> bool:
         if budget is None or budget.take(1):
             return True
+        if budget is self.xb and self.qb is not None and self.streaming() and self.qb.take(1):
+            return True                                               # the quotes stream: their share of the day goes to the chains and books
         self.stats["budget_skips"] += 1
         if budget is self.qb:
             self.stats["quote_skips"] = self.stats.get("quote_skips", 0) + 1     # a quote batch the pace did not wait for: should stay at 0
@@ -475,7 +491,14 @@ class FyersFeed:
         how many changed quotes went to the pusher."""
         live = [n for n in self.names if self._open(n)]
         quotes: dict[str, dict] = {}
-        tickers = [self.names[n]["ticker"] for n in live]
+        if self.streaming():                                          # the socket has the quotes: no REST call for the contracts it carries this round
+            self.stats["socket_rounds"] += 1
+            open_now = set(live)
+            for t, q in self.socket.latest().items():
+                n = self.by_ticker.get(t)
+                if n in open_now:
+                    quotes[n] = q
+        tickers = [self.names[n]["ticker"] for n in self._rest_names()]
         for i in range(0, len(tickers), QUOTE_BATCH):
             if not self._spend(self.qb):
                 break                                                 # the day's quote budget is used up for now: the rest wait for the next round
@@ -548,7 +571,9 @@ class FyersFeed:
         sent = 0
         for n, q in quotes.items():
             full = {**q, "s": self.names[n]["seg"], "e": self.names[n]["expiry"].isoformat()}      # the contract: a paper position records which month it holds
-            if n in self.oi:
+            if "oi" in q:
+                self.oi[n] = q["oi"]                                  # the socket streams the open interest with the price
+            elif n in self.oi:
                 full["oi"] = self.oi[n]                               # open interest moves slowly: the last one read stands between depth turns
             key = {k: v for k, v in full.items() if k != "t"}
             book = fresh.get(n)
@@ -584,7 +609,7 @@ def _at(hhmm: str, day: dt.date) -> dt.datetime:
 
 
 def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = None, opener=None, now=lambda: dt.datetime.now(IST),
-        sleep=time.sleep, interval: float = INTERVAL_S, plan: str | None = None) -> dict:
+        sleep=time.sleep, interval: float = INTERVAL_S, plan: str | None = None, use_socket: bool = False, socket_factory=None) -> dict:
     """Stream until `until` (HH:MM IST), within the plan's caps and its day budget. Returns the run's counts (no price, no token)."""
     start = now()
     stop = _at(until, start.date())
@@ -603,7 +628,9 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
         slow = (f"{len(names)} contracts need {batches} quote calls a round: on Standard a round then comes every "
                 f"{batches / qb.rate:.0f} s, over the paper desk's 30 s quote age for a fill")
         rep["notes"] = [*rep["notes"], slow]
-    feed = FyersFeed(FyersData(app_id, token, opener=opener, plan=plan_name), names, depth_watch(watchlist or {}), pusher, now=now, quotes_budget=qb, extras_budget=xb)
+    api = FyersData(app_id, token, opener=opener, plan=plan_name)
+    sock = _start_socket(app_id, token, names, plan_name, api, rep, opener, socket_factory) if use_socket else None
+    feed = FyersFeed(api, names, depth_watch(watchlist or {}), pusher, now=now, quotes_budget=qb, extras_budget=xb, socket=sock)
     first = min(a for a, _ in SESSIONS.values())
     if now().time() < first:                                          # before the open: sleep to it instead of polling a closed market
         wait = (dt.datetime.combine(start.date(), first, IST) - now()).total_seconds()
@@ -626,15 +653,40 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
             if all(now().time() > b for _, b in SESSIONS.values()):
                 rep["stopped"] = "every session closed"
                 break
-            need = min(max(1, feed.quote_calls_needed()), BUDGET_BURST)
-            pace = qb.wait_s(need) + 0.05                             # the day's budget sets the pace (a hair over, so the round finds its calls there): at most one
+            need = min(feed.quote_calls_needed(), BUDGET_BURST)
+            pace = qb.wait_s(need) + 0.05 if need else 0.0           # the day's budget sets the pace (a hair over, so the round finds its calls there): at most one
 #                                                                           round an `interval`, and no faster than the budget allows
             left = (stop - now()).total_seconds()
             sleep(max(0.0, min(max(interval - (time.monotonic() - t0), pace), max(left, 0.0))))
     finally:
         pusher.stop()
+        if sock is not None:
+            sock.stop()
+            rep["socket"] = {k: v for k, v in sock.stats.items()}
     rep.update({k: v for k, v in feed.stats.items()}, calls=feed.api.calls, push=pusher.stats(), budget_spent={"quotes": qb.spent, "extras": xb.spent})
     return rep
+
+
+def _start_socket(app_id: str, token: str, names: dict, plan: str, api, rep: dict, opener=None, factory=None):
+    """The Data Socket for the near futures, within the plan's symbol cap; None (and a note) when it cannot start: the REST feed then carries the quotes."""
+    from . import fyers_socket as FS
+    tickers = sorted(c["ticker"] for c in names.values())[:FS.SYMBOL_CAP.get(plan, FS.SYMBOL_CAP["standard"])]
+    try:
+        topics, unknown = FS.symbol_topics(app_id, token, tickers, opener=opener, limiter=getattr(api, "limiter", None))
+        if isinstance(getattr(api, "calls", None), int):
+            api.calls += 1                                            # one data-API call, counted with the rest
+        sock = (factory or FS.FyersSocket)(app_id, token, topics)
+        sock.start()
+    except FS.SocketRefused as e:
+        rep["notes"] = [*rep["notes"], f"Data Socket not used: {e}"]
+        return None
+    except (OSError, ValueError) as e:                                # urllib's errors are OSErrors; an answer that is not ok is a ValueError
+        rep["notes"] = [*rep["notes"], f"Data Socket not used: the symbol-token call failed ({type(e).__name__})"]
+        return None
+    rep["socket_symbols"] = len(topics)
+    if unknown:
+        rep["notes"] = [*rep["notes"], f"{len(unknown)} futures unknown to the Data Socket: their quotes stay on REST"]
+    return sock
 
 
 class CountingPusher:
@@ -658,7 +710,8 @@ class CountingPusher:
         return {"would_push": self.n, "instruments": len(self.names)}
 
 
-def check(app_id: str, token: str, watchlist: dict | None = None, opener=None, today: dt.date | None = None) -> dict:
+def check(app_id: str, token: str, watchlist: dict | None = None, opener=None, today: dt.date | None = None, use_socket: bool = False, socket_factory=None,
+          socket_wait_s: float = 20.0, sleep=time.sleep) -> dict:
     """ONE round against Fyers with today's token, sending nothing anywhere: proves the login, the instrument list, the quotes, a book and the option chains before
     the first real session (owner, 14 Nov 2026: "Confirm the broker integration status"). The clock is held at midday so every contract counts as open: on a weekend
     Fyers answers with the last prices. Returns counts only (no price, no token)."""
@@ -679,6 +732,20 @@ def check(app_id: str, token: str, watchlist: dict | None = None, opener=None, t
         rep["result"] = "Fyers refused the token"
     except Blocked:
         rep["result"] = "blocked by Fyers (HTTP 429)"
+    if use_socket and rep.get("result") == "ok":                       # the Data Socket too: log in, subscribe, and wait for the first quotes
+        sub: dict = {"notes": []}
+        sock = _start_socket(app_id, token, names, DEFAULT_PLAN, feed.api, sub, opener, socket_factory)
+        if sock is None:
+            rep["socket"] = {"result": "not started", "notes": sub["notes"]}
+        else:
+            waited, got = 0.0, {}
+            while waited < socket_wait_s and not got and not sock.stats.get("stopped"):
+                sleep(1.0)
+                waited += 1.0
+                got = sock.latest()
+            sock.stop()
+            rep["socket"] = {"result": "ok" if got else (sock.stats.get("stopped") or "no quote came in time"), "symbols": sub.get("socket_symbols", 0),
+                             "quotes": len(got), **{k: sock.stats[k] for k in ("connects", "frames", "unread", "messages")}}
     c = feed.api.calls
     rep.update(feed.stats, calls=c if isinstance(c, int) else len(c), **pusher.stats())
     return rep

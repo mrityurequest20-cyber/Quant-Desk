@@ -498,6 +498,9 @@ feeds:
   # spreads the day's calls across the session within the plan's caps; on Standard that is a quote round about every 22 s and every watchlist option chain within 8 to 9 minutes.
   # Anything else counts as standard, the tighter one. Change it only to the plan the account really has: a feed that thinks it is on Prime would be blocked for the day.
   fyers_plan: standard
+  # The futures' quotes streamed over Fyers' Data Socket (quantdesk/data/fyers_socket.py): no call budget, only a symbol cap (Standard 100, Prime 5,000). The REST budget then
+  # goes to the option chains and books. Off (false) puts the quotes back on REST. A socket that cannot log in or stops delivering hands the quotes back to REST by itself.
+  fyers_socket: true
   routes:
     idx: [z, k]          # indices: Kite, Kotak behind it
     eq:  [z, k]          # NSE cash prices of the F&O stocks

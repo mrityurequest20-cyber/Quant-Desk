@@ -367,13 +367,15 @@ def cmd_fyers_feed(cfg, a):
             raise SystemExit(1)
         return
     if a.check:
-        return _feed_check("fyers-feed", lambda: F.check(app_id, token, watchlist=cfg.get("desk.watchlist", {}) or {}), a.metrics)
+        return _feed_check("fyers-feed", lambda: F.check(app_id, token, watchlist=cfg.get("desk.watchlist", {}) or {}, use_socket=bool(cfg.get("feeds.fyers_socket", False))),
+                           a.metrics)
     if not (url and ingest):
         print("fyers-feed: no live relay configured (LIVE_URL, LIVE_INGEST_TOKEN); the feed is display only, so nothing to do")
         return
     watch = cfg.get("desk.watchlist", {}) or {}
     try:
-        rep = F.run(a.until, app_id, token, LivePusher(url, ingest, src="f"), watchlist=watch if isinstance(watch, dict) else {}, plan=cfg.get("feeds.fyers_plan"))
+        rep = F.run(a.until, app_id, token, LivePusher(url, ingest, src="f"), watchlist=watch if isinstance(watch, dict) else {}, plan=cfg.get("feeds.fyers_plan"),
+                    use_socket=bool(cfg.get("feeds.fyers_socket", False)))
     except (OSError, ValueError) as exc:                            # Fyers or the network (urllib's errors are OSErrors), or an answer that is not JSON: a warning, not a red run
         rep = {"stopped": f"Fyers side: {type(exc).__name__}"}
         print(f"::warning::fyers-feed: {rep['stopped']}")
@@ -400,6 +402,11 @@ def _feed_check(label: str, fn, metrics: str | None) -> None:
     if metrics:
         Path(metrics).write_text(_json.dumps(rep, indent=1, default=str))
     print(f"{label} check: {rep.get('result')}; {rep.get('contracts', 0)} contracts, {rep.get('instruments', 0)} instruments with a quote, {rep.get('calls', 0)} calls")
+    sock = rep.get("socket")
+    if isinstance(sock, dict):                                       # the Data Socket is a bonus, never the gate: a warning if it did not deliver
+        print(f"{label} check: Data Socket {sock.get('result')}; {sock.get('symbols', 0)} symbols subscribed, {sock.get('quotes', 0)} quotes")
+        if sock.get("result") != "ok":
+            print(f"::warning::{label}: the Data Socket did not deliver ({sock.get('result')}); the feed will carry the quotes by REST")
     if rep.get("result") != "ok":
         raise SystemExit(1)
 

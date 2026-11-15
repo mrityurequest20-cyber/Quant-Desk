@@ -172,7 +172,7 @@ def test_the_process_that_holds_the_pin_imports_only_the_standard_library():
 
 def test_nothing_in_the_fyers_code_can_trade_or_read_the_account():
     banned = re.compile(r"/(orders?|positions|holdings|funds|profile|tradebook|multi-order|multileg|gtt|logout|convert)\b|place_order|exit_positions")
-    for f in ("deploy/fyers_autologin.py", "quantdesk/data/fyers_feed.py", "deploy/fyers-token.sh", ".github/workflows/fyers-feed.yml"):
+    for f in ("deploy/fyers_autologin.py", "quantdesk/data/fyers_feed.py", "quantdesk/data/fyers_socket.py", "deploy/fyers-token.sh", ".github/workflows/fyers-feed.yml"):
         assert not banned.search((ROOT / f).read_text()), f
     with pytest.raises(ValueError):
         F.FyersData("A-100", "t").get("/orders", {})
