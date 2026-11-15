@@ -4,72 +4,192 @@
   "plan": "docs/EVOLUTION.md, phase 5, the regime library (the owner, 14 Nov 2026: \"market may not behave the same way 2 months later, 3 months later, a year later. How our trading desk is going to evolve in that process?\"); and the deferred test of the forgetting record (docs/prereg/evolution_probation_v1.json, not_registered_A_forgetting: \"revisited in phase 5, where replays over years of history give it the long, stale records it needs, and a test that can pass\")",
   "question": "S: when the desk meets a market, does what each kind of structure did in the most SIMILAR past markets (by the fingerprint) choose better than what it did on AVERAGE? A: does a record that FORGETS (weights halving every 60 sessions) choose better than the cumulative one? Both are asked on the same replay of the desk's structures through every session of real option closes the warehouse holds, walk-forward (each session's choice uses only what was known at its close), and both are answered as one number: R a trade gained or lost against choosing by the cumulative record",
   "not_for": "nothing here trades, sizes or moves a limit (2.5% a trade, 5% a day, 10% drawdown; the convexity book's 0.5% a trade and 3% a month), and nothing changes in AUTO v2 because of this spec. The replay is research on end-of-day closing prices (evidence class real_eod_approximation, as docs/prereg/expiry_wings_v1.json): it is NOT evidence that any structure is profitable, qualifies nothing for paper money, and is never a paper-gate or profitability claim. What a PASS allows is set in use_if_passed and needs the owner",
+  "parameters": {
+    "pool_start": "2019-01-01",
+    "min_pool_sessions": 250,
+    "embargo": {
+      "sessions": 60,
+      "pool_ends_at": "d - 61 (the last pool session is 61 replay sessions before d)"
+    },
+    "features": [
+      "vol_pct",
+      "trend_t",
+      "vol_change",
+      "vr5",
+      "drawdown",
+      "tail_days"
+    ],
+    "robust_z": {
+      "centre": "median of the pool",
+      "scale": "1.4826 x median absolute deviation of the pool",
+      "scale_if_mad_is_0": "standard deviation of the pool + 1e-12",
+      "clip": 4.0
+    },
+    "bandwidth_h": 0.5,
+    "kappa": 30,
+    "half_life_sessions": 60,
+    "newey_west_lags": [
+      20,
+      60
+    ],
+    "t_crit": 1.96,
+    "min_differ_share": 0.1,
+    "r_clamp": [
+      -5.0,
+      10.0
+    ],
+    "lock": "2026-10-30",
+    "forward_sessions": 120,
+    "underlyings": {
+      "NIFTY": {
+        "index": "NIFTY 50",
+        "lot": 65
+      },
+      "BANKNIFTY": {
+        "index": "NIFTY BANK",
+        "lot": 30
+      }
+    },
+    "costs": {
+      "as_of": "config/quantdesk.yaml on 2026-11-15, charged to every session",
+      "brokerage_per_order_inr": 20.0,
+      "brokerage_pct_cap": 0.0003,
+      "options_stt_sell": 0.0015,
+      "options_exchange": 0.0003503,
+      "options_stamp_buy": 3e-05,
+      "gst_on_brokerage_exchange_sebi": 0.18,
+      "sebi_inr_per_crore": 10.0,
+      "exercise_stt_on_intrinsic": 0.0015,
+      "leg_cost": "research.warehouse_research.leg_cost: 0.05 + max(0.05, 0.002 x price) index points a unit, each side",
+      "min_premium": "auto2.MIN_PREMIUM = 1.0 index point",
+      "max_fees_r": "auto2.MAX_FEES_R = 0.30"
+    },
+    "muhurat_sessions_excluded": [
+      "2021-11-04",
+      "2022-10-24",
+      "2024-11-01",
+      "2025-10-21"
+    ],
+    "sim_sha256": {
+      "library_features.py": "2633e02e14b4f0ab7df3b7b6e25c55d2279e2e1ab80b32a5d4c6509aaabe093c",
+      "power.py": "f548e9b98f95cb0ed1cfb4d78ce0deb72ac8000de5737bee0af158de6115009d",
+      "power_bs.py": "d32b9e578b4388eb9eb17b0ca89660b039a34fd524de697ee946dc51acdcbff8"
+    }
+  },
   "dataset": {
     "fingerprints": "NIFTY's daily closes from the daily-history dataset of 2026-11-08 (release daily-history, 2026-11-08_daily_YYYY.parquet; NIFTY content hash 5002ba113391e894a2207f0c, source Yahoo, 2013-01-02 to 2026-11-06; status unverified only for 8 missing days of 3411, all before 2019-01-02, cross-checked 60 of 60 against the warehouse 2019-2026). The same series the brief's fingerprint is computed from each morning (premarket/tailrisk.py, Yahoo), so the library describes the past exactly as the desk describes today. Each session's fingerprint is quantdesk/premarket/fingerprint.compute(asof = that session), from closes up to its close and nothing after; 3,026 sessions, 2014-07-16 to 2026-11-06 (the first 378 closes are its warm-up). Every session after 2026-11-06 is computed the same way from the same source",
     "options": "the warehouse's fo_bhav (release warehouse, fo_bhav_YYYY-MM.parquet), NSE's F&O bhavcopy: every NIFTY and BANKNIFTY option, daily close, settlement price, contracts traded; months 2019-01 to 2026-11 (November only for 2026-11-02, the exit of the lock's entries). The run records the SHA-256 of every file it reads",
     "spot": "the warehouse's nse_index_close (NSE's official closing value, the price index options settle on): NIFTY 50 and NIFTY BANK",
     "pool_start": "2019-01-01: the first session with real option closes. Only sessions from it have replay outcomes",
-    "window": "test sessions: every session from the first whose embargoed pool (library.embargo) holds at least 250 sessions, counted on the fingerprint calendar (by the 2026-11-06 fingerprints, 2020-04-15; 1,626 sessions to 2026-11-06, a few fewer to the lock) through 2026-10-30, the lock. The outcome of a session needs the next session's close, so the last outcome read is 2026-11-02's",
+    "window": "test sessions: every replay session from the first whose embargoed pool holds at least 250 replay sessions (by the 2026-11-06 fingerprint calendar, 2020-04-15; 1,626 sessions to 2026-11-06, a few fewer to the lock) through 2026-10-30, the lock. The outcome of a session needs the next replay session's close, so the last outcome read is the exit of 2026-10-30's entries, on 2026-11-02",
     "not_backfilled": "the warehouse holds no option closes before 2019. The 2008 crash, the 2013 taper and the 2016 demonetisation are not in this replay: the fingerprint library reaches them (the aeron7 index minutes, 2007 to Feb 2023, external_verified, allowed use regime_research), the options do not. A backfill of fo_bhav to 2008 (NSE's old-format bhavcopy is archived from 2000) is a new dataset and, if it is wanted, a new spec (regime_library_v2), never added to this one"
   },
-  "what_was_seen_before_registering": "the builder computed the 3,026 fingerprints from closes and read their features' distribution, their correlations and the kernel's n_eff at five bandwidths (docs/prereg/sims/regime_library_v1/library_features.out.txt), and read the column names of one fo_bhav month and one nse_index_close year. No replay outcome, no option price series and no forward return was computed or looked at. Earlier desk studies did read fo_bhav 2019 onwards: the expiry studies (expiry_seller_v1 to v4, expiry_eve_law_v1 and v2, expiry_wings_v1) sold premium entered 1 to 10 sessions before expiry and held to settlement. This replay's protocol (entered at every close, held one session) was never run, but its short-premium families overlap those results near expiry: the builder knew, before registering, that selling premium into the last sessions before an expiry did not survive costs in those studies",
+  "calendar": {
+    "replay_sessions": "the dates, Monday to Friday, on which the warehouse's nse_index_close has NIFTY 50 and fo_bhav has NIFTY options, less the one-hour Muhurat sessions (parameters.muhurat_sessions_excluded; the weekend ones, 2020-11-14 and 2023-11-12, and the weekend special sessions 2024-01-20, 2024-03-02, 2024-05-18 and 2025-02-01, are excluded by the weekday rule). One calendar for both underlyings; a BANKNIFTY row on a date outside it is not used, and is counted",
+    "next_session": "an entry's exit is at the next replay session (a session left out in between is held through)",
+    "counting": "every count of sessions (min_pool_sessions, the embargo, the half-life, the Newey-West lags) is in replay sessions",
+    "fingerprint_of_a_session": "fingerprint.compute at that date when the daily-history series has it; otherwise the last earlier fingerprint (a replay session the series lacks, e.g. 2019-01-01, the pool's first day), counted in the report. The simulations used the fingerprint calendar; the two differ on a handful of dates",
+    "timing": "the replay enters at session d's close, so d's own close fingerprint is what was known at entry. In live use the estimate for trades during a session is computed from the last close's fingerprint, as the brief's is"
+  },
+  "what_was_seen_before_registering": "the builder computed the 3,026 fingerprints from closes and read their features' distribution, their correlations and the kernel's n_eff at five bandwidths (docs/prereg/sims/regime_library_v1/library_features.out.txt), and read the column names of one fo_bhav month and one nse_index_close year. No replay outcome, no option price series and no forward return was computed or looked at for this spec. Earlier desk studies did read fo_bhav 2019 onwards, and their results were known before registering: (1) the expiry studies (expiry_seller_v1 to v4, expiry_eve_law_v1 and v2, expiry_wings_v1) sold premium entered 1 to 10 sessions before expiry and held to settlement: selling premium into the last sessions before an expiry did not survive costs; (2) the expiry_eve_law_v1 and v2 audits (docs/prereg/results, check 7_current_regime) found the short-premium edge weaker since 2024-11-20 (e.g. +4.92 bps, t 1.42, against +10.27 bps, t 4.24, before): a change a forgetting record can follow, which bears on A; (3) research.warehouse_research.buyer_edge_rows ran, in October 2026, exactly this replay's protocol for the LS family: the nearest expiry's ATM straddle bought at the close and sold at the next close, worsened by leg_cost, with fees, 2019 onwards, by days to expiry and weekday; its finding (commit 802e5fa, 3 Oct 2026): \"No bucket where buyers win, on either index, intraday or overnight\". That fixes LS's average, not how it varies with the kind of market, which is what S asks; it was never cut by the fingerprint",
   "library": {
-    "features": ["vol_pct", "trend_t", "vol_change", "vr5", "drawdown", "tail_days"],
+    "features": [
+      "vol_pct",
+      "trend_t",
+      "vol_change",
+      "vr5",
+      "drawdown",
+      "tail_days"
+    ],
     "why_these": "the fingerprint's NIFTY-only features: every one exists at every session since 2014. The stocks' correlation and dispersion and the cross-asset percentiles are left out (their series start later or carry survivorship); the brief-only features (US VIX, the dollar, US yields, events) have no history in the desk's data",
-    "scale": "each feature as a robust z against the pool (the median and 1.4826 x the median absolute deviation of the pool's sessions, the pool being the past only), clipped to +/-4",
+    "scale": "each feature as a robust z against the pool (parameters.robust_z: the pool's median and 1.4826 x its median absolute deviation; where that deviation is 0, the pool's standard deviation + 1e-12, as library_features.robust_z does; tail_days's deviation is 0 in about 35% of the test sessions), clipped to +/-4. The code reproduces library_features.robust_z exactly (a test pins it)",
     "distance": "the root mean square of the six z differences",
     "kernel": "w = exp(-d^2 / (2 h^2)), h = 0.5",
-    "embargo": "the pool of session d is the sessions from pool_start to d - 61 (at least 60 sessions before d): the library is about markets LIKE today's in the past, not the last few weeks, which the live record already holds. Without the embargo, the nearest fingerprints are yesterday's, and similarity would be recency by another name",
+    "embargo": "the pool of session d is the replay sessions from pool_start to d - 61 (61 replay sessions before d, so that every pool outcome is known at d's close): the library is about markets LIKE today's in the past, not the last few weeks, which the live record already holds. Without the embargo, the nearest fingerprints are yesterday's, and similarity would be recency by another name",
     "why_h_0.5": "fixed from the features alone (library_features.out.txt): on the test sessions, h 0.5 leaves n_eff (the kernel's effective number of sessions, (sum w)^2 / sum w^2) at 115 / 286 / 713 at its 10th, 50th and 90th percentiles, under 30 in 3% of sessions; h 0.35 leaves it under 30 in 10%, h 0.25 in 39%. In the simulation (power, below) h 0.35 and 0.5 have the same power to within the simulation's error, and 0.5 the steadier n_eff"
   },
   "replay": {
-    "underlyings": ["NIFTY", "BANKNIFTY"],
+    "underlyings": [
+      "NIFTY",
+      "BANKNIFTY"
+    ],
     "families": {
-      "up": ["LC", "BCS", "BPS", "BWC", "CRB"],
-      "down": ["LP", "BRP", "BRC", "BWP", "PRB"],
-      "flat": ["IC", "IF", "LS", "LG", "CBF", "PBF"]
+      "up": [
+        "LC",
+        "BCS",
+        "BPS",
+        "BWC",
+        "CRB"
+      ],
+      "down": [
+        "LP",
+        "BRP",
+        "BRC",
+        "BWP",
+        "PRB"
+      ],
+      "flat": [
+        "IC",
+        "IF",
+        "LS",
+        "LG",
+        "CBF",
+        "PBF"
+      ]
     },
-    "family_definition": "a family is a structure of quantdesk/paper/auto2.py STRUCTURES (its family in Lab.fit's hierarchical model), its legs from the same table, placed by the same function (auto2.legs_for over the strikes listed that day for that expiry, at-the-money = the listed strike nearest the official close), at each of its registered widths. Its outcome in a session is the mean R of its widths that could be traded that session; with none, the family has no outcome that session",
+    "family_definition": "a family is a structure of quantdesk/paper/auto2.py STRUCTURES (its family in Lab.fit's hierarchical model), its legs from the same table, placed by the same function (auto2.legs_for) at each of its registered widths. The strikes are those of every fo_bhav row (CE or PE) for that underlying, that expiry and that date, traded or not, sorted; at-the-money is the strike nearest the official close, the lower one on a tie (auto2's rule). Its outcome in a session is the mean R of its widths that have an outcome; with none, the family has no outcome that session",
     "left_out": "calendars and diagonals (CAL, PCAL, DGC, DGP: their worst case values a later expiry at its floor, which closing prices do not price cleanly), the Convexity desk's structures (convex payoffs under their own caps and exits; probation leaves them out for the same reason), futures (direction only), and invented structures (they change over time). All are in the shadow book as before",
-    "entry": "at each session's close: the nearest expiry after that session (an option expiring at this close is not entered), every leg at its closing price worsened by research.warehouse_research.leg_cost (a tick plus a half-spread of at least a tick, 0.2% of premium): bought above the close, sold below it. Every leg must have traded that session (contracts > 0, close > 0) and be priced at least auto2.MIN_PREMIUM; else that width is not traded",
-    "exit": "at the next session's close, every leg at its close worsened the same way; a leg that did not trade then is valued at NSE's settlement price for that day, worsened the same way, and counted. If the expiry is that next session, the legs settle at their intrinsic value on the official index close, with no exit spread, and STT on the intrinsic value of exercised long legs (warehouse_research.STT_EXERCISE)",
-    "costs": "the desk's statutory fee model as AUTO v2 pays it today (paperlink/cli.auto_v2: execution.costs.CostModel on the desk's config, one lot of today's lot size, entry and exit), for every session in the window: the question is how structures behave in kinds of market, not what costs were in 2019, and charging today's costs keeps the 2024 STT and lot changes out of the comparison. A width whose round-trip costs exceed auto2.MAX_FEES_R of its risk is not traded, as AUTO v2 refuses it",
-    "R": "the outcome in R as AUTO v2 scores a shadow trade: the profit or loss per unit after spreads, fees and STT, over the risk (the structure's worst loss at expiry from auto2.payoff_bounds at the entry fills, plus the round trip's fees), clamped to -5 .. +10 as Lab.add clamps it",
+    "entry": "at each replay session's close: the nearest expiry after that session (an option expiring at this close is not entered), every leg at its closing price worsened by parameters.costs.leg_cost: bought above the close, sold below it. A width is TRADABLE at entry when every leg traded that session (contracts > 0, close > 0), every leg's close (before worsening) is at least auto2.MIN_PREMIUM, its worst value at expiry at the entry fills (auto2.payoff_bounds) is below 0, and its round-trip fees priced at the entry fills are at most auto2.MAX_FEES_R of its risk. A family is tradable when one of its widths is",
+    "exit": "at the next replay session's close, every leg at its close worsened the same way (a long sold below, a short bought back above); a leg that did not trade then is valued at NSE's settlement price for that day, worsened the same way, and counted; a leg with no row at all on the exit date leaves its width without an outcome, counted. If the expiry is that next session, the legs settle at their intrinsic value on the official index close, with no exit spread and no exit order fees, and exercise STT (parameters.costs.exercise_stt_on_intrinsic) on the intrinsic value of long legs in the money",
+    "costs": "parameters.costs, the desk's option schedule as config/quantdesk.yaml stands on 2026-11-15, for every session in the window, at one lot of the lot in parameters.underlyings: the question is how structures behave in kinds of market, not what costs were in 2019, and one schedule keeps the 2024 STT and lot changes out of the comparison. Each order pays brokerage (the lower of the flat fee and the cap), exchange charges and SEBI's fee on the premium turnover, GST on those three, STT on a sale and stamp duty on a purchase. The 0.0015 exercise STT is the desk's own rate from 2026-04-01, not the 0.00125 frozen in warehouse_research.STT_EXERCISE",
+    "R": "profit or loss per unit after spreads, actual fees (entry fees at the entry fills, exit fees at the exit fills, or exercise STT at settlement) over the risk, as auto2.price defines it: the worst loss at expiry from auto2.payoff_bounds at the entry fills plus the round trip's fees priced at the entry fills; clamped to parameters.r_clamp as Lab.add clamps it",
     "why_one_session": "closing prices can replay an entry at a close and an exit at the next close and nothing finer: AUTO v2's take-profits, stops and intraday exits happen between closes and cannot be replayed honestly. Overnight is what the desk's overnight strategies carry",
     "no_view": "the replay has no market read and no news model (neither has a history), so every family trades every session it can, whatever the direction. The tests compare families WITHIN a direction group, which is how the desk uses a family: given a view, which structure"
   },
   "choosers": {
-    "FLAT": "the cumulative record: for each underlying and family, the mean R of all its outcomes from pool_start to d - 1 (the outcome of session d - 1 is known at d's close)",
-    "SIM": "the library: the kernel-weighted mean R over the embargoed pool (w as in library), shrunk to FLAT: (n_eff x kernel mean + 30 x FLAT) / (n_eff + 30), n_eff counted over the sessions where the family has an outcome",
-    "EW": "the record that forgets: the mean R with weights halving every 60 sessions, over pool_start to d - 1",
-    "choice": "in each of the six cells (two underlyings x three groups), each chooser takes the family with the highest estimate among those with an outcome that session; FLAT's choice is the reference. A family with no outcome in the pool yet is not chosen"
+    "FLAT": "the cumulative record: for each underlying and family, the mean R of all its outcomes from pool_start to d - 1 (the outcome of session d - 1 is known at d's close). With no outcome yet, the family cannot be chosen",
+    "SIM": "the library: the kernel-weighted mean R of the family's outcomes in the embargoed pool (w as in library), shrunk to FLAT: (n_eff x kernel mean + kappa x FLAT) / (n_eff + kappa), n_eff = (sum w)^2 / sum w^2 over the pool sessions where the family has an outcome. With no outcome in the embargoed pool, SIM is FLAT",
+    "EW": "the record that forgets: the mean R of the family's outcomes from pool_start to d - 1, each weighted 0.5^(age / half_life) with age in replay sessions; a session without an outcome adds nothing",
+    "choice": "in each of the six cells (two underlyings x three groups), each chooser takes, among the families TRADABLE at d's entry (replay.entry) whose FLAT exists, the one with the highest estimate; on a tie, the first in replay.families order. Nothing about the exit is used to choose. FLAT's choice is the reference"
   },
   "tests": {
-    "statistic": "D(d) = the mean over the cells of y(the chooser's family) - y(FLAT's family), in R; a cell where they choose the same family adds 0; a cell with fewer than two families with outcomes is left out of that session's mean, and a session with no cell left has no D",
+    "statistic": "D(d) = the mean over the usable cells of y(the chooser's family) - y(FLAT's family), in R. A cell is usable in session d when at least two families are choosable and both chosen families have an outcome; a cell where a chosen family has no outcome (its exit could not be priced) is left out of that session's mean for that test, and counted; a session with no usable cell has no D. A usable cell where both choose the same family adds 0",
     "S": "SIM against FLAT",
     "A": "EW against FLAT",
-    "inference": "the mean of D over the test sessions; Newey-West t with 20 lags (research.edges.hac_mean); and, as a check that the choices' persistence is not overstating it, with 60 lags",
-    "pass": "a test PASSES when its t is at least 1.96 with 20 lags AND with 60 lags (one-sided 2.5% each: two tests, Bonferroni), and its choice differs from FLAT's in at least 10% of the cell-sessions",
-    "fail": "any other result is a FAIL of that test, reported with its mean, both t, its 95% interval and the share of cell-sessions where the choices differed. A choice that differs in under 10% of cell-sessions is reported as NOT INFORMATIVE, not as a FAIL",
-    "one_run": "each test runs once, on the window to the lock. No bandwidth, embargo, shrinkage, feature, family list or cost is changed after a result is seen; a change is a new spec on data this run did not touch"
+    "inference": "the mean of D over the test sessions; Newey-West t with 20 lags (research.edges.hac_mean); and, as a check that the choices' persistence is not overstating it, with 60 lags. The 95% interval is the mean +/- 1.96 x the 20-lag standard error",
+    "pass": "a test PASSES when its t is at least 1.96 with 20 lags AND with 60 lags (one-sided 2.5% each: two tests, Bonferroni), and its choice differs from FLAT's in at least 10% of the usable cell-sessions",
+    "fail": "any other result is a FAIL of that test, reported with its mean, both t, its 95% interval and the share of usable cell-sessions where the choices differed. A choice that differs in under 10% of usable cell-sessions is reported as NOT INFORMATIVE, not as a FAIL",
+    "detectable": "the report prints, for each test, the sd of D across sessions and the mean D the test would detect with 80% power at that sd (2.80 x the 20-lag standard error), so a FAIL says how large an effect it rules out",
+    "one_run": "each test runs once, on the window to the lock. No bandwidth, embargo, shrinkage, feature, family list, calendar rule or cost is changed after a result is seen; a change is a new spec on data this run did not touch"
   },
   "power": {
-    "evidence": "docs/prereg/sims/regime_library_v1/power.py (numpy, seed 5, 200 worlds each), output power.out.txt: the REAL fingerprint path and kernel weights of the 1,626 test sessions, SYNTHETIC outcomes for 16 families on 2 underlyings (an overnight move scaled by each session's real 20-session volatility, priced in, so that a volatile market alone pays neither long nor short volatility; per-family loadings on it; normal noise of 0.2 R; a regime effect of size delta, each family's own smooth function of the six features; optionally a random-walk drift per family that no feature describes, and heavy tails with rare multi-R payoffs)",
-    "results_h_0.5": "the share of worlds that PASS by the registered rule (t >= 1.96 at 20 and at 60 lags, choices differing in at least 10% of cell-sessions). S: nothing differs 0.035; fixed family means 0.010; drift only 0.005; heavy tails 0.005; regime 0.03 R 0.385; regime 0.05 R 0.815; regime 0.08 R 0.995; regime 0.05 R with heavy tails 0.740; regime 0.05 R with drift 0.230. A: nothing differs 0.025; fixed family means 0.005; heavy tails 0.000; drift only 0.650; regime 0.05 R 0.325; regime 0.08 R 0.835; regime 0.05 R with drift 0.730. At h 0.35 S passes 0.830 of the regime 0.05 R worlds and 0.025 of the nothing-differs ones; at h 0.7, 0.730 and 0.030",
-    "reading": "S has about 80% power when the best structure's edge moves by 0.05 R a trade (sd over sessions) with the kind of market (74% with heavy tails), under 40% at 0.03 R. Its false PASS rate was 3.5% where nothing differs (nominal 2.5%; with 200 worlds that is within about one standard error) and 1% or less in every other null world, including one where the family means drift and only a forgetting record could follow. A PASSES where change is drift (as it should) and seldom where only the market's kind matters. Drift of the simulated size (0.15 R over the sample) cuts S's power to about 0.23: a FAIL of S is therefore not proof that kinds of market do not matter, only that the library could not show it on this sample. A noisier chooser loses to the cumulative record when the families' means simply differ and stay put (mean D -0.0014 R for S, -0.0029 R for A): that is the price a PASS has to overcome"
+    "evidence": "two simulations on the REAL fingerprint path and kernel weights of the 1,626 test sessions, 200 worlds each, seed 5, the registered PASS rule. (1) power_bs.py / power_bs.out.txt, the realistic one: outcomes priced by Black-Scholes for auto2's own legs at each session's real 20-session volatility (BANKNIFTY's x 1.22, the desk's iv_beta), on the contract calendar by the exchange's rules, with leg_cost, the parameters.costs schedule, MIN_PREMIUM, MAX_FEES_R, settlement and exercise STT, a t(4) overnight move and a change in implied volatility; the expected move is priced in. (2) power.py / power.out.txt, the first, simpler one: an assumed noise of 0.2 R a family and per-family loadings on a priced-in move; it also has heavy-tailed worlds. Both add a regime effect delta (each family's own smooth function of the six features, sd delta R over sessions) and optionally a random-walk drift per family that no feature describes",
+    "noise_measured": "in the Black-Scholes world a family's overnight R has an sd of 0.31 to 1.24 R over the test sessions (long calls and puts about 1 R, broken-wing butterflies about 0.3 R; power_bs.out.txt); the families of a group move together with the market, so the sd of D across sessions is about 0.22 R, and the mean D the test detects with 80% power is about 0.017 R (0.015 to 0.018 across the null and 0.05 R worlds)",
+    "results_black_scholes": "S: pricing only 0.000; drift only 0.005; regime 0.05 R 0.655; regime 0.10 R 1.000; regime 0.20 R 1.000; regime 0.20 R with drift 0.985. A: pricing only 0.000; drift only 0.235; regime 0.05 R 0.215; regime 0.10 R 0.950; regime 0.20 R 1.000; regime 0.20 R with drift 0.950",
+    "results_simple": "S: nothing differs 0.035; fixed family means 0.010; drift only 0.005; heavy tails 0.005; regime 0.03 R 0.385; regime 0.05 R 0.815; regime 0.08 R 0.995; regime 0.05 R with heavy tails 0.740; regime 0.05 R with drift 0.230. A: nothing differs 0.025; fixed family means 0.005; heavy tails 0.000; drift only 0.650; regime 0.05 R 0.325; regime 0.08 R 0.835; regime 0.05 R with drift 0.730. At h 0.35 S passes 0.830 of the regime 0.05 R worlds and 0.025 of the nothing-differs ones; at h 0.7, 0.730 and 0.030",
+    "reading": "at the noise option pricing gives, S passes about two worlds in three when the best structure's edge moves by 0.05 R a trade (sd over sessions) with the kind of market, and every world at 0.10 R; its false PASS rate is 0 to 0.5% in the Black-Scholes null worlds and at most 3.5% in the simple ones (nominal 2.5%; with 200 worlds, within about one standard error). Drift cuts S's power (0.23 at 0.05 R in the simple world): a FAIL of S is not proof that kinds of market do not matter, only that the library could not show an effect of the detectable size on this sample. A forgetting record follows a persistent kind of market as well as drift: A passes 0.215 to 0.325 of the 0.05 R regime worlds, 0.835 to 0.950 at 0.08 to 0.10 R, and 0.235 to 0.650 of the drift-only ones, so an A PASS does not tell drift from the kind of market. A noisier chooser loses to the cumulative record when the families' means simply differ and stay put (mean D -0.0014 R for S, -0.0029 R for A in the simple world; -0.0046 and -0.0053 R with pricing only): that is the price a PASS has to overcome. Both simulations' outcomes are synthetic; the real replay's noise is what the report's detectable effect measures"
   },
-  "reported_descriptively": "never a claim and never a second test: (1) SIM against EW, the same statistic; (2) D by calendar year and by named windows (2020-04 to 2020-12, the recovery; 2022, the rate hikes; 2024-06-03 to 2024-06-14, the election result; 2024-11-20 onwards, the F&O rule changes and BANKNIFTY's weekly expiry ending); (3) the share of sessions each regime key of phase 1 covers in the window (by 2026-11-06's fingerprints, 'normal/down' held on 8 of 3,026 sessions and 'high/up' on 14: the key is lopsided, which phase 3's choice by regime must allow for, and which the continuous features used here do not suffer from); (4) the replay's coverage: sessions, families and widths traded, legs valued at settlement",
+  "reported_descriptively": [
+    "SIM against EW, the same statistic",
+    "SIM_TIME, a placebo for similarity: the same embargoed pool, weights by distance in time only (exp(-age / tau), tau chosen in each session so that n_eff equals SIM's that session), shrunk the same way; D(SIM against SIM_TIME). If SIM's gain over FLAT is matched by SIM_TIME's, the library added time, not kind of market",
+    "each chooser's estimate against the next outcome: mean squared error over the test sessions, per underlying and group (aggregates only)",
+    "D by calendar year, by underlying, and before and after 2024-11-20 (the F&O rule changes; BANKNIFTY's nearest expiry becomes monthly), and in named windows (2020-04 to 2020-12, the recovery; 2022, the rate hikes; 2024-06-03 to 2024-06-14, the election result). Stated before the run: an A PASS carried by the BANKNIFTY cells after 2024-11-20 is a contract-calendar effect (phase 6's rule-change freeze), not evidence for forgetting",
+    "the share of sessions each regime key of phase 1 covers in the window (by 2026-11-06's fingerprints, 'normal/down' held on 8 of 3,026 sessions and 'high/up' on 14: the key is lopsided, which phase 3's choice by regime must allow for, and which the continuous features used here do not suffer from)",
+    "the replay's coverage: sessions, families and widths traded, legs valued at settlement, widths and cells without an outcome, replay sessions without their own fingerprint"
+  ],
   "code": {
     "module": "quantdesk/research/regime_library.py (the library, the replay and the tests), run by the Study workflow (a new choice, regime-library), merged after this spec. The run summary and the logs carry only what publication makes public; per-family output goes where publication says, and in the app (if S passes) over the keyed relay, never in the public site. The fingerprints are fingerprint.compute; the legs, the bounds and the clamp are auto2's own functions, imported, never copied",
     "rule": "the report records the git commit of the run and this spec's SHA-256; a change to any definition or parameter above after this spec is merged is a new spec (regime_library_v2)"
   },
-  "forward_rule": "the sessions after the lock are untouched. 120 sessions after the lock (about May 2027), both tests are run again on those sessions only, by the same code, and reported beside the first result; they confirm or weaken it and change no verdict",
+  "forward_rule": "the sessions after the lock are untouched. 120 replay sessions after the lock (about May 2027), both tests are run again on those sessions only, by the same code, and reported beside the first result with their mean D and 95% interval; this is descriptive (120 sessions have little power) and changes no verdict",
   "publication": "as docs/prereg/evolution_probation_v1.json decided on the owner's delegation (the owner's Claude Code session of 14 Nov 2026, claude.ai/code/session_011DBceCbQNtu6df3GhXrgYD: \"Up to you how you feel it's right to do, so do it in that way.\"): the verdicts and aggregates (each test's mean D, t, interval and share of differing choices; the descriptive items' aggregates) go to this public repository (docs/prereg/results) with this spec's SHA-256; which family did best in which kind of market, per family and per regime, is a trading result and stays private: on the relay only, or in an expiring workflow artifact only if AES-256 encrypted the way recorded Kite market data leaves a runner (docs/AUTONOMY.md); never in a run summary, a log, an unencrypted artifact, a release, the gh-pages site or this repository, which are all public",
   "lock": "this file is never edited once it is merged",
   "use_if_passed": {
+    "scope": "a PASS covers what was replayed: each family's overnight, close-to-close variant on the nearest expiry, with no view, per underlying. The desk's families hold 126 to 252 strategies each in AUTO v2's catalogue (other exits, holds, expiries and contexts); carrying a prior from this variant to them is part of the owner's decision",
     "S": "a PASS allows the phase 5 code to compute, each morning, every family's library estimate for today (SIM, from the replay to the last close) and to show it in the app beside the family's own record. Using it as the family prior in Lab.fit (the mean a family's members are shrunk towards, now 0) changes which strategies AUTO v2 chooses for paper money and can loosen a choice, so it is the owner's decision with this result in front of them (docs/RENAISSANCE.md, invariant 7). The builder's recommendation, if S passes: run it in shadow first (record what the prior would have chosen beside what was chosen) for 60 sessions",
-    "A": "a PASS is the evidence the deferred forgetting record lacked. Adding it to Lab changes choices for paper money: the owner's decision, with the probation spec's own simulation (it chose worse under Thompson draws in most worlds) beside this result",
+    "A": "a PASS is the evidence the deferred forgetting record lacked, with a limit stated now: a forgetting record follows a persistent kind of market as well as drift (power.reading), so an A PASS does not say which. Adding it to Lab changes choices for paper money: the owner's decision, with the probation spec's own simulation (it chose worse under Thompson draws in most worlds) and the before/after 2024-11-20 split (reported_descriptively) beside this result",
     "neither": "nothing in AUTO v2 changes. The library itself (the fingerprints of every past session) still serves phase 4 (breaks and the unfamiliar-market guard, which only tighten) and the app's Market regime panel"
   },
-  "owner_decisions": "this spec is research and changes nothing that trades. The owner merges it, as the plan's phases are the owner's. Everything a PASS could change in AUTO v2 is the owner's to approve afterwards (use_if_passed)"
+  "owner_decisions": "this spec is research and changes nothing that trades. The owner merges it, as the plan's phases are the owner's. Everything a PASS could change in AUTO v2 is the owner's to approve afterwards (use_if_passed)",
+  "reviews": "research review of 15 Nov 2026 on the first draft (0b33bba): NOT CLEAR, 8 items and 5 notes, all taken: the protocol overlap with buyer_edge_rows and the 2024-11-20 audit disclosed; outcome noise measured by Black-Scholes pricing (power_bs.py) instead of assumed; A's reading corrected; one dated cost schedule (exercise STT 0.0015); the zero-deviation scale, the calendar, the strike list, the fees in R, the tie-break, the choice set and the interval defined; parameters structured; SIM_TIME placebo, predictive error, the 2024-11-20 split, the scope of a PASS and the fingerprint timing registered. Risk review of the same draft: VETO 1, publication named a public channel as private; fixed in 6e1ee75"
 }

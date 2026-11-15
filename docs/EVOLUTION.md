@@ -98,8 +98,9 @@ computed:
   at the close, out at the next close, at closing prices worsened by a spread, with today's real costs, scored in R as the shadow book scores a trade. No view: the
   tests compare structures within a direction (up, down, flat).
 - **Two tests, walk-forward.** S chooses by the similar past, A by a record that forgets (weights halving every 60 sessions, the idea deferred from phase 2), each
-  against the cumulative record. A simulation on the real fingerprint path gives S about 80% power when a structure's edge moves by 0.05 R with the kind of market,
-  and a false-pass rate near the nominal one when it does not.
+  against the cumulative record. In a simulation on the real fingerprint path, with outcomes priced by Black-Scholes (synthetic, not measured), S passes about two
+  worlds in three when a structure's edge moves by 0.05 R with the kind of market, every world at 0.10 R, and almost never when nothing moves; the real report prints
+  the effect its own noise lets it detect. A forgetting record follows a lasting kind of market as well as drift, so an A pass cannot say which.
 - **What a pass changes.** Nothing on its own: the estimate goes to the app, and using it to choose paper-money strategies is the owner's decision.
 
 ## Honest limits
