@@ -44,7 +44,13 @@ def load_labels(path: str, set_path: str) -> list[dict]:
         bad = [k for k in lab if k not in KEYS]
         if bad:
             raise SystemExit(f"{path}: row i={r['i']} labels unknown subject(s) {bad}")
-    return sorted(rows, key=lambda r: r["i"])
+    rows = sorted(rows, key=lambda r: r["i"])
+    if ONLY is not None:                                                         # --exclude: the checks above ran on the whole set first
+        rows = [r for r in rows if r["i"] in ONLY]
+    return rows
+
+
+ONLY: set | None = None
 
 
 def load_parser(path: str, expect_sha256: str | None = None):
@@ -138,7 +144,7 @@ def cmd_agree(a):
 
 def cmd_compare(a):
     """Paired: on the same headlines and labels, pairs the fixed parser gets right and the baseline wrong (b) and the reverse (c); exact one-sided sign test."""
-    rows, p0, p1 = load_labels(a.labels, a.set), load_parser(a.parser), load_parser(a.parser2, a.expect_sha256)
+    rows, p0, p1 = load_labels(a.labels, a.set), load_parser(a.parser, a.expect_sha256_baseline), load_parser(a.parser2, a.expect_sha256)
     b = c = 0
     for r in rows:
         lab, g0, g1 = nonzero(r["labels"]), read(p0, r["title"]), read(p1, r["title"])
@@ -158,6 +164,8 @@ def main():
     ap.add_argument("--parser")
     ap.add_argument("--parser2")
     ap.add_argument("--expect-sha256", dest="expect_sha256", help="refuse to run unless --parser (score) or --parser2 (compare) has this SHA-256")
+    ap.add_argument("--expect-sha256-baseline", dest="expect_sha256_baseline", help="compare: refuse to run unless --parser (the baseline) has this SHA-256")
+    ap.add_argument("--exclude", help="exposure.py's JSON: run on the unexposed rows, then on all rows")
     ap.add_argument("--labels")
     ap.add_argument("--labels2")
     ap.add_argument("--errors", action="store_true")
@@ -165,7 +173,19 @@ def main():
     a = ap.parse_args()
     if a.cmd in ("score", "compare") and not (a.parser and a.labels) or a.cmd == "compare" and not a.parser2 or a.cmd == "agree" and not (a.labels and a.labels2):
         ap.error("missing --parser / --parser2 / --labels / --labels2 for this command")
-    {"score": cmd_score, "agree": cmd_agree, "compare": cmd_compare}[a.cmd](a)
+    run = {"score": cmd_score, "agree": cmd_agree, "compare": cmd_compare}[a.cmd]
+    if not a.exclude:
+        run(a)
+        return
+    global ONLY
+    out = set(json.load(open(a.exclude, encoding="utf-8"))["exposed"])               # exposure.py's output (P_test.exposure_rule)
+    n = sum(1 for line in open(a.set, encoding="utf-8") if line.strip())
+    ONLY = {i for i in range(n) if i not in out}
+    print(json.dumps({"rows": f"unexposed: {len(ONLY)} of {n} (excluded {sorted(out)}); PASS, FAIL, VOID, agreement and the sign test use these"}))
+    run(a)
+    ONLY = None
+    print(json.dumps({"rows": f"all {n}, reported alongside"}))
+    run(a)
 
 
 if __name__ == "__main__":

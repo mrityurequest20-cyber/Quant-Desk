@@ -1,6 +1,6 @@
 """Validation rounds while fixing (docs/prereg/news_parse_v1.json, development): N headlines drawn with a recorded seed from the pool, never from DEV, TEST
-or an earlier round (AUDIT is outside the pool); from round 5 (TWIN_RULE_FROM), never a twin of a TEST or AUDIT row either (one contains the other, ignoring
-case and spacing). A round is labelled on the guide BEFORE any parser is run on it; its labels and score are reported in the result.
+or an earlier round (AUDIT is outside the pool); from round 5 (TWIN_RULE_FROM), never a twin of a TEST or AUDIT row either (one contains the other, after
+normalising case and spacing, or to letters and digits only). A round is labelled on the guide BEFORE any parser is run on it; its labels and score are reported in the result.
 TEST is computed in memory only to be excluded, never written or printed.
 
     python -I docs/prereg/sims/news_parse_v1/draw_val.py <sample.py> <dir of journal-archive-*.db> <seed> <out.jsonl> [earlier round .jsonl ...]
@@ -11,10 +11,16 @@ import glob
 import importlib.util
 import json
 import random
+import re
 import sys
 
 N_VAL = 100
 TWIN_RULE_FROM = 20261123          # rounds 1-4 (seeds 20261119-20261122) were drawn by exact-string exclusion only and reproduce byte for byte under it
+
+
+def norms(s: str) -> tuple[str, str]:
+    a = " ".join(s.lower().split())
+    return a, re.sub(r"[^a-z0-9]+", "", a)
 
 
 def test_rows(smp, pool):
@@ -43,12 +49,13 @@ def main():
     cand = [h for h in pool if h not in excl]
     if seed >= TWIN_RULE_FROM:                                                  # from round 5: no twin of a TEST or AUDIT row either (one copy longer than the other)
         outside = [h for h in allh if not smp.POOL.search(h)]
-        held = [" ".join(x.lower().split()) for x in test_rows(smp, pool) + random.Random(smp.SEED_AUDIT).sample(outside, smp.N_AUDIT)]
-        cand = [h for h in cand if not any(" ".join(h.lower().split()) in x or x in " ".join(h.lower().split()) for x in held)]
+        held = [norms(x) for x in test_rows(smp, pool) + random.Random(smp.SEED_AUDIT).sample(outside, smp.N_AUDIT)]
+        cand = [h for h in cand if not any(a in b or b in a for x in held for a, b in zip(norms(h), x))]
     val = random.Random(seed).sample(cand, N_VAL)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write("".join(json.dumps({"i": i, "title": t}, ensure_ascii=False) + "\n" for i, t in enumerate(val)))
-    print(f"round seed {seed}: {len(val)} headlines from {len([h for h in pool if h not in excl])} (excluded {len(excl)}: DEV, TEST and {len(earlier)} earlier rounds)")
+    print(f"round seed {seed}: {len(val)} headlines from {len(cand)} candidates (excluded DEV, TEST, {len(earlier)} earlier rounds"
+          f"{' and twins of TEST or AUDIT rows' if seed >= TWIN_RULE_FROM else ''})")
 
 
 if __name__ == "__main__":
