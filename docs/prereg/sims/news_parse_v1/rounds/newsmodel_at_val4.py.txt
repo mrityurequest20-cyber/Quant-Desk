@@ -1,0 +1,683 @@
+"""The news model (owner, 13 Nov 2026: "The news analyser must be sophisticated that it understand past and present situations well so that it can accurately predict the
+future, it should [read] each and everything which can impact our vision. Models should read differently as per the instrument as these instruments are different").
+PAPER MONEY ONLY; nothing here trades.
+
+A story moves instruments through CHANNELS, not only by naming them. "Brent jumps 6% after Gulf strikes" names no Indian instrument, yet it moves crude up, the rupee
+down (USD/INR up), the indices down, and gold up. The model reads each story in three steps:
+
+1. SUBJECTS. Which economic variables it is about (crude, gold, the rupee, the dollar, US yields, the Fed, the RBI, inflation, growth, foreign flows, geopolitics, tariffs,
+   China, Wall Street, the monsoon, sector news ...), from its words (SUBJECTS).
+2. DIRECTION. Which way it says each one is going: "crude jumps" is crude UP; "rupee hits record low" is the rupee DOWN; "RBI cuts repo" is rates DOWN; "ceasefire" is
+   geopolitical risk DOWN. Read from the direction words nearest the subject's own word (direction()).
+3. CHANNELS. How each instrument responds to each subject moving up (CHANNELS: a signed sensitivity per instrument or group, with the reason). The sum over stories, each
+   weighted by its impact, novelty and age, is the instrument's CHANNEL SCORE: different for every instrument, from the same news.
+
+Then the PAST: for the events under way (the digest's event watch), the pre-market brief has measured, for EACH instrument, what it did on past episodes of the same kind,
+weighting each episode by how much the market then resembled the market now (premarket/analogs.py: trend, volatility regime, drawdown). Their weighted share of up days is
+a second piece of evidence, worth more the more (effective) episodes there were.
+
+The two combine as log-odds into P(up) for the instrument (forecast()); P >= VOTE_P is a vote in AUTO v2's view (one vote: it never trades alone). Every forecast is SCORED
+against what the price did over the next HORIZON_S (Brier score; calibration()), per instrument, so the desk can see whether its news reading is worth anything.
+
+The sensitivities are PRIORS written from how these markets are known to transmit shocks (an oil importer's currency and indices, a safe haven, rate-sensitive lenders,
+exporters' rupee exposure), not fitted: the Brier record is what will say which hold. Standard library only (paper package rules).
+"""
+from __future__ import annotations
+
+import datetime as dt
+import functools
+import math
+import re
+
+INDEX = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
+GROUPS = {
+    "INDEX": INDEX,
+    "BANKS": ("HDFCBANK", "SBIN", "ICICIBANK", "AXISBANK", "KOTAKBANK", "BANKNIFTY", "FINNIFTY"),
+    "NBFC": ("BAJFINANCE", "FINNIFTY"),
+    "IT": ("TCS", "INFY"),
+    "AUTO": ("MARUTI", "BAJAJ-AUTO", "M&M"),
+    "PHARMA": ("DIVISLAB", "LAURUSLABS"),
+    "CRUDE": ("CRUDEOIL", "CRUDEOILM"),
+    "GAS": ("NATURALGAS", "NATGASMINI"),
+    "GOLD": ("GOLD", "GOLDM"),
+    "SILVER": ("SILVER", "SILVERM"),
+    "INR_PAIRS": ("USDINR", "EURINR", "GBPINR", "JPYINR"),
+}
+
+# subject -> words that name it (the 28 subjects of docs/prereg/news_parse_v1.json; a new subject needs a new spec). How a headline is read is in READING below.
+SUBJECTS = {
+    "crude": r"(?:brent|wti)(?: crude)?(?: oil)?(?: futures| prices?)?|crude(?: oil)?(?: futures| prices?)?|oil(?: futures| prices?| output| supply)?|opec\+?",
+    "natgas": r"natural gas|lng|henry hub",
+    "gold": r"gold|xau",
+    "silver": r"silver|xag",
+    "metals": r"copper|aluminium|aluminum|zinc|base metals?|lme|metal prices?",
+    "rupee": r"rupee|inr",
+    "dollar": r"dollar index|dxy|greenback|(?:the |us |u\.s\. )?dollar",
+    "us_yields": r"(?:us|u\.s\.) (?:treasury |bond |10-year )?yields?|treasury yields?|treasuries|global (?:bond )?yields?|10-year (?:treasury )?yields?|(?:bond )?yields?",
+    "fed": r"fed|fomc|federal reserve|powell|(?:us|u\.s\.) central bank",
+    "rbi": r"rbi|repo rate|repo|mpc|reserve bank|india'?s central bank",
+    "inflation": r"inflation|cpi|wpi|consumer prices?|price index",
+    "growth": r"gdp|pmi|iip|industrial output|industrial production|economic growth|growth (?:prospects|outlook|forecasts?)|economy|economies|core sector|payrolls|nonfarm|jobs (?:report|data|numbers|growth)|(?:us|u\.s\.) jobs|"
+              r"factory (?:activity|output)|manufacturing activity",
+    "fii": r"fiis?|fpis?|foreign (?:investors?|funds?|portfolio(?: investors?)?|institutional investors?|inflows?|outflows?|selling|buying)|overseas investors?|portfolio (?:outflows?|inflows?)",
+    "geopolitics": r"wars?|missiles?|air ?strikes?|drone strikes?|strikes? (?:on|against|targeting)|military|attacks?|attacked|invasion|invad\w+|troops|border clash\w*|"
+                   r"ceasefire|cease-fire|truce|peace(?: talks?)?|sanctions?|geopolitic\w*|iran\w*|israel\w*|gaza|houthis?|hezbollah|hamas|yemen\w*|middle east|mideast|"
+                   r"west asia|hormuz|russia-ukraine|ukrain\w*|kremlin",
+    "tariffs": r"tariffs?|trade war|trade deal|trade talks|import duty|export curbs?",
+    "china": r"china|chinese|beijing",
+    "wall_street": r"wall street|wall st\.?|s&p 500|s&p|nasdaq(?: 100| composite)?|ndx|spx|dow jones|dow|djia|russell 2000|(?:us|u\.s\.) (?:stocks?|stock market|markets?|equities|shares|tech(?: stocks| shares)?)",
+    "monsoon": r"monsoon|rainfall|rains?|kharif",
+    "it_spend": r"it services|tech spending|deal wins?|h-?1b|visa fee|outsourcing",
+    "auto_sales": r"auto sales|vehicle sales|car sales|two-wheeler sales|passenger vehicle",
+    "usfda": r"usfda|us fda|fda",
+    "telecom": r"telecom tariffs?|mobile tariffs?|arpu|spectrum",
+    "fno_rules": r"f&o (?:[\w-]+ ){0,2}(?:rules|norms|curbs|regulations?|framework|measures)|derivatives? (?:rules|curbs|norms|regulations?)|expiry (?:rules|curbs|norms)",
+    "fintech_rules": r"payments? bank|upi (?:rules|curbs|cap)|fintech (?:rules|norms|regulations?|curbs)|digital lending (?:rules|norms|guidelines)",
+    "bad_loans": r"bad loans|npas?|asset quality|loan defaults?|slippages?",
+    "capex": r"capex|infrastructure spending|defence orders?|railway orders?|power projects?|order book",
+    "electronics": r"smartphones?|electronics manufacturing|pli scheme|mobile manufacturing",
+    "cigarettes": r"cigarettes?|tobacco",
+}
+_SUBJ = {k: re.compile(rf"(?<![\w&]){'(?:' + v + ')'}(?![\w&])", re.I) for k, v in SUBJECTS.items()}
+
+# a mention that is not the subject: (words just before it, words just after it). A company's name, another country's market, the currency a rupee move is quoted in.
+_NOT = {
+    "crude": (r"(?:palm|edible|vegetable|cooking|mustard|olive|castor|essential|indian|hindustan|heating|diesel|gasoline|motor|jet|lube|lubricating)\s+$",
+              r"^\s*(?:&|and)\s+(?:natural\s+)?gas|^\s+(?:marketing|ministry|india|stocks?|psus?|companies|majors|producers?|refiners?|shipping|freight|tankers?|imports?|importers?|"
+              r"exporters?|firms?|corp\w*|market'?s?|and natural)\b"),
+    "dollar": (r"(?:australian|aussie|canadian|singapore|hong kong|taiwan|new zealand|kiwi|zimbabwe|billion|trillion|million|against|vs\.?|versus|per)\s+(?:the\s+|us\s+|u\.s\.\s+)?$",
+               r"^-?(?:denominated|bonds?)\b"),
+    "us_yields": (r"(?:euro\w*|japan\w*|jgb|uk|british|gilt|india\w*|china|chinese|german\w*|bund|french|italian|g-sec|state)\s+(?:bond\s+|10-year\s+)?$", None),
+    "fintech_rules": (r"\bpb\s+$", None),
+    "geopolitics": (r"(?:trade|price|tariff|currency|bidding|talent|chip|bears?|bulls?|cyber|panic|pre|post)[\s-]*$", r"^\s+of mind\b"),
+    "wall_street": (None, r"^\s+chemical\b"),
+    "rupee": (None, None),
+}
+# a bare "yields" is US Treasury yields only in a headline about US markets, the dollar or the Fed (the spec's guide G6)
+_US_CONTEXT = re.compile(r"(?<![\w.])(?:us|u\.s\.|american|dollar|fed|federal reserve|wall st\w*|s&p|nasdaq|dow|muni\w*|bitcoin)(?![\w])", re.I)
+# foreign flows are flows into INDIA: "overseas investors buy US stocks" is not one (no Indian market named, a US one is)
+_INDIA = re.compile(r"(?<![\w])(?:india\w*|sensex|nifty|dalal|d-street|rupee|inr|rs\.?|₹|crore|lakh|sebi|rbi|nse|bse|ipos?)(?![\w])", re.I)
+_IMPLIED_RATE = re.compile(r"\b(?:rate|interest[- ]rate)[- ](?:hikes?|cuts?|increases?)\b|\bbps in (?:interest )?rate (?:hikes|cuts)\b", re.I)
+_EXPLICIT_US_YIELDS = re.compile(r"(?:us|u\.s\.)\s|treasur|10-year|global", re.I)
+
+# subject -> [(instrument or GROUP, sensitivity to the subject going UP, why)]
+CHANNELS = {
+    "crude": [("CRUDE", 1.0, "it is crude"), ("GAS", 0.3, "energy moves together"), ("INR_PAIRS", 0.3, "a dearer import bill weakens the rupee"),
+              ("INDEX", -0.3, "India imports most of its oil"), ("MIDCPNIFTY", -0.1, "costs"), ("AUTO", -0.2, "fuel costs and demand"), ("RELIANCE", 0.1, "refining margins")],
+    "natgas": [("GAS", 1.0, "it is natural gas")],
+    "gold": [("GOLD", 1.0, "it is gold"), ("SILVER", 0.5, "precious metals move together")],
+    "silver": [("SILVER", 1.0, "it is silver"), ("GOLD", 0.3, "precious metals move together")],
+    "metals": [("COPPER", 1.0, "base metals"), ("SILVER", 0.3, "industrial demand")],
+    "rupee": [("INR_PAIRS", -1.0, "a stronger rupee is a lower rupee price of the currency"), ("IT", -0.3, "exporters earn in dollars"), ("INDEX", 0.1, "foreign flows")],
+    "dollar": [("USDINR", 0.6, "a stronger dollar"), ("EURINR", -0.3, "the euro falls against the dollar"), ("GBPINR", -0.3, "sterling falls against the dollar"),
+               ("JPYINR", -0.3, "the yen falls against the dollar"), ("GOLD", -0.4, "gold is priced in dollars"), ("SILVER", -0.4, "priced in dollars"),
+               ("COPPER", -0.2, "priced in dollars"), ("CRUDE", -0.2, "priced in dollars"), ("IT", 0.2, "dollar earnings")],
+    "us_yields": [("INDEX", -0.3, "money leaves emerging markets"), ("USDINR", 0.4, "outflows weaken the rupee"), ("GOLD", -0.4, "a higher return on cash"),
+                  ("IT", -0.1, "US tech valuations")],
+    "fed": [("INDEX", -0.4, "tighter US money"), ("USDINR", 0.5, "the dollar strengthens"), ("GOLD", -0.5, "a higher return on cash"), ("SILVER", -0.4, "the same"),
+            ("IT", -0.2, "US demand")],
+    "rbi": [("INDEX", -0.3, "dearer money"), ("BANKS", -0.3, "loan growth and bond losses"), ("NBFC", -0.5, "their borrowing costs"), ("AUTO", -0.4, "car loans"),
+            ("USDINR", -0.3, "higher rates hold the rupee up")],
+    "inflation": [("INDEX", -0.3, "rate hikes ahead"), ("BANKS", -0.2, "rates"), ("GOLD", 0.2, "a hedge"), ("USDINR", 0.2, "a weaker currency")],
+    "growth": [("INDEX", 0.4, "earnings"), ("BANKS", 0.3, "credit demand"), ("AUTO", 0.3, "demand"), ("BHEL", 0.3, "capex"), ("COPPER", 0.3, "industrial demand"),
+               ("CRUDE", 0.2, "fuel demand"), ("USDINR", -0.2, "inflows")],
+    "fii": [("INDEX", 0.5, "foreign buying"), ("BANKS", 0.4, "their favourite sector"), ("USDINR", -0.4, "dollars coming in")],
+    "geopolitics": [("INDEX", -0.6, "risk off"), ("MIDCPNIFTY", -0.6, "risk off, harder"), ("BANKS", -0.3, "risk off"), ("GOLD", 0.6, "the safe haven"),
+                    ("SILVER", 0.3, "a lesser haven"), ("CRUDE", 0.5, "supply risk"), ("USDINR", 0.5, "the dollar is the haven"), ("JPYINR", 0.3, "the yen is a haven"),
+                    ("DIXON", -0.2, "supply chains")],
+    "tariffs": [("INDEX", -0.3, "trade"), ("IT", -0.3, "US clients"), ("COPPER", -0.4, "industrial demand"), ("CRUDE", -0.3, "demand"), ("GOLD", 0.3, "uncertainty"),
+                ("USDINR", 0.3, "risk off")],
+    "china": [("COPPER", 0.6, "the largest buyer"), ("CRUDE", 0.3, "demand"), ("SILVER", 0.2, "industrial demand")],
+    "wall_street": [("INDEX", 0.4, "global risk"), ("IT", 0.4, "US tech")],
+    "monsoon": [("M&M", 0.5, "tractors and rural demand"), ("AUTO", 0.3, "rural demand"), ("ITC", 0.2, "rural demand"), ("INDEX", 0.1, "consumption")],
+    "it_spend": [("IT", 0.8, "their revenue")],
+    "auto_sales": [("AUTO", 0.8, "their volumes")],
+    "usfda": [("PHARMA", 0.6, "US approvals")],
+    "telecom": [("BHARTIARTL", 0.8, "revenue per user")],
+    "fno_rules": [("BSE", -0.8, "derivatives volumes are its revenue"), ("INDEX", -0.1, "liquidity")],
+    "fintech_rules": [("PAYTM", -0.8, "its licence and business")],
+    "bad_loans": [("BANKS", -0.6, "provisions"), ("NBFC", -0.5, "provisions")],
+    "capex": [("BHEL", 0.6, "its orders"), ("INDEX", 0.1, "investment")],
+    "electronics": [("DIXON", 0.6, "its orders")],
+    "cigarettes": [("ITC", -0.8, "a tax on cigarettes is a tax on its profit")],
+}
+CHANNELS.update({
+    "asia": [("INDEX", 0.3, "Asian markets set the tone for the Indian open"), ("MIDCPNIFTY", 0.1, "risk appetite")],
+    "europe": [("INDEX", 0.2, "European risk appetite"), ("EURINR", 0.2, "the euro's own market"), ("GBPINR", 0.1, "sterling's neighbours")],
+    "us_fear": [("INDEX", -0.4, "fear on Wall Street travels"), ("MIDCPNIFTY", -0.2, "risk off, harder"), ("GOLD", 0.2, "the safe haven"), ("USDINR", 0.2, "the dollar is the haven"),
+                ("JPYINR", 0.2, "the yen is a haven")],
+})
+# GLOBAL MARKETS (owner, 14 Nov 2026: "Global market inputs in the news model"): the pre-market brief's overnight moves (data/global_universe.py: the last close against the
+# one before), read as subjects moving. key -> (subject, sign of the subject's move per a rise in this market, a typical daily move in percent): a move counts in units of
+# its own typical size, capped at 3, so a 2% Nasdaq day and a 0.6% dollar day count alike.
+GLOBAL_SUBJECT = {
+    "ES": ("wall_street", 1, 1.0), "NQ": ("wall_street", 1, 1.3), "SPX": ("wall_street", 1, 1.0), "NASDAQ": ("wall_street", 1, 1.3), "DJI": ("wall_street", 1, 0.9),
+    "N225": ("asia", 1, 1.2), "HSI": ("asia", 1, 1.5), "KOSPI": ("asia", 1, 1.1), "SSE": ("china", 1, 1.0),
+    "STOXX": ("europe", 1, 1.0), "DAX": ("europe", 1, 1.1), "FTSE": ("europe", 1, 0.8),
+    "USVIX": ("us_fear", 1, 6.0), "DXY": ("dollar", 1, 0.4), "USDINR": ("rupee", -1, 0.3), "BRENT": ("crude", 1, 2.0), "GOLD": ("gold", 1, 1.0), "UST10": ("us_yields", 1, 1.5),
+}
+W_GLOBAL, GLOBAL_SCALE, GLOBAL_CAP = 1.0, 2.0, 3.0
+
+
+def global_score(u: str, globals_) -> tuple[float, list[str]]:
+    """(the instrument's evidence from last night's global markets, its strongest reasons). Each market's move in units of its typical daily move, through the same
+    channels as a story about the same subject."""
+    score, parts = 0.0, []
+    for g in globals_ or []:
+        if not isinstance(g, dict):
+            continue
+        spec = GLOBAL_SUBJECT.get(g.get("key"))
+        ch = g.get("change")
+        if not spec or not isinstance(ch, (int, float)) or not math.isfinite(ch):
+            continue
+        subj, sign, typical = spec
+        z = max(-GLOBAL_CAP, min(GLOBAL_CAP, ch * 100 / typical))
+        for sens, why in sensitivity(u, subj):
+            x = sign * z * sens
+            score += x
+            parts.append((abs(x), f"overnight {g.get('name', g.get('key'))} {ch * 100:+.1f}% ({subj.replace('_', ' ')} {'up' if sign * z > 0 else 'down'}: {why})"))
+    parts.sort(key=lambda p: -p[0])
+    return score, [p[1] for p in parts[:2]]
+
+
+
+IMPACT_W = {"high": 1.0, "medium": 0.5, "low": 0.2}
+HALF_LIFE_MIN = 120
+MAX_AGE_S = 6 * 3600
+W_CHANNEL, CH_SCALE = 1.5, 1.0        # the channel score enters as W * tanh(score / scale)
+W_ANALOG, ANALOG_N0 = 1.0, 4.0        # an analogue's log-odds, weighted by n_eff / (n_eff + n0)
+VOTE_P = 0.65
+HORIZON_S = 3600                      # a forecast is scored against the next hour
+
+
+def members(target: str) -> tuple:
+    return GROUPS.get(target, (target,))
+
+
+def sensitivity(u: str, subject: str) -> list[tuple[float, str]]:
+    """[(sensitivity, why)] of instrument `u` to `subject` going up (a group and a member can both apply: their sum is the instrument's)."""
+    return [(s, why) for target, s, why in CHANNELS.get(subject, ()) if u in members(target)]
+
+
+# READING. A headline is cut into SEGMENTS (at "|", ";", ": ", " - ", a dash, a sentence end) and each segment into CLAUSES (at commas and at as / after / amid /
+# on / despite / while / but / and ...). Each direction word belongs to ONE subject mention in its clause: a transitive word ("lifts", "weighs on", "softens") to the
+# mention after it ("Houthi attack lifts oil"), an intransitive one ("rises", "slips") to the mention before it ("copper slips"), or, as a modifier, to the one right
+# after it ("rising oil", "weak rains"). A subject takes the first word it owns in the first clause where it owns one; a hold word ("steadies", "stays") is a 0.
+# A clause that is only a subject ("Gold, silver prices fall") borrows the next clause's word, or the previous clause's when that word stood before its subject
+# ("lifts oil, dollar"). Some clauses say nothing: a question, a preview ("watch for", "ahead of"), what happens "despite" the main claim, a denial; their
+# subjects read 0. The RBI and the Fed read only rate moves (a hike, a cut, a hold, with "no" / "ends" negating them and "hike bets ease" reversing them),
+# geopolitics only escalation and de-escalation, foreign flows only buying and selling, rules only tightening and loosening. docs/prereg/news_parse_v1.json is the test.
+
+# subjects whose words are themselves a direction (a story about tariffs is about raising them, about bad loans about more of them) unless it says otherwise
+DEFAULT_UP = frozenset({"tariffs", "fintech_rules", "bad_loans", "cigarettes"})
+_SPECIAL = frozenset({"rbi", "fed", "geopolitics", "fii", "tariffs", "fno_rules", "fintech_rules", "cigarettes"})
+_RULES = frozenset({"tariffs", "fno_rules", "fintech_rules", "cigarettes"})
+
+_TOK = re.compile(r"[\w$%&'.\-/₹]+")
+_SEG = re.compile(r"\s*\|\s*|\s*;\s*|:\s+|\s+[-–—]{1,2}\s+|—|(?<=[a-z0-9%)]{2}[.!?])\s+(?=[A-Z])|(?<=\?)\s+")
+_CONJ = re.compile(r"\s*,\s*|(?<!weigh)(?<!weighs)(?<!weighed)(?<!weighing)(?<!pressure)\s+on\s+(?!wall st)|\s+(?:as|after|amid|despite|in spite of|shrugging off|brushing off|while|but|ahead of|following|with|from|and|&|even as|due to|over|against)\s+"
+                   r"|\s+(?:even if|if|unless)\s+|^(?:amid|despite|as|after|on|if|even if)\s+", re.I)
+_DESPITE = ("despite", "in spite of", "shrugging off", "brushing off", "even as", "even if", "if", "unless")
+_LIST_JOIN = (",", "and", "&")
+_AHEAD = re.compile(r"\bahead of\b", re.I)                                   # zeroes to the next comma only: "ahead of Trump deadline, strikes on Iran intensify"
+_FORWARD = re.compile(r"\b(?:flags? risks?|warns? (?:of|about|on)|risks? from|watch(?:es|ing)? for|all eyes on|eyes on|eyeing|investors eye|traders eye|focus (?:shifts )?(?:on|to)|what to expect|things to know|"
+                      r"predictions?|preview|key factors|should|look(?:s|ing)? for|vow(?:s|ed)?|pledg\w*|promis\w*|aims? to|seeks? to|wants? to|intends? to|den(?:y|ies|ied)|refutes?|dismiss(?:es|ed)? reports)\b", re.I)
+_BACKWARD = re.compile(r"\b(?:in focus|eyed|looms|awaited|to watch)\b", re.I)
+_LISTICLE = re.compile(r"^\W*\d+\s+(?:[\w.&'-]+\s+){0,4}stocks\b", re.I)
+
+_W_DOWN_P = (r"reverse[sd]? (?:early |its |their )?gains|give[sn]? up (?:early |its |their )?gains|gave up (?:early |its |their )?gains|pare[sd]? (?:early )?gains|"
+             r"erase[sd]? gains|edg(?:e|es|ed|ing) (?:lower|down|back)|pull(?:s|ed)? back|negative pressure|under pressure|below normal|record lows?|"
+             r"\d+[- ](?:day|week|month|year|yr)s?[- ]lows?|ticks? (?:down|lower)|bearish|pressure on|lowest")
+_W_UP_P = (r"above normal|record highs?|new highs?|new records?|\d+[- ](?:day|week|month|year|yr)s?[- ](?:highs?|peaks?)|edg(?:e|es|ed|ing) (?:higher|up|toward|towards)|"
+           r"returns? to growth|back to growth|ticks? (?:up|higher)|bullish|fresh (?:records?|highs?)|all-time highs?|record close|highest|"
+           r"cross(?:es|ed)? (?:above |over )?(?=[$₹\d])|add(?:s|ed)? (?:over |about |nearly |almost )?(?=[$₹\d])")
+_W_UP_T = r"lift(?:s|ed|ing)?|boost\w*|push(?:es|ed)? up|drives? up|rais(?:e|es|ed|ing)|support(?:s|ed)?"
+_W_DOWN_T = r"weigh(?:s|ed|ing)? on|drag(?:s|ged)?(?: down)?|soften\w*|pressur(?:es|ed|ing)|dent(?:s|ed)?|hurt(?:s|ing)?|cut(?:s|ting)?|lower(?:s|ed|ing)|slash\w*|trim(?:s|med)?"
+_W_HOLD_T = (r"(?:halt|stem|arrest|stop|snap|end|check|cap)(?:s|ped|ed)? (?:the |a |its )?(?:[\w'-]+ ){0,2}?(?:slide|fall|decline|losses|losing streak|"
+             r"rally|gains|winning streak|run)")
+_W_NONE = r"shor(?:e|es|ed|ing) up|prop(?:s|ped|ping)? up|defen[cd]\w*"                  # an action FOR a subject is not its move (guide G7)
+_W_NEAR = r"near(?:s|ing)? (?:a |an |its |their |the )?(?:[\w-]+ ){0,2}?(?:highs?|peaks?|records?|lows?)"
+_W_HOLD = r"rall(?:y|ies|ied) (?:peters? out|fizzl\w*|fad\w*|stall\w*)|hold(?:s|ing)?|held|steady|steadies|steadied|stay(?:s|ed)?|stable|stabili[sz]\w*|unchanged|flat|range-?bound|remain(?:s|ed)?"
+_W_UP_I = (r"surplus|strength|boom(?:s|ing|ed)?|trending (?:up|upward|higher)|upward|surg\w*|soar\w*|jump\w*|ris(?:e|es|en|ing)|rose|rall(?:y|ies|ied|ying)|gain(?:s|ed|ing)?|climb\w*|spik(?:e|es|ed|ing)|higher|highs?|peaks?|"
+           r"strengthen\w*|strong\w*|firm(?:s|ed|er|ing)?|accelerat\w*|expan\w*|beats?|tops?(?= \$| \d)|topped|up|increas\w*|rebound\w*|grow(?:s|ing)?|grew|robust|upbeat")
+_W_DOWN_I = (r"trending (?:down|downward|lower)|downward|deficien\w*|deficit|fall(?:s|en|ing)?|fell|drop\w*|slump\w*|plung\w*|crash\w*|slid(?:e|es|ing)?|declin\w*|eas(?:e|es|ed|ing)|lower|weak\w*|lows?|slip\w*|"
+             r"tumbl\w*|contraction|shr[iu]nk\w*|shrank|miss(?:es|ed)?|retreat\w*|dip(?:s|ped|ping)?|sink\w*|sank|sunk|cool(?:s|ed|ing)?|soft\w*|downtrend|slow\w*|down|"
+             r"skid\w*|shed\w*")
+# order matters: phrases before single words, transitive before intransitive ("lowers" before "lower")
+_WORDS = re.compile("|".join(rf"(?P<{g}>\b(?:{p})\b)" for g, p in (("no", _W_NONE), ("ht", _W_HOLD_T), ("nr", _W_NEAR), ("h0", _W_HOLD), ("dp", _W_DOWN_P), ("up", _W_UP_P), ("ut", _W_UP_T),
+                                                                 ("dt", _W_DOWN_T), ("h", _W_HOLD),
+                                                                 ("ui", _W_UP_I), ("di", _W_DOWN_I))), re.I)
+_KIND = {"no": (0, "n"), "h0": (0, "h"), "ht": (0, "x"), "nr": (0, "h"), "dp": (-1, "i"), "up": (1, "i"), "ut": (1, "t"), "dt": (-1, "t"), "h": (0, "h"), "ui": (1, "i"), "di": (-1, "i")}
+
+_FLOW = re.compile(r"\b(?:(?P<u>buy(?:s|ing|ers?)?|bought|inflows?|pour\w* in|pump\w* in|attract\w*|lur\w*)|(?P<d>sell(?:s|ing|ers?)?|sold|outflows?|pull(?:s|ed)? out|dump\w*|exit\w*|"
+                   r"offload\w*))\b", re.I)
+_RULE = re.compile(r"\b(?:(?P<u>tighten\w*|tighter|tougher|strict\w*|curbs?|curbed|restrict\w*|ban(?:s|ned)?|clampdown|crack(?:s|ed)? down|crackdown|impos\w*|levy|"
+                   r"hik\w*|rais\w*|higher|remov\w*|cancel\w*|bar(?:s|red)?|penal\w*|fines?|fined|threat\w*)|(?P<d>eas\w*|relax\w*|roll(?:s|ed)? back|rollback|scrap\w*|"
+                   r"withdraw\w*|cut\w*|lower\w*|loosen\w*|relief|exempt\w*|deals?|waive\w*|lift(?:s|ed)?|truce|pact|agreement))\b", re.I)
+
+_GEO = re.compile(r"\b(?:(?P<sd>(?:lift\w*|eas\w*|remov\w*|scrap\w*|roll\w* back|waive\w*|relax\w*) (?:[\w-]+ ){0,2}sanctions|sanctions relief)|"
+                  r"(?P<su>(?:impos\w*|new|fresh|tough\w*|tighter|more|slap\w*|expand\w*) (?:[\w-]+ ){0,2}sanctions)|"
+                  r"(?P<d>de-?escalat\w*|ceasefire|cease-fire|truce|peace|diplomac\w*|diplomatic|accord)|(?P<t>talks?)|"
+                  r"(?P<u>attack\w*|air ?strikes?|drone strikes?|missile strikes?|strikes? (?:on|against|targeting)|(?:carried out|launch\w*|conduct\w*) strikes|missiles?|"
+                  r"invasion|invad\w*|wars?|troops|aircraft carriers?|warships?|deploy\w*|escalat\w*|pound(?:s|ed|ing)|bombard\w*|bomb(?:s|ed|ing)|shell(?:s|ing|ed)|clash\w*|hostilit\w*))\b", re.I)
+_GEO_NEG = re.compile(r"\b(?:no|not|won't|without|unlikely(?: to)?|never|avoid\w*|rules? out|ruled out)\s+(?:[\w'-]+\s+)?$", re.I)
+
+_RATE = re.compile(r"(?:rates?|repo|bps|basis|interest|policy|cost)", re.I)
+_ACT = re.compile(r"\b(?:(?P<h>hik\w*)|(?P<r>rais(?:e|es|ed|ing)|increas\w*)|(?P<c>cut\w*)|(?P<l>lower\w*|reduc\w*)|(?P<ti>tightening)|(?P<ea>easing))\b", re.I)
+_NONRATE_OBJ = re.compile(r"^\W*(?:the\s+|its\s+)?(?:fy\s?\d+\s+)?(?:cycles?|gdp|growth|inflation|forecasts?|projections?|outlook|estimates?|tax\w*|duty|duties|stake|jobs|prices?|"
+                          r"tariffs?|limits?|cap|fees?|charges?|crr)\b", re.I)
+_NONRATE_PRE = re.compile(r"\b(?:price|tariff|tax|gst|duty|fee|fees|wage|fare|stt|toll|premium|salary)[\s-]*$", re.I)
+_RATE_NEG = re.compile(r"\b(?:no|not|end\w*|halt\w*|pause\w*|without|unlikely(?: to)?|won't|never|rules? out|ruled out)\s+(?:[\w'-]+\s+)?$", re.I)
+_RATE_HOLD = re.compile(r"\b(?:keep|keeps|kept|hold|holds|held|leave|leaves|left|pause\w*|unchanged|status quo|on hold)\b", re.I)
+_PATH_PRE = re.compile(r"\b(?:monetary|policy|more|further|calibrated|signals?|stance)\s+$", re.I)
+_MODIFIER = re.compile(r"^\W*(?:[\w-]+\s+)??(?:bets?|fears?|expectations?|odds|worries|concerns|speculation|wagers|hopes|pricing)\b", re.I)
+
+
+def _gap(t: str, a: int, b: int) -> int:
+    return len(_TOK.findall(t[a:b])) if b > a else 0
+
+
+def _norm(title: str) -> str:
+    t = " ".join(str(title or "").split())
+    return t.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+
+
+def _clauses(t: str) -> list[list]:
+    """[[start, end, segment, joiner, zero]] in reading order."""
+    out, pos, seg = [], 0, 0
+    for sm in list(_SEG.finditer(t)) + [None]:
+        s_end = sm.start() if sm else len(t)
+        if s_end > pos:
+            start, joiner = pos, ""
+            for cm in _CONJ.finditer(t, pos, s_end):
+                if cm.start() > start:
+                    out.append([start, cm.start(), seg, joiner, False])
+                joiner, start = cm.group().strip().lower(), cm.end()
+            if s_end > start:
+                out.append([start, s_end, seg, joiner, False])
+        if sm:
+            pos, seg = sm.end(), seg + 1
+    return out
+
+
+def _zero(t: str, cl: list[list]) -> list[tuple[int, int]]:
+    """character spans whose subjects say nothing (guide G4, G8, G9)."""
+    spans = []
+    if _LISTICLE.search(t):
+        return [(0, len(t))]
+    segs = {}
+    for c in cl:
+        segs.setdefault(c[2], []).append(c)
+    for cs in segs.values():
+        s0, s1 = cs[0][0], cs[-1][1]
+        if t[s0:s1].rstrip().endswith("?"):                                 # the comma-piece that is the question
+            k = max([i for i, c in enumerate(cs) if c[3] == ","] or [0])
+            if not re.match(r"^\W*(?:why|how come|here'?s why)\b", t[cs[k][0]:s1], re.I):   # "why are stocks falling?" states that they fall (G4)
+                spans.append((cs[k][0], s1))
+        for i, c in enumerate(cs):
+            if c[3] in _DESPITE:
+                j = i
+                while j + 1 < len(cs) and cs[j + 1][3] in ("and", "&"):            # "despite inflation and geopolitical risks", not "... as Dow slips"
+                    j += 1
+                spans.append((c[0], cs[j][1]))
+        for m in _FORWARD.finditer(t, s0, s1):
+            spans.append((m.start(), s1))
+        for m in _AHEAD.finditer(t, s0, s1):
+            nxt = t.find(",", m.end(), s1)
+            spans.append((m.start(), nxt if nxt > 0 else s1))
+        for m in _BACKWARD.finditer(t, s0, s1):
+            c = next((c for c in cs if c[0] <= m.start() < c[1]), None)
+            if c:
+                spans.append((c[0], c[1]))
+    return spans
+
+
+def _mentions(t: str) -> dict[str, list[tuple[int, int]]]:
+    out = {}
+    for name, rx in _SUBJ.items():
+        pre_rx, post_rx = _NOT.get(name, (None, None))
+        ms = []
+        for m in rx.finditer(t):
+            if pre_rx and re.search(pre_rx, t[max(0, m.start() - 30):m.start()], re.I):
+                continue
+            if post_rx and re.search(post_rx, t[m.end():m.end() + 30], re.I):
+                continue
+            if name == "us_yields" and not _EXPLICIT_US_YIELDS.search(m.group()) and not _US_CONTEXT.search(t):
+                continue
+            ms.append((m.start(), m.end()))
+        if ms:
+            out[name] = ms
+    return out
+
+
+def _owned(t, cl, ment, zero):
+    """{(subject, clause index): (position, sign)} for the general subjects, and per clause its first owned word (sign, side) for list inheritance."""
+    owned, first = {}, {}
+    gen = sorted((a, b, s) for s, spans in ment.items() if s not in _SPECIAL for a, b in spans)
+    allspans = [sp for spans in ment.values() for sp in spans]
+    for ci, (c0, c1, _seg, _j, _z) in enumerate(cl):
+        ms = [m for m in gen if c0 <= m[0] < c1]
+        if not ms:
+            continue
+        for w in _WORDS.finditer(t, c0, c1):
+            sign, kind = _KIND[w.lastgroup]
+            if kind == "n":
+                continue
+            if kind == "x":                                                         # "halts rupee's slide": the subject inside is held, a 0
+                inside = [m for m in ms if w.start() <= m[0] < w.end()]
+                if inside:
+                    first.setdefault(ci, (0, "pre"))
+                    owned.setdefault((inside[0][2], ci), (w.start(), 0))
+                continue
+            if any(a < w.end() and w.start() < b for a, b in allspans):
+                continue
+            P = next((m for m in reversed(ms) if m[1] <= w.start()), None)
+            Q = next((m for m in ms if m[0] >= w.end()), None)
+            gp = _gap(t, P[1], w.start()) if P else 99
+            gq = _gap(t, w.end(), Q[0]) if Q else 99
+            if Q and re.match(r"^'s\s+(?!" + "|".join(("slide", "fall", "rally", "gains?", "rise", "surge", "decline", "strength", "weakness")) + r")\w", t[Q[1]:Q[1] + 30]):
+                Q, gq = None, 99                                                    # "lower the dollar's demand": the demand is the object
+            if kind == "t":
+                own = Q if Q and gq <= 3 else None                                  # "oil prices boost risk appetite": the object moves, not the subject
+            elif kind == "h":
+                own = P if gp <= 2 else None
+            else:
+                own = P if gp <= 4 and gp <= gq else (Q if gq <= 1 else (P if gp <= 4 else None))
+            if own is None:
+                continue
+            first.setdefault(ci, (sign, "post" if own is P else "pre"))
+            owners = [own] + [m for m in ms if m[2] != own[2] and m[1] <= own[0] and _gap(t, m[1], own[0]) == 0]   # "China factory activity": both
+            for m in owners:
+                owned.setdefault((m[2], ci), (w.start(), sign))
+    return owned, first
+
+
+def _in(spans, p) -> bool:
+    return any(a <= p < b for a, b in spans)
+
+
+def _general(t, cl, ment, zero, owned, first, s) -> int:
+    for a, _b in ment[s]:
+        ci = next((i for i, c in enumerate(cl) if c[0] <= a < c[1]), None)
+        if ci is None or _in(zero, a):
+            continue
+        if (s, ci) in owned:
+            return owned[(s, ci)][1]
+        c0, c1, seg, joiner, _ = cl[ci]
+        rest = t[c0:c1]
+        for x, y in ment[s]:
+            if c0 <= x < c1:
+                rest = rest.replace(t[x:y], " ")
+        if len(_TOK.findall(rest)) <= 1:                                             # a clause that is only the subject: borrow (G1 lists)
+            nx = cl[ci + 1] if ci + 1 < len(cl) else None
+            if nx and nx[2] == seg and nx[3] in _LIST_JOIN and not _in(zero, nx[0]):
+                if ci + 1 in first:
+                    if first[ci + 1][1] == "post":
+                        return first[ci + 1][0]
+                else:                                                               # "Oil Prices and Bond Yields Keep Rising": a verb no subject here owns
+                    w = next((w for w in _WORDS.finditer(t, nx[0], nx[1]) if _KIND[w.lastgroup][1] == "i"), None)
+                    if w:
+                        return _KIND[w.lastgroup][0]
+            if ci > 0 and joiner in _LIST_JOIN and cl[ci - 1][2] == seg and ci - 1 in first and first[ci - 1][1] == "pre":
+                return first[ci - 1][0]
+        seg_cl = [c for c in cl if c[2] == seg]
+        head = t[seg_cl[0][0]:seg_cl[-1][1]]
+        if len(_TOK.findall(head)) <= 5 and re.search(r"\b(?:forecast|outlook|analysis|price|prices|today|update)\b", head, re.I):
+            nxt = [c for c in cl if c[2] == seg + 1]                                 # "WTI Crude Oil Price Forecast: Bullish Breakout Targets New Highs"
+            if nxt and not any(nxt[0][0] <= x < nxt[-1][1] for v in ment.values() for x, _ in v) and not _in(zero, nxt[0][0]):
+                w = next((w for w in _WORDS.finditer(t, nxt[0][0], nxt[-1][1]) if _KIND[w.lastgroup][1] in ("i", "t")), None)
+                if w:
+                    return _KIND[w.lastgroup][0]
+        nx = cl[ci + 1] if ci + 1 < len(cl) else None                                # "tests 50% Fib amid downtrend": a two-word "amid" clause about nothing else
+        if nx and nx[2] == seg and nx[3] == "amid" and len(_TOK.findall(t[nx[0]:nx[1]])) <= 2 and not _in(zero, nx[0]) and not any(nx[0] <= x < nx[1] for v in ment.values() for x, _ in v):
+            w = next((w for w in _WORDS.finditer(t, nx[0], nx[1]) if _KIND[w.lastgroup][1] != "h"), None)
+            if w:
+                return _KIND[w.lastgroup][0]
+    return 0
+
+
+def _flow(t, cl, ment, zero) -> int:
+    for a, b in ment["fii"]:
+        if _in(zero, a):
+            continue
+        c = next((c for c in cl if c[0] <= a < c[1]), (a, b))
+        best = min(((abs(f.start() - a), 1 if f.group("u") else -1) for f in _FLOW.finditer(t, c[0], c[1]) if abs(f.start() - a) <= 40), default=None)
+        if best:
+            return best[1]
+    return 0
+
+
+def _rule(t, cl, ment, zero, s) -> int:
+    for a, b in ment[s]:
+        if _in(zero, a):
+            continue
+        c = next((c for c in cl if c[0] <= a < c[1]), (a, b))
+        best = min(((min(abs(r.start() - a), abs(r.start() - b)), 1 if r.group("u") else -1) for r in _RULE.finditer(t, c[0], c[1])
+                    if max(r.start() - b, a - r.end()) <= 60), default=None)
+        if best:
+            return best[1]
+    return 1 if s in DEFAULT_UP and any(not _in(zero, a) and not re.match(r"trade (?:talks|deal)", t[a:b], re.I) for a, b in ment[s]) else 0
+
+
+def _geo(t, cl, ment, zero) -> int:
+    places = ment["geopolitics"]
+    for g in _GEO.finditer(t):
+        if _in(zero, g.start()):
+            continue
+        if g.group("t"):                                                             # "talks" are de-escalation only next to a conflict's words
+            if not any(0 <= g.start() - b <= 12 for a, b in places):
+                continue
+            return -1
+        if g.group("sd") or g.group("d"):
+            if re.search(r"\b(?:reject\w*|rejection of|collapse of|end of|breach of|violat\w*|scrap\w*|abandon\w*|suspend\w*|pull\w* out of|walk\w* away from)\s+(?:[\w'-]+\s+){0,3}$",
+                         t[max(0, g.start() - 50):g.start()], re.I) or re.match(r"^\s+(?:[\w-]+\s+)?(?:collaps\w*|break\w* down|broke down|fail\w*|stall\w*|falter\w*)\b",
+                                                                              t[g.end():g.end() + 30], re.I):
+                return 1                                                            # a peace plan rejected, talks collapsing: escalation
+            return -1
+        if g.group("su"):
+            return 1
+        if g.group("u"):
+            if re.search(_NOT["geopolitics"][0], t[max(0, g.start() - 30):g.start()], re.I):      # "trade war", "bears attack"
+                continue
+            return -1 if _GEO_NEG.search(t[max(0, g.start() - 30):g.start()]) else 1
+    return 0
+
+
+def _rates(t, cl, ment, zero, owned, first) -> dict[str, int]:
+    agents = sorted((a, b, s) for s in ("rbi", "fed") for a, b in ment.get(s, ()))
+    if not agents:
+        return {}
+    events = []
+    for h in _RATE_HOLD.finditer(t):
+        if not _in(zero, h.start()) and _RATE.search(t[max(0, h.start() - 25):h.end() + 25]):
+            events.append((h.start(), 0, h))
+    for a in _ACT.finditer(t):
+        if _in(zero, a.start()):
+            continue
+        g = a.lastgroup
+        sign = 1 if g in ("h", "r", "ti") else -1
+        a0 = a.start()
+        while a0 > 0 and (t[a0 - 1].isalnum() or t[a0 - 1] == "-"):                 # "rate-cut": read what stands before the whole word
+            a0 -= 1
+        before, after = t[max(0, a0 - 40):a0], t[a.end():a.end() + 40]
+        nxt = _TOK.findall(after)[:3]
+        rate_adj = (any(_RATE.fullmatch(x) or _RATE.fullmatch(x.rstrip("s")) for x in nxt) or bool(re.search(r"(?:rates?|repo)[\s-]*$", before, re.I))
+                    or bool(re.search(r"(?:rates?|repo)-$", t[a0:a.start()], re.I)))
+        near = any(0 <= a.start() - b and _gap(t, b, a.start()) <= 3 for _x, b, _s in agents)
+        if re.match(r"^\W*cycles?\b", after, re.I) and not re.match(r"^\W*cycles?\s+(?:resum\w*|begin\w*|start\w*|continu\w*|kicks? off)", after, re.I):
+            continue                                                                # "rate cut cycle near turning point": the cycle, not a move
+        if g in ("ti", "ea"):
+            ok = rate_adj or near or bool(_PATH_PRE.search(before))
+        elif g in ("h", "c"):
+            ok = rate_adj or (not _NONRATE_OBJ.match(after) and not _NONRATE_PRE.search(before) and (near or g == "h"))
+        else:
+            ok = rate_adj
+        if not ok:
+            continue
+        if _RATE_NEG.search(before) or re.match(r"^\W*(?:[\w-]+\s+){0,2}?['\"]?off the table", after, re.I):
+            continue
+        mod = _MODIFIER.match(after)
+        if mod:                                                                     # "hike bets ease": the bets move, the rate path is their sign times the move
+            ci = next((i for i, c in enumerate(cl) if c[0] <= a.start() < c[1]), None)
+            end = cl[ci][1] if ci is not None else len(t)
+            w = next((w for w in _WORDS.finditer(t, a.end() + mod.end(), end) if _KIND[w.lastgroup][1] != "h"), None)
+            if w:
+                sign *= _KIND[w.lastgroup][0]
+            elif ci is not None and ci + 1 < len(cl) and cl[ci + 1][3] in _LIST_JOIN and ci + 1 in first:
+                sign *= first[ci + 1][0] or 1
+        events.append((a.start(), sign, a))
+    out = {}
+    for pos, sign, _m in sorted(events, key=lambda e: e[0]):
+        who = min(agents, key=lambda m: min(abs(pos - m[0]), abs(pos - m[1])))[2]
+        out.setdefault(who, sign)
+    return out
+
+
+@functools.lru_cache(maxsize=4096)
+def subjects(title: str) -> tuple[tuple[str, int], ...]:
+    """((subject, direction), ...) a headline is about, in SUBJECTS order (cached: a story is read once, not once per instrument per cycle)."""
+    return tuple(_subjects(title))
+
+
+def _subjects(title: str) -> list[tuple[str, int]]:
+    t = _norm(title)
+    if not t:
+        return []
+    ment = _mentions(t)
+    if "fii" in ment and not _INDIA.search(t) and _US_CONTEXT.search(t):
+        del ment["fii"]
+    if "rbi" not in ment and "fed" not in ment and _INDIA.search(t) and not _US_CONTEXT.search(t):
+        m = _IMPLIED_RATE.search(t)                                                    # "Sensex drifts lower on rate hike": the RBI's (guide G10)
+        if m:
+            ment["rbi"] = [(m.start(), m.start())]
+    if not ment:
+        return []
+    cl = _clauses(t)
+    zero = _zero(t, cl)
+    owned, first = _owned(t, cl, ment, zero)
+    rates = _rates(t, cl, ment, zero, owned, first)
+    out = []
+    for s in SUBJECTS:
+        if s not in ment:
+            continue
+        if s in ("rbi", "fed"):
+            d = rates.get(s, 0)
+        elif s == "geopolitics":
+            d = _geo(t, cl, ment, zero)
+        elif s == "fii":
+            d = _flow(t, cl, ment, zero)
+        elif s in _RULES:
+            d = _rule(t, cl, ment, zero, s)
+        else:
+            d = _general(t, cl, ment, zero, owned, first, s)
+            if s == "us_yields" and d and all(re.fullmatch(r"treasuries", t[a:b], re.I) for a, b in ment[s]):
+                d = -d                                                              # "Treasuries rise": bond prices up, yields down
+            if d == 0 and s in DEFAULT_UP and any(not _in(zero, a) for a, _ in ment[s]):
+                d = 1
+        out.append((s, d))
+    return out
+
+
+def _ts(x) -> float | None:
+    try:
+        return dt.datetime.strptime(str(x), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def channel_score(digest, u: str, t: float) -> tuple[float, list[str]]:
+    """(the instrument's channel score, its strongest reasons). Each story counts by impact x novelty x half-life decay; recaps do not count."""
+    items = digest.get("items") if isinstance(digest, dict) and isinstance(digest.get("items"), list) else []
+    score, parts = 0.0, []
+    for it in items:
+        if not isinstance(it, dict) or it.get("recap") is True:
+            continue
+        ts = _ts(it.get("ts"))
+        if ts is None or not (0 <= t - ts <= MAX_AGE_S):
+            continue
+        nov = it.get("novelty")
+        w = IMPACT_W.get(it.get("impact"), 0.2) * max(0.2, float(nov) if isinstance(nov, (int, float)) else 0.5) * 0.5 ** ((t - ts) / 60 / HALF_LIFE_MIN)
+        title = str(it.get("title") or "")
+        syms = it.get("symbols") if isinstance(it.get("symbols"), list) else []
+        if u in syms:                                                                    # the story names the instrument: its own tone
+            tone = it.get("tone")
+            if isinstance(tone, (int, float)) and -1 <= tone <= 1 and tone:
+                score += w * tone
+                parts.append((abs(w * tone), f"named: {title[:70]}"))
+        for subj, d in subjects(title):
+            if not d:
+                continue
+            for s, why in sensitivity(u, subj):
+                x = w * d * s
+                score += x
+                parts.append((abs(x), f"{subj.replace('_', ' ')} {'up' if d > 0 else 'down'} ({why}): {title[:60]}"))
+    parts.sort(key=lambda p: -p[0])
+    return score, [p[1] for p in parts[:3]]
+
+
+def touches(u: str, event: dict) -> float:
+    """How strongly a digest event (event watch) bears on `u`: the largest |sensitivity| over the subjects of its top stories."""
+    best = 0.0
+    for title in event.get("top") or []:
+        for subj, _ in subjects(title):
+            for s, _ in sensitivity(u, subj):
+                best = max(best, abs(s))
+    return best
+
+
+def analog_evidence(u: str, digest, analogs: dict | None) -> tuple[float, list[str]]:
+    """(log-odds, reasons) from the past episodes of the kinds now under way, for this instrument (premarket/analogs.py), weighted by their effective number."""
+    if not isinstance(analogs, dict):
+        return 0.0, []
+    lo, why = 0.0, []
+    for ev in (digest.get("events") if isinstance(digest, dict) else None) or []:
+        if not isinstance(ev, dict) or ev.get("level") not in ("high", "watch"):
+            continue
+        a = ((analogs.get(ev.get("kind")) or {}).get(u)) if ev.get("kind") else None
+        if not isinstance(a, dict) or not isinstance(a.get("p_up"), (int, float)) or not isinstance(a.get("n_eff"), (int, float)):
+            continue
+        p = min(max(a["p_up"], 0.05), 0.95)
+        k = a["n_eff"] / (a["n_eff"] + ANALOG_N0)
+        lo += W_ANALOG * k * math.log(p / (1 - p))
+        why.append(f"in {a.get('n', '?')} past {ev['kind']} episodes most like today (effective {a['n_eff']:.1f}), {u} rose {p * 100:.0f}% of the time"
+                   + (f", median {a['median_ret'] * 100:+.1f}%" if isinstance(a.get("median_ret"), (int, float)) else ""))
+    return lo, why
+
+
+def forecast(u: str, digest, analogs: dict | None, t: float, globals_=None) -> dict:
+    """{"p_up", "vote", "score", "global", "why"}: the channel score (present: the news), last night's global markets (globals_: the brief's list), and the analogues
+    (past), as log-odds."""
+    sc, why_ch = channel_score(digest, u, t)
+    gs, why_g = global_score(u, globals_)
+    lo_an, why_an = analog_evidence(u, digest, analogs)
+    logit = W_CHANNEL * math.tanh(sc / CH_SCALE) + W_GLOBAL * math.tanh(gs / GLOBAL_SCALE) + lo_an
+    p = 1 / (1 + math.exp(-logit))
+    return {"p_up": round(p, 3), "vote": 1 if p >= VOTE_P else -1 if p <= 1 - VOTE_P else 0, "score": round(sc, 3), "global": round(gs, 3),
+            "why": (why_ch[:2] + why_g + why_an)[:4]}
+
+
+class Scorer:
+    """Each forecast with an opinion (|P - 0.5| >= 0.05), at most one per instrument per quarter hour, scored against the price HORIZON_S later: the Brier score."""
+
+    def __init__(self):
+        self.pending: dict[str, list[tuple[float, float, float]]] = {}
+        self.scored: dict[str, list[float]] = {}
+
+    def add(self, u: str, t: float, p: float, price: float | None) -> None:
+        q = self.pending.setdefault(u, [])
+        while q and t - q[0][0] >= HORIZON_S:
+            t0, p0, px0 = q.pop(0)
+            if price and px0 and abs(price / px0 - 1) >= 0.001:
+                y = 1.0 if price > px0 else 0.0
+                n_se = self.scored.setdefault(u, [0, 0.0])
+                n_se[0] += 1
+                n_se[1] += (p0 - y) ** 2
+        if price and abs(p - 0.5) >= 0.05 and (not q or t - q[-1][0] >= 900):
+            q.append((t, p, price))
+
+    def calibration(self) -> dict:
+        out = {u: {"n": int(n), "brier": round(se / n, 4)} for u, (n, se) in self.scored.items() if n}
+        n = sum(v[0] for v in self.scored.values())
+        if n:
+            out["all"] = {"n": int(n), "brier": round(sum(v[1] for v in self.scored.values()) / n, 4)}
+        return out

@@ -47,7 +47,12 @@ def load_labels(path: str, set_path: str) -> list[dict]:
     return sorted(rows, key=lambda r: r["i"])
 
 
-def load_parser(path: str):
+def load_parser(path: str, expect_sha256: str | None = None):
+    if expect_sha256:                                                            # the frozen parser, and no other file, is scored (P_test.order step 7)
+        import hashlib
+        got = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        if got != expect_sha256.lower():
+            raise SystemExit(f"{path}: sha256 {got} is not the frozen parser's {expect_sha256}")
     loader = importlib.machinery.SourceFileLoader("newsmodel_under_test", path)      # any file name: a snapshot may be stored as .py.txt
     spec = importlib.util.spec_from_loader("newsmodel_under_test", loader)
     mod = importlib.util.module_from_spec(spec)
@@ -96,7 +101,7 @@ def boot_ci(h, n=BOOT_N, seed=BOOT_SEED) -> tuple[float, float]:
 
 
 def cmd_score(a):
-    rows, parser = load_labels(a.labels, a.set), load_parser(a.parser)
+    rows, parser = load_labels(a.labels, a.set), load_parser(a.parser, a.expect_sha256)
     h = per_headline(rows, parser)
     s = summary(h)
     by = Counter()
@@ -133,7 +138,7 @@ def cmd_agree(a):
 
 def cmd_compare(a):
     """Paired: on the same headlines and labels, pairs the fixed parser gets right and the baseline wrong (b) and the reverse (c); exact one-sided sign test."""
-    rows, p0, p1 = load_labels(a.labels, a.set), load_parser(a.parser), load_parser(a.parser2)
+    rows, p0, p1 = load_labels(a.labels, a.set), load_parser(a.parser), load_parser(a.parser2, a.expect_sha256)
     b = c = 0
     for r in rows:
         lab, g0, g1 = nonzero(r["labels"]), read(p0, r["title"]), read(p1, r["title"])
@@ -152,6 +157,7 @@ def main():
     ap.add_argument("--set", required=True)
     ap.add_argument("--parser")
     ap.add_argument("--parser2")
+    ap.add_argument("--expect-sha256", dest="expect_sha256", help="refuse to run unless --parser (score) or --parser2 (compare) has this SHA-256")
     ap.add_argument("--labels")
     ap.add_argument("--labels2")
     ap.add_argument("--errors", action="store_true")
