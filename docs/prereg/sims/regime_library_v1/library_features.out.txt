@@ -1,0 +1,22 @@
+sessions with a fingerprint: 3026 (2014-07-16 to 2026-11-06)
+regime keys: {'normal/range': 1123, 'low/range': 1108, 'high/range': 489, 'low/up': 123, 'normal/up': 85, 'high/down': 76, 'high/up': 14, 'normal/down': 8}
+feature correlations:
+             vol_pct  trend_t  vol_change   vr5  drawdown  tail_days
+vol_pct        1.00    -0.45        0.47 -0.24     -0.52       0.47
+trend_t       -0.45     1.00       -0.20  0.13      0.76      -0.38
+vol_change     0.47    -0.20        1.00 -0.05     -0.24       0.11
+vr5           -0.24     0.13       -0.05  1.00      0.20      -0.11
+drawdown      -0.52     0.76       -0.24  0.20      1.00      -0.47
+tail_days      0.47    -0.38        0.11 -0.11     -0.47       1.00
+pool: every fingerprinted session
+  h 0.25: test sessions 2716 from 2015-10-28, n_eff quantiles 10/50/90 9 / 56 / 231, share under 30: 0.32
+  h 0.35: test sessions 2716 from 2015-10-28, n_eff quantiles 10/50/90 26 / 177 / 608, share under 30: 0.11
+  h 0.5: test sessions 2716 from 2015-10-28, n_eff quantiles 10/50/90 83 / 507 / 1155, share under 30: 0.01
+  h 0.7: test sessions 2716 from 2015-10-28, n_eff quantiles 10/50/90 223 / 923 / 1735, share under 30: 0.00
+  h 1.0: test sessions 2716 from 2015-10-28, n_eff quantiles 10/50/90 409 / 1285 / 2198, share under 30: 0.00
+pool: sessions from 2019-01-01 (those with replay outcomes)
+  h 0.25: test sessions 1626 from 2020-04-15, n_eff quantiles 10/50/90 9 / 43 / 133, share under 30: 0.39
+  h 0.35: test sessions 1626 from 2020-04-15, n_eff quantiles 10/50/90 33 / 123 / 359, share under 30: 0.10
+  h 0.5: test sessions 1626 from 2020-04-15, n_eff quantiles 10/50/90 115 / 286 / 713, share under 30: 0.03
+  h 0.7: test sessions 1626 from 2020-04-15, n_eff quantiles 10/50/90 248 / 540 / 1079, share under 30: 0.00
+  h 1.0: test sessions 1626 from 2020-04-15, n_eff quantiles 10/50/90 331 / 781 / 1358, share under 30: 0.00
