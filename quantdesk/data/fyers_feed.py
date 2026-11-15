@@ -60,7 +60,10 @@ PLANS = {
 }
 DEFAULT_PLAN = "standard"
 PER_SECOND, PER_MINUTE = PLANS[DEFAULT_PLAN]["per_second"], PLANS[DEFAULT_PLAN]["per_minute"]
-EXTRAS_SHARE = 0.25                   # of the day's calls for the books and the option chains; the quotes, which every price on the board needs, take the rest
+EXTRAS_SHARE = 0.45                   # of the day's calls for the option chains and the books; the quotes, which every price on the board needs, take the rest
+EXTRAS_PATTERN = ("c", "c", "c", "d")  # the spare calls in turn: three option chains for every book. The paper desk marks and exits MCX and currency options from the
+#                                        chains (a mark older than 600 s is not used), so on Standard every watchlist chain must come round within that; a book is the app's
+#                                        ladder and the futures' open interest, which moves slowly. Set from a simulated Standard day (tests/test_fyers_budget.py)
 BUDGET_BURST = 8                      # the most calls a bucket can hold: a cycle's quote batches, or its books and chains
 
 
@@ -105,7 +108,7 @@ class DayBudget:
 
     def take(self, n: int = 1) -> bool:
         self._fill()
-        if self.tokens + 1e-9 < n:
+        if self.tokens + 1e-6 < n:                                                    # a clock's microsecond rounding is not a missing call
             return False
         self.tokens -= n
         self.spent += n
@@ -156,6 +159,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None                                                  # the Authorization header must never travel to another host
 
 
+def _rate_limited(obj) -> bool:
+    """Fyers' rate-limit answer: code -429 (as a number or as text)."""
+    return isinstance(obj, dict) and str(obj.get("code")).strip() in ("-429", "429")
+
+
 class FyersData:
     """GET a Fyers data endpoint with the day's token. Only /data/quotes and /data/depth are ever asked for."""
 
@@ -185,9 +193,15 @@ class FyersData:
                 raise Blocked() from None
             if e.code in (401, 403):
                 raise Refused() from None
+            try:                                                                    # Fyers can put its rate-limit code in an error's body: the same stop
+                body = json.loads(e.read(1 << 16) or b"{}")
+            except Exception:                                                       # noqa: BLE001 - an unreadable error body is just an error
+                body = None
+            if _rate_limited(body):
+                raise Blocked() from None
             raise
         obj = json.loads(raw or b"{}")
-        if isinstance(obj, dict) and obj.get("code") == -429:                         # Fyers' rate-limit code, sent in the body too: the same stop as an HTTP 429
+        if _rate_limited(obj):                                                        # Fyers' rate-limit code, sent in the body too: the same stop as an HTTP 429
             raise Blocked()
         if isinstance(obj, dict) and obj.get("code") in (-15, -16, -17, -8):          # Fyers' "token invalid / expired / not authenticated" codes, sent with HTTP 200
             raise Refused()
@@ -428,7 +442,7 @@ class FyersFeed:
         self.chain_names = [n for n in self.depth_names]                    # the watchlist's commodities and currencies: their option chains, in turn
         self.chain_turn = 0
         self.chains_per = CHAINS_PER_CYCLE
-        self.extra_first = "c"                                              # which of a chain and a book has the next spare call
+        self.extra_i = 0                                                   # where the spare calls are in EXTRAS_PATTERN
         self.last_opt: dict[str, dict] = {}
         self.oi: dict[str, float] = {}
         self.last: dict[str, dict] = {}
@@ -452,6 +466,8 @@ class FyersFeed:
         if budget is None or budget.take(1):
             return True
         self.stats["budget_skips"] += 1
+        if budget is self.qb:
+            self.stats["quote_skips"] = self.stats.get("quote_skips", 0) + 1     # a quote batch the pace did not wait for: should stay at 0
         return False
 
     def cycle(self) -> int:
@@ -480,16 +496,19 @@ class FyersFeed:
         want = [n for n in self.depth_names if n in live]
         plan_c = [want_c[(self.chain_turn + i) % len(want_c)] for i in range(min(self.chains_per, len(want_c)))] if want_c else []
         plan_d = [want[(self.turn + i) % len(want)] for i in range(min(self.per, len(want)))] if want else []
-        order, firsts = [], ([("c", n) for n in plan_c], [("d", n) for n in plan_d])
-        pair = firsts if self.extra_first == "c" else firsts[::-1]
-        for i in range(max(len(plan_c), len(plan_d))):                # chains and books by turns, so a short budget shares itself between them
-            order += [x[i] for x in pair if i < len(x)]
+        order, left = [], {"c": [("c", n) for n in plan_c], "d": [("d", n) for n in plan_d]}
+        k = self.extra_i
+        while left["c"] or left["d"]:                                 # chains and books by EXTRAS_PATTERN's turns, so a short budget shares itself between them
+            want_kind = EXTRAS_PATTERN[k % len(EXTRAS_PATTERN)]
+            kind = want_kind if left[want_kind] else ("d" if want_kind == "c" else "c")
+            order.append(left[kind].pop(0))
+            k += 1
         opts: dict[str, dict] = {}
         fresh: dict[str, dict] = {}                                   # books fetched in THIS cycle: only these are sent, so a ladder is never older than its timestamp says
         for kind, n in order:
             if not self._spend(self.xb):
                 break                                                 # the day's budget for chains and books is used up for now
-            self.extra_first = "d" if kind == "c" else "c"            # the next spare call goes to the other kind
+            self.extra_i += 1                                         # the next spare call is the pattern's next turn
             if kind == "c":
                 self.chain_turn += 1
                 try:
@@ -579,6 +598,11 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
         rep["stopped"] = "no contracts"
         return rep
     qb, xb = DayBudget(caps["per_day"], 1 - EXTRAS_SHARE, now), DayBudget(caps["per_day"], EXTRAS_SHARE, now)
+    batches = math.ceil(len(names) / QUOTE_BATCH)
+    if batches > 1 and plan_name == "standard":
+        slow = (f"{len(names)} contracts need {batches} quote calls a round: on Standard a round then comes every "
+                f"{batches / qb.rate:.0f} s, over the paper desk's 30 s quote age for a fill")
+        rep["notes"] = [*rep["notes"], slow]
     feed = FyersFeed(FyersData(app_id, token, opener=opener, plan=plan_name), names, depth_watch(watchlist or {}), pusher, now=now, quotes_budget=qb, extras_budget=xb)
     first = min(a for a, _ in SESSIONS.values())
     if now().time() < first:                                          # before the open: sleep to it instead of polling a closed market
@@ -587,12 +611,14 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
             sleep(wait)
     pusher.start()
     try:
+        first_wait = qb.wait_s(min(max(1, feed.quote_calls_needed()), BUDGET_BURST)) + 0.05     # a job starts with an empty budget: its first round waits for its calls
+        sleep(max(0.0, min(first_wait, (stop - now()).total_seconds())))
         while now() < stop:
             t0 = time.monotonic()
             try:
                 feed.cycle()
             except Blocked:
-                rep["stopped"] = "blocked by Fyers (HTTP 429): stopped for the day"
+                rep["stopped"] = "blocked by Fyers (rate limit, 429): stopped for the day"
                 break
             except Refused:
                 rep["stopped"] = "Fyers refused today's token"
@@ -601,7 +627,8 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
                 rep["stopped"] = "every session closed"
                 break
             need = min(max(1, feed.quote_calls_needed()), BUDGET_BURST)
-            pace = qb.wait_s(need)                                    # the day's budget sets the pace: at most one round a `interval`, and no faster than it allows
+            pace = qb.wait_s(need) + 0.05                             # the day's budget sets the pace (a hair over, so the round finds its calls there): at most one
+#                                                                           round an `interval`, and no faster than the budget allows
             left = (stop - now()).total_seconds()
             sleep(max(0.0, min(max(interval - (time.monotonic() - t0), pace), max(left, 0.0))))
     finally:

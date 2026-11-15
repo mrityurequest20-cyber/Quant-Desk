@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from collections import Counter
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -90,24 +91,69 @@ def test_a_whole_standard_day_in_three_jobs_and_a_rerun_stays_under_the_day_and_
     assert max(per_min.values()) <= F.PLANS["standard"]["per_minute"]
     assert any(t.time() >= dt.time(23, 0) for t in times)                             # the budget lasts the day: quotes in the last hour
     quotes = [t for t, p in api.at if p == "/quotes"]
-    gaps = sorted((b - a).total_seconds() for a, b in zip(quotes, quotes[1:]) if a.date() == b.date() and (b - a).total_seconds() < 3600)
-    assert 12 <= gaps[len(gaps) // 2] <= 20                                            # a quote round about every 16 s
+    gaps = sorted((b - a).total_seconds() for a, b in pairwise(quotes) if a.date() == b.date() and (b - a).total_seconds() < 3600)
+    assert 15 <= gaps[len(gaps) // 2] <= 24 and gaps[int(0.99 * len(gaps))] < 30     # a quote round about every 20 s, inside the paper desk's 30 s quote age for a fill
+    assert sum(r.get("quote_skips", 0) for r in reps) == 0                             # the budget sets the pace: no quote batch is ever skipped for want of budget
     assert all(r["plan"] == "standard" and r["per_day"] == 4500 for r in reps)
     assert sum(r["budget_spent"]["quotes"] + r["budget_spent"]["extras"] for r in reps) == len(times)
 
 
-def test_a_short_budget_is_shared_between_the_option_chains_and_the_books(monkeypatch):
+def test_a_short_budget_is_shared_three_option_chains_to_one_book(monkeypatch):
     api, _ = _day(monkeypatch, "standard", [("08:59", "23:58")])
     n = Counter(p for _, p in api.at)
-    assert n["/options-chain-v3"] > 100 and n["/depth"] > 100                         # neither starves the other
-    assert abs(n["/options-chain-v3"] - n["/depth"]) <= 0.1 * (n["/options-chain-v3"] + n["/depth"])
-    assert n["/quotes"] >= 2.5 * (n["/options-chain-v3"] + n["/depth"])                # three quarters of the day for the quotes
+    assert n["/depth"] > 100                                                           # the books are not starved
+    assert 2.7 <= n["/options-chain-v3"] / n["/depth"] <= 3.3
+    extras = n["/options-chain-v3"] + n["/depth"]
+    assert abs(extras / sum(n.values()) - F.EXTRAS_SHARE) <= 0.03                     # the extras' share of the day, the quotes the rest
+
+
+COM = ["CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI", "GOLD", "GOLDM", "SILVER", "SILVERM", "COPPER"]
+CUR = ["USDINR", "EURINR", "GBPINR", "JPYINR"]
+
+
+def test_on_standard_every_watchlist_chain_comes_round_within_the_paper_desks_600_s_mark_age(monkeypatch):
+    """Risk review, 15 Nov 2026: at a quarter of the budget shared one to one with the books, a chain came round every 14 to 27 minutes, past the runner's 600 s mark age
+    (MARK_MAX_AGE_S) and the 12-minute chain staleness. The desk's real watchlist (9 commodities, 4 currencies) and 32 contracts, a whole day in three jobs."""
+    from quantdesk.paper import runner as RN
+    names = {f"{c}-MCX": {"seg": "mcx", "ticker": f"MCX:{c}26NOVFUT", "expiry": dt.date(2026, 11, 19)} for c in COM + [f"X{i}" for i in range(15)]}
+    names.update({f"{c}-CDS": {"seg": "cds", "ticker": f"NSE:{c}26NOVFUT", "expiry": dt.date(2026, 11, 26)} for c in CUR + ["CHFINR", "AUDINR", "CADINR", "SGDINR"]})
+    cfg = Config.load(ROOT / "config" / "quantdesk.yaml")
+    assert [n for n in COM + CUR] == [str(x).upper() for x in cfg.get("desk.watchlist.commodities") + cfg.get("desk.watchlist.currencies")]
+    clock = Clock(dt.datetime.combine(DAY, dt.time(8, 59), IST))
+    api = TimedAPI({c["ticker"]: (100.0, 99.9, 100.1) for c in names.values()}, clock)
+    monkeypatch.setattr(F, "load_contracts", lambda opener=None: ([], []))
+    monkeypatch.setattr(F, "near_futures", lambda c, d: names)
+    monkeypatch.setattr(F, "FyersData", lambda *a, **k: api)
+    for start, until in [("08:59", "14:15"), ("14:15", "20:05"), ("20:05", "23:58")]:
+        h, m = (int(x) for x in start.split(":"))
+        clock.t = max(clock.t, dt.datetime.combine(DAY, dt.time(h, m), IST))
+        F.run(until, "A-100", "t", FakePusher(), watchlist={"commodities": COM, "currencies": CUR}, now=clock.now, sleep=clock.sleep, plan="standard")
+    seen: dict[str, list] = {}
+    for (t, path), (_, params) in zip(api.at, api.calls):
+        if path == "/options-chain-v3":
+            seen.setdefault(params["symbol"], []).append(t)
+    assert len(seen) == len(COM + CUR)
+    for lo, hi in ((dt.time(9, 30), dt.time(17, 5)), (dt.time(17, 30), dt.time(23, 58))):       # by day (13 names) and in the evening (MCX's 9)
+        gaps = [(b - a).total_seconds() for ts in seen.values() for a, b in pairwise([x for x in ts if lo <= x.time() <= hi])]
+        assert gaps and max(gaps) < RN.MARK_MAX_AGE_S == 600
+
+
+def test_more_than_fifty_contracts_on_standard_is_reported(monkeypatch):
+    names = {f"X{i}-MCX": {"seg": "mcx", "ticker": f"MCX:X{i}26NOVFUT", "expiry": dt.date(2026, 11, 19)} for i in range(60)}
+    clock = Clock(dt.datetime.combine(DAY, dt.time(10, 0), IST))
+    api = TimedAPI({c["ticker"]: (1.0, 0.9, 1.1) for c in names.values()}, clock)
+    monkeypatch.setattr(F, "load_contracts", lambda opener=None: ([], []))
+    monkeypatch.setattr(F, "near_futures", lambda c, d: names)
+    monkeypatch.setattr(F, "FyersData", lambda *a, **k: api)
+    rep = F.run("10:05", "A-100", "t", FakePusher(), now=clock.now, sleep=clock.sleep, plan="standard")
+    assert any("60 contracts need 2 quote calls a round" in n for n in rep["notes"])
+    assert not any("quote calls a round" in n for n in F.run("10:10", "A-100", "t", FakePusher(), now=clock.now, sleep=clock.sleep, plan="prime")["notes"])
 
 
 def test_on_prime_the_five_second_floor_sets_the_pace_and_chains_and_books_run_each_round(monkeypatch):
     api, reps = _day(monkeypatch, "prime", [("10:00", "10:10")])
     quotes = [t for t, p in api.at if p == "/quotes"]
-    gaps = [(b - a).total_seconds() for a, b in zip(quotes, quotes[1:])]
+    gaps = [(b - a).total_seconds() for a, b in pairwise(quotes)]
     assert gaps and max(gaps[3:]) <= 6                                                 # after the first seconds' fill, a round every 5 s as before
     assert reps[0]["budget_skips"] <= 3
     n = Counter(p for _, p in api.at)
@@ -132,6 +178,25 @@ def test_fyers_rate_limit_code_in_the_answer_body_stops_the_feed_like_an_http_42
                       limiter=F.Limiter(clock=lambda: 0.0, sleep=lambda s: None))
     with pytest.raises(F.Blocked):
         api.get("/quotes", {"symbols": "MCX:A"})
+    text = F.FyersData("A-100", "t", opener=lambda req, timeout=None: Resp(b'{"s": "error", "code": "-429"}'), limiter=api.limiter)
+    with pytest.raises(F.Blocked):
+        text.get("/quotes", {"symbols": "MCX:A"})                                       # the code as text too
+
+
+def test_fyers_rate_limit_code_in_an_http_error_body_stops_the_feed_too():
+    import io
+    import urllib.error
+
+    def opener(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 400, "x", {}, io.BytesIO(json.dumps({"s": "error", "code": -429}).encode()))
+    api = F.FyersData("A-100", "t", opener=opener, limiter=F.Limiter(clock=lambda: 0.0, sleep=lambda s: None))
+    with pytest.raises(F.Blocked):
+        api.get("/quotes", {"symbols": "MCX:A"})
+
+    def other(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 500, "x", {}, io.BytesIO(b"not json"))
+    with pytest.raises(urllib.error.HTTPError):                                        # any other error is just an error (one cycle lost, the feed goes on)
+        F.FyersData("A-100", "t", opener=other, limiter=api.limiter).get("/quotes", {"symbols": "MCX:A"})
 
 
 def test_the_desk_says_standard_and_the_cli_passes_the_configured_plan(monkeypatch, tmp_path):
