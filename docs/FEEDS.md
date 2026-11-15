@@ -97,8 +97,10 @@ Never paste any of these into a chat, an issue or a commit.
      - a quote round about every **22 s** (under 27 s in 99% of rounds; a job's first round can take longer), inside the paper desk's
        30 s quote age for a fill. More than 50 contracts would need two calls a round: the run says so in its notes;
      - **every watchlist option chain within 8 minutes by day and 9 in the evening**, inside the runner's 600 s mark age and the
-       12-minute chain staleness, so held MCX and currency options keep their marks and can be closed;
-     - a book (the ladder and the futures' open interest) about every 20 minutes.
+       12-minute chain staleness, so held MCX and currency options keep their marks, and the forced exits (the kill switch, the halts,
+       expiry) close them. The owner's own sell needs a bid under 120 s old (`EXIT_AGE_S`), so after Kite's hours it may be refused
+       until the next chain arrives and need a retry;
+     - each name's book (the ladder and the futures' open interest) about every 23 minutes by day and 16 in the evening.
      **The limit that remains on Standard:** a new option needs a quote under 30 s old to be filled, which a chain fetched minutes
      earlier is not. In Kite's hours the relay shows Kite's fresher price; after them, MCX and currency option entries wait for the
      Data Socket (below). On Prime the 5 s floor sets the pace, with three chains and two books a round, as before.
