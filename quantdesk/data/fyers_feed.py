@@ -165,7 +165,8 @@ def _rate_limited(obj) -> bool:
 
 
 class FyersData:
-    """GET a Fyers data endpoint with the day's token. Only /data/quotes and /data/depth are ever asked for."""
+    """GET a Fyers data endpoint with the day's token: /data/quotes, /data/depth and /data/options-chain-v3 only (the Data Socket's one POST, /data/symbol-token,
+    is in fyers_socket.py)."""
 
     PATHS = ("/quotes", "/depth", "/options-chain-v3")
 
@@ -465,7 +466,7 @@ class FyersFeed:
         live = [n for n in self.names if self._open(n)]
         if not self.streaming():
             return live
-        on_socket = set(self.socket.topics.values())
+        on_socket = self.socket.seen()                                # a contract stays on REST until the socket has carried it at least once
         return [n for n in live if self.names[n]["ticker"] not in on_socket]
 
     def quote_calls_needed(self) -> int:
@@ -629,8 +630,8 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
                 f"{batches / qb.rate:.0f} s, over the paper desk's 30 s quote age for a fill")
         rep["notes"] = [*rep["notes"], slow]
     api = FyersData(app_id, token, opener=opener, plan=plan_name)
-    sock = _start_socket(app_id, token, names, plan_name, api, rep, opener, socket_factory) if use_socket else None
-    feed = FyersFeed(api, names, depth_watch(watchlist or {}), pusher, now=now, quotes_budget=qb, extras_budget=xb, socket=sock)
+    sock = None
+    feed = FyersFeed(api, names, depth_watch(watchlist or {}), pusher, now=now, quotes_budget=qb, extras_budget=xb)
     first = min(a for a, _ in SESSIONS.values())
     if now().time() < first:                                          # before the open: sleep to it instead of polling a closed market
         wait = (dt.datetime.combine(start.date(), first, IST) - now()).total_seconds()
@@ -638,6 +639,12 @@ def run(until: str, app_id: str, token: str, pusher, watchlist: dict | None = No
             sleep(wait)
     pusher.start()
     try:
+        if use_socket:                                                # after the wait for the open, so an early job holds no idle socket
+            try:
+                sock = feed.socket = _start_socket(app_id, token, names, plan_name, api, rep, opener, socket_factory)
+            except Blocked:
+                rep["stopped"] = "blocked by Fyers (rate limit, 429): stopped for the day"
+                stop = now()                                          # no round at all: the day is over for this feed
         first_wait = qb.wait_s(min(max(1, feed.quote_calls_needed()), BUDGET_BURST)) + 0.05     # a job starts with an empty budget: its first round waits for its calls
         sleep(max(0.0, min(first_wait, (stop - now()).total_seconds())))
         while now() < stop:
@@ -672,16 +679,18 @@ def _start_socket(app_id: str, token: str, names: dict, plan: str, api, rep: dic
     from . import fyers_socket as FS
     tickers = sorted(c["ticker"] for c in names.values())[:FS.SYMBOL_CAP.get(plan, FS.SYMBOL_CAP["standard"])]
     try:
-        topics, unknown = FS.symbol_topics(app_id, token, tickers, opener=opener, limiter=getattr(api, "limiter", None))
         if isinstance(getattr(api, "calls", None), int):
             api.calls += 1                                            # one data-API call, counted with the rest
+        topics, unknown = FS.symbol_topics(app_id, token, tickers, opener=opener, limiter=getattr(api, "limiter", None))
         sock = (factory or FS.FyersSocket)(app_id, token, topics)
         sock.start()
+    except FS.RateLimited:
+        raise Blocked() from None                                     # Fyers' rate limit on this call too: the same stop as on any data call
     except FS.SocketRefused as e:
         rep["notes"] = [*rep["notes"], f"Data Socket not used: {e}"]
         return None
-    except (OSError, ValueError) as e:                                # urllib's errors are OSErrors; an answer that is not ok is a ValueError
-        rep["notes"] = [*rep["notes"], f"Data Socket not used: the symbol-token call failed ({type(e).__name__})"]
+    except Exception as e:                                            # noqa: BLE001 - whatever went wrong here, the REST feed carries on as before
+        rep["notes"] = [*rep["notes"], f"Data Socket not used: it could not start ({type(e).__name__})"]
         return None
     rep["socket_symbols"] = len(topics)
     if unknown:
@@ -734,7 +743,10 @@ def check(app_id: str, token: str, watchlist: dict | None = None, opener=None, t
         rep["result"] = "blocked by Fyers (HTTP 429)"
     if use_socket and rep.get("result") == "ok":                       # the Data Socket too: log in, subscribe, and wait for the first quotes
         sub: dict = {"notes": []}
-        sock = _start_socket(app_id, token, names, DEFAULT_PLAN, feed.api, sub, opener, socket_factory)
+        try:
+            sock = _start_socket(app_id, token, names, DEFAULT_PLAN, feed.api, sub, opener, socket_factory)
+        except Blocked:
+            sock, sub["notes"] = None, ["blocked by Fyers (HTTP 429)"]
         if sock is None:
             rep["socket"] = {"result": "not started", "notes": sub["notes"]}
         else:
@@ -745,7 +757,7 @@ def check(app_id: str, token: str, watchlist: dict | None = None, opener=None, t
                 got = sock.latest()
             sock.stop()
             rep["socket"] = {"result": "ok" if got else (sock.stats.get("stopped") or "no quote came in time"), "symbols": sub.get("socket_symbols", 0),
-                             "quotes": len(got), **{k: sock.stats[k] for k in ("connects", "frames", "unread", "messages")}}
+                             "quotes": len(got), **{k: sock.stats.get(k) for k in ("connects", "frames", "unread", "message_codes")}}
     c = feed.api.calls
     rep.update(feed.stats, calls=c if isinstance(c, int) else len(c), **pusher.stats())
     return rep

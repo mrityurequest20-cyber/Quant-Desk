@@ -130,10 +130,46 @@ def test_the_symbol_token_call_posts_the_tickers_and_maps_fyers_tokens_to_topics
     topics, bad = FS.symbol_topics("A-100", "TOK", ["MCX:CRUDEOIL26NOVFUT", "NSE:USDINR26NOVFUT", "MCX:NOPE"], opener=opener)
     assert topics == {"sf|mcx_fo|445566": "MCX:CRUDEOIL26NOVFUT", "sf|cde_fo|001234": "NSE:USDINR26NOVFUT"} and bad == ["MCX:NOPE"]
     req = seen[0]
-    assert req.full_url == FS.TOKEN_API and req.get_method() == "POST" and req.get_header("Authorization") == "A-100:TOK"
+    assert req.full_url == FS.TOKEN_API and req.get_method() == "POST" and req.get_header("Authorization") == "TOK"     # the bare token, as Fyers' SDK sends it here
     assert json.loads(req.data) == {"symbols": ["MCX:CRUDEOIL26NOVFUT", "NSE:USDINR26NOVFUT", "MCX:NOPE"]}
     with pytest.raises(ValueError):
         FS.symbol_topics("A-100", "TOK", ["X"], opener=lambda req, timeout=None: Resp(b'{"s": "error", "message": "bad"}'))
+    with pytest.raises(FS.RateLimited):
+        FS.symbol_topics("A-100", "TOK", ["X"], opener=lambda req, timeout=None: Resp(b'{"s": "error", "code": -429}'))
+    import io
+    import urllib.error
+
+    def limited(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 429, "x", {}, io.BytesIO(b""))
+    with pytest.raises(FS.RateLimited):
+        FS.symbol_topics("A-100", "TOK", ["X"], opener=limited)
+    odd = lambda req, timeout=None: Resp(json.dumps({"s": "ok", "validSymbol": {}, "invalidSymbol": 5}).encode())
+    assert FS.symbol_topics("A-100", "TOK", ["X"], opener=odd) == ({}, [])          # an odd answer is not a crash
+
+    class Lim:
+        n = 0
+
+        def wait(self):
+            Lim.n += 1
+    FS.symbol_topics("A-100", "TOK", ["X"], opener=odd, limiter=Lim())
+    assert Lim.n == 1                                                                   # through the REST feed's limiter
+
+
+def test_the_symbol_token_call_refuses_redirects(monkeypatch):
+    import urllib.request
+    seen = {}
+
+    def build(*handlers):
+        seen["handlers"] = handlers
+
+        class O:
+            def open(self, req, timeout=None):
+                raise OSError("stop here")
+        return O()
+    monkeypatch.setattr(urllib.request, "build_opener", build)
+    with pytest.raises(OSError):
+        FS.symbol_topics("A-100", "TOK", ["X"])
+    assert FS._NoRedirect in seen["handlers"]
 
 
 # ---------------------------------------------------------------------------------------------------------------- the frames we read
@@ -144,7 +180,7 @@ def test_the_decoder_reads_login_subscription_snapshots_updates_and_fyers_messag
     d.feed(sub_resp(ok=True))
     assert d.subscribed is True
     d.feed(custom(51001, "Symbol limit exceeded for your plan"))
-    assert d.messages == [(51001, "Symbol limit exceeded for your plan")]
+    assert d.messages == [51001]                                                       # the code only: Fyers' text never reaches the public summary
     snap = {"ltp": 581250, "bid_price": 581200, "ask_price": 581300, "bid_size": 5, "ask_size": 7, "vol_traded_today": 12000, "OI": 4400, "prev_close_price": 575000}
     quotes, ack = d.feed(data(1, snapshot(7, CRUDE, snap), snapshot(8, USD, {"ltp": 845025, "bid_price": 845000, "ask_price": 845050}, mult=1, prec=4)))
     assert ack is None
@@ -200,7 +236,8 @@ def test_a_real_websocket_session_logs_in_subscribes_streams_acks_pings_and_reco
         port = server.socket.getsockname()[1]
         threading.Thread(target=server.serve_forever, daemon=True).start()
         from websockets.sync.client import connect
-        sock = FS.FyersSocket("A-100", TOKEN, TOPICS, connect=lambda url: connect(f"ws://127.0.0.1:{port}"), sleep=lambda s: time.sleep(0.05))
+        sock = FS.FyersSocket("A-100", TOKEN, TOPICS, connect=lambda url: connect(f"ws://127.0.0.1:{port}", proxy=None), sleep=lambda s: time.sleep(0.05),
+                              host=f"127.0.0.1:{port}")
         sock.start()
         deadline = time.time() + 8
         while time.time() < deadline and len(sessions) < 2:
@@ -219,11 +256,17 @@ def test_a_real_websocket_session_logs_in_subscribes_streams_acks_pings_and_reco
 # ---------------------------------------------------------------------------------------------------------------- the feed with the socket
 
 class FakeSocket:
-    def __init__(self, topics, quotes=None, delivering=True):
-        self.topics, self.q, self.up, self.stats = dict(topics), dict(quotes or {}), delivering, {"connects": 1, "frames": 5, "unread": 0, "messages": []}
+    def __init__(self, topics, quotes=None, delivering=True, seen=None):
+        self.topics, self.q, self.up = dict(topics), dict(quotes or {}), delivering
+        self.carried = set(self.topics.values()) if seen is None else set(seen)
+        self.stats = {"connects": 1, "frames": 5, "unread": 0, "message_codes": []}
+        self.stopped = False
 
     def delivering(self):
         return self.up
+
+    def seen(self):
+        return set(self.carried)
 
     def latest(self):
         out, self.q = self.q, {}
@@ -303,7 +346,7 @@ def test_a_socket_that_cannot_start_leaves_the_rest_feed_as_it_was(monkeypatch):
         raise OSError("down")
     monkeypatch.setattr(FS, "symbol_topics", down)
     rep = run(TOKEN)
-    assert "socket" not in rep and any("symbol-token call failed" in n for n in rep["notes"]) and any(p == "/quotes" for p, _ in api.calls)
+    assert "socket" not in rep and any("could not start (OSError)" in n for n in rep["notes"]) and any(p == "/quotes" for p, _ in api.calls)
     monkeypatch.setattr(FS, "symbol_topics", lambda *a, **k: ({"x": "MCX:CRUDEOIL26NOVFUT"}, []))
     t[0], api.calls[:] = clock, []
     rep = run(jwt({"exp": time.time() + 99}))                                          # a token without an hsm_key: the socket is refused, REST carries on
@@ -344,7 +387,7 @@ def test_the_socket_code_names_only_fyers_data_hosts():
     import re
     hosts = set(re.findall(r"(?:https|wss)://([a-z0-9.-]+)", text))
     assert hosts == {"socket.fyers.in", "api-t1.fyers.in"}
-    assert "order_ws" not in text and "OrderSocket" not in text
+    assert "order_ws" not in text and "OrderSocket" not in text and "/trade" not in text
 
 
 def test_the_socket_counts_as_delivering_only_with_data_in_the_last_minute_and_never_once_stopped():
@@ -358,3 +401,188 @@ def test_the_socket_counts_as_delivering_only_with_data_in_the_last_minute_and_n
     sock.last_data = t[0]
     sock.stop()
     assert not sock.delivering()
+
+
+# ---------------------------------------------------------------------------------------------------------------- risk review of f5bdbb2 (VETO), each finding pinned
+
+def test_a_handshake_redirected_away_from_fyers_sends_nothing_there():
+    """V2: websockets follows redirects; the hsm_key must reach Fyers' host only. The redirect target must receive no frame."""
+    from websockets.datastructures import Headers
+    from websockets.http11 import Response
+    from websockets.sync.server import serve
+    other_got = []
+
+    def other(ws):
+        try:
+            other_got.append(ws.recv(timeout=2))
+        except Exception as e:                                                          # noqa: BLE001 - nothing arriving is the expected case
+            other_got.append(None) if not isinstance(e, (TimeoutError, OSError)) and "ConnectionClosed" not in type(e).__name__ else None
+
+    with serve(other, "127.0.0.1", 0) as b:
+        pb = b.socket.getsockname()[1]
+        threading.Thread(target=b.serve_forever, daemon=True).start()
+
+        def redirect(connection, request):
+            return Response(302, "Found", Headers([("Location", f"ws://127.0.0.1:{pb}/")]))
+        with serve(lambda ws: None, "127.0.0.1", 0, process_request=redirect) as a:
+            pa = a.socket.getsockname()[1]
+            threading.Thread(target=a.serve_forever, daemon=True).start()
+            from websockets.sync.client import connect
+            sock = FS.FyersSocket("A-100", TOKEN, TOPICS, connect=lambda url: connect(f"ws://127.0.0.1:{pa}/", proxy=None), host=f"127.0.0.1:{pa}")
+            sock.start()
+            sock._thread.join(timeout=10)
+            a.shutdown()
+        b.shutdown()
+    assert other_got == [] and sock.stats["stopped"] == "the connection did not end on Fyers' host" and sock.stats["connects"] == 0
+
+
+class FakeWS:
+    """A scripted connection: frames in order; "quiet" is a recv timeout; at the end the connection drops."""
+
+    def __init__(self, script, host=FS.HOST):
+        self.script, self.sent = list(script), []
+        self.request = type("R", (), {"headers": {"Host": host}})()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def send(self, b):
+        self.sent.append(b)
+
+    def recv(self, timeout=None):
+        if not self.script:
+            raise ConnectionError("dropped")
+        x = self.script.pop(0)
+        if x == "quiet":
+            raise TimeoutError()
+        return x
+
+
+def _streaming_session():
+    return FakeWS([auth_resp(), sub_resp(), data(1, snapshot(7, CRUDE, {"ltp": 581250}))])
+
+
+def test_fyers_message_texts_never_reach_the_stats():
+    """V1: the run summary is public; Fyers writes the text of its messages. Only the numeric code is kept."""
+    text = "Symbol limit exceeded for ACCOUNT XY12345"
+    ws = FakeWS([auth_resp(), custom(51001, text), sub_resp(), data(1, snapshot(7, CRUDE, {"ltp": 581250}))])
+    sock = FS.FyersSocket("A-100", TOKEN, TOPICS, connect=lambda url: ws, sleep=lambda s: None)
+    try:
+        sock._session()
+    except ConnectionError:
+        pass
+    assert sock.stats["message_codes"] == [51001] and "XY12345" not in json.dumps(sock.stats) and "Symbol limit" not in json.dumps(sock.stats)
+
+
+def test_eight_drops_spread_over_a_day_never_give_up_but_eight_failures_in_a_row_do():
+    sessions = []
+
+    def connect(url):
+        sessions.append(1)
+        if len(sessions) >= 12:
+            sock._stop.set()
+        return _streaming_session()                                                     # each logs in, streams a quote, then drops
+    sock = FS.FyersSocket("A-100", TOKEN, TOPICS, connect=connect, sleep=lambda s: None)
+    sock._run()
+    assert len(sessions) >= 12 and sock.stats["stopped"] is None                        # 12 drops, each after a working session: still going
+
+    tries = []
+
+    def broken(url):
+        tries.append(1)
+        if len(tries) > 3 * FS.RECONNECT_MAX:
+            sock._stop.set()                                                            # a socket that never gives up fails this test, it does not hang it
+        raise OSError("refused")
+    sock = FS.FyersSocket("A-100", TOKEN, TOPICS, connect=broken, sleep=lambda s: None)
+    sock._run()
+    assert sock.stats["stopped"] == f"gave up after {FS.RECONNECT_MAX} failed connections in a row" and sock.stats["last_error"] == "OSError"
+
+
+def test_a_refused_login_stops_the_socket_without_retrying():
+    tries = []
+    sock = FS.FyersSocket("A-100", TOKEN, TOPICS, connect=lambda url: tries.append(1) or FakeWS([auth_resp(ok=False)]), sleep=lambda s: None)
+    sock._run()
+    assert sock.stats["stopped"] == "the socket refused the login" and len(tries) == 1
+
+
+def test_a_socket_that_goes_silent_is_opened_again():
+    t = [0.0]
+
+    def clock():
+        t[0] += 1.0
+        return t[0]
+    opened = []
+
+    def connect(url):
+        opened.append(1)
+        if len(opened) >= 2:
+            sock._stop.set()
+        return FakeWS([auth_resp(), sub_resp(), data(1, snapshot(7, CRUDE, {"ltp": 581250}))] + ["quiet"] * 200)
+    sock = FS.FyersSocket("A-100", TOKEN, TOPICS, connect=connect, clock=clock, sleep=lambda s: None)
+    sock._run()
+    assert sock.stats["silent"] >= 1 and len(opened) >= 2
+
+
+def test_a_contract_carried_but_not_yet_streamed_stays_on_rest():
+    api = FakeAPI(dict(PRICES))
+    sock = FakeSocket({"x": "MCX:CRUDEOIL26NOVFUT", "y": "MCX:GOLD26DECFUT", "z": "NSE:USDINR26NOVFUT"}, seen={"MCX:CRUDEOIL26NOVFUT"})
+    feed = F.FyersFeed(api, NAMES, [], FakePusher(), now=lambda: dt.datetime(2026, 11, 16, 10, 0, tzinfo=IST), socket=sock)
+    feed.cycle()
+    sent = [prm["symbols"] for p, prm in api.calls if p == "/quotes"]
+    assert sent and "MCX:CRUDEOIL26NOVFUT" not in sent[0] and "MCX:GOLD26DECFUT" in sent[0] and "NSE:USDINR26NOVFUT" in sent[0]
+
+
+def test_the_chains_borrow_the_quotes_budget_only_while_the_socket_streams():
+    clock = dt.datetime(2026, 11, 16, 10, 0, tzinfo=IST)
+    qb, xb = F.DayBudget(4500, 0.55, lambda: clock), F.DayBudget(4500, 0.45, lambda: clock)
+    qb.tokens = 5.0                                                                     # the quotes have budget, the chains none
+    api = FakeAPI(dict(PRICES))
+    sock = FakeSocket(dict(TOPICS), delivering=False)
+    feed = F.FyersFeed(api, NAMES, ["CRUDEOIL-MCX"], FakePusher(), now=lambda: clock, quotes_budget=qb, extras_budget=xb, socket=sock)
+    feed.cycle()
+    assert not any(p in ("/options-chain-v3", "/depth") for p, _ in api.calls)          # not streaming: the chains do not drain the quotes' share
+    sock.up = True
+    api.calls.clear()
+    feed.cycle()
+    assert any(p == "/options-chain-v3" for p, _ in api.calls)                         # streaming: they may
+
+
+def test_the_socket_takes_at_most_the_plans_symbols_and_its_call_is_counted(monkeypatch):
+    names = {f"X{i:03d}-MCX": {"seg": "mcx", "ticker": f"MCX:X{i:03d}26NOVFUT", "expiry": dt.date(2026, 11, 19)} for i in range(150)}
+    asked = {}
+
+    def topics(app_id, token, tickers, opener=None, limiter=None):
+        asked["n"] = len(tickers)
+        return {f"t{i}": t for i, t in enumerate(tickers)}, []
+    monkeypatch.setattr(FS, "symbol_topics", topics)
+
+    class Api:
+        calls, limiter = 0, None
+    api, rep = Api(), {"notes": []}
+    sock = F._start_socket("A-100", TOKEN, names, "standard", api, rep, factory=lambda a, t, tp: FakeSocket(tp))
+    assert asked["n"] == FS.SYMBOL_CAP["standard"] == 100 and api.calls == 1 and rep["socket_symbols"] == 100 and sock is not None
+
+
+def test_the_run_stops_the_socket_and_a_rate_limited_start_stops_the_day(monkeypatch):
+    clock = [dt.datetime(2026, 11, 16, 10, 0, tzinfo=IST)]
+    api = FakeAPI(dict(PRICES))
+    monkeypatch.setattr(F, "load_contracts", lambda opener=None: ([], []))
+    monkeypatch.setattr(F, "near_futures", lambda c, d: NAMES)
+    monkeypatch.setattr(F, "FyersData", lambda *a, **k: api)
+    monkeypatch.setattr(FS, "symbol_topics", lambda *a, **k: ({"x": "MCX:CRUDEOIL26NOVFUT"}, []))
+    made = []
+    run = lambda: F.run("10:02", "A-100", TOKEN, FakePusher(), now=lambda: clock[0], plan="standard", use_socket=True,
+                        sleep=lambda s: clock.__setitem__(0, clock[0] + dt.timedelta(seconds=max(s, 1))),
+                        socket_factory=lambda a, t, tp: made.append(FakeSocket(tp)) or made[-1])
+    rep = run()
+    assert made and made[0].stopped and rep["socket"]["connects"] == 1
+
+    def limited(*a, **k):
+        raise FS.RateLimited()
+    monkeypatch.setattr(FS, "symbol_topics", limited)
+    clock[0], api.calls[:] = dt.datetime(2026, 11, 16, 10, 0, tzinfo=IST), []
+    rep = run()
+    assert rep["stopped"].startswith("blocked by Fyers") and not any(p == "/quotes" for p, _ in api.calls)

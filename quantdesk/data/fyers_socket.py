@@ -12,7 +12,8 @@ old versions of requests, aiohttp and setuptools and pulls in AWS tooling; this 
 could reach Fyers, so, as with the REST feed, the first real run is the test: anything the socket says that this cannot read is counted by its kind, never its value.
 
 DISPLAY ONLY, like the REST feed: market data only, no order, position, holding, funds or profile message or endpoint (a test checks), nothing written to disk, and the
-token never printed, logged or put in an error.
+token never printed, logged or put in an error. The run's summary is public, so what the socket reports is counts and Fyers' numeric message codes only, never a text
+Fyers wrote. The connection must end on socket.fyers.in: a handshake redirected anywhere else is refused before the login is sent (the REST side refuses redirects).
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import urllib.error
 import urllib.request
 
 URL = "wss://socket.fyers.in/hsm/v1-5/prod"
+HOST = "socket.fyers.in"
 TOKEN_API = "https://api-t1.fyers.in/data/symbol-token"
 SOURCE = "quantdesk-fyers-data"
 CHANNEL = 11
@@ -41,7 +43,11 @@ RECONNECT_MAX = 8                      # attempts in a row before the socket giv
 
 
 class SocketRefused(Exception):
-    """The token cannot be used on the socket (no hsm_key, or expired)."""
+    """The socket cannot be used (no hsm_key in the token, an expired token, a refused login, or a connection that did not end on Fyers' host)."""
+
+
+class RateLimited(Exception):
+    """Fyers answered the symbol-token call with its rate-limit code: the same stop as the REST feed's 429."""
 
 
 # ---------------------------------------------------------------------------------------------------------------- the token
@@ -52,7 +58,7 @@ def hsm_key(token: str, now: float | None = None) -> str:
         payload = token.split(".")[1]
         claims = json.loads(base64.urlsafe_b64decode(payload + "==="))
         key, exp = claims["hsm_key"], float(claims["exp"])
-    except (IndexError, KeyError, TypeError, ValueError):
+    except (IndexError, KeyError, TypeError, ValueError, OverflowError, AttributeError):
         raise SocketRefused("the token carries no hsm_key") from None
     if not isinstance(key, str) or not key:
         raise SocketRefused("the token carries no hsm_key")
@@ -62,17 +68,24 @@ def hsm_key(token: str, now: float | None = None) -> str:
 
 
 def symbol_topics(app_id: str, token: str, tickers: list[str], opener=None, limiter=None) -> tuple[dict[str, str], list[str]]:
-    """{HSM topic: Fyers ticker} for `tickers` (one POST /data/symbol-token call), and the tickers Fyers did not know."""
+    """{HSM topic: Fyers ticker} for `tickers` (one POST /data/symbol-token call, through the REST feed's limiter), and the tickers Fyers did not know. The
+    Authorization header is the bare access token, as Fyers' SDK sends it on this call (data_ws.py SymbolConversion). Redirects are refused. RateLimited on Fyers' 429."""
     if not tickers:
         return {}, []
     if limiter is not None:
         limiter.wait()
     req = urllib.request.Request(TOKEN_API, data=json.dumps({"symbols": list(tickers)}).encode(), method="POST",
-                                 headers={"Authorization": f"{app_id}:{token}", "Content-Type": "application/json", "Accept": "application/json",
-                                          "User-Agent": SOURCE})
+                                 headers={"Authorization": token, "Content-Type": "application/json", "Accept": "application/json", "User-Agent": SOURCE})
     open_ = opener or urllib.request.build_opener(_NoRedirect).open
-    with open_(req, timeout=10.0) as r:
-        obj = json.loads(r.read(1 << 20) or b"{}")
+    try:
+        with open_(req, timeout=10.0) as r:
+            obj = json.loads(r.read(1 << 20) or b"{}")
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise RateLimited() from None
+        raise
+    if isinstance(obj, dict) and str(obj.get("code")).strip() in ("-429", "429"):
+        raise RateLimited()
     if not isinstance(obj, dict) or obj.get("s") != "ok" or not isinstance(obj.get("validSymbol"), dict):
         raise ValueError("symbol-token answer not ok")
     out = {}
@@ -82,7 +95,8 @@ def symbol_topics(app_id: str, token: str, tickers: list[str], opener=None, limi
         seg = EXCH_SEG.get(fytoken[:4])
         if seg:
             out[f"sf|{seg}|{fytoken[10:]}"] = ticker
-    bad = [t for t in obj.get("invalidSymbol") or [] if isinstance(t, str)]
+    invalid = obj.get("invalidSymbol")
+    bad = [t for t in invalid if isinstance(t, str)] if isinstance(invalid, list) else []
     return out, bad
 
 
@@ -133,7 +147,7 @@ class Decoder:
         self.subscribed: bool | None = None
         self.ack_every = 0
         self.since_ack = 0
-        self.messages: list[tuple[int, str]] = []     # Fyers' own messages: (code, text), e.g. 51001, the plan's symbol limit
+        self.messages: list[int] = []                 # Fyers' own messages, by their numeric code only (e.g. 51001, the plan's symbol limit): the text is not kept
         self.unread = 0                               # frames or fields this could not read (counted, never shown)
 
     def feed(self, frame: bytes) -> tuple[dict[str, dict], int | None]:
@@ -167,7 +181,7 @@ class Decoder:
 
     def _custom(self, f: bytes) -> None:
         end = 2 + struct.unpack("!H", f[0:2])[0]
-        off, code, text = 4, 0, ""
+        off, code = 4, 0
         for _ in range(f[3]):
             fid = f[off]
             n = struct.unpack("!H", f[off + 1:off + 3])[0]
@@ -178,9 +192,7 @@ class Decoder:
                 raise ValueError("truncated")
             if fid == 1 and n == 4:
                 code = struct.unpack("!i", v)[0]
-            elif fid == 2:
-                text = v.decode("utf-8", errors="replace")[:120]
-        self.messages.append((code, text))
+        self.messages.append(code)
 
     def _data(self, f: bytes) -> tuple[dict[str, dict], int | None]:
         ack = None
@@ -265,21 +277,25 @@ class Decoder:
 
 class FyersSocket:
     """One Data Socket connection in a thread of its own: logs in, asks for full mode, subscribes the topics, answers the acknowledgements, pings every 10 s and
-    reconnects (with a growing pause) when the connection drops. `latest()` gives the quotes that changed since the last call; `delivering()` says whether data has
-    come in the last STALE_S seconds. Nothing here raises into the feed: a socket that cannot work leaves the REST feed doing what it did before."""
+    reconnects (with a growing pause) when the connection drops or has sent nothing for STALE_S. `latest()` gives the quotes that changed since the last call;
+    `delivering()` says whether data has come in the last STALE_S seconds; `seen()` names the tickers the socket has carried at least once (the others stay on REST).
+    Nothing here raises into the feed: a socket that cannot work leaves the REST feed doing what it did before."""
 
-    def __init__(self, app_id: str, token: str, topics: dict[str, str], connect=None, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, app_id: str, token: str, topics: dict[str, str], connect=None, clock=time.monotonic, sleep=None, host: str = HOST):
         self.key = hsm_key(token)
         self.auth_len = len(app_id) + 1 + len(token)
         self.topics = dict(topics)
         self._connect = connect or _ws_connect
-        self.clock, self.sleep = clock, sleep
+        self.host = host                                              # the Host the handshake must end on (socket.fyers.in; a test's local server)
+        self.clock = clock
         self._lock = threading.Lock()
         self._pending: dict[str, dict] = {}
+        self._seen: set[str] = set()
         self._stop = threading.Event()
+        self._pause = sleep or self._stop.wait                       # a pause that ends at once on stop()
         self._thread: threading.Thread | None = None
         self.last_data = None
-        self.stats = {"connects": 0, "frames": 0, "quotes": 0, "acks": 0, "unread": 0, "messages": [], "stopped": None}
+        self.stats = {"connects": 0, "frames": 0, "quotes": 0, "acks": 0, "unread": 0, "silent": 0, "message_codes": [], "stopped": None}
         self.decoder = Decoder(self.topics)
 
     def start(self) -> None:
@@ -295,6 +311,10 @@ class FyersSocket:
         t = self.last_data
         return t is not None and self.clock() - t < STALE_S and not self._stop.is_set()
 
+    def seen(self) -> set[str]:
+        with self._lock:
+            return set(self._seen)
+
     def latest(self) -> dict[str, dict]:
         with self._lock:
             out, self._pending = self._pending, {}
@@ -303,31 +323,37 @@ class FyersSocket:
     def _run(self) -> None:
         fails = 0
         while not self._stop.is_set() and fails < RECONNECT_MAX:
+            self._worked = False
             try:
                 self._session()
-                fails = 0
             except SocketRefused as e:
                 self.stats["stopped"] = str(e)
                 return
-            except Exception as e:                                    # noqa: BLE001 - a dropped connection, a refused handshake: counted, retried
-                fails += 1
+            except Exception as e:                                    # noqa: BLE001 - a dropped connection, a refused handshake, a silent socket: counted, retried
                 self.stats["last_error"] = type(e).__name__
-            if not self._stop.is_set():
-                self.sleep(min(60.0, 5.0 * fails))
-        if fails >= RECONNECT_MAX:
-            self.stats["stopped"] = f"gave up after {fails} failed connections"
+            fails = 1 if self._worked else fails + 1                  # a session that logged in and streamed starts the count again: eight failures IN A ROW give up
+            if not self._stop.is_set() and fails < RECONNECT_MAX:
+                self._pause(min(60.0, 5.0 * fails))
+        if fails >= RECONNECT_MAX and not self._stop.is_set():
+            self.stats["stopped"] = f"gave up after {fails} failed connections in a row"
 
     def _session(self) -> None:
         self.decoder = Decoder(self.topics)
         with self._connect(URL) as ws:
+            host = (getattr(getattr(ws, "request", None), "headers", None) or {}).get("Host", "")
+            if str(host) != self.host:
+                raise SocketRefused("the connection did not end on Fyers' host")      # checked before anything is sent: the hsm_key goes to Fyers only
             self.stats["connects"] += 1
             ws.send(auth_msg(self.key))
             ws.send(full_mode_msg())
-            subscribed, pinged = False, self.clock()
+            subscribed, pinged, quiet_since, read_msgs = False, self.clock(), self.clock(), 0
             while not self._stop.is_set():
                 if self.clock() - pinged >= PING_EVERY_S:
                     ws.send(PING)
                     pinged = self.clock()
+                if self.clock() - quiet_since >= STALE_S:
+                    self.stats["silent"] += 1
+                    raise TimeoutError("no data for a minute")          # reconnect: a socket that has gone quiet is opened again
                 try:
                     frame = ws.recv(timeout=1.0)
                 except TimeoutError:
@@ -345,16 +371,19 @@ class FyersSocket:
                     ws.send(ack_msg(ack))
                     self.stats["acks"] += 1
                 if quotes:
-                    self.last_data = self.clock()
+                    self.last_data = quiet_since = self.clock()
+                    self._worked = True
                     self.stats["quotes"] += len(quotes)
                     with self._lock:
                         self._pending.update(quotes)
+                        self._seen.update(quotes)
                 self.stats["unread"] = self.decoder.unread
-                for code, text in self.decoder.messages[len(self.stats["messages"]):]:
-                    if len(self.stats["messages"]) < 10:
-                        self.stats["messages"].append({"code": code, "text": text})
+                for code in self.decoder.messages[read_msgs:]:
+                    if len(self.stats["message_codes"]) < 10:
+                        self.stats["message_codes"].append(code)
+                read_msgs = len(self.decoder.messages)
 
 
 def _ws_connect(url: str):
     from websockets.sync.client import connect
-    return connect(url, open_timeout=15, close_timeout=5, max_size=1 << 22, user_agent_header=SOURCE)
+    return connect(url, open_timeout=15, close_timeout=5, max_size=1 << 22, user_agent_header=SOURCE, proxy=None)

@@ -112,14 +112,17 @@ Never paste any of these into a chat, an issue or a commit.
      near futures into socket topics (one `/data/symbol-token` call), logs in with the token's `hsm_key`, asks for full mode and
      subscribes them; the price, best bid and offer with sizes, volume, change and open interest then arrive as they change, and go to
      the relay every 5 s round. While the socket delivers, **no REST quote call is made and the whole day budget goes to the option
-     chains and books**: on a simulated Standard day every watchlist chain then comes round within five minutes by day. A future the
-     socket does not carry stays on REST; a socket that cannot log in, cannot get its topics, or has sent nothing for a minute hands
-     the quotes back to REST at once, under the same day budget, and reconnects by itself (a growing pause, at most eight failures in
-     a row). The wire protocol follows Fyers' own Python SDK (`fyers_apiv3` 3.2.1, MIT); the SDK itself is not installed (it pins old
+     chains and books**: on a simulated Standard day every watchlist chain then comes round within five minutes by day. A future stays
+     on REST until the socket has streamed it at least once; a socket that cannot log in, cannot get its topics, or has sent nothing
+     for a minute hands the quotes back to REST at once, under the same day budget, and is opened again (a growing pause; eight
+     failures in a row give up for the job, a session that streamed starts the count again). The handshake must end on
+     `socket.fyers.in`: a redirect anywhere else is refused before the login is sent, as the REST calls refuse redirects. A 429 on the
+     one `/data/symbol-token` call stops the feed for the day, like any 429. The wire protocol follows Fyers' own Python SDK (`fyers_apiv3` 3.2.1, MIT); the SDK itself is not installed (it pins old
      versions of requests, aiohttp and setuptools). No session that wrote this could reach Fyers: the **check_only** run now also
      opens the socket and waits up to 20 s for its first quotes, and says so in its summary (a socket that does not deliver is a
      warning, never a red check, since REST still carries the quotes). The run's metrics carry the socket's counts (connections,
-     frames, quotes, acknowledgements, frames it could not read, and Fyers' own messages, such as the plan's symbol limit).
+     frames, quotes, acknowledgements, silences, frames it could not read, and the numeric codes of Fyers' own messages, such as 51001 for
+     the plan's symbol limit; the summary is public, so the text Fyers writes is never kept).
    - Still on REST: the option chains. Streaming the near-the-money options of the watchlist names in the socket's remaining slots
      (about 68 on Standard), so that MCX and currency option entries can fill after Kite's hours, is the next step.
    - Nothing is written to disk. The run summary shows counts only, and the key names of any answer it could not read, never a value.
