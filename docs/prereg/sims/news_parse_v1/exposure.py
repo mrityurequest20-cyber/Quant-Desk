@@ -6,7 +6,8 @@ characters (normalised) are not matched, so that a short row cannot match everyt
 exposure (they are in-period template learning, data.in_period).
 
     python -I exposure.py <test.jsonl> <out exposed.json>     (run from the repository root)
-Prints the exposed rows' indices and the output's SHA-256; never a TEST title.
+Prints the exposed rows' indices and the output's SHA-256; never a TEST title. Run it before test.jsonl or any TEST label file is added to git (git ls-files
+also lists staged files, and a staged TEST file would flag every row).
 """
 from __future__ import annotations
 
@@ -29,13 +30,13 @@ def norms(s: str) -> tuple[str, str]:
 def main():
     test = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
     rows = [json.loads(line)["title"] for f in ROWS for line in open(f, encoding="utf-8") if line.strip()]
-    tracked = subprocess.run(["git", "ls-files", "tests", "quantdesk", "docs"], capture_output=True, text=True, check=True).stdout.split()
-    texts = []
+    tracked = [f for f in subprocess.run(["git", "ls-files", "-z", "tests", "quantdesk", "docs"], capture_output=True, text=True, check=True).stdout.split("\0") if f]
+    texts, unread = [], []
     for f in tracked:
         try:
             texts.append(norms(open(f, encoding="utf-8", errors="ignore").read()))
         except OSError:
-            pass
+            unread.append(f)
     rn = [norms(r) for r in rows]
     exposed = []
     for r in test:
@@ -51,7 +52,7 @@ def main():
             exposed.append(r["i"])
     data = json.dumps({"exposed": exposed, "rule": "news_parse_v1 P_test.exposure_rule"}, sort_keys=True).encode()
     open(sys.argv[2], "wb").write(data)
-    print(f"exposed TEST rows: {exposed}; {sys.argv[2]} sha256 {hashlib.sha256(data).hexdigest()}")
+    print(f"exposed TEST rows: {exposed}; {sys.argv[2]} sha256 {hashlib.sha256(data).hexdigest()}; tracked files read {len(texts)}, unreadable {len(unread)} {unread}")
 
 
 if __name__ == "__main__":

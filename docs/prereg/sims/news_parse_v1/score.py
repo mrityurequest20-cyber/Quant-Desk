@@ -173,6 +173,8 @@ def main():
     a = ap.parse_args()
     if a.cmd in ("score", "compare") and not (a.parser and a.labels) or a.cmd == "compare" and not a.parser2 or a.cmd == "agree" and not (a.labels and a.labels2):
         ap.error("missing --parser / --parser2 / --labels / --labels2 for this command")
+    if a.expect_sha256_baseline and a.cmd != "compare":
+        ap.error("--expect-sha256-baseline is for compare; a baseline's own score run uses --expect-sha256")
     run = {"score": cmd_score, "agree": cmd_agree, "compare": cmd_compare}[a.cmd]
     if not a.exclude:
         run(a)
