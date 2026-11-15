@@ -1,0 +1,128 @@
+{
+  "name": "news_parse_v1",
+  "registered": "2026-11-15",
+  "plan": "the owner, 15 Nov 2026, asked how confident the desk can be in the news analyser and then for the changes (\"Do it\"). A probe on hand-written headlines (none of them in the archives) found misreadings such as: \"Rupee rises as crude oil prices fall\" read crude UP; \"RBI keeps repo rate unchanged, cuts GDP forecast\" read a rate cut; \"Fed signals no rate cut this year\" read a cut; \"Not a good time to buy gold\" read gold UP. On DEV (below) the parser at 72af8ea scores 0.434 (95% headline-bootstrap interval 0.357 to 0.508). This spec measures how well quantdesk/paper/newsmodel.py reads headlines, before and after it is fixed",
+  "not_for": "nothing here trades, sizes or moves a limit. The news model stays one vote in AUTO v2's view (it never trades alone), under the vote watch (docs/prereg/evolution_probation_v1.json, C). Nothing here is a profitability claim, and nothing here tests whether the news votes have skill (see forecast_skill)",
+  "question": "P (parsing): does the news model read, from a headline's text, the right subjects and the right direction of each, at least 9 times in 10? Measured on headlines fixed before the parser is changed, labelled by two labellers on written rules",
+
+  "data": {
+    "source": "the desk's own journal archives (release journal-archive-2026, the `news` table: public RSS headlines the desk read on 28-30 Sep and 4-14 Oct 2026; 1-3 Oct are in no archive). Only the headline text is used",
+    "archives_db_sha256": {
+      "journal-archive-2026-09-28_2026-09-29.db": "841e804a54f163544cfb0f434ae35a63bb003dc88349c247d6110908506a663b",
+      "journal-archive-2026-09-30_2026-09-30.db": "a35818c954caffda1b084c4a33685426fc45f774035d9224890c0ad0ded272fa",
+      "journal-archive-2026-10-04_2026-10-08.db": "551d9a0ea26e4a7aa68672d7aa900fbe3c6aca110e02a97dda3d5aed8eb4e43a",
+      "journal-archive-2026-10-09_2026-10-14.db": "b2129f480ea05dfacd91e06815ec20fba7640fcbd37af0ccee6cf1cdee7dc28b"
+    },
+    "archives_gz_sha256": {
+      "journal-archive-2026-09-28_2026-09-29.db.gz": "4a16f1db20e8f3325610d48d914eac20b7765e7d061164938110a72345f2a4ac",
+      "journal-archive-2026-09-30_2026-09-30.db.gz": "1c6357870246fb81cf48b01ec2e1232adcd43122d62d3f57a4f8500e51805c35",
+      "journal-archive-2026-10-04_2026-10-08.db.gz": "f779720686a45d9a881e851c286fbdb24223a584b4010f836226d267a74b90bc",
+      "journal-archive-2026-10-09_2026-10-14.db.gz": "e6b744b839b9ae0cb776f15d09697b255f2b07b425c70a2c48368f9f52e4b636"
+    },
+    "pool": "every distinct headline (n_distinct) that names a subject the model reads, by its own subject words or by a wider list of plain words for the same things (sample.py WIDER): n_pool. The wider list is there so that headlines the current parser misses are drawn too. Recall is measured WITHIN the pool: a headline that names a subject in words neither list has is outside it, which is what the audit set describes",
+    "sets": "DEV: n_dev drawn with seed, shuffled (tests/fixtures/news_parse_v1/dev.jsonl). TEST: the next n_test_a of that draw, then n_test_b more drawn with seed_b from the rest of the pool (n_test). AUDIT: n_audit drawn with seed_audit from the headlines OUTSIDE the pool. TEST and AUDIT are not committed and not read before the freeze: sample.py hashes them in memory and writes them only with --test, after the freeze; the regenerated files must match sha256 below",
+    "seed": 20261115, "seed_b": 20261116, "seed_audit": 20261117,
+    "n_distinct": 6014, "n_pool": 3987, "n_outside_pool": 2027,
+    "n_dev": 200, "n_test_a": 100, "n_test_b": 100, "n_test": 200, "n_audit": 50,
+    "sha256": {
+      "dev.jsonl": "ee65a079a2e56a417fee58787cec2dcf51f67f48630e6fd03fd5ca9118567144",
+      "test.jsonl": "39bbdc99fc98902a873a3dcc81797ae4a638f6dfa11e275d09dd5b6b6ce8357c",
+      "test.jsonl, first n_test_a rows (the draw first hashed on 15 Nov)": "1182a6bd364d35c92818a124d11b55e64e1eed4d23febb8e454afb528b230847",
+      "audit.jsonl": "580c3915eb25deedc62ff1116e693948e971f65f88f9fd014334db6ba8979c54",
+      "dev_labels.json (the builder's DEV labels, the guide's anchors)": "6a1168ba39c39acfa0c382fb294a39ccbee157a2c1ed19b155560695d1502faf",
+      "score.py (the scorer, frozen with this spec)": "3d24ff2202b39b3e65a1dd8af23e1f9871342e04e1378647a7ceca248ecd1b87"
+    },
+    "python": "3.13.18 (reproduces the sets byte for byte)",
+    "evidence": "docs/prereg/sims/news_parse_v1/sample.py and sample.out.txt",
+    "exposure": "known exposure of TEST before the freeze, disclosed: (1) one first-half TEST headline (row 99 of the first half, i 99) is a string literal in tests/test_news.py on main since 7 Nov (4092f69, a recap and impact test, not a parser test); the result reports the score with and without that row, PASS uses all 200, and no parser test asserts on it. (2) Two superseded local commits of this spec held the first half in plain text; neither was pushed, they stay unreachable from any branch in the builder's container until it is reclaimed, and they are not read. (3) Two scratch copies of the first half were made while reproducing the sampler, one by the builder and one by the research reviewer during its first review; both were compared by hash only and deleted unread. The builder has not read any TEST or AUDIT headline",
+    "in_period": "DEV and TEST come from the same 15 days and share events (about 15 DEV headlines are about the RBI's October hike; a few TEST headlines are near-duplicates of DEV ones). P therefore measures accuracy on news like this period's. The forward check (below) is the out-of-period reading"
+  },
+
+  "subjects_scored": "exactly the 28 keys of newsmodel.SUBJECTS at 72af8ea (score.py KEYS). A key a parser adds is ignored; a key a label file gives that is not one of the 28 stops the scorer (a misspelt subject is an error, never a silent miss); the fixed parser keeps all 28",
+
+  "labels": {
+    "what": "for each headline, every scored subject it is about, each with a direction: +1, -1 or 0, the direction of that subject's VARIABLE (below). A headline about no subject has no labels. Labels are read from the TITLE TEXT ALONE: no summary, link or source, and no knowledge of what markets did later",
+    "variables": {
+      "crude, natgas, gold, silver, metals": "the price",
+      "rupee": "the rupee's value (stronger +1, weaker or a record low -1)",
+      "dollar": "the dollar's strength",
+      "us_yields": "the yield",
+      "fed, rbi": "the policy rate: a hike +1, a cut -1, a hold 0",
+      "inflation, growth": "the measure (a reading, a forecast or a revision of it)",
+      "fii": "foreign flows into Indian assets (buying, inflows +1; selling, outflows -1)",
+      "geopolitics": "the risk (escalation +1; a ceasefire, talks, de-escalation -1)",
+      "tariffs": "trade barriers (imposed or raised +1; cut, a deal -1)",
+      "china, wall_street": "the market or the economy named",
+      "monsoon": "the rainfall against normal",
+      "it_spend, auto_sales, telecom, capex, electronics": "the activity (orders, sales, tariffs, spending) up or down",
+      "usfda": "an approval +1, a warning letter, a rejection or an import alert -1",
+      "fno_rules, fintech_rules, cigarettes": "regulation or tax: tighter or higher +1, looser -1",
+      "bad_loans": "the bad loans themselves: more or worse +1, fewer or better -1"
+    },
+    "guide": {
+      "G1 stated vs passing": "a subject the headline gives a direction is labelled with it, also when it is stated as a cause of something else (\"Oil prices rise as West Asia shipping attacks fuel supply concerns\" DEV 44: crude +1, geopolitics +1). A subject named with no direction of its own is 0 (\"Market expert discusses Treasury yields, oil prices\" 131)",
+      "G2 level vs change": "a move, or a new extreme, is its sign; for growth, an economy growing, expanding or contracting is the move (\"Indian Economy Is Growing Fast\" 192 +1) (\"Rupee Hits 1-Month Peak\" 103 +1; \"Treasury Yields Hit 24-Year Highs\" 169 +1; \"hits record low\" -1). A level, a hold or steadying is 0: elevated, near $X, holds above, steadies, stays, stable, nears a record (\"amid elevated crude oil prices\" 28 crude 0; \"Dollar Stays Elevated\" 144; \"Gold steadies above $4,100\" 133; \"Brent Crude Oil Near $104\" 153; \"Dollar hold near two-month peak\" 197; \"as S&P 500 nears record\" 143). A small stated move is still a move (\"US stocks edge toward their records\" 16 +1)",
+      "G3 expectations, polls, pricing, guidance": "an expected, polled, priced or likely move reads as that move (\"RBI likely to hike repo rate … ET Poll\" 22 +1; \"Markets pricing 125 bps RBI hikes\" 75 +1; \"RBI may hike rates further\" 124 +1; \"Rate hike(s) ahead\" 81 +1). Bets or fears of a move that ease read as the opposite of the move, that mount as the move (\"As Fed Rate Hike Bets Ease\" 34 fed -1; \"as Fed-hike fears, oil prices ease\" 37 fed -1). A hold, \"higher for longer\", \"no cut\" or \"rules out cuts\" is 0 (\"RBI could keep rates higher for longer\" 8). This bets-and-fears rule is for the policy rate; risks, concerns or fears ABOUT a measure (inflation, growth) are not a reading or a forecast of it and are 0 (\"as inflation risks build\" 109 inflation 0)",
+      "G4 questions, advice, previews": "a question, advice, a watch list or a preview with no stated move is 0 for the subjects inside it (\"Will RBI hike repo rate by 25 bps?\" 127; \"Watch Can Treasury Yields Hit 6%?\" 67; \"3 U.S. Life Insurance Stocks Built For Higher Treasury Yields\" 57; \"Traders watch for energy ceasefire, tanker attacks\" 186 geopolitics 0). A move stated as fact inside such a headline still counts (\"Amid rising oil prices, how can LI homeowners beat the heat costs?\" 40 crude +1; \"3 Defensive U.S. Stocks to Watch as Rate Cuts Put Quality Back in Focus\" 187 fed -1). An analysis or a forecast that states a move or a direction is that direction (\"Crude Oil Faces Negative Pressure – Analysis\" 52 -1; \"… amid downtrend\" 79 -1)",
+      "G5 explainers": "an explainer of an event that happened reads as the event (\"Explained: How RBI rate hike may impact Sensex, Nifty\" 142 rbi +1; \"25 bps RBI repo rate hike could add ₹2.45 lakh to home loan interest\" 89 rbi +1)",
+      "G6 country scope": "us_yields is US yields (Treasury or muni) only: named (US, U.S., Treasury), muni yields (32), or a bare \"yields\" in a headline about US or global markets: US stocks, the dollar, the Fed, bitcoin (197, 112). Indian, UK, Japanese and euro-area yields are not us_yields and are not labelled (141, 120; the Eurozone half of 15). inflation and growth cover any economy's reading or forecast (\"U.S. CPI jumps\" 18; \"China factory activity returns to growth\" 150; \"Weak US Jobs\" 10; \"RBI raises FY27 GDP growth forecast\" 0). wall_street is US stock indices and US stocks. china is China's markets or economy",
+      "G7 RBI and Fed actions that are not rate moves": "forex measures, rupee defence, supervision, approvals and the like are rbi or fed 0 (\"RBI Tightens Dollar Grip\" 103; \"RBI forex curbs\" 180; \"Fed plans to overhaul bank supervision\" 56). The rupee is labelled only from its own stated move: \"RBI Bolsters Rupee Defense as Oil, Foreign Outflows Take Toll\" 39 rupee -1 (the toll is stated); \"RBI's rupee defence, record SIP inflows …\" 198 rupee 0",
+      "G8 conflict events": "an escalation event is +1 and a de-escalation event -1 even when it is the cause of another move (attacks, strikes, war, invasion, shelling: 5, 44, 68, 108; a ceasefire, talks, diplomacy: 4, 7, 21, 171). Sanctions imposed +1, lifted -1 (92). A risk, concern or uncertainty with no stated change is 0 (157, 166, 174). A denial of an attack is 0 (74); a stated \"no attack\" is -1 (163)",
+      "G9 mixed clauses": "the headline's main claim decides; a subject only inside a \"despite\" or \"shrugging off\" clause is 0 (\"Russia Pounds Ukrainian Energy Despite Trump's Ceasefire Announcement\" 30 geopolitics +1; \"U.S. stocks hit record highs despite inflation and geopolitical risks\" 156 inflation 0, geopolitics 0; \"despite elevated Treasury yields\" 49 us_yields 0). Two clauses that give one subject two directions: the first stated move",
+      "G10 implied subjects": "an unnamed subject counts when the referent is unambiguous (\"India's central bank hikes rates\" 109 rbi +1; 187's \"rate cuts\" in a headline about U.S. stocks is the Fed). A subject word inside a company's name is not the subject (\"PB Fintech\" 45, 159; \"Oil India\")",
+      "G11 the dollar beside the rupee": "the dollar that a rupee move is quoted against is not a dollar story and is not labelled (\"Rupee slips 4 paise to 96.39 against US dollar\" 28); a dollar move stated for itself is labelled",
+      "G12 truncation": "label only what the visible text says; a cut-off word is not read (\"… Amid Inflation C\" 77 inflation 0; \"US Treasury yields rise ahead of 10-year note a...\" 100 us_yields +1)",
+      "G13 products are not crude": "diesel, gasoline, heating oil, motor oil, jet fuel and shipping or freight costs are not crude's price (\"AAA points to crude oil prices as gas costs climb\" 59 crude 0; \"Russian diesel\" 92; \"Crude Oil Shipping Costs Hit $35\" 181 crude 0)",
+      "G14 metaphors": "market metaphors are not their literal subject (\"bears attack D-Street\" 63: not geopolitics)",
+      "guide_status": "this guide is frozen with the spec and is the only rule book for TEST; it was written against DEV only. Where it does not settle a case, each labeller decides alone and the case shows up as a disagreement"
+    },
+    "who": "two labellers label all n_test TEST headlines, each blind to the parser's output on TEST and to the other's labels: the builder, and the research reviewer. Neither runs any parser on TEST before both label files are committed. All three labellers (builder, reviewer, adjudicator) are sessions of the same model family, so their labels are less independent than three people's would be; the result says so",
+    "blinding": "each labeller writes their file outside the shared tree and scratchpad (the reviewer in its own private directory) and first publishes only its SHA-256 (in a commit message on the freeze branch). Only after both hashes are published are both files committed, and each must match its published hash; a file that does not, or a labeller who saw the other's file first, voids that labeller's file and the step is repeated by a fresh session",
+    "agreement": "over the metric's own pairs (the subjects either labeller gives a nonzero direction), the share on which both give the same direction; and Cohen's kappa on those pairs (score.py agree). agreement_min below",
+    "adjudication": "each pair the labellers disagree on goes to a third labeller (a fresh research-reviewer session that sees this guide, the headline and the two labels of that pair in a random order, without saying whose is whose, never a parser's output) who picks one of the two labels or 0 when it reads neither; that pick is final. The adjudicated file (the agreed pairs plus the picks) is committed and hashed before the scoring run",
+    "development": "while fixing, the parser may be checked on VALIDATION ROUNDS: 100 headlines each, drawn from the pool with seeds 20261119, 20261120, … in order, never from DEV, TEST or an earlier round (docs/prereg/sims/news_parse_v1/draw_val.py). A round is labelled on the guide before any parser is run on it; once scored it may be used like DEV. Every round's labels, its first score (before any fix made after seeing it), the SHA-256 of the parser that first scored it and the baseline's score on it are committed and reported in the result, whatever the score. Rounds stop at the freeze: no round is drawn after it, and the builder may not stop drawing because a round scored well (every round drawn is reported, and the result says how many). The last round's first score is the builder's estimate before TEST",
+    "rounds_registered": {
+      "round 1, seed 20261119": "tests/fixtures/news_parse_v1/val1.jsonl sha256 4c7ece96126f69a67fd263606bf3a51e0be28f5c3340d7eecf2d13614417e657 (drawn with a scratch copy of draw_val.py whose output equals the committed one byte for byte); labels val1_labels.json fb3d3dfee6aad79a5e1b56423f02a5e978f8b401905fe9927af372b3eb8fa2a7, 71 nonzero pairs, labelled before any parser ran on it; first scored by the parser in rounds/newsmodel_at_val1.py.txt (sha256 93f745fe627389b8b9245f0cabc4ff8974fa611f8e3b8ddfe0f7552b00539088): accuracy 0.7215 on 79 pairs, headline-bootstrap interval 0.6203 to 0.8133; the baseline 0.4257",
+      "round 2, seed 20261120": "tests/fixtures/news_parse_v1/val2.jsonl sha256 77da27f6abde1c6e73ca2ce445729760b81575616391cc7efffd526bec424a9f; labels val2_labels.json 70918dff9969af0b6237d0eedb043661ec1d87858b9086cb620c6d5cd69a210e, 67 nonzero pairs, labelled before any parser ran on it; first scored by rounds/newsmodel_at_val2.py.txt (sha256 397b157cb2c84776efaba5d88c55565846549799e2f49bfc14ab8d94b5de3862): accuracy 0.7778 on 72 pairs, interval 0.68 to 0.8696; the baseline 0.5783",
+      "reading": "the parser fitted on DEV (0.98 on DEV) read the first unseen round at 0.72: rules fitted to one set generalise much less well than its score says, which is why TEST is scored once and the rounds are reported"
+    },
+    "dev_labels": "tests/fixtures/news_parse_v1/dev_labels.json: the builder's DEV labels, the guide's anchors (DEV numbers above are its `i`). DEV may be relabelled while fixing only to follow the guide, never toward the parser; every change is listed in the result"
+  },
+
+  "metric": {
+    "pairs": "for each headline, the scored subjects either the labels or the parser give a NONZERO direction. A pair is right when the parser's direction for that subject equals the label's (a subject the parser does not give counts as 0, and so does one the labels do not give)",
+    "accuracy": "right pairs / all such pairs, over the set: misses and false readings both count against it",
+    "also_reported": "precision (right / the parser's nonzero pairs), recall (right / the labels' nonzero pairs), errors by subject, and a 95% interval resampling headlines (score.py, 10,000 resamples, seed 20261115)"
+  },
+
+  "P_test": {
+    "baseline": "the parser at 72af8ea (git show 72af8ea:quantdesk/paper/newsmodel.py), scored on the same labels by the same scorer",
+    "P_pass_min": 0.90,
+    "agreement_min": 0.85,
+    "pass": "agreement >= agreement_min AND the fixed parser's accuracy on the adjudicated TEST labels >= P_pass_min",
+    "fail": "agreement >= agreement_min AND accuracy < P_pass_min: the parser is not trusted, the result is published, and the next step is a new spec (a better rule parser, or an LLM reader compared on a fresh test set; never this TEST set again)",
+    "void": "agreement < agreement_min: the rules, not the parser, failed; no PASS or FAIL is declared, the score is published as descriptive, and a new spec with a tighter guide and a fresh test set follows",
+    "also_reported": "the fixed parser's accuracy against each labeller alone; the baseline's accuracy; the headline-bootstrap interval",
+    "operating_characteristic": "with about 140 pairs (TEST's size; docs/prereg/sims/news_parse_v1/power.py and power.out.txt) the chance of an observed accuracy >= 0.90 is 0.05 at a true 0.85, 0.25 at 0.88, 0.52 at 0.90, 0.80 at 0.92 and 0.99 at 0.95: the bar is a coin flip for a parser that is exactly at it, and a PASS is evidence of a true accuracy near or above 0.90, not proof of it",
+    "better_than_baseline": "on the adjudicated TEST labels, over the pairs of either parser or the labels: the count of pairs the fixed parser reads right and the baseline wrong (b) against the reverse (c), exact one-sided sign test (score.py compare); better means b > c with p <= 0.05",
+    "order": [
+      "1. freeze: the parser is committed (standard library only, no relative imports, so score.py can load it on its own); the git commit id and the SHA-256 of quantdesk/paper/newsmodel.py are recorded (docs/prereg/results/news_parse_v1_freeze.json, with score.py's SHA-256, which must equal the one above). Any later change to how newsmodel.py reads headlines is not covered by this test",
+      "2. TEST and AUDIT are regenerated (sample.py --test) and checked against sha256 above",
+      "3-4. both labellers label TEST and publish their files' hashes, then both files are committed (labels.blinding); score.py checks each against test.jsonl (--set)",
+      "5. agreement is computed; 6. disagreements are adjudicated and the adjudicated file committed and hashed",
+      "7. one scoring run: the fixed parser and the baseline on the adjudicated labels and on each labeller's, with and without the exposed row (data.exposure), the sign test and the interval. The result (docs/prereg/results/news_parse_v1.json) records every hash above"
+    ],
+    "one_run": "TEST is scored once, at step 7. DEV may be used any number of times while fixing"
+  },
+
+  "descriptive": {
+    "audit": "the n_audit AUDIT headlines (outside the pool) are labelled by the builder after the freeze, on the guide; reported: how many name a scored subject, and the fixed parser's recall on them. Not part of PASS",
+    "forward_check": "100 headlines drawn with seed 20261118 from the pool (by the same WIDER list) of the first journal archive released after the fixed parser is deployed, dated after the freeze commit and not in DEV, TEST, AUDIT, a validation round or any file under tests/ (the code that draws them is committed with the freeze, before they are drawn), labelled by the builder on the guide without the parser's output in view; the fixed parser's accuracy on them is reported as the out-of-period reading. Not part of PASS"
+  },
+
+  "forecast_skill": "whether the news votes call the next hour's move better than chance is NOT tested here. It needs a per-vote record the vote watch does not keep (time, session, instrument, P, direction, the prices at both ends, the outcome) and a session-clustered test; a later spec (news_vote_v1) will register both before any vote is counted. Nothing here restarts or changes the vote watch (evolution_probation_v1, C): its record and its mutes carry on across the parser change, exactly as C registers them",
+
+  "publication": "accuracy, precision, recall, agreement, kappa and the counts go to docs/prereg/results, with this spec's SHA-256; the headlines and the label files are public RSS titles and the desk's own labels, committed with the tests. No vote record and nothing per strategy is published here",
+  "use_if_passed": "P PASS: the fixed parser stays. P FAIL: it stays only if it is better than the baseline (better_than_baseline), and the owner is told the model reads headlines below the bar; otherwise the baseline is restored. P VOID: the fixed parser stays only if better than the baseline on the adjudicated labels, reported as descriptive, and the next spec follows",
+  "lock": "this file is never edited once it is merged"
+}

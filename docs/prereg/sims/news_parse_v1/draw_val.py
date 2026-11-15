@@ -1,0 +1,40 @@
+"""Validation rounds while fixing (docs/prereg/news_parse_v1.json, development): N headlines drawn with a recorded seed from the pool, never from DEV, TEST
+or an earlier round (AUDIT is outside the pool). A round is labelled on the guide BEFORE any parser is run on it; its labels and score are reported in the result.
+TEST is computed in memory only to be excluded, never written or printed.
+
+    python -I docs/prereg/sims/news_parse_v1/draw_val.py <sample.py> <dir of journal-archive-*.db> <seed> <out.jsonl> [earlier round .jsonl ...]
+"""
+from __future__ import annotations
+
+import glob
+import importlib.util
+import json
+import random
+import sys
+
+N_VAL = 100
+
+
+def main():
+    spec = importlib.util.spec_from_file_location("sample", sys.argv[1])
+    smp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smp)
+    seed, out, earlier = int(sys.argv[3]), sys.argv[4], sys.argv[5:]
+    allh = smp.headlines(sorted(glob.glob(f"{sys.argv[2]}/journal-archive-*.db")))
+    pool = [h for h in allh if smp.POOL.search(h)]
+    rng = random.Random(smp.SEED)
+    pick = rng.sample(pool, smp.N_DEV + smp.N_TEST_A)
+    rng.shuffle(pick)
+    drawn = set(pick)
+    extra = random.Random(smp.SEED_B).sample([h for h in pool if h not in drawn], smp.N_TEST_B)
+    excl = drawn | set(extra)
+    for f in earlier:
+        excl |= {json.loads(line)["title"] for line in open(f, encoding="utf-8") if line.strip()}
+    val = random.Random(seed).sample([h for h in pool if h not in excl], N_VAL)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write("".join(json.dumps({"i": i, "title": t}, ensure_ascii=False) + "\n" for i, t in enumerate(val)))
+    print(f"round seed {seed}: {len(val)} headlines from {len([h for h in pool if h not in excl])} (excluded {len(excl)}: DEV, TEST and {len(earlier)} earlier rounds)")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,626 @@
+[
+{
+"i": 0,
+"title": "One More U.S. Interest-Rate Increase May Be Appropriate, Fed’s Williams Says",
+"labels": {
+"fed": 1
+}
+},
+{
+"i": 1,
+"title": "Sensex settles 1,050 pts lower, Nifty ends below 22,250: Surging crude prices among key factors behind...",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 2,
+"title": "Stocks up ahead of US earnings data but oil prices stays high",
+"labels": {}
+},
+{
+"i": 3,
+"title": "RBI intervention halts rupee's slide to record low, risks linger",
+"labels": {}
+},
+{
+"i": 4,
+"title": "US stocks: Nasdaq ends lower as oil prices surge ahead of earnings, economic data",
+"labels": {
+"wall_street": -1,
+"crude": 1
+}
+},
+{
+"i": 5,
+"title": "Surging bond yields wreak havoc on Dalal Street, but IMF sees more pain ahead. Why AI is one of the culprits",
+"labels": {}
+},
+{
+"i": 6,
+"title": "Treasury yields near 24-yr high as investors await inflation data, Fed signals",
+"labels": {}
+},
+{
+"i": 7,
+"title": "Former Wall Street banker spent about €20 million restoring his family’s Irish castle; 25 years later, Ca",
+"labels": {}
+},
+{
+"i": 8,
+"title": "Morning wrap 🗽 Wall Street looks to rebound ahead of US CPI as ASML results weigh on sentiment (14.10.2026)",
+"labels": {
+"wall_street": 1
+}
+},
+{
+"i": 9,
+"title": "Rising oil prices send Treasury yields higher",
+"labels": {
+"crude": 1,
+"us_yields": 1
+}
+},
+{
+"i": 10,
+"title": "Sensex gains 100 points: Nifty also up 50 points, with heavier buying in banking and metal shares",
+"labels": {}
+},
+{
+"i": 11,
+"title": "Copper Set for Weekly Gain on China’s Return and Supply Concerns",
+"labels": {
+"metals": 1
+}
+},
+{
+"i": 12,
+"title": "Oil prices slip on Trump’s Russian diesel deal, Ukraine energy ceasefire",
+"labels": {
+"crude": -1,
+"geopolitics": -1
+}
+},
+{
+"i": 13,
+"title": "China’s Weak Holiday Spending Casts Shadow as Markets Reopen",
+"labels": {
+"china": -1
+}
+},
+{
+"i": 14,
+"title": "Markets Fall: Sensex Drops 460 Pts Amid Oil Spike, RBI Policy",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 15,
+"title": "Riyadh Airport Attacks Amplify Wall Street’s Unease Over Saudi",
+"labels": {
+"geopolitics": 1
+}
+},
+{
+"i": 16,
+"title": "Record-Breaking Foreign Investment in US Stocks: Unprecedented Massive Buying Spree by Overseas Investors",
+"labels": {}
+},
+{
+"i": 17,
+"title": "Sebi’s investor protection fund balloons but spending lags amid rising fraud risks",
+"labels": {}
+},
+{
+"i": 18,
+"title": "Pressure on rupee may continue after temporary gains on RBI actions, say economists",
+"labels": {
+"rupee": -1
+}
+},
+{
+"i": 19,
+"title": "Iran War Is Driving Up the Cost of Your Next Oil Change",
+"labels": {
+"geopolitics": 1
+}
+},
+{
+"i": 20,
+"title": "Crude Oil WTI consolidates in Ichimoku cloud: Live levels By Investing.com",
+"labels": {}
+},
+{
+"i": 21,
+"title": "Lenskart Solutions share price tumbles 5% today despite 47% returns in 2026 | What should investors do?",
+"labels": {}
+},
+{
+"i": 22,
+"title": "U.S. Treasury Yields Surge as Allies Turn Net Sellers",
+"labels": {
+"us_yields": 1
+}
+},
+{
+"i": 23,
+"title": "Dollar, crude oil rise; metals collectively weaken; alumina, LME zinc lead declines; NY gold falls below $4,200 [Overnight market]",
+"labels": {
+"dollar": 1,
+"crude": 1,
+"metals": -1,
+"gold": -1
+}
+},
+{
+"i": 24,
+"title": "Singapore Shares End Higher on Wall Street Momentum, Easing Oil Prices",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 25,
+"title": "Silver Price Forecast: XAG/USD drops to near $60.50 amid surging oil, Treasury yields",
+"labels": {
+"silver": -1,
+"crude": 1,
+"us_yields": 1
+}
+},
+{
+"i": 26,
+"title": "Nasdaq 100 Forecast: NDX rises as oil eases and tech gains",
+"labels": {
+"wall_street": 1,
+"crude": -1
+}
+},
+{
+"i": 27,
+"title": "TCS Q2 dividend amount announcement today: How's dividend yield of IT bellwether? Data details, dividend history here",
+"labels": {}
+},
+{
+"i": 28,
+"title": "Your money, shown at one place: What RBI’s new AA measures mean",
+"labels": {}
+},
+{
+"i": 29,
+"title": "UPL Share Price Live Updates: UPL's Market Update",
+"labels": {}
+},
+{
+"i": 30,
+"title": "Daily Summary: New Records on Wall Street. Markets Await the New Earnings Season",
+"labels": {
+"wall_street": 1
+}
+},
+{
+"i": 31,
+"title": "FPIs favour IPOs over listed stocks for 3rd year running; will trend last?",
+"labels": {}
+},
+{
+"i": 32,
+"title": "Coal India Share Price Live Updates: Coal India Market Performance: Slight Downturn",
+"labels": {}
+},
+{
+"i": 33,
+"title": "Oil Price Today (October 9): Crude oil dips 1% to $103 as Trump rules out Iran attack before midterm elections. What are analysts saying?",
+"labels": {
+"crude": -1,
+"geopolitics": -1
+}
+},
+{
+"i": 34,
+"title": "PB Fintech shares suffer Rs 37,000 crore shock in 4 days but Jefferies, Bernstein see up to 100% upside",
+"labels": {}
+},
+{
+"i": 35,
+"title": "US stocks: US market drops as Trump’s rejection of Iran peace plan lifts oil prices",
+"labels": {
+"wall_street": -1,
+"crude": 1,
+"geopolitics": 1
+}
+},
+{
+"i": 36,
+"title": "Oil prices slip as traders weigh strong Mideast exports against Gulf tensions",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 37,
+"title": "Oil Little Changed as Traders Weigh Mideast Crude Export Data",
+"labels": {}
+},
+{
+"i": 38,
+"title": "Jubilant FoodWorks shares fall 4% despite Q2 revenue growth of 12% YoY",
+"labels": {}
+},
+{
+"i": 39,
+"title": "Global Market: China stocks edge up as policy support pledge lifts property shares",
+"labels": {
+"china": 1
+}
+},
+{
+"i": 40,
+"title": "RIL Share Price Live Updates: RIL Sets New 52-Week Low",
+"labels": {}
+},
+{
+"i": 41,
+"title": "RBI MPC meeting LIVE: Governor Sanjay Malhotra to deliver speech soon | Direct link to watch it live?",
+"labels": {}
+},
+{
+"i": 42,
+"title": "Home loan EMI: Know the impact of RBI’s 25 bps repo rate hike",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 43,
+"title": "IPO frenzy attracts FPIs, even as stock selling hits ₹25,682 crore in September: Will trend continue? Experts weigh in",
+"labels": {
+"fii": 1
+}
+},
+{
+"i": 44,
+"title": "HCL Tech Q2 dividend 2026: ₹12 per share, 16 Oct record date, 26 Oct payment date - History, yield details",
+"labels": {}
+},
+{
+"i": 45,
+"title": "Iran uses oil prices as leverage in 'game of chess' with Trump ahead of US midterms",
+"labels": {}
+},
+{
+"i": 46,
+"title": "Rupee falls 16 paise to 96.13 against US dollar in early trade",
+"labels": {
+"rupee": -1
+}
+},
+{
+"i": 47,
+"title": "RBI rate hikes back on the table as inflation risks mount",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 48,
+"title": "Treasury yields are 'really, really high' but can come down soon, Bessent's new advisor says",
+"labels": {
+"us_yields": -1
+}
+},
+{
+"i": 49,
+"title": "Nifty 50 companies likely to log strong double-digit growth in Q2",
+"labels": {}
+},
+{
+"i": 50,
+"title": "Crude Oil Prices Fall on Dollar Strength and Saudi Price Cuts",
+"labels": {
+"crude": -1,
+"dollar": 1
+}
+},
+{
+"i": 51,
+"title": "US stocks are rising near their records, with the Nasdaq composite on track for an all-time high",
+"labels": {
+"wall_street": 1
+}
+},
+{
+"i": 52,
+"title": "WTI Crude Oil Price Forecast: Bullish Breakout Targets New Highs",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 53,
+"title": "PIMCO neutral on Indian assets, eyes 75 bps in interest rate hikes, exec says",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 54,
+"title": "Asian stocks mixed despite Wall Street tech record",
+"labels": {}
+},
+{
+"i": 55,
+"title": "Mideast Crude Oil Flows Hit 98% of Pre-War Level, JPMorgan Says",
+"labels": {}
+},
+{
+"i": 56,
+"title": "As oil prices soar, more NH residents fall behind on their heating bills",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 57,
+"title": "Daily Summary: Earnings Season Kicks Off on Wall Street Amid Mixed Sentiment",
+"labels": {}
+},
+{
+"i": 58,
+"title": "Invesco: Higher Treasury yields need not spell trouble for stocks",
+"labels": {}
+},
+{
+"i": 59,
+"title": "U.S. Stocks Fall as Treasury Yields Test Multidecade Highs",
+"labels": {
+"wall_street": -1,
+"us_yields": 1
+}
+},
+{
+"i": 60,
+"title": "Global Market: Japan five-year bond yield steady after strong demand at auction",
+"labels": {}
+},
+{
+"i": 61,
+"title": "Banks may explore easier forex hedging amid RBI curbs",
+"labels": {}
+},
+{
+"i": 62,
+"title": "Global Market Today: Asian stocks rise after US tech rally, oil dips",
+"labels": {
+"wall_street": 1,
+"crude": -1
+}
+},
+{
+"i": 63,
+"title": "Sebi changed goalposts, seeks order logs: Trading firm Jane Street to SAT",
+"labels": {}
+},
+{
+"i": 64,
+"title": "Sebi accuses Jane Street of dilatory tactics at SAT, says 'investigator is being investigated'",
+"labels": {}
+},
+{
+"i": 65,
+"title": "Tata Steel Share Price Live Updates: Tata Steel's Price Analysis",
+"labels": {}
+},
+{
+"i": 66,
+"title": "RBI tightens rules on rupee non-deliverable contracts, widens 20% cash reserve requirement",
+"labels": {}
+},
+{
+"i": 67,
+"title": "Crude oil, rupee & interest rates: Is the macroeconomic squeeze spreading to equities?",
+"labels": {}
+},
+{
+"i": 68,
+"title": "The era of easy money is over: RBI repo rate hike to 5.5%, what it means",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 69,
+"title": "Indian Rupee gains further on RBI’s fresh measures to lower US Dollar’s demand",
+"labels": {
+"rupee": 1
+}
+},
+{
+"i": 70,
+"title": "‘It’s been very volatile’: Home heating oil prices jump more than 77% in CNY ahead of winter",
+"labels": {}
+},
+{
+"i": 71,
+"title": "Oil prices staring at a 'perfect storm' right now: Energy expert",
+"labels": {}
+},
+{
+"i": 72,
+"title": "Rupee edges lower against dollar ahead of RBI policy decision",
+"labels": {
+"rupee": -1
+}
+},
+{
+"i": 73,
+"title": "Impact of surge in oil prices",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 74,
+"title": "Robinhood to allow 24-hour weekend trading of US stocks as industry shifts to wider access",
+"labels": {}
+},
+{
+"i": 75,
+"title": "Crude Oil Falls As Investors Focus On Signs Of Recovering Regional Crude Exports By Kedia Advisory",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 76,
+"title": "M&M Share Price Live Updates: M&M Stock Update: Current Trends",
+"labels": {}
+},
+{
+"i": 77,
+"title": "Will RBI hike repo rate? MPC begins 3-day meet as surging crude oil, inflation test policy limits",
+"labels": {
+"crude": 1,
+"inflation": 1
+}
+},
+{
+"i": 78,
+"title": "RBI signals more rate hikes ahead: Could 7.25% yield level become a near-term market reference point?",
+"labels": {
+"rbi": 1
+}
+},
+{
+"i": 79,
+"title": "GIFT Nifty signals mildly positive start for Sensex, Nifty after Friday's rally; falling oil offers...",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 80,
+"title": "European stocks join euro lower, French bonds sell off",
+"labels": {}
+},
+{
+"i": 81,
+"title": "Why are R Systems International shares up 28% in 2 days despite weak trends on Dalal Street? Reason, next target price",
+"labels": {}
+},
+{
+"i": 82,
+"title": "Sensex, Nifty Drift Lower In Early Trade On Rate Hike, Crude Surge",
+"labels": {
+"rbi": 1,
+"crude": 1
+}
+},
+{
+"i": 83,
+"title": "Oil prices edge higher as traders weigh Saudi supply risks",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 84,
+"title": "US stocks: Goldman Sachs quarterly profit rises on equities strength",
+"labels": {}
+},
+{
+"i": 85,
+"title": "US 10-year Treasury yields risk hitting 6% for first time since 2000, Pimco says",
+"labels": {
+"us_yields": 1
+}
+},
+{
+"i": 86,
+"title": "Sebi proposes market cap-based SME IPO norms, seeks public comments on regulatory overhaul",
+"labels": {}
+},
+{
+"i": 87,
+"title": "ASX Preview: Australian Shares to Rise as Saudi Attacks Lift Oil Prices; Arena Says Edge Early Learning Administrator Strikes Deals to Sell 22 More Centers",
+"labels": {
+"crude": 1,
+"geopolitics": 1
+}
+},
+{
+"i": 88,
+"title": "Indian rupee surges after RBI unveils measures to support currency",
+"labels": {
+"rupee": 1
+}
+},
+{
+"i": 89,
+"title": "Oil Prices Rise Due to Tensions in the Persian Gulf — Reuters",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 90,
+"title": "Treasury yields move lower as inflation concerns persist",
+"labels": {
+"us_yields": -1
+}
+},
+{
+"i": 91,
+"title": "RBI should keep all rate hike options open to support rupee, says SBI economist - CNBC TV18",
+"labels": {}
+},
+{
+"i": 92,
+"title": "Adani Ports SEZ Share Price Live Updates: Adani Ports SEZ Moves Below 100-Day SMA",
+"labels": {}
+},
+{
+"i": 93,
+"title": "FTSE 100 Rises 0.8% as Oil Prices Fall Following Trump’s Comments on Iran",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 94,
+"title": "Dow Jones Top Markets Headlines at 9 PM ET: U.S. Stocks Tick Down as Bank Earnings Don't Excite | One ...",
+"labels": {
+"wall_street": -1
+}
+},
+{
+"i": 95,
+"title": "Oil Prices Fall as G7 Plans 100 Million-Barrel Release",
+"labels": {
+"crude": -1
+}
+},
+{
+"i": 96,
+"title": "Wall Street bosses look past India's pain points to ramp up investment bets",
+"labels": {}
+},
+{
+"i": 97,
+"title": "GIFT Nifty Falls 87 Points, Signals Cautious Opening For Indian Markets Today; Crude Oil, US-Iran Tensions",
+"labels": {}
+},
+{
+"i": 98,
+"title": "Sensex down 450 pts, Nifty below 22,450: Rising crude prices among key factors behind market decline",
+"labels": {
+"crude": 1
+}
+},
+{
+"i": 99,
+"title": "Dr Reddys Share Price Live Updates: Dr. Reddys Price and Change Overview",
+"labels": {}
+}
+]
