@@ -107,7 +107,24 @@ Never paste any of these into a chat, an issue or a commit.
      When Fyers' price is over a minute old, the relay shows Kite's for the segment in Kite's hours, as the routes say.
    - A **429, in the HTTP status or as code -429 in the answer, stops the feed for the day** (Fyers blocks a user who breaks the minute
      cap more than three times), and a refused token stops it too: both are warnings in the run, never a retry loop.
-   - The next step is Fyers' Data Socket (a WebSocket; 100 symbols on Standard, 5,000 on Prime), which streams without spending these calls.
+   - **The futures stream over Fyers' Data Socket** (`quantdesk/data/fyers_socket.py`, `config feeds.fyers_socket: true`): one WebSocket,
+     no call budget, only a symbol cap (Standard 100, Prime 5,000 across connections). At the start of each job the feed turns the
+     near futures into socket topics (one `/data/symbol-token` call), logs in with the token's `hsm_key`, asks for full mode and
+     subscribes them; the price, best bid and offer with sizes, volume, change and open interest then arrive as they change, and go to
+     the relay every 5 s round. While the socket delivers, **no REST quote call is made and the whole day budget goes to the option
+     chains and books**: on a simulated Standard day every watchlist chain then comes round within five minutes by day. A future stays
+     on REST until the socket has streamed it at least once; a socket that cannot log in, cannot get its topics, or has sent nothing
+     for a minute hands the quotes back to REST at once, under the same day budget, and is opened again (a growing pause; eight
+     failures in a row give up for the job, a session that streamed starts the count again). The handshake must end on
+     `socket.fyers.in`: a redirect anywhere else is refused before the login is sent, as the REST calls refuse redirects. A 429 on the
+     one `/data/symbol-token` call stops the feed for the day, like any 429. The wire protocol follows Fyers' own Python SDK (`fyers_apiv3` 3.2.1, MIT); the SDK itself is not installed (it pins old
+     versions of requests, aiohttp and setuptools). No session that wrote this could reach Fyers: the **check_only** run now also
+     opens the socket and waits up to 20 s for its first quotes, and says so in its summary (a socket that does not deliver is a
+     warning, never a red check, since REST still carries the quotes). The run's metrics carry the socket's counts (connections,
+     frames, quotes, acknowledgements, silences, frames it could not read, and the numeric codes of Fyers' own messages, such as 51001 for
+     the plan's symbol limit; the summary is public, so the text Fyers writes is never kept).
+   - Still on REST: the option chains. Streaming the near-the-money options of the watchlist names in the socket's remaining slots
+     (about 68 on Standard), so that MCX and currency option entries can fill after Kite's hours, is the next step.
    - Nothing is written to disk. The run summary shows counts only, and the key names of any answer it could not read, never a value.
 3. **Watchdog W19** at 09:40 and 20:30: the feed ran today and has not failed.
 
