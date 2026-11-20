@@ -633,6 +633,54 @@ class Runner:
             return []
 
 
+STATE_CAP = 55_000            # characters: the relay refuses a runner state whose summary is over 60,000 (deploy/cloudflare/paper.js MAX_SUMMARY); the rest is margin
+LAB_KEEP = ("strategies", "tested", "trades", "eligible", "min_trades", "today", "tau", "invented", "shadow_open", "shadow_carry", "convex")
+
+
+def state_size(summ: dict) -> int:
+    """The summary's length as the relay measures it (JSON.stringify, no spaces), never under it: every character outside ASCII is counted as its six-character escape."""
+    return len(json.dumps(summ, separators=(",", ":"), ensure_ascii=True, default=str))
+
+
+def fit_summary(summ: dict, cap: int = STATE_CAP) -> dict:
+    """The runner's state cut, a step at a time, until it is under `cap`, so the relay never refuses it for size.
+
+    The relay refused every save from 10:16 IST on 20 Nov 2026: the summary (40 ledger rows with their whole theses, the session reviews, AUTO v2's lab panel) had grown past
+    its 60,000 characters with the day's 14th ledger row. The runner then blocked new entries, and the fill the relay never got was not there for the next part of the day.
+
+    What the brakes and the app's headline read is never cut: equity, cash, the floors, the halts, ledger_len and each position's symbol, quantity, average, mark and P&L.
+    Text goes first (theses, reasons), then detail (the lab's panels, older reviews, older ledger rows). `trimmed` lists the steps taken, so the app can say the panel is short."""
+    if state_size(summ) <= cap:
+        return summ
+    out = dict(summ)
+    done = []
+
+    def short(rows, key, n):
+        return [{**r, key: (str(r.get(key) or "")[:n] if n else "")} if isinstance(r, dict) and key in r else r for r in (rows or [])]
+
+    def lab(keep):
+        return {k: v for k, v in out["lab"].items() if k in keep} if isinstance(out.get("lab"), dict) else out.get("lab")
+
+    steps = (
+        ("theses", lambda: out.update(ledger_tail=short(out.get("ledger_tail"), "thesis", 160), positions=short(out.get("positions"), "thesis", 300),
+                                      reviews=[{**d, "fills": short(d.get("fills"), "thesis", 60)} if isinstance(d, dict) else d for d in out.get("reviews") or []])),
+        ("lab_detail", lambda: out.update(lab=lab(set(LAB_KEEP) | {"top", "families", "market", "probation", "votes", "phase2"}))),
+        ("reviews", lambda: out.update(reviews=[d for d in out.get("reviews") or [] if isinstance(d, dict) and d.get("today")][:1])),
+        ("ledger_tail", lambda: out.update(ledger_tail=short((out.get("ledger_tail") or [])[-10:], "thesis", 0), slips=(out.get("slips") or [])[-3:],
+                                           positions=short(out.get("positions"), "thesis", 0))),
+        ("lab", lambda: out.update(lab=lab(LAB_KEEP))),
+        ("review_fills", lambda: out.update(reviews=[{**d, "fills": [], "events": (d.get("events") or [])[-5:]} for d in out.get("reviews") or [] if isinstance(d, dict)])),
+        ("last", lambda: out.update(lab=None, ledger_tail=[], slips=[], reviews=[])),
+    )
+    for name, cut in steps:
+        cut()
+        done.append(name)
+        out["trimmed"] = list(done)
+        if state_size(out) <= cap:
+            break
+    return out
+
+
 def _tail(r: dict) -> dict:
     out = {k: r.get(k) for k in ("seq", "ts", "kind", "qty", "price", "fees", "strategy", "thesis") if k in r}
     if "thesis" in out:

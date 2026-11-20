@@ -623,3 +623,102 @@ def test_a_session_with_an_autopilot_that_loads_starts_and_runs(cfg, tmp_path, m
     S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
           say=lambda *a: None, new_account=True, auto=pilot)
     assert pilot.loaded and pilot.runner_commit == "abc123"
+
+
+# ---- the state always fits the relay (20 Nov 2026: refused from 10:16 IST for size, and a fill was lost at the hand-over) --------------------------------------------
+RELAY_MAX_SUMMARY = 60000                                                                                              # deploy/cloudflare/paper.js MAX_SUMMARY
+
+
+def _relay_cap():
+    src = (ROOT / "deploy" / "cloudflare" / "paper.js").read_text()
+    import re
+    return int(re.search(r"export const MAX_SUMMARY = (\d+);", src).group(1))
+
+
+class CappedRelay(FakeRelay):
+    """Refuses a summary over the Worker's cap, measured as the Worker does (JSON.stringify: compact, UTF-16 units)."""
+    def put_state(self, summary, account_text):
+        if len(json.dumps(summary, separators=(",", ":"), ensure_ascii=False).encode("utf-16-le")) // 2 > RELAY_MAX_SUMMARY:
+            raise RelayError("POST /paper/state: HTTP 400")
+        super().put_state(summary, account_text)
+
+
+class _BigLab:
+    """An autopilot whose lab panel alone is most of the relay's cap, as AUTO v2's was."""
+    def __init__(self, chars=40000):
+        self.chars = chars
+
+    def decide(self, *a, **k):
+        return []
+
+    def drain_events(self):
+        return []
+
+    def summary(self):
+        return {"strategies": 3735, "tested": 900, "trades": 52000, "eligible": 12, "state": {f"U{i}": ["up", "x" * 200] for i in range(self.chars // 220)},
+                "plan": {"items": [{"what": "y" * 300} for _ in range(20)]}, "top": [{"sid": f"s{i}", "what": "z" * 150} for i in range(12)]}
+
+
+def test_the_cap_in_this_test_is_the_relays():
+    assert _relay_cap() == RELAY_MAX_SUMMARY and R.STATE_CAP < RELAY_MAX_SUMMARY
+
+
+def test_a_small_state_is_sent_as_it_is():
+    s = {"ledger_len": 3, "equity": 1.0, "positions": [{"symbol": NAME, "thesis": "short"}], "lab": {"strategies": 1}}
+    assert R.fit_summary(s) is s and "trimmed" not in s
+
+
+def test_a_big_state_is_cut_under_the_cap_and_what_the_brakes_read_is_kept():
+    pos = [{"symbol": f"S{i}", "qty": 75, "avg": 100.0, "mark": 101.0, "pnl": 75.0, "lots": 1, "thesis": "t" * 1000} for i in range(8)]
+    tail = [{"seq": i, "kind": "buy", "thesis": "w" * 1000} for i in range(40)]
+    reviews = [{"day": f"2026-11-{20 - d:02d}", "today": d == 0, "fills": [{"t": "10:00", "thesis": "v" * 160} for _ in range(25)], "events": ["e"] * 30} for d in range(5)]
+    s = {"v": 1, "ledger_len": 214, "equity": 482000.0, "cash": 475000.0, "day_floor": 470000.0, "dd_floor": 450000.0, "halt": None, "day_halted": False, "kill": False,
+         "positions": pos, "ledger_tail": tail, "reviews": reviews, "slips": [{"seq": i} for i in range(8)], "lab": _BigLab().summary() | {"families": [{"x": "f" * 100}] * 30}}
+    assert R.state_size(s) > RELAY_MAX_SUMMARY
+    out = R.fit_summary(s)
+    assert R.state_size(out) <= R.STATE_CAP and out["trimmed"]
+    for k in ("ledger_len", "equity", "cash", "day_floor", "dd_floor", "halt", "day_halted", "kill"):
+        assert out[k] == s[k]
+    assert [(p["symbol"], p["qty"], p["avg"], p["mark"], p["pnl"]) for p in out["positions"]] == [(p["symbol"], p["qty"], p["avg"], p["mark"], p["pnl"]) for p in pos]
+    assert len(s["positions"][0]["thesis"]) == 1000 and len(s["ledger_tail"]) == 40                                     # the runner's own copy is not touched
+
+
+def test_text_outside_ascii_is_never_under_counted():
+    s = {"ledger_len": 1, "positions": [{"symbol": NAME, "thesis": "₹" * 20000}]}                                 # 20,000 rupee signs: 20,000 to the Worker, 120,000 here
+    assert R.state_size(s) >= 120000
+    assert R.state_size(R.fit_summary(s)) <= R.STATE_CAP
+
+
+def test_the_runner_keeps_saving_when_its_state_would_be_over_the_relays_cap(cfg, tmp_path):
+    clk = Clock()
+    rl = CappedRelay(clk)
+    rl.add()
+    lines = []
+    assert S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
+                 say=lines.append, new_account=True, auto=_BigLab(70000)) == 0
+    assert [r["status"] for r in rl.results] == ["filled"]                                                             # reported: the fill reached the relay
+    assert len(R.load_account(rl.state["account"]).ledger) == 1 and rl.state["summary"]["trimmed"]
+    assert not any("could not save" in m for m in lines)
+
+
+def test_a_part_that_ends_with_fills_the_relay_never_got_says_so_and_ends_red(cfg, tmp_path):
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add()
+    lines = []
+    orig = rl.put_state
+    calls = {"n": 0}
+
+    def put_state(summary, account_text):                                                                             # the opening state goes; after the fill nothing does
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RelayError("POST /paper/state: HTTP 400")
+        orig(summary, account_text)
+    rl.put_state = put_state
+    code = S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=2)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
+                 say=lines.append, new_account=True)
+    assert code == 3 and not rl.results                                                                                # the result waits for the relay; the run goes red
+    fails = [m for m in lines if "could not save the state" in m]
+    assert fails and "HTTP 400" in fails[0] and "1 fills not on the relay" in fails[0]                                 # the reason is in the log...
+    assert len(fails) < 10                                                                                             # ...about once a minute, not every three seconds
+    assert any("NOT on the relay" in m for m in lines)

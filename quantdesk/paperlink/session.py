@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ..markets import sessions as MK
 from ..paper.account import Account
-from ..paper.runner import Runner, account_json, choose_state, fingerprint, load_account
+from ..paper.runner import Runner, account_json, choose_state, fingerprint, fit_summary, load_account
 from .relay import Relay, RelayError
 
 IST = MK.IST
@@ -71,6 +71,11 @@ def restore(cfg, relay: Relay, ledger_path: Path, say=print, sleep=time.sleep, t
     return acct
 
 
+def _why(e: Exception) -> str:
+    """A failed save's reason for the log: a RelayError's own text (a method, a path and an HTTP status or an exception class, by design nothing secret), else the class."""
+    return str(e)[:120] if isinstance(e, RelayError) else type(e).__name__
+
+
 def _clean(x) -> str:
     """Anything that came from outside, made safe for a log line (no new lines, so no workflow command can start one)."""
     return "".join(c if 32 <= ord(c) < 127 else "?" for c in str(x))[:300]
@@ -85,7 +90,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     rn = runner or Runner(cfg, account)
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     fp_disk = fp_pushed = None
-    ledger_pushed, last_full, last_sum, pending, fails = -1, 0.0, 0.0, [], 0
+    ledger_pushed, last_full, last_sum, pending, fails, save_fails = -1, 0.0, 0.0, [], 0, 0
     account.save(ledger_path)
     fp_disk = fingerprint(account)
     if auto is not None and hasattr(auto, "load"):                    # AUTO v2: its strategies' shadow record, kept on the relay across sessions
@@ -95,7 +100,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         snap0 = relay.snapshot()
         now0 = Runner.server_now(snap0)
         if now0 is not None:
-            relay.put_state(rn.summary(snap0, now0), account_json(account))
+            relay.put_state(fit_summary(rn.summary(snap0, now0)), account_json(account))
             ledger_pushed, fp_pushed, last_full, last_sum = len(account.ledger), fingerprint(account), time.monotonic(), time.monotonic()
     except (RelayError, ValueError, OverflowError) as e:
         log(f"paper: could not send the opening state to the relay ({type(e).__name__}); will retry")
@@ -177,12 +182,17 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
                     summ = rn.summary(snap, now)
                     if auto is not None and hasattr(auto, "summary"):
                         summ["lab"] = auto.summary()                    # the Strategy lab panel in the app
-                    relay.put_state(summ, account_json(account) if full else None)
+                    relay.put_state(fit_summary(summ), account_json(account) if full else None)
                     last_sum = mono
+                    if save_fails:
+                        log(f"paper: the relay took the state again after {save_fails} failed saves")
+                    save_fails = 0
                     if full:
                         ledger_pushed, fp_pushed, last_full = fp[0], fp, mono
                 except (RelayError, ValueError, OverflowError) as e:
-                    log(f"paper: could not save the state to the relay ({type(e).__name__}); will retry")
+                    save_fails += 1
+                    if save_fails == 1 or save_fails % 20 == 0:                # the first, then about once a minute: the reason, not a wall of the same line
+                        log(f"paper: could not save the state to the relay ({_why(e)}); {save_fails} in a row; {len(account.ledger) - max(ledger_pushed, 0)} fills not on the relay; will retry")
         if ledger_pushed == len(account.ledger):                       # the relay holds every fill
             unsafe_since, rn.entries_blocked = None, None
         else:
@@ -206,7 +216,19 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     account.save(ledger_path)
     if auto is not None and hasattr(auto, "save"):
         auto.save(relay, time.monotonic(), force=True)
+    if len(account.ledger) > max(ledger_pushed, 0):                    # a last try: the next part of the day starts from the relay's copy, so a fill it never got is lost there
+        try:
+            snap = relay.snapshot()
+            now = Runner.server_now(snap)
+            if now is not None:
+                relay.put_state(fit_summary(rn.summary(snap, now)), account_json(account))
+                ledger_pushed = len(account.ledger)
+        except (RelayError, ValueError, OverflowError) as e:
+            log(f"paper: the last save to the relay failed too ({_why(e)})")
     log(f"paper: session ended; {len(account.ledger)} ledger rows")
+    if len(account.ledger) > max(ledger_pushed, 0):                    # red, so it is seen: the relay does not hold this part's whole ledger and the next part will start without it
+        log(f"paper: {len(account.ledger) - max(ledger_pushed, 0)} ledger rows are NOT on the relay; the next part of the day starts from the relay's copy without them. The owner must look.")
+        return 3
     return 0
 
 
