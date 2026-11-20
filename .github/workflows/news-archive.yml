@@ -1,0 +1,82 @@
+# The headline archive (quantdesk/newslink/archive.py, docs/NEWS_ENGINE.md L0): every headline the news digest read is kept, one gzip JSON-lines file per day
+# (India time) on a release per month, news-archive-YYYY-MM. Nothing had stored headlines since 6 Nov 2026.
+#
+# It runs after each successful news digest run on main (news.yml stays read-only and holds the relay key; this workflow never sees that key). It downloads
+# that run's own archive.json artifact, which the digest job wrote from public RSS titles, and merges it into the day's file. Public data only: titles, links
+# and the desk's own tags, never article text. The repository token can write releases (contents: write) and read the digest run's artifact (actions: read);
+# it is used in the steps that archive and nowhere else. No broker, no order, no relay key. A failed archive turns this run red (the archive is the only store);
+# the digest itself was already sent.
+# By hand, with backfill_journal, it also keeps the 15 Oct - 6 Nov 2026 headlines from the journal branch's database (one time).
+name: Headline archive
+
+on:
+  workflow_run:
+    workflows: ["News digest"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      backfill_journal:
+        description: "One-time: keep the 15 Oct - 6 Nov 2026 headlines from the journal branch"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write            # the news-archive-* releases (and nothing else)
+  actions: read              # the digest run's archive.json artifact
+
+concurrency:
+  group: news-archive
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+
+jobs:
+  archive:
+    # Only a successful, dispatched run of THIS repository's news.yml on main (a fork's pull request can name its own workflow "News digest" and its branch
+    # "main"; it fails these checks), or the owner's manual backfill from main.
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+       && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.event == 'workflow_dispatch'
+       && github.event.workflow_run.path == '.github/workflows/news.yml')
+      || (github.event_name == 'workflow_dispatch' && inputs.backfill_journal && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Keep every headline of the digest run (its own artifact; the repository token in this step only)
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n news-archive-rows -D runtime/news/r0
+          # the previous few digest runs too: a pending archive run can be cancelled by a newer one, and its rows would be lost when the 1-day artifact
+          # expires; merging is idempotent, so rows already kept are not kept twice
+          i=1
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" -w news.yml -s success -b main -e workflow_dispatch -L 6 --json databaseId -q '.[].databaseId'); do
+            [ "$id" = "$RUN_ID" ] && continue
+            gh run download "$id" -R "$GITHUB_REPOSITORY" -n news-archive-rows -D "runtime/news/r$i" || true
+            i=$((i+1))
+          done
+          python -m quantdesk news --archive runtime/news/r*/archive.json
+      - name: One-time backfill from the journal branch (a read-only copy of its database)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_journal }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --depth 1 origin journal
+          git show FETCH_HEAD:intraday/journal.db > "$RUNNER_TEMP/journal.db"
+          python -m quantdesk news --backfill-journal "$RUNNER_TEMP/journal.db"
