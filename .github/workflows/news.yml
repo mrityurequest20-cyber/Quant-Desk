@@ -50,3 +50,4 @@ jobs:
           path: runtime/news/archive.json
           retention-days: 1
           if-no-files-found: ignore
+        continue-on-error: true      # the digest has been sent; an upload problem must not turn its run red

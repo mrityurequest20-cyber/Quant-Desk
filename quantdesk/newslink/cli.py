@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -27,27 +28,34 @@ def _send(ND, path: str) -> None:
     print(f"news: sent to the relay ({ans.get('n', '?')} stories held)")
 
 
-def _archive(path: str, backfill_db: str | None, work: str) -> None:
-    """Keep every headline (newslink/archive.py). Reads only our own JSON file (or the journal's database, read-only); the repository token is the one secret here."""
-    from ..data.warehouse import ReleaseStore
+def _archive(paths: list[str] | None, backfill_db: str | None, work: str) -> None:
+    """Keep every headline (newslink/archive.py). Reads only our own JSON files (or the journal's database, read-only); the repository token is the one secret
+    here. Several digest runs' files can be given: a run whose archive job was cancelled is merged again by the next one (merging is idempotent)."""
     from . import archive as AR
+    repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        raise SystemExit("news --archive needs GITHUB_REPOSITORY (owner/name)")
     if backfill_db:
-        rows, seen_at = AR.from_journal(backfill_db), "journal-backfill"
+        batches, limit, windowed = [(AR.from_journal(backfill_db), "journal-backfill")], None, False
     else:
-        try:
-            doc = json.loads(Path(path).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            raise SystemExit("news --archive: the rows file could not be read") from None
-        if not (isinstance(doc, dict) and doc.get("v") == 1 and isinstance(doc.get("items"), list) and isinstance(doc.get("asof"), str)):
-            raise SystemExit("news --archive: that file is not an archive rows file")
-        rows, seen_at = doc["items"], doc["asof"]
-    store_for = lambda tag: ReleaseStore(tag, title=AR.TITLE.format(month=tag[len(AR.TAG_PREFIX) + 1:]), notes=AR.NOTES)  # noqa: E731
+        batches, limit, windowed = [], AR.MAX_ROWS, True
+        for path in paths or []:
+            try:
+                doc = json.loads(Path(path).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raise SystemExit(f"news --archive: {path} could not be read") from None
+            if not (isinstance(doc, dict) and doc.get("v") == 1 and isinstance(doc.get("items"), list) and isinstance(doc.get("asof"), str)):
+                raise SystemExit(f"news --archive: {path} is not an archive rows file")
+            batches.append((doc["items"], doc["asof"]))
+    token = re.sub(r"[^0-9a-z]", "", (os.environ.get("GITHUB_RUN_ID") or str(int(time.time()))).lower())[:20] or "run"
+    store_for = lambda tag: AR.GhRelease(tag, repo)  # noqa: E731
     try:
-        done = AR.archive(rows, seen_at, store_for, Path(work), limit=None if backfill_db else AR.MAX_ROWS)
+        done = AR.archive(batches, store_for, Path(work), token, limit=limit, windowed=windowed)
     except Exception as e:                                                                  # noqa: BLE001
         raise SystemExit(f"news --archive: {type(e).__name__}: {str(e)[:200]}") from None
     added = sum(b - a for a, b in done.values())
-    print(f"news archive: {len(rows)} rows read, {added} new stories kept, days {', '.join(f'{d} {a}->{b}' for d, (a, b) in done.items()) or 'none'}")
+    print(f"news archive: {sum(len(r) for r, _ in batches)} rows read from {len(batches)} run(s), {added} new stories kept, "
+          f"days {', '.join(f'{d} {a}->{b}' for d, (a, b) in done.items()) or 'none'}")
 
 
 def cmd_news(cfg, a):
@@ -86,7 +94,7 @@ def register(sub):
     s.add_argument("--push", action="store_true", help="send the digest to the relay (env LIVE_URL, LIVE_INGEST_TOKEN)")
     s.add_argument("--send", metavar="FILE", help="send a digest file made earlier (no feed is read): the step that holds the ingest key")
     s.add_argument("--out", default="runtime/news", help="folder for news.json and archive.json")
-    s.add_argument("--archive", metavar="FILE", help="keep the rows of an archive.json made earlier in the headline archive (needs GH_TOKEN; no feed is read)")
+    s.add_argument("--archive", metavar="FILE", nargs="+", help="keep the rows of archive.json files made by digest runs in the headline archive (needs GH_TOKEN, GITHUB_REPOSITORY; no feed is read)")
     s.add_argument("--backfill-journal", metavar="DB", help="one-time: keep the journal database's headlines (origin/journal) in the headline archive (needs GH_TOKEN)")
     s.add_argument("--now", help="the moment to read for (ISO, IST; default now)")
     s.set_defaults(fn=cmd_news)
