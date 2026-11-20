@@ -37,6 +37,7 @@ ALIASES: dict[str, list[str]] = {
 INDICES = ("NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY")
 MAX_ITEMS = 80
 MAX_AGE_H = 36
+ARCHIVE_LIMIT = 5000                      # the headline archive's rows per run (newslink/archive.py); the digest itself stays at MAX_ITEMS
 
 
 def _compile() -> dict[str, re.Pattern]:
@@ -138,13 +139,18 @@ def build(items, now: pd.Timestamp, health: dict | None = None, limit: int = MAX
             "events": event_watch(rows, now)}
 
 
-def fetch_digest(cfg, now: pd.Timestamp | None = None, fetch=None, sources=None) -> dict:
-    """Fetch the desk's feeds and build the digest. `fetch` and `sources` are for tests."""
+def fetch_digest(cfg, now: pd.Timestamp | None = None, fetch=None, sources=None, archive: bool = False) -> dict:
+    """Fetch the desk's feeds and build the digest. `fetch` and `sources` are for tests. With `archive`, the digest also carries `_archive`: every story of the
+    window in the digest's own row shape, before the digest's cap (the headline archive keeps them all; the key is removed before anything is sent)."""
     from ..intraday.news import NewsDesk
     now = now or pd.Timestamp.now(tz="Asia/Kolkata")
     desk = NewsDesk(cfg, fetch=fetch, sources=sources)
     desk.refresh(now, force=True)
-    return build(list(desk.items.values()), now.tz_convert("UTC") if now.tzinfo else now.tz_localize("UTC"), desk.health)
+    items, utc = list(desk.items.values()), (now.tz_convert("UTC") if now.tzinfo else now.tz_localize("UTC"))
+    digest = build(items, utc, desk.health)
+    if archive:
+        digest["_archive"] = build(items, utc, desk.health, limit=ARCHIVE_LIMIT)["items"]
+    return digest
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
