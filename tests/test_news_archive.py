@@ -154,6 +154,24 @@ def test_a_run_that_stops_between_delete_and_rename_is_finished_by_the_next_run(
     assert set(st.files) == {DAY} and len(day_rows(st)) == 4                              # recovered; the old temporary removed only after the confirmed file
 
 
+def test_a_temporary_left_beside_the_days_file_is_merged_and_only_then_removed(tmp_path):
+    # run 2 confirmed its superset temporary but stopped before deleting the old file: both are listed; story 2 is only in the temporary
+    old = AR.dumps(AR.merge([], [row(1)], "s1"))
+    tmp = AR.dumps(AR.merge([], [row(1), row(2)], "s2"))
+    st = FakeStore({DAY: old, f"{DAY}.tmp-r2": tmp})
+    assert run(st, [row(3)], tmp_path, token="r3") == {"2026-11-15": (2, 3)}
+    assert [r["id"] for r in day_rows(st)] == [f"{i:012x}" for i in (1, 2, 3)] and set(st.files) == {DAY}
+
+
+def test_a_leftover_is_kept_if_any_of_its_rows_is_missing_from_the_confirmed_file(tmp_path):
+    st = FakeStore()
+    work = tmp_path / "w"
+    work.mkdir()
+    st.files[f"{DAY}.tmp-old"], st.ids[f"{DAY}.tmp-old"] = b"held", 50
+    AR._replace(st, work, DAY, AR.dumps([AR.clean(row(1)) | {"first_seen": "s"}]), None, {f"{DAY}.tmp-old": {"zzz"}}, {f"{1:012x}"}, "t")
+    assert f"{DAY}.tmp-old" in st.files and DAY in st.files                                # its id is not in the confirmed file: never deleted
+
+
 def test_a_listed_file_that_cannot_be_downloaded_or_a_failed_listing_writes_nothing(tmp_path):
     st = FakeStore({DAY: AR.dumps([AR.clean(row(1)) | {"first_seen": "s0"}])}, fail={"download"})
     with pytest.raises(subprocess.CalledProcessError):

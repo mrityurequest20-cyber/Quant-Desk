@@ -152,8 +152,9 @@ class GhRelease:
         self._gh("api", "-X", "PATCH", f"repos/{self.repo}/releases/assets/{int(asset_id)}", "-f", f"name={name}")
 
 
-def _replace(store, work: Path, name: str, data: bytes, old: dict | None, leftovers: dict, token: str) -> None:
-    """Put `data` (a superset of `old`) in place of `name`, never losing a row: upload as a temporary, confirm, delete the old, rename, confirm."""
+def _replace(store, work: Path, name: str, data: bytes, old: dict | None, leftovers: dict[str, set], ids: set, token: str) -> None:
+    """Put `data` (a superset of the old file and of every leftover temporary) in place of `name`, never losing a row: upload as a temporary, confirm, delete the
+    old, rename, confirm; then delete a leftover temporary only if every id it held is in the confirmed file (`ids`)."""
     tmp = f"{name}.tmp-{token}"
     (work / tmp).write_bytes(data)
     store.upload(work / tmp)
@@ -166,8 +167,8 @@ def _replace(store, work: Path, name: str, data: bytes, old: dict | None, leftov
     have = store.assets() or {}
     if have.get(name, {}).get("size") != len(data):
         raise RuntimeError(f"{name} is not listed with its size after the rename (the data is in {tmp})")
-    for n in leftovers:                                    # earlier temporaries: every row they held is in the confirmed file
-        if n in have and n != name:
+    for n, held in leftovers.items():                      # earlier temporaries, each merged in before this write
+        if n in have and n != name and held <= ids:
             store.delete(have[n]["id"])
 
 
@@ -193,21 +194,25 @@ def archive(batches: list[tuple[list, str]], store_for, work: Path, token: str, 
             store.ensure()
             have = {}
         temps = sorted(n for n in have if n.startswith(name + ".tmp-"))
-        source = name if name in have else (temps[-1] if temps else None)       # a run that stopped mid-replace left its superset as a temporary
-        existing = []
-        if source:
+        # the day's file AND every temporary a stopped run left behind (each may hold rows the other lacks): all are read and merged before any write
+        existing, held = [], {}
+        for source in ([name] if name in have else []) + temps:
             store.download(source, work)
             if not (work / source).exists():
                 raise RuntimeError(f"{source} is listed on {tag} but could not be downloaded: not writing")
-            existing = loads((work / source).read_bytes())
+            got = loads((work / source).read_bytes())
+            held[source] = {r["id"] for r in got}
+            known = {r["id"] for r in existing}
+            existing = sorted(existing + [r for r in got if r["id"] not in known], key=lambda r: (r["ts"], r["id"]))
         merged = existing
         for r, seen_at in by_day[day]:
             merged = merge(merged, [r], seen_at)
-        if len(merged) == len(existing) and source == name and not temps:
+        if not temps and name in have and len(merged) == len(held.get(name, ())):
             done[day.isoformat()] = (len(existing), len(merged))
             continue
-        assert {r["id"] for r in existing} <= {r["id"] for r in merged}
-        _replace(store, work, name, dumps(merged), have.get(name), {n: have[n] for n in temps}, token)
+        ids = {r["id"] for r in merged}
+        assert all(h <= ids for h in held.values())
+        _replace(store, work, name, dumps(merged), have.get(name), {n: held[n] for n in temps}, ids, token)
         done[day.isoformat()] = (len(existing), len(merged))
     return done
 
