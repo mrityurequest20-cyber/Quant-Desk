@@ -746,3 +746,22 @@ def test_a_part_whose_every_save_failed_does_not_claim_a_count_it_cannot_know(cf
                  say=lines.append, new_account=True)
     assert code == S.EXIT_UNSAVED
     assert any("no save of this part reached the relay" in m for m in lines) and not any("rows NOT on the relay" in m for m in lines)
+
+
+def test_a_summary_that_fails_after_the_opening_save_never_stops_the_runner(cfg, tmp_path, monkeypatch):
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add()
+    real, calls, lines = R.Runner.summary, {"n": 0}, []
+
+    def summary(self, snap, now):                                                                                      # the opening save works; every later summary fails
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise ValueError("a figure that cannot be written")
+        return real(self, snap, now)
+    monkeypatch.setattr(R.Runner, "summary", summary)
+    code = S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=2)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
+                 say=lines.append, new_account=True)
+    assert calls["n"] > 5                                                                                              # it kept cycling (and so kept its brakes)
+    assert code in (0, S.EXIT_UNSAVED) and any("could not save the state" in m and "state ? characters" in m for m in lines)
+    assert S._size(None) == "?" and S._size("x") == "?"

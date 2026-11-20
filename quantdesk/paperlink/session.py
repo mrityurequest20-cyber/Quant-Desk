@@ -85,6 +85,9 @@ def _unsaved(account, ledger_pushed: int) -> str:
 
 
 def _size(summ) -> str:
+    """The state's size for a log line; "?" when there is none (the summary itself failed). Never raises: a log line must never stop the runner or the brakes."""
+    if not isinstance(summ, dict):
+        return "?"
     try:
         return f"{state_size(fit_summary(summ)):,}"
     except Exception:                                                  # noqa: BLE001 - a log line must never stop the runner
@@ -193,6 +196,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             mono = time.monotonic()
             full = fp[0] != ledger_pushed or (fp != fp_pushed and mono - last_full >= FULL_EVERY_S)      # the whole account: at once for a new fill, within a minute for the figures the brakes use
             if full or mono - last_sum > 10:
+                summ = None                                                # set before the try: the except below logs its size, and must never fail itself
                 try:
                     summ = rn.summary(snap, now)
                     if auto is not None and hasattr(auto, "summary"):
