@@ -9,11 +9,12 @@ from pathlib import Path
 
 from ..markets import sessions as MK
 from ..paper.account import Account
-from ..paper.runner import Runner, account_json, choose_state, fingerprint, load_account
+from ..paper.runner import Runner, account_json, choose_state, fingerprint, fit_summary, load_account, state_size
 from .relay import Relay, RelayError
 
 IST = MK.IST
 EXIT_REFUSED = 3             # the saved histories disagree or do not verify: the runner will not start
+EXIT_UNSAVED = 4             # the part ended with ledger rows the relay never got: the next part starts without them, so the run goes red
 UNSAFE_AFTER_S = 30.0        # new entries wait when the relay has not been given the latest fill for this long (exits and the brakes still run)
 NEWS_EVERY_S = 60.0          # the autopilot reads the news digest at most this often
 FULL_EVERY_S = 60.0          # the whole account goes to the relay at least this often when only the figures the brakes use (high-water mark, day start) have moved
@@ -71,6 +72,28 @@ def restore(cfg, relay: Relay, ledger_path: Path, say=print, sleep=time.sleep, t
     return acct
 
 
+def _why(e: Exception) -> str:
+    """A failed save's reason for the log: a RelayError's own text (a method, a path and an HTTP status or an exception class, by design nothing secret), else the class."""
+    return str(e)[:120] if isinstance(e, RelayError) else type(e).__name__
+
+
+def _unsaved(account, ledger_pushed: int) -> str:
+    """How much of the ledger the relay is not known to hold. -1: no save of this part reached it, so the rows restored at the start may be there and the count is unknown."""
+    if ledger_pushed < 0:
+        return f"no save of this part reached the relay ({len(account.ledger)} ledger rows here)"
+    return f"{len(account.ledger) - ledger_pushed} ledger rows NOT on the relay"
+
+
+def _size(summ) -> str:
+    """The state's size for a log line; "?" when there is none (the summary itself failed). Never raises: a log line must never stop the runner or the brakes."""
+    if not isinstance(summ, dict):
+        return "?"
+    try:
+        return f"{state_size(fit_summary(summ)):,}"
+    except Exception:                                                  # noqa: BLE001 - a log line must never stop the runner
+        return "?"
+
+
 def _clean(x) -> str:
     """Anything that came from outside, made safe for a log line (no new lines, so no workflow command can start one)."""
     return "".join(c if 32 <= ord(c) < 127 else "?" for c in str(x))[:300]
@@ -85,7 +108,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     rn = runner or Runner(cfg, account)
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     fp_disk = fp_pushed = None
-    ledger_pushed, last_full, last_sum, pending, fails = -1, 0.0, 0.0, [], 0
+    ledger_pushed, last_full, last_sum, pending, fails, save_fails = -1, 0.0, 0.0, [], 0, 0
     account.save(ledger_path)
     fp_disk = fingerprint(account)
     if auto is not None and hasattr(auto, "load"):                    # AUTO v2: its strategies' shadow record, kept on the relay across sessions
@@ -95,10 +118,10 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         snap0 = relay.snapshot()
         now0 = Runner.server_now(snap0)
         if now0 is not None:
-            relay.put_state(rn.summary(snap0, now0), account_json(account))
+            relay.put_state(fit_summary(rn.summary(snap0, now0)), account_json(account))
             ledger_pushed, fp_pushed, last_full, last_sum = len(account.ledger), fingerprint(account), time.monotonic(), time.monotonic()
     except (RelayError, ValueError, OverflowError) as e:
-        log(f"paper: could not send the opening state to the relay ({type(e).__name__}); will retry")
+        log(f"paper: could not send the opening state to the relay ({_why(e)}); will retry")
     unsafe_since = None
     news, news_at = None, -1e9
     brief_at = -1e9
@@ -173,16 +196,23 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             mono = time.monotonic()
             full = fp[0] != ledger_pushed or (fp != fp_pushed and mono - last_full >= FULL_EVERY_S)      # the whole account: at once for a new fill, within a minute for the figures the brakes use
             if full or mono - last_sum > 10:
+                summ = None                                                # set before the try: the except below logs its size, and must never fail itself
                 try:
                     summ = rn.summary(snap, now)
                     if auto is not None and hasattr(auto, "summary"):
                         summ["lab"] = auto.summary()                    # the Strategy lab panel in the app
-                    relay.put_state(summ, account_json(account) if full else None)
+                    relay.put_state(fit_summary(summ), account_json(account) if full else None)
                     last_sum = mono
+                    if save_fails:
+                        log(f"paper: the relay took the state again after {save_fails} failed saves")
+                    save_fails = 0
                     if full:
                         ledger_pushed, fp_pushed, last_full = fp[0], fp, mono
                 except (RelayError, ValueError, OverflowError) as e:
-                    log(f"paper: could not save the state to the relay ({type(e).__name__}); will retry")
+                    save_fails += 1
+                    if save_fails == 1 or save_fails % 20 == 0:                # the first, then about once a minute: the reason, not a wall of the same line
+                        log(f"paper: could not save the state to the relay ({_why(e)}); {save_fails} in a row; {_unsaved(account, ledger_pushed)}; "
+                            f"state {_size(summ)} characters; will retry")
         if ledger_pushed == len(account.ledger):                       # the relay holds every fill
             unsafe_since, rn.entries_blocked = None, None
         else:
@@ -206,7 +236,19 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     account.save(ledger_path)
     if auto is not None and hasattr(auto, "save"):
         auto.save(relay, time.monotonic(), force=True)
+    if len(account.ledger) > max(ledger_pushed, 0):                    # a last try: the next part of the day starts from the relay's copy, so a fill it never got is lost there
+        try:
+            snap = relay.snapshot()
+            now = Runner.server_now(snap)
+            if now is not None:
+                relay.put_state(fit_summary(rn.summary(snap, now)), account_json(account))
+                ledger_pushed = len(account.ledger)
+        except (RelayError, ValueError, OverflowError) as e:
+            log(f"paper: the last save to the relay failed too ({_why(e)})")
     log(f"paper: session ended; {len(account.ledger)} ledger rows")
+    if len(account.ledger) > max(ledger_pushed, 0):                    # red, so it is seen: the relay does not hold this part's whole ledger and the next part will start without it
+        log(f"paper: {_unsaved(account, ledger_pushed)}: the next part of the day starts from the relay's copy without them. The owner must look.")
+        return EXIT_UNSAVED
     return 0
 
 
