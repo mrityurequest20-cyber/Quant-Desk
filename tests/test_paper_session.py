@@ -717,8 +717,32 @@ def test_a_part_that_ends_with_fills_the_relay_never_got_says_so_and_ends_red(cf
     rl.put_state = put_state
     code = S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=2)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
                  say=lines.append, new_account=True)
-    assert code == 3 and not rl.results                                                                                # the result waits for the relay; the run goes red
+    assert code == S.EXIT_UNSAVED != S.EXIT_REFUSED and not rl.results                                                                                # the result waits for the relay; the run goes red
     fails = [m for m in lines if "could not save the state" in m]
-    assert fails and "HTTP 400" in fails[0] and "1 fills not on the relay" in fails[0]                                 # the reason is in the log...
+    assert fails and "HTTP 400" in fails[0] and "1 ledger rows NOT on the relay" in fails[0] and "characters" in fails[0]                                # the reason is in the log...
     assert len(fails) < 10                                                                                             # ...about once a minute, not every three seconds
     assert any("NOT on the relay" in m for m in lines)
+
+
+def test_even_the_last_cut_keeps_what_the_watchdogs_evening_review_reads():
+    today = {"day": "2026-11-20", "today": True, "closes": 4, "wins": 1, "losses": 3, "net": -2572.0, "fees": 199.0, "opened": ["A"], "still_open": 7,
+             "fills": [{"thesis": "x" * 160}] * 25, "events": ["e"] * 40}
+    s = {"ledger_len": 14, "equity": 1.0, "positions": [{"symbol": f"S{i}", "qty": 1} for i in range(10)], "reviews": [today],
+         "lab": {"today": {"shadow_closed": 9}, "eligible": 12, "state": {"u": "z" * 70000}}}
+    out = R.fit_summary(s, cap=1)                                                                                      # cannot fit: every step runs
+    assert out["trimmed"][-1] == "last" and [p["symbol"] for p in out["positions"]] == [p["symbol"] for p in s["positions"]]
+    rv = out["reviews"][0]
+    assert rv["day"] == "2026-11-20" and rv["closes"] == 4 and rv["net"] == -2572.0 and "fills" not in rv
+    assert out["lab"] == {"today": {"shadow_closed": 9}, "eligible": 12}
+
+
+def test_a_part_whose_every_save_failed_does_not_claim_a_count_it_cannot_know(cfg, tmp_path):
+    clk = Clock()
+    rl = FakeRelay(clk)
+    rl.add()
+    rl.fail = {"state"}
+    lines = []
+    code = S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=2)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
+                 say=lines.append, new_account=True)
+    assert code == S.EXIT_UNSAVED
+    assert any("no save of this part reached the relay" in m for m in lines) and not any("rows NOT on the relay" in m for m in lines)

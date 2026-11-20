@@ -9,11 +9,12 @@ from pathlib import Path
 
 from ..markets import sessions as MK
 from ..paper.account import Account
-from ..paper.runner import Runner, account_json, choose_state, fingerprint, fit_summary, load_account
+from ..paper.runner import Runner, account_json, choose_state, fingerprint, fit_summary, load_account, state_size
 from .relay import Relay, RelayError
 
 IST = MK.IST
 EXIT_REFUSED = 3             # the saved histories disagree or do not verify: the runner will not start
+EXIT_UNSAVED = 4             # the part ended with ledger rows the relay never got: the next part starts without them, so the run goes red
 UNSAFE_AFTER_S = 30.0        # new entries wait when the relay has not been given the latest fill for this long (exits and the brakes still run)
 NEWS_EVERY_S = 60.0          # the autopilot reads the news digest at most this often
 FULL_EVERY_S = 60.0          # the whole account goes to the relay at least this often when only the figures the brakes use (high-water mark, day start) have moved
@@ -76,6 +77,20 @@ def _why(e: Exception) -> str:
     return str(e)[:120] if isinstance(e, RelayError) else type(e).__name__
 
 
+def _unsaved(account, ledger_pushed: int) -> str:
+    """How much of the ledger the relay is not known to hold. -1: no save of this part reached it, so the rows restored at the start may be there and the count is unknown."""
+    if ledger_pushed < 0:
+        return f"no save of this part reached the relay ({len(account.ledger)} ledger rows here)"
+    return f"{len(account.ledger) - ledger_pushed} ledger rows NOT on the relay"
+
+
+def _size(summ) -> str:
+    try:
+        return f"{state_size(fit_summary(summ)):,}"
+    except Exception:                                                  # noqa: BLE001 - a log line must never stop the runner
+        return "?"
+
+
 def _clean(x) -> str:
     """Anything that came from outside, made safe for a log line (no new lines, so no workflow command can start one)."""
     return "".join(c if 32 <= ord(c) < 127 else "?" for c in str(x))[:300]
@@ -103,7 +118,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             relay.put_state(fit_summary(rn.summary(snap0, now0)), account_json(account))
             ledger_pushed, fp_pushed, last_full, last_sum = len(account.ledger), fingerprint(account), time.monotonic(), time.monotonic()
     except (RelayError, ValueError, OverflowError) as e:
-        log(f"paper: could not send the opening state to the relay ({type(e).__name__}); will retry")
+        log(f"paper: could not send the opening state to the relay ({_why(e)}); will retry")
     unsafe_since = None
     news, news_at = None, -1e9
     brief_at = -1e9
@@ -192,7 +207,8 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
                 except (RelayError, ValueError, OverflowError) as e:
                     save_fails += 1
                     if save_fails == 1 or save_fails % 20 == 0:                # the first, then about once a minute: the reason, not a wall of the same line
-                        log(f"paper: could not save the state to the relay ({_why(e)}); {save_fails} in a row; {len(account.ledger) - max(ledger_pushed, 0)} fills not on the relay; will retry")
+                        log(f"paper: could not save the state to the relay ({_why(e)}); {save_fails} in a row; {_unsaved(account, ledger_pushed)}; "
+                            f"state {_size(summ)} characters; will retry")
         if ledger_pushed == len(account.ledger):                       # the relay holds every fill
             unsafe_since, rn.entries_blocked = None, None
         else:
@@ -227,8 +243,8 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             log(f"paper: the last save to the relay failed too ({_why(e)})")
     log(f"paper: session ended; {len(account.ledger)} ledger rows")
     if len(account.ledger) > max(ledger_pushed, 0):                    # red, so it is seen: the relay does not hold this part's whole ledger and the next part will start without it
-        log(f"paper: {len(account.ledger) - max(ledger_pushed, 0)} ledger rows are NOT on the relay; the next part of the day starts from the relay's copy without them. The owner must look.")
-        return 3
+        log(f"paper: {_unsaved(account, ledger_pushed)}: the next part of the day starts from the relay's copy without them. The owner must look.")
+        return EXIT_UNSAVED
     return 0
 
 

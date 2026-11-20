@@ -638,17 +638,20 @@ LAB_KEEP = ("strategies", "tested", "trades", "eligible", "min_trades", "today",
 
 
 def state_size(summ: dict) -> int:
-    """The summary's length as the relay measures it (JSON.stringify, no spaces), never under it: every character outside ASCII is counted as its six-character escape."""
+    """The summary's length about as the relay measures it (JSON.stringify, no spaces). Text outside ASCII is counted as its six-character escape, so it is over-counted;
+    a few floats are written shorter here than JavaScript writes them (1e-05 against 0.00001), which STATE_CAP's margin of 5,000 characters covers."""
     return len(json.dumps(summ, separators=(",", ":"), ensure_ascii=True, default=str))
 
 
 def fit_summary(summ: dict, cap: int = STATE_CAP) -> dict:
     """The runner's state cut, a step at a time, until it is under `cap`, so the relay never refuses it for size.
 
-    The relay refused every save from 10:16 IST on 20 Nov 2026: the summary (40 ledger rows with their whole theses, the session reviews, AUTO v2's lab panel) had grown past
-    its 60,000 characters with the day's 14th ledger row. The runner then blocked new entries, and the fill the relay never got was not there for the next part of the day.
+    The relay refused every save from 10:16 IST on 20 Nov 2026, most likely for size (the log showed no status then): the summary (40 ledger rows with their whole theses,
+    the session reviews, AUTO v2's lab panel) had no bound on its total and failed with the day's 14th ledger row, twice. The runner then blocked new entries, and the fill the relay never got was not there for the next part of the day.
 
-    What the brakes and the app's headline read is never cut: equity, cash, the floors, the halts, ledger_len and each position's symbol, quantity, average, mark and P&L.
+    What the brakes and the app's headline read is never cut: equity, cash, the floors, the halts, ledger_len and each position's symbol, quantity, average, mark and P&L;
+    nor today's session review figures and the lab's today/eligible counts, which the watchdog's evening push (W18) reads. Positions are never dropped, so a book of some
+    hundreds of open positions could still be over the cap.
     Text goes first (theses, reasons), then detail (the lab's panels, older reviews, older ledger rows). `trimmed` lists the steps taken, so the app can say the panel is short."""
     if state_size(summ) <= cap:
         return summ
@@ -670,7 +673,8 @@ def fit_summary(summ: dict, cap: int = STATE_CAP) -> dict:
                                            positions=short(out.get("positions"), "thesis", 0))),
         ("lab", lambda: out.update(lab=lab(LAB_KEEP))),
         ("review_fills", lambda: out.update(reviews=[{**d, "fills": [], "events": (d.get("events") or [])[-5:]} for d in out.get("reviews") or [] if isinstance(d, dict)])),
-        ("last", lambda: out.update(lab=None, ledger_tail=[], slips=[], reviews=[])),
+        ("last", lambda: out.update(lab=lab(("today", "eligible")), ledger_tail=[], slips=[],
+                                    reviews=[{k: v for k, v in d.items() if k not in ("fills", "events")} for d in out.get("reviews") or [] if isinstance(d, dict) and d.get("today")][:1])),
     )
     for name, cut in steps:
         cut()
