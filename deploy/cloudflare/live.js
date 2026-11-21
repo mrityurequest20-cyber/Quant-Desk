@@ -25,6 +25,8 @@ import { SOURCES, PUSH_SOURCES, parseRoutes, pick, rank, freshest } from "./rout
 const MAX_BODY = 524288;                // bytes of one push (a batch of ~800 quotes is about 100 KB)
 const MAX_SYMBOLS = 3000;               // in one push
 const MAX_TOTAL = 6000;                 // symbols the board will ever hold: a stolen ingest key cannot grow it without bound
+const EVICT_AGE_MS = 6 * 3600e3;        // audit K-18 (E-02): a full board refused new strikes while 1,745 names unchanged all day kept their places. When full, names no feed
+const EVICT_BATCH = 300;                // has refreshed for 6 hours (no live price, so no live mark) make room, the oldest first, this many at a time
 const SYMBOL = /^[A-Za-z0-9&_.:-]{1,40}$/;
 const SEGMENTS = new Set(["idx", "eq", "fut", "bfo", "mcx", "cds", "opt", "mopt", "copt"]);      // mopt, copt: MCX and currency options, routed like their own segment (Fyers, Angel One first)
 const isOpt = (s) => s === "opt" || s === "mopt" || s === "copt";
@@ -358,6 +360,8 @@ export class LiveBoard {
 		this.universe = null;
 		this.cursor = 0;
 		this.lastPrune = 0;
+		this.lastEvictEmpty = 0;                    // when a full board last found nothing old enough to make room (it looks again a minute later, not on every refused name)
+		this.boardStat = { refused: 0, evicted: 0, hourFrom: 0, hourRefused: 0 };     // audit K-18: every refusal is counted and shown in /live/health (the watchdog reads it)
 		this.k = { status: "off", cycles: 0, calls_ok: 0, calls_failed: 0, last_ok: null, last_error: null, errors: {}, consecutive_failed: 0, consecutive_auth: 0, last_rate: 0, refused: 0, pruned: 0, total_calls: 0 };
 		this.agree = null;                          // today's Kite-vs-Kotak tally (see tally()); the finished days are kept in this.agreeDays
 		this.agreeDays = {};
@@ -397,12 +401,41 @@ export class LiveBoard {
 		return gone;
 	}
 
+	// A full board makes room from the names no feed has refreshed for EVICT_AGE_MS, the oldest first (audit K-18). Returns how many went.
+	evict(now) {
+		const old = [];
+		for (const [name, e] of this.quotes) {
+			let at = 0;
+			for (const s of Object.keys(e)) at = Math.max(at, e[s].at);
+			if (now - at >= EVICT_AGE_MS) old.push([at, name]);
+		}
+		if (!old.length) { this.lastEvictEmpty = now; return 0; }
+		old.sort((x, y) => x[0] - y[0]);
+		const n = Math.min(EVICT_BATCH, old.length);
+		for (let i = 0; i < n; i++) {
+			const name = old[i][1];
+			this.quotes.delete(name); this.depth.delete(name); this.candleSrc.delete(name); this.boardDirty.add(boardShard(name));
+		}
+		this.boardStat.evicted += n;
+		return n;
+	}
+
+	refuse(now) {
+		const b = this.boardStat;
+		b.refused += 1;
+		if (now - b.hourFrom >= 3600e3) { b.hourFrom = now; b.hourRefused = 0; }
+		b.hourRefused += 1;
+	}
+
 	put(name, src, q, onlyIfChanged) {
 		const now = this.now();
 		if (expiredOption(name, Number(istParts(now).date.replace(/-/g, "")))) return false;        // an old universe or a recorder cannot put an expired contract back (it would show until the next prune)
 		let e = this.quotes.get(name);
 		if (!e) {
-			if (this.quotes.size >= MAX_TOTAL && !(now - this.lastPrune > 60000 && this.prune(now) > 0)) return false;      // full: make room from the stale ones, once a minute at most
+			if (this.quotes.size >= MAX_TOTAL && !(now - this.lastPrune > 60000 && this.prune(now) > 0) && !(now - this.lastEvictEmpty > 60000 && this.evict(now) > 0)) {
+				this.refuse(now);                                                       // full of names refreshed in the last 6 hours: refused, counted and shown
+				return false;
+			}
 			e = {};
 			this.quotes.set(name, e);
 		}
@@ -563,6 +596,8 @@ export class LiveBoard {
 		const k = this.k;
 		return {
 			now, names: this.quotes.size,
+			board: { cap: MAX_TOTAL, names: this.quotes.size, refused: this.boardStat.refused, evicted: this.boardStat.evicted,         // since the Durable Object started
+				refused_last_hour: now - this.boardStat.hourFrom < 3600e3 ? this.boardStat.hourRefused : 0 },
 			kite: { n: src.z.n, newest_age_s: src.z.newest === null ? null : round1(src.z.newest) },
 			kotak: { configured: this.kotakConfigured(), status: k.status, n: src.k.n, newest_age_s: src.k.newest === null ? null : round1(src.k.newest), last_ok_age_s: k.last_ok === null ? null : round1((now - k.last_ok) / 1000),
 				cycles: k.cycles, consecutive_auth: k.consecutive_auth, calls_ok: k.calls_ok, calls_failed: k.calls_failed, planned_calls: k.total_calls, errors: k.errors, last_error: k.last_error, refused: k.refused, pruned: k.pruned,

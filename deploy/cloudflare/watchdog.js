@@ -215,6 +215,11 @@ async function w10LiveFeed(c) {
 	if (refused) {
 		out.push({ sev: "P1", check: "W10", title: "Kotak refused the consumer key", link: "", body: `The relay's Kotak poller was refused at ${c.now.hhmm} IST: the key is wrong, revoked or expired. Kite alone is carrying the live view. ${state}` });
 	}
+	const bd = h.board && typeof h.board === "object" ? h.board : null;
+	if (bd && Number.isInteger(bd.refused_last_hour) && bd.refused_last_hour > 0) {        // audit K-18: a full board refuses new strikes in silence
+		out.push({ sev: "P2", check: "W10", title: "Live board full: new names refused", link: "",
+			body: `At ${c.now.hhmm} IST the relay's board holds ${Number(bd.names) || 0} of ${Number(bd.cap) || 0} names and refused ${bd.refused_last_hour} new name(s) in the last hour: new strikes and contracts are not shown, and AUTO and the gate cannot read them. Every name has been refreshed in the last 6 hours, so none could make room.` });
+	}
 	if (kite && kotak && h.both >= 20 && h.disagree / h.both > 0.05) {
 		out.push({ sev: "P2", check: "W10", title: "Live prices: Kite and Kotak disagree", link: "",
 			body: `${h.disagree} of ${h.both} instruments carried by both sources differ by more than a spread at ${c.now.hhmm} IST. One of the two feeds is wrong; the app flags each row.` });
