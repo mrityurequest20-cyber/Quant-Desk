@@ -129,7 +129,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     start = clock().astimezone(IST)
     if start.time() < DESK_DAY_FROM:                                   # audit K-36, FH-06: a run queued behind yesterday's starts after midnight; with a clock time
         log(f"paper: this part started at {start:%H:%M} IST, before the desk's day ({DESK_DAY_FROM:%H:%M}): it is a run that waited behind "
-            f"yesterday's, so it does nothing (the scheduler starts today's)")                # only, it would run to its stop time on the wrong day, killed by its limit
+            f"yesterday's or was started by hand before the day, so it does nothing (the scheduler does not count it as today's and starts today's)")                # only, it would run to its stop time on the wrong day, killed by its limit
         return 0
     day0 = start.date()
     account = runner.account if runner else restore(cfg, relay, ledger_path, log, sleep, allow_new=new_account)
@@ -318,7 +318,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         left = (dt.datetime.combine(day0, until_ist, tzinfo=IST) - cut_short).total_seconds() / 60
         if final:
             log(f"::error::paper: the day's last part reached its time limit at {cut_short:%H:%M} IST, {left:.0f} minutes before its stop at {until_ist:%H:%M}: "
-                f"nothing watches the rest of the day, so the run ends red and the scheduler starts it again")
+                f"nothing watches the rest of the day, so the run ends red (the scheduler starts it again only before 23:25). The owner must look.")
             return EXIT_SHORT
         msg = (f"paper: this part reached its time limit at {cut_short:%H:%M} IST, {left:.0f} minutes before its hand-over at {until_ist:%H:%M}; "
                f"it saved and the next part takes over")

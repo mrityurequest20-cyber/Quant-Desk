@@ -16,7 +16,7 @@ from tests.test_paper_session import IST, NAME, Clock, FakeRelay, cfg  # noqa: F
 from tests.test_paper_workflow import RAW, ROOT
 
 WF = yaml.safe_load(RAW)
-PARTS = ("morning", "afternoon", "evening", "night")
+PARTS = ("morning", "afternoon", "evening", "night", "reserve")
 
 
 def go(cfg, rl, clk, tmp_path, until, lines, **kw):
@@ -107,8 +107,7 @@ def test_every_part_sets_its_deadline_first_and_stops_ten_minutes_inside_its_lim
         assert job["timeout-minutes"] - limit >= 10, name                                  # the last save and the artifact upload fit inside the limit
         runs = [s["run"] for s in job["steps"] if "quantdesk paper run" in str(s.get("run", ""))]
         assert len(runs) == 1 and '--deadline-epoch "$PART_DEADLINE"' in runs[0], name
-        assert ("--final" in runs[0]) == (name == "night"), name
-    assert 4 * limit >= (24 * 60 - 6 * 60) + 3 * 15                                         # four parts cover the 06:00-midnight day with one early end
+        assert ("--final" in runs[0]) == (name == "reserve"), name                     # the day's last part is the reserve
     assert re.search(r"^\s*PART_LIMIT_MIN: \"\d+\"", RAW, re.M)
 
 
@@ -128,3 +127,69 @@ def test_the_cli_takes_the_deadline_and_final(monkeypatch):
         assert e.code == 0
     assert seen["deadline"] == dt.datetime.fromtimestamp(1763700000, tz=dt.timezone.utc) and seen["final"] is True
     assert (ROOT / ".github" / "workflows" / "paper-desk.yml").exists()
+
+
+def cascade(dead=None, setup=5, first=dt.datetime(2026, 11, 23, 6, 0, 20, tzinfo=IST)):
+    """The workflow's day, as the session runs it: each job starts when the one before ends (plus a few seconds), spends `setup` minutes before its runner cycles,
+    and the runner stops at the earlier of its stop time and its job's start + PART_LIMIT_MIN. Part `dead` ends `setup` minutes after it starts (a crash at its
+    start). Returns the (from, to) IST intervals in which a runner is cycling."""
+    limit = int(WF["env"]["PART_LIMIT_MIN"])
+    stops = {"morning": "11:50", "afternoon": "17:40", "evening": "23:30", "night": "23:59", "reserve": "23:59"}
+    out, start = [], first
+    for name in PARTS:
+        cyc = start + dt.timedelta(minutes=setup)
+        if name == dead:
+            end = cyc
+        else:
+            until = dt.datetime.combine(first.date(), dt.time.fromisoformat(stops[name]), tzinfo=IST)
+            end = max(cyc, min(until, start + dt.timedelta(minutes=limit)))
+            if cyc.time() >= S.DESK_DAY_FROM and cyc.date() == first.date() and end > cyc:
+                out.append((cyc, end))
+        start = end + dt.timedelta(seconds=5)
+    return out
+
+
+def watched(iv, a, b):
+    return any(f <= a and t >= b for f, t in iv)
+
+
+def test_with_any_one_part_ending_at_its_start_the_brakes_of_the_day_still_run():
+    """Risk review of #279 (BLOCKING 1): with four parts, one part ending at its start left 3 x 345 minutes for an 18-hour day and the night part stopped at about
+    23:21, before the MCX square-off (23:25; config: futures intraday, square_off_min 5). The reserve part covers it, whichever part ends early."""
+    d = dt.date(2026, 11, 23)
+    at = lambda hhmm: dt.datetime.combine(d, dt.time.fromisoformat(hhmm), tzinfo=IST)     # noqa: E731
+    for dead in (None,) + PARTS[:-1]:
+        for setup in (3, 5):
+            iv = cascade(dead, setup)
+            assert watched(iv, at("23:27"), at("23:30")), (dead, setup, iv)        # the MCX square-off: runner.py squares off at any cycle from 23:25 to the 23:30
+            #                                                                         close; at least its last three minutes are watched (the worst case starts at 23:25:40)
+            assert watched(iv, at("15:20"), at("15:21")) and watched(iv, at("15:31"), at("15:32")), (dead, setup)   # the expiry sale and the settlement
+    assert cascade(None)[-1][1].time() >= dt.time(23, 30)                                                     # a normal day reaches the close in the night part
+
+
+def test_without_the_reserve_one_early_end_misses_the_square_off():
+    """The review's case, as a check on the cascade itself: four parts, the evening ending at its start, no runner cycles through 23:25."""
+    d = dt.date(2026, 11, 23)
+    iv = [x for x in cascade("evening") if x[0].time() < dt.time(23, 21)]          # drop what the reserve adds
+    assert not watched(iv, dt.datetime.combine(d, dt.time(23, 25), tzinfo=IST), dt.datetime.combine(d, dt.time(23, 30), tzinfo=IST))
+
+
+def test_a_paper_run_made_before_the_desks_day_is_not_counted_as_todays_session(monkeypatch):
+    """Risk review of #279 (BLOCKING 2): a run dispatched by hand at 01:00 IST does nothing (DESK_DAY_FROM) and ends green; the scheduler counted it as today's
+    session and never started the desk. Now, for the paper runner, a run made before its start window is not today's, green or cancelled."""
+    from tests.test_scheduler import HOLS, at, run, sch
+    t = at("2026-11-23 05:55")
+    early_ok, early_cx = run("2026-11-23 01:00"), run("2026-11-23 01:00", conclusion="cancelled")
+    assert sch.decide(t, [early_ok], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW, day_from=sch.PAPER_WINDOW[0])[0] == "start"
+    assert sch.decide(t, [early_cx], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW, day_from=sch.PAPER_WINDOW[0])[0] == "start"
+    later = at("2026-11-23 10:00")
+    assert sch.decide(later, [run("2026-11-23 06:00")], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW, day_from=sch.PAPER_WINDOW[0])[0] == "wait"    # a real session still counts
+    assert sch.decide(later, [run("2026-11-23 06:00", conclusion="cancelled")], HOLS, sch.PAPER_MAX_STARTS, sch.PAPER_WINDOW,
+                      day_from=sch.PAPER_WINDOW[0])[0] == "wait"                                                                         # and the owner's stop still holds
+    assert sch.decide(t, [early_ok], HOLS)[0] == "wait"                                       # the other workflows are unchanged (outside their window here anyway)
+    calls = []
+    monkeypatch.setattr(sch.dt, "datetime", type("D", (sch.dt.datetime,), {"now": classmethod(lambda c, tz=None: at("2026-11-23 06:00"))}))
+    monkeypatch.setattr(sch, "_runs", lambda wf: [early_ok] if wf == sch.PAPER_WORKFLOW else [])
+    monkeypatch.setattr(sch.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert sch.main([]) == 0
+    assert ["gh", "workflow", "run", "paper-desk.yml", "--ref", "main"] in calls                # main passes the paper runner's day start
