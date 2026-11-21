@@ -48,3 +48,8 @@ def test_only_the_keys_own_list_is_taken_not_a_deeper_one_or_one_after_it():
     assert sch._dates_at(same_indent, ("calendar", "holidays")) == {dt.date(2026, 11, 24), dt.date(2026, 12, 25)}   # valid YAML
     after = "calendar:\n  holidays:\n    - 2026-11-24\n- 2020-01-01\n"
     assert sch._dates_at(after, ("calendar", "holidays")) == {dt.date(2026, 11, 24)}              # a less indented item is not its
+
+
+def test_a_key_missing_from_its_parent_is_not_found_in_the_next_section():
+    text = "calendar:\n  x: 1\nother:\n  holidays:\n    - 2020-01-01\n"
+    assert sch._dates_at(text, ("calendar", "holidays")) == set()

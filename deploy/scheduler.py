@@ -86,11 +86,8 @@ def _dates_at(text: str, path: tuple[str, ...]) -> set[dt.date]:
     lo, hi, base = 0, len(lines), -1
     for key in path:
         child, found = None, None
-        for k in range(lo, hi):
+        for k in range(lo, hi):                                          # [lo, hi) is already the parent's block (set below), so every line here is inside it
             ind, t = lines[k]
-            if ind <= base:
-                hi = k
-                break
             child = ind if child is None else child
             if ind == child and t == f"{key}:":
                 found = k
