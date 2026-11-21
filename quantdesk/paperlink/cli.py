@@ -79,6 +79,61 @@ def cmd_verify(cfg, a):
     print(f"paper verify: ok; {len(acct.ledger)} ledger rows, {len(acct.positions)} open positions, cash {acct.cash:,.2f}" + ("; continues the branch's account" if old is not None else ""))
 
 
+def cmd_reconcile(cfg, a):
+    """Append fills the relay never received, from a plan, as reconstructed rows (quantdesk/paperlink/reconcile.py). A dry run unless --apply. Prints counts and a
+    fingerprint only: this repository's run logs are public, so no price, position or P&L is printed."""
+    import datetime as _dt
+    from ..paper.runner import Runner, account_json, fit_summary, load_account
+    from . import reconcile as RC
+    try:
+        plan = RC.load_plan(a.plan)
+        book = RC.QuoteBook.from_parquet(a.chains)
+    except (RC.PlanError, OSError, ValueError) as e:
+        raise SystemExit(f"paper reconcile: {e}") from None
+    relay = None
+    if a.account:
+        text = Path(a.account).read_text(encoding="utf-8")
+    else:
+        from .relay import Relay, RelayError
+        try:
+            relay = Relay.from_env()
+            text = (relay.get_state() or {}).get("account")
+        except (ValueError, RelayError) as e:
+            raise SystemExit(f"paper reconcile: the relay could not be read ({e})") from None
+    try:
+        acct = load_account(text)
+    except ValueError as e:
+        raise SystemExit(f"paper reconcile: the saved account does not verify ({e})") from None
+    if acct is None:
+        raise SystemExit("paper reconcile: there is no saved account")
+    before = (len(acct.ledger), RC.digest(acct))
+    try:
+        booked = RC.reconcile(cfg, acct, plan, book, _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d"))
+    except RC.PlanError as e:
+        raise SystemExit(f"paper reconcile: {e}") from None
+    print(f"paper reconcile {plan['id']}: {len(booked)} rows booked; ledger {before[0]} -> {len(acct.ledger)} rows ({before[1]} -> {RC.digest(acct)}); "
+          f"{len(acct.positions)} open positions; oldest quote used {max(b['quote_age_s'] for b in booked):.0f} s", flush=True)
+    if a.out:
+        acct.save(Path(a.out))
+    if not a.apply:
+        print("paper reconcile: dry run, nothing sent (add --apply to send it to the relay)")
+        return
+    if relay is None:
+        raise SystemExit("paper reconcile: --apply sends to the relay; it cannot be combined with --account")
+    from .relay import RelayError
+    try:
+        snap = relay.snapshot()
+        now = Runner.server_now(snap) or _dt.datetime.now(_dt.timezone.utc)
+        relay.put_state(fit_summary(Runner(cfg, acct).summary(snap, now)), account_json(acct))
+        back = load_account((relay.get_state() or {}).get("account"))
+    except (RelayError, ValueError) as e:
+        raise SystemExit(f"paper reconcile: sending or reading back failed ({e}). If the send went through, a re-run is refused (the ledger no longer matches the plan): "
+                         "read the relay's ledger length to know which; the relay only ever accepts a ledger that extends its own") from None
+    if back is None or len(back.ledger) != len(acct.ledger) or RC.digest(back) != RC.digest(acct):
+        raise SystemExit("paper reconcile: the relay does not hold the reconciled account after sending: the owner must look")
+    print(f"paper reconcile: sent and read back; the relay holds {len(back.ledger)} rows ({RC.digest(back)})")
+
+
 def register(sub):
     s = sub.add_parser("paper", help="the manual paper runner: the owner's queued paper orders through the risk gate (paper money only)")
     ss = s.add_subparsers(dest="pcmd", required=True)
@@ -93,3 +148,10 @@ def register(sub):
     x.add_argument("--file", default="runtime/paper/ledger/account.json")
     x.add_argument("--extends", help="a saved account that this one must continue (its ledger must be a prefix of this one's); skipped if the file does not exist")
     x.set_defaults(fn=cmd_verify)
+    x = ss.add_parser("reconcile", help="append fills the relay never received, from a plan, as reconstructed rows (a dry run unless --apply)")
+    x.add_argument("--plan", required=True, help="the plan (docs/reconcile/<day>.json): what the run logs show happened, no prices")
+    x.add_argument("--chains", nargs="+", required=True, help="the day's recorded chain files (parquet) the fills are priced from")
+    x.add_argument("--account", help="a saved account file to reconcile offline instead of the relay's (a dry run only)")
+    x.add_argument("--out", help="write the reconciled account to this file")
+    x.add_argument("--apply", action="store_true", help="send the reconciled account to the relay (env LIVE_URL, LIVE_READ_TOKEN, LIVE_INGEST_TOKEN)")
+    x.set_defaults(fn=cmd_reconcile)
