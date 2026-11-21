@@ -109,3 +109,12 @@ def test_an_option_book_is_unchanged():
     inst = Instrument.option("NIFTY", dt.date(2026, 11, 24), 24500, "CE", 65)
     a.apply_fill("buy", inst, "nse_fo", 65, 100.0, 20.0, "2026-11-20T04:00:00+00:00", "s", "a held call, no future in the book")
     assert a.stress() == pytest.approx(a.cash) and a.equity_lower_bound({}) == pytest.approx(a.cash)
+
+
+def test_a_future_is_never_marked_on_a_quote_older_than_two_minutes_but_an_option_still_is(cfg, tmp_path):
+    rn = desk(cfg, tmp_path)
+    assert buy(rn, "CRUDEOILM-MCX", 1, 5750.0)["status"] == "filled"
+    t1 = MON + dt.timedelta(minutes=6)
+    assert "CRUDEOILM-MCX" in rn.marks(board(t1, "CRUDEOILM-MCX", 5790.0, 5791.0, age=100.0), t1)
+    assert "CRUDEOILM-MCX" not in rn.marks(board(t1, "CRUDEOILM-MCX", 5790.0, 5791.0, age=300.0), t1)   # 5 minutes old: unknown, so it counts at its stress loss
+    assert R.FUT_QUOTE_AGE_S == 120 < R.MARK_MAX_AGE_S
