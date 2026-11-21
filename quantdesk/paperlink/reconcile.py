@@ -4,7 +4,8 @@ On 20 Nov 2026 the relay refused the runner's state twice (the summary had outgr
 never held: 12 in all. The next part started from the relay's shorter copy, so the paper record lost those fills and kept 7 positions the desk had
 already sold. This module puts the record right without rewriting it:
 
-  * a PLAN (a JSON file) lists what the run logs show happened: when, which side, which contract, how much. It holds no price and no P&L.
+  * a PLAN (a JSON file) lists what the run logs show happened: when, which side, which contract, how much. It holds no fill price, fee or P&L (an
+    opening's strategy may carry the public index level and volatility its stop is measured from, as AUTO v2 writes them).
   * each event is priced from the RECORDED market data of that moment (the recorders' public chain files), by the paper broker's own rules: a buy
     or a cover at the offer plus the modelled impact, a sale at the bid less it, fees from the desk's cost model. The price is not chosen here.
   * the rows are APPENDED to the relay's ledger (its hash chain continues; no existing row is touched), each one's thesis tagged
@@ -160,20 +161,21 @@ def reconcile(cfg, account: Account, plan: dict, book: QuoteBook, made: str) -> 
                 qty, seg = abs(pos.qty), pos.segment
             else:
                 qty, seg = e["lots"] * inst.lot_size, rn.segment(inst)
-            tick = rn.broker.tick_for(inst)
+            held = pos.instrument if side in ("sell", "btc") else inst                # a close is of the contract held, as the broker's own closes are (broker.py)
+            tick = rn.broker.tick_for(held)
             buying = side in ("buy", "btc")
             imp = SL.impact_ticks(qty, aq if buying else bq) * tick         # the paper broker's own rule (broker.buy / sell / cover / open_package)
             px = round(ask + imp, 6) if buying else round(max(bid - imp, 0.0), 6)
             if side == "buy" and px <= 0 or side == "sto" and px <= 0:
                 raise PlanError(f"event {i} ({e['symbol']}): an opening at a zero price is not a trade")
-            fees, _ = rn.broker.costs.fees(inst, qty if buying else -qty, px, segment=seg)
+            fees, _ = rn.broker.costs.fees(held, qty if buying else -qty, px, segment=seg)
             tag = TAG.format(made=made, source=source, quote_at=qt.isoformat(), age=age, at=e["at"])
             slip = SL.clean(SL.split("buy" if buying else "sell", qty, px, bid, ask, (px - ask) if buying else (bid - px)))
             if side in ("buy", "sto"):
                 strategy, thesis = e["strategy"], f"{e['thesis']} {tag}"
             else:
                 strategy, thesis = pos.strategy, f"{e.get('why') or 'exit'}: {pos.thesis} {tag}"
-            account.apply_fill(side, pos.instrument if side in ("sell", "btc") else inst, seg, qty, px, fees, _ts(e.get("book_at") or e["at"]).isoformat(), strategy, thesis, slip)
+            account.apply_fill(side, held, seg, qty, px, fees, _ts(e.get("book_at") or e["at"]).isoformat(), strategy, thesis, slip)
             booked.append({"side": side, "symbol": inst.symbol, "qty": qty, "price": px, "fees": fees, "quote_age_s": round(age, 1)})
         if not account.verify_ledger():
             raise PlanError("the reconciled ledger does not verify")

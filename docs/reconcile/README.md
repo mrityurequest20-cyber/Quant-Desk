@@ -2,7 +2,9 @@
 
 A plan here books paper fills the relay never received, as reconstructed rows appended to the paper account. It exists because of audit K-01: on 20 Nov 2026 the relay refused the runner's state, each part of the day ended with fills it never held, and the next part started from its shorter copy.
 
-**What a plan holds:** what the run logs show happened (time, side, contract, lots) and nothing else. It never holds a price, a fee or a P&L, because this repository is public.
+**What a plan holds:** what the run logs show happened (time, side, contract, lots). It never holds a fill price, a fee or a P&L, because this repository is public. An opening's strategy may carry the public index level and volatility its stop is measured from (`p` and `d`, as AUTO v2 writes them for an overnight hold).
+
+**Who applies one:** the owner, on their written decision. A dry run changes nothing and anyone may start it.
 
 **How each event is priced** (`quantdesk/paperlink/reconcile.py`):
 - the quote comes from the recorded chain files of that moment;
@@ -31,4 +33,4 @@ The run refuses, and changes nothing, in any of these cases:
 
 | Plan | Rows | Why |
 | --- | --- | --- |
-| `2026-11-20.json` | 12 | The 10:16 IST MIDCPNIFTY buy (morning part), and the afternoon part's package and 9 exits. All were lost when the relay refused the state. |
+| `2026-11-20.json` | 12 | The 10:16 IST MIDCPNIFTY buy (morning part), and the afternoon part's package and 9 exits. All were lost when the relay refused the state. It must be applied before the runner's next start (after it, the ledger no longer matches and the plan is refused). It leaves one position open, the MIDCPNIFTY 23 Nov 14200 put: AUTO v2's expiry rule sells it at 15:15 IST on 23 Nov (had the afternoon part known of it, it would have sold it at 15:15 on 20 Nov; no log shows that sale, so none is booked). |

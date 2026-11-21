@@ -181,11 +181,61 @@ def test_the_committed_plan_for_20_nov_is_well_formed_and_holds_no_price(cfg):
     for e in p["events"]:
         assert parse_contract(e["symbol"], rn.und, rn.lots, frozenset(rn.seg_of))[0] is not None, e["symbol"]
     assert all(re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+\.parquet", f) for f in p["chain_files"])
-    for e in p["events"]:                                                                      # an overnight AUTO v2 opening carries its volatility stop (p<spot> d<sd>), as auto2 writes it
-        if e["side"] in ("buy", "sto") and e["strategy"].split()[2].endswith(".o") and e["strategy"].split()[2].startswith("LP"):
+    left_open = {}
+    for e in p["events"]:
+        if e["side"] in ("buy", "sto"):
+            left_open[e["symbol"]] = e
+        else:
+            left_open.pop(e["symbol"], None)
+    assert sorted(left_open) == ["MIDCPNIFTY23NOV2614200PE"]
+    for e in left_open.values():                     # an overnight AUTO v2 opening the plan leaves open carries its volatility stop (p<spot> d<sd>), as auto2 writes it, so vol_stop can act
+        if e["strategy"].split()[2].endswith(".o"):
             assert re.search(r" p\d+(\.\d+)? d\d{1,6}$", e["strategy"]) and len(e["strategy"]) <= 60, e["strategy"]
     assert "owner's written decision" in p["why"]                                              # applying is the owner's act
 
+
+
+def test_a_close_books_the_contract_held_priced_and_charged_as_the_broker_would(cfg):
+    """A position held under an older lot size (as after an exchange's lot change): the close sells what is held, at the broker's own price and fees, and the row
+    names the held contract, never a fresh parse of the symbol."""
+    import dataclasses
+    old_lot = dataclasses.replace(inst(cfg, LONG), lot_size=75)
+    a, b = Account(500000.0), Account(500000.0)
+    for x in (a, b):
+        x.apply_fill("buy", old_lot, "nse_fo", 75, 100.0, 24.0, T0.isoformat(), "test", "a long put bought under the older lot size", None)
+    q = Quote(80.0, 80.5, AT, 75.0, 500.0)
+    _, real = Runner(cfg, b).broker.sell(LONG, 75, q, AT, "exit")
+    book = RC.QuoteBook([row(LONG, AT - dt.timedelta(seconds=5), 80.0, 80.5, bq=75.0, aq=500.0)])
+    booked = RC.reconcile(cfg, a, plan(a, [{"at": AT.isoformat(), "side": "sell", "symbol": LONG}]), book, "2026-11-21")
+    assert real is not None and booked[0]["qty"] == 75 and booked[0]["price"] == pytest.approx(real["price"]) and booked[0]["fees"] == pytest.approx(real["fees"])
+    assert a.ledger[-1]["instrument"] == old_lot.to_dict() == b.ledger[-1]["instrument"] and not a.positions and a.cash == pytest.approx(b.cash)
+    assert a.verify_ledger()
+
+
+def test_a_failed_send_says_how_to_tell_whether_it_went_through_and_prints_no_price(cfg, tmp_path, monkeypatch):
+    from quantdesk.paperlink import cli
+    from quantdesk.paperlink.relay import RelayError
+    a = account(cfg)
+    pf = tmp_path / "plan.json"
+    pf.write_text(json.dumps(plan(a, [{"at": AT.isoformat(), "side": "sell", "symbol": LONG}])), encoding="utf-8")
+    monkeypatch.setattr(RC.QuoteBook, "from_parquet", classmethod(lambda c, paths: c([row(LONG, AT, 90.0, 90.5)])))
+
+    class Down:
+        def get_state(self):
+            return {"account": account_json(a)}
+
+        def snapshot(self):
+            return {"now": int(AT.timestamp() * 1000), "quotes": {}}
+
+        def put_state(self, summary, text):
+            raise RelayError("POST /paper/state: HTTP 503")
+    monkeypatch.setattr("quantdesk.paperlink.relay.Relay.from_env", classmethod(lambda c: Down()))
+    out = io.StringIO()
+    with pytest.raises(SystemExit) as e, redirect_stdout(out):
+        cli.cmd_reconcile(cfg, SimpleNamespace(plan=str(pf), chains=["x.parquet"], account=None, out=None, apply=True))
+    msg = str(e.value)
+    assert "HTTP 503" in msg and "If the send went through, a re-run is refused" in msg and "ledger length" in msg
+    assert not re.search(r"\b(90|89\.\d+|cash|₹)\b", msg + out.getvalue())
 
 def test_the_command_prints_counts_and_a_fingerprint_only_and_a_dry_run_sends_nothing(cfg, tmp_path, monkeypatch):
     from quantdesk.paperlink import cli
