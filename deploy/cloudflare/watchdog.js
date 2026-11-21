@@ -260,34 +260,6 @@ async function w9Calendar(c) {
 	return out;
 }
 
-// Fixed IST times for each check. They must coincide with a cron firing in wrangler.jsonc (a test checks this).
-//   days: "trading" = Mon-Fri not a holiday; "weekdays" = Mon-Fri; "saturday"
-// W18: the session review, pushed after the close. The paper runner puts the review in the state it keeps on the relay (quantdesk/paper/review.py); this reads today's
-// straight from the Durable Object (no key: same Worker) and sends its figures by PUSH ONLY. Never by the email path: that opens a GitHub issue, and this repository is
-// public, so the paper account's results would be published. Silent when the live view is off; one INFO line when the runner left no review for today.
-const rs = (x) => (Number.isFinite(x) ? (x < 0 ? "-" : x > 0 ? "+" : "") + "Rs " + Math.round(Math.abs(x)).toLocaleString("en-IN") : "?");
-export function reviewLine(rv) {
-	if (!rv || typeof rv !== "object") return null;
-	const head = Number.isFinite(rv.equity_change) ? `${rs(rv.equity_change)} on the day (all in)` : `${rs(rv.net)} from closed trades after fees`;
-	const closes = Number.isInteger(rv.closes) && rv.closes > 0 ? `${rv.closes} closed (${rv.wins} won, ${rv.losses} lost), best ${rs(rv.best)}, worst ${rs(rv.worst)}` : "nothing closed";
-	const held = Array.isArray(rv.still_open) ? `${rv.still_open.length} still held` : "";
-	const opened = Array.isArray(rv.opened) ? `${rv.opened.length} opened` : "";
-	const ev = Array.isArray(rv.events) && rv.events.length ? ` ${rv.events.length} brake event(s).` : "";
-	return `${head}. ${closes}; ${opened}${opened && held ? ", " : ""}${held}; fees ${rs(rv.fees).replace("+", "")}.${ev} Open the app's Positions tab for every trade.`;
-}
-async function w18Review(c) {
-	if (!configured(c.env)) return [];
-	const r = await c.env.LIVE.get(c.env.LIVE.idFromName("board")).fetch("https://live/paper/state");
-	const st = r.ok ? await r.json() : null;
-	const reviews = st && st.summary && Array.isArray(st.summary.reviews) ? st.summary.reviews : [];
-	const today = reviews.find((x) => x && x.day === c.now.date);
-	if (!today) return [{ sev: "INFO", check: "W18", pushOnly: true, link: actionsUrl(c.env, PAPER_RUNNER), title: `Session review ${c.now.date}: none`,
-		body: "The paper runner left no review for today on the relay: it did not run, or it stopped before the close." }];
-	const lab = st.summary.lab && typeof st.summary.lab === "object" ? st.summary.lab : null;
-	const labLine = lab ? ` AUTO v2: ${Number(lab.today && lab.today.shadow_closed) || 0} shadow trades scored today, ${Number(lab.eligible) || 0} strategies proven enough to trade.` : "";
-	return [{ sev: "INFO", check: "W18", pushOnly: true, link: "", title: `Session review ${c.now.date}`, body: reviewLine(today) + labLine }];
-}
-
 // W21 and W22 (audit K-05, FH-04, B-08): the paper runner WHILE it runs. Its run is one run of five jobs from about 06:00 to midnight IST, so its conclusion exists only
 // at midnight and W6 and W14 never see a red part (each sees an in-progress run). Every half hour, and at 00:10 for the night part:
 //   W21  any part (job) of a recent paper run that ended since the previous paper slot with a conclusion other than success or skipped: P1, push and email. A timeout
@@ -356,6 +328,34 @@ async function w22PaperState(c) {
 			body: `At ${c.now.hhmm} IST the paper runner is sending a short view: the app's full summary could not be built. The record and the brakes are not affected.` });
 	}
 	return out;
+}
+
+// Fixed IST times for each check. They must coincide with a cron firing in wrangler.jsonc (a test checks this).
+//   days: "trading" = Mon-Fri not a holiday; "weekdays" = Mon-Fri; "saturday"
+// W18: the session review, pushed after the close. The paper runner puts the review in the state it keeps on the relay (quantdesk/paper/review.py); this reads today's
+// straight from the Durable Object (no key: same Worker) and sends its figures by PUSH ONLY. Never by the email path: that opens a GitHub issue, and this repository is
+// public, so the paper account's results would be published. Silent when the live view is off; one INFO line when the runner left no review for today.
+const rs = (x) => (Number.isFinite(x) ? (x < 0 ? "-" : x > 0 ? "+" : "") + "Rs " + Math.round(Math.abs(x)).toLocaleString("en-IN") : "?");
+export function reviewLine(rv) {
+	if (!rv || typeof rv !== "object") return null;
+	const head = Number.isFinite(rv.equity_change) ? `${rs(rv.equity_change)} on the day (all in)` : `${rs(rv.net)} from closed trades after fees`;
+	const closes = Number.isInteger(rv.closes) && rv.closes > 0 ? `${rv.closes} closed (${rv.wins} won, ${rv.losses} lost), best ${rs(rv.best)}, worst ${rs(rv.worst)}` : "nothing closed";
+	const held = Array.isArray(rv.still_open) ? `${rv.still_open.length} still held` : "";
+	const opened = Array.isArray(rv.opened) ? `${rv.opened.length} opened` : "";
+	const ev = Array.isArray(rv.events) && rv.events.length ? ` ${rv.events.length} brake event(s).` : "";
+	return `${head}. ${closes}; ${opened}${opened && held ? ", " : ""}${held}; fees ${rs(rv.fees).replace("+", "")}.${ev} Open the app's Positions tab for every trade.`;
+}
+async function w18Review(c) {
+	if (!configured(c.env)) return [];
+	const r = await c.env.LIVE.get(c.env.LIVE.idFromName("board")).fetch("https://live/paper/state");
+	const st = r.ok ? await r.json() : null;
+	const reviews = st && st.summary && Array.isArray(st.summary.reviews) ? st.summary.reviews : [];
+	const today = reviews.find((x) => x && x.day === c.now.date);
+	if (!today) return [{ sev: "INFO", check: "W18", pushOnly: true, link: actionsUrl(c.env, PAPER_RUNNER), title: `Session review ${c.now.date}: none`,
+		body: "The paper runner left no review for today on the relay: it did not run, or it stopped before the close." }];
+	const lab = st.summary.lab && typeof st.summary.lab === "object" ? st.summary.lab : null;
+	const labLine = lab ? ` AUTO v2: ${Number(lab.today && lab.today.shadow_closed) || 0} shadow trades scored today, ${Number(lab.eligible) || 0} strategies proven enough to trade.` : "";
+	return [{ sev: "INFO", check: "W18", pushOnly: true, link: "", title: `Session review ${c.now.date}`, body: reviewLine(today) + labLine }];
 }
 
 export const SLOTS = [
