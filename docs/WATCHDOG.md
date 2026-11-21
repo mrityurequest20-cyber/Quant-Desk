@@ -69,7 +69,7 @@ ntfy's anonymous e-mail is disabled on ntfy.sh, so e-mail goes through GitHub, n
 - **W6 sees 08:00 to 21:00 on trading days only.** Overnight and weekend failures are caught by the Saturday digest, which counts at most the last 100 failed runs. The paper runner is the exception: W21 reads its parts every half hour from 06:00 to 00:10, every day.
 - **Alerts can be forged by anyone who can dispatch `watchdog-alert.yml`** (write access, or the dispatch token): they can open a convincing issue assigned to you. That is no wider than that token's existing reach (it can already dispatch `clear-halt.yml`). Email dedupe is per check per day, and the workflow runs one at a time per check and day.
 - **`WATCHDOG_TEST=1` alerts at every half-hour firing** (a push and an INFO issue; 48 a day) until the variable is removed.
-- **W16 and W17 prove a run happened, not that data arrived.** `kite-evening.yml` is deliberately green when its login gate refuses (a Kite problem is a warning), so W16 can pass with no candles collected; the data-health report (`data health`) is what says whether the evening's candles are there.
+- **W16 and W17 prove a run happened and did not fail.** Since audit K-19 `kite-evening.yml` ends red when it collected nothing (unless another run has that evening's login), so W16 sees an empty evening; the data-health report (`data health`) still says how much of the evening's candles are there.
 - **Five cron triggers is the free plan's limit.** Any new check must reuse these firing times (a test checks every slot against
   the crons).
 - **Not built yet:** the optional dead-man's switch (an external service that alerts if the Worker itself dies), per-sleeve

@@ -15,8 +15,8 @@
 name: Kite evening candles
 
 on:
-  schedule:
-    - cron: "35 18 * * 1-5"       # 00:05 IST Tue to Sat: the evening of Mon to Fri has ended (best-effort; a late run is fine)
+  # Started by the Cloudflare Worker at 00:10 IST Tue to Sat (deploy/cloudflare/worker.js; W16 checks it by 06:00), or by hand. GitHub's own cron (00:05 IST) is gone
+  # (audit K-19): it fired at 06:12-07:32 IST, and that late run took the real evening's only login, so 12 and 17-19 Nov collected nothing.
   workflow_dispatch:
     inputs:
       days:
@@ -131,6 +131,17 @@ jobs:
         if: always() && (steps.login.outcome == 'failure' || steps.exchange.outcome == 'failure')
         run: |
           echo "::error::the evening Kite login failed (see the login step); nothing was collected"
+          exit 1
+      - name: Red when this evening collected nothing (audit K-19, so the watchdog sees it; four evenings were lost and every run was green)
+        if: always()
+        env:
+          KIND: ${{ steps.gate.outputs.kind }}
+          DAY: ${{ steps.find.outputs.day }}
+        run: |
+          case "$KIND" in dup|late) echo "no login by design ($KIND): another run has this evening's login, or this is a late scheduled run"; exit 0;; esac
+          d="runtime/kite_evening/$DAY/data"
+          if [ -n "$DAY" ] && [ -d "$d" ] && [ -n "$(ls -A "$d")" ]; then exit 0; fi
+          echo "::error::no evening candles were collected (login gate: ${KIND:-unknown}): the MCX and currency evening is not recorded"
           exit 1
 
   publish:

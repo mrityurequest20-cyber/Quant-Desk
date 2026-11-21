@@ -12,7 +12,13 @@ credentials work; it is started once a day and never retried. This job is a thir
 The session day is the IST day shifted by six hours: a run at 00:05 IST belongs to the evening that just ended (the same rule as quantdesk/data/evening_minutes.py).
 A run that may not log in does nothing (there is no stored-token fallback here: a stale token would only record an error). If the run lists cannot be read the answer is `false`.
 
-Prints `first=true|false` to $GITHUB_OUTPUT. Standard library plus the `gh` CLI the runner ships; needs `actions: read`."""
+Audit K-19 (E-04): GitHub's cron, meant for 00:05 IST, fired at 06:12-07:32 IST. Shifted by six hours that is the NEXT session day, so the late run (which could not log
+in: that day's recorder had not run yet) counted as that day's earliest run and took the real evening's login at 00:10: 12, 17, 18 and 19 Nov collected nothing, and green.
+Now a SCHEDULED run created outside the evening's window (EVENING_FROM to EVENING_TO IST) never logs in and never counts as an earlier run. A run started by hand (or by the
+Worker, at 00:10) still does: a hand-started run earlier in the day uses up the day's login, as before.
+
+Prints `first=true|false` and `kind=ok|dup|late|unproven|other` to $GITHUB_OUTPUT (the workflow turns a run red when no candles came for any reason but `dup` and `late`).
+Standard library plus the `gh` CLI the runner ships; needs `actions: read`."""
 from __future__ import annotations
 
 import datetime as dt
@@ -23,6 +29,7 @@ import sys
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 LOGIN_STEP = "Log in to Kite by itself"
+EVENING_FROM, EVENING_TO = dt.time(23, 56), dt.time(6, 0)       # after every MCX close (23:30, or 23:55 some months) and before any morning job (audit K-19)
 
 
 def session_day(ts: dt.datetime) -> dt.date:
@@ -31,6 +38,16 @@ def session_day(ts: dt.datetime) -> dt.date:
 
 def _created(r: dict) -> dt.datetime:
     return dt.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00"))
+
+
+def in_evening(ts: dt.datetime) -> bool:
+    t = ts.astimezone(IST).time()
+    return t >= EVENING_FROM or t < EVENING_TO
+
+
+def could_log_in(r: dict) -> bool:
+    """A run that this gate could have let log in: anything but a scheduled run created outside the evening's window (K-19). A run with no event is counted."""
+    return r.get("event") != "schedule" or in_evening(_created(r))
 
 
 def login_proven(record_runs: list[dict], jobs_of, day: dt.date) -> tuple[bool, str]:
@@ -47,18 +64,28 @@ def login_proven(record_runs: list[dict], jobs_of, day: dt.date) -> tuple[bool, 
 
 
 def may_log_in(own_runs: list[dict], run_id: int, attempt: int, now: dt.datetime, record_runs: list[dict], jobs_of) -> tuple[bool, str]:
+    ok, why, _ = decide(own_runs, run_id, attempt, now, record_runs, jobs_of)
+    return ok, why
+
+
+def decide(own_runs: list[dict], run_id: int, attempt: int, now: dt.datetime, record_runs: list[dict], jobs_of) -> tuple[bool, str, str]:
+    """(may log in, why, kind): kind is ok, dup (another run has this evening's login), late (a scheduled run outside the evening), unproven or other."""
     if attempt > 1:
-        return False, f"attempt {attempt} of this run: a re-run never logs in again"
+        return False, f"attempt {attempt} of this run: a re-run never logs in again", "dup"
     mine = [r for r in own_runs if int(r["databaseId"]) == run_id]
     if not mine:
-        return False, "this run is not in the run list yet: not logging in (no login is better than an extra one)"
+        return False, "this run is not in the run list yet: not logging in (no login is better than an extra one)", "other"
+    if not could_log_in(mine[0]):
+        return False, (f"a scheduled run created at {_created(mine[0]).astimezone(IST):%H:%M} IST, outside the evening ({EVENING_FROM:%H:%M}-{EVENING_TO:%H:%M}): "
+                       f"GitHub's cron ran late; it does not log in and does not use up an evening's login"), "late"
     day = session_day(_created(mine[0]))
     if day != session_day(now):
-        return False, "this run was created for another session day: not logging in"
-    earlier = [int(r["databaseId"]) for r in own_runs if session_day(_created(r)) == day and int(r["databaseId"]) < run_id]
+        return False, "this run was created for another session day: not logging in", "other"
+    earlier = [int(r["databaseId"]) for r in own_runs if could_log_in(r) and session_day(_created(r)) == day and int(r["databaseId"]) < run_id]
     if earlier:
-        return False, f"{len(earlier)} earlier run(s) for this session day: only the first one logs in"
-    return login_proven(record_runs, jobs_of, day)
+        return False, f"{len(earlier)} earlier run(s) for this session day: only the first one logs in", "dup"
+    ok, why = login_proven(record_runs, jobs_of, day)
+    return ok, why, "ok" if ok else "unproven"
 
 
 def _gh(*args: str) -> str:
@@ -69,15 +96,15 @@ def main() -> int:
     run_id, attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
     repo = os.environ["GITHUB_REPOSITORY"]
     try:
-        own = json.loads(_gh("run", "list", "-R", repo, "--workflow", "kite-evening.yml", "--limit", "30", "--json", "databaseId,createdAt") or "[]")
+        own = json.loads(_gh("run", "list", "-R", repo, "--workflow", "kite-evening.yml", "--limit", "30", "--json", "databaseId,createdAt,event") or "[]")
         rec = json.loads(_gh("run", "list", "-R", repo, "--workflow", "kite-record.yml", "--limit", "30", "--json", "databaseId,createdAt,conclusion") or "[]")
-        ok, why = may_log_in(own, run_id, attempt, dt.datetime.now(dt.timezone.utc), rec,
-                             lambda i: json.loads(_gh("run", "view", str(i), "-R", repo, "--json", "jobs") or "{}").get("jobs"))
+        ok, why, kind = decide(own, run_id, attempt, dt.datetime.now(dt.timezone.utc), rec,
+                               lambda i: json.loads(_gh("run", "view", str(i), "-R", repo, "--json", "jobs") or "{}").get("jobs"))
     except (subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
-        ok, why = False, f"could not read the run lists ({type(e).__name__}): not logging in"
+        ok, why, kind = False, f"could not read the run lists ({type(e).__name__}): not logging in", "other"
     print(f"kite evening login gate: {'yes' if ok else 'no'}: {why}")
     with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as fh:
-        fh.write(f"first={'true' if ok else 'false'}\n")
+        fh.write(f"first={'true' if ok else 'false'}\nkind={kind}\n")
     return 0
 
 

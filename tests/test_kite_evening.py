@@ -205,7 +205,7 @@ def test_the_gate_script_defaults_to_no_login_when_the_run_lists_cannot_be_read(
     out = tmp_path / "o"
     monkeypatch.setenv("GITHUB_RUN_ID", "30"); monkeypatch.setenv("GITHUB_REPOSITORY", "o/r"); monkeypatch.setenv("GITHUB_OUTPUT", str(out)); monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
     monkeypatch.setattr(G, "_gh", lambda *a: (_ for _ in ()).throw(OSError("no gh")))
-    assert G.main() == 0 and out.read_text().strip() == "first=false"
+    assert G.main() == 0 and out.read_text().split() == ["first=false", "kind=other"]         # (kind: audit K-19, an unread run list ends the evening red)
 
 
 # ---- the workflow ---------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -224,7 +224,7 @@ def test_the_workflow_isolates_the_kite_secrets_encrypts_before_it_uploads_and_p
     wf = yaml.safe_load(text)
     assert check_workflows.check(WF) == [] and wf["permissions"] == {"contents": "read", "actions": "read"}
     on = wf.get("on", wf.get(True))
-    assert set(on) == {"schedule", "workflow_dispatch"} and on["schedule"] == [{"cron": "35 18 * * 1-5"}]
+    assert set(on) == {"workflow_dispatch"}                                                          # the Worker starts it at 00:10 IST; GitHub's late cron is gone (K-19)
     assert wf["concurrency"]["group"] == "kite-evening"
     jobs = wf["jobs"]
     collect, publish = jobs["collect"], jobs["publish"]
