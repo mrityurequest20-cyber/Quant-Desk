@@ -283,3 +283,5 @@ The engineer's sessions can search and read the web. Use it deliberately:
 - Add an issue yourself with the `desk-request` label.
 - Re-rank [BACKLOG.md](BACKLOG.md).
 - Pause or resume the routine at claude.ai → Routines.
+
+Recording Fyers and Angel One data (owner-authorised, 21 Nov 2026): "<your words, e.g. I want all the Fyers and Angel One data kept, encrypted>". So the Fyers and Angel One market data may also leave the runner the way Kite's does: encrypted with the repository secret MARKET_TAPE_KEY (at least 32 random characters, e.g. from openssl rand -base64 32), as 90-day workflow artifacts, never unencrypted in the repository, a release or a model card.
