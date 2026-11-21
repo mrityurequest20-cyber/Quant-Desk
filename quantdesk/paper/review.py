@@ -52,7 +52,8 @@ def session_reviews(account: Account, now: dt.datetime, equity: float | None, cl
         kind = row.get("kind")
         if kind in FILL_KINDS:
             before = s.realized
-            s.apply_fill(kind, Instrument.from_dict(row["instrument"]), row["segment"], row["qty"], row["price"], row["fees"], row["ts"], row["strategy"], row["thesis"], row.get("slip"))
+            s.apply_fill(kind, Instrument.from_dict(row["instrument"]), row["segment"], row["qty"], row["price"], row["fees"], row["ts"], row["strategy"], row["thesis"], row.get("slip"),
+                         row.get("stop"), row.get("target"))                    # audit K-26: a futures entry needs its stop, as in Account._check_against_replay
             pnl = s.realized - before if kind in CLOSING else None
             d["realized"] += pnl or 0.0
             d["fees"] += float(row.get("fees") or 0.0)

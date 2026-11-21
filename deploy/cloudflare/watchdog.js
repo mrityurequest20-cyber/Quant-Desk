@@ -356,6 +356,9 @@ async function w18Review(c) {
 	const st = r.ok ? await r.json() : null;
 	const reviews = st && st.summary && Array.isArray(st.summary.reviews) ? st.summary.reviews : [];
 	const today = reviews.find((x) => x && x.day === c.now.date);
+	const err = st && st.summary && typeof st.summary.review_error === "string" ? ascii(st.summary.review_error, 40) : "";
+	if (!today && err) return [{ sev: "P2", check: "W18", pushOnly: true, link: actionsUrl(c.env, PAPER_RUNNER), title: `Session review ${c.now.date}: could not be worked out`,
+		body: `The paper runner is running, but its session review failed (${err}): the day's figures are in the app's Positions tab. The owner should look (audit K-26).` }];
 	if (!today) return [{ sev: "INFO", check: "W18", pushOnly: true, link: actionsUrl(c.env, PAPER_RUNNER), title: `Session review ${c.now.date}: none`,
 		body: "The paper runner left no review for today on the relay: it did not run, or it stopped before the close." }];
 	const lab = st.summary.lab && typeof st.summary.lab === "object" ? st.summary.lab : null;

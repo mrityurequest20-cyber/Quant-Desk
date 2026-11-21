@@ -644,12 +644,17 @@ class Runner:
                 "day_floor": fin(day_floor), "dd_floor": fin(dd_floor), "positions": pos,
                 "slippage": SL.totals(a.ledger), "slips": [{"seq": r["seq"], "symbol": r.get("symbol"), **r["slip"]} for r in [x for x in a.ledger if isinstance(x.get("slip"), dict)][-8:]],
                 "ledger_tail": [_tail(r) for r in a.ledger[-40:]],
-                "ledger_len": len(a.ledger), "ledger_ok": a.verify_ledger(), "reviews": self._reviews(now, eq)}
+                "ledger_len": len(a.ledger), "ledger_ok": a.verify_ledger(), "reviews": self._reviews(now, eq), "review_error": self._review_err}
+
+    _review_err = None
 
     def _reviews(self, now, eq) -> list:
         try:
-            return RV.session_reviews(self.account, now, float(eq) if is_number(eq) else None, visible)
-        except Exception:                                                    # noqa: BLE001 - a review that cannot be worked out never costs the state the app and the brakes read
+            out = RV.session_reviews(self.account, now, float(eq) if is_number(eq) else None, visible)
+            self._review_err = None
+            return out
+        except Exception as e:                                               # noqa: BLE001 - a review that cannot be worked out never costs the state the app and the brakes read
+            self._review_err = type(e).__name__                              # audit K-26: said, not an empty list read as "did not run"
             return []
 
 
