@@ -235,7 +235,7 @@ def test_a_failed_send_says_how_to_tell_whether_it_went_through_and_prints_no_pr
         cli.cmd_reconcile(cfg, SimpleNamespace(plan=str(pf), chains=["x.parquet"], account=None, out=None, apply=True))
     msg = str(e.value)
     assert "HTTP 503" in msg and "If the send went through, a re-run is refused" in msg and "ledger length" in msg
-    assert not re.search(r"\b(90|89\.\d+|cash|₹)\b", msg + out.getvalue())
+    assert not re.search(r"\b(90|89\.\d+|cash)\b|₹", msg + out.getvalue())
 
 def test_the_command_prints_counts_and_a_fingerprint_only_and_a_dry_run_sends_nothing(cfg, tmp_path, monkeypatch):
     from quantdesk.paperlink import cli
