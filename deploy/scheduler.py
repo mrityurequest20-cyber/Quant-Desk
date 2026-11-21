@@ -74,26 +74,69 @@ FX_WINDOW = (dt.time(4, 5), dt.time(11, 0))
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 
 
-def holidays(config: Path) -> set[dt.date]:
-    out, inside = set(), False
-    for line in config.read_text(encoding="utf-8").splitlines():
-        if re.match(r"^\s*holidays:\s*$", line):
-            inside = True
-            continue
-        if inside:
-            m = re.match(r"^\s*-\s*(\d{4}-\d{2}-\d{2})", line)
-            if m:
-                out.add(dt.date.fromisoformat(m.group(1)))
-            elif line.strip() and not line.strip().startswith("#"):
+def _dates_at(text: str, path: tuple[str, ...]) -> set[dt.date]:
+    """The `- YYYY-MM-DD` list under the key `path` (for example ("calendar", "holidays")) of a YAML text, read by indentation with the standard library only
+    (this script runs on the runner's bare python3). Each key is looked for among its parent's DIRECT children only, so a same-named list elsewhere, or deeper, is
+    never taken (audit K-37, FH-07: the first `holidays:` line in the file was the currency segment's, 20 dates where NSE has 16)."""
+    lines = []
+    for raw in text.splitlines():
+        body = raw.split("#", 1)[0].rstrip()
+        if body.strip():
+            lines.append((len(body) - len(body.lstrip()), body.strip()))
+    lo, hi, base = 0, len(lines), -1
+    for key in path:
+        child, found = None, None
+        for k in range(lo, hi):
+            ind, t = lines[k]
+            if ind <= base:
+                hi = k
                 break
+            child = ind if child is None else child
+            if ind == child and t == f"{key}:":
+                found = k
+                break
+        if found is None:
+            return set()
+        base, lo = lines[found][0], found + 1
+        for k in range(lo, hi):                                          # the key's block ends at the next line not deeper than it
+            if lines[k][0] <= base and not lines[k][1].startswith("- "):
+                hi = k
+                break
+    out = set()
+    for k in range(lo, hi):
+        ind, t = lines[k]
+        m = re.match(r"^-\s*(\d{4}-\d{2}-\d{2})$", t)
+        if not (m and ind >= base):                                     # YAML allows the items at the key's own indent; a less indented one is not its
+            break
+        out.add(dt.date.fromisoformat(m.group(1)))
     return out
 
 
-def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: int = MAX_STARTS, window: tuple[dt.time, dt.time] = WINDOW) -> tuple[str, str]:
-    """('start' | 'wait', why). `runs`: the recorder's runs as `gh run list --json status,conclusion,createdAt,event` gives them."""
+def holidays(config: Path) -> set[dt.date]:
+    """NSE's weekday holidays: calendar.holidays (the same list as quantdesk.config's Config.holidays())."""
+    return _dates_at(config.read_text(encoding="utf-8"), ("calendar", "holidays"))
+
+
+def mcx_closures(config: Path) -> set[dt.date]:
+    """MCX's weekday full-day closures (markets.mcx.holidays). On any other weekday NSE holiday MCX trades its evening, from 17:00 (markets/sessions.py)."""
+    return _dates_at(config.read_text(encoding="utf-8"), ("markets", "mcx", "holidays"))
+
+
+MCX_EVENING_FROM = dt.time(16, 50)                     # on an NSE holiday MCX opens at 17:00: the evening's workflows start a little before
+MCX_EVENING_WORKFLOWS = frozenset({"paper-desk.yml", "fyers-feed.yml"})     # the MCX evening's own (the paper desk trades it; Fyers is its first feed)
+
+
+def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: int = MAX_STARTS, window: tuple[dt.time, dt.time] = WINDOW,
+           mcx_evening: set[dt.date] | None = None) -> tuple[str, str]:
+    """('start' | 'wait', why). `runs`: the recorder's runs as `gh run list --json status,conclusion,createdAt,event` gives them. `mcx_evening`: for the MCX
+    evening's workflows, MCX's weekday full closures; an NSE holiday that is not one is an MCX evening, and the workflow may start from MCX_EVENING_FROM (K-37)."""
     now = now.astimezone(IST)
     day = now.date()
-    if day.weekday() >= 5 or day in hols:
+    if day.weekday() < 5 and day in hols and mcx_evening is not None and day not in mcx_evening:
+        window = (max(window[0], MCX_EVENING_FROM), max(window[1], MCX_EVENING_FROM))
+        if not (window[0] <= now.time() < window[1]):
+            return "wait", f"{day} is an NSE holiday: only the MCX evening trades, from {MCX_EVENING_FROM:%H:%M}"
+    elif day.weekday() >= 5 or day in hols:
         return "wait", f"{day} is not an NSE trading day"
     if not (window[0] <= now.time() < window[1]):
         return "wait", f"{now:%H:%M} IST is outside the start window {window[0]:%H:%M}–{window[1]:%H:%M}"
@@ -184,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     repo_root = Path(__file__).resolve().parent.parent
     hols = holidays(repo_root / "config" / "quantdesk.yaml")
+    mcx_closed = mcx_closures(repo_root / "config" / "quantdesk.yaml")
     if argv[:1] == ["--wake"]:                       # wake.yml: the armed waiter
         if not sleep_until(dt.datetime.fromisoformat(argv[1]).astimezone(IST)):
             return 1
@@ -201,7 +245,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{wf}: could not list its runs; not starting it")          # the Kite recorder never holds up the main one
             continue
         action, why = decide(now, wf_runs, hols, limit, {PAPER_WORKFLOW: PAPER_WINDOW, FYERS_WORKFLOW: FYERS_WINDOW, ANGEL_WORKFLOW: ANGEL_WINDOW,
-                                                          PREMARKET_WORKFLOW: PREMARKET_WINDOW}.get(wf, WINDOW))
+                                                          PREMARKET_WORKFLOW: PREMARKET_WINDOW}.get(wf, WINDOW),
+                             mcx_closed if wf in MCX_EVENING_WORKFLOWS else None)
         print(f"{wf}: {action}: {why}")
         if action == "start":
             try:
