@@ -99,7 +99,16 @@ def _size(summ) -> str:
 def _minimal(account, now, why: str) -> dict:
     """The smallest view the relay takes with an account (it needs the ledger's length): sent when the full summary cannot be built or is refused, so the record
     never waits for the app's view (audit K-01, K-06). The app shows it as degraded."""
-    return {"v": 1, "asof": now.isoformat() if now is not None else None, "ledger_len": len(account.ledger), "degraded": str(why)[:120]}
+    return {"v": 1, "asof": now.isoformat() if now is not None else None, "ledger_len": len(account.ledger), "degraded": str(why)[:120],
+            "halt": account.halt, "day_halted": bool(account.day_halted)}               # plain fields that cannot fail: the app's halt banners stay
+
+
+def _view(rn, snap, now, account) -> dict:
+    """The app's view, or the minimal one when building it fails for ANY reason (audit K-06, AIJ-05: a KeyError or TypeError here ended the part)."""
+    try:
+        return rn.summary(snap, now)
+    except Exception as e:                                             # noqa: BLE001 - the record and the brakes never wait for the view
+        return _minimal(account, now, f"summary failed ({type(e).__name__})")
 
 
 def _clean(x) -> str:
@@ -127,7 +136,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         snap0 = relay.snapshot()
         now0 = Runner.server_now(snap0)
         if now0 is not None:
-            relay.put_state(fit_summary(rn.summary(snap0, now0)), account_json(account))
+            relay.put_state(fit_summary(_view(rn, snap0, now0, account)), account_json(account))
             ledger_pushed, fp_pushed, last_full, last_sum = len(account.ledger), fingerprint(account), time.monotonic(), time.monotonic()
     except (RelayError, ValueError, OverflowError) as e:
         log(f"paper: could not send the opening state to the relay ({_why(e)}); will retry")
@@ -226,11 +235,13 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
                     summ["cycle_fails"] = cycle_fails
                     try:
                         relay.put_state(fit_summary(summ), account_json(account) if full else None)
-                    except RelayError:
+                    except RelayError as e:
                         if not full:
                             raise
                         relay.put_state(_minimal(account, now, "the full summary was refused"), account_json(account))   # the record never waits for the view (K-01)
                         view_degraded += 1
+                        if view_degraded == 1 or view_degraded % 100 == 0:
+                            log(f"paper: the relay refused the full summary ({_why(e)}); the account went with a short view ({view_degraded} times)")
                     last_sum = mono
                     if save_fails:
                         log(f"paper: the relay took the state again after {save_fails} failed saves")
@@ -270,7 +281,10 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             snap = relay.snapshot()
             now = Runner.server_now(snap)
             if now is not None:
-                relay.put_state(fit_summary(rn.summary(snap, now)), account_json(account))
+                try:
+                    relay.put_state(fit_summary(_view(rn, snap, now, account)), account_json(account))
+                except RelayError:                                     # the record never waits for the view (K-01), at the last save too
+                    relay.put_state(_minimal(account, now, "the full summary was refused"), account_json(account))
                 ledger_pushed = len(account.ledger)
         except (RelayError, ValueError, OverflowError) as e:
             log(f"paper: the last save to the relay failed too ({_why(e)})")

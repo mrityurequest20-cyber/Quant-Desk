@@ -43,7 +43,7 @@ def test_a_key_error_in_autos_summary_never_stops_the_runner_and_the_record_is_k
     assert any("summary could not be built (KeyError)" in m for m in lines)
 
 
-def test_a_cycle_that_fails_every_time_blocks_entries_says_brakes_down_and_ends_the_part_red(cfg, tmp_path, monkeypatch):
+def test_a_cycle_that_fails_every_time_says_brakes_down_once_and_ends_the_part_red(cfg, tmp_path, monkeypatch):
     def broken(self, *a, **k):
         raise TypeError("a malformed position")
     monkeypatch.setattr(R.Runner, "step", broken)
@@ -96,3 +96,26 @@ def test_the_app_says_when_the_view_is_short_or_the_brakes_are_down_and_never_sh
     assert "sm.degraded" in app and "The trade record itself is saved" in app
     assert "sm.brakes_down" in app and "the brakes are not running" in app
     assert 'sm.degraded ? "—" : String(pos.length)' in app
+
+
+
+def test_a_summary_error_at_the_opening_or_the_last_save_never_ends_the_part(cfg, tmp_path, monkeypatch):
+    """Risk review of K-06: AIJ-05 was still open at a part's first and last save. Every summary fails here, from the very first."""
+    def broken(self, snap, now):
+        raise KeyError("why")
+    monkeypatch.setattr(R.Runner, "summary", broken)
+    clk, lines = Clock(), []
+    rl = FakeRelay(clk)
+    rl.add()
+    code = go(cfg, rl, clk, tmp_path, minutes=1, lines=lines)
+    assert code == 0 and NAME in R.load_account(rl.state["account"]).positions
+    s = rl.state["summary"]
+    assert s["degraded"].startswith("summary failed (KeyError)") and s["halt"] is None and s["day_halted"] is False
+
+
+def test_a_refused_full_summary_is_logged_once_with_its_reason(cfg, tmp_path):
+    clk, lines = Clock(), []
+    rl = ViewRefusing(clk)
+    rl.add()
+    go(cfg, rl, clk, tmp_path, minutes=1, lines=lines)
+    assert sum("refused the full summary" in m and "HTTP 400" in m for m in lines) == 1
