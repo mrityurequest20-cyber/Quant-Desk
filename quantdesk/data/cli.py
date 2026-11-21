@@ -375,7 +375,8 @@ def cmd_fyers_feed(cfg, a):
         return
     watch = cfg.get("desk.watchlist", {}) or {}
     try:
-        rep = F.run(a.until, app_id, token, LivePusher(url, ingest, src="f"), watchlist=watch if isinstance(watch, dict) else {}, plan=cfg.get("feeds.fyers_plan"),
+        from .tape import tee                                          # audit K-20: every quote also to the day's tape (MARKET_TAPE_DIR, set by the workflow)
+        rep = F.run(a.until, app_id, token, tee(LivePusher(url, ingest, src="f"), os.environ.get("MARKET_TAPE_DIR"), "f"), watchlist=watch if isinstance(watch, dict) else {}, plan=cfg.get("feeds.fyers_plan"),
                     use_socket=bool(cfg.get("feeds.fyers_socket", False)))
     except (OSError, ValueError) as exc:                            # Fyers or the network (urllib's errors are OSErrors), or an answer that is not JSON: a warning, not a red run
         rep = {"stopped": f"Fyers side: {type(exc).__name__}"}
@@ -437,7 +438,8 @@ def cmd_angel_feed(cfg, a):
         print("angel-feed: no live relay configured (LIVE_URL, LIVE_INGEST_TOKEN); the feed is display only, so nothing to do")
         return
     try:
-        rep = A.run(a.until, key, jwt, LivePusher(url, ingest, src="a"))
+        from .tape import tee                                          # audit K-20: every quote also to the day's tape (MARKET_TAPE_DIR, set by the workflow)
+        rep = A.run(a.until, key, jwt, tee(LivePusher(url, ingest, src="a"), os.environ.get("MARKET_TAPE_DIR"), "a"))
     except (OSError, ValueError) as exc:                            # Angel One or the network, or an answer that is not JSON: a warning, not a red run
         rep = {"stopped": f"Angel One side: {type(exc).__name__}"}
         print(f"::warning::angel-feed: {rep['stopped']}")

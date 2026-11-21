@@ -13,7 +13,8 @@ What it reads, with the day's session (deploy/angel_autologin.py) and SmartAPI's
 Our own rate cap is 2 calls a second and 40 a minute, far under SmartAPI's. A 429 stops the feed for the day; a refused
 session (401, 403, or an AG8001/AG8002 "invalid/expired token" answer) stops it too.
 
-DISPLAY ONLY, like the other feeds: nothing is written to disk, and no order, position, holding, funds or profile
+DISPLAY ONLY, like the other feeds: nothing is written to disk by this module (the CLI may wrap its pusher in a tape, quantdesk/data/tape.py, audit K-20,
+which the workflow encrypts), and no order, position, holding, funds or profile
 endpoint is named in this file (a test checks). The session token and the API key are never printed or logged.
 """
 from __future__ import annotations

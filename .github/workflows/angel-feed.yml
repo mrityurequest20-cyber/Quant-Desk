@@ -1,6 +1,7 @@
 # The Angel One feed (docs/FEEDS.md): currency futures, every five seconds, to the private live relay as feed "a". The owner's split of 13 Nov 2026: Kite carries indices, stocks
 # and options; Fyers carries MCX; Angel One carries currency; Kotak stands behind them all. Market data only: the code calls SmartAPI's quote API and nothing else (a test checks),
-# and writes no price to disk, to the repository or to a release.
+# Since audit K-20 every quote it hands the relay is also kept on a tape (quantdesk/data/tape.py), ENCRYPTED with the owner's MARKET_TAPE_KEY before it is kept as a
+# 90-day artifact (licensed data, public repository): no price ever reaches the repository, a release or an artifact in the clear.
 #
 # Login (docs/AUTONOMY.md, "More market-data brokers"): SmartAPI's documented login (client code, MPIN, TOTP), one call, in standard-library Python under `-I -S`
 # (deploy/angel_autologin.py). The MPIN and TOTP key reach that step only. Lockout guard: only the first run of the IST day, on its first attempt, may log in
@@ -89,6 +90,7 @@ jobs:
       - name: Stream currency to the live relay
         if: "!inputs.check_only"
         env:
+          MARKET_TAPE_DIR: runtime/tape          # every quote handed to the relay is also kept (audit K-20)
           UNTIL: ${{ inputs.first_until || '14:50' }}
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
           LIVE_URL: ${{ vars.LIVE_URL }}
@@ -100,6 +102,27 @@ jobs:
       - name: The run's counts (no price, no token)
         if: always()
         run: if [ -f angel_metrics.json ]; then { echo '```'; cat angel_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Encrypt the day's Angel One tape with the owner's tape key (licensed data, never kept in the clear; audit K-20)
+        if: always()
+        env:
+          MARKET_TAPE_KEY: ${{ secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -d runtime/tape ] || [ -z "$(ls -A runtime/tape)" ]; then echo "no tape was written"; exit 0; fi
+          if [ -z "$MARKET_TAPE_KEY" ]; then
+            echo "::warning::MARKET_TAPE_KEY is not set, so today's Angel One tape is not kept: add the secret (a long random string) to keep it"
+            rm -rf runtime/tape; exit 0
+          fi
+          tar -C runtime/tape -cf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MARKET_TAPE_KEY -out angel_tape.tar.enc
+          rm -rf runtime/tape
+          echo "angel_tape.tar.enc sha256 $(sha256sum angel_tape.tar.enc | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the encrypted tape
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: angel-tape-${{ github.job }}
+          path: angel_tape.tar.enc
+          if-no-files-found: ignore
+          retention-days: 90
 
   feed-2:
     needs: feed-1
@@ -129,6 +152,7 @@ jobs:
         run: deploy/angel-export.sh
       - name: Stream currency to the live relay until the close
         env:
+          MARKET_TAPE_DIR: runtime/tape          # every quote handed to the relay is also kept (audit K-20)
           UNTIL: ${{ inputs.second_until || '17:05' }}
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
           LIVE_URL: ${{ vars.LIVE_URL }}
@@ -140,3 +164,24 @@ jobs:
       - name: The run's counts (no price, no token)
         if: always()
         run: if [ -f angel_metrics.json ]; then { echo '```'; cat angel_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Encrypt the day's Angel One tape with the owner's tape key (licensed data, never kept in the clear; audit K-20)
+        if: always()
+        env:
+          MARKET_TAPE_KEY: ${{ secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -d runtime/tape ] || [ -z "$(ls -A runtime/tape)" ]; then echo "no tape was written"; exit 0; fi
+          if [ -z "$MARKET_TAPE_KEY" ]; then
+            echo "::warning::MARKET_TAPE_KEY is not set, so today's Angel One tape is not kept: add the secret (a long random string) to keep it"
+            rm -rf runtime/tape; exit 0
+          fi
+          tar -C runtime/tape -cf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MARKET_TAPE_KEY -out angel_tape.tar.enc
+          rm -rf runtime/tape
+          echo "angel_tape.tar.enc sha256 $(sha256sum angel_tape.tar.enc | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the encrypted tape
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: angel-tape-${{ github.job }}
+          path: angel_tape.tar.enc
+          if-no-files-found: ignore
+          retention-days: 90

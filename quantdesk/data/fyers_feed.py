@@ -16,7 +16,8 @@ Fyers' limits: a per-second and a per-minute cap, and a user who breaks the per-
 day is blocked for the rest of it. So every call goes through `Limiter` (well under the caps), and a 429 stops the feed
 for the day at once instead of trying again.
 
-DISPLAY ONLY, like the Kite live push: nothing is written to disk, nothing is read by the paper desk's decisions
+DISPLAY ONLY, like the Kite live push: nothing is written to disk by this module (the CLI may wrap its pusher in a tape, quantdesk/data/tape.py, audit K-20,
+which the workflow encrypts), nothing is read by the paper desk's decisions
 except through the relay's quotes, and no order, position, holding, funds or profile endpoint is named in this file
 (a test checks). The token is never printed, logged or put in an error.
 """
