@@ -71,11 +71,14 @@ class PaperBroker:
         row = self.account.apply_fill("buy", order.instrument, order.segment, order.qty, px, fees, now.isoformat(), order.strategy, order.thesis, slip)
         return d, row
 
-    def sell(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
-        d = self.gate.check_exit(self.account, symbol, qty, quote, now)
+    def sell(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None,
+             forced: bool = False) -> tuple[Decision, dict | None]:
+        d = self.gate.check_exit(self.account, symbol, qty, quote, now, forced=forced)
         if not d.allowed:
             return d, None
         pos = self.account.positions[symbol]
+        if forced and quote.bid_qty is not None and qty > quote.bid_qty:                # a brake is never refused for the size shown: it is filled, and the record says so (K-02)
+            why = f"{why} ({qty} sold against {quote.bid_qty:g} bid: a forced exit is never refused for size)"
         impact = SL.impact_ticks(qty, quote.bid_qty) * self.tick_for(pos.instrument)
         px = max(quote.bid - impact, 0.0)
         impact = quote.bid - px                                                  # what was really given up (a bid below the impact is sold at nothing, not below)
@@ -144,12 +147,15 @@ class PaperBroker:
             return Decision(False, [f"the package could not be completed ({type(e).__name__}): nothing was opened"]), []
         return d, rows
 
-    def cover(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
+    def cover(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None,
+             forced: bool = False) -> tuple[Decision, dict | None]:
         """Buy back (close) a sold option at the offer plus the modelled impact."""
-        d = self.gate.check_cover(self.account, symbol, qty, quote, now)
+        d = self.gate.check_cover(self.account, symbol, qty, quote, now, forced=forced)
         if not d.allowed:
             return d, None
         pos = self.account.positions[symbol]
+        if forced and quote.ask_qty is not None and qty > quote.ask_qty:
+            why = f"{why} ({qty} bought back against {quote.ask_qty:g} offered: a forced exit is never refused for size)"
         impact = SL.impact_ticks(qty, quote.ask_qty) * self.tick_for(pos.instrument)
         px = quote.ask + impact
         if limit is not None and px > limit + 1e-9:
@@ -160,12 +166,13 @@ class PaperBroker:
         row = self.account.apply_fill("btc", pos.instrument, pos.segment, qty, px, fees, now.isoformat(), pos.strategy, f"{why}: {pos.thesis}", slip)
         return d, row
 
-    def close(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None) -> tuple[Decision, dict | None]:
+    def close(self, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, why: str = "exit", ref: dict | None = None, limit: float | None = None,
+              forced: bool = False) -> tuple[Decision, dict | None]:
         """Close a position whichever way it is held: sell a long, buy back a short."""
         pos = self.account.positions.get(symbol)
         if pos is not None and pos.qty < 0:
-            return self.cover(symbol, qty, quote, now, why, ref, limit)
-        return self.sell(symbol, qty, quote, now, why, ref, limit)
+            return self.cover(symbol, qty, quote, now, why, ref, limit, forced)
+        return self.sell(symbol, qty, quote, now, why, ref, limit, forced)
 
     def trim(self, quotes: dict[str, Quote], marks: dict[str, float], now: dt.datetime, why: str = "trim to the loss budget") -> dict[str, Decision]:
         """Sell just enough, biggest positions first, in whole lots, to bring the open premium back inside the loss budget (the gate's
@@ -183,7 +190,7 @@ class PaperBroker:
                 continue
             lot = max(1, pos.instrument.lot_size)
             qty = min(pos.qty, -(-int(math.ceil(excess / mark)) // lot) * lot)
-            d, row = self.sell(sym, qty, quotes.get(sym), now, why)
+            d, row = self.sell(sym, qty, quotes.get(sym), now, why, forced=True)       # the loss budget's trim is a brake (K-02)
             out[sym] = d
             if row is not None:
                 excess -= qty * mark
@@ -194,7 +201,7 @@ class PaperBroker:
         out = {}
         for sym in sorted(self.account.positions, key=lambda k: self.account.positions[k].qty >= 0):       # sold options first: buying them back never leaves anything uncovered
             pos = self.account.positions[sym]
-            d, _ = self.close(sym, abs(pos.qty), quotes.get(sym), now, why)
+            d, _ = self.close(sym, abs(pos.qty), quotes.get(sym), now, why, forced=True)
             out[sym] = d
         return out
 

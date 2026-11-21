@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 IST = MK.IST
 MON = dt.datetime(2026, 11, 16, 11, 0, tzinfo=IST)            # Mon 16 Nov 2026: NSE, currency and MCX all trade; US daylight saving is over, so MCX closes 23:30
 CRUDE, USD = "CRUDEOIL-MCX", "USDINR-CDS"
+CAP = 2_500_000      # one full CRUDEOIL lot (100 barrels) fits 2.5% a trade only on an account this size: a 9% move through its stop is about 52,300 (audit K-03)
 THESIS = "crude holding above the overnight range with rising open interest"
 
 
@@ -34,7 +35,7 @@ def cfg():
 
 @pytest.fixture()
 def rn(cfg, tmp_path):
-    return R.Runner(cfg, Account(500_000), gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "KILL")), kill_file=tmp_path / "KILL")
+    return R.Runner(cfg, Account(CAP), gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "KILL")), kill_file=tmp_path / "KILL")
 
 
 def board(now=MON, crude=(5800.0, 5801.0), usd=(84.5000, 84.5025), e_crude="2026-12-17", e_usd="2026-12-29", age=2.0, **extra):
@@ -69,8 +70,8 @@ def test_a_long_fills_at_the_offer_and_moves_cash_only_by_its_fees(rn):
     assert r["fill"]["kind"] == "buy" and r["fill"]["price"] == 5801.0 and r["fill"]["qty"] == 100 and r["fill"]["stop"] == 5750.0 and r["fill"]["target"] == 5900.0
     p = rn.account.positions[CRUDE]
     assert p.instrument.kind == FUTURE and p.instrument.expiry == dt.date(2026, 12, 17) and p.segment == "mcx" and p.stop == 5750.0 and p.target == 5900.0
-    assert rn.account.cash == pytest.approx(500_000 - r["fill"]["fees"])                        # margined: nothing like 5.8 lakh of notional leaves the cash
-    assert rn.account.equity({CRUDE: 5800.0}) == pytest.approx(500_000 - r["fill"]["fees"] - 100.0)   # marked at the bid: one rupee a barrel under the price paid
+    assert rn.account.cash == pytest.approx(CAP - r["fill"]["fees"])                        # margined: nothing like 5.8 lakh of notional leaves the cash
+    assert rn.account.equity({CRUDE: 5800.0}) == pytest.approx(CAP - r["fill"]["fees"] - 100.0)   # marked at the bid: one rupee a barrel under the price paid
 
 
 def test_a_short_fills_at_the_bid_with_its_stop_above(rn):
@@ -156,7 +157,7 @@ def test_the_stop_closes_a_long_at_the_bid_and_books_the_loss(rn):
     rep = run(rn, [], board(t, crude=(5749.0, 5750.0)), t)
     assert CRUDE not in rn.account.positions and any(f["action"] == "futures" and "stop" in f["why"][0] for f in rep["forced"])
     assert rn.account.realized == pytest.approx((5749.0 - 5801.0) * 100)
-    assert rn.account.cash == pytest.approx(500_000 + (5749.0 - 5801.0) * 100 - rn.account.fees) and rn.account.fees > fees_in
+    assert rn.account.cash == pytest.approx(CAP + (5749.0 - 5801.0) * 100 - rn.account.fees) and rn.account.fees > fees_in
 
 
 def test_the_target_closes_a_short_at_the_offer(rn):
@@ -200,12 +201,15 @@ def test_a_restart_rebuilds_the_future_with_its_stop_from_the_ledger(rn):
         Account.from_dict(json.loads(json.dumps(tampered)))
 
 
-def test_the_book_counts_a_future_at_its_stop(rn):
+def test_the_book_counts_a_future_at_its_stop_or_its_stress_move_the_worse(rn):
+    """Audit K-03: a stop is a trigger, not a bound. A held future's worst case is the larger loss of its stop (5,100 here) and a 9% move from its entry (52,209)."""
     run(rn, [order()])
     a = rn.account
-    assert a.stress() == pytest.approx(a.cash + (5750.0 - 5801.0) * 100)
-    assert a.open_value({CRUDE: 5800.0}) == pytest.approx((5800.0 - 5750.0) * 100)
-    assert a.equity_lower_bound({}) == pytest.approx(a.cash + (5750.0 - 5801.0) * 100)            # no price: counted at its stop
+    worst = -0.09 * 5801.0 * 100
+    assert worst < (5750.0 - 5801.0) * 100
+    assert a.stress() == pytest.approx(a.cash + worst)
+    assert a.open_value({CRUDE: 5800.0}) == pytest.approx((5800.0 - 5801.0) * 100 - worst)
+    assert a.equity_lower_bound({}) == pytest.approx(a.cash + worst)                               # no price: counted at its stress loss, not only its stop
 
 
 def test_the_app_sees_the_future_with_its_stop(rn):

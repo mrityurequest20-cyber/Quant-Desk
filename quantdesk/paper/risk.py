@@ -133,6 +133,14 @@ class RiskGate:
         self.costs = CostModel(cfg)
         self.kill = kill or KillSwitch(cfg.get("paper.kill_switch_file", "runtime/paper/KILL"))
         self.configured_costs = set((cfg.get("costs.segments") or {}).keys())
+        fut = cfg.get("paper.futures") or {}
+        seg_stress = fut.get("stress_pct") if isinstance(fut.get("stress_pct"), dict) else {}
+        self.fut_stress = {}                                                     # underlying -> stress move (audit K-03); a contract's own stress_pct wins over its segment's
+        for u, c in (fut.get("contracts") or {}).items():
+            if isinstance(c, dict):
+                v = c.get("stress_pct", seg_stress.get(c.get("segment")))
+                if is_number(v) and 0 < v < 1:
+                    self.fut_stress[str(u).upper()] = float(v)
 
     # ---- state ---------------------------------------------------------------------------------------------------------------
     def floors(self, account: Account) -> tuple[float | None, float]:
@@ -334,10 +342,16 @@ class RiskGate:
                 fees_in, _ = self.costs.fees(inst, -order.qty if short else order.qty, px, segment=seg)
                 fees_out, _ = self.costs.fees(inst, order.qty if short else -order.qty, stop, segment=seg)
                 slip = 0.001 * px                                                 # a stop fills worse than its price: a tenth of a percent allowed for it
-                risk = order.qty * (abs(px - stop) + slip) + fees_in + fees_out
-                if risk > self.limits.risk_per_trade * eq:
-                    why.append(f"to the stop it would risk {risk:,.0f} (with a slippage allowance and both sides' fees), over {self.limits.risk_per_trade:.1%} of equity "
-                               f"({self.limits.risk_per_trade * eq:,.0f}): a closer stop or fewer lots")
+                sp = self.fut_stress.get(str(inst.underlying or "").upper())
+                risk = None
+                if not (is_number(sp) and sp > 0):
+                    why.append("no registered stress move for this contract (paper.futures.stress_pct): a futures entry is sized on it, not only on its stop")
+                else:
+                    to_stop, gap = abs(px - stop) + slip, sp * px                  # a stop is a trigger, not a bound (audit K-03): the larger of the two is the risk
+                    risk = order.qty * max(to_stop, gap) + fees_in + fees_out
+                    if risk > self.limits.risk_per_trade * eq:
+                        why.append(f"it would risk {risk:,.0f}: the larger of its stop's loss and a {sp:.0%} move through it (the exchange's price-limit band), with both sides' "
+                                   f"fees, over {self.limits.risk_per_trade:.1%} of equity ({self.limits.risk_per_trade * eq:,.0f}): a mini contract, or no trade")
                 rates = rules.get("margins") or {}
                 margin = order.qty * px * float(rules.get("margin", 1.0))
                 used = account.margin_used(marks, rates)
@@ -347,10 +361,10 @@ class RiskGate:
                     why.append(f"the fees of {fees_in:,.0f} are more than the cash")
                 day_floor, dd_floor = self.floors(account)
                 floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
-                at_risk = account.open_value(marks) + risk
-                if not (at_risk <= eq - floor):
-                    why.append(f"if every open position went to its worst together with this one at its stop, {at_risk:,.0f} would be lost against a loss budget of "
-                               f"{max(eq - floor, 0):,.0f} left before the daily or drawdown floor")
+                at_risk = account.open_value(marks) + risk if risk is not None else None
+                if at_risk is not None and not (at_risk <= eq - floor):
+                    why.append(f"if every open position went to its worst together with this one at its worst (its stop or its stress move), {at_risk:,.0f} would be lost "
+                               f"against a loss budget of {max(eq - floor, 0):,.0f} left before the daily or drawdown floor")
         return Decision(not why, why)
 
     # ---- packages: several legs at once, some of them SOLD, judged together ------------------------------------------------------------
@@ -432,7 +446,7 @@ class RiskGate:
             else:
                 from .account import Position
                 after[inst.symbol] = Position(inst, l["segment"], signed, px, now.isoformat(), strategy, thesis)
-        before, worst = account.stress(), stress_equity(cash_after, after)
+        before, worst = account.stress(), stress_equity(cash_after, after, account.fut_stress)
         if worst == float("-inf"):
             return Decision(False, ["this would leave a sold option uncovered (a short call without a long call of the same expiry behind it, or a position that cannot be valued): the loss would have no limit"])
         risk = before - worst
@@ -457,7 +471,7 @@ class RiskGate:
             why.append(f"if everything expired now at the worst price, equity would be {worst:,.0f}, too near the {floor:,.0f} floor (the day's or the drawdown limit; {STRESS_MARGIN:.1%} of equity is kept in reserve)")
         return Decision(not why, why)
 
-    def check_cover(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime) -> Decision:
+    def check_cover(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, forced: bool = False) -> Decision:
         """Buy back (close) a sold option. Like every exit it is never blocked by a brake: it only ever reduces the risk."""
         try:
             pos = account.positions.get(symbol)
@@ -468,7 +482,7 @@ class RiskGate:
                 why.append(f"cannot buy back {qty!r} of {symbol}: short {-pos.qty if pos and pos.qty < 0 else 0}")
             if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)):
                 why.append("no usable two-sided quote")
-            elif pos and quote.ask_qty is not None and qty > quote.ask_qty:
+            elif pos and not forced and quote.ask_qty is not None and qty > quote.ask_qty:      # a forced exit is never refused for the size shown (K-02)
                 why.append(f"{qty} is more than the {quote.ask_qty:g} on offer")
             if pos:
                 day = now.astimezone(IST).date()
@@ -480,7 +494,7 @@ class RiskGate:
             return Decision(False, [f"the check itself failed ({type(e).__name__}): not covered"])
 
     # ---- exits: never blocked by a brake ---------------------------------------------------------------------------------------
-    def check_exit(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime) -> Decision:
+    def check_exit(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, forced: bool = False) -> Decision:
         try:
             pos = account.positions.get(symbol)
             why = []
@@ -493,7 +507,7 @@ class RiskGate:
                 rest[symbol].qty -= qty
                 if rest[symbol].qty == 0:
                     del rest[symbol]
-                worst, before = stress_equity(account.cash, rest), account.stress()
+                worst, before = stress_equity(account.cash, rest, account.fut_stress), account.stress()
                 day_floor, dd_floor = self.floors(account)
                 floor = max(dd_floor, day_floor if day_floor is not None else dd_floor)
                 if worst == float("-inf") and before != float("-inf"):
@@ -502,7 +516,7 @@ class RiskGate:
                     why.append(f"selling this would leave a sold option without its cover: the worst case would be equity of {worst:,.0f}, under the {floor:,.0f} floor: buy the sold option back first")
             if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)):
                 why.append("no usable two-sided quote")
-            elif pos and quote.bid_qty is not None and qty > quote.bid_qty:
+            elif pos and not forced and quote.bid_qty is not None and qty > quote.bid_qty:      # a forced exit is never refused for the size shown (K-02)
                 why.append(f"{qty} is more than the {quote.bid_qty:g} bid")
             if pos:
                 day = now.astimezone(IST).date()
