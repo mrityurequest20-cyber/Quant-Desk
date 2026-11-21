@@ -49,7 +49,7 @@ def crude_board(t, F=5800.0, age=1.0, exp=EXP):
     return {"now": int(t.timestamp() * 1000), "quotes": q}
 
 
-FIT = 1_500_000                                  # an account on which one full CRUDEOIL lot fits 2.5% a trade through a 6% stress move (audit K-03)
+FIT = 2_500_000                                  # an account on which one full CRUDEOIL lot fits 2.5% a trade through a 9% stress move (audit K-03)
 
 
 def desk(cfg, tmp_path, stats=None, capital=500_000):
@@ -170,7 +170,7 @@ def test_a_shadow_futures_trade_is_scored_in_r_at_its_target(cfg, tmp_path, monk
 
 
 def test_on_the_desks_own_account_a_full_crude_lot_is_refused_for_its_stress_move(cfg, tmp_path, monkeypatch):
-    """Audit K-03: on 5 lakh, one CRUDEOIL lot (100 barrels) through a 6% move is about 35,000, over 2.5% a trade: AUTO's order is refused, with the reason."""
+    """Audit K-03: on 5 lakh, one CRUDEOIL lot (100 barrels) through a 9% move is about 52,000, over 2.5% a trade: AUTO's order is refused, with the reason."""
     rn, ap = desk(cfg, tmp_path, proven(FS))
     ap.evolved_on = EVE.date()
     monkeypatch.setattr(ap, "state", lambda snap, u, ch, now, news: futures_state("down"))
@@ -178,4 +178,4 @@ def test_on_the_desks_own_account_a_full_crude_lot_is_refused_for_its_stress_mov
     fut = [o for o in mine if o.get("symbol") == "CRUDEOIL-MCX"]
     assert fut and not rn.account.positions
     res = next(r for r in rep["results"] if r["id"] == fut[0]["id"])
-    assert res["status"] == "refused" and any("6% move through it" in r for r in res["reasons"])
+    assert res["status"] == "refused" and any("9% move through it" in r for r in res["reasons"])

@@ -48,13 +48,13 @@ def test_every_contract_has_a_registered_stress_move(cfg):
     g = RiskGate(cfg)
     contracts = cfg.get("paper.futures.contracts")
     assert set(g.fut_stress) == {u.upper() for u in contracts}
-    assert all(g.fut_stress[u.upper()] == (0.06 if c["segment"] == "mcx" else 0.03) for u, c in contracts.items())
+    assert all(g.fut_stress[u.upper()] == (0.09 if c["segment"] == "mcx" else 0.03) for u, c in contracts.items())
 
 
 def test_the_audits_two_lot_crude_long_is_refused_because_a_gap_through_its_stop_could_cost_far_more_than_2_5_percent(cfg, tmp_path):
     rn = desk(cfg, tmp_path)
     res = buy(rn, "CRUDEOIL-MCX", 2, 5750.0)
-    assert res["status"] == "refused" and any("6% move through it" in r for r in res["reasons"]), res
+    assert res["status"] == "refused" and any("9% move through it" in r for r in res["reasons"]), res
     assert not rn.account.positions
 
 
@@ -64,7 +64,7 @@ def test_a_mini_contract_sized_on_the_stress_move_keeps_a_stress_gap_inside_the_
     assert res["status"] == "filled", res
     eq0 = 500_000
     t1 = MON + dt.timedelta(seconds=3)
-    step(rn, board(t1, "CRUDEOILM-MCX", 5800 * 0.94, 5800 * 0.94 + 1), [], t1)          # a 6% gap straight through the stop, inside three seconds
+    step(rn, board(t1, "CRUDEOILM-MCX", 5800 * 0.91, 5800 * 0.91 + 1), [], t1)          # a 9% gap straight through the stop, inside three seconds
     assert "CRUDEOILM-MCX" not in rn.account.positions
     loss = eq0 - rn.account.cash
     assert 0 < loss <= 0.025 * eq0, loss                                                  # the per-trade cap holds through a stress gap (it did not: 24.1%)
@@ -77,8 +77,8 @@ def test_a_stop_is_never_filled_on_a_stale_quote_and_the_position_counts_at_its_
     step(rn, board(t1, "CRUDEOILM-MCX", 5740.0, 5741.0, age=590.0), [], t1)               # the only price is 590 s old
     assert "CRUDEOILM-MCX" in rn.account.positions                                        # not sold at a price ten minutes old (it was)
     p = rn.account.positions["CRUDEOILM-MCX"]
-    assert future_worst(p, rn.account.fut_stress) == pytest.approx(-10 * 0.06 * p.avg_price)
-    assert rn.account.equity_lower_bound({}) <= rn.account.cash + p.value(p.avg_price * 0.94) + 1e-6   # a floor under a 6% gap, not the stop's loss
+    assert future_worst(p, rn.account.fut_stress) == pytest.approx(-10 * 0.09 * p.avg_price)
+    assert rn.account.equity_lower_bound({}) <= rn.account.cash + p.value(p.avg_price * 0.91) + 1e-6   # a floor under a 9% gap, not the stop's loss
     t2 = MON + dt.timedelta(seconds=6)
     step(rn, board(t2, "CRUDEOILM-MCX", 5740.0, 5741.0, age=2.0), [], t2)                  # a fresh price: the stop goes at once
     assert "CRUDEOILM-MCX" not in rn.account.positions
@@ -88,9 +88,9 @@ def test_with_the_feed_down_the_lower_bound_is_under_the_true_equity_at_a_stress
     rn = desk(cfg, tmp_path)
     assert buy(rn, "CRUDEOILM-MCX", 1, 5750.0)["status"] == "filled"
     t1 = MON + dt.timedelta(minutes=11)
-    step(rn, board(t1, "CRUDEOILM-MCX", 5800 * 0.94, 5800 * 0.94 + 1, age=700.0), [], t1)
+    step(rn, board(t1, "CRUDEOILM-MCX", 5800 * 0.91, 5800 * 0.91 + 1, age=700.0), [], t1)
     p = rn.account.positions["CRUDEOILM-MCX"]
-    gap = p.avg_price * 0.94                                                                     # a 6% move from its entry
+    gap = p.avg_price * 0.91                                                                     # a 9% move from its entry
     assert rn.account.equity_lower_bound({}) <= rn.account.cash + p.value(gap) + 1e-6           # was: above it (the stop's loss only)
     assert rn.account.stress() <= rn.account.cash + p.value(gap) + 1e-6
 
@@ -118,3 +118,26 @@ def test_a_future_is_never_marked_on_a_quote_older_than_two_minutes_but_an_optio
     assert "CRUDEOILM-MCX" in rn.marks(board(t1, "CRUDEOILM-MCX", 5790.0, 5791.0, age=100.0), t1)
     assert "CRUDEOILM-MCX" not in rn.marks(board(t1, "CRUDEOILM-MCX", 5790.0, 5791.0, age=300.0), t1)   # 5 minutes old: unknown, so it counts at its stress loss
     assert R.FUT_QUOTE_AGE_S == 120 < R.MARK_MAX_AGE_S
+
+
+def test_with_only_stale_quotes_the_square_off_still_closes_before_the_close_and_says_how_old_its_price_was(cfg, tmp_path):
+    """Risk review of K-03: the 120 s rule must not hold a future overnight. The square-off (and a future somehow held past its day) takes the freshest quote within
+    FORCED_EXIT_AGE_S and records its age; a stop or a target still needs a fresh one."""
+    rn = desk(cfg, tmp_path)
+    assert buy(rn, "CRUDEOILM-MCX", 1, 5750.0)["status"] == "filled"
+    t1 = MON.replace(hour=23, minute=26)                                                    # inside the 5-minute square-off before MCX's 23:30 close
+    step(rn, board(t1, "CRUDEOILM-MCX", 5790.0, 5791.0, age=300.0), [], t1)
+    assert "CRUDEOILM-MCX" not in rn.account.positions
+    row = rn.account.ledger[-1]
+    assert row["kind"] == "sell" and "square-off" in row["thesis"] and "300 s old" in row["thesis"]
+
+
+def test_a_stale_quote_still_never_fires_a_stop_and_a_future_held_past_its_day_is_listed_as_stuck(cfg, tmp_path):
+    rn = desk(cfg, tmp_path)
+    assert buy(rn, "CRUDEOILM-MCX", 1, 5750.0)["status"] == "filled"
+    t1 = MON + dt.timedelta(minutes=3)
+    step(rn, board(t1, "CRUDEOILM-MCX", 5700.0, 5701.0, age=300.0), [], t1)                 # below the stop, but five minutes old
+    assert "CRUDEOILM-MCX" in rn.account.positions
+    nxt = MON + dt.timedelta(days=1, hours=-1)                                             # the next morning, before any fresh quote
+    snap = board(nxt, "CRUDEOILM-MCX", 5700.0, 5701.0, age=900.0)
+    assert "CRUDEOILM-MCX" in rn.summary(snap, nxt.astimezone(dt.timezone.utc))["stuck"]

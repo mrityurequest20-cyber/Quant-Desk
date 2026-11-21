@@ -384,7 +384,8 @@ class Runner:
             ds = self.broker.trim(quotes, marks, now)
             rep["forced"].append({"action": "trim", "why": trim, "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
         ist = now.astimezone(IST)
-        fx = self.futures_exits(quotes, now, ist)
+        last = {s: self.held_quote(snap, s, now, FORCED_EXIT_AGE_S) for s, p in self.account.positions.items() if p.is_future}   # for the square-off only (K-03 review)
+        fx = self.futures_exits(quotes, now, ist, last)
         if fx:
             rep["forced"].append({"action": "futures", "why": sorted({w for w, _ in fx.values()}), "decisions": {k: v.reasons or ["closed"] for k, (_, v) in fx.items()}})
         today = [s for s, p in self.account.positions.items() if not p.is_future and p.instrument.expiry is not None and p.instrument.expiry >= ist.date() and self.past_last_entry(p.instrument, ist)]      # an expired one is "stuck" and reported, not retried every cycle
@@ -529,7 +530,7 @@ class Runner:
                        | ({"slip": row["slip"]} if isinstance(row.get("slip"), dict) else {}))
         return res
 
-    def futures_exits(self, quotes: dict, now: dt.datetime, ist: dt.datetime) -> dict:
+    def futures_exits(self, quotes: dict, now: dt.datetime, ist: dt.datetime, last: dict | None = None) -> dict:
         """Each cycle, for every futures position: its stop, its target, the square-off before its segment's close (futures are intraday), and one somehow held from an
         earlier day closed at once. {symbol: (why, decision)} for what was tried."""
         out = {}
@@ -552,6 +553,9 @@ class Runner:
                 why = f"stop {p.stop:g} reached ({'bid' if p.qty > 0 else 'offer'} {q.bid if p.qty > 0 else q.ask:g})"
             elif q is not None and p.target is not None and ((p.qty > 0 and q.bid >= p.target) or (p.qty < 0 and q.ask <= p.target)):
                 why = f"target {p.target:g} reached ({'bid' if p.qty > 0 else 'offer'} {q.bid if p.qty > 0 else q.ask:g})"
+            if why and q is None and (opened < ist.date() or why.startswith("square-off")) and (last or {}).get(sym) is not None:
+                q = last[sym]                                                        # never held overnight for want of a fresh price: the square-off takes the
+                why = f"{why}; on a quote {(now - q.ts).total_seconds():.0f} s old (no fresher one)"   # freshest within FORCED_EXIT_AGE_S, and says so (K-03 review)
             if why:
                 d, _ = self.broker.close(sym, abs(p.qty), q, now, why, forced=True)
                 out[sym] = (why, d)
@@ -635,7 +639,9 @@ class Runner:
         day_floor, dd_floor = self.gate.floors(a)
         return {"v": 1, "asof": now.isoformat(), "equity": fin(eq), "cash": a.cash, "capital0": a.capital0, "net_pnl": fin(eq - a.capital0) if is_number(eq) else None,
                 "realized": a.realized, "fees": a.fees, "hwm": a.hwm, "day": a.day, "day_start": a.day_start, "day_halted": a.day_halted, "halt": a.halt,
-                "kill": self.kill_file.exists(), "stuck": [s for s, p in a.positions.items() if not p.is_future and p.instrument.expiry and p.instrument.expiry < now.astimezone(IST).date()], "day_floor": fin(day_floor), "dd_floor": fin(dd_floor), "positions": pos,
+                "kill": self.kill_file.exists(), "stuck": [s for s, p in a.positions.items() if (not p.is_future and p.instrument.expiry and p.instrument.expiry < now.astimezone(IST).date())
+                          or (p.is_future and str(p.opened_at or "")[:10] < now.astimezone(IST).date().isoformat())],     # a future held past its day is stuck too
+                "day_floor": fin(day_floor), "dd_floor": fin(dd_floor), "positions": pos,
                 "slippage": SL.totals(a.ledger), "slips": [{"seq": r["seq"], "symbol": r.get("symbol"), **r["slip"]} for r in [x for x in a.ledger if isinstance(x.get("slip"), dict)][-8:]],
                 "ledger_tail": [_tail(r) for r in a.ledger[-40:]],
                 "ledger_len": len(a.ledger), "ledger_ok": a.verify_ledger(), "reviews": self._reviews(now, eq)}

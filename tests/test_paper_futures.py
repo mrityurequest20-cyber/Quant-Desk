@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 IST = MK.IST
 MON = dt.datetime(2026, 11, 16, 11, 0, tzinfo=IST)            # Mon 16 Nov 2026: NSE, currency and MCX all trade; US daylight saving is over, so MCX closes 23:30
 CRUDE, USD = "CRUDEOIL-MCX", "USDINR-CDS"
-CAP = 1_500_000      # one full CRUDEOIL lot (100 barrels) fits 2.5% a trade only on an account this size: a 6% move through its stop is about 34,950 (audit K-03)
+CAP = 2_500_000      # one full CRUDEOIL lot (100 barrels) fits 2.5% a trade only on an account this size: a 9% move through its stop is about 52,300 (audit K-03)
 THESIS = "crude holding above the overnight range with rising open interest"
 
 
@@ -202,10 +202,10 @@ def test_a_restart_rebuilds_the_future_with_its_stop_from_the_ledger(rn):
 
 
 def test_the_book_counts_a_future_at_its_stop_or_its_stress_move_the_worse(rn):
-    """Audit K-03: a stop is a trigger, not a bound. A held future's worst case is the larger loss of its stop (5,100 here) and a 6% move from its entry (34,806)."""
+    """Audit K-03: a stop is a trigger, not a bound. A held future's worst case is the larger loss of its stop (5,100 here) and a 9% move from its entry (52,209)."""
     run(rn, [order()])
     a = rn.account
-    worst = -0.06 * 5801.0 * 100
+    worst = -0.09 * 5801.0 * 100
     assert worst < (5750.0 - 5801.0) * 100
     assert a.stress() == pytest.approx(a.cash + worst)
     assert a.open_value({CRUDE: 5800.0}) == pytest.approx((5800.0 - 5801.0) * 100 - worst)

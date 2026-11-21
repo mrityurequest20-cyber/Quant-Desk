@@ -411,9 +411,10 @@ paper:
     stop_max_pct: 0.10               # a stop more than 10% from the price is a typo, not a stop
     # The stress move a futures position is sized and valued on (audit K-03, B-02: a stop is a trigger, not a bound; a gap, a feed outage or a hand-over can carry the
     # price through it). The risk of an entry is the larger of the loss to its stop and this move from the entry, and a held future with no fresh price counts at that
-    # loss. MCX non-agri: the move its daily price limit allows before the exchange's first cooling-off (a 4% slab relaxed to 6% at once; 9% only after 15 minutes),
-    # per SEBI's daily price limit framework as MCX applies it to crude. NSE currency futures: the 3% operating range. A contract may set its own stress_pct.
-    stress_pct: {mcx: 0.06, nse_cds: 0.03}
+    # loss. MCX non-agri: 9%, the limit reachable inside one session under SEBI's daily price limit framework as MCX applies it (for crude: a 4% slab, 6% at once, 9%
+    # after a 15-minute cooling-off; read from secondary sources on 21 Nov 2026, the MCX circular itself not yet read: to be checked). 6% was not enough: silver fell
+    # 6.1% on 20 Nov. NSE currency futures: the 3% operating range. A contract may set its own stress_pct; it only ever tightens.
+    stress_pct: {mcx: 0.09, nse_cds: 0.03}
     contracts:
       CRUDEOIL:   {segment: mcx,     lot: 100,  unit: "per barrel",      margin: 0.32, no_entry_days: 5, opt_tick: 0.1}
       CRUDEOILM:  {segment: mcx,     lot: 10,   unit: "per barrel",      margin: 0.32, no_entry_days: 5, opt_tick: 0.1}
