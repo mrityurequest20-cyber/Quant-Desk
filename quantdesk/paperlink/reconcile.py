@@ -1,4 +1,4 @@
-"""Book paper fills the relay never received, as reconstructed ledger rows (audit K-01; the owner's decision of 21 Nov 2026).
+"""Book paper fills the relay never received, as reconstructed ledger rows (audit K-01). Applying a plan is the owner's act, on their written decision.
 
 On 20 Nov 2026 the relay refused the runner's state twice (the summary had outgrown its cap), and each part of the day ended with fills the relay
 never held: 12 in all. The next part started from the relay's shorter copy, so the paper record lost those fills and kept 7 positions the desk had
@@ -29,6 +29,7 @@ from ..paper.runner import Runner, account_json, parse_contract
 
 SIDES = ("buy", "sto", "sell", "btc")          # buy = open long, sto = sell to open, sell = close a long, btc = buy to close a short
 MAX_AGE_CAP_S = 600                            # a plan may never price on a quote older than this, whatever it asks
+MAX_OPEN_LOTS = 2                              # an opening in a plan may not be bigger than AUTO v2 itself opens (one lot; two on a ratio leg)
 TAG = ("[reconstructed {made}: lost when the relay refused the runner's state (audit K-01); priced by the paper broker's rules on the recorded "
        "{source} quote of {quote_at} ({age:.0f} s before); original time {at}]")
 
@@ -69,8 +70,8 @@ def load_plan(path: str | Path) -> dict:
         last = book
         lots = e.get("lots")
         if e["side"] in ("buy", "sto"):
-            if not (isinstance(lots, int) and not isinstance(lots, bool) and lots >= 1):
-                raise PlanError(f"event {i}: an opening needs a whole number of lots")
+            if not (isinstance(lots, int) and not isinstance(lots, bool) and 1 <= lots <= MAX_OPEN_LOTS):
+                raise PlanError(f"event {i}: an opening needs a whole number of lots, 1 to {MAX_OPEN_LOTS} (what AUTO v2 itself opens)")
             if not (isinstance(e.get("strategy"), str) and e["strategy"].strip() and isinstance(e.get("thesis"), str) and len(e["thesis"].strip()) >= 20):
                 raise PlanError(f"event {i}: an opening needs a strategy and a thesis (20 characters or more)")
         elif lots is not None:
@@ -172,7 +173,7 @@ def reconcile(cfg, account: Account, plan: dict, book: QuoteBook, made: str) -> 
                 strategy, thesis = e["strategy"], f"{e['thesis']} {tag}"
             else:
                 strategy, thesis = pos.strategy, f"{e.get('why') or 'exit'}: {pos.thesis} {tag}"
-            account.apply_fill(side, inst, seg, qty, px, fees, _ts(e.get("book_at") or e["at"]).isoformat(), strategy, thesis, slip)
+            account.apply_fill(side, pos.instrument if side in ("sell", "btc") else inst, seg, qty, px, fees, _ts(e.get("book_at") or e["at"]).isoformat(), strategy, thesis, slip)
             booked.append({"side": side, "symbol": inst.symbol, "qty": qty, "price": px, "fees": fees, "quote_age_s": round(age, 1)})
         if not account.verify_ledger():
             raise PlanError("the reconciled ledger does not verify")

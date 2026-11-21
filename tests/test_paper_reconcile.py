@@ -162,6 +162,7 @@ def test_a_close_must_match_the_side_held(cfg):
     (lambda p: p["events"][0].update(side="short"), "needs side"),
     (lambda p: p["events"].append({"at": AT.isoformat(), "side": "buy", "symbol": NEW, "lots": 1, "strategy": "s", "thesis": "short"}), "thesis"),
     (lambda p: p["events"].append({"at": AT.isoformat(), "side": "sell", "symbol": LONG, "lots": 1}), "whole position"),
+    (lambda p: p["events"].append({"at": AT.isoformat(), "side": "buy", "symbol": NEW, "lots": 3, "strategy": "s", "thesis": "bigger than AUTO v2 ever opens"}), "1 to 2"),
 ])
 def test_a_malformed_plan_is_refused_before_anything_runs(cfg, tmp_path, mutate, why):
     a = account(cfg)
@@ -180,6 +181,10 @@ def test_the_committed_plan_for_20_nov_is_well_formed_and_holds_no_price(cfg):
     for e in p["events"]:
         assert parse_contract(e["symbol"], rn.und, rn.lots, frozenset(rn.seg_of))[0] is not None, e["symbol"]
     assert all(re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+\.parquet", f) for f in p["chain_files"])
+    for e in p["events"]:                                                                      # an overnight AUTO v2 opening carries its volatility stop (p<spot> d<sd>), as auto2 writes it
+        if e["side"] in ("buy", "sto") and e["strategy"].split()[2].endswith(".o") and e["strategy"].split()[2].startswith("LP"):
+            assert re.search(r" p\d+(\.\d+)? d\d{1,6}$", e["strategy"]) and len(e["strategy"]) <= 60, e["strategy"]
+    assert "owner's written decision" in p["why"]                                              # applying is the owner's act
 
 
 def test_the_command_prints_counts_and_a_fingerprint_only_and_a_dry_run_sends_nothing(cfg, tmp_path, monkeypatch):

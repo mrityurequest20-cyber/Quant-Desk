@@ -127,7 +127,8 @@ def cmd_reconcile(cfg, a):
         relay.put_state(fit_summary(Runner(cfg, acct).summary(snap, now)), account_json(acct))
         back = load_account((relay.get_state() or {}).get("account"))
     except (RelayError, ValueError) as e:
-        raise SystemExit(f"paper reconcile: sending failed ({e}); the relay keeps what it had (it only ever accepts a ledger that extends its own)") from None
+        raise SystemExit(f"paper reconcile: sending or reading back failed ({e}). If the send went through, a re-run is refused (the ledger no longer matches the plan): "
+                         "read the relay's ledger length to know which; the relay only ever accepts a ledger that extends its own") from None
     if back is None or len(back.ledger) != len(acct.ledger) or RC.digest(back) != RC.digest(acct):
         raise SystemExit("paper reconcile: the relay does not hold the reconciled account after sending: the owner must look")
     print(f"paper reconcile: sent and read back; the relay holds {len(back.ledger)} rows ({RC.digest(back)})")

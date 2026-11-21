@@ -1,6 +1,6 @@
 {
   "id": "2026-11-20",
-  "why": "Audit K-01: on 20 Nov 2026 the relay refused the paper runner's state (its summary had outgrown the relay's cap) from 10:16 IST in the morning part and from 12:12 IST in the afternoon part. Each part ended with fills the relay never held (1 and 11), and the next part started from the relay's shorter copy. These events are what the parts' own run logs show; they are priced from the recorded chains by the paper broker's rules (quantdesk/paperlink/reconcile.py). The owner chose a reconstruction on 21 Nov 2026.",
+  "why": "Audit K-01: on 20 Nov 2026 the relay refused the paper runner's state (its summary had outgrown the relay's cap) from 10:16 IST in the morning part and from 12:12 IST in the afternoon part. Each part ended with fills the relay never held (1 and 11), and the next part started from the relay's shorter copy. These events are what the parts' own run logs show; they are priced from the recorded chains by the paper broker's rules (quantdesk/paperlink/reconcile.py). Applying it is the owner's act and needs the owner's written decision (audit decision sheet, item 2).",
   "sources": {
     "morning": "Paper runner run 44646393336, job 135989962620 (log line at 2026-11-20T04:46:00.79Z; 13 rows held on the relay, 14 at the part's end)",
     "afternoon": "Paper runner run 44646393336, job 136123784404 (relay held 15 rows from 06:25:07Z; 26 at the part's end)",
@@ -23,8 +23,8 @@
       "side": "buy",
       "symbol": "MIDCPNIFTY23NOV2614200PE",
       "lots": 1,
-      "strategy": "AUTO v2 LP0.daan.2/1.o MIDCPNIFTY",
-      "thesis": "AUTO v2 long put (LP0.daan.2/1.o), filled at 10:16 IST on 20 Nov in the morning part; its original thesis was lost with the row the relay never received. Booked after the relay's last row so the ledger stays in time order."
+      "strategy": "AUTO v2 LP0.daan.2/1.o MIDCPNIFTY p14214.6 d1042",
+      "thesis": "AUTO v2 long put (LP0.daan.2/1.o), filled at 10:16 IST on 20 Nov in the morning part; its original thesis was lost with the row the relay never received. Booked after the relay's last row so the ledger stays in time order. Its volatility stop is measured from p = the recorded MIDCPNIFTY spot at the fill (14214.6) and d = a 1.0424% day, the pre-market brief's MIDCPNIFTY tail-model sigma (the 20 Nov brief is no longer kept; this is the next one's, one day more data)."
     },
     {
       "at": "2026-11-20T06:42:10.190Z",
