@@ -760,8 +760,18 @@ def test_a_summary_that_fails_after_the_opening_save_never_stops_the_runner(cfg,
             raise ValueError("a figure that cannot be written")
         return real(self, snap, now)
     monkeypatch.setattr(R.Runner, "summary", summary)
+    snaps = {"n": 0}
+    real_snap = rl.snapshot
+
+    def snapshot():
+        snaps["n"] += 1
+        return real_snap()
+    rl.snapshot = snapshot
     code = S.run(cfg, rl, tmp_path / "ledger" / "account.json", (clk.t + dt.timedelta(minutes=2)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
                  say=lines.append, new_account=True)
-    assert calls["n"] > 5                                                                                              # it kept cycling (and so kept its brakes)
-    assert code in (0, S.EXIT_UNSAVED) and any("could not save the state" in m and "state ? characters" in m for m in lines)
+    assert snaps["n"] > 30                                                                                             # it kept cycling (and so kept its brakes)
+    assert code == 0                                                                                                   # audit K-06: the record never waits for the view
+    held = R.load_account(rl.state["account"])
+    assert NAME in held.positions and rl.state["summary"].get("degraded", "").startswith("summary failed (ValueError)")
+    assert any("could not be built (ValueError)" in m for m in lines) and [r["status"] for r in rl.results] == ["filled"]
     assert S._size(None) == "?" and S._size("x") == "?"
