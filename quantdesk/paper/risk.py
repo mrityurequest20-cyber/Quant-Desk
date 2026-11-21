@@ -457,7 +457,7 @@ class RiskGate:
             why.append(f"if everything expired now at the worst price, equity would be {worst:,.0f}, too near the {floor:,.0f} floor (the day's or the drawdown limit; {STRESS_MARGIN:.1%} of equity is kept in reserve)")
         return Decision(not why, why)
 
-    def check_cover(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime) -> Decision:
+    def check_cover(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, forced: bool = False) -> Decision:
         """Buy back (close) a sold option. Like every exit it is never blocked by a brake: it only ever reduces the risk."""
         try:
             pos = account.positions.get(symbol)
@@ -468,7 +468,7 @@ class RiskGate:
                 why.append(f"cannot buy back {qty!r} of {symbol}: short {-pos.qty if pos and pos.qty < 0 else 0}")
             if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)):
                 why.append("no usable two-sided quote")
-            elif pos and quote.ask_qty is not None and qty > quote.ask_qty:
+            elif pos and not forced and quote.ask_qty is not None and qty > quote.ask_qty:      # a forced exit is never refused for the size shown (K-02)
                 why.append(f"{qty} is more than the {quote.ask_qty:g} on offer")
             if pos:
                 day = now.astimezone(IST).date()
@@ -480,7 +480,7 @@ class RiskGate:
             return Decision(False, [f"the check itself failed ({type(e).__name__}): not covered"])
 
     # ---- exits: never blocked by a brake ---------------------------------------------------------------------------------------
-    def check_exit(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime) -> Decision:
+    def check_exit(self, account: Account, symbol: str, qty: int, quote: Quote | None, now: dt.datetime, forced: bool = False) -> Decision:
         try:
             pos = account.positions.get(symbol)
             why = []
@@ -502,7 +502,7 @@ class RiskGate:
                     why.append(f"selling this would leave a sold option without its cover: the worst case would be equity of {worst:,.0f}, under the {floor:,.0f} floor: buy the sold option back first")
             if not _two_sided(quote) or not (_size_ok(quote.ask_qty) and _size_ok(quote.bid_qty)):
                 why.append("no usable two-sided quote")
-            elif pos and quote.bid_qty is not None and qty > quote.bid_qty:
+            elif pos and not forced and quote.bid_qty is not None and qty > quote.bid_qty:      # a forced exit is never refused for the size shown (K-02)
                 why.append(f"{qty} is more than the {quote.bid_qty:g} bid")
             if pos:
                 day = now.astimezone(IST).date()

@@ -54,6 +54,8 @@ MAX_LOTS = 1000               # a sanity bound on the shape of an order; the ris
 SEGMENT = "nse_fo"            # this version trades the NSE index options only
 FUT_RE = re.compile(r"^([A-Z][A-Z0-9&]{1,20})-(MCX|CDS)$")      # an MCX or currency future as the board names it: the near month (paper.futures)
 FUT_SEG = {"MCX": "mcx", "CDS": "nse_cds"}
+LOT_SIZED = frozenset({"mcx", "nse_cds"})   # segments whose exchanges trade, and show their order books, in LOTS (audit K-02, E-01: the live MCX board showed SILVER bid 3
+                                            # against a 30 kg lot, COPPER 1 against 2,500 kg). Their sizes become units once, in quote_from; NSE F&O shows units.
 
 
 def _num(x):
@@ -287,7 +289,8 @@ class Runner:
         return dt.datetime.fromtimestamp(ms / 1000, tz=dt.timezone.utc)
 
     @staticmethod
-    def quote_from(snap, name, now, max_age: float | None = None) -> Quote | None:
+    def quote_from(snap, name, now, max_age: float | None = None, lot: int = 1) -> Quote | None:
+        """The board's quote for `name`, or None. `lot`: the contract's lot size where its segment shows sizes in lots (LOT_SIZED), so every size here is in units."""
         q = (snap.get("quotes") or {}).get(name) if isinstance(snap, dict) and isinstance(snap.get("quotes"), dict) else None
         if not isinstance(q, dict):
             return None
@@ -302,8 +305,14 @@ class Runner:
             elif _num(v) is None:
                 return None
             else:
-                sizes[k] = _num(v)
+                sizes[k] = _num(v) * (lot if isinstance(lot, int) and not isinstance(lot, bool) and lot >= 1 else 1)
         return Quote(bid, ask, now - dt.timedelta(seconds=age), sizes["bid_qty"], sizes["ask_qty"])
+
+    @staticmethod
+    def units(inst, segment) -> int:
+        """What one displayed size is worth in units of `inst`: its lot where `segment` shows lots (LOT_SIZED), else 1."""
+        lot = getattr(inst, "lot_size", 1)
+        return int(lot) if segment in LOT_SIZED and isinstance(lot, int) and lot >= 1 else 1
 
     @staticmethod
     def board_expiry(snap, name) -> dt.date | None:
@@ -320,7 +329,7 @@ class Runner:
         pos = self.account.positions.get(sym)
         if pos is not None and pos.instrument.kind == FUTURE and self.board_expiry(snap, sym) != pos.instrument.expiry:
             return None
-        return self.quote_from(snap, sym, now, max_age)
+        return self.quote_from(snap, sym, now, max_age, self.units(pos.instrument, pos.segment) if pos is not None else 1)
 
     def marks(self, snap, now) -> dict[str, float]:
         out = {}
@@ -381,7 +390,7 @@ class Runner:
             ds = {}
             for s in sorted(today, key=lambda k: self.account.positions[k].qty >= 0):          # sold options first: buying them back never leaves anything uncovered
                 why = "flatten: expires today" if self.account.positions[s].instrument.expiry == ist.date() else "flatten: a stock option is physically settled, so it is sold before its expiry day"
-                ds[s] = self.broker.close(s, abs(self.account.positions[s].qty), quotes.get(s), now, why)[0]
+                ds[s] = self.broker.close(s, abs(self.account.positions[s].qty), quotes.get(s), now, why, forced=True)[0]
             rep["forced"].append({"action": "sell expiring", "why": ["expires today, or a stock option on its last day before expiry"], "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
         if ist.time() >= SETTLE_AT:
             left = {s: p for s, p in self.account.positions.items() if not p.is_future and p.instrument.expiry == ist.date()}
@@ -436,7 +445,9 @@ class Runner:
         if o["side"] == "buy" and self.past_last_entry(inst, ist):
             res.update(status="refused", reasons=[self.last_entry_why(inst)])
             return res
-        quote = self.quote_from(snap, inst.symbol, now, None if o["side"] == "buy" else EXIT_AGE_S)
+        held = self.account.positions.get(inst.symbol)
+        quote = self.quote_from(snap, inst.symbol, now, None if o["side"] == "buy" else EXIT_AGE_S,
+                                self.units(held.instrument, held.segment) if held is not None else self.units(inst, self.segment(inst)))
         if o["side"] == "buy":
             if quote is not None and o["limit"] is not None and quote.ask > o["limit"]:
                 res.update(status="refused", reasons=[f"the offer is {quote.ask:g}, above your limit {o['limit']:g}: not bought"])
@@ -507,7 +518,7 @@ class Runner:
             short = o["side"] == "short"
             order = Order(inst, seg, o["lots"] * inst.lot_size, o["strategy"], f"{o['thesis']}{MARK}[order {o['id']}]")
             rules = {**self.fut_rules, **self.fut[inst.underlying], "margins": self.fut_margins}
-            d, row = self.broker.open_future(order, short, self.quote_from(snap, sym, now, None), o["stop"], o["target"], self.marks(snap, now), now, rules,
+            d, row = self.broker.open_future(order, short, self.quote_from(snap, sym, now, None, self.units(inst, seg)), o["stop"], o["target"], self.marks(snap, now), now, rules,
                                              self._ref(o, now), o["limit"])
         if row is None:
             res.update(status="refused", reasons=d.reasons or ["refused"])
@@ -540,7 +551,7 @@ class Runner:
             elif q is not None and p.target is not None and ((p.qty > 0 and q.bid >= p.target) or (p.qty < 0 and q.ask <= p.target)):
                 why = f"target {p.target:g} reached ({'bid' if p.qty > 0 else 'offer'} {q.bid if p.qty > 0 else q.ask:g})"
             if why:
-                d, _ = self.broker.close(sym, abs(p.qty), q, now, why)
+                d, _ = self.broker.close(sym, abs(p.qty), q, now, why, forced=True)
                 out[sym] = (why, d)
         return out
 
@@ -559,7 +570,8 @@ class Runner:
             if self.past_last_entry(inst, ist):
                 res.update(status="refused", reasons=[f"{inst.symbol}: {self.last_entry_why(inst)}; nothing opened"])
                 return res
-            legs.append({"side": l["side"], "instrument": inst, "segment": self.segment(inst), "qty": l["lots"] * inst.lot_size, "quote": self.quote_from(snap, inst.symbol, now, None)})
+            legs.append({"side": l["side"], "instrument": inst, "segment": self.segment(inst), "qty": l["lots"] * inst.lot_size,
+                         "quote": self.quote_from(snap, inst.symbol, now, None, self.units(inst, self.segment(inst)))})
             if l["ref"]:
                 refs[inst.symbol] = {"bid": l["ref"]["bid"], "ask": l["ref"]["ask"], "at": l["ref"]["at"] if l["ref"]["at"] is not None else o.get("queued_at")}
         marks = self.marks(snap, now)
