@@ -173,7 +173,7 @@ def test_the_positions_tab_shows_the_review_and_the_watchdog_pushes_it_by_push_o
     assert "function ppReview(reviews)" in app and "ppReview(sm.reviews)" in app and "innerHTML" not in app
     wd = (ROOT / "deploy/cloudflare/watchdog.js").read_text()
     w18 = wd[wd.index("async function w18Review"):wd.index("export const SLOTS")]
-    assert w18.count("pushOnly: true") == 2 and '"https://live/paper/state"' in w18                       # never the email path: that opens an issue on a PUBLIC repository
+    assert w18.count("pushOnly: true") == w18.count("check: \"W18\"") == 3 and '"https://live/paper/state"' in w18      # every W18 alert, never the email path: that opens an issue on a PUBLIC repository
     assert '{ at: "15:50", days: "trading", run: w18Review, check: "W18" }' in wd
 
 

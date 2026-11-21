@@ -17,6 +17,8 @@ EXIT_REFUSED = 3             # the saved histories disagree or do not verify: th
 EXIT_UNSAVED = 4             # the part ended with ledger rows the relay never got: the next part starts without them, so the run goes red
 EXIT_BRAKES_DOWN = 5         # the cycle failed BRAKES_DOWN_AFTER times in a row at some point in the part: the brakes did not run, so the run goes red (audit K-06, FH-05)
 BRAKES_DOWN_AFTER = 20       # consecutive failed cycles (about a minute) before an ::error:: is written and the state says brakes_down
+EXIT_SHORT = 6               # the day's last part stopped at its time limit before its own stop time: the rest of the day is not watched, so the run goes red (audit K-07)
+DESK_DAY_FROM = dt.time(5, 30)   # a part that starts before this (IST) is a run that waited behind yesterday's: the desk's day is 06:00 to midnight, so it does nothing (audit K-36)
 UNSAFE_AFTER_S = 30.0        # new entries wait when the relay has not been given the latest fill for this long (exits and the brakes still run)
 NEWS_EVERY_S = 60.0          # the autopilot reads the news digest at most this often
 FULL_EVERY_S = 60.0          # the whole account goes to the relay at least this often when only the figures the brakes use (high-water mark, day start) have moved
@@ -117,10 +119,19 @@ def _clean(x) -> str:
 
 
 def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float = 3.0, *, clock=None, sleep=time.sleep, say=print, runner: Runner | None = None,
-        new_account: bool = False, auto=None) -> int:
-    """Run until `until_ist` (IST clock time today). Returns a process exit code."""
+        new_account: bool = False, auto=None, deadline: dt.datetime | None = None, final: bool = False) -> int:
+    """Run until `until_ist` (IST clock time on the day it started), or until `deadline` (an aware time: the hosted job's own limit less the last save's margin,
+    audit K-07), whichever is first. A part that started early (the one before it ended early) therefore stops on its own and saves, instead of being killed by
+    the job's time limit with no last save, and the next part takes over. `final`: the day's last part, so stopping at the deadline before `until_ist` leaves the
+    rest of the day unwatched and ends red (EXIT_SHORT). Returns a process exit code."""
     clock = clock or (lambda: dt.datetime.now(dt.timezone.utc))
     log = lambda m: say(_clean(m))                                      # noqa: E731
+    start = clock().astimezone(IST)
+    if start.time() < DESK_DAY_FROM:                                   # audit K-36, FH-06: a run queued behind yesterday's starts after midnight; with a clock time
+        log(f"paper: this part started at {start:%H:%M} IST, before the desk's day ({DESK_DAY_FROM:%H:%M}): it is a run that waited behind "
+            f"yesterday's or was started by hand before the day, so it does nothing (the scheduler does not count it as today's and starts today's)")                # only, it would run to its stop time on the wrong day, killed by its limit
+        return 0
+    day0 = start.date()
     account = runner.account if runner else restore(cfg, relay, ledger_path, log, sleep, allow_new=new_account)
     rn = runner or Runner(cfg, account)
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +154,15 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     unsafe_since = None
     news, news_at = None, -1e9
     brief_at = -1e9
-    while clock().astimezone(IST).time() < until_ist:
+    cut_short = None
+    while True:
+        t_now = clock()
+        ist_t = t_now.astimezone(IST)
+        if ist_t.time() >= until_ist or ist_t.date() != day0:          # the stop time, on the day it started: never on into the next day (K-36)
+            break
+        if deadline is not None and t_now >= deadline:                 # the job's own limit (K-07): stop and save while there is time to
+            cut_short = ist_t
+            break
         t0 = time.monotonic()
         try:
             snap, q = relay.snapshot(), relay.queue()
@@ -295,6 +314,15 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     if brakes_down_seen:
         log(f"::error::paper: at some point {BRAKES_DOWN_AFTER} or more cycles in a row failed and the brakes did not run. The owner must look.")
         return EXIT_BRAKES_DOWN
+    if cut_short is not None:
+        left = (dt.datetime.combine(day0, until_ist, tzinfo=IST) - cut_short).total_seconds() / 60
+        if final:
+            log(f"::error::paper: the day's last part reached its time limit at {cut_short:%H:%M} IST, {left:.0f} minutes before its stop at {until_ist:%H:%M}: "
+                f"nothing watches the rest of the day, so the run ends red (the scheduler starts it again only before 23:25). The owner must look.")
+            return EXIT_SHORT
+        msg = (f"paper: this part reached its time limit at {cut_short:%H:%M} IST, {left:.0f} minutes before its hand-over at {until_ist:%H:%M}; "
+               f"it saved and the next part takes over")
+        log(("::warning::" if left > 30 else "") + msg)                # a few minutes early is the usual case (a part runs 350 minutes to the hand-over)
     return 0
 
 

@@ -124,7 +124,7 @@ MCX_EVENING_WORKFLOWS = frozenset({"paper-desk.yml", "fyers-feed.yml"})     # th
 
 
 def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: int = MAX_STARTS, window: tuple[dt.time, dt.time] = WINDOW,
-           mcx_evening: set[dt.date] | None = None) -> tuple[str, str]:
+           mcx_evening: set[dt.date] | None = None, day_from: dt.time | None = None) -> tuple[str, str]:
     """('start' | 'wait', why). `runs`: the recorder's runs as `gh run list --json status,conclusion,createdAt,event` gives them. `mcx_evening`: for the MCX
     evening's workflows, MCX's weekday full closures; an NSE holiday that is not one is an MCX evening, and the workflow may start from MCX_EVENING_FROM (K-37)."""
     now = now.astimezone(IST)
@@ -140,6 +140,8 @@ def decide(now: dt.datetime, runs: list[dict], hols: set[dt.date], max_starts: i
     if any(r.get("status") in ACTIVE for r in runs):
         return "wait", "the desk is already queued or running"
     today = [r for r in runs if _ist(r["createdAt"]).date() == day]
+    if day_from is not None:                                            # the paper runner (audit K-36, risk review of #279): a run made before the desk's day does
+        today = [r for r in today if _ist(r["createdAt"]).time() >= day_from]   # nothing (session.DESK_DAY_FROM), so it is not today's session, green or not
     if any(r.get("conclusion") == "cancelled" for r in today):
         return "wait", "a run today was cancelled: the desk was stopped on purpose, so it stays stopped"
     if any(r.get("conclusion") == "success" for r in today):
@@ -243,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         action, why = decide(now, wf_runs, hols, limit, {PAPER_WORKFLOW: PAPER_WINDOW, FYERS_WORKFLOW: FYERS_WINDOW, ANGEL_WORKFLOW: ANGEL_WINDOW,
                                                           PREMARKET_WORKFLOW: PREMARKET_WINDOW}.get(wf, WINDOW),
-                             mcx_closed if wf in MCX_EVENING_WORKFLOWS else None)
+                             mcx_closed if wf in MCX_EVENING_WORKFLOWS else None, PAPER_WINDOW[0] if wf == PAPER_WORKFLOW else None)
         print(f"{wf}: {action}: {why}")
         if action == "start":
             try:

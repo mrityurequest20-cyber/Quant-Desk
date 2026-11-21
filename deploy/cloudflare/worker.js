@@ -76,9 +76,9 @@ export async function keepLiveAlive(env) {
 }
 
 export const dispatchScheduler = (env) => dispatchWorkflow(env, "scheduler.yml");
-// The MCX and currency evening candles (kite-evening.yml) log in to Kite, so they are NOT started by the desk scheduler (a test pins that); GitHub's own cron for them ("35 18 * * 1-5") is best-effort and has been
-// hours late. The Worker's clock starts them once, in the firing at 00:10 IST, Tue to Sat (the evening of Mon to Fri has ended). The workflow's own gate lets only the first attempt of the day log in, so a second start
-// (this one and GitHub's cron both arriving) cannot cause a second login.
+// The MCX and currency evening candles (kite-evening.yml) log in to Kite, so they are NOT started by the desk scheduler (a test pins that). GitHub's own cron for them was removed (audit K-19): it fired
+// hours late and its late run took the evening's login. The Worker's clock starts them once, in the firing at 00:10 IST, Tue to Sat (the evening of Mon to Fri has ended). The workflow's own gate lets only the
+// first attempt of the day log in, so a second start (this one and a start by hand) cannot cause a second login.
 export const EVENING_AT = "00:10";
 export const dispatchEvening = (env) => dispatchWorkflow(env, "kite-evening.yml");
 export const dispatchCollect = (env, step) => dispatchWorkflow(env, "collect-wide.yml", { step });

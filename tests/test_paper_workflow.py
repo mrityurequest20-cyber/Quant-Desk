@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RAW = (ROOT / ".github" / "workflows" / "paper-desk.yml").read_text(encoding="utf-8")
 WF = yaml.safe_load(RAW)
 JOBS = WF["jobs"]
-PARTS = ("morning", "afternoon", "evening", "night")
+PARTS = ("morning", "afternoon", "evening", "night", "reserve")      # the reserve (audit K-07) takes over when one part ended at its start
 
 
 def steps(job):
@@ -29,7 +29,7 @@ def test_the_relay_keys_live_in_the_one_step_that_runs_the_runner_in_each_half_a
         holders = [s for s in steps(job) if "secrets." in yaml.safe_dump(s)]
         assert len(holders) == 1 and holders[0]["run"].find("quantdesk paper run") >= 0, job
         assert set(holders[0]["env"]) == {"LIVE_URL", "LIVE_READ_TOKEN", "LIVE_INGEST_TOKEN"}
-    assert RAW.count("secrets.LIVE_READ_TOKEN") == 4 and RAW.count("secrets.LIVE_INGEST_TOKEN") == 4     # a part each; the workflow-level env holds none
+    assert RAW.count("secrets.LIVE_READ_TOKEN") == 5 and RAW.count("secrets.LIVE_INGEST_TOKEN") == 5     # a part each; the workflow-level env holds none
     assert not any("secrets." in str(v) for v in WF["env"].values())
 
 
@@ -53,7 +53,7 @@ def test_the_publish_job_verifies_picks_the_longest_and_only_the_two_git_steps_h
     assert holders == ["Fetch the paper-ledger branch (into its own directory)", "Add it to the branch (a new commit; never a force-push)"]      # the repository code (verify) never runs with the token
     pick = next(x["run"] for x in steps_ if x.get("name", "").startswith("Take the longest"))
     assert "paper verify --file \"$f\"" in pick and "--extends \"$pick\"" in pick and "the runner saved no account to publish" in pick and "exit 1" in pick      # each file verifies; the longer wins; nothing saved is an error
-    assert "for part in morning afternoon evening night" in pick                                       # every part's saved account is considered, in the order they ran
+    assert "for part in morning afternoon evening night reserve" in pick                                       # every part's saved account is considered, in the order they ran
     check = next(x["run"] for x in steps_ if x.get("name", "").startswith("Check it continues"))
     assert "--extends \"$RUNNER_TEMP/ledger-branch/account.json\"" in check
     chk = next(x for x in steps_ if x.get("name", "").startswith("Check it continues"))
@@ -75,10 +75,10 @@ def test_the_backup_is_off_unless_the_owner_turns_it_on_because_the_repository_i
 
 def test_one_run_at_a_time_four_parts_inside_a_job_limit_and_the_first_account_is_a_declared_act():
     assert WF["concurrency"] == {"group": "paper-desk", "cancel-in-progress": False}                      # two runners on one account would be dangerous
-    assert JOBS["afternoon"]["needs"] == "morning" and JOBS["evening"]["needs"] == "afternoon" and JOBS["night"]["needs"] == "evening" and JOBS["publish"]["needs"] == "night"
+    assert JOBS["afternoon"]["needs"] == "morning" and JOBS["evening"]["needs"] == "afternoon" and JOBS["night"]["needs"] == "evening" and JOBS["reserve"]["needs"] == "night" and JOBS["publish"]["needs"] == "reserve"
     env, inp = WF["env"], WF[True]["workflow_dispatch"]["inputs"]                                         # 06:00 to midnight (owner, 13 Nov 2026); the afternoon part holds the 15:20 sale and the 15:31 settlement
     assert [inp[k]["default"] for k in ("handover", "handover2", "handover3", "until")] == ["11:50", "17:40", "23:30", "23:59"]
-    assert "--until \"$HANDOVER2\"" in steps("afternoon")[-2]["run"] and "--until \"$HANDOVER3\"" in steps("evening")[-2]["run"] and "--until \"$UNTIL\"" in steps("night")[-2]["run"]
+    assert "--until \"$HANDOVER2\"" in steps("afternoon")[-2]["run"] and "--until \"$HANDOVER3\"" in steps("evening")[-2]["run"] and "--until \"$UNTIL\"" in steps("night")[-2]["run"] and "--until \"$UNTIL\"" in steps("reserve")[-2]["run"]
     assert all(k in env for k in ("HANDOVER", "HANDOVER2", "HANDOVER3", "UNTIL"))
     for job in JOBS:
         assert JOBS[job]["timeout-minutes"] <= 359, job                                                   # under GitHub's six hours

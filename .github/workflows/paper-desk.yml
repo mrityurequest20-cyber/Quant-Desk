@@ -5,10 +5,14 @@
 # The owner places a paper trade by hand in the app; it waits in the relay's queue (docs/LIVE.md, /paper/*); this job takes it through quantdesk/paper (the risk gate, the broker, the
 # hash-chained ledger) every few seconds and reports back. Nothing here can reach a broker: there is no broker credential in this workflow, and a test pins that.
 #
-# Five jobs, so that the ones that hold the relay keys cannot write and the one that can write holds no secret:
-#   morning / afternoon / evening / night   hold LIVE_READ_TOKEN and LIVE_INGEST_TOKEN in the one step that runs the runner; `contents: read`. A hosted job may run six hours and
-#                         the day is eighteen, so it is four parts (hand-overs at 11:50, 17:40 and 23:30 IST; the afternoon part holds the 15:20 sale and the 15:31 settlement).
-#                         The account lives on the relay (authoritative) and is restored at the start of each part.
+# Six jobs, so that the ones that hold the relay keys cannot write and the one that can write holds no secret:
+#   morning / afternoon / evening / night / reserve   hold LIVE_READ_TOKEN and LIVE_INGEST_TOKEN in the one step that runs the runner; `contents: read`. A hosted job may run six hours and
+#                         the day is eighteen, so it is four parts (stop times 11:50, 17:40, 23:30 and 23:59 IST; the afternoon part holds the 15:20 sale and the 15:31
+#                         settlement) and a reserve. Each part also stops by its own job's deadline (start + PART_LIMIT_MIN), saves and hands over: on a normal day
+#                         that is a few minutes before its stop time (about 11:45, 17:31 and 23:16), and a part that starts early (the one before it ended early)
+#                         hands over early instead of being killed with no last save. The day is covered by the parts that run, so the reserve takes over when one
+#                         part has ended at its start; on a normal day it does nothing (audit K-07). The account lives on the relay (authoritative) and is restored
+#                         at the start of each part.
 #   publish               `contents: write`, NO secret: verifies the saved account and ADDS it to the `paper-ledger` branch as a new commit (a backup and an audit trail). It refuses an
 #                         account that does not continue the one already on the branch, and it never force-pushes.
 # Started by deploy/scheduler.py like the other recorders (best-effort), or by hand. One run at a time: two runners on one account would be dangerous.
@@ -51,6 +55,7 @@ defaults:
 
 env:
   PYTHONUNBUFFERED: "1"
+  PART_LIMIT_MIN: "345"      # a part's runner stops by its job's start + this, ten minutes inside timeout-minutes (355), so an early start never ends in a kill with no last save (audit K-07)
   TZ: Asia/Kolkata
   HANDOVER: ${{ inputs.handover || '11:50' }}
   HANDOVER2: ${{ inputs.handover2 || '17:40' }}
@@ -64,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -90,7 +97,7 @@ jobs:
         run: |
           flag=""
           if [ "$NEW_ACCOUNT" = "yes" ]; then flag="--new-account"; fi
-          python -m quantdesk paper run --until "$HANDOVER" $flag
+          python -m quantdesk paper run --until "$HANDOVER" --deadline-epoch "$PART_DEADLINE" $flag
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -106,6 +113,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -129,7 +138,7 @@ jobs:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
-        run: python -m quantdesk paper run --until "$HANDOVER2"
+        run: python -m quantdesk paper run --until "$HANDOVER2" --deadline-epoch "$PART_DEADLINE"
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -145,6 +154,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -168,7 +179,7 @@ jobs:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
-        run: python -m quantdesk paper run --until "$HANDOVER3"
+        run: python -m quantdesk paper run --until "$HANDOVER3" --deadline-epoch "$PART_DEADLINE"
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -184,6 +195,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -207,7 +220,7 @@ jobs:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
-        run: python -m quantdesk paper run --until "$UNTIL"
+        run: python -m quantdesk paper run --until "$UNTIL" --deadline-epoch "$PART_DEADLINE"
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -217,10 +230,54 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
 
-  publish:
+  reserve:
+    # Audit K-07 (risk review of #279): the parts stop by their own deadlines, so the day is covered by the sum of the parts that ran. If one part ends at its
+    # start, three parts (3 x 345 minutes) fall short of the 18-hour day and the night part would stop before the MCX 23:25 square-off. This fifth part takes
+    # over then. On a normal day it starts at about midnight and does nothing (its stop time has passed, or it is before the desk's day).
     needs: night
+    if: ${{ !cancelled() && needs.night.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        continue-on-error: true
+        with:
+          ref: paper-ledger
+          path: ledger
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Put the ledger branch's copy of the account in place
+        run: |
+          mkdir -p runtime/paper/ledger
+          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+      - name: Run the paper runner to midnight, if the day's earlier parts have not got there
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}
+          LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
+          LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
+        run: python -m quantdesk paper run --until "$UNTIL" --deadline-epoch "$PART_DEADLINE" --final
+      - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
+        if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-ledger-reserve
+          path: runtime/paper/ledger/account.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+  publish:
+    needs: reserve
     # Off unless the owner sets the repository variable PAPER_LEDGER_BACKUP to yes: this repository is PUBLIC, so the branch, the artifacts and the logs would show the paper account (every thesis, position and result) to anyone.
-    if: ${{ !cancelled() && needs.night.result != 'skipped' && vars.PAPER_LEDGER_BACKUP == 'yes' }}
+    if: ${{ !cancelled() && needs.reserve.result != 'skipped' && vars.PAPER_LEDGER_BACKUP == 'yes' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -242,7 +299,7 @@ jobs:
         run: |
           # no token in this step: the repository code runs here (hash chain, replay of every fill, flags)
           pick=""
-          for part in morning afternoon evening night; do                                   # the parts in the order they ran
+          for part in morning afternoon evening night reserve; do                                   # the parts in the order they ran
             f=art/paper-ledger-$part/account.json
             [ -f "$f" ] || continue
             python -m quantdesk paper verify --file "$f" || { echo "::error::$f does not verify"; exit 1; }

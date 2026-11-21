@@ -173,6 +173,12 @@ def health(day: dt.date, minutes_manifest: dict | None, stock_assets: list[str] 
     return rows
 
 
+def not_reached(rows: list[dict]) -> list[str]:
+    """The minute sources the evening never got to (audit K-21, FH-03: 26 stocks were "UNKNOWN not reached" every day for five weeks, as a warning nobody saw).
+    UNKNOWN only: MISSING means the step asked and Kotak served nothing (a name it does not know, a holiday), which the health line already says."""
+    return [r["source"] for r in rows if r["status"] == "UNKNOWN" and r["source"].split(":", 1)[0] in ("minutes", "stock_minutes")]
+
+
 def render(day: dt.date, rows: list[dict]) -> list[str]:
     return [f"HEALTH {day} {r['source']:<22} {r['status']:<8} {r['detail']}" for r in rows]
 

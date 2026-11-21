@@ -215,6 +215,11 @@ async function w10LiveFeed(c) {
 	if (refused) {
 		out.push({ sev: "P1", check: "W10", title: "Kotak refused the consumer key", link: "", body: `The relay's Kotak poller was refused at ${c.now.hhmm} IST: the key is wrong, revoked or expired. Kite alone is carrying the live view. ${state}` });
 	}
+	const bd = h.board && typeof h.board === "object" ? h.board : null;
+	if (bd && Number.isInteger(bd.refused_last_hour) && bd.refused_last_hour > 0) {        // audit K-18: a full board refuses new strikes in silence
+		out.push({ sev: "P2", check: "W10", title: "Live board full: new names refused", link: "",
+			body: `At ${c.now.hhmm} IST the relay's board holds ${Number(bd.names) || 0} of ${Number(bd.cap) || 0} names and refused ${bd.refused_last_hour} new name(s) in the last hour: new strikes and contracts are not shown, and AUTO and the gate cannot read them. Every name has been refreshed in the last 6 hours, so none could make room.` });
+	}
 	if (kite && kotak && h.both >= 20 && h.disagree / h.both > 0.05) {
 		out.push({ sev: "P2", check: "W10", title: "Live prices: Kite and Kotak disagree", link: "",
 			body: `${h.disagree} of ${h.both} instruments carried by both sources differ by more than a spread at ${c.now.hhmm} IST. One of the two feeds is wrong; the app flags each row.` });
@@ -260,6 +265,76 @@ async function w9Calendar(c) {
 	return out;
 }
 
+// W21 and W22 (audit K-05, FH-04, B-08): the paper runner WHILE it runs. Its run is one run of five jobs from about 06:00 to midnight IST, so its conclusion exists only
+// at midnight and W6 and W14 never see a red part (each sees an in-progress run). Every half hour, and at 00:10 for the night part:
+//   W21  any part (job) of a recent paper run that ended since the previous paper slot with a conclusion other than success or skipped: P1, push and email. A timeout
+//        ends "cancelled", so a cancelled part is reported too (the owner's own cancel included: it is cheap to read, and a kill is not to be missed).
+//   W22  while a paper run is in progress: the state on the relay older than PAPER_STALE_MIN (the runner sends it at least every 10 s: fills are not reaching the relay
+//        and new entries wait), or saying brakes_down (the cycle keeps failing: no stop or cap runs). P1, PUSH ONLY: it reads the relay's private state, and an
+//        email opens a public issue. A degraded view (the app's summary could not be built) is P2.
+// The messages carry part names, times and minutes only: never an account figure, a position or a trade.
+export const PAPER_SLOTS = ["00:10", ...Array.from({ length: 36 }, (_, i) => `${p2(6 + Math.floor(i / 2))}:${i % 2 ? "30" : "00"}`)];
+export const PAPER_STALE_MIN = 10;
+const PAPER_RUN_LOOKBACK_MS = 30 * 3600 * 1000;               // a run created up to 30 hours ago (yesterday's, for the 00:10 slot)
+const PAPER_FINE = new Set(["success", "skipped"]);
+// The IST time of the paper slot before `now` (stateless de-duplication: a part is reported by the first slot after it ended, and by no other).
+export function prevPaperSlotMs(nowMs) {
+	const now = ist(nowMs);
+	const i = PAPER_SLOTS.indexOf(now.hhmm);
+	const prev = i > 0 ? PAPER_SLOTS[i - 1] : PAPER_SLOTS[PAPER_SLOTS.length - 1];
+	const prevDate = i > 0 ? now.date : addDays(now.date, -1);
+	return Date.parse(`${prevDate}T${prev}:00+05:30`);
+}
+const withTimeout = (p) => {
+	let t;
+	return Promise.race([p, new Promise((_, no) => { t = setTimeout(() => no(new Error("the relay did not answer in time")), FETCH_MS); })]).finally(() => clearTimeout(t));
+};
+async function paperRuns(c) {
+	return (await workflowRuns(c.env, PAPER_RUNNER, { per_page: 5 })).filter((r) => c.nowMs - Date.parse(r.created_at) < PAPER_RUN_LOOKBACK_MS);
+}
+async function w21PaperParts(c) {
+	const since = prevPaperSlotMs(c.nowMs);
+	const bad = [];
+	for (const r of (await paperRuns(c)).slice(0, 3)) {
+		const id = Number(r.id);
+		if (!Number.isSafeInteger(id) || id <= 0) continue;
+		const jobs = (await ghGet(c.env, `/actions/runs/${id}/jobs`, { per_page: 20 })).jobs || [];
+		for (const j of jobs) {
+			if (j.status !== "completed" || PAPER_FINE.has(j.conclusion)) continue;
+			const end = Date.parse(j.completed_at);
+			if (!(end > since && end <= c.nowMs)) continue;
+			bad.push({ name: ascii(j.name, 30), how: ascii(j.conclusion || "unknown", 20), at: ist(end).hhmm, link: link(j.html_url) || link(r.html_url) });
+		}
+	}
+	return bad.map((b) => ({ sev: "P1", check: "W21", title: `Paper runner: the ${b.name} part ended ${b.how}`, link: b.link || actionsUrl(c.env, PAPER_RUNNER),
+		body: `The paper runner's ${b.name} part ended ${b.how} at ${b.at} IST. A red part can mean fills the relay never got, brakes that did not run, or a part killed by its time limit; the next part may have started without them. Open the run's log.` }));
+}
+async function w22PaperState(c) {
+	if (!configured(c.env)) return [];
+	const running = (await paperRuns(c)).filter((r) => r.status === "in_progress" && c.nowMs - Date.parse(r.run_started_at || r.created_at) >= 15 * 60000);
+	if (!running.length) return [];                                // nothing should be sending (between days, or the run has only just started)
+	const res = await withTimeout(c.env.LIVE.get(c.env.LIVE.idFromName("board")).fetch("https://live/paper/state"));
+	const st = res.ok ? await res.json() : null;
+	const sm = st && st.summary && typeof st.summary === "object" ? st.summary : null;
+	const got = sm && Number.isFinite(sm.received_at) ? sm.received_at : null;
+	const age = got === null ? Infinity : (c.nowMs - got) / 60000;
+	const out = [];
+	const base = { pushOnly: true, link: link(running[0].html_url) || actionsUrl(c.env, PAPER_RUNNER) };
+	if (age > PAPER_STALE_MIN) {
+		out.push({ ...base, sev: "P1", check: "W22", title: "Paper runner: its state on the relay is stale",
+			body: got === null ? `At ${c.now.hhmm} IST the paper run is in progress but the relay holds no state from it.` :
+				`At ${c.now.hhmm} IST the paper run is in progress but its last state reached the relay ${Math.round(age)} minutes ago (it is sent at least every 10 seconds). Fills may not be saved and new entries wait.` });
+	}
+	if (sm && sm.brakes_down === true) {
+		out.push({ ...base, sev: "P1", check: "W22", title: "Paper runner: the brakes are down",
+			body: `At ${c.now.hhmm} IST the paper runner reports that its cycle keeps failing: no stop, cap, square-off or settlement is running. Open the run's log.` });
+	} else if (sm && typeof sm.degraded === "string" && sm.degraded && age <= PAPER_STALE_MIN) {
+		out.push({ ...base, sev: "P2", check: "W22", title: "Paper runner: the app's view is degraded",
+			body: `At ${c.now.hhmm} IST the paper runner is sending a short view: the app's full summary could not be built. The record and the brakes are not affected.` });
+	}
+	return out;
+}
+
 // Fixed IST times for each check. They must coincide with a cron firing in wrangler.jsonc (a test checks this).
 //   days: "trading" = Mon-Fri not a holiday; "weekdays" = Mon-Fri; "saturday"
 // W18: the session review, pushed after the close. The paper runner puts the review in the state it keeps on the relay (quantdesk/paper/review.py); this reads today's
@@ -281,6 +356,9 @@ async function w18Review(c) {
 	const st = r.ok ? await r.json() : null;
 	const reviews = st && st.summary && Array.isArray(st.summary.reviews) ? st.summary.reviews : [];
 	const today = reviews.find((x) => x && x.day === c.now.date);
+	const err = st && st.summary && typeof st.summary.review_error === "string" ? ascii(st.summary.review_error, 40) : "";
+	if (!today && err) return [{ sev: "P2", check: "W18", pushOnly: true, link: actionsUrl(c.env, PAPER_RUNNER), title: `Session review ${c.now.date}: could not be worked out`,
+		body: `The paper runner is running, but its session review failed (${err}): the day's figures are in the app's Positions tab. The owner should look (audit K-26).` }];
 	if (!today) return [{ sev: "INFO", check: "W18", pushOnly: true, link: actionsUrl(c.env, PAPER_RUNNER), title: `Session review ${c.now.date}: none`,
 		body: "The paper runner left no review for today on the relay: it did not run, or it stopped before the close." }];
 	const lab = st.summary.lab && typeof st.summary.lab === "object" ? st.summary.lab : null;
@@ -319,6 +397,9 @@ export const SLOTS = [
 	...["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"].map((at) => ({ at, days: "all", run: freshWithin("news.yml", "News digest", "W15", 60), check: "W15" })),
 	{ at: "06:00", days: "tuesat", run: ranSinceMidnight("kite-evening.yml", "MCX/currency evening candles", "P2", "W16"), check: "W16" },
 	{ at: "11:10", days: "tuesat", run: ranSinceMidnight("fx-minutes.yml", "FX minute bars", "P2", "W17"), check: "W17" },
+	// The paper runner while it runs (audit K-05): every day, since the desk also trades the MCX evening of an NSE holiday; with no run, both are silent.
+	...PAPER_SLOTS.map((at) => ({ at, days: "all", run: w21PaperParts, check: "W21" })),
+	...PAPER_SLOTS.filter((at) => at !== "00:10" && at !== "06:00").map((at) => ({ at, days: "all", run: w22PaperState, check: "W22" })),
 ];
 
 function dayMatches(kind, now) {
