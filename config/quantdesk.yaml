@@ -409,6 +409,11 @@ paper:
     square_off_min: 5
     entry_cutoff_min: 15             # no new entry in the last 15 minutes of a segment's session
     stop_max_pct: 0.10               # a stop more than 10% from the price is a typo, not a stop
+    # The stress move a futures position is sized and valued on (audit K-03, B-02: a stop is a trigger, not a bound; a gap, a feed outage or a hand-over can carry the
+    # price through it). The risk of an entry is the larger of the loss to its stop and this move from the entry, and a held future with no fresh price counts at that
+    # loss. MCX non-agri: the move its daily price limit allows before the exchange's first cooling-off (a 4% slab relaxed to 6% at once; 9% only after 15 minutes),
+    # per SEBI's daily price limit framework as MCX applies it to crude. NSE currency futures: the 3% operating range. A contract may set its own stress_pct.
+    stress_pct: {mcx: 0.06, nse_cds: 0.03}
     contracts:
       CRUDEOIL:   {segment: mcx,     lot: 100,  unit: "per barrel",      margin: 0.32, no_entry_days: 5, opt_tick: 0.1}
       CRUDEOILM:  {segment: mcx,     lot: 10,   unit: "per barrel",      margin: 0.32, no_entry_days: 5, opt_tick: 0.1}

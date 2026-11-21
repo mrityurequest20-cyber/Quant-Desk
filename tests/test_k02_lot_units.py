@@ -18,7 +18,7 @@ FL2 = "FL1.uaan.2/1.d"                    # a long future with a 2R target (any 
 
 
 def held_future(cfg, tmp_path, monkeypatch):
-    rn, ap = M.desk(cfg, tmp_path, M.proven(FL2))
+    rn, ap = M.desk(cfg, tmp_path, M.proven(FL2), capital=M.FIT)                 # one full lot fits only here (audit K-03)
     ap.evolved_on = M.EVE.date()
     monkeypatch.setattr(ap, "state", lambda snap, u, ch, now, news: M.futures_state("up"))
     snap = M.crude_board(M.EVE)

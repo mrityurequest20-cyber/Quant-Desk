@@ -119,7 +119,17 @@ def multi_expiry_worst(legs) -> float | None:
     return min(value(x) for x in sorted(pts))
 
 
-def stress_equity(cash: float, positions: dict) -> float:
+def future_worst(p, fut_stress: dict | None = None) -> float:
+    """A future's worst case (negative for a loss): its stop's loss, or the registered stress move from its entry when that is larger (audit K-03: a stop is a trigger,
+    not a bound). Without a registered move, its stop alone; without a stop, -inf."""
+    stop = p.at_stop()
+    pct = (fut_stress or {}).get(str(getattr(p.instrument, "underlying", "") or "").upper())
+    if is_number(pct) and pct > 0 and is_number(p.avg_price) and p.avg_price > 0:
+        return min(stop, -abs(p.qty) * float(pct) * float(p.avg_price))
+    return stop
+
+
+def stress_equity(cash: float, positions: dict, fut_stress: dict | None = None) -> float:
     """The WORST-CASE equity if every option expired now: the cash plus, for each underlying and expiry, the lowest value the group's legs can have at expiry over every spot price (each leg at its
     intrinsic value; time value is ignored, which is conservative for the longs). It is -infinity when some group could lose without limit (a short call not covered by a long call) or when a position is
     not a plain option. For a book of long options only it is at least the cash; for a hedged book of spreads, condors and butterflies it is exactly cash less the worst possible loss; for a naked short it
@@ -131,7 +141,7 @@ def stress_equity(cash: float, positions: dict) -> float:
     for p in positions.values():
         i = p.instrument
         if getattr(p, "is_future", False):
-            futures += p.at_stop()                               # a future counts at its stop (-inf without one); it moves no cash of its own, so this is all it can cost
+            futures += future_worst(p, fut_stress)               # a future counts at its stop or its stress move, the worse (-inf without a stop); it moves no cash of its own
             continue
         if not is_number(i.strike) or i.strike <= 0 or i.right not in ("CE", "PE") or i.expiry is None or not is_number(p.qty) or not p.qty:
             return float("-inf")                                 # anything that is not a plain option with a real strike and quantity cannot be valued: treated as unbounded (and a NaN can never slip past a comparison)
@@ -172,6 +182,7 @@ class Account:
         self.day_halted = False      # sticky for the day once the daily loss cap is hit
         self.halt: dict | None = None  # the multi-day drawdown halt: cleared only by the owner (clear_halt)
         self.ledger: list[dict] = []
+        self.fut_stress: dict[str, float] = {}   # underlying -> the stress move its futures are valued on (paper.futures.stress_pct, set by the runner; never saved)
 
     # ---- reads ---------------------------------------------------------------------------------------------------------------
     def equity(self, marks: dict[str, float]) -> float:
@@ -188,7 +199,7 @@ class Account:
 
     def stress(self) -> float:
         """The worst-case equity if everything expired now (see `stress_equity`)."""
-        return stress_equity(self.cash, self.positions)
+        return stress_equity(self.cash, self.positions, self.fut_stress)
 
     def equity_lower_bound(self, marks: dict[str, float]) -> float:
         """Equity with every position that has no usable mark counted as worth nothing. For a long-only book that is a floor under
@@ -200,7 +211,7 @@ class Account:
         for sym, p in self.positions.items():
             m = marks.get(sym)
             if p.is_future:
-                total += p.value(m) if _usable(m) else min(p.at_stop(), 0.0)          # a future with no price: counted at its stop, the loss it was opened to bear
+                total += p.value(m) if _usable(m) else min(future_worst(p, self.fut_stress), 0.0)   # no price: its stop or its stress move, the worse (K-03)
             else:
                 total += p.qty * float(m) if _usable(m) else 0.0
         return total
@@ -213,7 +224,8 @@ class Account:
             if not _usable(m):
                 return float("nan")
             if p.is_future:
-                total += max(0.0, p.value(m) - p.at_stop()) if math.isfinite(p.at_stop()) else float("inf")
+                w = future_worst(p, self.fut_stress)                                    # its worst: the stop, or the stress move through it (K-03)
+                total += max(0.0, p.value(m) - w) if math.isfinite(w) else float("inf")
             else:
                 total += p.qty * float(m)
         return total

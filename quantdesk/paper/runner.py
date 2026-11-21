@@ -45,6 +45,7 @@ MAX_ORDER_AGE_S = 120         # an order that waited longer than this is not exe
 MARK_MAX_AGE_S = 600          # a held position is marked at its bid only if the quote is this fresh; otherwise its mark is unknown and the gate fails closed
 EXIT_AGE_S = 120              # the owner's own sell needs a bid this fresh (an exit is never blocked by a brake, but it is not filled at a day-old price either)
 FORCED_EXIT_AGE_S = 600       # a forced sale (kill switch, halts, trim, expiry) takes a bid up to this old: a position must not be trapped by a quiet strike
+FUT_QUOTE_AGE_S = 120         # a future is marked and its stop, target or square-off filled only on a quote this fresh; older, it counts at its stress loss (audit K-03)
 FLATTEN_AT = dt.time(15, 20)  # IST: contracts that expire today are sold at the bid from here
 SETTLE_AT = dt.time(15, 31)   # IST: whatever expires today and is still held is cash-settled at the index price now (the session has closed)
 SETTLE_SPOT_AGE_S = 300       # the index price used for it must be this fresh
@@ -259,6 +260,7 @@ class Runner:
         self.cfg = cfg
         self.account = account
         self.gate = gate or RiskGate(cfg)
+        account.fut_stress = dict(getattr(self.gate, "fut_stress", {}) or {})     # the stress move its futures are valued on (audit K-03)
         self.broker = PaperBroker(cfg, account, self.gate)
         lim = self.gate.limits.underlyings
         self.seg_of = {u: seg for seg in ("mcx", "nse_cds") for u in lim.get(seg, ())}       # MCX and currency options trade too (owner, 13 Nov 2026); everything else is NSE F&O
@@ -334,7 +336,7 @@ class Runner:
     def marks(self, snap, now) -> dict[str, float]:
         out = {}
         for sym in self.account.positions:
-            q = self.held_quote(snap, sym, now, MARK_MAX_AGE_S)
+            q = self.held_quote(snap, sym, now, FUT_QUOTE_AGE_S if self.account.positions[sym].is_future else MARK_MAX_AGE_S)
             short = self.account.positions[sym].qty < 0
             if q is not None and q.bid > 0 and (not short or q.ask > 0):
                 out[sym] = q.ask if short else q.bid                          # what it could be sold for now (a sold option: what it would cost to buy back): never the mid, never the last trade
@@ -367,7 +369,7 @@ class Runner:
             rep["skipped"] = f"the relay's clock and this machine's differ by more than {MAX_SKEW_S}s: nothing is done"
             return rep
         marks = self.marks(snap, now)
-        quotes = {s: self.held_quote(snap, s, now, FORCED_EXIT_AGE_S) for s in self.account.positions}
+        quotes = {s: self.held_quote(snap, s, now, FUT_QUOTE_AGE_S if p.is_future else FORCED_EXIT_AGE_S) for s, p in self.account.positions.items()}
         try:
             reasons = self.gate.update(self.account, marks, now)
         except ValueError as e:                                              # a clock that ran backwards: refuse the cycle, change nothing

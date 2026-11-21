@@ -465,7 +465,8 @@ def test_the_config_carries_loss_caps_only(cfg):
     assert set(p) == {"capital", "risk_per_trade", "daily_loss_limit", "drawdown_halt", "max_quote_age_s", "cost_verified_segments", "kill_switch_file",
                       "underlyings", "allow_short_legs", "stock_options", "futures"}
     assert set(p["stock_options"]) == {"lots", "steps"}
-    assert set(p["futures"]) == {"square_off_min", "entry_cutoff_min", "stop_max_pct", "contracts"}                   # MCX and currency (13 Nov 2026): contract facts and session mechanics, no cap on size
+    assert set(p["futures"]) == {"square_off_min", "entry_cutoff_min", "stop_max_pct", "stress_pct", "contracts"}     # MCX and currency (13 Nov 2026): contract facts and session mechanics, no cap on size
+    assert p["futures"]["stress_pct"] == {"mcx": 0.06, "nse_cds": 0.03}         # audit K-03: the move a future is sized and valued on (the exchanges' price bands); it only ever tightens
     assert all(set(c) == {"segment", "lot", "unit", "margin", "no_entry_days", "opt_tick"} for c in p["futures"]["contracts"].values())                                 # contract facts only (lots per expiry, strike steps): no cap on trades, positions or size hides there
     assert p["allow_short_legs"] is True                                        # sold options, only as legs of bounded packages, are ON by the owner's written order (8 Nov 2026)
     assert p["risk_per_trade"] == 0.025 and p["daily_loss_limit"] == 0.05 and p["drawdown_halt"] == 0.10 and p["cost_verified_segments"] == ["nse_fo", "mcx", "nse_cds"]
