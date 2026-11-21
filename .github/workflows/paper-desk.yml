@@ -8,7 +8,8 @@
 # Five jobs, so that the ones that hold the relay keys cannot write and the one that can write holds no secret:
 #   morning / afternoon / evening / night   hold LIVE_READ_TOKEN and LIVE_INGEST_TOKEN in the one step that runs the runner; `contents: read`. A hosted job may run six hours and
 #                         the day is eighteen, so it is four parts (hand-overs at 11:50, 17:40 and 23:30 IST; the afternoon part holds the 15:20 sale and the 15:31 settlement).
-#                         The account lives on the relay (authoritative) and is restored at the start of each part.
+#                         The account lives on the relay (authoritative) and is restored at the start of each part. A part that starts early (the one before it ended
+#                         early) stops by its own job's deadline, saves, and hands over early; the four parts' 23 hours cover the 18-hour day (audit K-07).
 #   publish               `contents: write`, NO secret: verifies the saved account and ADDS it to the `paper-ledger` branch as a new commit (a backup and an audit trail). It refuses an
 #                         account that does not continue the one already on the branch, and it never force-pushes.
 # Started by deploy/scheduler.py like the other recorders (best-effort), or by hand. One run at a time: two runners on one account would be dangerous.
@@ -51,6 +52,7 @@ defaults:
 
 env:
   PYTHONUNBUFFERED: "1"
+  PART_LIMIT_MIN: "345"      # a part's runner stops by its job's start + this, ten minutes inside timeout-minutes (355), so an early start never ends in a kill with no last save (audit K-07)
   TZ: Asia/Kolkata
   HANDOVER: ${{ inputs.handover || '11:50' }}
   HANDOVER2: ${{ inputs.handover2 || '17:40' }}
@@ -64,6 +66,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -90,7 +94,7 @@ jobs:
         run: |
           flag=""
           if [ "$NEW_ACCOUNT" = "yes" ]; then flag="--new-account"; fi
-          python -m quantdesk paper run --until "$HANDOVER" $flag
+          python -m quantdesk paper run --until "$HANDOVER" --deadline-epoch "$PART_DEADLINE" $flag
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -106,6 +110,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -129,7 +135,7 @@ jobs:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
-        run: python -m quantdesk paper run --until "$HANDOVER2"
+        run: python -m quantdesk paper run --until "$HANDOVER2" --deadline-epoch "$PART_DEADLINE"
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -145,6 +151,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -168,7 +176,7 @@ jobs:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
-        run: python -m quantdesk paper run --until "$HANDOVER3"
+        run: python -m quantdesk paper run --until "$HANDOVER3" --deadline-epoch "$PART_DEADLINE"
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -184,6 +192,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
+        run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -207,7 +217,7 @@ jobs:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
-        run: python -m quantdesk paper run --until "$UNTIL"
+        run: python -m quantdesk paper run --until "$UNTIL" --deadline-epoch "$PART_DEADLINE" --final
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

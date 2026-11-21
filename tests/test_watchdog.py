@@ -267,7 +267,7 @@ out.logs = r.logs.join(" | ");
 out.allBodies = JSON.stringify(r.calls.map((c) => [c.url.startsWith("https://ntfy.sh/") ? "ntfy" : c.url, c.body,
   c.url.startsWith("https://ntfy.sh/") ? c.headers : null]));
 out.ascii = W.ascii("Désk — halted\n\t  now", 40);
-out.test = (await at("2026-10-23T12:30:00", env({ WATCHDOG_TEST: "1" }), {})).results.map((x) => [x.check, x.alerts[0].sev]);
+out.test = (await at("2026-10-23T12:30:00", env({ WATCHDOG_TEST: "1" }), {})).results.filter((x) => x.alerts.length).map((x) => [x.check, x.alerts[0].sev]);   // (W21 and W22 also run at 12:30: silent with no paper run)
 out.testOff = (await at("2026-10-23T12:40:00", env({ WATCHDOG_TEST: "1" }), {})).results.filter((x) => x.check === "TEST").length;
 console.log = () => {}; process.stdout.write(JSON.stringify(out) + "\n");
 """)
