@@ -149,10 +149,12 @@ def test_workflow_is_read_only_pinned_isolated_and_adds_no_secret():
         assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", uses), uses
     assert wf["concurrency"]["group"] == "collect-wide" != live["concurrency"]["group"]
     assert wf["concurrency"]["cancel-in-progress"] is False
-    for job in wf["jobs"].values():                               # a failing step never fails the run or reaches the desk
+    for job in wf["jobs"].values():                               # a failing collection step never fails the run or reaches the desk
         for st in job["steps"]:
-            if "collect-wide --step" in st.get("run", "") and "tee" in st["run"]:
+            if "collect-wide --step" in st.get("run", "") and "tee" in st["run"] and "--step health" not in st["run"]:
                 assert st.get("continue-on-error") is True
+    health = [st for st in wf["jobs"]["minutes"]["steps"] if "--step health" in st.get("run", "")]
+    assert len(health) == 1 and "--strict" in health[0]["run"] and "continue-on-error" not in health[0]    # audit K-21: a source not reached turns the run red
     assert "quantdesk intraday" not in text and "journal" not in text.replace("the journal, the", "")
 
 

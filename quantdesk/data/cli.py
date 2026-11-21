@@ -220,6 +220,7 @@ def register(sub):
     x.add_argument("--force", action="store_true", help="stocks: also outside the session or on a non-trading day")
     x.add_argument("--out", help="default runtime/collect")
     x.add_argument("--push", action="store_true", help="push to the GitHub releases (needs GH_TOKEN)")
+    x.add_argument("--strict", action="store_true", help="health: exit 1 when an index or stock's minutes were not reached today (audit K-21), so the run is red")
     x.set_defaults(fn=cmd_collect_wide)
     x = ss.add_parser("daily-history", help="daily OHLCV since ~2013 for the indices and F&O stocks, with split/bonus "
                                             "adjustment, jump flags, a second-source cross-check and a gap report "
@@ -510,11 +511,13 @@ def cmd_kotak_backfill(cfg, a):
 
 
 def cmd_collect_wide(cfg, a):
-    """Every step is fail-safe: a problem is a ::warning:: and a health line, the exit status is always 0."""
+    """Every step is fail-safe: a problem is a ::warning:: and a health line, and the exit status is 0, except health with --strict: a minute source not reached
+    today exits 1 (audit K-21), so the run is red and the watchdog sees it."""
     import argparse
 
     from . import collect_wide as W
     from .warehouse import ReleaseStore
+    missed = None                                 # health: the minute sources not reached (None: the check did not finish)
     now = pd.Timestamp.now(tz=IST)
     day = dt.date.fromisoformat(a.day) if a.day else now.date()
     S = W.settings(cfg)
@@ -593,12 +596,20 @@ def cmd_collect_wide(cfg, a):
                 if r["status"] != "OK":
                     print(f"::warning::collect-wide {r['source']} {r['status']}: {r['detail']}")
             p = W.write_health(day, rows, out / "health")
+            missed = W.not_reached(rows)
             if a.push:
                 ReleaseStore(W.release_tag(S["minutes_release"], day, S["shard"])).push(p.parent, [p.name])
     except SystemExit as exc:                    # kotak-backfill's "no key" exit is a skipped step here, not a failed run
         print(f"::warning::collect-wide {a.step}: {exc}")
     except Exception as exc:
         print(f"::warning::collect-wide {a.step} failed: {exc!s:.200}")
+    if a.step == "health" and getattr(a, "strict", False):
+        if missed is None:
+            print("::error::collect-wide health: the check itself did not finish, so whether today's minutes arrived is not known")
+            raise SystemExit(1)
+        if missed:
+            print(f"::error::collect-wide health: {len(missed)} minute source(s) not reached today: {', '.join(m.split(':', 1)[1] for m in missed)[:600]}")
+            raise SystemExit(1)
 
 
 def cmd_daily_history(cfg, a):

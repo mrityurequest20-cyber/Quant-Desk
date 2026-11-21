@@ -5,7 +5,8 @@
 #              it is a separate workflow rather than a step in record.yml so a failure here cannot reach the desk)
 #   15:45 IST  minutes: Kotak 1-minute option candles for NIFTY, BANKNIFTY, SENSEX (bse_fo), FINNIFTY, MIDCPNIFTY,
 #              then (collect_wide.stock_minutes) the stocks' near-the-money option minutes, grouped into a few assets/day,
-#              then the health check: per source and per stock, did today's data arrive (warning + line in the step summary)
+#              then the health check: per source and per stock, did today's data arrive (a line in the step summary; the run is red when
+#              an index or a stock was not reached today, audit K-21)
 # Releases are quarterly (option-minutes-2026Q4, chains-2026Q4) to stay under GitHub's ~1000 assets per release.
 # GitHub's cron has run hours late on this repo: a late stocks run records nothing (the book is blank) and the health
 # check says so; the minutes run overlaps 3 days, so a late one loses nothing.
@@ -60,7 +61,7 @@ jobs:
   minutes:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.step != 'stocks' || github.event.schedule == '15 10 * * 1-5' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 200       # audit K-21 (FH-03): 90 killed it every day: five indices (about 28 min) and 80 stocks (about 57 s each, 76 min) are about 105 min
     env:
       PYTHONUNBUFFERED: "1"
       TZ: Asia/Kolkata
@@ -76,15 +77,17 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Option minutes (five indices, then the stocks near the money)
         continue-on-error: true
+        timeout-minutes: 175     # its own budget, inside the job's, so the health check below always runs and says what was not reached (the 90-minute kill took it too)
         run: |
           echo "KOTAK_CONSUMER_KEY set: $HAS_KOTAK_CONSUMER_KEY"
           python -m quantdesk data collect-wide --step minutes --push | tee minutes.txt \
             || echo "::warning::option-minute collection failed"
       - name: Health check (did each source's data arrive today?)
         if: always()
-        continue-on-error: true
         run: |
-          python -m quantdesk data collect-wide --step health --push | tee health.txt || echo "::warning::health check failed"
+          # red when an index or a stock's minutes were not reached today (audit K-21: 26 stocks were "not reached" every day, as a warning nobody saw)
+          set -o pipefail
+          python -m quantdesk data collect-wide --step health --push --strict | tee health.txt
       - name: Summary
         if: always()
         run: |
