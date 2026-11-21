@@ -15,6 +15,8 @@ from .relay import Relay, RelayError
 IST = MK.IST
 EXIT_REFUSED = 3             # the saved histories disagree or do not verify: the runner will not start
 EXIT_UNSAVED = 4             # the part ended with ledger rows the relay never got: the next part starts without them, so the run goes red
+EXIT_BRAKES_DOWN = 5         # the cycle failed BRAKES_DOWN_AFTER times in a row at some point in the part: the brakes did not run, so the run goes red (audit K-06, FH-05)
+BRAKES_DOWN_AFTER = 20       # consecutive failed cycles (about a minute) before an ::error:: is written and the state says brakes_down
 UNSAFE_AFTER_S = 30.0        # new entries wait when the relay has not been given the latest fill for this long (exits and the brakes still run)
 NEWS_EVERY_S = 60.0          # the autopilot reads the news digest at most this often
 FULL_EVERY_S = 60.0          # the whole account goes to the relay at least this often when only the figures the brakes use (high-water mark, day start) have moved
@@ -94,6 +96,12 @@ def _size(summ) -> str:
         return "?"
 
 
+def _minimal(account, now, why: str) -> dict:
+    """The smallest view the relay takes with an account (it needs the ledger's length): sent when the full summary cannot be built or is refused, so the record
+    never waits for the app's view (audit K-01, K-06). The app shows it as degraded."""
+    return {"v": 1, "asof": now.isoformat() if now is not None else None, "ledger_len": len(account.ledger), "degraded": str(why)[:120]}
+
+
 def _clean(x) -> str:
     """Anything that came from outside, made safe for a log line (no new lines, so no workflow command can start one)."""
     return "".join(c if 32 <= ord(c) < 127 else "?" for c in str(x))[:300]
@@ -109,6 +117,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     fp_disk = fp_pushed = None
     ledger_pushed, last_full, last_sum, pending, fails, save_fails = -1, 0.0, 0.0, [], 0, 0
+    cycle_fails, brakes_down_seen, view_degraded = 0, False, 0          # audit K-06: a failing cycle is counted, and a failing summary never costs the record
     account.save(ledger_path)
     fp_disk = fingerprint(account)
     if auto is not None and hasattr(auto, "load"):                    # AUTO v2: its strategies' shadow record, kept on the relay across sessions
@@ -183,8 +192,14 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             orders = orders + mine
         try:
             rep = rn.step(snap, orders, kill, clock())
+            cycle_fails = 0
         except Exception as e:                                         # noqa: BLE001 - whatever went wrong, what was filled before it is still saved below
             rep = {"asof": None, "skipped": f"the cycle failed ({type(e).__name__})", "forced": [], "results": []}
+            cycle_fails += 1
+            if cycle_fails == BRAKES_DOWN_AFTER:                       # the brakes are in step(): with it failing, nothing is watched (FH-05)
+                brakes_down_seen = True
+                log(f"::error::paper: {cycle_fails} cycles in a row failed ({type(e).__name__}): the brakes are not running (nothing in the cycle is: no entry, exit, "
+                    f"stop or cap); it keeps retrying, and this part will end red")
         if rep["skipped"]:
             log(f"paper: cycle skipped: {rep['skipped']}")
         now = Runner.server_now(snap)
@@ -198,10 +213,24 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
             if full or mono - last_sum > 10:
                 summ = None                                                # set before the try: the except below logs its size, and must never fail itself
                 try:
-                    summ = rn.summary(snap, now)
-                    if auto is not None and hasattr(auto, "summary"):
-                        summ["lab"] = auto.summary()                    # the Strategy lab panel in the app
-                    relay.put_state(fit_summary(summ), account_json(account) if full else None)
+                    try:                                                   # the app's view, built from everything; ANY error in it (audit K-06, AIJ-05) gives a
+                        summ = rn.summary(snap, now)                       # minimal view instead, and never stops the runner or the record
+                        if auto is not None and hasattr(auto, "summary"):
+                            summ["lab"] = auto.summary()                # the Strategy lab panel in the app
+                    except Exception as e:                             # noqa: BLE001 - see above
+                        view_degraded += 1
+                        if view_degraded == 1 or view_degraded % 100 == 0:
+                            log(f"paper: the app's summary could not be built ({type(e).__name__}); a minimal one is sent ({view_degraded} times)")
+                        summ = _minimal(account, now, f"summary failed ({type(e).__name__})")
+                    summ["brakes_down"] = cycle_fails >= BRAKES_DOWN_AFTER
+                    summ["cycle_fails"] = cycle_fails
+                    try:
+                        relay.put_state(fit_summary(summ), account_json(account) if full else None)
+                    except RelayError:
+                        if not full:
+                            raise
+                        relay.put_state(_minimal(account, now, "the full summary was refused"), account_json(account))   # the record never waits for the view (K-01)
+                        view_degraded += 1
                     last_sum = mono
                     if save_fails:
                         log(f"paper: the relay took the state again after {save_fails} failed saves")
@@ -249,6 +278,9 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     if len(account.ledger) > max(ledger_pushed, 0):                    # red, so it is seen: the relay does not hold this part's whole ledger and the next part will start without it
         log(f"paper: {_unsaved(account, ledger_pushed)}: the next part of the day starts from the relay's copy without them. The owner must look.")
         return EXIT_UNSAVED
+    if brakes_down_seen:
+        log(f"::error::paper: at some point {BRAKES_DOWN_AFTER} or more cycles in a row failed and the brakes did not run. The owner must look.")
+        return EXIT_BRAKES_DOWN
     return 0
 
 

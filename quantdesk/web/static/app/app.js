@@ -2403,6 +2403,8 @@ function ppDraw() {
 	if (!sm) put(body, h("div", { class: "banner warn" }, icon("alert"), "The paper runner has not reported yet. Orders wait two minutes, then expire. It starts by itself on trading days from about 08:30."));
 	else if (inSession() && !(age < 45)) put(body, h("div", { class: "banner warn" }, icon("alert"), `The paper runner last reported ${liveAge(age)} ago. If it is not running, orders will expire unfilled.`));
 	if (sm && sm.stuck && sm.stuck.length) put(body, h("div", { class: "banner warn" }, icon("alert"), `Held past expiry with no price: ${sm.stuck.join(", ")}. New orders are refused until this is settled.`));
+	if (sm && sm.degraded) put(body, h("div", { class: "banner warn" }, icon("alert"), `The desk sent a short view (${String(sm.degraded).slice(0, 80)}): positions and figures are not shown here. The trade record itself is saved.`));
+	if (sm && sm.brakes_down) put(body, h("div", { class: "banner err" }, icon("stop"), `The paper runner's cycles are failing (${sm.cycle_fails} in a row): the brakes are not running and new entries wait.`));
 	if (sm && sm.day_halted) put(body, h("div", { class: "banner err" }, icon("stop"), "Stopped for today: the daily loss limit was hit."));
 	if (sm && sm.halt) put(body, h("div", { class: "banner err" }, icon("stop"), "Drawdown halt is ON: only the owner clears it."));
 	if (P.note) put(body, h("div", { class: "banner warn" }, icon("alert"), P.note));
@@ -2411,7 +2413,7 @@ function ppDraw() {
 		h("div", { class: "sec-h" }, h("h2", {}, "Paper account"), h("span", { class: "hint" }, sm.asof ? "as of " + ist(sm.asof) : "")),
 		h("div", { class: "acct" }, h("div", {}, h("span", { class: "k" }, "Equity"), h("div", { class: "eq mono" }, fin(sm.equity) ? inr(sm.equity) : "unknown (a position has no price)")),
 			h("div", { class: "day mono " + cls(day) }, h("span", { class: "k" }, "Today"), fin(day) ? inr(day, true) : "—")),
-		h("div", { class: "kstrip" }, cell("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""), cell("Cash", inr(sm.cash)), cell("Fees paid", inr(sm.fees)), cell("Open positions", String(pos.length)))));
+		h("div", { class: "kstrip" }, cell("Profit since the start", fin(sm.net_pnl) ? inr(sm.net_pnl, true) : "—", fin(sm.net_pnl) ? (sm.net_pnl >= 0 ? "up" : "dn") : ""), cell("Cash", inr(sm.cash)), cell("Fees paid", inr(sm.fees)), cell("Open positions", sm.degraded ? "—" : String(pos.length)))));
 	if (sm && Array.isArray(sm.reviews) && sm.reviews.length) put(body, ppReview(sm.reviews));
 	if (sm && sm.lab && sm.lab.plan && typeof sm.lab.plan === "object") put(body, ppPlan(sm.lab.plan));
 	if (sm && sm.lab && (sm.lab.market || (sm.lab.regimes && Object.keys(sm.lab.regimes).length))) put(body, ppMarket(sm.lab));
@@ -2420,7 +2422,7 @@ function ppDraw() {
 	else if (sm && sm.lab) put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, "Convexity desk"), h("span", { class: "hint" }, "waiting for its first session")),
 		h("div", { class: "f3", style: "font-size:12.5px;line-height:1.55;padding:10px 16px" }, "Switched on with the 14 Nov 2026 update. The paper desk reports it from its next session (the runner works on trading days, from the 06:00 plan): then this panel shows the month's spend against its 3% budget, the 0.5% stake, what is open and proven, and which tests pass on each instrument.")));
 	if (sm && sm.lab && typeof sm.lab === "object") put(body, ppLab(sm.lab));
-	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, `Positions (${pos.length})`)),
+	put(body, h("div", { class: "grp" }, h("div", { class: "sec-h" }, h("h2", {}, sm && sm.degraded ? "Positions (not in this short view)" : `Positions (${pos.length})`)),
 		pos.length ? pos.map((p) => h("div", { class: "pad", style: "border-top:1px solid var(--line)" },
 			h("div", { class: "row", style: "justify-content:space-between;align-items:center;gap:8px" }, h("b", { class: "mono", style: "font-size:13px" }, p.symbol),
 				h("span", { class: "mono " + (fin(p.pnl) ? (p.pnl >= 0 ? "up" : "dn") : "f3"), style: "font-size:15px" }, fin(p.pnl) ? inr(p.pnl, true) : "no price")),
