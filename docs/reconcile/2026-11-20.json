@@ -1,0 +1,100 @@
+{
+  "id": "2026-11-20",
+  "why": "Audit K-01: on 20 Nov 2026 the relay refused the paper runner's state (its summary had outgrown the relay's cap) from 10:16 IST in the morning part and from 12:12 IST in the afternoon part. Each part ended with fills the relay never held (1 and 11), and the next part started from the relay's shorter copy. These events are what the parts' own run logs show; they are priced from the recorded chains by the paper broker's rules (quantdesk/paperlink/reconcile.py). The owner chose a reconstruction on 21 Nov 2026.",
+  "sources": {
+    "morning": "Paper runner run 44646393336, job 135989962620 (log line at 2026-11-20T04:46:00.79Z; 13 rows held on the relay, 14 at the part's end)",
+    "afternoon": "Paper runner run 44646393336, job 136123784404 (relay held 15 rows from 06:25:07Z; 26 at the part's end)",
+    "prices": "chains-2026 2026-11-20_{morning,afternoon}-44664692569_chains.parquet and stock-chains-2026Q4 2026-11-20_stock_chains.parquet"
+  },
+  "chain_files": [
+    "chains-2026/2026-11-20_morning-44664692569_chains.parquet",
+    "chains-2026/2026-11-20_afternoon-44664692569_chains.parquet",
+    "stock-chains-2026Q4/2026-11-20_stock_chains.parquet"
+  ],
+  "expect": {
+    "ledger_len": 15,
+    "last_ts": "2026-11-20T06:25:06.625000+00:00"
+  },
+  "max_quote_age_s": 300,
+  "events": [
+    {
+      "at": "2026-11-20T04:46:00.790Z",
+      "book_at": "2026-11-20T06:25:07.000Z",
+      "side": "buy",
+      "symbol": "MIDCPNIFTY23NOV2614200PE",
+      "lots": 1,
+      "strategy": "AUTO v2 LP0.daan.2/1.o MIDCPNIFTY",
+      "thesis": "AUTO v2 long put (LP0.daan.2/1.o), filled at 10:16 IST on 20 Nov in the morning part; its original thesis was lost with the row the relay never received. Booked after the relay's last row so the ledger stays in time order."
+    },
+    {
+      "at": "2026-11-20T06:42:10.190Z",
+      "side": "sto",
+      "symbol": "NIFTY23NOV2625650CE",
+      "lots": 1,
+      "strategy": "AUTO v2 CRB1.uran.3/1.o NIFTY",
+      "thesis": "AUTO v2 call ratio backspread (CRB1.uran.3/1.o), the sold leg, filled at 12:12 IST on 20 Nov; its original thesis was lost with the rows the relay never received."
+    },
+    {
+      "at": "2026-11-20T06:42:10.190Z",
+      "side": "buy",
+      "symbol": "NIFTY23NOV2625700CE",
+      "lots": 2,
+      "strategy": "AUTO v2 CRB1.uran.3/1.o NIFTY",
+      "thesis": "AUTO v2 call ratio backspread (CRB1.uran.3/1.o), the bought legs, filled at 12:12 IST on 20 Nov; its original thesis was lost with the rows the relay never received."
+    },
+    {
+      "at": "2026-11-20T06:50:19.270Z",
+      "side": "sell",
+      "symbol": "KOTAKBANK23NOV26490PE",
+      "why": "AUTO v2 exit: volatility stop"
+    },
+    {
+      "at": "2026-11-20T07:07:01.200Z",
+      "side": "sell",
+      "symbol": "HDFCBANK23NOV26800PE",
+      "why": "AUTO v2 exit: volatility stop"
+    },
+    {
+      "at": "2026-11-20T09:02:28.570Z",
+      "side": "sell",
+      "symbol": "HDFCBANK23NOV26810PE",
+      "why": "AUTO v2 exit: trailed"
+    },
+    {
+      "at": "2026-11-20T09:02:28.570Z",
+      "side": "sell",
+      "symbol": "HDFCBANK23NOV26850CE",
+      "why": "AUTO v2 exit: trailed"
+    },
+    {
+      "at": "2026-11-20T09:45:03.410Z",
+      "side": "sell",
+      "symbol": "M&M23NOV263400PE",
+      "why": "AUTO v2 exit: its expiry is next"
+    },
+    {
+      "at": "2026-11-20T09:45:03.410Z",
+      "side": "sell",
+      "symbol": "M&M23NOV263600CE",
+      "why": "AUTO v2 exit: its expiry is next"
+    },
+    {
+      "at": "2026-11-20T09:45:03.410Z",
+      "side": "sell",
+      "symbol": "SBIN23NOV261140PE",
+      "why": "AUTO v2 exit: its expiry is next"
+    },
+    {
+      "at": "2026-11-20T09:45:03.410Z",
+      "side": "btc",
+      "symbol": "NIFTY23NOV2625650CE",
+      "why": "AUTO v2 exit: its expiry is next"
+    },
+    {
+      "at": "2026-11-20T09:45:03.410Z",
+      "side": "sell",
+      "symbol": "NIFTY23NOV2625700CE",
+      "why": "AUTO v2 exit: its expiry is next"
+    }
+  ]
+}
