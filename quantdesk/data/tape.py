@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -56,15 +57,29 @@ class Tape:
         if not self.rows:
             return
         path = self.out / f"tape-{self.src}-{self.files:05d}.csv.gz"
+        tmp = path.with_name(path.name + ".tmp")
         try:
-            with gzip.open(path, "wt", newline="", encoding="utf-8") as fh:
+            with gzip.open(tmp, "wt", newline="", encoding="utf-8", compresslevel=6) as fh:
                 w = csv.writer(fh)
                 w.writerow(HEADER)
                 w.writerows(self.rows)
+            os.replace(tmp, path)                                       # whole or not at all: a kill mid-write never leaves a cut chunk in the tape
             self.files += 1
             self.rows = []
-        except OSError:                                                 # kept for the next flush (bounded by MAX_PENDING)
-            self.errors += 1
+        except Exception:                                               # noqa: BLE001 - kept for the next flush (bounded by MAX_PENDING); a row that
+            self.errors += 1                                            # cannot be written at all (bad text) is dropped below, not kept for ever
+            self._salvage()
+
+    def _salvage(self) -> None:
+        """After a failed write: drop the rows that cannot be encoded (a lone surrogate in a name), so one bad row never blocks the tape."""
+        good = []
+        for r in self.rows:
+            try:
+                "".join(map(str, r)).encode("utf-8")
+                good.append(r)
+            except UnicodeEncodeError:
+                self.dropped += 1
+        self.rows = good
 
     def stats(self) -> dict:
         return {"tape_rows": self.n, "tape_files": self.files, "tape_errors": self.errors, "tape_dropped": self.dropped}
@@ -87,7 +102,10 @@ class TeePusher:
         try:
             self.pusher.stop()
         finally:
-            self.tape.flush()
+            try:
+                self.tape.flush()
+            except Exception:                                           # noqa: BLE001 - the run's report is never replaced by a tape error
+                self.tape.errors += 1
 
     def stats(self) -> dict:
         return {**self.pusher.stats(), **self.tape.stats()}

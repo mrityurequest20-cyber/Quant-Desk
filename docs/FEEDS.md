@@ -174,8 +174,8 @@ The data is licensed to the subscriber and this repository is public, so the tap
 the end of each streaming job it is tarred and encrypted (AES-256-CBC, PBKDF2 with 200,000 iterations) with the repository secret **`MARKET_TAPE_KEY`**, and
 kept as a 90-day artifact (`fyers-tape-<job>`, `angel-tape-<job>`). Without the secret the tape is deleted at the end of the job with a warning.
 
-**Owner set-up (once):** add the secret `MARKET_TAPE_KEY` (Settings, Secrets and variables, Actions): a long random string, used for nothing else, kept somewhere
-safe (without it the tapes cannot be read). **To read a tape:** download the artifact, then
+**Owner set-up (once):** add the secret `MARKET_TAPE_KEY` (Settings, Secrets and variables, Actions): a random string of at least 32 characters (for example the output of
+`openssl rand -base64 32`), used for nothing else, kept somewhere safe (without it the tapes cannot be read; a shorter one is refused). **To read a tape:** download the artifact, then
 `MARKET_TAPE_KEY=... openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MARKET_TAPE_KEY -in fyers_tape.tar.enc | tar -xf -`.
 
 Artifacts expire after 90 days. A durable private copy (a store outside this public repository) is the next step; until then, download what you want to keep.

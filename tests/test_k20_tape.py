@@ -116,6 +116,10 @@ def test_every_streaming_job_keeps_its_tape_encrypted_and_only_encrypted(feed):
         assert i < enc < up and steps[enc]["if"] == "always()" and steps[up]["if"] == "always()"
         assert set(steps[enc]["env"]) == {"MARKET_TAPE_KEY"} and "openssl enc -aes-256-cbc -pbkdf2 -iter 200000" in steps[enc]["run"]
         assert steps[up]["with"]["path"] == f"{feed}_tape.tar.enc" and steps[up]["with"]["retention-days"] == 90
+        assert steps[up]["with"]["name"].endswith("-${{ github.run_attempt }}")                      # a re-run never collides with the first attempt's artifact
+        tok = "FYERS_DATA_TOKEN" if feed == "fyers" else "ANGEL_DATA_TOKEN"
+        blank = next(k for k, s in enumerate(steps) if str(s.get("name", "")).startswith("The day's") and "token ends with the stream" in s["name"])
+        assert i < blank < enc and steps[blank]["if"] == "always()" and steps[blank]["run"] == f'echo "{tok}=" >> "$GITHUB_ENV"'     # K-20 review: no later step sees it
         assert all("MARKET_TAPE_KEY" not in str(s.get("env", {})) for k, s in enumerate(steps) if k != enc)      # the key reaches the encrypting step alone
         assert not any("runtime/tape" in str(s.get("with", {})) for s in steps)                                   # the plain tape is never uploaded
     assert re.findall(r"uses:\s*actions/upload-artifact@([0-9a-f]{40})", text)                                   # pinned
@@ -152,3 +156,27 @@ def test_the_encrypt_step_encrypts_with_the_key_deletes_the_plain_tape_and_witho
     d2, r2 = run("")
     assert r2.returncode == 0 and "::warning::MARKET_TAPE_KEY is not set" in r2.stdout
     assert not (d2 / "fyers_tape.tar.enc").exists() and not (d2 / "runtime" / "tape").exists()     # nothing kept in the clear
+    tmp_path2 = tmp_path / "short"
+    tmp_path2.mkdir()
+    (tmp_path2 / "runtime" / "tape").mkdir(parents=True)
+    (tmp_path2 / "runtime" / "tape" / "tape-f-00000.csv.gz").write_bytes(b"x")
+    r3 = subprocess.run(["bash", "-e", "-c", enc_script()], cwd=tmp_path2, env={"PATH": "/usr/bin:/bin", "MARKET_TAPE_KEY": "k" * 31, "GITHUB_STEP_SUMMARY": str(tmp_path2 / "s")},
+                        capture_output=True, text=True)
+    assert r3.returncode == 0 and "under 32 characters" in r3.stdout and not (tmp_path2 / "fyers_tape.tar.enc").exists() and not (tmp_path2 / "runtime" / "tape").exists()
+
+
+def test_a_chunk_is_whole_or_absent_and_a_row_that_cannot_be_written_never_blocks_the_tape(tmp_path):
+    tape = T.Tape(tmp_path / "t", "f", flush_rows=3)
+    tape.record("GOLD-MCX", {"ltp": 1.0})
+    tape.record("BAD\ud800", {"ltp": 2.0})                                                # a lone surrogate: it cannot be encoded
+    tape.record("SILVER-MCX", {"ltp": 3.0})                                               # the flush fails, the bad row is dropped and counted
+    tape.flush()
+    assert not list((tmp_path / "t").glob("*.tmp"))
+    assert [r[1] for r in rows(tmp_path / "t")] == ["GOLD-MCX", "SILVER-MCX"] and tape.dropped == 1 and tape.errors == 1
+    class P(Pusher):
+        def stop(self):
+            raise RuntimeError("pusher")
+    tp = T.TeePusher(P(), tape)
+    tape.flush = lambda: (_ for _ in ()).throw(RuntimeError("flush"))
+    with pytest.raises(RuntimeError, match="pusher"):                                      # the pusher's own error is the one reported, never the tape's
+        tp.stop()

@@ -99,6 +99,9 @@ jobs:
           cap=$(date -d '+340 minutes' +%H:%M)     # an early start must still stop before the job's 358-minute limit
           if [[ "$cap" < "$UNTIL" ]] && [[ "$cap" > "$(date +%H:%M)" ]]; then UNTIL=$cap; fi
           python -m quantdesk data angel-feed --until "$UNTIL" --metrics angel_metrics.json
+      - name: The day's Angel One token ends with the stream (no later step, the upload's included, sees it; K-20 review)
+        if: always()
+        run: echo "ANGEL_DATA_TOKEN=" >> "$GITHUB_ENV"
       - name: The run's counts (no price, no token)
         if: always()
         run: if [ -f angel_metrics.json ]; then { echo '```'; cat angel_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
@@ -108,8 +111,8 @@ jobs:
           MARKET_TAPE_KEY: ${{ secrets.MARKET_TAPE_KEY }}
         run: |
           if [ ! -d runtime/tape ] || [ -z "$(ls -A runtime/tape)" ]; then echo "no tape was written"; exit 0; fi
-          if [ -z "$MARKET_TAPE_KEY" ]; then
-            echo "::warning::MARKET_TAPE_KEY is not set, so today's Angel One tape is not kept: add the secret (a long random string) to keep it"
+          if [ "${#MARKET_TAPE_KEY}" -lt 32 ]; then                    # missing, or too short to protect licensed data in a public repository
+            echo "::warning::MARKET_TAPE_KEY is not set (or is under 32 characters), so today's Angel One tape is not kept: add the secret (openssl rand -base64 32) to keep it"
             rm -rf runtime/tape; exit 0
           fi
           tar -C runtime/tape -cf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MARKET_TAPE_KEY -out angel_tape.tar.enc
@@ -119,7 +122,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: angel-tape-${{ github.job }}
+          name: angel-tape-${{ github.job }}-${{ github.run_attempt }}
           path: angel_tape.tar.enc
           if-no-files-found: ignore
           retention-days: 90
@@ -161,6 +164,9 @@ jobs:
           cap=$(date -d '+340 minutes' +%H:%M)
           if [[ "$cap" < "$UNTIL" ]] && [[ "$cap" > "$(date +%H:%M)" ]]; then UNTIL=$cap; fi
           python -m quantdesk data angel-feed --until "$UNTIL" --metrics angel_metrics.json
+      - name: The day's Angel One token ends with the stream (no later step, the upload's included, sees it; K-20 review)
+        if: always()
+        run: echo "ANGEL_DATA_TOKEN=" >> "$GITHUB_ENV"
       - name: The run's counts (no price, no token)
         if: always()
         run: if [ -f angel_metrics.json ]; then { echo '```'; cat angel_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
@@ -170,8 +176,8 @@ jobs:
           MARKET_TAPE_KEY: ${{ secrets.MARKET_TAPE_KEY }}
         run: |
           if [ ! -d runtime/tape ] || [ -z "$(ls -A runtime/tape)" ]; then echo "no tape was written"; exit 0; fi
-          if [ -z "$MARKET_TAPE_KEY" ]; then
-            echo "::warning::MARKET_TAPE_KEY is not set, so today's Angel One tape is not kept: add the secret (a long random string) to keep it"
+          if [ "${#MARKET_TAPE_KEY}" -lt 32 ]; then                    # missing, or too short to protect licensed data in a public repository
+            echo "::warning::MARKET_TAPE_KEY is not set (or is under 32 characters), so today's Angel One tape is not kept: add the secret (openssl rand -base64 32) to keep it"
             rm -rf runtime/tape; exit 0
           fi
           tar -C runtime/tape -cf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MARKET_TAPE_KEY -out angel_tape.tar.enc
@@ -181,7 +187,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: angel-tape-${{ github.job }}
+          name: angel-tape-${{ github.job }}-${{ github.run_attempt }}
           path: angel_tape.tar.enc
           if-no-files-found: ignore
           retention-days: 90
