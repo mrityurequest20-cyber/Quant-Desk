@@ -99,3 +99,16 @@ def test_the_gate_refuses_by_size_only_when_not_forced():
     q = Quote(90.0, 90.5, now, 65.0, 1000.0)
     assert not gate.check_exit(a, inst.symbol, 130, q, now).allowed
     assert gate.check_exit(a, inst.symbol, 130, q, now, forced=True).allowed
+
+
+def test_an_mcx_option_order_compares_units_with_a_book_shown_in_lots(cfg, tmp_path):
+    """The owner's own option order on a lot-sized segment: one CRUDEOIL call lot (100 units) against 2 lots offered (200 units) is filled; against the same
+    numbers read as units (the bug) it was "100 is more than the 2 offered"."""
+    from quantdesk.paper.risk import KillSwitch, RiskGate
+    from tests import test_paper_mcx_options as O
+    rn = R.Runner(cfg, Account(500_000), gate=RiskGate(cfg, kill=KillSwitch(tmp_path / "KILL")), kill_file=tmp_path / "KILL")
+    s = O.board()
+    s["quotes"][O.CRUDE_CE].update(bid_qty=2, ask_qty=2)
+    r = O.res(O.run(rn, [O.order()], s))
+    assert r["status"] == "filled", r["reasons"]
+    assert rn.account.positions[O.CRUDE_CE].qty == 100
