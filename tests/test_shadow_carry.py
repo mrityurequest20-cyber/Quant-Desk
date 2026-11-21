@@ -273,10 +273,12 @@ def test_a_failed_read_at_the_start_never_gets_a_fresh_book_dropped(cfg, tmp_pat
     ap.shadow_dirty = True
     ap.save(relay, 1000.0, force=True)                                                       # the record and the book, stamped
     b = desk(cfg, tmp_path)[1]
-    b.load(ReadFails(relay.lab, relay.shadow), now=t)                                        # the next job: the record read, the book's read fails
+    b.load_sleep = lambda s: None
+    b.load(ReadFails(relay.lab, relay.shadow), now=t)                                        # the next job: the record read, the book's read fails every time
     b.shadow = dict(ap.shadow)
     b.shadow_dirty = True
-    assert b.save_shadow(relay, 2000.0, force=True)                                          # it keeps its book; its record is unchanged and not saved
+    kept = relay.shadow
+    assert not b.save_shadow(relay, 2000.0, force=True) and relay.shadow == kept             # audit K-04: a job that could not read the book never saves over it
     c = desk(cfg, tmp_path)[1]
     c.load(relay, now=t + dt.timedelta(minutes=1))
     assert set(c.shadow) == set(ap.shadow) and "older than the record" not in c.shadow_io["dropped"]
