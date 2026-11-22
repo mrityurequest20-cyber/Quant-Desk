@@ -262,6 +262,7 @@ class Runner:
         self.gate = gate or RiskGate(cfg)
         account.fut_stress = dict(getattr(self.gate, "fut_stress", {}) or {})     # the stress move its futures are valued on (audit K-03)
         self.broker = PaperBroker(cfg, account, self.gate)
+        self._agreed: dict[str, Quote] = {}                                      # each held contract's last quote the brokers agreed on (audit K-10)
         lim = self.gate.limits.underlyings
         self.seg_of = {u: seg for seg in ("mcx", "nse_cds") for u in lim.get(seg, ())}       # MCX and currency options trade too (owner, 13 Nov 2026); everything else is NSE F&O
         self.und = frozenset(lim.get(SEGMENT, ())) | frozenset(self.seg_of)
@@ -291,8 +292,10 @@ class Runner:
         return dt.datetime.fromtimestamp(ms / 1000, tz=dt.timezone.utc)
 
     @staticmethod
-    def quote_from(snap, name, now, max_age: float | None = None, lot: int = 1) -> Quote | None:
-        """The board's quote for `name`, or None. `lot`: the contract's lot size where its segment shows sizes in lots (LOT_SIZED), so every size here is in units."""
+    def quote_from(snap, name, now, max_age: float | None = None, lot: int = 1, disputed_ok: bool = False) -> Quote | None:
+        """The board's quote for `name`, or None. `lot`: the contract's lot size where its segment shows sizes in lots (LOT_SIZED), so every size here is in units.
+        A price the two brokers dispute (the relay's `x`, audit K-10) is no quote for an entry; with `disputed_ok` (an exit, forced or the owner's) it is returned
+        carrying `disputed`, so the fill says so, and is filled on its worse side (`exit_quote`). What a mark, a stop or a target is judged on never is one (`judged`)."""
         q = (snap.get("quotes") or {}).get(name) if isinstance(snap, dict) and isinstance(snap.get("quotes"), dict) else None
         if not isinstance(q, dict):
             return None
@@ -308,7 +311,18 @@ class Runner:
                 return None
             else:
                 sizes[k] = _num(v) * (lot if isinstance(lot, int) and not isinstance(lot, bool) and lot >= 1 else 1)
-        return Quote(bid, ask, now - dt.timedelta(seconds=age), sizes["bid_qty"], sizes["ask_qty"])
+        x = _num(q.get("x"))
+        x = x if x is not None and x > 0 else None
+        if x is not None and not disputed_ok:
+            return None
+        return Quote(bid, ask, now - dt.timedelta(seconds=age), sizes["bid_qty"], sizes["ask_qty"], x)
+
+    @staticmethod
+    def dispute_why(snap, name) -> str | None:
+        """Why an entry on `name` is refused when the two brokers dispute its price (audit K-10), else None."""
+        q = (snap.get("quotes") or {}).get(name) if isinstance(snap, dict) and isinstance(snap.get("quotes"), dict) else None
+        x = _num(q.get("x")) if isinstance(q, dict) else None
+        return f"{name}: the two brokers dispute this price by {x:g}%: no entry on it" if x is not None and x > 0 else None
 
     @staticmethod
     def units(inst, segment) -> int:
@@ -326,17 +340,42 @@ class Runner:
         except ValueError:
             return None
 
-    def held_quote(self, snap, sym, now, max_age) -> Quote | None:
+    def held_quote(self, snap, sym, now, max_age, disputed_ok: bool = False) -> Quote | None:
         """A held position's quote; for a future only while the board still shows the same contract month (after a roll the name is another contract: no price, never a wrong one)."""
         pos = self.account.positions.get(sym)
         if pos is not None and pos.instrument.kind == FUTURE and self.board_expiry(snap, sym) != pos.instrument.expiry:
             return None
-        return self.quote_from(snap, sym, now, max_age, self.units(pos.instrument, pos.segment) if pos is not None else 1)
+        return self.quote_from(snap, sym, now, max_age, self.units(pos.instrument, pos.segment) if pos is not None else 1, disputed_ok)
+
+    def judged(self, sym, q: Quote | None, now, max_age: float) -> Quote | None:
+        """The quote a mark, a stop or a target is judged on (audit K-10). A price the brokers dispute is no news: the last agreed quote stands while it is within
+        `max_age` (as if the feed had not moved), then there is no price at all, which every brake already treats as the worst (a stale quote's path, K-03)."""
+        if q is None or not q.disputed:
+            if q is not None:
+                self._agreed[sym] = q
+            return q
+        a = self._agreed.get(sym)
+        return a if a is not None and 0 <= (now - a.ts).total_seconds() <= max_age else None
+
+    def exit_quote(self, sym, q: Quote | None, now) -> Quote | None:
+        """The quote an exit fills on (audit K-10 review). On a price the brokers dispute, the worse for the account of it and the last agreed quote (within
+        FORCED_EXIT_AGE_S), or, with none known (after a restart, or a dispute older than that), the disputed price moved against the account by the dispute
+        itself: a dispute never books a profit, and never traps a position."""
+        if q is None or not q.disputed:
+            return q
+        a = self.judged(sym, q, now, FORCED_EXIT_AGE_S)
+        if a is not None:
+            bid, ask = min(q.bid, a.bid), max(q.ask, a.ask)
+        else:
+            bid = q.bid * (1 - q.disputed / 100) if q.disputed < 100 else q.bid       # the other broker is at p(1+x) or p(1-x); the second only while x < 100, so
+            ask = q.ask * (1 + q.disputed / 100)                                      # a bid is never cut to nothing and an exit is never refused for it (review)
+        return Quote(bid, ask, q.ts, q.bid_qty, q.ask_qty, q.disputed)
 
     def marks(self, snap, now) -> dict[str, float]:
         out = {}
         for sym in self.account.positions:
-            q = self.held_quote(snap, sym, now, FUT_QUOTE_AGE_S if self.account.positions[sym].is_future else MARK_MAX_AGE_S)
+            age = FUT_QUOTE_AGE_S if self.account.positions[sym].is_future else MARK_MAX_AGE_S
+            q = self.judged(sym, self.held_quote(snap, sym, now, age, disputed_ok=True), now, age)    # never marked on a price the brokers dispute (audit K-10)
             short = self.account.positions[sym].qty < 0
             if q is not None and q.bid > 0 and (not short or q.ask > 0):
                 out[sym] = q.ask if short else q.bid                          # what it could be sold for now (a sold option: what it would cost to buy back): never the mid, never the last trade
@@ -368,8 +407,9 @@ class Runner:
         if abs((now - local_now).total_seconds()) > MAX_SKEW_S:
             rep["skipped"] = f"the relay's clock and this machine's differ by more than {MAX_SKEW_S}s: nothing is done"
             return rep
+        self._agreed = {s: q for s, q in self._agreed.items() if s in self.account.positions}
         marks = self.marks(snap, now)
-        quotes = {s: self.held_quote(snap, s, now, FUT_QUOTE_AGE_S if p.is_future else FORCED_EXIT_AGE_S) for s, p in self.account.positions.items()}
+        quotes = {s: self.exit_quote(s, self.held_quote(snap, s, now, FUT_QUOTE_AGE_S if p.is_future else FORCED_EXIT_AGE_S, disputed_ok=True), now) for s, p in self.account.positions.items()}   # a brake fills on a disputed price at the worse side (exit_quote; its record says so); what TRIGGERS one never does (judged)
         try:
             reasons = self.gate.update(self.account, marks, now)
         except ValueError as e:                                              # a clock that ran backwards: refuse the cycle, change nothing
@@ -384,8 +424,9 @@ class Runner:
             ds = self.broker.trim(quotes, marks, now)
             rep["forced"].append({"action": "trim", "why": trim, "decisions": {k: v.reasons or ["sold"] for k, v in ds.items()}})
         ist = now.astimezone(IST)
-        last = {s: self.held_quote(snap, s, now, FORCED_EXIT_AGE_S) for s, p in self.account.positions.items() if p.is_future}   # for the square-off only (K-03 review)
-        fx = self.futures_exits(quotes, now, ist, last)
+        last = {s: self.exit_quote(s, self.held_quote(snap, s, now, FORCED_EXIT_AGE_S, disputed_ok=True), now) for s, p in self.account.positions.items() if p.is_future}   # for the square-off only (K-03 review)
+        judge = {s: self.judged(s, self.held_quote(snap, s, now, FUT_QUOTE_AGE_S, disputed_ok=True), now, FUT_QUOTE_AGE_S) for s, p in self.account.positions.items() if p.is_future}
+        fx = self.futures_exits(quotes, now, ist, last, judge)
         if fx:
             rep["forced"].append({"action": "futures", "why": sorted({w for w, _ in fx.values()}), "decisions": {k: v.reasons or ["closed"] for k, (_, v) in fx.items()}})
         today = [s for s, p in self.account.positions.items() if not p.is_future and p.instrument.expiry is not None and p.instrument.expiry >= ist.date() and self.past_last_entry(p.instrument, ist)]      # an expired one is "stuck" and reported, not retried every cycle
@@ -412,6 +453,11 @@ class Runner:
             except Exception as e:                                           # noqa: BLE001 - one bad order must not stop the brakes or lose a fill made earlier in the cycle
                 oid = raw.get("id") if isinstance(raw, dict) and isinstance(raw.get("id"), str) and ID_RE.fullmatch(raw["id"]) else None
                 rep["results"].append({"id": oid, "status": "invalid", "reasons": [f"the order could not be processed ({type(e).__name__})"], "fill": None, "at": now.isoformat()})
+        for s in self.account.positions:                                      # a position opened this cycle knows its agreed price from now on (audit K-10)
+            try:
+                self.judged(s, self.held_quote(snap, s, now, FORCED_EXIT_AGE_S, disputed_ok=True), now, 0)
+            except Exception:                                                # noqa: BLE001 - only a memo: never costs the cycle's report
+                pass
         return rep
 
     def handle(self, raw, snap, now) -> dict:
@@ -450,8 +496,14 @@ class Runner:
             return res
         held = self.account.positions.get(inst.symbol)
         quote = self.quote_from(snap, inst.symbol, now, None if o["side"] == "buy" else EXIT_AGE_S,
-                                self.units(held.instrument, held.segment) if held is not None else self.units(inst, self.segment(inst)))
+                                self.units(held.instrument, held.segment) if held is not None else self.units(inst, self.segment(inst)),
+                                disputed_ok=o["side"] != "buy" and held is not None)
+        if o["side"] != "buy":
+            quote = self.exit_quote(inst.symbol, quote, now)            # audit K-10: an exit is never trapped by a dispute (its fill says so); an entry is
         if o["side"] == "buy":
+            if quote is None and (why := self.dispute_why(snap, inst.symbol)):
+                res.update(status="refused", reasons=[why])
+                return res
             if quote is not None and o["limit"] is not None and quote.ask > o["limit"]:
                 res.update(status="refused", reasons=[f"the offer is {quote.ask:g}, above your limit {o['limit']:g}: not bought"])
                 return res
@@ -502,7 +554,7 @@ class Runner:
                 res.update(status="refused", reasons=[f"{sym} is not held"])
                 return res
             qty = abs(pos.qty) if o["lots"] == "all" else min(abs(pos.qty), o["lots"] * pos.instrument.lot_size)
-            quote = self.held_quote(snap, sym, now, EXIT_AGE_S)
+            quote = self.exit_quote(sym, self.held_quote(snap, sym, now, EXIT_AGE_S, disputed_ok=True), now)   # audit K-10: a close is never trapped by a dispute
             d, row = self.broker.close(sym, qty, quote, now, f"{MARK}exit {o['id']}", self._ref(o, now), o["limit"])
         else:
             if self.entries_blocked:
@@ -518,6 +570,9 @@ class Runner:
             if o["stop"] is None:
                 res.update(status="refused", reasons=["every futures entry needs a stop price"])
                 return res
+            if why := self.dispute_why(snap, sym):
+                res.update(status="refused", reasons=[why])
+                return res
             short = o["side"] == "short"
             order = Order(inst, seg, o["lots"] * inst.lot_size, o["strategy"], f"{o['thesis']}{MARK}[order {o['id']}]")
             rules = {**self.fut_rules, **self.fut[inst.underlying], "margins": self.fut_margins}
@@ -530,7 +585,7 @@ class Runner:
                        | ({"slip": row["slip"]} if isinstance(row.get("slip"), dict) else {}))
         return res
 
-    def futures_exits(self, quotes: dict, now: dt.datetime, ist: dt.datetime, last: dict | None = None) -> dict:
+    def futures_exits(self, quotes: dict, now: dt.datetime, ist: dt.datetime, last: dict | None = None, judge: dict | None = None) -> dict:
         """Each cycle, for every futures position: its stop, its target, the square-off before its segment's close (futures are intraday), and one somehow held from an
         earlier day closed at once. {symbol: (why, decision)} for what was tried."""
         out = {}
@@ -539,6 +594,7 @@ class Runner:
             if not p.is_future:
                 continue
             q = quotes.get(sym)
+            jq = judge.get(sym) if judge is not None and q is not None and q.disputed else q   # audit K-10: a stop or target is never reached on a disputed price
             sess = MK.exit_session(p.segment, ist.date(), self.gate.cal)
             why = None
             try:
@@ -549,10 +605,10 @@ class Runner:
                 why = "held past its day: futures are intraday"
             elif sess is not None and ist >= sess[1] - sq:
                 why = f"square-off {sq.seconds // 60} minutes before the {p.segment} close: futures are intraday"
-            elif q is not None and p.stop is not None and ((p.qty > 0 and q.bid <= p.stop) or (p.qty < 0 and q.ask >= p.stop)):
-                why = f"stop {p.stop:g} reached ({'bid' if p.qty > 0 else 'offer'} {q.bid if p.qty > 0 else q.ask:g})"
-            elif q is not None and p.target is not None and ((p.qty > 0 and q.bid >= p.target) or (p.qty < 0 and q.ask <= p.target)):
-                why = f"target {p.target:g} reached ({'bid' if p.qty > 0 else 'offer'} {q.bid if p.qty > 0 else q.ask:g})"
+            elif jq is not None and p.stop is not None and ((p.qty > 0 and jq.bid <= p.stop) or (p.qty < 0 and jq.ask >= p.stop)):
+                why = f"stop {p.stop:g} reached ({'bid' if p.qty > 0 else 'offer'} {jq.bid if p.qty > 0 else jq.ask:g})"
+            elif jq is not None and p.target is not None and ((p.qty > 0 and jq.bid >= p.target) or (p.qty < 0 and jq.ask <= p.target)):
+                why = f"target {p.target:g} reached ({'bid' if p.qty > 0 else 'offer'} {jq.bid if p.qty > 0 else jq.ask:g})"
             if why and q is None and (opened < ist.date() or why.startswith("square-off")) and (last or {}).get(sym) is not None:
                 q = last[sym]                                                        # never held overnight for want of a fresh price: the square-off takes the
                 why = f"{why}; on a quote {(now - q.ts).total_seconds():.0f} s old (no fresher one)"   # freshest within FORCED_EXIT_AGE_S, and says so (K-03 review)
@@ -575,6 +631,9 @@ class Runner:
                 return res
             if self.past_last_entry(inst, ist):
                 res.update(status="refused", reasons=[f"{inst.symbol}: {self.last_entry_why(inst)}; nothing opened"])
+                return res
+            if why := self.dispute_why(snap, inst.symbol):
+                res.update(status="refused", reasons=[f"{why}; nothing opened"])
                 return res
             legs.append({"side": l["side"], "instrument": inst, "segment": self.segment(inst), "qty": l["lots"] * inst.lot_size,
                          "quote": self.quote_from(snap, inst.symbol, now, None, self.units(inst, self.segment(inst)))})

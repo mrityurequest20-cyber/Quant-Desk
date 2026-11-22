@@ -78,6 +78,7 @@ class Quote:
     ts: dt.datetime                 # timezone-aware
     bid_qty: float | None = None    # displayed size at the touch, when the feed has it
     ask_qty: float | None = None
+    disputed: float | None = None   # audit K-10: the two brokers disagree on this price by this many percent (the relay's `x`); only an exit is ever filled on one, and nothing is judged on one
 
 
 @dataclass(frozen=True)

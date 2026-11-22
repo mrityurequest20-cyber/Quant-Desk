@@ -79,6 +79,8 @@ class PaperBroker:
         pos = self.account.positions[symbol]
         if forced and quote.bid_qty is not None and qty > quote.bid_qty:                # a brake is never refused for the size shown: it is filled, and the record says so (K-02)
             why = f"{why} ({qty} sold against {quote.bid_qty:g} bid: a forced exit is never refused for size)"
+        if getattr(quote, "disputed", None):                                            # audit K-10: filled at a price the brokers dispute, and the record says so
+            why = f"{why} (on a price the two brokers dispute by {quote.disputed:g}%: filled at its worse side)"
         impact = SL.impact_ticks(qty, quote.bid_qty) * self.tick_for(pos.instrument)
         px = max(quote.bid - impact, 0.0)
         impact = quote.bid - px                                                  # what was really given up (a bid below the impact is sold at nothing, not below)
@@ -156,6 +158,8 @@ class PaperBroker:
         pos = self.account.positions[symbol]
         if forced and quote.ask_qty is not None and qty > quote.ask_qty:
             why = f"{why} ({qty} bought back against {quote.ask_qty:g} offered: a forced exit is never refused for size)"
+        if getattr(quote, "disputed", None):
+            why = f"{why} (on a price the two brokers dispute by {quote.disputed:g}%: filled at its worse side)"
         impact = SL.impact_ticks(qty, quote.ask_qty) * self.tick_for(pos.instrument)
         px = quote.ask + impact
         if limit is not None and px > limit + 1e-9:
