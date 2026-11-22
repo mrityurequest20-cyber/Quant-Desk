@@ -19,16 +19,21 @@ def steps(job):
 
 def test_only_the_publish_job_can_write_and_it_holds_no_secret():
     assert WF["permissions"] == {"contents": "read"}                                                  # everything else is read-only
-    assert JOBS["publish"]["permissions"] == {"contents": "write"} and all("permissions" not in JOBS[j] for j in PARTS)
+    assert JOBS["publish"]["permissions"] == {"contents": "write"} and all("permissions" not in JOBS[j] for j in PARTS[1:])
+    assert JOBS["morning"]["permissions"] == {"contents": "read", "actions": "read"}                  # only to fetch the previous run's encrypted hand-over (audit K-01)
     pub = yaml.safe_dump(JOBS["publish"])
     assert "secrets.LIVE" not in pub and "secrets." not in pub.replace("secrets.GITHUB_TOKEN", "") and "github.token" in pub    # the repository token for the branch, nothing else
 
 
 def test_the_relay_keys_live_in_the_one_step_that_runs_the_runner_in_each_half_and_nowhere_else():
     for job in PARTS:
-        holders = [s for s in steps(job) if "secrets." in yaml.safe_dump(s)]
+        holders = [s for s in steps(job) if "secrets.LIVE" in yaml.safe_dump(s)]
         assert len(holders) == 1 and holders[0]["run"].find("quantdesk paper run") >= 0, job
         assert set(holders[0]["env"]) == {"LIVE_URL", "LIVE_READ_TOKEN", "LIVE_INGEST_TOKEN"}
+        others = [s for s in steps(job) if "secrets." in yaml.safe_dump(s) and s is not holders[0]]
+        assert len(others) == 2 and all(set(s["env"]) == {"HANDOVER_KEY"} for s in others), job      # the hand-over key (audit K-01), in two steps only
+        for s in others:                                                                              # which run openssl alone (no repository code runs in them)
+            assert "openssl enc" in s["run"] and "python" not in s["run"] and "quantdesk" not in s["run"], job
     assert RAW.count("secrets.LIVE_READ_TOKEN") == 5 and RAW.count("secrets.LIVE_INGEST_TOKEN") == 5     # a part each; the workflow-level env holds none
     assert not any("secrets." in str(v) for v in WF["env"].values())
 
@@ -69,7 +74,10 @@ def test_the_backup_is_off_unless_the_owner_turns_it_on_because_the_repository_i
     assert gate in JOBS["publish"]["if"]
     for job in PARTS:
         up = [x for x in steps(job) if str(x.get("uses", "")).startswith("actions/upload-artifact")]
-        assert len(up) == 1 and gate in up[0]["if"], job                                               # nothing is uploaded to a public place by default
+        plain = [x for x in up if x["with"]["path"] == "runtime/paper/ledger/account.json"]
+        assert len(plain) == 1 and gate in plain[0]["if"], job                                         # nothing plain is uploaded to a public place by default
+        enc = [x for x in up if x is not plain[0]]
+        assert len(enc) == 1 and enc[0]["with"]["path"] == "handover-out/account.json.enc" and enc[0]["with"]["name"] == f"paper-handover-{job}", job   # the hand-over: ciphertext only
     assert "PUBLIC" in RAW and "paper-ledger" in RAW
 
 
@@ -78,7 +86,8 @@ def test_one_run_at_a_time_four_parts_inside_a_job_limit_and_the_first_account_i
     assert JOBS["afternoon"]["needs"] == "morning" and JOBS["evening"]["needs"] == "afternoon" and JOBS["night"]["needs"] == "evening" and JOBS["reserve"]["needs"] == "night" and JOBS["publish"]["needs"] == "reserve"
     env, inp = WF["env"], WF[True]["workflow_dispatch"]["inputs"]                                         # 06:00 to midnight (owner, 13 Nov 2026); the afternoon part holds the 15:20 sale and the 15:31 settlement
     assert [inp[k]["default"] for k in ("handover", "handover2", "handover3", "until")] == ["11:50", "17:40", "23:30", "23:59"]
-    assert "--until \"$HANDOVER2\"" in steps("afternoon")[-2]["run"] and "--until \"$HANDOVER3\"" in steps("evening")[-2]["run"] and "--until \"$UNTIL\"" in steps("night")[-2]["run"] and "--until \"$UNTIL\"" in steps("reserve")[-2]["run"]
+    runner = lambda j: next(x["run"] for x in steps(j) if "quantdesk paper run" in x.get("run", ""))      # noqa: E731
+    assert "--until \"$HANDOVER2\"" in runner("afternoon") and "--until \"$HANDOVER3\"" in runner("evening") and "--until \"$UNTIL\"" in runner("night") and "--until \"$UNTIL\"" in runner("reserve")
     assert all(k in env for k in ("HANDOVER", "HANDOVER2", "HANDOVER3", "UNTIL"))
     for job in JOBS:
         assert JOBS[job]["timeout-minutes"] <= 359, job                                                   # under GitHub's six hours
@@ -108,3 +117,38 @@ def test_no_workflow_uses_a_context_where_github_does_not_allow_it():
                 if re.search(r"\b(runner|steps|job)\.", str(v)):
                     bad.append((f.name, where, k))
     assert bad == []
+
+
+# ---- audit K-01: each part's own account reaches the next part, encrypted -------------------------------------------------------------------------
+def _named(job, start):
+    return next(x for x in steps(job) if x.get("name", "").startswith(start))
+
+
+def test_every_part_hands_its_own_account_on_encrypted_and_starts_from_the_longest_verified_copy():
+    for i, job in enumerate(PARTS):
+        names = [x.get("name", "") for x in steps(job)]
+        run_i = next(k for k, x in enumerate(steps(job)) if "quantdesk paper run" in x.get("run", ""))
+        dec, pick = _named(job, "Decrypt the hand-overs"), _named(job, "Start from the longest verified copy")
+        enc, keep = _named(job, "Hand this part's own account"), _named(job, "Keep the encrypted hand-over")
+        assert names.index(dec["name"]) < names.index(pick["name"]) < run_i < names.index(enc["name"]) < names.index(keep["name"]), job
+        assert "paper pick --branch ledger/account.json --out runtime/paper/ledger/account.json $files" in pick["run"] and "ledger/account.json" in pick["run"] and "env" not in pick, job
+        assert "openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt" in enc["run"] and "-in runtime/paper/ledger/account.json -out handover-out/account.json.enc" in enc["run"]
+        assert "openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000" in dec["run"] and "for d in handover-prev handover" in dec["run"]
+        assert enc["if"] == "${{ always() }}" and keep["if"] == "${{ always() }}", job                     # a part that fails or is cancelled still hands over what it holds
+        assert keep["with"]["retention-days"] == 7, job                                                   # the next morning after a long holiday (Thu 23:59 to Mon 06:00 is 78 h), no longer
+        assert "-nt runtime/paper/picked.stamp" in enc["run"] and "touch runtime/paper/picked.stamp" in pick["run"], job   # a part that never started hands nothing over again
+        assert "--branch ledger/account.json" in pick["run"], job                                          # the owner's backup must verify, or nothing starts (as before)
+        for s_ in (enc, dec):
+            assert s_["env"]["HANDOVER_KEY"] == "${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}" and '-lt 32' in s_["run"], job
+        tok = [x.get("name", x.get("uses", "")) for x in steps(job) if "github.token" in yaml.safe_dump(x) or "GH_TOKEN" in yaml.safe_dump(x)]
+        assert tok == (["Fetch the previous run's hand-overs (its night part's account, for this morning; audit K-01)"] if i == 0 else []), job   # the token: one gh-only step
+        if i == 0:
+            prev = _named(job, "Fetch the previous run's hand-overs")
+            assert prev["continue-on-error"] is True and set(prev["env"]) == {"GH_TOKEN"} and prev["env"]["GH_TOKEN"] == "${{ github.token }}"
+            assert "gh run download" in prev["run"] and "--pattern 'paper-handover-*'" in prev["run"] and "python" not in prev["run"]
+        else:
+            got = next(x for x in steps(job) if str(x.get("uses", "")).startswith("actions/download-artifact"))
+            assert got["with"]["pattern"] == "paper-handover-*" and got["continue-on-error"] is True, job
+    assert "cp ledger/account.json runtime/paper/ledger/account.json" not in RAW                          # the branch's copy alone is never the only local candidate again
+    assert not any("handover" in str(x.get("with", {}).get("path", "")) and x["with"]["path"].endswith(".json") for j in PARTS for x in steps(j)
+                   if str(x.get("uses", "")).startswith("actions/upload-artifact"))                      # never a plain account in a hand-over

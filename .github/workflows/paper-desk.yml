@@ -12,7 +12,8 @@
 #                         that is a few minutes before its stop time (about 11:45, 17:31 and 23:16), and a part that starts early (the one before it ended early)
 #                         hands over early instead of being killed with no last save. The day is covered by the parts that run, so the reserve takes over when one
 #                         part has ended at its start; on a normal day it does nothing (audit K-07). The account lives on the relay (authoritative) and is restored
-#                         at the start of each part.
+#                         at the start of each part, from the longest verified copy: the relay's, the ledger branch's, or an earlier part's own account,
+#                         handed over ENCRYPTED (PAPER_HANDOVER_KEY, else MARKET_TAPE_KEY) so a fill the relay never took is not lost at a hand-over (audit K-01).
 #   publish               `contents: write`, NO secret: verifies the saved account and ADDS it to the `paper-ledger` branch as a new commit (a backup and an audit trail). It refuses an
 #                         account that does not continue the one already on the branch, and it never force-pushes.
 # Started by deploy/scheduler.py like the other recorders (best-effort), or by hand. One run at a time: two runners on one account would be dangerous.
@@ -73,6 +74,9 @@ jobs:
   morning:
     runs-on: ubuntu-latest
     timeout-minutes: 355
+    permissions:
+      contents: read
+      actions: read              # only to fetch the previous run's encrypted hand-over (audit K-01)
     steps:
       - name: Note this job's own deadline (the runner stops and saves 10 minutes before the job's 355-minute limit, however early it started; audit K-07)
         run: echo "PART_DEADLINE=$(( $(date +%s) + PART_LIMIT_MIN * 60 ))" >> "$GITHUB_ENV"
@@ -90,10 +94,42 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Put the ledger branch's copy of the account in place (the relay's copy is the one used if it is the longer)
+      - name: Fetch the previous run's hand-overs (its night part's account, for this morning; audit K-01)
+        continue-on-error: true               # none yet, or expired: the part starts from the relay's copy and the ledger branch's, as before
+        env:
+          GH_TOKEN: ${{ github.token }}       # actions: read only (this job's permissions); gh alone runs here, no repository code
+        run: |
+          runs=$(gh run list -R "$GITHUB_REPOSITORY" --workflow paper-desk.yml --branch main --event workflow_dispatch --limit 10 --json databaseId,status \
+                 --jq ".[] | select(.databaseId != ${GITHUB_RUN_ID} and .status == \"completed\") | .databaseId")
+          for prev in $runs; do                                # newest first; a run cancelled before it ran has no hand-over, so the one before it is taken
+            if gh run download "$prev" -R "$GITHUB_REPOSITORY" --pattern 'paper-handover-*' --dir handover-prev; then echo "the hand-overs of run $prev"; break; fi
+          done
+          [ -d handover-prev ] || echo "no earlier run with a hand-over (kept 7 days)"
+      - name: Decrypt the hand-overs (openssl only; the key is in this step and the encrypting one, nowhere else)
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          mkdir -p handover-dec
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): this part starts from the relay's copy and the ledger branch's only"; exit 0; fi
+          n=0
+          for d in handover-prev handover; do                  # oldest first: the previous run's parts, then this run's
+            for part in morning afternoon evening night reserve; do
+              f="$d/paper-handover-$part/account.json.enc"
+              [ -f "$f" ] || continue
+              n=$((n + 1))
+              if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:HANDOVER_KEY -in "$f" -out "handover-dec/$(printf '%02d' $n)-$part.json" 2>/dev/null; then
+                rm -f "handover-dec/$(printf '%02d' $n)-$part.json"; echo "::warning::the $part hand-over in $d could not be decrypted; left out"
+              fi
+            done
+          done
+          echo "decrypted $(ls handover-dec | wc -l) of $n hand-overs"
+      - name: Start from the longest verified copy, the ledger branch's or an earlier part's own (the relay's is still used if it is longer; audit K-01)
         run: |
           mkdir -p runtime/paper/ledger
-          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+          files=""
+          for f in handover-dec/*.json; do [ -f "$f" ] && files="$files $f"; done
+          python -m quantdesk paper pick --branch ledger/account.json --out runtime/paper/ledger/account.json $files
+          touch runtime/paper/picked.stamp                     # a part that never starts (a conflict) leaves its file older than this, and hands nothing over again
       - name: Run the paper runner to the hand-over
         env:
           LIVE_URL: ${{ vars.LIVE_URL }}                           # the private live relay (docs/LIVE.md)
@@ -103,6 +139,26 @@ jobs:
           flag=""
           if [ "$NEW_ACCOUNT" = "yes" ]; then flag="--new-account"; fi
           python -m quantdesk paper run --until "$HANDOVER" --deadline-epoch "$PART_DEADLINE" $flag
+      - name: Hand this part's own account to the next parts, encrypted (audit K-01; the plain account never leaves the runner)
+        if: ${{ always() }}
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -f runtime/paper/ledger/account.json ]; then echo "no account file to hand over"; exit 0; fi
+          if [ -f runtime/paper/picked.stamp ] && [ ! runtime/paper/ledger/account.json -nt runtime/paper/picked.stamp ]; then
+            echo "::warning::this part did not start from its copy (see the runner's step), so that copy is not handed over again"; exit 0
+          fi
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): the next part starts from the relay's copy only; add the secret (openssl rand -base64 32)"; exit 0; fi
+          mkdir -p handover-out
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:HANDOVER_KEY -in runtime/paper/ledger/account.json -out handover-out/account.json.enc
+      - name: Keep the encrypted hand-over for the next parts and the next morning (7 days, for a long holiday)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-handover-morning
+          path: handover-out/account.json.enc
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -134,16 +190,63 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Put the ledger branch's copy of the account in place
+      - name: Fetch the earlier parts' hand-overs (each part's own account, encrypted; audit K-01)
+        continue-on-error: true               # none when every earlier part ended before saving one
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: paper-handover-*
+          path: handover
+      - name: Decrypt the hand-overs (openssl only; the key is in this step and the encrypting one, nowhere else)
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          mkdir -p handover-dec
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): this part starts from the relay's copy and the ledger branch's only"; exit 0; fi
+          n=0
+          for d in handover-prev handover; do                  # oldest first: the previous run's parts, then this run's
+            for part in morning afternoon evening night reserve; do
+              f="$d/paper-handover-$part/account.json.enc"
+              [ -f "$f" ] || continue
+              n=$((n + 1))
+              if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:HANDOVER_KEY -in "$f" -out "handover-dec/$(printf '%02d' $n)-$part.json" 2>/dev/null; then
+                rm -f "handover-dec/$(printf '%02d' $n)-$part.json"; echo "::warning::the $part hand-over in $d could not be decrypted; left out"
+              fi
+            done
+          done
+          echo "decrypted $(ls handover-dec | wc -l) of $n hand-overs"
+      - name: Start from the longest verified copy, the ledger branch's or an earlier part's own (the relay's is still used if it is longer; audit K-01)
         run: |
           mkdir -p runtime/paper/ledger
-          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+          files=""
+          for f in handover-dec/*.json; do [ -f "$f" ] && files="$files $f"; done
+          python -m quantdesk paper pick --branch ledger/account.json --out runtime/paper/ledger/account.json $files
+          touch runtime/paper/picked.stamp                     # a part that never starts (a conflict) leaves its file older than this, and hands nothing over again
       - name: Run the paper runner through the NSE close to the evening hand-over
         env:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
         run: python -m quantdesk paper run --until "$HANDOVER2" --deadline-epoch "$PART_DEADLINE"
+      - name: Hand this part's own account to the next parts, encrypted (audit K-01; the plain account never leaves the runner)
+        if: ${{ always() }}
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -f runtime/paper/ledger/account.json ]; then echo "no account file to hand over"; exit 0; fi
+          if [ -f runtime/paper/picked.stamp ] && [ ! runtime/paper/ledger/account.json -nt runtime/paper/picked.stamp ]; then
+            echo "::warning::this part did not start from its copy (see the runner's step), so that copy is not handed over again"; exit 0
+          fi
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): the next part starts from the relay's copy only; add the secret (openssl rand -base64 32)"; exit 0; fi
+          mkdir -p handover-out
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:HANDOVER_KEY -in runtime/paper/ledger/account.json -out handover-out/account.json.enc
+      - name: Keep the encrypted hand-over for the next parts and the next morning (7 days, for a long holiday)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-handover-afternoon
+          path: handover-out/account.json.enc
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -175,16 +278,63 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Put the ledger branch's copy of the account in place
+      - name: Fetch the earlier parts' hand-overs (each part's own account, encrypted; audit K-01)
+        continue-on-error: true               # none when every earlier part ended before saving one
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: paper-handover-*
+          path: handover
+      - name: Decrypt the hand-overs (openssl only; the key is in this step and the encrypting one, nowhere else)
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          mkdir -p handover-dec
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): this part starts from the relay's copy and the ledger branch's only"; exit 0; fi
+          n=0
+          for d in handover-prev handover; do                  # oldest first: the previous run's parts, then this run's
+            for part in morning afternoon evening night reserve; do
+              f="$d/paper-handover-$part/account.json.enc"
+              [ -f "$f" ] || continue
+              n=$((n + 1))
+              if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:HANDOVER_KEY -in "$f" -out "handover-dec/$(printf '%02d' $n)-$part.json" 2>/dev/null; then
+                rm -f "handover-dec/$(printf '%02d' $n)-$part.json"; echo "::warning::the $part hand-over in $d could not be decrypted; left out"
+              fi
+            done
+          done
+          echo "decrypted $(ls handover-dec | wc -l) of $n hand-overs"
+      - name: Start from the longest verified copy, the ledger branch's or an earlier part's own (the relay's is still used if it is longer; audit K-01)
         run: |
           mkdir -p runtime/paper/ledger
-          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+          files=""
+          for f in handover-dec/*.json; do [ -f "$f" ] && files="$files $f"; done
+          python -m quantdesk paper pick --branch ledger/account.json --out runtime/paper/ledger/account.json $files
+          touch runtime/paper/picked.stamp                     # a part that never starts (a conflict) leaves its file older than this, and hands nothing over again
       - name: Run the paper runner through the MCX evening to the night hand-over
         env:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
         run: python -m quantdesk paper run --until "$HANDOVER3" --deadline-epoch "$PART_DEADLINE"
+      - name: Hand this part's own account to the next parts, encrypted (audit K-01; the plain account never leaves the runner)
+        if: ${{ always() }}
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -f runtime/paper/ledger/account.json ]; then echo "no account file to hand over"; exit 0; fi
+          if [ -f runtime/paper/picked.stamp ] && [ ! runtime/paper/ledger/account.json -nt runtime/paper/picked.stamp ]; then
+            echo "::warning::this part did not start from its copy (see the runner's step), so that copy is not handed over again"; exit 0
+          fi
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): the next part starts from the relay's copy only; add the secret (openssl rand -base64 32)"; exit 0; fi
+          mkdir -p handover-out
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:HANDOVER_KEY -in runtime/paper/ledger/account.json -out handover-out/account.json.enc
+      - name: Keep the encrypted hand-over for the next parts and the next morning (7 days, for a long holiday)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-handover-evening
+          path: handover-out/account.json.enc
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -216,16 +366,63 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Put the ledger branch's copy of the account in place
+      - name: Fetch the earlier parts' hand-overs (each part's own account, encrypted; audit K-01)
+        continue-on-error: true               # none when every earlier part ended before saving one
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: paper-handover-*
+          path: handover
+      - name: Decrypt the hand-overs (openssl only; the key is in this step and the encrypting one, nowhere else)
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          mkdir -p handover-dec
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): this part starts from the relay's copy and the ledger branch's only"; exit 0; fi
+          n=0
+          for d in handover-prev handover; do                  # oldest first: the previous run's parts, then this run's
+            for part in morning afternoon evening night reserve; do
+              f="$d/paper-handover-$part/account.json.enc"
+              [ -f "$f" ] || continue
+              n=$((n + 1))
+              if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:HANDOVER_KEY -in "$f" -out "handover-dec/$(printf '%02d' $n)-$part.json" 2>/dev/null; then
+                rm -f "handover-dec/$(printf '%02d' $n)-$part.json"; echo "::warning::the $part hand-over in $d could not be decrypted; left out"
+              fi
+            done
+          done
+          echo "decrypted $(ls handover-dec | wc -l) of $n hand-overs"
+      - name: Start from the longest verified copy, the ledger branch's or an earlier part's own (the relay's is still used if it is longer; audit K-01)
         run: |
           mkdir -p runtime/paper/ledger
-          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+          files=""
+          for f in handover-dec/*.json; do [ -f "$f" ] && files="$files $f"; done
+          python -m quantdesk paper pick --branch ledger/account.json --out runtime/paper/ledger/account.json $files
+          touch runtime/paper/picked.stamp                     # a part that never starts (a conflict) leaves its file older than this, and hands nothing over again
       - name: Run the paper runner to midnight
         env:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
         run: python -m quantdesk paper run --until "$UNTIL" --deadline-epoch "$PART_DEADLINE"
+      - name: Hand this part's own account to the next parts, encrypted (audit K-01; the plain account never leaves the runner)
+        if: ${{ always() }}
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -f runtime/paper/ledger/account.json ]; then echo "no account file to hand over"; exit 0; fi
+          if [ -f runtime/paper/picked.stamp ] && [ ! runtime/paper/ledger/account.json -nt runtime/paper/picked.stamp ]; then
+            echo "::warning::this part did not start from its copy (see the runner's step), so that copy is not handed over again"; exit 0
+          fi
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): the next part starts from the relay's copy only; add the secret (openssl rand -base64 32)"; exit 0; fi
+          mkdir -p handover-out
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:HANDOVER_KEY -in runtime/paper/ledger/account.json -out handover-out/account.json.enc
+      - name: Keep the encrypted hand-over for the next parts and the next morning (7 days, for a long holiday)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-handover-night
+          path: handover-out/account.json.enc
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -260,16 +457,63 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Put the ledger branch's copy of the account in place
+      - name: Fetch the earlier parts' hand-overs (each part's own account, encrypted; audit K-01)
+        continue-on-error: true               # none when every earlier part ended before saving one
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: paper-handover-*
+          path: handover
+      - name: Decrypt the hand-overs (openssl only; the key is in this step and the encrypting one, nowhere else)
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          mkdir -p handover-dec
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): this part starts from the relay's copy and the ledger branch's only"; exit 0; fi
+          n=0
+          for d in handover-prev handover; do                  # oldest first: the previous run's parts, then this run's
+            for part in morning afternoon evening night reserve; do
+              f="$d/paper-handover-$part/account.json.enc"
+              [ -f "$f" ] || continue
+              n=$((n + 1))
+              if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:HANDOVER_KEY -in "$f" -out "handover-dec/$(printf '%02d' $n)-$part.json" 2>/dev/null; then
+                rm -f "handover-dec/$(printf '%02d' $n)-$part.json"; echo "::warning::the $part hand-over in $d could not be decrypted; left out"
+              fi
+            done
+          done
+          echo "decrypted $(ls handover-dec | wc -l) of $n hand-overs"
+      - name: Start from the longest verified copy, the ledger branch's or an earlier part's own (the relay's is still used if it is longer; audit K-01)
         run: |
           mkdir -p runtime/paper/ledger
-          if [ -f ledger/account.json ]; then cp ledger/account.json runtime/paper/ledger/account.json; echo "restored the ledger branch's account"; else echo "no ledger branch account yet"; fi
+          files=""
+          for f in handover-dec/*.json; do [ -f "$f" ] && files="$files $f"; done
+          python -m quantdesk paper pick --branch ledger/account.json --out runtime/paper/ledger/account.json $files
+          touch runtime/paper/picked.stamp                     # a part that never starts (a conflict) leaves its file older than this, and hands nothing over again
       - name: Run the paper runner to midnight, if the day's earlier parts have not got there
         env:
           LIVE_URL: ${{ vars.LIVE_URL }}
           LIVE_READ_TOKEN: ${{ secrets.LIVE_READ_TOKEN }}
           LIVE_INGEST_TOKEN: ${{ secrets.LIVE_INGEST_TOKEN }}
         run: python -m quantdesk paper run --until "$UNTIL" --deadline-epoch "$PART_DEADLINE" --final
+      - name: Hand this part's own account to the next parts, encrypted (audit K-01; the plain account never leaves the runner)
+        if: ${{ always() }}
+        env:
+          HANDOVER_KEY: ${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -f runtime/paper/ledger/account.json ]; then echo "no account file to hand over"; exit 0; fi
+          if [ -f runtime/paper/picked.stamp ] && [ ! runtime/paper/ledger/account.json -nt runtime/paper/picked.stamp ]; then
+            echo "::warning::this part did not start from its copy (see the runner's step), so that copy is not handed over again"; exit 0
+          fi
+          if [ "${#HANDOVER_KEY}" -lt 32 ]; then echo "::warning::no hand-over key (PAPER_HANDOVER_KEY, or MARKET_TAPE_KEY, of 32+ characters): the next part starts from the relay's copy only; add the secret (openssl rand -base64 32)"; exit 0; fi
+          mkdir -p handover-out
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:HANDOVER_KEY -in runtime/paper/ledger/account.json -out handover-out/account.json.enc
+      - name: Keep the encrypted hand-over for the next parts and the next morning (7 days, for a long holiday)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paper-handover-reserve
+          path: handover-out/account.json.enc
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Keep the saved account (only when PAPER_LEDGER_BACKUP is yes, because this repository is public)
         if: ${{ always() && vars.PAPER_LEDGER_BACKUP == 'yes' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -84,6 +84,47 @@ def cmd_verify(cfg, a):
     print(f"paper verify: ok; {len(acct.ledger)} ledger rows, {len(acct.positions)} open positions, cash {acct.cash:,.2f}" + ("; continues the branch's account" if old is not None else ""))
 
 
+def cmd_pick(cfg, a):
+    """Audit K-01: the account a part starts from, among the copies it was handed: the ledger branch's file and each earlier part's own file (decrypted from its
+    hand-over). Every copy must verify (hash chain, replay); the one kept is the longest history the others are all a prefix of, with the highest high-water
+    mark any of them reached. Written to --out, where `paper run` takes it as its local copy (and still keeps the relay's when that is longer). Exits 1, writing
+    nothing, when two copies are two different histories, or when the ledger branch's copy (--branch) does not verify: the part must not start until the owner
+    looks. A hand-over that does not verify is reported and left out.
+    Prints counts only: this repository's run logs are public."""
+    from ..paper.runner import choose_state, load_account
+    best, used, bad = None, 0, 0
+    branch = getattr(a, "branch", None)
+    for f in ([branch] if branch else []) + list(a.files):
+        p = Path(f)
+        if not p.exists():
+            continue
+        try:
+            acct = load_account(p.read_text(encoding="utf-8"))
+        except (ValueError, OSError, UnicodeDecodeError, KeyError, TypeError, AttributeError) as e:
+            if branch and f == branch:                                   # the ledger branch's copy stops the start, as it always did: it is the owner's backup
+                print(f"::error::paper pick: the ledger branch's account does not verify ({type(e).__name__}): not starting until the owner looks")
+                raise SystemExit(1) from None
+            bad += 1
+            print(f"::warning::paper pick: {p.name} does not verify ({type(e).__name__}); left out")
+            continue
+        if acct is None:
+            continue
+        used += 1
+        if best is None:
+            best = acct
+            continue
+        chosen, note = choose_state(acct, best)                          # a tie keeps the later copy (the files are given oldest first); hwm is the higher of the two
+        if chosen is None:
+            print(f"::error::paper pick: {p.name} and an earlier copy are two different histories: not starting until the owner looks")
+            raise SystemExit(1)
+        best = chosen
+    if best is None:
+        print(f"paper pick: no usable copy ({bad} left out); the part starts from the relay's alone")
+        return
+    best.save(Path(a.out))
+    print(f"paper pick: {used} copies verified, {bad} left out; the longest has {len(best.ledger)} ledger rows")
+
+
 def cmd_reconcile(cfg, a):
     """Append fills the relay never received, from a plan, as reconstructed rows (quantdesk/paperlink/reconcile.py). A dry run unless --apply. Prints counts and a
     fingerprint only: this repository's run logs are public, so no price, position or P&L is printed."""
@@ -155,6 +196,11 @@ def register(sub):
     x.add_argument("--file", default="runtime/paper/ledger/account.json")
     x.add_argument("--extends", help="a saved account that this one must continue (its ledger must be a prefix of this one's); skipped if the file does not exist")
     x.set_defaults(fn=cmd_verify)
+    x = ss.add_parser("pick", help="audit K-01: the account a part starts from, among the ledger branch's file and the earlier parts' hand-overs (the longest history)")
+    x.add_argument("files", nargs="*", help="the hand-overs, oldest first; missing ones are skipped, ones that do not verify are left out")
+    x.add_argument("--branch", help="the ledger branch's account: if it exists it must verify, or nothing starts (as before)")
+    x.add_argument("--out", default="runtime/paper/ledger/account.json")
+    x.set_defaults(fn=cmd_pick)
     x = ss.add_parser("reconcile", help="append fills the relay never received, from a plan, as reconstructed rows (a dry run unless --apply)")
     x.add_argument("--plan", required=True, help="the plan (docs/reconcile/<day>.json): what the run logs show happened, no prices")
     x.add_argument("--chains", nargs="+", required=True, help="the day's recorded chain files (parquet) the fills are priced from")

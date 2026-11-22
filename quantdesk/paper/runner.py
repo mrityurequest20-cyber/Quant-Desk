@@ -244,7 +244,8 @@ def choose_state(relay: Account | None, branch: Account | None) -> tuple[Account
     a, b = relay.ledger, branch.ledger
     short, long_ = (a, b) if len(a) <= len(b) else (b, a)
     if relay.capital0 != branch.capital0 or long_[:len(short)] != short:
-        return None, "the relay's account and the ledger branch's are two different histories: not starting until the owner looks"
+        return None, ("the relay's account and the local copy (the ledger branch's, or an earlier part's hand-over) are two different histories: not starting "
+                      "until the owner looks (docs/PAPER_TRADING.md, audit K-01)")
     chosen, note = (relay, "continued from the relay") if len(a) >= len(b) else (branch, "continued from the ledger branch (it was ahead of the relay)")
     chosen.hwm = max(relay.hwm, branch.hwm)                              # the high-water mark only ever rises: a copy saved a little earlier must not loosen the drawdown floor
     return chosen, note
