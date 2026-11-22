@@ -32,7 +32,7 @@ def test_the_relay_keys_live_in_the_one_step_that_runs_the_runner_in_each_half_a
         assert set(holders[0]["env"]) == {"LIVE_URL", "LIVE_READ_TOKEN", "LIVE_INGEST_TOKEN"}
         others = [s for s in steps(job) if "secrets." in yaml.safe_dump(s) and s is not holders[0]]
         assert len(others) == 2 and all(set(s["env"]) == {"HANDOVER_KEY"} for s in others), job      # the hand-over key (audit K-01), in two steps only
-        for s in others:                                                                              # which run openssl alone: no repository code ever sees the key
+        for s in others:                                                                              # which run openssl alone (no repository code runs in them)
             assert "openssl enc" in s["run"] and "python" not in s["run"] and "quantdesk" not in s["run"], job
     assert RAW.count("secrets.LIVE_READ_TOKEN") == 5 and RAW.count("secrets.LIVE_INGEST_TOKEN") == 5     # a part each; the workflow-level env holds none
     assert not any("secrets." in str(v) for v in WF["env"].values())
@@ -131,13 +131,17 @@ def test_every_part_hands_its_own_account_on_encrypted_and_starts_from_the_longe
         dec, pick = _named(job, "Decrypt the hand-overs"), _named(job, "Start from the longest verified copy")
         enc, keep = _named(job, "Hand this part's own account"), _named(job, "Keep the encrypted hand-over")
         assert names.index(dec["name"]) < names.index(pick["name"]) < run_i < names.index(enc["name"]) < names.index(keep["name"]), job
-        assert "paper pick --out runtime/paper/ledger/account.json $files" in pick["run"] and "ledger/account.json" in pick["run"] and "env" not in pick, job
+        assert "paper pick --branch ledger/account.json --out runtime/paper/ledger/account.json $files" in pick["run"] and "ledger/account.json" in pick["run"] and "env" not in pick, job
         assert "openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt" in enc["run"] and "-in runtime/paper/ledger/account.json -out handover-out/account.json.enc" in enc["run"]
         assert "openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000" in dec["run"] and "for d in handover-prev handover" in dec["run"]
         assert enc["if"] == "${{ always() }}" and keep["if"] == "${{ always() }}", job                     # a part that fails or is cancelled still hands over what it holds
-        assert keep["with"]["retention-days"] <= 3, job                                                    # long enough for the next morning, no longer
+        assert keep["with"]["retention-days"] == 7, job                                                   # the next morning after a long holiday (Thu 23:59 to Mon 06:00 is 78 h), no longer
+        assert "-nt runtime/paper/picked.stamp" in enc["run"] and "touch runtime/paper/picked.stamp" in pick["run"], job   # a part that never started hands nothing over again
+        assert "--branch ledger/account.json" in pick["run"], job                                          # the owner's backup must verify, or nothing starts (as before)
         for s_ in (enc, dec):
             assert s_["env"]["HANDOVER_KEY"] == "${{ secrets.PAPER_HANDOVER_KEY || secrets.MARKET_TAPE_KEY }}" and '-lt 32' in s_["run"], job
+        tok = [x.get("name", x.get("uses", "")) for x in steps(job) if "github.token" in yaml.safe_dump(x) or "GH_TOKEN" in yaml.safe_dump(x)]
+        assert tok == (["Fetch the previous run's hand-overs (its night part's account, for this morning; audit K-01)"] if i == 0 else []), job   # the token: one gh-only step
         if i == 0:
             prev = _named(job, "Fetch the previous run's hand-overs")
             assert prev["continue-on-error"] is True and set(prev["env"]) == {"GH_TOKEN"} and prev["env"]["GH_TOKEN"] == "${{ github.token }}"

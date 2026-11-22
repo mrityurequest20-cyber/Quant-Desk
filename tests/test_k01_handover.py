@@ -189,8 +189,8 @@ def acct_with(cfg, tmp_path, n_orders, name):
     return d
 
 
-def pick(files, out):
-    C.cmd_pick(None, type("A", (), {"files": [str(f) for f in files], "out": str(out)}))
+def pick(files, out, branch=None):
+    C.cmd_pick(None, type("A", (), {"files": [str(f) for f in files], "out": str(out), "branch": str(branch) if branch else None}))
 
 
 def test_the_pick_keeps_the_longest_history_and_the_highest_mark(cfg, tmp_path, capsys):
@@ -250,3 +250,51 @@ def test_the_pick_prints_counts_only(cfg, tmp_path, capsys):
     pick([f], tmp_path / "o.json")
     printed = capsys.readouterr().out
     assert NAME not in printed and "cash" not in printed and "100.0" not in printed
+
+
+# ---- the risk review's findings (K-01, review of 1256c79) ---------------------------------------------------------------------------------
+@needs_openssl
+def test_a_part_that_never_started_hands_nothing_over_again(cfg, tmp_path):
+    """Finding 1: a conflict stopped the part, and its always() step handed the conflicting copy on again, so every later part and morning stayed blocked."""
+    b = tmp_path / "b"
+    (b / "ledger").mkdir(parents=True)
+    Account(500_000).save(b / "ledger/account.json")
+    assert sh(step("afternoon", "Start from the longest verified copy")["run"], b).returncode == 0
+    r = sh(step("afternoon", "Hand this part's own account")["run"], b)                                      # the runner refused: the file is as the pick left it
+    assert r.returncode == 0 and "not handed over again" in r.stdout and not (b / "handover-out").exists()
+    import time
+    time.sleep(0.05)
+    Account(500_000).save(b / "runtime/paper/ledger/account.json")                                           # a part that started saves its account at once
+    assert sh(step("afternoon", "Hand this part's own account")["run"], b).returncode == 0 and (b / "handover-out/account.json.enc").exists()
+
+
+def test_the_ledger_branchs_copy_must_verify_or_nothing_starts_as_before(cfg, tmp_path, capsys):
+    """Finding 3: a tampered ledger-branch copy stopped the start before this change; it still does. A hand-over that does not verify is only left out."""
+    good = acct_with(cfg, tmp_path, 1, "g")
+    bad = tmp_path / "branch.json"
+    d = json.loads(good.read_text())
+    d["cash"] = d["cash"] + 1
+    bad.write_text(json.dumps(d))
+    out = tmp_path / "out.json"
+    with pytest.raises(SystemExit) as e:
+        pick([good], out, branch=bad)
+    assert e.value.code == 1 and not out.exists() and "ledger branch's account does not verify" in capsys.readouterr().out
+    pick([bad, good], out, branch=tmp_path / "no-branch-yet.json")                                           # no branch yet: not an error; a bad hand-over is left out
+    assert R.load_account(out.read_text()).ledger == R.load_account(good.read_text()).ledger
+
+
+def test_a_copy_of_the_wrong_shape_is_left_out_not_a_crash(cfg, tmp_path, capsys):
+    good = acct_with(cfg, tmp_path, 1, "g")
+    odd = [tmp_path / f"odd{i}.json" for i in range(3)]
+    odd[0].write_text("[]")
+    odd[1].write_text('{"v": 1}')
+    odd[2].write_text('{"capital0": "x", "ledger": 5}')
+    out = tmp_path / "out.json"
+    pick(odd + [good], out)
+    assert R.load_account(out.read_text()).ledger == R.load_account(good.read_text()).ledger and "left out" in capsys.readouterr().out
+
+
+def test_the_morning_skips_a_previous_run_with_no_hand_over():
+    """Finding 2: the newest completed run may have been cancelled before it ran: the one before it is taken."""
+    prev = step("morning", "Fetch the previous run's hand-overs")["run"]
+    assert "for prev in $runs" in prev and "break" in prev and "--limit 10" in prev
