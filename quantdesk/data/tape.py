@@ -25,6 +25,7 @@ class Tape:
     def __init__(self, out: Path, src: str, flush_rows: int = FLUSH_ROWS, now=time.time):
         self.out, self.src, self.flush_rows, self.now = Path(out), str(src), int(flush_rows), now
         self.rows: list[list] = []
+        self._next_flush = self.flush_rows                              # after a failed write, the next try waits for another flush_rows rows
         self.lock = threading.Lock()
         self.n = self.files = self.errors = self.dropped = 0
         try:
@@ -37,6 +38,10 @@ class Tape:
             return
         try:
             row = [int(self.now() * 1000), str(name), json.dumps(quote, separators=(",", ":"), sort_keys=True, default=str)]
+            row[1].encode("utf-8")                                      # checked once, here: a row that cannot be written never reaches a chunk
+        except UnicodeEncodeError:
+            self.dropped += 1
+            return
         except (TypeError, ValueError):
             self.errors += 1
             return
@@ -46,7 +51,7 @@ class Tape:
                 return
             self.rows.append(row)
             self.n += 1
-            if len(self.rows) >= self.flush_rows:
+            if len(self.rows) >= self._next_flush:
                 self._flush()
 
     def flush(self) -> None:
@@ -66,20 +71,14 @@ class Tape:
             os.replace(tmp, path)                                       # whole or not at all: a kill mid-write never leaves a cut chunk in the tape
             self.files += 1
             self.rows = []
-        except Exception:                                               # noqa: BLE001 - kept for the next flush (bounded by MAX_PENDING); a row that
-            self.errors += 1                                            # cannot be written at all (bad text) is dropped below, not kept for ever
-            self._salvage()
-
-    def _salvage(self) -> None:
-        """After a failed write: drop the rows that cannot be encoded (a lone surrogate in a name), so one bad row never blocks the tape."""
-        good = []
-        for r in self.rows:
+            self._next_flush = self.flush_rows
+        except Exception:                                               # noqa: BLE001 - kept for the next flush (bounded by MAX_PENDING)
+            self.errors += 1
+            self._next_flush = len(self.rows) + self.flush_rows        # a failing disk is tried again only after as many new rows: never on every row
             try:
-                "".join(map(str, r)).encode("utf-8")
-                good.append(r)
-            except UnicodeEncodeError:
-                self.dropped += 1
-        self.rows = good
+                tmp.unlink()                                            # no partial file is left for the tar
+            except OSError:
+                pass
 
     def stats(self) -> dict:
         return {"tape_rows": self.n, "tape_files": self.files, "tape_errors": self.errors, "tape_dropped": self.dropped}
