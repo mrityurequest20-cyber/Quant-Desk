@@ -451,3 +451,71 @@ console.log(JSON.stringify(out));""")
     r = subprocess.run(["node", "t.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-1500:]
     assert json.loads(r.stdout.strip().splitlines()[-1]) == {"reset": 200, "prev_is_old": True, "plain": 200, "no_prev_without_reset": True, "breset": 200, "book_prev": True}
+
+
+def test_a_damaged_book_pauses_auto_v2_and_the_owners_reset_starts_it_empty(cfg, tmp_path):
+    class Broken(Relay):
+        def get_shadow(self):
+            return {"shadow": None, "broken": True}
+    ap = desk(cfg, tmp_path)[1]
+    ap.load(Broken(lab=record()))
+    assert ap.persist_kind == "corrupt" and "damaged" in ap.persist_blocked                   # was: taken for "no book ever saved", then written over
+    ap2 = desk(cfg, tmp_path)[1]
+    ap2.allow_reset = True
+    ap2.load(Broken(lab=record()))
+    assert ap2.persist_blocked is None and ap2.book_reset_pending and ap2.shadow == {}
+
+
+def test_a_reset_carries_the_runs_id(cfg, tmp_path, monkeypatch):
+    ap = desk(cfg, tmp_path)[1]
+    assert ap._reset_kw() == {"reset": True}
+    ap.reset_id = "44980626325"
+    assert ap._reset_kw() == {"reset": True, "rid": "44980626325"}
+    from tests.test_paper_session import Clock, FakeRelay, IST
+    clk = Clock()
+    monkeypatch.setattr(S.time, "monotonic", lambda: (clk.t - Clock().t).total_seconds())
+    monkeypatch.setenv("GITHUB_RUN_ID", "12345")
+    auto = AutoStub("failed")
+    auto.reset_id = None
+    S.run(cfg, FakeRelay(clk), tmp_path / "l" / "a.json", (clk.t + dt.timedelta(minutes=1)).astimezone(IST).time(), every_s=3.0, clock=clk, sleep=clk.sleep,
+          say=lambda *a: None, new_account=True, auto=auto)
+    assert auto.reset_id == "12345"
+
+
+@needs_node
+def test_a_retried_reset_never_copies_the_reset_data_over_the_copy_and_a_damaged_book_says_so(tmp_path):
+    shutil.copyfile(ROOT / "deploy/cloudflare/paper.js", tmp_path / "paper.js")
+    (tmp_path / "package.json").write_text('{"type": "module"}')
+    (tmp_path / "cases.json").write_text(json.dumps({"r300": record(300), "r1": record(1)}))
+    (tmp_path / "t.mjs").write_text("""import { PaperBook } from './paper.js';
+import { readFileSync } from 'fs';
+const C = JSON.parse(readFileSync('cases.json', 'utf8'));
+const store = new Map();
+const state = { storage: {
+  get: async (k) => { if (Array.isArray(k)) { const m = new Map(); for (const x of k) if (store.has(x)) m.set(x, store.get(x)); return m; } return store.get(k); },
+  put: async (k, v) => { if (typeof k === "object") for (const [a, b] of Object.entries(k)) store.set(a, b); else store.set(k, v); },
+  delete: async (k) => { for (const x of (Array.isArray(k) ? k : [k])) store.delete(x); } } };
+const b = new PaperBook(state);
+const call = async (m, path, body) => { const r = await b.handle(new Request("https://live" + path, { method: m, ...(body ? { body: JSON.stringify(body) } : {}) }), new URL("https://live" + path), 1); return [r.status, await r.json()]; };
+const out = {};
+await call("POST", "/paper/lab", { lab: C.r300 });
+await call("POST", "/paper/lab", { lab: C.r1, reset: true, rid: "run-1" });
+await call("POST", "/paper/lab", { lab: C.r1, reset: true, rid: "run-1" });          // the same reset again (its reply was lost)
+out.lab_prev_kept = store.get("paper:lab:prev") === C.r300;
+const book = JSON.stringify({ v: 1, seq: 1, open: [["A", "NIFTY"]] });
+await call("POST", "/paper/shadow", { shadow: book });
+out.ok_read = (await call("GET", "/paper/shadow"))[1];
+store.delete("paper:shadow:0");                                                    // a piece lost: the count says one, no piece
+out.broken_read = (await call("GET", "/paper/shadow"))[1];
+store.clear();
+out.never = (await call("GET", "/paper/shadow"))[1];
+store.set("paper:shadowmeta", { n: 2 }); store.set("paper:shadow:0", "half");          // a broken book, reset: kept raw
+await call("POST", "/paper/shadow", { shadow: JSON.stringify({ v: 1, open: [] }), reset: true, rid: "run-2" });
+out.raw_kept = store.get("paper:shadowprev:0") === "half" && JSON.stringify(store.get("paper:shadowprevmeta")) === '{"n":2}';
+console.log(JSON.stringify(out));""")
+    r = subprocess.run(["node", "t.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-1500:]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert out["lab_prev_kept"] is True and out["raw_kept"] is True
+    assert "broken" not in out["ok_read"] and out["broken_read"]["broken"] is True and out["broken_read"]["shadow"] is None
+    assert out["never"]["shadow"] is None and "broken" not in out["never"]

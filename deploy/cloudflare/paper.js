@@ -189,7 +189,7 @@ export class PaperBook {
 			if (p === "/paper/lab" && m === "POST") return await this.putLab(await request.json(), now);
 			if (p === "/paper/lab" && m === "GET") { const lab = await this.state.storage.get("paper:lab"); return json(200, { lab: typeof lab === "string" ? lab : null, now }); }
 			if (p === "/paper/shadow" && m === "POST") return await this.putShadow(await request.json(), now);
-			if (p === "/paper/shadow" && m === "GET") return json(200, { shadow: await this.heldShadow(), now });
+			if (p === "/paper/shadow" && m === "GET") { const shadow = await this.heldShadow(); return json(200, { shadow, ...(shadow === null && await this.shadowBroken() ? { broken: true } : {}), now }); }
 		} catch (e) {
 			return json(500, { error: "the paper store could not complete that; nothing was changed" });       // storage failed: memory is untouched (see below)
 		}
@@ -245,8 +245,7 @@ export class PaperBook {
 		// Audit K-04 (FH-01): a runner that could not read the record once saved an empty one over it. A record with fewer than half the strategies of the one held is
 		// refused, unless the runner says it is the owner's reset_record (a catalogue change, or an unreadable record replaced on purpose).
 		if (raw.reset === true) {                                                            // the owner's reset: the record it replaces is kept, so a reset can be undone
-			const held = await this.state.storage.get("paper:lab");
-			if (typeof held === "string") await this.state.storage.put("paper:lab:prev", held);
+			await this.keepPrev("lab", raw.rid);
 		} else {
 			const held = await this.state.storage.get("paper:lab");
 			const had = typeof held === "string" ? labCount(held) : null, got = labCount(lab);
@@ -263,14 +262,7 @@ export class PaperBook {
 		let o;
 		try { o = JSON.parse(text); } catch (e) { return json(400, { error: "not a valid shadow book" }); }
 		if (!o || typeof o !== "object" || o.v !== 1 || !Array.isArray(o.open)) return json(400, { error: "not a valid shadow book" });
-		if (raw.reset === true) {                                                            // the owner's reset (audit K-04): the book it replaces is kept as paper:shadowprev
-			const prev = await this.heldShadow();
-			if (typeof prev === "string") {
-				const m = Math.max(1, Math.ceil(prev.length / CHUNK)), keep = { "paper:shadowprevmeta": { n: m } };
-				for (let i = 0; i < m; i++) keep["paper:shadowprev:" + i] = prev.slice(i * CHUNK, (i + 1) * CHUNK);
-				await this.state.storage.put(keep);
-			}
-		}
+		if (raw.reset === true) await this.keepPrev("shadow", raw.rid);                      // the owner's reset (audit K-04): the book it replaces is kept as paper:shadowprev
 		const n = Math.max(1, Math.ceil(text.length / CHUNK));
 		const writes = {};
 		for (let i = 0; i < n; i++) writes["paper:shadow:" + i] = text.slice(i * CHUNK, (i + 1) * CHUNK);
@@ -280,6 +272,30 @@ export class PaperBook {
 		for (let i = n; i < MAX_SHADOW_CHUNKS; i++) stale.push("paper:shadow:" + i);
 		try { await this.state.storage.delete(stale); } catch (e) { /* never read (the count says n): the book itself is kept, so this is no failure */ }
 		return json(200, { saved: true, chars: text.length, now });
+	}
+
+	// A book was saved but cannot be put back together (a bad piece count, a missing piece): said, so the runner pauses instead of taking it for no book (K-04 review).
+	async shadowBroken() {
+		const meta = await this.state.storage.get("paper:shadowmeta");
+		return meta !== undefined && meta !== null;
+	}
+
+	// The owner's reset keeps what it replaces, once per reset id (a reset retried after a lost reply never copies the reset data over the copy; K-04 review).
+	async keepPrev(kind, rid) {
+		const ridKey = "paper:" + kind + "prevrid";
+		const clean = typeof rid === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(rid) ? rid : null;
+		if (clean !== null && (await this.state.storage.get(ridKey)) === clean) return false;
+		const keep = clean !== null ? { [ridKey]: clean } : {};
+		if (kind === "lab") {
+			const held = await this.state.storage.get("paper:lab");
+			if (typeof held === "string") keep["paper:lab:prev"] = held;
+		} else {
+			const keys = ["paper:shadowmeta", ...Array.from({ length: MAX_SHADOW_CHUNKS }, (_, i) => "paper:shadow:" + i)];
+			const got = await this.state.storage.get(keys);
+			for (const k of keys) if (got.has(k)) keep[k === "paper:shadowmeta" ? "paper:shadowprevmeta" : k.replace("paper:shadow:", "paper:shadowprev:")] = got.get(k);    // raw: a broken book is kept as it is
+		}
+		if (Object.keys(keep).length) await this.state.storage.put(keep);
+		return true;
 	}
 
 	async heldShadow() {

@@ -144,6 +144,7 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
         auto.runner_commit = os.environ.get("GITHUB_SHA") or None      # phase 2's monthly report names the code that produced it (the paper package reads no environment)
         if hasattr(auto, "allow_reset"):                               # the owner's reset_record (paper-desk.yml input; audit K-04): never set by the desk itself
             auto.allow_reset = os.environ.get("PAPER_RESET_RECORD", "").strip().lower() == "yes"
+            auto.reset_id = (os.environ.get("GITHUB_RUN_ID") or "").strip() or None      # one copy kept per reset, whatever is retried
         log(f"paper: AUTO v2 strategy record: {auto.load(relay)}")
         if getattr(auto, "persist_blocked", None):                     # audit K-04: paused, so it is seen
             log(("::error::" if getattr(auto, "persist_kind", None) == "corrupt" else "::warning::") + f"paper: AUTO v2 {auto.persist_blocked}: paused "
