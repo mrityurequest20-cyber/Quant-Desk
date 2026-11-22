@@ -111,7 +111,9 @@ def test_a_later_read_resumes_from_the_relays_copy_and_keeps_the_higher_trail_pe
     ap.cx_peak = {"held": 3.5}                                                                # a convex package's peak seen while paused
     assert not ap.save(relay, 100.0)                                                          # too soon to read again
     assert relay.reads["lab"] == 2
-    ap.save(relay, 100.0 + A2.LOAD_RETRY_S)                                                   # read again from the loop: it works
+    ap.save(relay, 100.0 + A2.LOAD_RETRY_S)                                                   # read again, on its own thread
+    ap._retry_thread.join(5)
+    ap.save(relay, 101.0 + A2.LOAD_RETRY_S)                                                   # the next cycle applies what it brought
     assert ap.persist_blocked is None and len(ap.lab.stats) == 300 and ap.cx_peak.get("held") == 3.5
     assert "read its record on a later try" in ap.persist_note and ap.summary()["persist"]["state"] == "ok"
     learn(ap)
@@ -305,3 +307,63 @@ def test_a_proven_strategy_never_goes_live_while_the_book_is_unread(cfg, tmp_pat
     mine, _ = cycle(rn, ap, board(t), t)
     assert not [o for o in mine if o.get("group") == "auto2"] and not rn.account.positions     # the same cycle went live in test_paper_auto2 without the pause
     assert A2.BY_SID[IC]
+
+
+def test_the_reread_never_holds_up_the_cycle_or_its_brakes(cfg, tmp_path):
+    """Risk review of K-04 v2, finding 1: a re-read inside save() could wait up to a minute on the relay's timeouts, before rn.step, so no stop or halt ran."""
+    import threading
+    import time
+    gate = threading.Event()
+
+    class Slow(Flaky):
+        def get_lab(self):
+            if self.reads["lab"] >= 2:                                                        # the start's two tries fail at once; the re-read hangs on the relay
+                self.reads["lab"] += 1
+                gate.wait(10)
+            return super().get_lab()
+    relay = Slow(lab_fails=2, lab=record(), shadow=BOOK)
+    ap = desk(cfg, tmp_path)[1]
+    ap.load(relay)
+    t0 = time.monotonic()
+    for k in range(5):
+        ap.save(relay, 1000.0 + k * A2.LOAD_RETRY_S)
+    assert time.monotonic() - t0 < 1.0 and ap.persist_blocked                                 # five cycles, none waited
+    assert sum(1 for th in threading.enumerate() if th.name == "auto2-reread") == 1           # one re-read at a time
+    gate.set()
+    ap._retry_thread.join(5)
+    ap.save(relay, 9000.0)
+    assert ap.persist_blocked is None and len(ap.lab.stats) == 300
+
+
+def test_a_failing_retry_costs_the_retry_never_the_part(cfg, tmp_path, monkeypatch):
+    ap = desk(cfg, tmp_path)[1]
+    ap.load(Flaky(lab_fails=99, lab=record()))
+    monkeypatch.setattr(ap, "_retry", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert ap.save(Flaky(lab=record()), 1000.0) is False and ap.shadow_io["retry_errors"] == 1
+
+
+def test_an_unknown_convex_peak_never_trails_below_a_rung_already_sold(cfg, tmp_path, monkeypatch):
+    """Risk review of K-04 v2, finding 2: with the record unread a package's peak was unknown, so one that had sold its first third at +RUNG1_R trailed from where
+    it is now. A rung sold proves the package reached it."""
+    ap = desk(cfg, tmp_path)[1]
+    s = A2.CX_CATALOGUE[0]
+    seen = {}
+    monkeypatch.setattr(ap, "_cx_meta", lambda text: {"n": 3})
+    monkeypatch.setattr(ap, "_cx_exit", lambda s_, r, peak, d1, d2, *a, **k: seen.update(peak=peak, d1=d1, d2=d2) or (None, ""))
+    ins = SimpleNamespace(lot_size=65)
+
+    def pkg(lots):
+        return {"sid": s.sid, "u": "NIFTY", "legs": {"L": SimpleNamespace(qty=65 * lots, instrument=ins)}}
+    t1, t2 = A2.CX.tranches(3)
+    ap._cx_live_exit("pkgA", pkg(3 - t1), s, 0.4, T0, T0, dt.date(2026, 11, 26), 0.0, {})      # rung 1 sold, peak unknown, now +0.4R
+    assert seen["d1"] and seen["peak"] == A2.CX.RUNG1_R and ap.cx_peak["pkgA"] == A2.CX.RUNG1_R
+    ap._cx_live_exit("pkgB", pkg(3 - t1 - t2), s, 0.4, T0, T0, dt.date(2026, 11, 26), 0.0, {})     # both rungs sold
+    assert seen["peak"] == A2.CX.RUNG2_R
+    ap._cx_live_exit("pkgC", pkg(3), s, 0.4, T0, T0, dt.date(2026, 11, 26), 0.0, {})               # nothing sold: the peak is what it is
+    assert seen["peak"] == 0.4
+    ap.cx_peak["pkgD"] = 5.0
+    ap._cx_live_exit("pkgD", pkg(3 - t1), s, 0.4, T0, T0, dt.date(2026, 11, 26), 0.0, {})          # a known higher peak is kept
+    assert seen["peak"] == 5.0
+    ap.cx_peak["pkgE"] = 0.5                                                                       # a known peak below a rung already sold (one stored under the old ladder)
+    ap._cx_live_exit("pkgE", pkg(3 - t1), s, 0.4, T0, T0, dt.date(2026, 11, 26), 0.0, {})
+    assert seen["peak"] == A2.CX.RUNG1_R

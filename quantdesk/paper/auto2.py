@@ -40,6 +40,7 @@ import base64
 import datetime as dt
 import json
 import math
+import threading
 import time
 import random
 import re
@@ -743,6 +744,24 @@ class Lab:
 
 
 # ---- the engine -----------------------------------------------------------------------------------------------------------------------------
+class _Fetched:
+    """What a background re-read brought (audit K-04): load() reads it like a relay, with no network on the cycle's thread."""
+    def __init__(self, lab, book):
+        self._lab = lab
+        if book is not None:
+            self.get_shadow = lambda: self._give(book)
+
+    @staticmethod
+    def _give(x):
+        kind, v = x
+        if kind == "e":
+            raise v
+        return v
+
+    def get_lab(self):
+        return self._give(self._lab)
+
+
 class AutoPilotV2:
     def __init__(self, underlyings, lots: dict, fees_fn, cal, capital: float = 500_000.0, seed: int | None = None, lab: Lab | None = None,
                  segments: dict | None = None, ticks: dict | None = None, fut_fees_fn=None, fut_specs: dict | None = None):
@@ -768,6 +787,8 @@ class AutoPilotV2:
         self.persist_note: str | None = None       # a line for the session's log (a late read, a refused save)
         self.lab_refused = 0                       # saves the relay refused (409: a record with far fewer strategies than the one it holds)
         self._retry_at = 0.0
+        self._retry_thread = None
+        self._retry_result = None
         self.tape: dict[str, list[tuple[float, float]]] = {}
         self.shadow: dict[tuple, dict] = {}        # (sid, u) -> open shadow trade
         self.cool: dict[tuple, float] = {}         # (sid, u) -> no shadow re-entry before this
@@ -1962,15 +1983,16 @@ class AutoPilotV2:
     def _cx_live_exit(self, text, pkg, s: Strategy, r: float, opened, ist, exp, t: float, states: dict) -> list[dict]:
         """A live convex package's exit orders: the lots of a rung (a third at +100%, a third at +300%), or everything left."""
         meta = self._cx_meta(text)
-        old = self.cx_peak.get(text, -math.inf)
-        peak = max(old, r)
-        if peak > old or text not in self.cx_peak:
-            self.lab.dirty = True                                                       # kept with the record: a restart does not loosen the trail
-        self.cx_peak[text] = peak
         n_now = min(abs(p.qty) // max(1, p.instrument.lot_size) for p in pkg["legs"].values())
         n0 = max(meta.get("n") or n_now, n_now)
         sold = n0 - n_now
         t1, t2 = CX.tranches(n0)
+        floor = CX.RUNG2_R if sold >= t1 + t2 else (CX.RUNG1_R if sold >= t1 else -math.inf)    # a rung sold proves the package reached it: an unknown peak
+        old = self.cx_peak.get(text, floor)                                             # (the record unread, audit K-04 review) never trails from below it
+        peak = max(old, r, floor)
+        if peak > old or text not in self.cx_peak:
+            self.lab.dirty = True                                                       # kept with the record: a restart does not loosen the trail
+        self.cx_peak[text] = peak
         act, why = self._cx_exit(s, r, peak, sold >= t1, sold >= t1 + t2, opened, ist, exp, pkg["u"], meta.get("event_at"), states)
         if act is None:
             return []
@@ -2421,9 +2443,10 @@ class AutoPilotV2:
         ends badly can lose a trade, never count one twice (risk review of the carry, 14 Nov 2026). While paused (audit K-04) nothing is sent: a failed read is tried
         again every LOAD_RETRY_S from here, and on success AUTO v2 goes on from what the relay holds."""
         if self.persist_blocked:
-            if self.persist_kind == "failed" and mono - self._retry_at >= LOAD_RETRY_S:
-                self._retry_at = mono
-                self._late_load(relay)
+            try:
+                self._retry(relay, mono)                                                # never waits on the network: the brakes run in the same cycle (K-04 review)
+            except Exception:                                                           # noqa: BLE001 - a retry that fails costs the retry, never the part
+                self.shadow_io["retry_errors"] = self.shadow_io.get("retry_errors", 0) + 1
             if self.persist_blocked:
                 self.shadow_io["blocked"] = self.shadow_io.get("blocked", 0) + 1
                 return False
@@ -2477,6 +2500,28 @@ class AutoPilotV2:
             return True
         except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
             return False
+
+    def _retry(self, relay, mono: float) -> None:
+        """While paused by a failed read: apply what the last background read brought, and start the next one every LOAD_RETRY_S. The reads run on their own
+        thread, one try each (the relay's own timeout), so the cycle and its brakes never wait for them (risk review of K-04 v2, finding 1)."""
+        got, self._retry_result = self._retry_result, None
+        if got is not None and got[0] == "ok":
+            self._late_load(_Fetched(*got[1:]))
+        th = self._retry_thread
+        if self.persist_kind != "failed" or (th is not None and th.is_alive()) or mono - self._retry_at < LOAD_RETRY_S:
+            return
+        self._retry_at = mono
+
+        def work():
+            def one(fn):
+                try:
+                    return ("v", fn())
+                except Exception as e:                                                  # noqa: BLE001 - kept, raised again when the answer is applied
+                    return ("e", e)
+            gs = getattr(relay, "get_shadow", None)
+            self._retry_result = ("ok", one(relay.get_lab), None if gs is None else one(gs))
+        self._retry_thread = threading.Thread(target=work, name="auto2-reread", daemon=True)
+        self._retry_thread.start()
 
     def _late_load(self, relay) -> None:
         """A read that failed at the start, tried again (audit K-04). Nothing was opened, learned or saved meanwhile, so the relay's record and book are taken whole;
