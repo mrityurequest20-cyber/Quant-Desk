@@ -325,6 +325,17 @@ async function w22PaperState(c) {
 			body: got === null ? `At ${c.now.hhmm} IST the paper run is in progress but the relay holds no state from it.` :
 				`At ${c.now.hhmm} IST the paper run is in progress but its last state reached the relay ${Math.round(age)} minutes ago (it is sent at least every 10 seconds). Fills may not be saved and new entries wait.` });
 	}
+	const ps = sm && sm.lab && typeof sm.lab === "object" && sm.lab.persist && typeof sm.lab.persist === "object" ? sm.lab.persist : null;     // audit K-04
+	if (ps && ps.state === "blocked") {
+		out.push({ ...base, sev: "P1", check: "W22", title: "AUTO v2 cannot read its strategy record",
+			body: `At ${c.now.hhmm} IST AUTO v2 is paused: its stored record or open shadow book cannot be read, so it runs only the exits of what it holds and saves nothing over it. The owner must look (or run the paper runner with reset_record).` });
+	} else if (ps && Number.isInteger(ps.refused) && ps.refused > 0) {
+		out.push({ ...base, sev: "P1", check: "W22", title: "The relay refused AUTO v2's record",
+			body: `At ${c.now.hhmm} IST the relay refused AUTO v2's strategy record (it has far fewer strategies than the one held): nothing AUTO v2 learns is saved. The owner must look.` });
+	} else if (ps && ps.state === "paused") {
+		out.push({ ...base, sev: "P2", check: "W22", title: "AUTO v2 is paused: its record was not read",
+			body: `At ${c.now.hhmm} IST AUTO v2 could not read its record or book from the relay and is paused (exits only); it tries again every 3 minutes.` });
+	}
 	if (sm && sm.brakes_down === true) {
 		out.push({ ...base, sev: "P1", check: "W22", title: "Paper runner: the brakes are down",
 			body: `At ${c.now.hhmm} IST the paper runner reports that its cycle keeps failing: no stop, cap, square-off or settlement is running. Open the run's log.` });

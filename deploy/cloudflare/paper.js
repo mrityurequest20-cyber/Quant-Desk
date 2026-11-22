@@ -19,6 +19,15 @@ export const MAX_QUEUE_BYTES = 90000;           // the whole queue is one stored
 export const MAX_QUEUE_BYTES_EXIT = 120000;     // ...and a sale always has room above that, so an exit can be queued when the queue is full
 export const MAX_RESULTS = 50;                     // kept results: with the reason caps below, the stored value stays far under a Durable Object's 128 KiB limit
 export const MAX_LAB = 120000;                     // characters: AUTO v2's strategy record (quantdesk/paper/auto2.py), one stored value (128 KiB at most), ASCII only
+const LAB_GUARD_MIN = 20;                  // the guard applies once the record held has this many strategies (audit K-04)
+// How many strategy records a stored record holds: the keys of `stats`, or `n` for the compressed form ({"v":1,"stats":{},"n":k,"z":...}); null when not known.
+export function labCount(text) {
+	let o;
+	try { o = JSON.parse(text); } catch (e) { return null; }
+	if (!o || typeof o !== "object" || !o.stats || typeof o.stats !== "object") return null;
+	if (typeof o.z === "string") return Number.isInteger(o.n) && o.n >= 0 ? o.n : null;
+	return Object.keys(o.stats).length;
+}
 export const MAX_RESULTS_BYTES = 100000;           // characters of JSON in the stored results (far under a stored value's 128 KiB even with wide characters)
 export const MAX_SEEN = 1000;                      // order ids remembered as used (about 70 KB stored)
 export const MAX_SUMMARY = 60000;                  // characters
@@ -233,6 +242,13 @@ export class PaperBook {
 		let o;
 		try { o = JSON.parse(lab); } catch (e) { return json(400, { error: "not a valid strategy record" }); }
 		if (!o || typeof o !== "object" || o.v !== 1 || !o.stats || typeof o.stats !== "object" || Array.isArray(o.stats)) return json(400, { error: "not a valid strategy record" });
+		// Audit K-04 (FH-01): a runner that could not read the record once saved an empty one over it. A record with fewer than half the strategies of the one held is
+		// refused, unless the runner says it is the owner's reset_record (a catalogue change, or an unreadable record replaced on purpose).
+		if (raw.reset !== true) {
+			const held = await this.state.storage.get("paper:lab");
+			const had = typeof held === "string" ? labCount(held) : null, got = labCount(lab);
+			if (had !== null && got !== null && had >= LAB_GUARD_MIN && got < had / 2) return json(409, { error: "a strategy record with far fewer strategies than the one held: the owner must look", held: had, got });
+		}
 		await this.state.storage.put("paper:lab", lab);
 		return json(200, { saved: true, chars: lab.length, now });
 	}

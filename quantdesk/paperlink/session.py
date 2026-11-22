@@ -142,7 +142,12 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
     fp_disk = fingerprint(account)
     if auto is not None and hasattr(auto, "load"):                    # AUTO v2: its strategies' shadow record, kept on the relay across sessions
         auto.runner_commit = os.environ.get("GITHUB_SHA") or None      # phase 2's monthly report names the code that produced it (the paper package reads no environment)
+        if hasattr(auto, "allow_reset"):                               # the owner's reset_record (paper-desk.yml input; audit K-04): never set by the desk itself
+            auto.allow_reset = os.environ.get("PAPER_RESET_RECORD", "").strip().lower() == "yes"
         log(f"paper: AUTO v2 strategy record: {auto.load(relay)}")
+        if getattr(auto, "persist_blocked", None):                     # audit K-04: paused, so it is seen
+            log(("::error::" if getattr(auto, "persist_kind", None) == "corrupt" else "::warning::") + f"paper: AUTO v2 {auto.persist_blocked}: paused "
+                "(exits only; nothing opened, learned or saved over the relay's copy)")
     try:                                                              # the account goes to the relay once before the first cycle, so even a session with no cycles (the very first, by hand, out of hours) leaves it there
         snap0 = relay.snapshot()
         now0 = Runner.server_now(snap0)
@@ -215,6 +220,10 @@ def run(cfg, relay: Relay, ledger_path: Path, until_ist: dt.time, every_s: float
                 log(f"paper: the autopilot failed this cycle ({type(e).__name__}); the owner's orders and the brakes go on")
             if hasattr(auto, "save"):
                 auto.save(relay, time.monotonic())                     # at most every two minutes, and only when the record changed
+                note = getattr(auto, "persist_note", None)
+                if note:                                               # a late read, or a refused save (audit K-04)
+                    log(note)
+                    auto.persist_note = None
             for o in mine:
                 log(f"paper: auto proposes {o['side']} {o.get('symbol') or '+'.join(l['symbol'] for l in o.get('legs', []))}" + (f" ({o['_why']})" if o.get('_why') else ""))
             orders = orders + mine

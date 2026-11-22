@@ -208,7 +208,8 @@ def test_the_record_is_saved_at_most_every_two_minutes_and_read_back_validated(c
     ap3.load(FakeRelay(bad))
     assert set(ap3.lab.stats) == {IC}                                                            # unknown, malformed and negative entries are dropped: storage is not trusted
     ap4 = desk(cfg, tmp_path)[1]
-    assert "starting from zero" in ap4.load(FakeRelay("{not json")) and ap4.lab.stats == {}
+    msg = ap4.load(FakeRelay("{not json"))                                                       # audit K-04: an unreadable stored record pauses AUTO v2 and is never saved over
+    assert ap4.persist_kind == "corrupt" and "cannot be read" in msg and ap4.lab.stats == {}
     big = A2.Lab({s.sid: [1000, 1.0, 1.0, 500] for s in A2.CATALOGUE})
     assert len(big.to_json()) <= A2.LAB_MAX_CHARS + 50                                           # the relay keeps it in one stored value
 
@@ -267,9 +268,9 @@ def test_the_whole_catalogue_fits_the_relay_compressed_and_a_bad_record_is_refus
     assert "z" not in json.loads(small)                                                          # a record that fits stays plain
     bomb = base64.b64encode(zlib.compress(b"{}" + b" " * (A2.LAB_MAX_INFLATED + 10))).decode()   # cut at the bound it would still parse: only the bound refuses it
     ap2 = desk(cfg, tmp_path)[1]
-    assert "starting from zero" in ap2.load(FakeRelay(json.dumps({"v": 1, "stats": {}, "z": bomb}))) and ap2.lab.stats == {}
+    assert "cannot be read" in ap2.load(FakeRelay(json.dumps({"v": 1, "stats": {}, "z": bomb}))) and ap2.lab.stats == {} and ap2.persist_kind == "corrupt"   # K-04
     ap3 = desk(cfg, tmp_path)[1]
-    assert "starting from zero" in ap3.load(FakeRelay(json.dumps({"v": 1, "stats": {}, "z": "not base64!"})))
+    assert "cannot be read" in ap3.load(FakeRelay(json.dumps({"v": 1, "stats": {}, "z": "not base64!"}))) and ap3.persist_kind == "corrupt"
 
 
 def test_todays_plan_survives_a_restart_and_yesterdays_does_not(cfg, tmp_path):

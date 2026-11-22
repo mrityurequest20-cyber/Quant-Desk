@@ -120,6 +120,8 @@ SWING_SESSIONS = 3
 LEDGER_SOFT_LIMIT = V1.LEDGER_SOFT_LIMIT
 SUMMARY_SOFT_MAX = 30000                 # AUTO v2's share of the runner's state (the relay's cap is 60,000 for all of it): past this, reasons are dropped before numbers
 LAB_MAX_CHARS = 110000                   # the relay keeps the record in one stored value (128 KiB at most)
+LOAD_TRIES = 2                           # audit K-04 (FH-01): the record and the open book are each read twice at a part's start (no wait: a part never starts late for it)
+LOAD_RETRY_S = 180                       # and, while either could not be read, again this often from inside the loop (AUTO v2 is paused meanwhile)
 LAB_MAX_INFLATED = 8_000_000              # a compressed record read back may not inflate past this (storage is not trusted)
 # ---- the evolution, phase 1 (docs/EVOLUTION.md): every closed shadow trade is tagged with the market it was taken in (the brief's fingerprint key) ---------------
 RECENT_MAX = 400                          # the latest closed shadow trades kept whole (date, strategy, underlying, R, regime) for the later phases' replays
@@ -680,7 +682,7 @@ class Lab:
 
         def packed(k):
             z = base64.b64encode(zlib.compress(plain(k).encode("ascii"), 9)).decode("ascii")
-            return json.dumps({"v": 1, "stats": {}, "z": z}, separators=(",", ":"))
+            return json.dumps({"v": 1, "stats": {}, "n": k, "z": z}, separators=(",", ":"))     # n: how many strategy records it holds, for the relay's guard (K-04)
         self.last_kept = len(rows)                                              # how many strategy records the text holds (fewer only past the size bound)
         text = plain(len(rows))
         if len(text) <= LAB_MAX_CHARS:
@@ -755,6 +757,17 @@ class AutoPilotV2:
         self.capital = float(capital)
         self.rng = random.Random(seed)
         self.lab = lab or Lab()
+        # audit K-04 (FH-01, X-3): one failed read at a part's start emptied the record and the open book, and the next save wrote that over the relay's copy (20 Nov:
+        # 16,952 open shadow trades). Now, while either cannot be read, AUTO v2 is PAUSED: it runs every exit of what it holds (the R stop, the volatility stop, the
+        # expiry exits, the convex trail), and opens nothing, live or shadow, learns nothing and saves nothing, so the relay keeps exactly what it had. A failed read
+        # is tried again every LOAD_RETRY_S; an unreadable stored record or book (corrupt) is not, and waits for the owner (reset_record).
+        self.persist_blocked: str | None = None
+        self.persist_kind: str | None = None       # "failed" (tried again) | "corrupt" (the owner must look)
+        self.allow_reset = False                   # the owner's reset_record: an unreadable record or book starts from zero, and the relay's guard is told so
+        self.reset_pending = False
+        self.persist_note: str | None = None       # a line for the session's log (a late read, a refused save)
+        self.lab_refused = 0                       # saves the relay refused (409: a record with far fewer strategies than the one it holds)
+        self._retry_at = 0.0
         self.tape: dict[str, list[tuple[float, float]]] = {}
         self.shadow: dict[tuple, dict] = {}        # (sid, u) -> open shadow trade
         self.cool: dict[tuple, float] = {}         # (sid, u) -> no shadow re-entry before this
@@ -1797,13 +1810,15 @@ class AutoPilotV2:
             st = self.state(snap, u, ch, now, news)
             if st is not None:
                 states[u] = st
-        if ist.time() >= PLAN_FROM:
+        paused = bool(self.persist_blocked)                                                # audit K-04: the record or book unread: exits only
+        if ist.time() >= PLAN_FROM and not paused:
             try:
                 self.evolve(ist.date())                                                    # the inventor's morning (inventor.py)
             except Exception:                                                              # noqa: BLE001 - an inventor that fails costs inventions, never the session
                 pass
-        self.shadow_step(snap, states, ch, now)
-        if PLAN_FROM <= ist.time() < PLAN_UNTIL and t - self.plan_at >= PLAN_EVERY_S:      # before the open: plan the day from the closing books, every ten minutes
+        if not paused:
+            self.shadow_step(snap, states, ch, now)
+        if PLAN_FROM <= ist.time() < PLAN_UNTIL and t - self.plan_at >= PLAN_EVERY_S and not paused:      # before the open: plan the day from the closing books, every ten minutes
             self.plan_at = t
             try:
                 self.plan(snap, now, news)
@@ -1851,7 +1866,7 @@ class AutoPilotV2:
                     continue
                 self.pending_exit[sym] = t + EXIT_RESEND_S
                 orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": sym, "lots": "all", "queued_at": int(t * 1000), "_why": f"{TAG} exit: {why}"})
-        if kill or entries_blocked or len(account.ledger) >= LEDGER_SOFT_LIMIT:
+        if kill or entries_blocked or paused or len(account.ledger) >= LEDGER_SOFT_LIMIT:
             return orders
         held_syms = set(account.positions)
         busy = {(pkg["sid"], pkg["u"]) for pkg in pk.values()} | self.live_futures(account)
@@ -2280,11 +2295,37 @@ class AutoPilotV2:
         self.shadow_io.update({"restored": kept, "dropped": dropped})
         return self.shadow_io
 
+    def _fetch(self, fn):
+        """One relay read, tried LOAD_TRIES times at once (audit K-04). A missing route (HTTP 404, a Worker rolled back) is not tried again."""
+        last = None
+        for _ in range(LOAD_TRIES):
+            try:
+                return fn()
+            except Exception as e:                                                      # noqa: BLE001 - every kind of failure is tried again, then raised
+                last = e
+                if "HTTP 404" in str(e):
+                    break
+        raise last
+
+    def _blocked(self, kind: str, why: str) -> str:
+        if self.persist_kind != "corrupt":                                              # a corrupt store is never downgraded to a passing failure
+            self.persist_blocked, self.persist_kind = why, kind
+        if kind == "corrupt":
+            return (f"{why}: AUTO v2 is paused (it runs the exits of what it holds, opens nothing, learns nothing and saves nothing over it); the owner must look, "
+                    f"or run the paper runner with reset_record to start it from zero (audit K-04)")
+        return f"{why}: AUTO v2 is paused (exits only, nothing opened, learned or saved) and reads it again every {LOAD_RETRY_S // 60} minutes (audit K-04)"
+
     def load(self, relay, now: dt.datetime | None = None) -> str:
+        self.persist_blocked = self.persist_kind = None
         try:
-            got = relay.get_lab()
-            raw = got.get("lab") if isinstance(got, dict) else None
-            got = Lab.unpack(raw) if isinstance(raw, str) else {}
+            fetched = self._fetch(relay.get_lab)
+        except Exception as e:                                                          # noqa: BLE001
+            return self._blocked("failed", f"the strategy record could not be read ({type(e).__name__})")
+        raw = fetched.get("lab") if isinstance(fetched, dict) else None
+        if not isinstance(fetched, dict) or not (raw is None or isinstance(raw, str)):
+            return self._blocked("failed", "the relay's answer is not a strategy record")
+        try:
+            got = Lab.unpack(raw) if isinstance(raw, str) else {}                       # None: no record was ever saved (the very first session): a true start
             stats, inv = got.get("stats"), got.get("inv")
             self.lab = Lab(stats if isinstance(stats, dict) else None, inv if isinstance(inv, dict) else None)
             self._read_w = got.get("read_w") if isinstance(got.get("read_w"), dict) else None
@@ -2300,9 +2341,15 @@ class AutoPilotV2:
                 self.lab.restore_tags(got.get("reg"), got.get("recent"))                 # last, and on its own: a bad tag never costs the trail peaks or the plan
             except Exception:                                                           # noqa: BLE001
                 self.lab.reg, self.lab.recent = {}, []
-            msg = f"{len(self.lab.stats)} strategies with a record" + self._load_shadow(relay, now)
-        except Exception as e:                                                          # noqa: BLE001 - no record means starting from zero, never not trading
-            msg = f"no record could be read ({type(e).__name__}): starting from zero" + self._load_shadow(relay, now)
+        except Exception as e:                                                          # noqa: BLE001 - a stored record that cannot be read is never saved over
+            if not self.allow_reset:
+                return self._blocked("corrupt", f"the stored strategy record cannot be read ({type(e).__name__})")
+            self.lab, self.cx_peak, self._rec_p2, self.lab_shadow_seq = Lab(), {}, (None, None), 0
+            self.reset_pending = True
+            self.persist_note = f"::warning::paper: the owner's reset_record: the unreadable strategy record ({type(e).__name__}) starts from zero"
+        msg = f"{len(self.lab.stats)} strategies with a record" + self._load_shadow(relay, now)
+        if self.persist_blocked:
+            return msg + "; " + self._blocked(self.persist_kind, self.persist_blocked)
         self._restore_p2(now)
         return msg
 
@@ -2347,17 +2394,39 @@ class AutoPilotV2:
         if get is None:
             return ""
         try:
-            got = get()
-            io = self.restore_shadow(got.get("shadow") if isinstance(got, dict) else None, now or dt.datetime.now(IST))
-            gone = sum(io["dropped"].values())
-            return f"; {io['restored']} open shadow trades carried over" + (f", {gone} dropped" if gone else "")
-        except Exception as e:                                                          # noqa: BLE001 - an unreadable shadow book starts empty, as it always did
+            got = self._fetch(get)
+        except Exception as e:                                                          # noqa: BLE001
+            if "HTTP 404" in str(e):                                                    # no book route (a Worker rolled back): no book to read or to save over;
+                return "; no open shadow book (the relay has no book route)"            # the record's stamp drops the stale one later
+            self._blocked("failed", f"the open shadow book could not be read ({type(e).__name__})")
             return f"; no open shadow trades could be read ({type(e).__name__})"
+        if not isinstance(got, dict) or not (got.get("shadow") is None or isinstance(got.get("shadow"), str)):
+            self._blocked("failed", "the relay's answer is not a shadow book")
+            return "; no open shadow trades could be read (not a book)"
+        try:
+            io = self.restore_shadow(got.get("shadow"), now or dt.datetime.now(IST))
+        except Exception as e:                                                          # noqa: BLE001 - a stored book that cannot be read is never saved over
+            if not self.allow_reset:
+                self._blocked("corrupt", f"the stored open shadow book cannot be read ({type(e).__name__})")
+                return f"; the open shadow book cannot be read ({type(e).__name__})"
+            self.shadow, self._p2_book = {}, None
+            self.persist_note = f"::warning::paper: the owner's reset_record: the unreadable open shadow book ({type(e).__name__}) starts empty"
+            return "; the open shadow book starts empty (the owner's reset)"
+        gone = sum(io["dropped"].values())
+        return f"; {io['restored']} open shadow trades carried over" + (f", {gone} dropped" if gone else "")
 
     def save(self, relay, mono: float, force: bool = False) -> bool:
         """The open shadow book, then the record. The record is never kept ahead of the book: when it is due, an unsaved book goes first (whatever its own clock),
         and a book that could not be kept holds the record back. So a trade the record has scored is never still open in the book the next job reads: a job that
-        ends badly can lose a trade, never count one twice (risk review of the carry, 14 Nov 2026)."""
+        ends badly can lose a trade, never count one twice (risk review of the carry, 14 Nov 2026). While paused (audit K-04) nothing is sent: a failed read is tried
+        again every LOAD_RETRY_S from here, and on success AUTO v2 goes on from what the relay holds."""
+        if self.persist_blocked:
+            if self.persist_kind == "failed" and mono - self._retry_at >= LOAD_RETRY_S:
+                self._retry_at = mono
+                self._late_load(relay)
+            if self.persist_blocked:
+                self.shadow_io["blocked"] = self.shadow_io.get("blocked", 0) + 1
+                return False
         book_ver = (self.probation.ver, self.votes.ver, self._p2x_ver)
         if book_ver != self._p2_book_ver:
             self.shadow_dirty = True                                                    # phase 2 rides with the book: the book is due
@@ -2391,14 +2460,38 @@ class AutoPilotV2:
                     break
             else:
                 self.p2x["record_left_out"] = self.p2x.get("record_left_out", 0) + 1     # even the backstop did not fit beside the records: the book still has it
-            relay.put_lab(text)
+            try:
+                relay.put_lab(text, reset=True) if self.reset_pending else relay.put_lab(text)
+            except Exception as e:                                                      # noqa: BLE001
+                if "HTTP 409" not in str(e):
+                    raise
+                if not self.allow_reset:                                                # the relay holds a record with far more strategies (audit K-04): said, counted
+                    self.lab_refused += 1
+                    if self.lab_refused == 1:
+                        self.persist_note = ("::error::paper: the relay refused AUTO v2's record: it has far fewer strategies than the one held (a catalogue change, "
+                                             "or a fault). The record held is kept; nothing AUTO v2 learns is saved until the owner looks (reset_record replaces it)")
+                    raise
+                relay.put_lab(text, reset=True)                                         # the owner's reset_record: the smaller record replaces it, on purpose
+            self.reset_pending = False
             self.lab.dirty, self.lab_saved_at, self._p2_rec_ver = False, mono, rec_ver
             return True
         except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
             return False
 
+    def _late_load(self, relay) -> None:
+        """A read that failed at the start, tried again (audit K-04). Nothing was opened, learned or saved meanwhile, so the relay's record and book are taken whole;
+        only the convex trail peaks seen while paused are kept where higher (a trail never loosens)."""
+        peaks = dict(self.cx_peak)
+        msg = self.load(relay)
+        if not self.persist_blocked:
+            for k, v in peaks.items():
+                self.cx_peak[k] = max(self.cx_peak.get(k, v), v)
+            self.persist_note = f"paper: AUTO v2 read its record on a later try and goes on: {msg}"
+
     def save_shadow(self, relay, mono: float, force: bool = False) -> bool:
         put = getattr(relay, "put_shadow", None)
+        if self.persist_blocked:                                                        # audit K-04: never over a book or record that could not be read
+            return False
         if put is None or not (self.shadow_dirty and (force or mono - self.shadow_saved_at >= 120)):
             return False
         try:
@@ -2417,6 +2510,8 @@ class AutoPilotV2:
     def owner_release(self, sid, now: dt.datetime) -> tuple[bool, str]:
         """The owner's release of a strategy from probation (from the app, through the relay's queue). It restores the strategy's ordinary rules and nothing
         more: it still needs its proof and a positive draw to trade. A strategy not in probation is refused, and so is anything unknown."""
+        if self.persist_blocked:                                                        # audit K-04: a release now would not be saved, so it is not made
+            return False, "AUTO v2 has not read its record in this part yet: nothing was released; try again in a few minutes"
         if not (isinstance(sid, str) and sid in BY_SID):
             return False, "no such strategy"
         if not self.probation.blocked(sid):
@@ -2472,6 +2567,8 @@ class AutoPilotV2:
         out["market"] = {"session": s(b.get("session"), 10), "key": s(fp.get("key"), 16), "label": s(fp.get("label"), 200), "since": s(fp.get("since"), 10)} if fp else None
         out["regimes"] = self.lab.by_regime()
         out["shadow_carry"] = dict(self.shadow_io)
+        out["persist"] = {"state": ("blocked" if self.persist_kind == "corrupt" else "paused") if self.persist_blocked else "ok",       # audit K-04: the watchdog reads it
+                          "why": (self.persist_blocked or "")[:120], "refused": self.lab_refused}
         out["probation"] = {**(self._p2(lambda: self.probation.report(dt.datetime.now(IST).date().isoformat(), self.pb_ctx.sessions_between), {}) or {}),
                             "list": self._p2(self.probation.listing, [])}
         out["votes"] = self._p2(self.votes.report, {})

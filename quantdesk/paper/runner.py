@@ -659,7 +659,7 @@ class Runner:
 
 
 STATE_CAP = 55_000            # characters: the relay refuses a runner state whose summary is over 60,000 (deploy/cloudflare/paper.js MAX_SUMMARY); the rest is margin
-LAB_KEEP = ("strategies", "tested", "trades", "eligible", "min_trades", "today", "tau", "invented", "shadow_open", "shadow_carry", "convex")
+LAB_KEEP = ("strategies", "tested", "trades", "eligible", "min_trades", "today", "tau", "invented", "shadow_open", "shadow_carry", "convex", "persist")     # persist: K-04
 
 
 def state_size(summ: dict) -> int:
