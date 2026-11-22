@@ -109,7 +109,7 @@ def test_stale_expired_unknown_and_malformed_trades_are_dropped_and_counted(cfg,
             pass
         assert ap4.shadow == {}
     ap5 = desk(cfg, tmp_path)[1]
-    assert "no open shadow trades could be read" in ap5._load_shadow(Relay(shadow="{broken"), t)
+    assert "the open shadow book cannot be read" in ap5._load_shadow(Relay(shadow="{broken"), t) and ap5.persist_kind == "corrupt"   # K-04: never saved over
 
 
 def test_an_overnight_and_a_convex_trade_carry_their_state(cfg, tmp_path):
@@ -273,10 +273,11 @@ def test_a_failed_read_at_the_start_never_gets_a_fresh_book_dropped(cfg, tmp_pat
     ap.shadow_dirty = True
     ap.save(relay, 1000.0, force=True)                                                       # the record and the book, stamped
     b = desk(cfg, tmp_path)[1]
-    b.load(ReadFails(relay.lab, relay.shadow), now=t)                                        # the next job: the record read, the book's read fails
+    b.load(ReadFails(relay.lab, relay.shadow), now=t)                                        # the next job: the record read, the book's read fails every time
     b.shadow = dict(ap.shadow)
     b.shadow_dirty = True
-    assert b.save_shadow(relay, 2000.0, force=True)                                          # it keeps its book; its record is unchanged and not saved
+    kept = relay.shadow
+    assert not b.save_shadow(relay, 2000.0, force=True) and relay.shadow == kept             # audit K-04: a job that could not read the book is paused and saves nothing
     c = desk(cfg, tmp_path)[1]
     c.load(relay, now=t + dt.timedelta(minutes=1))
     assert set(c.shadow) == set(ap.shadow) and "older than the record" not in c.shadow_io["dropped"]

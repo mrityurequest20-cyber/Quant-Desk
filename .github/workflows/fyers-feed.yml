@@ -1,6 +1,7 @@
 # The Fyers feed (docs/FEEDS.md): MCX commodities and currency pairs, every five seconds, to the private live relay as feed "f". The owner's split of 13 Nov 2026: Kite carries indices,
 # stocks and options; Fyers carries MCX (and is currency's second feed); Kotak stands behind them all. Market data only: the code calls /data/quotes and /data/depth and nothing else
-# (a test checks), and writes no price to disk, to the repository or to a release.
+# (a test checks). Since audit K-20 every quote it hands the relay is also kept on a tape (quantdesk/data/tape.py), ENCRYPTED with the owner's MARKET_TAPE_KEY before it is
+# kept as a 90-day artifact (the data is licensed and this repository is public): no price ever reaches the repository, a release or an artifact in the clear.
 #
 # Login (docs/AUTONOMY.md, "More market-data brokers"): the `token` job logs in by itself with the owner's Fyers secrets: the stored refresh token and the PIN on most days, the full TOTP
 # login when that is refused (deploy/fyers_autologin.py). The PIN, TOTP key and client id reach that one step only, which runs standard-library Python (`-I -S`). Lockout guard: only the
@@ -154,6 +155,7 @@ jobs:
         run: deploy/fyers-token.sh export
       - name: Stream MCX and currency to the live relay
         env:
+          MARKET_TAPE_DIR: runtime/tape          # every quote handed to the relay is also kept (audit K-20)
           UNTIL: ${{ inputs.first_until || '14:15' }}
           FYERS_APP_ID: ${{ secrets.FYERS_APP_ID }}
           LIVE_URL: ${{ vars.LIVE_URL }}
@@ -162,9 +164,33 @@ jobs:
           cap=$(date -d '+340 minutes' +%H:%M)     # an early start must still stop before the job's 358-minute limit
           if [[ "$cap" < "$UNTIL" ]] && [[ "$cap" > "$(date +%H:%M)" ]]; then UNTIL=$cap; fi       # (a cap past midnight wraps to the small hours: then the until stands)
           python -m quantdesk data fyers-feed --until "$UNTIL" --metrics fyers_metrics.json
+      - name: The day's Fyers token ends with the stream (no later step, the upload's included, sees it; K-20 review)
+        if: always()
+        run: echo "FYERS_DATA_TOKEN=" >> "$GITHUB_ENV"
       - name: The run's counts (no price, no token)
         if: always()
         run: if [ -f fyers_metrics.json ]; then { echo '```'; cat fyers_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Encrypt the day's Fyers tape with the owner's tape key (licensed data, never kept in the clear; audit K-20)
+        if: always()
+        env:
+          MARKET_TAPE_KEY: ${{ secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -d runtime/tape ] || [ -z "$(ls -A runtime/tape)" ]; then echo "no tape was written"; exit 0; fi
+          if [ "${#MARKET_TAPE_KEY}" -lt 32 ]; then                    # missing, or too short to protect licensed data in a public repository
+            echo "::warning::MARKET_TAPE_KEY is not set (or is under 32 characters), so today's Fyers tape is not kept: add the secret (openssl rand -base64 32) to keep it"
+            rm -rf runtime/tape; exit 0
+          fi
+          tar -C runtime/tape -cf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MARKET_TAPE_KEY -out fyers_tape.tar.enc
+          rm -rf runtime/tape
+          echo "fyers_tape.tar.enc sha256 $(sha256sum fyers_tape.tar.enc | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the encrypted tape
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fyers-tape-${{ github.job }}-${{ github.run_attempt }}
+          path: fyers_tape.tar.enc
+          if-no-files-found: ignore
+          retention-days: 90
 
   feed-2:
     needs: [token, feed-1]
@@ -186,6 +212,7 @@ jobs:
         run: deploy/fyers-token.sh export
       - name: Stream MCX and currency to the live relay
         env:
+          MARKET_TAPE_DIR: runtime/tape          # every quote handed to the relay is also kept (audit K-20)
           UNTIL: ${{ inputs.second_until || '20:05' }}
           FYERS_APP_ID: ${{ secrets.FYERS_APP_ID }}
           LIVE_URL: ${{ vars.LIVE_URL }}
@@ -194,9 +221,33 @@ jobs:
           cap=$(date -d '+340 minutes' +%H:%M)
           if [[ "$cap" < "$UNTIL" ]] && [[ "$cap" > "$(date +%H:%M)" ]]; then UNTIL=$cap; fi
           python -m quantdesk data fyers-feed --until "$UNTIL" --metrics fyers_metrics.json
+      - name: The day's Fyers token ends with the stream (no later step, the upload's included, sees it; K-20 review)
+        if: always()
+        run: echo "FYERS_DATA_TOKEN=" >> "$GITHUB_ENV"
       - name: The run's counts (no price, no token)
         if: always()
         run: if [ -f fyers_metrics.json ]; then { echo '```'; cat fyers_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Encrypt the day's Fyers tape with the owner's tape key (licensed data, never kept in the clear; audit K-20)
+        if: always()
+        env:
+          MARKET_TAPE_KEY: ${{ secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -d runtime/tape ] || [ -z "$(ls -A runtime/tape)" ]; then echo "no tape was written"; exit 0; fi
+          if [ "${#MARKET_TAPE_KEY}" -lt 32 ]; then                    # missing, or too short to protect licensed data in a public repository
+            echo "::warning::MARKET_TAPE_KEY is not set (or is under 32 characters), so today's Fyers tape is not kept: add the secret (openssl rand -base64 32) to keep it"
+            rm -rf runtime/tape; exit 0
+          fi
+          tar -C runtime/tape -cf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MARKET_TAPE_KEY -out fyers_tape.tar.enc
+          rm -rf runtime/tape
+          echo "fyers_tape.tar.enc sha256 $(sha256sum fyers_tape.tar.enc | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the encrypted tape
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fyers-tape-${{ github.job }}-${{ github.run_attempt }}
+          path: fyers_tape.tar.enc
+          if-no-files-found: ignore
+          retention-days: 90
 
   feed-3:
     needs: [token, feed-2]
@@ -218,6 +269,7 @@ jobs:
         run: deploy/fyers-token.sh export
       - name: Stream MCX to the live relay until the evening close
         env:
+          MARKET_TAPE_DIR: runtime/tape          # every quote handed to the relay is also kept (audit K-20)
           UNTIL: ${{ inputs.third_until || '23:58' }}
           FYERS_APP_ID: ${{ secrets.FYERS_APP_ID }}
           LIVE_URL: ${{ vars.LIVE_URL }}
@@ -226,6 +278,30 @@ jobs:
           cap=$(date -d '+290 minutes' +%H:%M)
           if [[ "$cap" < "$UNTIL" ]] && [[ "$cap" > "$(date +%H:%M)" ]]; then UNTIL=$cap; fi       # (a cap past midnight wraps to the small hours: then the until stands)
           python -m quantdesk data fyers-feed --until "$UNTIL" --metrics fyers_metrics.json
+      - name: The day's Fyers token ends with the stream (no later step, the upload's included, sees it; K-20 review)
+        if: always()
+        run: echo "FYERS_DATA_TOKEN=" >> "$GITHUB_ENV"
       - name: The run's counts (no price, no token)
         if: always()
         run: if [ -f fyers_metrics.json ]; then { echo '```'; cat fyers_metrics.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Encrypt the day's Fyers tape with the owner's tape key (licensed data, never kept in the clear; audit K-20)
+        if: always()
+        env:
+          MARKET_TAPE_KEY: ${{ secrets.MARKET_TAPE_KEY }}
+        run: |
+          if [ ! -d runtime/tape ] || [ -z "$(ls -A runtime/tape)" ]; then echo "no tape was written"; exit 0; fi
+          if [ "${#MARKET_TAPE_KEY}" -lt 32 ]; then                    # missing, or too short to protect licensed data in a public repository
+            echo "::warning::MARKET_TAPE_KEY is not set (or is under 32 characters), so today's Fyers tape is not kept: add the secret (openssl rand -base64 32) to keep it"
+            rm -rf runtime/tape; exit 0
+          fi
+          tar -C runtime/tape -cf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MARKET_TAPE_KEY -out fyers_tape.tar.enc
+          rm -rf runtime/tape
+          echo "fyers_tape.tar.enc sha256 $(sha256sum fyers_tape.tar.enc | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the encrypted tape
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fyers-tape-${{ github.job }}-${{ github.run_attempt }}
+          path: fyers_tape.tar.enc
+          if-no-files-found: ignore
+          retention-days: 90

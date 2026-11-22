@@ -162,6 +162,26 @@ is the test, and like the Fyers feed it names any answer it cannot read by its k
 **First run by hand:** Actions, then "Angel One feed", then Run workflow (between 09:00 and 16:00 on a trading day). Look for "angel
 login: logged in" and "N contracts, N cycles, N quotes pushed".
 
+## The tape: every Fyers and Angel One quote is kept (audit K-20, 21 Nov 2026)
+
+Until 21 Nov the Fyers and Angel One feeds kept nothing: their MCX and currency quotes, five-level books and option chains existed only in the relay's latest
+snapshot, so nothing AUTO decided on could be studied, replayed or trained on, and every MCX option series that expired was lost for good (Kite lists only live
+contracts). Now each quote a feed hands the relay is also written to a tape (`quantdesk/data/tape.py`): the time, the name, and the whole quote as JSON (price,
+bid, ask, sizes, volume, open interest, change, segment, and the book when the feed sent one), in gzip CSV chunks. The relay's view is unchanged, and a tape
+problem is counted (`tape_errors` in the run's counts), never allowed to stop the feed.
+
+Keeping it is the owner's decision of 21 Nov 2026, recorded in [AUTONOMY.md](AUTONOMY.md) ("Recording Fyers and Angel One data"): the data may leave the
+runner the way Kite's does, encrypted, as expiring workflow artifacts, never unencrypted. The data is licensed to the subscriber and this repository is public, so
+the tape is **encrypted before it is kept** and is never uploaded in the clear: at
+the end of each streaming job it is tarred and encrypted (AES-256-CBC, PBKDF2 with 200,000 iterations) with the repository secret **`MARKET_TAPE_KEY`**, and
+kept as a 90-day artifact (`fyers-tape-<job>`, `angel-tape-<job>`). Without the secret the tape is deleted at the end of the job with a warning.
+
+**Owner set-up (once):** add the secret `MARKET_TAPE_KEY` (Settings, Secrets and variables, Actions): a random string of at least 32 characters (for example the output of
+`openssl rand -base64 32`), used for nothing else, kept somewhere safe (without it the tapes cannot be read; a shorter one is refused). **To read a tape:** download the artifact, then
+`MARKET_TAPE_KEY=... openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MARKET_TAPE_KEY -in fyers_tape.tar.enc | tar -xf -`.
+
+Artifacts expire after 90 days. A durable private copy (a store outside this public repository) is the next step; until then, download what you want to keep.
+
 ## Checking a login before the first session (14 Nov 2026)
 
 Run **Fyers feed** or **Angel One feed** from the Actions tab with **check_only** ticked. It logs in exactly as the morning run does (the same login gate:

@@ -98,15 +98,17 @@ class Relay:
         """AUTO v2's strategy record (INGEST key): {"lab": "<json text>" or None}."""
         return self._call("GET", "/paper/lab", self._ingest)
 
-    def put_lab(self, text: str) -> dict:
-        return self._call("POST", "/paper/lab", self._ingest, {"lab": text})
+    def put_lab(self, text: str, reset: bool = False) -> dict:
+        """reset: the owner's reset_record (audit K-04): the relay keeps this record even if it holds one with far more strategies."""
+        return self._call("POST", "/paper/lab", self._ingest, {"lab": text, **({"reset": True} if reset else {})})
 
     def get_shadow(self) -> dict:
         """AUTO v2's open shadow trades (INGEST key): {"shadow": "<json text>" or None}."""
         return self._call("GET", "/paper/shadow", self._ingest)
 
-    def put_shadow(self, text: str) -> dict:
-        return self._call("POST", "/paper/shadow", self._ingest, {"shadow": text})
+    def put_shadow(self, text: str, reset: bool = False) -> dict:
+        """reset: the owner's reset_record (audit K-04): the relay first keeps the book it holds as paper:shadowprev."""
+        return self._call("POST", "/paper/shadow", self._ingest, {"shadow": text, **({"reset": True} if reset else {})})
 
     def get_state(self) -> dict:
         return self._call("GET", "/paper/state?full=1", self._ingest)
