@@ -785,6 +785,7 @@ class AutoPilotV2:
         self.allow_reset = False                   # the owner's reset_record: an unreadable record or book starts from zero, and the relay's guard is told so
         self.reset_pending = False
         self.book_reset_pending = False            # the owner's reset of the open book: the relay keeps the old one as paper:shadowprev (K-04 review)
+        self.reset_id: str | None = None           # the run that resets (the session sets it): the relay keeps one copy per reset, never the reset data over it
         self.persist_note: str | None = None       # a line for the session's log (a late read, a refused save)
         self.lab_refused = 0                       # saves the relay refused (409: a record with far fewer strategies than the one it holds)
         self._retry_at = 0.0
@@ -2427,6 +2428,13 @@ class AutoPilotV2:
         if not isinstance(got, dict) or not (got.get("shadow") is None or isinstance(got.get("shadow"), str)):
             self._blocked("failed", "the relay's answer is not a shadow book")
             return "; no open shadow trades could be read (not a book)"
+        if got.get("broken") is True and not self.allow_reset:                          # a book was saved but its pieces do not add up: never taken for no book
+            self._blocked("corrupt", "the stored open shadow book is damaged (its pieces do not add up)")
+            return "; the open shadow book is damaged"
+        if got.get("broken") is True:
+            self.shadow, self._p2_book, self.book_reset_pending = {}, None, True
+            self.persist_note = "::warning::paper: the owner's reset_record: the damaged open shadow book starts empty"
+            return "; the open shadow book starts empty (the owner's reset)"
         try:
             io = self.restore_shadow(got.get("shadow"), now or dt.datetime.now(IST))
         except Exception as e:                                                          # noqa: BLE001 - a stored book that cannot be read is never saved over
@@ -2489,7 +2497,7 @@ class AutoPilotV2:
             else:
                 self.p2x["record_left_out"] = self.p2x.get("record_left_out", 0) + 1     # even the backstop did not fit beside the records: the book still has it
             try:
-                relay.put_lab(text, reset=True) if self.reset_pending else relay.put_lab(text)
+                relay.put_lab(text, **self._reset_kw()) if self.reset_pending else relay.put_lab(text)
             except Exception as e:                                                      # noqa: BLE001
                 if "HTTP 409" not in str(e):
                     raise
@@ -2499,12 +2507,15 @@ class AutoPilotV2:
                         self.persist_note = ("::error::paper: the relay refused AUTO v2's record: it has far fewer strategies than the one held (a catalogue change, "
                                              "or a fault). The record held is kept; nothing AUTO v2 learns is saved until the owner looks (reset_record replaces it)")
                     raise
-                relay.put_lab(text, reset=True)                                         # the owner's reset_record: the smaller record replaces it, on purpose
+                relay.put_lab(text, **self._reset_kw())                                 # the owner's reset_record: the smaller record replaces it, on purpose
             self.reset_pending = False
             self.lab.dirty, self.lab_saved_at, self._p2_rec_ver = False, mono, rec_ver
             return True
         except Exception:                                                               # noqa: BLE001 - kept dirty: the next save tries again
             return False
+
+    def _reset_kw(self) -> dict:
+        return {"reset": True, **({"rid": self.reset_id} if self.reset_id else {})}
 
     def _retry(self, relay, mono: float) -> None:
         """While paused by a failed read: apply what the last background read brought, and start the next one every LOAD_RETRY_S. The reads run on their own
@@ -2547,7 +2558,7 @@ class AutoPilotV2:
         try:
             seq = self.next_seq()                                                       # used once issued: a put whose reply is lost may still have been stored
             text, left_out = self.shadow_json(seq)
-            put(text, reset=True) if self.book_reset_pending else put(text)
+            put(text, **self._reset_kw()) if self.book_reset_pending else put(text)
             self.book_reset_pending = False
             self.shadow_dirty, self.shadow_saved_at, self.shadow_route = False, mono, True
             self.shadow_io["left_out"] = left_out

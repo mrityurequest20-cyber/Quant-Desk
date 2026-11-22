@@ -172,7 +172,7 @@ def test_a_chunk_is_whole_or_absent_and_a_row_that_cannot_be_written_never_block
     tape.record("SILVER-MCX", {"ltp": 3.0})                                               # the flush fails, the bad row is dropped and counted
     tape.flush()
     assert not list((tmp_path / "t").glob("*.tmp"))
-    assert [r[1] for r in rows(tmp_path / "t")] == ["GOLD-MCX", "SILVER-MCX"] and tape.dropped == 1 and tape.errors == 1
+    assert [r[1] for r in rows(tmp_path / "t")] == ["GOLD-MCX", "SILVER-MCX"] and tape.dropped == 1 and tape.errors == 0    # refused at record(), once
     class P(Pusher):
         def stop(self):
             raise RuntimeError("pusher")
@@ -180,3 +180,28 @@ def test_a_chunk_is_whole_or_absent_and_a_row_that_cannot_be_written_never_block
     tape.flush = lambda: (_ for _ in ()).throw(RuntimeError("flush"))
     with pytest.raises(RuntimeError, match="pusher"):                                      # the pusher's own error is the one reported, never the tape's
         tp.stop()
+
+
+def test_a_failing_disk_never_costs_more_than_a_row_at_a_time(tmp_path, monkeypatch):
+    """Risk review of b09c28b: after a failed write every record() tried the write again and re-scanned every pending row (60 ms a row at 199,000 pending).
+    Now a failed write is tried again only after flush_rows more rows, and the partial .tmp is removed."""
+    import time
+    tape = T.Tape(tmp_path / "t", "f", flush_rows=1000)
+    calls = {"n": 0}
+    real = T.gzip.open
+
+    def failing(path, *a, **k):
+        calls["n"] += 1
+        fh = real(path, *a, **k)
+        fh.close()
+        raise OSError("disk full")
+    monkeypatch.setattr(T.gzip, "open", failing)
+    t0 = time.perf_counter()
+    for i in range(5000):
+        tape.record(f"N{i}", {"ltp": i})
+    took = time.perf_counter() - t0
+    assert calls["n"] == 5 and tape.errors == 5 and len(tape.rows) == 5000                    # one try per 1,000 rows, not one per row after the first failure
+    assert took < 2.0 and not list((tmp_path / "t").glob("*.tmp"))
+    monkeypatch.setattr(T.gzip, "open", real)
+    tape.flush()
+    assert len(rows(tmp_path / "t")) == 5000 and tape.files == 1                               # the disk back: nothing kept was lost
