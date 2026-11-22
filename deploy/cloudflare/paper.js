@@ -295,6 +295,10 @@ export class PaperBook {
 			for (const k of keys) if (got.has(k)) keep[k === "paper:shadowmeta" ? "paper:shadowprevmeta" : k.replace("paper:shadow:", "paper:shadowprev:")] = got.get(k);    // raw: a broken book is kept as it is
 		}
 		if (Object.keys(keep).length) await this.state.storage.put(keep);
+		if (kind !== "lab") {                                                                // pieces of an older copy this one did not overwrite go, AFTER the copy is written (a
+			const old = ["paper:shadowprevmeta", ...Array.from({ length: MAX_SHADOW_CHUNKS }, (_, i) => "paper:shadowprev:" + i)].filter(k => !(k in keep));   // failed write never
+			try { if (old.length) await this.state.storage.delete(old); } catch (e) { /* the old copy's extra pieces stay: the kept count still says which are read */ }   // loses it)
+		}
 		return true;
 	}
 

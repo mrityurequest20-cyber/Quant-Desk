@@ -26,6 +26,7 @@ class Tape:
         self.out, self.src, self.flush_rows, self.now = Path(out), str(src), int(flush_rows), now
         self.rows: list[list] = []
         self._next_flush = self.flush_rows                              # after a failed write, the next try waits for another flush_rows rows
+        self._full_gap = self._full_next = self.flush_rows             # while full: the disk is tried after this many dropped rows, the gap doubling on each failure
         self.lock = threading.Lock()
         self.n = self.files = self.errors = self.dropped = 0
         try:
@@ -48,6 +49,10 @@ class Tape:
         with self.lock:
             if len(self.rows) >= MAX_PENDING:
                 self.dropped += 1
+                if self.dropped >= self._full_next:                         # full: the disk is still tried, so a recovered disk is used again (#282 review); a disk
+                    self._flush()                                           # still failing is tried half as often each time, so the feed is never held up for long
+                    self._full_gap = self.flush_rows if not self.rows else min(self._full_gap * 2, 64 * self.flush_rows)
+                    self._full_next = self.dropped + self._full_gap
                 return
             self.rows.append(row)
             self.n += 1

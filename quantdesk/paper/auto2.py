@@ -419,6 +419,9 @@ def _book(q, now_ok=QUOTE_MAX_AGE_S):
     age, b, a = _num(q.get("age_s")), _num(q.get("bid")), _num(q.get("ask"))
     if None in (age, b, a) or not (0 <= age <= now_ok) or not (0 < b <= a):
         return None
+    x = _num(q.get("x"))
+    if x is not None and x > 0:                                                         # audit K-10: the brokers dispute this price: never priced, entered or marked on (an
+        return None                                                                     # unmarked trade waits, as with no book; the runner's brakes still stand)
     return b, a
 
 
@@ -1411,6 +1414,12 @@ class AutoPilotV2:
                 at = None
         return CX.exit_action(r, peak, done1, done2, now=ist, event_at=at, rich=rich, last_day=last_day, held_sessions=held)
 
+    @staticmethod
+    def _disputed(snap, legs) -> bool:
+        """Whether any leg's quote carries the relay's dispute flag (audit K-10)."""
+        q = snap.get("quotes") or {}
+        return any(isinstance(q.get(l["name"]), dict) and (_num(q[l["name"]].get("x")) or 0) > 0 for l in legs)
+
     def mark(self, snap, legs) -> float | None:
         """What closing the structure now would get, per unit (a long sold at the bid, a short bought back at the offer), less what it cost to open."""
         q, v = snap.get("quotes") or {}, 0.0
@@ -1861,6 +1870,20 @@ class AutoPilotV2:
                      "k": p.instrument.strike, "px": p.avg_price, "exp": p.instrument.expiry} for sym, p in pkg["legs"].items()]   # a leg's side is its size in lots
             v = self.mark(snap, legs)
             if v is None:
+                if CX.is_convex(s.struct) or not self._disputed(snap, legs):
+                    continue
+                try:                                                                    # audit K-10 review: a leg's price is disputed, so the trade cannot be marked; its
+                    opened = dt.datetime.fromisoformat(first.opened_at).astimezone(IST)  # time exits (out by the day exit, its expiry next, its sessions held) still
+                except (TypeError, ValueError):                                         # apply, judged at 0R so no stop or target is taken on the disputed price
+                    opened = ist
+                why = self._exit_why(s, 0.0, math.inf, opened, ist, min(l["exp"] for l in legs), pkg["u"])
+                if why:
+                    why = f"{why}; a leg's price is disputed by the brokers, so closed on time alone"
+                    for sym, p in sorted(pkg["legs"].items(), key=lambda kv: kv[1].qty > 0):
+                        if self.pending_exit.get(sym, 0) > t:
+                            continue
+                        self.pending_exit[sym] = t + EXIT_RESEND_S
+                        orders.append({"id": self._oid(t, "x"), "side": "sell", "symbol": sym, "lots": "all", "queued_at": int(t * 1000), "_why": f"{TAG} exit: {why}"})
                 continue
             exps = {l["exp"] for l in legs}
             if len(exps) > 1:                                                           # a calendar or diagonal: judged at the near expiry, the later long at its floor

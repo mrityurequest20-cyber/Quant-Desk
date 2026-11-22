@@ -56,6 +56,9 @@ def _spot(snap, name):
     if not isinstance(q, dict):
         return None
     age, px = _num(q.get("age_s")), _num(q.get("ltp"))
+    x = _num(q.get("x"))
+    if x is not None and x > 0:                                                                       # audit K-10 (E-03): the brokers dispute this price (USDINR 95.005 against 93): no spot,
+        return None                                                                      # so no false momentum vote and no blown-up volatility from it
     return px if px and px > 0 and age is not None and 0 <= age <= QUOTE_MAX_AGE_S else None
 
 
@@ -294,7 +297,8 @@ class AutoPilot:
         for s, pos in account.positions.items():
             q = (snap.get("quotes") or {}).get(s)
             age, bid = (_num(q.get("age_s")), _num(q.get("bid"))) if isinstance(q, dict) else (None, None)
-            if bid and bid > 0 and age is not None and 0 <= age <= 600:
+            x = _num(q.get("x")) if isinstance(q, dict) else None
+            if bid and bid > 0 and age is not None and 0 <= age <= 600 and not (x is not None and x > 0):    # audit K-10: never marked (stopped, trailed, peaked) on a disputed price
                 marks[s] = bid
         facts = self.day_facts(account, ist.date(), marks)
         info["day"] = {"entries": facts["entries"], "result": round(facts["result"], 2)}
