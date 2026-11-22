@@ -170,7 +170,9 @@ contracts). Now each quote a feed hands the relay is also written to a tape (`qu
 bid, ask, sizes, volume, open interest, change, segment, and the book when the feed sent one), in gzip CSV chunks. The relay's view is unchanged, and a tape
 problem is counted (`tape_errors` in the run's counts), never allowed to stop the feed.
 
-The data is licensed to the subscriber and this repository is public, so the tape is **encrypted before it is kept** and is never uploaded in the clear: at
+Keeping it is the owner's decision of 21 Nov 2026, recorded in [AUTONOMY.md](AUTONOMY.md) ("Recording Fyers and Angel One data"): the data may leave the
+runner the way Kite's does, encrypted, as expiring workflow artifacts, never unencrypted. The data is licensed to the subscriber and this repository is public, so
+the tape is **encrypted before it is kept** and is never uploaded in the clear: at
 the end of each streaming job it is tarred and encrypted (AES-256-CBC, PBKDF2 with 200,000 iterations) with the repository secret **`MARKET_TAPE_KEY`**, and
 kept as a 90-day artifact (`fyers-tape-<job>`, `angel-tape-<job>`). Without the secret the tape is deleted at the end of the job with a warning.
 
