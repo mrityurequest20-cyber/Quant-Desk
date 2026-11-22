@@ -244,7 +244,10 @@ export class PaperBook {
 		if (!o || typeof o !== "object" || o.v !== 1 || !o.stats || typeof o.stats !== "object" || Array.isArray(o.stats)) return json(400, { error: "not a valid strategy record" });
 		// Audit K-04 (FH-01): a runner that could not read the record once saved an empty one over it. A record with fewer than half the strategies of the one held is
 		// refused, unless the runner says it is the owner's reset_record (a catalogue change, or an unreadable record replaced on purpose).
-		if (raw.reset !== true) {
+		if (raw.reset === true) {                                                            // the owner's reset: the record it replaces is kept, so a reset can be undone
+			const held = await this.state.storage.get("paper:lab");
+			if (typeof held === "string") await this.state.storage.put("paper:lab:prev", held);
+		} else {
 			const held = await this.state.storage.get("paper:lab");
 			const had = typeof held === "string" ? labCount(held) : null, got = labCount(lab);
 			if (had !== null && got !== null && had >= LAB_GUARD_MIN && got < had / 2) return json(409, { error: "a strategy record with far fewer strategies than the one held: the owner must look", held: had, got });
@@ -260,6 +263,14 @@ export class PaperBook {
 		let o;
 		try { o = JSON.parse(text); } catch (e) { return json(400, { error: "not a valid shadow book" }); }
 		if (!o || typeof o !== "object" || o.v !== 1 || !Array.isArray(o.open)) return json(400, { error: "not a valid shadow book" });
+		if (raw.reset === true) {                                                            // the owner's reset (audit K-04): the book it replaces is kept as paper:shadowprev
+			const prev = await this.heldShadow();
+			if (typeof prev === "string") {
+				const m = Math.max(1, Math.ceil(prev.length / CHUNK)), keep = { "paper:shadowprevmeta": { n: m } };
+				for (let i = 0; i < m; i++) keep["paper:shadowprev:" + i] = prev.slice(i * CHUNK, (i + 1) * CHUNK);
+				await this.state.storage.put(keep);
+			}
+		}
 		const n = Math.max(1, Math.ceil(text.length / CHUNK));
 		const writes = {};
 		for (let i = 0; i < n; i++) writes["paper:shadow:" + i] = text.slice(i * CHUNK, (i + 1) * CHUNK);

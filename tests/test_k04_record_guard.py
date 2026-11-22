@@ -367,3 +367,87 @@ def test_an_unknown_convex_peak_never_trails_below_a_rung_already_sold(cfg, tmp_
     ap.cx_peak["pkgE"] = 0.5                                                                       # a known peak below a rung already sold (one stored under the old ladder)
     ap._cx_live_exit("pkgE", pkg(3 - t1), s, 0.4, T0, T0, dt.date(2026, 11, 26), 0.0, {})
     assert seen["peak"] == A2.CX.RUNG1_R
+
+
+@pytest.mark.parametrize("n0, sold, want", [(1, 0, 0.4), (2, 0, 0.4), (2, 1, "RUNG1_R"), (3, 1, "RUNG1_R"), (3, 2, "RUNG2_R")])
+def test_the_floor_counts_only_a_rung_that_exists(cfg, tmp_path, monkeypatch, n0, sold, want):
+    """Risk review of a73f721: one lot has no rung and two lots only the first (CX.tranches), so a floor that did not check gave a one-lot package a peak of
+    RUNG2_R on its first cycle, and the trail closed it at once."""
+    ap = desk(cfg, tmp_path)[1]
+    s = A2.CX_CATALOGUE[0]
+    seen = {}
+    monkeypatch.setattr(ap, "_cx_meta", lambda text: {"n": n0})
+    monkeypatch.setattr(ap, "_cx_exit", lambda s_, r, peak, d1, d2, *a, **k: seen.update(peak=peak) or (None, ""))
+    pkg = {"sid": s.sid, "u": "NIFTY", "legs": {"L": SimpleNamespace(qty=65 * (n0 - sold), instrument=SimpleNamespace(lot_size=65))}}
+    ap._cx_live_exit("p", pkg, s, 0.4, T0, T0, dt.date(2026, 11, 26), 0.0, {})
+    assert seen["peak"] == (getattr(A2.CX, want) if isinstance(want, str) else want)
+
+
+def test_a_one_lot_package_is_not_closed_on_its_first_cycle(cfg, tmp_path, monkeypatch):
+    ap = desk(cfg, tmp_path)[1]
+    s = A2.CX_CATALOGUE[0]
+    monkeypatch.setattr(ap, "_cx_meta", lambda text: {"n": 1})
+    pkg = {"sid": s.sid, "u": "NIFTY", "legs": {"L": SimpleNamespace(qty=65, instrument=SimpleNamespace(lot_size=65))}}
+    assert ap._cx_live_exit("one", pkg, s, 0.4, T0, T0, dt.date(2026, 11, 26), 0.0, {}) == []      # was: "trailed" at once, peak 3.0 from the first cycle
+
+
+def test_a_retry_that_raises_fails_closed(cfg, tmp_path, monkeypatch):
+    ap = desk(cfg, tmp_path)[1]
+    relay = Flaky(lab_fails=99, lab=record())
+    ap.load(relay)
+
+    def half(*a):
+        ap.persist_blocked = None                                                             # as if the pause had been cleared, then something raised
+        raise RuntimeError("late")
+    monkeypatch.setattr(ap, "_retry", half)
+    learn(ap)
+    assert ap.save(relay, 1000.0, force=True) is False and ap.persist_blocked and relay.puts == 0
+
+
+def test_a_reset_of_the_book_tells_the_relay_once(cfg, tmp_path):
+    class Rec(Relay):
+        def put_shadow(self, text, reset=False):
+            self.flags = getattr(self, "flags", []) + [reset]
+            return super().put_shadow(text)
+    relay = Rec(lab=record(), shadow="{broken")
+    ap = desk(cfg, tmp_path)[1]
+    ap.allow_reset = True
+    ap.load(relay)
+    assert ap.persist_blocked is None and ap.book_reset_pending
+    ap.shadow_dirty = True
+    assert ap.save_shadow(relay, 1000.0, force=True) and relay.flags == [True]
+    ap.shadow_dirty = True
+    ap.save_shadow(relay, 2000.0, force=True)
+    assert relay.flags == [True, False]
+
+
+@needs_node
+def test_a_reset_keeps_the_record_and_the_book_it_replaces(tmp_path):
+    shutil.copyfile(ROOT / "deploy/cloudflare/paper.js", tmp_path / "paper.js")
+    (tmp_path / "package.json").write_text('{"type": "module"}')
+    (tmp_path / "cases.json").write_text(json.dumps({"r300": record(300), "r1": record(1)}))
+    (tmp_path / "t.mjs").write_text("""import { PaperBook } from './paper.js';
+import { readFileSync } from 'fs';
+const C = JSON.parse(readFileSync('cases.json', 'utf8'));
+const store = new Map();
+const state = { storage: {
+  get: async (k) => { if (Array.isArray(k)) { const m = new Map(); for (const x of k) if (store.has(x)) m.set(x, store.get(x)); return m; } return store.get(k); },
+  put: async (k, v) => { if (typeof k === "object") for (const [a, b] of Object.entries(k)) store.set(a, b); else store.set(k, v); },
+  delete: async (k) => { for (const x of (Array.isArray(k) ? k : [k])) store.delete(x); } } };
+const b = new PaperBook(state);
+const post = async (path, body) => (await b.handle(new Request("https://live" + path, { method: "POST", body: JSON.stringify(body) }), new URL("https://live" + path), 1)).status;
+const out = {};
+await post("/paper/lab", { lab: C.r300 });
+out.reset = await post("/paper/lab", { lab: C.r1, reset: true });
+out.prev_is_old = store.get("paper:lab:prev") === C.r300 && store.get("paper:lab") === C.r1;
+const book1 = JSON.stringify({ v: 1, seq: 1, open: [["A", "NIFTY"]] }), book2 = JSON.stringify({ v: 1, seq: 2, open: [] });
+await post("/paper/shadow", { shadow: book1 });
+out.plain = await post("/paper/shadow", { shadow: book2 });
+out.no_prev_without_reset = !store.has("paper:shadowprevmeta");
+out.breset = await post("/paper/shadow", { shadow: book1, reset: true });
+const m = store.get("paper:shadowprevmeta");
+out.book_prev = m && Array.from({ length: m.n }, (_, i) => store.get("paper:shadowprev:" + i)).join("") === book2;
+console.log(JSON.stringify(out));""")
+    r = subprocess.run(["node", "t.mjs"], cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert json.loads(r.stdout.strip().splitlines()[-1]) == {"reset": 200, "prev_is_old": True, "plain": 200, "no_prev_without_reset": True, "breset": 200, "book_prev": True}

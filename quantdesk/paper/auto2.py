@@ -784,6 +784,7 @@ class AutoPilotV2:
         self.persist_kind: str | None = None       # "failed" (tried again) | "corrupt" (the owner must look)
         self.allow_reset = False                   # the owner's reset_record: an unreadable record or book starts from zero, and the relay's guard is told so
         self.reset_pending = False
+        self.book_reset_pending = False            # the owner's reset of the open book: the relay keeps the old one as paper:shadowprev (K-04 review)
         self.persist_note: str | None = None       # a line for the session's log (a late read, a refused save)
         self.lab_refused = 0                       # saves the relay refused (409: a record with far fewer strategies than the one it holds)
         self._retry_at = 0.0
@@ -1987,7 +1988,8 @@ class AutoPilotV2:
         n0 = max(meta.get("n") or n_now, n_now)
         sold = n0 - n_now
         t1, t2 = CX.tranches(n0)
-        floor = CX.RUNG2_R if sold >= t1 + t2 else (CX.RUNG1_R if sold >= t1 else -math.inf)    # a rung sold proves the package reached it: an unknown peak
+        floor = (CX.RUNG2_R if t2 > 0 and sold >= t1 + t2 else (CX.RUNG1_R if t1 > 0 and sold >= t1 else -math.inf))   # a rung sold proves the package reached it
+        #                                                                         (only a rung that exists: one lot has none, two lots only the first; K-04 review)
         old = self.cx_peak.get(text, floor)                                             # (the record unread, audit K-04 review) never trails from below it
         peak = max(old, r, floor)
         if peak > old or text not in self.cx_peak:
@@ -2432,6 +2434,7 @@ class AutoPilotV2:
                 self._blocked("corrupt", f"the stored open shadow book cannot be read ({type(e).__name__})")
                 return f"; the open shadow book cannot be read ({type(e).__name__})"
             self.shadow, self._p2_book = {}, None
+            self.book_reset_pending = True
             self.persist_note = f"::warning::paper: the owner's reset_record: the unreadable open shadow book ({type(e).__name__}) starts empty"
             return "; the open shadow book starts empty (the owner's reset)"
         gone = sum(io["dropped"].values())
@@ -2443,10 +2446,12 @@ class AutoPilotV2:
         ends badly can lose a trade, never count one twice (risk review of the carry, 14 Nov 2026). While paused (audit K-04) nothing is sent: a failed read is tried
         again every LOAD_RETRY_S from here, and on success AUTO v2 goes on from what the relay holds."""
         if self.persist_blocked:
+            before = (self.persist_blocked, self.persist_kind)
             try:
                 self._retry(relay, mono)                                                # never waits on the network: the brakes run in the same cycle (K-04 review)
             except Exception:                                                           # noqa: BLE001 - a retry that fails costs the retry, never the part
                 self.shadow_io["retry_errors"] = self.shadow_io.get("retry_errors", 0) + 1
+                self.persist_blocked, self.persist_kind = before                        # and fails closed: still paused, nothing saved
             if self.persist_blocked:
                 self.shadow_io["blocked"] = self.shadow_io.get("blocked", 0) + 1
                 return False
@@ -2542,7 +2547,8 @@ class AutoPilotV2:
         try:
             seq = self.next_seq()                                                       # used once issued: a put whose reply is lost may still have been stored
             text, left_out = self.shadow_json(seq)
-            put(text)
+            put(text, reset=True) if self.book_reset_pending else put(text)
+            self.book_reset_pending = False
             self.shadow_dirty, self.shadow_saved_at, self.shadow_route = False, mono, True
             self.shadow_io["left_out"] = left_out
             self._p2_book_ver = (self.probation.ver, self.votes.ver, self._p2x_ver)
