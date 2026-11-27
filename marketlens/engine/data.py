@@ -3,6 +3,7 @@
 Tables used (one file per period, `{table}_{period}.parquet`, as Quant-Desk's warehouse release keeps them):
   fo_bhav          NSE index futures and options, daily (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50)
   fo_stock_opts    every F&O stock's futures and nearest two option expiries (strikes within +-30%), daily
+  fo_stock_far     the same for each stock's third expiry (the far month); read together with fo_stock_opts
   bse_fo_bhav      BSE index futures and options (SENSEX, BANKEX), daily, from 2024
   nse_index_close  NSE's official index OHLC (the spot NSE's index options settle on), and India VIX
   participant_oi   FII / DII / Pro / Client open interest by product, daily
@@ -32,7 +33,7 @@ OPT_COLS = ["date", "symbol", "kind", "expiry", "strike", "open", "high", "low",
 # (the future converges to spot), but it is not spot: basis and carry are not computed from it.
 PROXY_SRC = {"old-fut"}
 RELEASE_API = "https://api.github.com/repos/mrityurequest20-cyber/Quant-Desk/releases/tags/warehouse"
-TABLES = ("fo_bhav", "fo_stock_opts", "bse_fo_bhav", "nse_index_close", "participant_oi", "participant_vol",
+TABLES = ("fo_bhav", "fo_stock_opts", "fo_stock_far", "bse_fo_bhav", "nse_index_close", "participant_oi", "participant_vol",
           "fii_dii", "corp_events", "nse_holidays", "gift_nifty")
 
 
@@ -100,6 +101,9 @@ class Warehouse:
         if "stockopts" not in self._cache:
             syms = [s.symbol for s in U.STOCKS]
             df = self._read("fo_stock_opts", OPT_COLS, syms)
+            far = self._read("fo_stock_far", OPT_COLS, syms)              # the far month: absent until the warehouse has it
+            if len(far):
+                df = pd.concat([df, far], ignore_index=True).drop_duplicates(["date", "symbol", "kind", "expiry", "strike"])
             self._cache["stockopts"] = {s: g for s, g in df.groupby("symbol")}
         return self._cache["stockopts"]
 

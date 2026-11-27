@@ -33,11 +33,16 @@ on the device, and recomputes live panels with `web/livecore.js`:
 - the live smile and 25-delta skew
 - open interest added today by strike, and near-money PCR now vs at the close
 - today's futures build-up against the same contract's close
+- every futures month the feed carries (current, near, far: `NIFTY-FUT`, `NIFTY-FUT-2027-01-25`, ...), each against its
+  own close, with the calendar spread between months
 
 `livecore.js` applies the same rules as `engine/vol.py`, line for line. `tests/test_live.py` and a real-chain parity
-run check this: on 638 expiries over 40 sessions, forward and straddle are identical and ATM IV agrees within 2e-6.
+run check this: on 695 expiries over 40 sessions (the nearest six plus the monthlies), forward and straddle are identical and ATM IV agrees within 2e-6.
 
-Quotes older than 120 seconds, and options not traded today, are not used. Outside the session the panels step aside
+Prices older than 120 seconds, and options not traded today, are not used. Option chains may be up to 8 minutes old:
+on Kotak alone the relay rotates each stock's chain through the calls its prices leave free (about every 6 minutes).
+A chain is one call, so its strikes come from one moment and its own parity forward keeps the read consistent; a
+chain older than 2 minutes is labelled with its age. Outside the session the panels step aside
 and the page shows the analysis at the last close. Live prices are licensed, are read only with the owner's key, and
 are never stored.
 
@@ -46,6 +51,13 @@ are never stored.
 - **Implied vol** is computed from the bhavcopy itself. The forward comes from put-call parity at the strike where
   call and put prices are closest, then Black-76 is applied on the out-of-the-money side. Strikes that did not trade
   only have a theoretical settlement price, so they are kept out of the at-the-money numbers and the smile.
+- **Which expiries**: each day the nearest six, plus the current, near and far monthly contract (the last expiry of
+  each of the nearest three calendar months), labelled weekly / current month / near month / far month. A monthly
+  contract must trade at least 0.2% of the busiest *monthly* near the money (not of an expiry-week weekly, which
+  trades hundreds of times more); an expiry that did not trade at the money is withheld, never shown from settlement
+  prices. Stocks' far month comes from the warehouse's `fo_stock_far` table.
+- **Futures by month**: price, basis, carry (20+ days out only), open interest and its share, and the change against
+  the same contract the session before, for every listed month.
 - **30-day IV** interpolates total variance between expiries, so a weekly and a monthly calendar can be compared
   over the years.
 - **The event move** is the extra variance in the front expiry over the forward variance to the next expiry,

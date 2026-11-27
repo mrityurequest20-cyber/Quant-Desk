@@ -85,15 +85,32 @@ def _prices(opt: pd.DataFrame) -> pd.DataFrame:
     return o
 
 
+MONTHS = 3                # the current, near and far monthly contracts are always read, beyond the nearest weeklies
+
+
+def read_set(de: pd.DataFrame) -> pd.DataFrame:
+    """(date, expiry) pairs read each day: the nearest MAX_EXPIRIES, plus the monthly expiry (the last listed one of its
+    calendar month) of each of the nearest MONTHS months, labelled weekly / current / near / far month."""
+    d = de.drop_duplicates().sort_values(["date", "expiry"]).copy()
+    d["ym"] = d["expiry"].dt.year * 12 + d["expiry"].dt.month
+    d["monthly"] = d["expiry"] == d.groupby(["date", "ym"])["expiry"].transform("max")
+    d["mrank"] = d.groupby("date")["ym"].rank(method="dense")
+    d["rank"] = d.groupby("date")["expiry"].rank(method="dense")
+    month = d["monthly"] & (d["mrank"] <= MONTHS)
+    d = d[(d["rank"] <= MAX_EXPIRIES) | month].copy()
+    names = {1: "current month", 2: "near month", 3: "far month"}
+    d["series"] = np.where(month.loc[d.index], d["mrank"].map(names), np.where(d["monthly"], "monthly", "weekly"))
+    return d[["date", "expiry", "series"]]
+
+
 def expiry_table(opt: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Per (date, expiry): days, forward, ATM IV, 25d RR/fly, straddle. Also returns the per-strike IV rows (for smiles)."""
     o = _prices(opt)
     o = o[o["days"] >= MIN_DAYS]
     if o.empty:
         return pd.DataFrame(), pd.DataFrame()
-    # keep the nearest MAX_EXPIRIES expiries each day
-    rank = o.groupby("date")["expiry"].rank(method="dense")
-    o = o[rank <= MAX_EXPIRIES]
+    rs = read_set(o[["date", "expiry"]])
+    o = o.merge(rs[["date", "expiry"]], on=["date", "expiry"])
 
     # forward from parity on traded pairs (fall back to settlement pairs when a day has none traded)
     c = o[o["kind"] == "CE"][["date", "expiry", "strike", "px", "traded"]]
@@ -183,8 +200,14 @@ def expiry_table(opt: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     # where that exceeds one vol point (a Rs 35 stock a week from expiry), where rounding, not the market, sets the IV
     good &= (TICK_ERR / (t["F"] * np.sqrt(t["T"]))) <= 0.01
     day_max = t.groupby("date")["atm_contracts"].transform("max")
+    # a monthly contract is measured against the monthly contracts: next to an expiry-week weekly (NIFTY 26 Nov 2026,
+    # 43.8 million contracts near the money) a clean January month at 51,591 is 0.1%, yet it is 8% of December's
+    t = t.merge(rs, on=["date", "expiry"], how="left")
+    monthly = t["series"].str.endswith(" month").fillna(False).to_numpy()
+    m_max = t["atm_contracts"].where(monthly).groupby(t["date"]).transform("max")
+    yard = np.where(monthly & m_max.notna().to_numpy(), m_max, day_max)
     is_front = t.groupby("date")["expiry"].transform("min") == t["expiry"]
-    good &= is_front | (t["atm_contracts"].fillna(0) >= MIN_LIQ_SHARE * day_max)
+    good &= is_front | (t["atm_contracts"].fillna(0) >= MIN_LIQ_SHARE * yard)
     t = t[good].copy()
     t["days"] = (t["expiry"] - t["date"]).dt.days
     t = drop_curve_outliers(t)

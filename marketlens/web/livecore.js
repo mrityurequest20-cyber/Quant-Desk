@@ -161,6 +161,24 @@
     }
   }
 
+  // which expiries are read: the nearest MAX_EXPIRIES, plus the monthly (last listed of its calendar month) of each of
+  // the nearest 3 months, labelled as vol.py read_set does. Returns {expiry: series} in expiry order
+  function readSet(list) {
+    const ex = [...new Set(list)].sort();
+    const ym = (e) => e.slice(0, 7);
+    const months = [...new Set(ex.map(ym))];
+    const lastOf = {};
+    ex.forEach((e) => { lastOf[ym(e)] = e; });
+    const names = ["current month", "near month", "far month"];
+    const out = {};
+    ex.forEach((e, i) => {
+      const monthly = lastOf[ym(e)] === e, mr = months.indexOf(ym(e));
+      const month = monthly && mr < 3;
+      if (i < MAX_EXPIRIES || month) out[e] = month ? names[mr] : monthly ? "monthly" : "weekly";
+    });
+    return out;
+  }
+
   // the whole live read of one underlying
   function readUnderlying(quotes, symbol, opts) {
     const { nowMs, maxAge } = opts;
@@ -170,9 +188,13 @@
       spotAge: sq ? sq.age_s : null, src: sq ? sq.src : null,
       fut: fresh(fq) ? { ltp: fq.ltp, oi: fq.oi || 0, chg: Number.isFinite(fq.chg) ? fq.chg / 100 : null, age: fq.age_s, e: fq.e || null } : null,
       expiries: [] };
-    const ch = chains(quotes, symbol, maxAge);
+    // option chains may be older than the prices: the relay rotates the stock chains through the calls the prices leave
+    // free (about 6 minutes a round on Kotak alone). A chain is one call, so its strikes are one moment and its own
+    // parity forward keeps the read consistent; its age is carried so the page says how old it is
+    const ch = chains(quotes, symbol, opts.optMaxAge || maxAge);
     const today = istDate(nowMs);
-    for (const e of Object.keys(ch).sort().filter((x) => x > today).slice(0, MAX_EXPIRIES)) {   // the nearest 6, as vol.py
+    const sel = readSet(Object.keys(ch).filter((x) => x > today));
+    for (const e of Object.keys(sel)) {   // the nearest 6 plus the current, near and far month, as vol.py read_set
       const T = yearsTo(e, nowMs);
       const days = (Date.parse(e + "T15:30:00+05:30") - nowMs) / 86400e3;
       // a contract on its own expiry day is all gamma, no vol: not read (vol.py MIN_DAYS), and never the yardstick
@@ -180,12 +202,20 @@
       if (e <= istDate(nowMs)) continue;
       const anchor = out.fut ? out.fut.ltp : null;
       const r = readExpiry(ch[e], T, anchor);
-      r.expiry = e; r.days = days; r.T = T;
+      r.expiry = e; r.days = days; r.T = T; r.series = sel[e];
+      r.age = Math.max(...ch[e].map((x) => x.age));
       out.expiries.push(r);
     }
-    // an expiry trading under 0.2% of the busiest one near the money is not read (vol.py MIN_LIQ_SHARE); the front stays
+    // an expiry trading under 0.2% of the busiest one near the money is not read (vol.py MIN_LIQ_SHARE); the front stays.
+    // A monthly contract is measured against the busiest monthly
+    const isM = (x) => / month$/.test(x.series || "");
     const busiest = Math.max(0, ...out.expiries.map((x) => x.atm_vol || 0));
-    out.expiries.forEach((x, i) => { if (i > 0 && x.ok && (x.atm_vol || 0) < 0.002 * busiest) { x.ok = false; x.why = "too thin next to the front expiry"; } });
+    const mons = out.expiries.filter((x) => isM(x) && Number.isFinite(x.atm_vol));
+    const mBusiest = mons.length ? Math.max(...mons.map((x) => x.atm_vol)) : null;
+    out.expiries.forEach((x, i) => {
+      const yard = isM(x) && mBusiest !== null ? mBusiest : busiest;
+      if (i > 0 && x.ok && (x.atm_vol || 0) < 0.002 * yard) { x.ok = false; x.why = "too thin next to the front expiry"; }
+    });
     dropCurveOutliers(out.expiries.filter((x) => x.ok));
     return out;
   }
@@ -229,6 +259,41 @@
     return { dp, doi, label, basis, carry, expiry: lastRow.fut_expiry };
   }
 
+  // every futures month the feed carries: the near one as <SYM>-FUT, later ones as <SYM>-FUT-<expiry>. Each is compared with
+  // the SAME contract's close (build.py fut_months), carry only 20+ days out, and the calendar spread to the month before
+  function futuresMonths(quotes, symbol, opts, baseMonths, spot) {
+    const { nowMs, maxAge } = opts, today = istDate(nowMs);
+    const fresh = (q) => q && q.age_s <= maxAge && q.ltp > 0;
+    const close = {};
+    (baseMonths || []).forEach((m) => { close[m.expiry] = m; });
+    const rows = [];
+    const near = quotes[symbol + "-FUT"];
+    const nearExp = (near && near.e) || ((baseMonths || []).find((m) => m.expiry > today) || {}).expiry || null;
+    if (fresh(near) && nearExp) rows.push({ expiry: nearExp, q: near });
+    const re = new RegExp("^" + symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-FUT-(\\d{4}-\\d{2}-\\d{2})$");
+    for (const n of Object.keys(quotes)) {
+      const m = re.exec(n);
+      if (m && m[1] > today && fresh(quotes[n]) && !rows.some((r) => r.expiry === m[1])) rows.push({ expiry: m[1], q: quotes[n] });
+    }
+    rows.sort((a, b) => (a.expiry < b.expiry ? -1 : 1));
+    // a month is named by its place among ALL listed months (the close's and the feed's), so a stale near month never
+    // turns the next one into "current month"
+    const listed = new Set([...(baseMonths || []).map((m) => m.expiry), ...(nearExp ? [nearExp] : []),
+      ...Object.keys(quotes).map((n) => (re.exec(n) || [])[1]).filter(Boolean)].filter((e) => e > today));
+    const order = [...listed].sort();
+    const names = ["current month", "near month", "far month"];
+    return rows.map((r, i) => {
+      const k = order.indexOf(r.expiry);
+      const c = close[r.expiry], days = (Date.parse(r.expiry + "T15:30:00+05:30") - nowMs) / 86400e3;
+      const basis = spot !== null && spot > 0 ? r.q.ltp - spot : null;
+      return { expiry: r.expiry, series: names[k] || "month " + (k + 1), days, ltp: r.q.ltp, oi: r.q.oi ?? null, age: r.q.age_s,
+        dp: c && c.fut > 0 ? r.q.ltp / c.fut - 1 : null,
+        doi: c && c.oi > 0 && Number.isFinite(r.q.oi) ? r.q.oi / c.oi - 1 : null,
+        basis, carry: basis !== null && days >= 20 ? Math.log(r.q.ltp / spot) / (days / 365) : null,
+        spread: i > 0 && order.indexOf(rows[i - 1].expiry) === k - 1 ? r.q.ltp - rows[i - 1].q.ltp : null };
+    });
+  }
+
   // vol.py constant_maturity, on the live expiries: total variance interpolated in time to `days`; an expiry this week
   // alone is not stretched to 30 days; flat at the ends. One extra rule for live: the feed carries only the nearest
   // expiries, so if none lies within 5 days of the target (NIFTY's live chain is two weeklies) the end-of-day method
@@ -255,7 +320,7 @@
     return { call_wall: cw, put_wall: pw, pcr: tc > 0 ? tp / tc : null, lo: exp.strikes[0], hi: exp.strikes[exp.strikes.length - 1] };
   }
 
-  const api = { constantMaturity, walls, istDate, b76, impliedVol, ndtri, readExpiry, readUnderlying, chains, yearsTo, pctVsHistory, oiVsClose, futuresToday, OPT };
+  const api = { readSet, futuresMonths, constantMaturity, walls, istDate, b76, impliedVol, ndtri, readExpiry, readUnderlying, chains, yearsTo, pctVsHistory, oiVsClose, futuresToday, OPT };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.LiveCore = api;
 })(typeof window !== "undefined" ? window : globalThis);

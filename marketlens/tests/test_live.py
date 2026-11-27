@@ -137,3 +137,64 @@ def test_constant_maturity_matches_end_of_day():
     # only weeklies live (NIFTY's feed): no 30-day reading rather than a weekly stretched to 30 days
     js = run_js("console.log(JSON.stringify(L.constantMaturity([{ok:true,days:4,atm_iv:.14},{ok:true,days:11,atm_iv:.15}])));")
     assert js["iv"] is None and "30 days" in js["why"]
+
+
+def test_read_set_matches_end_of_day():
+    """Live and end-of-day read the same expiries: the nearest six plus the current, near and far month."""
+    day = pd.Timestamp("2026-11-26")
+    weeks = [pd.Timestamp(x) for x in ["2026-12-01", "2026-12-08", "2026-12-15", "2026-12-22", "2026-12-29", "2027-01-05",
+                                       "2027-01-12", "2027-01-25", "2027-02-23", "2027-03-30", "2027-06-29"]]
+    for exps in (weeks, weeks[4:], [weeks[4], weeks[7]], weeks[:3]):
+        py = V.read_set(pd.DataFrame({"date": day, "expiry": exps}))
+        py = {str(r.expiry.date()): r.series for r in py.itertuples()}
+        js = run_js(f"console.log(JSON.stringify(L.readSet({json.dumps([str(e.date()) for e in exps])})));")
+        assert js == py
+    py = {str(r.expiry.date()): r.series for r in V.read_set(pd.DataFrame({"date": day, "expiry": weeks})).itertuples()}
+    assert py["2026-12-29"] == "current month" and py["2027-01-25"] == "near month" and py["2027-02-23"] == "far month"
+    assert "2027-01-05" in py and "2027-01-12" not in py and "2027-03-30" not in py   # 7th weekly out; 4th month out
+
+
+def test_thin_monthly_is_measured_against_monthlies():
+    """A far month trading 0.1% of an expiry-week weekly but 5% of the current month is read, live and end-of-day."""
+    day = pd.Timestamp("2026-11-26")
+    w, m1, m2 = pd.Timestamp("2026-12-01"), pd.Timestamp("2026-12-29"), pd.Timestamp("2027-01-25")
+    df = _chain(day, 1000.0, {w: 0.15, m1: 0.14, m2: 0.145})
+    opt = df["kind"] != "FUT"
+    df.loc[opt & (df["expiry"] == w), "contracts"] = 100000.0
+    df.loc[opt & (df["expiry"] == m1), "contracts"] = 2000.0
+    df.loc[opt & (df["expiry"] == m2), "contracts"] = 100.0
+    t, js = compare(df, day)
+    assert set(t["expiry"].dt.strftime("%Y-%m-%d")) == {"2026-12-01", "2026-12-29", "2027-01-25"}
+    assert dict(zip(t["expiry"].dt.strftime("%Y-%m-%d"), t["series"])) == {"2026-12-01": "weekly", "2026-12-29": "current month", "2027-01-25": "near month"}
+    assert all(js[e]["ok"] for e in ("2026-12-01", "2026-12-29", "2027-01-25"))
+
+
+def test_futures_months_compare_each_contract_with_its_own_close():
+    now = int(pd.Timestamp("2026-11-27 11:00", tz="Asia/Kolkata").timestamp() * 1000)
+    q = {"X-FUT": {"ltp": 1010, "oi": 1100, "age_s": 3, "e": "2026-12-29"}, "X-FUT-2027-01-25": {"ltp": 1020, "oi": 220, "age_s": 3},
+         "X-FUT-2027-02-23": {"ltp": 1030, "oi": 30, "age_s": 999}, "XY-FUT-2027-01-25": {"ltp": 5, "age_s": 1}}
+    base = [{"expiry": "2026-12-29", "fut": 1000, "oi": 1000}, {"expiry": "2027-01-25", "fut": 1010, "oi": 200}, {"expiry": "2027-02-23", "fut": 1020, "oi": 30}]
+    r = run_js(f"console.log(JSON.stringify(L.futuresMonths({json.dumps(q)}, 'X', {{nowMs: {now}, maxAge: 120}}, {json.dumps(base)}, 1000)));")
+    assert [m["expiry"] for m in r] == ["2026-12-29", "2027-01-25"]                 # the far month is stale; XY is another underlying
+    assert [m["series"] for m in r] == ["current month", "near month"]
+    assert r[0]["dp"] == pytest.approx(0.01) and r[1]["doi"] == pytest.approx(0.1) and r[1]["spread"] == pytest.approx(10)
+    assert r[0]["carry"] is not None and r[0]["basis"] == pytest.approx(10)
+    q["X-FUT"]["age_s"] = 999                                                       # the near month stale: the next keeps its own name
+    r = run_js(f"console.log(JSON.stringify(L.futuresMonths({json.dumps(q)}, 'X', {{nowMs: {now}, maxAge: 120}}, {json.dumps(base)}, 1000)));")
+    assert [(m["expiry"], m["series"], m["spread"]) for m in r] == [("2027-01-25", "near month", None)]
+
+
+def test_a_delayed_chain_is_read_with_its_age_and_a_stale_one_is_not():
+    """Kotak rotates stock chains (about 6 minutes a round): a chain up to optMaxAge old is read, carrying its age."""
+    day = pd.Timestamp("2026-11-26")
+    df = _chain(day, 1000.0, {pd.Timestamp("2026-12-29"): 0.2})
+    q = quotes_from_chain(df[df["date"] == day], "X")
+    for k, v in q.items():
+        if v["s"] == "opt":
+            v["age_s"] = 300
+    now_ms = int(pd.Timestamp("2026-11-26 15:30", tz="Asia/Kolkata").timestamp() * 1000)
+    run = lambda o: run_js(f"const r = L.readUnderlying({json.dumps(q)}, 'X', {json.dumps(dict(nowMs=now_ms, maxAge=120, **o))});"
+                           "console.log(JSON.stringify(r.expiries.map(e => ({ok: e.ok, age: e.age}))));")
+    assert run({}) == []                                                   # prices-only age limit: no chain
+    assert run({"optMaxAge": 480}) == [{"ok": True, "age": 300}]
+    assert run({"optMaxAge": 240}) == []

@@ -7,7 +7,8 @@ are never printed (a test greps this file for both).
 What it lists, by the same names the Kite universe uses, so a price from either source lands on one row:
   * the index spots (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, INDIAVIX, SENSEX, BANKEX), each asked for by its Kotak name, one to a call
   * the cash price of every NSE F&O stock (name -> its cash token from the F&O scrip master's asset code)
-  * the near-month future of every F&O underlying (stocks and the four NSE indices), `<NAME>-FUT`, from Kotak's own `instrument_type=fut` chain view
+  * the near-month future of every F&O underlying (stocks and the four NSE indices), `<NAME>-FUT`, from Kotak's own `instrument_type=fut` chain view, and the four
+    indices' next and far months, `<NAME>-FUT-<expiry>` (they fit in the existing quote batches; more months for every stock would cost calls the 5-second cycle does not have)
   * the option chains to poll: the nearest two expiries of each index (the chain call returns every strike near the money with last price, volume and open interest)
 It is fail-soft by part: a scrip master that will not download, an underlying with no future, an index with no expiries, each skips only itself and is counted in `errors`;
 a universe with nothing in it is the only failure. The relay keeps the last good universe if a day's build fails.
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.request
 
 from ..intraday.kotak import INDEX, KotakFutures, KotakError, _fo, scrip_master, segments
+from .kite_universe import MONTHS, future_name
 from .live_push import SYMBOL, _NoRedirect
 
 QUOTE_NAME = re.compile(r"^[A-Z0-9&_.-]{1,32}$")                  # an F&O stock name for its spot and future: what the relay accepts as a symbol (no colon, space or control character: it is printed in workflow log lines)
@@ -94,6 +96,10 @@ def build(client, today: dt.date, say=print, fut_limit: int | None = None) -> di
                 raise KotakError("no unexpired future")
             seg, tok = live[0]["token"].split("|", 1)
             add(f"{u}-FUT", "fut", seg, tok)
+            if u in FUT_INDICES:                              # the indices' next and far months too (NIFTY-FUT-2027-01-25): eight names that ride in the quote
+                for c in live[1:MONTHS]:                      # batches already made (25 to a call), so they cost no extra call in a cycle
+                    s2, t2 = c["token"].split("|", 1)
+                    add(future_name(u, c["expiry"]), "fut", s2, t2)
         except Exception as e:                                # noqa: BLE001
             errors.append(f"{u} future: {type(e).__name__}")
 

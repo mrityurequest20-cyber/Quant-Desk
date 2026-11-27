@@ -288,3 +288,20 @@ def test_a_stock_name_the_relay_would_drop_from_a_chain_is_excluded_and_counted_
     eq = {q["n"] for q in u["quotes"] if q["s"] == "eq"}
     fut = {q["n"] for q in u["quotes"] if q["s"] == "fut"}
     assert {"HAS.DOT", "X" * 25} <= eq and {"HAS.DOT-FUT", ("X" * 25) + "-FUT"} <= fut      # a name only the chain rule refuses keeps its spot and its future
+
+
+def test_the_indices_get_their_next_and_far_futures_months_and_stocks_do_not(master):
+    c = FakeClient(fut_expiries=("2026-11-03", "2026-11-24", "2026-12-29", "2027-01-26", "2027-02-23"))
+    q = by_name(KU.build(c, TODAY, say=lambda *a: None))
+    for u in KU.FUT_INDICES:
+        assert {f"{u}-FUT-2026-12-29", f"{u}-FUT-2027-01-26"} <= set(q) and f"{u}-FUT-2027-02-23" not in q        # near (the plain name), next, far: three months
+        assert q[f"{u}-FUT-2026-12-29"]["s"] == "fut" and q[f"{u}-FUT-2026-12-29"]["t"] == str(abs(hash((u, "2026-12-29"))) % 90000 + 10000)
+    assert not any(n.startswith("RELIANCE-FUT-") for n in q)
+
+
+def test_the_extra_futures_months_cost_no_extra_call_in_a_cycle_at_todays_size():
+    """The relay's universe on 27 Nov 2026: 447 quotes, 7 of them indices asked one to a call, the other 440 in batches of 25 (18 calls). The indices'
+    next and far months add 8 to the batches: still 18 calls, so the 5-second cycle (40 calls) keeps the same room for the stock chains."""
+    import math
+    batched_before, batch = 447 - 7, 25
+    assert math.ceil(batched_before / batch) == math.ceil((batched_before + 2 * len(KU.FUT_INDICES)) / batch) == 18

@@ -13,6 +13,9 @@
   const POLL_MS = 5000;             // the owner's cadence: every live number within 5 seconds, the relay's own update rate
                                     // (Kite pushes every 5 s, Kotak is polled every ~5 s): faster would show nothing new
   const MAX_AGE = 120;              // a quote older than this (seconds, by the relay's own clock) is not live
+  const OPT_MAX_AGE = 480;          // an option chain may be this old: on Kotak alone each stock chain comes round about every 6 minutes;
+                                    // an older one than MAX_AGE is shown with its age, never as if it were this second's
+  const chainAge = (e) => (e && e.age > MAX_AGE ? ` · options ${Math.round(e.age / 60)} min old` : "");
   const KEY = "qd.livekey";
   const L = { mode: "init", reads: {}, at: null, feedAge: null, timer: null, note: "", busy: false };
   const key = () => { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } };
@@ -37,7 +40,11 @@
       if (!nifty || !(nifty.age_s <= MAX_AGE)) { L.mode = "closed"; L.reads = {}; return paint(); }
       L.mode = "live";
       const reads = {};
-      for (const u of (ov ? ov.universe : [])) reads[u.symbol] = LiveCore.readUnderlying(snap.quotes, u.symbol, { nowMs: Date.now(), maxAge: MAX_AGE });
+      for (const u of (ov ? ov.universe : [])) {
+        const r = LiveCore.readUnderlying(snap.quotes, u.symbol, { nowMs: Date.now(), maxAge: MAX_AGE, optMaxAge: OPT_MAX_AGE }), base = ov.live_base[u.symbol];
+        r.months = LiveCore.futuresMonths(snap.quotes, u.symbol, { nowMs: Date.now(), maxAge: MAX_AGE }, base ? base.fut_months : [], r.spot);
+        reads[u.symbol] = r;
+      }
       const vix = snap.quotes.INDIAVIX;
       L.vix = vix && vix.age_s <= MAX_AGE ? { ltp: vix.ltp, chg: Number.isFinite(vix.chg) ? vix.chg / 100 : null } : null;
       L.reads = reads;
@@ -113,13 +120,14 @@
     const front = r.expiries.find((e) => e.ok);
     const closeIv = front ? (base.term.find((c) => c.expiry === front.expiry) || {}).iv : null;
     const fut = LiveCore.futuresToday(r, base.fut ? { fut: base.fut.fut, near_oi: base.fut.near_oi, fut_expiry: base.fut.fut_expiry } : null, today());
+    const months = r.months || [];
     const oiBase = front ? base.oi.find((p) => p.expiry === front.expiry) : null;
     const oi = front && oiBase ? LiveCore.oiVsClose(front, oiBase) : null;
     return {
       r, front, spot: r.spot, chg: r.spotChg,
       iv: front ? front.atm_iv : null, ivClose: closeIv ?? null, ivChg: front && Number.isFinite(closeIv) ? front.atm_iv - closeIv : null,
       ivPct: front ? LiveCore.pctVsHistory(front.atm_iv, base.iv_front) : null,
-      move: front ? front.move : null, rr: front ? front.rr25 ?? null : null, fut, oi, base,
+      move: front ? front.move : null, rr: front ? front.rr25 ?? null : null, fut, months, oi, base,
       why: front ? null : (r.expiries[0] && r.expiries[0].why) || (r.spot === null ? "no fresh quote" : "no live options"),
       ...(() => {                                  // 30-day IV the end-of-day way, its percentile, and the premium over
         const cm = LiveCore.constantMaturity(r.expiries);       // realised vol (realised: at the last close)
@@ -151,7 +159,7 @@
       if (!x || x.spot === null) return "";
       return `<a class="card kpi live-tile" href="#/sym/${s}"><div class="lab"><span>${s}</span>${badge()}</div>
         <div class="val num">${f.num(x.spot, 1)} <small class="chg ${x.chg >= 0 ? "pos" : "neg"}">${f.sgn(x.chg, 2)}%</small></div>
-        <div class="foot">${x.front ? `IV ${f.pct(x.iv)} <span class="muted">(${f.sgn(x.ivChg)} vs close)</span> · move ±${f.pct(x.move)} to ${x.front.expiry.slice(5)}` : `<span class="muted">options: ${x.why}</span>`}</div></a>`;
+        <div class="foot">${x.front ? `IV ${f.pct(x.iv)} <span class="muted">(${f.sgn(x.ivChg)} vs close)</span> · move ±${f.pct(x.move)} to ${x.front.expiry.slice(5)}${chainAge(x.front)}` : `<span class="muted">options: ${x.why}</span>`}</div></a>`;
     }).join("");
     const vix = L.vix ? `<div class="card kpi live-tile"><div class="lab"><span>India VIX</span>${badge()}</div><div class="val num">${f.num(L.vix.ltp, 2)} <small class="chg ${L.vix.chg >= 0 ? "neg" : "pos"}">${f.sgn(L.vix.chg, 2)}%</small></div><div class="foot">≈ ${(L.vix.ltp / Math.sqrt(252)).toFixed(2)}% a day priced for NIFTY</div></div>` : "";
     // the session's biggest live changes, each against its own close
@@ -191,7 +199,7 @@
     const pctTxt = (p) => (Number.isFinite(p) ? ` · ${ord(p)} pct (1y)` : "");
     const head = `<div class="grid g3" style="margin-bottom:16px">
       ${kpiLive("Price now", f.num(x.spot, x.spot > 1000 ? 1 : 2), `<span class="chg ${x.chg >= 0 ? "pos" : "neg"}">${f.sgn(x.chg, 2)}%</span> today`)}
-      ${kpiLive("Front-expiry IV", x.front ? f.pct(x.iv) : "—", x.front ? `${f.sgn(x.ivChg)} vol pts vs ${x.front.expiry} close${pctTxt(x.ivPct)}` : `not read: ${x.why}`)}
+      ${kpiLive("Front-expiry IV", x.front ? f.pct(x.iv) : "—", x.front ? `${f.sgn(x.ivChg)} vol pts vs ${x.front.expiry} close${pctTxt(x.ivPct)}${chainAge(x.front)}` : `not read: ${x.why}`)}
       ${kpiLive("30-day IV", x.iv30 !== null ? f.pct(x.iv30) : "—", x.iv30 !== null ? `close-of-day method${pctTxt(x.iv30Pct)}` : `not read live: ${x.iv30Why}`)}
       ${kpiLive("Premium (IV − realised)", x.vrp !== null ? f.sgn(x.vrp) + " pts" : "—", x.vrp !== null ? `30-day IV now vs realised ${f.pct(x.base.rv21)} at the close${pctTxt(x.vrpPct)}` : "needs a live 30-day IV")}
       ${kpiLive("Priced move", x.front ? "±" + f.pct(x.move) : "—", x.front ? `${f.num(lo)} – ${f.num(hi)} to ${x.front.expiry}` : "")}
@@ -245,7 +253,14 @@
         <tr><td>live</td><td class="num">${f.num(r.ltp, r.ltp > 1000 ? 1 : 2)}</td><td class="num">${fu && Number.isFinite(fu.dp) ? `<span class="chg ${fu.dp >= 0 ? "pos" : "neg"}">${f.sgn(fu.dp, 2)}%</span>` : "—"}</td>
         <td class="num">${fu && Number.isFinite(fu.doi) ? f.sgn(fu.doi, 1) + "%" : "—"}</td><td class="num">${big(r.oi)}</td><td class="num">${fu && Number.isFinite(fu.basis) ? f.num(fu.basis, 1) : "—"}</td>
         <td class="num">${fu && Number.isFinite(fu.carry) ? f.pct(fu.carry) + (Number.isFinite(x.carryPct) ? ` <span class="muted small">${ord(x.carryPct)} pct</span>` : "") : `<span class="muted small">near month under 20 days</span>`}</td>
-        <td>${fu && fu.label ? `<span class="bu">${fu.label}</span>` : `<span class="muted small">${(fu && fu.why) || "—"}</span>`}</td></tr></tbody></table></div>` })}</div>`;
+        <td>${fu && fu.label ? `<span class="bu">${fu.label}</span>` : `<span class="muted small">${(fu && fu.why) || "—"}</span>`}</td></tr></tbody></table></div>` })}
+      ${(x.months || []).length > 1 ? card({ title: "Every futures month, live", chip: badge(), hint: "each contract vs its own last close", cls: "stack",
+        analyst: "Calendar spread: this month's future minus the month before it. Carry is annualised against the live spot and shown only 20+ days out.",
+        body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Contract</th><th>Expiry</th><th>Future</th><th>Today</th><th>OI</th><th>OI change</th><th>Basis</th><th>Carry</th><th>Spread</th></tr></thead><tbody>
+        ${x.months.map((m) => `<tr><td>${m.series}</td><td class="num">${m.expiry}</td><td class="num">${f.num(m.ltp, m.ltp > 1000 ? 1 : 2)}</td>
+          <td class="num">${Number.isFinite(m.dp) ? `<span class="chg ${m.dp >= 0 ? "pos" : "neg"}">${f.sgn(m.dp, 2)}%</span>` : "—"}</td><td class="num">${Number.isFinite(m.oi) ? big(m.oi) : "—"}</td>
+          <td class="num">${Number.isFinite(m.doi) ? f.sgn(m.doi, 1) + "%" : "—"}</td><td class="num">${Number.isFinite(m.basis) ? f.num(m.basis, 1) : "—"}</td>
+          <td class="num">${Number.isFinite(m.carry) ? f.pct(m.carry) : "—"}</td><td class="num">${Number.isFinite(m.spread) ? f.num(m.spread, 1) : "—"}</td></tr>`).join("")}</tbody></table></div>` }) : ""}</div>`;
   }
   // charts for the live panels, drawn after the page's HTML is in place
   function charts(tab, u) {
@@ -269,9 +284,11 @@
           { name: "Puts", type: "bar", stack: "x", data: K.map((k) => -(by[k].PE ? by[k].PE.oi : 0)), itemStyle: { color: t.s2 } }] });
     }
     if (tab === "vol" && x && x.front && document.getElementById("liveTerm")) {
-      const now = x.r.expiries.filter((e) => e.ok).map((e) => [+e.days.toFixed(2), e.atm_iv]);
-      const close = x.base.term.map((c) => [Math.round((Date.parse(c.expiry + "T15:30:00+05:30") - Date.now()) / 86400e3 * 100) / 100, c.iv]).filter((p) => p[0] > 0);
-      chart("#liveTerm", { tooltip: { trigger: "axis", valueFormatter: (v) => f.pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+      const pt = (days, iv, e, sr) => ({ value: [days, iv], name: `${e} · ${sr || "expiry"}`, symbolSize: /month$/.test(sr || "") ? 9 : 5 });
+      const now = x.r.expiries.filter((e) => e.ok).map((e) => pt(+e.days.toFixed(2), e.atm_iv, e.expiry, e.series));
+      const close = x.base.term.map((c) => pt(Math.round((Date.parse(c.expiry + "T15:30:00+05:30") - Date.now()) / 86400e3 * 100) / 100, c.iv, c.expiry, c.series)).filter((p) => p.value[0] > 0);
+      chart("#liveTerm", { tooltip: { trigger: "item", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text },
+          formatter: (p) => `<b>${p.seriesName}</b><br>${p.data.name}<br>${p.data.value[0].toFixed(1)} days · ATM IV ${f.pct(p.data.value[1], 1)}` },
         xAxis: { type: "value", name: "days to expiry", nameLocation: "middle", nameGap: 24, nameTextStyle: { color: t.text3, fontSize: 11 }, axisLabel: { color: t.text3 }, splitLine: { show: false } },
         yAxis: axisY(t, fmtPct(1)), series: [line("Now", now, t.s1, { showSymbol: true }), line("Last close", close, t.s2, { showSymbol: true, lineStyle: { width: 1.5, type: "dashed", color: t.s2 } })] });
     }

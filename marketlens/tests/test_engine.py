@@ -352,3 +352,15 @@ def test_day_change_needs_readings_today_and_yesterday():
     iv = pd.Series(0.15, index=idx)
     iv.iloc[-5:] = np.nan                                       # withheld for the last 5 sessions
     assert B.day_changes(pd.DataFrame({"iv30": iv})) == []
+
+
+def test_stock_far_month_is_read_with_the_two_nearest(tmp_path):
+    """fo_stock_far (the third expiry) joins fo_stock_opts' two, and a warehouse without it reads as before."""
+    from marketlens.engine import data as D
+    row = dict(date=pd.Timestamp("2026-11-26"), symbol="RELIANCE", kind="FUT", strike=np.nan, open=1.0, high=1.0, low=1.0, close=1.0,
+               settle=1.0, underlying=1.0, oi=1.0, chg_oi=0.0, contracts=1.0, lot=500.0, src="udiff")
+    near = pd.DataFrame([dict(row, expiry=pd.Timestamp(e)) for e in ("2026-12-29", "2027-01-25")])
+    near.to_parquet(tmp_path / "fo_stock_opts_2026-11.parquet")
+    assert sorted(D.Warehouse(tmp_path).options("RELIANCE")["expiry"].dt.month) == [1, 12]
+    pd.DataFrame([dict(row, expiry=pd.Timestamp("2027-02-23"))]).to_parquet(tmp_path / "fo_stock_far_2026-11.parquet")
+    assert sorted(D.Warehouse(tmp_path).options("RELIANCE")["expiry"].dt.month) == [1, 2, 12]

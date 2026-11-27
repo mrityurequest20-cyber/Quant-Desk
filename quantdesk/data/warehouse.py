@@ -7,6 +7,8 @@ Tables (one file per period, `{table}_{period}.parquet`):
                            active strikes, ATM straddle, futures volume/OI (the same bhavcopy file)
   fo_stock_opts     month  every F&O stock's options and futures, daily, in fo_bhav's columns: the nearest two
                            expiries, strikes within ±30% that traded or are open (the same file, kept, not discarded)
+  fo_stock_far      month  the same for each stock's third expiry, the far month (with fo_stock_opts: current, near and
+                           far month). Its own table so fo_stock_opts' readers and studies see exactly what they did
   bse_fo_bhav       month  BSE's index futures and options (SENSEX, BANKEX), daily, in fo_bhav's columns (from 2024)
   nse_index_close   year   NSE's official closing value of every index, daily (ind_close_all): the price NSE's
                            index options settle on, and the true spot on days the bhavcopy has no underlying column
@@ -39,6 +41,7 @@ TABLES = {                                   # table → (period, key columns, d
     "fo_bhav": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
     "fo_stocks": ("month", ["date", "symbol"], "date"),
     "fo_stock_opts": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
+    "fo_stock_far": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
     "bse_fo_bhav": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
     "nse_index_close": ("year", ["date", "index"], "date"),
     "participant_oi": ("year", ["date", "participant"], "date"),
@@ -50,7 +53,7 @@ TABLES = {                                   # table → (period, key columns, d
     "manifest": ("year", ["table", "date"], "date"),
 }
 DATE_COLS = ("date", "expiry")
-DAILY_FILES = ("fo_bhav", "fo_stocks", "fo_stock_opts", "bse_fo_bhav", "nse_index_close", "participant_oi",
+DAILY_FILES = ("fo_bhav", "fo_stocks", "fo_stock_opts", "fo_stock_far", "bse_fo_bhav", "nse_index_close", "participant_oi",
                "participant_vol")
 SETTLE_DAYS = 3                              # a file still missing this many days later is taken as never coming
 
@@ -170,6 +173,7 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
     fetchers = {"fo_bhav": (nse.fo_bhav, N.parse_fo_bhav),
                 "fo_stocks": (nse.fo_bhav, N.parse_fo_stocks),
                 "fo_stock_opts": (nse.fo_bhav, N.parse_fo_stock_opts),
+                "fo_stock_far": (nse.fo_bhav, N.parse_fo_stock_far),
                 "bse_fo_bhav": (bse.fo_bhav if bse else None, B.parse_fo_bhav),
                 "nse_index_close": (nse.index_close, N.parse_index_close),
                 "participant_oi": (lambda d: nse.participant("oi", d), N.parse_participant),

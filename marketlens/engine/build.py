@@ -270,7 +270,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     def curve(d):
         g = t[(t["date"] == d) & (t["days"] >= 2)].sort_values("days")     # an expiry tomorrow is all gamma, no vol
         return [{"expiry": str(r.expiry.date()), "days": int(r.days), "iv": r.atm_iv, "move": r.implied_move,
-                 "straddle": r.straddle, "F": r.F} for r in g.itertuples()]
+                 "straddle": r.straddle, "F": r.F, "series": r.series} for r in g.itertuples()]
 
     # "now" is the as-of session (or the one before): a curve last readable a week ago is not today's curve
     sess = list(df.index)
@@ -299,11 +299,16 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     smiles = []
     lt = ivrows[ivrows["date"] == asof]
     on_curve = set(t.loc[t["date"] == asof, "expiry"])                 # only expiries that passed the curve's checks
-    for e in [x for x in sorted(lt["expiry"].unique()) if x in on_curve][:3]:
+    ser = t[t["date"] == asof].set_index("expiry")["series"].to_dict()
+    readable = [x for x in sorted(lt["expiry"].unique()) if x in on_curve]
+    # the two nearest expiries, plus every monthly contract (current, near, far): the smiles a trader rolls between
+    pick = [x for i, x in enumerate(readable) if i < 2 or str(ser.get(x, "")).endswith(" month")]
+    for e in pick:
         g = lt[lt["expiry"] == e].sort_values("strike")
         F = float(g["F"].iat[0])
         g = g[(g["strike"] / F).between(0.85, 1.15) & g["liquid"]]     # liquid traded strikes: no stale wing prints
         smiles.append({"expiry": str(pd.Timestamp(e).date()), "days": int((pd.Timestamp(e) - asof).days), "F": F,
+                       "series": ser.get(e),
                        "strike": g["strike"].tolist(), "iv": g["iv"].round(5).tolist(),
                        "traded": g["traded"].tolist()})
 
@@ -326,6 +331,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         recent_bu = [r["buildup"] for r in fut_rows[-5:]]
         fcard_row = fut_rows[-1] if fut_rows else None
         rolls = P.roll_history(book)
+    fut_months = P.futures_months(opt, raw_close, asof)
 
     # events
     results = []
@@ -402,7 +408,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "story": story, "cards": cards, "series": series(df, cols),
         "term": term, "smiles": smiles, "cone": cone, "scorecard": score,
         "scorecard_series": series(sc_series.set_index("date"), ["implied_move", "realised"]) if sc_series is not None and len(sc_series) else None,
-        "oi_profile": prof, "futures": fut_rows, "rolls": rolls, "results": results, "macro": macro,
+        "oi_profile": prof, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
         "big_days": E.big_days(ret), "changes": changes, "rules": rules,
     }
     return clean(out)
@@ -538,7 +544,8 @@ def live_base(d: dict) -> dict:
     ser = d.get("series", {})
     return {
         "asof": d["meta"]["asof"], "close": d["headline"]["spot"], "kind": d["meta"]["kind"],
-        "term": [{"expiry": c["expiry"], "iv": c["iv"], "move": c["move"], "F": c["F"]} for c in tn],
+        "term": [{"expiry": c["expiry"], "iv": c["iv"], "move": c["move"], "F": c["F"], "series": c.get("series")} for c in tn],
+        "fut_months": [{"expiry": m["expiry"], "fut": m["fut"], "oi": m["oi"]} for m in d.get("fut_months") or []],
         "fut": ({"fut": fr["fut"], "near_oi": fr["near_oi"], "fut_expiry": fr["fut_expiry"]} if fr else None),
         "iv_front": (ser.get("iv_front") or [])[-252:],
         # for live 30-day IV, its percentile and the live premium over realised vol (realised: at the last close)

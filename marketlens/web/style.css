@@ -59,7 +59,9 @@ button { font: inherit; color: inherit; }
 .shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
 .side { position: sticky; top: 0; height: 100vh; overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); padding: 18px 12px; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; font-weight: 700; letter-spacing: -.01em; font-size: 16px; }
-.brand-mark { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--s1), var(--s7)); display: grid; place-items: center; color: #fff; font-size: 13px; }
+.brand-mark { width: 28px; height: 28px; flex: none; }
+.brand b { font-weight: 700; color: var(--accent); }
+.icon-btn svg { display: block; }
 .nav-h { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); padding: 14px 10px 6px; }
 .nav a { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 8px; color: var(--text-2); font-size: 13.5px; }
 .nav a:hover { background: var(--surface-2); color: var(--text); }
@@ -190,3 +192,13 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .live-tile { color: inherit; }
 .live-tile:hover { border-color: var(--accent); }
 @media (max-width: 760px) { .live-pill { padding: 4px 8px; } }
+.tbl tr.hl td { background: color-mix(in srgb, var(--s1) 6%, transparent); }
+.card.stack { margin-top: 16px; }
+@media (max-width: 760px) {
+  .top { flex-wrap: wrap; row-gap: 8px; }
+  .top .crumbs { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top .search { order: 10; flex: 1 1 100%; }
+  .top .search input { width: 100%; }
+  .search .res { left: 0; right: auto; width: 100%; }
+}
+@media (max-width: 760px) { .card-h h3 .hint { display: block; margin: 2px 0 0; } }

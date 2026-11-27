@@ -199,3 +199,34 @@ def participant_books(poi: pd.DataFrame) -> pd.DataFrame:
     w = p.pivot_table(index="date", columns="participant", values=cols)
     w.columns = [f"{a}:{b}" for a, b in w.columns]       # (value, participant) -> "metric:who"
     return w.sort_index()
+
+
+def futures_months(opt: pd.DataFrame, spot: pd.Series, asof) -> list[dict]:
+    """Every futures month listed on the as-of day: price, basis to spot, annualised carry (only at 20+ days, as
+    futures_book), OI, and the OI and price change against the same contract the session before."""
+    f = opt[(opt["kind"] == "FUT") & (opt["expiry"] > opt["date"])].copy()
+    if f.empty or asof not in set(f["date"]):
+        return []
+    f["px"] = np.where(f["close"] > 0, f["close"], f["settle"])
+    f["stl"] = np.where(f["settle"] > 0, f["settle"], f["px"])
+    days = sorted(pd.to_datetime(f["date"].unique()))
+    i = days.index(pd.Timestamp(asof))
+    prev = f[f["date"] == days[i - 1]].set_index("expiry") if i > 0 else pd.DataFrame()
+    s = float(spot.get(asof, np.nan))
+    names = {0: "current month", 1: "near month", 2: "far month"}
+    out = []
+    for n, r in enumerate(f[f["date"] == asof].sort_values("expiry").itertuples()):
+        dte = int((r.expiry - r.date).days)
+        p0 = prev.loc[r.expiry] if len(prev) and r.expiry in prev.index else None
+        p0 = p0.iloc[0] if isinstance(p0, pd.DataFrame) else p0
+        ok = np.isfinite(s) and s > 0
+        out.append({"expiry": str(r.expiry.date()), "series": names.get(n, "month %d" % (n + 1)), "days": dte,
+                    "fut": float(r.px), "basis": float(r.stl - s) if ok else None,
+                    "carry": float(np.log(r.stl / s) / (dte / 365)) if ok and dte >= 20 else None,
+                    "oi": float(r.oi), "contracts": float(r.contracts),
+                    "d_oi": float(r.oi / p0["oi"] - 1) if p0 is not None and p0["oi"] > 0 else None,
+                    "d_price": float(r.px / p0["px"] - 1) if p0 is not None and p0["px"] > 0 else None})
+    tot = sum(x["oi"] for x in out)
+    for x in out:
+        x["oi_share"] = x["oi"] / tot if tot > 0 else None
+    return out
