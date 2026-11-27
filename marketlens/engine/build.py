@@ -14,6 +14,7 @@ from .. import universe as U
 from . import events as E
 from . import narrative as N
 from . import positioning as P
+from . import rules as RL
 from . import vol as V
 from .data import Warehouse
 
@@ -119,7 +120,7 @@ def rules_block(opt: pd.DataFrame, asof, inst: U.Instrument, curve: list[dict]) 
 
 # ---------------- one instrument ----------------
 
-def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFrame) -> dict:
+def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFrame, limits=None) -> dict:
     t0 = time.time()
     opt = wh.options(inst.symbol)
     if opt.empty:
@@ -287,6 +288,13 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     up_res = next((r for r in results if r["upcoming"]), None)
     changes = day_changes(df)
     rules = rules_block(opt, asof, inst, tn)
+    if inst.kind == "stock" and limits is not None:
+        pl = RL.stock_block(inst.symbol, *limits)
+        if pl:
+            rules["position_limit"] = pl
+            txt = RL.sentence(pl)
+            if txt:
+                rules["notes"].insert(0, {"kind": "ban" if pl.get("in_ban") else "mwpl", "text": txt})
     metrics = {
         "symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
         "spot": spot_now, "chg": chg, "iv30": _last(df["iv30"]), "iv30_chg5": (
@@ -298,6 +306,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "carry_p": carry_p, "fut_oi_chg": fcard_row["d_oi"] if fcard_row else None,
         "buildup": fcard_row["buildup"] if fcard_row else None, "event": (evv or {}).get("cause", "premium") if evv else None,
         "results": up_res["date"] if up_res else None, "comp_p": comp_p,
+        "mwpl_util": (rules.get("position_limit") or {}).get("util"), "in_ban": (rules.get("position_limit") or {}).get("in_ban"),
         "inside": score.get("inside_all"), "changes": changes, "pos52": (spot_now - lo52) / (hi52 - lo52) if hi52 > lo52 else None,
     }
     cols = [c for c in ["close", "iv30", "iv_front", "rv21", "rv5", "rv63", "pk21", "fwd_rv21", "vrp", "rr25",
@@ -415,6 +424,28 @@ def calendar_block(wh: Warehouse, asof, sym_data: dict, ev_cal: pd.DataFrame) ->
     return {"items": out[:80]}
 
 
+def limits_block(limits, sym_data: dict) -> dict:
+    """Market-wide: today's F&O ban list (all stocks, not only covered ones) and covered stocks near the limit."""
+    if limits is None:
+        return {"available": False}
+    ban, mw = limits
+    out: dict = {"available": True}
+    read = ban.loc[ban["symbol"] == "", "date"] if len(ban) else pd.Series(dtype="datetime64[ns]")
+    if len(read):
+        last = read.max()
+        out["ban_date"] = str(pd.Timestamp(last).date())
+        out["ban"] = sorted(ban.loc[(ban["date"] == last) & (ban["symbol"] != ""), "symbol"].tolist())
+    near = []
+    for s, d in sym_data.items():
+        pl = d.get("rules", {}).get("position_limit")
+        if pl and pl.get("util") is not None and (pl["util"] >= 0.6 or pl.get("in_ban")):
+            near.append({"symbol": s, "util": pl["util"], "in_ban": bool(pl.get("in_ban")), "chg5": pl.get("util_chg5")})
+    out["near"] = sorted(near, key=lambda x: -x["util"])
+    if len(mw):
+        out["mwpl_date"] = str(pd.Timestamp(mw["date"].max()).date())
+    return out
+
+
 def changes_feed(sym_data: dict, n: int = 10) -> list[dict]:
     """The day's most unusual changes across all instruments, each measured against that instrument's own history."""
     rows = []
@@ -470,10 +501,12 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
     ev = wh.corp_events()
     ev_cal = E.results_calendar(ev, [s.symbol for s in U.STOCKS], None)
     insts = [i for i in U.ALL if not symbols or i.symbol in symbols]
+    limits = RL.load(warehouse)
+    limits = limits if (len(limits[0]) or len(limits[1])) else None
     data = {}
     for inst in insts:
         try:
-            d = analyse(wh, inst, vix, ev_cal)
+            d = analyse(wh, inst, vix, ev_cal, limits)
         except Exception as e:                      # one bad instrument never stops the build
             say(f"  {inst.symbol}: FAILED {type(e).__name__}: {e}")
             continue
@@ -496,6 +529,7 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
         "participants": parts, "flows": flows,
         "calendar": calendar_block(wh, asof, data, ev_cal),
         "changes": changes_feed(data),
+        "limits": limits_block(limits, data),
         "universe": [{"symbol": i.symbol, "name": i.name, "kind": i.kind, "sector": i.sector, "slug": U.slug(i.symbol)}
                      for i in insts if i.symbol in data],
     }

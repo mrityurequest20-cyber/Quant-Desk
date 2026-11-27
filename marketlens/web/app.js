@@ -181,6 +181,7 @@ async function pagePulse(app, ov) {
       simple: "Only changes that are big for that particular instrument make this list: a 2-sigma day is one that happens about once a month for it.",
       body: (ov.changes || []).length ? `<ul class="story">${ov.changes.map((c) => `<li><a href="#/sym/${slug(c.symbol)}"><b>${esc(c.symbol)}</b></a> · ${esc(c.text.replace(c.symbol + ": ", ""))} <span class="chip ${Math.abs(c.z) >= 2.5 ? "extreme" : "elevated"}">${Math.abs(c.z).toFixed(1)}σ</span></li>`).join("")}</ul>` : `<div class="muted">A quiet day: no reading moved unusually for its instrument.</div>`,
       analyst: "Size of a change = the day's change divided by the standard deviation of that instrument's daily changes over the past year. Readings: 30-day IV, 25-delta risk reversal, 21-day realised vol." })}</div>
+    ${limitsCard(ov)}
     <div class="grid g2" style="margin-top:16px">
       ${card({ title: "India VIX since 2019", hint: "the market's 30-day fear gauge", body: `<div class="chart" id="vix"></div>`,
         analyst: "India VIX is computed by NSE from NIFTY option prices across strikes (like the US VIX). Spikes mark stress (Mar 2020, Jun 2024 election). It mean-reverts: very high readings have historically come down faster than very low ones went up." })}
@@ -209,6 +210,17 @@ async function pagePulse(app, ov) {
   bindScreener(ov);
 }
 
+function limitsCard(ov) {
+  const L = ov.limits || {};
+  if (!L.available) return "";
+  const ban = L.ban || [];
+  const near = (L.near || []).filter((x) => !x.in_ban);
+  return `<div style="margin-top:16px">${card({ title: "F&O ban & position limits", hint: L.ban_date ? `NSE's ban list for ${L.ban_date}` : "",
+    simple: ban.length ? `In the F&O ban: no new positions can be opened in these, only existing ones reduced. ${ban.length} stock${ban.length > 1 ? "s" : ""} in all.` : "No stock is in the F&O ban.",
+    body: `${ban.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${ban.map((b) => `<span class="chip extreme">${esc(b)}</span>`).join("")}</div>` : ""}
+      ${near.length ? `<div class="muted small" style="margin-bottom:4px">Covered stocks with the most of their limit used</div><ul class="story">${near.slice(0, 6).map((x) => `<li><a href="#/sym/${slug(x.symbol)}"><b>${esc(x.symbol)}</b></a> · ${pct(x.util, 0)} of its market-wide limit${fin(x.chg5) ? ` <span class="muted">(${vp(x.chg5, 0)} pts in 5 sessions)</span>` : ""}${x.util >= .8 ? ` <span class="chip elevated">near ban</span>` : ""}</li>`).join("")}</ul>` : ""}`,
+    analyst: "A stock enters the ban when its open interest crosses 95% of its market-wide position limit (MWPL) and leaves when it falls below 80%. The ban itself is read from NSE's own list, never inferred. Limits are from NSE's combined open interest file" + (L.mwpl_date ? ` of ${L.mwpl_date}.` : ".") })}</div>`;
+}
 function calendarRows(items) {
   if (!items.length) return `<div class="muted">Nothing scheduled in the data.</div>`;
   const lab = { expiry: "Expiry", results: "Results", holiday: "Holiday", lot: "Lot change" };
@@ -230,6 +242,7 @@ const COLS = [
   { k: "pcr_p", lab: "PCR pct", f: (x) => pcell(x.pcr_p), a: 1 },
   { k: "carry", lab: "Futures carry", f: (x) => pct(x.carry), a: 1 },
   { k: "buildup", lab: "Futures today", f: (x) => x.buildup ? `<span class="bu">${x.buildup}</span>` : "—", a: 1 },
+  { k: "mwpl_util", lab: "Limit used", f: (x) => x.in_ban ? `<span class="chip extreme">BAN</span>` : fin(x.mwpl_util) ? `<span class="${x.mwpl_util >= .8 ? "chg neg" : ""}">${pct(x.mwpl_util, 0)}</span>` : "—" },
   { k: "results", lab: "Results", f: (x) => x.results ? `<span class="chip elevated">${x.results.slice(5)}</span>` : (x.event === "results" ? `<span class="chip elevated">results priced</span>` : x.event ? `<span class="chip">front premium</span>` : "") },
 ];
 function pcell(p) {
@@ -400,10 +413,15 @@ function rulesHtml(d) {
   const r = d.rules || {}, ch = d.changes || [];
   const notes = (r.notes || []).map((n) => `<li>${esc(n.text)}</li>`).join("");
   const chg = ch.map((c) => `<li>${esc(c.label)}: ${c.from.toFixed(1)} → ${c.to.toFixed(1)} <span class="muted">(${c.chg >= 0 ? "+" : ""}${c.chg.toFixed(1)} ${c.unit}${fin(c.z) ? `, ${Math.abs(c.z).toFixed(1)}σ for it` : ""})</span></li>`).join("");
-  return `<p class="simple">Lot size <b class="num">${num(r.lot)}</b> · next futures expiry <b class="num">${r.front_expiry || "—"}</b>${fin(r.sessions_to_expiry) ? ` (${r.sessions_to_expiry} sessions)` : ""}.</p>
+  const pl = r.position_limit;
+  const gauge = pl && fin(pl.util) ? `<div style="margin:4px 0 10px"><div class="lab muted small" style="display:flex;justify-content:space-between"><span>Market-wide position limit used${pl.in_ban ? ` · <b style="color:var(--neg)">IN BAN</b>` : ""}</span><span class="num">${pct(pl.util, 0)}</span></div>
+      <div style="position:relative;height:8px;border-radius:6px;background:var(--line);margin-top:6px;overflow:hidden"><b style="position:absolute;left:0;top:0;bottom:0;width:${Math.min(100, pl.util * 100)}%;background:${pl.util >= .95 || pl.in_ban ? "var(--neg)" : pl.util >= .8 ? "var(--s4)" : "var(--s1)"};border-radius:6px"></b>
+      <i style="position:absolute;left:80%;top:-2px;bottom:-2px;width:2px;background:var(--text-3)"></i><i style="position:absolute;left:95%;top:-2px;bottom:-2px;width:2px;background:var(--neg)"></i></div>
+      <div class="pbar-l"><span>0%</span><span>80% exit · 95% ban</span><span>100%</span></div></div>` : "";
+  return `${gauge}<p class="simple">Lot size <b class="num">${num(r.lot)}</b> · next futures expiry <b class="num">${r.front_expiry || "—"}</b>${fin(r.sessions_to_expiry) ? ` (${r.sessions_to_expiry} sessions)` : ""}.</p>
     ${notes ? `<ul class="story">${notes}</ul>` : ""}
     <div class="muted small" style="margin:8px 0 2px">Since yesterday</div><ul class="story">${chg || "<li>No readings.</li>"}</ul>
-    <p class="analyst">Open expiries: ${(r.expiries || []).join(", ")}. A lot-size note appears only when the exchange already lists a later expiry with a different lot.</p>`;
+    <p class="analyst">Open expiries: ${(r.expiries || []).join(", ")}. A lot-size note appears only when the exchange already lists a later expiry with a different lot.${pl ? ` Position limit from NSE's combined OI file of ${pl.mwpl_date || "—"}: open interest ${big(pl.oi)} against a limit of ${big(pl.mwpl)}${fin(pl.util_chg5) ? `, ${vp(pl.util_chg5, 0)} pts in 5 sessions` : ""}; ban status from NSE's ban list${pl.ban_date ? ` for ${pl.ban_date}` : ""}${pl.ban_window ? ` (${pl.ban_days} banned session${pl.ban_days === 1 ? "" : "s"} in the last ${pl.ban_window} read)` : ""}.` : ""}</p>`;
 }
 const chipFromTone = (tn) => tn === "extreme" ? `<span class="chip extreme"><span class="dot"></span>unusual</span>` : tn === "elevated" ? `<span class="chip elevated"><span class="dot"></span>notable</span>` : `<span class="chip"><span class="dot"></span>normal</span>`;
 

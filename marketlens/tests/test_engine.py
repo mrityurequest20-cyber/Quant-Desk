@@ -250,3 +250,9 @@ def test_corporate_action_needs_rebuilt_strikes_a_calm_market_and_no_lot_change(
     assert V.corporate_actions(split, stock, calm) == []           # lot changed: a split/bonus, handled elsewhere
     t = pd.DataFrame({"date": days, "expiry": e, "atm_iv": 0.05})
     assert set(V.drop_action_windows(t, a)["date"]) == set(days[2:])
+
+
+def test_skew_words_match_size():
+    assert "about the same" in N.skew_card("X", 0.005, 0.5)["simple"]
+    assert "Protection against a fall" in N.skew_card("X", -0.03, 0.5)["simple"]
+    assert "Upside calls cost more" in N.skew_card("X", 0.03, 0.95)["simple"]

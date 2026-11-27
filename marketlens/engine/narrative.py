@@ -102,7 +102,10 @@ def term_card(name, front_iv, back_iv, front_days, back_days, ev):
 def skew_card(name, rr, p):
     if rr is None or not math.isfinite(rr):
         return None
-    if rr < 0:
+    if abs(rr) < 0.01:              # within one vol point: calls and puts priced alike
+        s = (f"Calls and puts the same distance from the price cost about the same (gap {rr * 100:+.1f} vol points): "
+             f"no strong demand for either protection or upside. That is {level(p)} for {name}.")
+    elif rr < 0:
         s = (f"Protection against a fall costs more than a bet on a rise, by {abs(rr) * 100:.1f} vol points. "
              f"That gap is {level(p)} for {name}.")
     else:
