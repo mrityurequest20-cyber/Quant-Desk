@@ -121,6 +121,14 @@
       ivPct: front ? LiveCore.pctVsHistory(front.atm_iv, base.iv_front) : null,
       move: front ? front.move : null, rr: front ? front.rr25 ?? null : null, fut, oi, base,
       why: front ? null : (r.expiries[0] && r.expiries[0].why) || (r.spot === null ? "no fresh quote" : "no live options"),
+      ...(() => {                                  // 30-day IV the end-of-day way, its percentile, and the premium over
+        const cm = LiveCore.constantMaturity(r.expiries);       // realised vol (realised: at the last close)
+        const vrp = cm.iv !== null && Number.isFinite(base.rv21) ? cm.iv - base.rv21 : null;
+        return { iv30: cm.iv, iv30Why: cm.why || null, iv30Pct: LiveCore.pctVsHistory(cm.iv, base.iv30),
+                 vrp, vrpPct: LiveCore.pctVsHistory(vrp, base.vrp),
+                 carryPct: fut && Number.isFinite(fut.carry) ? LiveCore.pctVsHistory(fut.carry, base.carry) : null,
+                 walls: front ? LiveCore.walls(front, r.spot) : null };
+      })(),
     };
   }
 
@@ -164,11 +172,12 @@
     if (L.mode !== "live") return statusBlock();
     const rows = ov.universe.map((u) => ({ u, x: summary(u.symbol) })).filter((o) => o.x);
     return `<div style="margin-bottom:16px">${card({ title: "Live board", chip: badge(), hint: "every instrument, refreshed every 5 seconds",
-      simple: "Price and today's change from your feeds; implied vol of the front expiry against that same expiry's close; the move it prices; what futures positions did today.",
-      body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Instrument</th><th>Price</th><th>Today</th><th>Front IV</th><th>vs close</th><th>IV pct 1y</th><th>Priced move</th><th>Futures today</th><th>OI today</th></tr></thead><tbody>
+      simple: "Price and today's change from your feeds; implied vol of the front expiry against that same expiry's close; 30-day IV the close-of-day way and its premium over realised vol, where the feed carries an expiry near 30 days; the move it prices; what futures positions and options OI did today.",
+      body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Instrument</th><th>Price</th><th>Today</th><th>Front IV</th><th>vs close</th><th>IV pct 1y</th><th>30-day IV</th><th>Premium</th><th>Priced move</th><th>Futures today</th><th>OI today</th></tr></thead><tbody>
       ${rows.map(({ u, x }) => `<tr onclick="location.hash='#/sym/${u.slug}'" style="cursor:pointer"><td><span class="sym">${u.symbol}</span></td>
         <td class="num">${f.num(x.spot, x.spot > 1000 ? 0 : 2)}</td><td class="num"><span class="chg ${x.chg >= 0 ? "pos" : "neg"}">${f.sgn(x.chg, 2)}%</span></td>
         <td class="num">${x.front ? f.pct(x.iv) : `<span class="muted small">${x.why || "—"}</span>`}</td><td class="num">${f.sgn(x.ivChg)}</td><td class="num">${Number.isFinite(x.ivPct) ? ord(x.ivPct) : "—"}</td>
+        <td class="num">${x.iv30 !== null ? f.pct(x.iv30) : "—"}</td><td class="num">${x.vrp !== null ? f.sgn(x.vrp) : "—"}</td>
         <td class="num">${x.front ? `±${f.pct(x.move)} <span class="muted small">${x.front.expiry.slice(5)}</span>` : "—"}</td>
         <td>${x.fut && x.fut.label ? `<span class="bu">${x.fut.label}</span>` : x.fut && x.fut.why ? `<span class="muted small">${x.fut.why.slice(0, 40)}…</span>` : "—"}</td>
         <td class="num">${x.oi ? `C ${big(x.oi.call_add)} · P ${big(x.oi.put_add)}` : "—"}</td></tr>`).join("")}</tbody></table></div>` })}</div>`;
@@ -179,26 +188,64 @@
     const x = summary(u.symbol);
     if (!x || x.spot === null) return `<div class="callout" style="margin-bottom:16px">${badge()} No fresh live quote for ${u.symbol} right now.</div>`;
     const lo = x.front ? x.front.F * (1 - x.move) : null, hi = x.front ? x.front.F * (1 + x.move) : null;
-    const head = `<div class="grid g4" style="margin-bottom:16px">
+    const pctTxt = (p) => (Number.isFinite(p) ? ` · ${ord(p)} pct (1y)` : "");
+    const head = `<div class="grid g3" style="margin-bottom:16px">
       ${kpiLive("Price now", f.num(x.spot, x.spot > 1000 ? 1 : 2), `<span class="chg ${x.chg >= 0 ? "pos" : "neg"}">${f.sgn(x.chg, 2)}%</span> today`)}
-      ${kpiLive("Front-expiry IV", x.front ? f.pct(x.iv) : "—", x.front ? `${f.sgn(x.ivChg)} vol pts vs ${x.front.expiry} close${Number.isFinite(x.ivPct) ? ` · ${ord(x.ivPct)} pct (1y)` : ""}` : `not read: ${x.why}`)}
+      ${kpiLive("Front-expiry IV", x.front ? f.pct(x.iv) : "—", x.front ? `${f.sgn(x.ivChg)} vol pts vs ${x.front.expiry} close${pctTxt(x.ivPct)}` : `not read: ${x.why}`)}
+      ${kpiLive("30-day IV", x.iv30 !== null ? f.pct(x.iv30) : "—", x.iv30 !== null ? `close-of-day method${pctTxt(x.iv30Pct)}` : `not read live: ${x.iv30Why}`)}
+      ${kpiLive("Premium (IV − realised)", x.vrp !== null ? f.sgn(x.vrp) + " pts" : "—", x.vrp !== null ? `30-day IV now vs realised ${f.pct(x.base.rv21)} at the close${pctTxt(x.vrpPct)}` : "needs a live 30-day IV")}
       ${kpiLive("Priced move", x.front ? "±" + f.pct(x.move) : "—", x.front ? `${f.num(lo)} – ${f.num(hi)} to ${x.front.expiry}` : "")}
-      ${kpiLive("Futures today", x.fut && x.fut.label ? x.fut.label : "—", x.fut && x.fut.label ? `price ${f.sgn(x.fut.dp, 2)}%, OI ${Number.isFinite(x.fut.doi) ? f.sgn(x.fut.doi, 1) + "%" : "—"}${Number.isFinite(x.fut.basis) ? ` · basis ${f.num(x.fut.basis, 1)}` : ""}` : (x.fut && x.fut.why) || "no live future")}
+      ${kpiLive("Futures today", x.fut && x.fut.label ? x.fut.label : "—", x.fut && x.fut.label ? `price ${f.sgn(x.fut.dp, 2)}%, OI ${Number.isFinite(x.fut.doi) ? f.sgn(x.fut.doi, 1) + "%" : "—"}${Number.isFinite(x.fut.basis) ? ` · basis ${f.num(x.fut.basis, 1)}` : ""}${Number.isFinite(x.fut.carry) ? ` · carry ${f.pct(x.fut.carry)}` : ""}` : (x.fut && x.fut.why) || "no live future")}
     </div>`;
-    if (tab === "oi") return head + liveOi(x, u);
-    if (tab === "vol" && x.front) return head + `<div style="margin-bottom:16px">${card({ title: "Live smile", chip: badge(), hint: `${x.front.expiry} · liquid traded strikes`, body: `<div class="chart" id="liveSmile"></div>`,
-      analyst: `Forward ${f.num(x.front.F, 1)} from put-call parity at ${f.num(x.front.atm_strike)}; ATM IV ${f.pct(x.iv, 2)} (straddle's own vol ${f.pct(x.front.straddle_iv, 2)}); 25-delta risk reversal ${Number.isFinite(x.rr) ? f.sgn(x.rr, 2) + " vol pts" : "not covered by the live strikes"}.` })}</div>`;
-    return head;
+    const more = { vol: liveVol, move: liveMove, oi: liveOi, futures: liveFut }[tab];
+    return head + (more ? more(x, u) : "");
   }
   function kpiLive(label, value, foot) {
     return `<section class="card kpi"><div class="lab"><span>${label}</span>${badge()}</div><div class="val num" style="font-size:22px">${value}</div><div class="foot">${foot}</div></section>`;
   }
+  // Volatility: the live term structure against the close's curve, and the live smile
+  function liveVol(x) {
+    if (!x.front) return "";
+    return `<div class="grid g2" style="margin-bottom:16px">
+      ${card({ title: "Term structure now", chip: badge(), hint: "ATM IV by expiry, live vs the last close", body: `<div class="chart" id="liveTerm"></div><div class="legend"><span style="--c:${css("--s1")}">Now</span><span style="--c:${css("--s2")}">Last close</span></div>`,
+        analyst: "Live points are the expiries the feed carries that pass every end-of-day check; the close curve is every expiry at the last close." })}
+      ${card({ title: "Live smile", chip: badge(), hint: `${x.front.expiry} · liquid traded strikes`, body: `<div class="chart" id="liveSmile"></div>`,
+        analyst: `Forward ${f.num(x.front.F, 1)} from put-call parity at ${f.num(x.front.atm_strike)}; ATM IV ${f.pct(x.iv, 2)} (the straddle's own vol ${f.pct(x.front.straddle_iv, 2)}); 25-delta risk reversal ${Number.isFinite(x.rr) ? f.sgn(x.rr, 2) + " vol pts" : "not covered by the live strikes"}.` })}
+    </div>`;
+  }
+  // Expected move: every live expiry, the end-of-day table's columns
+  function liveMove(x) {
+    const rows = x.r.expiries;
+    if (!rows.length) return "";
+    return `<div style="margin-bottom:16px">${card({ title: "Every live expiry", chip: badge(), hint: "straddle at the parity strike, as at the close",
+      body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expiry</th><th>Days</th><th>ATM IV</th><th>vs close</th><th>Straddle</th><th>Priced move</th><th>Range</th></tr></thead><tbody>
+      ${rows.map((e) => { const c = x.base.term.find((t) => t.expiry === e.expiry); return e.ok ? `<tr><td class="num">${e.expiry}</td><td class="num">${e.days.toFixed(1)}</td><td class="num">${f.pct(e.atm_iv)}</td><td class="num">${c ? f.sgn(e.atm_iv - c.iv) : "—"}</td><td class="num">${f.num(e.straddle, 1)}</td><td class="num">±${f.pct(e.move, 2)}</td><td class="num">${f.num(e.F * (1 - e.move))} – ${f.num(e.F * (1 + e.move))}</td></tr>`
+        : `<tr><td class="num">${e.expiry}</td><td class="num">${e.days.toFixed(1)}</td><td colspan="5" class="muted small" style="text-align:left">not read: ${e.why}</td></tr>`; }).join("")}</tbody></table></div>` })}</div>`;
+  }
+  // Options: open interest now by strike (with walls among the live strikes) and what was added today
   function liveOi(x, u) {
-    if (!x.oi) return `<div class="callout" style="margin-bottom:16px">No live open interest to compare with the close for ${u.symbol}'s front expiry.</div>`;
-    const rows = x.oi.rows;
-    return `<div style="margin-bottom:16px">${card({ title: "Open interest added today, by strike", chip: badge(), hint: `${x.front.expiry} · vs the last close`,
-      simple: `Since the close, calls ${x.oi.call_add >= 0 ? "added" : "shed"} ${big(Math.abs(x.oi.call_add))} and puts ${x.oi.put_add >= 0 ? "added" : "shed"} ${big(Math.abs(x.oi.put_add))} (OI units) on these strikes. Put/call ratio on them: ${Number.isFinite(x.oi.pcr_live) ? x.oi.pcr_live.toFixed(2) : "—"} now, ${Number.isFinite(x.oi.pcr_close) ? x.oi.pcr_close.toFixed(2) : "—"} at the close.`,
-      body: `<div class="chart tall" id="liveOi" style="height:${Math.max(280, rows.length * 16)}px"></div><div class="legend"><span style="--c:${css("--s1")}">Calls added</span><span style="--c:${css("--s2")}">Puts added</span></div>` })}</div>`;
+    if (!x.front) return `<div class="callout" style="margin-bottom:16px">No live options reading for ${u.symbol}: ${x.why}.</div>`;
+    const w = x.walls, oi = x.oi;
+    const lvl = card({ title: "Open interest now, by strike", chip: badge(), hint: `${x.front.expiry} · the live strikes ${f.num(w.lo)}–${f.num(w.hi)}`,
+      simple: `Within the strikes the feed carries, the biggest pile of calls is at ${w.call_wall ? f.num(w.call_wall) : "—"} and of puts at ${w.put_wall ? f.num(w.put_wall) : "—"}. Put/call ratio on these strikes: ${Number.isFinite(w.pcr) ? w.pcr.toFixed(2) : "—"}.`,
+      body: `<div class="chart tall" id="liveOiLvl" style="height:${Math.max(280, x.front.strikes.length * 15)}px"></div><div class="legend"><span style="--c:${css("--s1")}">Calls</span><span style="--c:${css("--s2")}">Puts</span></div>`,
+      analyst: "Only the strikes in the live feed (about +-15 for indices, +-8 for stocks): a wall outside them shows in the close-of-day chart below." });
+    const add = oi ? card({ title: "Open interest added today, by strike", chip: badge(), hint: `${x.front.expiry} · vs the last close`,
+      simple: `Since the close, calls ${oi.call_add >= 0 ? "added" : "shed"} ${big(Math.abs(oi.call_add))} and puts ${oi.put_add >= 0 ? "added" : "shed"} ${big(Math.abs(oi.put_add))} (OI units) on these strikes. Put/call ratio on them: ${Number.isFinite(oi.pcr_live) ? oi.pcr_live.toFixed(2) : "—"} now, ${Number.isFinite(oi.pcr_close) ? oi.pcr_close.toFixed(2) : "—"} at the close.`,
+      body: `<div class="chart tall" id="liveOi" style="height:${Math.max(280, oi.rows.length * 15)}px"></div><div class="legend"><span style="--c:${css("--s1")}">Calls added</span><span style="--c:${css("--s2")}">Puts added</span></div>` })
+      : card({ title: "Open interest added today", chip: badge(), simple: "The last close has no strike profile for this expiry to compare with." });
+    return `<div class="grid g2" style="margin-bottom:16px">${lvl}${add}</div>`;
+  }
+  // Futures: today's row, the end-of-day table's columns, read live against the same contract's close
+  function liveFut(x) {
+    const fu = x.fut, r = x.r.fut;
+    if (!r) return `<div class="callout" style="margin-bottom:16px">No live future in the feed for this instrument.</div>`;
+    return `<div style="margin-bottom:16px">${card({ title: "Today, live", chip: badge(), hint: "same contract vs its last close; carry from a contract 20+ days out, as at the close",
+      body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Now</th><th>Future</th><th>Today</th><th>OI change</th><th>Near-month OI</th><th>Basis</th><th>Carry</th><th>Read</th></tr></thead><tbody>
+        <tr><td>live</td><td class="num">${f.num(r.ltp, r.ltp > 1000 ? 1 : 2)}</td><td class="num">${fu && Number.isFinite(fu.dp) ? `<span class="chg ${fu.dp >= 0 ? "pos" : "neg"}">${f.sgn(fu.dp, 2)}%</span>` : "—"}</td>
+        <td class="num">${fu && Number.isFinite(fu.doi) ? f.sgn(fu.doi, 1) + "%" : "—"}</td><td class="num">${big(r.oi)}</td><td class="num">${fu && Number.isFinite(fu.basis) ? f.num(fu.basis, 1) : "—"}</td>
+        <td class="num">${fu && Number.isFinite(fu.carry) ? f.pct(fu.carry) + (Number.isFinite(x.carryPct) ? ` <span class="muted small">${ord(x.carryPct)} pct</span>` : "") : `<span class="muted small">near month under 20 days</span>`}</td>
+        <td>${fu && fu.label ? `<span class="bu">${fu.label}</span>` : `<span class="muted small">${(fu && fu.why) || "—"}</span>`}</td></tr></tbody></table></div>` })}</div>`;
   }
   // charts for the live panels, drawn after the page's HTML is in place
   function charts(tab, u) {
@@ -212,10 +259,26 @@
         xAxis: { type: "value", axisLabel: { color: t.text3, formatter: (v) => big(v) }, splitLine: { lineStyle: { color: t.line2 } } },
         series: [{ name: "Calls added", type: "bar", data: rows.map((r) => r.call_chg), itemStyle: { color: t.s1 } }, { name: "Puts added", type: "bar", data: rows.map((r) => r.put_chg), itemStyle: { color: t.s2 } }] });
     }
+    if (tab === "oi" && x && x.front && document.getElementById("liveOiLvl")) {
+      const K = x.front.strikes, by = x.front.by;
+      chart("#liveOiLvl", { grid: { left: 64, right: 24, top: 10, bottom: 30 }, tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text },
+          formatter: (ps) => { const k = K[ps[0].dataIndex]; return `<b>${f.num(k)}</b><br>calls ${big(by[k].CE ? by[k].CE.oi : 0)}<br>puts ${big(by[k].PE ? by[k].PE.oi : 0)}`; } },
+        yAxis: { type: "category", data: K.map((k) => f.num(k)), axisLabel: { color: t.text3, fontSize: 10 } },
+        xAxis: { type: "value", axisLabel: { color: t.text3, formatter: (v) => big(Math.abs(v)) }, splitLine: { lineStyle: { color: t.line2 } } },
+        series: [{ name: "Calls", type: "bar", stack: "x", data: K.map((k) => (by[k].CE ? by[k].CE.oi : 0)), itemStyle: { color: t.s1 } },
+          { name: "Puts", type: "bar", stack: "x", data: K.map((k) => -(by[k].PE ? by[k].PE.oi : 0)), itemStyle: { color: t.s2 } }] });
+    }
+    if (tab === "vol" && x && x.front && document.getElementById("liveTerm")) {
+      const now = x.r.expiries.filter((e) => e.ok).map((e) => [+e.days.toFixed(2), e.atm_iv]);
+      const close = x.base.term.map((c) => [Math.round((Date.parse(c.expiry + "T15:30:00+05:30") - Date.now()) / 86400e3 * 100) / 100, c.iv]).filter((p) => p[0] > 0);
+      chart("#liveTerm", { tooltip: { trigger: "axis", valueFormatter: (v) => f.pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+        xAxis: { type: "value", name: "days to expiry", nameLocation: "middle", nameGap: 24, nameTextStyle: { color: t.text3, fontSize: 11 }, axisLabel: { color: t.text3 }, splitLine: { show: false } },
+        yAxis: axisY(t, fmtPct(1)), series: [line("Now", now, t.s1, { showSymbol: true }), line("Last close", close, t.s2, { showSymbol: true, lineStyle: { width: 1.5, type: "dashed", color: t.s2 } })] });
+    }
     if (tab === "vol" && x && x.front && document.getElementById("liveSmile")) {
       const sm = x.front.smile.filter((p) => Math.abs(p[0] / x.front.F - 1) <= 0.15);
       chart("#liveSmile", { tooltip: { trigger: "axis", valueFormatter: (v) => f.pct(v, 2), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
-        xAxis: { type: "value", scale: true, axisLabel: { color: t.text3, formatter: (v) => f.num(v) }, splitLine: { show: false } }, yAxis: axisY(t, fmtPct(0)),
+        xAxis: { type: "value", scale: true, axisLabel: { color: t.text3, formatter: (v) => f.num(v) }, splitLine: { show: false } }, yAxis: axisY(t, fmtPct(1)),
         series: [line("IV now", sm, t.s1, { showSymbol: true })] });
     }
   }

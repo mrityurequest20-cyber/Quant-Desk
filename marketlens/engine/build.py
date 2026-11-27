@@ -541,6 +541,11 @@ def live_base(d: dict) -> dict:
         "term": [{"expiry": c["expiry"], "iv": c["iv"], "move": c["move"], "F": c["F"]} for c in tn],
         "fut": ({"fut": fr["fut"], "near_oi": fr["near_oi"], "fut_expiry": fr["fut_expiry"]} if fr else None),
         "iv_front": (ser.get("iv_front") or [])[-252:],
+        # for live 30-day IV, its percentile and the live premium over realised vol (realised: at the last close)
+        "iv30": (ser.get("iv30") or [])[-252:],
+        "vrp": (ser.get("vrp") or [])[-252:],
+        "rv21": next((x for x in reversed(ser.get("rv21") or []) if x is not None), None),
+        "carry": [x for x in (ser.get("carry") or [])[-252:] if x is not None],
         "oi": [{"expiry": p["expiry"], "strikes": p["strikes"], "call_oi": p["call_oi"], "put_oi": p["put_oi"]}
                for p in d.get("oi_profile", [])[:2]],
     }

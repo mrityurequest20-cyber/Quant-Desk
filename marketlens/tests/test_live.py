@@ -121,3 +121,19 @@ def test_contract_expiring_today_is_not_read_live():
     df = _chain(day, 1000.0, {day: 0.5, pd.Timestamp("2026-12-29"): 0.16})
     _, js = compare(df, day)
     assert "2026-11-26" not in js and js["2026-12-29"]["ok"]
+
+
+def test_constant_maturity_matches_end_of_day():
+    """Live 30-day IV is vol.py's constant_maturity on the same expiries (integer days, as at the close)."""
+    day = pd.Timestamp("2026-11-26")
+    cases = [[(3, 0.30), (10, 0.25), (33, 0.20), (61, 0.22)], [(33, 0.24), (59, 0.23)], [(20, 0.2), (45, 0.3)]]
+    for c in cases:
+        t = pd.DataFrame({"date": day, "expiry": [day + pd.Timedelta(days=d) for d, _ in c], "days": [d for d, _ in c],
+                          "atm_iv": [v for _, v in c]})
+        py = V.constant_maturity(t, 30).iloc[0]
+        exps = [{"ok": True, "days": d, "atm_iv": v} for d, v in c]
+        js = run_js(f"console.log(JSON.stringify(L.constantMaturity({json.dumps(exps)})));")
+        assert js["iv"] == pytest.approx(py, rel=1e-12)
+    # only weeklies live (NIFTY's feed): no 30-day reading rather than a weekly stretched to 30 days
+    js = run_js("console.log(JSON.stringify(L.constantMaturity([{ok:true,days:4,atm_iv:.14},{ok:true,days:11,atm_iv:.15}])));")
+    assert js["iv"] is None and "30 days" in js["why"]

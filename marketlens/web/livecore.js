@@ -229,7 +229,33 @@
     return { dp, doi, label, basis, carry, expiry: lastRow.fut_expiry };
   }
 
-  const api = { istDate, b76, impliedVol, ndtri, readExpiry, readUnderlying, chains, yearsTo, pctVsHistory, oiVsClose, futuresToday, OPT };
+  // vol.py constant_maturity, on the live expiries: total variance interpolated in time to `days`; an expiry this week
+  // alone is not stretched to 30 days; flat at the ends. One extra rule for live: the feed carries only the nearest
+  // expiries, so if none lies within 5 days of the target (NIFTY's live chain is two weeklies) the end-of-day method
+  // would have used a monthly the feed does not have: no reading, rather than a number built differently.
+  function constantMaturity(exps, days = 30) {
+    const g = exps.filter((e) => e.ok && e.days >= 2).sort((a, b) => a.days - b.days);
+    if (!g.length || g[g.length - 1].days < 7) return { iv: null, why: "only an expiry this week" };
+    if (g[g.length - 1].days < days - 5) return { iv: null, why: "no live expiry near 30 days" };
+    const x = g.map((e) => e.days), w = g.map((e) => e.atm_iv * e.atm_iv * e.days);
+    if (g.length === 1 || days <= x[0]) return { iv: days <= x[0] ? g[0].atm_iv : g[g.length - 1].atm_iv };
+    if (days >= x[x.length - 1]) return { iv: g[g.length - 1].atm_iv };
+    return { iv: Math.sqrt(Math.max(interp(days, x, w), 0) / days) };
+  }
+
+  // walls among the live strikes: the largest call OI at or above the price, the largest put OI at or below it
+  function walls(exp, spot) {
+    if (!exp || !spot) return null;
+    let cw = null, pw = null, cmax = 0, pmax = 0, tc = 0, tp = 0;
+    for (const k of exp.strikes) {
+      const s = exp.by[k];
+      if (s.CE) { tc += s.CE.oi; if (k >= spot && s.CE.oi > cmax) { cmax = s.CE.oi; cw = k; } }
+      if (s.PE) { tp += s.PE.oi; if (k <= spot && s.PE.oi > pmax) { pmax = s.PE.oi; pw = k; } }
+    }
+    return { call_wall: cw, put_wall: pw, pcr: tc > 0 ? tp / tc : null, lo: exp.strikes[0], hi: exp.strikes[exp.strikes.length - 1] };
+  }
+
+  const api = { constantMaturity, walls, istDate, b76, impliedVol, ndtri, readExpiry, readUnderlying, chains, yearsTo, pctVsHistory, oiVsClose, futuresToday, OPT };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.LiveCore = api;
 })(typeof window !== "undefined" ? window : globalThis);
