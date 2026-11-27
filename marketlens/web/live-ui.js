@@ -1,4 +1,4 @@
-/* MarketLens live layer: polls the private live relay every 30 seconds during the session, reads every instrument
+/* MarketLens live layer: polls the private live relay every 5 seconds during the session, reads every instrument
    with LiveCore (the same rules as the end-of-day engine) and redraws the page in place.
 
    What is live and what is not is always visible:
@@ -10,7 +10,8 @@
    device, qd.livekey) from the same Worker that serves this page, and are never written anywhere. */
 (function () {
   "use strict";
-  const POLL_MS = 30000;            // the owner's cadence: every number on the page within 30 seconds
+  const POLL_MS = 5000;             // the owner's cadence: every live number within 5 seconds, the relay's own update rate
+                                    // (Kite pushes every 5 s, Kotak is polled every ~5 s): faster would show nothing new
   const MAX_AGE = 120;              // a quote older than this (seconds, by the relay's own clock) is not live
   const KEY = "qd.livekey";
   const L = { mode: "init", reads: {}, at: null, feedAge: null, timer: null, note: "", busy: false };
@@ -57,12 +58,30 @@
   let painted = null;
   function paint(data) {
     pill();
-    if (!data && L.mode === painted) return;          // nothing new to draw: no redraw every 30 s while closed
-    painted = L.mode;
-    if (typeof window.MLRoute === "function") {
-      const y = window.scrollY;
-      window.MLRoute({ soft: true }).then(() => window.scrollTo(0, y));
+    if (L.mode !== painted) {                           // the state changed (open, closed, key): redraw the page once
+      painted = L.mode;
+      if (typeof window.MLRoute === "function") {
+        const y = window.scrollY;
+        window.MLRoute({ soft: true }).then(() => window.scrollTo(0, y));
+      }
+      return;
     }
+    if (data) refresh();                                // same state, new data: only the live panels, in place
+  }
+  // every tick: rebuild just the live container and its charts, and the sidebar's live changes; the rest of the page,
+  // its charts, scroll and selections stay as they are
+  function refresh() {
+    const ctx = window.MLLiveCtx, el = document.getElementById("mlLive");
+    if (!ctx || !el) return;
+    if (typeof S !== "undefined" && S.charts) {
+      S.charts = S.charts.filter((c) => { if (el.contains(c.getDom())) { c.dispose(); return false; } return true; });
+    }
+    el.innerHTML = render(ctx);
+    if (ctx.kind === "symbol") charts(ctx.tab, ctx.u);
+    if (typeof renderNav === "function" && ctx.ov) renderNav(ctx.ov, "#/" + (location.hash.replace(/^#\/?/, "") || "pulse").split("/").slice(0, 2).join("/"));
+  }
+  function render(ctx) {
+    return ctx.kind === "pulse" ? pulse(ctx.ov) : ctx.kind === "screener" ? screener(ctx.ov) : ctx.kind === "symbol" ? symbol(ctx.d, ctx.u, ctx.tab) : "";
   }
   function pill() {
     const el = document.getElementById("livePill");
@@ -73,7 +92,7 @@
       nokey: `<span class="dot"></span>Live: add key`, error: `<span class="dot err"></span>Live: offline`, init: `<span class="dot"></span>Live…`,
     }[L.mode] || "";
     el.innerHTML = txt;
-    el.title = L.mode === "live" ? "Live data from your feeds, refreshed every 30 seconds" : (L.note || "");
+    el.title = L.mode === "live" ? "Live data from your feeds, refreshed every 5 seconds while this page is open (about 100 MB an hour; paused when hidden)" : (L.note || "");
   }
   function askKey() {
     const k = prompt("Your live key (the LIVE_READ_TOKEN on the Worker). It stays on this device only.");
@@ -144,7 +163,7 @@
   function screener(ov) {
     if (L.mode !== "live") return statusBlock();
     const rows = ov.universe.map((u) => ({ u, x: summary(u.symbol) })).filter((o) => o.x);
-    return `<div style="margin-bottom:16px">${card({ title: "Live board", chip: badge(), hint: "every instrument, refreshed every 30 seconds",
+    return `<div style="margin-bottom:16px">${card({ title: "Live board", chip: badge(), hint: "every instrument, refreshed every 5 seconds",
       simple: "Price and today's change from your feeds; implied vol of the front expiry against that same expiry's close; the move it prices; what futures positions did today.",
       body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Instrument</th><th>Price</th><th>Today</th><th>Front IV</th><th>vs close</th><th>IV pct 1y</th><th>Priced move</th><th>Futures today</th><th>OI today</th></tr></thead><tbody>
       ${rows.map(({ u, x }) => `<tr onclick="location.hash='#/sym/${u.slug}'" style="cursor:pointer"><td><span class="sym">${u.symbol}</span></td>
@@ -201,5 +220,5 @@
     }
   }
 
-  window.MLLive = { start, poll, askKey, pulse, screener, symbol, charts, state: L };
+  window.MLLive = { start, poll, askKey, pulse, screener, symbol, charts, render, state: L };
 })();

@@ -1,5 +1,5 @@
 /* MarketLens live engine: the same rules as marketlens/engine/vol.py and positioning.py, applied to the private live
-   relay's snapshot (/live/snapshot) every 30 seconds. Pure functions, no page code: marketlens/tests/test_live.py runs
+   relay's snapshot (/live/snapshot) every 5 seconds. Pure functions, no page code: marketlens/tests/test_live.py runs
    them in node against the Python engine on the same chains, so live and end-of-day numbers are computed one way.
 
    Rules carried over from the end-of-day engine (see vol.py for why each exists):

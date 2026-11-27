@@ -171,8 +171,8 @@ async function pagePulse(app, ov) {
   const fiiLS = ov.participants?.rows?.find((r) => r.who === "FII" && r.metric === "idx_fut_long_share");
   const fl = ov.flows?.FII;
   app.innerHTML = `
-    <div class="page-h"><div><h1>Market pulse</h1><div class="sub">What the derivatives market is pricing, and how unusual it is. Live panels refresh every 30 seconds in the session; the analysis below is at the close of ${ov.asof}.</div></div></div>
-    ${window.MLLive ? MLLive.pulse(ov) : ""}
+    <div class="page-h"><div><h1>Market pulse</h1><div class="sub">What the derivatives market is pricing, and how unusual it is. Live panels refresh every 5 seconds in the session; the analysis below is at the close of ${ov.asof}.</div></div></div>
+    ${liveSlot({ kind: "pulse", ov })}
     <div class="grid g4">
       ${kpi({ label: "India VIX (fear gauge)", value: num(ov.vix.now, 2), p: ov.vix.p1y, lo: "calm", hi: "fearful",
         foot: `≈ ${(ov.vix.now / Math.sqrt(252)).toFixed(2)}% expected NIFTY move a day` })}
@@ -281,7 +281,7 @@ function bindScreener(ov) {
 async function pageScreener(app, ov) {
   $("#crumbs").textContent = "Volatility screener";
   app.innerHTML = `<div class="page-h"><div><h1>Volatility screener</h1><div class="sub">Every covered index and stock, side by side. Percentiles compare each name with its own past year.</div></div></div>
-    ${window.MLLive ? MLLive.screener(ov) : ""}
+    ${liveSlot({ kind: "screener", ov })}
     ${screenerCard(ov)}
     <div class="callout" style="margin-top:16px">Reading it: <b>IV</b> is what options charge (annualised). <b>Realised</b> is how much the price actually moved. <b>IV − RV</b> above zero means options are pricier than recent movement: normal, because sellers want paying for risk. <b>Skew (RR)</b> below zero means downside protection costs more than upside calls.</div>`;
   bindScreener(ov);
@@ -394,7 +394,7 @@ async function pageSymbol(app, ov, sl, tab = "overview") {
   const stNames = { iv30: "implied vol", rr25: "skew", implied_move: "priced move", term: "term structure", pcr_oi: "put/call ratio", carry: "carry", rv21: "realised vol", vrp: "premium" };
   const stList = Object.entries(st).filter(([k]) => stNames[k]);
   const stale = stList.length ? `<div class="callout" style="margin-bottom:14px">No reading today for ${stList.map(([k, v]) => `${stNames[k]} (last ${v})`).join(", ")}: the options did not trade enough at the money to read them cleanly, so those numbers are left blank rather than shown out of date.</div>` : "";
-  app.innerHTML = head + stale + (window.MLLive ? MLLive.symbol(d, u, tab) : "") + `<div id="tabBody"></div>`;
+  app.innerHTML = head + stale + liveSlot({ kind: "symbol", ov, d, u, tab }) + `<div id="tabBody"></div>`;
   body($("#tabBody"), d, u, pos52);
   if (window.MLLive) MLLive.charts(tab, u);
   bindHorizon(route);
@@ -646,6 +646,11 @@ async function route(opts = {}) {
     else if (parts[0] === "method") await pageMethod(app, ov);
     else await pagePulse(app, ov);
   } catch (e) { console.error(e); app.innerHTML = `<div class="loading">Something went wrong drawing this page: ${esc(e.message)}</div>`; }
+}
+// the live panels sit in one container the live layer refreshes on its own every few seconds, without redrawing the page
+function liveSlot(ctx) {
+  window.MLLiveCtx = ctx;
+  return `<div id="mlLive">${window.MLLive ? MLLive.render(ctx) : ""}</div>`;
 }
 window.MLState = S;
 window.MLRoute = route;

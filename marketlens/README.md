@@ -24,7 +24,7 @@ behind each sentence.
 ## Live mode (during market hours)
 
 The app is served by the desk's Cloudflare Worker at `/lens/` (deploy/cloudflare/lens.js), the same origin as the private
-live relay. Every 30 seconds it reads `/live/snapshot` with the owner's key, the `qd.livekey` the desk app already keeps
+live relay. Every 5 seconds (the relay's own update rate; paused while the page is hidden) it reads `/live/snapshot` with the owner's key, the `qd.livekey` the desk app already keeps
 on the device, and recomputes live panels with `web/livecore.js`:
 
 - price and day change
