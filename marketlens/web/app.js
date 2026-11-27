@@ -123,15 +123,18 @@ function renderNav(ov, active) {
   const idx = ov.universe.filter((u) => u.kind === "index");
   const stk = ov.universe.filter((u) => u.kind === "stock");
   const m = Object.fromEntries(ov.screener.map((x) => [x.symbol, x]));
+  // in the session the sidebar's day change is the live one, like every other price on screen
+  const live = window.MLLive && MLLive.state.mode === "live" ? MLLive.state.reads : null;
+  const chgOf = (sym) => (live && live[sym] && live[sym].spotChg !== null ? live[sym].spotChg : m[sym]?.chg);
   const a = (href, label, tag = "") => `<a href="${href}" class="${active === href ? "on" : ""}">${label}${tag ? `<span class="tag">${tag}</span>` : ""}</a>`;
   $("#nav").innerHTML = `
     <div class="nav-h">Market</div>
     ${a("#/pulse", "Market pulse")}${a("#/screener", "Volatility screener")}${a("#/positioning", "Who holds what")}
     ${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}
     <div class="nav-h">Indices</div>
-    ${idx.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(m[u.symbol]?.chg, 1) + "%")).join("")}
+    ${idx.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(chgOf(u.symbol), 1) + "%")).join("")}
     <div class="nav-h">Stocks</div>
-    ${stk.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(m[u.symbol]?.chg, 1) + "%")).join("")}
+    ${stk.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(chgOf(u.symbol), 1) + "%")).join("")}
     <div class="nav-h">Help</div>${a("#/method", "How to read this")}`;
 }
 
@@ -168,7 +171,8 @@ async function pagePulse(app, ov) {
   const fiiLS = ov.participants?.rows?.find((r) => r.who === "FII" && r.metric === "idx_fut_long_share");
   const fl = ov.flows?.FII;
   app.innerHTML = `
-    <div class="page-h"><div><h1>Market pulse</h1><div class="sub">What the derivatives market is pricing today, and how unusual it is. Close of ${ov.asof}.</div></div></div>
+    <div class="page-h"><div><h1>Market pulse</h1><div class="sub">What the derivatives market is pricing, and how unusual it is. Live panels refresh every 30 seconds in the session; the analysis below is at the close of ${ov.asof}.</div></div></div>
+    ${window.MLLive ? MLLive.pulse(ov) : ""}
     <div class="grid g4">
       ${kpi({ label: "India VIX (fear gauge)", value: num(ov.vix.now, 2), p: ov.vix.p1y, lo: "calm", hi: "fearful",
         foot: `≈ ${(ov.vix.now / Math.sqrt(252)).toFixed(2)}% expected NIFTY move a day` })}
@@ -276,7 +280,8 @@ function bindScreener(ov) {
 }
 async function pageScreener(app, ov) {
   $("#crumbs").textContent = "Volatility screener";
-  app.innerHTML = `<div class="page-h"><div><h1>Volatility screener</h1><div class="sub">Every covered index and stock, side by side. Percentiles compare each name with its own history.</div></div></div>
+  app.innerHTML = `<div class="page-h"><div><h1>Volatility screener</h1><div class="sub">Every covered index and stock, side by side. Percentiles compare each name with its own past year.</div></div></div>
+    ${window.MLLive ? MLLive.screener(ov) : ""}
     ${screenerCard(ov)}
     <div class="callout" style="margin-top:16px">Reading it: <b>IV</b> is what options charge (annualised). <b>Realised</b> is how much the price actually moved. <b>IV − RV</b> above zero means options are pricier than recent movement: normal, because sellers want paying for risk. <b>Skew (RR)</b> below zero means downside protection costs more than upside calls.</div>`;
   bindScreener(ov);
@@ -389,8 +394,9 @@ async function pageSymbol(app, ov, sl, tab = "overview") {
   const stNames = { iv30: "implied vol", rr25: "skew", implied_move: "priced move", term: "term structure", pcr_oi: "put/call ratio", carry: "carry", rv21: "realised vol", vrp: "premium" };
   const stList = Object.entries(st).filter(([k]) => stNames[k]);
   const stale = stList.length ? `<div class="callout" style="margin-bottom:14px">No reading today for ${stList.map(([k, v]) => `${stNames[k]} (last ${v})`).join(", ")}: the options did not trade enough at the money to read them cleanly, so those numbers are left blank rather than shown out of date.</div>` : "";
-  app.innerHTML = head + stale + `<div id="tabBody"></div>`;
+  app.innerHTML = head + stale + (window.MLLive ? MLLive.symbol(d, u, tab) : "") + `<div id="tabBody"></div>`;
   body($("#tabBody"), d, u, pos52);
+  if (window.MLLive) MLLive.charts(tab, u);
   bindHorizon(route);
 }
 
@@ -621,16 +627,16 @@ function symEvents(el, d, u) {
 }
 
 // ---------------------------------------------------------------- router
-async function route() {
+async function route(opts = {}) {
   disposeCharts();
-  document.body.classList.remove("nav-open");
+  if (!opts.soft) document.body.classList.remove("nav-open");
   const app = $("#app");
   let ov;
   try { ov = await overview(); } catch (e) { app.innerHTML = `<div class="loading">Could not load data (${esc(e.message)}).</div>`; return; }
   if (!route.ready) { setupShell(ov); route.ready = true; }
   const parts = (location.hash.replace(/^#\/?/, "") || "pulse").split("/");
   renderNav(ov, "#/" + parts.slice(0, 2).join("/"));
-  window.scrollTo(0, 0);
+  if (!opts.soft) window.scrollTo(0, 0);
   try {
     if (parts[0] === "sym") await pageSymbol(app, ov, parts[1], parts[2]);
     else if (parts[0] === "screener") await pageScreener(app, ov);
@@ -641,8 +647,12 @@ async function route() {
     else await pagePulse(app, ov);
   } catch (e) { console.error(e); app.innerHTML = `<div class="loading">Something went wrong drawing this page: ${esc(e.message)}</div>`; }
 }
+window.MLState = S;
+window.MLRoute = route;
 (function init() {
   const th = lsGet("ml.theme", ""); if (th) document.documentElement.dataset.theme = th;
-  window.addEventListener("hashchange", route);
-  route();
+  window.addEventListener("hashchange", () => route());
+  route().then(() => { if (window.MLLive) window.MLLive.start(); });
+  const pillEl = document.getElementById("livePill");
+  if (pillEl) pillEl.onclick = () => (window.MLLive.state.mode === "nokey" ? window.MLLive.askKey() : window.MLLive.poll(true));
 })();

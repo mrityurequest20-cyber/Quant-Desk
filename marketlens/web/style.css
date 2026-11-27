@@ -178,3 +178,15 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   .top .asof { display: none; }
   .price { font-size: 28px; }
 }
+
+/* live */
+.live-pill { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 11px; font-size: 12px; font-weight: 600; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); display: inline-block; }
+.dot.live { background: var(--pos); box-shadow: 0 0 0 0 color-mix(in srgb, var(--pos) 60%, transparent); animation: pulse 2s infinite; }
+.dot.err { background: var(--neg); }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pos) 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .dot.live { animation: none; } }
+.live-chip { background: color-mix(in srgb, var(--pos) 14%, var(--surface)); color: var(--text); }
+.live-tile { color: inherit; }
+.live-tile:hover { border-color: var(--accent); }
+@media (max-width: 760px) { .live-pill { padding: 4px 8px; } }

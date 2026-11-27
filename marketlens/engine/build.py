@@ -320,7 +320,9 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         for d, r in bk.iterrows():
             fut_rows.append({"date": str(d.date()), "fut": r.fut, "basis": r.basis, "carry": r.carry,
                              "fut_oi": r.fut_oi, "d_price": r.d_price, "d_oi": r.d_oi, "buildup": r.buildup,
-                             "roll_share": r.roll_share, "days": r.days})
+                             "roll_share": r.roll_share, "days": r.days,
+                             # the live layer compares the live near-month future with these, the same contract:
+                             "near_oi": r.near_oi, "fut_expiry": str(pd.Timestamp(r.fut_expiry).date())})
         recent_bu = [r["buildup"] for r in fut_rows[-5:]]
         fcard_row = fut_rows[-1] if fut_rows else None
         rolls = P.roll_history(book)
@@ -527,6 +529,23 @@ def limits_block(limits, sym_data: dict) -> dict:
     return out
 
 
+def live_base(d: dict) -> dict:
+    """What the live layer compares against, per instrument, at the last close: each expiry's ATM IV and priced move
+    (live IV is compared with the SAME expiry's close), the near-month future's close and OI (same contract), the
+    front-expiry IV of the past year (for a live percentile), and the near-money OI by strike of the front expiries."""
+    tn = d.get("term", {}).get("now", [])
+    fr = (d.get("futures") or [None])[-1]
+    ser = d.get("series", {})
+    return {
+        "asof": d["meta"]["asof"], "close": d["headline"]["spot"], "kind": d["meta"]["kind"],
+        "term": [{"expiry": c["expiry"], "iv": c["iv"], "move": c["move"], "F": c["F"]} for c in tn],
+        "fut": ({"fut": fr["fut"], "near_oi": fr["near_oi"], "fut_expiry": fr["fut_expiry"]} if fr else None),
+        "iv_front": (ser.get("iv_front") or [])[-252:],
+        "oi": [{"expiry": p["expiry"], "strikes": p["strikes"], "call_oi": p["call_oi"], "put_oi": p["put_oi"]}
+               for p in d.get("oi_profile", [])[:2]],
+    }
+
+
 def changes_feed(sym_data: dict, n: int = 10) -> list[dict]:
     """The day's most unusual changes across all instruments, each measured against that instrument's own history."""
     rows = []
@@ -610,6 +629,7 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
         "participants": parts, "flows": flows,
         "calendar": calendar_block(wh, asof, data, ev_cal),
         "changes": changes_feed(data),
+        "live_base": {s: live_base(d) for s, d in data.items()},
         "limits": limits_block(limits, data),
         "universe": [{"symbol": i.symbol, "name": i.name, "kind": i.kind, "sector": i.sector, "slug": U.slug(i.symbol)}
                      for i in insts if i.symbol in data],

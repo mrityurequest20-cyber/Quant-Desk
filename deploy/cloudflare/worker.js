@@ -25,6 +25,7 @@
 
 import { runWatchdog, ist } from "./watchdog.js";
 import { armLive, handleLive, needsUniverse } from "./live.js";
+import { handleLens } from "./lens.js";
 
 export { LiveBoard } from "./live.js";      // the Durable Object behind /live/* (live.js): wrangler.jsonc binds it as LIVE
 
@@ -119,6 +120,8 @@ export default {
 	async fetch(request, env) {
 		const liveReply = await handleLive(request, env);        // /live/* is the private live-price relay, never passed to Pages
 		if (liveReply) return liveReply;
+		const lensReply = await handleLens(request, env);        // /lens/* is MarketLens, served from its own published branch (lens.js)
+		if (lensReply) return lensReply;
 		if (request.method !== "GET" && request.method !== "HEAD") {
 			return new Response("Read-only site.\n", { status: 405, headers: { allow: "GET, HEAD" } });
 		}

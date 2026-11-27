@@ -21,6 +21,26 @@ its only link to Quant-Desk.
 A **Simple / Analyst** switch controls detail: Simple shows plain sentences, Analyst adds the method and the numbers
 behind each sentence.
 
+## Live mode (during market hours)
+
+The app is served by the desk's Cloudflare Worker at `/lens/` (deploy/cloudflare/lens.js), the same origin as the private
+live relay. Every 30 seconds it reads `/live/snapshot` with the owner's key, the `qd.livekey` the desk app already keeps
+on the device, and recomputes live panels with `web/livecore.js`:
+
+- price and day change
+- front-expiry IV against the same expiry's close, plus its percentile against the past year
+- the priced move and its range
+- the live smile and 25-delta skew
+- open interest added today by strike, and near-money PCR now vs at the close
+- today's futures build-up against the same contract's close
+
+`livecore.js` applies the same rules as `engine/vol.py`, line for line. `tests/test_live.py` and a real-chain parity
+run check this: on 638 expiries over 40 sessions, forward and straddle are identical and ATM IV agrees within 2e-6.
+
+Quotes older than 120 seconds, and options not traded today, are not used. Outside the session the panels step aside
+and the page shows the analysis at the last close. Live prices are licensed, are read only with the owner's key, and
+are never stored.
+
 ## Method, briefly
 
 - **Implied vol** is computed from the bhavcopy itself. The forward comes from put-call parity at the strike where
@@ -50,5 +70,4 @@ python -m pytest marketlens/tests
 
 - MCX commodities. The warehouse has no MCX options, open interest or history, and the only MCX minutes come
   from a licensed broker feed that must not be published.
-- Live intraday data. That needs a broker feed served privately, never on a public page.
 - The Claude-labelled news model, which is waiting on the owner's API key.

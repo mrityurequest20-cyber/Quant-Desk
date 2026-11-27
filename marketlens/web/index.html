@@ -20,6 +20,7 @@
     <header class="top">
       <button class="icon-btn menu-btn" id="menuBtn" aria-label="Menu">☰</button>
       <div class="crumbs" id="crumbs">MarketLens</div>
+      <button class="live-pill" id="livePill" aria-label="Live status"><span class="dot"></span>Live…</button>
       <span class="asof" id="asof"></span>
       <div class="search"><input id="q" placeholder="Search NIFTY, RELIANCE…" autocomplete="off"><div class="res" id="qres"></div></div>
       <div class="seg" id="modeSeg" title="How much detail to show">
@@ -30,6 +31,8 @@
     <main class="page" id="app"><div class="loading">Loading the market…</div></main>
   </div>
 </div>
+<script src="livecore.js"></script>
 <script src="app.js"></script>
+<script src="live-ui.js"></script>
 </body>
 </html>
