@@ -82,7 +82,11 @@ def pcr_history(opt: pd.DataFrame) -> pd.DataFrame:
 
 # ---------------- futures ----------------
 
-def futures_book(opt: pd.DataFrame, spot: pd.Series) -> pd.DataFrame:
+MIN_FUT_CONTRACTS = 500   # below this much open interest (in contracts) a day's OI change is a handful of trades, not
+                          # positioning (BSE's BANKEX futures: 1 to 53 contracts, +283% in a day)
+
+
+def futures_book(opt: pd.DataFrame, spot: pd.Series, action_dates=()) -> pd.DataFrame:
     """Daily: near-month future price, basis, annualised carry, total futures OI, roll share, and the build-up class.
 
     Changes are measured on the same contracts across the two days, so an expiry never shows up as a market move:
@@ -125,10 +129,11 @@ def futures_book(opt: pd.DataFrame, spot: pd.Series) -> pd.DataFrame:
     out["roll_share"] = out["next_oi"] / (out["near_oi"] + out["next_oi"])
     out["fut_contracts"] = f.groupby("date")["contracts"].sum()
 
+    lot = f_all.groupby("date")["lot"].median() if "lot" in f_all else pd.Series(dtype=float)
     px = f.pivot_table(index="date", columns="expiry", values="px", aggfunc="last")
     oi = f_all.pivot_table(index="date", columns="expiry", values="oi", aggfunc="sum")
     days = list(out.index)
-    dp, doi = [np.nan], [np.nan]
+    dp, doi, thin = [np.nan], [np.nan], [False]
     for prev, cur in zip(days, days[1:]):
         e = out.at[cur, "fut_expiry"]
         a0 = px.at[prev, e] if e in px.columns else np.nan
@@ -136,6 +141,8 @@ def futures_book(opt: pd.DataFrame, spot: pd.Series) -> pd.DataFrame:
         both = oi.loc[[prev, cur]].dropna(axis=1).columns          # contracts listed on both days
         o0, o1 = oi.loc[prev, both].sum(), oi.loc[cur, both].sum()
         doi.append(o1 / o0 - 1 if o0 > 0 else np.nan)
+        lt = lot.get(prev, np.nan)
+        thin.append(bool(np.isfinite(lt) and lt > 0 and o0 / lt < MIN_FUT_CONTRACTS))
     out["d_price"] = dp
     out["d_oi"] = doi
     d_p, d_o = out["d_price"], out["d_oi"]
@@ -143,6 +150,12 @@ def futures_book(opt: pd.DataFrame, spot: pd.Series) -> pd.DataFrame:
         [(d_p > 0) & (d_o > 0), (d_p < 0) & (d_o > 0), (d_p > 0) & (d_o < 0), (d_p < 0) & (d_o < 0)],
         ["Long build-up", "Short build-up", "Short covering", "Long unwinding"], default="Flat")
     out.loc[d_p.isna() | d_o.isna(), "buildup"] = "No read"
+    th = np.array(thin, bool)
+    out.loc[th, ["d_oi"]] = np.nan
+    out.loc[th, "buildup"] = "Thin market"
+    acts = out.index.isin(pd.to_datetime(list(action_dates)))
+    out.loc[acts, ["d_price", "d_oi"]] = np.nan
+    out.loc[acts, "buildup"] = "Corporate action"
     return out
 
 

@@ -313,3 +313,42 @@ def test_carry_uses_settlement_and_a_contract_20_days_out():
     assert b.loc[d, "basis"] == pytest.approx(1368.6 - 1367.4)           # settlement vs the official close
     assert b.loc[d, "carry"] == pytest.approx(np.log(1376.0 / 1367.4) / (39 / 365))
     assert 0.04 < b.loc[d, "carry"] < 0.07                               # not the -40% a 3-day annualisation gives
+
+
+def test_corporate_action_day_gets_no_fake_buildup_and_carry_uses_raw_spot():
+    """Tier 1 adjusts price history for a 1:1 bonus; the futures book must use the raw spot, and the bonus day's
+    halved futures price and doubled OI must not read as a -50% short build-up (Reliance, 28 Oct 2024)."""
+    d = pd.bdate_range("2024-10-23", periods=4)
+    exp = pd.Timestamp("2024-11-28")
+    px = [2700.0, 2710.0, 1360.0, 1365.0]
+    oi = [1000.0, 1010.0, 2030.0, 2040.0]
+    rows = [dict(date=x, kind="FUT", expiry=exp, close=p, settle=p, oi=o, contracts=1.0) for x, p, o in zip(d, px, oi)]
+    raw = pd.Series([2690.0, 2700.0, 1355.0, 1360.0], index=d)
+    b = P.futures_book(pd.DataFrame(rows), raw, [str(d[2].date())])
+    assert b.loc[d[2], "buildup"] == "Corporate action" and np.isnan(b.loc[d[2], "d_price"])
+    assert b["carry"].abs().max() < 0.2                    # raw futures vs raw spot: a normal carry throughout
+    adj = raw.copy(); adj.iloc[:2] /= 2                      # what Tier 1's adjusted history looks like
+    bad = P.futures_book(pd.DataFrame(rows), adj)
+    assert bad["carry"].iloc[0] > 5                          # the bug this guards against: 700%+ carry before the bonus
+
+
+def test_thin_futures_get_no_buildup_read():
+    d = pd.bdate_range("2026-11-02", periods=3)
+    exp = pd.Timestamp("2026-11-26")
+    rows = [dict(date=x, kind="FUT", expiry=exp, close=p, settle=p, oi=o, contracts=1.0, lot=30.0)
+            for x, p, o in zip(d, [100.0, 101.0, 102.0], [360.0, 1260.0, 1230.0])]       # 12 to 42 contracts
+    b = P.futures_book(pd.DataFrame(rows), pd.Series([99.9, 100.9, 101.9], index=d))
+    assert list(b["buildup"].iloc[1:]) == ["Thin market", "Thin market"]
+
+
+def test_cards_step_aside_when_a_reading_is_withheld():
+    assert N.iv_card("X", None, None, None, "2019-01-01") is None
+    assert N.realised_card("X", None, None, None, None, None) is None
+    assert N.vrp_card("X", None, 0.2, None, None, "2019") is None and N.skew_card("X", None, None) is None
+
+
+def test_day_change_needs_readings_today_and_yesterday():
+    idx = pd.bdate_range("2025-01-01", periods=300)
+    iv = pd.Series(0.15, index=idx)
+    iv.iloc[-5:] = np.nan                                       # withheld for the last 5 sessions
+    assert B.day_changes(pd.DataFrame({"iv30": iv})) == []

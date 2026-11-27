@@ -244,7 +244,7 @@ const COLS = [
   { k: "iv_p1y", lab: "IV pct 1y", f: (x) => pcell(x.iv_p1y) },
   { k: "rv21", lab: "Realised 21d", f: (x) => pct(x.rv21) },
   { k: "vrp", lab: "IV − RV", f: (x) => vp(x.vrp) },
-  { k: "move", lab: "Priced move", f: (x) => `±${pct(x.move, 1)} <span class="muted small">${x.move_days ?? ""}d</span>` },
+  { k: "move", lab: "Priced move", f: (x) => fin(x.move) ? `±${pct(x.move, 1)} <span class="muted small">${x.move_days ?? ""}d</span>` : "—" },
   { k: "rr25", lab: "Skew (RR)", f: (x) => vp(x.rr25) },
   { k: "pcr_p", lab: "PCR pct 1y", f: (x) => pcell(x.pcr_p), a: 1 },
   { k: "carry", lab: "Futures carry", f: (x) => pct(x.carry), a: 1 },
@@ -354,7 +354,7 @@ async function pageMethod(app) {
     ["Priced move (straddle)", "The cost of buying both the at-the-money call and put, as a % of price. It is the options market's average expected move to expiry. A fairly priced straddle is beaten about 43% of the time; the scorecard shows how this name actually did."],
     ["Term structure", "IV of each expiry. Normally later expiries cost a bit more. When near ones cost more (inversion), the market expects something soon: results, a policy decision, or stress."],
     ["Skew / risk reversal (RR)", "IV of an out-of-the-money call minus an equally far put (25 delta). Negative = puts dearer: people pay for protection against falls."],
-    ["Percentile", "Where today sits in the instrument's own history: 90th = higher than 90% of past days. All 'high' and 'low' words in the app come from percentiles."],
+    ["Percentile", "Where today sits against the instrument's own past year: 90th = higher than 90% of the last 252 sessions. Every 'high' and 'low' word in the app comes from this one convention; Analyst mode adds the rank against all history where the two differ."],
     ["Open interest (OI) walls", "Strikes with the most open option contracts. Sellers there hedge and defend, so price often slows near them; they are not hard support or resistance."],
     ["PCR", "Put open interest divided by call open interest. In India most open puts are written (sold), so a high PCR often means put sellers are confident. The app shows it as a percentile, not as bullish or bearish."],
     ["Futures carry", "The futures premium over spot, annualised: roughly the funding rate minus dividends, so its normal level moves with interest rates. The app judges it against its own past year. Much higher: buyers paying up to hold longs. Lower or negative: heavy shorting or hedging."],
@@ -367,7 +367,7 @@ async function pageMethod(app) {
     ${card({ title: "Where the data comes from", body: `<p class="simple">NSE's and BSE's own end-of-day files: the F&O bhavcopy (every future and option, every day since 2019; BSE since 2024), official index closes, India VIX, participant-wise open interest, FII/DII cash flows and the corporate event calendar.</p>
       <p class="simple">Implied vols are computed here from those prices (Black-76 on the put-call-parity forward). Untraded strikes, which only carry a theoretical settlement price, are kept out of the at-the-money numbers.</p>
       <p class="simple"><b>What this app is not:</b> a signal service. It never says buy or sell. It shows what is priced, how unusual it is, and what happened historically, so the decision stays yours.</p>
-      <p class="analyst">Percentiles compare a day with the days before it only. Historical hit rates use overlapping windows, so they count days, not independent trials. A bonus or split is detected from the one-day jump plus the lot-size change and removed from the price history.</p>` })}</div>`;
+      <p class="analyst">Percentiles compare a day with the 252 sessions before it (all-history ranks are shown in Analyst mode where they differ). Historical hit rates use overlapping windows, so they count days, not independent trials. A bonus or split is detected from the one-day jump plus the lot-size change and removed from the price history.</p>` })}</div>`;
 }
 
 // ---------------------------------------------------------------- symbol pages
@@ -385,7 +385,11 @@ async function pageSymbol(app, ov, sl, tab = "overview") {
       <div class="sub">${esc(u.sector || "")} · ${d.meta.exchange} · history since ${d.meta.since} · as of ${d.meta.asof}</div></div>${["overview", "events"].includes(tab) ? "" : horizonSeg()}</div>
     <div class="tabs">${TABS.map(([k, l]) => `<a href="#/sym/${sl}/${k}" class="${k === tab ? "on" : ""}">${l}</a>`).join("")}</div>`;
   const body = { overview: symOverview, vol: symVol, move: symMove, oi: symOI, futures: symFutures, events: symEvents }[tab] || symOverview;
-  app.innerHTML = head + `<div id="tabBody"></div>`;
+  const st = d.meta.stale || {};
+  const stNames = { iv30: "implied vol", rr25: "skew", implied_move: "priced move", term: "term structure", pcr_oi: "put/call ratio", carry: "carry", rv21: "realised vol", vrp: "premium" };
+  const stList = Object.entries(st).filter(([k]) => stNames[k]);
+  const stale = stList.length ? `<div class="callout" style="margin-bottom:14px">No reading today for ${stList.map(([k, v]) => `${stNames[k]} (last ${v})`).join(", ")}: the options did not trade enough at the money to read them cleanly, so those numbers are left blank rather than shown out of date.</div>` : "";
+  app.innerHTML = head + stale + `<div id="tabBody"></div>`;
   body($("#tabBody"), d, u, pos52);
   bindHorizon(route);
 }
@@ -405,7 +409,8 @@ function symOverview(el, d, u, pos52) {
       ${kpi({ label: "Options price (IV 30d)", value: pct(m.iv30), p: m.iv_p1y, lo: "cheap", hi: "expensive", foot: `5-day change ${vp(m.iv30_chg5)} vol pts` })}
       ${kpi({ label: "Actual movement (21d)", value: pct(m.rv21), p: m.rv_p, lo: "quiet", hi: "wild", foot: `≈ ${pct(m.rv21 / Math.sqrt(252), 2)} a day` })}
       ${kpi({ label: "Premium (IV − RV)", value: vp(m.vrp), unit: "vol pts", p: m.vrp_p, lo: "options cheap", hi: "options rich" })}
-      ${kpi({ label: "Priced move to expiry", value: "±" + pct(m.move, 1), unit: `${m.move_days}d`, foot: `≈ ±${num(h.spot * m.move, h.spot > 1000 ? 0 : 1)} · inside ${pct(m.inside, 0)} historically` })}
+      ${fin(m.move) ? kpi({ label: "Priced move to expiry", value: "±" + pct(m.move, 1), unit: `${m.move_days}d`, foot: `≈ ±${num(h.spot * m.move, h.spot > 1000 ? 0 : 1)} · inside ${pct(m.inside, 0)} historically` })
+        : kpi({ label: "Priced move to expiry", value: "—", foot: `no clean reading today · inside ${pct(m.inside, 0)} historically` })}
     </div>
     <div class="grid g3" style="margin-top:16px">
       ${card({ title: "Contract facts & changes", hint: "from the exchange's own data", body: rulesHtml(d) })}
@@ -563,7 +568,7 @@ function symFutures(el, d, u) {
   const t = theme(), c = d.cards;
   const s = slice(d.series, ["carry", "fut_oi", "close", "basis", "roll_share"]);
   const fr = d.futures || [];
-  const buCol = { "Long build-up": "--s1", "Short build-up": "--s2", "Short covering": "--s3", "Long unwinding": "--s4" };
+  const buCol = { "Long build-up": "--s1", "Short build-up": "--s2", "Short covering": "--s3", "Long unwinding": "--s4", "Corporate action": "--text-3", "Thin market": "--text-3" };
   el.innerHTML = `
     <div class="grid g2">
       ${card({ title: "Futures premium (annualised carry)", simple: c.futures?.simple, analyst: c.futures?.analyst, body: `<div class="chart" id="carry"></div>` })}

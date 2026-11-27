@@ -46,10 +46,12 @@ def ordinal(p):
 
 
 def daily(iv):
-    return iv / math.sqrt(252)
+    return None if iv is None else iv / math.sqrt(252)
 
 
 def iv_card(name, iv30, p1y, pall, since, vix=None):
+    if iv30 is None:                 # withheld: no clean reading today
+        return None
     simple = (f"Options on {name} are priced for moves of about {pct(daily(iv30), 2)} a day. "
               f"That is {level(p1y)} for {name} compared with the past year.")
     analyst = (f"30-day constant-maturity ATM IV {pct(iv30)}: {ordinal(p1y)} percentile of 1 year, "
@@ -71,7 +73,7 @@ def vrp_card(name, iv30, rv21, spread_p, rich_share, since):
              f"while the last month realised {pct(rv21)}.")
     else:
         s = f"Options are priced close to how much {name} has really been moving (about {pct(iv30)} a year)."
-    a = (f"IV30 - RV21 = {gap * 100:+.1f} vol points, {ordinal(spread_p)} percentile of history. "
+    a = (f"IV30 - RV21 = {gap * 100:+.1f} vol points, {ordinal(spread_p)} percentile of the past year. "
          f"Since {since}, IV30 was above the volatility that actually followed over the next 21 sessions on "
          f"{pct(rich_share, 0)} of days: option sellers are usually paid a premium for carrying the risk, "
          f"and the gap is what that premium looks like today.")
@@ -107,11 +109,11 @@ def skew_card(name, rr, p):
              f"no strong demand for either protection or upside. That is {level(p)} for {name}.")
     elif rr < 0:
         s = (f"Protection against a fall costs more than a bet on a rise, by {abs(rr) * 100:.1f} vol points. "
-             f"That gap is {level(p)} for {name}.")
+             f"That gap is {level(p)} for {name} against the past year.")
     else:
         s = (f"Upside calls cost more than downside puts, which is unusual. Traders are paying up for a sharp move "
              f"higher (this happens in squeezes and in stocks with a big pending event).")
-    a = (f"25-delta risk reversal {rr * 100:+.2f} vol pts (front month), {ordinal(p)} percentile of history. "
+    a = (f"25-delta risk reversal {rr * 100:+.2f} vol pts (front month), {ordinal(p)} percentile of the past year. "
          f"More negative = more demand for downside insurance relative to upside.")
     return {"simple": s, "analyst": a, "tone": tone(p)}
 
@@ -177,10 +179,13 @@ def futures_card(name, row, carry_p, recent, carry_med=None):
 
 
 def realised_card(name, rv21, p, rv5, rv63, comp_p):
-    s = f"{name} has actually been moving about {pct(daily(rv21), 2)} a day this past month: {level(p)} for it."
+    if rv21 is None:
+        return None
+    s = (f"{name} has actually been moving about {pct(daily(rv21), 2)} a day this past month: {level(p)} for it "
+         f"against the past year.")
     if rv5 is not None and rv63 and rv5 / rv63 < 0.6:
         s += " The last week has been unusually quiet. Quiet spells tend to end with bigger moves, in either direction."
-    a = (f"RV21 {pct(rv21)} ({ordinal(p)} pct), RV5 {pct(rv5)}, RV63 {pct(rv63)}; "
+    a = (f"RV21 {pct(rv21)} ({ordinal(p)} percentile of the past year), RV5 {pct(rv5)}, RV63 {pct(rv63)}; "
          f"RV5/RV63 compression at the {ordinal(comp_p)} percentile.")
     return {"simple": s, "analyst": a, "tone": tone(p)}
 

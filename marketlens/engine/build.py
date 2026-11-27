@@ -106,6 +106,9 @@ def day_changes(df: pd.DataFrame) -> list[dict]:
         x = df[k].dropna()
         if len(x) < 60:
             continue
+        # a change "since yesterday" needs a reading on both the as-of session and the one before it
+        if len(df) < 2 or x.index[-1] != df.index[-1] or x.index[-2] != df.index[-2]:
+            continue
         d = x.diff().dropna()
         if k == "implied_move":            # the front expiry rolls: a move into a new expiry is not a change
             continue
@@ -179,7 +182,11 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     fr = V.front(t)
     rv = V.realised(spot)
     pcr = P.pcr_history(opt)
-    book = P.futures_book(opt, close)
+    # futures are raw prices: compare them with the RAW spot (the exchange adjusts both together on an action day);
+    # the adjusted series is for returns and history only. Action days get no build-up read.
+    raw_close = spot_raw["close"][spot_raw.index <= asof]
+    act_days = [x["date"] for x in splits] + [x["date"] for x in actions]
+    book = P.futures_book(opt, raw_close, act_days)
     if "true_spot" in spot and not book.empty:          # no basis or carry against a futures-price "spot"
         proxy = ~spot["true_spot"].reindex(book.index).fillna(True).astype(bool)
         book.loc[proxy, ["basis", "carry"]] = np.nan
@@ -214,18 +221,46 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     since = str(df.index.min().date())
 
     # percentiles
-    iv_p1y = P.latest_pct(df["iv30"], 252)
-    iv_pall = P.latest_pct(df["iv30"])
-    rv_p = P.latest_pct(df["rv21"])
-    vrp_p = P.latest_pct(df["vrp"])
-    rr_p = P.latest_pct(df["rr25"])
+    # a headline is today's reading or nothing: a series whose last value is older than 2 sessions (NIFTYNXT50's IV
+    # when its thin options fail the liquidity checks) is withheld, and the page says when it was last read, instead
+    # of showing an old number as today's. Every headline read below goes through these two helpers.
+    stale = {}
+    pos_now = len(df) - 1
+
+    def fresh(c):
+        if c not in df:
+            return None
+        s_ = df[c]
+        lv = s_.last_valid_index()
+        if lv is None:
+            return None
+        if pos_now - df.index.get_loc(lv) > 2:
+            stale[c] = str(lv.date())
+            return None
+        return s_.loc[:lv]
+
+    def cur(c):
+        s_ = fresh(c)
+        return float(s_.iat[-1]) if s_ is not None and len(s_) else None
+
+    def pctl(c, w=None):
+        s_ = fresh(c)
+        return P.latest_pct(s_, w) if s_ is not None else None
+
+    # one convention across the app: every headline percentile is against the past year (252 sessions); the
+    # all-history rank is kept beside it for the analyst view
+    iv_p1y = pctl("iv30", 252)
+    iv_pall = pctl("iv30")
+    rv_p = pctl("rv21", 252)
+    vrp_p = pctl("vrp", 252)
+    rr_p = pctl("rr25", 252)
     # positioning readings are judged against the last year: their levels moved with the market's structure (NIFTY's
     # PCR ran ~1.4 in 2019 and ~0.95 since 2022; weekly expiries were cut in Nov 2024), so all-history ranks mislead
-    pcr_p = P.latest_pct(df["pcr_oi"], 252)
-    carry_p = P.latest_pct(df["carry"], 252) if "carry" in df else None
+    pcr_p = pctl("pcr_oi", 252)
+    carry_p = pctl("carry", 252) if "carry" in df else None
     carry_med = float(df["carry"].dropna().iloc[-253:-1].median()) if "carry" in df and df["carry"].notna().sum() > 60 else None
-    comp = (df["rv5"] / df["rv63"])
-    comp_p = P.latest_pct(comp)
+    df["comp"] = df["rv5"] / df["rv63"]
+    comp_p = pctl("comp", 252)
     hist = df.dropna(subset=["iv30", "fwd_rv21"])
     rich_share = float((hist["iv30"] > hist["fwd_rv21"]).mean()) if len(hist) > 50 else None
 
@@ -237,11 +272,16 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         return [{"expiry": str(r.expiry.date()), "days": int(r.days), "iv": r.atm_iv, "move": r.implied_move,
                  "straddle": r.straddle, "F": r.F} for r in g.itertuples()]
 
-    term = {"now": curve(days[-1])}
-    if len(days) > 5:
-        term["week_ago"] = curve(days[-6])
-    if len(days) > 21:
-        term["month_ago"] = curve(days[-22])
+    # "now" is the as-of session (or the one before): a curve last readable a week ago is not today's curve
+    sess = list(df.index)
+    recent = set(sess[-2:])
+    term = {"now": curve(days[-1]) if days and days[-1] in recent else []}
+    if not term["now"] and days:
+        stale["term"] = str(pd.Timestamp(days[-1]).date())
+    if len(sess) > 5:
+        term["week_ago"] = curve(sess[-6])
+    if len(sess) > 21:
+        term["month_ago"] = curve(sess[-22])
     evv = V.event_vol(t, asof)
     if evv and inst.kind == "stock" and not ev_cal.empty:
         # name the cause only when the exchange's calendar has one inside the front expiry
@@ -296,12 +336,12 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     # cards
     vix_now = _last(vix) if inst.symbol == "NIFTY" else None
     cards = {
-        "iv": N.iv_card(inst.symbol, _last(df["iv30"]), iv_p1y, iv_pall, since, vix_now),
-        "vrp": N.vrp_card(inst.symbol, _last(df["iv30"]), _last(df["rv21"]), vrp_p, rich_share, since),
+        "iv": N.iv_card(inst.symbol, cur("iv30"), iv_p1y, iv_pall, since, vix_now),
+        "vrp": N.vrp_card(inst.symbol, cur("iv30"), cur("rv21"), vrp_p, rich_share, since),
         "term": N.term_card(inst.symbol, front_iv, back["iv"] if back else None, tn[0]["days"] if tn else None,
                             back["days"] if back else None, evv),
-        "skew": N.skew_card(inst.symbol, _last(df["rr25"]), rr_p),
-        "realised": N.realised_card(inst.symbol, _last(df["rv21"]), rv_p, _last(df["rv5"]), _last(df["rv63"]), comp_p),
+        "skew": N.skew_card(inst.symbol, cur("rr25"), rr_p),
+        "realised": N.realised_card(inst.symbol, cur("rv21"), rv_p, cur("rv5"), cur("rv63"), comp_p),
         "oi": N.oi_card(inst.symbol, prof, spot_now, pcr_p),
         "futures": N.futures_card(inst.symbol, fcard_row, carry_p, recent_bu, carry_med),
     }
@@ -335,12 +375,12 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
                 rules["notes"].insert(0, {"kind": "ban" if pl.get("in_ban") else "mwpl", "text": txt})
     metrics = {
         "symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
-        "spot": spot_now, "chg": chg, "iv30": _last(df["iv30"]), "iv30_chg5": (
-            _last(df["iv30"]) - _ago(df["iv30"], 5)) if _ago(df["iv30"], 5) else None,
-        "iv_p1y": iv_p1y, "iv_pall": iv_pall, "rv21": _last(df["rv21"]), "rv_p": rv_p,
-        "vrp": _last(df["vrp"]), "vrp_p": vrp_p, "rr25": _last(df["rr25"]), "rr_p": rr_p,
+        "spot": spot_now, "chg": chg, "iv30": cur("iv30"), "iv30_chg5": (
+            cur("iv30") - _ago(df["iv30"], 5)) if cur("iv30") is not None and _ago(df["iv30"], 5) else None,
+        "iv_p1y": iv_p1y, "iv_pall": iv_pall, "rv21": cur("rv21"), "rv_p": rv_p,
+        "vrp": cur("vrp"), "vrp_p": vrp_p, "rr25": cur("rr25"), "rr_p": rr_p,
         "move": tn[0]["move"] if tn else None, "move_days": tn[0]["days"] if tn else None,
-        "pcr": _last(df["pcr_oi"]), "pcr_p": pcr_p, "carry": _last(df["carry"]) if "carry" in df else None,
+        "pcr": cur("pcr_oi"), "pcr_p": pcr_p, "carry": cur("carry") if "carry" in df else None,
         "carry_p": carry_p, "fut_oi_chg": fcard_row["d_oi"] if fcard_row else None,
         "buildup": fcard_row["buildup"] if fcard_row else None, "event": (evv or {}).get("cause", "premium") if evv else None,
         "results": up_res["date"] if up_res else None, "comp_p": comp_p,
@@ -353,6 +393,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     out = {
         "meta": {"symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
                  "exchange": inst.exchange, "asof": str(asof.date()), "since": since, "splits": splits, "actions": actions,
+                 "stale": stale,
                  "regimes": regimes,
                  "build_seconds": round(time.time() - t0, 1)},
         "headline": {"spot": spot_now, "chg": chg, "hi52": hi52, "lo52": lo52, "metrics": metrics},
