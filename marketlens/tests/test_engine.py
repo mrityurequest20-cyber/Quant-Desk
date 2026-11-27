@@ -256,3 +256,60 @@ def test_skew_words_match_size():
     assert "about the same" in N.skew_card("X", 0.005, 0.5)["simple"]
     assert "Protection against a fall" in N.skew_card("X", -0.03, 0.5)["simple"]
     assert "Upside calls cost more" in N.skew_card("X", 0.03, 0.95)["simple"]
+
+
+def test_buildup_on_roll_day_uses_same_contracts():
+    """Day after expiry: the price change is the new near month against its own price, not the expired month's, and
+    the OI change ignores the month that left. Real read, not a fake jump."""
+    d = pd.bdate_range("2026-10-26", periods=4)          # Mon..Thu; the Oct contract expires on Tue d[1]
+    oct_, nov = d[1], pd.Timestamp("2026-11-24")
+    rows = [dict(date=d[0], kind="FUT", expiry=oct_, close=100.0, settle=100.0, oi=1000.0, contracts=1.0),
+            dict(date=d[0], kind="FUT", expiry=nov, close=100.6, settle=100.6, oi=500.0, contracts=1.0),
+            dict(date=d[1], kind="FUT", expiry=oct_, close=101.0, settle=101.0, oi=300.0, contracts=1.0),   # rolled out
+            dict(date=d[1], kind="FUT", expiry=nov, close=101.5, settle=101.5, oi=1400.0, contracts=1.0),
+            dict(date=d[2], kind="FUT", expiry=nov, close=101.0, settle=101.0, oi=1450.0, contracts=1.0),
+            dict(date=d[3], kind="FUT", expiry=nov, close=102.0, settle=102.0, oi=1400.0, contracts=1.0)]
+    spot = pd.Series([99.9, 101.0, 100.5, 101.5], index=d)
+    b = P.futures_book(pd.DataFrame(rows), spot)
+    # on the expiry day the near month is November: +0.89% on its own price; OI counted on every contract both days,
+    # the expiring one included: 1000+500 -> 300+1400, a net +13% (700 of Oct rolled into Nov is not new money)
+    assert b.loc[d[1], "fut_expiry"] == nov
+    assert b.loc[d[1], "d_price"] == pytest.approx(101.5 / 100.6 - 1)
+    assert b.loc[d[1], "d_oi"] == pytest.approx(1700 / 1500 - 1)
+    assert b.loc[d[1], "buildup"] == "Long build-up"
+    # next day: October is gone from both sides of the comparison; November alone 1400 -> 1450
+    assert b.loc[d[2], "buildup"] == "Short build-up" and b.loc[d[3], "buildup"] == "Short covering"
+    assert np.isfinite(b.loc[d[1], "carry"]) and abs(b.loc[d[1], "carry"]) < 0.5      # no 1-day annualised blow-up
+
+
+def test_oi_profile_skips_contract_settling_today():
+    day = pd.Timestamp("2026-11-26")
+    rows = [dict(date=day, kind=k, expiry=e, strike=s, oi=100.0, chg_oi=0.0, contracts=1.0)
+            for e in (day, pd.Timestamp("2026-12-03")) for k in ("CE", "PE") for s in (90.0, 100.0, 110.0)]
+    prof = P.strike_profile(pd.DataFrame(rows), day, 100.0)
+    assert [p["expiry"] for p in prof] == ["2026-12-03"]
+
+
+def test_expiry_regime_detects_rule_change_not_flicker():
+    days = pd.bdate_range("2024-06-03", periods=200)
+    rows = []
+    for i, d in enumerate(days):
+        n = 10 if i < 100 else 6                                  # weeklies cut: 10 listed expiries -> 6
+        for k in range(n):
+            rows.append(dict(date=d, kind="CE", expiry=d + pd.Timedelta(days=7 * (k + 1))))
+    r = B.expiry_regimes(pd.DataFrame(rows))
+    assert len(r) == 1 and r[0]["from"] == 10 and r[0]["to"] == 6
+    flick = [dict(date=d, kind="CE", expiry=d + pd.Timedelta(days=7 * (k + 1)))
+             for i, d in enumerate(days) for k in range(1 if (i // 50) % 2 else 2)]
+    assert B.expiry_regimes(pd.DataFrame(flick)) == []        # 1 <-> 2 is not a rule change
+
+
+def test_carry_uses_settlement_and_a_contract_20_days_out():
+    d = pd.Timestamp("2026-11-20")
+    near, nxt = pd.Timestamp("2026-11-23"), pd.Timestamp("2026-12-29")
+    rows = [dict(date=d, kind="FUT", expiry=near, close=1363.0, settle=1368.6, oi=1.0, contracts=1.0),   # 3 days out
+            dict(date=d, kind="FUT", expiry=nxt, close=1378.0, settle=1376.0, oi=1.0, contracts=1.0)]   # 39 days out
+    b = P.futures_book(pd.DataFrame(rows), pd.Series([1367.4], index=[d]))
+    assert b.loc[d, "basis"] == pytest.approx(1368.6 - 1367.4)           # settlement vs the official close
+    assert b.loc[d, "carry"] == pytest.approx(np.log(1376.0 / 1367.4) / (39 / 365))
+    assert 0.04 < b.loc[d, "carry"] < 0.07                               # not the -40% a 3-day annualisation gives

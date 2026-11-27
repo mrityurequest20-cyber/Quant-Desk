@@ -141,26 +141,38 @@ def oi_card(name, prof, spot, pcr_p):
     s = f"For the {p0['expiry']} expiry, " + " and ".join(parts) + "." if parts else "No open interest concentration."
     s += " Option sellers defend these levels, so price often slows near them, but they shift as positions change."
     a = (f"Front-expiry PCR (OI) {p0['pcr']:.2f}" if p0.get("pcr") else "PCR n/a")
-    a += (f"; all-expiry OI PCR at the {ordinal(pcr_p)} percentile of history." if pcr_p is not None else ".")
+    a += (f"; all-expiry OI PCR at the {ordinal(pcr_p)} percentile of the past year." if pcr_p is not None else ".")
     a += (f" Today's change: calls {p0['call_add']:+,.0f}, puts {p0['put_add']:+,.0f} (OI units, i.e. shares or index quantity). A high PCR in India "
           f"mostly reflects put writing, so it is read as crowding, not as a signal.")
     return {"simple": s, "analyst": a, "tone": tone(pcr_p)}
 
 
-def futures_card(name, row, carry_p, recent):
+def futures_card(name, row, carry_p, recent, carry_med=None):
+    """Carry = the futures premium, annualised: what the market charges to hold the index or stock through the future
+    (the funding rate less dividends). It is judged against its own last year, not a fixed rate: the funding rate itself
+    moved (repo 4% in 2020-22, 6.5% in 2023-24), and so did what is 'normal'."""
     if row is None:
         return None
     carry = row.get("carry")
     b = row.get("basis")
-    s = (f"{name} futures trade {abs(b):,.1f} points {'above' if b >= 0 else 'below'} the price itself. ")
+    if b is None or not math.isfinite(b):
+        return None
+    s = f"{name} futures trade {abs(b):,.1f} points {'above' if b >= 0 else 'below'} the price itself. "
     if carry is not None and math.isfinite(carry):
-        s += (f"That works out to {pct(carry)} a year: "
-              + ("about the cost of money, so nothing unusual." if 0.04 <= carry <= 0.085 else
-                 "richer than the cost of money: buyers are paying up to hold longs." if carry > 0.085 else
-                 "below the cost of money: hedgers or short sellers are leaning on the futures."))
-    a = (f"Near-month basis {b:+,.1f}, annualised carry {pct(carry)} ({ordinal(carry_p)} percentile). "
-         f"Last 5 sessions (price x OI): {', '.join(recent)}. Build-up labels describe what happened to positions; "
-         f"they do not say who is right.")
+        s += f"That premium works out to {pct(carry)} a year, "
+        if carry_p is None:
+            s += "with too little history to judge."
+        elif carry_p > 0.9:
+            s += "higher than almost any day this past year: buyers are paying up to hold longs through futures."
+        elif carry_p < 0.1:
+            s += ("lower than almost any day this past year: hedgers or short sellers are leaning on the futures."
+                  if carry > 0 else "a discount: hedging or short selling is pressing the futures below the price.")
+        else:
+            s += "within its usual range for the past year."
+    a = (f"Near-month basis {b:+,.1f}, annualised carry {pct(carry)} ({ordinal(carry_p)} percentile of the past year"
+         + (f"; its 1-year median {pct(carry_med)}" if carry_med is not None else "") + "). "
+         f"Last 5 sessions (price x OI, same contracts day to day): {', '.join(recent)}. Build-up labels describe what "
+         f"happened to positions; they do not say who is right.")
     return {"simple": s, "analyst": a, "tone": tone(carry_p)}
 
 

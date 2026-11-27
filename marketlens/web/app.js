@@ -75,6 +75,13 @@ function line(name, data, color, extra = {}) {
     lineStyle: { width: 2, color }, itemStyle: { color }, emphasis: { focus: "series" } }, extra);
 }
 
+// dates where the exchange changed how many expiries it lists: total OI and PCR change level there for that reason
+function regimeMarks(d, dates, t) {
+  const r = (d.meta.regimes || []).filter((x) => dates.includes(x.date));
+  return r.length ? { silent: true, symbol: "none", lineStyle: { color: t.text3, type: "dotted" },
+    label: { formatter: (p) => p.data.name, color: t.text3, fontSize: 10, position: "insideEndTop" },
+    data: r.map((x) => ({ xAxis: x.date, name: `expiries listed ${x.from}→${x.to}` })) } : undefined;
+}
 const ma = (a, n) => a.map((_, i) => { const w = a.slice(Math.max(0, i - n + 1), i + 1).filter(fin); return w.length >= Math.min(n, 3) ? w.reduce((x, y) => x + y, 0) / w.length : null; });
 
 // slice a {d: [...], col: [...]} series by the chosen horizon
@@ -167,8 +174,8 @@ async function pagePulse(app, ov) {
         foot: `≈ ${(ov.vix.now / Math.sqrt(252)).toFixed(2)}% expected NIFTY move a day` })}
       ${kpi({ label: `NIFTY: priced move to expiry`, value: "±" + pct(n.move, 1), unit: `${n.move_days}d`,
         foot: `About ±${num(n.spot * n.move)} points. Inside it ${pct(n.inside, 0)} of the time historically` })}
-      ${kpi({ label: "FIIs: long share, index futures", value: pct(fiiLS?.now, 0), p: fiiLS?.pct, lo: "short-heavy", hi: "long-heavy",
-        foot: `5-day change ${vp(fiiLS?.chg5)} pts · history since ${ov.participants?.since}` })}
+      ${kpi({ label: "FIIs: long share, index futures", value: pct(fiiLS?.now, 0), p: fiiLS?.pct1y, lo: "short-heavy", hi: "long-heavy",
+        foot: `vs the past year · 5-day change ${vp(fiiLS?.chg5)} pts` })}
       ${kpi({ label: "FII cash: last 5 sessions", value: (fl ? (fl.sum5 >= 0 ? "+" : "−") + "₹" + num(Math.abs(fl.sum5)) : "—"), unit: "cr",
         foot: fl ? `${fl.streak} day${fl.streak > 1 ? "s" : ""} of ${fl.streak_side} in a row` : "" })}
     </div>
@@ -239,7 +246,7 @@ const COLS = [
   { k: "vrp", lab: "IV − RV", f: (x) => vp(x.vrp) },
   { k: "move", lab: "Priced move", f: (x) => `±${pct(x.move, 1)} <span class="muted small">${x.move_days ?? ""}d</span>` },
   { k: "rr25", lab: "Skew (RR)", f: (x) => vp(x.rr25) },
-  { k: "pcr_p", lab: "PCR pct", f: (x) => pcell(x.pcr_p), a: 1 },
+  { k: "pcr_p", lab: "PCR pct 1y", f: (x) => pcell(x.pcr_p), a: 1 },
   { k: "carry", lab: "Futures carry", f: (x) => pct(x.carry), a: 1 },
   { k: "buildup", lab: "Futures today", f: (x) => x.buildup ? `<span class="bu">${x.buildup}</span>` : "—", a: 1 },
   { k: "mwpl_util", lab: "Limit used", f: (x) => x.in_ban ? `<span class="chip extreme">BAN</span>` : fin(x.mwpl_util) ? `<span class="${x.mwpl_util >= .8 ? "chg neg" : ""}">${pct(x.mwpl_util, 0)}</span>` : "—" },
@@ -285,13 +292,14 @@ async function pagePositioning(app, ov) {
   const nice = { FII: "Foreign investors (FII)", Client: "Individuals & others (Client)", Pro: "Brokers' own trading (Pro)", DII: "Domestic institutions (DII)" };
   const tbl = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Who</th>${show.map((k) => `<th>${rows.find((r) => r.metric === k)?.label || k}</th>`).join("")}</tr></thead><tbody>
     ${who.map((w) => `<tr><td><span class="sym">${w}</span><span class="nm">${nice[w]}</span></td>${show.map((k) => { const r = rows.find((x) => x.who === w && x.metric === k); if (!r) return "<td>—</td>";
-      const v = k.includes("share") ? pct(r.now, 0) : big(r.now); return `<td class="num">${v}<br><span class="muted small">${ord(r.pct)} pct · 5d ${k.includes("share") ? vp(r.chg5) + " pts" : big(r.chg5)}</span></td>`; }).join("")}</tr>`).join("")}
+      const v = k.includes("share") ? pct(r.now, 0) : big(r.now); return `<td class="num">${v}<br><span class="muted small">${ord(r.pct1y)} pct (1y) · 5d ${k.includes("share") ? vp(r.chg5) + " pts" : big(r.chg5)}</span><span class="muted small a-only"><br>${ord(r.pct)} pct since ${P.since}</span></td>`; }).join("")}</tr>`).join("")}
     </tbody></table></div>`;
   app.innerHTML = `<div class="page-h"><div><h1>Who holds what</h1><div class="sub">NSE's participant-wise open interest: positions of foreign investors, domestic institutions, brokers' own desks and everyone else, daily since ${P.since}.</div></div>${horizonSeg()}</div>
     <div class="grid g2">${card({ title: "In plain words", body: `<ul class="story">${P.simple.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` })}
     ${card({ title: "Index futures: share of positions that are long", body: `<div class="chart" id="ls"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span></div>`,
       analyst: "Long share = long contracts / (long + short). Every future has a buyer and a seller, so one group's long is another's short. FIIs hedge their share holdings with index-futures shorts, which keeps their long share structurally low; the extremes, not the level, are what history makes interesting." })}</div>
-    <div style="margin-top:16px">${card({ title: "Current books against their history", hint: "contracts; percentile vs all days since " + P.since, body: tbl })}</div>
+    <div style="margin-top:16px">${card({ title: "Current books against their history", hint: "contracts; percentile vs the past year", body: tbl,
+      analyst: "Percentiles compare with the past year because these books changed regime: FIIs' median long share in index futures was 44-63% in 2019-2024 and 12-17% in 2025-26. Against all history a normal day now looks extreme. Every contract has a buyer and a seller: the four groups' longs equal their shorts each day (checked)." })}</div>
     <div class="grid g2" style="margin-top:16px">
       ${card({ title: "Index futures: net contracts", body: `<div class="chart" id="net"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span><span style="--c:${css("--s4")}">DII</span></div>` })}
       ${card({ title: "Index options stance", hint: "net calls − net puts", simple: "Above zero: the group's options gain if the market rises (long calls / short puts). Below zero: they gain on a fall.",
@@ -349,7 +357,7 @@ async function pageMethod(app) {
     ["Percentile", "Where today sits in the instrument's own history: 90th = higher than 90% of past days. All 'high' and 'low' words in the app come from percentiles."],
     ["Open interest (OI) walls", "Strikes with the most open option contracts. Sellers there hedge and defend, so price often slows near them; they are not hard support or resistance."],
     ["PCR", "Put open interest divided by call open interest. In India most open puts are written (sold), so a high PCR often means put sellers are confident. The app shows it as a percentile, not as bullish or bearish."],
-    ["Futures carry", "The futures premium over spot, annualised. Near the cost of money (~6.5%) is normal. Much higher: buyers paying up for leverage. Lower or negative: heavy shorting or hedging."],
+    ["Futures carry", "The futures premium over spot, annualised: roughly the funding rate minus dividends, so its normal level moves with interest rates. The app judges it against its own past year. Much higher: buyers paying up to hold longs. Lower or negative: heavy shorting or hedging."],
     ["Build-up", "Price up with OI up = long build-up; price down with OI up = short build-up; price up with OI down = short covering; price down with OI down = long unwinding. It describes what happened to positions; it does not say who is right."],
     ["Participant OI", "NSE splits open interest by who holds it: FII (foreign), DII (domestic institutions), Pro (brokers' own books) and Client (everyone else, mostly individuals)."],
     ["Event move", "When the nearest expiry has unusually high variance compared with the next one, the extra variance is the market pricing a single event day. The app shows that day's implied move."],
@@ -525,7 +533,7 @@ function symOI(el, d, u) {
         <div class="seg" id="oiMode" style="margin:0 0 8px 8px"><button data-m="oi" class="on">Open positions</button><button data-m="chg">Today's change</button></div>
         <div class="chart tall" id="oi" style="height:460px"></div><div class="legend"><span style="--c:${t.s1}">Calls</span><span style="--c:${t.s2}">Puts</span></div>` })}
       ${card({ title: "Put / call ratio history", hint: "open interest, all expiries", simple: "Puts open divided by calls open. Shown against its own past rather than as 'bullish' or 'bearish': in India most open puts are sold, so the ratio says more about how crowded put-selling is than about direction.", body: `<div class="chart" id="pcr"></div>` })}
-      ${card({ title: "Total options open interest", hint: "contracts, all strikes", simple: "How many option positions are open. Rising positions mean money committing; falling, money leaving.", body: `<div class="chart" id="toi"></div>` })}
+      ${card({ title: "Total options open interest", hint: "all strikes, OI units (shares or index quantity)", simple: "How many option positions are open. Rising positions mean money committing; falling, money leaving.", body: `<div class="chart" id="toi"></div>` })}
     </div>`;
   let sel = 0, mode = "oi";
   const draw = () => {
@@ -546,9 +554,9 @@ function symOI(el, d, u) {
   $$("#oiMode button").forEach((b) => b.onclick = () => { mode = b.dataset.m; $$("#oiMode button").forEach((x) => x.classList.toggle("on", x === b)); draw(); });
   draw();
   chart("#pcr", { tooltip: { trigger: "axis", valueFormatter: (v) => fin(v) ? v.toFixed(2) : "—", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, (v) => v.toFixed(2)),
-    series: [line("PCR daily", s.pcr_oi, t.s1, { lineStyle: { width: 1, color: t.s1, opacity: .35 } }), line("10-day average", ma(s.pcr_oi, 10), t.s1)] });
+    series: [line("PCR daily", s.pcr_oi, t.s1, { lineStyle: { width: 1, color: t.s1, opacity: .35 }, markLine: regimeMarks(d, s.d, t) }), line("10-day average", ma(s.pcr_oi, 10), t.s1)] });
   chart("#toi", { tooltip: { trigger: "axis", valueFormatter: big, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, big),
-    series: [line("Options OI daily", s.opt_oi, t.s7, { lineStyle: { width: 1, color: t.s7, opacity: .35 } }), line("10-day average", ma(s.opt_oi, 10), t.s7)] });
+    series: [line("Options OI daily", s.opt_oi, t.s7, { lineStyle: { width: 1, color: t.s7, opacity: .35 }, markLine: regimeMarks(d, s.d, t) }), line("10-day average", ma(s.opt_oi, 10), t.s7)] });
 }
 
 function symFutures(el, d, u) {
@@ -559,7 +567,7 @@ function symFutures(el, d, u) {
   el.innerHTML = `
     <div class="grid g2">
       ${card({ title: "Futures premium (annualised carry)", simple: c.futures?.simple, analyst: c.futures?.analyst, body: `<div class="chart" id="carry"></div>` })}
-      ${card({ title: "Futures open interest", hint: "all months, contracts", simple: "How many futures positions are open across all months. It drops at each monthly expiry when the near month settles.", body: `<div class="chart" id="foi"></div>` })}
+      ${card({ title: "Futures open interest", hint: "all months, OI units (shares or index quantity)", simple: "How many futures positions are open across all months. It drops at each monthly expiry when the near month settles.", body: `<div class="chart" id="foi"></div>` })}
       ${card({ title: "Last 30 sessions: what positions did", hint: "price change × OI change", cls: "span2", simple: "Each day classified by what happened to price and open positions together. Labels describe position changes; they do not predict.",
         body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Future</th><th>Day</th><th>OI change</th><th>Open interest</th><th>Basis</th><th>Carry</th><th>Read</th></tr></thead><tbody>
         ${fr.slice().reverse().map((r) => `<tr><td class="num">${r.date}</td><td class="num">${num(r.fut, r.fut > 1000 ? 1 : 2)}</td><td class="num"><span class="chg ${r.d_price >= 0 ? "pos" : "neg"}">${vp(r.d_price, 2)}%</span></td>
@@ -569,8 +577,10 @@ function symFutures(el, d, u) {
     </div>`;
   const tip = (f) => ({ trigger: "axis", valueFormatter: f, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } });
   chart("#carry", { tooltip: tip((v) => pct(v, 1)), xAxis: axisX(s.d, t), yAxis: axisY(t, fmtPct(0)),
-    series: [line("Carry", s.carry.map((v) => fin(v) && Math.abs(v) < 1 ? v : null), t.s1, { markLine: { silent: true, symbol: "none", data: [{ yAxis: .065, label: { formatter: "cost of money ≈6.5%", color: t.text3 } }], lineStyle: { color: t.text3, type: "dashed" } } })] });
+    series: [line("Carry", s.carry.map((v) => fin(v) && Math.abs(v) < 1 ? v : null), t.s1, { markLine: (() => { const v = s.carry.slice(-252).filter((x) => fin(x) && Math.abs(x) < 1).sort((a, b) => a - b);
+      return v.length > 20 ? { silent: true, symbol: "none", data: [{ yAxis: v[Math.floor(v.length / 2)], label: { formatter: `1-year median ${pct(v[Math.floor(v.length / 2)])}`, color: t.text3 } }], lineStyle: { color: t.text3, type: "dashed" } } : undefined; })() })] });
   chart("#foi", { tooltip: tip(big), xAxis: axisX(s.d, t), yAxis: axisY(t, big), series: [line("Futures OI", s.fut_oi, t.s7, { areaStyle: { color: t.s7, opacity: .08 } })] });
+  // futures are listed monthly for every underlying: no expiry-regime marks here
   const rl = d.rolls || [];
   chart("#roll", { tooltip: tip((v) => pct(v, 0)), xAxis: { type: "category", data: rl.map((r) => r.expiry), axisLabel: { color: t.text3, fontSize: 10 }, axisLine: { lineStyle: { color: t.line } } }, yAxis: axisY(t, fmtPct(0), { min: 0, max: 1, scale: false }),
     series: [{ name: "Rolled", type: "bar", data: rl.map((r) => r.roll_share), itemStyle: { color: t.s1, borderRadius: [4, 4, 0, 0] }, barWidth: "55%" }] });

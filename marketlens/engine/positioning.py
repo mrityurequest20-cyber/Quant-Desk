@@ -37,8 +37,8 @@ def latest_pct(x: pd.Series, window: int | None = None) -> float | None:
 
 def strike_profile(opt: pd.DataFrame, asof, spot: float, n_expiries: int = 2, band: float = 0.12) -> list[dict]:
     """Calls and puts open interest and its change by strike, for the nearest expiries, within +-band of spot."""
-    o = opt[(opt["date"] == asof) & opt["kind"].isin(["CE", "PE"])]
-    exps = sorted(o["expiry"].unique())[:n_expiries]
+    o = opt[(opt["date"] == asof) & opt["kind"].isin(["CE", "PE"]) & (opt["expiry"] > asof)]   # a contract settling
+    exps = sorted(o["expiry"].unique())[:n_expiries]                                              # today has no walls
     out = []
     for e in exps:
         g = o[(o["expiry"] == e) & (o["strike"].between(spot * (1 - band), spot * (1 + band)))]
@@ -83,12 +83,22 @@ def pcr_history(opt: pd.DataFrame) -> pd.DataFrame:
 # ---------------- futures ----------------
 
 def futures_book(opt: pd.DataFrame, spot: pd.Series) -> pd.DataFrame:
-    """Daily: near-month future price, basis, annualised carry, total futures OI, roll share, and the build-up class."""
+    """Daily: near-month future price, basis, annualised carry, total futures OI, roll share, and the build-up class.
+
+    Changes are measured on the same contracts across the two days, so an expiry never shows up as a market move:
+    the price change is today's near contract against its own price yesterday (not against yesterday's expired near
+    month, which would add a month's carry), and the OI change compares the contracts alive on both days (an expiring
+    month's OI leaving the total is not unwinding). Every session gets a real read, the day after expiry included."""
     f = opt[opt["kind"] == "FUT"].copy()
     if f.empty:
         return pd.DataFrame()
     f["px"] = np.where(f["close"] > 0, f["close"], f["settle"])
-    f = f.sort_values(["date", "expiry"])
+    # OI changes count every contract the file carries, the one expiring that day included: NSE reports its open
+    # interest at the close, so positions rolled out of it into the next month net out instead of looking like fresh
+    # money (Reliance's expiry day, 23 Nov 2026, showed +14.9% the other way)
+    f_all = f[f["expiry"] >= f["date"]]
+    f = f[f["expiry"] > f["date"]].sort_values(["date", "expiry"])   # a contract settling today is not tradable next
+                                                                        # session, and its 1-day carry is noise
     f["n"] = f.groupby("date").cumcount()
     near = f[f["n"] == 0].set_index("date")
     nxt = f[f["n"] == 1].set_index("date")
@@ -98,24 +108,41 @@ def futures_book(opt: pd.DataFrame, spot: pd.Series) -> pd.DataFrame:
     out["fut_expiry"] = near["expiry"]
     out["spot"] = spot.reindex(out.index)
     out["days"] = (near["expiry"] - near.index.to_series()).dt.days
-    out["basis"] = out["fut"] - out["spot"]
-    T = out["days"].clip(lower=1) / 365
-    out["carry"] = np.log(out["fut"] / out["spot"]) / T        # annualised: compare with a ~6.5% funding rate
+    # basis and carry use NSE's settlement price: like the official spot close, it is an average of the last 30 minutes,
+    # so the two are measured at the same moment (a last-traded price can be minutes away from the spot's close).
+    # Carry is read from the first contract at least 20 days out: annualising a short basis turns a few points of noise
+    # into -40% (Reliance, 20 Nov 2026, 3 days out). Measured on 2025-26: at 20 days NIFTY's carry moves more than
+    # 5 points in a day 8 times in 469 sessions, against 50 at 7 days. Near expiry it therefore comes from next month.
+    st = f.assign(stl=np.where(f["settle"] > 0, f["settle"], f["px"]))
+    st["dte"] = (st["expiry"] - st["date"]).dt.days
+    near_stl = st[st["n"] == 0].set_index("date")["stl"]
+    cm = st[st["dte"] >= 20].sort_values(["date", "expiry"]).drop_duplicates("date").set_index("date")
+    out["basis"] = near_stl.reindex(out.index) - out["spot"]
+    out["carry"] = np.log(cm["stl"] / out["spot"].reindex(cm.index)).reindex(out.index) / (cm["dte"].reindex(out.index) / 365)
     out["fut_oi"] = tot
     out["near_oi"] = near["oi"]
     out["next_oi"] = nxt["oi"].reindex(out.index)
     out["roll_share"] = out["next_oi"] / (out["near_oi"] + out["next_oi"])
     out["fut_contracts"] = f.groupby("date")["contracts"].sum()
-    dp = out["fut"].pct_change()
-    doi = out["fut_oi"].pct_change()
-    # an expiry day removes the near month's OI from the total by construction; that is not unwinding
-    rolled = out["fut_expiry"] != out["fut_expiry"].shift()
+
+    px = f.pivot_table(index="date", columns="expiry", values="px", aggfunc="last")
+    oi = f_all.pivot_table(index="date", columns="expiry", values="oi", aggfunc="sum")
+    days = list(out.index)
+    dp, doi = [np.nan], [np.nan]
+    for prev, cur in zip(days, days[1:]):
+        e = out.at[cur, "fut_expiry"]
+        a0 = px.at[prev, e] if e in px.columns else np.nan
+        dp.append(out.at[cur, "fut"] / a0 - 1 if np.isfinite(a0) and a0 > 0 else np.nan)
+        both = oi.loc[[prev, cur]].dropna(axis=1).columns          # contracts listed on both days
+        o0, o1 = oi.loc[prev, both].sum(), oi.loc[cur, both].sum()
+        doi.append(o1 / o0 - 1 if o0 > 0 else np.nan)
     out["d_price"] = dp
-    out["d_oi"] = doi.where(~rolled)
+    out["d_oi"] = doi
+    d_p, d_o = out["d_price"], out["d_oi"]
     out["buildup"] = np.select(
-        [(dp > 0) & (doi > 0), (dp < 0) & (doi > 0), (dp > 0) & (doi < 0), (dp < 0) & (doi < 0)],
+        [(d_p > 0) & (d_o > 0), (d_p < 0) & (d_o > 0), (d_p > 0) & (d_o < 0), (d_p < 0) & (d_o < 0)],
         ["Long build-up", "Short build-up", "Short covering", "Long unwinding"], default="Flat")
-    out.loc[rolled | out["d_oi"].isna(), "buildup"] = "Expiry roll"
+    out.loc[d_p.isna() | d_o.isna(), "buildup"] = "No read"
     return out
 
 
@@ -126,6 +153,8 @@ def roll_history(book: pd.DataFrame) -> list[dict]:
     b = book.dropna(subset=["roll_share"])
     out = []
     for e, g in b.groupby("fut_expiry"):
+        if pd.Timestamp(e) > b.index.max():            # the current month has not reached its roll day yet
+            continue
         g = g[g.index < e]
         if g.empty:
             continue

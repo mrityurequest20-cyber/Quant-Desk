@@ -64,6 +64,34 @@ def _ago(s: pd.Series, n: int):
 
 # ---------------- what changed, and the exchange's rules ----------------
 
+def expiry_regimes(opt: pd.DataFrame, min_days: int = 40, min_step: int = 2) -> list[dict]:
+    """Dates when the exchange changed how many option expiries it lists for this underlying (SEBI ended BANKNIFTY's
+    and FINNIFTY's weeklies in Nov 2024). Total OI and PCR change level at such a date for reasons that have nothing
+    to do with positioning, so the charts mark them. A change must hold for min_days sessions and be at least min_step
+    expiries (a thin index flickering between one and two listed months is liquidity, not a rule). Indices only: the
+    warehouse keeps two expiries per stock by construction."""
+    o = opt[opt["kind"].isin(["CE", "PE"]) & (opt["expiry"] > opt["date"])]
+    if o.empty:
+        return []
+    n = o.groupby("date")["expiry"].nunique().rolling(20, min_periods=10).median().round()
+    out, cur, since = [], None, None
+    vals = n.dropna()
+    i = 0
+    while i < len(vals):
+        v = vals.iat[i]
+        if cur is None:
+            cur = v
+        elif v != cur:
+            run = vals.iloc[i:i + min_days]
+            if len(run) >= min_days and (run == v).mean() >= 0.9 and abs(v - cur) >= min_step:
+                out.append({"date": str(vals.index[i].date()), "from": int(cur), "to": int(v)})
+                cur = v
+                i += min_days
+                continue
+        i += 1
+    return out
+
+
 CHANGE_FIELDS = {"iv30": ("30-day IV", "vol pts", 100), "rr25": ("skew (25d risk reversal)", "vol pts", 100),
                  "implied_move": ("priced move to the front expiry", "% pts", 100), "rv21": ("realised vol (21d)", "vol pts", 100)}
 
@@ -176,6 +204,13 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         df["vix"] = vix.reindex(df.index) / 100
     df = df[df.index >= t["date"].min()] if len(t) else df
     df["vrp"] = df["iv30"] - df["rv21"]
+    # OI counts shares: a bonus or split multiplies it overnight. Restate the history in today's units, like price.
+    for sp_ in splits:
+        d0 = pd.Timestamp(sp_["date"])
+        for c in ("opt_oi", "fut_oi"):
+            if c in df:
+                df.loc[df.index < d0, c] *= sp_["ratio"]
+    regimes = expiry_regimes(opt) if inst.kind == "index" else []
     since = str(df.index.min().date())
 
     # percentiles
@@ -184,8 +219,11 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     rv_p = P.latest_pct(df["rv21"])
     vrp_p = P.latest_pct(df["vrp"])
     rr_p = P.latest_pct(df["rr25"])
-    pcr_p = P.latest_pct(df["pcr_oi"])
-    carry_p = P.latest_pct(df["carry"]) if "carry" in df else None
+    # positioning readings are judged against the last year: their levels moved with the market's structure (NIFTY's
+    # PCR ran ~1.4 in 2019 and ~0.95 since 2022; weekly expiries were cut in Nov 2024), so all-history ranks mislead
+    pcr_p = P.latest_pct(df["pcr_oi"], 252)
+    carry_p = P.latest_pct(df["carry"], 252) if "carry" in df else None
+    carry_med = float(df["carry"].dropna().iloc[-253:-1].median()) if "carry" in df and df["carry"].notna().sum() > 60 else None
     comp = (df["rv5"] / df["rv63"])
     comp_p = P.latest_pct(comp)
     hist = df.dropna(subset=["iv30", "fwd_rv21"])
@@ -265,7 +303,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "skew": N.skew_card(inst.symbol, _last(df["rr25"]), rr_p),
         "realised": N.realised_card(inst.symbol, _last(df["rv21"]), rv_p, _last(df["rv5"]), _last(df["rv63"]), comp_p),
         "oi": N.oi_card(inst.symbol, prof, spot_now, pcr_p),
-        "futures": N.futures_card(inst.symbol, fcard_row, carry_p, recent_bu),
+        "futures": N.futures_card(inst.symbol, fcard_row, carry_p, recent_bu, carry_med),
     }
     if tn:
         f0 = tn[0]
@@ -315,6 +353,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     out = {
         "meta": {"symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
                  "exchange": inst.exchange, "asof": str(asof.date()), "since": since, "splits": splits, "actions": actions,
+                 "regimes": regimes,
                  "build_seconds": round(time.time() - t0, 1)},
         "headline": {"spot": spot_now, "chg": chg, "hi52": hi52, "lo52": lo52, "metrics": metrics},
         "story": story, "cards": cards, "series": series(df, cols),
@@ -349,10 +388,11 @@ def participants_block(wh: Warehouse) -> dict:
     simple = []
     if fii and fii["now"] is not None:
         simple.append(f"Foreign investors (FIIs) hold {N.pct(fii['now'], 0)} of their index-futures positions on the "
-                      f"long side, {N.level(fii['pct'])} against every day since 2019 ({N.ordinal(fii['pct'])} percentile).")
+                      f"long side: {N.level(fii['pct1y'])} for them against the past year ({N.ordinal(fii['pct1y'])} "
+                      f"percentile; {N.ordinal(fii['pct'])} against every day since 2019).")
     if cli and cli["now"] is not None:
         simple.append(f"Retail and other individual traders (Clients) are {N.pct(cli['now'], 0)} long in index futures, "
-                      f"{N.level(cli['pct'])} for them.")
+                      f"{N.level(cli['pct1y'])} for them against the past year.")
     simple.append("FIIs often hold futures shorts against the shares they own, so a low long share is partly hedging, "
                   "not a forecast. Extremes matter more than the level.")
     return clean({"since": str(w.index.min().date()), "asof": str(w.index.max().date()), "rows": rows,
