@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MarketLens</title>
+<meta name="description" content="Indian index and stock derivatives, read like an analyst: volatility, the priced move, positioning, flows and events, explained in plain words.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.1/echarts.min.js"></script>
+</head>
+<body class="mode-simple">
+<div class="shell">
+  <aside class="side" id="side">
+    <a class="brand" href="#/pulse"><span class="brand-mark">ML</span> MarketLens</a>
+    <nav class="nav" id="nav"></nav>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Menu">☰</button>
+      <div class="crumbs" id="crumbs">MarketLens</div>
+      <span class="asof" id="asof"></span>
+      <div class="search"><input id="q" placeholder="Search NIFTY, RELIANCE…" autocomplete="off"><div class="res" id="qres"></div></div>
+      <div class="seg" id="modeSeg" title="How much detail to show">
+        <button data-mode="simple" class="on">Simple</button><button data-mode="analyst">Analyst</button>
+      </div>
+      <button class="icon-btn" id="themeBtn" aria-label="Toggle theme">◐</button>
+    </header>
+    <main class="page" id="app"><div class="loading">Loading the market…</div></main>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

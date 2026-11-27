@@ -1,0 +1,45 @@
+# MarketLens (marketlens/): a separate, read-only analysis app. After each warehouse update it downloads the public
+# warehouse tables (NSE/BSE end-of-day files only: nothing licensed), rebuilds the app's data, runs its tests and
+# publishes the static site to the `marketlens-site` branch as one snapshot commit. Any static host (Cloudflare Pages,
+# GitHub Pages from a second repo, Netlify) can serve that branch as is. No broker, no keys, no orders.
+name: MarketLens
+
+on:
+  workflow_run:
+    workflows: ["Data warehouse"]
+    types: [completed]
+  schedule:
+    - cron: "41 14 * * 1-5"        # 20:11 IST weekdays, a fallback if the warehouse run did not trigger it
+  workflow_dispatch:
+
+permissions:
+  contents: write                   # push the marketlens-site branch (and nothing else)
+
+concurrency:
+  group: marketlens
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: Asia/Kolkata
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Test the engine
+        run: python -m pytest marketlens/tests -q -p no:cacheprovider
+      - name: Download the public warehouse
+        run: python -m marketlens fetch --dest _wh
+      - name: Build the analysis
+        run: python -m marketlens build --warehouse _wh --out _lensdata
+      - name: Assemble and publish the site
+        run: |
+          python -m marketlens site --data _lensdata --out _lens
+          deploy/push-dir.sh _lens marketlens-site "MarketLens data $(date +%F)"
