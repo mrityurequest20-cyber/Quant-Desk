@@ -92,8 +92,10 @@ def term_card(name, front_iv, back_iv, front_days, back_days, ev):
     a = (f"Term structure: {front_days}d {pct(front_iv)} -> {back_days}d {pct(back_iv)} "
          f"({slope * 100:+.1f} vol pts). ")
     if ev:
-        a += (f"The front expiry holds an event: the curve implies a one-day move of about {pct(ev['event_move'], 1)} "
-              f"against {pct(ev['normal_day_move'], 2)} on a normal day (forward vol {pct(ev['fwd_vol'])}).")
+        a += (f"Front-expiry variance above the forward curve, expressed as one day: about ±{pct(ev['event_move'], 1)} "
+              f"against {pct(ev['normal_day_move'], 2)} on a normal day (forward vol {pct(ev['fwd_vol'])})"
+              + (f"; the exchange calendar has results on {ev['cause_date']} inside that expiry." if ev.get("cause") == "results"
+                 else "; no scheduled event in the data explains it."))
     return {"simple": s, "analyst": a, "tone": "elevated" if slope < -0.01 else "normal"}
 
 
@@ -166,3 +168,12 @@ def realised_card(name, rv21, p, rv5, rv63, comp_p):
     a = (f"RV21 {pct(rv21)} ({ordinal(p)} pct), RV5 {pct(rv5)}, RV63 {pct(rv63)}; "
          f"RV5/RV63 compression at the {ordinal(comp_p)} percentile.")
     return {"simple": s, "analyst": a, "tone": tone(p)}
+
+
+def event_sentence(name, ev):
+    if ev.get("cause") == "results":
+        return (f"The option curve prices {name}'s results ({ev['cause_date']}) at about ±{pct(ev['event_move'], 1)} on "
+                f"the day, against {pct(ev['normal_day_move'], 2)} on a normal day.")
+    return (f"Near-term {name} options carry an extra premium: the expiry to {ev['front_expiry']} prices one day worth "
+            f"about ±{pct(ev['event_move'], 1)}, against {pct(ev['normal_day_move'], 2)} normally. No scheduled event "
+            f"in the data explains it: the market is paying for near-term risk.")

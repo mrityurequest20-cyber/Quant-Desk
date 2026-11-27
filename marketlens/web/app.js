@@ -177,6 +177,10 @@ async function pagePulse(app, ov) {
       ${card({ title: "Options map", hint: "every instrument, one dot", simple: "Right = options expensive for that name (vs its own last year). Up = the price has really been moving a lot. Top-right: expensive for a reason. Bottom-right: expensive while calm.",
         body: `<div class="chart tall" id="map"></div><div class="legend"><span style="--c:${css("--s1")}">Indices</span><span style="--c:${css("--s2")}">Stocks</span></div>` })}
     </div>
+    <div style="margin-top:16px">${card({ title: "What changed since yesterday", hint: "the day's most unusual moves, each against its own history",
+      simple: "Only changes that are big for that particular instrument make this list: a 2-sigma day is one that happens about once a month for it.",
+      body: (ov.changes || []).length ? `<ul class="story">${ov.changes.map((c) => `<li><a href="#/sym/${slug(c.symbol)}"><b>${esc(c.symbol)}</b></a> · ${esc(c.text.replace(c.symbol + ": ", ""))} <span class="chip ${Math.abs(c.z) >= 2.5 ? "extreme" : "elevated"}">${Math.abs(c.z).toFixed(1)}σ</span></li>`).join("")}</ul>` : `<div class="muted">A quiet day: no reading moved unusually for its instrument.</div>`,
+      analyst: "Size of a change = the day's change divided by the standard deviation of that instrument's daily changes over the past year. Readings: 30-day IV, 25-delta risk reversal, 21-day realised vol." })}</div>
     <div class="grid g2" style="margin-top:16px">
       ${card({ title: "India VIX since 2019", hint: "the market's 30-day fear gauge", body: `<div class="chart" id="vix"></div>`,
         analyst: "India VIX is computed by NSE from NIFTY option prices across strikes (like the US VIX). Spikes mark stress (Mar 2020, Jun 2024 election). It mean-reverts: very high readings have historically come down faster than very low ones went up." })}
@@ -207,8 +211,8 @@ async function pagePulse(app, ov) {
 
 function calendarRows(items) {
   if (!items.length) return `<div class="muted">Nothing scheduled in the data.</div>`;
-  const lab = { expiry: "Expiry", results: "Results", holiday: "Holiday" };
-  return items.map((i) => `<div class="cal-row"><span class="num">${i.date}</span><span class="chip ${i.type === "results" ? "elevated" : ""}">${lab[i.type] || i.type}</span>
+  const lab = { expiry: "Expiry", results: "Results", holiday: "Holiday", lot: "Lot change" };
+  return items.map((i) => `<div class="cal-row"><span class="num">${i.date}</span><span class="chip ${i.type === "results" || i.type === "lot" ? "elevated" : ""}">${lab[i.type] || i.type}</span>
     <span>${i.symbol ? `<a href="#/sym/${slug(i.symbol)}"><b>${esc(i.symbol)}</b></a> · ` : ""}${esc(i.symbol ? i.text.replace(i.symbol + " ", "") : i.text)}</span></div>`).join("");
 }
 
@@ -226,7 +230,7 @@ const COLS = [
   { k: "pcr_p", lab: "PCR pct", f: (x) => pcell(x.pcr_p), a: 1 },
   { k: "carry", lab: "Futures carry", f: (x) => pct(x.carry), a: 1 },
   { k: "buildup", lab: "Futures today", f: (x) => x.buildup ? `<span class="bu">${x.buildup}</span>` : "—", a: 1 },
-  { k: "results", lab: "Results", f: (x) => x.results ? `<span class="chip elevated">${x.results.slice(5)}</span>` : (x.event ? `<span class="chip">event priced</span>` : "") },
+  { k: "results", lab: "Results", f: (x) => x.results ? `<span class="chip elevated">${x.results.slice(5)}</span>` : (x.event === "results" ? `<span class="chip elevated">results priced</span>` : x.event ? `<span class="chip">front premium</span>` : "") },
 ];
 function pcell(p) {
   if (!fin(p)) return "—";
@@ -383,6 +387,7 @@ function symOverview(el, d, u, pos52) {
       ${kpi({ label: "Priced move to expiry", value: "±" + pct(m.move, 1), unit: `${m.move_days}d`, foot: `≈ ±${num(h.spot * m.move, h.spot > 1000 ? 0 : 1)} · inside ${pct(m.inside, 0)} historically` })}
     </div>
     <div class="grid g3" style="margin-top:16px">
+      ${card({ title: "Contract facts & changes", hint: "from the exchange's own data", body: rulesHtml(d) })}
       ${["vrp", "skew", "term", "oi", "futures", "realised"].filter((k) => c[k]).map((k) => card({ title: { vrp: "Options vs reality", skew: "Fear of a fall", term: "Near vs far options", oi: "Where positions sit", futures: "Futures", realised: "How it's moving" }[k],
         chip: chipFromTone(c[k].tone), simple: c[k].simple, analyst: c[k].analyst })).join("")}
     </div>`;
@@ -390,6 +395,15 @@ function symOverview(el, d, u, pos52) {
   const s = slice(d.series, ["close"], "1Y");
   chart("#spark", { grid: { left: 0, right: 0, top: 6, bottom: 0 }, xAxis: axisX(s.d, t, { show: false }), yAxis: axisY(t, null, { show: false }),
     series: [line("Close", s.close, t.s1, { areaStyle: { color: t.s1, opacity: .08 } })] });
+}
+function rulesHtml(d) {
+  const r = d.rules || {}, ch = d.changes || [];
+  const notes = (r.notes || []).map((n) => `<li>${esc(n.text)}</li>`).join("");
+  const chg = ch.map((c) => `<li>${esc(c.label)}: ${c.from.toFixed(1)} → ${c.to.toFixed(1)} <span class="muted">(${c.chg >= 0 ? "+" : ""}${c.chg.toFixed(1)} ${c.unit}${fin(c.z) ? `, ${Math.abs(c.z).toFixed(1)}σ for it` : ""})</span></li>`).join("");
+  return `<p class="simple">Lot size <b class="num">${num(r.lot)}</b> · next futures expiry <b class="num">${r.front_expiry || "—"}</b>${fin(r.sessions_to_expiry) ? ` (${r.sessions_to_expiry} sessions)` : ""}.</p>
+    ${notes ? `<ul class="story">${notes}</ul>` : ""}
+    <div class="muted small" style="margin:8px 0 2px">Since yesterday</div><ul class="story">${chg || "<li>No readings.</li>"}</ul>
+    <p class="analyst">Open expiries: ${(r.expiries || []).join(", ")}. A lot-size note appears only when the exchange already lists a later expiry with a different lot.</p>`;
 }
 const chipFromTone = (tn) => tn === "extreme" ? `<span class="chip extreme"><span class="dot"></span>unusual</span>` : tn === "elevated" ? `<span class="chip elevated"><span class="dot"></span>notable</span>` : `<span class="chip"><span class="dot"></span>normal</span>`;
 
@@ -548,17 +562,19 @@ function symEvents(el, d, u) {
   const t = theme();
   const res = d.results || [];
   el.innerHTML = `<div class="grid g2">
-    ${u.kind === "stock" ? card({ title: "Results", hint: "from NSE's event calendar", cls: "span2", simple: "For past results: what options priced for the event and what the stock actually did the next session. For upcoming ones: what the curve prices now.",
-      body: res.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Agenda</th><th>Status</th><th>Priced event move</th><th>Actual next-day move</th><th>IV change after</th></tr></thead><tbody>
+    ${u.kind === "stock" ? card({ title: "Results", hint: "from NSE's event calendar", cls: "span2", simple: "For past results: the move options priced for the results day, and what the stock actually did on that day and the next. For upcoming ones: what the curve prices now.",
+      body: res.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Agenda</th><th>Status</th><th>Priced event move</th><th>Results day</th><th>Next day</th><th>Front IV change</th></tr></thead><tbody>
       ${res.map((r) => `<tr><td class="num">${r.date}</td><td>${esc(r.purpose)}</td><td>${r.upcoming ? `<span class="chip elevated">upcoming</span>` : `<span class="chip">done</span>`}</td>
-        <td class="num">${fin(r.implied_event_move) ? "±" + pct(r.implied_event_move, 1) : r.upcoming ? (d.headline.metrics.event ? "priced in curve" : "—") : "not separable"}</td>
-        <td class="num">${fin(r.move_next) ? `<span class="chg ${r.move_next >= 0 ? "pos" : "neg"}">${vp(r.move_next, 1)}%</span>` : "—"}</td>
-        <td class="num">${fin(r.iv_crush) ? vp(r.iv_crush) + " pts" : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="muted">No results dates in the calendar window.</div>`,
-      analyst: "The event move is the extra variance in the expiry holding the results over the forward variance to the next expiry, expressed as a one-day move. 'Not separable' means the curve did not show a distinct event (both expiries priced alike). IV change: front ATM IV the session after the reaction minus the session before the results." }) : ""}
+        <td class="num">${fin(r.implied_event_move) ? "±" + pct(r.implied_event_move, 1) : "not separable"}</td>
+        <td class="num">${fin(r.move_day0) ? `<span class="chg ${r.move_day0 >= 0 ? "pos" : "neg"}">${vp(r.move_day0, 1)}%</span>` : "—"}</td>
+        <td class="num">${fin(r.move_day1) ? `<span class="chg ${r.move_day1 >= 0 ? "pos" : "neg"}">${vp(r.move_day1, 1)}%</span>` : "—"}</td>
+        <td class="num">${fin(r.iv_change) ? vp(r.iv_change) + " pts" : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="muted">No results dates in the calendar window.</div>`,
+      analyst: "Priced event move: the extra variance in the expiry holding the results over the forward variance to the next expiry, as a one-day move, read at the last close before the results date. 'Not separable' means the curve showed no distinct event. The calendar does not say whether results came in market hours or after the close, so both the results-day and next-day moves are shown. Front IV change: close of the next day minus the last close before." }) : ""}
     ${d.macro?.length ? card({ title: "How it moves on big macro days", hint: "median absolute move, since " + d.meta.since, simple: "On days like these, this index has typically moved this many times its normal amount.",
       body: `<div class="chart" id="macro"></div>`, analyst: "Days from the macro calendar (RBI policy, Union Budget, US Fed, election results...). Descriptive: a small sample per kind, overlapping with other news." }) : ""}
     ${card({ title: "Biggest one-day moves on record", hint: "since " + d.meta.since, body: `<div class="tbl-wrap"><table class="tbl"><tbody>${d.big_days.map((b) => `<tr><td class="num">${b.date}</td><td class="num"><span class="chg ${b.ret >= 0 ? "pos" : "neg"}">${vp(Math.expm1(b.ret), 1)}%</span></td></tr>`).join("")}</tbody></table></div>`,
-      analyst: d.meta.splits?.length ? `Corporate actions removed from the history: ${d.meta.splits.map((x) => `${x.date} (×${x.ratio})`).join(", ")}.` : "" })}
+      analyst: [d.meta.splits?.length ? `Splits and bonuses removed from the price history: ${d.meta.splits.map((x) => `${x.date} (×${x.ratio})`).join(", ")}.` : "",
+        d.meta.actions?.length ? `Other corporate actions (demergers and similar, where the exchange rebuilt the option strikes): ${d.meta.actions.map((x) => `${x.date} (${vp(x.adjusted, 1)}% taken out of the history; the 25 sessions of option prices before it are left out of the vol history)`).join(", ")}.` : ""].filter(Boolean).join(" ") })}
   </div>`;
   if (d.macro?.length) {
     const mm = d.macro;

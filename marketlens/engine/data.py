@@ -26,7 +26,11 @@ import pyarrow.dataset as ds
 from .. import universe as U
 
 OPT_COLS = ["date", "symbol", "kind", "expiry", "strike", "open", "high", "low", "close", "settle",
-            "underlying", "oi", "chg_oi", "contracts", "lot"]
+            "underlying", "oi", "chg_oi", "contracts", "lot", "src"]
+# Before NSE's UDiFF bhavcopy (stocks: 8 Jul 2024) the stock file had no spot column; the warehouse filled
+# `underlying` with the near-month future's close ("old-fut"). That is fine for returns and for the move to expiry
+# (the future converges to spot), but it is not spot: basis and carry are not computed from it.
+PROXY_SRC = {"old-fut"}
 RELEASE_API = "https://api.github.com/repos/mrityurequest20-cyber/Quant-Desk/releases/tags/warehouse"
 TABLES = ("fo_bhav", "fo_stock_opts", "bse_fo_bhav", "nse_index_close", "participant_oi", "participant_vol",
           "fii_dii", "corp_events", "nse_holidays", "gift_nifty")
@@ -121,7 +125,9 @@ class Warehouse:
         s = u.groupby("date")["underlying"].median().to_frame("close")
         for c in ("open", "high", "low"):
             s[c] = np.nan
-        return s[["open", "high", "low", "close"]].sort_index()
+        src = u.groupby("date")["src"].agg(lambda x: not set(x.astype(str)) & PROXY_SRC) if "src" in u else True
+        s["true_spot"] = src
+        return s[["open", "high", "low", "close", "true_spot"]].sort_index()
 
     # ---- positioning and flows ----
     def participants(self) -> pd.DataFrame:

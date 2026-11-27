@@ -19,6 +19,42 @@ def results_calendar(ev: pd.DataFrame, symbols: list[str], asof) -> pd.DataFrame
     return e[["date", "symbol", "purpose"]]
 
 
+def results_study(ev: pd.DataFrame, close: pd.Series, t: pd.DataFrame, iv_front: pd.Series, asof) -> list[dict]:
+    """For each results date: what the option curve priced, and what happened.
+
+    The announcement time is not in the calendar (during market hours or after the close), so the reaction is shown
+    for both the results-day session (day 0) and the next one (day 1), and everything priced is read at the last close
+    before day 0, when the event was certainly still ahead. IV change = front ATM IV at the close of day 1 minus at
+    that last close before."""
+    from . import vol as V
+    out = []
+    idx = close.index
+    for r in ev.itertuples():
+        d = pd.Timestamp(r.date)
+        item = {"date": str(d.date()), "purpose": r.purpose, "upcoming": bool(d > asof)}
+        i0 = idx.searchsorted(d)                    # day 0: the results date, or the first session after it
+        if item["upcoming"]:
+            ev_now = V.event_vol(t, asof)
+            if ev_now and pd.Timestamp(ev_now["front_expiry"]) >= d:
+                item["implied_event_move"] = ev_now["event_move"]
+        elif 0 < i0 < len(idx):
+            pre = idx[i0 - 1]
+            item["move_day0"] = float(close.iat[i0] / close.iat[i0 - 1] - 1)
+            if i0 + 1 < len(idx):
+                item["move_day1"] = float(close.iat[i0 + 1] / close.iat[i0] - 1)
+            evp = V.event_vol(t, pre)
+            if evp:
+                item["implied_event_move"] = evp["event_move"]
+            moves = [abs(x) for x in (item.get("move_day0"), item.get("move_day1")) if x is not None]
+            item["reaction"] = max(moves) if moves else None
+            if i0 + 1 < len(idx):
+                a, b = iv_front.get(idx[i0 + 1]), iv_front.get(pre)
+                if a is not None and b is not None and np.isfinite(a) and np.isfinite(b):
+                    item["iv_change"] = float(a - b)
+        out.append(item)
+    return out
+
+
 def macro_kinds() -> dict:
     try:
         return json.loads(MACRO_FILE.read_text())["kinds"]

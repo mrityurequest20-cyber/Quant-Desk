@@ -61,6 +61,62 @@ def _ago(s: pd.Series, n: int):
     return float(s.iat[-1 - n]) if len(s) > n else None
 
 
+# ---------------- what changed, and the exchange's rules ----------------
+
+CHANGE_FIELDS = {"iv30": ("30-day IV", "vol pts", 100), "rr25": ("skew (25d risk reversal)", "vol pts", 100),
+                 "implied_move": ("priced move to the front expiry", "% pts", 100), "rv21": ("realised vol (21d)", "vol pts", 100)}
+
+
+def day_changes(df: pd.DataFrame) -> list[dict]:
+    """Yesterday-to-today change of each reading, and how big that change is for this instrument: the change over the
+    standard deviation of its own daily changes in the past year (a z-score; |z| >= 2 is a day in ~20 for it)."""
+    out = []
+    for k, (label, unit, mult) in CHANGE_FIELDS.items():
+        if k not in df:
+            continue
+        x = df[k].dropna()
+        if len(x) < 60:
+            continue
+        d = x.diff().dropna()
+        if k == "implied_move":            # the front expiry rolls: a move into a new expiry is not a change
+            continue
+        sd = d.iloc[-253:-1].std()
+        now = float(d.iat[-1])
+        z = now / sd if sd and np.isfinite(sd) and sd > 0 else None
+        out.append({"field": k, "label": label, "chg": now * mult, "unit": unit, "z": z, "from": float(x.iat[-2]) * mult,
+                    "to": float(x.iat[-1]) * mult, "date": str(x.index[-1].date())})
+    return out
+
+
+def rules_block(opt: pd.DataFrame, asof, inst: U.Instrument, curve: list[dict]) -> dict:
+    """What the exchange's own contract data says about this instrument's contracts today: upcoming expiries, a lot
+    size that differs between expiries (a revision already listed), and physical settlement for stocks near expiry."""
+    o = opt[opt["date"] == asof]
+    lots = (o.groupby("expiry")["lot"].agg(lambda x: x.mode().iat[0] if len(x.mode()) else np.nan)
+            .dropna().sort_index())
+    out = {"expiries": [str(pd.Timestamp(e).date()) for e in sorted(o["expiry"].unique())][:6], "notes": []}
+    if len(lots) >= 2 and lots.nunique() > 1:
+        first = lots.iat[0]
+        for e, l in lots.items():
+            if l != first:
+                out["notes"].append({"kind": "lot", "text": f"Lot size changes from {first:,.0f} to {l:,.0f} for the "
+                                     f"{pd.Timestamp(e).date()} contracts (the exchange has already listed them so)."})
+                out["lot_change"] = {"from": float(first), "to": float(l), "expiry": str(pd.Timestamp(e).date())}
+                break
+    out["lot"] = float(lots.iat[0]) if len(lots) else None
+    fut = o[o["kind"] == "FUT"]
+    if len(fut):
+        nxt = pd.Timestamp(fut["expiry"].min())
+        sessions = int(np.busday_count(pd.Timestamp(asof).date(), nxt.date()))
+        out["front_expiry"] = str(nxt.date())
+        out["sessions_to_expiry"] = sessions
+        if inst.kind == "stock" and sessions <= 5:
+            out["notes"].append({"kind": "settlement", "text": f"Expiry is {sessions} session{'s' if sessions != 1 else ''} "
+                                 f"away ({nxt.date()}). Stock futures and in-the-money stock options held into expiry "
+                                 f"are settled by delivery of shares, not in cash."})
+    return out
+
+
 # ---------------- one instrument ----------------
 
 def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFrame) -> dict:
@@ -72,15 +128,32 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     lots = opt.groupby("date")["lot"].median()
     spot_raw = wh.spot(inst.symbol)
     spot, splits = V.adjust_splits(spot_raw, lots, inst.kind)
-    spot = spot[spot.index <= asof]
+    spot = spot[spot.index <= asof].copy()
     close = spot["close"]
 
     t, ivrows = V.expiry_table(opt)
+    actions = []
+    if inst.kind == "stock":
+        market = wh.spot("NIFTY")["close"]
+        actions = V.corporate_actions(opt, spot_raw["close"], market)
+        t = V.drop_action_windows(t, actions)
+        # a demerger's drop is value handed to shareholders, not a market move: take it out of the price history
+        # (net of the market's own move that day), as adjust_splits does for splits and bonuses
+        rm = np.log(market).diff()
+        for a in actions:
+            d = pd.Timestamp(a["date"])
+            jump = a["move"] - (rm.get(d, 0.0) if np.isfinite(rm.get(d, np.nan)) else 0.0)
+            spot.loc[spot.index < d, ["open", "high", "low", "close"]] *= np.exp(jump)
+            a["adjusted"] = round(float(jump), 4)
+        close = spot["close"]
     iv30 = V.constant_maturity(t, 30)
     fr = V.front(t)
     rv = V.realised(spot)
     pcr = P.pcr_history(opt)
     book = P.futures_book(opt, close)
+    if "true_spot" in spot and not book.empty:          # no basis or carry against a futures-price "spot"
+        proxy = ~spot["true_spot"].reindex(book.index).fillna(True).astype(bool)
+        book.loc[proxy, ["basis", "carry"]] = np.nan
 
     df = pd.DataFrame(index=close.index)
     df["close"] = close
@@ -131,6 +204,13 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     if len(days) > 21:
         term["month_ago"] = curve(days[-22])
     evv = V.event_vol(t, asof)
+    if evv and inst.kind == "stock" and not ev_cal.empty:
+        # name the cause only when the exchange's calendar has one inside the front expiry
+        due = ev_cal[(ev_cal["symbol"] == inst.symbol) & (ev_cal["date"] > asof)
+                     & (ev_cal["date"] <= pd.Timestamp(evv["front_expiry"]))]
+        if len(due):
+            evv["cause"] = "results"
+            evv["cause_date"] = str(due["date"].iat[0].date())
     tn = term["now"]
     front_iv = tn[0]["iv"] if tn else None
     later = tn[1:]
@@ -139,10 +219,11 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     # smiles (latest day, nearest 3 expiries)
     smiles = []
     lt = ivrows[ivrows["date"] == asof]
-    for e in sorted(lt["expiry"].unique())[:3]:
+    on_curve = set(t.loc[t["date"] == asof, "expiry"])                 # only expiries that passed the curve's checks
+    for e in [x for x in sorted(lt["expiry"].unique()) if x in on_curve][:3]:
         g = lt[lt["expiry"] == e].sort_values("strike")
         F = float(g["F"].iat[0])
-        g = g[(g["strike"] / F).between(0.85, 1.15) & g["traded"]]     # settlement-only strikes are model prices
+        g = g[(g["strike"] / F).between(0.85, 1.15) & g["liquid"]]     # liquid traded strikes: no stale wing prints
         smiles.append({"expiry": str(pd.Timestamp(e).date()), "days": int((pd.Timestamp(e) - asof).days), "F": F,
                        "strike": g["strike"].tolist(), "iv": g["iv"].round(5).tolist(),
                        "traded": g["traded"].tolist()})
@@ -169,27 +250,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     results = []
     if inst.kind == "stock" and not ev_cal.empty:
         e = ev_cal[ev_cal["symbol"] == inst.symbol]
-        for r in e.itertuples():
-            item = {"date": str(r.date.date()), "purpose": r.purpose, "upcoming": bool(r.date > asof)}
-            if not item["upcoming"]:
-                i = close.index.searchsorted(r.date)
-                if 0 < i < len(close):
-                    j = i if close.index[i] >= r.date else i + 1
-                    j = min(j, len(close) - 1)
-                    # results come after the close more often than not: the reaction is the next session's
-                    nxt = min(j + 1, len(close) - 1) if close.index[j] == r.date else j
-                    item["move_next"] = float(close.iat[nxt] / close.iat[nxt - 1] - 1)
-                    pre = t[(t["date"] == close.index[max(j - 1, 0)])]
-                    ev_pre = V.event_vol(t, close.index[max(j - 1, 0)]) if len(pre) else None
-                    if ev_pre:
-                        item["implied_event_move"] = ev_pre["event_move"]
-                    f_pre = fr["implied_move"].reindex([close.index[max(j - 1, 0)]]).iat[0] if len(fr) else None
-                    item["front_implied_move"] = f_pre
-                    after = df["iv_front"].reindex(close.index[min(nxt, len(close) - 1):min(nxt + 1, len(close))])
-                    before = df["iv_front"].reindex([close.index[max(j - 1, 0)]])
-                    if len(after) and len(before) and np.isfinite(after.iat[0]) and np.isfinite(before.iat[0]):
-                        item["iv_crush"] = float(after.iat[0] - before.iat[0])
-            results.append(item)
+        results = E.results_study(e, close, t, df["iv_front"], asof)
     ret = rv["ret"]
     macro = E.macro_study(ret) if inst.kind == "index" else []
 
@@ -218,13 +279,14 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     story = [cards["move"]["simple"]] if "move" in cards else []
     story += [cards[k]["simple"] for _, k in ranked[:3]]
     if evv:
-        story.append(f"The option curve is pricing an event before {evv['front_expiry']}: about "
-                     f"±{N.pct(evv['event_move'], 1)} on the day, against {N.pct(evv['normal_day_move'], 2)} normally.")
+        story.append(N.event_sentence(inst.symbol, evv))
 
     hi52 = float(close.tail(252).max())
     lo52 = float(close.tail(252).min())
     chg = float(close.iat[-1] / close.iat[-2] - 1) if len(close) > 1 else None
     up_res = next((r for r in results if r["upcoming"]), None)
+    changes = day_changes(df)
+    rules = rules_block(opt, asof, inst, tn)
     metrics = {
         "symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
         "spot": spot_now, "chg": chg, "iv30": _last(df["iv30"]), "iv30_chg5": (
@@ -234,23 +296,23 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "move": tn[0]["move"] if tn else None, "move_days": tn[0]["days"] if tn else None,
         "pcr": _last(df["pcr_oi"]), "pcr_p": pcr_p, "carry": _last(df["carry"]) if "carry" in df else None,
         "carry_p": carry_p, "fut_oi_chg": fcard_row["d_oi"] if fcard_row else None,
-        "buildup": fcard_row["buildup"] if fcard_row else None, "event": bool(evv),
+        "buildup": fcard_row["buildup"] if fcard_row else None, "event": (evv or {}).get("cause", "premium") if evv else None,
         "results": up_res["date"] if up_res else None, "comp_p": comp_p,
-        "inside": score.get("inside_all"), "pos52": (spot_now - lo52) / (hi52 - lo52) if hi52 > lo52 else None,
+        "inside": score.get("inside_all"), "changes": changes, "pos52": (spot_now - lo52) / (hi52 - lo52) if hi52 > lo52 else None,
     }
     cols = [c for c in ["close", "iv30", "iv_front", "rv21", "rv5", "rv63", "pk21", "fwd_rv21", "vrp", "rr25",
                         "pcr_oi", "pcr_vol", "opt_oi", "carry", "basis", "fut_oi", "roll_share", "vix",
                         "implied_move"] if c in df]
     out = {
         "meta": {"symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
-                 "exchange": inst.exchange, "asof": str(asof.date()), "since": since, "splits": splits,
+                 "exchange": inst.exchange, "asof": str(asof.date()), "since": since, "splits": splits, "actions": actions,
                  "build_seconds": round(time.time() - t0, 1)},
         "headline": {"spot": spot_now, "chg": chg, "hi52": hi52, "lo52": lo52, "metrics": metrics},
         "story": story, "cards": cards, "series": series(df, cols),
         "term": term, "smiles": smiles, "cone": cone, "scorecard": score,
         "scorecard_series": series(sc_series.set_index("date"), ["implied_move", "realised"]) if sc_series is not None and len(sc_series) else None,
         "oi_profile": prof, "futures": fut_rows, "rolls": rolls, "results": results, "macro": macro,
-        "big_days": E.big_days(ret),
+        "big_days": E.big_days(ret), "changes": changes, "rules": rules,
     }
     return clean(out)
 
@@ -333,6 +395,11 @@ def calendar_block(wh: Warehouse, asof, sym_data: dict, ev_cal: pd.DataFrame) ->
             mv = dd.get("headline", {}).get("metrics", {}).get("move")
             items.append({"date": str(r.date.date()), "type": "results", "symbol": r.symbol,
                           "text": f"{r.symbol} results" + (f" (front expiry prices ±{N.pct(mv, 1)})" if mv else "")})
+    for s, d in sym_data.items():
+        lc = d.get("rules", {}).get("lot_change")
+        if lc:
+            items.append({"date": lc["expiry"], "type": "lot", "symbol": s,
+                          "text": f"{s} lot size {lc['from']:,.0f} -> {lc['to']:,.0f} from this expiry"})
     h = wh.holidays()
     for r in h.itertuples():
         if r.date > asof:
@@ -346,6 +413,24 @@ def calendar_block(wh: Warehouse, asof, sym_data: dict, ev_cal: pd.DataFrame) ->
             seen.add(k)
             out.append(i)
     return {"items": out[:80]}
+
+
+def changes_feed(sym_data: dict, n: int = 10) -> list[dict]:
+    """The day's most unusual changes across all instruments, each measured against that instrument's own history."""
+    rows = []
+    for s, d in sym_data.items():
+        for c in d.get("changes", []):
+            if c.get("z") is None:
+                continue
+            up = c["chg"] > 0
+            verb = {"iv30": ("options got pricier" if up else "options got cheaper"),
+                    "rr25": ("downside protection got cheaper relative to calls" if up else "downside protection got dearer"),
+                    "rv21": ("it has been moving more" if up else "it has been moving less")}.get(c["field"], c["label"])
+            rows.append({"symbol": s, "field": c["field"], "z": c["z"], "chg": c["chg"], "unit": c["unit"],
+                         "text": f"{s}: {verb}. {c['label']} {c['from']:.1f} -> {c['to']:.1f} ({c['chg']:+.1f} {c['unit']}), "
+                                 f"a {abs(c['z']):.1f}-sigma day for {s}."})
+    rows.sort(key=lambda r: -abs(r["z"]))
+    return [r for r in rows if abs(r["z"]) >= 1.5][:n]
 
 
 def pulse(sym_data: dict, vix: pd.Series, parts: dict, flows: dict) -> list[str]:
@@ -410,6 +495,7 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
                       "series": series(v.to_frame("vix")[v.index >= "2019-01-01"], ["vix"], 3)}),
         "participants": parts, "flows": flows,
         "calendar": calendar_block(wh, asof, data, ev_cal),
+        "changes": changes_feed(data),
         "universe": [{"symbol": i.symbol, "name": i.name, "kind": i.kind, "sector": i.sector, "slug": U.slug(i.symbol)}
                      for i in insts if i.symbol in data],
     }
