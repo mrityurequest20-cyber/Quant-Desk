@@ -54,8 +54,8 @@
   // ---- time: years to an expiry's 15:30 IST close, from now (ms) ----
   function expiryDate(dd, mon, yy) { return `20${yy}-${String(MON[mon] + 1).padStart(2, "0")}-${dd}`; }
   function istDate(ms) { return new Date(ms + 5.5 * 3600e3).toISOString().slice(0, 10); }
-  function yearsTo(expiry, nowMs) {
-    const close = Date.parse(expiry + "T15:30:00+05:30");
+  function yearsTo(expiry, nowMs, hhmm = "15:30") {          // MCX options run to the 23:30 close of their expiry day
+    const close = Date.parse(expiry + "T" + hhmm + ":00+05:30");
     return Math.max(close - nowMs, 60e3) / (365 * 86400e3);
   }
 
@@ -182,9 +182,11 @@
   // the whole live read of one underlying
   function readUnderlying(quotes, symbol, opts) {
     const { nowMs, maxAge } = opts;
-    const sq = quotes[symbol], fq = quotes[symbol + "-FUT"];
+    const hhmm = opts.closeHHMM || "15:30";
+    // an MCX commodity has no spot: its option chain is on the future (CRUDEOIL-MCX), which stands in for the spot too
+    const sq = opts.futName ? null : quotes[symbol], fq = quotes[opts.futName || symbol + "-FUT"];
     const fresh = (q) => q && q.age_s <= maxAge && q.ltp > 0;
-    const out = { symbol, spot: fresh(sq) ? sq.ltp : null, spotChg: fresh(sq) && Number.isFinite(sq.chg) ? sq.chg / 100 : null,
+    const out = { symbol, spot: fresh(sq) ? sq.ltp : (opts.futName && fresh(fq) ? fq.ltp : null), spotChg: fresh(sq) && Number.isFinite(sq.chg) ? sq.chg / 100 : null,
       spotAge: sq ? sq.age_s : null, src: sq ? sq.src : null,
       fut: fresh(fq) ? { ltp: fq.ltp, oi: fq.oi || 0, chg: Number.isFinite(fq.chg) ? fq.chg / 100 : null, age: fq.age_s, e: fq.e || null } : null,
       expiries: [] };
@@ -200,12 +202,15 @@
     }
     const sel = readSet(Object.keys(ch).filter((x) => x > today));
     for (const e of Object.keys(sel)) {   // the nearest 6 plus the current, near and far month, as vol.py read_set
-      const T = yearsTo(e, nowMs);
-      const days = (Date.parse(e + "T15:30:00+05:30") - nowMs) / 86400e3;
+      const T = yearsTo(e, nowMs, hhmm);
+      const days = (Date.parse(e + "T" + hhmm + ":00+05:30") - nowMs) / 86400e3;
       // a contract on its own expiry day is all gamma, no vol: not read (vol.py MIN_DAYS), and never the yardstick
       // for the other expiries' liquidity
       if (e <= istDate(nowMs)) continue;
-      const anchor = out.fut ? out.fut.ltp : null;
+      // the live future anchors the parity forward (a stale pair shows as a forward far from it). On MCX the quoted
+      // future can be an earlier month than the options' own underlying (copper's options of 23 Dec are on the December
+      // future while the near future expires 30 Nov): then it is not the same contract, and no anchor is applied
+      const anchor = out.fut && !(opts.futName && out.fut.e && out.fut.e < e) ? out.fut.ltp : null;
       const r = readExpiry(ch[e], T, anchor);
       r.expiry = e; r.days = days; r.T = T; r.series = sel[e];
       r.age = Math.max(...ch[e].map((x) => x.age));

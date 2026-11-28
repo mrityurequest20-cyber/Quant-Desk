@@ -35,6 +35,7 @@
       if (!r.ok) { L.mode = "error"; L.note = "The live relay answered " + r.status + "."; return paint(); }
       const snap = await r.json();
       const ov = window.MLState && window.MLState.overview;
+      mcxRead(snap.quotes || {});                       // MCX keeps its own clock: it trades to 23:30, after NSE closes
       const nifty = snap.quotes && snap.quotes.NIFTY;
       L.feedAge = nifty ? nifty.age_s : null;
       L.at = Date.now();
@@ -86,9 +87,11 @@
     }
     el.innerHTML = render(ctx);
     if (ctx.kind === "symbol") charts(ctx.tab, ctx.u);
+    if (ctx.kind === "commodities") mcxCharts();
     if (typeof renderNav === "function" && ctx.ov) renderNav(ctx.ov, "#/" + (location.hash.replace(/^#\/?/, "") || "pulse").split("/").slice(0, 2).join("/"));
   }
   function render(ctx) {
+    if (ctx.kind === "commodities") return mcxPanel(ctx);
     return ctx.kind === "pulse" ? pulse(ctx.ov) : ctx.kind === "screener" ? screener(ctx.ov) : ctx.kind === "symbol" ? symbol(ctx.d, ctx.u, ctx.tab) : "";
   }
   function pill() {
@@ -105,6 +108,75 @@
   function askKey() {
     const k = prompt("Your live key (the LIVE_READ_TOKEN on the Worker). It stays on this device only.");
     if (k && k.trim().length >= 24) { try { localStorage.setItem(KEY, k.trim()); } catch (e) {} L.note = ""; poll(true); }
+  }
+
+  // ---- MCX: every watchlist commodity's future and option chain, read with LiveCore on the future ----
+  const MCX = ["CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI", "GOLD", "GOLDM", "SILVER", "SILVERM", "COPPER"];
+  const MCX_OPEN = 9 * 60, MCX_CLOSE = 23 * 60 + 30;
+  L.mcx = { at: null, reads: {}, live: false, sel: "CRUDEOIL" };
+  function mcxRead(quotes) {
+    const now = Date.now(), reads = {};
+    for (const c of MCX) {
+      const fq = quotes[c + "-MCX"];
+      if (!fq) continue;
+      const r = LiveCore.readUnderlying(quotes, c, { nowMs: now, maxAge: MAX_AGE, optMaxAge: OPT_MAX_AGE, futName: c + "-MCX", closeHHMM: "23:30" });
+      const front = r.expiries.find((e) => e.ok) || null;
+      const any = r.expiries[0] || null;
+      const chain = front || any;
+      reads[c] = { r, fut: fq, front, gamma: chain && r.spot ? LiveCore.gammaMap({ expiries: front ? [front] : [] }, r.spot, null, 0.08, 0.05) : null,
+        maxPain: chain ? LiveCore.maxPain(chain.strikes, chain.by) : null, walls: front ? LiveCore.walls(front, r.spot) : null };
+    }
+    L.mcx.reads = reads;
+    L.mcx.at = now;
+    L.mcx.live = Object.values(reads).some((x) => x.fut && x.fut.age_s <= MAX_AGE);
+    if (window.MLLiveCtx && window.MLLiveCtx.kind === "commodities") refresh();
+  }
+  function mcxPanel(ctx) {
+    const C = (ctx.C && ctx.C.contracts) || {}, R = L.mcx.reads, ist = new Date(Date.now() + 19800000), mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+    if (L.mode === "nokey") return `<div class="callout">Live MCX panels need your live key on this device. <a href="#" onclick="MLLive.askKey();return false"><b>Add it</b></a>.</div>`;
+    if (!Object.keys(R).length) return `<div class="callout">No MCX prices from the relay yet${L.mode === "error" ? `: ${L.note || "the relay did not answer"}` : ""}.</div>`;
+    const open = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5 && mins >= MCX_OPEN && mins <= MCX_CLOSE;
+    const rows = MCX.filter((c) => R[c]).map((c) => {
+      const x = R[c], fq = x.fut, fr = x.front, par = C[c] && C[c].parity, fresh = fq.age_s <= MAX_AGE;
+      const prem = fin(par) && fq.ltp > 0 ? fq.ltp / par - 1 : null;
+      return `<tr class="${c === L.mcx.sel ? "hl" : ""}" style="cursor:pointer" onclick="MLLive.mcxSelect('${c}')"><td><b>${c}</b> <span class="muted small">${fq.e || ""}</span></td>
+        <td class="num">${fq.ltp ? (fq.ltp > 1000 ? Math.round(fq.ltp).toLocaleString("en-IN") : fq.ltp.toFixed(2)) : "—"} <span class="muted small">${fresh ? "" : ago(fq.age_s)}</span></td>
+        <td class="num">${Number.isFinite(fq.chg) ? `<span class="chg ${fq.chg >= 0 ? "pos" : "neg"}">${fq.chg >= 0 ? "+" : ""}${fq.chg.toFixed(2)}%</span>` : "—"}</td>
+        <td class="num">${fr ? f.pct(fr.atm_iv) : `<span class="muted small">${(x.r.expiries[0] && x.r.expiries[0].why) || "no options in the feed"}</span>`}</td>
+        <td class="num">${fr ? "±" + f.pct(fr.move) + ` <span class="muted small">${fr.expiry.slice(5)}</span>` : "—"}</td>
+        <td class="num">${fr && Number.isFinite(fr.rr25) ? f.sgn(fr.rr25) + " pts" : "—"}</td>
+        <td class="num">${x.maxPain !== null ? Math.round(x.maxPain).toLocaleString("en-IN") : "—"}</td>
+        <td class="num">${prem !== null ? f.sgn(prem, 1) + "%" : "—"}</td></tr>`;
+    }).join("");
+    const sel = R[L.mcx.sel] || R[MCX.find((c) => R[c])], sf = sel && sel.front;
+    return `${open || L.mcx.live ? "" : `<div class="callout" style="margin-bottom:12px">MCX is closed now (it trades 9:00–23:30 IST on weekdays): these are the last prices the relay holds, with their age.</div>`}
+      <div class="grid g2">${card({ title: "MCX now", chip: L.mcx.live ? badgeMcx() : "", hint: "front option expiry · click a row for its smile and open interest", cls: "span2",
+        simple: "Each commodity's future and its options read live: the at-the-money vol, the move the straddle prices to the option expiry, skew (call minus put vol at 25 delta), max pain, and the future's premium over import parity (the international benchmark in rupees at the last close).",
+        analyst: "MCX options are options on the future, so the future stands in for the spot; time to expiry runs to the 23:30 close of the expiry day. The same reading rules as the index and stock pages (traded at-the-money pair, liquid strikes, the straddle and smile vols agreeing). Import parity is before duties, so a steady premium is normal; a change in it is the news.",
+        body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Contract</th><th>Future</th><th>Day</th><th>ATM IV</th><th>Priced move</th><th>Skew 25d</th><th>Max pain</th><th>Over parity</th></tr></thead><tbody>${rows}</tbody></table></div>` })}
+      ${sf ? card({ title: `${L.mcx.sel}: smile`, chip: badgeMcx(), hint: `${sf.expiry} · liquid traded strikes`, body: `<div class="chart" id="mcxSmile"></div>`,
+        analyst: `Forward ${Math.round(sf.F).toLocaleString("en-IN")} from put-call parity at ${sf.atm_strike}; ATM IV ${f.pct(sf.atm_iv, 2)} (the straddle's own ${f.pct(sf.straddle_iv, 2)}).` }) : ""}
+      ${sf ? card({ title: `${L.mcx.sel}: open interest and gamma`, chip: badgeMcx(), hint: "by strike, the strikes the feed carries", body: `<div class="chart" id="mcxOi"></div><div class="legend"><span style="--c:${css("--s1")}">Calls</span><span style="--c:${css("--s2")}">Puts</span></div>`,
+        simple: sel.walls ? `The biggest pile of calls is at ${sel.walls.call_wall ? Math.round(sel.walls.call_wall).toLocaleString("en-IN") : "—"}, of puts at ${sel.walls.put_wall ? Math.round(sel.walls.put_wall).toLocaleString("en-IN") : "—"}; put/call ratio ${Number.isFinite(sel.walls.pcr) ? sel.walls.pcr.toFixed(2) : "—"}.` : "" }) : ""}</div>`;
+  }
+  const ago = (s) => (s < 120 ? Math.round(s) + "s" : s < 7200 ? Math.round(s / 60) + "m" : Math.round(s / 3600) + "h") + " old";
+  const badgeMcx = () => `<span class="chip live-chip"><span class="dot live"></span>LIVE · ${L.mcx.at ? Math.round((Date.now() - L.mcx.at) / 1000) : "—"}s</span>`;
+  function mcxSelect(c) { L.mcx.sel = c; if (window.MLLiveCtx && window.MLLiveCtx.kind === "commodities") refresh(); }
+  function mcxCharts() {
+    const x = L.mcx.reads[L.mcx.sel], t = theme();
+    if (!x || !x.front) return;
+    const fr = x.front;
+    if (document.getElementById("mcxSmile")) chart("#mcxSmile", { tooltip: { trigger: "axis", valueFormatter: (v) => f.pct(v, 2), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+      xAxis: { type: "value", scale: true, axisLabel: { color: t.text3, formatter: (v) => Math.round(v).toLocaleString("en-IN") }, splitLine: { show: false } }, yAxis: axisY(t, fmtPct(1)),
+      series: [line("IV", fr.smile.map((p) => [p[0], p[1]]), t.s1, { showSymbol: true })] });
+    if (document.getElementById("mcxOi")) {
+      const K = fr.strikes, by = fr.by;
+      chart("#mcxOi", { grid: { left: 64, right: 24, top: 10, bottom: 30 }, tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+        yAxis: { type: "category", data: K.map((k) => Math.round(k).toLocaleString("en-IN")), axisLabel: { color: t.text3, fontSize: 10 } },
+        xAxis: { type: "value", axisLabel: { color: t.text3, formatter: (v) => big(Math.abs(v)) }, splitLine: { lineStyle: { color: t.line2 } } },
+        series: [{ name: "Calls", type: "bar", stack: "x", data: K.map((k) => (by[k].CE ? by[k].CE.oi || 0 : 0)), itemStyle: { color: t.s1 } },
+          { name: "Puts", type: "bar", stack: "x", data: K.map((k) => -(by[k].PE ? by[k].PE.oi || 0 : 0)), itemStyle: { color: t.s2 } }] });
+    }
   }
 
   // ---- what the pages show ----
@@ -382,5 +454,5 @@
     }
   }
 
-  window.MLLive = { start, poll, askKey, pulse, screener, symbol, charts, render, state: L };
+  window.MLLive = { start, poll, askKey, pulse, screener, symbol, charts, render, mcxCharts, mcxSelect, state: L };
 })();

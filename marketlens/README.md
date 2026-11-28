@@ -122,8 +122,18 @@ python -m pytest marketlens/tests
 `.github/workflows/marketlens.yml` runs this after each warehouse update and publishes `site/` to the
 `marketlens-site` branch.
 
+## Commodities (MCX)
+
+MCX's own files refuse automated reads (403, from GitHub's runners as well), and the MCX prices the desk receives
+are licensed. So the public side shows the international benchmark each contract tracks (WTI, Henry Hub, COMEX gold,
+silver, copper; with USDINR, the dollar index, US 10-year, CBOE VIX and S&P futures), its realised vol against its
+year, and its import parity (the benchmark in the MCX unit in rupees, before duties). The live side, in the browser
+with the owner's key, reads the MCX futures and option chains the relay carries with the same engine as NSE's: ATM
+IV, priced move to the option expiry, smile, skew, open interest and max pain, with time to the 23:30 close. MCX
+options are on the future; when the quoted future is an earlier month than the options' own underlying (copper's
+December options while the near future is November's), it does not anchor the forward.
+
 ## Not yet in it
 
-- MCX commodities. The warehouse has no MCX options, open interest or history, and the only MCX minutes come
-  from a licensed broker feed that must not be published.
+- MCX history (IV percentiles): there is no public MCX file to build it from; live MCX readings are not stored.
 - The Claude-labelled news model, which is waiting on the owner's API key.

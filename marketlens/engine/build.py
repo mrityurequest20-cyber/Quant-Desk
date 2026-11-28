@@ -797,6 +797,14 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
                      for i in insts if i.symbol in data],
     }
     (out / "overview.json").write_text(json.dumps(clean(overview), separators=(",", ":")))
+    # MCX commodities' public side: the international benchmarks they track (engine/commodities.py), own file
+    try:
+        from . import commodities as CMD
+        cm = CMD.board(wh.globals_(), asof)
+        (out / "commodities.json").write_text(json.dumps(clean(cm), separators=(",", ":")))
+        say(f"  commodities: {len(cm.get('contracts', {}))} contracts with a benchmark" if cm else "  commodities: no global_daily yet")
+    except Exception as e:                          # never stops the build
+        say(f"  commodities: FAILED {type(e).__name__}: {e}")
     # the whole F&O market: its own file, read only by the breadth page
     try:
         br = BR.market(Path(warehouse), asof)

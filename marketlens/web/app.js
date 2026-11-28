@@ -131,7 +131,7 @@ function renderNav(ov, active) {
   $("#nav").innerHTML = `
     <div class="nav-h">Market</div>
     ${a("#/pulse", "Market pulse")}${a("#/screener", "Volatility screener")}${a("#/positioning", "Who holds what")}
-    ${a("#/breadth", "Whole F&O market")}${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}
+    ${a("#/breadth", "Whole F&O market")}${a("#/commodities", "Commodities (MCX)")}${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}
     <div class="nav-h">Indices</div>
     ${idx.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(chgOf(u.symbol), 1) + "%")).join("")}
     <div class="nav-h">Stocks</div>
@@ -398,6 +398,40 @@ async function pageBreadth(app, ov) {
       tooltip: { show: false }, series: [{ type: "line", data: x.rv21_1y, showSymbol: false, lineStyle: { width: 1.2, color: t.s1 }, silent: true }] }));
   };
   draw();
+}
+
+// ---- MCX commodities: public benchmarks (engine/commodities.py) + the live panel (live-ui.js) ----
+async function pageCommodities(app, ov) {
+  $("#crumbs").textContent = "Commodities (MCX)";
+  let C = {};
+  try { C = S.commodities || (S.commodities = await getJSON("data/commodities.json")); } catch (e) { C = {}; }
+  const t = theme(), cs = C.contracts || {};
+  const names = Object.keys(cs);
+  const seen = new Set(), bench = names.filter((n) => { const k = cs[n].ticker; if (seen.has(k)) return false; seen.add(k); return true; });
+  const label = { "CL=F": "WTI crude", "NG=F": "Henry Hub gas", "GC=F": "COMEX gold", "SI=F": "COMEX silver", "HG=F": "COMEX copper" };
+  app.innerHTML = `<div class="page-h"><div><h1>Commodities (MCX)</h1><div class="sub">Live MCX futures and options from your feeds (9:00–23:30 IST, private), and the international benchmark each contract tracks${C.asof ? ` · benchmarks as of ${C.asof}` : ""}</div></div></div>
+    ${liveSlot({ kind: "commodities", ov, C })}
+    ${names.length ? `<div class="grid g2" style="margin-top:16px">
+      ${card({ title: "The benchmarks MCX tracks", hint: "realised vol and import parity", cls: "span2",
+        simple: "MCX contracts follow international prices converted into rupees. Import parity is the benchmark in the MCX contract's own unit at today's dollar rate, before duties and local premiums; the live panel above sets the MCX future against it.",
+        analyst: `Benchmarks: front-month futures on NYMEX/COMEX via Yahoo Finance (a public source, not an exchange file): every reading carries its date. Units: gold Rs per 10 g (31.1035 g a troy ounce), silver Rs per kg, copper Rs per kg (2.2046 lb), crude Rs per barrel, gas Rs per mmBtu. Realised vol: 21 sessions, ranked against its own past year.`,
+        body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>MCX contract</th><th>Benchmark</th><th>Last</th><th>Day</th><th>Realised vol 21d</th><th>Rank 1y</th><th>Import parity</th></tr></thead><tbody>
+          ${names.map((n) => { const x = cs[n]; return `<tr><td><b>${n}</b></td><td>${label[x.ticker] || x.ticker} <span class="muted small">${x.benchmark_unit} · ${x.date}</span></td><td class="num">${num(x.close, 2)}</td>
+            <td class="num"><span class="chg ${x.chg >= 0 ? "pos" : "neg"}">${vp(x.chg, 2)}%</span></td><td class="num">${pct(x.rv21, 1)}</td><td class="num">${ord(x.rv21_rank)}</td>
+            <td class="num">${fin(x.parity) ? num(x.parity, x.parity > 1000 ? 0 : 1) : "—"} <span class="muted small">${x.mcx_unit}</span></td></tr>`; }).join("")}</tbody></table></div>` })}
+      ${bench.map((n, i) => card({ title: `${label[cs[n].ticker] || cs[n].ticker}: how much it moves`, hint: `realised vol, 21 days · since ${cs[n].since}`, body: `<div class="chart" id="bm${i}" style="height:200px"></div>` })).join("")}
+      ${(C.macro || []).length ? card({ title: "Macro board", hint: "the prices commodities and Indian markets take their cue from", cls: "span2",
+        body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Market</th><th>Last</th><th>Day</th><th>Realised vol 21d</th><th>Rank 1y</th></tr></thead><tbody>
+          ${C.macro.map((m) => `<tr><td>${esc(m.name)} <span class="muted small">${m.date}</span></td><td class="num">${num(m.close, 2)}${m.is_yield ? "%" : ""}</td>
+            <td class="num">${m.is_yield ? (m.chg >= 0 ? "+" : "") + (m.chg * 100).toFixed(0) + " bp" : `<span class="chg ${m.chg >= 0 ? "pos" : "neg"}">${vp(m.chg, 2)}%</span>`}</td>
+            <td class="num">${m.is_yield ? (fin(m.rv21) ? (m.rv21 * 1e4).toFixed(0) + " bp/yr" : "—") : pct(m.rv21, 1)}</td><td class="num">${ord(m.rv21_rank)}</td></tr>`).join("")}</tbody></table></div>` }) : ""}
+    </div>` : `<div class="callout" style="margin-top:16px">The international benchmarks are not in the warehouse yet: they arrive with its next update (global_daily).</div>`}`;
+  bench.forEach((n, i) => {
+    const x = cs[n].rv21_1y;
+    chart(`#bm${i}`, { grid: { left: 52, right: 18, top: 16, bottom: 26 }, tooltip: { trigger: "axis", valueFormatter: (v) => pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+      xAxis: axisX(x.date, t), yAxis: axisY(t, fmtPct(0)), series: [line("Realised vol", x.v, t.s1, { areaStyle: { color: t.s1, opacity: .08 } })] });
+  });
+  if (window.MLLive) MLLive.mcxCharts();
 }
 
 // ---- implied against realised correlation (engine/dispersion.py) ----
@@ -999,6 +1033,7 @@ async function route(opts = {}) {
     else if (parts[0] === "positioning") await pagePositioning(app, ov);
     else if (parts[0] === "flows") await pageFlows(app, ov);
     else if (parts[0] === "breadth") await pageBreadth(app, ov);
+    else if (parts[0] === "commodities") await pageCommodities(app, ov);
     else if (parts[0] === "calendar") await pageCalendar(app, ov);
     else if (parts[0] === "method") await pageMethod(app, ov);
     else await pagePulse(app, ov);

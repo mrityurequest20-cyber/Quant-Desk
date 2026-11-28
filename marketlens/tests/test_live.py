@@ -249,3 +249,24 @@ def test_live_max_pain_matches_end_of_day():
     by = {str(int(k)): {"CE": {"oi": c}, "PE": {"oi": p}} for k, c, p in zip(K, oi["oi_c"], oi["oi_p"])}
     js = run_js(f"console.log(JSON.stringify(L.maxPain({json.dumps(K)}, {json.dumps(by)})));")
     assert js == X.max_pain(oi)
+
+
+def test_mcx_options_read_on_the_future_to_the_2330_close():
+    """An MCX chain: no spot, the future (CRUDEOIL-MCX) stands in; time runs to 23:30 on the expiry day; a quoted future
+    of an earlier month than the options' own underlying does not anchor the forward."""
+    day = pd.Timestamp("2026-11-26")
+    df = _chain(day, 7700.0, {pd.Timestamp("2026-12-16"): 0.45})
+    q = quotes_from_chain(df[(df["date"] == day) & (df["kind"] != "FUT")], "CRUDEOIL")
+    now_ms = int(pd.Timestamp("2026-11-26 21:00", tz="Asia/Kolkata").timestamp() * 1000)
+    fwd = float(df[df["kind"] == "FUT"]["close"].iat[0])
+    q["CRUDEOIL-MCX"] = {"ltp": fwd, "age_s": 2, "e": "2026-12-18", "s": "mcx"}
+    run = lambda qq, extra="": run_js(f"const r = L.readUnderlying({json.dumps(qq)}, 'CRUDEOIL', {{nowMs: {now_ms}, maxAge: 120, futName: 'CRUDEOIL-MCX', closeHHMM: '23:30'{extra}}});"
+                                     "console.log(JSON.stringify({spot: r.spot, e: r.expiries.map(e => ({ok: e.ok, why: e.why || null, T: e.T, atm: e.atm_iv}))}))")
+    r = run(q)
+    assert r["spot"] == pytest.approx(fwd) and r["e"][0]["ok"] and r["e"][0]["atm"] == pytest.approx(0.45, abs=0.01)
+    T_2330 = (pd.Timestamp("2026-12-16 23:30", tz="Asia/Kolkata") - pd.Timestamp("2026-11-26 21:00", tz="Asia/Kolkata")).total_seconds() / (365 * 86400)
+    assert r["e"][0]["T"] == pytest.approx(T_2330, rel=1e-9)
+    q["CRUDEOIL-MCX"] = {"ltp": fwd * 1.06, "age_s": 2, "e": "2026-12-18", "s": "mcx"}       # same month, 6% away: refused
+    assert not run(q)["e"][0]["ok"]
+    q["CRUDEOIL-MCX"] = {"ltp": fwd * 1.06, "age_s": 2, "e": "2026-11-30", "s": "mcx"}       # an earlier month: not an anchor
+    assert run(q)["e"][0]["ok"]
