@@ -51,6 +51,7 @@ TABLES = {                                   # table → (period, key columns, d
     "participant_vol": ("year", ["date", "participant"], "date"),
     "fii_dii": ("year", ["date", "category"], "date"),
     "global_daily": ("year", ["date", "ticker"], "date"),
+    "macro_events": ("year", ["date", "country", "title"], "date"),
     "gift_nifty": ("year", ["ts"], "ts"),
     "corp_events": ("year", ["date", "symbol", "purpose"], "date"),
     "nse_holidays": ("year", ["date"], "date"),
@@ -194,7 +195,7 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
     reaches today. Returns counts per table."""
     sim = today is not None
     today = today or pd.Timestamp.now(tz=IST).date()
-    only = only or set(DAILY_FILES) | {"fii_dii", "gift_nifty", "corp_events", "nse_holidays", "global_daily"}
+    only = only or set(DAILY_FILES) | {"fii_dii", "gift_nifty", "corp_events", "nse_holidays", "global_daily", "macro_events"}
     holidays = holidays or set()
     days = [d.date() for d in pd.bdate_range(start, min(end, today)) if d.date() not in holidays]
     days = sorted(set(days) | {d for d in SPECIAL_SESSIONS if start <= d <= min(end, today)}
@@ -249,7 +250,39 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
         _snapshots(wh, nse, only, counts, say)
     if "global_daily" in only:
         _globals(wh, start, min(end, today), counts, say, stamp)
+    if "macro_events" in only:
+        _macro(wh, today, counts, say, stamp, holidays)
     return counts
+
+
+def _macro(wh: Warehouse, today: dt.date, counts: dict, say, stamp, holidays=frozenset(), get=None) -> None:
+    """The global macro calendar (quantdesk/data/macro.py): this week's Forex Factory calendar, the Fed's FOMC dates, India's
+    releases by MoSPI's rules from 2019 to four months ahead, and the desk's checked list of past macro days. Each
+    source that fails is said and skipped; the table keeps what it already had."""
+    from . import macro as M
+    if get is None:
+        import requests
+
+        def get(url):
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"}, timeout=30)
+            r.raise_for_status()
+            return r.content
+    parts = [M.checked_history(), M.india_rules(dt.date(2019, 1, 1), today + dt.timedelta(days=120), set(holidays))]
+    for name, url, parse in (("forexfactory", M.FF_URL, M.parse_ff), ("fed", M.FED_URL, lambda b: M.parse_fed(b.decode("utf-8", "replace")))):
+        try:
+            df = parse(get(url))
+            parts.append(df)
+            say(f"  macro_events {name}: {len(df)} events")
+        except Exception as exc:                                       # noqa: BLE001 - one source failing skips only itself
+            say(f"  macro_events {name}: {exc!s:.160}")
+    df = pd.concat([p for p in parts if len(p)], ignore_index=True)
+    if df.empty:
+        return
+    # one row per key; a later source (Forex Factory, the Fed) wins over the rule or the desk list for the same event
+    df = df.drop_duplicates(["date", "country", "title"], keep="last")
+    df["fetched"] = stamp()
+    wh.upsert("macro_events", df)
+    counts["macro_events"] = len(df)
 
 
 # the international benchmarks MarketLens reads beside Indian markets (commodities against MCX, the dollar, US rates)

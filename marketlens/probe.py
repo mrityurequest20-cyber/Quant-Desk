@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
+import pandas as pd
 import requests
 
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -103,6 +104,17 @@ def macro_sources() -> dict:
             out[name] = o
         except Exception as e:                                   # noqa: BLE001
             out[name] = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+    # the parsers themselves, on the live pages (quantdesk/data/macro.py)
+    try:
+        from quantdesk.data import macro as M
+        ff = M.parse_ff(requests.get(M.FF_URL, headers=UA, timeout=25).content)
+        fed = M.parse_fed(requests.get(M.FED_URL, headers=UA, timeout=25).text)
+        out["parsed"] = {"forexfactory_rows": len(ff), "forexfactory_kinds": ff["kind"].value_counts().to_dict(),
+                         "forexfactory_high": ff[ff["impact"] == "High"][["date", "time_ist", "country", "title", "kind"]].astype(str).values.tolist()[:15],
+                         "fed_meetings": len(fed), "fed_years": sorted({d.year for d in fed["date"]}),
+                         "fed_next": fed[fed["date"] >= pd.Timestamp.now().normalize()][["date", "time_ist", "title"]].astype(str).values.tolist()[:4]}
+    except Exception as e:                                       # noqa: BLE001
+        out["parsed"] = {"error": f"{type(e).__name__}: {str(e)[:160]}"}
     for name, url in (("rbi_mpc_page", "https://www.rbi.org.in/Scripts/AnnualPolicy.aspx"),
                       ("mospi_calendar", "https://www.mospi.gov.in/advance-release-calendar"),
                       ("bls_cpi_schedule", "https://www.bls.gov/schedule/news_release/cpi.htm"),

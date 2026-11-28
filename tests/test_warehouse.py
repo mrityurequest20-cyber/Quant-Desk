@@ -459,3 +459,25 @@ def test_weekend_sessions_are_fetched_like_weekdays(tmp_path):
     assert sunday in asked["fo"] and dt.date(2026, 11, 21) not in asked["fo"]      # found nightly; a quiet Saturday is not
     assert set(W.SPECIAL_SESSIONS) >= {dt.date(2019, 10, 27), dt.date(2025, 2, 1), dt.date(2026, 2, 1)}
     assert all(d.weekday() >= 5 for d in W.SPECIAL_SESSIONS)
+
+
+def test_macro_events_keep_each_source_and_survive_one_failing(tmp_path):
+    """The global macro calendar (quantdesk/data/macro.py): Forex Factory's week, the Fed's dates, India's releases by
+    rule and the desk's checked list land in macro_events; a source that fails is said and skipped."""
+    import json as _json
+    from quantdesk.data import macro as M
+    from quantdesk.data.warehouse import _macro
+    ff = _json.dumps([{"title": "Non-Farm Employment Change", "country": "USD", "date": "2026-12-04T08:30:00-05:00",
+                       "impact": "High", "forecast": "150K", "previous": "120K"}]).encode()
+
+    def get(url):
+        if url == M.FF_URL:
+            return ff
+        raise OSError("the Fed page is down")
+    wh, said, c = Warehouse(tmp_path), [], {}
+    _macro(wh, dt.date(2026, 11, 28), c, said.append, lambda: pd.Timestamp("2026-11-28", tz="Asia/Kolkata"), get=get)
+    t = wh.read("macro_events")
+    nfp = t[t["kind"] == "us_nfp"].iloc[0]
+    assert (str(nfp["date"].date()), nfp["time_ist"], nfp["forecast"]) == ("2026-12-04", "19:00", "150K")
+    assert {"rbi", "fomc", "india_cpi", "india_gdp", "budget"} <= set(t["kind"])           # the checked list and India's rules
+    assert any("fed" in s and "down" in s for s in said) and c["macro_events"] == len(t)

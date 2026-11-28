@@ -385,3 +385,11 @@ def test_stock_spot_is_the_exchange_cash_close_where_the_warehouse_has_it(tmp_pa
     s = wh.spot("HDFCBANK")
     assert list(s["close"]) == [1605.5, 1617.2, 1630.0] and list(s["true_spot"]) == [True, True, False]
     assert s["high"].iat[1] == 1620.0
+
+
+def test_skew_card_flat_gap_reads_as_less_fear_when_high():
+    """A near-zero put-call gap ranks high for an index (puts usually cost more): the line must say what that means."""
+    from marketlens.engine import narrative as N
+    hi = N.skew_card("NIFTY", 0.001, 0.95)["simple"]
+    assert "less fear is priced than usual" in hi and "That is very high" not in hi
+    assert "unknown" not in N.skew_card("NIFTY", 0.001, None)["simple"]
