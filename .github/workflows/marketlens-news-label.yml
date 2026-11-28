@@ -1,0 +1,43 @@
+# MarketLens news, phase P3 (marketlens/news/label.py): the ONE-TIME Claude labelling run over the news corpus.
+# Modes: estimate (counts tokens and prices the run; spends nothing), run (Claude Haiku 5.5 labels every story through
+# the Batch API), audit (Claude Opus 5.5 labels a ~1,500-story sample to measure label quality). The code holds both
+# models together to the owner's $13 budget, stops a tranche short of any cap, and resumes without paying twice.
+# The key comes from the CLAUDE_API secret and is never printed. Labels go to the news-labels release.
+name: MarketLens news labels
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "estimate, run or audit"
+        default: "estimate"
+      cap:
+        description: "Dollars this run may spend (run, audit); both models together never exceed $13"
+        default: "0"
+
+permissions:
+  contents: write            # the news-labels release (the corpus release is only read)
+
+concurrency:
+  group: news-labels
+  cancel-in-progress: false
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PYTHONUNBUFFERED: "1"
+      ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API || secrets.CLAUDE_API_KEY || secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Label
+        run: python -m marketlens news-label --corpus _news --out _labels --mode "${{ inputs.mode }}" --cap "${{ inputs.cap }}" --release news-corpus,news-labels

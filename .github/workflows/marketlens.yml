@@ -63,6 +63,12 @@ jobs:
         run: |
           python -m marketlens news-corpus --dest _nc --from 2023-01-02 --to 2023-01-05 --sources nse --budget-min 3
           python -m marketlens news-corpus --dest _nc --from 2020-03-01 --to 2020-04-01 --sources gnews --budget-min 5
+      - name: News P3 smoke test - one live labelling request on six stories, and the price of labelling this sample (report only)
+        continue-on-error: true
+        timeout-minutes: 6
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API || secrets.CLAUDE_API_KEY || secrets.ANTHROPIC_API_KEY }}
+        run: python -m marketlens news-label --corpus _nc --out _nl --mode smoke
 
   build:
     if: github.event_name != 'pull_request'

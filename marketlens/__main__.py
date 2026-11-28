@@ -29,6 +29,13 @@ def main(argv=None) -> int:
     nc.add_argument("--sources", default="nse,gnews")
     nc.add_argument("--budget-min", type=float, default=320)
     nc.add_argument("--release", default="", help="pull from / push to this GitHub release (news-corpus)")
+    nl = sub.add_parser("news-label", help="news P3: the one-time Claude labelling run (estimate, smoke, run, audit)")
+    nl.add_argument("--corpus", type=Path, required=True)
+    nl.add_argument("--out", type=Path, required=True)
+    nl.add_argument("--mode", choices=["estimate", "smoke", "run", "audit"], default="estimate")
+    nl.add_argument("--cap", type=float, default=0.0, help="dollars this run may spend (run, audit)")
+    nl.add_argument("--audit-n", type=int, default=1500)
+    nl.add_argument("--release", default="", help="pull the corpus from / push labels to these releases: corpus,labels")
     sub.add_parser("news-probe", help="news P0: which news sources answer from here, how far back, and whether the Anthropic key works")
     s = sub.add_parser("site", help="assemble the static site: the web app plus a data folder")
     s.add_argument("--data", type=Path, required=True)
@@ -53,6 +60,8 @@ def main(argv=None) -> int:
         if store:
             store.push(a.dest, c.files())
         return 0
+    if a.cmd == "news-label":
+        return _news_label(a)
     if a.cmd == "news-probe":
         from .news.probe import main as news_probe_main
         return news_probe_main()
@@ -103,3 +112,50 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _news_label(a) -> int:
+    import anthropic
+    import pandas as pd
+    from .news import corpus as NC, label as NL
+    stores = {}
+    if a.release:
+        from quantdesk.data.warehouse import ReleaseStore
+        c_tag, l_tag = (a.release.split(",") + ["news-labels"])[:2]
+        stores["c"] = ReleaseStore(c_tag)
+        stores["l"] = ReleaseStore(l_tag, title="MarketLens news labels",
+                                   notes="The one-time Claude labels of the news corpus (marketlens/news/label.py). Not a software release.")
+        stores["l"].ensure()
+        stores["c"].pull(a.corpus, [n for n in stores["c"].assets() if n.endswith(".parquet")])
+        have = stores["l"].assets()
+        if have:
+            stores["l"].pull(a.out, have)
+    df = NC.Corpus(a.corpus).read()
+    stories = NL.select(df)
+    print(f"{len(df)} rows in the corpus, {len(stories)} stories to label")
+    client = anthropic.Anthropic()
+    if a.mode == "smoke":
+        print(json.dumps(NL.smoke(client, stories.sample(min(6, len(stories)), random_state=1)), indent=1, default=str))
+        return 0
+    model = NL.OPUS if a.mode == "audit" else NL.HAIKU
+    if a.mode == "audit":
+        stories = NL.audit_sample(stories, a.audit_n)
+    reqs = NL.requests_for(stories, model)
+    est = NL.estimate(client, reqs, model)
+    print("estimate:", json.dumps(est))
+    if a.mode == "estimate":
+        return 0
+    if a.cap <= 0:
+        print("no --cap given: nothing sent")
+        return 1
+    run = NL.Run(a.out, model)
+    other = NL.Run(a.out, NL.HAIKU if model == NL.OPUS else NL.OPUS).state["spent"]
+    cap = min(a.cap, NL.TOTAL_BUDGET - other)                 # the owner's $13 covers both models together
+    print(f"cap for this run ${cap:.2f} (the other model has spent ${other:.4f} of ${NL.TOTAL_BUDGET:.2f})")
+    try:
+        print(json.dumps(NL.label(client, reqs, run, cap), indent=1))
+    finally:
+        if "l" in stores:
+            stores["l"].push(a.out, run.files())
+    return 0
+
