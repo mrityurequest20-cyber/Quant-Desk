@@ -212,6 +212,19 @@ class Run:
         return [p.name for p in (self.lab_path, self.state_path) if p.exists()]
 
 
+def total_spent(root: Path, but: str | None = None) -> float:
+    """What every part of the job has spent (labels, audit, briefs: their state_*.json files), less one of them."""
+    tot = 0.0
+    for p in Path(root).glob("state_*.json"):
+        if but and p.name == but:
+            continue
+        try:
+            tot += float(json.loads(p.read_text()).get("spent", 0))
+        except (ValueError, OSError):
+            pass
+    return tot
+
+
 def estimate(client, reqs: list[dict], model: str, sample: int = 5, out_per_story: int = 110) -> dict:
     """Price the run without spending: input tokens counted exactly on a sample of requests (count_tokens is free),
     output estimated per story (the JSON label, plus low-effort thinking: measured by the pilot)."""

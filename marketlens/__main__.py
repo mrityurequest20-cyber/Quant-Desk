@@ -32,7 +32,8 @@ def main(argv=None) -> int:
     nl = sub.add_parser("news-label", help="news P3: the one-time Claude labelling run (estimate, smoke, run, audit)")
     nl.add_argument("--corpus", type=Path, required=True)
     nl.add_argument("--out", type=Path, required=True)
-    nl.add_argument("--mode", choices=["estimate", "smoke", "run", "audit"], default="estimate")
+    nl.add_argument("--mode", choices=["estimate", "smoke", "run", "audit", "situations", "briefs"], default="estimate")
+    nl.add_argument("--warehouse", type=Path, default=None, help="situations/briefs: the warehouse folder (fetched if empty)")
     nl.add_argument("--cap", type=float, default=0.0, help="dollars this run may spend (run, audit)")
     nl.add_argument("--audit-n", type=int, default=1500)
     nl.add_argument("--release", default="", help="pull the corpus from / push labels to these releases: corpus,labels")
@@ -131,6 +132,26 @@ def _news_label(a) -> int:
     df = NC.Corpus(a.corpus).read()
     stories = NL.select(df)
     print(f"{len(df)} rows in the corpus, {len(stories)} stories to label")
+    if a.mode in ("situations", "briefs"):
+        from .engine.data import Warehouse, fetch
+        from .news import brief as NB, situations as NS
+        wh_dir = a.warehouse or (a.out / "_warehouse")
+        if not any(Path(wh_dir).glob("*.parquet")):
+            fetch(Path(wh_dir), tables=("global_daily", "cm_bhav", "nse_index_close"))
+        an = NS.analyse(df, *NS.inputs(Warehouse(Path(wh_dir))))
+        a.out.mkdir(parents=True, exist_ok=True)
+        (a.out / "situations.json").write_text(json.dumps(an, default=str))
+        for sid, sit in an.items():
+            print(f"{sid}: {sit['stories']} stories, {len(sit['episodes'])} episodes")
+        files = ["situations.json"]
+        if a.mode == "briefs":
+            reqs = NB.requests_for(an, NS.recent(df))
+            st = NB.write(anthropic.Anthropic(), reqs, a.out, NL.total_spent(a.out, but="state_briefs.json"), a.cap or NL.TOTAL_BUDGET)
+            print(json.dumps(st))
+            files += [p.name for p in a.out.glob("brief_*.json")] + ["state_briefs.json"]
+        if "l" in stores:
+            stores["l"].push(a.out, [f for f in files if (a.out / f).exists()])
+        return 0
     client = anthropic.Anthropic()
     if a.mode == "smoke":
         print(json.dumps(NL.smoke(client, stories.sample(min(6, len(stories)), random_state=1)), indent=1, default=str))
@@ -147,9 +168,9 @@ def _news_label(a) -> int:
         print("no --cap given: nothing sent")
         return 1
     run = NL.Run(a.out, model)
-    other = NL.Run(a.out, NL.HAIKU if model == NL.OPUS else NL.OPUS).state["spent"]
-    cap = min(a.cap, NL.TOTAL_BUDGET - other)                 # the owner's $13 covers both models together
-    print(f"cap for this run ${cap:.2f} (the other model has spent ${other:.4f} of ${NL.TOTAL_BUDGET:.2f})")
+    other = NL.total_spent(a.out, but=run.state_path.name)
+    cap = min(a.cap, NL.TOTAL_BUDGET - other)                 # the owner's $13 covers labels, audit and briefs together
+    print(f"cap for this run ${cap:.2f} (the rest of the job has spent ${other:.4f} of ${NL.TOTAL_BUDGET:.2f})")
     try:
         print(json.dumps(NL.label(client, reqs, run, cap), indent=1))
     finally:

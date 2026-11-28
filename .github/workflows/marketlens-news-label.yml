@@ -1,7 +1,9 @@
 # MarketLens news, phase P3 (marketlens/news/label.py): the ONE-TIME Claude labelling run over the news corpus.
 # Modes: estimate (counts tokens and prices the run; spends nothing), run (Claude Haiku 5.5 labels every story through
-# the Batch API), audit (Claude Opus 5.5 labels a ~1,500-story sample to measure label quality). The code holds both
-# models together to the owner's $13 budget, stops a tranche short of any cap, and resumes without paying twice.
+# the Batch API), audit (Claude Opus 5.5 labels a stratified sample to measure label quality), situations (no Claude:
+# the running situations, their flare-up episodes and the measured market reaction to each, from the warehouse),
+# briefs (Claude Opus 5.5 writes one analyst brief per situation from those tables). The code holds the whole job to
+# the owner's $13 budget, stops short of any cap, and resumes without paying twice.
 # The key comes from the CLAUDE_API secret and is never printed. Labels go to the news-labels release.
 name: MarketLens news labels
 
@@ -9,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "estimate, run or audit"
+        description: "estimate, run, audit, situations or briefs"
         default: "estimate"
       cap:
         description: "Dollars this run may spend (run, audit); both models together never exceed $13"
