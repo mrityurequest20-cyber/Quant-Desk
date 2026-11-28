@@ -153,6 +153,17 @@ class Warehouse:
             s[c] = np.nan
         src = u.groupby("date")["src"].agg(lambda x: not set(x.astype(str)) & PROXY_SRC) if "src" in u else True
         s["true_spot"] = src
+        # NSE's official cash close (sec_bhavdata_full, from 30 Sep 2019) wherever it exists: the F&O file's own
+        # "underlying" is the near future's close before July 2024 (off by the futures premium, ~0.3%, and jumping on
+        # roll days) and now and then off on its own; the exchange's closing price is the cash market's.
+        cash = self.cash(symbol)
+        if len(cash) and "close" in cash:
+            c = cash.reindex(s.index)
+            have = c["close"].notna() & (c["close"] > 0)
+            for col in ("open", "high", "low", "close"):
+                if col in c:
+                    s.loc[have, col] = c.loc[have, col].astype(float)
+            s.loc[have, "true_spot"] = True
         return s[["open", "high", "low", "close", "true_spot"]].sort_index()
 
     # ---- positioning and flows ----

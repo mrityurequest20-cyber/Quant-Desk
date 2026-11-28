@@ -140,7 +140,7 @@ def day_changes(df: pd.DataFrame) -> list[dict]:
     return out
 
 
-def rules_block(opt: pd.DataFrame, asof, inst: U.Instrument, curve: list[dict]) -> dict:
+def rules_block(opt: pd.DataFrame, asof, inst: U.Instrument, curve: list[dict], holidays=()) -> dict:
     """What the exchange's own contract data says about this instrument's contracts today: upcoming expiries, a lot
     size that differs between expiries (a revision already listed), and physical settlement for stocks near expiry."""
     o = opt[opt["date"] == asof]
@@ -159,7 +159,8 @@ def rules_block(opt: pd.DataFrame, asof, inst: U.Instrument, curve: list[dict]) 
     fut = o[o["kind"] == "FUT"]
     if len(fut):
         nxt = pd.Timestamp(fut["expiry"].min())
-        sessions = int(np.busday_count(pd.Timestamp(asof).date(), nxt.date()))
+        # NSE trading days, not weekdays: the exchange's holidays between now and expiry are not sessions
+        sessions = int(np.busday_count(pd.Timestamp(asof).date(), nxt.date(), holidays=[pd.Timestamp(h).date() for h in holidays]))
         out["front_expiry"] = str(nxt.date())
         out["sessions_to_expiry"] = sessions
         if inst.kind == "stock" and sessions <= 5:
@@ -492,7 +493,11 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     chg = float(close.iat[-1] / close.iat[-2] - 1) if len(close) > 1 else None
     up_res = next((r for r in results if r["upcoming"]), None)
     changes = day_changes(df)
-    rules = rules_block(opt, asof, inst, tn)
+    try:
+        hol = list(pd.to_datetime(wh.holidays()["date"]))
+    except Exception:                               # no holiday table: weekdays, as before
+        hol = []
+    rules = rules_block(opt, asof, inst, tn, hol)
     if inst.kind == "stock" and limits is not None:
         pl = RL.stock_block(inst.symbol, *limits)
         if pl:
