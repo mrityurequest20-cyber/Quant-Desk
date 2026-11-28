@@ -99,3 +99,8 @@ def test_queries_cover_every_instrument_and_the_macro_channels():
     for s in ("NIFTY", "BANKNIFTY", "INDIAVIX", "RELIANCE", "M&M", "PAYTM", "MACRO:RBI", "MACRO:CRUDE"):
         assert s in q
     assert q["RELIANCE"] == '"Reliance Industries"' and "Paytm" in q["PAYTM"]
+
+
+def test_situation_timelines_are_queried_too():
+    q = C.queries()
+    assert {"SIT:IRAN_US_ISRAEL", "SIT:RUSSIA_UKRAINE", "SIT:US_TARIFFS_INDIA", "SIT:INDIA_PAKISTAN"} <= set(q)

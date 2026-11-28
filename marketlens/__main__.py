@@ -110,8 +110,6 @@ def main(argv=None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
 
 
 def _news_label(a) -> int:
@@ -159,3 +157,5 @@ def _news_label(a) -> int:
             stores["l"].push(a.out, run.files())
     return 0
 
+if __name__ == "__main__":
+    raise SystemExit(main())

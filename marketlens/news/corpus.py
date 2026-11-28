@@ -57,6 +57,21 @@ MACRO = {
     "MACRO:SEBI": 'SEBI (F&O OR derivatives OR rules OR circular)',
     "MACRO:MONSOON": 'India monsoon',
 }
+# the running situations an analyst follows (each becomes a dated timeline: its history, its episodes, its reactions)
+SITUATIONS = {
+    "SIT:IRAN_US_ISRAEL": 'Iran (US OR Israel OR strike OR sanctions OR nuclear OR Hormuz)',
+    "SIT:RUSSIA_UKRAINE": 'Russia Ukraine (war OR invasion OR ceasefire OR sanctions OR talks)',
+    "SIT:CHINA_TAIWAN_US": '(China Taiwan) OR ("US China" (tensions OR sanctions OR chips))',
+    "SIT:RED_SEA_SHIPPING": '"Red Sea" OR Houthi OR "Suez Canal" OR "shipping disruption"',
+    "SIT:OPEC": 'OPEC (cut OR output OR meeting OR production)',
+    "SIT:US_TARIFFS_INDIA": '(tariff OR "trade deal" OR "trade talks") (India US OR "Trump India")',
+    "SIT:INDIA_PAKISTAN": 'India Pakistan (attack OR strike OR border OR terror OR ceasefire)',
+    "SIT:INDIA_CHINA_BORDER": 'India China (border OR LAC OR Galwan OR standoff)',
+    "SIT:FED_CYCLE": '"Federal Reserve" (hike OR cut OR pause OR Powell)',
+    "SIT:RBI_CYCLE": 'RBI (repo OR MPC OR "rate cut" OR "rate hike" OR CRR)',
+    "SIT:INDIA_ELECTIONS": 'India (election OR "exit poll" OR "Lok Sabha" OR "state elections") results',
+    "SIT:CRUDE_SPIKE": '(Brent OR "crude oil") (surge OR spike OR crash OR "$100")',
+}
 INDEX_Q = {"NIFTY": '"Nifty" OR "Sensex"', "BANKNIFTY": '"Bank Nifty" OR "banking stocks"', "FINNIFTY": '"Fin Nifty" OR "financial stocks" India',
            "MIDCPNIFTY": 'midcap stocks India', "NIFTYNXT50": '"Nifty Next 50"', "SENSEX": '"Sensex"', "BANKEX": '"Bankex" OR "bank stocks" BSE',
            "INDIAVIX": '"India VIX" OR "volatility index" India'}
@@ -69,6 +84,7 @@ def queries() -> dict[str, str]:
         name = s.name.split(" (")[0]
         q[s.symbol] = f'"{name}"' + (' OR "Paytm"' if s.symbol == "PAYTM" else "")
     q.update(MACRO)
+    q.update(SITUATIONS)
     return q
 
 

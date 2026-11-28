@@ -97,3 +97,12 @@ def test_audit_sample_draws_from_every_stratum():
     s = pd.concat([corpus().iloc[[0, 2]].assign(id=lambda d, k=k: d["id"] + str(k)) for k in range(30)], ignore_index=True)
     a = L.audit_sample(s, n=10)
     assert len(a) == 10 and set(a["source"]) == {"nse", "gnews"}
+
+
+def test_the_cli_command_runs_end_to_end_on_an_empty_corpus(tmp_path):
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, "-m", "marketlens", "news-label", "--corpus", str(tmp_path / "c"), "--out", str(tmp_path / "o"),
+                        "--mode", "estimate"], capture_output=True, text=True, env={**__import__("os").environ, "ANTHROPIC_API_KEY": "x"})
+    assert r.returncode == 0, r.stderr
+    assert "0 stories to label" in r.stdout
