@@ -131,7 +131,7 @@ function renderNav(ov, active) {
   $("#nav").innerHTML = `
     <div class="nav-h">Market</div>
     ${a("#/pulse", "Market pulse")}${a("#/screener", "Volatility screener")}${a("#/positioning", "Who holds what")}
-    ${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}
+    ${a("#/breadth", "Whole F&O market")}${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}
     <div class="nav-h">Indices</div>
     ${idx.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(chgOf(u.symbol), 1) + "%")).join("")}
     <div class="nav-h">Stocks</div>
@@ -345,6 +345,59 @@ async function pageFlows(app, ov) {
     series: [line("FII", cum(s.FII), t.s1), line("DII", cum(s.DII), t.s2)] });
 }
 
+// ---------------------------------------------------------------- the whole F&O market (engine/breadth.py)
+async function pageBreadth(app, ov) {
+  $("#crumbs").textContent = "Whole F&O market";
+  let B;
+  try { B = S.breadth || (S.breadth = await getJSON("data/breadth.json")); }
+  catch (e) { app.innerHTML = `<div class="loading">The market-wide data is not built yet (${esc(e.message)}).</div>`; return; }
+  const t = theme(), T = B.today, cls = ["Long build-up", "Short build-up", "Short covering", "Long unwinding"];
+  const vol = { d: B.vol.date, dear: B.vol.dear, cheap: B.vol.cheap, median_rank: B.vol.median_rank, median_iv: B.vol.median_iv };
+  const pos = { d: B.positions.date, ...Object.fromEntries(cls.map((c) => [c, B.positions[c]])) };
+  const vNow = vol.dear.length - 1, pNow = pos.d.length - 1;
+  const shares = cls.map((c) => [c, pos[c][pNow]]);
+  const top = shares.slice().sort((a, b) => b[1] - a[1])[0];
+  const have = new Set((ov.universe || []).map((u) => u.symbol));
+  const name = (sym) => (have.has(sym) ? `<a href="#/sym/${slug(sym)}"><b>${esc(sym)}</b></a>` : `<span>${esc(sym)}</span>`);
+  const list = (xs) => xs.map((x) => `${name(x.symbol)} <span class="num">${pct(x.iv, 0)}</span> <span class="muted small">${ord(x.rank)}</span>`).join(" · ");
+  const draw = () => {
+    app.innerHTML = `<div class="page-h"><div><h1>The whole F&O market</h1><div class="sub">Every stock in NSE's F&O list (${num(T.n_iv)} with a vol reading today), each judged against its own past year · as of ${B.asof}</div></div>${horizonSeg()}</div>
+    <div class="grid g4">
+      ${kpi({ label: "Options unusually dear", value: pct(vol.dear[vNow], 0), foot: `of stocks at their own 80th percentile of IV or above` })}
+      ${kpi({ label: "Options unusually cheap", value: pct(vol.cheap[vNow], 0), foot: `at their own 20th percentile or below` })}
+      ${kpi({ label: "Median stock's IV rank", value: ord(vol.median_rank[vNow]), foot: `median IV ${pct(vol.median_iv[vNow], 1)}` })}
+      ${kpi({ label: "Most common futures read", value: esc(top[0]), foot: `${pct(top[1], 0)} of ${num(B.positions.n[pNow])} stocks` })}
+    </div>
+    <div class="grid g2" style="margin-top:16px">
+      ${card({ title: "How many stocks have dear or cheap options", hint: "share of F&O stocks, each against its own year", cls: "span2",
+        simple: "Each day, the share of stocks whose at-the-money option vol is in the top fifth of its own past year (dear) or the bottom fifth (cheap). When dear options spread across the market, the fear is broad, not about one name.",
+        analyst: "At-the-money straddle implied vol of each stock's nearest expiry at least 7 days out, from the strike where call and put (both traded that day) are closest in price; ranked against the stock's own previous 252 readings (126 at least). It equals the engine's own straddle vol on every shared day and sits within a median 0.05 vol points of its smile-based ATM vol. Days with fewer than 50 readable stocks are left out.",
+        body: `<div class="chart" id="bvol"></div><div class="legend"><span style="--c:${t.dneg}">Dear (80th pct+)</span><span style="--c:${t.dpos}">Cheap (20th pct−)</span><span style="--c:${t.s7}">Median rank</span></div>` })}
+      ${card({ title: "What futures positions did, market-wide", hint: "share of F&O stocks in each class each day", cls: "span2",
+        simple: `Today ${shares.map(([c, v]) => `${c.toLowerCase()} ${pct(v, 0)}`).join(", ")}. A market where most stocks see short build-up is being sold with fresh positions; short covering means shorts are leaving.`,
+        analyst: "Each stock's futures day classed by price change × open-interest change on the same contracts (the instrument pages' rules: the expiring contract counted on its last day; a book under 500 lots is a thin market; a split or bonus day gets no class). Verified to match those pages day by day on all twenty stocks (34,662 stock-days, no difference).",
+        body: `<div class="chart" id="bpos"></div><div class="legend">${cls.map((c, i) => `<span style="--c:${[t.s1, t.s2, t.s3, t.s4][i]}">${c}</span>`).join("")}</div>` })}
+      ${card({ title: "Dearest options today", hint: "against each stock's own year", body: `<div class="small" style="line-height:2">${list(T.dearest)}</div>` })}
+      ${card({ title: "Cheapest options today", hint: "against each stock's own year", body: `<div class="small" style="line-height:2">${list(T.cheapest)}</div>` })}
+      ${card({ title: "Sector vol board", hint: "21-day realised vol of NSE's sector indices", cls: "span2",
+        simple: "How much each sector has actually been moving, against its own past year; 'waking' compares the last week with the last quarter (above 1: the sector has started to move more).",
+        body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Sector</th><th>Realised vol (21d)</th><th>Rank (1y)</th><th>Waking (5d / 63d)</th><th>Last year</th></tr></thead><tbody>
+          ${(B.sectors || []).map((x, i) => `<tr><td>${esc(x.sector)} <span class="muted small">${esc(x.index)}</span></td><td class="num">${pct(x.rv21, 1)}</td><td class="num">${ord(x.rank)}</td>
+            <td class="num">${fin(x.wake) ? x.wake.toFixed(2) + "×" : "—"}</td><td><div class="chart" id="sec${i}" style="height:28px;width:160px"></div></td></tr>`).join("")}</tbody></table></div>` })}
+      ${card({ title: "Today's futures reads by class", cls: "span2", body: cls.map((c) => `<div style="margin:6px 0"><b>${c}</b> <span class="muted small">(${T.buildups[c].length})</span><div class="small muted" style="line-height:1.8">${T.buildups[c].map((x) => name(x)).join(" · ") || "—"}</div></div>`).join("") })}
+    </div>`;
+    bindHorizon(draw);
+    const v = slice(vol, ["dear", "cheap", "median_rank"]), pp = slice(pos, cls);
+    chart("#bvol", { tooltip: { trigger: "axis", valueFormatter: (x) => pct(x, 0), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(v.d, t), yAxis: axisY(t, fmtPct(0), { min: 0, max: 1, scale: false }),
+      series: [line("Dear", v.dear, t.dneg, { areaStyle: { color: t.dneg, opacity: .12 } }), line("Cheap", v.cheap, t.dpos, { areaStyle: { color: t.dpos, opacity: .12 } }), line("Median rank", v.median_rank, t.s7, { lineStyle: { width: 1.5, type: "dashed", color: t.s7 } })] });
+    chart("#bpos", { tooltip: { trigger: "axis", valueFormatter: (x) => pct(x, 0), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(pp.d, t), yAxis: axisY(t, fmtPct(0), { min: 0, max: 1, scale: false }),
+      series: cls.map((c, i) => ({ name: c, type: "line", stack: "all", areaStyle: { opacity: .55 }, lineStyle: { width: 0 }, showSymbol: false, data: ma(pp[c], 5), itemStyle: { color: [t.s1, t.s2, t.s3, t.s4][i] }, color: [t.s1, t.s2, t.s3, t.s4][i] })) });
+    (B.sectors || []).forEach((x, i) => chart(`#sec${i}`, { grid: { left: 0, right: 0, top: 2, bottom: 2 }, xAxis: { type: "category", show: false, data: x.rv21_1y.map((_, j) => j) }, yAxis: { type: "value", show: false, scale: true },
+      tooltip: { show: false }, series: [{ type: "line", data: x.rv21_1y, showSymbol: false, lineStyle: { width: 1.2, color: t.s1 }, silent: true }] }));
+  };
+  draw();
+}
+
 // ---------------------------------------------------------------- calendar & method
 async function pageCalendar(app, ov) {
   $("#crumbs").textContent = "Calendar";
@@ -461,6 +514,7 @@ function symVol(el, d, u) {
       ${card({ title: "Volatility smile", hint: "IV by strike · nearest expiries and the monthly contracts", simple: "How option prices bend across strikes. A steeper left side means crash protection is in demand.", body: `<div class="chart" id="smile"></div><div class="legend">${d.smiles.map((x, i) => `<span style="--c:${smc[i]}">${x.expiry} · ${seriesName(x)} (${x.days}d)</span>`).join("")}</div>` })}
       ${card({ title: "Skew history", hint: "25-delta risk reversal", simple: c.skew?.simple, analyst: c.skew?.analyst, body: `<div class="chart" id="rr"></div>` })}
       ${curveCard(d, u)}
+      ${linkCard(d, u)}
       ${card({ title: "Volatility cone", hint: "realised vol by window, since " + d.meta.since, simple: "The bands show the usual range of actual movement for each look-back; the dot is today. A dot near the top of its band: unusually wild.", analyst: c.realised?.analyst, cls: "span2", body: `<div class="chart" id="cone"></div>` })}
     </div>`;
   const tip = { trigger: "axis", valueFormatter: (v) => pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } };
@@ -483,6 +537,7 @@ function symVol(el, d, u) {
     yAxis: axisY(t, fmtPct(0)),
     series: d.smiles.map((x, i) => line(`${x.expiry} ${seriesName(x)}`, x.strike.map((k, j) => [k / x.F - 1, x.iv[j]]), smc[i], isMonth(x) ? {} : { lineStyle: { width: 1.5, type: "dashed", color: smc[i] } })) });
   curveCharts(d);
+  linkChart(d);
   chart("#rr", { tooltip: { ...tip, valueFormatter: (v) => vp(v) + " pts" }, xAxis: axisX(s.d, t), yAxis: axisY(t, (v) => (v * 100).toFixed(1)),
     series: [line("Risk reversal", s.rr25, t.s7, { markLine: { silent: true, symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: t.text3, type: "dashed" }, label: { show: false } } })] });
   const cn = d.cone, W = cn.map((x) => x.window + "d");
@@ -673,6 +728,24 @@ function curveCharts(d) {
         markLine: { silent: true, symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: t.text3, type: "dashed" }, label: { show: false } } }),
       line("inverted", s.term_60_30.map((v) => fin(v) ? Math.min(v, 0) : null), t.dneg, { connectNulls: false, lineStyle: { width: 1, color: t.dneg }, areaStyle: { color: t.dneg, opacity: .25 } })] });
 }
+// ---- how much of a stock's move is its own (engine/linkage.py) ----
+function linkCard(d, u) {
+  const k = d.link;
+  if (!k || !fin(k.own)) return "";
+  const own = k.own, word = own >= 0.7 ? "mostly its own" : own >= 0.45 ? "about half its own" : "mostly the market's";
+  return card({ title: "How much of its move is its own", hint: "last 63 sessions", cls: "span2",
+    simple: `${pct(own, 0)} of ${u.symbol}'s day-to-day variance is its own, not NIFTY's or ${k.sector_index || "its sector"}'s: its moves are ${word}${fin(k.own_p) ? ` (${ord(k.own_p)} percentile of its past year)` : ""}. Its options price that own risk (results, deals, news) on top of the market's, which an index option cannot hedge.`,
+    analyst: `Rolling 63-session regression of daily log returns on NIFTY${k.sector_index ? ` and ${k.sector_index}` : ""}: beta to NIFTY ${fin(k.beta_n) ? k.beta_n.toFixed(2) : "—"} (correlation ${fin(k.corr_n) ? k.corr_n.toFixed(2) : "—"})${fin(k.beta_s) ? `, beta to the sector ${k.beta_s.toFixed(2)} (correlation ${k.corr_s.toFixed(2)})` : ""}; R² of the two together ${pct(k.r2, 0)}. Own share = 1 − R². Split- and demerger-adjusted prices.`,
+    body: `<div class="chart" id="lkOwn" style="height:200px"></div><div class="legend"><span style="--c:${theme().s7}">Own share of variance</span><span style="--c:${theme().s1}">Beta to NIFTY</span></div>` });
+}
+function linkChart(d) {
+  if (!$("#lkOwn")) return;
+  const t = theme(), s = slice(d.series, ["own", "beta_n"]);
+  chart("#lkOwn", { grid: { left: 52, right: 52, top: 16, bottom: 26 }, tooltip: { trigger: "axis", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t),
+    yAxis: [axisY(t, fmtPct(0), { min: 0, max: 1, scale: false }), axisY(t, (v) => v.toFixed(1), { position: "right", splitLine: { show: false } })],
+    series: [line("Own share", s.own, t.s7, { areaStyle: { color: t.s7, opacity: .08 }, tooltip: { valueFormatter: (v) => pct(v, 0) } }), line("Beta to NIFTY", s.beta_n, t.s1, { yAxisIndex: 1, lineStyle: { width: 1.2, color: t.s1 } })] });
+}
+
 // ---- the roll between futures months ----
 function rollCard(d, u) {
   const c = d.curve || {};
@@ -828,6 +901,7 @@ async function route(opts = {}) {
     else if (parts[0] === "screener") await pageScreener(app, ov);
     else if (parts[0] === "positioning") await pagePositioning(app, ov);
     else if (parts[0] === "flows") await pageFlows(app, ov);
+    else if (parts[0] === "breadth") await pageBreadth(app, ov);
     else if (parts[0] === "calendar") await pageCalendar(app, ov);
     else if (parts[0] === "method") await pageMethod(app, ov);
     else await pagePulse(app, ov);

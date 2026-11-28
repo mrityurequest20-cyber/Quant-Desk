@@ -13,7 +13,9 @@ import pandas as pd
 from .. import universe as U
 from . import events as E
 from . import expiry as X
+from . import breadth as BR
 from . import gamma as GM
+from . import linkage as LK
 from . import narrative as N
 from . import positioning as P
 from . import rules as RL
@@ -220,6 +222,22 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     if gmap is not None and inst.kind == "index":
         gmap["study"] = GM.regime_study(ghist, rv["ret"], iv30)
 
+    # how much of a stock's moves are the market's, its sector's, or its own (adjusted closes: returns, not prices)
+    link = None
+    if inst.kind == "stock":
+        ic = wh.index_close()
+        sec_name = LK.SECTOR_INDEX.get(inst.sector)
+        get = lambda n: ic[ic["index"] == n].drop_duplicates("date", keep="last").set_index("date")["close"].sort_index()
+        nifty_c = get("Nifty 50")
+        sec_c = get(sec_name) if sec_name else None
+        lk = LK.rolling(close, nifty_c, sec_c if sec_c is not None and len(sec_c) > 300 else None)
+        lk = lk[lk.index <= asof]
+        if len(lk):
+            last = lk.iloc[-1]
+            link = {"sector_index": sec_name if "beta_s" in lk else None,
+                    **{k: (float(last[k]) if k in lk and np.isfinite(last[k]) else None) for k in ("beta_n", "corr_n", "beta_s", "corr_s", "r2", "own")},
+                    "own_p": P.latest_pct(lk["own"], 252)}
+
     # the expiry in front, and what past expiries did (raw prices: strikes are raw)
     xfront = X.front(opt, t, asof, float(raw_close.iat[-1]))
     if xfront is not None:
@@ -242,6 +260,8 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     for c in ("gamma_call", "gamma_put", "gamma_net"):
         if c in ghist:
             df[c] = ghist[c]
+    if link is not None:
+        df["own"], df["beta_n"] = lk["own"], lk["beta_n"]
     df["pcr_oi"] = pcr["pcr_oi"]
     df["pcr_vol"] = pcr["pcr_vol"]
     df["opt_oi"] = pcr["opt_oi"]
@@ -448,7 +468,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     cols = [c for c in ["close", "iv30", "iv_front", "rv21", "rv5", "rv63", "pk21", "fwd_rv21", "vrp", "rr25",
                         "pcr_oi", "pcr_vol", "opt_oi", "carry", "basis", "fut_oi", "roll_share", "vix",
                         "implied_move", "gamma_call", "gamma_put", "gamma_net", "iv60", "iv90", "term_60_30",
-                        "iv_m1", "iv_m2", "iv_m3", "rr_m1", "rr_m2", "rr_m3", "days_m1", "cal_spread", "cal_carry"] if c in df]
+                        "iv_m1", "iv_m2", "iv_m3", "rr_m1", "rr_m2", "rr_m3", "days_m1", "cal_spread", "cal_carry", "own", "beta_n"] if c in df]
     out = {
         "meta": {"symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
                  "exchange": inst.exchange, "asof": str(asof.date()), "since": since, "splits": splits, "actions": actions,
@@ -459,7 +479,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "story": story, "cards": cards, "series": series(df, cols),
         "term": term, "smiles": smiles, "cone": cone, "scorecard": score,
         "scorecard_series": series(sc_series.set_index("date"), ["implied_move", "realised"]) if sc_series is not None and len(sc_series) else None,
-        "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
+        "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "link": link, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
         "big_days": E.big_days(ret), "changes": changes, "rules": rules,
     }
     return clean(out)
@@ -702,4 +722,13 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
                      for i in insts if i.symbol in data],
     }
     (out / "overview.json").write_text(json.dumps(clean(overview), separators=(",", ":")))
+    # the whole F&O market: its own file, read only by the breadth page
+    try:
+        br = BR.market(Path(warehouse), asof)
+        br["sectors"] = BR.sector_board(wh.index_close(), asof)
+        br["asof"] = str(asof.date())
+        (out / "breadth.json").write_text(json.dumps(clean(br), separators=(",", ":")))
+        say(f"  breadth: {br['today']['n_iv']} stocks with a vol reading, {br['today']['n_fut']} with a futures read")
+    except Exception as e:                          # breadth is extra: it never stops the build
+        say(f"  breadth: FAILED {type(e).__name__}: {e}")
     return overview

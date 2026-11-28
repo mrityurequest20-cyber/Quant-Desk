@@ -82,6 +82,14 @@ are never stored.
   horizon), the 60-30 spread with its percentile, and each monthly contract's ATM IV and skew. **The roll between
   months**: ln(next future / this future) annualised over the days between their expiries, against the premium
   over spot.
+- **The whole F&O market** (all ~220 F&O stocks, not just the app's twenty): each stock's at-the-money straddle IV
+  (the nearest expiry at least a week out) ranked against its own past year, and the share of stocks with dear
+  (80th percentile+) or cheap (20th-) options; each stock's futures day classed by price x OI on the same contracts,
+  and the share of stocks in each class; NSE sector indices' realised vol against their own year. The straddle IV
+  equals the engine's own straddle vol on every shared day (34,435 of them) and is within a median 0.05 vol points
+  of its smile ATM vol; the vectorised futures classes match the instrument pages on all 34,662 stock-days.
+- **How much of a stock's move is its own**: rolling 63-session regression on NIFTY and the stock's sector index;
+  one minus the R-squared is the share of its variance its own events drive.
 - **30-day IV** interpolates total variance between expiries, so a weekly and a monthly calendar can be compared
   over the years.
 - **The event move** is the extra variance in the front expiry over the forward variance to the next expiry,

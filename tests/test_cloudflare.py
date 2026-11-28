@@ -141,8 +141,11 @@ globalThis.fetch = async (url, init) => { calls.push({ url: String(url), body: J
   return new Response(null, { status: 204 }); };
 const logs = []; console.log = (m) => logs.push(m);
 const env = { GH_DISPATCH_TOKEN: "t0k" };
-for (const cron of ["55 9 * * MON-FRI", "15 10 * * MON-FRI", "*/10 2-9 * * MON-FRI", "0 12 * * SUN"]) await worker.scheduled({ cron }, env, {});
-await worker.scheduled({ cron: "55 9 * * MON-FRI" }, {}, {});          // no token: logs why, calls nothing
+// a fixed firing time (Tue 24 Nov 2026, 12:05 IST) that no watchdog slot uses: on the wall clock a Saturday 09:00 run
+// also fired the weekly digest, adding log lines and GitHub calls this test does not expect
+const T0 = Date.parse("2026-11-24T06:35:00Z");
+for (const cron of ["55 9 * * MON-FRI", "15 10 * * MON-FRI", "*/10 2-9 * * MON-FRI", "0 12 * * SUN"]) await worker.scheduled({ cron, scheduledTime: T0 }, env, {});
+await worker.scheduled({ cron: "55 9 * * MON-FRI", scheduledTime: T0 }, {}, {});          // no token: logs why, calls nothing
 process.stdout.write(JSON.stringify({ calls, logs }) + "\n");
 """
 
@@ -189,27 +192,28 @@ globalThis.fetch = async (url, init) => { gh.push(String(url).split("/workflows/
 console.log = () => {};
 const secrets = { LIVE_INGEST_TOKEN: "i".repeat(30), LIVE_READ_TOKEN: "r".repeat(30), KOTAK_CONSUMER_KEY: "k".repeat(20), GH_DISPATCH_TOKEN: "t0k" };
 const stub = (need) => ({ idFromName: () => "b", get: () => ({ fetch: async (u) => new Response(JSON.stringify(String(u).endsWith("needs-universe") ? { need } : { ok: true })) }) });
+const T0 = Date.parse("2026-11-24T06:35:00Z");       // a fixed firing time no watchdog slot uses (see COLLECT)
 const out = {};
 // 1. the poller is on and its universe is stale: the cron re-arms it and dispatches the universe workflow, besides the desk scheduler
 let pending = []; gh.length = 0;
-await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { ...secrets, LIVE: stub(true) }, { waitUntil: (p) => pending.push(p) });
+await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: T0 }, { ...secrets, LIVE: stub(true) }, { waitUntil: (p) => pending.push(p) });
 await Promise.all(pending);
 out.stale = [...gh];
 // 2. not stale: no universe dispatch
 pending = []; gh.length = 0;
-await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { ...secrets, LIVE: stub(false) }, { waitUntil: (p) => pending.push(p) });
+await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: T0 }, { ...secrets, LIVE: stub(false) }, { waitUntil: (p) => pending.push(p) });
 await Promise.all(pending);
 out.fresh = [...gh];
 // 3. the live object HANGS: scheduled() still returns and the desk scheduler was still dispatched (the live path is never awaited)
 gh.length = 0;
 const hang = { idFromName: () => "b", get: () => ({ fetch: () => new Promise(() => {}) }) };
-const done = await Promise.race([worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { ...secrets, LIVE: hang }, { waitUntil: () => {} }).then(() => "returned"), new Promise((r) => setTimeout(() => r("held up"), 3000))]);
+const done = await Promise.race([worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: T0 }, { ...secrets, LIVE: hang }, { waitUntil: () => {} }).then(() => "returned"), new Promise((r) => setTimeout(() => r("held up"), 3000))]);
 out.hang = { done, gh: [...gh] };
 // 4. no ctx, no LIVE binding, a throwing LIVE: nothing breaks
 let err = null;
 try {
-  await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, secrets, undefined);
-  await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI" }, { ...secrets, LIVE: { idFromName: () => { throw new Error("no"); }, get: () => { throw new Error("no"); } } }, { waitUntil: (p) => p });
+  await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: T0 }, secrets, undefined);
+  await worker.scheduled({ cron: "*/10 2-9 * * MON-FRI", scheduledTime: T0 }, { ...secrets, LIVE: { idFromName: () => { throw new Error("no"); }, get: () => { throw new Error("no"); } } }, { waitUntil: (p) => p });
 } catch (e) { err = String(e); }
 out.err = err;
 process.stdout.write(JSON.stringify(out) + "\n");

@@ -125,6 +125,10 @@ class NSE:
         mon = day.strftime("%b").upper()
         return self.archive(f"/content/historical/DERIVATIVES/{day:%Y}/{mon}/fo{day:%d}{mon}{day:%Y}bhav.csv.zip")
 
+    def cm_bhav(self, day: dt.date) -> tuple[bytes, str]:
+        """The cash market's full bhavcopy with delivery (sec_bhavdata_full): published from 30 Sep 2019."""
+        return self.archive(f"/products/content/sec_bhavdata_full_{day:%d%m%Y}.csv")
+
     def participant(self, kind: str, day: dt.date) -> tuple[bytes, str]:
         assert kind in ("oi", "vol")
         return self.archive(f"/content/nsccl/fao_participant_{kind}_{day:%d%m%Y}.csv")
@@ -310,6 +314,37 @@ def parse_fo_stock_far(b: bytes, day: dt.date, band: float = 0.30) -> pd.DataFra
         return out
     third = pd.to_datetime(out["expiry"]).groupby(out["symbol"]).rank(method="dense") == 3      # a stock with two months listed has none
     return out[third].reset_index(drop=True)
+
+
+CM_BHAV_FROM = dt.date(2019, 9, 30)               # the archive's first sec_bhavdata_full (its contents start 1 Oct 2019)
+CM_COLS = {"SYMBOL": "symbol", "SERIES": "series", "DATE1": "date", "PREV_CLOSE": "prev_close", "OPEN_PRICE": "open",
+           "HIGH_PRICE": "high", "LOW_PRICE": "low", "LAST_PRICE": "last", "CLOSE_PRICE": "close", "AVG_PRICE": "avg_price",
+           "TTL_TRD_QNTY": "volume", "TURNOVER_LACS": "turnover_lacs", "NO_OF_TRADES": "trades", "DELIV_QTY": "deliv_qty",
+           "DELIV_PER": "deliv_pct"}
+
+
+def parse_cm_bhav(b: bytes, day: dt.date, series=("EQ", "BE", "BZ")) -> pd.DataFrame:
+    """The cash market's day by security: OHLC, last, average price, volume, turnover (Rs lakh), trades, delivered
+    quantity and delivery %, for the equity series (EQ, and BE/BZ where a stock is in trade-for-trade). NSE pads every
+    field with spaces and writes '-' where there is no delivery figure: kept as missing, never zero."""
+    raw = pd.read_csv(io.BytesIO(b), dtype=str, skipinitialspace=True)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    missing = set(CM_COLS) - set(raw.columns)
+    if missing:
+        raise ValueError(f"cash bhavcopy lacks columns {sorted(missing)}: {list(raw.columns)[:8]}")
+    d = raw[list(CM_COLS)].rename(columns=CM_COLS).apply(lambda c: c.str.strip())
+    d = d[d["series"].isin(series)].copy()
+    d["date"] = pd.to_datetime(d["date"], format="%d-%b-%Y").dt.date
+    if len(d) and (d["date"] != day).any():
+        # NSE writes a file under a date it holds no session for: on a holiday a copy of the day before (2 Oct 2019
+        # carries 1 Oct), and the archive's 30 Sep 2019 file carries 27 Jun 2019. Such a file is not that day's:
+        # recorded as absent, never stored under the wrong date
+        raise NotPublished(f"cash bhavcopy named {day} carries {sorted(set(d['date']))[:3]}")
+    for c in ("prev_close", "open", "high", "low", "last", "close", "avg_price", "volume", "turnover_lacs", "trades",
+              "deliv_qty", "deliv_pct"):
+        d[c] = pd.to_numeric(d[c].replace({"-": None, "": None}), errors="coerce")
+    d["date"] = pd.to_datetime(d["date"])
+    return d.reset_index(drop=True)
 
 
 PARTICIPANT_COLS = {
