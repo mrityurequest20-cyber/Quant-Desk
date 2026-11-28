@@ -126,6 +126,23 @@ function wallLine(x) {
   if (x.put_wall === x.call_wall) return `; the biggest call and put open interest are both at ${num(x.call_wall)}, ${where(x.call_wall)} the price`;
   return `; the biggest call open interest is at ${num(x.call_wall)} (${where(x.call_wall)} the price) and the biggest put open interest at ${num(x.put_wall)} (${where(x.put_wall)} it)`;
 }
+// the week's high-impact macro events in one line (Market pulse)
+const MACRO_LABEL = { fomc: "US Fed decision", us_cpi: "US CPI", us_nfp: "US jobs (NFP)", us_gdp: "US GDP", us_pce: "US PCE inflation", us_ism: "US ISM manufacturing",
+  fed_chair: "Fed chair speaks", ecb: "ECB decision", boe: "Bank of England", boj: "Bank of Japan", china_data: "China data", rbi: "RBI policy", india_cpi: "India CPI",
+  india_gdp: "India GDP", india_iip: "India IIP", budget: "Union Budget", election: "Election results", geopolitics: "Geopolitical shock", oil_shock: "Oil shock" };
+// the instrument's macro sensitivity in one line: the kinds that move it most, and whether options price them
+function macroLine(sym, mm) {
+  const top = mm.filter((x) => fin(x.ratio)).slice(0, 3);
+  if (!top.length) return "";
+  const s = top.map((x) => `${MACRO_LABEL[x.kind] || x.kind} (${x.ratio.toFixed(1)}× a normal day${fin(x.beat_priced) ? `, beat the priced move ${pct(x.beat_priced, 0)} of the time` : ""})`).join("; ");
+  const crush = top.find((x) => fin(x.d_iv) && x.d_iv < -0.005);
+  return `${sym} moves most on: ${s}.${crush ? ` IV usually falls after ${MACRO_LABEL[crush.kind] || crush.kind} (${vp(crush.d_iv)} pts): options price the event in, then give it back.` : ""}`;
+}
+function eventRiskLine(ev) {
+  if (!ev || !ev.length) return "Today: no high-impact macro event in the coming week.";
+  const nm = { USD: "US", EUR: "Euro area", GBP: "UK", JPY: "Japan", CNY: "China", INR: "India", WORLD: "" };
+  return `Event risk this week: ${ev.slice(0, 6).map((e) => `${nm[e.country] ?? e.country} ${e.title} (${new Date(e.date + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}${e.time ? " " + e.time + " IST" : ""})`).join("; ")}${ev.length > 6 ? `, and ${ev.length - 6} more` : ""}. Options often price these in before and give it back after.`;
+}
 // one plain line for a participant metric: FIIs and Clients today, against their own year
 function partLine(rows, metric) {
   const r = (who) => (rows || []).find((x) => x.who === who && x.metric === metric);
@@ -236,7 +253,7 @@ async function pagePulse(app, ov) {
       ${card({ title: "India VIX since 2019", hint: "the market's 30-day fear gauge", body: `<div class="chart" id="vix"></div>`,
         simple: fin(ov.vix?.now) ? `Today: India VIX ${ov.vix.now.toFixed(1)}, ${level(ov.vix.p1y)} for the past year (${ord(ov.vix.p1y)} percentile). Options price NIFTY moving about ${(ov.vix.now / 16).toFixed(2)}% a day over the next month.` : "",
         analyst: "India VIX is computed by NSE from NIFTY option prices across strikes (like the US VIX). Spikes mark stress (Mar 2020, Jun 2024 election). It mean-reverts: very high readings have historically come down faster than very low ones went up." })}
-      ${card({ title: "Next on the calendar", body: calendarRows(ov.calendar.items.slice(0, 9)) + `<div style="margin-top:10px"><a class="muted small" href="#/calendar">Full calendar →</a></div>` })}
+      ${card({ title: "Next on the calendar", simple: eventRiskLine(ov.event_risk), body: calendarRows(ov.calendar.items.slice(0, 9)) + `<div style="margin-top:10px"><a class="muted small" href="#/calendar">Full calendar →</a></div>` })}
     </div>
     <div style="margin-top:16px">${screenerCard(ov, 10)}</div>`;
   const t = theme();
@@ -275,7 +292,11 @@ function limitsCard(ov) {
 function calendarRows(items) {
   if (!items.length) return `<div class="muted">Nothing scheduled in the data.</div>`;
   const lab = { expiry: "Expiry", results: "Results", holiday: "Holiday", lot: "Lot change" };
-  return items.map((i) => `<div class="cal-row"><span class="num">${i.date}</span><span class="chip ${i.type === "results" || i.type === "lot" ? "elevated" : ""}">${lab[i.type] || i.type}</span>
+  const flag = { USD: "US", EUR: "Euro area", GBP: "UK", JPY: "Japan", CNY: "China", INR: "India", AUD: "Australia", CAD: "Canada", NZD: "New Zealand", CHF: "Switzerland", WORLD: "Global" };
+  return items.map((i) => i.type === "macro"
+    ? `<div class="cal-row"><span class="num">${i.date}${i.time ? ` <span class="muted small">${i.time} IST</span>` : ""}</span><span class="chip ${i.impact === "High" ? "extreme" : "elevated"}">${esc(flag[i.country] || i.country)} · ${i.impact === "High" ? "high impact" : "medium"}</span>
+      <span>${esc(i.text)}${i.rule ? ` <span class="muted small">(date by MoSPI's release rule)</span>` : ""}</span></div>`
+    : `<div class="cal-row"><span class="num">${i.date}</span><span class="chip ${i.type === "results" || i.type === "lot" ? "elevated" : ""}">${lab[i.type] || i.type}</span>
     <span>${i.symbol ? `<a href="#/sym/${slug(i.symbol)}"><b>${esc(i.symbol)}</b></a> · ` : ""}${esc(i.symbol ? i.text.replace(i.symbol + " ", "") : i.text)}</span></div>`).join("");
 }
 
@@ -616,8 +637,14 @@ function dispChart(x) {
 // ---------------------------------------------------------------- calendar & method
 async function pageCalendar(app, ov) {
   $("#crumbs").textContent = "Calendar";
-  app.innerHTML = `<div class="page-h"><div><h1>Calendar</h1><div class="sub">Expiries, results of covered stocks, and market holidays, from the exchanges' own calendars.</div></div></div>
-    ${card({ title: "Upcoming", body: calendarRows(ov.calendar.items) })}`;
+  const all = ov.calendar.items, f = S.calFilter || "all";
+  const pick = { all: () => true, india: (i) => i.type === "macro" && i.country === "INR", global: (i) => i.type === "macro" && i.country !== "INR",
+                 exchange: (i) => i.type !== "macro" };
+  app.innerHTML = `<div class="page-h"><div><h1>Calendar</h1><div class="sub">What is scheduled: central banks, inflation, jobs and growth data in India and abroad (times in IST), expiries, results of covered stocks and market holidays.</div></div>
+      <div class="seg" id="calf">${[["all", "All"], ["global", "Global macro"], ["india", "India"], ["exchange", "Exchange"]].map(([k, l]) => `<button data-f="${k}" class="${k === f ? "on" : ""}">${l}</button>`).join("")}</div></div>
+    ${card({ title: "Upcoming", body: (() => { const rows = all.filter(pick[f]);
+      return rows.length ? calendarRows(rows) : `<p class="muted">Nothing in this view yet.${f === "global" ? " The global calendar (Forex Factory, the Fed) fills on the next warehouse run." : ""}</p>`; })() })}`;
+  $$("#calf button").forEach((b) => b.onclick = () => { S.calFilter = b.dataset.f; pageCalendar(app, ov); });
 }
 async function pageMethod(app) {
   $("#crumbs").textContent = "How to read this";
@@ -1162,8 +1189,12 @@ function symEvents(el, d, u) {
         <td class="num">${fin(r.move_day1) ? `<span class="chg ${r.move_day1 >= 0 ? "pos" : "neg"}">${vp(r.move_day1, 1)}%</span>` : "—"}</td>
         <td class="num">${fin(r.iv_change) ? vp(r.iv_change) + " pts" : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="muted">No results dates in the calendar window.</div>`,
       analyst: "Priced event move: the extra variance in the expiry holding the results over the forward variance to the next expiry, as a one-day move, read at the last close before the results date. 'Not separable' means the curve showed no distinct event. The calendar does not say whether results came in market hours or after the close, so both the results-day and next-day moves are shown. Front IV change: close of the next day minus the last close before." }) : ""}
-    ${d.macro?.length ? card({ level: "a", title: "How it moves on big macro days", hint: "median absolute move, since " + d.meta.since, simple: "On days like these, this index has typically moved this many times its normal amount.",
-      body: `<div class="chart" id="macro"></div>`, analyst: "Days from the macro calendar (RBI policy, Union Budget, US Fed, election results...). Descriptive: a small sample per kind, overlapping with other news." }) : ""}
+    ${d.macro?.length ? card({ title: "How it moves on big macro days", hint: "each kind against a normal day, since " + d.meta.since,
+      simple: macroLine(u.symbol, d.macro),
+      body: `<div class="chart" id="macro"></div><div class="tbl-wrap a-only" style="margin-top:10px"><table class="tbl"><thead><tr><th>Event</th><th>Times</th><th>Median move</th><th>× normal</th><th>Beat the priced day</th><th>IV change</th><th>Up share</th><th>Biggest</th></tr></thead><tbody>
+        ${d.macro.map((x) => `<tr><td>${esc(MACRO_LABEL[x.kind] || x.kind)}</td><td class="num">${x.n}</td><td class="num">${pct(x.median_move, 2)}</td><td class="num">${fin(x.ratio) ? x.ratio.toFixed(1) + "×" : "—"}</td>
+          <td class="num">${fin(x.beat_priced) ? pct(x.beat_priced, 0) : "—"}</td><td class="num">${fin(x.d_iv) ? vp(x.d_iv) + " pts" : "—"}</td><td class="num">${pct(x.up_share, 0)}</td><td class="num"><span class="chg ${x.max_move >= 0 ? "pos" : "neg"}">${vp(Math.expm1(x.max_move), 1)}%</span></td></tr>`).join("")}</tbody></table></div>`,
+      analyst: "Events from the global macro calendar (central banks, India and US inflation, jobs and growth data, China, the Budget, elections) and the desk's checked list of geopolitical and oil shocks. The reacting session: the event's own session if it lands before 15:30 IST, else the next one (US data and the Fed land after India closes). Beat the priced day: the move was bigger than the front ATM IV of the evening before allowed for one day (IV / √252); about 32% is what a fairly priced day gives. IV change: front ATM IV from the evening before to the reacting session's close (negative = the event premium came out). Medians of a small sample per kind, overlapping with other news: descriptive, not a forecast." }) : ""}
     ${card({ title: "Biggest one-day moves on record", hint: "since " + d.meta.since,
       simple: (d.big_days || []).length ? `Its biggest day since ${d.meta.since}: ${vp(d.big_days[0].ret, 1)}% on ${d.big_days[0].date}. Against that, a normal day today is about ${fin(d.headline.metrics?.rv21) ? (d.headline.metrics.rv21 / 16 * 100).toFixed(1) + "%" : "—"}.` : "",
       body: `<div class="tbl-wrap"><table class="tbl"><tbody>${d.big_days.map((b) => `<tr><td class="num">${b.date}</td><td class="num"><span class="chg ${b.ret >= 0 ? "pos" : "neg"}">${vp(Math.expm1(b.ret), 1)}%</span></td></tr>`).join("")}</tbody></table></div>`,
@@ -1173,8 +1204,8 @@ function symEvents(el, d, u) {
   if (d.macro?.length) {
     const mm = d.macro;
     chart("#macro", { grid: { left: 150, right: 30, top: 10, bottom: 24 }, tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text },
-        formatter: (ps) => { const x = mm[ps[0].dataIndex]; return `<b>${x.label}</b> (${x.n} days)<br>median move ${pct(x.median_move, 2)} vs ${pct(x.normal_median, 2)} normally<br>biggest ${pct(x.max_move, 1)}`; } },
-      yAxis: { type: "category", data: mm.map((x) => x.label), axisLabel: { color: t.text2, fontSize: 11 }, axisLine: { lineStyle: { color: t.line } }, axisTick: { show: false }, inverse: true },
+        formatter: (ps) => { const x = mm[ps[0].dataIndex]; return `<b>${MACRO_LABEL[x.kind] || x.kind}</b> (${x.n} days)<br>median move ${pct(x.median_move, 2)} vs ${pct(x.normal, 2)} normally<br>biggest ${vp(Math.expm1(x.max_move), 1)}%`; } },
+      yAxis: { type: "category", data: mm.map((x) => MACRO_LABEL[x.kind] || x.kind), axisLabel: { color: t.text2, fontSize: 11 }, axisLine: { lineStyle: { color: t.line } }, axisTick: { show: false }, inverse: true },
       xAxis: { type: "value", axisLabel: { color: t.text3, formatter: (v) => v.toFixed(1) + "×" }, splitLine: { lineStyle: { color: t.line2 } } },
       series: [{ type: "bar", data: mm.map((x) => x.ratio), itemStyle: { color: t.s1, borderRadius: [0, 4, 4, 0] }, barWidth: "55%", label: { show: true, position: "right", color: t.text2, formatter: (p) => p.value.toFixed(1) + "×" },
         markLine: { silent: true, symbol: "none", data: [{ xAxis: 1 }], lineStyle: { color: t.text3, type: "dashed" }, label: { formatter: "normal day", color: t.text3 } } }] });

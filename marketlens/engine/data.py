@@ -35,7 +35,7 @@ OPT_COLS = ["date", "symbol", "kind", "expiry", "strike", "open", "high", "low",
 # (the future converges to spot), but it is not spot: basis and carry are not computed from it.
 PROXY_SRC = {"old-fut"}
 RELEASE_API = "https://api.github.com/repos/mrityurequest20-cyber/Quant-Desk/releases/tags/warehouse"
-TABLES = ("fo_bhav", "fo_stock_opts", "fo_stock_far", "cm_bhav", "global_daily", "bse_fo_bhav", "nse_index_close", "participant_oi", "participant_vol",
+TABLES = ("fo_bhav", "fo_stock_opts", "fo_stock_far", "cm_bhav", "global_daily", "macro_events", "bse_fo_bhav", "nse_index_close", "participant_oi", "participant_vol",
           "fii_dii", "corp_events", "nse_holidays", "gift_nifty")
 
 
@@ -176,6 +176,13 @@ class Warehouse:
         if "pvol" not in self._cache:
             self._cache["pvol"] = self._read("participant_vol").sort_values(["date", "participant"])
         return self._cache["pvol"]
+
+    def macro_events(self) -> pd.DataFrame:
+        """The global macro calendar (quantdesk/data/macro.py): date, time_ist, country, title, kind, impact, forecast,
+        previous, source. Empty until the warehouse has the table."""
+        if "macro" not in self._cache:
+            self._cache["macro"] = self._read("macro_events")
+        return self._cache["macro"]
 
     def fii_dii(self) -> pd.DataFrame:
         return self._read("fii_dii").sort_values(["date", "category"])

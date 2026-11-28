@@ -14,6 +14,7 @@ from .. import universe as U
 from . import events as E
 from . import expiry as X
 from . import baserates as BRT
+from . import macro as MX
 from . import breadth as BR
 from . import gamma as GM
 from . import linkage as LK
@@ -459,7 +460,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         e = ev_cal[ev_cal["symbol"] == inst.symbol]
         results = E.results_study(e, close, t, df["iv_front"], asof)
     ret = rv["ret"]
-    macro = E.macro_study(ret) if inst.kind == "index" else []
+    macro = MX.study(close, df["iv_front"] if "iv_front" in df else None, macro_events(wh), asof)
 
     # cards
     vix_now = _last(vix) if inst.symbol == "NIFTY" else None
@@ -610,8 +611,31 @@ def flows_block(wh: Warehouse) -> dict:
     return clean(out)
 
 
+def macro_events(wh: Warehouse) -> pd.DataFrame:
+    """The global macro calendar (warehouse macro_events) with the desk's checked list of past macro days, cached."""
+    if "macro_ev" not in wh._cache:
+        from quantdesk.data import macro as QM
+        try:
+            raw = wh.macro_events()
+        except Exception:                                # an unreadable table is the same as none
+            raw = pd.DataFrame()
+        parts = [x for x in (raw, QM.checked_history()) if len(x)]
+        wh._cache["macro_ev"] = MX.events(pd.concat(parts, ignore_index=True) if parts else pd.DataFrame())
+    return wh._cache["macro_ev"]
+
+
+def event_risk(wh: Warehouse, asof, days: int = 7) -> list[dict]:
+    """The high-impact macro events of the coming week: Market pulse's line and the calendar's top."""
+    return MX.upcoming(macro_events(wh), asof, days=days, min_impact="High")
+
+
 def calendar_block(wh: Warehouse, asof, sym_data: dict, ev_cal: pd.DataFrame) -> dict:
     items = []
+    for m in MX.upcoming(macro_events(wh), asof, days=60, min_impact="Medium"):
+        items.append({"date": m["date"], "type": "macro", "symbol": "", "country": m["country"], "impact": m["impact"], "time": m["time"],
+                      "kind": m["kind"], "text": m["title"] + (f" (forecast {m['forecast']}, previous {m['previous']})" if m["forecast"] else
+                                                               f" (previous {m['previous']})" if m["previous"] else ""),
+                      "rule": m["source"] == "rule"})
     for s, d in sym_data.items():
         if d.get("meta", {}).get("kind") == "index":
             for c in d.get("term", {}).get("now", [])[:2]:
@@ -638,11 +662,11 @@ def calendar_block(wh: Warehouse, asof, sym_data: dict, ev_cal: pd.DataFrame) ->
     # one row per symbol per date
     seen, out = set(), []
     for i in items:
-        k = (i["date"], i["type"], i["symbol"])
+        k = (i["date"], i["type"], i["symbol"], i.get("text") if i["type"] == "macro" else "")
         if k not in seen:
             seen.add(k)
             out.append(i)
-    return {"items": out[:80]}
+    return {"items": out[:160]}
 
 
 def limits_block(limits, sym_data: dict) -> dict:
@@ -835,6 +859,7 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
                       "series": series(v.to_frame("vix")[v.index >= "2019-01-01"], ["vix"], 3)}),
         "participants": parts, "flows": flows,
         "calendar": calendar_block(wh, asof, data, ev_cal),
+        "event_risk": event_risk(wh, asof),
         "changes": changes_feed(data),
         "live_base": {s: live_base(d) for s, d in data.items()},
         "limits": limits_block(limits, data),
