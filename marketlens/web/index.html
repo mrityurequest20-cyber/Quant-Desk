@@ -10,7 +10,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.1/echarts.min.js"></script>
+<!-- the chart library ships with the app (Apache ECharts 5.5.1, vendor/): no chart depends on reaching another site;
+     the public CDN copy is only a fallback if the bundled file did not load -->
+<script src="vendor/echarts.min.js"></script>
+<script>window.echarts || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.1/echarts.min.js"><\/script>');</script>
 </head>
 <body class="mode-simple">
 <div class="shell">
@@ -35,6 +38,7 @@
 </div>
 <script src="livecore.js"></script>
 <script src="alertrules.js"></script>
+<script src="readguide.js"></script>
 <script src="app.js"></script>
 <script src="live-ui.js"></script>
 </body>

@@ -16,11 +16,11 @@ def level(p: float | None) -> str:
     if p < 0.10:
         return "very low"
     if p < 0.30:
-        return "low"
+        return "on the low side"            # 10th-30th percentile: below normal, not low
     if p <= 0.70:
         return "normal"
     if p <= 0.90:
-        return "high"
+        return "on the high side"           # 70th-90th: above normal, not high (a 71st percentile is not "high")
     return "very high"
 
 
