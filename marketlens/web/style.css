@@ -203,3 +203,6 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 @media (max-width: 760px) { .card-h h3 .hint { display: block; margin: 2px 0 0; } }
 .card.flat { background: transparent; border: 0; padding: 0; box-shadow: none; } .card.flat > .card-h { display: none; }
+.btn { padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn[disabled] { opacity: .5; cursor: default; }

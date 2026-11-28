@@ -36,6 +36,7 @@
       const snap = await r.json();
       const ov = window.MLState && window.MLState.overview;
       mcxRead(snap.quotes || {});                       // MCX keeps its own clock: it trades to 23:30, after NSE closes
+      notify(snap.quotes || {});                        // the alert rules, while the app is open (alertrules.js)
       const nifty = snap.quotes && snap.quotes.NIFTY;
       L.feedAge = nifty ? nifty.age_s : null;
       L.at = Date.now();
@@ -108,6 +109,29 @@
   function askKey() {
     const k = prompt("Your live key (the LIVE_READ_TOKEN on the Worker). It stays on this device only.");
     if (k && k.trim().length >= 24) { try { localStorage.setItem(KEY, k.trim()); } catch (e) {} L.note = ""; poll(true); }
+  }
+
+  // ---- alerts in the browser: the same rules as the Worker's, a notification for each new one today ----
+  L.alertRules = null;
+  async function loadRules() {
+    try {
+      const r = await fetch("/live/alerts", { headers: { Authorization: "Bearer " + key() }, cache: "no-store" });
+      L.alertRules = r.ok ? (await r.json()).rules || [] : [];
+    } catch (e) { L.alertRules = []; }
+  }
+  function notify(quotes) {
+    if (typeof AlertRules === "undefined" || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const ov = window.MLState && window.MLState.overview;
+    if (!ov) return;
+    if (L.alertRules === null) { loadRules(); return; }
+    const now = Date.now(), ist = new Date(now + 19800000), hm = ist.getUTCHours() * 60 + ist.getUTCMinutes(), wd = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5;
+    const due = AlertRules.evaluate(quotes, ov, L.alertRules, now, { nse: L.mode === "live", mcx: wd && hm >= 545 && hm <= 1410, eod: false });
+    let seen = [];
+    try { seen = JSON.parse(localStorage.getItem("ml.alerts.seen") || "[]"); } catch (e) {}
+    const day = LiveCore.istDate(now), keep = seen.filter((k) => k.slice(0, 10) === day), have = new Set(keep);
+    const fresh = due.filter((a) => !have.has(a.key)).slice(0, 4);
+    fresh.forEach((a) => { try { new Notification("MarketLens: " + a.title, { body: a.body, tag: a.key }); } catch (e) {} });
+    if (fresh.length) try { localStorage.setItem("ml.alerts.seen", JSON.stringify([...keep, ...fresh.map((a) => a.key)])); } catch (e) {}
   }
 
   // ---- MCX: every watchlist commodity's future and option chain, read with LiveCore on the future ----

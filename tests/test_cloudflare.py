@@ -36,6 +36,8 @@ def stage_worker(tmp_path):
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "candles.js", tmp_path / "candles.js")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "routes.js", tmp_path / "routes.js")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "lens.js", tmp_path / "lens.js")
+    for name in ("alerts.js", "alertbook.js", "livecore.js", "alertrules.js"):            # MarketLens alerts (alerts.js)
+        shutil.copyfile(ROOT / "deploy" / "cloudflare" / name, tmp_path / name)
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
 
 

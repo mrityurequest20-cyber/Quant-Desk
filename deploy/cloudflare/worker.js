@@ -26,6 +26,7 @@
 import { runWatchdog, ist } from "./watchdog.js";
 import { armLive, handleLive, needsUniverse } from "./live.js";
 import { handleLens } from "./lens.js";
+import { runAlerts } from "./alerts.js";
 
 export { LiveBoard } from "./live.js";      // the Durable Object behind /live/* (live.js): wrangler.jsonc binds it as LIVE
 
@@ -114,6 +115,11 @@ export default {
 			await runWatchdog(event, env, { dispatchWorkflow });
 		} catch (e) {
 			console.log(`watchdog failed (${event.cron}): ${String(e && e.message).slice(0, 200)}`);
+		}
+		try {                                                    // MarketLens alerts (alerts.js): last, after the watchdog, and never holding anything up
+			await runAlerts(event, env);
+		} catch (e) {
+			console.log(`marketlens alerts failed (${event.cron}): ${String(e && e.message).slice(0, 200)}`);
 		}
 	},
 

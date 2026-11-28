@@ -133,6 +133,17 @@ IV, priced move to the option expiry, smile, skew, open interest and max pain, w
 options are on the future; when the quoted future is an earlier month than the options' own underlying (copper's
 December options while the near future is November's), it does not anchor the forward.
 
+## Alerts
+
+On by default. The desk's Worker evaluates the rules every ten minutes in market hours (NSE on trading days
+09:20-15:30 IST, MCX on weekdays 09:05-23:30, the ban list in the evening once the site is rebuilt) and pushes each new
+alert to the owner's phone through ntfy, the watchdog's channel. Rules: front-expiry IV at a one-year extreme, a move
+of more than twice what options priced for the day, an index crossing the hedgers' gamma flip, an inverted curve, a
+watchlist stock in or near the F&O ban, and an MCX commodity moving more than its options priced. Each fires at most
+once a day (the relay keeps the keys sent); the Alerts page sets them (thresholds, on/off) with the owner's live key,
+and the browser shows the same alerts while the app is open. The rules are one file (web/alertrules.js) used by both
+the browser and the Worker (deploy/cloudflare/ holds byte-identical copies, checked by a test).
+
 ## Not yet in it
 
 - MCX history (IV percentiles): there is no public MCX file to build it from; live MCX readings are not stored.

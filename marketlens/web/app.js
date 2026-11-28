@@ -131,7 +131,7 @@ function renderNav(ov, active) {
   $("#nav").innerHTML = `
     <div class="nav-h">Market</div>
     ${a("#/pulse", "Market pulse")}${a("#/screener", "Volatility screener")}${a("#/positioning", "Who holds what")}
-    ${a("#/breadth", "Whole F&O market")}${a("#/commodities", "Commodities (MCX)")}${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}
+    ${a("#/breadth", "Whole F&O market")}${a("#/commodities", "Commodities (MCX)")}${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}${a("#/alerts", "Alerts")}
     <div class="nav-h">Indices</div>
     ${idx.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(chgOf(u.symbol), 1) + "%")).join("")}
     <div class="nav-h">Stocks</div>
@@ -398,6 +398,53 @@ async function pageBreadth(app, ov) {
       tooltip: { show: false }, series: [{ type: "line", data: x.rv21_1y, showSymbol: false, lineStyle: { width: 1.2, color: t.s1 }, silent: true }] }));
   };
   draw();
+}
+
+// ---- alerts: the owner's rules, kept in the relay; pushed by the Worker, shown here too (alertrules.js) ----
+async function pageAlerts(app, ov) {
+  $("#crumbs").textContent = "Alerts";
+  const key = (() => { try { return localStorage.getItem("qd.livekey") || ""; } catch (e) { return ""; } })();
+  let state = { rules: [], log: [] }, err = "";
+  if (key) {
+    try {
+      const r = await fetch("/live/alerts", { headers: { Authorization: "Bearer " + key }, cache: "no-store" });
+      if (r.ok) state = await r.json(); else err = r.status === 401 ? "the live key was not accepted" : `the relay answered ${r.status}`;
+    } catch (e) { err = "the relay did not answer (alerts live on the desk's Worker, at the same address as this app)"; }
+  }
+  const rules = AlertRules.mergeRules(state.rules);
+  const perm = typeof Notification !== "undefined" ? Notification.permission : "unsupported";
+  const field = (r, k, lab, step, scale = 1, unit = "") => (k in r ? `<label class="small muted" style="margin-left:12px">${lab} <input type="number" step="${step}" data-id="${r.id}" data-k="${k}" data-scale="${scale}" value="${+(r[k] * scale).toFixed(2)}" style="width:72px;padding:4px 6px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--text)"> ${unit}</label>` : "");
+  app.innerHTML = `<div class="page-h"><div><h1>Alerts</h1><div class="sub">Pushed to your phone by the desk's Worker every ten minutes in market hours (ntfy, the watchdog's channel), and shown here while the app is open. Each fires at most once a day.</div></div></div>
+    ${!key ? `<div class="callout">Alerts need your live key on this device. <a href="#" onclick="MLLive.askKey();return false"><b>Add it</b></a>, then come back.</div>` : err ? `<div class="callout">Could not read the alert settings: ${esc(err)}.</div>` : ""}
+    <div class="grid g2" style="margin-top:16px">
+      ${card({ title: "Rules", cls: "span2", simple: "Each rule reads the same live numbers as the app's panels. Nothing here predicts a move: an alert says a reading crossed the line you set.",
+        analyst: "NSE rules run on trading days 09:20–15:30 IST, MCX 09:05–23:30, the ban list once the site is rebuilt in the evening. Settings live in the desk's relay (your live key); the Worker reads them at each firing.",
+        body: `<div>${rules.map((r) => `<div style="padding:10px 0;border-bottom:1px solid var(--line-2)"><label><input type="checkbox" data-id="${r.id}" data-k="on" ${r.on ? "checked" : ""}> <b>${esc(r.label)}</b></label>
+          ${field(r, "hi", "above percentile", 1, 100, "")}${field(r, "lo", "below percentile", 1, 100, "")}${field(r, "mult", "times the priced day", 0.1)}${field(r, "pts", "vol points", 0.5, 100)}${field(r, "near", "of the limit", 1, 100, "%")}
+          ${"scope" in r ? `<label class="small muted" style="margin-left:12px">for <select data-id="${r.id}" data-k="scope" style="padding:4px;border-radius:6px;background:var(--surface);color:var(--text);border:1px solid var(--line)"><option value="indices" ${r.scope === "indices" ? "selected" : ""}>indices</option><option value="all" ${r.scope === "all" ? "selected" : ""}>indices and stocks</option></select></label>` : ""}</div>`).join("")}
+          <div style="margin-top:12px"><button class="btn" id="alSave" ${key ? "" : "disabled"}>Save</button> <span class="muted small" id="alMsg"></span></div></div>` })}
+      ${card({ title: "On this device", simple: perm === "granted" ? "Browser notifications are on: while this app is open, an alert also shows here." : perm === "denied" ? "This browser has blocked notifications for this page; the phone push still works." : perm === "unsupported" ? "This browser has no notifications; the phone push still works." : "Turn on browser notifications to see alerts here while the app is open.",
+        body: perm === "default" ? `<button class="btn" id="alPerm">Turn on notifications</button>` : "" })}
+      ${card({ title: "Sent recently", hint: "by the Worker", body: (state.log || []).length ? `<div class="tbl-wrap"><table class="tbl"><tbody>${state.log.slice(0, 30).map((x) => `<tr><td class="num small">${new Date(x.at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td><td style="text-align:left"><b>${esc(x.title)}</b><div class="small muted">${esc(x.body)}</div></td></tr>`).join("")}</tbody></table></div>` : `<div class="muted small">Nothing sent yet.</div>` })}
+    </div>`;
+  const save = $("#alSave");
+  if (save) save.onclick = async () => {
+    const out = rules.map((r) => ({ id: r.id }));
+    $$("[data-id]").forEach((el) => {
+      const r = out.find((x) => x.id === el.dataset.id); if (!r) return;
+      if (el.dataset.k === "on") r.on = el.checked;
+      else if (el.dataset.k === "scope") r.scope = el.value;
+      else r[el.dataset.k] = Number(el.value) / Number(el.dataset.scale || 1);
+    });
+    $("#alMsg").textContent = "saving…";
+    try {
+      const r = await fetch("/live/alerts", { method: "PUT", headers: { Authorization: "Bearer " + key, "content-type": "application/json" }, body: JSON.stringify({ rules: out }) });
+      $("#alMsg").textContent = r.ok ? "saved: the Worker uses them from its next firing" : `not saved (${r.status})`;
+      if (r.ok && window.MLLive) MLLive.state.alertRules = (await r.json()).rules;
+    } catch (e) { $("#alMsg").textContent = "not saved: the relay did not answer"; }
+  };
+  const pb = $("#alPerm");
+  if (pb) pb.onclick = async () => { await Notification.requestPermission(); route({ soft: true }); };
 }
 
 // ---- MCX commodities: public benchmarks (engine/commodities.py) + the live panel (live-ui.js) ----
@@ -1034,6 +1081,7 @@ async function route(opts = {}) {
     else if (parts[0] === "flows") await pageFlows(app, ov);
     else if (parts[0] === "breadth") await pageBreadth(app, ov);
     else if (parts[0] === "commodities") await pageCommodities(app, ov);
+    else if (parts[0] === "alerts") await pageAlerts(app, ov);
     else if (parts[0] === "calendar") await pageCalendar(app, ov);
     else if (parts[0] === "method") await pageMethod(app, ov);
     else await pagePulse(app, ov);
