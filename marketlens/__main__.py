@@ -20,10 +20,14 @@ def main(argv=None) -> int:
     r.add_argument("--days", type=int, default=60, help="calendar weekdays back from today")
     r.add_argument("--strict", action="store_true", help="fail on any file that arrived but did not parse")
     r.add_argument("--show", action="store_true", help="print what was read (the live probe)")
+    sub.add_parser("probe-sources", help="check which Tier 3 data sources answer from this machine (read-only)")
     s = sub.add_parser("site", help="assemble the static site: the web app plus a data folder")
     s.add_argument("--data", type=Path, required=True)
     s.add_argument("--out", type=Path, required=True)
     a = ap.parse_args(argv)
+    if a.cmd == "probe-sources":
+        from .probe import main as probe_main
+        return probe_main()
     if a.cmd == "fetch":
         from .engine.data import fetch
         print(f"fetched {fetch(a.dest)} files into {a.dest}")

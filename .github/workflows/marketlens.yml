@@ -46,6 +46,10 @@ jobs:
         run: python -m pytest marketlens/tests -q -p no:cacheprovider
       - name: Live probe of NSE's ban list and MWPL files
         run: python -m marketlens fetch-rules --dest _rules --days 8 --strict --show
+      - name: Which Tier 3 sources answer from Actions (report only, never fails)
+        continue-on-error: true
+        timeout-minutes: 5
+        run: python -m marketlens probe-sources
 
   build:
     if: github.event_name != 'pull_request'
