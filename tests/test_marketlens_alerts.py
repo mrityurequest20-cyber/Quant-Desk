@@ -44,7 +44,8 @@ const ov = { universe: [{ symbol: "NIFTY", kind: "index" }], live_base: { NIFTY:
 const pushes = [];
 globalThis.fetch = async (url, init) => {
   url = String(url);
-  if (url.endsWith("/data/overview.json")) return new Response(JSON.stringify(ov));
+  if (url.endsWith("/data/overview.json")) return new Response(JSON.stringify({ ...ov, live_base: undefined }));
+  if (url.endsWith("/data/live_base.json")) return new Response(JSON.stringify(ov.live_base));
   if (url.startsWith("https://ntfy.sh/")) { pushes.push({ title: init.headers.Title, body: init.body }); return new Response("{}"); }
   return new Response("no", { status: 404 });
 };

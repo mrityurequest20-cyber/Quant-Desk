@@ -104,7 +104,8 @@ function chipP(p, label) {
   return `<span class="chip ${toneOf(p)}"><span class="dot"></span>${label || level(p)}</span>`;
 }
 function card({ title, hint = "", body = "", simple = "", analyst = "", chip = "", cls = "" }) {
-  return `<section class="card ${cls}"><div class="card-h"><h3>${title}${hint ? ` <span class="hint">${hint}</span>` : ""}</h3>${chip}</div>
+  const csv = /class="(tbl|chart)/.test(body) ? `<button class="icon-btn csv" title="Download this card's data as CSV" aria-label="Download CSV" data-csv="${esc(String(title).replace(/<[^>]+>/g, ""))}">CSV</button>` : "";
+  return `<section class="card ${cls}"><div class="card-h"><h3>${title}${hint ? ` <span class="hint">${hint}</span>` : ""}</h3><span class="card-tools">${chip}${csv}</span></div>
     ${simple ? `<p class="simple">${esc(simple)}</p>` : ""}${body}${analyst ? `<p class="analyst">${esc(analyst)}</p>` : ""}</section>`;
 }
 function kpi({ label, value, unit = "", foot = "", p = null, lo, hi, chipLabel }) {
@@ -131,7 +132,7 @@ function renderNav(ov, active) {
   $("#nav").innerHTML = `
     <div class="nav-h">Market</div>
     ${a("#/pulse", "Market pulse")}${a("#/screener", "Volatility screener")}${a("#/positioning", "Who holds what")}
-    ${a("#/breadth", "Whole F&O market")}${a("#/commodities", "Commodities (MCX)")}${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}${a("#/alerts", "Alerts")}
+    ${a("#/breadth", "Whole F&O market")}${a("#/commodities", "Commodities (MCX)")}${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}${a("#/alerts", "Alerts")}${a("#/compare", "Compare")}${a("#/health", "Data health")}
     <div class="nav-h">Indices</div>
     ${idx.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(chgOf(u.symbol), 1) + "%")).join("")}
     <div class="nav-h">Stocks</div>
@@ -291,7 +292,8 @@ async function pageScreener(app, ov) {
 // ---------------------------------------------------------------- positioning
 async function pagePositioning(app, ov) {
   $("#crumbs").textContent = "Who holds what";
-  const P = ov.participants;
+  if (!S.partSeries) { try { S.partSeries = (await getJSON("data/participants.json")).series; } catch (e) { S.partSeries = {}; } }
+  const P = { ...ov.participants, series: ov.participants.series || S.partSeries };
   const rows = P.rows;
   const show = ["idx_fut_long_share", "idx_fut_net", "idx_opt_stance", "stk_fut_net"];
   const who = ["FII", "Client", "Pro", "DII"];
@@ -398,6 +400,73 @@ async function pageBreadth(app, ov) {
       tooltip: { show: false }, series: [{ type: "line", data: x.rv21_1y, showSymbol: false, lineStyle: { width: 1.2, color: t.s1 }, silent: true }] }));
   };
   draw();
+}
+
+// ---- data health: what this build was made from ----
+async function pageHealth(app, ov) {
+  $("#crumbs").textContent = "Data health";
+  const H = ov.health || { tables: [], instruments: [] };
+  const what = { fo_bhav: "NSE index futures and options", fo_stock_opts: "NSE stock futures and options (near months)", fo_stock_far: "NSE stock options, far month",
+    cm_bhav: "NSE cash market (OHLC, volume, delivery)", global_daily: "International benchmarks (Yahoo)", bse_fo_bhav: "BSE index futures and options",
+    nse_index_close: "NSE index closes", participant_oi: "Participant-wise open interest", participant_vol: "Participant-wise volume", fii_dii: "FII / DII cash flows",
+    corp_events: "Corporate events (results)", nse_holidays: "Exchange holidays", gift_nifty: "GIFT Nifty" };
+  const dot = (b) => (b === null || b === undefined ? `<span class="chip extreme"><span class="dot"></span>missing</span>` : b === 0 ? `<span class="chip"><span class="dot live"></span>current</span>` : b <= 2 ? `<span class="chip elevated"><span class="dot"></span>${b} session${b > 1 ? "s" : ""} behind</span>` : `<span class="chip extreme"><span class="dot"></span>${b} sessions behind</span>`);
+  const L = window.MLLive ? MLLive.state : {};
+  app.innerHTML = `<div class="page-h"><div><h1>Data health</h1><div class="sub">What this build was made from · built ${esc(ov.built || "")} · analysis as of ${ov.asof}</div></div></div>
+    <div class="grid g2">
+      ${card({ title: "Warehouse tables", hint: "the newest day each one holds", cls: "span2", simple: "Each table the app reads, and how far its newest day is behind the build's as-of session. 'Missing' means the table has not been filled yet (a new table waits for its first backfill).",
+        body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Table</th><th>What</th><th>Files</th><th>Newest day</th><th>State</th></tr></thead><tbody>
+          ${H.tables.map((t) => `<tr><td><code>${t.table}</code></td><td style="text-align:left">${what[t.table] || ""}</td><td class="num">${num(t.files)}</td><td class="num">${t.last || "—"}</td><td>${dot(t.behind)}</td></tr>`).join("")}</tbody></table></div>` })}
+      ${card({ title: "Live feed", body: `<div class="small" style="line-height:1.9">State: <b>${esc(L.mode || "—")}</b>${L.feedAge !== null && L.feedAge !== undefined ? ` · NIFTY's quote ${Math.round(L.feedAge)} s old` : ""}<br>MCX: ${L.mcx && L.mcx.live ? "live" : "no fresh MCX price"}${L.note ? `<br>${esc(L.note)}` : ""}</div>` })}
+      ${card({ title: "Instruments", hint: "readings left blank are listed", body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Instrument</th><th>As of</th><th>Blank today</th></tr></thead><tbody>
+          ${H.instruments.map((x) => `<tr><td><a href="#/sym/${slug(x.symbol)}"><b>${esc(x.symbol)}</b></a></td><td class="num">${x.asof}</td><td class="small muted" style="text-align:left">${Object.keys(x.stale).join(", ") || "—"}</td></tr>`).join("")}</tbody></table></div>` })}
+    </div>`;
+}
+
+// ---- compare two instruments side by side ----
+async function pageCompare(app, ov, a, b) {
+  $("#crumbs").textContent = "Compare";
+  const U = ov.universe || [];
+  a = a || "NIFTY"; b = b || "BANKNIFTY";
+  const opts = (sel) => U.map((u) => `<option value="${u.slug}" ${u.slug === sel ? "selected" : ""}>${esc(u.symbol)}</option>`).join("");
+  let A, B;
+  try { [A, B] = await Promise.all([symData(a), symData(b)]); } catch (e) { app.innerHTML = `<div class="loading">Could not load ${esc(a)} or ${esc(b)}.</div>`; return; }
+  const t = theme(), ma_ = A.headline.metrics, mb = B.headline.metrics;
+  const rows = [["Price", (m) => num(m.spot, 1)], ["Day", (m) => `${vp(m.chg, 2)}%`], ["30-day IV", (m) => pct(m.iv30)], ["IV rank (1y)", (m) => ord(m.iv_p1y)],
+    ["Realised vol (21d)", (m) => pct(m.rv21)], ["Premium (IV − RV)", (m) => (fin(m.vrp) ? vp(m.vrp) + " pts" : "—")], ["Skew (25d RR)", (m) => (fin(m.rr25) ? vp(m.rr25) + " pts" : "—")],
+    ["Priced move to front expiry", (m) => (fin(m.move) ? "±" + pct(m.move, 2) : "—")], ["Put/call ratio rank", (m) => ord(m.pcr_p)], ["Futures carry", (m) => pct(m.carry)]];
+  const extra = (d) => ({ own: d.link && fin(d.link.own) ? pct(d.link.own, 0) : "—", lab: d.lab && d.lab.verdict ? d.lab.verdict.neighbours || "—" : "—",
+    gamma: d.gamma && fin(d.gamma.net_total) ? (d.gamma.net_total >= 0 ? "long " : "short ") + num(Math.abs(d.gamma.net_total)) + " cr" : "—",
+    atr: d.movement && fin(d.movement.atr14) ? pct(d.movement.atr14, 2) : "—" });
+  const ea = extra(A), eb = extra(B);
+  app.innerHTML = `<div class="page-h"><div><h1>Compare</h1><div class="sub">Two instruments side by side, each against its own history</div></div>
+      <div><select id="cmpA" class="seg" style="padding:6px">${opts(a)}</select> <span class="muted">vs</span> <select id="cmpB" class="seg" style="padding:6px">${opts(b)}</select></div></div>
+    <div class="grid g2">
+      ${card({ title: "Readings today", cls: "span2", body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>${esc(A.meta.symbol)}</th><th>${esc(B.meta.symbol)}</th></tr></thead><tbody>
+        ${rows.map(([l, f]) => `<tr><td style="text-align:left">${l}</td><td class="num">${f(ma_)}</td><td class="num">${f(mb)}</td></tr>`).join("")}
+        <tr><td style="text-align:left">Average true range (14d)</td><td class="num">${ea.atr}</td><td class="num">${eb.atr}</td></tr>
+        <tr><td style="text-align:left">Own share of variance</td><td class="num">${ea.own}</td><td class="num">${eb.own}</td></tr>
+        <tr><td style="text-align:left">Hedgers' net gamma</td><td class="num">${ea.gamma}</td><td class="num">${eb.gamma}</td></tr>
+        <tr><td style="text-align:left">Days like today vs an ordinary day</td><td class="num">${ea.lab}</td><td class="num">${eb.lab}</td></tr></tbody></table></div>` })}
+      ${card({ title: "30-day IV", hint: "each against its own year", body: `<div class="chart" id="cmpIv"></div>` })}
+      ${card({ title: "Realised vol (21d)", body: `<div class="chart" id="cmpRv"></div>` })}
+      ${card({ title: "Premium: IV − realised", body: `<div class="chart" id="cmpVrp"></div>` })}
+      ${card({ title: "Price, rebased to 100", body: `<div class="chart" id="cmpPx"></div>` })}
+    </div>`;
+  const sa = slice(A.series, ["iv30", "rv21", "vrp", "close"]), sb = slice(B.series, ["iv30", "rv21", "vrp", "close"]);
+  const d = sa.d.length >= sb.d.length ? sa.d : sb.d;
+  const align = (s, c) => { const m = new Map(s.d.map((x, i) => [x, s[c][i]])); return d.map((x) => (m.has(x) ? m.get(x) : null)); };
+  const tip = (f) => ({ trigger: "axis", valueFormatter: f, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } });
+  const two = (id, c, f, fy) => chart(id, { tooltip: tip(f), xAxis: axisX(d, t), yAxis: axisY(t, fy), legend: { show: true, top: 0, textStyle: { color: t.text2 } },
+    series: [line(A.meta.symbol, align(sa, c), t.s1), line(B.meta.symbol, align(sb, c), t.s2)] });
+  two("#cmpIv", "iv30", (v) => pct(v, 1), fmtPct(0));
+  two("#cmpRv", "rv21", (v) => pct(v, 1), fmtPct(0));
+  two("#cmpVrp", "vrp", (v) => vp(v) + " pts", (v) => (v * 100).toFixed(0));
+  const reb = (s) => { const x = align(s, "close"), f0 = x.find(fin); return x.map((v) => (fin(v) && f0 ? (100 * v) / f0 : null)); };
+  chart("#cmpPx", { tooltip: tip((v) => (fin(v) ? v.toFixed(1) : "—")), xAxis: axisX(d, t), yAxis: axisY(t, (v) => v.toFixed(0)), legend: { show: true, top: 0, textStyle: { color: t.text2 } },
+    series: [line(A.meta.symbol, reb(sa), t.s1), line(B.meta.symbol, reb(sb), t.s2)] });
+  const go = () => { location.hash = `#/compare/${$("#cmpA").value}/${$("#cmpB").value}`; };
+  $("#cmpA").onchange = go; $("#cmpB").onchange = go;
 }
 
 // ---- alerts: the owner's rules, kept in the relay; pushed by the Worker, shown here too (alertrules.js) ----
@@ -1082,6 +1151,8 @@ async function route(opts = {}) {
     else if (parts[0] === "breadth") await pageBreadth(app, ov);
     else if (parts[0] === "commodities") await pageCommodities(app, ov);
     else if (parts[0] === "alerts") await pageAlerts(app, ov);
+    else if (parts[0] === "health") await pageHealth(app, ov);
+    else if (parts[0] === "compare") await pageCompare(app, ov, parts[1], parts[2]);
     else if (parts[0] === "calendar") await pageCalendar(app, ov);
     else if (parts[0] === "method") await pageMethod(app, ov);
     else await pagePulse(app, ov);
@@ -1092,6 +1163,40 @@ function liveSlot(ctx) {
   window.MLLiveCtx = ctx;
   return `<div id="mlLive">${window.MLLive ? MLLive.render(ctx) : ""}</div>`;
 }
+// ---- CSV: a card's table, or its charts' series (x and every line or bar), as the page shows them ----
+function cardCSV(cardEl) {
+  const q = (v) => { const t = String(v ?? "").replace(/\s+/g, " ").trim(); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const tbl = cardEl.querySelector("table");
+  if (tbl) return [...tbl.querySelectorAll("tr")].map((tr) => [...tr.children].map((c) => q(c.innerText)).join(",")).join("\n");
+  const out = [];
+  cardEl.querySelectorAll(".chart").forEach((el) => {
+    const c = S.charts.find((x) => x.getDom() === el);
+    if (!c) return;
+    const o = c.getOption(), xs = (o.xAxis && o.xAxis[0] && o.xAxis[0].data) || (o.yAxis && o.yAxis[0] && o.yAxis[0].data) || null;
+    const ser = (o.series || []).filter((x) => Array.isArray(x.data) && !/lo$/.test(x.name || ""));
+    if (!ser.length) return;
+    const val = (v) => (v && typeof v === "object" && !Array.isArray(v) ? (Array.isArray(v.value) ? v.value[v.value.length - 1] : v.value) : Array.isArray(v) ? v[1] : v);
+    const xOf = (v, i) => (xs ? xs[i] : Array.isArray(v) ? v[0] : v && Array.isArray(v.value) ? v.value[0] : i);
+    const n = Math.max(...ser.map((x) => x.data.length));
+    out.push(["x", ...ser.map((x) => q(x.name || "series"))].join(","));
+    for (let i = 0; i < n; i++) out.push([q(xOf(ser[0].data[i], i)), ...ser.map((x) => q(val(x.data[i])))].join(","));
+    out.push("");
+  });
+  return out.join("\n");
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("[data-csv]");
+  if (!b) return;
+  const txt = cardCSV(b.closest(".card"));
+  if (!txt) return;
+  const name = (location.hash.replace(/^#\/?/, "").replace(/\//g, "-") || "pulse") + "-" + b.dataset.csv.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".csv";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([txt], { type: "text/csv" }));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
 window.MLState = S;
 window.MLRoute = route;
 (function init() {

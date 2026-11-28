@@ -27,9 +27,13 @@ export function windows(nowMs) {
 async function overview(env, nowMs, fetchFn) {
 	if (cached.ov && nowMs - cached.at < 20 * 60000) return cached.ov;
 	const origin = String(env.LENS_ORIGIN || LENS_ORIGIN).replace(/\/+$/, "");
-	const r = await fetchFn(`${origin}/data/overview.json`, { signal: AbortSignal.timeout(FETCH_MS) });
+	const [r, b] = await Promise.all([fetchFn(`${origin}/data/overview.json`, { signal: AbortSignal.timeout(FETCH_MS) }),
+		fetchFn(`${origin}/data/live_base.json`, { signal: AbortSignal.timeout(FETCH_MS) })]);
 	if (!r.ok) throw new Error(`overview.json answered ${r.status}`);
-	cached = { at: nowMs, ov: await r.json() };
+	const ov = await r.json();
+	// the live baseline has its own file (the site keeps the overview small); an older site still carries it inside
+	ov.live_base = b.ok ? await b.json() : ov.live_base || {};
+	cached = { at: nowMs, ov };
 	return cached.ov;
 }
 

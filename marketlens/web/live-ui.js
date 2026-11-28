@@ -34,7 +34,11 @@
       if (r.status === 503) { L.mode = "error"; L.note = "The live relay is switched off on the Worker."; return paint(); }
       if (!r.ok) { L.mode = "error"; L.note = "The live relay answered " + r.status + "."; return paint(); }
       const snap = await r.json();
-      const ov = window.MLState && window.MLState.overview;
+      const ov0 = window.MLState && window.MLState.overview;
+      if (ov0 && !L.liveBase) {                         // the close-of-day baseline: its own file, loaded once live mode is on
+        try { const b = await fetch("data/live_base.json", { cache: "no-cache" }); L.liveBase = b.ok ? await b.json() : {}; } catch (e) { L.liveBase = {}; }
+      }
+      const ov = ov0 ? { ...ov0, live_base: L.liveBase || {} } : null;
       mcxRead(snap.quotes || {});                       // MCX keeps its own clock: it trades to 23:30, after NSE closes
       notify(snap.quotes || {});                        // the alert rules, while the app is open (alertrules.js)
       const nifty = snap.quotes && snap.quotes.NIFTY;
@@ -121,8 +125,9 @@
   }
   function notify(quotes) {
     if (typeof AlertRules === "undefined" || typeof Notification === "undefined" || Notification.permission !== "granted") return;
-    const ov = window.MLState && window.MLState.overview;
-    if (!ov) return;
+    const ov0 = window.MLState && window.MLState.overview;
+    if (!ov0 || !L.liveBase) return;
+    const ov = { ...ov0, live_base: L.liveBase };
     if (L.alertRules === null) { loadRules(); return; }
     const now = Date.now(), ist = new Date(now + 19800000), hm = ist.getUTCHours() * 60 + ist.getUTCMinutes(), wd = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5;
     const due = AlertRules.evaluate(quotes, ov, L.alertRules, now, { nse: L.mode === "live", mcx: wd && hm >= 545 && hm <= 1410, eod: false });
@@ -212,7 +217,7 @@
   // the live read of one instrument against its close: front expiry IV vs the same expiry's close, the priced move,
   // a live percentile against the past year's front-expiry IV, today's futures read, OI added today
   function summary(sym) {
-    const ov = window.MLState.overview, base = ov.live_base[sym], r = L.reads[sym];
+    const base = (L.liveBase || {})[sym], r = L.reads[sym];
     if (!base || !r) return null;
     const front = r.expiries.find((e) => e.ok);
     const closeIv = front ? (base.term.find((c) => c.expiry === front.expiry) || {}).iv : null;

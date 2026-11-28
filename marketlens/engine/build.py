@@ -28,6 +28,8 @@ from .data import Warehouse
 # ---------------- JSON helpers ----------------
 
 def _num(x, nd=5):
+    """A number for the app's JSON: 5 decimals below 1 (a vol of 0.144444 keeps 0.14444), 7 significant figures from 1
+    up (NIFTY's 26,029.4 and an OI of 12,500,280 keep every digit that means anything)."""
     if x is None:
         return None
     if isinstance(x, (np.integer,)):
@@ -35,7 +37,10 @@ def _num(x, nd=5):
     if isinstance(x, (float, np.floating)):
         if not math.isfinite(x):
             return None
-        return round(float(x), nd)
+        x = float(x)
+        if abs(x) >= 1:
+            return round(x, max(0, 6 - int(math.floor(math.log10(abs(x))))))
+        return round(x, nd)
     if isinstance(x, (pd.Timestamp,)):
         return str(x.date())
     return x
@@ -726,6 +731,32 @@ def pulse(sym_data: dict, vix: pd.Series, parts: dict, flows: dict) -> list[str]
     return out
 
 
+def health_block(wh: Warehouse, data: dict, asof) -> dict:
+    """What the app was built from: each warehouse table's latest day (from its newest file only), how many sessions that
+    is behind the build's as-of day, and each instrument's own as-of day and the readings it had to leave blank."""
+    from .data import TABLES
+    sess = pd.bdate_range(end=asof, periods=30)
+    tables = []
+    for t in TABLES:
+        files = wh.files(t)
+        if not files:
+            tables.append({"table": t, "files": 0, "last": None, "behind": None})
+            continue
+        try:
+            df = pd.read_parquet(files[-1])
+            col = "date" if "date" in df else ("ts" if "ts" in df else None)
+            last = pd.to_datetime(df[col]).max() if col and len(df) else None
+            if last is not None and getattr(last, "tzinfo", None) is not None:
+                last = last.tz_localize(None)
+        except Exception:                            # an unreadable file is itself a health finding
+            last = None
+        behind = None if last is None else int(((sess > pd.Timestamp(last).normalize()) & (sess <= asof)).sum())
+        tables.append({"table": t, "files": len(files), "last": None if last is None else str(pd.Timestamp(last).date()), "behind": behind})
+    inst = [{"symbol": s_, "asof": d["meta"]["asof"], "stale": d["meta"].get("stale") or {}, "seconds": d["meta"].get("build_seconds"),
+             "since": d["meta"].get("since")} for s_, d in data.items()]
+    return {"asof": str(pd.Timestamp(asof).date()), "tables": tables, "instruments": inst}
+
+
 def dispersion_block(wh: Warehouse, asof, iv_panel, say=print) -> dict:
     """Implied against realised correlation for each index whose members can be listed (engine/dispersion.py)."""
     from . import dispersion as DS
@@ -793,9 +824,14 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
         "changes": changes_feed(data),
         "live_base": {s: live_base(d) for s, d in data.items()},
         "limits": limits_block(limits, data),
+        "health": health_block(wh, data, asof),
         "universe": [{"symbol": i.symbol, "name": i.name, "kind": i.kind, "sector": i.sector, "slug": U.slug(i.symbol)}
                      for i in insts if i.symbol in data],
     }
+    # the heavy parts each page does not need go in their own files: the participant history (Who holds what) and the
+    # live baseline (live mode and the Worker's alerts); every page loads the overview, so it stays small
+    (out / "participants.json").write_text(json.dumps(clean({"series": overview["participants"].pop("series", {})}), separators=(",", ":")))
+    (out / "live_base.json").write_text(json.dumps(clean(overview.pop("live_base")), separators=(",", ":")))
     (out / "overview.json").write_text(json.dumps(clean(overview), separators=(",", ":")))
     # MCX commodities' public side: the international benchmarks they track (engine/commodities.py), own file
     try:

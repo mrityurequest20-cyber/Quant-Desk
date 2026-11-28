@@ -179,7 +179,7 @@ def test_the_positions_tab_shows_the_review_and_the_watchdog_pushes_it_by_push_o
 
 @needs_node
 def test_the_push_line_says_the_day_in_one_line(tmp_path):
-    for f in ("watchdog.js", "live.js", "kotak.js", "series.js", "paper.js", "news.js", "candles.js", "routes.js"):
+    for f in ("watchdog.js", "live.js", "kotak.js", "series.js", "paper.js", "news.js", "alertbook.js", "candles.js", "routes.js"):
         shutil.copyfile(ROOT / "deploy/cloudflare" / f, tmp_path / f)
     (tmp_path / "package.json").write_text('{"type": "module"}')
     (tmp_path / "t.mjs").write_text("""import { reviewLine } from './watchdog.js';
