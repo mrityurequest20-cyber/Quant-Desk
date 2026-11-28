@@ -106,7 +106,10 @@ def skew_card(name, rr, p):
         return None
     if abs(rr) < 0.01:              # within one vol point: calls and puts priced alike
         s = (f"Calls and puts the same distance from the price cost about the same (gap {rr * 100:+.1f} vol points): "
-             f"no strong demand for either protection or upside. That is {level(p)} for {name}.")
+             f"no strong demand for either protection or upside."
+             + (f" Puts usually cost more than this for {name}: against the past year the gap is {level(p)}, "
+                f"so less fear is priced than usual." if p is not None and math.isfinite(p) and p >= 0.7 else
+                f" Against the past year, that gap is {level(p)} for {name}." if p is not None and math.isfinite(p) else ""))
     elif rr < 0:
         s = (f"Protection against a fall costs more than a bet on a rise, by {abs(rr) * 100:.1f} vol points. "
              f"That gap is {level(p)} for {name} against the past year.")
