@@ -20,7 +20,7 @@ const vp = (x, d = 1) => (fin(x) ? (x * 100 >= 0 ? "+" : "") + (x * 100).toFixed
 const num = (x, d = 0) => (fin(x) ? Number(x).toLocaleString("en-IN", { maximumFractionDigits: d, minimumFractionDigits: d }) : "—");
 const big = (x) => { if (!fin(x)) return "—"; const a = Math.abs(x); return a >= 1e7 ? (x / 1e7).toFixed(2) + " cr" : a >= 1e5 ? (x / 1e5).toFixed(2) + " L" : a >= 1e3 ? (x / 1e3).toFixed(1) + "k" : num(x); };
 const ord = (p) => { if (!fin(p)) return "—"; const n = Math.round(p * 100); const s = n % 100 >= 11 && n % 100 <= 13 ? "th" : { 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th"; return n + s; };
-const level = (p) => !fin(p) ? "unknown" : p < .1 ? "very low" : p < .3 ? "low" : p <= .7 ? "normal" : p <= .9 ? "high" : "very high";
+const level = (p) => !fin(p) ? "unknown" : p < .1 ? "very low" : p < .3 ? "on the low side" : p <= .7 ? "normal" : p <= .9 ? "on the high side" : "very high";
 const toneOf = (p) => !fin(p) ? "" : Math.abs(p - .5) >= .4 ? "extreme" : Math.abs(p - .5) >= .2 ? "elevated" : "";
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const slug = (s) => s.replace("&", "_");
@@ -101,9 +101,12 @@ function pbar(p, lo = "low", hi = "high") {
 }
 function chipP(p, label) {
   if (!fin(p)) return "";
-  return `<span class="chip ${toneOf(p)}"><span class="dot"></span>${label || level(p)}</span>`;
+  const short = { "on the low side": "below normal", "on the high side": "above normal" };     // chips stay short
+  return `<span class="chip ${toneOf(p)}"><span class="dot"></span>${label || short[level(p)] || level(p)}</span>`;
 }
-function card({ title, hint = "", body = "", simple = "", analyst = "", chip = "", cls = "" }) {
+function card({ title, hint = "", body = "", simple = "", analyst = "", chip = "", cls = "", level = "" }) {
+  // level "a": a deep-dive card, shown in Analyst mode only (Simple keeps the essentials)
+  if (level === "a") cls = (cls ? cls + " " : "") + "a-only";
   const csv = /class="(tbl|chart)/.test(body) ? `<button class="icon-btn csv" title="Download this card's data as CSV" aria-label="Download CSV" data-csv="${esc(String(title).replace(/<[^>]+>/g, ""))}">CSV</button>` : "";
   return `<section class="card ${cls}"><div class="card-h"><h3>${title}${hint ? ` <span class="hint">${hint}</span>` : ""}</h3><span class="card-tools">${chip}${csv}</span></div>
     ${simple ? `<p class="simple">${esc(simple)}</p>` : ""}${body}${analyst ? `<p class="analyst">${esc(analyst)}</p>` : ""}</section>`;
@@ -190,7 +193,7 @@ async function pagePulse(app, ov) {
       ${card({ title: "Options map", hint: "every instrument, one dot", simple: "Right = options expensive for that name (vs its own last year). Up = the price has really been moving a lot. Top-right: expensive for a reason. Bottom-right: expensive while calm.",
         body: `<div class="chart tall" id="map"></div><div class="legend"><span style="--c:${css("--s1")}">Indices</span><span style="--c:${css("--s2")}">Stocks</span></div>` })}
     </div>
-    <div style="margin-top:16px">${card({ title: "What changed since yesterday", hint: "the day's most unusual moves, each against its own history",
+    <div style="margin-top:16px">${card({ level: "a", title: "What changed since yesterday", hint: "the day's most unusual moves, each against its own history",
       simple: "Only changes that are big for that particular instrument make this list: a 2-sigma day is one that happens about once a month for it.",
       body: (ov.changes || []).length ? `<ul class="story">${ov.changes.map((c) => `<li><a href="#/sym/${slug(c.symbol)}"><b>${esc(c.symbol)}</b></a> · ${esc(c.text.replace(c.symbol + ": ", ""))} <span class="chip ${Math.abs(c.z) >= 2.5 ? "extreme" : "elevated"}">${Math.abs(c.z).toFixed(1)}σ</span></li>`).join("")}</ul>` : `<div class="muted">A quiet day: no reading moved unusually for its instrument.</div>`,
       analyst: "Size of a change = the day's change divided by the standard deviation of that instrument's daily changes over the past year. Readings: 30-day IV, 25-delta risk reversal, 21-day realised vol." })}</div>
@@ -252,9 +255,15 @@ const COLS = [
   { k: "vrp", lab: "IV − RV", f: (x) => vp(x.vrp) },
   { k: "move", lab: "Priced move", f: (x) => fin(x.move) ? `±${pct(x.move, 1)} <span class="muted small">${x.move_days ?? ""}d</span>` : "—" },
   { k: "rr25", lab: "Skew (RR)", f: (x) => vp(x.rr25) },
+  { k: "iv_pall", lab: "IV pct all", f: (x) => pcell(x.iv_pall), a: 1 },
+  { k: "rv_p", lab: "RV pct 1y", f: (x) => pcell(x.rv_p), a: 1 },
+  { k: "rr_p", lab: "Skew pct 1y", f: (x) => pcell(x.rr_p), a: 1 },
   { k: "pcr_p", lab: "PCR pct 1y", f: (x) => pcell(x.pcr_p), a: 1 },
   { k: "carry", lab: "Futures carry", f: (x) => pct(x.carry), a: 1 },
+  { k: "carry_p", lab: "Carry pct 1y", f: (x) => pcell(x.carry_p), a: 1 },
   { k: "buildup", lab: "Futures today", f: (x) => x.buildup ? `<span class="bu">${x.buildup}</span>` : "—", a: 1 },
+  { k: "comp_p", lab: "Compression pct", f: (x) => pcell(x.comp_p), a: 1 },
+  { k: "pos52", lab: "52w position", f: (x) => (fin(x.pos52) ? pct(x.pos52, 0) : "—"), a: 1 },
   { k: "mwpl_util", lab: "Limit used", f: (x) => x.in_ban ? `<span class="chip extreme">BAN</span>` : fin(x.mwpl_util) ? `<span class="${x.mwpl_util >= .8 ? "chg neg" : ""}">${pct(x.mwpl_util, 0)}</span>` : "—" },
   { k: "results", lab: "Results", f: (x) => x.results ? `<span class="chip elevated">${x.results.slice(5)}</span>` : (x.event === "results" ? `<span class="chip elevated">results priced</span>` : x.event ? `<span class="chip">front premium</span>` : "") },
 ];
@@ -306,11 +315,11 @@ async function pagePositioning(app, ov) {
     <div class="grid g2">${card({ title: "In plain words", body: `<ul class="story">${P.simple.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` })}
     ${card({ title: "Index futures: share of positions that are long", body: `<div class="chart" id="ls"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span></div>`,
       analyst: "Long share = long contracts / (long + short). Every future has a buyer and a seller, so one group's long is another's short. FIIs hedge their share holdings with index-futures shorts, which keeps their long share structurally low; the extremes, not the level, are what history makes interesting." })}</div>
-    <div style="margin-top:16px">${card({ title: "Current books against their history", hint: "contracts; percentile vs the past year", body: tbl,
+    <div style="margin-top:16px">${card({ level: "a", title: "Current books against their history", hint: "contracts; percentile vs the past year", body: tbl,
       analyst: "Percentiles compare with the past year because these books changed regime: FIIs' median long share in index futures was 44-63% in 2019-2024 and 12-17% in 2025-26. Against all history a normal day now looks extreme. Every contract has a buyer and a seller: the four groups' longs equal their shorts each day (checked)." })}</div>
     <div class="grid g2" style="margin-top:16px">
       ${card({ title: "Index futures: net contracts", body: `<div class="chart" id="net"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span><span style="--c:${css("--s4")}">DII</span></div>` })}
-      ${card({ title: "Index options stance", hint: "net calls − net puts", simple: "Above zero: the group's options gain if the market rises (long calls / short puts). Below zero: they gain on a fall.",
+      ${card({ level: "a", title: "Index options stance", hint: "net calls − net puts", simple: "Above zero: the group's options gain if the market rises (long calls / short puts). Below zero: they gain on a fall.",
         body: `<div class="chart" id="opt"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span></div>` })}
     </div>`;
   const t = theme();
@@ -381,13 +390,13 @@ async function pageBreadth(app, ov) {
         body: `<div class="chart" id="bpos"></div><div class="legend">${cls.map((c, i) => `<span style="--c:${[t.s1, t.s2, t.s3, t.s4][i]}">${c}</span>`).join("")}</div>` })}
       ${card({ title: "Dearest options today", hint: "against each stock's own year", body: `<div class="small" style="line-height:2">${list(T.dearest)}</div>` })}
       ${card({ title: "Cheapest options today", hint: "against each stock's own year", body: `<div class="small" style="line-height:2">${list(T.cheapest)}</div>` })}
-      ${card({ title: "Sector vol board", hint: "21-day realised vol of NSE's sector indices", cls: "span2",
+      ${card({ level: "a", title: "Sector vol board", hint: "21-day realised vol of NSE's sector indices", cls: "span2",
         simple: "How much each sector has actually been moving, against its own past year; 'waking' compares the last week with the last quarter (above 1: the sector has started to move more).",
         body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Sector</th><th>Realised vol (21d)</th><th>Rank (1y)</th><th>Waking (5d / 63d)</th><th>Last year</th></tr></thead><tbody>
           ${(B.sectors || []).map((x, i) => `<tr><td>${esc(x.sector)} <span class="muted small">${esc(x.index)}</span></td><td class="num">${pct(x.rv21, 1)}</td><td class="num">${ord(x.rank)}</td>
             <td class="num">${fin(x.wake) ? x.wake.toFixed(2) + "×" : "—"}</td><td><div class="chart" id="sec${i}" style="height:28px;width:160px"></div></td></tr>`).join("")}</tbody></table></div>` })}
       ${Object.values(B.dispersion || {}).map((x) => dispCard(x)).join("")}
-      ${card({ title: "Today's futures reads by class", cls: "span2", body: cls.map((c) => `<div style="margin:6px 0"><b>${c}</b> <span class="muted small">(${T.buildups[c].length})</span><div class="small muted" style="line-height:1.8">${T.buildups[c].map((x) => name(x)).join(" · ") || "—"}</div></div>`).join("") })}
+      ${card({ level: "a", title: "Today's futures reads by class", cls: "span2", body: cls.map((c) => `<div style="margin:6px 0"><b>${c}</b> <span class="muted small">(${T.buildups[c].length})</span><div class="small muted" style="line-height:1.8">${T.buildups[c].map((x) => name(x)).join(" · ") || "—"}</div></div>`).join("") })}
     </div>`;
     bindHorizon(draw);
     const v = slice(vol, ["dear", "cheap", "median_rank"]), pp = slice(pos, cls);
@@ -414,7 +423,7 @@ async function pageHealth(app, ov) {
   const L = window.MLLive ? MLLive.state : {};
   app.innerHTML = `<div class="page-h"><div><h1>Data health</h1><div class="sub">What this build was made from · built ${esc(ov.built || "")} · analysis as of ${ov.asof}</div></div></div>
     <div class="grid g2">
-      ${card({ title: "Warehouse tables", hint: "the newest day each one holds", cls: "span2", simple: "Each table the app reads, and how far its newest day is behind the build's as-of session. 'Missing' means the table has not been filled yet (a new table waits for its first backfill).",
+      ${card({ level: "a", title: "Warehouse tables", hint: "the newest day each one holds", cls: "span2", simple: "Each table the app reads, and how far its newest day is behind the build's as-of session. 'Missing' means the table has not been filled yet (a new table waits for its first backfill).",
         body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Table</th><th>What</th><th>Files</th><th>Newest day</th><th>State</th></tr></thead><tbody>
           ${H.tables.map((t) => `<tr><td><code>${t.table}</code></td><td style="text-align:left">${what[t.table] || ""}</td><td class="num">${num(t.files)}</td><td class="num">${t.last || "—"}</td><td>${dot(t.behind)}</td></tr>`).join("")}</tbody></table></div>` })}
       ${card({ title: "Live feed", body: `<div class="small" style="line-height:1.9">State: <b>${esc(L.mode || "—")}</b>${L.feedAge !== null && L.feedAge !== undefined ? ` · NIFTY's quote ${Math.round(L.feedAge)} s old` : ""}<br>MCX: ${L.mcx && L.mcx.live ? "live" : "no fresh MCX price"}${L.note ? `<br>${esc(L.note)}` : ""}</div>` })}
@@ -682,11 +691,11 @@ function symVol(el, d, u) {
         body: `<div class="chart tall" id="ivrv"></div><div class="legend"><span style="--c:${t.s1}">Implied 30d (options' price)</span><span style="--c:${t.s2}">Realised 21d (actual)</span>${s.vix ? `<span style="--c:${t.s3}">India VIX</span>` : ""}</div>` })}
       ${card({ title: "The premium: IV − realised", hint: "vol points", simple: c.vrp?.simple, analyst: c.vrp?.analyst, body: `<div class="chart" id="vrp"></div>` })}
       ${card({ title: "Term structure", hint: "IV by expiry", simple: c.term?.simple, analyst: c.term?.analyst, body: `<div class="chart" id="term"></div><div class="legend"><span style="--c:${t.s1}">Today</span><span style="--c:${t.s2}">A week ago</span><span style="--c:${t.s3}">A month ago</span></div>` })}
-      ${card({ title: "Volatility smile", hint: "IV by strike · nearest expiries and the monthly contracts", simple: "How option prices bend across strikes. A steeper left side means crash protection is in demand.", body: `<div class="chart" id="smile"></div><div class="legend">${d.smiles.map((x, i) => `<span style="--c:${smc[i]}">${x.expiry} · ${seriesName(x)} (${x.days}d)</span>`).join("")}</div>` })}
-      ${card({ title: "Skew history", hint: "25-delta risk reversal", simple: c.skew?.simple, analyst: c.skew?.analyst, body: `<div class="chart" id="rr"></div>` })}
+      ${card({ level: "a", title: "Volatility smile", hint: "IV by strike · nearest expiries and the monthly contracts", simple: "How option prices bend across strikes. A steeper left side means crash protection is in demand.", body: `<div class="chart" id="smile"></div><div class="legend">${d.smiles.map((x, i) => `<span style="--c:${smc[i]}">${x.expiry} · ${seriesName(x)} (${x.days}d)</span>`).join("")}</div>` })}
+      ${card({ level: "a", title: "Skew history", hint: "25-delta risk reversal", simple: c.skew?.simple, analyst: c.skew?.analyst, body: `<div class="chart" id="rr"></div>` })}
       ${curveCard(d, u)}
       ${linkCard(d, u)}
-      ${card({ title: "Volatility cone", hint: "realised vol by window, since " + d.meta.since, simple: "The bands show the usual range of actual movement for each look-back; the dot is today. A dot near the top of its band: unusually wild.", analyst: c.realised?.analyst, cls: "span2", body: `<div class="chart" id="cone"></div>` })}
+      ${card({ level: "a", title: "Volatility cone", hint: "realised vol by window, since " + d.meta.since, simple: "The bands show the usual range of actual movement for each look-back; the dot is today. A dot near the top of its band: unusually wild.", analyst: c.realised?.analyst, cls: "span2", body: `<div class="chart" id="cone"></div>` })}
     </div>`;
   const tip = { trigger: "axis", valueFormatter: (v) => pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } };
   const ser = [line("Implied 30d", s.iv30, t.s1), line("Realised 21d", s.rv21, t.s2)];
@@ -730,10 +739,10 @@ function symMove(el, d, u) {
         <div class="legend"><span style="--c:${t.s1}">Price</span><span style="--c:${t.s2}">±1 priced move (straddle)</span><span style="--c:${t.s3}">±2×</span></div>` })}
       ${card({ title: "Did the price stay inside the priced move?", hint: `by days to expiry · ${num(sc.n)} days since ${sc.since}`, simple: `Overall the price ended inside the straddle-priced range ${pct(sc.inside_all, 0)} of the time (last year: ${pct(sc.inside_1y, 0)}). A fairly priced straddle gives about 57%: above that, options were on average more expensive than the moves that followed.`,
         body: `<div class="chart" id="sc"></div>`, analyst: `Median realised/implied ratio over the last year: ${fin(sc.ratio_1y) ? sc.ratio_1y.toFixed(2) : "—"} (below 1 = moves smaller than priced). The 90th-percentile ratio per bucket is in the tooltip: the tail is where straddle sellers lose.` })}
-      ${card({ title: "Priced vs actual, each day", hint: "front expiry, last ~400 days", simple: "Each dot is a day: across is the move options priced, up is the move that happened by expiry. Dots above the line beat the price.", body: `<div class="chart" id="scat"></div>` })}
+      ${card({ level: "a", title: "Priced vs actual, each day", hint: "front expiry, last ~400 days", simple: "Each dot is a day: across is the move options priced, up is the move that happened by expiry. Dots above the line beat the price.", body: `<div class="chart" id="scat"></div>` })}
       ${labCard(d, u)}
       ${expiryCards(d, u)}
-      ${card({ title: "Every expiry on the curve", cls: "span2", body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expiry</th><th>Contract</th><th>Days</th><th>ATM IV</th><th>Straddle</th><th>Priced move</th><th>Range</th></tr></thead><tbody>
+      ${card({ level: "a", title: "Every expiry on the curve", cls: "span2", body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expiry</th><th>Contract</th><th>Days</th><th>ATM IV</th><th>Straddle</th><th>Priced move</th><th>Range</th></tr></thead><tbody>
         ${(d.term.now || []).map((x) => `<tr${isMonth(x) ? ' class="hl"' : ""}><td class="num">${x.expiry}</td><td>${seriesName(x)}</td><td class="num">${x.days}</td><td class="num">${pct(x.iv)}</td><td class="num">${num(x.straddle, 1)}</td><td class="num">±${pct(x.move, 2)}</td><td class="num">${num(x.F * (1 - x.move))} – ${num(x.F * (1 + x.move))}</td></tr>`).join("")}</tbody></table></div>` })}
     </div>`;
   if (f0) {
@@ -790,15 +799,15 @@ function symMovement(el, d, u) {
         simple: `${u.symbol}'s daily swings, measured four ways. ${fin(swing) ? (swing > 1.1 ? "The range estimators run above close-to-close: the days swing more than where they settle." : swing < 0.9 ? "Close-to-close runs above the range estimators: big closing moves and gaps, more than intraday swings." : "The four agree: the days settle about as far as they swing.") : ""}`,
         analyst: "Close-to-close: standard deviation of daily log returns. Parkinson: from the high-low range only. Garman-Klass: adds open-to-close. Yang-Zhang: adds the overnight gap and is unbiased under drift; it is the one to set against an option's implied vol. Split-adjusted; a demerger day is left out.",
         body: `<div class="chart" id="mvEst"></div><div class="legend"><span style="--c:${t.s1}">Close-to-close</span><span style="--c:${t.s2}">Yang-Zhang</span><span style="--c:${t.s3}">Garman-Klass</span></div>` })}
-      ${card({ title: "Gaps", hint: "open against the previous close",
+      ${card({ level: "a", title: "Gaps", hint: "open against the previous close",
         simple: `Over the past year the median gap was ${pct(m.gap_p50, 2)} and one day in twenty opened ${pct(m.gap_p95, 2)} or more away. Overnight carries ${pct(m.ovn_share, 0)} of the variance.`,
         analyst: "Overnight share: variance of log(open / previous close) over the variance of that plus log(close / open), 63 sessions.",
         body: `<div class="chart" id="mvGap" style="height:200px"></div><div class="tbl-wrap" style="margin-top:8px"><table class="tbl"><thead><tr><th>Biggest gaps of the year</th><th>Gap</th></tr></thead><tbody>
           ${(m.big_gaps || []).map((g) => `<tr><td class="num">${g.date}</td><td class="num"><span class="chg ${g.gap >= 0 ? "pos" : "neg"}">${vp(g.gap, 2)}%</span></td></tr>`).join("")}</tbody></table></div>` })}
-      ${card({ title: "Compression", hint: "20-day range and band width, ranked against the past year",
+      ${card({ level: "a", title: "Compression", hint: "20-day range and band width, ranked against the past year",
         simple: `The 20-day range is ${comp} for ${u.symbol} (${ord(m.rng20_rank)} percentile). ${studyTxt}`,
         body: `<div class="chart" id="mvComp"></div><div class="legend"><span style="--c:${t.s7}">20-day range rank</span><span style="--c:${t.s1}">Band-width rank</span></div>` })}
-      ${stock ? card({ title: "Participation", hint: "volume, delivery and liquidity", cls: "span2",
+      ${stock ? card({ level: "a", title: "Participation", hint: "volume, delivery and liquidity", cls: "span2",
         simple: `Volume today is ${fin(m.vol_z) ? (m.vol_z >= 0 ? "+" : "") + m.vol_z.toFixed(1) + " standard deviations" : "—"} against its last 63 sessions; ${pct(m.deliv, 0)} of the traded shares were taken for delivery (${ord(m.deliv_rank)} percentile of its year). Descriptive: delivery shows how much of the day's trade was not day-trading, not who was right.`,
         analyst: `Amihud illiquidity (median absolute return per Rs crore traded, 63 sessions): ${fin(m.amihud) ? m.amihud.toFixed(3) : "—"} bp per crore, ${ord(m.amihud_rank)} percentile of its year (higher: a rupee moves the price more). From NSE's cash-market bhavcopy, since ${m.since}.`,
         body: `<div class="chart" id="mvPart"></div><div class="legend"><span style="--c:${t.s1}">Volume z-score</span><span style="--c:${t.s2}">Delivery %</span></div>` }) : ""}
@@ -829,8 +838,8 @@ function symOI(el, d, u) {
         <div class="seg" id="oiMode" style="margin:0 0 8px 8px"><button data-m="oi" class="on">Open positions</button><button data-m="chg">Today's change</button></div>
         <div class="chart tall" id="oi" style="height:460px"></div><div class="legend"><span style="--c:${t.s1}">Calls</span><span style="--c:${t.s2}">Puts</span></div>` })}
       ${gammaCards(d, u)}
-      ${card({ title: "Put / call ratio history", hint: "open interest, all expiries", simple: "Puts open divided by calls open. Shown against its own past rather than as 'bullish' or 'bearish': in India most open puts are sold, so the ratio says more about how crowded put-selling is than about direction.", body: `<div class="chart" id="pcr"></div>` })}
-      ${card({ title: "Total options open interest", hint: "all strikes, OI units (shares or index quantity)", simple: "How many option positions are open. Rising positions mean money committing; falling, money leaving.", body: `<div class="chart" id="toi"></div>` })}
+      ${card({ level: "a", title: "Put / call ratio history", hint: "open interest, all expiries", simple: "Puts open divided by calls open. Shown against its own past rather than as 'bullish' or 'bearish': in India most open puts are sold, so the ratio says more about how crowded put-selling is than about direction.", body: `<div class="chart" id="pcr"></div>` })}
+      ${card({ level: "a", title: "Total options open interest", hint: "all strikes, OI units (shares or index quantity)", simple: "How many option positions are open. Rising positions mean money committing; falling, money leaving.", body: `<div class="chart" id="toi"></div>` })}
     </div>`;
   let sel = 0, mode = "oi";
   const draw = () => {
@@ -874,11 +883,11 @@ function gammaCards(d, u) {
   const g = d.gamma;
   if (!g || !g.strikes || !g.strikes.length) return "";
   const t = theme(), st = gammaStory(g, u), hasNet = !!g.net;
-  return `${card({ title: "Gamma by strike", hint: "Rs crore of hedging per 1% move · all expiries read", cls: "span2", simple: st.simple, analyst: st.analyst,
+  return `${card({ level: "a", title: "Gamma by strike", hint: "Rs crore of hedging per 1% move · all expiries read", cls: "span2", simple: st.simple, analyst: st.analyst,
       body: `${hasNet ? `<div class="seg" id="gmMode" style="margin-bottom:8px"><button data-m="side" class="on">Calls and puts</button><button data-m="net">Hedgers' net</button></div>` : ""}
         <div class="chart tall" id="gmap" style="height:440px"></div><div class="legend" id="gmLeg"><span style="--c:${t.s1}">Call gamma</span><span style="--c:${t.s2}">Put gamma</span></div>` })}
-    ${hasNet && g.profile ? card({ title: "Hedgers' net gamma if the price moves", hint: "same positions, prices ±5%", simple: "Each point re-prices every strike's gamma at that index level, positions unchanged. Above zero their hedging damps moves; below, it adds to them.", body: `<div class="chart" id="gprof"></div>` }) : ""}
-    ${card({ title: "Gamma over time", hint: hasNet ? "total and hedgers' net, Rs crore per 1%" : "total call and put gamma, Rs crore per 1%", simple: "How much hedging the open options carry each day. It swells into an expiry and empties after it.", body: `<div class="chart" id="ghist"></div>` })}`;
+    ${hasNet && g.profile ? card({ level: "a", title: "Hedgers' net gamma if the price moves", hint: "same positions, prices ±5%", simple: "Each point re-prices every strike's gamma at that index level, positions unchanged. Above zero their hedging damps moves; below, it adds to them.", body: `<div class="chart" id="gprof"></div>` }) : ""}
+    ${card({ level: "a", title: "Gamma over time", hint: hasNet ? "total and hedgers' net, Rs crore per 1%" : "total call and put gamma, Rs crore per 1%", simple: "How much hedging the open options carry each day. It swells into an expiry and empties after it.", body: `<div class="chart" id="ghist"></div>` })}`;
 }
 function gammaCharts(d, u) {
   const g = d.gamma, t = theme();
@@ -932,7 +941,7 @@ function curveCard(d, u) {
   const simple = tilt ? `The 2-month option price against the 1-month one is ${vp(c.term_60_30, 1)} vol points: the curve is ${tilt}${fin(c.term_p) ? ` (${ord(c.term_p)} percentile of the past year)` : ""}.` : "Not enough listed months today to compare one horizon with another.";
   const tbl = rows.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="tbl"><thead><tr><th>Contract</th><th>ATM IV</th><th>25-delta skew</th></tr></thead><tbody>
     ${rows.map(([n, a, b]) => `<tr><td>${n}</td><td class="num">${pct(m[a])}</td><td class="num">${fin(m[b]) ? vp(m[b]) + " pts" : "—"}</td></tr>`).join("")}</tbody></table></div>` : "";
-  return card({ title: "The curve between months", hint: "constant-maturity IV: 30, 60, 90 days", cls: "span2", simple,
+  return card({ level: "a", title: "The curve between months", hint: "constant-maturity IV: 30, 60, 90 days", cls: "span2", simple,
     analyst: `IV at fixed horizons by total-variance interpolation between expiries, shown only where the listed expiries reach the horizon (no flat extension). Today: 30d ${pct(d.headline.metrics?.iv30 ?? null)}, 60d ${pct(c.iv60)}, 90d ${pct(c.iv90)}. Skew is the 25-delta risk reversal of each monthly contract (negative: puts dearer).`,
     body: `<div class="chart" id="cmIv"></div><div class="legend"><span style="--c:${theme().s1}">30 days</span><span style="--c:${theme().s2}">60 days</span><span style="--c:${theme().s3}">90 days</span></div>
       <div class="chart" id="cmSpread" style="height:180px"></div>${tbl}` });
@@ -953,7 +962,7 @@ function linkCard(d, u) {
   const k = d.link;
   if (!k || !fin(k.own)) return "";
   const own = k.own, word = own >= 0.7 ? "mostly its own" : own >= 0.45 ? "about half its own" : "mostly the market's";
-  return card({ title: "How much of its move is its own", hint: "last 63 sessions", cls: "span2",
+  return card({ level: "a", title: "How much of its move is its own", hint: "last 63 sessions", cls: "span2",
     simple: `${pct(own, 0)} of ${u.symbol}'s day-to-day variance is its own, not NIFTY's or ${k.sector_index || "its sector"}'s: its moves are ${word}${fin(k.own_p) ? ` (${ord(k.own_p)} percentile of its past year)` : ""}. Its options price that own risk (results, deals, news) on top of the market's, which an index option cannot hedge.`,
     analyst: `Rolling 63-session regression of daily log returns on NIFTY${k.sector_index ? ` and ${k.sector_index}` : ""}: beta to NIFTY ${fin(k.beta_n) ? k.beta_n.toFixed(2) : "—"} (correlation ${fin(k.corr_n) ? k.corr_n.toFixed(2) : "—"})${fin(k.beta_s) ? `, beta to the sector ${k.beta_s.toFixed(2)} (correlation ${k.corr_s.toFixed(2)})` : ""}; R² of the two together ${pct(k.r2, 0)}. Own share = 1 − R². Split- and demerger-adjusted prices.`,
     body: `<div class="chart" id="lkOwn" style="height:200px"></div><div class="legend"><span style="--c:${theme().s7}">Own share of variance</span><span style="--c:${theme().s1}">Beta to NIFTY</span></div>` });
@@ -970,7 +979,7 @@ function linkChart(d) {
 function rollCard(d, u) {
   const c = d.curve || {};
   if (!fin(c.cal_carry)) return "";
-  return card({ title: "The roll between months", hint: "next month's future over this month's, annualised",
+  return card({ level: "a", title: "The roll between months", hint: "next month's future over this month's, annualised",
     simple: `Rolling a position from this month's future into the next costs ${pct(c.cal_carry)} a year${fin(c.cal_carry_p) ? `, ${ord(c.cal_carry_p)} percentile of the past year` : ""}${fin(c.cal_spread) && u.kind === "index" ? ` (${num(c.cal_spread, 1)} points)` : ""}. A dear roll means longs are paying up to stay in.`,
     analyst: "ln(next future / this future) over the days between the two expiries, at each close: the market's own financing rate for the roll, independent of when the spot printed. Compare with the futures premium over spot beside it.",
     body: `<div class="chart" id="calc"></div><div class="legend"><span style="--c:${theme().s7}">Roll rate between months</span><span style="--c:${theme().s1}">Premium over spot</span></div>` });
@@ -1001,7 +1010,7 @@ function labCard(d, u) {
     : v === "lower" ? `After the ${nn.n} past days most like today, the next month moved ${nn.ratio.toFixed(2)}× what options priced, against ${b.ratio.toFixed(2)}× on an ordinary day: options have tended to over-price what followed.`
     : `After the ${nn.n} past days most like today, the next month moved ${nn.ratio.toFixed(2)}× what options priced: no different from an ordinary day (${b.ratio.toFixed(2)}×) within the uncertainty.`;
   const split = nn && nn.before_2024 && nn.from_2024 ? ((nn.before_2024.ratio - b.ratio) * (nn.from_2024.ratio - b.ratio) > 0 ? " It points the same way before and after 2024." : " It does not hold the same way before and after 2024: treat it as weak.") : "";
-  return card({ title: "Days like today", hint: `what followed, over the next ${L.horizon} sessions`, cls: "span2",
+  return card({ level: "a", title: "Days like today", hint: `what followed, over the next ${L.horizon} sessions`, cls: "span2",
     simple: `Today ${u.symbol}'s options are ${ivw}, priced ${pw}, with ${cw}. ${say}${split}`,
     analyst: `Realised vol of the next ${L.horizon} sessions as a share of the 30-day IV that day (1.00× = priced exactly), and how often the price ended inside the IV's one-sigma range (fairly priced: about 68%). Ranges are 90% moving-block bootstrap intervals (21-session blocks). Nearest neighbours: the 40 past days closest to today on IV rank, premium, curve slope, skew rank and last week's vol against the last quarter's, at most one per 10 sessions. With 27 instruments and two methods, some "different" readings are chance: weight one that holds in both halves. Descriptive, never a signal.`,
     body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Days</th><th>How many</th><th>Moved / priced</th><th>Ended inside ±1 IV move</th><th>Before 2024</th><th>From 2024</th></tr></thead><tbody>
@@ -1024,17 +1033,17 @@ function expiryCards(d, u) {
     const verdict = st.p < 0.05 ? `more often than chance (p = ${st.p.toFixed(3)} for one instrument; with many instruments tested, treat a single p near 0.05 with care)`
       : st.share < 0.5 && st.p_two < 0.05 ? `less often than a coin toss (two-sided p = ${st.p_two.toFixed(3)}): the price tended to move away from it`
       : `about as often as a coin toss would (p = ${st.p.toFixed(2)}): no pull towards it shows`;
-    pin = card({ title: "Does max pain pull the price?", hint: `${num(st.n)} expiries since ${st.since}`, cls: "span2",
+    pin = card({ level: "a", title: "Does max pain pull the price?", hint: `${num(st.n)} expiries since ${st.since}`, cls: "span2",
       simple: `From the close before each expiry, the settlement landed closer to max pain than to the mirror point the same distance on the other side ${pct(st.share, 0)} of the time, ${verdict}.`,
       analyst: `Max pain from the open interest at the close before expiry; median distance from the price ${pct(st.median_gap, 2)}. Expiries with max pain within 0.1% of the price are not counted (no direction to test). On expiry day itself the price stayed inside the one-day straddle priced the evening before ${pct(st.inside, 0)} of the time (${num(st.n_priced)} expiries; a fairly priced straddle gives about 57%).`,
       body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expiry</th><th>Close before</th><th>Max pain</th><th>Settled</th><th>Closer to max pain?</th><th>Move</th><th>Priced</th></tr></thead><tbody>
         ${st.recent.slice().reverse().map((r) => `<tr><td class="num">${r.expiry}</td><td class="num">${num(r.close_before, 1)}</td><td class="num">${num(r.max_pain)}</td><td class="num">${num(r.settle, 1)}</td>
           <td>${r.closer === null ? `<span class="muted small">not counted</span>` : r.closer ? "yes" : "no"}</td><td class="num">${pct(r.move, 2)}</td><td class="num">${fin(r.priced) ? "±" + pct(r.priced, 2) : "—"}</td></tr>`).join("")}</tbody></table></div>` });
   }
-  const pay = x.payout && x.payout.strike.length ? card({ title: "What option buyers collect at each settlement", hint: `${x.expiry} · every open call and put`,
+  const pay = x.payout && x.payout.strike.length ? card({ level: "a", title: "What option buyers collect at each settlement", hint: `${x.expiry} · every open call and put`,
       simple: `If ${u.symbol} settled at each level, this is what all the open options of the expiry would pay their buyers. The lowest point is max pain${fin(x.max_pain) ? ` (${num(x.max_pain)})` : ""}.`,
       body: `<div class="chart" id="xpay"></div>` }) : "";
-  const dec = x.decay && x.decay.date.length > 1 ? card({ title: "How the straddle is decaying", hint: `${x.expiry} · at-the-money call + put`,
+  const dec = x.decay && x.decay.date.length > 1 ? card({ level: "a", title: "How the straddle is decaying", hint: `${x.expiry} · at-the-money call + put`,
       simple: "The at-the-money straddle at each close against the path a steady market would give (shrinking with the square root of the time left). Above the line, options held their value: the market got more nervous or moved.",
       body: `<div class="chart" id="xdec"></div><div class="legend"><span style="--c:${theme().s1}">Straddle</span><span style="--c:${theme().s3}">√time path from the first reading</span></div>` }) : "";
   return `<div class="span2">${card({ title: "The expiry in front", hint: x.expiry, body: tiles, cls: "flat" })}</div>${pay}${dec}${pin}`;
@@ -1063,7 +1072,7 @@ function futMonthsCard(d) {
   if (!m.length) return "";
   const p = (x) => num(x, x > 1000 ? 1 : 2);
   const sp = m.slice(1).map((x, i) => `${m[i].series.replace(" month", "")} → ${x.series.replace(" month", "")} ${num(x.fut - m[i].fut, x.fut > 1000 ? 1 : 2)}`).join(" · ");
-  return card({ title: "Futures by month", hint: `current, near and far contracts · ${d.meta.asof}`, cls: "span2",
+  return card({ level: "a", title: "Futures by month", hint: `current, near and far contracts · ${d.meta.asof}`, cls: "span2",
     simple: `Each listed futures month side by side. Most positions sit in the ${m[0].series} (${pct(m[0].oi_share, 0)} of futures OI); the later months show where traders are rolling and what carrying a position costs further out.`,
     analyst: `Calendar spreads (later minus earlier future): ${sp || "—"}. Carry is annualised from the settlement price against the spot close and shown only 20+ days out (a short basis annualised is noise). OI and price change compare the same contract with the session before.`,
     body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Contract</th><th>Expiry</th><th>Days</th><th>Future</th><th>Day</th><th>Basis</th><th>Carry</th><th>Open interest</th><th>Share</th><th>OI change</th><th>Contracts</th></tr></thead><tbody>
@@ -1089,7 +1098,7 @@ function symFutures(el, d, u) {
         ${fr.slice().reverse().map((r) => `<tr><td class="num">${r.date}</td><td class="num">${num(r.fut, r.fut > 1000 ? 1 : 2)}</td><td class="num"><span class="chg ${r.d_price >= 0 ? "pos" : "neg"}">${vp(r.d_price, 2)}%</span></td>
           <td class="num">${fin(r.d_oi) ? vp(r.d_oi, 1) + "%" : "—"}</td><td class="num">${big(r.fut_oi)}</td><td class="num">${num(r.basis, 1)}</td><td class="num">${pct(r.carry)}</td>
           <td><span class="bu" style="${buCol[r.buildup] ? `box-shadow: inset 3px 0 0 ${css(buCol[r.buildup])}` : ""}">${r.buildup}</span></td></tr>`).join("")}</tbody></table></div>` })}
-      ${card({ title: "Rollover at each expiry", hint: "share of OI already in next month, day before expiry", cls: "span2", simple: "How much of the position was carried into the next month. A high roll means traders kept their bets on; a low roll means they closed out.", body: `<div class="chart" id="roll"></div>` })}
+      ${card({ level: "a", title: "Rollover at each expiry", hint: "share of OI already in next month, day before expiry", cls: "span2", simple: "How much of the position was carried into the next month. A high roll means traders kept their bets on; a low roll means they closed out.", body: `<div class="chart" id="roll"></div>` })}
     </div>`;
   const tip = (f) => ({ trigger: "axis", valueFormatter: f, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } });
   chart("#carry", { tooltip: tip((v) => pct(v, 1)), xAxis: axisX(s.d, t), yAxis: axisY(t, fmtPct(0)),
@@ -1115,7 +1124,7 @@ function symEvents(el, d, u) {
         <td class="num">${fin(r.move_day1) ? `<span class="chg ${r.move_day1 >= 0 ? "pos" : "neg"}">${vp(r.move_day1, 1)}%</span>` : "—"}</td>
         <td class="num">${fin(r.iv_change) ? vp(r.iv_change) + " pts" : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="muted">No results dates in the calendar window.</div>`,
       analyst: "Priced event move: the extra variance in the expiry holding the results over the forward variance to the next expiry, as a one-day move, read at the last close before the results date. 'Not separable' means the curve showed no distinct event. The calendar does not say whether results came in market hours or after the close, so both the results-day and next-day moves are shown. Front IV change: close of the next day minus the last close before." }) : ""}
-    ${d.macro?.length ? card({ title: "How it moves on big macro days", hint: "median absolute move, since " + d.meta.since, simple: "On days like these, this index has typically moved this many times its normal amount.",
+    ${d.macro?.length ? card({ level: "a", title: "How it moves on big macro days", hint: "median absolute move, since " + d.meta.since, simple: "On days like these, this index has typically moved this many times its normal amount.",
       body: `<div class="chart" id="macro"></div>`, analyst: "Days from the macro calendar (RBI policy, Union Budget, US Fed, election results...). Descriptive: a small sample per kind, overlapping with other news." }) : ""}
     ${card({ title: "Biggest one-day moves on record", hint: "since " + d.meta.since, body: `<div class="tbl-wrap"><table class="tbl"><tbody>${d.big_days.map((b) => `<tr><td class="num">${b.date}</td><td class="num"><span class="chg ${b.ret >= 0 ? "pos" : "neg"}">${vp(Math.expm1(b.ret), 1)}%</span></td></tr>`).join("")}</tbody></table></div>`,
       analyst: [d.meta.splits?.length ? `Splits and bonuses removed from the price history: ${d.meta.splits.map((x) => `${x.date} (×${x.ratio})`).join(", ")}.` : "",
@@ -1156,6 +1165,7 @@ async function route(opts = {}) {
     else if (parts[0] === "calendar") await pageCalendar(app, ov);
     else if (parts[0] === "method") await pageMethod(app, ov);
     else await pagePulse(app, ov);
+    modeNote(app);
   } catch (e) { console.error(e); app.innerHTML = `<div class="loading">Something went wrong drawing this page: ${esc(e.message)}</div>`; }
 }
 // the live panels sit in one container the live layer refreshes on its own every few seconds, without redrawing the page
@@ -1164,6 +1174,20 @@ function liveSlot(ctx) {
   return `<div id="mlLive">${window.MLLive ? MLLive.render(ctx) : ""}</div>`;
 }
 // ---- CSV: a card's table, or its charts' series (x and every line or bar), as the page shows them ----
+// Simple mode says what it leaves out, so the difference from Analyst is never a mystery
+function modeNote(app) {
+  const hidden = $$(".a-only", app).length, notes = $$(".analyst", app).length;
+  const h = $(".page-h", app);
+  if (!h || (!hidden && !notes)) return;
+  const el = document.createElement("div");
+  el.className = "mode-note";
+  el.innerHTML = S.mode === "simple"
+    ? `Simple view: the essentials in plain words.${hidden ? ` <b>${hidden}</b> deeper chart${hidden === 1 ? "" : "s"}` : ""}${hidden && notes ? " and" : ""}${notes ? ` the method behind ${notes} reading${notes === 1 ? "" : "s"}` : ""} are in <a href="#" data-to-mode="analyst">Analyst</a>.`
+    : `Analyst view: every chart, the extra columns, and how each number is computed. <a href="#" data-to-mode="simple">Simple</a> keeps the essentials.`;
+  h.after(el);
+  $$("[data-to-mode]", el).forEach((a) => a.onclick = (e) => { e.preventDefault(); S.mode = a.dataset.toMode; lsSet("ml.mode", S.mode); applyMode(); route(); });
+}
+
 function cardCSV(cardEl) {
   const q = (v) => { const t = String(v ?? "").replace(/\s+/g, " ").trim(); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
   const tbl = cardEl.querySelector("table");
