@@ -431,3 +431,31 @@ def test_global_benchmarks_carry_their_source_and_skip_what_yahoo_will_not_serve
     asked.clear()
     W._globals(wh, dt.date(2026, 11, 20), dt.date(2026, 11, 27), counts, said.append, lambda: pd.Timestamp("2026-11-27", tz="Asia/Kolkata"), history)
     assert asked[0][1] == dt.date(2026, 11, 13)                            # after that: the run's range less a week of overlap
+
+
+def test_weekend_sessions_are_fetched_like_weekdays(tmp_path):
+    """NSE's Budget Sunday (1 Feb 2026) and the Muhurat/drill weekends: on the list, and a new one found nightly."""
+    asked = {"cm": [], "fo": []}
+    sunday = dt.date(2026, 11, 22)                                     # pretend NSE held a session this Sunday
+
+    class Nse:
+        def cm_bhav(self, d):
+            asked["cm"].append(d)
+            if d == sunday:
+                return CM.replace("26-Nov-2026", d.strftime("%d-%b-%Y")).encode(), "u"
+            raise N.NotPublished("x")
+
+        def fo_bhav(self, d):
+            asked["fo"].append(d)
+            raise N.NotPublished("x")
+
+        def __getattr__(self, name):
+            return lambda *a, **k: (_ for _ in ()).throw(N.NotPublished("x"))
+
+    update(Warehouse(tmp_path), Nse(), dt.date(2026, 1, 28), dt.date(2026, 2, 4), only={"fo_bhav"}, say=lambda *a: None, today=dt.date(2026, 3, 1))
+    assert dt.date(2026, 2, 1) in asked["fo"]                          # the Budget Sunday, from the list
+    asked["fo"].clear()
+    update(Warehouse(tmp_path), Nse(), dt.date(2026, 11, 16), dt.date(2026, 11, 27), only={"fo_bhav"}, say=lambda *a: None, today=dt.date(2026, 11, 27))
+    assert sunday in asked["fo"] and dt.date(2026, 11, 21) not in asked["fo"]      # found nightly; a quiet Saturday is not
+    assert set(W.SPECIAL_SESSIONS) >= {dt.date(2019, 10, 27), dt.date(2025, 2, 1), dt.date(2026, 2, 1)}
+    assert all(d.weekday() >= 5 for d in W.SPECIAL_SESSIONS)

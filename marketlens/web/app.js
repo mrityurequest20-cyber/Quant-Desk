@@ -560,6 +560,7 @@ function symMove(el, d, u) {
       ${card({ title: "Did the price stay inside the priced move?", hint: `by days to expiry · ${num(sc.n)} days since ${sc.since}`, simple: `Overall the price ended inside the straddle-priced range ${pct(sc.inside_all, 0)} of the time (last year: ${pct(sc.inside_1y, 0)}). A fairly priced straddle gives about 57%: above that, options were on average more expensive than the moves that followed.`,
         body: `<div class="chart" id="sc"></div>`, analyst: `Median realised/implied ratio over the last year: ${fin(sc.ratio_1y) ? sc.ratio_1y.toFixed(2) : "—"} (below 1 = moves smaller than priced). The 90th-percentile ratio per bucket is in the tooltip: the tail is where straddle sellers lose.` })}
       ${card({ title: "Priced vs actual, each day", hint: "front expiry, last ~400 days", simple: "Each dot is a day: across is the move options priced, up is the move that happened by expiry. Dots above the line beat the price.", body: `<div class="chart" id="scat"></div>` })}
+      ${labCard(d, u)}
       ${expiryCards(d, u)}
       ${card({ title: "Every expiry on the curve", cls: "span2", body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expiry</th><th>Contract</th><th>Days</th><th>ATM IV</th><th>Straddle</th><th>Priced move</th><th>Range</th></tr></thead><tbody>
         ${(d.term.now || []).map((x) => `<tr${isMonth(x) ? ' class="hl"' : ""}><td class="num">${x.expiry}</td><td>${seriesName(x)}</td><td class="num">${x.days}</td><td class="num">${pct(x.iv)}</td><td class="num">${num(x.straddle, 1)}</td><td class="num">±${pct(x.move, 2)}</td><td class="num">${num(x.F * (1 - x.move))} – ${num(x.F * (1 + x.move))}</td></tr>`).join("")}</tbody></table></div>` })}
@@ -808,6 +809,33 @@ function rollChart(d) {
   const t = theme(), s = slice(d.series, ["cal_carry", "carry"]), ok = (v) => (fin(v) && Math.abs(v) < 1 ? v : null);
   chart("#calc", { tooltip: { trigger: "axis", valueFormatter: (v) => pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, fmtPct(0)),
     series: [line("Roll rate", (s.cal_carry || []).map(ok), t.s7), line("Premium over spot", (s.carry || []).map(ok), t.s1, { lineStyle: { width: 1, color: t.s1, opacity: .5 } })] });
+}
+
+// ---- days like today (engine/baserates.py) ----
+function labCard(d, u) {
+  const L = d.lab;
+  if (!L || !L.baseline) return "";
+  const st = L.state, b = L.baseline;
+  const ivw = { cheap: "cheap (bottom fifth of its year)", normal: "in its usual range", dear: "dear (top fifth of its year)" }[st.iv];
+  const pw = st.premium === "premium" ? "above the vol of the last month" : "below the vol of the last month";
+  const cw = st.curve === "inverted" ? "the curve inverted" : st.curve === "upward" ? "the curve sloping up" : "no curve reading";
+  const row = (name, x) => x ? `<tr><td>${name}</td><td class="num">${num(x.n)} <span class="muted small">(${num(x.episodes)} episodes)</span></td>
+      <td class="num">${x.ratio.toFixed(2)}× <span class="muted small">${x.ratio_ci[0].toFixed(2)}–${x.ratio_ci[1].toFixed(2)}</span></td>
+      <td class="num">${pct(x.inside, 0)} <span class="muted small">${pct(x.inside_ci[0], 0)}–${pct(x.inside_ci[1], 0)}</span></td>
+      <td class="num">${x.before_2024 ? x.before_2024.ratio.toFixed(2) + "×" : "—"}</td><td class="num">${x.from_2024 ? x.from_2024.ratio.toFixed(2) + "×" : "—"}</td></tr>`
+    : `<tr><td>${name}</td><td colspan="5" class="muted small" style="text-align:left">too few past days to say</td></tr>`;
+  const v = L.verdict.neighbours, nn = L.neighbours;
+  const say = !nn ? "Too few comparable days to say anything." : v === "higher"
+    ? `After the ${nn.n} past days most like today, the next month moved ${nn.ratio.toFixed(2)}× what options priced, against ${b.ratio.toFixed(2)}× on an ordinary day: options have tended to under-price what followed states like this.`
+    : v === "lower" ? `After the ${nn.n} past days most like today, the next month moved ${nn.ratio.toFixed(2)}× what options priced, against ${b.ratio.toFixed(2)}× on an ordinary day: options have tended to over-price what followed.`
+    : `After the ${nn.n} past days most like today, the next month moved ${nn.ratio.toFixed(2)}× what options priced: no different from an ordinary day (${b.ratio.toFixed(2)}×) within the uncertainty.`;
+  const split = nn && nn.before_2024 && nn.from_2024 ? ((nn.before_2024.ratio - b.ratio) * (nn.from_2024.ratio - b.ratio) > 0 ? " It points the same way before and after 2024." : " It does not hold the same way before and after 2024: treat it as weak.") : "";
+  return card({ title: "Days like today", hint: `what followed, over the next ${L.horizon} sessions`, cls: "span2",
+    simple: `Today ${u.symbol}'s options are ${ivw}, priced ${pw}, with ${cw}. ${say}${split}`,
+    analyst: `Realised vol of the next ${L.horizon} sessions as a share of the 30-day IV that day (1.00× = priced exactly), and how often the price ended inside the IV's one-sigma range (fairly priced: about 68%). Ranges are 90% moving-block bootstrap intervals (21-session blocks). Nearest neighbours: the 40 past days closest to today on IV rank, premium, curve slope, skew rank and last week's vol against the last quarter's, at most one per 10 sessions. With 27 instruments and two methods, some "different" readings are chance: weight one that holds in both halves. Descriptive, never a signal.`,
+    body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Days</th><th>How many</th><th>Moved / priced</th><th>Ended inside ±1 IV move</th><th>Before 2024</th><th>From 2024</th></tr></thead><tbody>
+      ${row("Every day (the baseline)", b)}${row("Same state as today", L.same_bucket)}${row("40 nearest days", nn)}</tbody></table></div>
+      ${(L.neighbour_days || []).length ? `<div class="muted small" style="margin-top:8px">Nearest days: ${L.neighbour_days.slice(0, 12).join(", ")}${L.neighbour_days.length > 12 ? "…" : ""}</div>` : ""}` });
 }
 
 // ---- the expiry in front (engine/expiry.py) ----

@@ -13,6 +13,7 @@ import pandas as pd
 from .. import universe as U
 from . import events as E
 from . import expiry as X
+from . import baserates as BRT
 from . import breadth as BR
 from . import gamma as GM
 from . import linkage as LK
@@ -362,6 +363,10 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     carry_med = float(df["carry"].dropna().iloc[-253:-1].median()) if "carry" in df and df["carry"].notna().sum() > 60 else None
     df["comp"] = df["rv5"] / df["rv63"]
     comp_p = pctl("comp", 252)
+    try:
+        lab = BRT.lab(df, B=500) if not stale.get("iv30") else None        # today's state must be today's
+    except Exception:                                                 # an extra: never stops the instrument
+        lab = None
     # the curve between months: constant-maturity 60-day over 30-day IV, and the futures roll rate between months
     months_curve = {"iv60": cur("iv60") if "iv60" in df else None, "iv90": cur("iv90") if "iv90" in df else None,
              "term_60_30": cur("term_60_30") if "term_60_30" in df else None,
@@ -520,7 +525,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "story": story, "cards": cards, "series": series(df, cols),
         "term": term, "smiles": smiles, "cone": cone, "scorecard": score,
         "scorecard_series": series(sc_series.set_index("date"), ["implied_move", "realised"]) if sc_series is not None and len(sc_series) else None,
-        "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "link": link, "movement": move_now, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
+        "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "link": link, "movement": move_now, "lab": lab, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
         "big_days": E.big_days(ret), "changes": changes, "rules": rules,
     }
     return clean(out)

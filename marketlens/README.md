@@ -97,6 +97,11 @@ are never stored.
   app's own split list rescales history. *Tested:* after compressed days the next 10 sessions' realised vol rose
   against the recent vol (stocks about 1.08x against 0.91x), but measured against the IV options priced that day it
   was no larger (NIFTY 0.77 against 0.86, block-permutation p = 0.99): ordinary mean-reversion that options price.
+- **Days like today** (Expected move tab): every past day in the same options state (IV cheap / normal / dear
+  against its year, premium sign, curve inverted or not), and the 40 nearest days on the continuous readings (one
+  per 10 sessions), against the baseline of every day: the next 21 sessions' realised vol as a share of the IV, and
+  how often the price ended inside the IV's one-sigma range, with 90% moving-block bootstrap intervals and the
+  before/after-2024 split. Tested to read fairly priced noise as an ordinary day and to find a planted effect.
 - **30-day IV** interpolates total variance between expiries, so a weekly and a monthly calendar can be compared
   over the years.
 - **The event move** is the extra variance in the front expiry over the forward variance to the next expiry,

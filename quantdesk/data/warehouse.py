@@ -59,6 +59,13 @@ TABLES = {                                   # table → (period, key columns, d
 DATE_COLS = ("date", "expiry")
 DAILY_FILES = ("fo_bhav", "fo_stocks", "fo_stock_opts", "fo_stock_far", "cm_bhav", "bse_fo_bhav", "nse_index_close", "participant_oi",
                "participant_vol")
+# Sessions NSE held on a Saturday or Sunday (Muhurat trading, Budget days, disaster-recovery drill days), found by
+# reading every weekend's cash bhavcopy since 2019 and keeping the ones whose rows carry that day's own date (on other
+# weekends and holidays the archive serves a copy of the session before). A weekday list never asks for them, so every
+# table missed them. New ones are found by update() itself (weekend_sessions), this list is the history.
+SPECIAL_SESSIONS = (dt.date(2019, 10, 27), dt.date(2020, 2, 1), dt.date(2020, 11, 14), dt.date(2023, 11, 12),
+                    dt.date(2024, 1, 20), dt.date(2024, 3, 2), dt.date(2024, 5, 18), dt.date(2025, 2, 1),
+                    dt.date(2026, 2, 1), dt.date(2026, 11, 8))
 SETTLE_DAYS = 3                              # a file still missing this many days later is taken as never coming
 
 
@@ -147,6 +154,27 @@ class Warehouse:
 
 
 # ---- filling it ---------------------------------------------------------------------------------------------------
+def weekend_sessions(nse, start: dt.date, end: dt.date, today: dt.date, say=print, max_days: int = 21) -> list[dt.date]:
+    """Weekend days in a short recent range (a nightly run's) on which NSE held a session: its cash bhavcopy for that
+    day exists and carries that day's own date. A long backfill does not probe every weekend (SPECIAL_SESSIONS holds
+    the history). One small request per weekend day; any failure means no session."""
+    if (end - start).days > max_days:
+        return []
+    found = []
+    for d in pd.date_range(start, end):
+        d = d.date()
+        if d.weekday() < 5 or d in SPECIAL_SESSIONS or d > today or d < N.CM_BHAV_FROM:      # the probe file's archive starts then
+            continue
+        try:
+            b, _ = nse.cm_bhav(d)
+            N.parse_cm_bhav(b, d)                                          # raises NotPublished on a copy of another day
+            found.append(d)
+            say(f"  a weekend session on {d}: fetched like a weekday")
+        except Exception:                                                  # noqa: BLE001 - absent, a copy, or unreadable: no session
+            continue
+    return found
+
+
 def _settled(man: pd.DataFrame, table: str, today: dt.date) -> set[dt.date]:
     """Days a table needs nothing more for: fetched, or confirmed absent (NSE still had nothing SETTLE_DAYS later)."""
     if man.empty:
@@ -169,6 +197,8 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
     only = only or set(DAILY_FILES) | {"fii_dii", "gift_nifty", "corp_events", "nse_holidays", "global_daily"}
     holidays = holidays or set()
     days = [d.date() for d in pd.bdate_range(start, min(end, today)) if d.date() not in holidays]
+    days = sorted(set(days) | {d for d in SPECIAL_SESSIONS if start <= d <= min(end, today)}
+                  | set(weekend_sessions(nse, start, min(end, today), today, say)))
     man = wh.read("manifest")
     counts: dict[str, int] = {}
     stamp = (lambda: pd.Timestamp(today, tz=IST)) if sim else (lambda: pd.Timestamp.now(tz=IST))   # noqa: E731
