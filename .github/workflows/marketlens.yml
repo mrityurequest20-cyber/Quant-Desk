@@ -50,6 +50,12 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         run: python -m marketlens probe-sources
+      - name: News P0 - sources, history depth, conditional polling, the Anthropic key (report only, never fails)
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m marketlens news-probe
 
   build:
     if: github.event_name != 'pull_request'
