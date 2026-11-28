@@ -207,6 +207,9 @@ def test_rules_detect_listed_lot_revision_and_physical_settlement():
     r = B.rules_block(pd.DataFrame(rows), asof, U.BY_SYMBOL["HDFCBANK"], [])
     assert r["lot_change"] == {"from": 650.0, "to": 750.0, "expiry": "2027-01-25"}
     assert any(n["kind"] == "settlement" for n in r["notes"]) and r["sessions_to_expiry"] == 2
+    # an NSE holiday before expiry is not a session (25 Nov here): one session left, not two
+    r = B.rules_block(pd.DataFrame(rows), asof, U.BY_SYMBOL["HDFCBANK"], [], holidays=[pd.Timestamp("2026-11-25")])
+    assert r["sessions_to_expiry"] == 1 and "1 session away" in next(n["text"] for n in r["notes"] if n["kind"] == "settlement")
 
 
 def test_forward_must_agree_with_the_future():
@@ -364,3 +367,21 @@ def test_stock_far_month_is_read_with_the_two_nearest(tmp_path):
     assert sorted(D.Warehouse(tmp_path).options("RELIANCE")["expiry"].dt.month) == [1, 12]
     pd.DataFrame([dict(row, expiry=pd.Timestamp("2027-02-23"))]).to_parquet(tmp_path / "fo_stock_far_2026-11.parquet")
     assert sorted(D.Warehouse(tmp_path).options("RELIANCE")["expiry"].dt.month) == [1, 2, 12]
+
+
+def test_stock_spot_is_the_exchange_cash_close_where_the_warehouse_has_it(tmp_path):
+    """The F&O file's 'underlying' is the near future's close before July 2024 (src old-fut) and now and then off on
+    its own; the official close is the cash market's (cm_bhav). The proxy stays only where there is no cash close."""
+    import marketlens.engine.data as D
+    days = pd.to_datetime(["2023-03-01", "2023-03-02", "2023-03-03"])
+    opt = pd.DataFrame({"date": days.repeat(2), "symbol": "HDFCBANK", "kind": "CE", "expiry": pd.Timestamp("2023-03-30"),
+                        "strike": 1600.0, "underlying": [1610.0, 1610.0, 1622.0, 1622.0, 1630.0, 1630.0], "src": "old-fut"})
+    cash = pd.DataFrame({"date": days[:2], "symbol": "HDFCBANK", "series": "EQ", "open": [1600.0, 1606.0], "high": [1612.0, 1620.0],
+                         "low": [1595.0, 1601.0], "close": [1605.5, 1617.2]})
+    wh = D.Warehouse(tmp_path)
+    wh._cache["opt:HDFCBANK"] = opt
+    wh.options = lambda s: opt
+    wh._cache["cash:HDFCBANK"] = cash.set_index("date")
+    s = wh.spot("HDFCBANK")
+    assert list(s["close"]) == [1605.5, 1617.2, 1630.0] and list(s["true_spot"]) == [True, True, False]
+    assert s["high"].iat[1] == 1620.0
