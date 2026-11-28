@@ -26,6 +26,9 @@ MAX_SUBSCRIBE = 2500
 OPT_FAMILIES = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
 OPT_EXPIRIES = 2
 OPT_STEPS = 10
+MONTHS = 3                                                       # the current, near and far monthly contracts (MarketLens reads all three)
+MONTH_STEPS = 6                                                  # strikes either side of the money for an index's monthly expiries beyond the nearest two
+STOCK_NEXT_STEPS = 3                                             # and for a watchlist stock's next monthly expiry
 EXTRA_INDEX = {"FINNIFTY": "NSE:NIFTY FIN SERVICE", "MIDCPNIFTY": "NSE:NIFTY MID SELECT", "NIFTYNXT50": "NSE:NIFTY NEXT 50",
                "SENSEX": "BSE:SENSEX", "BANKEX": "BSE:BANKEX"}
 SPOT_FOR_OPTIONS = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK", "FINNIFTY": "NSE:NIFTY FIN SERVICE", "MIDCPNIFTY": "NSE:NIFTY MID SELECT"}
@@ -34,6 +37,19 @@ NAME_OK = re.compile(r"^[A-Za-z0-9&_.:-]{1,40}$")                # what the live
 
 
 _MON = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+
+
+def monthly_expiries(expiries, months: int = MONTHS) -> list:
+    """The monthly expiry (the last listed one of its calendar month) of each of the nearest `months` months, in order."""
+    last: dict[tuple[int, int], object] = {}
+    for e in sorted(set(expiries)):
+        last[(e.year, e.month)] = e
+    return [last[k] for k in sorted(last)[:months]]
+
+
+def future_name(name: str, expiry) -> str:
+    """A later futures month on the board: NIFTY-FUT-2027-01-25. The near month keeps its plain name, NIFTY-FUT."""
+    return f"{name}-FUT-{pd.Timestamp(expiry).date().isoformat()}"
 
 
 def option_name(underlying: str, expiry, strike: float, side: str) -> str:
@@ -86,6 +102,17 @@ def _near_futures(df: pd.DataFrame, today: dt.date, exclude=()) -> list[tuple[st
     return [(str(r.name_), int(r.instrument_token), r.expiry) for r in first.rename(columns={"name": "name_"}).itertuples()]
 
 
+def _window(oe: pd.DataFrame, spot: float, steps: int, put) -> None:
+    """Call `put(row)` for the calls and puts of the `steps` strikes either side of the strike nearest `spot`."""
+    strikes = sorted(oe["strike"].dropna().unique())
+    if not strikes:
+        return
+    atm = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
+    keep = set(strikes[max(0, atm - steps): atm + steps + 1])
+    for r in oe[oe["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
+        put(r)
+
+
 def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBSCRIBE, stock_options=(), stock_steps: int = 8, commodity_options=(), currency_options=(),
                fx_steps: int = 8) -> tuple[dict[str, int], dict[str, dict], list[str]]:
     errors: list[str] = []
@@ -126,6 +153,13 @@ def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBS
     for name, token, expiry in _near_futures(nfo, today):
         add(f"{name}-FUT", token, "fut", "future", name=name, expiry=str(expiry))
         fno_names.append(name)
+    # 2b. the next and far futures months of the indices and the watchlist stocks: the calendar spread, and where the roll is going (a few dozen names)
+    watch = [n for n in dict.fromkeys(str(x).strip().upper() for x in (stock_options or ())) if n]
+    if not nfo.empty and {"instrument_type", "name", "expiry", "instrument_token"} <= set(nfo.columns):
+        lf = nfo[(nfo["instrument_type"] == "FUT") & nfo["expiry"].notna() & (nfo["expiry"] >= today) & nfo["name"].isin([*OPT_FAMILIES, *watch])]
+        for name, g in lf.sort_values(["name", "expiry"]).groupby("name", sort=True):
+            for r in g.iloc[1:MONTHS].itertuples():
+                add(future_name(name, r.expiry), r.instrument_token, "fut", "future", name=str(name), expiry=str(r.expiry))
     for seg, df, suffix in (("bfo", bfo, "BFO"), ("mcx", mcx, "MCX"), ("cds", cds, "CDS")):
         for name, token, expiry in _near_futures(df, today):
             add(f"{name}-{suffix}", token, seg, "future", name=name, expiry=str(expiry))
@@ -184,6 +218,20 @@ def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBS
             for r in oe[oe["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
                 add(option_name(n, expiry, float(r.strike), str(r.instrument_type)), r.instrument_token, "opt", str(r.instrument_type), name=n, expiry=str(expiry), strike=float(r.strike))
 
+    # 5b. the next monthly expiry of each watchlist stock, `STOCK_NEXT_STEPS` strikes either side: late in the month the front month is a week from expiry and
+    #     the 30-day IV needs the next one
+    if wanted and not nfo.empty and {"instrument_type", "name", "strike", "tradingsymbol", "instrument_token"} <= set(nfo.columns):
+        for n in wanted:
+            spot = (sltp.get(f"NSE:{n}") or {}).get("last_price")
+            if not (isinstance(spot, (int, float)) and spot > 0):
+                continue
+            o = nfo[(nfo["name"] == n) & nfo["instrument_type"].isin(["CE", "PE"]) & nfo["expiry"].notna() & (nfo["expiry"] >= today)]
+            exps = sorted(o["expiry"].unique())
+            if len(exps) < 2:
+                continue
+            _window(o[o["expiry"] == exps[1]], spot, STOCK_NEXT_STEPS, lambda r, e=exps[1], n=n: add(option_name(n, e, float(r.strike), str(r.instrument_type)), r.instrument_token, "opt",
+                                                                                                   str(r.instrument_type), name=n, expiry=str(e), strike=float(r.strike)))
+
     # 6. MCX and currency options (owner, 13 Nov 2026: "MCX and currency options should be treated in the same way" as index and stock options): for each watchlist commodity
     #    and currency pair, its nearest option expiry, `fx_steps` strikes either side of its near-month future's price, under the same names as every option (option_name).
     #    MCX options are options on the future; currency options settle on the RBI reference rate. Last of all, so a cut takes these first.
@@ -217,6 +265,18 @@ def build_wide(kite, today: dt.date, core: dict[str, int], limit: int = MAX_SUBS
             for r in oe[oe["strike"].isin(keep)].sort_values(["strike", "instrument_type"]).itertuples():
                 add(option_name(n, expiry, float(r.strike), str(r.instrument_type)), r.instrument_token, "mopt" if exch == "MCX" else "copt", str(r.instrument_type), name=n,
                     expiry=str(expiry), strike=float(r.strike))                  # their own route labels: Fyers (MCX) and Angel One (currency) are shown first
+
+    # 7. the index monthly expiries (current, near and far month) the nearest two do not already cover, `MONTH_STEPS` strikes either side. Last, so a cut takes them first
+    if not nfo.empty and {"instrument_type", "name", "strike", "tradingsymbol", "instrument_token"} <= set(nfo.columns):
+        for fam in OPT_FAMILIES:
+            spot = prices.get(fam)
+            if spot is None:
+                continue
+            o = nfo[(nfo["name"] == fam) & nfo["instrument_type"].isin(["CE", "PE"]) & nfo["expiry"].notna() & (nfo["expiry"] >= today)]
+            exps = sorted(o["expiry"].unique())
+            for e in [x for x in monthly_expiries(exps) if x not in exps[:OPT_EXPIRIES]]:
+                _window(o[o["expiry"] == e], spot, MONTH_STEPS, lambda r, e=e, fam=fam: add(option_name(fam, e, float(r.strike), str(r.instrument_type)), r.instrument_token, "opt",
+                                                                                          str(r.instrument_type), name=fam, expiry=str(e), strike=float(r.strike)))
 
     room = max(0, int(limit) - len(core))
     if len(tokens) > room:

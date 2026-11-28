@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MarketLens</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Crect width='28' height='28' rx='8' fill='%23338ced'/%3E%3Ccircle cx='14' cy='14' r='8.6' fill='none' stroke='white' stroke-opacity='.6' stroke-width='1.6'/%3E%3Cpath d='M8.4 10.6 Q14 19.9 19.6 10.6' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='14' cy='15.25' r='1.8' fill='white'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#0e1116">
+<meta name="description" content="Indian index and stock derivatives, read like an analyst: volatility, the priced move, positioning, flows and events, explained in plain words.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.1/echarts.min.js"></script>
+</head>
+<body class="mode-simple">
+<div class="shell">
+  <aside class="side" id="side">
+    <a class="brand" href="#/pulse"><svg class="brand-mark" viewBox="0 0 28 28" aria-hidden="true"><defs><linearGradient id="mlg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#338ced"/><stop offset="1" stop-color="#6a4ce2"/></linearGradient></defs><rect width="28" height="28" rx="8" fill="url(#mlg)"/><circle cx="14" cy="14" r="8.6" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.6"/><path d="M8.4 10.6 Q14 19.9 19.6 10.6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="14" cy="15.25" r="1.6" fill="#fff"/></svg><span>Market<b>Lens</b></span></a>
+    <nav class="nav" id="nav"></nav>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Menu"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+      <div class="crumbs" id="crumbs">MarketLens</div>
+      <button class="live-pill" id="livePill" aria-label="Live status"><span class="dot"></span>Live…</button>
+      <span class="asof" id="asof"></span>
+      <div class="search"><input id="q" placeholder="Search NIFTY, RELIANCE…" autocomplete="off"><div class="res" id="qres"></div></div>
+      <div class="seg" id="modeSeg" title="How much detail to show">
+        <button data-mode="simple" class="on">Simple</button><button data-mode="analyst">Analyst</button>
+      </div>
+      <button class="icon-btn" id="themeBtn" aria-label="Toggle theme"><svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3a7 7 0 0 1 0 14z" fill="currentColor"/></svg></button>
+    </header>
+    <main class="page" id="app"><div class="loading">Loading the market…</div></main>
+  </div>
+</div>
+<script src="livecore.js"></script>
+<script src="app.js"></script>
+<script src="live-ui.js"></script>
+</body>
+</html>

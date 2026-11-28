@@ -731,7 +731,8 @@ function liveUnder(name) {
 	const o = liveOpt(name);
 	if (o) return o.u;
 	for (const x of LIVE_SUFFIX) if (name.endsWith(x) && name.length > x.length) return name.slice(0, -x.length);
-	return name;
+	const m = /^(.+)-FUT-\d{4}-\d{2}-\d{2}$/.exec(name);       // a later futures month (NIFTY-FUT-2027-01-25) belongs to its underlying too
+	return m ? m[1] : name;
 }
 // the board names of one underlying: its cash or index price and its near-month future, whichever the board holds; `main` is the one a watchlist row shows
 function liveNames(u, quotes) {
@@ -982,7 +983,7 @@ function liveOpen(name, view) {
 	const box = $("#lv-detail");
 	if (box) { box.textContent = ""; box.dataset.key = ""; }
 	L.sel = name ? liveUnder(name) : null;
-	if (name) L.view = view || (o ? "opt" : LIVE_SUFFIX.some((x) => name.endsWith(x)) ? "fut" : "spot");
+	if (name) L.view = view || (o ? "opt" : LIVE_SUFFIX.some((x) => name.endsWith(x)) || /-FUT-\d{4}-\d{2}-\d{2}$/.test(name) ? "fut" : "spot");
 	L.series = null; L.cand = null; L.allStrikes = false; L.heavyAt = 0;
 	L.exp = o ? o.e : null;
 	liveDraw();

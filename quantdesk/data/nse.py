@@ -300,6 +300,18 @@ def parse_fo_stock_opts(b: bytes, day: dt.date, n_expiries: int = 2, band: float
     return out[keep].reset_index(drop=True)
 
 
+def parse_fo_stock_far(b: bytes, day: dt.date, band: float = 0.30) -> pd.DataFrame:
+    """The far month of every F&O stock (its third expiry), futures and options, in fo_stock_opts' columns and by its
+    rules: strikes within ±`band` that traded or are open, and before UDiFF the NEAR-month future's close as the
+    underlying (src "old-fut"), as fo_stock_opts has it. With fo_stock_opts' two nearest expiries this is the current,
+    near and far month; fo_stock_opts itself is left as its studies read it."""
+    out = parse_fo_stock_opts(b, day, n_expiries=3, band=band)
+    if out.empty:
+        return out
+    third = pd.to_datetime(out["expiry"]).groupby(out["symbol"]).rank(method="dense") == 3      # a stock with two months listed has none
+    return out[third].reset_index(drop=True)
+
+
 PARTICIPANT_COLS = {
     "future index long": "fut_idx_long", "future index short": "fut_idx_short",
     "future stock long": "fut_stk_long", "future stock short": "fut_stk_short",

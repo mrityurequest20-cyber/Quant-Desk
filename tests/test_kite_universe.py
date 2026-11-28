@@ -81,9 +81,9 @@ def test_f_and_o_stocks_get_their_cash_price_and_indices_do_not_pose_as_stocks()
 
 def test_index_options_are_a_window_around_the_money_for_the_nearest_two_expiries():
     toks, meta, _ = build()
-    nifty = {k: v for k, v in meta.items() if v["s"] == "opt" and v["name"] == "NIFTY"}
+    nifty = {k: v for k, v in meta.items() if v["s"] == "opt" and v["name"] == "NIFTY" and v["expiry"] != "2026-11-26"}   # 26 Nov: the monthly, its own window (below)
     assert len(nifty) == 2 * 21 * 2                                      # two expiries, 21 strikes (ATM +- 10), calls and puts
-    assert {v["expiry"] for v in nifty.values()} == {"2026-11-12", "2026-11-19"}                      # not the third
+    assert {v["expiry"] for v in nifty.values()} == {"2026-11-12", "2026-11-19"}
     strikes = sorted({v["strike"] for v in nifty.values()})
     assert strikes[0] == 24500 - 10 * 50 and strikes[-1] == 24500 + 10 * 50 and 24500.0 in strikes       # spot 24510 -> ATM 24500 (nearest listed strike), 10 steps each side
     assert {v["kind"] for v in nifty.values()} == {"CE", "PE"}
@@ -318,7 +318,8 @@ def test_a_whole_wide_session_leaves_the_trials_report_computable(tmp_path, monk
     assert (out / "wide").is_dir() and list((out / "wide").glob("wide_*.parquet")) and not list(out.glob("wide_*"))
     assert all(p.name.startswith("ticks_") for p in out.glob("*.parquet"))                              # nothing but the trial's own parts at the top level
     rep = KC.session_report(out, pd.Timestamp("2026-10-26").date())                                    # used to raise on the NaT exchange timestamps
-    assert sorted(m["symbol"] for m in rep["measures"]) == sorted(CORE) and res["wide_n"] == 1                # the trial measures its five instruments, no wide symbol
+    # the trial measures its five instruments, no wide symbol; the wide list is RELIANCE-FUT and the next month of NIFTY's and BANKNIFTY's futures
+    assert sorted(m["symbol"] for m in rep["measures"]) == sorted(CORE) and res["wide_n"] == 3
     ev = [json.loads(x) for x in (out / "events.jsonl").read_text().splitlines()]
     assert any(e["kind"] == "wide" and e["ticks"] > 0 for e in ev)
 
@@ -383,3 +384,82 @@ def test_mcx_and_currency_option_chains_are_built_like_stock_options():
     assert "CRUDEOIL17NOV265800CE" in crude and "CRUDEOIL17NOV265400PE" in crude and "CRUDEOIL17NOV266200CE" in crude and "CRUDEOIL17NOV265350CE" not in crude
     assert "USDINR20NOV2684.5CE" in usd and "USDINR20NOV2684.25PE" in usd and "USDINR20NOV2686.5CE" in usd     # decimal strikes, named as everywhere else
     assert meta["USDINR20NOV2684.25PE"]["strike"] == 84.25 and meta["CRUDEOIL17NOV265800CE"]["expiry"] == "2026-11-17"
+
+
+def test_monthly_expiries_are_the_last_of_each_of_the_nearest_three_months():
+    d = [dt.date(2026, 12, x) for x in (1, 8, 15, 29)] + [dt.date(2027, 1, 5), dt.date(2027, 1, 25), dt.date(2027, 2, 23), dt.date(2027, 3, 30)]
+    assert U.monthly_expiries(d) == [dt.date(2026, 12, 29), dt.date(2027, 1, 25), dt.date(2027, 2, 23)]
+    assert U.monthly_expiries([dt.date(2026, 12, 29)]) == [dt.date(2026, 12, 29)]
+
+
+def _months_lists():
+    lists = make_lists()
+    tok = 90_000
+    for exp in ("2026-12-29", "2027-01-26"):                              # NIFTY's December and January months (26 Nov above is November's)
+        for k in range(-30, 31):
+            for typ in ("CE", "PE"):
+                tok += 1
+                lists["NFO"].append(_inst(tok, "NIFTY", typ, exp, strike=float(24500 + k * 50), sym=f"NIFTY{exp}{24500 + k * 50}{typ}"))
+    for exp in ("2026-11-24", "2026-12-29", "2027-01-26"):                 # a watchlist stock's three months of options
+        for k in range(-10, 11):
+            for typ in ("CE", "PE"):
+                tok += 1
+                lists["NFO"].append(_inst(tok, "RELIANCE", typ, exp, strike=float(1400 + k * 10), sym=f"RELIANCE{exp}{1400 + k * 10}{typ}"))
+    lists["NFO"].append(_inst(tok + 1, "RELIANCE", "FUT", "2027-01-26"))
+    return lists
+
+
+class MonthsKite(FakeKite):
+    def ltp(self, keys):
+        out = super().ltp(keys)
+        out.update({k: {"instrument_token": 1, "last_price": 1402.0} for k in keys if k == "NSE:RELIANCE"})
+        return out
+
+
+def test_index_monthlies_beyond_the_nearest_two_get_a_narrower_window():
+    toks, meta, _ = build(kite=MonthsKite(lists=_months_lists()))
+    by = {}
+    for v in meta.values():
+        if v["s"] == "opt" and v["name"] == "NIFTY":
+            by.setdefault(v["expiry"], set()).add(v["strike"])
+    assert set(by) == {"2026-11-12", "2026-11-19", "2026-11-26", "2026-12-29", "2027-01-26"}       # nearest two + Nov, Dec, Jan months; not a 4th month
+    assert len(by["2026-11-12"]) == 21 and len(by["2026-12-29"]) == 2 * U.MONTH_STEPS + 1
+    assert all(len(by[e]) == 2 * U.MONTH_STEPS + 1 for e in ("2026-11-26", "2027-01-26"))
+
+
+def test_later_futures_months_for_indices_and_watchlist_stocks_only():
+    toks, meta, _ = build(kite=MonthsKite(lists=_months_lists()), stock_options=["RELIANCE"])
+    assert meta["NIFTY-FUT-2026-12-29"]["expiry"] == "2026-12-29" and meta["NIFTY-FUT-2026-12-29"]["s"] == "fut"
+    assert "RELIANCE-FUT-2026-12-29" in meta and "RELIANCE-FUT-2027-01-26" in meta and meta["RELIANCE-FUT"]["expiry"] == "2026-11-24"
+    assert not any(k.startswith("TCS-FUT-") for k in meta)                # not on the watchlist: its near month only
+    assert all(LP.SYMBOL.match(k) for k in meta)
+
+
+def test_a_watchlist_stock_gets_its_next_month_too_and_the_cut_takes_the_extra_months_first():
+    toks, meta, _ = build(kite=MonthsKite(lists=_months_lists()), stock_options=["RELIANCE"], stock_steps=8)
+    rel = {}
+    for v in meta.values():
+        if v["s"] == "opt" and v["name"] == "RELIANCE":
+            rel.setdefault(v["expiry"], set()).add(v["strike"])
+    assert set(rel) == {"2026-11-24", "2026-12-29"} and len(rel["2026-11-24"]) == 17 and len(rel["2026-12-29"]) == 2 * U.STOCK_NEXT_STEPS + 1
+    near2 = {"2026-11-12", "2026-11-19"}
+    monthly = {k for k, v in meta.items() if v["s"] == "opt" and v["name"] in U.OPT_FAMILIES and v["expiry"] not in near2}   # step 7, the last thing added
+    assert len(monthly) == 2 * (2 * U.MONTH_STEPS + 1) * (3 + 3)             # NIFTY's three months, one each for the other three families
+    cut, m2, _ = build(kite=MonthsKite(lists=_months_lists()), stock_options=["RELIANCE"], stock_steps=8, limit=len(CORE) + len(toks) - len(monthly))
+    assert set(cut) == set(toks) - monthly
+
+
+def test_the_board_files_a_later_futures_month_under_its_underlying():
+    """quantdesk/web/static/app/app.js liveUnder: NIFTY-FUT-2027-01-25 belongs to NIFTY, as NIFTY-FUT does."""
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    src = (ROOT / "quantdesk" / "web" / "static" / "app" / "app.js").read_text(encoding="utf-8")
+    start = src.index("const LIVE_SUFFIX")
+    end = src.index("// the board names of one underlying")
+    code = "const liveOpt = () => null;\n" + src[start:end] + \
+        "\nconsole.log(JSON.stringify(['NIFTY-FUT-2027-01-25','NIFTY-FUT','RELIANCE','CRUDEOIL-MCX','M&M-FUT-2026-12-29','X-FUT-2027'].map(liveUnder)));"
+    out = subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == ["NIFTY", "NIFTY", "RELIANCE", "CRUDEOIL", "M&M", "X-FUT-2027"]

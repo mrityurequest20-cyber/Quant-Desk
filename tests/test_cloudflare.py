@@ -35,6 +35,7 @@ def stage_worker(tmp_path):
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "news.js", tmp_path / "news.js")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "candles.js", tmp_path / "candles.js")
     shutil.copyfile(ROOT / "deploy" / "cloudflare" / "routes.js", tmp_path / "routes.js")
+    shutil.copyfile(ROOT / "deploy" / "cloudflare" / "lens.js", tmp_path / "lens.js")
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
 
 

@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from quantdesk.data import nse as N
+from quantdesk.data import warehouse as W
 from quantdesk.data.warehouse import ReleaseStore, Warehouse, holiday_diff, needed_assets, update
 
 UDIFF = """TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,XpryDt,FininstrmActlXpryDt,StrkPric,OptnTp,FinInstrmNm,OpnPric,HghPric,LwPric,ClsPric,LastPric,PrvsClsgPric,UndrlygPric,SttlmPric,OpnIntrst,ChngInOpnIntrst,TtlTradgVol,TtlTrfVal,TtlNbOfTxsExctd,SsnId,NewBrdLotQty,Rmks,Rsvd1,Rsvd2,Rsvd3,Rsvd4
@@ -299,6 +300,28 @@ def test_stock_options_are_kept_not_discarded():
     assert r["symbol"] == "RELIANCE" and r["underlying"] == 3155 and r["src"] == "old-fut"   # the future stands in
     assert set(old["symbol"]) == {"RELIANCE"}
 
+
+
+def test_the_far_month_is_its_own_table_and_fo_stock_opts_is_unchanged():
+    day = dt.date(2026, 10, 1)
+    far = N.parse_fo_stock_far(zipped(STOCK_OPTS, "BhavCopy.csv"), day)
+    assert set(far["expiry"]) == {dt.date(2026, 12, 29)}                           # the third expiry only: current and near are fo_stock_opts'
+    assert list(far["strike"]) == [380.0] and (far["underlying"] == 375.05).all() and list(far.columns) == N.BHAV_COLS
+    near = N.parse_fo_stock_opts(zipped(STOCK_OPTS, "BhavCopy.csv"), day)
+    assert not set(near["expiry"]) & set(far["expiry"])                            # together: three months, no row twice
+    two = STOCK_OPTS.replace("2026-12-29,2026-12-29", "2026-11-24,2026-11-24").replace(",67133,", ",67199,")
+    assert N.parse_fo_stock_far(zipped(two, "BhavCopy.csv"), day).empty           # a stock with two months listed has no far month
+    old = N.parse_fo_stock_far(zipped(OLD + "FUTSTK,RELIANCE,25-Jul-2024,0,XX,3150,3160,3140,3155,3155,500,10,9000,10,05-JUL-2024,\n"
+                                       "FUTSTK,RELIANCE,26-Sep-2024,0,XX,3190,3200,3180,3195,3195,50,1,900,1,05-JUL-2024,\n"
+                                       "OPTSTK,RELIANCE,26-Sep-2024,3100,CE,150,160,145,155,155,10,1,200,1,05-JUL-2024,\n"
+                                       "FUTSTK,RELIANCE,29-Aug-2024,0,XX,3170,3180,3160,3175,3175,80,1,1900,1,05-JUL-2024,\n",
+                                       "fo05JUL2024bhav.csv"), dt.date(2024, 7, 5))
+    assert set(old["expiry"]) == {dt.date(2024, 9, 26)} and (old["underlying"] == 3155).all()   # pre-UDiFF: the NEAR month's close stands in, as in fo_stock_opts
+    assert sorted(old["kind"]) == ["CE", "FUT"]
+
+
+def test_fo_stock_far_is_a_daily_table_fed_from_the_same_bhavcopy():
+    assert "fo_stock_far" in W.DAILY_FILES and W.TABLES["fo_stock_far"] == W.TABLES["fo_stock_opts"]
 
 BSE_CSV = """TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,XpryDt,FininstrmActlXpryDt,StrkPric,OptnTp,FinInstrmNm,OpnPric,HghPric,LwPric,ClsPric,LastPric,PrvsClsgPric,UndrlygPric,SttlmPric,OpnIntrst,ChngInOpnIntrst,TtlTradgVol,TtlTrfVal,TtlNbOfTxsExctd,SsnId,NewBrdLotQty,Rmks,Rsvd1,Rsvd2,Rsvd3,Rsvd4
 {d},{d},FO,BSE,IDO,886815,,SENSEX,,{d},{d},81300.00,CE,X,0.45,0.60,0.05,71909.70,0.40,0.65,71909.70,71909.70,520,-40,600,1,30,F1,20,,,,,
