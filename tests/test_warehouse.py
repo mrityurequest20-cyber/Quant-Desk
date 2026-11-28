@@ -481,3 +481,28 @@ def test_macro_events_keep_each_source_and_survive_one_failing(tmp_path):
     assert (str(nfp["date"].date()), nfp["time_ist"], nfp["forecast"]) == ("2026-12-04", "19:00", "150K")
     assert {"rbi", "fomc", "india_cpi", "india_gdp", "budget"} <= set(t["kind"])           # the checked list and India's rules
     assert any("fed" in s and "down" in s for s in said) and c["macro_events"] == len(t)
+
+
+def test_macro_fred_history_with_a_key_and_the_key_never_logged(tmp_path, monkeypatch):
+    import json as _json
+    from quantdesk.data import macro as M
+    from quantdesk.data.warehouse import _macro
+    key = "a" * 32
+    monkeypatch.setenv("FRED_API_KEY", key)
+
+    def get(url):
+        if url.startswith(M.FRED_DATES) and "release_id=50" in url:
+            return _json.dumps({"release_dates": [{"date": "2024-03-08"}, {"date": "2024-04-05"}]}).encode()
+        if url.startswith(M.FRED_DATES):
+            raise OSError(f"403 Client Error for url: {url}")
+        raise OSError("offline")
+    wh, said = Warehouse(tmp_path), []
+    _macro(wh, dt.date(2026, 11, 28), {}, said.append, lambda: pd.Timestamp("2026-11-28", tz="Asia/Kolkata"), get=get)
+    t = wh.read("macro_events")
+    nfp = t[(t["kind"] == "us_nfp") & (t["source"] == "fred")]
+    assert [str(d.date()) for d in nfp["date"]] == ["2024-03-08", "2024-04-05"] and set(nfp["time_ist"]) == {"19:00", "18:00"}
+    assert not any(key in s for s in said) and any("***" in s for s in said)
+    monkeypatch.delenv("FRED_API_KEY")
+    said.clear()
+    _macro(wh, dt.date(2026, 11, 28), {}, said.append, lambda: pd.Timestamp("2026-11-28", tz="Asia/Kolkata"), get=get)
+    assert any("no FRED_API_KEY" in s for s in said)

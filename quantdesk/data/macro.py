@@ -7,6 +7,9 @@ Sources (what answers from GitHub Actions, checked by marketlens/probe.py on 28 
     run, so the table keeps every week it has seen: the history grows from the first run on.
   * The Federal Reserve's FOMC calendar page: every meeting date for the current and recent years (decision = the
     meeting's last day, 14:00 New York time).
+  * FRED (St. Louis Fed), when a FRED_API_KEY is set: the release dates of US CPI, the jobs report (NFP), GDP and
+    personal income and outlays (PCE), back to 2019 and the scheduled ones ahead; all at 08:30 New York time. This is
+    the US data's history for the event studies (Forex Factory only gives the current week).
   * India (no INR in Forex Factory): RBI MPC decisions from the checked list in quantdesk/premarket/macro_dates.json;
     MoSPI's releases by their published rules (CPI on the 12th, IIP on the 28th (the 12th before 2025), GDP on the last working day of Feb,
     May, Aug and Nov, all at 16:00 IST; the next working day when the date is a weekend), marked source "rule" because
@@ -26,6 +29,10 @@ import pandas as pd
 FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 FED_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 IST = "Asia/Kolkata"
+FRED_DATES = "https://api.stlouisfed.org/fred/release/dates"
+# FRED release id -> (title, kind); every one is published at 08:30 New York time
+FRED_RELEASES = {10: ("CPI (consumer prices)", "us_cpi"), 50: ("Employment Situation (jobs, NFP)", "us_nfp"),
+                 53: ("GDP", "us_gdp"), 54: ("Personal income and outlays (PCE)", "us_pce")}
 COLS = ["date", "time_ist", "country", "title", "kind", "impact", "forecast", "previous", "source"]
 MACRO_DATES = Path(__file__).resolve().parents[1] / "premarket" / "macro_dates.json"
 
@@ -80,6 +87,27 @@ def parse_ff(payload) -> pd.DataFrame:
                      "kind": kind_of(str(e.get("country") or ""), e.get("title")), "impact": str(e.get("impact") or ""),
                      "forecast": str(e.get("forecast") or ""), "previous": str(e.get("previous") or ""), "source": "forexfactory"})
     return pd.DataFrame(rows, columns=COLS)
+
+
+def fred_url(release_id: int, key: str, start: str = "2019-01-01") -> str:
+    return (f"{FRED_DATES}?release_id={release_id}&api_key={key}&file_type=json&realtime_start={start}"
+            f"&realtime_end=9999-12-31&include_release_dates_with_no_data=true&sort_order=asc&limit=10000")
+
+
+def parse_fred(payload, release_id: int) -> pd.DataFrame:
+    """FRED's release/dates JSON -> rows: each date at 08:30 New York, in IST (19:00 or 18:00 with US daylight time)."""
+    d = json.loads(payload) if isinstance(payload, (bytes, str)) else payload
+    title, kind = FRED_RELEASES[release_id]
+    rows = []
+    for r in (d or {}).get("release_dates", []):
+        try:
+            ny = pd.Timestamp(f"{r['date']} 08:30").tz_localize("America/New_York")
+        except (KeyError, ValueError, TypeError):
+            continue
+        t = ny.tz_convert(IST)
+        rows.append({"date": pd.Timestamp(t.date()), "time_ist": t.strftime("%H:%M"), "country": "USD", "title": title, "kind": kind,
+                     "impact": "High", "forecast": "", "previous": "", "source": "fred"})
+    return pd.DataFrame(rows, columns=COLS).drop_duplicates(["date", "title"])
 
 
 MONTHS = {m: i for i, m in enumerate(["january", "february", "march", "april", "may", "june", "july", "august", "september",

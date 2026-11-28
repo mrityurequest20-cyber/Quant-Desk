@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -275,6 +276,17 @@ def _macro(wh: Warehouse, today: dt.date, counts: dict, say, stamp, holidays=fro
             say(f"  macro_events {name}: {len(df)} events")
         except Exception as exc:                                       # noqa: BLE001 - one source failing skips only itself
             say(f"  macro_events {name}: {exc!s:.160}")
+    key = os.environ.get("FRED_API_KEY", "").strip()
+    if key:
+        for rid, (title, _) in M.FRED_RELEASES.items():
+            try:
+                df = M.parse_fred(get(M.fred_url(rid, key)), rid)
+                parts.append(df)
+                say(f"  macro_events fred {title}: {len(df)} release dates")
+            except Exception as exc:                                   # noqa: BLE001 - the key never reaches the log
+                say(f"  macro_events fred {title}: {str(exc).replace(key, '***'):.160}")
+    else:
+        say("  macro_events fred: no FRED_API_KEY, US release history skipped")
     df = pd.concat([p for p in parts if len(p)], ignore_index=True)
     if df.empty:
         return

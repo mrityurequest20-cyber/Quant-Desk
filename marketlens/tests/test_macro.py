@@ -75,3 +75,11 @@ def test_upcoming_keeps_the_important_ones_once():
     ev = MX.events(pd.concat([M.parse_ff(FF), M.parse_fed(FED)]))
     up = MX.upcoming(ev, pd.Timestamp("2026-12-01"), days=30)
     assert [x["kind"] for x in up] == ["us_cpi", "fomc", "ecb"]                            # the Fed's page and FF list one meeting once
+
+
+def test_fred_release_dates_to_ist_across_us_daylight_time():
+    from quantdesk.data import macro as M
+    j = {"release_dates": [{"release_id": 10, "date": "2026-01-13"}, {"release_id": 10, "date": "2026-07-14"}, {"date": "bad"}]}
+    d = M.parse_fred(json.dumps(j), 10)
+    assert d[["time_ist", "kind", "source"]].values.tolist() == [["19:00", "us_cpi", "fred"], ["18:00", "us_cpi", "fred"]]
+    assert "api_key=K" in M.fred_url(50, "K") and "include_release_dates_with_no_data=true" in M.fred_url(50, "K")
