@@ -16,6 +16,9 @@ def main(argv=None) -> int:
     b.add_argument("--warehouse", type=Path, required=True)
     b.add_argument("--out", type=Path, required=True)
     b.add_argument("--symbols", default="")
+    b.add_argument("--news", type=Path, default=None, help="the news corpus folder (and any briefs): builds the News page")
+    fn = sub.add_parser("fetch-news", help="download the news corpus and the situation briefs from their releases (read-only)")
+    fn.add_argument("--dest", type=Path, required=True)
     r = sub.add_parser("fetch-rules", help="download NSE's ban list and MWPL files for recent sessions")
     r.add_argument("--dest", type=Path, required=True)
     r.add_argument("--days", type=int, default=60, help="calendar weekdays back from today")
@@ -61,6 +64,21 @@ def main(argv=None) -> int:
         if store:
             store.push(a.dest, c.files())
         return 0
+    if a.cmd == "fetch-news":
+        from quantdesk.data.warehouse import ReleaseStore
+        a.dest.mkdir(parents=True, exist_ok=True)
+        got = []
+        for tag, keep in (("news-corpus", lambda n: n.endswith(".parquet")), ("news-labels", lambda n: n.startswith("brief_"))):
+            st = ReleaseStore(tag)
+            try:
+                names = [n for n in st.assets() if keep(n)]
+            except Exception as e:                              # noqa: BLE001 - a release not made yet is no error
+                print(f"{tag}: not available ({e!s:.120})")
+                continue
+            got += st.pull(a.dest, names) if names else []
+            print(f"{tag}: {len(names)} files")
+        print(f"fetched {len(got)} news files into {a.dest}")
+        return 0
     if a.cmd == "news-label":
         return _news_label(a)
     if a.cmd == "news-probe":
@@ -75,7 +93,7 @@ def main(argv=None) -> int:
     elif a.cmd == "build":
         from .engine.build import build
         syms = [x.strip() for x in a.symbols.split(",") if x.strip()] or None
-        ov = build(a.warehouse, a.out, syms)
+        ov = build(a.warehouse, a.out, syms, news=a.news)
         print(f"built {len(ov['screener'])} instruments, as of {ov['asof']}")
     elif a.cmd == "fetch-rules":
         import datetime as dt

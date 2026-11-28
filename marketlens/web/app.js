@@ -185,7 +185,7 @@ function renderNav(ov, active) {
   const a = (href, label, tag = "") => `<a href="${href}" class="${active === href ? "on" : ""}">${label}${tag ? `<span class="tag">${tag}</span>` : ""}</a>`;
   $("#nav").innerHTML = `
     <div class="nav-h">Market</div>
-    ${a("#/pulse", "Market pulse")}${a("#/screener", "Volatility screener")}${a("#/positioning", "Who holds what")}
+    ${a("#/pulse", "Market pulse")}${a("#/news", "News", (() => { const n = (ov.news_top || []).filter((x) => x.heat === "flaring").length; return n ? n + " flaring" : ""; })())}${a("#/screener", "Volatility screener")}${a("#/positioning", "Who holds what")}
     ${a("#/breadth", "Whole F&O market")}${a("#/commodities", "Commodities (MCX)")}${a("#/flows", "FII / DII money")}${a("#/calendar", "Calendar")}${a("#/alerts", "Alerts")}${a("#/compare", "Compare")}${a("#/health", "Data health")}
     <div class="nav-h">Indices</div>
     ${idx.map((u) => a(`#/sym/${u.slug}`, u.symbol, vp(chgOf(u.symbol), 1) + "%")).join("")}
@@ -253,6 +253,9 @@ async function pagePulse(app, ov) {
       ${card({ title: "India VIX since 2019", hint: "the market's 30-day fear gauge", body: `<div class="chart" id="vix"></div>`,
         simple: fin(ov.vix?.now) ? `Today: India VIX ${ov.vix.now.toFixed(1)}, ${level(ov.vix.p1y)} for the past year (${ord(ov.vix.p1y)} percentile). Options price NIFTY moving about ${(ov.vix.now / 16).toFixed(2)}% a day over the next month.` : "",
         analyst: "India VIX is computed by NSE from NIFTY option prices across strikes (like the US VIX). Spikes mark stress (Mar 2020, Jun 2024 election). It mean-reverts: very high readings have historically come down faster than very low ones went up." })}
+      ${(ov.news_top || []).length ? card({ title: "In the news", hint: "running situations above their usual level",
+        simple: `${ov.news_top.map((x) => `${x.name}: ${x.last7} stories this week (a typical week has about ${Math.round(x.typical7)})`).join("; ")}.`,
+        body: `<ul class="story">${ov.news_top.map((x) => `<li><a href="#/news/${x.id}"><b>${esc(x.name)}</b></a> ${heatChip(x.heat)}</li>`).join("")}</ul><div style="margin-top:10px"><a class="muted small" href="#/news">All situations →</a></div>` }) : ""}
       ${card({ title: "Next on the calendar", simple: eventRiskLine(ov.event_risk), body: calendarRows(ov.calendar.items.slice(0, 9)) + `<div style="margin-top:10px"><a class="muted small" href="#/calendar">Full calendar →</a></div>` })}
     </div>
     <div style="margin-top:16px">${screenerCard(ov, 10)}</div>`;
@@ -634,6 +637,90 @@ function dispChart(x) {
       line("Realised, next month", s.realised_next, t.s3, { connectNulls: false, lineStyle: { width: 1.2, type: "dashed", color: t.s3 } })] });
 }
 
+// ---------------------------------------------------------------- news: running situations (news/cards.py)
+const HEAT = { flaring: ["extreme", "Flaring now"], active: ["elevated", "Active"], quiet: ["", "Quiet"] };
+const heatChip = (h) => `<span class="chip ${HEAT[h]?.[0] || ""}"><span class="dot"></span>${HEAT[h]?.[1] || h}</span>`;
+const lr = (v) => (fin(v) ? Math.exp(v) - 1 : null);                       // a log return as a plain return
+function mv(v, unit, d = 1) {
+  if (!fin(v)) return `<span class="muted">—</span>`;
+  const x = unit === "ret" ? lr(v) * 100 : v;
+  const s = unit === "bp" ? `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(0)} bp` : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(d)}${unit === "ret" ? "%" : " pts"}`;
+  return `<span class="${x > 0 ? "pos" : x < 0 ? "neg" : ""}">${s}</span>`;
+}
+async function newsData() { if (S.news === undefined) { try { S.news = await getJSON("data/news.json"); } catch (e) { S.news = null; } } return S.news; }
+function newsEmpty(app) {
+  app.innerHTML = `<div class="page-h"><div><h1>News: running situations</h1><div class="sub">The situations that move Indian markets, their history and what markets did after each flare-up.</div></div></div>
+    ${card({ title: "Not built yet", body: `<p class="muted">The news history (NSE filings and headlines since 2019) is still being collected. This page fills on the first site build after it is saved, with no other step.</p>` })}`;
+}
+function sparkBars(el, weekly) {
+  const t = theme();
+  chart(el, { grid: { left: 2, right: 2, top: 4, bottom: 2 }, tooltip: { trigger: "axis", confine: true, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text, fontSize: 12 },
+      formatter: (p) => `Week to ${p[0].name}: ${p[0].value} stories` },
+    xAxis: { type: "category", data: weekly.map((w) => w[0]), show: false }, yAxis: { type: "value", show: false },
+    series: [{ type: "bar", data: weekly.map((w) => w[1]), itemStyle: { color: t.s1 }, barCategoryGap: "20%" }] });
+}
+async function pageNews(app, ov, id) {
+  $("#crumbs").textContent = "News";
+  const N = await newsData();
+  if (!N || !(N.situations || []).length) return newsEmpty(app);
+  if (id) return pageSituation(app, N, id);
+  const sits = N.situations.filter((c) => c.stories > 0 || c.brief), none = N.situations.filter((c) => !(c.stories > 0 || c.brief));
+  app.innerHTML = `<div class="page-h"><div><h1>News: running situations</h1><div class="sub">Each situation's history as dated flare-ups, what markets did after them, and how active it is now. Measured from ${num(N.stories)} stories, as of ${N.asof}. Analysis written by Claude is marked as such.</div></div></div>
+    <div class="grid g2">${sits.map((c) => card({ title: `<a href="#/news/${c.id}">${esc(c.name)}</a>`, hint: esc(c.sides.join(" · ")), chip: heatChip(c.activity.heat),
+      simple: c.plain,
+      body: `${c.activity.weekly.some((w) => w[1] > 0) ? `<div class="chart" id="sp_${c.id}" style="height:54px"></div>` : ""}
+        <div class="muted small" style="margin-top:6px">${c.n_episodes} flare-up${c.n_episodes === 1 ? "" : "s"} on record${c.first ? ` since ${c.first}` : ""} · weekly stories, past year</div>
+        ${c.latest.length ? `<ul class="story" style="margin-top:8px">${c.latest.slice(0, 2).map((h) => `<li><span class="muted small">${h.date}</span> ${esc(h.title)}</li>`).join("")}</ul>` : ""}
+        <div style="margin-top:8px"><a class="small" href="#/news/${c.id}">${c.brief ? "History, sides, scenarios and the measured record →" : "History and the measured record →"}</a></div>` })).join("")}</div>
+    ${none.length ? `<p class="muted small" style="margin-top:16px">Followed, with no stories in the record yet: ${none.map((c) => esc(c.name)).join(", ")}.</p>` : ""}`;
+  sits.forEach((c) => { const el = $(`#sp_${c.id}`); if (el) sparkBars(el, c.activity.weekly); });
+}
+function pageSituation(app, N, id) {
+  const c = N.situations.find((x) => x.id === id);
+  if (!c) { app.innerHTML = `<div class="loading">No situation called “${esc(id)}”. <a href="#/news">All situations →</a></div>`; return; }
+  $("#crumbs").textContent = "News · " + c.name;
+  const b = c.brief, t = theme();
+  const writ = (x) => `<p class="muted small">Written by Claude (${esc(b.model || "Opus")}) from the tables on this page and the headlines up to ${esc(b.current_state?.as_of || "its date")}. Judgement, not a forecast; every number in it comes from the measured record.</p>${x}`;
+  const lik = (l) => `<span class="chip ${l === "high" ? "extreme" : l === "medium" ? "elevated" : ""}">${esc(l)}</span>`;
+  const KEYS = ["NIFTY", "BANKNIFTY", "India VIX", "Brent crude"];
+  const unitOf = { "India VIX": "pts", "CBOE VIX": "pts", "US 10-year yield": "bp" };
+  const epRows = c.episodes.map((e) => `<tr><td><b>${e.start}</b><span class="nm">${e.stories} stories that week</span></td>
+      ${KEYS.map((k) => `<td>${mv(e.measures[k]?.["5"], unitOf[k] || "ret")}</td>`).join("")}
+      <td>${e.top_basket ? `${esc(e.top_basket[0])} ${mv(e.top_basket[1], "ret")}` : `<span class="muted">—</span>`}</td></tr>
+      <tr class="sub-row"><td colspan="6" class="muted small" style="white-space:normal;text-align:left">${e.headlines.map(esc).join(" · ")}</td></tr>`).join("");
+  const baseRows = c.base.map((r) => `<tr><td>${esc(r.measure)}</td>${[1, 5, 20].map((h) => { const x = r["h" + h];
+      return `<td>${x ? `${mv(x.median, r.unit)} <span class="muted small">${Math.round(x.share_up * x.n)}/${x.n} up</span>` : `<span class="muted">—</span>`}</td>`; }).join("")}
+      <td>${fin(r.kept_at_20) ? (r.kept_at_20 < .5 ? "faded" : r.kept_at_20 < 1.5 ? "held" : "grew") : "—"}</td></tr>`).join("");
+  app.innerHTML = `<div class="page-h"><div><h1>${esc(c.name)} ${heatChip(c.activity.heat)}</h1><div class="sub">${esc(c.sides.join(" · "))} · ${num(c.stories)} stories${c.first ? ` from ${c.first} to ${c.last}` : ""} · sectors it reaches: ${esc(c.baskets.join(", "))} · <a href="#/news">all situations</a></div></div></div>
+    <div class="grid g2">
+    ${card({ title: "Where it stands", cls: "span2", simple: c.plain,
+      body: b ? writ(`<p>${esc(b.summary)}</p>${b.current_state ? `<p><b>Phase:</b> ${esc(b.current_state.phase)} · <b>What changed:</b> ${esc(b.current_state.what_changed)}</p>` : ""}`) : `<p class="muted small">No written brief for this situation yet: the measured record below is complete without it.</p>` })}
+    ${card({ title: "How much it is in the news", hint: "stories a week, past year", body: `<div class="chart" id="nwk" style="height:200px"></div>`,
+      simple: `${c.activity.last7} stories in the past week; a typical week has about ${c.activity.typical7.toFixed(0)}.` })}
+    ${b && (b.ladder || []).length ? card({ title: "The escalation ladder", hint: "today's rung highlighted", body: writ(`<ol class="ladder">${b.ladder.map((r, i) => `<li class="${i === b.current_state?.ladder_rung ? "on" : ""}">${esc(r)}</li>`).join("")}</ol>`) })
+      : card({ title: "Latest headlines", body: c.latest.length ? `<ul class="story">${c.latest.map((h) => `<li><span class="muted small">${h.date}</span> ${esc(h.title)}</li>`).join("")}</ul>` : `<p class="muted">Nothing in the past month.</p>` })}
+    ${card({ title: "What markets did after past flare-ups", hint: c.base.length ? `median of ${c.n_episodes} episodes; sessions after the flare-up` : "", cls: "span2",
+      simple: c.base.length ? "" : c.plain,
+      body: c.base.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Measure</th><th>1 session</th><th>5 sessions</th><th>20 sessions</th><th>By 20</th></tr></thead><tbody>${baseRows}</tbody></table></div>
+        <p class="muted small" style="margin-top:8px">From the last close before each flare-up. Sector rows are the sector's equal-weight basket minus NIFTY. "By 20" says whether the five-session move faded, held or grew. Past flare-ups overlap with other news: a guide to scale, not a forecast.</p>`
+        : `<p class="muted small">Fewer than five flare-ups on record: each one is listed below instead of a rate.</p>` })}
+    ${card({ title: "Flare-up history", hint: "newest first; moves over the next five sessions", cls: "span2",
+      body: c.episodes.length ? `<div class="tbl-wrap"><table class="tbl news-ep"><thead><tr><th>Flare-up</th>${KEYS.map((k) => `<th>${k}</th>`).join("")}<th>Sector that moved most vs NIFTY</th></tr></thead><tbody>${epRows}</tbody></table></div>`
+        : `<p class="muted">No flare-up stands out in the record yet.</p>` })}
+    ${b ? `
+    ${card({ title: "The sides and their next moves", cls: "span2", body: writ((b.sides || []).map((s) => `<div class="nw-side"><h4>${esc(s.side)}</h4><p class="small">${esc(s.aims)}</p>
+        <ul class="story">${(s.next_moves || []).map((m) => `<li>${lik(m.likelihood)} ${esc(m.move)} <span class="muted small">— ${esc(m.market_effect)}</span></li>`).join("")}</ul></div>`).join("")) })}
+    ${card({ title: "Scenarios: what could happen next", cls: "span2", body: writ((b.scenarios || []).map((s) => `<div class="nw-scen"><h4>${esc(s.name)} ${lik(s.likelihood)}</h4>
+        <p class="small"><b>Trigger:</b> ${esc(s.trigger)}</p><p class="small"><b>Precedent:</b> ${esc(s.precedent)}</p>
+        <p class="small"><b>India, macro:</b> ${esc(s.india_macro)}</p><p class="small"><b>India, sectors:</b> ${esc(s.india_micro)}</p><p class="small"><b>Options:</b> ${esc(s.options)}</p></div>`).join("")) })}
+    ${card({ title: "How it reaches India", body: writ(`<ul class="story">${(b.transmission || []).map((x) => `<li><b>${esc(x.from)} → ${esc(x.to)}</b>: ${esc(x.mechanism)} <span class="muted small">${esc(x.evidence)}</span></li>`).join("")}</ul>`) })}
+    ${card({ title: "What to watch", body: writ(`<ul class="story">${(b.watch || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>${(b.caveats || []).length ? `<p class="small"><b>Caveats:</b> ${b.caveats.map(esc).join(" ")}</p>` : ""}`) })}
+    ${card({ title: "Latest headlines", cls: "span2", body: c.latest.length ? `<ul class="story">${c.latest.map((h) => `<li><span class="muted small">${h.date}</span> ${esc(h.title)}</li>`).join("")}</ul>` : `<p class="muted">Nothing in the past month.</p>` })}` : ""}
+    </div>`;
+  const w = c.activity.weekly;
+  chart("#nwk", { xAxis: axisX(w.map((x) => x[0]), t, { boundaryGap: true }), yAxis: axisY(t, (v) => v, { scale: false, minInterval: 1 }),
+    series: [{ name: "Stories", type: "bar", data: w.map((x) => x[1]), itemStyle: { color: t.s1 } }] });
+}
 // ---------------------------------------------------------------- calendar & method
 async function pageCalendar(app, ov) {
   $("#crumbs").textContent = "Calendar";
@@ -1234,6 +1321,7 @@ async function route(opts = {}) {
     else if (parts[0] === "health") await pageHealth(app, ov);
     else if (parts[0] === "compare") await pageCompare(app, ov, parts[1], parts[2]);
     else if (parts[0] === "calendar") await pageCalendar(app, ov);
+    else if (parts[0] === "news") await pageNews(app, ov, parts[1]);
     else if (parts[0] === "method") await pageMethod(app, ov);
     else await pagePulse(app, ov);
     modeNote(app);

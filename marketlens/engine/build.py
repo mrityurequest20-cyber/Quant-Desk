@@ -820,7 +820,27 @@ def dispersion_block(wh: Warehouse, asof, iv_panel, say=print) -> dict:
     return out
 
 
-def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=print) -> dict:
+def news_block(wh, news: Path | None, asof, out: Path, say=print) -> list[dict]:
+    """The News page (news/cards.py): situation cards from the news corpus and the warehouse, rebuilt every day (no
+    Claude here; the Opus briefs are read from the folder if they were written). Writes news.json; returns the overview's
+    short list of what is flaring or active."""
+    if news is None or not any(Path(news).glob("news_*.parquet")):
+        return []
+    try:
+        from ..news import cards as NCD, corpus as NC, situations as NS
+        stories = NC.Corpus(Path(news)).read()
+        nj = NCD.build(stories, *NS.inputs(wh), briefs=NCD.load_briefs(Path(news)), asof=asof)
+        (out / "news.json").write_text(json.dumps(nj, separators=(",", ":")))
+        say(f"  news: {nj['stories']} stories, {len(nj['situations'])} situations, "
+            f"{sum(1 for c in nj['situations'] if c['brief'])} with a brief")
+        return [{"id": c["id"], "name": c["name"], "heat": c["activity"]["heat"], "last7": c["activity"]["last7"],
+                 "typical7": c["activity"]["typical7"]} for c in nj["situations"] if c["activity"]["heat"] != "quiet"][:4]
+    except Exception as e:                          # the news is extra: it never stops the build
+        say(f"  news: FAILED {type(e).__name__}: {e}")
+        return []
+
+
+def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=print, news: Path | None = None) -> dict:
     wh = Warehouse(warehouse)
     out.mkdir(parents=True, exist_ok=True)
     (out / "sym").mkdir(exist_ok=True)
@@ -860,6 +880,7 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
         "participants": parts, "flows": flows,
         "calendar": calendar_block(wh, asof, data, ev_cal),
         "event_risk": event_risk(wh, asof),
+        "news_top": news_block(wh, news, asof, out, say),
         "changes": changes_feed(data),
         "live_base": {s: live_base(d) for s, d in data.items()},
         "limits": limits_block(limits, data),
