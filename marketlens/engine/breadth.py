@@ -144,6 +144,7 @@ def market(root: Path, asof) -> dict:
     pb = pb[pb["n"] >= 50]
 
     last = pd.Timestamp(asof)
+    market.iv_panel = iv.pivot_table(index="date", columns="symbol", values="iv", aggfunc="last")     # for dispersion
     today_iv = iv[iv["date"] == last].dropna(subset=["rank"]).sort_values("rank")
     today_bu = bu[bu["date"] == last]
     return {

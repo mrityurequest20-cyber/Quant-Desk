@@ -384,6 +384,7 @@ async function pageBreadth(app, ov) {
         body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Sector</th><th>Realised vol (21d)</th><th>Rank (1y)</th><th>Waking (5d / 63d)</th><th>Last year</th></tr></thead><tbody>
           ${(B.sectors || []).map((x, i) => `<tr><td>${esc(x.sector)} <span class="muted small">${esc(x.index)}</span></td><td class="num">${pct(x.rv21, 1)}</td><td class="num">${ord(x.rank)}</td>
             <td class="num">${fin(x.wake) ? x.wake.toFixed(2) + "×" : "—"}</td><td><div class="chart" id="sec${i}" style="height:28px;width:160px"></div></td></tr>`).join("")}</tbody></table></div>` })}
+      ${Object.values(B.dispersion || {}).map((x) => dispCard(x)).join("")}
       ${card({ title: "Today's futures reads by class", cls: "span2", body: cls.map((c) => `<div style="margin:6px 0"><b>${c}</b> <span class="muted small">(${T.buildups[c].length})</span><div class="small muted" style="line-height:1.8">${T.buildups[c].map((x) => name(x)).join(" · ") || "—"}</div></div>`).join("") })}
     </div>`;
     bindHorizon(draw);
@@ -392,10 +393,30 @@ async function pageBreadth(app, ov) {
       series: [line("Dear", v.dear, t.dneg, { areaStyle: { color: t.dneg, opacity: .12 } }), line("Cheap", v.cheap, t.dpos, { areaStyle: { color: t.dpos, opacity: .12 } }), line("Median rank", v.median_rank, t.s7, { lineStyle: { width: 1.5, type: "dashed", color: t.s7 } })] });
     chart("#bpos", { tooltip: { trigger: "axis", valueFormatter: (x) => pct(x, 0), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(pp.d, t), yAxis: axisY(t, fmtPct(0), { min: 0, max: 1, scale: false }),
       series: cls.map((c, i) => ({ name: c, type: "line", stack: "all", areaStyle: { opacity: .55 }, lineStyle: { width: 0 }, showSymbol: false, data: ma(pp[c], 5), itemStyle: { color: [t.s1, t.s2, t.s3, t.s4][i] }, color: [t.s1, t.s2, t.s3, t.s4][i] })) });
+    Object.values(B.dispersion || {}).forEach((x) => dispChart(x));
     (B.sectors || []).forEach((x, i) => chart(`#sec${i}`, { grid: { left: 0, right: 0, top: 2, bottom: 2 }, xAxis: { type: "category", show: false, data: x.rv21_1y.map((_, j) => j) }, yAxis: { type: "value", show: false, scale: true },
       tooltip: { show: false }, series: [{ type: "line", data: x.rv21_1y, showSymbol: false, lineStyle: { width: 1.2, color: t.s1 }, silent: true }] }));
   };
   draw();
+}
+
+// ---- implied against realised correlation (engine/dispersion.py) ----
+function dispCard(x) {
+  const g = x.gap_median, rich = fin(g) && g > 0.02, cheap = fin(g) && g < -0.02;
+  return card({ title: `Do ${x.index}'s members move together?`, hint: "implied vs realised correlation", cls: "span2",
+    simple: `Options price ${x.index}'s members to move together with an average correlation of ${fin(x.implied) ? x.implied.toFixed(2) : "—"}${fin(x.implied_rank) ? ` (${ord(x.implied_rank)} percentile of its year)` : ""}; over the last month they did ${fin(x.realised) ? x.realised.toFixed(2) : "—"}. Since ${x.since}, implied correlation ran ${fin(g) ? (g >= 0 ? "+" : "") + g.toFixed(3) : "—"} against what the next month delivered (above it ${pct(x.gap_share_positive, 0)} of days): ${rich ? "the index's options have carried a correlation premium" : cheap ? "the index's options have under-priced how together the members moved" : "close to fair"}.`,
+    analyst: `Weights estimated from returns: a price index's daily return is the weighted sum of its members', so a non-negative least-squares fit over 126 sessions recovers them (NSE's weight sources do not answer from the build machine). This month's fit: R² ${x.fit_r2.toFixed(4)}, weights summing to ${x.weight_sum.toFixed(3)}; a month fitting under 0.95 is left out. Members from ${x.members_source}. Implied: each one's at-the-money straddle vol (nearest expiry a week or more out, the same method for the index and every member); realised: 21-session close-to-close.`,
+    body: `<div class="chart" id="disp_${x.index}"></div><div class="legend"><span style="--c:${theme().s1}">Implied</span><span style="--c:${theme().s2}">Realised (last month)</span><span style="--c:${theme().s3}">Realised (the month after)</span></div>
+      <div class="small muted" style="margin-top:8px;line-height:1.8">Estimated weights: ${x.weights.map((w) => `<b>${esc(w.symbol)}</b> ${pct(w.w, 1)}`).join(" · ")}</div>` });
+}
+function dispChart(x) {
+  const el = $(`#disp_${x.index}`);
+  if (!el) return;
+  const t = theme(), s = slice({ d: x.series.date, implied: x.series.implied, realised: x.series.realised, realised_next: x.series.realised_next }, ["implied", "realised", "realised_next"]);
+  chart(`#disp_${x.index}`, { tooltip: { trigger: "axis", valueFormatter: (v) => (fin(v) ? v.toFixed(2) : "—"), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+    xAxis: axisX(s.d, t), yAxis: axisY(t, (v) => v.toFixed(1)),
+    series: [line("Implied", s.implied, t.s1, { connectNulls: false }), line("Realised", s.realised, t.s2, { connectNulls: false, lineStyle: { width: 1.2, color: t.s2 } }),
+      line("Realised, next month", s.realised_next, t.s3, { connectNulls: false, lineStyle: { width: 1.2, type: "dashed", color: t.s3 } })] });
 }
 
 // ---------------------------------------------------------------- calendar & method

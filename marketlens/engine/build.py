@@ -726,6 +726,35 @@ def pulse(sym_data: dict, vix: pd.Series, parts: dict, flows: dict) -> list[str]
     return out
 
 
+def dispersion_block(wh: Warehouse, asof, iv_panel, say=print) -> dict:
+    """Implied against realised correlation for each index whose members can be listed (engine/dispersion.py)."""
+    from . import dispersion as DS
+    out = {}
+    if iv_panel is None:
+        return out
+    ic = wh.index_close()
+    for idx in DS.LISTS:
+        try:
+            mem, src = DS.members(idx)
+            if not mem:
+                continue
+            rm = DS.returns({s: wh.cash(s) for s in mem})
+            if rm.shape[1] < 0.8 * len(mem):
+                say(f"  dispersion {idx}: only {rm.shape[1]} of {len(mem)} members have cash data")
+                continue
+            close = ic[ic["index"] == DS.INDEX_NAME[idx]].drop_duplicates("date", keep="last").set_index("date")["close"].sort_index()
+            ri = np.log(close).diff()
+            ivi = BR.straddle_iv(wh.options(idx).assign(symbol=idx)).set_index("date")["iv"]
+            st = DS.study(idx, ri, rm, ivi, iv_panel.reindex(columns=mem), asof)
+            if st:
+                st["members_source"] = src
+                out[idx] = st
+                say(f"  dispersion {idx}: fit R2 {st['fit_r2']:.4f}, implied correlation {st['implied']}")
+        except Exception as e:                      # one index failing skips only itself
+            say(f"  dispersion {idx}: FAILED {type(e).__name__}: {e}")
+    return out
+
+
 def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=print) -> dict:
     wh = Warehouse(warehouse)
     out.mkdir(parents=True, exist_ok=True)
@@ -772,6 +801,7 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
     try:
         br = BR.market(Path(warehouse), asof)
         br["sectors"] = BR.sector_board(wh.index_close(), asof)
+        br["dispersion"] = dispersion_block(wh, asof, getattr(BR.market, "iv_panel", None), say)
         br["asof"] = str(asof.date())
         (out / "breadth.json").write_text(json.dumps(clean(br), separators=(",", ":")))
         say(f"  breadth: {br['today']['n_iv']} stocks with a vol reading, {br['today']['n_fut']} with a futures read")
