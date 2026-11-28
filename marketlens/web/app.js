@@ -460,6 +460,7 @@ function symVol(el, d, u) {
       ${card({ title: "Term structure", hint: "IV by expiry", simple: c.term?.simple, analyst: c.term?.analyst, body: `<div class="chart" id="term"></div><div class="legend"><span style="--c:${t.s1}">Today</span><span style="--c:${t.s2}">A week ago</span><span style="--c:${t.s3}">A month ago</span></div>` })}
       ${card({ title: "Volatility smile", hint: "IV by strike · nearest expiries and the monthly contracts", simple: "How option prices bend across strikes. A steeper left side means crash protection is in demand.", body: `<div class="chart" id="smile"></div><div class="legend">${d.smiles.map((x, i) => `<span style="--c:${smc[i]}">${x.expiry} · ${seriesName(x)} (${x.days}d)</span>`).join("")}</div>` })}
       ${card({ title: "Skew history", hint: "25-delta risk reversal", simple: c.skew?.simple, analyst: c.skew?.analyst, body: `<div class="chart" id="rr"></div>` })}
+      ${curveCard(d, u)}
       ${card({ title: "Volatility cone", hint: "realised vol by window, since " + d.meta.since, simple: "The bands show the usual range of actual movement for each look-back; the dot is today. A dot near the top of its band: unusually wild.", analyst: c.realised?.analyst, cls: "span2", body: `<div class="chart" id="cone"></div>` })}
     </div>`;
   const tip = { trigger: "axis", valueFormatter: (v) => pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } };
@@ -481,6 +482,7 @@ function symVol(el, d, u) {
     xAxis: { type: "value", name: "strike vs forward", nameLocation: "middle", nameGap: 24, nameTextStyle: { color: t.text3, fontSize: 11 }, axisLabel: { color: t.text3, formatter: (v) => (v >= 0 ? "+" : "") + (v * 100).toFixed(0) + "%" }, splitLine: { show: false } },
     yAxis: axisY(t, fmtPct(0)),
     series: d.smiles.map((x, i) => line(`${x.expiry} ${seriesName(x)}`, x.strike.map((k, j) => [k / x.F - 1, x.iv[j]]), smc[i], isMonth(x) ? {} : { lineStyle: { width: 1.5, type: "dashed", color: smc[i] } })) });
+  curveCharts(d);
   chart("#rr", { tooltip: { ...tip, valueFormatter: (v) => vp(v) + " pts" }, xAxis: axisX(s.d, t), yAxis: axisY(t, (v) => (v * 100).toFixed(1)),
     series: [line("Risk reversal", s.rr25, t.s7, { markLine: { silent: true, symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: t.text3, type: "dashed" }, label: { show: false } } })] });
   const cn = d.cone, W = cn.map((x) => x.window + "d");
@@ -503,6 +505,7 @@ function symMove(el, d, u) {
       ${card({ title: "Did the price stay inside the priced move?", hint: `by days to expiry · ${num(sc.n)} days since ${sc.since}`, simple: `Overall the price ended inside the straddle-priced range ${pct(sc.inside_all, 0)} of the time (last year: ${pct(sc.inside_1y, 0)}). A fairly priced straddle gives about 57%: above that, options were on average more expensive than the moves that followed.`,
         body: `<div class="chart" id="sc"></div>`, analyst: `Median realised/implied ratio over the last year: ${fin(sc.ratio_1y) ? sc.ratio_1y.toFixed(2) : "—"} (below 1 = moves smaller than priced). The 90th-percentile ratio per bucket is in the tooltip: the tail is where straddle sellers lose.` })}
       ${card({ title: "Priced vs actual, each day", hint: "front expiry, last ~400 days", simple: "Each dot is a day: across is the move options priced, up is the move that happened by expiry. Dots above the line beat the price.", body: `<div class="chart" id="scat"></div>` })}
+      ${expiryCards(d, u)}
       ${card({ title: "Every expiry on the curve", cls: "span2", body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expiry</th><th>Contract</th><th>Days</th><th>ATM IV</th><th>Straddle</th><th>Priced move</th><th>Range</th></tr></thead><tbody>
         ${(d.term.now || []).map((x) => `<tr${isMonth(x) ? ' class="hl"' : ""}><td class="num">${x.expiry}</td><td>${seriesName(x)}</td><td class="num">${x.days}</td><td class="num">${pct(x.iv)}</td><td class="num">${num(x.straddle, 1)}</td><td class="num">±${pct(x.move, 2)}</td><td class="num">${num(x.F * (1 - x.move))} – ${num(x.F * (1 + x.move))}</td></tr>`).join("")}</tbody></table></div>` })}
     </div>`;
@@ -521,6 +524,7 @@ function symMove(el, d, u) {
         line("+1×", [...pad, ...bandAt(1, f0.move)], t.s2, { lineStyle: { width: 1.5, type: "dashed", color: t.s2 } }), line("−1×", [...pad, ...bandAt(-1, f0.move)], t.s2, { lineStyle: { width: 1.5, type: "dashed", color: t.s2 } }),
         line("+2×", [...pad, ...bandAt(1, 2 * f0.move)], t.s3, { lineStyle: { width: 1, type: "dotted", color: t.s3 } }), line("−2×", [...pad, ...bandAt(-1, 2 * f0.move)], t.s3, { lineStyle: { width: 1, type: "dotted", color: t.s3 } })] });
   }
+  expiryCharts(d);
   const b = sc.buckets || [];
   chart("#sc", { grid: { left: 44, right: 16, top: 20, bottom: 30 }, tooltip: { trigger: "axis", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text },
       formatter: (ps) => { const x = b[ps[0].dataIndex]; return `<b>${x.bucket}</b> (${num(x.n)} days)<br>inside: ${pct(x.inside, 0)}<br>avg priced ${pct(x.avg_implied, 2)} · avg actual ${pct(x.avg_realised, 2)}<br>90th pct actual/priced: ${x.p90_ratio.toFixed(2)}×`; } },
@@ -549,6 +553,7 @@ function symOI(el, d, u) {
         body: `<div class="seg" id="expSeg" style="margin-bottom:8px">${prof.map((p, i) => `<button data-i="${i}" class="${i ? "" : "on"}">${p.expiry} · ${p.days}d</button>`).join("")}</div>
         <div class="seg" id="oiMode" style="margin:0 0 8px 8px"><button data-m="oi" class="on">Open positions</button><button data-m="chg">Today's change</button></div>
         <div class="chart tall" id="oi" style="height:460px"></div><div class="legend"><span style="--c:${t.s1}">Calls</span><span style="--c:${t.s2}">Puts</span></div>` })}
+      ${gammaCards(d, u)}
       ${card({ title: "Put / call ratio history", hint: "open interest, all expiries", simple: "Puts open divided by calls open. Shown against its own past rather than as 'bullish' or 'bearish': in India most open puts are sold, so the ratio says more about how crowded put-selling is than about direction.", body: `<div class="chart" id="pcr"></div>` })}
       ${card({ title: "Total options open interest", hint: "all strikes, OI units (shares or index quantity)", simple: "How many option positions are open. Rising positions mean money committing; falling, money leaving.", body: `<div class="chart" id="toi"></div>` })}
     </div>`;
@@ -570,10 +575,167 @@ function symOI(el, d, u) {
   $$("#expSeg button").forEach((b) => b.onclick = () => { sel = +b.dataset.i; $$("#expSeg button").forEach((x) => x.classList.toggle("on", x === b)); draw(); });
   $$("#oiMode button").forEach((b) => b.onclick = () => { mode = b.dataset.m; $$("#oiMode button").forEach((x) => x.classList.toggle("on", x === b)); draw(); });
   draw();
+  gammaCharts(d, u);
   chart("#pcr", { tooltip: { trigger: "axis", valueFormatter: (v) => fin(v) ? v.toFixed(2) : "—", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, (v) => v.toFixed(2)),
     series: [line("PCR daily", s.pcr_oi, t.s1, { lineStyle: { width: 1, color: t.s1, opacity: .35 }, markLine: regimeMarks(d, s.d, t) }), line("10-day average", ma(s.pcr_oi, 10), t.s1)] });
   chart("#toi", { tooltip: { trigger: "axis", valueFormatter: big, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, big),
     series: [line("Options OI daily", s.opt_oi, t.s7, { lineStyle: { width: 1, color: t.s7, opacity: .35 }, markLine: regimeMarks(d, s.d, t) }), line("10-day average", ma(s.opt_oi, 10), t.s7)] });
+}
+
+// ---- gamma by strike (engine/gamma.py) ----
+const cr = (v, dp = 0) => (fin(v) ? "₹" + num(v, dp) + " cr" : "—");
+const kfmt = (v) => (Math.abs(v) >= 1000 ? (v / 1000).toFixed(Math.abs(v) >= 1e4 ? 0 : 1) + "k" : num(v));
+function gammaStory(g, u) {
+  const w = g.weights, st = g.study, away = (x) => vp(x / g.spot - 1, 1) + "%";
+  if (!w || !fin(g.net_total)) return { simple: `Where option hedging would be heaviest if ${u.symbol} moves: the gamma of every strike's open positions, calls and puts. NSE's participant file covers all stocks together, so it cannot say who is long this stock's gamma: no net is estimated.`, analyst: "" };
+  const long = g.net_total > 0;
+  let simple = `On NSE's own position figures, the desks that hedge (prop traders and FIIs) are net ${long ? "long" : "short"} option gamma around ${u.symbol}'s price: their hedging ${long ? "sells into rises and buys into falls, which damps moves" : "buys into rises and sells into falls, which feeds moves"}.`;
+  simple += fin(g.flip) ? ` That turns ${long ? "short" : "long"} at about ${num(g.flip)} (${away(g.flip)}).` : ` It stays ${long ? "long" : "short"} across ±5% of the price.`;
+  let analyst = `Hedgers' net share of index open interest (${w.date}): calls ${vp(w.calls, 1)}%, puts ${vp(w.puts, 1)}%, applied to every strike (the file is one figure for all index options). Net ${cr(g.net_total)} per 1% move; total call gamma ${cr(g.call_total)}, put gamma ${cr(g.put_total)}. Expiries read: ${g.expiries.join(", ")}.`;
+  if (st) analyst += ` Does the sign matter? Since ${st.since}, on the ${num(st.n_neg)} days the hedgers were short gamma the next day's move was ${pct(st.raw_neg, 2)} against ${pct(st.raw_pos, 2)} on the ${num(st.n_pos)} long-gamma days; measured against what options already priced that day, ${st.z_neg.toFixed(2)} against ${st.z_pos.toFixed(2)} of the priced daily move (permutation p = ${st.p.toFixed(2)}). ${st.p < 0.05 ? "The gap holds beyond the priced volatility." : "The raw gap is the volatile years, not the gamma: read this as where hedging sits, not as a forecast."}`;
+  return { simple, analyst };
+}
+function gammaCards(d, u) {
+  const g = d.gamma;
+  if (!g || !g.strikes || !g.strikes.length) return "";
+  const t = theme(), st = gammaStory(g, u), hasNet = !!g.net;
+  return `${card({ title: "Gamma by strike", hint: "Rs crore of hedging per 1% move · all expiries read", cls: "span2", simple: st.simple, analyst: st.analyst,
+      body: `${hasNet ? `<div class="seg" id="gmMode" style="margin-bottom:8px"><button data-m="side" class="on">Calls and puts</button><button data-m="net">Hedgers' net</button></div>` : ""}
+        <div class="chart tall" id="gmap" style="height:440px"></div><div class="legend" id="gmLeg"><span style="--c:${t.s1}">Call gamma</span><span style="--c:${t.s2}">Put gamma</span></div>` })}
+    ${hasNet && g.profile ? card({ title: "Hedgers' net gamma if the price moves", hint: "same positions, prices ±5%", simple: "Each point re-prices every strike's gamma at that index level, positions unchanged. Above zero their hedging damps moves; below, it adds to them.", body: `<div class="chart" id="gprof"></div>` }) : ""}
+    ${card({ title: "Gamma over time", hint: hasNet ? "total and hedgers' net, Rs crore per 1%" : "total call and put gamma, Rs crore per 1%", simple: "How much hedging the open options carry each day. It swells into an expiry and empties after it.", body: `<div class="chart" id="ghist"></div>` })}`;
+}
+function gammaCharts(d, u) {
+  const g = d.gamma, t = theme();
+  if (!g || !g.strikes || !$("#gmap")) return;
+  const near = (v) => g.strikes.reduce((bi, k, i) => Math.abs(k - v) < Math.abs(g.strikes[bi] - v) ? i : bi, 0);
+  const inRange = (v) => fin(v) && v >= g.strikes[0] && v <= g.strikes[g.strikes.length - 1];
+  const marks = () => ({ silent: true, symbol: "none", lineStyle: { type: "dashed" }, data: [
+    { yAxis: near(g.spot), lineStyle: { color: t.text }, label: { formatter: `price ${num(g.spot)}`, color: t.text2 } },
+    ...(inRange(g.flip) ? [{ yAxis: near(g.flip), lineStyle: { color: t.s4 }, label: { formatter: `flip ${num(g.flip)}`, color: t.s4 } }] : [])] });
+  let mode = "side";
+  const draw = () => {
+    const ex = S.charts.find((c) => c.getDom() === $("#gmap")); if (ex) { ex.dispose(); S.charts = S.charts.filter((c) => c !== ex); }
+    const series = mode === "side"
+      ? [{ name: "Call gamma", type: "bar", stack: "x", data: g.call, itemStyle: { color: t.s1, borderRadius: [0, 3, 3, 0] }, barCategoryGap: "25%", markLine: marks() },
+         { name: "Put gamma", type: "bar", stack: "x", data: g.put.map((v) => -v), itemStyle: { color: t.s2, borderRadius: [3, 0, 0, 3] } }]
+      : [{ name: "Hedgers' net", type: "bar", data: g.net.map((v) => ({ value: v, itemStyle: { color: v >= 0 ? t.dpos : t.dneg } })), barCategoryGap: "25%", markLine: marks() }];
+    chart("#gmap", { grid: { left: 64, right: 24, top: 10, bottom: 30 }, tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text },
+        formatter: (ps) => { const i = ps[0].dataIndex; return `<b>Strike ${num(g.strikes[i])}</b><br>call gamma ${cr(g.call[i], 1)}<br>put gamma ${cr(g.put[i], 1)}${g.net ? `<br>hedgers' net ${cr(g.net[i], 1)}` : ""}`; } },
+      yAxis: { type: "category", data: g.strikes.map((k) => num(k)), axisLabel: { color: t.text3, fontSize: 10 }, axisLine: { lineStyle: { color: t.line } }, axisTick: { show: false } },
+      xAxis: { type: "value", axisLabel: { color: t.text3, formatter: (v) => num(Math.abs(v)) }, splitLine: { lineStyle: { color: t.line2 } } }, series });
+    const leg = $("#gmLeg");
+    if (leg) leg.innerHTML = mode === "side" ? `<span style="--c:${t.s1}">Call gamma</span><span style="--c:${t.s2}">Put gamma</span>` : `<span style="--c:${t.dpos}">Hedgers long gamma (damping)</span><span style="--c:${t.dneg}">Hedgers short gamma (amplifying)</span>`;
+  };
+  $$("#gmMode button").forEach((b) => b.onclick = () => { mode = b.dataset.m; $$("#gmMode button").forEach((x) => x.classList.toggle("on", x === b)); draw(); });
+  draw();
+  if (g.profile && $("#gprof")) {
+    const pr = g.profile;
+    chart("#gprof", { tooltip: { trigger: "axis", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text }, formatter: (ps) => `at ${num(pr.price[ps[0].dataIndex])}<br>net ${cr(pr.net[ps[0].dataIndex])}` },
+      xAxis: { type: "value", min: pr.price[0], max: pr.price[pr.price.length - 1], name: "price", nameLocation: "middle", nameGap: 24, nameTextStyle: { color: t.text3, fontSize: 11 }, axisLabel: { color: t.text3, formatter: (v) => num(v) }, splitLine: { show: false } },
+      yAxis: axisY(t, (v) => num(v), { scale: false }),
+      series: [line("Hedgers' net", pr.price.map((p, i) => [p, pr.net[i]]), t.s7, { areaStyle: { color: t.s7, opacity: .08 },
+        markLine: { silent: true, symbol: "none", lineStyle: { type: "dashed" }, data: [{ yAxis: 0, lineStyle: { color: t.text3 }, label: { show: false } },
+          { xAxis: g.spot, lineStyle: { color: t.text }, label: { formatter: "price", color: t.text2 } },
+          ...(fin(g.flip) ? [{ xAxis: g.flip, lineStyle: { color: t.s4 }, label: { formatter: "flip", color: t.s4 } }] : [])] } })] });
+  }
+  const s = slice(d.series, ["gamma_call", "gamma_put", "gamma_net"]);
+  if ($("#ghist") && s.gamma_call) {
+    const tot = s.gamma_call.map((v, i) => fin(v) && fin(s.gamma_put[i]) ? v + s.gamma_put[i] : null);
+    const ser = [line("Total gamma", tot, t.s1, { areaStyle: { color: t.s1, opacity: .08 } })];
+    if (s.gamma_net) ser.push(line("Hedgers' net", s.gamma_net, t.s7, { markLine: { silent: true, symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: t.text3, type: "dashed" }, label: { show: false } } }));
+    chart("#ghist", { tooltip: { trigger: "axis", valueFormatter: (v) => cr(v), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, kfmt), series: ser });
+  }
+}
+
+// ---- the curve between months ----
+function curveCard(d, u) {
+  const c = d.curve || {}, m = c.months || {};
+  const rows = [["current month", "iv_m1", "rr_m1"], ["near month", "iv_m2", "rr_m2"], ["far month", "iv_m3", "rr_m3"]].filter(([, a]) => fin(m[a]));
+  if (!fin(c.term_60_30) && !rows.length) return "";
+  const tilt = fin(c.term_60_30) ? (c.term_60_30 > 0.005 ? "upward: later months cost more, the usual calm shape" : c.term_60_30 < -0.005 ? "inverted: the next month is dearer than the one after, as when trouble is expected soon" : "flat") : null;
+  const simple = tilt ? `The 2-month option price against the 1-month one is ${vp(c.term_60_30, 1)} vol points: the curve is ${tilt}${fin(c.term_p) ? ` (${ord(c.term_p)} percentile of the past year)` : ""}.` : "Not enough listed months today to compare one horizon with another.";
+  const tbl = rows.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="tbl"><thead><tr><th>Contract</th><th>ATM IV</th><th>25-delta skew</th></tr></thead><tbody>
+    ${rows.map(([n, a, b]) => `<tr><td>${n}</td><td class="num">${pct(m[a])}</td><td class="num">${fin(m[b]) ? vp(m[b]) + " pts" : "—"}</td></tr>`).join("")}</tbody></table></div>` : "";
+  return card({ title: "The curve between months", hint: "constant-maturity IV: 30, 60, 90 days", cls: "span2", simple,
+    analyst: `IV at fixed horizons by total-variance interpolation between expiries, shown only where the listed expiries reach the horizon (no flat extension). Today: 30d ${pct(d.headline.metrics?.iv30 ?? null)}, 60d ${pct(c.iv60)}, 90d ${pct(c.iv90)}. Skew is the 25-delta risk reversal of each monthly contract (negative: puts dearer).`,
+    body: `<div class="chart" id="cmIv"></div><div class="legend"><span style="--c:${theme().s1}">30 days</span><span style="--c:${theme().s2}">60 days</span><span style="--c:${theme().s3}">90 days</span></div>
+      <div class="chart" id="cmSpread" style="height:180px"></div>${tbl}` });
+}
+function curveCharts(d) {
+  if (!$("#cmIv")) return;
+  const t = theme(), s = slice(d.series, ["iv30", "iv60", "iv90", "term_60_30"]);
+  chart("#cmIv", { tooltip: { trigger: "axis", valueFormatter: (v) => pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, fmtPct(0)),
+    // no joining across days without a reading: the 60/90-day lines exist only when the listed expiries reach them
+    series: [line("30 days", s.iv30, t.s1), ...(s.iv60 ? [line("60 days", s.iv60, t.s2, { connectNulls: false })] : []), ...(s.iv90 ? [line("90 days", s.iv90, t.s3, { connectNulls: false, lineStyle: { width: 1.5, color: t.s3 } })] : [])] });
+  if (s.term_60_30) chart("#cmSpread", { grid: { left: 52, right: 18, top: 16, bottom: 26 }, tooltip: { trigger: "axis", valueFormatter: (v) => vp(v) + " pts", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, (v) => (v * 100).toFixed(1)),
+    series: [line("60d − 30d", s.term_60_30.map((v) => fin(v) ? Math.max(v, 0) : null), t.dpos, { connectNulls: false, lineStyle: { width: 1, color: t.dpos }, areaStyle: { color: t.dpos, opacity: .25 },
+        markLine: { silent: true, symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: t.text3, type: "dashed" }, label: { show: false } } }),
+      line("inverted", s.term_60_30.map((v) => fin(v) ? Math.min(v, 0) : null), t.dneg, { connectNulls: false, lineStyle: { width: 1, color: t.dneg }, areaStyle: { color: t.dneg, opacity: .25 } })] });
+}
+// ---- the roll between futures months ----
+function rollCard(d, u) {
+  const c = d.curve || {};
+  if (!fin(c.cal_carry)) return "";
+  return card({ title: "The roll between months", hint: "next month's future over this month's, annualised",
+    simple: `Rolling a position from this month's future into the next costs ${pct(c.cal_carry)} a year${fin(c.cal_carry_p) ? `, ${ord(c.cal_carry_p)} percentile of the past year` : ""}${fin(c.cal_spread) && u.kind === "index" ? ` (${num(c.cal_spread, 1)} points)` : ""}. A dear roll means longs are paying up to stay in.`,
+    analyst: "ln(next future / this future) over the days between the two expiries, at each close: the market's own financing rate for the roll, independent of when the spot printed. Compare with the futures premium over spot beside it.",
+    body: `<div class="chart" id="calc"></div><div class="legend"><span style="--c:${theme().s7}">Roll rate between months</span><span style="--c:${theme().s1}">Premium over spot</span></div>` });
+}
+function rollChart(d) {
+  if (!$("#calc")) return;
+  const t = theme(), s = slice(d.series, ["cal_carry", "carry"]), ok = (v) => (fin(v) && Math.abs(v) < 1 ? v : null);
+  chart("#calc", { tooltip: { trigger: "axis", valueFormatter: (v) => pct(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t), yAxis: axisY(t, fmtPct(0)),
+    series: [line("Roll rate", (s.cal_carry || []).map(ok), t.s7), line("Premium over spot", (s.carry || []).map(ok), t.s1, { lineStyle: { width: 1, color: t.s1, opacity: .5 } })] });
+}
+
+// ---- the expiry in front (engine/expiry.py) ----
+function expiryCards(d, u) {
+  const x = d.expiry;
+  if (!x) return "";
+  const away = (v) => (fin(v) ? ` (${vp(v / x.spot - 1, 1)}%)` : "");
+  const st = x.study;
+  const tiles = `<div class="grid g4" style="margin-bottom:10px">
+    ${[["Expiry", `${x.expiry}`, `${x.days} day${x.days === 1 ? "" : "s"} to go`], ["Max pain", num(x.max_pain), `the least payout to option buyers${away(x.max_pain)}`],
+       ["Biggest call strike", num(x.call_wall), `within 10% of the price${away(x.call_wall)}`], ["Biggest put strike", num(x.put_wall), `within 10% of the price${away(x.put_wall)}`]]
+      .map(([l, v, f]) => `<section class="card kpi"><div class="lab"><span>${l}</span></div><div class="val num" style="font-size:20px">${v}</div><div class="foot">${f}</div></section>`).join("")}</div>`;
+  let pin = "";
+  if (st) {
+    const verdict = st.p < 0.05 ? `more often than chance (p = ${st.p.toFixed(3)} for one instrument; with many instruments tested, treat a single p near 0.05 with care)`
+      : st.share < 0.5 && st.p_two < 0.05 ? `less often than a coin toss (two-sided p = ${st.p_two.toFixed(3)}): the price tended to move away from it`
+      : `about as often as a coin toss would (p = ${st.p.toFixed(2)}): no pull towards it shows`;
+    pin = card({ title: "Does max pain pull the price?", hint: `${num(st.n)} expiries since ${st.since}`, cls: "span2",
+      simple: `From the close before each expiry, the settlement landed closer to max pain than to the mirror point the same distance on the other side ${pct(st.share, 0)} of the time, ${verdict}.`,
+      analyst: `Max pain from the open interest at the close before expiry; median distance from the price ${pct(st.median_gap, 2)}. Expiries with max pain within 0.1% of the price are not counted (no direction to test). On expiry day itself the price stayed inside the one-day straddle priced the evening before ${pct(st.inside, 0)} of the time (${num(st.n_priced)} expiries; a fairly priced straddle gives about 57%).`,
+      body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expiry</th><th>Close before</th><th>Max pain</th><th>Settled</th><th>Closer to max pain?</th><th>Move</th><th>Priced</th></tr></thead><tbody>
+        ${st.recent.slice().reverse().map((r) => `<tr><td class="num">${r.expiry}</td><td class="num">${num(r.close_before, 1)}</td><td class="num">${num(r.max_pain)}</td><td class="num">${num(r.settle, 1)}</td>
+          <td>${r.closer === null ? `<span class="muted small">not counted</span>` : r.closer ? "yes" : "no"}</td><td class="num">${pct(r.move, 2)}</td><td class="num">${fin(r.priced) ? "±" + pct(r.priced, 2) : "—"}</td></tr>`).join("")}</tbody></table></div>` });
+  }
+  const pay = x.payout && x.payout.strike.length ? card({ title: "What option buyers collect at each settlement", hint: `${x.expiry} · every open call and put`,
+      simple: `If ${u.symbol} settled at each level, this is what all the open options of the expiry would pay their buyers. The lowest point is max pain${fin(x.max_pain) ? ` (${num(x.max_pain)})` : ""}.`,
+      body: `<div class="chart" id="xpay"></div>` }) : "";
+  const dec = x.decay && x.decay.date.length > 1 ? card({ title: "How the straddle is decaying", hint: `${x.expiry} · at-the-money call + put`,
+      simple: "The at-the-money straddle at each close against the path a steady market would give (shrinking with the square root of the time left). Above the line, options held their value: the market got more nervous or moved.",
+      body: `<div class="chart" id="xdec"></div><div class="legend"><span style="--c:${theme().s1}">Straddle</span><span style="--c:${theme().s3}">√time path from the first reading</span></div>` }) : "";
+  return `<div class="span2">${card({ title: "The expiry in front", hint: x.expiry, body: tiles, cls: "flat" })}</div>${pay}${dec}${pin}`;
+}
+function expiryCharts(d) {
+  const x = d.expiry, t = theme();
+  if (!x) return;
+  if ($("#xpay")) {
+    const p = x.payout;
+    chart("#xpay", { tooltip: { trigger: "axis", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text }, formatter: (ps) => `settles at ${num(p.strike[ps[0].dataIndex])}<br>buyers collect ₹${num(p.payout[ps[0].dataIndex], 0)} cr` },
+      xAxis: { type: "category", data: p.strike.map((k) => num(k)), axisLabel: { color: t.text3, fontSize: 10 }, axisLine: { lineStyle: { color: t.line } } }, yAxis: axisY(t, (v) => num(v), { scale: false }),
+      series: [{ name: "Payout", type: "bar", data: p.strike.map((k, i) => ({ value: p.payout[i], itemStyle: { color: k === x.max_pain ? t.s4 : t.s1, opacity: k === x.max_pain ? 1 : .7 } })), barCategoryGap: "30%",
+        markLine: { silent: true, symbol: "none", lineStyle: { color: t.text, type: "dashed" }, label: { formatter: `price ${num(x.spot)}`, color: t.text2 },
+          data: [{ xAxis: p.strike.reduce((bi, k, i) => Math.abs(k - x.spot) < Math.abs(p.strike[bi] - x.spot) ? i : bi, 0) }] } }] });
+  }
+  if ($("#xdec")) {
+    const c = x.decay;
+    chart("#xdec", { tooltip: { trigger: "axis", valueFormatter: (v) => num(v, 1), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+      xAxis: axisX(c.date, t), yAxis: axisY(t, (v) => num(v)),
+      series: [line("Straddle", c.straddle, t.s1, { showSymbol: true }), line("√time path", c.sqrt_t, t.s3, { lineStyle: { width: 1.5, type: "dashed", color: t.s3 } })] });
+  }
 }
 
 function futMonthsCard(d) {
@@ -600,7 +762,8 @@ function symFutures(el, d, u) {
     <div class="grid g2">
       ${futMonthsCard(d)}
       ${card({ title: "Futures premium (annualised carry)", simple: c.futures?.simple, analyst: c.futures?.analyst, body: `<div class="chart" id="carry"></div>` })}
-      ${card({ title: "Futures open interest", hint: "all months, OI units (shares or index quantity)", simple: "How many futures positions are open across all months. It drops at each monthly expiry when the near month settles.", body: `<div class="chart" id="foi"></div>` })}
+      ${rollCard(d, u)}
+      ${card({ title: "Futures open interest", cls: d.curve && fin(d.curve.cal_carry) ? "span2" : "", hint: "all months, OI units (shares or index quantity)", simple: "How many futures positions are open across all months. It drops at each monthly expiry when the near month settles.", body: `<div class="chart" id="foi"></div>` })}
       ${card({ title: "Last 30 sessions: what positions did", hint: "price change × OI change", cls: "span2", simple: "Each day classified by what happened to price and open positions together. Labels describe position changes; they do not predict.",
         body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Future</th><th>Day</th><th>OI change</th><th>Open interest</th><th>Basis</th><th>Carry</th><th>Read</th></tr></thead><tbody>
         ${fr.slice().reverse().map((r) => `<tr><td class="num">${r.date}</td><td class="num">${num(r.fut, r.fut > 1000 ? 1 : 2)}</td><td class="num"><span class="chg ${r.d_price >= 0 ? "pos" : "neg"}">${vp(r.d_price, 2)}%</span></td>
@@ -612,6 +775,7 @@ function symFutures(el, d, u) {
   chart("#carry", { tooltip: tip((v) => pct(v, 1)), xAxis: axisX(s.d, t), yAxis: axisY(t, fmtPct(0)),
     series: [line("Carry", s.carry.map((v) => fin(v) && Math.abs(v) < 1 ? v : null), t.s1, { markLine: (() => { const v = s.carry.slice(-252).filter((x) => fin(x) && Math.abs(x) < 1).sort((a, b) => a - b);
       return v.length > 20 ? { silent: true, symbol: "none", data: [{ yAxis: v[Math.floor(v.length / 2)], label: { formatter: `1-year median ${pct(v[Math.floor(v.length / 2)])}`, color: t.text3 } }], lineStyle: { color: t.text3, type: "dashed" } } : undefined; })() })] });
+  rollChart(d);
   chart("#foi", { tooltip: tip(big), xAxis: axisX(s.d, t), yAxis: axisY(t, big), series: [line("Futures OI", s.fut_oi, t.s7, { areaStyle: { color: t.s7, opacity: .08 } })] });
   // futures are listed monthly for every underlying: no expiry-regime marks here
   const rl = d.rolls || [];

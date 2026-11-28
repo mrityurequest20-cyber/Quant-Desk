@@ -126,6 +126,13 @@ def futures_book(opt: pd.DataFrame, spot: pd.Series, action_dates=()) -> pd.Data
     out["fut_oi"] = tot
     out["near_oi"] = near["oi"]
     out["next_oi"] = nxt["oi"].reindex(out.index)
+    # the calendar spread: next month's future over this month's, as points and as the carry between the two expiries
+    # (annualised), which is the market's own financing rate for rolling, free of the spot's timing
+    nx = nxt.reindex(out.index)
+    out["cal_spread"] = nx["px"] - out["fut"]
+    gap = (nx["expiry"] - out["fut_expiry"]).dt.days
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out["cal_carry"] = np.where(gap > 0, np.log(nx["px"] / out["fut"]) / (gap / 365), np.nan)
     out["roll_share"] = out["next_oi"] / (out["near_oi"] + out["next_oi"])
     out["fut_contracts"] = f.groupby("date")["contracts"].sum()
 

@@ -193,6 +193,11 @@
     // parity forward keeps the read consistent; its age is carried so the page says how old it is
     const ch = chains(quotes, symbol, opts.optMaxAge || maxAge);
     const today = istDate(nowMs);
+    if (ch[today] && ch[today].length) {                   // expiring today: not read for vol, kept for the expiry-day view
+      const by = {};
+      for (const r of ch[today]) (by[r.K] = by[r.K] || {})[r.right] = r;
+      out.expiring = { expiry: today, strikes: Object.keys(by).map(Number).sort((a, b) => a - b), by };
+    }
     const sel = readSet(Object.keys(ch).filter((x) => x > today));
     for (const e of Object.keys(sel)) {   // the nearest 6 plus the current, near and far month, as vol.py read_set
       const T = yearsTo(e, nowMs);
@@ -294,6 +299,104 @@
     });
   }
 
+  // gamma.py on the live chains: Black-76 gamma at each strike (vol off the expiry's liquid smile, flat beyond it)
+  // x open interest x F^2 x 1%, in Rs crore per 1% move, summed over the expiries that passed every check; the
+  // hedgers' net with the close's participant weights; and the net over a range of prices, with its flip
+  const npdf = (x) => Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+  function b76Gamma(F, K, T, s) {
+    const sq = s * Math.sqrt(T), d1 = (Math.log(F / K) + 0.5 * sq * sq) / sq;
+    return Math.exp(-R * T) * npdf(d1) / (F * sq);
+  }
+  function gammaMap(read, spot, w, band = 0.06, grid = 0.05) {
+    const rows = [];
+    for (const e of read.expiries.filter((x) => x.ok && x.smile && x.smile.length >= 2)) {
+      const xs = e.smile.map((p) => p[0]), ys = e.smile.map((p) => p[1]);
+      for (const K of e.strikes) {
+        if (K / e.F < 0.6 || K / e.F > 1.6) continue;
+        const b = e.by[K], oc = (b.CE && b.CE.oi) || 0, op = (b.PE && b.PE.oi) || 0;
+        rows.push({ K, F: e.F, T: e.T, iv: interp(K, xs, ys), oc, op });
+      }
+    }
+    if (!rows.length || !(spot > 0)) return null;
+    const gex = (r, shift) => { const F = r.F * shift; return b76Gamma(F, r.K, r.T, r.iv) * F * F * 0.01 / 1e7; };
+    const by = new Map();
+    let callTot = 0, putTot = 0;
+    for (const r of rows) {
+      const g = gex(r, 1), c = g * r.oc, p = g * r.op;
+      callTot += c; putTot += p;
+      const a = by.get(r.K) || { call: 0, put: 0 };
+      a.call += c; a.put += p; by.set(r.K, a);
+    }
+    const ks = [...by.keys()].filter((k) => k >= spot * (1 - band) && k <= spot * (1 + band)).sort((a, b) => a - b);
+    const out = { spot, call_total: callTot, put_total: putTot, strikes: ks, call: ks.map((k) => by.get(k).call), put: ks.map((k) => by.get(k).put) };
+    if (w && Number.isFinite(w.calls) && Number.isFinite(w.puts)) {
+      out.net = ks.map((k) => w.calls * by.get(k).call + w.puts * by.get(k).put);
+      const price = [], net = [];
+      for (let i = 0; i < 41; i++) {
+        const s = 1 - grid + (2 * grid) * i / 40;
+        let tot = 0;
+        for (const r of rows) { const g = gex(r, s); tot += w.calls * g * r.oc + w.puts * g * r.op; }
+        price.push(spot * s); net.push(tot);
+      }
+      out.profile = { price, net };
+      out.net_total = net[20];
+      out.flip = flipOf(price, net, spot);
+    }
+    return out;
+  }
+  function flipOf(price, net, spot) {
+    let best = null;
+    for (let i = 1; i < net.length; i++) {
+      const a = net[i - 1], b = net[i];
+      if (a === 0 || (a < 0) !== (b < 0)) {
+        const p = a === 0 ? price[i - 1] : price[i - 1] + (price[i] - price[i - 1]) * a / (a - b);
+        if (best === null || Math.abs(p - spot) < Math.abs(best - spot)) best = p;
+      }
+    }
+    return best;
+  }
+
+  // expiry.py max_pain on a live chain: the strike at which every open call and put of the expiry pays its buyers least
+  function maxPain(strikes, by) {
+    const K = strikes.filter((k) => by[k]), c = K.map((k) => (by[k].CE && by[k].CE.oi) || 0), p = K.map((k) => (by[k].PE && by[k].PE.oi) || 0);
+    if (!K.length || c.concat(p).reduce((a, b) => a + b, 0) <= 0) return null;
+    let best = null, bestPay = Infinity;
+    for (const s of K) {
+      let pay = 0;
+      for (let i = 0; i < K.length; i++) pay += c[i] * Math.max(s - K[i], 0) + p[i] * Math.max(K[i] - s, 0);
+      if (pay < bestPay) { bestPay = pay; best = s; }
+    }
+    return best;
+  }
+
+  // ---- the day minute by minute, from the relay's one-close-a-minute series (/live/series) ----
+  const MON_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  function optName(symbol, expiryIso, K, right) {          // NIFTY + 08 + DEC + 26 + 25450 + PE, as the feed names options
+    const [y, m, d] = expiryIso.split("-");
+    return `${symbol}${d}${MON_NAMES[+m - 1]}${y.slice(2)}${String(+K)}${right}`;
+  }
+  // The at-the-money straddle of one strike through the day, its parity forward and the vol it implies. A minute is
+  // drawn only when both legs have printed within `stale` minutes of it: one leg's old price against the other's new
+  // one is not a straddle.
+  function intraday(calls, puts, K, expiryIso, stale = 10) {
+    const grid = [...new Set([...calls.map((x) => x[0]), ...puts.map((x) => x[0])])].sort((a, b) => a - b);
+    const out = { minute: [], straddle: [], iv: [], F: [] };
+    let i = 0, j = 0, c = null, p = null;
+    for (const m of grid) {
+      while (i < calls.length && calls[i][0] <= m) c = calls[i++];
+      while (j < puts.length && puts[j][0] <= m) p = puts[j++];
+      if (!c || !p || m - c[0] > stale || m - p[0] > stale) continue;
+      const T = yearsTo(expiryIso, m * 60000);
+      if (!(T > 0)) continue;
+      const st = c[1] + p[1], F = K + Math.exp(R * T) * (c[1] - p[1]);
+      out.minute.push(m); out.straddle.push(st); out.F.push(F);
+      // Black-76 on the out-of-the-money leg at the parity forward: exact at any strike (the straddle formula is
+      // exact only at K = F, and the strike nearest the price is rarely exactly there)
+      out.iv.push(F > 0 ? impliedVol(K >= F ? c[1] : p[1], F, K, T, K >= F) : null);
+    }
+    return out;
+  }
+
   // vol.py constant_maturity, on the live expiries: total variance interpolated in time to `days`; an expiry this week
   // alone is not stretched to 30 days; flat at the ends. One extra rule for live: the feed carries only the nearest
   // expiries, so if none lies within 5 days of the target (NIFTY's live chain is two weeklies) the end-of-day method
@@ -320,7 +423,7 @@
     return { call_wall: cw, put_wall: pw, pcr: tc > 0 ? tp / tc : null, lo: exp.strikes[0], hi: exp.strikes[exp.strikes.length - 1] };
   }
 
-  const api = { readSet, futuresMonths, constantMaturity, walls, istDate, b76, impliedVol, ndtri, readExpiry, readUnderlying, chains, yearsTo, pctVsHistory, oiVsClose, futuresToday, OPT };
+  const api = { maxPain, optName, intraday, gammaMap, b76Gamma, readSet, futuresMonths, constantMaturity, walls, istDate, b76, impliedVol, ndtri, readExpiry, readUnderlying, chains, yearsTo, pctVsHistory, oiVsClose, futuresToday, OPT };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.LiveCore = api;
 })(typeof window !== "undefined" ? window : globalThis);

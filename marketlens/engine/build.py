@@ -12,6 +12,8 @@ import pandas as pd
 
 from .. import universe as U
 from . import events as E
+from . import expiry as X
+from . import gamma as GM
 from . import narrative as N
 from . import positioning as P
 from . import rules as RL
@@ -179,6 +181,20 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
             a["adjusted"] = round(float(jump), 4)
         close = spot["close"]
     iv30 = V.constant_maturity(t, 30)
+    reach = t[t["days"] >= 2].groupby("date")["days"].max()
+
+    def cm(target):
+        """Constant-maturity IV only where the listed expiries reach (near) the horizon: flat extrapolation past
+        the last expiry would label a 2-month vol as a 3-month one."""
+        x = V.constant_maturity(t, target)
+        return x.where(reach.reindex(x.index) >= 0.85 * target)
+    iv60, iv90 = cm(60), cm(90)
+    # each monthly contract's own ATM IV and skew, by its place (current / near / far month)
+    by_month = {}
+    if "series" in t:
+        for i, name in enumerate(("current month", "near month", "far month"), 1):
+            m = t[t["series"] == name].drop_duplicates("date").set_index("date")
+            by_month[f"iv_m{i}"], by_month[f"rr_m{i}"], by_month[f"days_m{i}"] = m["atm_iv"], m["rr25"], m["days"]
     fr = V.front(t)
     rv = V.realised(spot)
     pcr = P.pcr_history(opt)
@@ -191,22 +207,48 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         proxy = ~spot["true_spot"].reindex(book.index).fillna(True).astype(bool)
         book.loc[proxy, ["basis", "carry"]] = np.nan
 
+    # gamma by strike: concentration for every instrument; the hedgers' net only for indices (NSE's participant
+    # file is one figure for all stocks together, so it cannot sign a single stock's book)
+    poi = wh.participants()
+    w_hist = GM.weights_history(poi, "index") if inst.kind == "index" else pd.DataFrame(columns=["calls", "puts"])
+    w_now = GM.weights(poi, asof, "index") if inst.kind == "index" else None
+    gmap = GM.profile(opt, t, ivrows, asof, float(raw_close.iat[-1]), w_now,
+                      band=0.06 if inst.kind == "index" else 0.12, grid=0.05 if inst.kind == "index" else 0.10)
+    ghist = GM.history(opt, t, ivrows, w_hist, sorted(t["date"].unique()))
+    if inst.kind != "index":
+        ghist = ghist.drop(columns=["gamma_net"], errors="ignore")
+    if gmap is not None and inst.kind == "index":
+        gmap["study"] = GM.regime_study(ghist, rv["ret"], iv30)
+
+    # the expiry in front, and what past expiries did (raw prices: strikes are raw)
+    xfront = X.front(opt, t, asof, float(raw_close.iat[-1]))
+    if xfront is not None:
+        xfront["study"] = X.pin_study(opt, t, raw_close, asof)
+
     df = pd.DataFrame(index=close.index)
     df["close"] = close
     df["iv30"] = iv30
     df["iv_front"] = fr["atm_iv"]
+    df["iv60"], df["iv90"] = iv60, iv90
+    df["term_60_30"] = df["iv60"] - df["iv30"]
+    for k, v in by_month.items():
+        df[k] = v
     df["rr25"] = V.front(t, min_days=7)["rr25"]        # skew from an expiry at least a week out: expiry-week wings are noise
     df["implied_move"] = fr["implied_move"]
     for c in ("rv5", "rv21", "rv63", "fwd_rv21"):
         df[c] = rv[c]
     if "pk21" in rv:
         df["pk21"] = rv["pk21"]
+    for c in ("gamma_call", "gamma_put", "gamma_net"):
+        if c in ghist:
+            df[c] = ghist[c]
     df["pcr_oi"] = pcr["pcr_oi"]
     df["pcr_vol"] = pcr["pcr_vol"]
     df["opt_oi"] = pcr["opt_oi"]
     if not book.empty:
-        for c in ("carry", "basis", "fut_oi", "roll_share"):
-            df[c] = book[c]
+        for c in ("carry", "basis", "fut_oi", "roll_share", "cal_spread", "cal_carry"):
+            if c in book:
+                df[c] = book[c]
     if inst.kind == "index" and inst.symbol == "NIFTY":
         df["vix"] = vix.reindex(df.index) / 100
     df = df[df.index >= t["date"].min()] if len(t) else df
@@ -261,6 +303,14 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     carry_med = float(df["carry"].dropna().iloc[-253:-1].median()) if "carry" in df and df["carry"].notna().sum() > 60 else None
     df["comp"] = df["rv5"] / df["rv63"]
     comp_p = pctl("comp", 252)
+    # the curve between months: constant-maturity 60-day over 30-day IV, and the futures roll rate between months
+    months_curve = {"iv60": cur("iv60") if "iv60" in df else None, "iv90": cur("iv90") if "iv90" in df else None,
+             "term_60_30": cur("term_60_30") if "term_60_30" in df else None,
+             "term_p": pctl("term_60_30", 252) if "term_60_30" in df else None,
+             "cal_carry": cur("cal_carry") if "cal_carry" in df else None,
+             "cal_carry_p": pctl("cal_carry", 252) if "cal_carry" in df else None,
+             "cal_spread": cur("cal_spread") if "cal_spread" in df else None,
+             "months": {k: cur(k) for k in ("iv_m1", "iv_m2", "iv_m3", "rr_m1", "rr_m2", "rr_m3") if k in df}}
     hist = df.dropna(subset=["iv30", "fwd_rv21"])
     rich_share = float((hist["iv30"] > hist["fwd_rv21"]).mean()) if len(hist) > 50 else None
 
@@ -397,7 +447,8 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     }
     cols = [c for c in ["close", "iv30", "iv_front", "rv21", "rv5", "rv63", "pk21", "fwd_rv21", "vrp", "rr25",
                         "pcr_oi", "pcr_vol", "opt_oi", "carry", "basis", "fut_oi", "roll_share", "vix",
-                        "implied_move"] if c in df]
+                        "implied_move", "gamma_call", "gamma_put", "gamma_net", "iv60", "iv90", "term_60_30",
+                        "iv_m1", "iv_m2", "iv_m3", "rr_m1", "rr_m2", "rr_m3", "days_m1", "cal_spread", "cal_carry"] if c in df]
     out = {
         "meta": {"symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
                  "exchange": inst.exchange, "asof": str(asof.date()), "since": since, "splits": splits, "actions": actions,
@@ -408,7 +459,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "story": story, "cards": cards, "series": series(df, cols),
         "term": term, "smiles": smiles, "cone": cone, "scorecard": score,
         "scorecard_series": series(sc_series.set_index("date"), ["implied_move", "realised"]) if sc_series is not None and len(sc_series) else None,
-        "oi_profile": prof, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
+        "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
         "big_days": E.big_days(ret), "changes": changes, "rules": rules,
     }
     return clean(out)
@@ -546,6 +597,7 @@ def live_base(d: dict) -> dict:
         "asof": d["meta"]["asof"], "close": d["headline"]["spot"], "kind": d["meta"]["kind"],
         "term": [{"expiry": c["expiry"], "iv": c["iv"], "move": c["move"], "F": c["F"], "series": c.get("series")} for c in tn],
         "fut_months": [{"expiry": m["expiry"], "fut": m["fut"], "oi": m["oi"]} for m in d.get("fut_months") or []],
+        "expiry_mp": ({"expiry": d["expiry"]["expiry"], "max_pain": d["expiry"]["max_pain"]} if d.get("expiry") else None),
         "fut": ({"fut": fr["fut"], "near_oi": fr["near_oi"], "fut_expiry": fr["fut_expiry"]} if fr else None),
         "iv_front": (ser.get("iv_front") or [])[-252:],
         # for live 30-day IV, its percentile and the live premium over realised vol (realised: at the last close)
@@ -553,6 +605,9 @@ def live_base(d: dict) -> dict:
         "vrp": (ser.get("vrp") or [])[-252:],
         "rv21": next((x for x in reversed(ser.get("rv21") or []) if x is not None), None),
         "carry": [x for x in (ser.get("carry") or [])[-252:] if x is not None],
+        # the gamma map's participant weights (indices) and its close-of-day net and flip, for the live comparison
+        "gamma": ({k: (d.get("gamma") or {}).get(k) for k in ("weights", "net_total", "flip", "call_total", "put_total")}
+                  if d.get("gamma") else None),
         "oi": [{"expiry": p["expiry"], "strikes": p["strikes"], "call_oi": p["call_oi"], "put_oi": p["put_oi"]}
                for p in d.get("oi_profile", [])[:2]],
     }

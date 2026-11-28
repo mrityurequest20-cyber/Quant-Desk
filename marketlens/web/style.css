@@ -202,3 +202,4 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   .search .res { left: 0; right: auto; width: 100%; }
 }
 @media (max-width: 760px) { .card-h h3 .hint { display: block; margin: 2px 0 0; } }
+.card.flat { background: transparent; border: 0; padding: 0; box-shadow: none; } .card.flat > .card-h { display: none; }

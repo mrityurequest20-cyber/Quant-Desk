@@ -33,6 +33,10 @@ on the device, and recomputes live panels with `web/livecore.js`:
 - the live smile and 25-delta skew
 - open interest added today by strike, and near-money PCR now vs at the close
 - today's futures build-up against the same contract's close
+- gamma by strike on the live chains (same rule as the close), with the hedgers' net and flip against the close's
+- max pain on live open interest (today's expiring contract on expiry day)
+- the day minute by minute: the at-the-money straddle of the front (or expiring) contract and its Black-76 vol, from
+  the relay's one-close-a-minute series (`/live/series`), fetched once a minute
 - every futures month the feed carries (current, near, far: `NIFTY-FUT`, `NIFTY-FUT-2027-01-25`, ...), each against its
   own close, with the calendar spread between months
 
@@ -58,6 +62,26 @@ are never stored.
   prices. Stocks' far month comes from the warehouse's `fo_stock_far` table.
 - **Futures by month**: price, basis, carry (20+ days out only), open interest and its share, and the change against
   the same contract the session before, for every listed month.
+- **Gamma by strike**: Black-76 gamma at each strike (vol off that expiry's liquid smile) x open interest x F^2 x 1%,
+  in Rs crore of hedging per 1% move, over every expiry on the curve. The concentration (calls and puts) needs no
+  assumption. For indices, the *hedgers'* net (Pro + FII, the desks that delta-hedge) is signed from NSE's own
+  participant file (their net share of index call and put open interest), with the price where it flips. The file
+  is one figure for all index options, so the net is an estimate and is labelled one; stocks get no net (the file
+  lumps all stocks together).
+  *Tested, not assumed:* since 2019, days with the hedgers short gamma were followed by bigger raw moves (NIFTY
+  0.69% vs 0.51%), but measured against what options already priced that day the gap vanishes (0.57 vs 0.59 of the
+  priced daily move, permutation p = 0.66; BANKNIFTY 0.58 vs 0.58). The app says so: the map shows where hedging
+  sits, not a forecast.
+- **The expiry in front**: max pain (the settlement with the least payout to option buyers), the biggest call and
+  put strikes, the payout curve, and the straddle's decay against the square-root-of-time path.
+  *Tested:* from the close before each expiry, did the settlement land closer to max pain than to the mirror point
+  the same distance on the other side (a coin toss with no pull)? NIFTY 43% of 306 expiries (it settles *away* from
+  max pain more often; two-sided p = 0.014), BANKNIFTY 50%, FINNIFTY 52%, stocks 40-47%, SENSEX 61% of 82 (p = 0.03,
+  one of several tests). There is no pinning to trade on, and the page says that.
+- **The curve between months**: constant-maturity 30, 60 and 90-day IV (only where the listed expiries reach the
+  horizon), the 60-30 spread with its percentile, and each monthly contract's ATM IV and skew. **The roll between
+  months**: ln(next future / this future) annualised over the days between their expiries, against the premium
+  over spot.
 - **30-day IV** interpolates total variance between expiries, so a weekly and a monthly calendar can be compared
   over the years.
 - **The event move** is the extra variance in the front expiry over the forward variance to the next expiry,
