@@ -54,7 +54,8 @@ jobs:
         continue-on-error: true
         timeout-minutes: 8
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API || secrets.CLAUDE_API_KEY || secrets.ANTHROPIC_API_KEY }}
+          KEY_FROM: ${{ secrets.CLAUDE_API != '' && 'CLAUDE_API' || secrets.CLAUDE_API_KEY != '' && 'CLAUDE_API_KEY' || secrets.ANTHROPIC_API_KEY != '' && 'ANTHROPIC_API_KEY' || 'none' }}
         run: python -m marketlens news-probe
 
   build:

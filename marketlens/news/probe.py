@@ -10,7 +10,7 @@ History candidates (the labelled corpus needs years, not weeks):
   * RBI press releases
 Live feeds: the RSS list the desk's digest already reads.
 
-The key is read from the environment (ANTHROPIC_API_KEY, a GitHub secret) and never printed: the check sends one
+The key is read from the environment (ANTHROPIC_API_KEY, filled from the GitHub secret CLAUDE_API) and never printed: the check sends one
 16-token request to the cheapest model and reports only whether it answered and the model id that served it.
 """
 from __future__ import annotations
@@ -134,7 +134,7 @@ def key_check() -> dict:
 
 
 def main() -> int:
-    rep = {"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "anthropic": key_check(), "history": history(), "live": live()}
+    rep = {"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "key_secret": os.environ.get("KEY_FROM", "?"), "anthropic": key_check(), "history": history(), "live": live()}
     print(json.dumps(rep, indent=1, default=str))
     return 0
 
