@@ -88,8 +88,13 @@ jobs:
         run: python -m marketlens fetch --dest _wh
       - name: Download NSE's ban list and position limits (last 60 sessions)
         run: python -m marketlens fetch-rules --dest _wh --days 60 --show
+      - name: Download the news corpus and the situation briefs (the News page; skipped if not made yet)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m marketlens fetch-news --dest _news
       - name: Build the analysis
-        run: python -m marketlens build --warehouse _wh --out _lensdata
+        run: python -m marketlens build --warehouse _wh --out _lensdata --news _news
       - name: Assemble and publish the site
         run: |
           python -m marketlens site --data _lensdata --out _lens

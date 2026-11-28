@@ -219,3 +219,19 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .howto summary::before { content: "? "; }
 .howto[open] summary { margin-bottom: 6px; }
 .howto p { margin: 4px 0; line-height: 1.55; }
+
+/* News: situation pages */
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+.tbl.news-ep tr.sub-row td { border-bottom: 1px solid var(--line); padding-top: 0; }
+.tbl.news-ep tr:not(.sub-row) td { border-bottom: 0; }
+.ladder { margin: 6px 0 0; padding-left: 22px; }
+.ladder li { padding: 5px 0; color: var(--text-2); }
+.ladder li.on { color: var(--text); font-weight: 600; }
+.ladder li.on::marker { color: var(--neg); }
+.nw-side, .nw-scen { padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.nw-side:last-child, .nw-scen:last-child { border-bottom: 0; }
+.nw-side h4, .nw-scen h4 { margin: 0 0 4px; font-size: 14px; display: flex; gap: 8px; align-items: center; }
+.nw-scen p, .nw-side p { margin: 3px 0; }
+.card-h h3 a { color: inherit; text-decoration: none; }
+.card-h h3 a:hover { text-decoration: underline; }

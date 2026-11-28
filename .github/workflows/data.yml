@@ -51,6 +51,8 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Fetch what's missing
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}       # optional: US data release history for the macro calendar
         run: python -m quantdesk data update --release warehouse ${FROM:+--from "$FROM"} ${TO:+--to "$TO"} ${ONLY:+--only "$ONLY"} $REFETCH
       - name: Status
         if: always()
