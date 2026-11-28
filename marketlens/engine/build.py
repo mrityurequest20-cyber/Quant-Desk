@@ -533,7 +533,12 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "link": link, "movement": move_now, "lab": lab, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
         "big_days": E.big_days(ret), "changes": changes, "rules": rules,
     }
-    return clean(out)
+    out = clean(out)
+    # the daily panel the news reactions read (marketlens/news/reactions.py): a Parquet file beside the JSON, never in it
+    keep = [c for c in ("close", "iv_front", "iv30", "rv21", "implied_move", "rr25", "beta_n", "own", "fut_oi", "basis", "pcr_oi", "opt_oi", "mv_gap")
+            if c in df]
+    out["_panel"] = df[keep].astype("float64")
+    return out
 
 
 # ---------------- market-wide ----------------
@@ -806,8 +811,12 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
         if not d:
             say(f"  {inst.symbol}: no data")
             continue
+        panel = d.pop("_panel", None)
         data[inst.symbol] = d
         (out / "sym" / f"{U.slug(inst.symbol)}.json").write_text(json.dumps(d, separators=(",", ":")))
+        if panel is not None and len(panel):
+            (out / "panels").mkdir(exist_ok=True)
+            panel.rename_axis("date").to_parquet(out / "panels" / f"{U.slug(inst.symbol)}.parquet")
         say(f"  {inst.symbol}: {d['meta']['since']} .. {d['meta']['asof']} ({d['meta']['build_seconds']}s)")
     asof = max(pd.Timestamp(d["meta"]["asof"]) for d in data.values())
     parts = participants_block(wh)
