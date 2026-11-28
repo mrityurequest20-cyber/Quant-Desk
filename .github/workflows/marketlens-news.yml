@@ -1,0 +1,48 @@
+# MarketLens news, phase P1 (marketlens/news/corpus.py): the historical news corpus the one-time Claude labelling run and
+# the event library are built from. NSE corporate filings (exact times, 2019 on) and Google News headlines for every
+# watchlist instrument and the macro channels, one Parquet file per source and year on the `news-corpus` release.
+# Resumable: each run fills the windows not yet done until its time budget, so run it again until the log says all done.
+# Public data only: titles, short filing summaries, links. No key, no broker, no order.
+name: MarketLens news corpus
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Start date YYYY-MM-DD"
+        default: "2019-01-01"
+      to:
+        description: "End date YYYY-MM-DD (empty: today)"
+        default: ""
+      sources:
+        description: "nse, gnews or both (comma-separated)"
+        default: "nse,gnews"
+      budget_min:
+        description: "Minutes of fetching before it saves and stops (the next run continues)"
+        default: "320"
+
+permissions:
+  contents: write            # the news-corpus release (and nothing else)
+
+concurrency:
+  group: news-corpus
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Collect (saves to the release when it stops)
+        run: python -m marketlens news-corpus --dest _news --from "${{ inputs.from }}" ${{ inputs.to && format('--to {0}', inputs.to) || '' }} --sources "${{ inputs.sources }}" --budget-min "${{ inputs.budget_min }}" --release news-corpus

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 
@@ -21,11 +22,37 @@ def main(argv=None) -> int:
     r.add_argument("--strict", action="store_true", help="fail on any file that arrived but did not parse")
     r.add_argument("--show", action="store_true", help="print what was read (the live probe)")
     sub.add_parser("probe-sources", help="check which Tier 3 data sources answer from this machine (read-only)")
+    nc = sub.add_parser("news-corpus", help="news P1: collect the historical news corpus (NSE filings, Google News) into a folder")
+    nc.add_argument("--dest", type=Path, required=True)
+    nc.add_argument("--from", dest="start", default="2019-01-01")
+    nc.add_argument("--to", dest="end", default="")
+    nc.add_argument("--sources", default="nse,gnews")
+    nc.add_argument("--budget-min", type=float, default=320)
+    nc.add_argument("--release", default="", help="pull from / push to this GitHub release (news-corpus)")
     sub.add_parser("news-probe", help="news P0: which news sources answer from here, how far back, and whether the Anthropic key works")
     s = sub.add_parser("site", help="assemble the static site: the web app plus a data folder")
     s.add_argument("--data", type=Path, required=True)
     s.add_argument("--out", type=Path, required=True)
     a = ap.parse_args(argv)
+    if a.cmd == "news-corpus":
+        import datetime as _dt
+        from .news import corpus as NC
+        store = None
+        if a.release:
+            from quantdesk.data.warehouse import ReleaseStore
+            store = ReleaseStore(a.release, title="MarketLens news corpus",
+                                 notes="Historical news for MarketLens (marketlens/news/corpus.py): NSE filings and Google News headlines. Not a software release.")
+            store.ensure()
+            have = store.assets()
+            if have:
+                store.pull(a.dest, have)
+        c = NC.Corpus(a.dest)
+        end = _dt.date.fromisoformat(a.end) if a.end else _dt.date.today() + _dt.timedelta(days=1)
+        print(NC.collect(c, _dt.date.fromisoformat(a.start), end, sources=tuple(a.sources.split(",")), budget_s=a.budget_min * 60))
+        print(json.dumps(NC.stats(c), indent=1))
+        if store:
+            store.push(a.dest, c.files())
+        return 0
     if a.cmd == "news-probe":
         from .news.probe import main as news_probe_main
         return news_probe_main()
