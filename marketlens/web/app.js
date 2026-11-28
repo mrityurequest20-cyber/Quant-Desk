@@ -109,7 +109,41 @@ function card({ title, hint = "", body = "", simple = "", analyst = "", chip = "
   if (level === "a") cls = (cls ? cls + " " : "") + "a-only";
   const csv = /class="(tbl|chart)/.test(body) ? `<button class="icon-btn csv" title="Download this card's data as CSV" aria-label="Download CSV" data-csv="${esc(String(title).replace(/<[^>]+>/g, ""))}">CSV</button>` : "";
   return `<section class="card ${cls}"><div class="card-h"><h3>${title}${hint ? ` <span class="hint">${hint}</span>` : ""}</h3><span class="card-tools">${chip}${csv}</span></div>
-    ${simple ? `<p class="simple">${esc(simple)}</p>` : ""}${body}${analyst ? `<p class="analyst">${esc(analyst)}</p>` : ""}</section>`;
+    ${simple ? `<p class="simple">${esc(simple)}</p>` : ""}${body}${analyst ? `<p class="analyst">${esc(analyst)}</p>` : ""}${howTo(title)}</section>`;
+}
+// "How to read this": what the card shows, how to read it, what it does not say (readguide.js), folded under every card
+function howTo(title) {
+  const g = window.ReadGuide && ReadGuide.find(title);
+  if (!g) return "";
+  const row = (k, v) => (v ? `<p><b>${k}</b> ${esc(v)}</p>` : "");
+  return `<details class="howto"><summary>How to read this</summary>${row("What it shows:", g.shows)}${row("How to read it:", g.read)}${row("What it does not tell you:", g.not)}</details>`;
+}
+// where the biggest call and put open interest sit against the price, said as it is (they can be on the same side)
+function wallLine(x) {
+  if (!fin(x.call_wall) || !fin(x.put_wall)) return "";
+  const where = (k) => (k > x.spot ? "above" : k < x.spot ? "below" : "at");
+  if (x.put_wall < x.spot && x.spot < x.call_wall) return `, between the put wall at ${num(x.put_wall)} and the call wall at ${num(x.call_wall)}`;
+  if (x.put_wall === x.call_wall) return `; the biggest call and put open interest are both at ${num(x.call_wall)}, ${where(x.call_wall)} the price`;
+  return `; the biggest call open interest is at ${num(x.call_wall)} (${where(x.call_wall)} the price) and the biggest put open interest at ${num(x.put_wall)} (${where(x.put_wall)} it)`;
+}
+// one plain line for a participant metric: FIIs and Clients today, against their own year
+function partLine(rows, metric) {
+  const r = (who) => (rows || []).find((x) => x.who === who && x.metric === metric);
+  const share = metric.includes("share");
+  const say = (who, nm) => { const x = r(who); if (!x || !fin(x.now)) return "";
+    const v = share ? pct(x.now, 0) + " long" : `${x.now >= 0 ? "net long" : "net short"} ${big(Math.abs(x.now))} contracts`;
+    const c = share ? `${x.chg5 >= 0 ? "+" : "−"}${Math.abs(x.chg5 * 100).toFixed(1)} pts` : `${x.chg5 >= 0 ? "+" : "−"}${big(Math.abs(x.chg5))}`;
+    return `${nm} ${v} (${ord(x.pct1y)} percentile of their year; 5 days ${c})`; };
+  const parts = [say("FII", "FIIs"), say("Client", "clients")].filter(Boolean);
+  return parts.length ? "Today: " + parts.join("; ") + "." : "";
+}
+// one plain line for the cash-market flows
+function flowLine(F) {
+  const one = (k, nm) => { const x = F && F[k]; if (!x || !fin(x.last)) return "";
+    const s = (v) => `${v >= 0 ? "bought" : "sold"} ₹${num(Math.abs(v))} cr`;
+    return `${nm} ${s(x.last)} in the last session and ${x.sum20 >= 0 ? "net bought" : "net sold"} ₹${num(Math.abs(x.sum20))} cr over 20 sessions`; };
+  const parts = [one("FII", "FIIs"), one("DII", "DIIs")].filter(Boolean);
+  return parts.length ? "Today: " + parts.join("; ") + "." : "";
 }
 function kpi({ label, value, unit = "", foot = "", p = null, lo, hi, chipLabel }) {
   return `<section class="card kpi"><div class="lab"><span>${label}</span>${chipP(p, chipLabel)}</div>
@@ -200,6 +234,7 @@ async function pagePulse(app, ov) {
     ${limitsCard(ov)}
     <div class="grid g2" style="margin-top:16px">
       ${card({ title: "India VIX since 2019", hint: "the market's 30-day fear gauge", body: `<div class="chart" id="vix"></div>`,
+        simple: fin(ov.vix?.now) ? `Today: India VIX ${ov.vix.now.toFixed(1)}, ${level(ov.vix.p1y)} for the past year (${ord(ov.vix.p1y)} percentile). Options price NIFTY moving about ${(ov.vix.now / 16).toFixed(2)}% a day over the next month.` : "",
         analyst: "India VIX is computed by NSE from NIFTY option prices across strikes (like the US VIX). Spikes mark stress (Mar 2020, Jun 2024 election). It mean-reverts: very high readings have historically come down faster than very low ones went up." })}
       ${card({ title: "Next on the calendar", body: calendarRows(ov.calendar.items.slice(0, 9)) + `<div style="margin-top:10px"><a class="muted small" href="#/calendar">Full calendar →</a></div>` })}
     </div>
@@ -313,12 +348,12 @@ async function pagePositioning(app, ov) {
     </tbody></table></div>`;
   app.innerHTML = `<div class="page-h"><div><h1>Who holds what</h1><div class="sub">NSE's participant-wise open interest: positions of foreign investors, domestic institutions, brokers' own desks and everyone else, daily since ${P.since}.</div></div>${horizonSeg()}</div>
     <div class="grid g2">${card({ title: "In plain words", body: `<ul class="story">${P.simple.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` })}
-    ${card({ title: "Index futures: share of positions that are long", body: `<div class="chart" id="ls"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span></div>`,
+    ${card({ title: "Index futures: share of positions that are long", simple: partLine(P.rows, "idx_fut_long_share"), body: `<div class="chart" id="ls"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span></div>`,
       analyst: "Long share = long contracts / (long + short). Every future has a buyer and a seller, so one group's long is another's short. FIIs hedge their share holdings with index-futures shorts, which keeps their long share structurally low; the extremes, not the level, are what history makes interesting." })}</div>
     <div style="margin-top:16px">${card({ level: "a", title: "Current books against their history", hint: "contracts; percentile vs the past year", body: tbl,
       analyst: "Percentiles compare with the past year because these books changed regime: FIIs' median long share in index futures was 44-63% in 2019-2024 and 12-17% in 2025-26. Against all history a normal day now looks extreme. Every contract has a buyer and a seller: the four groups' longs equal their shorts each day (checked)." })}</div>
     <div class="grid g2" style="margin-top:16px">
-      ${card({ title: "Index futures: net contracts", body: `<div class="chart" id="net"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span><span style="--c:${css("--s4")}">DII</span></div>` })}
+      ${card({ title: "Index futures: net contracts", simple: partLine(P.rows, "idx_fut_net"), body: `<div class="chart" id="net"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span><span style="--c:${css("--s4")}">DII</span></div>` })}
       ${card({ level: "a", title: "Index options stance", hint: "net calls − net puts", simple: "Above zero: the group's options gain if the market rises (long calls / short puts). Below zero: they gain on a fall.",
         body: `<div class="chart" id="opt"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">Client</span><span style="--c:${css("--s3")}">Pro</span></div>` })}
     </div>`;
@@ -344,7 +379,7 @@ async function pageFlows(app, ov) {
     ${kpi({ label: "DII · last session", value: (F.DII?.last >= 0 ? "+" : "−") + "₹" + num(Math.abs(F.DII?.last)), unit: "cr", foot: `20 sessions: ${F.DII?.sum20 >= 0 ? "+" : "−"}₹${num(Math.abs(F.DII?.sum20))} cr` })}</div>
     <div style="margin-top:16px">${card({ title: "In plain words", body: `<ul class="story">${F.simple.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`, analyst: F.note })}</div>
     <div class="grid g2" style="margin-top:16px">
-      ${card({ title: "Daily net buying", body: `<div class="chart" id="fd"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">DII</span></div>` })}
+      ${card({ title: "Daily net buying", simple: flowLine(F), body: `<div class="chart" id="fd"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">DII</span></div>` })}
       ${card({ title: "Running total since " + F.since, simple: "When the two lines move opposite ways, domestic money is absorbing what foreign money sells (or the reverse).", body: `<div class="chart" id="fc"></div><div class="legend"><span style="--c:${css("--s1")}">FII</span><span style="--c:${css("--s2")}">DII</span></div>` })}
     </div>
     <div class="callout" style="margin-top:16px">Positioning in derivatives by the same groups is on <a href="#/positioning"><b>Who holds what</b></a>, with history back to 2019.</div>`;
@@ -1046,7 +1081,10 @@ function expiryCards(d, u) {
   const dec = x.decay && x.decay.date.length > 1 ? card({ level: "a", title: "How the straddle is decaying", hint: `${x.expiry} · at-the-money call + put`,
       simple: "The at-the-money straddle at each close against the path a steady market would give (shrinking with the square root of the time left). Above the line, options held their value: the market got more nervous or moved.",
       body: `<div class="chart" id="xdec"></div><div class="legend"><span style="--c:${theme().s1}">Straddle</span><span style="--c:${theme().s3}">√time path from the first reading</span></div>` }) : "";
-  return `<div class="span2">${card({ title: "The expiry in front", hint: x.expiry, body: tiles, cls: "flat" })}</div>${pay}${dec}${pin}`;
+  const xs = fin(x.spot) && fin(x.max_pain)
+    ? `Today: ${x.days} day${x.days === 1 ? "" : "s"} to the ${x.expiry} expiry. The price (${num(x.spot)}) is ${pct(Math.abs(x.spot / x.max_pain - 1), 1)} ${x.spot >= x.max_pain ? "above" : "below"} max pain (${num(x.max_pain)})${wallLine(x)}.`
+    : "";
+  return `<div class="span2">${card({ title: "The expiry in front", hint: x.expiry, body: tiles, cls: "flat", simple: xs })}</div>${pay}${dec}${pin}`;
 }
 function expiryCharts(d) {
   const x = d.expiry, t = theme();
@@ -1126,7 +1164,9 @@ function symEvents(el, d, u) {
       analyst: "Priced event move: the extra variance in the expiry holding the results over the forward variance to the next expiry, as a one-day move, read at the last close before the results date. 'Not separable' means the curve showed no distinct event. The calendar does not say whether results came in market hours or after the close, so both the results-day and next-day moves are shown. Front IV change: close of the next day minus the last close before." }) : ""}
     ${d.macro?.length ? card({ level: "a", title: "How it moves on big macro days", hint: "median absolute move, since " + d.meta.since, simple: "On days like these, this index has typically moved this many times its normal amount.",
       body: `<div class="chart" id="macro"></div>`, analyst: "Days from the macro calendar (RBI policy, Union Budget, US Fed, election results...). Descriptive: a small sample per kind, overlapping with other news." }) : ""}
-    ${card({ title: "Biggest one-day moves on record", hint: "since " + d.meta.since, body: `<div class="tbl-wrap"><table class="tbl"><tbody>${d.big_days.map((b) => `<tr><td class="num">${b.date}</td><td class="num"><span class="chg ${b.ret >= 0 ? "pos" : "neg"}">${vp(Math.expm1(b.ret), 1)}%</span></td></tr>`).join("")}</tbody></table></div>`,
+    ${card({ title: "Biggest one-day moves on record", hint: "since " + d.meta.since,
+      simple: (d.big_days || []).length ? `Its biggest day since ${d.meta.since}: ${vp(d.big_days[0].ret, 1)}% on ${d.big_days[0].date}. Against that, a normal day today is about ${fin(d.headline.metrics?.rv21) ? (d.headline.metrics.rv21 / 16 * 100).toFixed(1) + "%" : "—"}.` : "",
+      body: `<div class="tbl-wrap"><table class="tbl"><tbody>${d.big_days.map((b) => `<tr><td class="num">${b.date}</td><td class="num"><span class="chg ${b.ret >= 0 ? "pos" : "neg"}">${vp(Math.expm1(b.ret), 1)}%</span></td></tr>`).join("")}</tbody></table></div>`,
       analyst: [d.meta.splits?.length ? `Splits and bonuses removed from the price history: ${d.meta.splits.map((x) => `${x.date} (×${x.ratio})`).join(", ")}.` : "",
         d.meta.actions?.length ? `Other corporate actions (demergers and similar, where the exchange rebuilt the option strikes): ${d.meta.actions.map((x) => `${x.date} (${vp(x.adjusted, 1)}% taken out of the history; the 25 sessions of option prices before it are left out of the vol history)`).join(", ")}.` : ""].filter(Boolean).join(" ") })}
   </div>`;
