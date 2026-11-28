@@ -5,6 +5,8 @@ Tables used (one file per period, `{table}_{period}.parquet`, as Quant-Desk's wa
   fo_stock_opts    every F&O stock's futures and nearest two option expiries (strikes within +-30%), daily
   fo_stock_far     the same for each stock's third expiry (the far month); read together with fo_stock_opts
   bse_fo_bhav      BSE index futures and options (SENSEX, BANKEX), daily, from 2024
+  cm_bhav          NSE's cash-market day by stock: OHLC, volume, delivery (from Oct 2019)
+  global_daily     international benchmarks (WTI, gold, Henry Hub, dollar, US rates, USDINR) from Yahoo
   nse_index_close  NSE's official index OHLC (the spot NSE's index options settle on), and India VIX
   participant_oi   FII / DII / Pro / Client open interest by product, daily
   fii_dii          FII and DII cash-market net buying, Rs crore (NSE publishes only the latest day: short history)
@@ -33,7 +35,7 @@ OPT_COLS = ["date", "symbol", "kind", "expiry", "strike", "open", "high", "low",
 # (the future converges to spot), but it is not spot: basis and carry are not computed from it.
 PROXY_SRC = {"old-fut"}
 RELEASE_API = "https://api.github.com/repos/mrityurequest20-cyber/Quant-Desk/releases/tags/warehouse"
-TABLES = ("fo_bhav", "fo_stock_opts", "fo_stock_far", "bse_fo_bhav", "nse_index_close", "participant_oi", "participant_vol",
+TABLES = ("fo_bhav", "fo_stock_opts", "fo_stock_far", "cm_bhav", "global_daily", "bse_fo_bhav", "nse_index_close", "participant_oi", "participant_vol",
           "fii_dii", "corp_events", "nse_holidays", "gift_nifty")
 
 
@@ -108,6 +110,26 @@ class Warehouse:
         return self._cache["stockopts"]
 
     # ---- spot ----
+    def cash(self, symbol: str) -> pd.DataFrame:
+        """A stock's cash-market day (NSE's sec_bhavdata_full, equity series): OHLC, NSE's previous close, volume,
+        turnover (Rs lakh), trades, delivered quantity and delivery %, indexed by date. Empty before the warehouse has
+        the table, or for an index."""
+        key = "cash:" + symbol
+        if key not in self._cache:
+            df = self._read("cm_bhav", None, [symbol])
+            if len(df) and "series" in df:
+                # one row a day: EQ, or the trade-for-trade series on the days a stock is in it
+                df = df.assign(_p=df["series"].map({"EQ": 0, "BE": 1, "BZ": 2}).fillna(3)).sort_values(["date", "_p"])
+                df = df.drop_duplicates("date").drop(columns="_p").set_index("date").sort_index()
+            self._cache[key] = df
+        return self._cache[key]
+
+    def globals_(self) -> pd.DataFrame:
+        """The international benchmarks (global_daily): date, ticker, name, OHLC, source."""
+        if "glob" not in self._cache:
+            self._cache["glob"] = self._read("global_daily")
+        return self._cache["glob"]
+
     def index_close(self) -> pd.DataFrame:
         if "idx" not in self._cache:
             df = self._read("nse_index_close", ["date", "index", "open", "high", "low", "close"])

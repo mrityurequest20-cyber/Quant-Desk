@@ -90,6 +90,13 @@ are never stored.
   of its smile ATM vol; the vectorised futures classes match the instrument pages on all 34,662 stock-days.
 - **How much of a stock's move is its own**: rolling 63-session regression on NIFTY and the stock's sector index;
   one minus the R-squared is the share of its variance its own events drive.
+- **How it moves** (new tab; nothing directional): ATR, close-to-close against Parkinson / Garman-Klass /
+  Yang-Zhang range vol, the overnight share of variance, gaps, compression (20-day range and band width against the
+  year, NR7) and, for stocks, volume z-score, delivery % and Amihud illiquidity from NSE's cash bhavcopy. NSE's
+  previous close is not adjusted for bonuses (Reliance 28 Oct 2024: 2,655.70 against an open of 1,337), so the
+  app's own split list rescales history. *Tested:* after compressed days the next 10 sessions' realised vol rose
+  against the recent vol (stocks about 1.08x against 0.91x), but measured against the IV options priced that day it
+  was no larger (NIFTY 0.77 against 0.86, block-permutation p = 0.99): ordinary mean-reversion that options price.
 - **30-day IV** interpolates total variance between expiries, so a weekly and a monthly calendar can be compared
   over the years.
 - **The event move** is the extra variance in the front expiry over the forward variance to the next expiry,

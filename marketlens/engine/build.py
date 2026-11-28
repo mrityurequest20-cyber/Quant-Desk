@@ -16,6 +16,7 @@ from . import expiry as X
 from . import breadth as BR
 from . import gamma as GM
 from . import linkage as LK
+from . import movement as MV
 from . import narrative as N
 from . import positioning as P
 from . import rules as RL
@@ -49,6 +50,15 @@ def clean(o):
     if isinstance(o, (bool, np.bool_)):
         return bool(o)
     return _num(o)
+
+
+def rank_last(x: pd.Series, n: int = 252):
+    """The latest value's share of the n readings before it that are lower (one convention for every rank)."""
+    x = x.dropna()
+    if len(x) < 127:
+        return None
+    h = x.iloc[-n - 1:-1]
+    return float((h < x.iat[-1]).mean())
 
 
 def series(df: pd.DataFrame, cols: list[str], nd=5) -> dict:
@@ -238,6 +248,31 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
                     **{k: (float(last[k]) if k in lk and np.isfinite(last[k]) else None) for k in ("beta_n", "corr_n", "beta_s", "corr_s", "r2", "own")},
                     "own_p": P.latest_pct(lk["own"], 252)}
 
+    # how it moves: range, gaps, compression, participation (indices: NSE's index OHLC; stocks: the cash bhavcopy)
+    move_now, mv = None, None
+    if inst.kind == "index":
+        src = spot_raw[spot_raw.index <= asof]
+    else:
+        cash = wh.cash(inst.symbol)
+        src = cash[cash.index <= asof] if len(cash) else pd.DataFrame()
+    if len(src) > 60 and {"open", "high", "low"} <= set(src.columns) and src["open"].notna().sum() > 60:
+        mv = MV.measures(MV.prepare(src, splits if inst.kind == "stock" else (), [a["date"] for a in actions]))
+        last = mv.iloc[-1]
+        g = mv["gap"].dropna()
+        move_now = {
+            **{k: (float(last[k]) if k in mv and pd.notna(last[k]) else None)
+               for k in ("atr14", "cc21", "pk21", "gk21", "yz21", "ovn_share", "rng20", "rng20_rank", "bbw", "bbw_rank",
+                         "vol_z", "deliv", "deliv_rank", "amihud", "amihud_rank")},
+            "nr7": bool(last["nr7"]), "since": str(mv.index[0].date()),
+            "atr_rank": rank_last(mv["atr14"]),
+            "gap_p50": float(g.abs().iloc[-252:].median()) if len(g) > 60 else None,
+            "gap_p95": float(g.abs().iloc[-252:].quantile(.95)) if len(g) > 60 else None,
+            "big_gaps": [{"date": str(d.date()), "gap": float(x)} for d, x in g.iloc[-252:].abs().sort_values().tail(6)[::-1].items()
+                         if pd.notna(x)],
+            "study": MV.compression_study(mv, iv30),
+        }
+        move_now["big_gaps"] = [dict(x, gap=float(g.loc[pd.Timestamp(x["date"])])) for x in move_now["big_gaps"]]
+
     # the expiry in front, and what past expiries did (raw prices: strikes are raw)
     xfront = X.front(opt, t, asof, float(raw_close.iat[-1]))
     if xfront is not None:
@@ -262,6 +297,10 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
             df[c] = ghist[c]
     if link is not None:
         df["own"], df["beta_n"] = lk["own"], lk["beta_n"]
+    if mv is not None:
+        for c in ("atr14", "cc21", "gk21", "yz21", "ovn_share", "rng20_rank", "bbw_rank", "vol_z", "deliv", "amihud", "gap"):
+            if c in mv:
+                df["mv_" + c] = mv[c]
     df["pcr_oi"] = pcr["pcr_oi"]
     df["pcr_vol"] = pcr["pcr_vol"]
     df["opt_oi"] = pcr["opt_oi"]
@@ -468,7 +507,9 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     cols = [c for c in ["close", "iv30", "iv_front", "rv21", "rv5", "rv63", "pk21", "fwd_rv21", "vrp", "rr25",
                         "pcr_oi", "pcr_vol", "opt_oi", "carry", "basis", "fut_oi", "roll_share", "vix",
                         "implied_move", "gamma_call", "gamma_put", "gamma_net", "iv60", "iv90", "term_60_30",
-                        "iv_m1", "iv_m2", "iv_m3", "rr_m1", "rr_m2", "rr_m3", "days_m1", "cal_spread", "cal_carry", "own", "beta_n"] if c in df]
+                        "iv_m1", "iv_m2", "iv_m3", "rr_m1", "rr_m2", "rr_m3", "days_m1", "cal_spread", "cal_carry", "own", "beta_n",
+                        "mv_atr14", "mv_cc21", "mv_gk21", "mv_yz21", "mv_ovn_share", "mv_rng20_rank", "mv_bbw_rank",
+                        "mv_vol_z", "mv_deliv", "mv_amihud", "mv_gap"] if c in df]
     out = {
         "meta": {"symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
                  "exchange": inst.exchange, "asof": str(asof.date()), "since": since, "splits": splits, "actions": actions,
@@ -479,7 +520,7 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "story": story, "cards": cards, "series": series(df, cols),
         "term": term, "smiles": smiles, "cone": cone, "scorecard": score,
         "scorecard_series": series(sc_series.set_index("date"), ["implied_move", "realised"]) if sc_series is not None and len(sc_series) else None,
-        "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "link": link, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
+        "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "link": link, "movement": move_now, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
         "big_days": E.big_days(ret), "changes": changes, "rules": rules,
     }
     return clean(out)

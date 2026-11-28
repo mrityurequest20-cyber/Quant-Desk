@@ -430,7 +430,7 @@ async function pageMethod(app) {
 }
 
 // ---------------------------------------------------------------- symbol pages
-const TABS = [["overview", "Overview"], ["vol", "Volatility"], ["move", "Expected move"], ["oi", "Options positions"], ["futures", "Futures"], ["events", "Events & history"]];
+const TABS = [["overview", "Overview"], ["vol", "Volatility"], ["move", "Expected move"], ["movement", "How it moves"], ["oi", "Options positions"], ["futures", "Futures"], ["events", "Events & history"]];
 
 async function pageSymbol(app, ov, sl, tab = "overview") {
   const u = ov.universe.find((x) => x.slug === sl);
@@ -443,7 +443,7 @@ async function pageSymbol(app, ov, sl, tab = "overview") {
   const head = `<div class="page-h"><div><h1>${esc(u.symbol)} <span class="muted" style="font-weight:500;font-size:16px">${esc(u.name)}</span></h1>
       <div class="sub">${esc(u.sector || "")} · ${d.meta.exchange} · history since ${d.meta.since} · as of ${d.meta.asof}</div></div>${["overview", "events"].includes(tab) ? "" : horizonSeg()}</div>
     <div class="tabs">${TABS.map(([k, l]) => `<a href="#/sym/${sl}/${k}" class="${k === tab ? "on" : ""}">${l}</a>`).join("")}</div>`;
-  const body = { overview: symOverview, vol: symVol, move: symMove, oi: symOI, futures: symFutures, events: symEvents }[tab] || symOverview;
+  const body = { overview: symOverview, vol: symVol, move: symMove, movement: symMovement, oi: symOI, futures: symFutures, events: symEvents }[tab] || symOverview;
   const st = d.meta.stale || {};
   const stNames = { iv30: "implied vol", rr25: "skew", implied_move: "priced move", term: "term structure", pcr_oi: "put/call ratio", carry: "carry", rv21: "realised vol", vrp: "premium" };
   const stList = Object.entries(st).filter(([k]) => stNames[k]);
@@ -596,6 +596,54 @@ function symMove(el, d, u) {
       series: [{ type: "scatter", data: pts, symbolSize: 6, itemStyle: { color: t.s1, opacity: .55 } },
         { type: "line", data: [[0, 0], [mx, mx]], showSymbol: false, lineStyle: { color: t.s2, type: "dashed", width: 1.5 }, silent: true, tooltip: { show: false } }] });
   }
+}
+
+// ---- how it moves: range, gaps, compression, participation (engine/movement.py) ----
+function symMovement(el, d, u) {
+  const m = d.movement, t = theme();
+  if (!m) { el.innerHTML = `<div class="callout">No daily high-low data for ${u.symbol} yet: the cash-market table starts with the warehouse's next update.</div>`; return; }
+  const st = m.study, stock = u.kind === "stock";
+  const swing = fin(m.yz21) && fin(m.cc21) ? m.yz21 / m.cc21 : null;
+  const tiles = `<div class="grid g4">
+    ${kpi({ label: "Average true range (14d)", value: pct(m.atr14, 2), foot: `a typical day's full swing · ${fin(m.atr_rank) ? ord(m.atr_rank) + " percentile of 1y" : ""}` })}
+    ${kpi({ label: "Range vol vs close vol", value: fin(swing) ? swing.toFixed(2) + "×" : "—", foot: `Yang-Zhang ${pct(m.yz21, 1)} vs close-to-close ${pct(m.cc21, 1)}` })}
+    ${kpi({ label: "Overnight share of variance", value: pct(m.ovn_share, 0), foot: "the part an option seller cannot hedge (63d)" })}
+    ${kpi({ label: "20-day range", value: pct(m.rng20, 1), foot: `${ord(m.rng20_rank)} percentile of 1y${m.nr7 ? " · NR7 today" : ""}` })}
+  </div>`;
+  const comp = fin(m.rng20_rank) && m.rng20_rank <= 0.2 ? "compressed" : fin(m.rng20_rank) && m.rng20_rank >= 0.8 ? "wide" : "normal";
+  const studyTxt = st ? `Since ${st.since}, after compressed days (20-day range in the bottom fifth of its year) the next ${st.horizon} sessions' realised vol was ${st.raw_comp.toFixed(2)}× the recent vol, against ${st.raw_other.toFixed(2)}× after other days: ${st.raw_comp > st.raw_other ? "quiet spells do tend to end" : "no rebound shows even in raw terms"}. But measured against what options priced that day, it was ${st.z_comp.toFixed(2)}× the 30-day IV after compression and ${st.z_other.toFixed(2)}× otherwise (block-permutation p = ${st.p.toFixed(2)} for 'bigger after compression'). ${st.p < 0.05 ? "Compression has been followed by more movement than options priced." : "The rebound is ordinary volatility mean-reversion, and options already price it: compression is not an edge on its own."}` : "Not enough history to test compression here.";
+  el.innerHTML = `${tiles}
+    <div class="grid g2" style="margin-top:16px">
+      ${card({ title: "How big the days are", hint: "annualised, 21 sessions", cls: "span2",
+        simple: `${u.symbol}'s daily swings, measured four ways. ${fin(swing) ? (swing > 1.1 ? "The range estimators run above close-to-close: the days swing more than where they settle." : swing < 0.9 ? "Close-to-close runs above the range estimators: big closing moves and gaps, more than intraday swings." : "The four agree: the days settle about as far as they swing.") : ""}`,
+        analyst: "Close-to-close: standard deviation of daily log returns. Parkinson: from the high-low range only. Garman-Klass: adds open-to-close. Yang-Zhang: adds the overnight gap and is unbiased under drift; it is the one to set against an option's implied vol. Split-adjusted; a demerger day is left out.",
+        body: `<div class="chart" id="mvEst"></div><div class="legend"><span style="--c:${t.s1}">Close-to-close</span><span style="--c:${t.s2}">Yang-Zhang</span><span style="--c:${t.s3}">Garman-Klass</span></div>` })}
+      ${card({ title: "Gaps", hint: "open against the previous close",
+        simple: `Over the past year the median gap was ${pct(m.gap_p50, 2)} and one day in twenty opened ${pct(m.gap_p95, 2)} or more away. Overnight carries ${pct(m.ovn_share, 0)} of the variance.`,
+        analyst: "Overnight share: variance of log(open / previous close) over the variance of that plus log(close / open), 63 sessions.",
+        body: `<div class="chart" id="mvGap" style="height:200px"></div><div class="tbl-wrap" style="margin-top:8px"><table class="tbl"><thead><tr><th>Biggest gaps of the year</th><th>Gap</th></tr></thead><tbody>
+          ${(m.big_gaps || []).map((g) => `<tr><td class="num">${g.date}</td><td class="num"><span class="chg ${g.gap >= 0 ? "pos" : "neg"}">${vp(g.gap, 2)}%</span></td></tr>`).join("")}</tbody></table></div>` })}
+      ${card({ title: "Compression", hint: "20-day range and band width, ranked against the past year",
+        simple: `The 20-day range is ${comp} for ${u.symbol} (${ord(m.rng20_rank)} percentile). ${studyTxt}`,
+        body: `<div class="chart" id="mvComp"></div><div class="legend"><span style="--c:${t.s7}">20-day range rank</span><span style="--c:${t.s1}">Band-width rank</span></div>` })}
+      ${stock ? card({ title: "Participation", hint: "volume, delivery and liquidity", cls: "span2",
+        simple: `Volume today is ${fin(m.vol_z) ? (m.vol_z >= 0 ? "+" : "") + m.vol_z.toFixed(1) + " standard deviations" : "—"} against its last 63 sessions; ${pct(m.deliv, 0)} of the traded shares were taken for delivery (${ord(m.deliv_rank)} percentile of its year). Descriptive: delivery shows how much of the day's trade was not day-trading, not who was right.`,
+        analyst: `Amihud illiquidity (median absolute return per Rs crore traded, 63 sessions): ${fin(m.amihud) ? m.amihud.toFixed(3) : "—"} bp per crore, ${ord(m.amihud_rank)} percentile of its year (higher: a rupee moves the price more). From NSE's cash-market bhavcopy, since ${m.since}.`,
+        body: `<div class="chart" id="mvPart"></div><div class="legend"><span style="--c:${t.s1}">Volume z-score</span><span style="--c:${t.s2}">Delivery %</span></div>` }) : ""}
+    </div>`;
+  const s = slice(d.series, ["mv_cc21", "mv_yz21", "mv_gk21", "mv_gap", "mv_rng20_rank", "mv_bbw_rank", "mv_vol_z", "mv_deliv"]);
+  const tip = (f) => ({ trigger: "axis", valueFormatter: f, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } });
+  chart("#mvEst", { tooltip: tip((v) => pct(v, 1)), xAxis: axisX(s.d, t), yAxis: axisY(t, fmtPct(0)),
+    series: [line("Close-to-close", s.mv_cc21, t.s1), line("Yang-Zhang", s.mv_yz21, t.s2), line("Garman-Klass", s.mv_gk21, t.s3, { lineStyle: { width: 1.2, color: t.s3 } })] });
+  chart("#mvGap", { grid: { left: 52, right: 18, top: 12, bottom: 26 }, tooltip: tip((v) => vp(v, 2) + "%"), xAxis: axisX(s.d, t, { boundaryGap: true }), yAxis: axisY(t, (v) => (v * 100).toFixed(1) + "%"),
+    series: [{ name: "Gap", type: "bar", data: (s.mv_gap || []).map((v) => ({ value: v, itemStyle: { color: fin(v) && v < 0 ? t.dneg : t.dpos } })), barCategoryGap: "10%" }] });
+  chart("#mvComp", { tooltip: tip((v) => ord(v)), xAxis: axisX(s.d, t), yAxis: axisY(t, fmtPct(0), { min: 0, max: 1, scale: false }),
+    series: [line("20-day range rank", s.mv_rng20_rank, t.s7, { connectNulls: false, markArea: { silent: true, itemStyle: { color: t.dpos, opacity: .08 }, data: [[{ yAxis: 0 }, { yAxis: 0.2 }]] } }),
+      line("Band-width rank", s.mv_bbw_rank, t.s1, { connectNulls: false, lineStyle: { width: 1.2, color: t.s1 } })] });
+  if (stock && $("#mvPart")) chart("#mvPart", { grid: { left: 52, right: 52, top: 16, bottom: 26 }, tooltip: { trigger: "axis", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } }, xAxis: axisX(s.d, t, { boundaryGap: true }),
+    yAxis: [axisY(t, (v) => v.toFixed(1)), axisY(t, fmtPct(0), { position: "right", splitLine: { show: false } })],
+    series: [{ name: "Volume z", type: "bar", data: (s.mv_vol_z || []).map((v) => ({ value: v, itemStyle: { color: fin(v) && v >= 2 ? t.s4 : t.s1, opacity: .7 } })), barCategoryGap: "10%" },
+      line("Delivery %", s.mv_deliv, t.s2, { yAxisIndex: 1, lineStyle: { width: 1.2, color: t.s2 } })] });
 }
 
 function symOI(el, d, u) {
