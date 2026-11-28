@@ -7,6 +7,8 @@ Tables (one file per period, `{table}_{period}.parquet`):
                            active strikes, ATM straddle, futures volume/OI (the same bhavcopy file)
   fo_stock_opts     month  every F&O stock's options and futures, daily, in fo_bhav's columns: the nearest two
                            expiries, strikes within ±30% that traded or are open (the same file, kept, not discarded)
+  cm_bhav           month  the cash market's day by security (equity series): OHLC, volume, turnover, trades, delivered
+                           quantity and delivery %, from NSE's sec_bhavdata_full (published from 30 Sep 2019)
   fo_stock_far      month  the same for each stock's third expiry, the far month (with fo_stock_opts: current, near and
                            far month). Its own table so fo_stock_opts' readers and studies see exactly what they did
   bse_fo_bhav       month  BSE's index futures and options (SENSEX, BANKEX), daily, in fo_bhav's columns (from 2024)
@@ -42,19 +44,28 @@ TABLES = {                                   # table → (period, key columns, d
     "fo_stocks": ("month", ["date", "symbol"], "date"),
     "fo_stock_opts": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
     "fo_stock_far": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
+    "cm_bhav": ("month", ["date", "symbol", "series"], "date"),
     "bse_fo_bhav": ("month", ["date", "symbol", "kind", "expiry", "strike"], "date"),
     "nse_index_close": ("year", ["date", "index"], "date"),
     "participant_oi": ("year", ["date", "participant"], "date"),
     "participant_vol": ("year", ["date", "participant"], "date"),
     "fii_dii": ("year", ["date", "category"], "date"),
+    "global_daily": ("year", ["date", "ticker"], "date"),
     "gift_nifty": ("year", ["ts"], "ts"),
     "corp_events": ("year", ["date", "symbol", "purpose"], "date"),
     "nse_holidays": ("year", ["date"], "date"),
     "manifest": ("year", ["table", "date"], "date"),
 }
 DATE_COLS = ("date", "expiry")
-DAILY_FILES = ("fo_bhav", "fo_stocks", "fo_stock_opts", "fo_stock_far", "bse_fo_bhav", "nse_index_close", "participant_oi",
+DAILY_FILES = ("fo_bhav", "fo_stocks", "fo_stock_opts", "fo_stock_far", "cm_bhav", "bse_fo_bhav", "nse_index_close", "participant_oi",
                "participant_vol")
+# Sessions NSE held on a Saturday or Sunday (Muhurat trading, Budget days, disaster-recovery drill days), found by
+# reading every weekend's cash bhavcopy since 2019 and keeping the ones whose rows carry that day's own date (on other
+# weekends and holidays the archive serves a copy of the session before). A weekday list never asks for them, so every
+# table missed them. New ones are found by update() itself (weekend_sessions), this list is the history.
+SPECIAL_SESSIONS = (dt.date(2019, 10, 27), dt.date(2020, 2, 1), dt.date(2020, 11, 14), dt.date(2023, 11, 12),
+                    dt.date(2024, 1, 20), dt.date(2024, 3, 2), dt.date(2024, 5, 18), dt.date(2025, 2, 1),
+                    dt.date(2026, 2, 1), dt.date(2026, 11, 8))
 SETTLE_DAYS = 3                              # a file still missing this many days later is taken as never coming
 
 
@@ -143,6 +154,27 @@ class Warehouse:
 
 
 # ---- filling it ---------------------------------------------------------------------------------------------------
+def weekend_sessions(nse, start: dt.date, end: dt.date, today: dt.date, say=print, max_days: int = 21) -> list[dt.date]:
+    """Weekend days in a short recent range (a nightly run's) on which NSE held a session: its cash bhavcopy for that
+    day exists and carries that day's own date. A long backfill does not probe every weekend (SPECIAL_SESSIONS holds
+    the history). One small request per weekend day; any failure means no session."""
+    if (end - start).days > max_days:
+        return []
+    found = []
+    for d in pd.date_range(start, end):
+        d = d.date()
+        if d.weekday() < 5 or d in SPECIAL_SESSIONS or d > today or d < N.CM_BHAV_FROM:      # the probe file's archive starts then
+            continue
+        try:
+            b, _ = nse.cm_bhav(d)
+            N.parse_cm_bhav(b, d)                                          # raises NotPublished on a copy of another day
+            found.append(d)
+            say(f"  a weekend session on {d}: fetched like a weekday")
+        except Exception:                                                  # noqa: BLE001 - absent, a copy, or unreadable: no session
+            continue
+    return found
+
+
 def _settled(man: pd.DataFrame, table: str, today: dt.date) -> set[dt.date]:
     """Days a table needs nothing more for: fetched, or confirmed absent (NSE still had nothing SETTLE_DAYS later)."""
     if man.empty:
@@ -162,9 +194,11 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
     reaches today. Returns counts per table."""
     sim = today is not None
     today = today or pd.Timestamp.now(tz=IST).date()
-    only = only or set(DAILY_FILES) | {"fii_dii", "gift_nifty", "corp_events", "nse_holidays"}
+    only = only or set(DAILY_FILES) | {"fii_dii", "gift_nifty", "corp_events", "nse_holidays", "global_daily"}
     holidays = holidays or set()
     days = [d.date() for d in pd.bdate_range(start, min(end, today)) if d.date() not in holidays]
+    days = sorted(set(days) | {d for d in SPECIAL_SESSIONS if start <= d <= min(end, today)}
+                  | set(weekend_sessions(nse, start, min(end, today), today, say)))
     man = wh.read("manifest")
     counts: dict[str, int] = {}
     stamp = (lambda: pd.Timestamp(today, tz=IST)) if sim else (lambda: pd.Timestamp.now(tz=IST))   # noqa: E731
@@ -174,6 +208,7 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
                 "fo_stocks": (nse.fo_bhav, N.parse_fo_stocks),
                 "fo_stock_opts": (nse.fo_bhav, N.parse_fo_stock_opts),
                 "fo_stock_far": (nse.fo_bhav, N.parse_fo_stock_far),
+                "cm_bhav": (nse.cm_bhav, N.parse_cm_bhav),
                 "bse_fo_bhav": (bse.fo_bhav if bse else None, B.parse_fo_bhav),
                 "nse_index_close": (nse.index_close, N.parse_index_close),
                 "participant_oi": (lambda d: nse.participant("oi", d), N.parse_participant),
@@ -181,7 +216,8 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
     for table in [t for t in DAILY_FILES if t in only]:
         fetch, parse = fetchers[table]
         done = set() if refetch else _settled(man, table, today)    # refetch: parse the range again (new columns)
-        todo = [d for d in days if d not in done and (table != "bse_fo_bhav" or d >= B.BSE_FROM)]
+        todo = [d for d in days if d not in done and (table != "bse_fo_bhav" or d >= B.BSE_FROM)
+                and (table != "cm_bhav" or d >= N.CM_BHAV_FROM)]                  # nothing to ask for before the archive starts
         if not todo:
             continue
         say(f"  {table}: {len(todo)} day(s) to fetch, {todo[0]} → {todo[-1]}")
@@ -211,7 +247,53 @@ def update(wh: Warehouse, nse: N.NSE, start: dt.date, end: dt.date, only: set[st
                     on_checkpoint()
     if end >= today - dt.timedelta(days=1):
         _snapshots(wh, nse, only, counts, say)
+    if "global_daily" in only:
+        _globals(wh, start, min(end, today), counts, say, stamp)
     return counts
+
+
+# the international benchmarks MarketLens reads beside Indian markets (commodities against MCX, the dollar, US rates)
+GLOBAL_TICKERS = {"CL=F": "WTI crude", "BZ=F": "Brent crude", "GC=F": "COMEX gold", "SI=F": "COMEX silver",
+                  "HG=F": "COMEX copper", "NG=F": "Henry Hub gas", "DX-Y.NYB": "Dollar index", "^TNX": "US 10-year yield",
+                  "INR=X": "USDINR", "^VIX": "CBOE VIX", "ES=F": "S&P 500 futures"}
+GLOBAL_FROM = dt.date(2019, 1, 1)
+
+
+def _globals(wh: Warehouse, start: dt.date, end: dt.date, counts: dict, say, stamp, history=None) -> None:
+    """Daily OHLC of the international benchmarks from Yahoo (yfinance). Not an exchange's own file: every row carries
+    its source and fetch time, and a ticker Yahoo will not serve is skipped and said, never filled. On a table that is
+    still empty the whole history from GLOBAL_FROM is read once; after that, the run's range less a week of overlap
+    (Yahoo revises the last bar after the close)."""
+    if history is None:
+        def history(tk, a, b):
+            import yfinance as yf
+            return yf.Ticker(tk).history(start=a.isoformat(), end=(b + dt.timedelta(days=1)).isoformat(), interval="1d", auto_adjust=False)
+    have = wh.read("global_daily")
+    a = GLOBAL_FROM if have.empty else max(GLOBAL_FROM, start - dt.timedelta(days=7))
+    rows = []
+    for tk, name in GLOBAL_TICKERS.items():
+        try:
+            h = history(tk, a, end)
+        except Exception as exc:                                       # noqa: BLE001 - one ticker failing skips only itself
+            say(f"  global_daily {tk}: {exc!s:.160}")
+            continue
+        if h is None or len(h) == 0:
+            say(f"  global_daily {tk}: nothing served")
+            continue
+        h = h.rename(columns=str.lower)
+        idx = pd.to_datetime(h.index)
+        idx = idx.tz_localize(None) if idx.tz is not None else idx
+        df = pd.DataFrame({"date": idx.normalize(), "ticker": tk, "name": name,
+                           **{c: pd.to_numeric(h[c], errors="coerce").to_numpy() for c in ("open", "high", "low", "close", "volume") if c in h}})
+        df = df[(df["close"] > 0) & (df["date"].dt.date <= end)]
+        df["source"] = "yahoo"
+        df["fetched"] = stamp()
+        rows.append(df)
+    if rows:
+        df = pd.concat(rows, ignore_index=True)
+        wh.upsert("global_daily", df)
+        counts["global_daily"] = len(df)
+        say(f"  global_daily: {len(df):,} rows, {df['ticker'].nunique()} tickers, {df['date'].min().date()} → {df['date'].max().date()}")
 
 
 def _snapshots(wh: Warehouse, nse: N.NSE, only: set[str], counts: dict, say) -> None:

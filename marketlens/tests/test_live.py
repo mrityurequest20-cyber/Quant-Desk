@@ -198,3 +198,75 @@ def test_a_delayed_chain_is_read_with_its_age_and_a_stale_one_is_not():
     assert run({}) == []                                                   # prices-only age limit: no chain
     assert run({"optMaxAge": 480}) == [{"ok": True, "age": 300}]
     assert run({"optMaxAge": 240}) == []
+
+
+def test_option_names_match_the_feed():
+    r = run_js("console.log(JSON.stringify([L.optName('NIFTY','2026-12-08',25450,'PE'), L.optName('RELIANCE','2027-01-25',1402.5,'CE'), L.optName('M&M','2026-12-29',3200,'CE')]));")
+    assert r == ["NIFTY08DEC2625450PE", "RELIANCE25JAN271402.5CE", "M&M29DEC263200CE"]
+    # and the parser reads them back to the same expiry and strike
+    q = {n: {"ltp": 10, "vol": 1, "oi": 1, "age_s": 1} for n in r}
+    back = run_js(f"const c = L.chains({json.dumps(q)}, 'NIFTY', 120); console.log(JSON.stringify(Object.keys(c).map(e => [e, c[e][0].K, c[e][0].right])));")
+    assert back == [["2026-12-08", 25450, "PE"]]
+
+
+def test_intraday_straddle_recovers_the_vol_minute_by_minute():
+    """A straddle priced at a known vol each minute reads back that vol; a stale leg leaves its minutes out."""
+    K, F, sig, exp = 1000.0, 1002.0, 0.18, "2026-12-03"
+    start = int(pd.Timestamp("2026-11-27 09:15", tz="Asia/Kolkata").timestamp() // 60)
+    calls, puts = [], []
+    for i in range(0, 60):
+        m = start + i
+        T = max((pd.Timestamp(f"{exp} 15:30", tz="Asia/Kolkata").timestamp() - m * 60) / 60, 1) / (365 * 1440)
+        c = float(V._b76(F, K, T, sig, np.array(True)))
+        p = float(V._b76(F, K, T, sig, np.array(False)))
+        calls.append([m, c])
+        if i < 30 or i >= 50:                                   # the put stops printing for 20 minutes
+            puts.append([m, p])
+    r = run_js(f"console.log(JSON.stringify(L.intraday({json.dumps(calls)}, {json.dumps(puts)}, {K}, '{exp}')));")
+    assert len(r["minute"]) == 60 - 10                          # minutes 40..49: the put's last print is over 10 minutes old
+    both = {m for m, _ in puts}                                 # minutes where both legs printed (30..39 carry a put up to 9 min old)
+    fresh = [i for i, m in enumerate(r["minute"]) if m in both]
+    assert len(fresh) == 40
+    assert all(r["iv"][i] == pytest.approx(sig, abs=1e-5) for i in fresh)     # the vol it was priced at
+    assert all(r["F"][i] == pytest.approx(F, abs=1e-6) for i in fresh)       # parity at the strike gives the forward back
+
+
+def test_the_contract_expiring_today_is_kept_for_the_expiry_view_only():
+    day = pd.Timestamp("2026-11-26")
+    df = _chain(day, 1000.0, {day: 0.5, pd.Timestamp("2026-12-29"): 0.16})
+    q = quotes_from_chain(df[df["date"] == day], "X")
+    now_ms = int(pd.Timestamp("2026-11-26 11:00", tz="Asia/Kolkata").timestamp() * 1000)
+    r = run_js(f"const r = L.readUnderlying({json.dumps(q)}, 'X', {{nowMs: {now_ms}, maxAge: 120}});"
+               "console.log(JSON.stringify({exp: r.expiries.map(e => e.expiry), today: r.expiring ? r.expiring.expiry : null, n: r.expiring ? r.expiring.strikes.length : 0}));")
+    assert r["exp"] == ["2026-12-29"] and r["today"] == "2026-11-26" and r["n"] > 10
+
+
+def test_live_max_pain_matches_end_of_day():
+    from marketlens.engine import expiry as X
+    rng = np.random.default_rng(3)
+    K = [float(k) for k in range(900, 1101, 10)]
+    oi = pd.DataFrame({"strike": K, "oi_c": rng.integers(0, 9000, len(K)).astype(float), "oi_p": rng.integers(0, 9000, len(K)).astype(float)})
+    by = {str(int(k)): {"CE": {"oi": c}, "PE": {"oi": p}} for k, c, p in zip(K, oi["oi_c"], oi["oi_p"])}
+    js = run_js(f"console.log(JSON.stringify(L.maxPain({json.dumps(K)}, {json.dumps(by)})));")
+    assert js == X.max_pain(oi)
+
+
+def test_mcx_options_read_on_the_future_to_the_2330_close():
+    """An MCX chain: no spot, the future (CRUDEOIL-MCX) stands in; time runs to 23:30 on the expiry day; a quoted future
+    of an earlier month than the options' own underlying does not anchor the forward."""
+    day = pd.Timestamp("2026-11-26")
+    df = _chain(day, 7700.0, {pd.Timestamp("2026-12-16"): 0.45})
+    q = quotes_from_chain(df[(df["date"] == day) & (df["kind"] != "FUT")], "CRUDEOIL")
+    now_ms = int(pd.Timestamp("2026-11-26 21:00", tz="Asia/Kolkata").timestamp() * 1000)
+    fwd = float(df[df["kind"] == "FUT"]["close"].iat[0])
+    q["CRUDEOIL-MCX"] = {"ltp": fwd, "age_s": 2, "e": "2026-12-18", "s": "mcx"}
+    run = lambda qq, extra="": run_js(f"const r = L.readUnderlying({json.dumps(qq)}, 'CRUDEOIL', {{nowMs: {now_ms}, maxAge: 120, futName: 'CRUDEOIL-MCX', closeHHMM: '23:30'{extra}}});"
+                                     "console.log(JSON.stringify({spot: r.spot, e: r.expiries.map(e => ({ok: e.ok, why: e.why || null, T: e.T, atm: e.atm_iv}))}))")
+    r = run(q)
+    assert r["spot"] == pytest.approx(fwd) and r["e"][0]["ok"] and r["e"][0]["atm"] == pytest.approx(0.45, abs=0.01)
+    T_2330 = (pd.Timestamp("2026-12-16 23:30", tz="Asia/Kolkata") - pd.Timestamp("2026-11-26 21:00", tz="Asia/Kolkata")).total_seconds() / (365 * 86400)
+    assert r["e"][0]["T"] == pytest.approx(T_2330, rel=1e-9)
+    q["CRUDEOIL-MCX"] = {"ltp": fwd * 1.06, "age_s": 2, "e": "2026-12-18", "s": "mcx"}       # same month, 6% away: refused
+    assert not run(q)["e"][0]["ok"]
+    q["CRUDEOIL-MCX"] = {"ltp": fwd * 1.06, "age_s": 2, "e": "2026-11-30", "s": "mcx"}       # an earlier month: not an anchor
+    assert run(q)["e"][0]["ok"]

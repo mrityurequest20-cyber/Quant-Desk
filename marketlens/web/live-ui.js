@@ -17,7 +17,8 @@
                                     // an older one than MAX_AGE is shown with its age, never as if it were this second's
   const chainAge = (e) => (e && e.age > MAX_AGE ? ` · options ${Math.round(e.age / 60)} min old` : "");
   const KEY = "qd.livekey";
-  const L = { mode: "init", reads: {}, at: null, feedAge: null, timer: null, note: "", busy: false };
+  const L = { mode: "init", reads: {}, at: null, feedAge: null, timer: null, note: "", busy: false, intra: {} };
+  const INTRA_MS = 60000;           // the minute series change once a minute: fetched at most that often per contract
   const key = () => { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } };
   const today = () => LiveCore.istDate(Date.now());
 
@@ -33,7 +34,13 @@
       if (r.status === 503) { L.mode = "error"; L.note = "The live relay is switched off on the Worker."; return paint(); }
       if (!r.ok) { L.mode = "error"; L.note = "The live relay answered " + r.status + "."; return paint(); }
       const snap = await r.json();
-      const ov = window.MLState && window.MLState.overview;
+      const ov0 = window.MLState && window.MLState.overview;
+      if (ov0 && !L.liveBase) {                         // the close-of-day baseline: its own file, loaded once live mode is on
+        try { const b = await fetch("data/live_base.json", { cache: "no-cache" }); L.liveBase = b.ok ? await b.json() : {}; } catch (e) { L.liveBase = {}; }
+      }
+      const ov = ov0 ? { ...ov0, live_base: L.liveBase || {} } : null;
+      mcxRead(snap.quotes || {});                       // MCX keeps its own clock: it trades to 23:30, after NSE closes
+      notify(snap.quotes || {});                        // the alert rules, while the app is open (alertrules.js)
       const nifty = snap.quotes && snap.quotes.NIFTY;
       L.feedAge = nifty ? nifty.age_s : null;
       L.at = Date.now();
@@ -85,9 +92,11 @@
     }
     el.innerHTML = render(ctx);
     if (ctx.kind === "symbol") charts(ctx.tab, ctx.u);
+    if (ctx.kind === "commodities") mcxCharts();
     if (typeof renderNav === "function" && ctx.ov) renderNav(ctx.ov, "#/" + (location.hash.replace(/^#\/?/, "") || "pulse").split("/").slice(0, 2).join("/"));
   }
   function render(ctx) {
+    if (ctx.kind === "commodities") return mcxPanel(ctx);
     return ctx.kind === "pulse" ? pulse(ctx.ov) : ctx.kind === "screener" ? screener(ctx.ov) : ctx.kind === "symbol" ? symbol(ctx.d, ctx.u, ctx.tab) : "";
   }
   function pill() {
@@ -106,6 +115,99 @@
     if (k && k.trim().length >= 24) { try { localStorage.setItem(KEY, k.trim()); } catch (e) {} L.note = ""; poll(true); }
   }
 
+  // ---- alerts in the browser: the same rules as the Worker's, a notification for each new one today ----
+  L.alertRules = null;
+  async function loadRules() {
+    try {
+      const r = await fetch("/live/alerts", { headers: { Authorization: "Bearer " + key() }, cache: "no-store" });
+      L.alertRules = r.ok ? (await r.json()).rules || [] : [];
+    } catch (e) { L.alertRules = []; }
+  }
+  function notify(quotes) {
+    if (typeof AlertRules === "undefined" || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const ov0 = window.MLState && window.MLState.overview;
+    if (!ov0 || !L.liveBase) return;
+    const ov = { ...ov0, live_base: L.liveBase };
+    if (L.alertRules === null) { loadRules(); return; }
+    const now = Date.now(), ist = new Date(now + 19800000), hm = ist.getUTCHours() * 60 + ist.getUTCMinutes(), wd = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5;
+    const due = AlertRules.evaluate(quotes, ov, L.alertRules, now, { nse: L.mode === "live", mcx: wd && hm >= 545 && hm <= 1410, eod: false });
+    let seen = [];
+    try { seen = JSON.parse(localStorage.getItem("ml.alerts.seen") || "[]"); } catch (e) {}
+    const day = LiveCore.istDate(now), keep = seen.filter((k) => k.slice(0, 10) === day), have = new Set(keep);
+    const fresh = due.filter((a) => !have.has(a.key)).slice(0, 4);
+    fresh.forEach((a) => { try { new Notification("MarketLens: " + a.title, { body: a.body, tag: a.key }); } catch (e) {} });
+    if (fresh.length) try { localStorage.setItem("ml.alerts.seen", JSON.stringify([...keep, ...fresh.map((a) => a.key)])); } catch (e) {}
+  }
+
+  // ---- MCX: every watchlist commodity's future and option chain, read with LiveCore on the future ----
+  const MCX = ["CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI", "GOLD", "GOLDM", "SILVER", "SILVERM", "COPPER"];
+  const MCX_OPEN = 9 * 60, MCX_CLOSE = 23 * 60 + 30;
+  L.mcx = { at: null, reads: {}, live: false, sel: "CRUDEOIL" };
+  function mcxRead(quotes) {
+    const now = Date.now(), reads = {};
+    for (const c of MCX) {
+      const fq = quotes[c + "-MCX"];
+      if (!fq) continue;
+      const r = LiveCore.readUnderlying(quotes, c, { nowMs: now, maxAge: MAX_AGE, optMaxAge: OPT_MAX_AGE, futName: c + "-MCX", closeHHMM: "23:30" });
+      const front = r.expiries.find((e) => e.ok) || null;
+      const any = r.expiries[0] || null;
+      const chain = front || any;
+      reads[c] = { r, fut: fq, front, gamma: chain && r.spot ? LiveCore.gammaMap({ expiries: front ? [front] : [] }, r.spot, null, 0.08, 0.05) : null,
+        maxPain: chain ? LiveCore.maxPain(chain.strikes, chain.by) : null, walls: front ? LiveCore.walls(front, r.spot) : null };
+    }
+    L.mcx.reads = reads;
+    L.mcx.at = now;
+    L.mcx.live = Object.values(reads).some((x) => x.fut && x.fut.age_s <= MAX_AGE);
+    if (window.MLLiveCtx && window.MLLiveCtx.kind === "commodities") refresh();
+  }
+  function mcxPanel(ctx) {
+    const C = (ctx.C && ctx.C.contracts) || {}, R = L.mcx.reads, ist = new Date(Date.now() + 19800000), mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+    if (L.mode === "nokey") return `<div class="callout">Live MCX panels need your live key on this device. <a href="#" onclick="MLLive.askKey();return false"><b>Add it</b></a>.</div>`;
+    if (!Object.keys(R).length) return `<div class="callout">No MCX prices from the relay yet${L.mode === "error" ? `: ${L.note || "the relay did not answer"}` : ""}.</div>`;
+    const open = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5 && mins >= MCX_OPEN && mins <= MCX_CLOSE;
+    const rows = MCX.filter((c) => R[c]).map((c) => {
+      const x = R[c], fq = x.fut, fr = x.front, par = C[c] && C[c].parity, fresh = fq.age_s <= MAX_AGE;
+      const prem = fin(par) && fq.ltp > 0 ? fq.ltp / par - 1 : null;
+      return `<tr class="${c === L.mcx.sel ? "hl" : ""}" style="cursor:pointer" onclick="MLLive.mcxSelect('${c}')"><td><b>${c}</b> <span class="muted small">${fq.e || ""}</span></td>
+        <td class="num">${fq.ltp ? (fq.ltp > 1000 ? Math.round(fq.ltp).toLocaleString("en-IN") : fq.ltp.toFixed(2)) : "—"} <span class="muted small">${fresh ? "" : ago(fq.age_s)}</span></td>
+        <td class="num">${Number.isFinite(fq.chg) ? `<span class="chg ${fq.chg >= 0 ? "pos" : "neg"}">${fq.chg >= 0 ? "+" : ""}${fq.chg.toFixed(2)}%</span>` : "—"}</td>
+        <td class="num">${fr ? f.pct(fr.atm_iv) : `<span class="muted small">${(x.r.expiries[0] && x.r.expiries[0].why) || "no options in the feed"}</span>`}</td>
+        <td class="num">${fr ? "±" + f.pct(fr.move) + ` <span class="muted small">${fr.expiry.slice(5)}</span>` : "—"}</td>
+        <td class="num">${fr && Number.isFinite(fr.rr25) ? f.sgn(fr.rr25) + " pts" : "—"}</td>
+        <td class="num">${x.maxPain !== null ? Math.round(x.maxPain).toLocaleString("en-IN") : "—"}</td>
+        <td class="num">${prem !== null ? f.sgn(prem, 1) + "%" : "—"}</td></tr>`;
+    }).join("");
+    const sel = R[L.mcx.sel] || R[MCX.find((c) => R[c])], sf = sel && sel.front;
+    return `${open || L.mcx.live ? "" : `<div class="callout" style="margin-bottom:12px">MCX is closed now (it trades 9:00–23:30 IST on weekdays): these are the last prices the relay holds, with their age.</div>`}
+      <div class="grid g2">${card({ title: "MCX now", chip: L.mcx.live ? badgeMcx() : "", hint: "front option expiry · click a row for its smile and open interest", cls: "span2",
+        simple: "Each commodity's future and its options read live: the at-the-money vol, the move the straddle prices to the option expiry, skew (call minus put vol at 25 delta), max pain, and the future's premium over import parity (the international benchmark in rupees at the last close).",
+        analyst: "MCX options are options on the future, so the future stands in for the spot; time to expiry runs to the 23:30 close of the expiry day. The same reading rules as the index and stock pages (traded at-the-money pair, liquid strikes, the straddle and smile vols agreeing). Import parity is before duties, so a steady premium is normal; a change in it is the news.",
+        body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Contract</th><th>Future</th><th>Day</th><th>ATM IV</th><th>Priced move</th><th>Skew 25d</th><th>Max pain</th><th>Over parity</th></tr></thead><tbody>${rows}</tbody></table></div>` })}
+      ${sf ? card({ title: `${L.mcx.sel}: smile`, chip: badgeMcx(), hint: `${sf.expiry} · liquid traded strikes`, body: `<div class="chart" id="mcxSmile"></div>`,
+        analyst: `Forward ${Math.round(sf.F).toLocaleString("en-IN")} from put-call parity at ${sf.atm_strike}; ATM IV ${f.pct(sf.atm_iv, 2)} (the straddle's own ${f.pct(sf.straddle_iv, 2)}).` }) : ""}
+      ${sf ? card({ title: `${L.mcx.sel}: open interest and gamma`, chip: badgeMcx(), hint: "by strike, the strikes the feed carries", body: `<div class="chart" id="mcxOi"></div><div class="legend"><span style="--c:${css("--s1")}">Calls</span><span style="--c:${css("--s2")}">Puts</span></div>`,
+        simple: sel.walls ? `The biggest pile of calls is at ${sel.walls.call_wall ? Math.round(sel.walls.call_wall).toLocaleString("en-IN") : "—"}, of puts at ${sel.walls.put_wall ? Math.round(sel.walls.put_wall).toLocaleString("en-IN") : "—"}; put/call ratio ${Number.isFinite(sel.walls.pcr) ? sel.walls.pcr.toFixed(2) : "—"}.` : "" }) : ""}</div>`;
+  }
+  const ago = (s) => (s < 120 ? Math.round(s) + "s" : s < 7200 ? Math.round(s / 60) + "m" : Math.round(s / 3600) + "h") + " old";
+  const badgeMcx = () => `<span class="chip live-chip"><span class="dot live"></span>LIVE · ${L.mcx.at ? Math.round((Date.now() - L.mcx.at) / 1000) : "—"}s</span>`;
+  function mcxSelect(c) { L.mcx.sel = c; if (window.MLLiveCtx && window.MLLiveCtx.kind === "commodities") refresh(); }
+  function mcxCharts() {
+    const x = L.mcx.reads[L.mcx.sel], t = theme();
+    if (!x || !x.front) return;
+    const fr = x.front;
+    if (document.getElementById("mcxSmile")) chart("#mcxSmile", { tooltip: { trigger: "axis", valueFormatter: (v) => f.pct(v, 2), backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+      xAxis: { type: "value", scale: true, axisLabel: { color: t.text3, formatter: (v) => Math.round(v).toLocaleString("en-IN") }, splitLine: { show: false } }, yAxis: axisY(t, fmtPct(1)),
+      series: [line("IV", fr.smile.map((p) => [p[0], p[1]]), t.s1, { showSymbol: true })] });
+    if (document.getElementById("mcxOi")) {
+      const K = fr.strikes, by = fr.by;
+      chart("#mcxOi", { grid: { left: 64, right: 24, top: 10, bottom: 30 }, tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text } },
+        yAxis: { type: "category", data: K.map((k) => Math.round(k).toLocaleString("en-IN")), axisLabel: { color: t.text3, fontSize: 10 } },
+        xAxis: { type: "value", axisLabel: { color: t.text3, formatter: (v) => big(Math.abs(v)) }, splitLine: { lineStyle: { color: t.line2 } } },
+        series: [{ name: "Calls", type: "bar", stack: "x", data: K.map((k) => (by[k].CE ? by[k].CE.oi || 0 : 0)), itemStyle: { color: t.s1 } },
+          { name: "Puts", type: "bar", stack: "x", data: K.map((k) => -(by[k].PE ? by[k].PE.oi || 0 : 0)), itemStyle: { color: t.s2 } }] });
+    }
+  }
+
   // ---- what the pages show ----
   const f = { pct: (x, d = 1) => (Number.isFinite(x) ? (x * 100).toFixed(d) + "%" : "—"),
               sgn: (x, d = 1) => (Number.isFinite(x) ? (x >= 0 ? "+" : "") + (x * 100).toFixed(d) : "—"),
@@ -115,19 +217,21 @@
   // the live read of one instrument against its close: front expiry IV vs the same expiry's close, the priced move,
   // a live percentile against the past year's front-expiry IV, today's futures read, OI added today
   function summary(sym) {
-    const ov = window.MLState.overview, base = ov.live_base[sym], r = L.reads[sym];
+    const base = (L.liveBase || {})[sym], r = L.reads[sym];
     if (!base || !r) return null;
     const front = r.expiries.find((e) => e.ok);
     const closeIv = front ? (base.term.find((c) => c.expiry === front.expiry) || {}).iv : null;
     const fut = LiveCore.futuresToday(r, base.fut ? { fut: base.fut.fut, near_oi: base.fut.near_oi, fut_expiry: base.fut.fut_expiry } : null, today());
     const months = r.months || [];
+    const gb = base.gamma, gSpot = r.spot || (r.fut && r.fut.ltp) || null;
+    const gamma = gb && gSpot ? LiveCore.gammaMap(r, gSpot, gb.weights, base.kind === "index" ? 0.06 : 0.12, base.kind === "index" ? 0.05 : 0.10) : null;
     const oiBase = front ? base.oi.find((p) => p.expiry === front.expiry) : null;
     const oi = front && oiBase ? LiveCore.oiVsClose(front, oiBase) : null;
     return {
       r, front, spot: r.spot, chg: r.spotChg,
       iv: front ? front.atm_iv : null, ivClose: closeIv ?? null, ivChg: front && Number.isFinite(closeIv) ? front.atm_iv - closeIv : null,
       ivPct: front ? LiveCore.pctVsHistory(front.atm_iv, base.iv_front) : null,
-      move: front ? front.move : null, rr: front ? front.rr25 ?? null : null, fut, months, oi, base,
+      move: front ? front.move : null, rr: front ? front.rr25 ?? null : null, fut, months, gamma, oi, base,
       why: front ? null : (r.expiries[0] && r.expiries[0].why) || (r.spot === null ? "no fresh quote" : "no live options"),
       ...(() => {                                  // 30-day IV the end-of-day way, its percentile, and the premium over
         const cm = LiveCore.constantMaturity(r.expiries);       // realised vol (realised: at the last close)
@@ -211,10 +315,63 @@
   function kpiLive(label, value, foot) {
     return `<section class="card kpi"><div class="lab"><span>${label}</span>${badge()}</div><div class="val num" style="font-size:22px">${value}</div><div class="foot">${foot}</div></section>`;
   }
+  // ---- the day minute by minute: the at-the-money straddle of one contract, from the relay's minute series ----
+  function intraContract(x, u) {
+    const r = x.r, spot = r.spot || (r.fut && r.fut.ltp);
+    const pick = (exp, strikes, by) => {
+      const both = strikes.filter((k) => by[k] && by[k].CE && by[k].PE);
+      if (!both.length || !spot) return null;
+      const K = both.reduce((b, k) => (Math.abs(k - spot) < Math.abs(b - spot) ? k : b), both[0]);
+      return { expiry: exp, K, today: exp === today() };
+    };
+    if (r.expiring) { const c = pick(r.expiring.expiry, r.expiring.strikes, r.expiring.by); if (c) return c; }
+    return x.front ? pick(x.front.expiry, x.front.strikes, x.front.by) : null;
+  }
+  async function loadIntra(sym, c) {
+    const id = `${sym}|${c.expiry}|${c.K}`, have = L.intra[sym];
+    if (have && have.id === id && Date.now() - have.at < INTRA_MS) return have;
+    const get = async (n) => {
+      const res = await fetch("/live/series?name=" + encodeURIComponent(n), { headers: { Authorization: "Bearer " + key() }, cache: "no-store" });
+      if (!res.ok) throw new Error(String(res.status));
+      return (await res.json()).day || [];
+    };
+    try {
+      const [ce, pe, ul] = await Promise.all([get(LiveCore.optName(sym, c.expiry, c.K, "CE")), get(LiveCore.optName(sym, c.expiry, c.K, "PE")), get(sym).catch(() => [])]);
+      const m = (a) => a.map(([ms, px]) => [Math.floor(ms), px]);           // the relay's series are [epoch minute, close]
+      L.intra[sym] = { id, at: Date.now(), c, data: LiveCore.intraday(m(ce), m(pe), c.K, c.expiry), spot: m(ul) };
+    } catch (e) {
+      L.intra[sym] = { id, at: Date.now(), c, data: null, err: "the relay has no minute series for it yet" };
+    }
+    return L.intra[sym];
+  }
+  function intraCard(x, u) {
+    const c = intraContract(x, u);
+    if (!c) return "";
+    return card({ title: c.today ? "Expiry day, minute by minute" : "Today, minute by minute", chip: badge(), cls: "span2",
+      hint: `${c.expiry} · strike ${f.num(c.K)} (nearest the price now) · straddle and the vol it implies`,
+      simple: c.today ? `This contract settles at 15:30 today. The straddle shows the market pricing the rest of the day: it should melt towards zero unless the price is moving.` : "The at-the-money straddle through the session and the volatility it implies, minute by minute.",
+      analyst: "Built from the relay's one-close-a-minute series of the call and the put (a minute is drawn only when both legs printed within 10 minutes of it). The forward is put-call parity at this strike; the vol is Black-76 on the out-of-the-money leg at that forward, with time to the 15:30 close measured in minutes.",
+      body: `<div class="chart" id="liveIntra" style="height:280px"><div class="muted small" style="padding:20px">Loading the day's minutes…</div></div><div class="legend"><span style="--c:${css("--s1")}">Straddle</span><span style="--c:${css("--s7")}">Implied vol</span></div>` });
+  }
+  function drawIntra(sym) {
+    const el = document.getElementById("liveIntra"), it = L.intra[sym];
+    if (!el || !it) return;
+    const t = theme(), d = it.data;
+    if (!d || !d.minute.length) { el.innerHTML = `<div class="muted small" style="padding:20px">No minutes to draw yet: ${it.err || "the two legs have not both printed today"}.</div>`; return; }
+    const hm = (m) => new Date(m * 60000).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" });
+    el.innerHTML = "";
+    chart("#liveIntra", { grid: { left: 56, right: 56, top: 16, bottom: 30 }, tooltip: { trigger: "axis", backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text },
+        formatter: (ps) => { const i = ps[0].dataIndex; return `<b>${hm(d.minute[i])}</b><br>straddle ${f.num(d.straddle[i], 2)}<br>implied vol ${d.iv[i] === null ? "—" : f.pct(d.iv[i], 1)}<br>forward ${f.num(d.F[i], 1)}`; } },
+      xAxis: { type: "category", data: d.minute.map(hm), axisLabel: { color: t.text3 }, axisLine: { lineStyle: { color: t.line } } },
+      yAxis: [axisY(t, (v) => f.num(v)), axisY(t, (v) => (v * 100).toFixed(1) + "%", { position: "right", splitLine: { show: false } })],
+      series: [line("Straddle", d.straddle, t.s1), line("Implied vol", d.iv, t.s7, { yAxisIndex: 1, lineStyle: { width: 1.5, color: t.s7 } })] });
+  }
+
   // Volatility: the live term structure against the close's curve, and the live smile
-  function liveVol(x) {
+  function liveVol(x, u) {
     if (!x.front) return "";
     return `<div class="grid g2" style="margin-bottom:16px">
+      ${intraCard(x, u)}
       ${card({ title: "Term structure now", chip: badge(), hint: "ATM IV by expiry, live vs the last close", body: `<div class="chart" id="liveTerm"></div><div class="legend"><span style="--c:${css("--s1")}">Now</span><span style="--c:${css("--s2")}">Last close</span></div>`,
         analyst: "Live points are the expiries the feed carries that pass every end-of-day check; the close curve is every expiry at the last close." })}
       ${card({ title: "Live smile", chip: badge(), hint: `${x.front.expiry} · liquid traded strikes`, body: `<div class="chart" id="liveSmile"></div>`,
@@ -222,10 +379,17 @@
     </div>`;
   }
   // Expected move: every live expiry, the end-of-day table's columns
-  function liveMove(x) {
+  function liveMove(x, u) {
     const rows = x.r.expiries;
     if (!rows.length) return "";
-    return `<div style="margin-bottom:16px">${card({ title: "Every live expiry", chip: badge(), hint: "straddle at the parity strike, as at the close",
+    // the expiry in front, live: today's expiring contract on expiry day, else the front expiry
+    const ex = x.r.expiring || (x.front ? { expiry: x.front.expiry, strikes: x.front.strikes, by: x.front.by } : null);
+    const mp = ex ? LiveCore.maxPain(ex.strikes, ex.by) : null, close = x.base.expiry_mp || {};
+    const spot = x.r.spot;
+    const mpCard = mp !== null ? card({ title: ex.expiry === today() ? "Expiry today: max pain now" : "Max pain now", chip: badge(), hint: `${ex.expiry} · on the strikes the feed carries`,
+      simple: `On live open interest the least payout to option buyers is at ${f.num(mp)}${spot ? ` (${f.sgn(mp / spot - 1, 1)}% from the price)` : ""}${close.expiry === ex.expiry && Number.isFinite(close.max_pain) ? `; at the last close it was ${f.num(close.max_pain)}` : ""}. The close-of-day study on the Expected move tab shows whether expiries have actually settled near it.`,
+      analyst: "Only the strikes the live feed carries (about ±10 for indices) are counted, so a far-away pile of open interest outside them can move the close-of-day figure." }) : "";
+    return `<div style="margin-bottom:16px">${mpCard ? `<div style="margin-bottom:16px">${mpCard}</div>` : ""}${card({ title: "Every live expiry", chip: badge(), hint: "straddle at the parity strike, as at the close",
       body: `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expiry</th><th>Days</th><th>ATM IV</th><th>vs close</th><th>Straddle</th><th>Priced move</th><th>Range</th></tr></thead><tbody>
       ${rows.map((e) => { const c = x.base.term.find((t) => t.expiry === e.expiry); return e.ok ? `<tr><td class="num">${e.expiry}</td><td class="num">${e.days.toFixed(1)}</td><td class="num">${f.pct(e.atm_iv)}</td><td class="num">${c ? f.sgn(e.atm_iv - c.iv) : "—"}</td><td class="num">${f.num(e.straddle, 1)}</td><td class="num">±${f.pct(e.move, 2)}</td><td class="num">${f.num(e.F * (1 - e.move))} – ${f.num(e.F * (1 + e.move))}</td></tr>`
         : `<tr><td class="num">${e.expiry}</td><td class="num">${e.days.toFixed(1)}</td><td colspan="5" class="muted small" style="text-align:left">not read: ${e.why}</td></tr>`; }).join("")}</tbody></table></div>` })}</div>`;
@@ -242,7 +406,14 @@
       simple: `Since the close, calls ${oi.call_add >= 0 ? "added" : "shed"} ${big(Math.abs(oi.call_add))} and puts ${oi.put_add >= 0 ? "added" : "shed"} ${big(Math.abs(oi.put_add))} (OI units) on these strikes. Put/call ratio on them: ${Number.isFinite(oi.pcr_live) ? oi.pcr_live.toFixed(2) : "—"} now, ${Number.isFinite(oi.pcr_close) ? oi.pcr_close.toFixed(2) : "—"} at the close.`,
       body: `<div class="chart tall" id="liveOi" style="height:${Math.max(280, oi.rows.length * 15)}px"></div><div class="legend"><span style="--c:${css("--s1")}">Calls added</span><span style="--c:${css("--s2")}">Puts added</span></div>` })
       : card({ title: "Open interest added today", chip: badge(), simple: "The last close has no strike profile for this expiry to compare with." });
-    return `<div class="grid g2" style="margin-bottom:16px">${lvl}${add}</div>`;
+    const g = x.gamma, gb = x.base.gamma || {};
+    const gcard = g && g.strikes.length ? card({ title: "Gamma now, by strike", chip: badge(), hint: "Rs crore of hedging per 1% move · the live strikes", cls: "span2",
+      simple: Number.isFinite(g.net_total)
+        ? `The hedgers' net gamma is ${g.net_total >= 0 ? "long" : "short"} at ${f.num(g.net_total)} crore per 1% (${Number.isFinite(gb.net_total) ? f.num(gb.net_total) + " at the close" : "no close figure"}). ${Number.isFinite(g.flip) ? `It flips at about ${f.num(g.flip)}${Number.isFinite(gb.flip) ? ` (${f.num(gb.flip)} at the close)` : ""}.` : "No flip within ±5%."}`
+        : `Call gamma ${f.num(g.call_total)} and put gamma ${f.num(g.put_total)} crore per 1% on the strikes the feed carries.`,
+      analyst: "The close-of-day map reads every listed strike; live reads only the strikes the feed carries (about ±10 for indices, ±3 to ±8 for stocks), so live totals run lower. The hedgers' weights are the last participant file's.",
+      body: `<div class="chart" id="liveGamma" style="height:${Math.max(260, g.strikes.length * 14)}px"></div><div class="legend"><span style="--c:${css("--s1")}">Call gamma</span><span style="--c:${css("--s2")}">Put gamma</span></div>` }) : "";
+    return `<div class="grid g2" style="margin-bottom:16px">${lvl}${add}${gcard}</div>`;
   }
   // Futures: today's row, the end-of-day table's columns, read live against the same contract's close
   function liveFut(x) {
@@ -266,6 +437,10 @@
   function charts(tab, u) {
     if (L.mode !== "live") return;
     const x = summary(u.symbol), t = theme();
+    if (tab === "vol" && x && document.getElementById("liveIntra")) {
+      const c = intraContract(x, u);
+      if (c) { drawIntra(u.symbol); loadIntra(u.symbol, c).then(() => drawIntra(u.symbol)); }
+    }
     if (tab === "oi" && x && x.oi && document.getElementById("liveOi")) {
       const rows = x.oi.rows;
       chart("#liveOi", { grid: { left: 64, right: 24, top: 10, bottom: 30 }, tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text },
@@ -273,6 +448,14 @@
         yAxis: { type: "category", data: rows.map((r) => f.num(r.K)), axisLabel: { color: t.text3, fontSize: 10 } },
         xAxis: { type: "value", axisLabel: { color: t.text3, formatter: (v) => big(v) }, splitLine: { lineStyle: { color: t.line2 } } },
         series: [{ name: "Calls added", type: "bar", data: rows.map((r) => r.call_chg), itemStyle: { color: t.s1 } }, { name: "Puts added", type: "bar", data: rows.map((r) => r.put_chg), itemStyle: { color: t.s2 } }] });
+    }
+    if (tab === "oi" && x && x.gamma && document.getElementById("liveGamma")) {
+      const g = x.gamma;
+      chart("#liveGamma", { grid: { left: 64, right: 24, top: 10, bottom: 30 }, tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, backgroundColor: t.surface, borderColor: t.line, textStyle: { color: t.text },
+          formatter: (ps) => { const i = ps[0].dataIndex; return `<b>${f.num(g.strikes[i])}</b><br>call gamma ${f.num(g.call[i], 1)} cr<br>put gamma ${f.num(g.put[i], 1)} cr${g.net ? `<br>hedgers' net ${f.num(g.net[i], 1)} cr` : ""}`; } },
+        yAxis: { type: "category", data: g.strikes.map((k) => f.num(k)), axisLabel: { color: t.text3, fontSize: 10 } },
+        xAxis: { type: "value", axisLabel: { color: t.text3, formatter: (v) => f.num(Math.abs(v)) }, splitLine: { lineStyle: { color: t.line2 } } },
+        series: [{ name: "Call gamma", type: "bar", stack: "x", data: g.call, itemStyle: { color: t.s1 } }, { name: "Put gamma", type: "bar", stack: "x", data: g.put.map((v) => -v), itemStyle: { color: t.s2 } }] });
     }
     if (tab === "oi" && x && x.front && document.getElementById("liveOiLvl")) {
       const K = x.front.strikes, by = x.front.by;
@@ -300,5 +483,5 @@
     }
   }
 
-  window.MLLive = { start, poll, askKey, pulse, screener, symbol, charts, render, state: L };
+  window.MLLive = { start, poll, askKey, pulse, screener, symbol, charts, render, mcxCharts, mcxSelect, state: L };
 })();

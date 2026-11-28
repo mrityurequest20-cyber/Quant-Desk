@@ -4,7 +4,9 @@ import datetime as dt
 import io
 import json
 import zipfile
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -360,3 +362,100 @@ def test_update_fetches_bse_only_where_bse_has_files(tmp_path):
                say=lambda *a: None, today=dt.date(2024, 1, 10), bse=fb)
     assert fb.asked and min(fb.asked) == B.BSE_FROM                          # nothing asked before BSE's archive
     assert c["bse_fo_bhav"] > 0 and set(wh.read("bse_fo_bhav")["symbol"]) == {"SENSEX"}
+
+
+CM = """SYMBOL, SERIES, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, LAST_PRICE, CLOSE_PRICE, AVG_PRICE, TTL_TRD_QNTY, TURNOVER_LACS, NO_OF_TRADES, DELIV_QTY, DELIV_PER
+RELIANCE, EQ, 26-Nov-2026, 1373.90, 1371.10, 1401.70, 1361.80, 1396.20, 1396.20, 1382.70, 20028816, 276937.64, 272674, 9435244, 47.11
+SMALLCO, BE, 26-Nov-2026, 10.00, 10.10, 10.50, 9.90, 10.20, 10.25, 10.20, 1000, 0.10, 12, -, -
+RELIANCE, N1, 26-Nov-2026, 100.00, 100.00, 100.00, 100.00, 100.00, 100.00, 100.00, 5, 0.01, 1, 5, 100.00
+"""
+
+
+def test_cash_bhavcopy_keeps_the_equity_series_with_delivery():
+    df = N.parse_cm_bhav(CM.encode(), dt.date(2026, 11, 26))
+    assert list(df["symbol"]) == ["RELIANCE", "SMALLCO"] and list(df["series"]) == ["EQ", "BE"]     # a bond series (N1) is not equity
+    r = df.iloc[0]
+    assert (r["open"], r["high"], r["low"], r["close"]) == (1371.10, 1401.70, 1361.80, 1396.20)
+    assert r["volume"] == 20028816 and r["deliv_qty"] == 9435244 and r["deliv_pct"] == 47.11 and r["trades"] == 272674
+    assert np.isnan(df.iloc[1]["deliv_pct"]) and np.isnan(df.iloc[1]["deliv_qty"])                 # '-' stays missing, never 0
+    assert df["date"].iloc[0] == pd.Timestamp("2026-11-26")
+
+
+def test_a_cash_file_carrying_another_day_is_not_that_days():
+    """NSE's archive writes a copy of the day before on a holiday (2 Oct 2019 carries 1 Oct) and its 30 Sep 2019 file
+    carries 27 Jun 2019: either is recorded as not published, never stored under the wrong date."""
+    with pytest.raises(N.NotPublished):
+        N.parse_cm_bhav(CM.encode(), dt.date(2026, 11, 27))
+
+
+def test_cm_bhav_is_a_daily_table_and_is_not_asked_for_before_the_archive_starts():
+    assert "cm_bhav" in W.DAILY_FILES and W.TABLES["cm_bhav"][1] == ["date", "symbol", "series"]
+    asked = []
+
+    class Nse:
+        def cm_bhav(self, d):
+            asked.append(d)
+            raise N.NotPublished("x")
+
+        def __getattr__(self, name):
+            return lambda *a, **k: (_ for _ in ()).throw(N.NotPublished("x"))
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        update(Warehouse(Path(tmp)), Nse(), dt.date(2019, 9, 25), dt.date(2019, 10, 4), only={"cm_bhav"}, say=lambda *a: None,
+               today=dt.date(2019, 10, 20))
+    assert asked and min(asked) >= N.CM_BHAV_FROM
+
+
+def test_global_benchmarks_carry_their_source_and_skip_what_yahoo_will_not_serve(tmp_path):
+    asked = []
+
+    def history(tk, a, b):
+        asked.append((tk, a, b))
+        if tk == "NG=F":
+            raise ConnectionError("rate limited")
+        if tk == "^VIX":
+            return pd.DataFrame()
+        idx = pd.DatetimeIndex(["2026-11-25", "2026-11-26"], tz="America/New_York")
+        return pd.DataFrame({"Open": [80.0, 81.0], "High": [82.0, 83.0], "Low": [79.0, 80.0], "Close": [81.0, -1.0], "Volume": [10, 20]}, index=idx)
+
+    wh = Warehouse(tmp_path)
+    counts, said = {}, []
+    W._globals(wh, dt.date(2026, 11, 20), dt.date(2026, 11, 27), counts, said.append, lambda: pd.Timestamp("2026-11-27", tz="Asia/Kolkata"), history)
+    g = wh.read("global_daily")
+    assert asked[0][1] == W.GLOBAL_FROM                                   # an empty table reads the whole history once
+    assert set(g["ticker"]) == set(W.GLOBAL_TICKERS) - {"NG=F", "^VIX"}     # a refused or empty ticker skips only itself
+    assert (g["close"] > 0).all() and len(g) == len(W.GLOBAL_TICKERS) - 2     # a non-positive close is dropped, never kept
+    assert (g["source"] == "yahoo").all() and any("NG=F" in x for x in said) and any("^VIX" in x for x in said)
+    assert g["date"].iloc[0] == pd.Timestamp("2026-11-25")                  # the exchange's own trading date, no time zone shift
+    asked.clear()
+    W._globals(wh, dt.date(2026, 11, 20), dt.date(2026, 11, 27), counts, said.append, lambda: pd.Timestamp("2026-11-27", tz="Asia/Kolkata"), history)
+    assert asked[0][1] == dt.date(2026, 11, 13)                            # after that: the run's range less a week of overlap
+
+
+def test_weekend_sessions_are_fetched_like_weekdays(tmp_path):
+    """NSE's Budget Sunday (1 Feb 2026) and the Muhurat/drill weekends: on the list, and a new one found nightly."""
+    asked = {"cm": [], "fo": []}
+    sunday = dt.date(2026, 11, 22)                                     # pretend NSE held a session this Sunday
+
+    class Nse:
+        def cm_bhav(self, d):
+            asked["cm"].append(d)
+            if d == sunday:
+                return CM.replace("26-Nov-2026", d.strftime("%d-%b-%Y")).encode(), "u"
+            raise N.NotPublished("x")
+
+        def fo_bhav(self, d):
+            asked["fo"].append(d)
+            raise N.NotPublished("x")
+
+        def __getattr__(self, name):
+            return lambda *a, **k: (_ for _ in ()).throw(N.NotPublished("x"))
+
+    update(Warehouse(tmp_path), Nse(), dt.date(2026, 1, 28), dt.date(2026, 2, 4), only={"fo_bhav"}, say=lambda *a: None, today=dt.date(2026, 3, 1))
+    assert dt.date(2026, 2, 1) in asked["fo"]                          # the Budget Sunday, from the list
+    asked["fo"].clear()
+    update(Warehouse(tmp_path), Nse(), dt.date(2026, 11, 16), dt.date(2026, 11, 27), only={"fo_bhav"}, say=lambda *a: None, today=dt.date(2026, 11, 27))
+    assert sunday in asked["fo"] and dt.date(2026, 11, 21) not in asked["fo"]      # found nightly; a quiet Saturday is not
+    assert set(W.SPECIAL_SESSIONS) >= {dt.date(2019, 10, 27), dt.date(2025, 2, 1), dt.date(2026, 2, 1)}
+    assert all(d.weekday() >= 5 for d in W.SPECIAL_SESSIONS)

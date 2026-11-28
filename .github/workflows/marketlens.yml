@@ -46,6 +46,29 @@ jobs:
         run: python -m pytest marketlens/tests -q -p no:cacheprovider
       - name: Live probe of NSE's ban list and MWPL files
         run: python -m marketlens fetch-rules --dest _rules --days 8 --strict --show
+      - name: Which Tier 3 sources answer from Actions (report only, never fails)
+        continue-on-error: true
+        timeout-minutes: 5
+        run: python -m marketlens probe-sources
+      - name: News P0 - sources, history depth, conditional polling, the Anthropic key (report only, never fails)
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API || secrets.CLAUDE_API_KEY || secrets.ANTHROPIC_API_KEY }}
+          KEY_FROM: ${{ secrets.CLAUDE_API != '' && 'CLAUDE_API' || secrets.CLAUDE_API_KEY != '' && 'CLAUDE_API_KEY' || secrets.ANTHROPIC_API_KEY != '' && 'ANTHROPIC_API_KEY' || 'none' }}
+        run: python -m marketlens news-probe
+      - name: News P1 smoke test - three days of NSE filings and one month of Google News (report only)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          python -m marketlens news-corpus --dest _nc --from 2023-01-02 --to 2023-01-05 --sources nse --budget-min 3
+          python -m marketlens news-corpus --dest _nc --from 2020-03-01 --to 2020-04-01 --sources gnews --budget-min 5
+      - name: News P3 smoke test - one live labelling request on six stories, and the price of labelling this sample (report only)
+        continue-on-error: true
+        timeout-minutes: 6
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API || secrets.CLAUDE_API_KEY || secrets.ANTHROPIC_API_KEY }}
+        run: python -m marketlens news-label --corpus _nc --out _nl --mode smoke
 
   build:
     if: github.event_name != 'pull_request'

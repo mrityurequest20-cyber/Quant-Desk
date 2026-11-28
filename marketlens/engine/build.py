@@ -12,6 +12,12 @@ import pandas as pd
 
 from .. import universe as U
 from . import events as E
+from . import expiry as X
+from . import baserates as BRT
+from . import breadth as BR
+from . import gamma as GM
+from . import linkage as LK
+from . import movement as MV
 from . import narrative as N
 from . import positioning as P
 from . import rules as RL
@@ -22,6 +28,8 @@ from .data import Warehouse
 # ---------------- JSON helpers ----------------
 
 def _num(x, nd=5):
+    """A number for the app's JSON: 5 decimals below 1 (a vol of 0.144444 keeps 0.14444), 7 significant figures from 1
+    up (NIFTY's 26,029.4 and an OI of 12,500,280 keep every digit that means anything)."""
     if x is None:
         return None
     if isinstance(x, (np.integer,)):
@@ -29,7 +37,10 @@ def _num(x, nd=5):
     if isinstance(x, (float, np.floating)):
         if not math.isfinite(x):
             return None
-        return round(float(x), nd)
+        x = float(x)
+        if abs(x) >= 1:
+            return round(x, max(0, 6 - int(math.floor(math.log10(abs(x))))))
+        return round(x, nd)
     if isinstance(x, (pd.Timestamp,)):
         return str(x.date())
     return x
@@ -45,6 +56,15 @@ def clean(o):
     if isinstance(o, (bool, np.bool_)):
         return bool(o)
     return _num(o)
+
+
+def rank_last(x: pd.Series, n: int = 252):
+    """The latest value's share of the n readings before it that are lower (one convention for every rank)."""
+    x = x.dropna()
+    if len(x) < 127:
+        return None
+    h = x.iloc[-n - 1:-1]
+    return float((h < x.iat[-1]).mean())
 
 
 def series(df: pd.DataFrame, cols: list[str], nd=5) -> dict:
@@ -179,6 +199,20 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
             a["adjusted"] = round(float(jump), 4)
         close = spot["close"]
     iv30 = V.constant_maturity(t, 30)
+    reach = t[t["days"] >= 2].groupby("date")["days"].max()
+
+    def cm(target):
+        """Constant-maturity IV only where the listed expiries reach (near) the horizon: flat extrapolation past
+        the last expiry would label a 2-month vol as a 3-month one."""
+        x = V.constant_maturity(t, target)
+        return x.where(reach.reindex(x.index) >= 0.85 * target)
+    iv60, iv90 = cm(60), cm(90)
+    # each monthly contract's own ATM IV and skew, by its place (current / near / far month)
+    by_month = {}
+    if "series" in t:
+        for i, name in enumerate(("current month", "near month", "far month"), 1):
+            m = t[t["series"] == name].drop_duplicates("date").set_index("date")
+            by_month[f"iv_m{i}"], by_month[f"rr_m{i}"], by_month[f"days_m{i}"] = m["atm_iv"], m["rr25"], m["days"]
     fr = V.front(t)
     rv = V.realised(spot)
     pcr = P.pcr_history(opt)
@@ -191,22 +225,95 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         proxy = ~spot["true_spot"].reindex(book.index).fillna(True).astype(bool)
         book.loc[proxy, ["basis", "carry"]] = np.nan
 
+    # gamma by strike: concentration for every instrument; the hedgers' net only for indices (NSE's participant
+    # file is one figure for all stocks together, so it cannot sign a single stock's book)
+    poi = wh.participants()
+    w_hist = GM.weights_history(poi, "index") if inst.kind == "index" else pd.DataFrame(columns=["calls", "puts"])
+    w_now = GM.weights(poi, asof, "index") if inst.kind == "index" else None
+    gmap = GM.profile(opt, t, ivrows, asof, float(raw_close.iat[-1]), w_now,
+                      band=0.06 if inst.kind == "index" else 0.12, grid=0.05 if inst.kind == "index" else 0.10)
+    ghist = GM.history(opt, t, ivrows, w_hist, sorted(t["date"].unique()))
+    if inst.kind != "index":
+        ghist = ghist.drop(columns=["gamma_net"], errors="ignore")
+    if gmap is not None and inst.kind == "index":
+        gmap["study"] = GM.regime_study(ghist, rv["ret"], iv30)
+
+    # how much of a stock's moves are the market's, its sector's, or its own (adjusted closes: returns, not prices)
+    link = None
+    if inst.kind == "stock":
+        ic = wh.index_close()
+        sec_name = LK.SECTOR_INDEX.get(inst.sector)
+        get = lambda n: ic[ic["index"] == n].drop_duplicates("date", keep="last").set_index("date")["close"].sort_index()
+        nifty_c = get("Nifty 50")
+        sec_c = get(sec_name) if sec_name else None
+        lk = LK.rolling(close, nifty_c, sec_c if sec_c is not None and len(sec_c) > 300 else None)
+        lk = lk[lk.index <= asof]
+        if len(lk):
+            last = lk.iloc[-1]
+            link = {"sector_index": sec_name if "beta_s" in lk else None,
+                    **{k: (float(last[k]) if k in lk and np.isfinite(last[k]) else None) for k in ("beta_n", "corr_n", "beta_s", "corr_s", "r2", "own")},
+                    "own_p": P.latest_pct(lk["own"], 252)}
+
+    # how it moves: range, gaps, compression, participation (indices: NSE's index OHLC; stocks: the cash bhavcopy)
+    move_now, mv = None, None
+    if inst.kind == "index":
+        src = spot_raw[spot_raw.index <= asof]
+    else:
+        cash = wh.cash(inst.symbol)
+        src = cash[cash.index <= asof] if len(cash) else pd.DataFrame()
+    if len(src) > 60 and {"open", "high", "low"} <= set(src.columns) and src["open"].notna().sum() > 60:
+        mv = MV.measures(MV.prepare(src, splits if inst.kind == "stock" else (), [a["date"] for a in actions]))
+        last = mv.iloc[-1]
+        g = mv["gap"].dropna()
+        move_now = {
+            **{k: (float(last[k]) if k in mv and pd.notna(last[k]) else None)
+               for k in ("atr14", "cc21", "pk21", "gk21", "yz21", "ovn_share", "rng20", "rng20_rank", "bbw", "bbw_rank",
+                         "vol_z", "deliv", "deliv_rank", "amihud", "amihud_rank")},
+            "nr7": bool(last["nr7"]), "since": str(mv.index[0].date()),
+            "atr_rank": rank_last(mv["atr14"]),
+            "gap_p50": float(g.abs().iloc[-252:].median()) if len(g) > 60 else None,
+            "gap_p95": float(g.abs().iloc[-252:].quantile(.95)) if len(g) > 60 else None,
+            "big_gaps": [{"date": str(d.date()), "gap": float(x)} for d, x in g.iloc[-252:].abs().sort_values().tail(6)[::-1].items()
+                         if pd.notna(x)],
+            "study": MV.compression_study(mv, iv30),
+        }
+        move_now["big_gaps"] = [dict(x, gap=float(g.loc[pd.Timestamp(x["date"])])) for x in move_now["big_gaps"]]
+
+    # the expiry in front, and what past expiries did (raw prices: strikes are raw)
+    xfront = X.front(opt, t, asof, float(raw_close.iat[-1]))
+    if xfront is not None:
+        xfront["study"] = X.pin_study(opt, t, raw_close, asof)
+
     df = pd.DataFrame(index=close.index)
     df["close"] = close
     df["iv30"] = iv30
     df["iv_front"] = fr["atm_iv"]
+    df["iv60"], df["iv90"] = iv60, iv90
+    df["term_60_30"] = df["iv60"] - df["iv30"]
+    for k, v in by_month.items():
+        df[k] = v
     df["rr25"] = V.front(t, min_days=7)["rr25"]        # skew from an expiry at least a week out: expiry-week wings are noise
     df["implied_move"] = fr["implied_move"]
     for c in ("rv5", "rv21", "rv63", "fwd_rv21"):
         df[c] = rv[c]
     if "pk21" in rv:
         df["pk21"] = rv["pk21"]
+    for c in ("gamma_call", "gamma_put", "gamma_net"):
+        if c in ghist:
+            df[c] = ghist[c]
+    if link is not None:
+        df["own"], df["beta_n"] = lk["own"], lk["beta_n"]
+    if mv is not None:
+        for c in ("atr14", "cc21", "gk21", "yz21", "ovn_share", "rng20_rank", "bbw_rank", "vol_z", "deliv", "amihud", "gap"):
+            if c in mv:
+                df["mv_" + c] = mv[c]
     df["pcr_oi"] = pcr["pcr_oi"]
     df["pcr_vol"] = pcr["pcr_vol"]
     df["opt_oi"] = pcr["opt_oi"]
     if not book.empty:
-        for c in ("carry", "basis", "fut_oi", "roll_share"):
-            df[c] = book[c]
+        for c in ("carry", "basis", "fut_oi", "roll_share", "cal_spread", "cal_carry"):
+            if c in book:
+                df[c] = book[c]
     if inst.kind == "index" and inst.symbol == "NIFTY":
         df["vix"] = vix.reindex(df.index) / 100
     df = df[df.index >= t["date"].min()] if len(t) else df
@@ -261,6 +368,18 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     carry_med = float(df["carry"].dropna().iloc[-253:-1].median()) if "carry" in df and df["carry"].notna().sum() > 60 else None
     df["comp"] = df["rv5"] / df["rv63"]
     comp_p = pctl("comp", 252)
+    try:
+        lab = BRT.lab(df, B=500) if not stale.get("iv30") else None        # today's state must be today's
+    except Exception:                                                 # an extra: never stops the instrument
+        lab = None
+    # the curve between months: constant-maturity 60-day over 30-day IV, and the futures roll rate between months
+    months_curve = {"iv60": cur("iv60") if "iv60" in df else None, "iv90": cur("iv90") if "iv90" in df else None,
+             "term_60_30": cur("term_60_30") if "term_60_30" in df else None,
+             "term_p": pctl("term_60_30", 252) if "term_60_30" in df else None,
+             "cal_carry": cur("cal_carry") if "cal_carry" in df else None,
+             "cal_carry_p": pctl("cal_carry", 252) if "cal_carry" in df else None,
+             "cal_spread": cur("cal_spread") if "cal_spread" in df else None,
+             "months": {k: cur(k) for k in ("iv_m1", "iv_m2", "iv_m3", "rr_m1", "rr_m2", "rr_m3") if k in df}}
     hist = df.dropna(subset=["iv30", "fwd_rv21"])
     rich_share = float((hist["iv30"] > hist["fwd_rv21"]).mean()) if len(hist) > 50 else None
 
@@ -397,7 +516,10 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
     }
     cols = [c for c in ["close", "iv30", "iv_front", "rv21", "rv5", "rv63", "pk21", "fwd_rv21", "vrp", "rr25",
                         "pcr_oi", "pcr_vol", "opt_oi", "carry", "basis", "fut_oi", "roll_share", "vix",
-                        "implied_move"] if c in df]
+                        "implied_move", "gamma_call", "gamma_put", "gamma_net", "iv60", "iv90", "term_60_30",
+                        "iv_m1", "iv_m2", "iv_m3", "rr_m1", "rr_m2", "rr_m3", "days_m1", "cal_spread", "cal_carry", "own", "beta_n",
+                        "mv_atr14", "mv_cc21", "mv_gk21", "mv_yz21", "mv_ovn_share", "mv_rng20_rank", "mv_bbw_rank",
+                        "mv_vol_z", "mv_deliv", "mv_amihud", "mv_gap"] if c in df]
     out = {
         "meta": {"symbol": inst.symbol, "name": inst.name, "kind": inst.kind, "sector": inst.sector,
                  "exchange": inst.exchange, "asof": str(asof.date()), "since": since, "splits": splits, "actions": actions,
@@ -408,10 +530,15 @@ def analyse(wh: Warehouse, inst: U.Instrument, vix: pd.Series, ev_cal: pd.DataFr
         "story": story, "cards": cards, "series": series(df, cols),
         "term": term, "smiles": smiles, "cone": cone, "scorecard": score,
         "scorecard_series": series(sc_series.set_index("date"), ["implied_move", "realised"]) if sc_series is not None and len(sc_series) else None,
-        "oi_profile": prof, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
+        "oi_profile": prof, "gamma": gmap, "curve": months_curve, "expiry": xfront, "link": link, "movement": move_now, "lab": lab, "futures": fut_rows, "fut_months": fut_months, "rolls": rolls, "results": results, "macro": macro,
         "big_days": E.big_days(ret), "changes": changes, "rules": rules,
     }
-    return clean(out)
+    out = clean(out)
+    # the daily panel the news reactions read (marketlens/news/reactions.py): a Parquet file beside the JSON, never in it
+    keep = [c for c in ("close", "iv_front", "iv30", "rv21", "implied_move", "rr25", "beta_n", "own", "fut_oi", "basis", "pcr_oi", "opt_oi", "mv_gap")
+            if c in df]
+    out["_panel"] = df[keep].astype("float64")
+    return out
 
 
 # ---------------- market-wide ----------------
@@ -546,6 +673,7 @@ def live_base(d: dict) -> dict:
         "asof": d["meta"]["asof"], "close": d["headline"]["spot"], "kind": d["meta"]["kind"],
         "term": [{"expiry": c["expiry"], "iv": c["iv"], "move": c["move"], "F": c["F"], "series": c.get("series")} for c in tn],
         "fut_months": [{"expiry": m["expiry"], "fut": m["fut"], "oi": m["oi"]} for m in d.get("fut_months") or []],
+        "expiry_mp": ({"expiry": d["expiry"]["expiry"], "max_pain": d["expiry"]["max_pain"]} if d.get("expiry") else None),
         "fut": ({"fut": fr["fut"], "near_oi": fr["near_oi"], "fut_expiry": fr["fut_expiry"]} if fr else None),
         "iv_front": (ser.get("iv_front") or [])[-252:],
         # for live 30-day IV, its percentile and the live premium over realised vol (realised: at the last close)
@@ -553,6 +681,9 @@ def live_base(d: dict) -> dict:
         "vrp": (ser.get("vrp") or [])[-252:],
         "rv21": next((x for x in reversed(ser.get("rv21") or []) if x is not None), None),
         "carry": [x for x in (ser.get("carry") or [])[-252:] if x is not None],
+        # the gamma map's participant weights (indices) and its close-of-day net and flip, for the live comparison
+        "gamma": ({k: (d.get("gamma") or {}).get(k) for k in ("weights", "net_total", "flip", "call_total", "put_total")}
+                  if d.get("gamma") else None),
         "oi": [{"expiry": p["expiry"], "strikes": p["strikes"], "call_oi": p["call_oi"], "put_oi": p["put_oi"]}
                for p in d.get("oi_profile", [])[:2]],
     }
@@ -605,6 +736,61 @@ def pulse(sym_data: dict, vix: pd.Series, parts: dict, flows: dict) -> list[str]
     return out
 
 
+def health_block(wh: Warehouse, data: dict, asof) -> dict:
+    """What the app was built from: each warehouse table's latest day (from its newest file only), how many sessions that
+    is behind the build's as-of day, and each instrument's own as-of day and the readings it had to leave blank."""
+    from .data import TABLES
+    sess = pd.bdate_range(end=asof, periods=30)
+    tables = []
+    for t in TABLES:
+        files = wh.files(t)
+        if not files:
+            tables.append({"table": t, "files": 0, "last": None, "behind": None})
+            continue
+        try:
+            df = pd.read_parquet(files[-1])
+            col = "date" if "date" in df else ("ts" if "ts" in df else None)
+            last = pd.to_datetime(df[col]).max() if col and len(df) else None
+            if last is not None and getattr(last, "tzinfo", None) is not None:
+                last = last.tz_localize(None)
+        except Exception:                            # an unreadable file is itself a health finding
+            last = None
+        behind = None if last is None else int(((sess > pd.Timestamp(last).normalize()) & (sess <= asof)).sum())
+        tables.append({"table": t, "files": len(files), "last": None if last is None else str(pd.Timestamp(last).date()), "behind": behind})
+    inst = [{"symbol": s_, "asof": d["meta"]["asof"], "stale": d["meta"].get("stale") or {}, "seconds": d["meta"].get("build_seconds"),
+             "since": d["meta"].get("since")} for s_, d in data.items()]
+    return {"asof": str(pd.Timestamp(asof).date()), "tables": tables, "instruments": inst}
+
+
+def dispersion_block(wh: Warehouse, asof, iv_panel, say=print) -> dict:
+    """Implied against realised correlation for each index whose members can be listed (engine/dispersion.py)."""
+    from . import dispersion as DS
+    out = {}
+    if iv_panel is None:
+        return out
+    ic = wh.index_close()
+    for idx in DS.LISTS:
+        try:
+            mem, src = DS.members(idx)
+            if not mem:
+                continue
+            rm = DS.returns({s: wh.cash(s) for s in mem})
+            if rm.shape[1] < 0.8 * len(mem):
+                say(f"  dispersion {idx}: only {rm.shape[1]} of {len(mem)} members have cash data")
+                continue
+            close = ic[ic["index"] == DS.INDEX_NAME[idx]].drop_duplicates("date", keep="last").set_index("date")["close"].sort_index()
+            ri = np.log(close).diff()
+            ivi = BR.straddle_iv(wh.options(idx).assign(symbol=idx)).set_index("date")["iv"]
+            st = DS.study(idx, ri, rm, ivi, iv_panel.reindex(columns=mem), asof)
+            if st:
+                st["members_source"] = src
+                out[idx] = st
+                say(f"  dispersion {idx}: fit R2 {st['fit_r2']:.4f}, implied correlation {st['implied']}")
+        except Exception as e:                      # one index failing skips only itself
+            say(f"  dispersion {idx}: FAILED {type(e).__name__}: {e}")
+    return out
+
+
 def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=print) -> dict:
     wh = Warehouse(warehouse)
     out.mkdir(parents=True, exist_ok=True)
@@ -625,8 +811,12 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
         if not d:
             say(f"  {inst.symbol}: no data")
             continue
+        panel = d.pop("_panel", None)
         data[inst.symbol] = d
         (out / "sym" / f"{U.slug(inst.symbol)}.json").write_text(json.dumps(d, separators=(",", ":")))
+        if panel is not None and len(panel):
+            (out / "panels").mkdir(exist_ok=True)
+            panel.rename_axis("date").to_parquet(out / "panels" / f"{U.slug(inst.symbol)}.parquet")
         say(f"  {inst.symbol}: {d['meta']['since']} .. {d['meta']['asof']} ({d['meta']['build_seconds']}s)")
     asof = max(pd.Timestamp(d["meta"]["asof"]) for d in data.values())
     parts = participants_block(wh)
@@ -643,8 +833,31 @@ def build(warehouse: Path, out: Path, symbols: list[str] | None = None, say=prin
         "changes": changes_feed(data),
         "live_base": {s: live_base(d) for s, d in data.items()},
         "limits": limits_block(limits, data),
+        "health": health_block(wh, data, asof),
         "universe": [{"symbol": i.symbol, "name": i.name, "kind": i.kind, "sector": i.sector, "slug": U.slug(i.symbol)}
                      for i in insts if i.symbol in data],
     }
+    # the heavy parts each page does not need go in their own files: the participant history (Who holds what) and the
+    # live baseline (live mode and the Worker's alerts); every page loads the overview, so it stays small
+    (out / "participants.json").write_text(json.dumps(clean({"series": overview["participants"].pop("series", {})}), separators=(",", ":")))
+    (out / "live_base.json").write_text(json.dumps(clean(overview.pop("live_base")), separators=(",", ":")))
     (out / "overview.json").write_text(json.dumps(clean(overview), separators=(",", ":")))
+    # MCX commodities' public side: the international benchmarks they track (engine/commodities.py), own file
+    try:
+        from . import commodities as CMD
+        cm = CMD.board(wh.globals_(), asof)
+        (out / "commodities.json").write_text(json.dumps(clean(cm), separators=(",", ":")))
+        say(f"  commodities: {len(cm.get('contracts', {}))} contracts with a benchmark" if cm else "  commodities: no global_daily yet")
+    except Exception as e:                          # never stops the build
+        say(f"  commodities: FAILED {type(e).__name__}: {e}")
+    # the whole F&O market: its own file, read only by the breadth page
+    try:
+        br = BR.market(Path(warehouse), asof)
+        br["sectors"] = BR.sector_board(wh.index_close(), asof)
+        br["dispersion"] = dispersion_block(wh, asof, getattr(BR.market, "iv_panel", None), say)
+        br["asof"] = str(asof.date())
+        (out / "breadth.json").write_text(json.dumps(clean(br), separators=(",", ":")))
+        say(f"  breadth: {br['today']['n_iv']} stocks with a vol reading, {br['today']['n_fut']} with a futures read")
+    except Exception as e:                          # breadth is extra: it never stops the build
+        say(f"  breadth: FAILED {type(e).__name__}: {e}")
     return overview

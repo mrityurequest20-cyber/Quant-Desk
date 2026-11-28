@@ -19,6 +19,7 @@ import { KotakPoller, istParts, runCycle, inSession, SPECIAL_SESSIONS } from "./
 import { Series, shardKeys, FLUSH_MS } from "./series.js";
 import { PaperBook, cleanOrder, cleanResult, cleanState, MAX_LAB, MAX_SHADOW } from "./paper.js";
 import { NewsBook } from "./news.js";
+import { AlertBook } from "./alertbook.js";
 import { Candles, candleKeys, cleanDepth } from "./candles.js";
 import { SOURCES, PUSH_SOURCES, parseRoutes, pick, rank, freshest } from "./routes.js";
 
@@ -180,6 +181,7 @@ export async function handleLive(request, env) {
 	const stub = env.LIVE.get(env.LIVE.idFromName("board"));
 	if (isPaper) return handlePaper(request, env, url, stub);
 	if (isNews) return handleNews(request, env, url, stub);
+	if (url.pathname === "/live/alerts") return handleAlerts(request, env, stub);
 	if (url.pathname === "/live/ingest") {
 		if (request.method !== "POST") return reply(405, { error: "POST only" });
 		if (!(await same(bearer(request), String(env.LIVE_INGEST_TOKEN).trim()))) return reply(401, { error: "no" });
@@ -284,6 +286,18 @@ async function handleNews(request, env, url, stub) {
 	try { fwd = body !== undefined ? JSON.stringify(body) : undefined; } catch (e) { return reply(400, { error: "not a valid digest" }); }      // absurdly deep nesting parses but cannot be written back out
 	return stub.fetch("https://live" + url.pathname, { method: request.method, ...(fwd !== undefined ? { body: fwd } : {}) });
 }
+// MarketLens alerts from the app, with the owner's READ key: GET the rules and the recent log, PUT the rules. The cron's own
+// "sent" path is internal (the Worker reaches the object directly) and has no public route.
+async function handleAlerts(request, env, stub) {
+	if (request.method !== "GET" && request.method !== "PUT") return reply(405, { error: "GET or PUT" });
+	if (!(await same(bearer(request), String(env.LIVE_READ_TOKEN).trim()))) return reply(401, { error: "no" });
+	if (request.method === "GET") return stub.fetch("https://live/alerts/state");
+	const raw = await readCapped(request, 20000);
+	if (raw === null) return reply(413, { error: "too large" });
+	let body;
+	try { body = JSON.parse(raw); } catch (e) { return reply(400, { error: "not JSON" }); }
+	return stub.fetch("https://live/alerts/rules", { method: "PUT", body: JSON.stringify({ rules: body && body.rules }) });
+}
 const NEWS_MAX_BODY = 200000;
 const PAPER_MAX_BODY = 1300000;           // a saved account is up to MAX_CHUNKS x CHUNK characters
 
@@ -345,6 +359,7 @@ export class LiveBoard {
 		this.env = env || {};
 		this.quotes = new Map();                    // name -> {z?: quote, k?: quote}, each with `at`
 		this.news = new NewsBook(state);            // the news digest (news.js)
+		this.alerts = new AlertBook(state);         // MarketLens alerts: the owner's rules and what was sent today (alertbook.js)
 		this.book = new PaperBook(state);           // the paper-order queue and account (paper.js): same object, its own storage keys
 		this.series = new Series();                 // one close a minute per instrument, for the app's chart (series.js); stored in shards
 		this.candles = new Candles();               // today's one-minute candles of everything but options (candles.js); stored in shards
@@ -681,6 +696,7 @@ export class LiveBoard {
 		await this.maybeFlush(now);
 		await this.arm().catch(() => {});
 		if (path === "/news" || path === "/news/ingest") return this.news.handle(request, url, now);              // the news digest (news.js)
+		if (path.startsWith("/alerts/")) return this.alerts.handle(request, url, now);           // MarketLens alerts (alertbook.js)
 		if (path.startsWith("/paper/")) return this.book.handle(request, url, now);              // the paper-order queue (paper.js)
 		if (request.method === "POST" && path === "/push") {                                    // Kite, from the recorder
 			const { quotes, dropped, src } = await request.json();
