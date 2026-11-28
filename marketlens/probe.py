@@ -83,6 +83,34 @@ def probe() -> dict:
         out["mcx_bhav_post"] = {"status": r.status_code, "bytes": len(r.content), "head": r.content[:300].decode("utf-8", "replace")}
     except Exception as e:                                       # noqa: BLE001
         out["mcx_bhav_post"] = {"error": f"{type(e).__name__}: {str(e)[:160]}"}
+    out["macro_calendar"] = macro_sources()
+    return out
+
+
+def macro_sources() -> dict:
+    """Economic-calendar sources for the global macro calendar: which answer from here, and what they hold."""
+    out = {}
+    for name, url in (("forexfactory_thisweek", "https://nfs.faireconomy.media/ff_calendar_thisweek.json"),
+                      ("forexfactory_nextweek", "https://nfs.faireconomy.media/ff_calendar_nextweek.json")):
+        try:
+            r = requests.get(url, headers=UA, timeout=25)
+            o = {"status": r.status_code, "bytes": len(r.content)}
+            if r.ok:
+                ev = r.json()
+                o.update({"events": len(ev), "countries": sorted({e.get("country") for e in ev}),
+                          "high": [f"{e.get('date', '')[:16]} {e.get('country')} {e.get('title')}" for e in ev if e.get("impact") == "High"][:12],
+                          "keys": sorted(ev[0].keys()) if ev else []})
+            out[name] = o
+        except Exception as e:                                   # noqa: BLE001
+            out[name] = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+    for name, url in (("rbi_mpc_page", "https://www.rbi.org.in/Scripts/AnnualPolicy.aspx"),
+                      ("mospi_calendar", "https://www.mospi.gov.in/advance-release-calendar"),
+                      ("bls_cpi_schedule", "https://www.bls.gov/schedule/news_release/cpi.htm"),
+                      ("bls_nfp_schedule", "https://www.bls.gov/schedule/news_release/empsit.htm"),
+                      ("fed_fomc_calendar", "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"),
+                      ("ecb_calendar", "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html"),
+                      ("fred_release_dates", "https://api.stlouisfed.org/fred/release/dates?release_id=10&file_type=json")):
+        out[name] = _get(url)
     return out
 
 
